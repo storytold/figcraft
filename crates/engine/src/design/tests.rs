@@ -328,9 +328,38 @@ fn contrast_is_checked_in_the_given_variable_modes() {
     assert_eq!(dark["modes"], json!({"Theme": "Dark"}), "{dark}");
     let finding = dark["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "color.contrast").unwrap();
     assert_eq!(finding["fixable"], false, "{dark}");
+    assert_eq!(finding["reason"], "modes", "{dark}");
     assert!(finding["message"].as_str().unwrap().contains("Theme: Dark"), "{finding}");
     assert!(s.execute("design.audit", &json!({"scope": "page", "modes": {"Theme": "Dusk"}})).is_err());
     assert!(s.execute("design.assert", &json!({"scope": "page", "modes": {"Theme": "Dark"}, "failOn": "high"})).is_err());
+}
+
+#[test]
+fn unfixable_findings_carry_a_reason_code() {
+    let mut s = Session::new();
+    let bound = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100, "props": {"layout": "vertical", "gap": 13}}),
+    ));
+    ex(&mut s, "variable.createCollection", json!({"name": "C"}));
+    ex(&mut s, "variable.create", json!({"collection": "C", "name": "space", "type": "number", "value": 13}));
+    ex(&mut s, "variable.bind", json!({"ids": [bound], "field": "gap", "variable": "space"}));
+    let loose = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "x": 300, "y": 0, "width": 200, "height": 100, "props": {"layout": "vertical", "gap": 13}}),
+    ));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["spacing.off-grid", "naming.auto"]}));
+    let findings = r["findings"].as_array().unwrap();
+    let bound_f = findings.iter().find(|f| f["node"] == bound.0 && f["rule"] == "spacing.off-grid").unwrap();
+    assert_eq!(bound_f["fixable"], false, "{r}");
+    assert_eq!(bound_f["reason"], "bound", "{r}");
+    let loose_f = findings.iter().find(|f| f["node"] == loose.0 && f["rule"] == "spacing.off-grid").unwrap();
+    assert_eq!(loose_f["fixable"], true, "{r}");
+    assert!(loose_f.get("reason").is_none(), "{r}");
+    let named = findings.iter().find(|f| f["rule"] == "naming.auto").unwrap();
+    assert_eq!(named["reason"], "decision", "{r}");
 }
 
 #[test]

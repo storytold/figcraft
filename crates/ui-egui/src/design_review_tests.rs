@@ -151,6 +151,55 @@ fn the_window_reads_the_files_preset_and_grid() {
 }
 
 #[test]
+fn report_only_findings_are_labelled_in_the_list() {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "C"})).unwrap();
+    s.execute("variable.create", &json!({"collection": "C", "name": "space", "type": "number", "value": 13})).unwrap();
+    let bound = s
+        .execute("node.create", &json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100, "props": {"layout": "vertical", "gap": 13}}))
+        .unwrap();
+    s.execute("variable.bind", &json!({"ids": [bound["id"]], "field": "gap", "variable": "space"})).unwrap();
+    s.execute("node.create", &json!({"type": "frame", "x": 300, "y": 0, "width": 200, "height": 100, "props": {"layout": "vertical", "gap": 13}}))
+        .unwrap();
+    let mut u = Ui::new(s);
+    crate::design_review::open(&mut u.app);
+    let mut shapes = Vec::new();
+    for _ in 0..5 {
+        shapes = crate::live_tests::flat(&u.frame_output(vec![]).shapes);
+    }
+    assert!(crate::live_tests::has_text(&shapes, "Report only"), "the bound finding shows the chip");
+    assert!(crate::live_tests::has_text(&shapes, "Fix"), "the loose finding keeps its Fix button");
+}
+
+#[test]
+fn the_window_edits_the_design_system() {
+    let (mut h, _) = Harness::new();
+    crate::design_review::open(&mut h.app);
+    let state = h.app.ui.design_review.take().unwrap();
+    assert!(crate::design_review::parse_num_list("0, 6 10;  14", 32).is_some());
+    assert!(crate::design_review::parse_num_list("4, wide", 32).is_none());
+    assert!(
+        crate::design_review::parse_num_list(
+            "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33",
+            32
+        )
+        .is_none()
+    );
+    assert_eq!(crate::design_review::parse_color_list("#ff0000, #0a0", 32), Some(vec!["#FF0000".to_string(), "#00AA00".to_string()]));
+    assert!(crate::design_review::parse_color_list("#FF0000, blue", 32).is_none());
+
+    assert!(crate::design_review::apply_design_system(&mut h.app, Some(vec![0.0, 6.0, 10.0]), Some(vec!["#FF0000".to_string()]), None));
+    let config = &h.app.session.ds().unwrap().doc.design_review;
+    assert_eq!(config.radii, vec![0.0, 6.0, 10.0]);
+    assert_eq!(config.brand.len(), 1);
+    assert!(crate::design_review::apply_design_system(&mut h.app, None, None, Some(("icon.emoji".to_string(), true))));
+    let config = &h.app.session.ds().unwrap().doc.design_review;
+    assert_eq!(config.disabled, vec!["icon.emoji".to_string()]);
+    assert!(!crate::design_review::apply_design_system(&mut h.app, None, None, None), "nothing to apply is a no-op");
+    drop(state);
+}
+
+#[test]
 fn the_window_saves_the_preset_and_grid_in_the_file() {
     let (mut h, _) = Harness::new();
     crate::design_review::open(&mut h.app);

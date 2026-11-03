@@ -149,6 +149,9 @@ pub(crate) struct Finding {
     pub(crate) suggestion: Option<Value>,
     /// The values behind the message, for a localized line in the window and for agents.
     pub(crate) details: Option<Value>,
+    /// Why a finding is not fixable: `"bound"` (owned by a variable or style), `"modes"` (read in
+    /// the chosen variable modes), `None` (needs a decision). Only for `fixable: false`.
+    pub(crate) reason: Option<&'static str>,
 }
 
 impl Finding {
@@ -166,6 +169,11 @@ impl Finding {
         }
         if let (Some(d), Some(o)) = (&self.details, v.as_object_mut()) {
             o.insert("details".into(), d.clone());
+        }
+        if !self.fixable
+            && let Some(o) = v.as_object_mut()
+        {
+            o.insert("reason".into(), json!(self.reason.unwrap_or("decision")));
         }
         v
     }
@@ -481,7 +489,7 @@ impl Ctx<'_> {
             .iter()
             .any(|k| n.bound.contains_key(*k))
             {
-                self.not_fixable(" (bound to a variable)");
+                self.not_fixable(" (bound to a variable)", "bound");
             }
         }
     }
@@ -511,7 +519,7 @@ impl Ctx<'_> {
             Some(json!({"radii": bad, "suggested": suggested})),
         );
         if ["cornerRadius", "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"].iter().any(|k| n.bound.contains_key(*k)) {
-            self.not_fixable(" (bound to a variable)");
+            self.not_fixable(" (bound to a variable)", "bound");
         }
     }
 
@@ -543,7 +551,7 @@ impl Ctx<'_> {
                 Some(json!({"strokeOpacity": 0.08})),
             );
             if n.styles.stroke.is_some() || n.bound.keys().any(|k| k.starts_with("strokes/")) {
-                self.not_fixable(" (bound to a style or variable)");
+                self.not_fixable(" (bound to a style or variable)", "bound");
             }
         }
     }
@@ -571,7 +579,7 @@ impl Ctx<'_> {
                 Some(json!({"removeEffects": ["dropShadow", "innerShadow"]})),
             );
             if n.styles.effect.is_some() || n.bound.keys().any(|k| k.starts_with("effects/")) {
-                self.not_fixable(" (bound to a style or variable)");
+                self.not_fixable(" (bound to a style or variable)", "bound");
             }
         }
         if colored {
@@ -583,7 +591,7 @@ impl Ctx<'_> {
                 Some(json!({"neutralShadow": true})),
             );
             if n.styles.effect.is_some() || n.bound.keys().any(|k| k.starts_with("effects/")) {
-                self.not_fixable(" (bound to a style or variable)");
+                self.not_fixable(" (bound to a style or variable)", "bound");
             }
         }
     }
@@ -631,13 +639,13 @@ impl Ctx<'_> {
                 Some(json!({"weight": weight})),
             );
             if styled {
-                self.not_fixable(" (bound to a style or variable)");
+                self.not_fixable(" (bound to a style or variable)", "bound");
             }
         }
         if s.italic() && !chars.is_empty() {
             self.push("type.italic", n.id, path, "Interface text is italic".into(), Some(json!({"italic": false})));
             if styled {
-                self.not_fixable(" (bound to a style or variable)");
+                self.not_fixable(" (bound to a style or variable)", "bound");
             }
         }
         let tracking = s.letter_spacing.resolve(size);
@@ -651,7 +659,7 @@ impl Ctx<'_> {
                 Some(json!({"tracking": tracking})),
             );
             if styled {
-                self.not_fixable(" (bound to a style or variable)");
+                self.not_fixable(" (bound to a style or variable)", "bound");
             }
         }
 
@@ -731,9 +739,9 @@ impl Ctx<'_> {
             Some(details),
         );
         if !self.settings.modes.is_empty() {
-            self.not_fixable(" (read in the chosen variable modes)");
+            self.not_fixable(" (read in the chosen variable modes)", "modes");
         } else if n.styles.fill.is_some() || n.bound.keys().any(|k| k.starts_with("fills/")) {
-            self.not_fixable(" (bound to a style or variable)");
+            self.not_fixable(" (bound to a style or variable)", "bound");
         }
     }
 
@@ -911,14 +919,18 @@ impl Ctx<'_> {
             fixable: r.fixable,
             suggestion,
             details,
+            reason: None,
         });
     }
 
-    /// Mark the finding just pushed as not auto-fixable, with the reason in its message.
-    fn not_fixable(&mut self, note: &str) {
+    /// Mark the finding just pushed as not auto-fixable, with the reason in its message and as a
+    /// machine code for the window (`"bound"`: owned by a variable or style; `"modes"`: read in
+    /// the chosen variable modes).
+    fn not_fixable(&mut self, note: &str, reason: &'static str) {
         if let Some(f) = self.findings.last_mut() {
             f.fixable = false;
             f.message.push_str(note);
+            f.reason = Some(reason);
         }
     }
 }

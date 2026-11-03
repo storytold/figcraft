@@ -594,6 +594,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Gap 19: unfixable findings carry a `reason` code (`bound` / `modes` / `decision`) that the window shows as a **Report only** chip with the explanation on hover, and the window gains a **Design system…** disclosure — radii and brand colours as validated fields, every rule as a disabled-rules checkbox — writing the file with `design.configure` and re-checking. Tests: `design::tests`, `design_review_tests`. |
 | 2026-11-03 | minor | Gap 19: the Review design window is redesigned (summary card with score/bar/chips/Live, flat finding rows with a filled Fix, footer with Show ignored and Fix all), and the remaining window strings are in all 24 catalogs. A blind comparison of the old panel and two redesigns preferred the flat-row design in 3 of 4 judgments. Tests: `design_review_tests`, `i18n`. |
 | 2026-11-03 | minor | Gap 19: all 25 design review rule titles are in all 24 interface catalogs (the older 23 were English outside Chinese); the value line's field names use the same catalogs, and the es-419 overlay falls back to Spanish. Tests: `i18n`. |
 | 2026-11-03 | minor | Gap 19: findings carry `details` (values behind the message) and the review window shows a localized line instead of the English message — field names from the catalogs, numbers/colours/names as they are. The spacing title says "the grid" now that 4/8px is configurable. Tests: `design_review_tests`, `design::tests`. |

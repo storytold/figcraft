@@ -78,18 +78,23 @@ resizable window, as do **Review design** in the Actions palette (⌘K, no searc
 `ui.menu.invoke {"id": "design.audit"}` on the control channel. Pick Selection, Page or Document
 and press **Check design**. The score sits in a summary card with its bar; the severity counts are
 chips that also filter the list. Each finding is a row with its rule, layer path, localized values
-and a filled **Fix** when the review can repair it, so the list scans like an inspector rather than
-a stack of messages. The row under the scope picks the file's **Preset** and its **Grid** (4 px or
-8 px), and writes them with `design.configure` before checking again. **Select** selects the layer;
-**Fix** applies that rule; **Fix all** applies every fixable rule; **Comment** pins the finding to
-its layer as a comment, so the comments panel and the `fix_comments` / `watch_comments` loop can
-pick it up. **Live** re-runs the check after an edit has been still for a moment. **Ignore** hides
-one finding, **Ignore all of this rule** hides the rule, and **Show ignored** / **Clear ignores**
-bring them back. Ignores belong to the file: they are saved in the preferences by document path,
-so reopening a saved file keeps them (an unsaved file keeps them for the session only). The **…**
-menu also has **Select all** for every layer behind that rule. Repairs run `design.fix` with the
-visible layers as `ids`, so an ignored finding is left alone, and the list checks itself again.
-The toolbar button closes the window again when it is open.
+and a filled **Fix** when the review can repair it; a finding the review will not touch shows
+**Report only** with the reason on hover — the value belongs to a variable or style (fix the
+variable or unbind first), it was read in the variable modes you chose, or it needs a decision
+(content, naming or gradients). The row under the scope picks the file's **Preset** and its
+**Grid** (4 px or 8 px), and **Design system…** unfolds the rest of the file's settings: the
+accepted **Radii** (empty: grid steps and pills) and **Brand colours** as comma-separated fields,
+and the **Disabled rules** as checkboxes. Everything there writes the file with `design.configure`
+and checks again, so the next person, agent and CI run read the same system. **Select** selects
+the layer; **Fix** applies that rule; **Fix all** applies every fixable rule; **Comment** pins the
+finding to its layer as a comment, so the comments panel and the `fix_comments` / `watch_comments`
+loop can pick it up. **Live** re-runs the check after an edit has been still for a moment.
+**Ignore** hides one finding, **Ignore all of this rule** hides the rule, and **Show ignored** /
+**Clear ignores** bring them back. Ignores belong to the file: they are saved in the preferences
+by document path, so reopening a saved file keeps them (an unsaved file keeps them for the session
+only). The **…** menu also has **Select all** for every layer behind that rule. Repairs run
+`design.fix` with the visible layers as `ids`, so an ignored finding is left alone, and the list
+checks itself again. The toolbar button closes the window again when it is open.
 
 The window follows Preferences ▸ Language: its labels, severity names and rule titles are in the
 interface catalogs (all 24, Chinese included; the regional Spanish overlay reads Spanish). Each
@@ -98,7 +103,9 @@ field names come from the catalogs in every language ("Gap 13", "Padding 11 11 1
 numbers, colours, layer names and mode names stay as they are. The engine's `message` and `path`
 stay English, like command and MCP output; the window shows the localized line instead of the
 message, and the rule id is on the label's tooltip for use with `rules`. Agents get the same values
-structurally in `details`.
+structurally in `details`. A finding the review will not repair carries `reason`: `"bound"` (the
+value belongs to a variable or style), `"modes"` (read in the chosen variable modes) or `"decision"`
+(needs a judgment call) — the same text the window's **Report only** chip explains.
 
 ## Prior art
 

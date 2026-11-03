@@ -223,6 +223,114 @@ fn style_field_label(field: &str) -> String {
     }
 }
 
+/// Every rule id, for the design system's turned-off list (keep in sync with `rule_label`).
+const RULE_IDS: &[&str] = &[
+    "spacing.off-grid",
+    "radius.off-scale",
+    "type.sizes",
+    "type.families",
+    "type.weight",
+    "type.italic",
+    "type.too-small",
+    "type.negative-tracking",
+    "color.gradient",
+    "color.gradient-text",
+    "color.glow",
+    "color.colored-shadow",
+    "color.border-opacity",
+    "color.contrast",
+    "color.accents",
+    "token.hardcoded-color",
+    "token.hardcoded-number",
+    "icon.emoji",
+    "copy.exclamation",
+    "copy.trailing-period",
+    "copy.hype",
+    "naming.auto",
+    "detail.shadow-count",
+    "layout.text-overflow",
+    "layout.no-auto-layout",
+];
+
+/// `"0, 6 10"` (commas, spaces or semicolons) → radii, capped and rounded; `None` when a part is
+/// not a usable number.
+pub(crate) fn parse_num_list(text: &str, cap: usize) -> Option<Vec<f64>> {
+    let mut out = Vec::new();
+    for part in text.split([',', ' ', ';']) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let v: f64 = part.parse().ok()?;
+        if !v.is_finite() || !(0.0..=999.0).contains(&v) {
+            return None;
+        }
+        out.push((v * 100.0).round() / 100.0);
+    }
+    (out.len() <= cap).then_some(out)
+}
+
+/// `"#FF0000, #0A0"` → hex colour strings (`#0A0` expands); `None` when a part is not one.
+pub(crate) fn parse_color_list(text: &str, cap: usize) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    for part in text.split([',', ' ', ';']) {
+        let part = part.trim().trim_start_matches('#');
+        if part.is_empty() {
+            continue;
+        }
+        let hex = match part.len() {
+            6 if part.bytes().all(|b| b.is_ascii_hexdigit()) => part.to_ascii_uppercase(),
+            3 if part.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                let expanded: String = part.chars().flat_map(|c| [c, c]).collect();
+                expanded.to_ascii_uppercase()
+            }
+            _ => return None,
+        };
+        out.push(format!("#{hex}"));
+    }
+    (out.len() <= cap).then_some(out)
+}
+
+/// Why a finding is not fixable, as the chip's label and its hover text.
+fn report_reason(finding: &Value) -> (String, String) {
+    match finding["reason"].as_str() {
+        Some("bound") => (tr("Report only").to_string(), tr("Bound to a variable or style; fix the variable or unbind first.").to_string()),
+        Some("modes") => (tr("Report only").to_string(), tr("Read in the chosen variable modes; fixing would change the base colours.").to_string()),
+        _ => (tr("Report only").to_string(), tr("Needs a decision (content, naming or gradients); the review does not guess.").to_string()),
+    }
+}
+
+/// Run `design.configure` with the design-system changes the window collected. `radii`, `brand`
+/// and `toggle` come from the editor's fields; `toggle` is a rule id and whether it is now off.
+/// False when there was nothing to apply.
+pub(crate) fn apply_design_system(app: &mut FigApp, radii: Option<Vec<f64>>, brand: Option<Vec<String>>, toggle: Option<(String, bool)>) -> bool {
+    use serde_json::Map;
+    let mut params = Map::new();
+    if let Some(r) = radii {
+        params.insert("radii".into(), json!(r));
+    }
+    if let Some(b) = brand {
+        params.insert("brand".into(), json!(b));
+    }
+    if let Some((rule, off)) = toggle {
+        let mut disabled: Vec<String> = app.session.ds().map(|d| d.doc.design_review.disabled.clone()).unwrap_or_default();
+        if off {
+            if !disabled.contains(&rule) {
+                disabled.push(rule);
+                disabled.sort();
+            }
+        } else {
+            disabled.retain(|x| x != &rule);
+        }
+        params.insert("disabled".into(), json!(disabled));
+    }
+    if params.is_empty() {
+        return false;
+    }
+    app.run("design.configure", Value::Object(params));
+    true
+}
+
 /// The window's state, kept while it is open.
 pub struct State {
     pub scope: Scope,
@@ -234,6 +342,11 @@ pub struct State {
     /// The file's preset and spacing grid, as the check uses them.
     pub preset: DesignPreset,
     pub grid: f64,
+    /// The design-system editor is open, with its draft fields.
+    pub show_config: bool,
+    pub(crate) radii_text: String,
+    pub(crate) brand_text: String,
+    pub(crate) config_error: Option<String>,
     pub report: Option<Value>,
     pub error: Option<String>,
     /// Ignores: one finding and whole rules, kept in the preferences by document path.
@@ -270,6 +383,10 @@ impl State {
             show_ignored: false,
             preset: config.preset,
             grid: config.grid(),
+            show_config: false,
+            radii_text: String::new(),
+            brand_text: String::new(),
+            config_error: None,
             report: None,
             error: None,
             ignored,
@@ -629,11 +746,15 @@ fn finding_view(ui: &mut egui::Ui, t: &Tokens, finding: &Value, all: &[Value]) -
         if widgets::button(ui, tr("Select"), false, node.is_some()).clicked() {
             out.select = node;
         }
-        if fixable
-            && let Some(id) = node
-            && widgets::button(ui, tr("Fix"), true, true).clicked()
-        {
-            out.fix = Some((rule.to_string(), id));
+        if fixable {
+            if let Some(id) = node
+                && widgets::button(ui, tr("Fix"), true, true).clicked()
+            {
+                out.fix = Some((rule.to_string(), id));
+            }
+        } else {
+            let (label, tip) = report_reason(finding);
+            ui.label(RichText::new(label).size(9.5).color(t.text_tertiary)).on_hover_text(tip);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             finding_menu(ui, rule, node, all, out);
@@ -684,6 +805,9 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     let mut clear_ignores = false;
     let mut scope_changed = false;
     let mut config_changed = false;
+    let mut config_radii: Option<Vec<f64>> = None;
+    let mut config_brand: Option<Vec<String>> = None;
+    let mut config_toggle: Option<(String, bool)> = None;
 
     let width = 430.0;
     let screen = ctx.content_rect();
@@ -714,27 +838,93 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
                 });
             });
             ui.add_space(2.0);
+            let config = app.session.ds().map(|d| d.doc.design_review.clone()).unwrap_or_default();
             ui.horizontal(|ui| {
-                ui.label(RichText::new(tr("Preset")).size(10.0).color(t.text_tertiary));
-                craft_ui::ComboBox::from_id_salt("design_review_preset").width(122.0).selected_text(tr(preset_label(state.preset))).show_ui(
-                    ui,
-                    |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let combo = craft_ui::ComboBox::from_id_salt("design_review_preset")
+                    .width(108.0)
+                    .selected_text(tr(preset_label(state.preset)))
+                    .show_ui(ui, |ui| {
                         for preset in DesignPreset::ALL {
                             if ui.selectable_value(&mut state.preset, preset, tr(preset_label(preset))).changed() {
                                 config_changed = true;
                             }
                         }
-                    },
-                );
-                ui.add_space(6.0);
-                ui.label(RichText::new(tr("Grid")).size(10.0).color(t.text_tertiary));
+                    });
+                combo.response.on_hover_text(tr("Preset"));
                 for grid in [4.0, 8.0] {
-                    if chip(ui, &t, &format!("{grid:.0} px"), (state.grid - grid).abs() < 0.5, None).clicked() && (state.grid - grid).abs() >= 0.5 {
+                    let selected = (state.grid - grid).abs() < 0.5;
+                    let r = chip(ui, &t, &format!("{grid:.0} px"), selected, None);
+                    if r.clicked() && !selected {
                         state.grid = grid;
                         config_changed = true;
                     }
+                    r.on_hover_text(tr("Grid"));
                 }
             });
+            // The design system gets its own row: the preset row is full in the wider catalogs.
+            let open = state.show_config;
+            let label = if open { tr("Hide design system") } else { tr("Design system…") };
+            let r = chip(ui, &t, label, open, None);
+            if r.clicked() {
+                state.show_config = !state.show_config;
+                if state.show_config && state.radii_text.is_empty() && state.brand_text.is_empty() {
+                    state.radii_text = config.radii.iter().map(|r| trim_num(*r)).collect::<Vec<_>>().join(", ");
+                    state.brand_text = config.brand.iter().map(|c| format!("#{}", c.to_hex())).collect::<Vec<_>>().join(", ");
+                }
+            }
+            if state.show_config {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr("Radii")).size(10.0).color(t.text_tertiary));
+                    let r =
+                        ui.add(egui::TextEdit::singleline(&mut state.radii_text).desired_width(180.0).hint_text(tr("Empty: grid steps and pills")));
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        match parse_num_list(&state.radii_text, figcraft_doc::MAX_RADII) {
+                            Some(v) => {
+                                state.config_error = None;
+                                state.radii_text = v.iter().map(|r| trim_num(*r)).collect::<Vec<_>>().join(", ");
+                                config_radii = Some(v);
+                            }
+                            None => state.config_error = Some(tr("Radii must be numbers, like 0, 6, 10, 14.").to_string()),
+                        }
+                    }
+                    r.on_hover_text(tr("Accepted corner radii in px, separated by commas or spaces."));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr("Brand colours")).size(10.0).color(t.text_tertiary));
+                    let r = ui.add(egui::TextEdit::singleline(&mut state.brand_text).desired_width(180.0).hint_text(tr("#FF0000, #00AA00")));
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        match parse_color_list(&state.brand_text, figcraft_doc::MAX_BRAND_COLORS) {
+                            Some(v) => {
+                                state.config_error = None;
+                                state.brand_text = v.join(", ");
+                                config_brand = Some(v);
+                            }
+                            None => state.config_error = Some(tr("Brand colours must be hex colours, like #FF0000, #00AA00.").to_string()),
+                        }
+                    }
+                    r.on_hover_text(tr("Accent colours the file owns, in hex, separated by commas."));
+                    for color in &config.brand {
+                        let [cr, cg, cb, _] = color.to_rgba8();
+                        let (rect, _) = ui.allocate_exact_size(vec2(13.0, 13.0), Sense::hover());
+                        ui.painter().rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(cr, cg, cb));
+                    }
+                });
+                if let Some(error) = &state.config_error {
+                    ui.colored_label(t.danger, error);
+                }
+                let off = |rule: &str| config.disabled.iter().any(|r| r == rule);
+                ui.label(RichText::new(tr("Disabled rules")).size(10.0).color(t.text_tertiary));
+                egui::ScrollArea::vertical().id_salt("design_review_disabled_rules").max_height(132.0).show(ui, |ui| {
+                    for id in RULE_IDS {
+                        let mut on = !off(id);
+                        if ui.checkbox(&mut on, tr(rule_label(id))).changed() {
+                            config_toggle = Some(((*id).to_string(), !on));
+                        }
+                    }
+                });
+            }
 
             if let Some(error) = &state.error {
                 ui.add_space(6.0);
@@ -843,12 +1033,16 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     if let Some(id) = select {
         app.session.set_selection(vec![id]);
     }
+    let mut config_applied = config_changed;
     if config_changed {
         // The preset and the grid belong to the file (`design.configure`); the check then runs
         // against them.
         if let Some((preset, grid)) = app.ui.design_review.as_ref().map(|s| (s.preset, s.grid)) {
             app.run("design.configure", json!({"preset": preset.id(), "grid": grid}));
         }
+    }
+    if apply_design_system(app, config_radii, config_brand, config_toggle) {
+        config_applied = true;
     }
     if let Some((id, rule, message, path)) = comment {
         comment_on(app, id, &rule, &message, &path);
@@ -857,7 +1051,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
         Some(Action::Check) => check(app),
         Some(Action::FixAll) => fix_all(app),
         Some(Action::FixFinding(rule, node)) => fix_finding(app, &rule, node),
-        None if scope_changed || config_changed || live_due => check(app),
+        None if scope_changed || config_applied || live_due => check(app),
         None => {}
     }
     sync_revision(app, now);
