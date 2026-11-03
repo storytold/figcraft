@@ -1941,6 +1941,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "브랜드 색상은 16진수 색이어야 합니다(예: #FF0000, #00AA00)."
 "Empty: grid steps and pills" = "비우면 그리드 배수와 필"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "프레임이 내용을 잘라냅니다"
 [commands]
 "align.bottom" = "아래쪽 정렬"
 "align.hcenter" = "수평 가운데 정렬"

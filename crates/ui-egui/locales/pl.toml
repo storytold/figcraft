@@ -1931,6 +1931,7 @@ name = "Polski"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Kolory marki muszą być w hex, np. #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Puste: wielokrotności siatki i pigułki"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Ramka przycina swoją zawartość"
 [commands]
 "align.bottom" = "Wyrównaj do dołu"
 "align.hcenter" = "Wyrównaj poziomo do środka"

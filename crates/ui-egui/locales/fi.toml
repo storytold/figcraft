@@ -2016,6 +2016,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Brändin värien on oltava heksavärejä, kuten #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Tyhjä: ruudukon monikot ja pillerit"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Kehys leikkaa sisältöään"
 [commands]
 "align.bottom" = "Tasaa alas"
 "align.hcenter" = "Keskitä vaakasuunnassa"

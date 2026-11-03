@@ -1906,6 +1906,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "สีแบรนด์ต้องเป็นสีฐานสิบหก เช่น #FF0000, #00AA00"
 "Empty: grid steps and pills" = "ว่าง: จำนวนเท่าของกริดและทรงแคปซูล"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "เฟรมตัดเนื้อหาของมัน"
 [commands]
 "align.bottom" = "จัดแนวชิดล่าง"
 "align.hcenter" = "จัดแนวกึ่งกลางแนวนอน"

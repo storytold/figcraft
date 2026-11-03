@@ -1969,6 +1969,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "ბრენდის ფერები hex ფერები უნდა იყოს, მაგალითად #FF0000, #00AA00."
 "Empty: grid steps and pills" = "დაცარიელებული: ბადის ჯერადი და აბები"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "ჩარჩო თავის შიგთავსს კვეთს"
 [commands]
 "align.bottom" = "ქვემოთ სწორება"
 "align.hcenter" = "ჰორიზონტალური ცენტრების სწორება"

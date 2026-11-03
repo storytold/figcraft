@@ -1881,6 +1881,7 @@ name = "Türkçe"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Marka renkleri on altılık renk olmalı, örneğin #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Boş: ızgara katları ve hap şekiller"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Bir çerçeve içeriğini kırpıyor"
 [commands]
 "align.bottom" = "Alta hizala"
 "align.hcenter" = "Yatay merkezleri hizala"

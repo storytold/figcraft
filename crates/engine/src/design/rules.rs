@@ -102,6 +102,12 @@ pub(crate) const RULES: &[Rule] = &[
         fixable: false,
         description: "A fixed-width text box is shorter than the text it holds, so it clips or overlaps",
     },
+    Rule {
+        id: "layout.clipped",
+        severity: Severity::High,
+        fixable: false,
+        description: "A fixed-size auto layout frame clips children that overflow it, so they are invisible",
+    },
 ];
 
 pub(crate) fn rule(id: &str) -> Option<&'static Rule> {
@@ -115,7 +121,7 @@ pub(crate) fn enabled(id: &str, preset: DesignPreset) -> bool {
         DesignPreset::Recommended => !matches!(id, "color.accents" | "layout.no-auto-layout"),
         DesignPreset::Strict => true,
         DesignPreset::Accessibility => {
-            matches!(id, "color.contrast" | "color.gradient-text" | "type.too-small" | "layout.text-overflow")
+            matches!(id, "color.contrast" | "color.gradient-text" | "type.too-small" | "layout.text-overflow" | "layout.clipped")
         }
     }
 }

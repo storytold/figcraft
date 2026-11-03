@@ -26,7 +26,7 @@ The review follows the file, not one person's taste. `design.configure` keeps fo
 document, so everyone who opens it (and every agent, CLI and CI run) checks against the same
 system:
 
-- **Preset.** `recommended` (the default) checks the 23 usual tells. `strict` adds
+- **Preset.** `recommended` (the default) checks the 26 usual tells. `strict` adds
   `color.accents` (more than two accent colours in one scope) and `layout.no-auto-layout` (a frame
   or component with three or more children and no auto layout). `accessibility` checks only what
   keeps a design usable: contrast, the 11px type floor, gradient text and clipped text.
@@ -140,7 +140,7 @@ text or asset is copied; the rules are FigCraft's own.
 | `color.gradient-text` — text painted with a gradient | high | no |
 | `color.glow` — a shadow with no offset and a large blur | medium | yes |
 | `color.colored-shadow` — a shadow with a visible hue | low | yes |
-| `color.border-opacity` — a border stronger than a hairline | low | yes |
+| `color.border-opacity` — a border stronger than a hairline (container shapes; an icon's own stroke is exempt) | low | yes |
 | `color.contrast` — text below 4.5:1 (3:1 large) | high | yes |
 | `color.accents` — more than two accent colours in one scope, brand colours excluded (**Strict**) | medium | no |
 | `token.hardcoded-color` — a solid colour equals a colour variable but is not bound | low | no |
@@ -152,6 +152,7 @@ text or asset is copied; the rules are FigCraft's own.
 | `naming.auto` — a layer still named "Frame 12" | low | no |
 | `detail.shadow-count` — shadows on too many layers | low | no |
 | `layout.text-overflow` — a fixed-width text box shorter than its text | high | no |
+| `layout.clipped` — a fixed-size auto layout frame clipping children that overflow it, so they are invisible | high | no |
 | `layout.no-auto-layout` — a frame or component with three or more children and no auto layout (**Strict**) | low | no |
 
 The pair to remember: **hi**gh is a blocker (contrast, gradient text, clipped text), **medium** is

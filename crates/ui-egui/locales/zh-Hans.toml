@@ -1834,6 +1834,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "品牌色必须是十六进制颜色，如 #FF0000, #00AA00。"
 "Empty: grid steps and pills" = "留空则用网格倍数和胶囊形"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "框架裁剪了它的内容"
 [commands]
 "align.bottom" = "底部对齐"
 "align.hcenter" = "水平居中对齐"

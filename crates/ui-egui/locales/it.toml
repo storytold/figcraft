@@ -1841,6 +1841,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "I colori del marchio devono essere esadecimali, come #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Vuoto: multipli della griglia e pillole"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Un frame taglia il suo contenuto"
 [commands]
 "align.bottom" = "Allinea in basso"
 "align.hcenter" = "Allinea i centri orizzontali"

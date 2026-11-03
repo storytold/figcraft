@@ -1998,6 +1998,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Boje brenda moraju biti heksadekadske, npr. #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Prazno: višestruko mreže i pilule"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Okvir reže svoj sadržaj"
 [commands]
 
 "align.bottom" = "Poravnaj dno"

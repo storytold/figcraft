@@ -171,7 +171,9 @@ pub struct RenderArgs {
 /// Run a script of commands in a headless session, one JSON result line per step
 ///
 /// The script is a JSON array (or JSON lines) of {"command": id, "params": {...}}, run as one
-/// all-or-nothing undo step.
+/// all-or-nothing undo step. A step's params can use what an earlier step returned: {"$step": n}
+/// is the id in step n's result and {"$ref": "name"} the id of a step named with "as": "name";
+/// either takes "field", a key of that result or a slash path into it ("ids/0", "map/3").
 #[derive(Args)]
 pub struct RunArgs {
     /// The script to run

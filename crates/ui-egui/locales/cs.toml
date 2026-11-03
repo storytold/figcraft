@@ -1876,6 +1876,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Brandové barvy musí být hex, např. #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Prázdné: násobky mřížky a pilulky"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Rám ořezává svůj obsah"
 [commands]
 "align.bottom" = "Zarovnat dolů"
 "align.hcenter" = "Zarovnat vodorovné středy"

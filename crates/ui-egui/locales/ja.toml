@@ -1901,6 +1901,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "ブランドカラーは16進カラーで入力してください（例: #FF0000, #00AA00）。"
 "Empty: grid steps and pills" = "空欄ならグリッドの倍数とピル"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "フレームが内容をクリップしています"
 [commands]
 "align.bottom" = "下揃え"
 "align.hcenter" = "水平方向の中央揃え"

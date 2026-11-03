@@ -1931,6 +1931,7 @@ name = "Русский"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Фирменные цвета должны быть в hex, например #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Пусто: кратные сетке и таблетки"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Фрейм обрезает своё содержимое"
 [commands]
 "align.bottom" = "Выровнять по нижнему краю"
 "align.hcenter" = "Выровнять центры по горизонтали"

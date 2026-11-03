@@ -2014,6 +2014,7 @@ name = "Svenska"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Varumärkesfärger måste vara hexfärger, som #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Tomt: rutnätssteg och piller"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "En ram klipper sitt innehåll"
 [commands]
 
 "align.bottom" = "Justera nederkant"

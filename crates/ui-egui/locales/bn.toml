@@ -1915,6 +1915,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "ব্র্যান্ড রং হেক্স রং হতে হবে, যেমন #FF0000, #00AA00।"
 "Empty: grid steps and pills" = "খালি: গ্রিডের গুণিতক এবং পিল"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "একটি ফ্রেম তার বিষয়বস্তু কেটে দিচ্ছে"
 [commands]
 "board.addConnected" = "সংযুক্ত আকার যোগ করুন"
 "board.connector" = "সংযোগকারী"

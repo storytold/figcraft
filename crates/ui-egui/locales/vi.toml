@@ -1842,6 +1842,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Màu thương hiệu phải là màu hex, ví dụ #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Để trống: bội số lưới và hình viên thuốc"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Khung đang cắt nội dung của nó"
 [commands]
 "align.bottom" = "Căn dưới"
 "align.hcenter" = "Căn tâm ngang"

@@ -1919,6 +1919,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Merkkleuren moeten hexkleuren zijn, zoals #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Leeg: rastervouden en pillen"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Een frame knipt zijn inhoud bij"
 [commands]
 "align.bottom" = "Onder uitlijnen"
 "align.hcenter" = "Horizontale middens uitlijnen"

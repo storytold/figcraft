@@ -1881,6 +1881,7 @@ status = "draft — needs native review"
 "Brand colours must be hex colours, like #FF0000, #00AA00." = "Warna merek harus berupa warna heks, seperti #FF0000, #00AA00."
 "Empty: grid steps and pills" = "Kosong: kelipatan kisi dan bentuk pil"
 "#FF0000, #00AA00" = "#FF0000, #00AA00"
+"A frame clips its content" = "Sebuah frame memotong isinya"
 [commands]
 "align.bottom" = "Ratakan bawah"
 "align.hcenter" = "Ratakan tengah horizontal"

@@ -92,6 +92,7 @@ fn rule_label(rule: &str) -> &str {
         "layout.text-overflow" => tr_noop("Text overflows its box"),
         "color.accents" => tr_noop("More than two accent colours"),
         "layout.no-auto-layout" => tr_noop("A frame with no auto layout"),
+        "layout.clipped" => tr_noop("A frame clips its content"),
         _ => rule,
     }
 }

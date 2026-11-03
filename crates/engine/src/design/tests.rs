@@ -1,6 +1,6 @@
 //! `design.audit`, `design.fix` and `design.rules`: the checks, the repairs and the report.
 
-use figcraft_doc::{EffectKind, NodeId, NodeKind};
+use figcraft_doc::{EffectKind, NodeId, NodeKind, Sizing};
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -717,4 +717,88 @@ fn fix_junk_is_an_error_not_a_panic() {
     assert!(s.execute("design.fix", &json!({"scope": "everything"})).is_err());
     assert!(s.execute("design.fix", &json!({"rules": ["no.such.rule"]})).is_err());
     assert!(s.execute("design.fix", &json!({})).is_ok());
+}
+
+#[test]
+fn a_fixed_frame_that_clips_children_is_reported() {
+    let mut s = Session::new();
+    let f = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Card", "x": 0, "y": 0, "width": 200, "height": 40,
+               "props": {"layout": "vertical", "gap": 8, "padding": 8, "fill": "#FFFFFF"}}),
+    ));
+    ex(&mut s, "text.create", json!({"text": "Row one", "parent": f}));
+    ex(&mut s, "text.create", json!({"text": "Row two", "parent": f}));
+    let only = json!(["layout.clipped"]);
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only}));
+    assert!(has(&r, "layout.clipped"), "{r}");
+    let finding = r["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "layout.clipped").unwrap();
+    assert_eq!(finding["fixable"], false, "{r}");
+    assert_eq!(finding["suggestion"]["sizingV"], "hug", "{r}");
+    // A frame that hugs grows with its rows, so it cannot clip.
+    ex(&mut s, "node.set", json!({"id": f, "props": {"sizingV": "hug"}}));
+    let after = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only}));
+    assert!(rules(&after).is_empty(), "{after}");
+}
+
+#[test]
+fn an_auto_layout_frame_hugs_the_axes_no_size_names() {
+    let mut s = Session::new();
+    let f = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Card", "x": 0, "y": 0, "props": {"layout": "vertical", "gap": 8, "padding": 8}}),
+    ));
+    ex(&mut s, "text.create", json!({"text": "Row one", "parent": f}));
+    ex(&mut s, "text.create", json!({"text": "Row two", "parent": f}));
+    let n = s.doc().unwrap().node(f).unwrap();
+    assert_eq!(n.child_layout.sizing_h, Sizing::Hug);
+    assert_eq!(n.child_layout.sizing_v, Sizing::Hug);
+    assert!(n.height > 40.0 && n.height < 90.0, "hug height fits the rows, got {}", n.height);
+    // An explicit width stays fixed; the unnamed height hugs.
+    let g = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Bar", "x": 300, "y": 0, "width": 320, "props": {"layout": "vertical", "gap": 8}}),
+    ));
+    let n = s.doc().unwrap().node(g).unwrap();
+    assert_eq!(n.child_layout.sizing_h, Sizing::Fixed);
+    assert_eq!(n.child_layout.sizing_v, Sizing::Hug);
+    // No auto layout: the 100×100 defaults stay.
+    let p = id(&ex(&mut s, "node.create", json!({"type": "frame", "name": "Plain", "x": 700, "y": 0})));
+    let n = s.doc().unwrap().node(p).unwrap();
+    assert_eq!(n.child_layout.sizing_h, Sizing::Fixed);
+    assert_eq!(n.width, 100.0);
+}
+
+#[test]
+fn an_icons_stroke_is_not_a_border() {
+    let mut s = Session::new();
+    ex(
+        &mut s,
+        "node.create",
+        json!({"type": "vector", "name": "Chevron", "x": 0, "y": 0, "points": [[0, 0], [8, 8], [0, 16]],
+               "props": {"stroke": "#6B7280", "strokeWeight": 1.5, "fills": []}}),
+    );
+    let only = json!(["color.border-opacity"]);
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only}));
+    assert!(rules(&r).is_empty(), "an icon's stroke is its drawing, not a border: {r}");
+    ex(
+        &mut s,
+        "node.create",
+        json!({"type": "rectangle", "name": "Panel", "x": 100, "y": 0, "width": 48, "height": 48,
+               "props": {"fills": [], "stroke": "#6B7280", "strokeWeight": 1.5}}),
+    );
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only}));
+    assert!(has(&r, "color.border-opacity"), "{r}");
+}
+
+#[test]
+fn a_bad_parent_error_names_the_node() {
+    let mut s = Session::new();
+    let t = id(&ex(&mut s, "text.create", json!({"text": "Label", "x": 0, "y": 0})));
+    let err = s.execute("node.create", &json!({"type": "rectangle", "parent": t, "x": 0, "y": 0})).unwrap_err().to_string();
+    assert!(err.contains("TEXT \"Label\""), "{err}");
+    assert!(err.contains("can't contain"), "{err}");
 }

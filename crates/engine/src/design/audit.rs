@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_color::{BlendMode, Color, Paint, PaintKind};
 use figcraft_doc::{
-    CollectionId, DesignPreset, Document, Effect, EffectKind, LayoutMode, ModeId, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize,
-    TextData, VariableValue,
+    CollectionId, DesignPreset, Document, Effect, EffectKind, LayoutMode, ModeId, Node, NodeId, NodeKind, Shadow, Sizing, StrokeAlign,
+    TextAutoResize, TextData, VariableValue,
 };
 use serde_json::{Map, Value, json};
 
@@ -21,6 +21,8 @@ use super::rules::{Severity, rule};
 const MAX_NODES: usize = 50_000;
 /// Most text layers one audit lays out for the overflow check (text layout is the expensive part).
 const MAX_TEXT_MEASURED: usize = 2_000;
+/// Most auto layout frames one audit measures for clipped children (bounds are per-subtree).
+const MAX_FRAMES_MEASURED: usize = 500;
 /// Most siblings or children one backdrop lookup scans before it stops guessing; a flat frame with
 /// tens of thousands of layers must not turn every text check into a full scan.
 const MAX_BACKDROP_SCAN: usize = 512;
@@ -255,6 +257,8 @@ struct Ctx<'a> {
     shadowed: usize,
     /// Text layers laid out for the overflow check.
     measured: usize,
+    /// Auto layout frames measured for clipped children.
+    measured_frames: usize,
     tokens: Tokens,
     /// The design system this run checks against.
     settings: Settings,
@@ -275,6 +279,7 @@ pub(crate) fn collect(doc: &Document, roots: &[NodeId], anchor: Option<NodeId>, 
         families: BTreeSet::new(),
         shadowed: 0,
         measured: 0,
+        measured_frames: 0,
         tokens: Tokens::new(doc),
         settings: settings.clone(),
         accents: BTreeMap::new(),
@@ -369,6 +374,7 @@ impl Ctx<'_> {
             self.check_text(n, t, path);
         }
         self.check_layout(n, path);
+        self.check_clipping(n, path);
         self.note_accents(n);
         self.check_tokens(n, path);
     }
@@ -402,6 +408,65 @@ impl Ctx<'_> {
                 Some(json!({"children": count})),
             );
         }
+    }
+
+    /// A fixed-size auto layout frame that clips children which overflow it: the rows exist but
+    /// are invisible — the usual headless surprise. Hug frames grow, so they cannot clip.
+    fn check_clipping(&mut self, n: &Node, path: &str) {
+        if self.measured_frames >= MAX_FRAMES_MEASURED || !n.clip || n.children.is_empty() {
+            return;
+        }
+        // An instance mirrors its main; the main is audited where it lives.
+        if matches!(n.kind, NodeKind::Instance { .. }) {
+            return;
+        }
+        let fixed_h = n.child_layout.sizing_h != Sizing::Hug;
+        let fixed_v = n.child_layout.sizing_v != Sizing::Hug;
+        if !(fixed_h || fixed_v) {
+            return;
+        }
+        let Some(frame) = self.doc.world_bounds(n.id) else { return };
+        let mut u: Option<(f64, f64, f64, f64)> = None;
+        for child in &n.children {
+            let Some(c) = self.doc.node(*child) else { continue };
+            if !c.visible {
+                continue;
+            }
+            if let Some(b) = self.doc.world_bounds(*child) {
+                u = Some(match u {
+                    None => (b.x0, b.y0, b.x1, b.y1),
+                    Some((x0, y0, x1, y1)) => (x0.min(b.x0), y0.min(b.y0), x1.max(b.x1), y1.max(b.y1)),
+                });
+            }
+        }
+        self.measured_frames += 1;
+        let Some((ux0, uy0, ux1, uy1)) = u else { return };
+        let over_h = fixed_h && (ux1 > frame.x1 + 1.0 || ux0 < frame.x0 - 1.0);
+        let over_v = fixed_v && (uy1 > frame.y1 + 1.0 || uy0 < frame.y0 - 1.0);
+        if !(over_h || over_v) {
+            return;
+        }
+        let mut suggestion = Map::new();
+        if over_h {
+            suggestion.insert("sizingH".into(), json!("hug"));
+        }
+        if over_v {
+            suggestion.insert("sizingV".into(), json!("hug"));
+        }
+        self.push_details(
+            "layout.clipped",
+            n.id,
+            path,
+            format!(
+                "Fixed-size frame clips children that reach {:.0}×{:.0} inside its {:.0}×{:.0}; they are invisible",
+                ux1 - ux0,
+                uy1 - uy0,
+                frame.x1 - frame.x0,
+                frame.y1 - frame.y0
+            ),
+            Some(Value::Object(suggestion)),
+            Some(json!({"width": ux1 - ux0, "height": uy1 - uy0, "frameWidth": frame.x1 - frame.x0, "frameHeight": frame.y1 - frame.y0})),
+        );
     }
 
     /// Collect the accent colours the scope paints (brand accents and neutrals excluded), for
@@ -542,7 +607,10 @@ impl Ctx<'_> {
             let id = if is_text { "color.gradient-text" } else { "color.gradient" };
             self.push(id, n.id, path, "Painted with a gradient (a hue-to-hue wash is the usual AI tell)".into(), None);
         }
-        if has_stroke(n) && border_is_strong(self.doc, n) {
+        // A hairline border is for container-like shapes; an icon's stroke is its whole drawing,
+        // so full opacity is the intent there, not a stray border.
+        let container_like = matches!(&n.kind, NodeKind::Frame | NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Component { .. });
+        if container_like && has_stroke(n) && border_is_strong(self.doc, n) {
             self.push(
                 "color.border-opacity",
                 n.id,
