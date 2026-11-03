@@ -189,6 +189,127 @@ fn lists_the_rules() {
     let spacing = rules.iter().find(|r| r["id"] == "spacing.off-grid").unwrap();
     assert_eq!(spacing["severity"], "medium");
     assert_eq!(spacing["fixable"], true);
+    assert_eq!(spacing["presets"], json!(["recommended", "strict"]));
+    let accents = rules.iter().find(|r| r["id"] == "color.accents").unwrap();
+    assert_eq!(accents["presets"], json!(["strict"]));
+    assert_eq!(r["presets"].as_array().unwrap().len(), 3, "{r}");
+}
+
+#[test]
+fn configure_changes_the_files_design_system() {
+    let mut s = Session::new();
+    let r = ex(
+        &mut s,
+        "design.configure",
+        json!({"preset": "strict", "grid": 8, "radii": [0, 10, 20], "brand": ["#3366FF"], "disabled": ["icon.emoji"]}),
+    );
+    assert_eq!(r["preset"], "strict", "{r}");
+    assert_eq!(r["grid"], 8.0, "{r}");
+    assert_eq!(r["radii"], json!([0.0, 10.0, 20.0]), "{r}");
+    assert_eq!(r["brand"], json!(["#3366FF"]), "{r}");
+    assert_eq!(r["disabled"], json!(["icon.emoji"]), "{r}");
+    assert_eq!(s.doc().unwrap().design_review.grid(), 8.0);
+    // The settings are part of the file and undoable with it.
+    let reset = ex(&mut s, "design.configure", json!({"reset": true}));
+    assert_eq!(reset["preset"], "recommended", "{reset}");
+    assert_eq!(reset["grid"], 4.0, "{reset}");
+    assert!(s.doc().unwrap().design_review.is_default());
+    assert!(s.execute("design.configure", &json!({"grid": 0})).is_err());
+    assert!(s.execute("design.configure", &json!({"radii": ["wide"]})).is_err());
+    assert!(s.execute("design.configure", &json!({"disabled": ["no.such.rule"]})).is_err());
+}
+
+#[test]
+fn the_configured_grid_drives_spacing_and_the_fixer() {
+    let mut s = Session::new();
+    ex(&mut s, "design.configure", json!({"grid": 8}));
+    let on = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100,
+               "props": {"layout": "vertical", "gap": 8, "padding": 8, "cornerRadius": 8}}),
+    ));
+    let off = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "x": 300, "y": 0, "width": 200, "height": 100,
+               "props": {"layout": "vertical", "gap": 6, "padding": 10, "cornerRadius": 12}}),
+    ));
+    let only = json!(["spacing.off-grid", "radius.off-scale"]);
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only}));
+    assert!(!rule_nodes(&r, "spacing.off-grid").contains(&on.0), "{r}");
+    assert!(!rule_nodes(&r, "radius.off-scale").contains(&on.0), "{r}");
+    assert_eq!(rule_nodes(&r, "spacing.off-grid"), vec![off.0], "{r}");
+    assert_eq!(rule_nodes(&r, "radius.off-scale"), vec![off.0], "{r}");
+    assert!(r["grid"] == json!(8.0), "{r}");
+    ex(&mut s, "design.fix", json!({"scope": "page"}));
+    let n = s.doc().unwrap().node(off).unwrap();
+    assert_eq!(n.layout.as_ref().unwrap().gap, 8.0);
+    assert_eq!(n.layout.as_ref().unwrap().padding, [8.0; 4]);
+    assert_eq!(n.corners.radii, [16.0; 4]);
+}
+
+#[test]
+fn a_custom_radius_scale_is_the_only_scale() {
+    let mut s = Session::new();
+    ex(&mut s, "design.configure", json!({"radii": [10, 20]}));
+    let ok = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 100, "props": {"cornerRadius": 10}})));
+    let off = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 300, "y": 0, "width": 200, "height": 100, "props": {"cornerRadius": 8}})));
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["radius.off-scale"]}));
+    assert!(!rule_nodes(&r, "radius.off-scale").contains(&ok.0), "{r}");
+    assert_eq!(rule_nodes(&r, "radius.off-scale"), vec![off.0], "{r}");
+    ex(&mut s, "design.fix", json!({"scope": "page"}));
+    assert_eq!(s.doc().unwrap().node(off).unwrap().corners.radii, [10.0; 4]);
+}
+
+#[test]
+fn presets_choose_the_rules_and_disabled_rules_stay_off() {
+    let mut s = Session::new();
+    for (i, fill) in ["#FF0000", "#00AA00", "#0000FF"].iter().enumerate() {
+        ex(&mut s, "node.create", json!({"type": "rectangle", "x": i * 60, "y": 0, "width": 40, "height": 40, "props": {"fill": fill}}));
+    }
+    let stack = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 100, "width": 200, "height": 200})));
+    for i in 0..3 {
+        ex(&mut s, "node.create", json!({"type": "rectangle", "x": i * 20, "y": 0, "width": 10, "height": 10, "parent": stack}));
+    }
+    let off_grid = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "x": 300, "y": 100, "width": 200, "height": 100, "props": {"layout": "vertical", "gap": 13}}),
+    ));
+
+    let recommended = ex(&mut s, "design.audit", json!({"scope": "page"}));
+    assert_eq!(recommended["preset"], "recommended", "{recommended}");
+    assert!(!has(&recommended, "color.accents"), "{recommended}");
+    assert!(!has(&recommended, "layout.no-auto-layout"), "{recommended}");
+    let strict = ex(&mut s, "design.audit", json!({"scope": "page", "preset": "strict"}));
+    assert!(has(&strict, "color.accents"), "{strict}");
+    assert!(has(&strict, "layout.no-auto-layout"), "{strict}");
+    let a11y = ex(&mut s, "design.audit", json!({"scope": "page", "preset": "accessibility"}));
+    assert!(!has(&a11y, "spacing.off-grid"), "{a11y}");
+
+    // The file can make Strict its own, and a disabled rule is neither reported nor fixed.
+    ex(&mut s, "design.configure", json!({"preset": "strict", "disabled": ["spacing.off-grid"]}));
+    let file = ex(&mut s, "design.audit", json!({"scope": "page"}));
+    assert_eq!(file["preset"], "strict", "{file}");
+    assert!(has(&file, "color.accents"), "{file}");
+    assert!(!has(&file, "spacing.off-grid"), "{file}");
+    ex(&mut s, "design.fix", json!({"scope": "page"}));
+    assert_eq!(s.doc().unwrap().node(off_grid).unwrap().layout.as_ref().unwrap().gap, 13.0, "a disabled rule is not fixed");
+}
+
+#[test]
+fn brand_colours_do_not_count_as_stray_accents() {
+    let mut s = Session::new();
+    for (i, fill) in ["#FF0000", "#00AA00", "#0000FF"].iter().enumerate() {
+        ex(&mut s, "node.create", json!({"type": "rectangle", "x": i * 60, "y": 0, "width": 40, "height": 40, "props": {"fill": fill}}));
+    }
+    let loose = ex(&mut s, "design.audit", json!({"scope": "page", "preset": "strict"}));
+    assert!(has(&loose, "color.accents"), "{loose}");
+    let brand = ex(&mut s, "design.configure", json!({"brand": ["#FF0000", "#00AA00"]}));
+    assert_eq!(brand["brand"], json!(["#FF0000", "#00AA00"]), "{brand}");
+    let kept = ex(&mut s, "design.audit", json!({"scope": "page", "preset": "strict"}));
+    assert!(!has(&kept, "color.accents"), "{kept}");
 }
 
 #[test]

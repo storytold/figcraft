@@ -1949,6 +1949,12 @@ status = "draft — needs native review"
 "Score" = "Rezultat"
 "Select" = "Odaberi"
 "The check failed; see the message below." = "Provjera nije uspjela; pogledajte poruku ispod."
+"Preset" = "Predložak"
+"Recommended" = "Preporučeno"
+"Strict" = "Strogo"
+"Accessibility" = "Pristupačnost"
+"More than two accent colours" = "Previše akcentnih boja"
+"A frame with no auto layout" = "Okvir bez automatskog rasporeda"
 [commands]
 
 "align.bottom" = "Poravnaj dno"

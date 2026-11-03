@@ -1,6 +1,6 @@
 //! The Design review window: the check it runs, the list it keeps and the repairs it makes.
 
-use figcraft_doc::NodeId;
+use figcraft_doc::{DesignPreset, NodeId};
 use figcraft_engine::Session;
 use serde_json::json;
 
@@ -122,6 +122,36 @@ fn a_file_saved_while_the_window_is_open_keeps_its_ignores() {
     u.app.session.ds_mut().unwrap().path = Some("saved-later.figcraft".into());
     crate::design_review::persist_ignores(&mut u.app, &state);
     assert_eq!(u.app.session.prefs.design_review_ignored.get("saved-later.figcraft"), Some(&vec!["type.weight@4".to_string()]));
+}
+
+#[test]
+fn the_window_reads_the_files_preset_and_grid() {
+    let mut s = Session::new();
+    s.execute("design.configure", &json!({"preset": "strict", "grid": 8})).unwrap();
+    let mut u = Ui::new(s);
+    crate::design_review::open(&mut u.app);
+    let state = u.app.ui.design_review.as_ref().unwrap();
+    assert_eq!(state.preset, DesignPreset::Strict);
+    assert_eq!(state.grid, 8.0);
+}
+
+#[test]
+fn the_window_saves_the_preset_and_grid_in_the_file() {
+    let (mut h, _) = Harness::new();
+    crate::design_review::open(&mut h.app);
+    let shapes = h.frames(4);
+    h.click(text_center(&shapes, "Recommended"));
+    let shapes = h.frames(2);
+    h.click(text_center(&shapes, "Strict"));
+    h.frames(2);
+    assert_eq!(h.app.session.ds().unwrap().doc.design_review.preset, DesignPreset::Strict);
+    let shapes = h.frames(1);
+    h.click(text_center(&shapes, "8 px"));
+    h.frames(2);
+    assert_eq!(h.app.session.ds().unwrap().doc.design_review.grid(), 8.0);
+    let report = h.app.ui.design_review.as_ref().and_then(|s| s.report.clone()).expect("the window checked again");
+    assert_eq!(report["preset"], "strict", "{report}");
+    assert_eq!(report["grid"], 8.0, "{report}");
 }
 
 #[test]

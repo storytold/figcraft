@@ -17,45 +17,63 @@ mod tests;
 
 use std::collections::BTreeSet;
 
-use figcraft_doc::{Document, NodeId};
+use figcraft_doc::{DesignPreset, DesignReview, Document, GRID_MAX, GRID_MIN, MAX_BRAND_COLORS, MAX_RADII, NodeId};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::params;
 use crate::{EngineError, Result, Session, bad, spec};
-use rules::{RULES, Severity, rule};
+use rules::{RULES, Severity, presets_of, rule};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!(
             "design.audit",
             "Check design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], minSeverity?: low|medium|high (default low)} → {scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], minSeverity?: low|medium|high (default low), preset?: recommended|strict|accessibility (default: the file's)} → {preset, grid, scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
             false,
             audit_cmd
         ),
         spec!(
             "design.fix",
             "Fix design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
             true,
             fix_cmd
         ),
         spec!(
             "design.assert",
             "Assert design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], failOn?: low|medium|high (default high), minScore?: 0-100 (default 0)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists or the score is below minScore; read-only, for CI",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), failOn?: low|medium|high (default high), minScore?: 0-100 (default 0)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists or the score is below minScore; read-only, for CI",
             false,
             assert_cmd
         ),
-        spec!("design.rules", "List design rules", "{} → {rules: [{id, severity, fixable, description}]}", false, |_, _| Ok(
-            json!({"rules": RULES.iter().map(|r| json!({
-                "id": r.id,
-                "severity": r.severity.id(),
-                "fixable": r.fixable,
-                "description": r.description,
-            })).collect::<Vec<_>>()})
-        )),
+        spec!(
+            "design.configure",
+            "Configure design review",
+            "{preset?: recommended|strict|accessibility, grid?: 1-64 (px, default 4), radii?: [px] (empty: the grid scale and a pill), brand?: [colour] (accent colours the file owns), disabled?: [rule ids] (rules off in this file), reset?: bool} → {preset, grid, radii, brand, disabled}  changes the file's design review settings in one undo step; audit, fix and assert use them from then on",
+            true,
+            configure_cmd
+        ),
+        spec!(
+            "design.rules",
+            "List design rules",
+            "{} → {rules: [{id, severity, fixable, description, presets}], presets: [{id, description}]}",
+            false,
+            |_, _| Ok(json!({
+                "rules": RULES.iter().map(|r| json!({
+                    "id": r.id,
+                    "severity": r.severity.id(),
+                    "fixable": r.fixable,
+                    "description": r.description,
+                    "presets": presets_of(r.id),
+                })).collect::<Vec<_>>(),
+                "presets": DesignPreset::ALL.iter().map(|p| json!({
+                    "id": p.id(),
+                    "description": preset_description(*p),
+                })).collect::<Vec<_>>(),
+            }))
+        ),
     ]
 }
 
@@ -63,14 +81,16 @@ fn audit_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let (label, roots, anchor, path) = scope_of(s, "design.audit", p)?;
     let min = severity_arg("design.audit", p)?;
     let filter = filter_arg("design.audit", p)?;
-    Ok(audit::run(s.doc()?, &roots, &label, anchor, &path, min, filter.as_ref()))
+    let preset = preset_arg("design.audit", p)?;
+    Ok(audit::run(s.doc()?, &roots, &label, anchor, &path, min, filter.as_ref(), preset))
 }
 
 fn fix_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let (label, roots, anchor, path) = scope_of(s, "design.fix", p)?;
     let filter = filter_arg("design.fix", p)?;
+    let preset = preset_arg("design.fix", p)?;
     let dry = params::boolean(p, "dryRun").unwrap_or(false);
-    Ok(fix::run(s.doc_mut()?, &roots, anchor, &path, &label, filter.as_ref(), dry))
+    Ok(fix::run(s.doc_mut()?, &roots, anchor, &path, &label, preset, filter.as_ref(), dry))
 }
 
 /// `design.assert`: a read-only gate for CI. Returns the score when the design passes; an error
@@ -79,6 +99,7 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let (label, roots, anchor, path) = scope_of(s, "design.assert", p)?;
     let filter = filter_arg("design.assert", p)?;
     let fail_on = severity_named("design.assert", p, "failOn", Severity::High)?;
+    let preset = preset_arg("design.assert", p)?;
     let min_score = match params::get(p, "minScore") {
         None => 0.0,
         Some(v) => match params::f64_of(v) {
@@ -88,7 +109,7 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // The score covers the whole review (as the window shows it); only findings at or above
     // `failOn` fail the gate.
-    let report = audit::run(s.doc()?, &roots, &label, anchor, &path, Severity::Low, filter.as_ref());
+    let report = audit::run(s.doc()?, &roots, &label, anchor, &path, Severity::Low, filter.as_ref(), preset);
     let failing: Vec<&Value> = report["findings"]
         .as_array()
         .map(|v| v.iter().filter(|f| f["severity"].as_str().and_then(Severity::from_id).is_some_and(|s| s >= fail_on)).collect())
@@ -117,6 +138,105 @@ fn severity_named(cmd: &str, p: &Value, key: &str, default: Severity) -> Result<
         None => Ok(default),
         Some(s) => Severity::from_id(&s).ok_or_else(|| bad(cmd, format!("`{key}` must be low, medium or high, not `{s}`"))),
     }
+}
+
+fn preset_arg(cmd: &str, p: &Value) -> Result<Option<DesignPreset>> {
+    match params::string(p, "preset").map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) => {
+            DesignPreset::from_id(&s).map(Some).ok_or_else(|| bad(cmd, format!("`preset` must be recommended, strict or accessibility, not `{s}`")))
+        }
+    }
+}
+
+fn preset_description(preset: DesignPreset) -> &'static str {
+    match preset {
+        DesignPreset::Recommended => "The usual AI-generated tells",
+        DesignPreset::Strict => "Recommended plus accent colours and frames without auto layout",
+        DesignPreset::Accessibility => "Contrast, the type floor, gradient text and clipped text only",
+    }
+}
+
+/// `design.configure`: change the file's design system and rules in one undo step.
+fn configure_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut config = if params::boolean(p, "reset").unwrap_or(false) { DesignReview::default() } else { s.doc()?.design_review.clone() };
+    if let Some(preset) = preset_arg("design.configure", p)? {
+        config.preset = preset;
+    }
+    if let Some(v) = params::get(p, "grid") {
+        let grid = params::f64_of(v)
+            .filter(|g| g.is_finite() && (GRID_MIN..=GRID_MAX).contains(g))
+            .ok_or_else(|| bad("design.configure", format!("`grid` must be a number from {GRID_MIN} to {GRID_MAX}")))?;
+        config.grid = grid;
+    }
+    if let Some(v) = params::get(p, "radii") {
+        let Value::Array(items) = v else { return Err(bad("design.configure", "`radii` must be an array of numbers")) };
+        if items.len() > MAX_RADII {
+            return Err(bad("design.configure", format!("at most {MAX_RADII} radii")));
+        }
+        let mut radii = Vec::new();
+        for item in items {
+            let r = params::f64_of(item)
+                .filter(|r| r.is_finite() && (0.0..=999.0).contains(r))
+                .ok_or_else(|| bad("design.configure", "each radius must be a number from 0 to 999"))?;
+            radii.push((r * 100.0).round() / 100.0);
+        }
+        radii.sort_by(f64::total_cmp);
+        radii.dedup_by(|a, b| (*a - *b).abs() <= 1e-6);
+        config.radii = radii;
+    }
+    if let Some(v) = params::get(p, "brand") {
+        let Value::Array(items) = v else { return Err(bad("design.configure", "`brand` must be an array of colours")) };
+        if items.len() > MAX_BRAND_COLORS {
+            return Err(bad("design.configure", format!("at most {MAX_BRAND_COLORS} brand colours")));
+        }
+        let mut brand = Vec::new();
+        for item in items {
+            let color = params::color_of(item).ok_or_else(|| bad("design.configure", "each brand colour must be a colour"))?;
+            if color.a > 0.05 {
+                brand.push(color);
+            }
+        }
+        config.brand = brand;
+    }
+    if let Some(v) = params::get(p, "disabled") {
+        let Value::Array(items) = v else { return Err(bad("design.configure", "`disabled` must be an array of rule ids")) };
+        let mut ids = BTreeSet::new();
+        for item in items {
+            let Some(id) = item.as_str().map(str::trim) else {
+                return Err(bad("design.configure", "`disabled` must be an array of rule ids"));
+            };
+            if rule(id).is_none() {
+                return Err(bad("design.configure", format!("unknown rule `{id}` (run design.rules for the list)")));
+            }
+            ids.insert(id.to_string());
+        }
+        config.disabled = ids.into_iter().collect();
+    }
+    if s.doc()?.design_review == config {
+        return Ok(settings_json(&config));
+    }
+    let doc = s.doc_mut()?;
+    doc.design_review = config;
+    Ok(settings_json(&doc.design_review))
+}
+
+fn settings_json(config: &DesignReview) -> Value {
+    let brand: Vec<String> = config
+        .brand
+        .iter()
+        .map(|c| {
+            let rgba = c.to_rgba8();
+            format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])
+        })
+        .collect();
+    json!({
+        "preset": config.preset.id(),
+        "grid": config.grid(),
+        "radii": config.radii,
+        "brand": brand,
+        "disabled": config.disabled,
+    })
 }
 
 /// The layers a command works on, its scope label, the layer aggregate findings point at and that

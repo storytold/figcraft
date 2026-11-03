@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use egui::{Context, RichText, Sense, vec2};
-use figcraft_doc::NodeId;
+use figcraft_doc::{DesignPreset, NodeId};
 use serde_json::{Value, json};
 
 use crate::FigApp;
@@ -89,7 +89,18 @@ fn rule_label(rule: &str) -> &str {
         "naming.auto" => tr_noop("A layer still has its default name"),
         "detail.shadow-count" => tr_noop("Too many shadows or blurs"),
         "layout.text-overflow" => tr_noop("Text overflows its box"),
+        "color.accents" => tr_noop("More than two accent colours"),
+        "layout.no-auto-layout" => tr_noop("A frame with no auto layout"),
         _ => rule,
+    }
+}
+
+/// The preset's name in the interface catalogs (the key is the English text).
+fn preset_label(preset: DesignPreset) -> &'static str {
+    match preset {
+        DesignPreset::Recommended => tr_noop("Recommended"),
+        DesignPreset::Strict => tr_noop("Strict"),
+        DesignPreset::Accessibility => tr_noop("Accessibility"),
     }
 }
 
@@ -101,6 +112,9 @@ pub struct State {
     pub live: bool,
     /// Show the findings the user ignored (saved files keep them in the preferences).
     pub show_ignored: bool,
+    /// The file's preset and spacing grid, as the check uses them.
+    pub preset: DesignPreset,
+    pub grid: f64,
     pub report: Option<Value>,
     pub error: Option<String>,
     /// Ignores: one finding and whole rules, kept in the preferences by document path.
@@ -129,11 +143,14 @@ impl State {
                 }
             }
         }
+        let config = app.session.ds().ok().map(|d| d.doc.design_review.clone()).unwrap_or_default();
         Self {
             scope: Scope::Page,
             filter: SeverityFilter::All,
             live: false,
             show_ignored: false,
+            preset: config.preset,
+            grid: config.grid(),
             report: None,
             error: None,
             ignored,
@@ -239,6 +256,13 @@ pub(crate) fn check(app: &mut FigApp) {
     if let Some(state) = app.ui.design_review.as_mut() {
         match result {
             Some(report) => {
+                // The file's settings, not the window's memory, decide the next run.
+                if let Some(preset) = report["preset"].as_str().and_then(DesignPreset::from_id) {
+                    state.preset = preset;
+                }
+                if let Some(grid) = report["grid"].as_f64() {
+                    state.grid = grid;
+                }
                 state.report = Some(report);
                 state.error = None;
             }
@@ -305,6 +329,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     let mut select_rule: Option<String> = None;
     let mut clear_ignores = false;
     let mut scope_changed = false;
+    let mut config_changed = false;
 
     let screen = ctx.content_rect();
     let default = egui::pos2((screen.center().x - 180.0).max(screen.min.x), (screen.center().y - 220.0).max(screen.min.y));
@@ -318,6 +343,23 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
             }
             if widgets::button(ui, tr("Check design"), true, true).clicked() {
                 action = Some(Action::Check);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(tr("Preset"));
+            craft_ui::ComboBox::from_id_salt("design_review_preset").width(150.0).selected_text(tr(preset_label(state.preset))).show_ui(ui, |ui| {
+                for preset in DesignPreset::ALL {
+                    if ui.selectable_value(&mut state.preset, preset, tr(preset_label(preset))).changed() {
+                        config_changed = true;
+                    }
+                }
+            });
+            ui.label(tr("Grid"));
+            for grid in [4.0, 8.0] {
+                if ui.selectable_label((state.grid - grid).abs() < 0.5, format!("{grid:.0} px")).clicked() && (state.grid - grid).abs() >= 0.5 {
+                    state.grid = grid;
+                    config_changed = true;
+                }
             }
         });
         ui.horizontal(|ui| {
@@ -469,6 +511,13 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     if let Some(id) = select {
         app.session.set_selection(vec![id]);
     }
+    if config_changed {
+        // The preset and the grid belong to the file (`design.configure`); the check then runs
+        // against them.
+        if let Some((preset, grid)) = app.ui.design_review.as_ref().map(|s| (s.preset, s.grid)) {
+            app.run("design.configure", json!({"preset": preset.id(), "grid": grid}));
+        }
+    }
     if let Some((id, rule, message, path)) = comment {
         comment_on(app, id, &rule, &message, &path);
     }
@@ -476,7 +525,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
         Some(Action::Check) => check(app),
         Some(Action::FixAll) => fix_all(app),
         Some(Action::FixFinding(rule, node)) => fix_finding(app, &rule, node),
-        None if scope_changed || live_due => check(app),
+        None if scope_changed || config_changed || live_due => check(app),
         None => {}
     }
     sync_revision(app, now);

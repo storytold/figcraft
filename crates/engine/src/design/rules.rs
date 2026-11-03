@@ -1,5 +1,7 @@
 //! The rules `design.audit` checks, with the severity and fixability the report carries.
 
+use figcraft_doc::DesignPreset;
+
 /// How much a finding matters: `High` first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Severity {
@@ -74,6 +76,7 @@ pub(crate) const RULES: &[Rule] = &[
     Rule { id: "color.colored-shadow", severity: Severity::Low, fixable: true, description: "A shadow has a visible hue instead of a neutral" },
     Rule { id: "color.border-opacity", severity: Severity::Low, fixable: true, description: "A border is more opaque than a hairline" },
     Rule { id: "color.contrast", severity: Severity::High, fixable: true, description: "Text contrast is below 4.5:1 (3:1 for large text)" },
+    Rule { id: "color.accents", severity: Severity::Medium, fixable: false, description: "More than two accent colours in one scope (Strict)" },
     Rule { id: "token.hardcoded-color", severity: Severity::Low, fixable: false, description: "A colour matches a variable but is not bound to it" },
     Rule {
         id: "token.hardcoded-number",
@@ -88,6 +91,12 @@ pub(crate) const RULES: &[Rule] = &[
     Rule { id: "naming.auto", severity: Severity::Low, fixable: false, description: "A layer still has its default auto name (Frame 12)" },
     Rule { id: "detail.shadow-count", severity: Severity::Low, fixable: false, description: "Shadows and blurs sit on too many layers" },
     Rule {
+        id: "layout.no-auto-layout",
+        severity: Severity::Low,
+        fixable: false,
+        description: "A frame or component with several children has no auto layout (Strict)",
+    },
+    Rule {
         id: "layout.text-overflow",
         severity: Severity::High,
         fixable: false,
@@ -97,4 +106,21 @@ pub(crate) const RULES: &[Rule] = &[
 
 pub(crate) fn rule(id: &str) -> Option<&'static Rule> {
     RULES.iter().find(|r| r.id == id)
+}
+
+/// Whether `preset` checks `id`. Recommended and Strict check every rule except the Strict-only
+/// ones; Accessibility checks only the findings that keep a design usable.
+pub(crate) fn enabled(id: &str, preset: DesignPreset) -> bool {
+    match preset {
+        DesignPreset::Recommended => !matches!(id, "color.accents" | "layout.no-auto-layout"),
+        DesignPreset::Strict => true,
+        DesignPreset::Accessibility => {
+            matches!(id, "color.contrast" | "color.gradient-text" | "type.too-small" | "layout.text-overflow")
+        }
+    }
+}
+
+/// The presets that check `id`, for `design.rules`.
+pub(crate) fn presets_of(id: &str) -> Vec<&'static str> {
+    DesignPreset::ALL.iter().copied().filter(|p| enabled(id, *p)).map(DesignPreset::id).collect()
 }

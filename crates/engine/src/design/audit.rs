@@ -7,7 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_color::{BlendMode, Color, Paint, PaintKind};
-use figcraft_doc::{Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize, TextData, VariableValue};
+use figcraft_doc::{
+    DesignPreset, Document, Effect, EffectKind, LayoutMode, Node, NodeId, NodeKind, Shadow, StrokeAlign, TextAutoResize, TextData, VariableValue,
+};
 use serde_json::{Map, Value, json};
 
 use crate::cmd::lists::paint_binding_key;
@@ -21,6 +23,90 @@ const MAX_TEXT_MEASURED: usize = 2_000;
 /// Most siblings or children one backdrop lookup scans before it stops guessing; a flat frame with
 /// tens of thousands of layers must not turn every text check into a full scan.
 const MAX_BACKDROP_SCAN: usize = 512;
+
+/// The design system a run checks against: the file's settings (`design.configure`) with an
+/// optional preset override from the call.
+#[derive(Clone)]
+pub(crate) struct Settings {
+    pub(crate) preset: DesignPreset,
+    pub(crate) grid: f64,
+    /// Allowed corner radii; empty: any multiple of the grid from the grid up, or a pill.
+    pub(crate) radii: Vec<f64>,
+    /// Brand accents as 8-bit RGBA.
+    pub(crate) brand: Vec<[u8; 4]>,
+    pub(crate) disabled: BTreeSet<String>,
+}
+
+impl Settings {
+    pub(crate) fn new(doc: &Document, preset: Option<DesignPreset>) -> Self {
+        let config = &doc.design_review;
+        Self {
+            preset: preset.unwrap_or(config.preset),
+            grid: config.grid(),
+            radii: config.radii.iter().copied().filter(|r| r.is_finite() && (0.0..=999.0).contains(r)).collect(),
+            brand: config.brand.iter().map(|c| c.to_rgba8()).collect(),
+            disabled: config.disabled.iter().cloned().collect(),
+        }
+    }
+
+    /// Whether a run using these settings reports `id`.
+    pub(crate) fn enabled(&self, id: &str) -> bool {
+        !self.disabled.contains(id) && super::rules::enabled(id, self.preset)
+    }
+
+    fn on_grid(&self, v: f64) -> bool {
+        v.is_finite() && ((v / self.grid) - (v / self.grid).round()).abs() <= 0.01
+    }
+
+    pub(crate) fn snap(&self, v: f64) -> f64 {
+        if v.is_finite() { ((v / self.grid).round() * self.grid).max(0.0) } else { 0.0 }
+    }
+
+    pub(crate) fn radius_ok(&self, r: f64, w: f64, h: f64) -> bool {
+        if !r.is_finite() || r <= 0.01 {
+            return true;
+        }
+        let min = w.min(h);
+        let pill = min > 0.0 && (r - min / 2.0).abs() <= 1.0;
+        if pill {
+            return true;
+        }
+        if !self.radii.is_empty() {
+            return self.radii.iter().any(|a| (r - a).abs() <= 0.5);
+        }
+        r >= self.grid && self.on_grid(r)
+    }
+
+    pub(crate) fn snap_radius(&self, r: f64) -> f64 {
+        if !r.is_finite() {
+            return self.grid;
+        }
+        if !self.radii.is_empty() {
+            let mut best = self.grid;
+            let mut distance = f64::INFINITY;
+            for a in &self.radii {
+                let d = (r - a).abs();
+                if d < distance {
+                    best = *a;
+                    distance = d;
+                }
+            }
+            return best;
+        }
+        ((r / self.grid).round() * self.grid).max(self.grid)
+    }
+
+    /// Whether `c` is one of the file's brand accents (within a few 8-bit steps per channel).
+    pub(crate) fn is_brand(&self, c: Color) -> bool {
+        let rgba = c.to_rgba8();
+        self.brand.iter().any(|b| (0..4).all(|i| b[i].abs_diff(rgba[i]) <= 12))
+    }
+
+    /// The settings a report or the window shows.
+    pub(crate) fn json(&self) -> Value {
+        json!({"preset": self.preset.id(), "grid": self.grid})
+    }
+}
 
 /// One finding, owned so `design.fix` can act on it after the walk.
 #[derive(Clone)]
@@ -128,12 +214,16 @@ struct Ctx<'a> {
     /// Text layers laid out for the overflow check.
     measured: usize,
     tokens: Tokens,
+    /// The design system this run checks against.
+    settings: Settings,
+    /// Distinct accent colours, with the first layer that paints each (for `color.accents`).
+    accents: BTreeMap<[u8; 4], String>,
     truncated: bool,
 }
 
 /// Walk `roots` and collect every finding. `design.audit` reports them; `design.fix` acts on the
 /// ones marked fixable.
-pub(crate) fn collect(doc: &Document, roots: &[NodeId], anchor: Option<NodeId>, anchor_path: &str, scope: &str) -> Report {
+pub(crate) fn collect(doc: &Document, roots: &[NodeId], anchor: Option<NodeId>, anchor_path: &str, scope: &str, settings: &Settings) -> Report {
     let mut ctx = Ctx {
         doc,
         findings: Vec::new(),
@@ -144,6 +234,8 @@ pub(crate) fn collect(doc: &Document, roots: &[NodeId], anchor: Option<NodeId>, 
         shadowed: 0,
         measured: 0,
         tokens: Tokens::new(doc),
+        settings: settings.clone(),
+        accents: BTreeMap::new(),
         truncated: false,
     };
     for root in roots {
@@ -163,10 +255,16 @@ pub(crate) fn run(
     anchor_path: &str,
     min: Severity,
     filter: Option<&BTreeSet<String>>,
+    preset: Option<DesignPreset>,
 ) -> Value {
-    let report = collect(doc, roots, anchor, anchor_path, scope);
-    let shown: Vec<&Finding> =
-        report.findings.iter().filter(|f| f.severity >= min).filter(|f| filter.is_none_or(|set| set.contains(f.rule))).collect();
+    let settings = Settings::new(doc, preset);
+    let report = collect(doc, roots, anchor, anchor_path, scope, &settings);
+    let shown: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|f| f.severity >= min && settings.enabled(f.rule))
+        .filter(|f| filter.is_none_or(|set| set.contains(f.rule)))
+        .collect();
     let mut counts = [0usize; 3];
     for f in &shown {
         counts[f.severity.index()] += 1;
@@ -177,15 +275,17 @@ pub(crate) fn run(
         *by_rule.entry(f.rule).or_default() += 1;
     }
     let findings: Vec<Value> = shown.into_iter().map(Finding::json).collect();
-    json!({
-        "scope": scope,
-        "score": score,
-        "counts": {"high": counts[2], "medium": counts[1], "low": counts[0]},
-        "byRule": by_rule,
-        "nodes": report.nodes,
-        "findings": findings,
-        "truncated": report.truncated,
-    })
+    let mut out = settings.json();
+    if let Some(o) = out.as_object_mut() {
+        o.insert("scope".into(), json!(scope));
+        o.insert("score".into(), json!(score));
+        o.insert("counts".into(), json!({"high": counts[2], "medium": counts[1], "low": counts[0]}));
+        o.insert("byRule".into(), json!(by_rule));
+        o.insert("nodes".into(), json!(report.nodes));
+        o.insert("findings".into(), json!(findings));
+        o.insert("truncated".into(), json!(report.truncated));
+    }
+    out
 }
 
 impl Ctx<'_> {
@@ -225,6 +325,8 @@ impl Ctx<'_> {
         if let NodeKind::Text(t) = &n.kind {
             self.check_text(n, t, path);
         }
+        self.check_layout(n, path);
+        self.note_accents(n);
         self.check_tokens(n, path);
     }
 
@@ -234,34 +336,68 @@ impl Ctx<'_> {
         }
     }
 
+    /// A frame or component holding several layers without auto layout: in the Strict preset.
+    fn check_layout(&mut self, n: &Node, path: &str) {
+        if n.layout.is_some() || n.children.len() < 3 {
+            return;
+        }
+        if matches!(n.kind, NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) {
+            let count = n.children.len();
+            self.push("layout.no-auto-layout", n.id, path, format!("{count} children with no auto layout"), None);
+        }
+    }
+
+    /// Collect the accent colours the scope paints (brand accents and neutrals excluded), for
+    /// `color.accents`.
+    fn note_accents(&mut self, n: &Node) {
+        let paints = match &n.kind {
+            NodeKind::Text(t) => t.style.fills.as_deref().unwrap_or(&n.fills),
+            _ => &n.fills,
+        };
+        for p in paints.iter().chain(n.strokes.iter()) {
+            if !p.visible || p.opacity < 0.5 {
+                continue;
+            }
+            let PaintKind::Solid { color } = &p.kind else { continue };
+            if self.settings.is_brand(*color) {
+                continue;
+            }
+            if let Some(rgba) = accent_rgba(*color)
+                && self.accents.len() < 64
+            {
+                self.accents.entry(rgba).or_insert_with(|| n.name.trim().to_string());
+            }
+        }
+    }
+
     fn check_spacing(&mut self, n: &Node, path: &str) {
         let Some(al) = &n.layout else { return };
         let mut off = Vec::new();
         let mut suggestion = Map::new();
         if al.mode != LayoutMode::Grid {
-            if !on_grid(al.gap) {
+            if !self.settings.on_grid(al.gap) {
                 off.push(format!("gap {}", al.gap));
-                suggestion.insert("gap".into(), json!(snap(al.gap)));
+                suggestion.insert("gap".into(), json!(self.settings.snap(al.gap)));
             }
-            if al.wrap && !on_grid(al.cross_gap) {
+            if al.wrap && !self.settings.on_grid(al.cross_gap) {
                 off.push(format!("cross gap {}", al.cross_gap));
-                suggestion.insert("crossGap".into(), json!(snap(al.cross_gap)));
+                suggestion.insert("crossGap".into(), json!(self.settings.snap(al.cross_gap)));
             }
         }
         let sides = ["top", "right", "bottom", "left"];
         let mut padding_off = false;
         for (i, side) in sides.iter().enumerate() {
-            if let Some(v) = al.padding.get(i).copied().filter(|v| !on_grid(*v)) {
+            if let Some(v) = al.padding.get(i).copied().filter(|v| !self.settings.on_grid(*v)) {
                 off.push(format!("padding {side} {v}"));
                 padding_off = true;
             }
         }
         if padding_off {
-            suggestion.insert("padding".into(), json!(al.padding.map(snap)));
+            suggestion.insert("padding".into(), json!(al.padding.map(|v| self.settings.snap(v))));
         }
         if !off.is_empty() {
             let suggestion = if suggestion.is_empty() { None } else { Some(Value::Object(suggestion)) };
-            self.push("spacing.off-grid", n.id, path, format!("Off the 4px grid: {}", off.join(", ")), suggestion);
+            self.push("spacing.off-grid", n.id, path, format!("Off the {}px grid: {}", self.settings.grid, off.join(", ")), suggestion);
             if [
                 "gap",
                 "columnGap",
@@ -284,21 +420,21 @@ impl Ctx<'_> {
     }
 
     fn check_radius(&mut self, n: &Node, path: &str) {
-        let mut bad: Vec<f64> = n.corners.radii.iter().copied().filter(|r| *r > 0.01 && !radius_ok(*r, n.width, n.height)).collect();
+        let mut bad: Vec<f64> = n.corners.radii.iter().copied().filter(|r| *r > 0.01 && !self.settings.radius_ok(*r, n.width, n.height)).collect();
         if bad.is_empty() {
             return;
         }
         bad.sort_by(f64::total_cmp);
         bad.dedup_by(|a, b| (*a - *b).abs() <= 0.01);
         let shown: Vec<String> = bad.iter().map(|r| r.to_string()).collect();
-        let suggestion = json!({"cornerRadius": snap_radius(bad.first().copied().unwrap_or(0.0))});
-        self.push(
-            "radius.off-scale",
-            n.id,
-            path,
-            format!("Corner radius off the scale: {} (use 4, 8, 12, 16, 20… or a pill)", shown.join(", ")),
-            Some(suggestion),
-        );
+        let suggestion = json!({"cornerRadius": self.settings.snap_radius(bad.first().copied().unwrap_or(0.0))});
+        let scale = if self.settings.radii.is_empty() {
+            format!("any multiple of {}, or a pill", self.settings.grid)
+        } else {
+            let list: Vec<String> = self.settings.radii.iter().map(|r| r.to_string()).collect();
+            format!("{}, or a pill", list.join(", "))
+        };
+        self.push("radius.off-scale", n.id, path, format!("Corner radius off the scale: {} (use {scale})", shown.join(", ")), Some(suggestion));
         if ["cornerRadius", "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"].iter().any(|k| n.bound.contains_key(*k)) {
             self.not_fixable(" (bound to a variable)");
         }
@@ -597,6 +733,16 @@ impl Ctx<'_> {
         if self.visited >= 20 && self.shadowed > 5 && self.shadowed * 5 > self.visited {
             self.push("detail.shadow-count", node, path, format!("{} of {} layers carry a shadow or blur", self.shadowed, self.visited), None);
         }
+        if self.accents.len() > 2 {
+            let shown: Vec<String> = self.accents.keys().take(6).map(|c| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])).collect();
+            self.push(
+                "color.accents",
+                node,
+                path,
+                format!("{} accent colours in this {scope}: {} (keep two)", self.accents.len(), shown.join(", ")),
+                None,
+            );
+        }
     }
 
     fn push(&mut self, id: &'static str, node: NodeId, path: &str, message: String, suggestion: Option<Value>) {
@@ -624,22 +770,15 @@ fn label(n: &Node) -> String {
     if chars.next().is_some() { format!("{short}…") } else { short }
 }
 
-fn on_grid(v: f64) -> bool {
-    v.is_finite() && ((v / 4.0) - (v / 4.0).round()).abs() <= 0.01
-}
-
-pub(crate) fn snap(v: f64) -> f64 {
-    if v.is_finite() { ((v / 4.0).round() * 4.0).max(0.0) } else { 0.0 }
-}
-
-pub(crate) fn radius_ok(r: f64, w: f64, h: f64) -> bool {
-    let min = w.min(h);
-    let pill = min > 0.0 && (r - min / 2.0).abs() <= 1.0;
-    pill || (r >= 4.0 && on_grid(r))
-}
-
-pub(crate) fn snap_radius(r: f64) -> f64 {
-    if r.is_finite() { ((r / 4.0).round() * 4.0).max(4.0) } else { 4.0 }
+/// A colour that reads as an accent: enough chroma to be a hue rather than a neutral, and neither
+/// near-black nor near-white.
+fn accent_rgba(c: Color) -> Option<[u8; 4]> {
+    if !c.a.is_finite() || c.a < 0.5 {
+        return None;
+    }
+    let max = c.r.max(c.g).max(c.b);
+    let min = c.r.min(c.g).min(c.b);
+    (max - min >= 0.18 && max >= 0.2 && min <= 0.88).then(|| c.to_rgba8())
 }
 
 fn has_stroke(n: &Node) -> bool {

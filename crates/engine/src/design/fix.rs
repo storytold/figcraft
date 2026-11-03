@@ -8,10 +8,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_color::{Color, PaintKind};
-use figcraft_doc::{Document, EffectKind, LayoutMode, LetterSpacing, Node, NodeId, NodeKind, TextData, TextStyle};
+use figcraft_doc::{DesignPreset, Document, EffectKind, LayoutMode, LetterSpacing, Node, NodeId, NodeKind, TextData, TextStyle};
 use serde_json::{Value, json};
 
-use super::audit::{Report, backdrop, collect, is_colored_shadow, is_glow, radius_ok, snap, snap_radius, text_color};
+use super::audit::{Report, Settings, backdrop, collect, is_colored_shadow, is_glow, text_color};
 
 /// Fix what `roots` made fixable among `filter`'s rules. `dry_run` reports the same counts without
 /// changing the document.
@@ -21,12 +21,19 @@ pub(crate) fn run(
     anchor: Option<NodeId>,
     anchor_path: &str,
     scope: &str,
+    preset: Option<DesignPreset>,
     filter: Option<&BTreeSet<String>>,
     dry_run: bool,
 ) -> Value {
-    let before = collect(doc, roots, anchor, anchor_path, scope);
-    let targets: Vec<(NodeId, &'static str)> =
-        before.findings.iter().filter(|f| f.fixable).filter(|f| filter.is_none_or(|set| set.contains(f.rule))).map(|f| (f.node, f.rule)).collect();
+    let settings = Settings::new(doc, preset);
+    let before = collect(doc, roots, anchor, anchor_path, scope, &settings);
+    let targets: Vec<(NodeId, &'static str)> = before
+        .findings
+        .iter()
+        .filter(|f| f.fixable && settings.enabled(f.rule))
+        .filter(|f| filter.is_none_or(|set| set.contains(f.rule)))
+        .map(|f| (f.node, f.rule))
+        .collect();
     let mut by_rule: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut changed = 0usize;
     let mut skipped = 0usize;
@@ -37,7 +44,7 @@ pub(crate) fn run(
         }
     } else {
         for (id, rule) in &targets {
-            match apply(doc, *id, rule) {
+            match apply(doc, *id, rule, &settings) {
                 Some(true) => {
                     changed += 1;
                     *by_rule.entry(*rule).or_default() += 1;
@@ -46,46 +53,47 @@ pub(crate) fn run(
             }
         }
     }
-    let after = collect(doc, roots, anchor, anchor_path, scope);
+    let after = collect(doc, roots, anchor, anchor_path, scope, &settings);
     json!({
         "scope": scope,
         "dryRun": dry_run,
         "changed": changed,
         "skipped": skipped,
         "byRule": by_rule,
-        "before": tally(&before),
-        "after": tally(&after),
+        "before": tally(&before, &settings),
+        "after": tally(&after, &settings),
     })
 }
 
-fn tally(report: &Report) -> Value {
+fn tally(report: &Report, settings: &Settings) -> Value {
+    let shown: Vec<&super::audit::Finding> = report.findings.iter().filter(|f| settings.enabled(f.rule)).collect();
     let mut counts = [0usize; 3];
-    for f in &report.findings {
+    for f in &shown {
         counts[f.severity.index()] += 1;
     }
-    let score = (100.0 - report.findings.iter().map(|f| f.severity.penalty()).sum::<f64>()).clamp(0.0, 100.0).round();
+    let score = (100.0 - shown.iter().map(|f| f.severity.penalty()).sum::<f64>()).clamp(0.0, 100.0).round();
     json!({
         "score": score,
         "counts": {"high": counts[2], "medium": counts[1], "low": counts[0]},
         "nodes": report.nodes,
-        "findings": report.findings.len(),
+        "findings": shown.len(),
     })
 }
 
 /// Apply one finding's repair. `None` when the layer is gone or the repair does not apply to it;
 /// `Some(false)` when it applied to nothing (a no-op the caller counts as skipped).
-fn apply(doc: &mut Document, id: NodeId, rule: &str) -> Option<bool> {
+fn apply(doc: &mut Document, id: NodeId, rule: &str, settings: &Settings) -> Option<bool> {
     if rule == "color.contrast" {
         return apply_contrast(doc, id);
     }
     let n = doc.node_mut(id)?;
     match rule {
-        "spacing.off-grid" => apply_spacing(n),
+        "spacing.off-grid" => apply_spacing(n, settings),
         "radius.off-scale" => {
             if ["cornerRadius", "topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"].iter().any(|k| n.bound.contains_key(*k)) {
                 return Some(false);
             }
-            apply_radius(n)
+            apply_radius(n, settings)
         }
         "type.weight" | "type.italic" | "type.negative-tracking" => {
             if text_styled(n) || ["fontSize", "fontStyle", "fontWeight", "letterSpacing"].iter().any(|k| n.bound.contains_key(*k)) {
@@ -177,7 +185,7 @@ fn accessible(fg: Color, bg: Color, need: f32) -> Color {
     best
 }
 
-fn apply_spacing(n: &mut Node) -> Option<bool> {
+fn apply_spacing(n: &mut Node, settings: &Settings) -> Option<bool> {
     // Any spacing binding owns the whole layout value: fixing one field next to a token would
     // leave a mixed layout and is not what the audit promised.
     if [
@@ -201,13 +209,13 @@ fn apply_spacing(n: &mut Node) -> Option<bool> {
     let al = n.layout.as_mut()?;
     let mut changed = false;
     if al.mode != LayoutMode::Grid {
-        let gap = snap(al.gap);
+        let gap = settings.snap(al.gap);
         if (gap - al.gap).abs() > 1e-6 {
             al.gap = gap;
             changed = true;
         }
         if al.wrap {
-            let cross = snap(al.cross_gap);
+            let cross = settings.snap(al.cross_gap);
             if (cross - al.cross_gap).abs() > 1e-6 {
                 al.cross_gap = cross;
                 changed = true;
@@ -215,7 +223,7 @@ fn apply_spacing(n: &mut Node) -> Option<bool> {
         }
     }
     for side in &mut al.padding {
-        let value = snap(*side);
+        let value = settings.snap(*side);
         if (value - *side).abs() > 1e-6 {
             *side = value;
             changed = true;
@@ -224,13 +232,13 @@ fn apply_spacing(n: &mut Node) -> Option<bool> {
     Some(changed)
 }
 
-fn apply_radius(n: &mut Node) -> Option<bool> {
+fn apply_radius(n: &mut Node, settings: &Settings) -> Option<bool> {
     let (w, h) = (n.width, n.height);
     let pill = w.min(h);
     let mut changed = false;
     for r in &mut n.corners.radii {
-        if *r > 0.01 && !radius_ok(*r, w, h) {
-            *r = if pill > 0.0 && (*r - pill / 2.0).abs() <= 1.0 { pill / 2.0 } else { snap_radius(*r) };
+        if *r > 0.01 && !settings.radius_ok(*r, w, h) {
+            *r = if pill > 0.0 && (*r - pill / 2.0).abs() <= 1.0 { pill / 2.0 } else { settings.snap_radius(*r) };
             changed = true;
         }
     }

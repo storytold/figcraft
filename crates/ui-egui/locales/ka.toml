@@ -1920,6 +1920,12 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Score" = "ქულა"
 "Select" = "არჩევა"
 "The check failed; see the message below." = "შემოწმება ვერ მოხერხდა; იხილეთ შეტყობინება ქვემოთ."
+"Preset" = "წინასწარ დაყენება"
+"Recommended" = "რეკომენდებული"
+"Strict" = "მკაცრი"
+"Accessibility" = "ხელმისაწვდომობა"
+"More than two accent colours" = "ზედმეტი აქცენტის ფერი"
+"A frame with no auto layout" = "ჩარჩო ავტომატური განლაგების გარეშე"
 [commands]
 "align.bottom" = "ქვემოთ სწორება"
 "align.hcenter" = "ჰორიზონტალური ცენტრების სწორება"

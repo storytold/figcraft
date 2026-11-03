@@ -9,13 +9,38 @@ generation: this is a checklist with arithmetic, not a taste engine.
 
 | Command | What it does |
 |---|---|
-| `design.audit {scope?, ids?, rules?, minSeverity?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
-| `design.fix {scope?, ids?, rules?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. Content, naming and gradients are left alone. The window uses `ids` so it repairs only the findings the user kept. |
-| `design.assert {scope?, ids?, rules?, failOn?, minScore?}` | A read-only gate for CI. It fails with an error that names the counts when a finding at or above `failOn` (default `high`) exists or the score is below `minScore` (default 0); otherwise it returns `{ok: true, score, counts}`. The score covers the whole review, not just the findings at `failOn`. |
-| `design.rules` | Lists the rules with their severity, fixability and a one-line description. |
+| `design.audit {scope?, ids?, rules?, minSeverity?, preset?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `preset`, `grid`, `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. Changes nothing. |
+| `design.fix {scope?, ids?, rules?, preset?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. Content, naming and gradients are left alone. The window uses `ids` so it repairs only the findings the user kept. |
+| `design.assert {scope?, ids?, rules?, preset?, failOn?, minScore?}` | A read-only gate for CI. It fails with an error that names the counts when a finding at or above `failOn` (default `high`) exists or the score is below `minScore` (default 0); otherwise it returns `{ok: true, score, counts}`. The score covers the whole review, not just the findings at `failOn`. |
+| `design.configure {preset?, grid?, radii?, brand?, disabled?, reset?}` | Sets the file's design review settings in one undo step: the preset, the spacing grid, the accepted corner radii, the brand accent colours and the rules this file turns off. `reset: true` returns to the defaults (recommended, 4px grid, 4px radius scale, no brand, no disabled rules). `audit`, `fix` and `assert` use the settings from then on. |
+| `design.rules` | Lists the rules with their severity, fixability, the presets that check them and a one-line description, and the presets themselves. |
 
 `scope` is `selection`, `page` or `document`; `ids` names the layers directly (it wins over
-`scope`); `rules` narrows the run to rule ids; `minSeverity` is `low`, `medium` or `high`.
+`scope`); `rules` narrows the run to rule ids; `minSeverity` is `low`, `medium` or `high`;
+`preset` overrides the file's preset for that call.
+
+## Presets and the design system
+
+The review follows the file, not one person's taste. `design.configure` keeps four settings in the
+document, so everyone who opens it (and every agent, CLI and CI run) checks against the same
+system:
+
+- **Preset.** `recommended` (the default) checks the 23 usual tells. `strict` adds
+  `color.accents` (more than two accent colours in one scope) and `layout.no-auto-layout` (a frame
+  or component with three or more children and no auto layout). `accessibility` checks only what
+  keeps a design usable: contrast, the 11px type floor, gradient text and clipped text.
+- **Grid.** 4px by default; 8px (or anything from 1 to 64) makes spacing and radii snap to that
+  step instead. The audit's message and the fixer both use it.
+- **Radii.** Empty by default, which accepts any multiple of the grid from the grid up, or a pill.
+  A list such as `[0, 6, 10, 14]` is the scale then (a pill is still accepted), and the fixer moves
+  an off-scale corner to the nearest listed one.
+- **Brand.** A list of accent colours the file owns. `color.accents` (Strict) does not count them
+  as stray accents. Colours within a few 8-bit steps of a brand colour count as that brand.
+- **Disabled.** Rule ids this file turns off: neither reported nor repaired.
+
+The window has the preset and the grid (4 px / 8 px) in its second row; changing either writes the
+file with `design.configure` and re-runs the check. Radii, brand colours and disabled rules are
+command settings, so a design system can set them once and a CI script can rely on them.
 
 The same commands are available through the CLI (`figcraft-cli run`), the control channel and MCP
 (`run_command`). The MCP server's initialize instructions name them, and `prompts/list` has the
@@ -37,7 +62,9 @@ The checkmark button in the bottom toolbar — **Review design**, next to Action
 resizable window, as do **Review design** in the Actions palette (⌘K, no search needed) and
 `ui.menu.invoke {"id": "design.audit"}` on the control channel. Pick Selection, Page or Document
 and press **Check design**: the window shows the score with a progress bar, the counts and every
-finding, filterable by severity. **Select** selects the layer; **Fix** applies that rule; **Fix
+finding, filterable by severity. The row under the scope picks the file's **Preset** and its
+**Grid** (4 px or 8 px), and writes them with `design.configure` before checking again. **Select**
+selects the layer; **Fix** applies that rule; **Fix
 all** applies every fixable rule; **Comment** pins the finding to its layer as a comment, so the
 comments panel and the `fix_comments` / `watch_comments` loop can pick it up. **Live** re-runs the
 check after an edit has been still for a moment. **Ignore** hides one finding, **Ignore all of this
@@ -66,8 +93,9 @@ The interaction model follows open-source design linters rather than inventing o
   presets, JSON/CI output.
 
 The review borrows the interaction model (click-to-select, severity filter, Fix all, Comment, live
-re-lint, persisted ignores, Select all) and the CI idea (`design.assert`); it does not yet offer
-presets or a config file. No code, text or asset is copied; the rules are FigCraft's own.
+re-lint, persisted ignores, Select all), the CI idea (`design.assert`) and the per-file settings
+(`design.configure`: preset, grid, radii, brand, disabled rules) from these projects. No code,
+text or asset is copied; the rules are FigCraft's own.
 
 ## What it checks
 
@@ -87,6 +115,7 @@ presets or a config file. No code, text or asset is copied; the rules are FigCra
 | `color.colored-shadow` — a shadow with a visible hue | low | yes |
 | `color.border-opacity` — a border stronger than a hairline | low | yes |
 | `color.contrast` — text below 4.5:1 (3:1 large) | high | yes |
+| `color.accents` — more than two accent colours in one scope, brand colours excluded (**Strict**) | medium | no |
 | `token.hardcoded-color` — a solid colour equals a colour variable but is not bound | low | no |
 | `token.hardcoded-number` — spacing, radii, a text size or opacity equals a number variable but is not bound | low | no |
 | `icon.emoji` — emoji in text or a layer name | low | no |
@@ -96,6 +125,7 @@ presets or a config file. No code, text or asset is copied; the rules are FigCra
 | `naming.auto` — a layer still named "Frame 12" | low | no |
 | `detail.shadow-count` — shadows on too many layers | low | no |
 | `layout.text-overflow` — a fixed-width text box shorter than its text | high | no |
+| `layout.no-auto-layout` — a frame or component with three or more children and no auto layout (**Strict**) | low | no |
 
 The pair to remember: **hi**gh is a blocker (contrast, gradient text, clipped text), **medium** is
 a discipline problem (spacing, type, gradients), **low** is polish (weights, borders, names, copy).

@@ -1965,6 +1965,12 @@ name = "Svenska"
 "Score" = "Poäng"
 "Select" = "Välj"
 "The check failed; see the message below." = "Kontrollen misslyckades; se meddelandet nedan."
+"Preset" = "Förinställning"
+"Recommended" = "Rekommenderad"
+"Strict" = "Strikt"
+"Accessibility" = "Tillgänglighet"
+"More than two accent colours" = "För många accentfärger"
+"A frame with no auto layout" = "En ram utan automatisk layout"
 [commands]
 
 "align.bottom" = "Justera nederkant"
