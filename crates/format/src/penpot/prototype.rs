@@ -275,6 +275,7 @@ pub(super) fn resolve_destinations(doc: &mut Document, by_penpot_id: &BTreeMap<S
                     duration_ms: interaction.duration_ms,
                     easing: interaction.easing,
                     delay_ms: 0,
+                    reset_component_state: false,
                 });
                 continue;
             };
@@ -289,6 +290,7 @@ pub(super) fn resolve_destinations(doc: &mut Document, by_penpot_id: &BTreeMap<S
                 duration_ms: interaction.duration_ms,
                 easing: interaction.easing,
                 delay_ms: 0,
+                reset_component_state: false,
             });
             mapped += 1;
         }
