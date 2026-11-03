@@ -85,10 +85,18 @@ pub fn effect_from(cmd: &str, p: &Value, key: &str) -> Result<Option<Effect>> {
     Ok(Some(effect))
 }
 
+/// Most keys an effect object may carry (the widest effect takes about a dozen).
+const MAX_EFFECT_KEYS: usize = 32;
+
 /// Refuse the keys of effect `given` that `parse` ignores, naming the keys the effect takes. Set to
 /// null, a key it reads fails to parse or changes the effect; a key it ignores changes nothing.
 fn refuse_ignored_effect_keys(cmd: &str, at: &str, given: &Value, parse: impl Fn(&Value) -> Option<Effect>) -> Result<()> {
     let Some(fields) = given.as_object() else { return Ok(()) };
+    // Each key is probed by reparsing the whole object without it: bounded, or a long list of
+    // unknown keys costs its length squared before it is refused.
+    if fields.len() > MAX_EFFECT_KEYS {
+        return Err(bad(cmd, format!("{at}: more than {MAX_EFFECT_KEYS} properties")));
+    }
     let parsed = parse(given);
     let ignored: Vec<&str> = fields
         .iter()
