@@ -33,6 +33,13 @@ pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
 pub use derived::route;
 pub(crate) use derived::{settle_routes, settle_stamps, settle_text, stamp_target};
+
+/// The sticky, shape or other object at `p` on `page`: the topmost layer of the page whose box
+/// holds it (stamps, connectors, their labels and ink aside), other than `except`. What a stamp
+/// sticks to, and what a "+" handle dragged onto it joins (#1919).
+pub fn object_at(doc: &Document, page: NodeId, p: Point, except: Option<NodeId>) -> Option<NodeId> {
+    stamp_target(doc, page, p, except)
+}
 pub use edit::label_of;
 pub(crate) use edit::{copied_items, copy_map, rejoin};
 use edit::{label_cmd, set_color, set_style};
@@ -114,7 +121,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.addConnected",
             "Add connected shape",
-            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector}  the next one of the same kind, size and colour on that side, joined by a connector",
+            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), at? ([x, y] on the page: the next one's centre, anywhere, instead of its place on that side; the connector then takes the sides facing each other), edit? (start typing in it; default false)} → {id, text, connector}  the next one of the same kind, size and colour on that side, joined by a connector",
             true,
             add_connected
         ),

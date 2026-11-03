@@ -140,3 +140,56 @@ fn the_object_a_stamp_will_stick_to_is_highlighted() {
     u.button(off, false);
     assert_eq!((target(&u), on(&u)), (None, None), "let go off the shape: on nothing, and no outline");
 }
+
+/// Dragging a "+" carries the preview ("Click to select and create the next shape in that
+/// direction, or drag the preview to any location on your board", Build faster with quick create;
+/// #1919): let go on empty board and the next shape is made there, centred on the pointer, joined
+/// by a connector, with typing started; one undo takes both away.
+#[test]
+fn dragging_a_handle_drops_the_next_shape_where_it_is_let_go() {
+    let (mut u, a) = board_with_shape();
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let before = u.app.session.doc().unwrap().ids().count();
+    let from = handle(&u, "below").expect("a handle below").center();
+    let to = from + egui::vec2(260.0, 180.0);
+    u.drag_to(from, to);
+    u.button(to, false);
+    u.frame(vec![]);
+    let doc = u.app.session.doc().unwrap();
+    let next = doc.ids().find(|i| *i != a && matches!(doc.node(*i).unwrap().board, Some(BoardItem::Shape { .. }))).expect("a new shape");
+    let line = doc.ids().find(|i| matches!(doc.node(*i).unwrap().board, Some(BoardItem::Connector(_)))).expect("a connector");
+    let centre = screen_box(&u, next).center();
+    assert!((centre - to).length() < 1.0, "centred where it was let go: {centre:?}, not {to:?}");
+    assert!(matches!(&doc.node(line).unwrap().board, Some(BoardItem::Connector(c)) if c.from.node() == Some(a) && c.to.node() == Some(next)));
+    assert!(u.app.session.ds().unwrap().text_edit.is_some(), "typing in the new shape");
+    figcraft_engine::textedit::end(&mut u.app.session).unwrap();
+    u.app.session.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(u.app.session.doc().unwrap().ids().count(), before, "undo takes the shape and its connector away");
+}
+
+/// A "+" dragged onto another sticky or shape joins the two with a connector instead of making a
+/// new shape (#1919).
+#[test]
+fn dropping_a_handle_on_another_shape_joins_them() {
+    let (mut u, a) = board_with_shape();
+    let b = id(&u.app.session.execute("board.shape", &json!({"shape": "ellipse", "x": 400, "y": 300, "width": 160, "height": 100})).unwrap());
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let shapes = |u: &Ui| {
+        let doc = u.app.session.doc().unwrap();
+        doc.ids().filter(|i| matches!(doc.node(*i).unwrap().board, Some(BoardItem::Shape { .. }))).count()
+    };
+    assert_eq!(shapes(&u), 2);
+    let from = handle(&u, "right").expect("a handle right").center();
+    let to = screen_box(&u, b).center();
+    u.drag_to(from, to);
+    u.button(to, false);
+    u.frame(vec![]);
+    assert_eq!(shapes(&u), 2, "no new shape");
+    let doc = u.app.session.doc().unwrap();
+    let line = doc.ids().find(|i| matches!(doc.node(*i).unwrap().board, Some(BoardItem::Connector(_)))).expect("a connector");
+    assert!(matches!(&doc.node(line).unwrap().board, Some(BoardItem::Connector(c)) if c.from.node() == Some(a) && c.to.node() == Some(b)));
+}

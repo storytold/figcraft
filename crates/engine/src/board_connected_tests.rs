@@ -104,3 +104,20 @@ fn the_next_sticky_shortcut_joins_the_next_shape_and_leaves_stickies_as_they_wer
     assert!(r.get("connector").is_none(), "{r}");
     assert!(matches!(node(&s, id(&r, "id")).board, Some(BoardItem::Sticky { .. })));
 }
+
+/// `at` (#1919; "drag the preview to any location on your board", Build faster with quick create):
+/// the next one is centred on that point, wherever it is, and the connector takes the sides facing
+/// each other; `at` must be two finite numbers.
+#[test]
+fn the_next_one_goes_where_it_is_dropped() {
+    let mut s = board();
+    let a = id(&s.execute("board.shape", &json!({"shape": "diamond", "x": 0, "y": 0, "width": 200, "height": 120})).unwrap(), "id");
+    let r = s.execute("board.addConnected", &json!({"id": a, "side": "below", "at": [700, 60]})).unwrap();
+    let (b, c) = (id(&r, "id"), id(&r, "connector"));
+    assert_eq!(at(&s, b), (600.0, 0.0), "centred on the point");
+    let k = connector(&s, c);
+    assert_eq!((k.from, k.to), (End::Node { node: a, side: Side::Auto, at: None }, End::Node { node: b, side: Side::Auto, at: None }));
+    for wrong in [json!([1]), json!("x"), json!([0, "y"]), json!({"x": 1, "y": 2})] {
+        assert!(s.execute("board.addConnected", &json!({"id": a, "at": wrong})).is_err(), "{wrong}");
+    }
+}
