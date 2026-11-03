@@ -648,7 +648,8 @@ fn path_between(net: &VectorNetwork, from: usize, to: usize, skip: usize) -> Opt
 }
 
 /// Connect two points with a new segment (handles relative to each end). Closing an open path
-/// (both points were its ends) makes the loop a fill region. Returns the new segment.
+/// (both points were its ends) makes the loop a fill region, or closes the fill loop it kept.
+/// Returns the new segment.
 pub fn connect(net: &mut VectorNetwork, a: usize, b: usize, ta: (f64, f64), tb: (f64, f64)) -> Option<usize> {
     if a == b || a >= net.vertices.len() || b >= net.vertices.len() {
         return None;
@@ -658,8 +659,12 @@ pub fn connect(net: &mut VectorNetwork, a: usize, b: usize, ta: (f64, f64), tb: 
     net.segments.push(Segment { a, b, ta: finite_t(ta), tb: finite_t(tb) });
     let si = net.segments.len() - 1;
     if ends && let Some(mut lp) = path_between(net, b, a, si) {
-        let unfilled = !net.regions.iter().any(|r| r.loops.iter().flatten().any(|s| lp.contains(s)));
-        if unfilled {
+        // A loop that is exactly this open path (kept filled when it was opened) closes over the
+        // new segment, so the fill follows it instead of a straight closing line.
+        let kept = net.regions.iter_mut().flat_map(|r| r.loops.iter_mut()).find(|l| l.len() == lp.len() && l.iter().all(|s| lp.contains(s)));
+        if let Some(l) = kept {
+            l.push(si);
+        } else if !net.regions.iter().any(|r| r.loops.iter().flatten().any(|s| lp.contains(s))) {
             lp.insert(0, si);
             net.regions.push(Region { loops: vec![lp], winding: WindingRule::NonZero, fills: None, ..Default::default() });
         }

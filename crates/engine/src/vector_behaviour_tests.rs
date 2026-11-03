@@ -790,3 +790,41 @@ fn vector_points_take_the_requested_size() {
     let e = s.execute("vector.create", &json!({"points": points, "width": 16, "height": -1})).unwrap_err().to_string();
     assert!(e.contains("positive"), "{e}");
 }
+
+#[test]
+fn closing_a_path_that_kept_its_fill_rounds_every_corner() {
+    // A 465 × 254 rectangle with its top-right corner deleted (the path opens but keeps its fill),
+    // then the two open ends connected again: the new edge closes the kept fill loop, so the
+    // fill (and the selection outline drawn from it) rounds the same corners as the stroke.
+    let mut s = Session::new();
+    let id = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 465, "height": 254}))["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    let n = net(&s, id);
+    let top = n.segments.iter().position(|sg| n.vertices[sg.a].y == 0.0 && n.vertices[sg.b].y == 0.0).unwrap();
+    let t_top = if n.vertices[n.segments[top].a].x == 465.0 { 0.1 } else { 0.9 };
+    ex(&mut s, "vector.edit.addVertex", json!({"segment": top, "t": t_top}));
+    let n = net(&s, id);
+    let right = n.segments.iter().position(|sg| n.vertices[sg.a].x == 465.0 && n.vertices[sg.b].x == 465.0).unwrap();
+    let t_right = if n.vertices[n.segments[right].a].y == 0.0 { 0.2 } else { 0.8 };
+    ex(&mut s, "vector.edit.addVertex", json!({"segment": right, "t": t_right}));
+    let corner = point_at(&s, id, (465.0, 0.0));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [corner]}));
+    ex(&mut s, "vector.edit.delete", json!({}));
+    let n = net(&s, id);
+    let ends: Vec<usize> = (0..n.vertices.len()).filter(|v| n.incident(*v).len() == 1).collect();
+    assert_eq!(ends.len(), 2, "deleting the corner opens the path");
+    let seg = ex(&mut s, "vector.edit.connect", json!({"a": ends[0], "b": ends[1]}))["segment"].as_u64();
+    ex(&mut s, "vector.edit.end", json!({}));
+    ex(&mut s, "node.set", json!({"id": id, "strokeWeight": 4, "strokeAlign": "inside", "cornerRadius": 43}));
+    let n = net(&s, id);
+    let new_seg = seg.map(|x| x as usize).unwrap_or(n.segments.len() - 1);
+    assert_eq!(n.segments.len(), 5);
+    assert!(n.regions.iter().flat_map(|r| r.loops.iter().flatten()).any(|x| *x == new_seg), "the fill loop takes the new edge: {:?}", n.regions);
+    let (fill, stroke) = (n.fill_path(), n.stroke_path());
+    let curves = |p: &BezPath| p.elements().iter().filter(|e| matches!(e, figcraft_geom::kurbo::PathEl::CurveTo(..))).count();
+    assert_eq!(curves(&fill), curves(&stroke), "fill rounds the same corners as the stroke");
+    assert!((fill.area().abs() - stroke.area().abs()).abs() < 0.5, "fill {} stroke {}", fill.area(), stroke.area());
+    let doc = s.doc().unwrap();
+    let (outline, _) = figcraft_render::node_outline(doc, doc.get(id).unwrap()).unwrap();
+    assert!((outline.area().abs() - stroke.area().abs()).abs() < 0.5, "outline {} stroke {}", outline.area(), stroke.area());
+}
