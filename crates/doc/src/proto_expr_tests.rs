@@ -199,3 +199,12 @@ fn serde_round_trip_and_old_files() {
     let old: Action = serde_json::from_str(r#"{"type":"setVariable","variable":"n","value":2}"#).unwrap_or(Action::Back);
     assert_eq!(old, Action::SetVariable { variable: "n".into(), value: serde_json::json!(2), expr: None });
 }
+
+#[test]
+fn operands_holding_too_many_string_bytes_are_refused() {
+    let long = "x".repeat(300_000);
+    let few = Expr::op(ExprOp::Add, vec![s(&long), s(&long)]);
+    assert!(eval(&few).is_some());
+    let many = Expr::op(ExprOp::Add, (0..8).map(|_| s(&long)).collect());
+    assert_eq!(eval(&many), None);
+}
