@@ -574,6 +574,19 @@ impl Document {
         Ok(())
     }
 
+    /// Remove every child of `id` with its subtree, in one pass over `id`'s child list (removing
+    /// them one by one would search that list once per child).
+    pub fn remove_children(&mut self, id: NodeId) -> DocResult<()> {
+        let kids = std::mem::take(&mut self.get_mut(id)?.children);
+        for c in kids {
+            for d in self.subtree(c) {
+                self.nodes.remove(&d);
+                self.dirty.touch(d);
+            }
+        }
+        Ok(())
+    }
+
     /// Whether sections may go in `parent`: a page or another section (never a frame or a group).
     pub fn takes_sections(&self, parent: NodeId) -> bool {
         self.node(parent).is_some_and(|p| p.is_page() || matches!(p.kind, NodeKind::Section { .. }))
