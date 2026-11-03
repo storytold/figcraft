@@ -135,46 +135,65 @@ fn number_weight(word: &str) -> Option<u16> {
     (100..=1000).contains(&n).then_some(n)
 }
 
+/// Style-name words that give a weight or a slant.
+const WEIGHT_WORDS: [&str; 25] = [
+    "thin",
+    "hairline",
+    "extralight",
+    "ultralight",
+    "light",
+    "semilight",
+    "demilight",
+    "regular",
+    "normal",
+    "roman",
+    "book",
+    "medium",
+    "semibold",
+    "demibold",
+    "bold",
+    "extrabold",
+    "ultrabold",
+    "black",
+    "extrablack",
+    "ultrablack",
+    "heavy",
+    "italic",
+    "oblique",
+    "plain",
+    "standard",
+];
+
+/// Words that grade the weight word after them ("Extra Bold") but a width otherwise ("Extra Condensed").
+const GRADES: [&str; 4] = ["extra", "ultra", "semi", "demi"];
+
+/// The width a Univers number leading a style name gives, as Univers, Frutiger and Helvetica Neue
+/// LT name styles ("45 Light", "55 Roman", "57 Condensed", "67 Bold Condensed"): the first digit
+/// grades the weight, the second the width (3 or 4 extended, 5 or 6 normal, 7 or 8 condensed, 9
+/// ultra condensed; even is italic, which the name says too). Only before weight, slant and width
+/// words, so another leading number ("12 Regular", "55 Rounded") stays part of the width.
+fn univers_width(words: &[&str]) -> Option<u8> {
+    const WIDTHS: [&str; 6] = ["condensed", "compressed", "narrow", "extended", "expanded", "wide"];
+    let (code, rest) = words.split_first()?;
+    let &[b'1'..=b'9', d @ b'3'..=b'9'] = code.as_bytes() else { return None };
+    let known = |w: &&str| WEIGHT_WORDS.contains(w) || GRADES.contains(w) || WIDTHS.contains(w);
+    (!rest.is_empty() && rest.iter().all(known)).then_some((d - b'1') / 2)
+}
+
 /// What a style name says besides its weight and slant ("Narrow Bold Italic" → "narrow",
-/// "Extra Condensed Bold" → "extra condensed").
+/// "Extra Condensed Bold" → "extra condensed", "67 Bold Condensed" → its Univers width and "condensed").
 fn style_rest(style: &str) -> String {
-    const WEIGHTS: [&str; 25] = [
-        "thin",
-        "hairline",
-        "extralight",
-        "ultralight",
-        "light",
-        "semilight",
-        "demilight",
-        "regular",
-        "normal",
-        "roman",
-        "book",
-        "medium",
-        "semibold",
-        "demibold",
-        "bold",
-        "extrabold",
-        "ultrabold",
-        "black",
-        "extrablack",
-        "ultrablack",
-        "heavy",
-        "italic",
-        "oblique",
-        "plain",
-        "standard",
-    ];
-    // Words that grade the weight word after them ("Extra Bold") but a width otherwise ("Extra Condensed").
-    const GRADES: [&str; 4] = ["extra", "ultra", "semi", "demi"];
     let s = style.to_ascii_lowercase().replace('-', " ");
     let words: Vec<&str> = s.split_whitespace().collect();
-    let weight = |w: &str| WEIGHTS.contains(&w) || w_number(w).or_else(|| number_weight(w)).is_some();
+    let weight = |w: &str| WEIGHT_WORDS.contains(&w) || w_number(w).or_else(|| number_weight(w)).is_some();
     let rest = words.iter().enumerate().filter(|(i, w)| {
         let graded = GRADES.contains(w) && words.get(i + 1).is_some_and(|next| weight(next) && !matches!(*next, "italic" | "oblique"));
         !weight(w) && !graded
     });
-    rest.map(|(_, w)| *w).collect::<Vec<_>>().join(" ")
+    let univers = univers_width(&words).map(|d| format!("univers width {d}"));
+    // The Univers number (the first word kept) gives way to its width.
+    let rest = rest.map(|(_, w)| *w).skip(usize::from(univers.is_some()));
+    univers.as_deref().into_iter().chain(rest).collect::<Vec<_>>().join(" ")
 }
 
 /// A style name that slants: italic, or oblique as some families name it.
@@ -183,10 +202,16 @@ fn slanted(style: &str) -> bool {
     s.contains("italic") || s.contains("oblique")
 }
 
-/// The weight a style name says ("W3", "W6 Italic", "Condensed W7" and "Condensed 600" too).
+/// The weight a style name says ("W3", "W6 Italic", "Condensed W7", "Condensed 600" and "45 Light" too).
 pub(crate) fn name_weight(style: &str) -> u16 {
-    let words = style.to_ascii_lowercase().replace('-', " ");
-    words.split_whitespace().find_map(|w| w_number(w).or_else(|| number_weight(w))).unwrap_or_else(|| figcraft_doc::style_weight(style))
+    let s = style.to_ascii_lowercase().replace('-', " ");
+    let words: Vec<&str> = s.split_whitespace().collect();
+    // A Univers number's weight digit has no fixed CSS weight ("65" is Medium in Helvetica Neue,
+    // Bold in Univers): the words after it say it.
+    if let Some((_, rest)) = words.split_first().filter(|_| univers_width(&words).is_some()) {
+        return figcraft_doc::style_weight(&rest.join(" "));
+    }
+    words.iter().find_map(|w| w_number(w).or_else(|| number_weight(w))).unwrap_or_else(|| figcraft_doc::style_weight(style))
 }
 
 /// The next heavier (`up`) or lighter style of `styles` (a family's with the weight each is listed

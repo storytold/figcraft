@@ -92,6 +92,38 @@ fn number_weights_count_after_a_width_but_other_numbers_dont() {
 }
 
 #[test]
+fn univers_numbers_step_by_weight_within_their_width() {
+    // Helvetica Neue LT, Univers, Frutiger: the first digit grades the weight, the second the width.
+    let hn = weighed(&[
+        ("45 Light", 300),
+        ("46 Light Italic", 300),
+        ("55 Roman", 400),
+        ("56 Italic", 400),
+        ("57 Condensed", 400),
+        ("65 Medium", 500),
+        ("67 Medium Condensed", 500),
+        ("75 Bold", 700),
+        ("76 Bold Italic", 700),
+        ("77 Bold Condensed", 700),
+    ]);
+    assert_eq!(walk(&hn, "55 Roman", true), ["65 Medium", "75 Bold"]);
+    assert_eq!(walk(&hn, "65 Medium", false), ["55 Roman", "45 Light"]);
+    assert_eq!(walk(&hn, "57 Condensed", true), ["67 Medium Condensed", "77 Bold Condensed"]);
+    assert_eq!(walk(&hn, "67 Medium Condensed", false), ["57 Condensed"]);
+    assert_eq!(walk(&hn, "46 Light Italic", true), ["56 Italic", "76 Bold Italic"]);
+    // Faces not read yet: the words after the number give the weight.
+    let univers = styles(&["45 Light", "55 Roman", "65 Bold", "75 Black", "57 Condensed", "67 Bold Condensed"]);
+    assert_eq!(walk(&univers, "45 Light", true), ["55 Roman", "65 Bold", "75 Black"]);
+    assert_eq!(walk(&univers, "67 Bold Condensed", false), ["57 Condensed"]);
+    assert_eq!((name_weight("45 Light"), name_weight("75 Black"), name_weight("57 Condensed")), (300, 900, 400));
+    // Other leading numbers stay part of the width: before another word, or not a width digit.
+    let other = styles(&["12 Regular", "12 Bold", "55 Rounded", "55 Rounded Bold", "Regular", "Bold"]);
+    assert_eq!(walk(&other, "12 Regular", true), ["12 Bold"]);
+    assert_eq!(walk(&other, "55 Rounded", true), ["55 Rounded Bold"]);
+    assert_eq!(walk(&other, "Regular", true), ["Bold"]);
+}
+
+#[test]
 fn a_custom_weight_axis_value_steps_from_where_it_is() {
     let family = styles(&["Light", "Regular", "Medium", "Bold"]);
     let mut st = at("Regular");
