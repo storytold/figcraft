@@ -19,6 +19,17 @@ fn frame(s: &mut Session) -> NodeId {
 }
 
 #[test]
+fn live_recheck_waits_for_the_document_to_be_still() {
+    use crate::design_review::live_recheck_due;
+    // A change at t=10 is pending, but not due until it has been still for 0.4 s.
+    assert!(!live_recheck_due(true, 2, 1, 10.0, 10.2));
+    assert!(live_recheck_due(true, 2, 1, 10.0, 10.4));
+    // Off, or already checked: never due.
+    assert!(!live_recheck_due(false, 2, 1, 10.0, 10.5));
+    assert!(!live_recheck_due(true, 1, 1, 10.0, 10.5));
+}
+
+#[test]
 fn the_review_window_checks_the_page_and_fixes_what_it_can() {
     let mut s = Session::new();
     let f = frame(&mut s);
@@ -48,6 +59,38 @@ fn an_ignored_rule_is_not_fixed() {
     crate::design_review::fix_all(&mut u.app);
     let n = u.app.session.doc().unwrap().node(f).unwrap();
     assert_eq!(n.layout.as_ref().unwrap().gap, 13.0, "the ignored rule is left alone");
+}
+
+#[test]
+fn an_ignored_child_finding_is_not_fixed_by_fix_all() {
+    let mut s = Session::new();
+    let parent = NodeId(
+        s.execute(
+            "node.create",
+            &json!({"type": "frame", "name": "Parent", "x": 0, "y": 0, "width": 200, "height": 100,
+                    "props": {"layout": "vertical", "cornerRadius": 3}}),
+        )
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap(),
+    );
+    let child = NodeId(
+        s.execute(
+            "node.create",
+            &json!({"type": "rectangle", "name": "Child", "parent": parent, "x": 0, "y": 0, "width": 80, "height": 40,
+                    "props": {"cornerRadius": 3}}),
+        )
+        .unwrap()["id"]
+            .as_u64()
+            .unwrap(),
+    );
+    let mut u = Ui::new(s);
+    crate::design_review::open(&mut u.app);
+    u.app.ui.design_review.as_mut().unwrap().ignored.insert(("radius.off-scale".to_string(), child.0));
+    crate::design_review::fix_all(&mut u.app);
+    let doc = u.app.session.doc().unwrap();
+    assert_ne!(doc.node(parent).unwrap().corners.radii[0], 3.0, "the kept parent finding is fixed");
+    assert_eq!(doc.node(child).unwrap().corners.radii[0], 3.0, "the ignored child finding stays");
 }
 
 #[test]

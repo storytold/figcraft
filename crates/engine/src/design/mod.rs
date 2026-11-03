@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "design.fix",
             "Fix design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), exact?: bool (with ids: repair only findings on those layers, not their descendants), dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
             true,
             fix_cmd
         ),
@@ -90,8 +90,9 @@ fn fix_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let (label, roots, anchor, path) = scope_of(s, "design.fix", p)?;
     let filter = filter_arg("design.fix", p)?;
     let preset = preset_arg("design.fix", p)?;
+    let exact = params::boolean(p, "exact").unwrap_or(false);
     let dry = params::boolean(p, "dryRun").unwrap_or(false);
-    Ok(fix::run(s.doc_mut()?, &roots, anchor, &path, &label, preset, filter.as_ref(), dry))
+    Ok(fix::run(s.doc_mut()?, &roots, anchor, &path, &label, preset, filter.as_ref(), exact, dry))
 }
 
 /// `design.assert`: a read-only gate for CI. Returns the score when the design passes; an error

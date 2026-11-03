@@ -413,7 +413,7 @@ impl Ctx<'_> {
     /// A fixed-size auto layout frame that clips children which overflow it: the rows exist but
     /// are invisible — the usual headless surprise. Hug frames grow, so they cannot clip.
     fn check_clipping(&mut self, n: &Node, path: &str) {
-        if self.measured_frames >= MAX_FRAMES_MEASURED || !n.clip || n.children.is_empty() {
+        if self.measured_frames >= MAX_FRAMES_MEASURED || !n.clip || n.children.is_empty() || n.layout.is_none() {
             return;
         }
         // An instance mirrors its main; the main is audited where it lives.

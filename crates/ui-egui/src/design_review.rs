@@ -251,6 +251,7 @@ const RULE_IDS: &[&str] = &[
     "detail.shadow-count",
     "layout.text-overflow",
     "layout.no-auto-layout",
+    "layout.clipped",
 ];
 
 /// `"0, 6 10"` (commas, spaces or semicolons) → radii, capped and rounded; `None` when a part is
@@ -353,9 +354,11 @@ pub struct State {
     /// Ignores: one finding and whole rules, kept in the preferences by document path.
     pub(crate) ignored: BTreeSet<(String, u64)>,
     pub(crate) ignored_rules: BTreeSet<String>,
-    /// The document revision and egui time of the last check (live re-lint).
-    revision: u64,
-    last_check: f64,
+    /// Live re-lint: the revision last seen, the revision the last check covered, and when the
+    /// seen revision last changed.
+    seen_revision: u64,
+    checked_revision: u64,
+    changed_at: f64,
 }
 
 impl State {
@@ -392,8 +395,9 @@ impl State {
             error: None,
             ignored,
             ignored_rules,
-            revision: 0,
-            last_check: 0.0,
+            seen_revision: 0,
+            checked_revision: 0,
+            changed_at: 0.0,
         }
     }
 
@@ -489,6 +493,7 @@ pub(crate) fn persist_ignores(app: &mut FigApp, state: &State) {
 /// Run `design.audit` for the window's scope and keep the report.
 pub(crate) fn check(app: &mut FigApp) {
     let Some(scope) = app.ui.design_review.as_ref().map(|s| s.scope) else { return };
+    let revision = app.session.ds().map(|d| d.revision).unwrap_or(0);
     let result = app.run("design.audit", json!({"scope": scope.id()}));
     if let Some(state) = app.ui.design_review.as_mut() {
         match result {
@@ -505,10 +510,17 @@ pub(crate) fn check(app: &mut FigApp) {
             }
             None => state.error = Some(tr("The check failed; see the message below.").to_string()),
         }
+        // This check covers everything up to now: a later edit is what makes live re-lint due.
+        state.seen_revision = revision;
+        state.checked_revision = revision;
     }
 }
 
-fn fix(app: &mut FigApp, params: Value) {
+fn fix(app: &mut FigApp, mut params: Value) {
+    // The window repairs the rows the user kept, never a descendant finding it ignored.
+    if let Some(o) = params.as_object_mut() {
+        o.insert("exact".into(), Value::Bool(true));
+    }
     if let Some(result) = app.run("design.fix", params) {
         let changed = result["changed"].as_u64().unwrap_or(0);
         app.toast(trf("Fixed {n}", &[("n", &changed)]));
@@ -539,14 +551,6 @@ pub(crate) fn comment_on(app: &mut FigApp, node: NodeId, rule: &str, message: &s
     let text = format!("{} · {rule}\n{message}\n{path}", tr("Design review"));
     let text: String = text.chars().take(1_000).collect();
     app.run("comment.add", json!({"x": center.x, "y": center.y, "text": text, "anchor": node, "page": page}));
-}
-
-fn sync_revision(app: &mut FigApp, now: f64) {
-    let revision = app.session.ds().map(|d| d.revision).unwrap_or(0);
-    if let Some(state) = app.ui.design_review.as_mut() {
-        state.revision = revision;
-        state.last_check = now;
-    }
 }
 
 fn ui_font(size: f32) -> egui::FontId {
@@ -788,14 +792,26 @@ fn finding_view(ui: &mut egui::Ui, t: &Tokens, finding: &Value, all: &[Value]) -
     out
 }
 
+/// Live re-lint waits this long after the last change, so typing does not re-audit every frame.
+const LIVE_DELAY: f64 = 0.4;
+
+/// Whether the changed document has been still long enough for a live re-check.
+pub(crate) fn live_recheck_due(live: bool, seen: u64, checked: u64, changed_at: f64, now: f64) -> bool {
+    live && seen != checked && now - changed_at >= LIVE_DELAY
+}
+
 /// Draw the window. Called once a frame from `dialogs::show`.
 pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
     let Some(mut state) = app.ui.design_review.take() else { return };
     let t = Tokens::get(ctx);
     let now = ctx.input(|i| i.time);
     let revision = app.session.ds().map(|d| d.revision).unwrap_or(0);
+    if revision != state.seen_revision {
+        state.seen_revision = revision;
+        state.changed_at = now;
+    }
     // Live re-lint: the document changed and has been still for a moment.
-    let live_due = state.live && revision != state.revision && now - state.last_check >= 0.4;
+    let live_due = live_recheck_due(state.live, state.seen_revision, state.checked_revision, state.changed_at, now);
     let mut open = true;
     let mut action: Option<Action> = None;
     let mut select: Option<NodeId> = None;
@@ -1055,5 +1071,13 @@ pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
         None if scope_changed || config_applied || live_due => check(app),
         None => {}
     }
-    sync_revision(app, now);
+    // A changed document that is waiting for the delay still gets its frame even when the user
+    // stops moving; otherwise an idle window would never run the pending check.
+    if let Some(state) = app.ui.design_review.as_ref()
+        && state.live
+        && state.seen_revision != state.checked_revision
+    {
+        let wait = (LIVE_DELAY - (now - state.changed_at)).max(0.0);
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
+    }
 }

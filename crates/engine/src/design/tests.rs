@@ -666,6 +666,28 @@ fn fix_with_ids_leaves_other_layers_alone() {
 }
 
 #[test]
+fn fix_with_exact_leaves_a_child_finding_alone() {
+    let mut s = Session::new();
+    let parent = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Parent", "x": 0, "y": 0, "width": 200, "height": 100,
+               "props": {"layout": "vertical", "cornerRadius": 3}}),
+    ));
+    let child = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "rectangle", "name": "Child", "parent": parent, "x": 0, "y": 0, "width": 80, "height": 40,
+               "props": {"cornerRadius": 3}}),
+    ));
+    let r = ex(&mut s, "design.fix", json!({"ids": [parent], "rules": ["radius.off-scale"], "exact": true}));
+    assert_eq!(r["changed"], 1, "{r}");
+    let doc = s.doc().unwrap();
+    assert_ne!(doc.node(parent).unwrap().corners.radii[0], 3.0, "the root is repaired");
+    assert_eq!(doc.node(child).unwrap().corners.radii[0], 3.0, "an ignored child finding stays: exact means the listed layers only");
+}
+
+#[test]
 fn hardcoded_values_that_match_variables_are_reported() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "C"}));
@@ -743,6 +765,22 @@ fn a_fixed_frame_that_clips_children_is_reported() {
 }
 
 #[test]
+fn a_plain_clipping_frame_is_not_a_layout_finding() {
+    let mut s = Session::new();
+    let f = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Crop", "x": 0, "y": 0, "width": 200, "height": 40,
+               "props": {"fill": "#FFFFFF"}}),
+    ));
+    // A manual frame clipping its artwork is a crop, not a layout mistake: `sizingV` cannot fix it.
+    ex(&mut s, "node.create", json!({"type": "rectangle", "parent": f, "x": 0, "y": 30, "width": 200, "height": 40}));
+    let only = json!(["layout.clipped"]);
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only}));
+    assert!(rules(&r).is_empty(), "clipping a manual frame is intentional: {r}");
+}
+
+#[test]
 fn an_auto_layout_frame_hugs_the_axes_no_size_names() {
     let mut s = Session::new();
     let f = id(&ex(
@@ -770,6 +808,27 @@ fn an_auto_layout_frame_hugs_the_axes_no_size_names() {
     let n = s.doc().unwrap().node(p).unwrap();
     assert_eq!(n.child_layout.sizing_h, Sizing::Fixed);
     assert_eq!(n.width, 100.0);
+    // A size in props is explicit too: it keeps that axis fixed and the other one hugs.
+    let q = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Props height", "x": 1000, "y": 0,
+               "props": {"layout": "vertical", "height": 300}}),
+    ));
+    let n = s.doc().unwrap().node(q).unwrap();
+    assert_eq!(n.height, 300.0);
+    assert_eq!(n.child_layout.sizing_v, Sizing::Fixed);
+    assert_eq!(n.child_layout.sizing_h, Sizing::Hug);
+    let r = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Props width", "x": 1000, "y": 400,
+               "props": {"layout": "vertical", "w": 320}}),
+    ));
+    let n = s.doc().unwrap().node(r).unwrap();
+    assert_eq!(n.width, 320.0);
+    assert_eq!(n.child_layout.sizing_h, Sizing::Fixed);
+    assert_eq!(n.child_layout.sizing_v, Sizing::Hug);
 }
 
 #[test]

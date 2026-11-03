@@ -369,7 +369,9 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
         // Explicit width/height and explicit sizing keep their fixed/fill behaviour.
         if doc.node(nid).is_some_and(|n| n.layout.is_some()) {
             let asked = |axis: &str, keys: &[&str]| {
-                (if axis == "h" { num(p, "width") } else { num(p, "height") }).is_some() || keys.iter().any(|k| props.contains_key(*k))
+                let long = if axis == "h" { "width" } else { "height" };
+                let short = if axis == "h" { "w" } else { "h" };
+                num(p, long).is_some() || props.contains_key(long) || props.contains_key(short) || keys.iter().any(|k| props.contains_key(*k))
             };
             if let Some(n) = doc.node_mut(nid) {
                 if !asked("h", &["sizingH", "layoutSizingHorizontal"]) {

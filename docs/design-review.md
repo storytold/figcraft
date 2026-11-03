@@ -9,8 +9,8 @@ generation: this is a checklist with arithmetic, not a taste engine.
 
 | Command | What it does |
 |---|---|
-| `design.audit {scope?, ids?, rules?, minSeverity?, preset?, modes?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `preset`, `grid`, the modes it read (when `modes` was given), `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `details`, `fixable` and a `suggestion` where a safe one exists. `details` holds the values behind the message (for the window's localized line and for agents). Changes nothing. |
-| `design.fix {scope?, ids?, rules?, preset?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. Content, naming and gradients are left alone. The window uses `ids` so it repairs only the findings the user kept. |
+| `design.audit {scope?, ids?, rules?, minSeverity?, preset?, modes?}` | Reads the selection (default when something is selected), the page (default otherwise) or the document, or just `ids`. Returns `preset`, `grid`, the modes it read (when `modes` was given), `score`, `counts`, `byRule`, `nodes` and `findings`; every finding has `rule`, `severity`, `node`, `path`, `message`, `fixable` and a `suggestion` where a safe one exists. `details` is present when the finding has measured values behind the message (the window's localized line and agents read them); some findings, such as gradient text, have none. Changes nothing. |
+| `design.fix {scope?, ids?, rules?, preset?, exact?, dryRun?}` | Repairs the findings marked fixable in one undo step and reports `changed`, `skipped`, `byRule` and the counts before and after. `dryRun` reports without changing. `exact` (with `ids`) repairs only findings on those layers, not on their descendants. Content, naming and gradients are left alone. The window uses `ids` and `exact` so it repairs only the findings the user kept. |
 | `design.assert {scope?, ids?, rules?, preset?, modes?, failOn?, minScore?}` | A read-only gate for CI. It fails with an error that names the counts when a finding at or above `failOn` (default `high`) exists or the score is below `minScore` (default 0); otherwise it returns `{ok: true, score, counts}`. The score covers the whole review, not just the findings at `failOn`. |
 | `design.configure {preset?, grid?, radii?, brand?, disabled?, reset?}` | Sets the file's design review settings in one undo step: the preset, the spacing grid, the accepted corner radii, the brand accent colours and the rules this file turns off. `reset: true` returns to the defaults (recommended, 4px grid, 4px radius scale, no brand, no disabled rules). `audit`, `fix` and `assert` use the settings from then on. |
 | `design.rules` | Lists the rules with their severity, fixability, the presets that check them and a one-line description, and the presets themselves. |
@@ -53,7 +53,7 @@ way is report-only: changing a layer would drift from the design system, so `des
 alone. To gate both appearances, run the gate twice:
 
 ```sh
-echo '[{"command":"design.assert","params":{"scope":"page","failOn":"high"}},{"command":"design.assert","params":{"scope":"page","modes":{"Theme":"Dark"},"failOn":"high"}}]' > review.jsonl
+echo '[{"command":"design.assert","params":{"scope":"page","modes":{"Theme":"Light"},"failOn":"high"}},{"command":"design.assert","params":{"scope":"page","modes":{"Theme":"Dark"},"failOn":"high"}}]' > review.jsonl
 figcraft-cli run review.jsonl --in design.figcraft
 ```
 
@@ -152,7 +152,7 @@ text or asset is copied; the rules are FigCraft's own.
 | `naming.auto` — a layer still named "Frame 12" | low | no |
 | `detail.shadow-count` — shadows on too many layers | low | no |
 | `layout.text-overflow` — a fixed-width text box shorter than its text | high | no |
-| `layout.clipped` — a fixed-size auto layout frame clipping children that overflow it, so they are invisible | high | no |
+| `layout.clipped` — a fixed-size auto-layout frame clipping children that overflow it, so they are invisible | high | no |
 | `layout.no-auto-layout` — a frame or component with three or more children and no auto layout (**Strict**) | low | no |
 
 The pair to remember: **hi**gh is a blocker (contrast, gradient text, clipped text), **medium** is
