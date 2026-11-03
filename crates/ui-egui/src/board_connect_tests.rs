@@ -236,3 +236,42 @@ fn letting_a_handle_go_over_a_panel_makes_nothing() {
     u.frame(vec![]);
     assert_eq!(u.app.session.doc().unwrap().ids().count(), before, "nothing made");
 }
+
+/// A handle let go over the floating toolbar at the bottom of the canvas makes nothing either
+/// (review): the toolbar lies inside the canvas rectangle.
+#[test]
+fn letting_a_handle_go_over_the_toolbar_makes_nothing() {
+    let (mut u, a) = board_with_shape();
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let before = u.app.session.doc().unwrap().ids().count();
+    let from = handle(&u, "below").expect("a handle below").center();
+    let to = crate::toolbar::pill_rect(u.app.canvas.rect, crate::toolbar::bar_width(&u.app)).center();
+    u.drag_to(from, to);
+    u.button(to, false);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.doc().unwrap().ids().count(), before, "nothing made behind the toolbar");
+}
+
+/// The selection moving to another shape under a drag ends the drag (review): letting go later,
+/// even with the first shape selected again, makes nothing.
+#[test]
+fn a_drag_ends_when_the_selection_moves_to_another_shape() {
+    let (mut u, a) = board_with_shape();
+    let b = id(&u.app.session.execute("board.shape", &json!({"shape": "ellipse", "x": 600, "y": 0, "width": 160, "height": 100})).unwrap());
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let before = u.app.session.doc().unwrap().ids().count();
+    let from = handle(&u, "below").expect("a handle below").center();
+    let to = from + egui::vec2(0.0, 160.0);
+    u.drag_to(from, to);
+    u.app.session.execute("select.set", &json!({"ids": [b]})).unwrap();
+    u.frame(vec![Event::PointerMoved(to)]);
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![Event::PointerMoved(to)]);
+    u.button(to, false);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.doc().unwrap().ids().count(), before, "the drag was over");
+}

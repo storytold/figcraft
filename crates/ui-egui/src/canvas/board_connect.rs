@@ -147,11 +147,17 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
     // A drag carries the preview: the next one centred on the pointer, or the object under it,
     // which the connector joins instead.
-    let Some(Drag { from, side }) = drag.filter(|d| d.from == id) else { return };
+    let Some(Drag { from, side }) = drag else { return };
+    // The selection moved to another sticky or shape under the drag: it is over too.
+    if from != id {
+        ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+        return;
+    }
     let Some(pointer) = ctx.input(|i| i.pointer.latest_pos()) else { return };
     let over = object_under(app, from, pointer);
-    // Off the canvas (over a panel) there is nothing to show and nothing to make.
-    let on_canvas = app.canvas.rect.contains(pointer);
+    // Off the canvas (over a panel) or over the floating toolbar there is nothing to show and
+    // nothing to make.
+    let on_canvas = app.canvas.rect.contains(pointer) && !toolbar.contains(pointer);
     if on_canvas {
         drag_preview(app, ctx, (b, next, side), pointer, over);
     }
