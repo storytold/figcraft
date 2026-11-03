@@ -78,15 +78,19 @@ const LATIN_AMERICA: &[&str] =
 
 /// The [`LANGS`] index for one tag: the exact tag ("pt-BR"), else its base language ("es" for
 /// "es_ES.UTF-8"), else a regional catalog of that language ("pt-BR" for "pt-PT"); Latin American
-/// Spanish ("es-MX") reads es-419, and Traditional Chinese (zh-Hant, zh-TW, zh-HK, zh-MO) none: it
-/// has no catalog and Simplified isn't a stand-in. A language the UI can't draw (CJK on the web
-/// without CJK faces built in) doesn't count.
+/// Spanish ("es-MX") reads es-419. A Chinese tag reads Traditional (zh-Hant) for `Hant`, `TW`, `HK`
+/// or `MO` and Simplified (zh-Hans) otherwise; an explicit `Hans` always reads Simplified. A
+/// language the UI can't draw (CJK on the web without CJK faces built in) doesn't count.
 fn resolve_one(want: &str) -> Option<usize> {
     let tag = want.trim().split(['.', '@']).next().unwrap_or("").replace('_', "-");
     let base = tag.split('-').next().unwrap_or("");
     let has = |subtags: &[&str]| tag.split('-').skip(1).any(|t| subtags.iter().any(|s| s.eq_ignore_ascii_case(t)));
-    if base.eq_ignore_ascii_case("zh") && (has(&["Hant"]) || (!has(&["Hans"]) && has(&["TW", "HK", "MO"]))) {
-        return None;
+    let zh = |code: &str| {
+        LANGS.iter().position(|l| l.code.eq_ignore_ascii_case(code)).filter(|i| LANGS.get(*i).is_some_and(|l| crate::cjk::can_show(l.code)))
+    };
+    if base.eq_ignore_ascii_case("zh") {
+        let traditional = has(&["Hant"]) || (!has(&["Hans"]) && has(&["TW", "HK", "MO"]));
+        return zh(if traditional { "zh-Hant" } else { "zh-Hans" });
     }
     let find = |t: &str| LANGS.iter().position(|l| l.code.eq_ignore_ascii_case(t));
     let alias = (base.eq_ignore_ascii_case("es") && has(LATIN_AMERICA)).then(|| find("es-419")).flatten();
@@ -182,7 +186,7 @@ fn plural(code: &str, n: usize) -> Plural {
         "bs" if n % 10 == 1 && n % 100 != 11 => Plural::One,
         "bs" if (2..=4).contains(&(n % 10)) && !(12..=14).contains(&(n % 100)) => Plural::Few,
         "bs" => Plural::Other,
-        "ja" | "ko" | "th" | "zh-Hans" | "vi" => Plural::Other,
+        "ja" | "ko" | "th" | "zh-Hans" | "zh-Hant" | "vi" => Plural::Other,
         "fr" | "pt-BR" if n <= 1 => Plural::One,
         _ if n == 1 => Plural::One,
         _ => Plural::Other,
