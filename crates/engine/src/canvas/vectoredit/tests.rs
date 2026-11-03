@@ -119,6 +119,16 @@ fn bend_tool_smooths_and_sharpens_points() {
     let n = net(&s, id);
     let v = vertex_at(&n, 100.0, 0.0);
     assert!(n.incident(v).iter().all(|(s, st)| n.handle(*s, *st) == Some((0.0, 0.0))), "a click sharpens it");
+    // Clicked again, the sharp corner curves: handles along the line between its neighbours
+    // (0,0) and (100,100), a third of the way to each (the box refits around the bulge, so the
+    // point is found by its index).
+    click(&mut s, 100.0, 0.0);
+    let n = net(&s, id);
+    assert_eq!(n.mirroring(v), HandleMirroring::Angle);
+    for (seg, st) in n.incident(v) {
+        let h = n.handle(seg, st).unwrap();
+        assert!((h.0.abs() - 100.0 / 3.0 / 2f64.sqrt()).abs() < 1e-6 && (h.0 - h.1).abs() < 1e-6, "along the neighbours' line: {h:?}");
+    }
     // ⌘-drag on a segment with the Move tool bends it.
     ex(&mut s, "vector.edit.tool", json!({"tool": "move"}));
     let mut down = ev(PointerKind::Down, 0.0, 50.0);
@@ -128,6 +138,123 @@ fn bend_tool_smooths_and_sharpens_points() {
     s.pointer(&ev(PointerKind::Up, -40.0, 50.0)).unwrap();
     let b = s.doc().unwrap().world_bounds(id).unwrap();
     assert!(b.x0 < -25.0, "bent outwards: {b:?}");
+}
+
+/// #1875: a line whose middle point was moved off the line, clicked with the Bend tool, curves
+/// there ("Click on a point or path where you want to add a curve", Edit vector layers): the
+/// handles run along the line between the neighbours, a third of the way to each, in one undo
+/// step; an endpoint is left alone; a click on the curved point makes it sharp again.
+#[test]
+fn a_bend_click_curves_a_sharp_point_between_its_neighbours() {
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [50, 30], [100, 0]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.tool", json!({"tool": "bend"}));
+    let (v, end) = (vertex_at(&net(&s, id), 50.0, 30.0), vertex_at(&net(&s, id), 0.0, 0.0));
+    let before = s.undo_depth().0;
+    click(&mut s, 50.0, 30.0);
+    let n = net(&s, id);
+    let reach = (50f64.powi(2) + 30f64.powi(2)).sqrt() / 3.0;
+    for (seg, st) in n.incident(v) {
+        let h = n.handle(seg, st).unwrap();
+        assert!((h.0.abs() - reach).abs() < 1e-6 && h.1.abs() < 1e-6, "along the neighbours' line, a third of the way: {h:?}");
+    }
+    assert_eq!(n.mirroring(v), HandleMirroring::Angle);
+    assert_eq!(s.undo_depth().0, before + 1, "one undo step");
+    // An endpoint has nothing to curve: the click changes nothing and leaves no undo step.
+    click(&mut s, 0.0, 0.0);
+    let n = net(&s, id);
+    assert!(n.incident(end).iter().all(|(sg, st)| n.handle(*sg, *st) == Some((0.0, 0.0))));
+    assert_eq!(s.undo_depth().0, before + 1);
+    // The curved point clicked again is sharp again.
+    click(&mut s, 50.0, 30.0);
+    let n = net(&s, id);
+    assert!(n.incident(v).iter().all(|(sg, st)| n.handle(*sg, *st) == Some((0.0, 0.0))));
+}
+
+/// Between a handle's end and a point both within reach, the nearer on the page wins, also under a
+/// non-uniform scale (10× wide here), where local distances would pick the point.
+#[test]
+fn a_handle_and_a_point_are_compared_on_the_page() {
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [5, 0]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    {
+        let node = s.doc_mut().unwrap().get_mut(id).unwrap();
+        let mut n = VectorNetwork::default();
+        n.vertices.push(figcraft_doc::Vertex::new(0.0, 0.0));
+        n.vertices.push(figcraft_doc::Vertex::new(5.0, 0.0));
+        let mut seg = figcraft_doc::Segment::line(0, 1);
+        seg.ta = (0.5, -0.9);
+        n.segments.push(seg);
+        node.kind = figcraft_doc::NodeKind::Vector { network: n };
+        node.transform = figcraft_geom::Affine::scale_non_uniform(10.0, 1.0);
+    }
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [0]}));
+    let doc = s.doc().unwrap().clone();
+    // On the page the point is at (0, 0) and its handle's end at (5, -0.9): from (4, 0) the
+    // handle's end is 1.3 away and the point 4, though locally the point is the nearer.
+    assert_eq!(hit(&doc, &ve(&s), pt(4.0, 0.0), 6.0), Some(VHit::Handle { seg: 0, start: true }));
+    assert_eq!(hit(&doc, &ve(&s), pt(0.0, 0.0), 6.0), Some(VHit::Vertex { index: 0 }));
+}
+
+/// A handle whose end lies exactly on another point (snapped there) can still be taken there: on a
+/// tie the handle wins, as handles always did.
+#[test]
+fn a_handle_on_another_point_is_still_the_handles() {
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [10, 0]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    {
+        let node = s.doc_mut().unwrap().get_mut(id).unwrap();
+        let mut n = VectorNetwork::default();
+        n.vertices.push(figcraft_doc::Vertex::new(0.0, 0.0));
+        n.vertices.push(figcraft_doc::Vertex::new(10.0, 0.0));
+        let mut seg = figcraft_doc::Segment::line(0, 1);
+        seg.ta = (10.0, 0.0);
+        n.segments.push(seg);
+        node.kind = figcraft_doc::NodeKind::Vector { network: n };
+        node.transform = figcraft_geom::Affine::IDENTITY;
+    }
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [0]}));
+    let doc = s.doc().unwrap().clone();
+    // Where the points are on the page now (entering edit mode may refit the layer's box).
+    let n = net(&s, id);
+    let w = doc.world_transform(id);
+    let (p0, p1) = (w * n.vertices[0].point(), w * n.vertices[1].point());
+    // Point 0's handle ends on point 1: there the handle; on point 0, the point.
+    assert_eq!(hit(&doc, &ve(&s), p1, 6.0), Some(VHit::Handle { seg: 0, start: true }));
+    assert_eq!(hit(&doc, &ve(&s), p0, 6.0), Some(VHit::Vertex { index: 0 }));
+}
+
+/// A short path's handles end a few pixels from their point: a click on the point is still on the
+/// point (the nearer of the two wins), so the Bend tool can sharpen it again, while a click on the
+/// handle's end still takes the handle.
+#[test]
+fn short_handles_leave_their_point_clickable() {
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [6, 10], [12, 0]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.tool", json!({"tool": "bend"}));
+    let v = vertex_at(&net(&s, id), 6.0, 10.0);
+    click(&mut s, 6.0, 10.0);
+    let n = net(&s, id);
+    let curved = |n: &VectorNetwork| n.incident(v).iter().all(|(sg, st)| n.handle(*sg, *st).is_some_and(|h| h != (0.0, 0.0)));
+    assert!(curved(&n));
+    let reach = (6f64.powi(2) + 10f64.powi(2)).sqrt() / 3.0;
+    assert!(reach < 6.0, "the handles end within the 6 px hit tolerance: {reach}");
+    // A click on the handle's end takes the handle (nothing changes); one on the point sharpens it.
+    let (sg, st) = n.incident(v)[0];
+    let h = n.handle(sg, st).unwrap();
+    click(&mut s, 6.0 + h.0, 10.0 + h.1);
+    assert!(curved(&net(&s, id)), "the handle's end is the handle's");
+    click(&mut s, 6.0, 10.0);
+    let n = net(&s, id);
+    assert!(n.incident(v).iter().all(|(sg, st)| n.handle(*sg, *st) == Some((0.0, 0.0))), "the point is the point's: sharp again");
 }
 
 #[test]
