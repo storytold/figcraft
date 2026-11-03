@@ -11,6 +11,9 @@ struct ActionTiming {
     rect: Option<Rect>,
     now: f64,
     depth: usize,
+    /// Whether the interaction's "reset component state" is on: navigation and overlays reset
+    /// affected component instances to their default variant.
+    reset_component_state: bool,
 }
 
 impl Presenter {
@@ -64,7 +67,7 @@ impl Presenter {
         let mut did = false;
         let first_link = self.urls.len();
         for a in &it.actions {
-            did |= self.perform(a, node, it.transition, dur, it.easing, rect, now);
+            did |= self.perform(a, node, it.transition, dur, it.easing, rect, now, it.reset_component_state);
         }
         let asked = live
             && matches!(
@@ -98,19 +101,34 @@ impl Presenter {
         error
     }
 
-    pub(crate) fn perform(&mut self, a: &Action, node: NodeId, tr: Transition, dur: f64, easing: Easing, rect: Option<Rect>, now: f64) -> bool {
-        self.perform_at(a, node, ActionTiming { transition: tr, duration: dur, easing, rect, now, depth: 0 })
+    pub(crate) fn perform(
+        &mut self,
+        a: &Action,
+        node: NodeId,
+        tr: Transition,
+        dur: f64,
+        easing: Easing,
+        rect: Option<Rect>,
+        now: f64,
+        reset_component_state: bool,
+    ) -> bool {
+        self.perform_at(a, node, ActionTiming { transition: tr, duration: dur, easing, rect, now, depth: 0, reset_component_state })
     }
 
     /// One action; `depth` counts the conditional actions it is inside.
     fn perform_at(&mut self, a: &Action, node: NodeId, timing: ActionTiming) -> bool {
-        let ActionTiming { transition: tr, duration: dur, easing, rect, now, depth } = timing;
+        let ActionTiming { transition: tr, duration: dur, easing, rect, now, depth, reset_component_state } = timing;
         let Some(doc) = self.doc.clone() else { return false };
         match a {
             Action::Navigate { dest, preserve_scroll } => {
                 let Some(top) = figcraft_engine::proto_run::navigate_target(&doc, *dest, &self.sections) else { return false };
                 if !doc.contains(top) || (top == self.current && self.overlays.is_empty()) {
                     return false;
+                }
+                if reset_component_state {
+                    if let Some(d) = self.design.as_mut() {
+                        reset_component_state_in(d, top);
+                    }
                 }
                 self.go(top, tr, dur, easing, now, true, *preserve_scroll);
                 true
@@ -144,6 +162,11 @@ impl Presenter {
                 let at = self.page_rect(rect);
                 if !doc.contains(*dest) {
                     return false;
+                }
+                if reset_component_state {
+                    if let Some(d) = self.design.as_mut() {
+                        reset_component_state_in(d, *dest);
+                    }
                 }
                 self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
                 self.overlays.push(OverlayState {
@@ -275,6 +298,31 @@ impl Presenter {
         let ft = FrameTex { key, tex, bounds };
         self.textures.insert(id, ft.clone());
         Some(ft)
+    }
+}
+
+/// Reset every interactive-component instance in `root`'s subtree to its default variant state
+/// (the variant and props the component set defines as default), rebuilding each instance so the
+/// reset shows. Used when an interaction with `resetComponentState` navigates or opens an overlay.
+fn reset_component_state_in(doc: &mut Document, root: NodeId) {
+    let ids: Vec<NodeId> = doc.subtree(root);
+    for id in ids {
+        let Some(component) = doc.node(id).and_then(|n| match &n.kind {
+            NodeKind::Instance { component, .. } => Some(*component),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let set = figcraft_engine::components::variant_set(doc, component);
+        let default_comp = set.and_then(|s| figcraft_engine::components::default_variant(doc, s)).unwrap_or(component);
+        let Some(default_props) = doc.node(default_comp).map(|c| figcraft_engine::components::default_props(c)) else { continue };
+        if let Some(n) = doc.node_mut(id) {
+            if let NodeKind::Instance { component, props } = &mut n.kind {
+                *component = default_comp;
+                *props = default_props;
+            }
+        }
+        figcraft_engine::components::sync_instance(doc, id);
     }
 }
 

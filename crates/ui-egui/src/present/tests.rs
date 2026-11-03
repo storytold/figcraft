@@ -331,13 +331,13 @@ fn device_screen_clips_the_frame_and_it_scrolls_through_its_height() {
 fn scroll_to_moves_every_scrolling_frame_around_the_layer() {
     let (d, a, _, _, list, item) = device_doc();
     let mut p = player_on(d.clone(), a);
-    assert!(p.perform(&Action::ScrollTo { dest: item, offset: [0.0, 0.0] }, item, Transition::Instant, 0.0, Easing::Linear, None, 1.0));
+    assert!(p.perform(&Action::ScrollTo { dest: item, offset: [0.0, 0.0] }, item, Transition::Instant, 0.0, Easing::Linear, None, 1.0, false));
     // The list brings the item to its top (as far as it scrolls), the screen brings the list.
     assert_eq!(p.scroll[&list], (0.0, 500.0));
     assert_eq!(p.scroll[&a], (0.0, 1148.0));
     // Animated, it gets there over the duration.
     let mut p = player_on(d, a);
-    assert!(p.perform(&Action::ScrollTo { dest: list, offset: [0.0, 0.0] }, list, Transition::Dissolve, 0.3, Easing::Linear, None, 1.0));
+    assert!(p.perform(&Action::ScrollTo { dest: list, offset: [0.0, 0.0] }, list, Transition::Dissolve, 0.3, Easing::Linear, None, 1.0, false));
     let anim = p.scroll_anim.as_ref().unwrap();
     assert_eq!(anim.frames, vec![(a, (0.0, 0.0), (0.0, 1148.0))]);
 }
@@ -347,14 +347,14 @@ fn navigating_resets_scroll_unless_it_preserves_it() {
     let (d, a, b, ..) = device_doc();
     let mut p = player_on(d, a);
     p.scroll_to(0.0, 600.0);
-    assert!(p.perform(&Action::Navigate { dest: b, preserve_scroll: false }, a, Transition::Instant, 0.0, Easing::Linear, None, 1.0));
+    assert!(p.perform(&Action::Navigate { dest: b, preserve_scroll: false }, a, Transition::Instant, 0.0, Easing::Linear, None, 1.0, false));
     assert_eq!(p.scroll.get(&b), None, "starts at the top");
     p.restart(a, 2.0);
     p.scroll_to(0.0, 1000.0);
-    assert!(p.perform(&Action::Navigate { dest: b, preserve_scroll: true }, a, Transition::Instant, 0.0, Easing::Linear, None, 3.0));
+    assert!(p.perform(&Action::Navigate { dest: b, preserve_scroll: true }, a, Transition::Instant, 0.0, Easing::Linear, None, 3.0, false));
     assert_eq!(p.scroll[&b], (0.0, 648.0), "kept, as far as B scrolls");
     // Back starts at the top again.
-    assert!(p.perform(&Action::Back, b, Transition::Instant, 0.0, Easing::Linear, None, 4.0));
+    assert!(p.perform(&Action::Back, b, Transition::Instant, 0.0, Easing::Linear, None, 4.0, false));
     assert_eq!((p.current, p.scroll.get(&a)), (a, None));
 }
 

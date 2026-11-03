@@ -214,7 +214,7 @@ fn player(doc: Document, start: NodeId) -> Presenter {
 
 fn act(p: &mut Presenter, a: Action, now: f64) -> bool {
     let node = p.current;
-    p.perform(&a, node, Transition::Instant, 0.0, Easing::Linear, None, now)
+    p.perform(&a, node, Transition::Instant, 0.0, Easing::Linear, None, now, false)
 }
 
 fn open(dest: NodeId, close_on_outside: bool) -> Action {
@@ -309,7 +309,7 @@ fn back_plays_the_way_in_backwards_and_restart_starts_over() {
     let mut p = player(doc, a);
     let go = |p: &mut Presenter, dest, tr, now| {
         let node = p.current;
-        p.perform(&Action::Navigate { dest, preserve_scroll: false }, node, tr, 0.3, Easing::Linear, None, now)
+        p.perform(&Action::Navigate { dest, preserve_scroll: false }, node, tr, 0.3, Easing::Linear, None, now, false)
     };
     assert!(go(&mut p, b, Transition::Push { direction: Direction::Left }, 1.0));
     assert!(go(&mut p, c, Transition::MoveIn { direction: Direction::Top }, 2.0));
