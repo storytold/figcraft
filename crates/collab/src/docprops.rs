@@ -54,18 +54,61 @@ struct List<T: Keyed> {
     entry: fn(T::Key) -> Entry,
     get: fn(&Document) -> &Vec<T>,
     get_mut: fn(&mut Document) -> &mut Vec<T>,
+    /// The list's slot in an [`Index`].
+    index: fn(&mut Index) -> &mut Option<KeyIndex<T::Key>>,
 }
 
-const STYLES: List<Style> =
-    List { whole: DocProp::Styles, order: DocProp::StyleOrder, entry: Entry::Style, get: |d| &d.styles, get_mut: |d| &mut d.styles };
-const COMMENTS: List<Comment> =
-    List { whole: DocProp::Comments, order: DocProp::CommentOrder, entry: Entry::Comment, get: |d| &d.comments, get_mut: |d| &mut d.comments };
+/// Where the entries of each keyed list sit, kept while one batch is applied: a batch can put
+/// hundreds of thousands of new entries, and finding each one's place by a scan of the growing
+/// list would cost the square of that on the thread every session shares.
+#[derive(Default)]
+pub(crate) struct Index {
+    styles: Option<KeyIndex<String>>,
+    comments: Option<KeyIndex<u64>>,
+    collections: Option<KeyIndex<String>>,
+    variables: Option<KeyIndex<String>>,
+}
+
+/// The position of the first entry with each key in one list, and the list's length when it was
+/// last brought up to date: a list whose length changed since is indexed again.
+struct KeyIndex<K> {
+    at: BTreeMap<K, usize>,
+    len: usize,
+}
+
+impl<K: Ord> KeyIndex<K> {
+    fn of<T: Keyed<Key = K>>(list: &[T]) -> Self {
+        let mut at = BTreeMap::new();
+        for (i, e) in list.iter().enumerate() {
+            at.entry(e.key()).or_insert(i);
+        }
+        KeyIndex { at, len: list.len() }
+    }
+}
+
+const STYLES: List<Style> = List {
+    whole: DocProp::Styles,
+    order: DocProp::StyleOrder,
+    entry: Entry::Style,
+    get: |d| &d.styles,
+    get_mut: |d| &mut d.styles,
+    index: |i| &mut i.styles,
+};
+const COMMENTS: List<Comment> = List {
+    whole: DocProp::Comments,
+    order: DocProp::CommentOrder,
+    entry: Entry::Comment,
+    get: |d| &d.comments,
+    get_mut: |d| &mut d.comments,
+    index: |i| &mut i.comments,
+};
 const COLLECTIONS: List<Collection> = List {
     whole: DocProp::Collections,
     order: DocProp::CollectionOrder,
     entry: Entry::Collection,
     get: |d| &d.variables.collections,
     get_mut: |d| &mut d.variables.collections,
+    index: |i| &mut i.collections,
 };
 const VARIABLES: List<Variable> = List {
     whole: DocProp::Variables,
@@ -73,6 +116,7 @@ const VARIABLES: List<Variable> = List {
     entry: Entry::Variable,
     get: |d| &d.variables.variables,
     get_mut: |d| &mut d.variables.variables,
+    index: |i| &mut i.variables,
 };
 
 impl<T: Keyed> List<T> {
@@ -111,25 +155,49 @@ impl<T: Keyed> List<T> {
         Ok(())
     }
 
-    fn put(&self, doc: &mut Document, key: T::Key, value: &Json) -> Result<(), Error> {
+    fn put(&self, doc: &mut Document, key: T::Key, value: &Json, index: &mut Index) -> Result<(), Error> {
         let t: T = value.read("entry")?;
         if t.key() != key {
             return Err(Error::Invalid("an entry's id must match the entry it is put at".into()));
         }
         let list = (self.get_mut)(doc);
-        match list.iter_mut().find(|e| e.key() == key) {
+        let slot = (self.index)(index);
+        // An index whose length or entry at `key` no longer matches the list is rebuilt, so a list
+        // changed some other way is never trusted.
+        let stale = |ix: &KeyIndex<T::Key>| ix.len != list.len() || ix.at.get(&key).is_some_and(|&i| list.get(i).is_none_or(|e| e.key() != key));
+        if slot.as_ref().is_none_or(stale) {
+            *slot = Some(KeyIndex::of(list));
+        }
+        match slot.as_ref().and_then(|ix| ix.at.get(&key).copied()).and_then(|i| list.get_mut(i)) {
             Some(e) => *e = t,
-            None => list.push(t),
+            None => {
+                list.push(t);
+                if let Some(ix) = slot {
+                    ix.at.insert(key, list.len() - 1);
+                    ix.len = list.len();
+                }
+            }
         }
         Ok(())
     }
 
-    fn remove(&self, doc: &mut Document, key: &T::Key) {
-        (self.get_mut)(doc).retain(|e| e.key() != *key);
+    fn remove(&self, doc: &mut Document, key: &T::Key, index: &mut Index) {
+        let list = (self.get_mut)(doc);
+        let slot = (self.index)(index);
+        if slot.as_ref().is_none_or(|ix| ix.len != list.len()) {
+            *slot = Some(KeyIndex::of(list));
+        }
+        // An absent entry leaves the list as it is, without a scan of it.
+        if slot.as_ref().is_some_and(|ix| !ix.at.contains_key(key)) {
+            return;
+        }
+        *slot = None;
+        list.retain(|e| e.key() != *key);
     }
 
     /// Entries in `keys` order first, the rest after in their current order.
-    fn reorder(&self, doc: &mut Document, value: &Json) -> Result<(), Error> {
+    fn reorder(&self, doc: &mut Document, value: &Json, index: &mut Index) -> Result<(), Error> {
+        *(self.index)(index) = None;
         let keys: Vec<T::Key> = value.read("order")?;
         let list = (self.get_mut)(doc);
         let mut slots: Vec<Option<T>> = std::mem::take(list).into_iter().map(Some).collect();
@@ -150,7 +218,8 @@ impl<T: Keyed> List<T> {
         Ok(())
     }
 
-    fn set_whole(&self, doc: &mut Document, value: &Json) -> Result<(), Error> {
+    fn set_whole(&self, doc: &mut Document, value: &Json, index: &mut Index) -> Result<(), Error> {
+        *(self.index)(index) = None;
         *(self.get_mut)(doc) = value.read("list")?;
         Ok(())
     }
@@ -316,28 +385,33 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
 /// Apply a document-level change. Returns whether it can change which pages are listed (the
 /// library store page is never listed).
 pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> {
+    apply_indexed(doc, change, &mut Index::default())
+}
+
+/// [`apply`] with the keyed lists' positions kept in `index` between the changes of one batch.
+pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Index) -> Result<bool, Error> {
     match change {
         Change::SetDoc { prop, value } => {
             if set_scalar(doc, *prop, value)? {
                 return Ok(*prop == DocProp::Libraries);
             }
             match prop {
-                DocProp::Styles => STYLES.set_whole(doc, value),
-                DocProp::StyleOrder => STYLES.reorder(doc, value),
-                DocProp::Comments => COMMENTS.set_whole(doc, value),
-                DocProp::CommentOrder => COMMENTS.reorder(doc, value),
-                DocProp::Collections => COLLECTIONS.set_whole(doc, value),
-                DocProp::CollectionOrder => COLLECTIONS.reorder(doc, value),
-                DocProp::Variables => VARIABLES.set_whole(doc, value),
-                DocProp::VariableOrder => VARIABLES.reorder(doc, value),
+                DocProp::Styles => STYLES.set_whole(doc, value, index),
+                DocProp::StyleOrder => STYLES.reorder(doc, value, index),
+                DocProp::Comments => COMMENTS.set_whole(doc, value, index),
+                DocProp::CommentOrder => COMMENTS.reorder(doc, value, index),
+                DocProp::Collections => COLLECTIONS.set_whole(doc, value, index),
+                DocProp::CollectionOrder => COLLECTIONS.reorder(doc, value, index),
+                DocProp::Variables => VARIABLES.set_whole(doc, value, index),
+                DocProp::VariableOrder => VARIABLES.reorder(doc, value, index),
                 _ => Err(Error::Invalid(format!("{prop:?} is not a list"))),
             }?;
         }
         Change::Put { entry, value } => match entry {
-            Entry::Style(k) => STYLES.put(doc, k.clone(), value)?,
-            Entry::Comment(k) => COMMENTS.put(doc, *k, value)?,
-            Entry::Collection(k) => COLLECTIONS.put(doc, k.clone(), value)?,
-            Entry::Variable(k) => VARIABLES.put(doc, k.clone(), value)?,
+            Entry::Style(k) => STYLES.put(doc, k.clone(), value, index)?,
+            Entry::Comment(k) => COMMENTS.put(doc, *k, value, index)?,
+            Entry::Collection(k) => COLLECTIONS.put(doc, k.clone(), value, index)?,
+            Entry::Variable(k) => VARIABLES.put(doc, k.clone(), value, index)?,
             Entry::DevSnapshot(k) => {
                 let snap: DevSnapshot = value.read("dev snapshot")?;
                 doc.dev_snapshots.insert(*k, Arc::new(snap));
@@ -351,14 +425,18 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
             }
         },
         Change::Remove { entry } => match entry {
-            Entry::Style(k) => STYLES.remove(doc, k),
-            Entry::Comment(k) => COMMENTS.remove(doc, k),
-            Entry::Collection(k) => COLLECTIONS.remove(doc, k),
-            Entry::Variable(k) => VARIABLES.remove(doc, k),
+            Entry::Style(k) => STYLES.remove(doc, k, index),
+            Entry::Comment(k) => COMMENTS.remove(doc, k, index),
+            Entry::Collection(k) => COLLECTIONS.remove(doc, k, index),
+            Entry::Variable(k) => VARIABLES.remove(doc, k, index),
             Entry::DevSnapshot(k) => {
                 doc.dev_snapshots.remove(k);
             }
             Entry::Image(k) => {
+                // Nothing to remove: no need to look through the document for what shows it.
+                if !doc.images.contains_key(k) {
+                    return Ok(false);
+                }
                 // An image a layer or style shows stays: removing it would let other bytes go
                 // under its key, swapping the picture that layer shows ([`image_for`]).
                 if figcraft_doc::used_images(doc).contains(k) {
