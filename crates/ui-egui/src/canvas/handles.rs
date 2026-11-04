@@ -185,6 +185,13 @@ fn drag_id() -> Id {
     Id::unique("figcraft_handle_drag")
 }
 
+/// Whether a gradient handle or stop on the canvas is being dragged, the press that starts it
+/// included: those are the open colour picker's own controls, so the picker stays through the drag
+/// instead of taking the press for one outside it (#1852).
+pub fn gradient_dragging(ctx: &egui::Context) -> bool {
+    matches!(ctx.data(|d| d.get_temp::<Drag>(drag_id())), Some(Drag::Gradient { .. }))
+}
+
 /// The gradient being edited (single node, picker open on a gradient paint).
 fn gradient_target(app: &FigApp) -> Option<(NodeId, bool, usize, figcraft_color::Gradient)> {
     let Some(PickerTarget::Paint { fills, index, ids }) = &app.ui.picker else { return None };

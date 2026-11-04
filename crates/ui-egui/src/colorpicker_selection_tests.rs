@@ -215,3 +215,48 @@ fn a_press_in_the_gradient_variable_picker_keeps_the_colour_picker_open() {
     assert!(u.app.ui.picker.is_some(), "the child variable picker is part of the interaction");
     u.button(at, false);
 }
+
+#[test]
+fn dragging_a_gradient_handle_on_the_canvas_keeps_the_picker_open() {
+    // #1852: the handles belong to the picker, so the press that starts a drag is not a press
+    // outside it: the picker and the handles stay, the drag is one undo step, and a press elsewhere
+    // on the layer still closes it.
+    let mut s = Session::new();
+    let a = NodeId(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+    s.execute("fill.set", &json!({"id": a, "paint": {"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}})).unwrap();
+    s.execute("select.set", &json!({"ids": [a]})).unwrap();
+    let mut u = Ui::new(s);
+    let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![a] };
+    u.app.open_picker(target.clone(), None);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.ui.picker, Some(target.clone()));
+    let depth = u.app.session.undo_depth().0;
+    let from_handle = |u: &Ui| match &u.app.session.doc().unwrap().node(a).unwrap().fills[0].kind {
+        figcraft_color::PaintKind::Gradient(g) => g.from,
+        _ => panic!("the fill is a gradient"),
+    };
+    assert_eq!(from_handle(&u), (0.5, 0.0), "a linear gradient starts at the top middle");
+    // Drag the start handle from the top middle of the layer to its left middle.
+    let from = u.app.to_screen(200.0, 100.0);
+    let to = u.app.to_screen(100.0, 200.0);
+    u.button(from, true);
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "the press on the handle keeps the picker open");
+    for _ in 0..2 {
+        u.frame(vec![egui::Event::PointerMoved(to)]);
+    }
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "and so does the drag");
+    let (x, y) = from_handle(&u);
+    assert!(x.abs() < 0.02 && (y - 0.5).abs() < 0.02, "the handle followed the pointer: ({x}, {y})");
+    u.button(to, false);
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "released, the picker is still open");
+    assert_eq!(u.app.session.undo_depth().0, depth + 1, "the drag is one undo step");
+    // A press on the layer away from its handles is still a press outside the picker.
+    let body = u.app.to_screen(250.0, 250.0);
+    u.button(body, true);
+    u.button(body, false);
+    u.frame(vec![]);
+    assert!(u.app.ui.picker.is_none(), "a plain canvas press closes it");
+}
