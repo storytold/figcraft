@@ -102,6 +102,11 @@ pub struct Face {
     pub underline_pos: f64,
     pub underline_thickness: f64,
     pub strike_pos: f64,
+    /// Synthesised superscript and subscript (the OS/2 table's values, or the usual ones without
+    /// it): the glyph size as a fraction of the em, and the baseline shift up in font units
+    /// (negative for a subscript, which sits below).
+    pub superscript: (f64, f64),
+    pub subscript: (f64, f64),
     pub shaper: harfrust::ShaperData,
     /// OpenType GSUB feature tags the face provides (e.g. `smcp`).
     gsub_features: Vec<[u8; 4]>,
@@ -179,6 +184,17 @@ impl Face {
         let colr = has_table(b"COLR");
         let under = m.underline.map(|d| (f64::from(d.offset), f64::from(d.thickness))).unwrap_or((-upem * 0.1, upem * 0.06));
         let strike = m.strikeout.map(|d| f64::from(d.offset)).unwrap_or(ascent * 0.3);
+        // Superscript and subscript sizes and offsets: the OS/2 table's, else the usual 0.65 em,
+        // 0.35 em up and 0.14 em down (what common fonts carry); a zero counts as unset, as some
+        // fonts leave these fields.
+        let os2 = f.os2().ok();
+        let script = |size: Option<i16>, offset: Option<i16>, up: bool, usual_offset: f64| -> (f64, f64) {
+            let size = size.map(f64::from).filter(|v| *v > 0.0).map_or(0.65, |v| v / upem);
+            let offset = offset.map(f64::from).filter(|v| *v != 0.0).unwrap_or(usual_offset * upem);
+            (size, if up { offset } else { -offset })
+        };
+        let superscript = script(os2.as_ref().map(|t| t.y_superscript_y_size()), os2.as_ref().map(|t| t.y_superscript_y_offset()), true, 0.35);
+        let subscript = script(os2.as_ref().map(|t| t.y_subscript_y_size()), os2.as_ref().map(|t| t.y_subscript_y_offset()), false, 0.14);
         let weight = {
             let w = attrs.weight.value();
             if w.is_finite() && w > 0.0 { w.round() as u16 } else { figcraft_doc::style_weight(&style) }
@@ -200,6 +216,8 @@ impl Face {
             underline_pos: under.0,
             underline_thickness: under.1.max(upem * 0.02),
             strike_pos: strike,
+            superscript,
+            subscript,
             shaper,
             gsub_features,
             track,
