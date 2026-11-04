@@ -292,10 +292,33 @@ pub enum Event {
     },
 }
 
+/// Whether a session's server can be reached from here (see [`crate::joined`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// It answers.
+    Online,
+    /// This computer has a network, and the server doesn't answer on it.
+    ServerDown,
+    /// This computer has no network.
+    NoNetwork,
+}
+
+impl Reach {
+    pub fn id(self) -> &'static str {
+        match self {
+            Reach::Online => "online",
+            Reach::ServerDown => "serverDown",
+            Reach::NoNetwork => "noNetwork",
+        }
+    }
+}
+
 /// A request to a server outside a live session: its plugin directory, a team library, or keeping
 /// a file there.
 #[derive(Clone, Debug)]
 pub enum NetRequest {
+    /// Whether the server of invite link `link` can be reached.
+    Probe { link: String },
     /// To the plugin directory of the server at `server` (`ws://host:port/`, with `?key=…` to
     /// publish).
     Plugins { server: String, req: PluginReq },
@@ -318,13 +341,14 @@ impl NetRequest {
         match self {
             NetRequest::Plugins { .. } => crate::plugin_directory::NO_DIRECTORY,
             NetRequest::Library { .. } | NetRequest::Upload(_) => NO_TEAM_LIBRARIES,
-            NetRequest::Hosting { .. } | NetRequest::Share { .. } => NO_HOSTING,
+            NetRequest::Hosting { .. } | NetRequest::Share { .. } | NetRequest::Probe { .. } => NO_HOSTING,
         }
     }
 
     /// How to answer that this request failed (and why).
     pub fn failure(&self) -> fn(String) -> NetReply {
         match self {
+            NetRequest::Probe { .. } => |_| NetReply::Probe(None),
             NetRequest::Plugins { .. } => |why| NetReply::Plugins(Err(why)),
             NetRequest::Library { .. } => |why| NetReply::Library(Err(why)),
             NetRequest::Upload(_) => |why| NetReply::Upload(Err(why)),
@@ -338,6 +362,7 @@ impl NetRequest {
     pub(crate) fn stands_for(&self, other: &NetRequest) -> bool {
         use std::mem::discriminant;
         match (self, other) {
+            (NetRequest::Probe { link: a }, NetRequest::Probe { link: b }) => a == b,
             (NetRequest::Plugins { server: a, req: x }, NetRequest::Plugins { server: b, req: y }) => a == b && discriminant(x) == discriminant(y),
             (NetRequest::Library { link: a, req: x }, NetRequest::Library { link: b, req: y }) => a == b && discriminant(x) == discriminant(y),
             (NetRequest::Upload(a), NetRequest::Upload(b)) => a.server == b.server,
@@ -355,6 +380,8 @@ impl NetRequest {
 /// The answer to a [`NetRequest`] (an error: the server couldn't be reached or refused).
 #[derive(Clone, Debug, PartialEq)]
 pub enum NetReply {
+    /// `None`: it can't be told from here (the browser).
+    Probe(Option<Reach>),
     Plugins(std::result::Result<PluginReply, String>),
     Library(std::result::Result<LibraryReply, String>),
     /// The new links, when some were asked for.
@@ -476,6 +503,7 @@ pub trait LiveLink: Send {
     /// Send `req` and wait for the answer (through the methods above).
     fn request(&mut self, req: NetRequest) -> NetReply {
         match req {
+            NetRequest::Probe { .. } => NetReply::Probe(None),
             NetRequest::Share { server, file, owner, revoke, create } => NetReply::Share(self.share(&server, &file, &owner, &revoke, create)),
             NetRequest::Plugins { server, req } => NetReply::Plugins(self.plugins(&server, req)),
             NetRequest::Library { link, req } => NetReply::Library(self.library(&link, req)),

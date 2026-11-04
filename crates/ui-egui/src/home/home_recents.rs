@@ -29,13 +29,13 @@ pub const GAP: f32 = 32.0;
 pub const CARD_MIN: f32 = 260.0;
 pub const CARD_MAX: f32 = 360.0;
 /// The footer under a card's picture: its icon, name and time.
-const FOOTER_H: f32 = 58.0;
+pub(super) const FOOTER_H: f32 = 58.0;
 /// A table row, and the table's header.
 const ROW_H: f32 = 44.0;
 const HEADER_H: f32 = 32.0;
 /// Pictures are decoded at most this many pixels on their longer side (the widest card on a
 /// double-density screen).
-const PICTURE_PX: u32 = 720;
+pub(super) const PICTURE_PX: u32 = 720;
 /// How long a picture takes to fade in (seconds).
 const FADE_SECS: f64 = 0.2;
 /// Most recent files shown.

@@ -481,6 +481,10 @@ pub(crate) fn remembering(last: Arc<Mutex<Option<PathBuf>>>, pick: DialogFuture,
 }
 
 impl Services for Desktop {
+    fn joined_previews_dir(&self) -> Option<PathBuf> {
+        Some(config_dir()?.join("joined-previews"))
+    }
+
     fn pick_open(&mut self, title: &str, exts: &[&str]) -> DialogFuture {
         let pick = picked(self.dialog_in_last_folder(title).add_filter("Supported files", exts).pick_file());
         remembering(self.last_folder.clone(), pick, false)

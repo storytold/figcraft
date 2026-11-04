@@ -112,6 +112,7 @@ fn answer(s: &mut Session, wire: &Arc<Mutex<Wire>>) -> usize {
     for (job, req) in &out {
         let mut w = wire.lock().unwrap();
         let reply = match req.clone() {
+            NetRequest::Probe { .. } => NetReply::Probe(None),
             NetRequest::Plugins { req, .. } => NetReply::Plugins(Ok(directory(req))),
             NetRequest::Library { req, .. } => NetReply::Library(Ok(library(&mut w, req))),
             NetRequest::Upload(_) => NetReply::Upload(Err("no".into())),

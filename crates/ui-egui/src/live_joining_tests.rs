@@ -97,3 +97,46 @@ fn leave_takes_a_session_id() {
     assert_eq!(h.app.session.execute("collab.leave", &json!({"session": id})).unwrap()["ended"], true);
     assert!(h.app.session.live.get(id).is_none());
 }
+
+/// The Online section with one session remembered, and the frames it painted.
+fn online_section(h: &mut Harness) -> Vec<egui::Shape> {
+    h.app.session.prefs.joined_files = vec![figcraft_engine::joined::JoinedFile {
+        address: "127.0.0.1:47900".into(),
+        file: "f".into(),
+        name: "Team file".into(),
+        link: LINK.into(),
+        access: "edit".into(),
+        opened: 1,
+    }];
+    h.app.ui.home = true;
+    h.app.ui.home_view.section = crate::home::Section::Online;
+    h.frames(3)
+}
+
+#[test]
+fn a_joined_session_shows_on_the_home_screen_and_a_click_joins_it_again() {
+    let (mut h, _) = Harness::new();
+    let shapes = online_section(&mut h);
+    assert!(has_text(&shapes, "Sessions you joined") && has_text(&shapes, "Team file"));
+    assert!(!has_text(&shapes, "Server not reachable"), "not until a server has answered");
+    h.click(text_center(&shapes, "Team file"));
+    assert_eq!(h.app.session.live().status, Status::Connecting);
+    assert!(h.app.ui.live.home_join.is_some());
+}
+
+#[test]
+fn a_card_says_why_a_session_cant_be_reached() {
+    use figcraft_engine::live::Reach;
+    let (mut h, _) = Harness::new();
+    online_section(&mut h);
+    for (reach, said, not) in
+        [(Reach::ServerDown, "Server not reachable", "You're offline"), (Reach::NoNetwork, "You're offline", "Server not reachable")]
+    {
+        h.app.session.live.reach.insert("127.0.0.1:47900".into(), reach);
+        let shapes = h.frames(2);
+        assert!(has_text(&shapes, said) && !has_text(&shapes, not));
+    }
+    h.app.session.live.reach.insert("127.0.0.1:47900".into(), Reach::Online);
+    let shapes = h.frames(2);
+    assert!(!has_text(&shapes, "Server not reachable") && !has_text(&shapes, "You're offline"));
+}

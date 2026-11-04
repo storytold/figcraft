@@ -82,6 +82,7 @@ pub use sharing::background;
 pub use sharing::branches;
 pub use sharing::collab;
 pub use sharing::invite_links;
+pub use sharing::joined;
 pub use sharing::live;
 pub use sharing::online;
 pub use sharing::team;
@@ -382,6 +383,8 @@ mod interaction_rollback_tests;
 mod invite_links_tests;
 #[cfg(test)]
 mod jam_open_tests;
+#[cfg(test)]
+mod joined_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
