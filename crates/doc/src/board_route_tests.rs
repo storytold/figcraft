@@ -24,8 +24,8 @@ fn an_attached_end_starts_outside_the_border() {
     assert_eq!(pts.first().copied(), Some(Point::new(50.0, 60.0 + END_GAP)));
 }
 
-/// Several connectors leaving one side run together along its normal before they part: an elbow's
-/// and a curve's first run leave straight out of the side.
+/// Elbows leaving one side share their first run along its normal, and curves leave tangent to it:
+/// the second point of each lies straight out of the side.
 #[test]
 fn connectors_from_one_side_leave_together() {
     let a = shape(0.0, 0.0);

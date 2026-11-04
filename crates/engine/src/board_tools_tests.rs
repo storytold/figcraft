@@ -276,3 +276,29 @@ fn a_board_tool_left_on_presses_as_move_in_a_design_file() {
     assert_eq!(s.tool.tool, ToolId::Move);
     assert_eq!(s.selection(), vec![r], "the press selected as Move does");
 }
+
+/// #1916: a connector's start, END_GAP outside the layer it leaves, is a snap line for other layers
+/// but not for that layer, nor for a section holding it (both carry the connector along), and nor
+/// is the connector's label.
+#[test]
+fn a_connector_joined_to_a_moving_layer_or_its_section_is_no_snap_target() {
+    let mut s = board();
+    let sec = id(&s.execute("node.create", &json!({"type": "section", "x": 0, "y": 0, "width": 300, "height": 300})).unwrap(), "id");
+    let a = id(&s.execute("board.sticky", &json!({"x": 50, "y": 50, "parent": sec})).unwrap(), "id");
+    let b = id(&s.execute("board.stamp", &json!({"x": 800, "y": 150})).unwrap(), "id");
+    let c = id(&s.execute("board.connector", &json!({"from": a, "to": b, "style": "straight", "label": "to"})).unwrap(), "id");
+    // A layer the connector has nothing to do with.
+    let d = id(&s.execute("board.sticky", &json!({"x": 0, "y": 900})).unwrap(), "id");
+    let page = s.page().unwrap();
+    let start = drawn(&s, c)[0].x;
+    let label = crate::board::label_of(s.doc().unwrap(), c).unwrap();
+    let lx = s.doc().unwrap().world_bounds(label).unwrap().x0;
+    // A box whose left edge is 1 past a line snaps back by 1 when the line is a target.
+    let pull = |s: &Session, moving: &[NodeId], x: f64| {
+        let t = crate::snap::Targets::gather(s.doc().unwrap(), page, moving);
+        t.snap_rect(figcraft_geom::Rect::new(x + 1.0, 600.0, x + 9.0, 610.0), 4.0).0
+    };
+    assert_eq!((pull(&s, &[d], start), pull(&s, &[d], lx)), (-1.0, -1.0), "for an unrelated layer, the connector and its label snap");
+    assert_eq!(pull(&s, &[b], start), 0.0, "not for the layer it arrives at");
+    assert_eq!((pull(&s, &[sec], start), pull(&s, &[sec], lx)), (0.0, 0.0), "not for the section the connector leaves from");
+}

@@ -95,10 +95,11 @@ impl Targets {
             }
         }
         // Siblings and, at the top level, all top-level layers. A board connector joined to a
-        // moving layer re-routes with it, as does its label: no snapping to where its own route
-        // starts (#1916).
+        // moving layer, or to one inside it (a section carries its stickies), re-routes with it, as
+        // does its label: no snapping to where its own route starts (#1916).
+        let carried = |e: NodeId| moving.contains(&e) || doc.ancestors(e).iter().any(|a| moving.contains(a));
         let follows = |id: NodeId| match doc.node(id).and_then(|n| n.board.as_ref()) {
-            Some(BoardItem::Connector(k)) => [k.from.node(), k.to.node()].into_iter().flatten().any(|e| moving.contains(&e)),
+            Some(BoardItem::Connector(k)) => [k.from.node(), k.to.node()].into_iter().flatten().any(carried),
             _ => false,
         };
         if let Some(p) = doc.node(parent) {

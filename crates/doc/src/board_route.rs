@@ -29,8 +29,8 @@ impl RouteEnd {
 const ROOM: f64 = 24.0;
 
 /// How far outside the border a connector attached to a side starts and ends (#1916): the stroke's
-/// round cap never lies on the fill, and several connectors leaving one side run together along the
-/// side's normal for this much before they part, as FigJam's do.
+/// round cap never lies on the fill, and elbows leaving one side share their first run along the
+/// side's normal (curves leave tangent to it), as FigJam's connectors do.
 pub const END_GAP: f64 = 4.0;
 
 /// The points a connector runs through from `from` to `to`: from [`END_GAP`] outside the middle of
