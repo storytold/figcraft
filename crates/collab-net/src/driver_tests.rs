@@ -393,6 +393,21 @@ fn a_long_queue_goes_out_paced_and_in_order() {
 }
 
 #[test]
+fn leaving_sends_what_was_waiting_its_turn() {
+    let t0 = Instant::now();
+    let (mut d, _inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    for seq in 0..300 {
+        d.send(ClientMsg::Ack { seq }, t0);
+    }
+    d.leave(t0);
+    let seqs: Vec<u64> = d.sock.sent.iter().filter_map(|m| if let ClientMsg::Ack { seq } = m { Some(*seq) } else { None }).collect();
+    assert_eq!(seqs, (0..300).collect::<Vec<u64>>());
+    assert!(d.done());
+}
+
+#[test]
 fn a_first_join_that_cant_reach_the_host_fails_at_once() {
     let t0 = Instant::now();
     // The browser gives up on the socket before it opens.
