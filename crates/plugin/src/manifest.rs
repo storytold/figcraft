@@ -77,6 +77,7 @@ fn api_from_number_or_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u
             .trim()
             .split('.')
             .next()
+            .filter(|major| !major.is_empty() && major.bytes().all(|b| b.is_ascii_digit()))
             .and_then(|major| major.parse().ok())
             .ok_or_else(|| serde::de::Error::custom(format!("invalid api version `{s}`"))),
     }

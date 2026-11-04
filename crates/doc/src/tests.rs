@@ -846,3 +846,17 @@ fn the_colour_walker_visits_calculation_literals() {
     let ColorOperand::Literal { literal } = from else { panic!("literal operand") };
     assert_eq!(literal.a, 0.5, "the mix's stored literal was converted like every other colour");
 }
+
+#[test]
+fn remove_children_removes_every_subtree_and_keeps_the_parent() {
+    let mut doc = Document::new("T");
+    let page = doc.first_page().unwrap();
+    let frame = doc.create(page, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let inner = doc.create(frame, NodeKind::Frame, "Inner", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let leaf = doc.create(inner, NodeKind::Rectangle, "Leaf", 0.0, 0.0, 5.0, 5.0).unwrap();
+    let other = doc.create(page, NodeKind::Rectangle, "Other", 0.0, 0.0, 5.0, 5.0).unwrap();
+    doc.remove_children(frame).unwrap();
+    assert!(doc.contains(frame) && doc.contains(other));
+    assert!(!doc.contains(inner) && !doc.contains(leaf));
+    assert!(doc.get(frame).unwrap().children.is_empty());
+}

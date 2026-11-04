@@ -148,6 +148,8 @@ mod image_tests;
 #[cfg(test)]
 mod journal_tests;
 #[cfg(test)]
+mod keyed_list_tests;
+#[cfg(test)]
 mod merge_list_tests;
 #[cfg(test)]
 mod merge_tests;

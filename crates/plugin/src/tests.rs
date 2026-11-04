@@ -472,3 +472,10 @@ fn api_may_be_a_version_string() {
     assert!(manifest(json!({"api": format!("{}.0.0", crate::API_VERSION + 1)})).is_err());
     assert!(manifest(json!({"api": "x"})).is_err());
 }
+
+#[test]
+fn api_version_string_rejects_signs() {
+    for bad in ["+2.0.0", "-1.0.0", "+2", ""] {
+        assert!(manifest(json!({"api": bad})).is_err(), "accepted {bad:?}");
+    }
+}
