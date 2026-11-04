@@ -101,7 +101,9 @@ fn all_have(s: &Session, p: &Value, pred: impl Fn(&TextStyle) -> bool) -> bool {
         }
         return false;
     }
-    targets(s, p).iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(t)) if t.spans().iter().all(|(_, _, st)| pred(st))))
+    // The texts `style` restyles: the targets and the texts inside them.
+    let texts: Vec<&TextData> = targets(s, p).iter().flat_map(|i| doc.subtree(*i)).filter_map(|d| doc.node(d).and_then(|n| n.kind.text())).collect();
+    !texts.is_empty() && texts.iter().all(|t| t.spans().iter().all(|(_, _, st)| pred(st)))
 }
 
 fn toggle_bold(s: &mut Session, p: &Value) -> Result<Value> {
@@ -217,10 +219,24 @@ pub fn specs() -> Vec<CommandSpec> {
             let on = all_have(s, p, |st| st.decoration == TextDecoration::Strikethrough);
             style(s, p, |st| st.decoration = if on { TextDecoration::None } else { TextDecoration::Strikethrough })
         }),
-        spec!("text.link", "Create link", "{url, ids?}", true, |s, p| {
-            let url = req_string("text.link", p, "url")?;
-            style(s, p, |st| st.link = Some(url.clone()))
-        }),
+        spec!(
+            "text.link",
+            "Create link",
+            "{url, ids?}  linked text is underlined unless it has a decoration of its own (Underline takes it off again)",
+            true,
+            |s, p| {
+                let url = req_string("text.link", p, "url")?;
+                style(s, p, |st| {
+                    // "Links are styled with an underline by default" (Add links to text); Underline
+                    // (Cmd/Ctrl+U) removes it, as documented there, and changing the URL of a link
+                    // leaves its decoration as it is.
+                    if st.link.is_none() && st.decoration == TextDecoration::None {
+                        st.decoration = TextDecoration::Underline;
+                    }
+                    st.link = Some(url.clone());
+                })
+            }
+        ),
         spec!("text.bulletList", "Bulleted list", "{ids?}  while editing: the selected paragraphs", true, |s, p| set_list(
             s,
             p,
@@ -292,6 +308,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 set_list(s, p, l, false)
             }
         ),
+        spec!(
+            "text.wrapStyle",
+            "Wrap style",
+            "{style: auto|balance|pretty, ids?}  where lines break when the text wraps: Auto fits as many words as fit on each line, Balance makes the lines close to the same length, Pretty keeps lines full but leaves no one word alone on the last",
+            true,
+            |s, p| {
+                let w: figcraft_doc::WrapStyle =
+                    get(p, "style").and_then(super::props::enum_of).ok_or_else(|| bad("text.wrapStyle", "`style`: auto|balance|pretty"))?;
+                para(s, p, |t| t.wrap_style = w)
+            }
+        ),
         spec!("text.paragraphIndent", "Paragraph indent", "{indent (px), ids?}", true, |s, p| {
             let v = finite(req_num("text.paragraphIndent", p, "indent")?).clamp(0.0, 10_000.0);
             para(s, p, |t| t.paragraph_indent = v)
@@ -303,16 +330,34 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.maxLines",
             "Max lines",
-            "{lines (0 = no limit; truncates: auto-height text hugs up to that many lines, other text becomes a truncating box), ids?}",
+            "{lines (0 = no limit; truncates: auto-height and auto-width text hug up to that many lines, fixed-size text becomes a truncating box), ids?}",
             true,
             |s, p| {
                 let v = finite(req_num("text.maxLines", p, "lines")?).clamp(0.0, 10_000.0) as u32;
-                para(s, p, |t| {
+                let r = para(s, p, |t| {
                     t.max_lines = v;
-                    if v > 0 && t.auto_resize != TextAutoResize::Height {
+                    if v > 0 && !matches!(t.auto_resize, TextAutoResize::Height | TextAutoResize::WidthAndHeight) {
                         t.auto_resize = TextAutoResize::Truncate;
                     }
-                })
+                })?;
+                // A text has a max height or a number of max lines, not both (Guide to auto layout).
+                if v > 0 {
+                    let ids = match textedit::selected_range(s) {
+                        Some((id, _, _)) => vec![id],
+                        None => targets(s, p),
+                    };
+                    let doc = s.doc_mut()?;
+                    for i in ids {
+                        for d in doc.subtree(i) {
+                            if let Some(n) = doc.node_mut(d)
+                                && n.kind.text().is_some()
+                            {
+                                n.child_layout.max_h = None;
+                            }
+                        }
+                    }
+                }
+                Ok(r)
             }
         ),
         spec!(
@@ -487,6 +532,32 @@ pub fn specs() -> Vec<CommandSpec> {
             textedit::end(s)?;
             ok()
         }),
+        spec!(
+            "text.openLink",
+            "Open link",
+            "{}  while editing: the link at the caret (the selection's start) goes to the UI to open, as Alt+Enter does (\"press Option Return / Alt Enter to activate a focused link\"); only a web or mail link opens → {url} ({url: null}: no link there)",
+            false,
+            |s, _| {
+                let Some(te) = s.ds()?.text_edit.clone() else { return Err(bad("text.openLink", "no text is being edited")) };
+                let doc = s.doc()?;
+                let t = doc.node(te.id).and_then(|n| n.kind.text()).ok_or_else(|| bad("text.openLink", format!("{} is not text", te.id)))?;
+                let n = t.char_count();
+                let at = te.caret.min(te.anchor);
+                // The caret sits between two chars: the link of the one after it, else before it.
+                let link = (at < n)
+                    .then(|| t.style_at(at).link.clone())
+                    .flatten()
+                    .or_else(|| (at > 0 && at <= n).then(|| t.style_at(at - 1).link.clone()).flatten());
+                match link {
+                    Some(url) if crate::doc_urls::openable(&url) => {
+                        s.request_ui("open.url", json!({"url": url}));
+                        Ok(json!({"url": url}))
+                    }
+                    Some(url) => Err(bad("text.openLink", format!("`{url}` is not a web or mail link"))),
+                    None => Ok(json!({"url": Value::Null})),
+                }
+            }
+        ),
         spec!(
             "text.fonts",
             "List fonts",
