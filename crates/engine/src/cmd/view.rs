@@ -194,6 +194,22 @@ fn region(s: &mut Session, step: i64) -> Result<Value> {
     ok()
 }
 
+/// Step the interface size through the Preferences sizes: `dir` 1 up, -1 down, 0 back to the
+/// system's size (1). At an end it stays. Kept at once, as a size picked in Preferences is.
+fn ui_scale_step(s: &mut Session, dir: i32) -> Result<Value> {
+    let now = s.prefs.ui_scale;
+    let next = match dir {
+        0 => 1.0,
+        1 => crate::UI_SCALE_SIZES.iter().copied().find(|v| *v > now + 1e-9).unwrap_or(now),
+        _ => crate::UI_SCALE_SIZES.iter().rev().copied().find(|v| *v < now - 1e-9).unwrap_or(now),
+    };
+    if (next - now).abs() > 1e-9 {
+        s.prefs.ui_scale = next;
+        s.prefs_unsaved = true;
+    }
+    Ok(json!({"scale": s.prefs.ui_scale}))
+}
+
 fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Result<Value> {
     let slot = f(&mut s.prefs);
     *slot = boolean(p, "on").unwrap_or(!*slot);
@@ -305,6 +321,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.snapObjects", "Snap to objects", "{on?}", false, |s, p| toggle(s, p, "view.snapObjects")),
         spec!("view.snapPixel", "Snap to pixel grid", "{on?}", false, |s, p| toggle(s, p, "view.snapPixel")),
         spec!("view.toggleUi", "Show/Hide UI", "{on?}", false, |s, p| flag(s, p, |v| &mut v.ui_hidden)),
+        spec!(
+            "view.minimize",
+            "Minimize the interface",
+            "{on?}  collapses the navigation bar and both sidebars and keeps the toolbar (Shift+Cmd/Ctrl+\\, the Minimize button by the file name); the right sidebar shows while something is selected",
+            false,
+            |s, p| flag(s, p, |v| &mut v.ui_minimized)
+        ),
         spec!("view.fullscreen", "Full screen", "{on?}  the window fills the screen (the desktop app; a no-op headless)", false, |s, p| {
             s.request_ui("window.fullscreen", json!({"on": boolean(p, "on")}));
             ok()
@@ -395,6 +418,21 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"scale": s.prefs.ui_scale}))
             }
         ),
+        spec!(
+            "pref.uiScaleUp",
+            "Larger interface",
+            "{}  the next of the Preferences sizes above the current one (the interface size keys of Accessibility at Figma); at the largest it stays → {scale}",
+            false,
+            |s, _| ui_scale_step(s, 1)
+        ),
+        spec!(
+            "pref.uiScaleDown",
+            "Smaller interface",
+            "{}  the next of the Preferences sizes below the current one; at the smallest it stays → {scale}",
+            false,
+            |s, _| ui_scale_step(s, -1)
+        ),
+        spec!("pref.uiScaleReset", "Default interface size", "{}  back to the system's own size (1) → {scale}", false, |s, _| ui_scale_step(s, 0)),
         spec!("pref.autoSave", "Save files automatically", "{on?}", false, |s, p| pref(s, p, |x| &mut x.auto_save)),
         spec!("pref.startOnHome", "Start on the Home screen", "{on?}", false, |s, p| pref(s, p, |x| &mut x.start_on_home)),
         spec!("pref.nudge", "Nudge amount", "{small?, big?}", false, |s, p| {

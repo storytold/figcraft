@@ -212,14 +212,20 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.comments", &["Shift+C"]),
     k(View, "view.multiplayerCursors", &["Alt+Cmd+\\"]),
     k(View, "view.snapPixel", &["Shift+Cmd+'"]),
-    k(View, "view.layers", &["Alt+1"]).label("Layers panel"),
+    // Windows: one help-center article writes Ctrl+1, another Alt+1; both open it there.
+    k(View, "view.layers", &["Alt+1"]).win(&["Alt+1", "Ctrl+1"]).label("Layers panel"),
+    // The interface size (Accessibility at Figma): Cmd/Ctrl+Shift+Alt with =, - and 0, while
+    // editing text too.
+    k(View, "pref.uiScaleUp", &["Alt+Shift+Cmd+="]).both(),
+    k(View, "pref.uiScaleDown", &["Alt+Shift+Cmd+-"]).both(),
+    k(View, "pref.uiScaleReset", &["Alt+Shift+Cmd+0"]).both(),
     k(View, "view.assets", &["Alt+2"]).label("Assets panel"),
     k(View, "libraries.open", &["Alt+3"]),
     k(View, "view.design", &["Alt+8"]).label("Design panel"),
     k(View, "view.prototype", &["Alt+9"]).label("Prototype panel"),
     k(View, "view.designPrototype", &["Shift+E"]),
     k(View, "view.devMode", &["Shift+D"]).label("Dev Mode on/off"),
-    k(View, "view.leftSidebar", &["Shift+Cmd+\\"]),
+    k(View, "view.minimize", &["Shift+Cmd+\\"]),
     k(View, "view.nextRegion", &["F6"]).win(&["F6", "Ctrl+F6"]).label("Focus the next region (toolbar, layers, canvas, properties)").both(),
     k(View, "view.previousRegion", &["Shift+F6"]).label("Focus the previous region").both(),
     k(View, "view.contextMenu", &["Shift+F10", "Menu"]).label("Context menu of the selection (the focused layer row or the canvas)"),
@@ -241,6 +247,7 @@ pub static KEYS: &[Binding] = &[
     // Text (on selected text layers, and on the selected characters while editing)
     k(Text, "text.bold", &["Cmd+B"]).both(),
     k(Text, "text.italic", &["Cmd+I"]).both(),
+    k(Text, "text.openLink", &["Alt+Enter"]).both(),
     k(Text, "text.underline", &["Cmd+U"]).both(),
     k(Text, "text.strikethrough", &["Shift+Cmd+X"]).both(),
     k(Text, "text.link", &["Shift+Cmd+U", "Cmd+K"]).text(),
@@ -345,6 +352,7 @@ pub static KEYS: &[Binding] = &[
 pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Tools, "Pan the canvas", "Space drag", "Space+drag"),
     (Tools, "Pan with nothing selected (Shift: farther)", "← ↑ → ↓", "← ↑ → ↓"),
+    (Transform, "Rotate a degree (Shift: 15)", "⌥⌘ ← ↑ → ↓", "Ctrl+Alt+← ↑ → ↓"),
     (Tools, "Place a shape or frame (its tool chosen)", "↵", "Enter"),
     (Zoom, "Zoom tool: click to zoom in, drag an area", "Hold Z", "Hold Z"),
     (Zoom, "Zoom tool: zoom out", "Hold ⌥Z", "Hold Alt+Z"),
@@ -357,6 +365,8 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Transform, "Opacity 10%…90%, 0: 100%", "1…9, 0", "1…9, 0"),
     (Transform, "Exact opacity (4 then 5: 45%)", "Two digits", "Two digits"),
     (Transform, "Suspend snapping while dragging", "Hold ⌃ or ⌘", "Hold Ctrl"),
+    (Arrange, "Set hug contents", "Double-click an edge of an auto layout frame", "Double-click an edge of an auto layout frame"),
+    (Arrange, "Set fill container", "⌥ double-click an edge of an auto layout child", "Alt+double-click an edge of an auto layout child"),
     (Prototype, "Presenting: next frame", "→, Space or N", "→, Space or N"),
     (Prototype, "Presenting: previous frame", "←", "←"),
     (Prototype, "Presenting: restart", "R", "R"),

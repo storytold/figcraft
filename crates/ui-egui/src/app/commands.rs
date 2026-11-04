@@ -210,10 +210,14 @@ impl FigApp {
                     if let Some(i) = r.data.get("inspect").and_then(|i| i.as_bool()) {
                         v.inspect = i;
                     }
+                    if let Some(h) = r.data.get("hideUi").and_then(|h| h.as_bool()) {
+                        v.hide_ui = h;
+                    }
                     if let Some(p) = self.ui.present.as_mut() {
                         p.view.device_frame = v.device_frame;
                         p.view.hotspot_hints = v.hotspot_hints;
                         p.view.inspect = v.inspect;
+                        p.view.hide_ui = v.hide_ui;
                         p.set_scale(v.scale);
                     }
                 }
@@ -224,6 +228,13 @@ impl FigApp {
                 }
                 "preview.close" => self.ui.preview = None,
                 "open.help" => self.services.open_url("https://getartcraft.com/apps/figcraft"),
+                // A link in text activated while editing (`text.openLink`): the engine checked it
+                // is a web or mail link.
+                "open.url" => {
+                    if let Some(url) = r.data["url"].as_str() {
+                        self.services.open_url(url);
+                    }
+                }
                 "layers.collapseAll" => layers::collapse_all(self),
                 "contextMenu" => self.ui.key_menu = true,
                 "selectArea" => self.start_key_box(),
