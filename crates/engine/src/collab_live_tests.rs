@@ -363,3 +363,26 @@ fn leaving_the_session_goes_back_to_snapshot_undo() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.doc().unwrap().node(r).unwrap().name, "Live");
 }
+
+/// #1817: the page a file opens on is a document property: setting it syncs to the server, so
+/// everyone who joins afterwards lands on it, and moves nobody's own view.
+#[test]
+fn the_opening_page_syncs_and_moves_no_ones_view() {
+    let mut room = Room::new(base(), 2, 7);
+    let first = room.server.document().first_page().unwrap();
+    let cover = NodeId(room.s(0).execute("page.add", &json!({"name": "Cover"})).unwrap()["id"].as_u64().unwrap());
+    room.settle();
+    room.check();
+    assert_eq!(room.s(1).page().unwrap(), first, "another person's page is their own");
+    room.s(0).execute("page.setOpening", &json!({"id": cover})).unwrap();
+    room.settle();
+    room.check();
+    assert_eq!(room.server.document().current_page, Some(cover), "the server's file opens on it now");
+    assert_eq!(room.s(1).page().unwrap(), first, "nobody's view moved");
+    assert_eq!(Session::with_document(room.server.document().clone()).page().unwrap(), cover, "whoever joins next lands on it");
+    // One undo step, the setter's.
+    assert_eq!(room.s(0).execute("edit.undo", &json!({})).unwrap()["undone"], true);
+    room.settle();
+    room.check();
+    assert_ne!(room.server.document().current_page, Some(cover), "undone for everyone");
+}

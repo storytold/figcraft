@@ -661,7 +661,9 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   in the pages list, never opened and holding no layers), `page.list` (each page's `divider`),
   `page.rename`, `page.move {id, index}`, `page.duplicate` ("Copy of …", after its source, with its colour,
   flows (starting at the copied frames), prototype settings and guides),
-  `page.delete` (the last page that isn't a divider stays).
+  `page.delete` (the last page that isn't a divider stays), `page.setOpening {id?}` (the page the
+  file opens on for everyone who opens or joins it, the current page when none is named, a divider
+  refused: a document change, so it syncs in a live session and undoes, #1817).
 - `component.list`: each component's `folder` (the Assets panel's folders: its page, the frames
   holding it, then its name's slash parts) and `label` (the name on its tile).
 - `view.contextMenu` (`Shift+F10`): the selection's context menu, at its layer row when the layers

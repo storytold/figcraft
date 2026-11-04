@@ -147,6 +147,23 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
+        spec!(
+            "page.setOpening",
+            "Set as opening page",
+            "{id?} (the page the file opens on, for everyone who opens or joins it; the current page when none is named)",
+            true,
+            |s, p| {
+                // A document property (#1817), so it syncs in a live session and undoes; nobody's
+                // own page moves (`page.select` is each viewer's).
+                let id = page_target(s, "page.setOpening", p)?;
+                if s.doc()?.is_divider(id) {
+                    return Err(bad("page.setOpening", "a divider isn't a page to open on"));
+                }
+                s.doc_mut()?.current_page = Some(id);
+                settle(s, "page.setOpening")?;
+                ok()
+            }
+        ),
         spec!("page.list", "List pages", "{}", false, |s, _| {
             let doc = s.doc()?;
             let cur = s.page()?;
