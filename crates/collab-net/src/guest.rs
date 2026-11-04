@@ -31,7 +31,7 @@ use crate::manage;
 use crate::net::{Duplex, NetLimits, config, open, shutdown};
 use crate::requests;
 pub use crate::requests::Publish;
-use crate::throttle::{PRESENCE_INTERVAL, Throttle, earliest};
+use crate::throttle::{PRESENCE_INTERVAL, Pace, Throttle, earliest};
 
 /// A joined (or joining) session. Dropping it leaves.
 pub struct Guest {
@@ -44,6 +44,8 @@ enum Cmd {
     /// For the server, in order (document changes).
     Send(ClientMsg),
     Leave,
+    /// Try now rather than after the pause under way (reconnecting).
+    Retry,
     /// The reader of connection `epoch` got its welcome.
     Welcomed(u64),
     /// Connection `epoch` ended.
@@ -131,6 +133,11 @@ impl Guest {
     /// breaks: the next welcome starts over).
     pub fn send(&self, msg: ClientMsg) {
         let _ = self.cmd.send(Cmd::Send(msg));
+    }
+
+    /// Reconnect now, if it is waiting to.
+    pub fn retry(&self) {
+        let _ = self.cmd.send(Cmd::Retry);
     }
 
     /// Leave (returns at once: a connection attempt in progress ends on its own).
@@ -227,6 +234,11 @@ fn supervise(cfg: &GuestConfig, inbox: &Inbox, rx: &Receiver<Cmd>, me: &Sender<C
                     match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
                         Ok(Cmd::Leave) | Err(RecvTimeoutError::Disconnected) => return,
                         Ok(Cmd::Presence(p)) => pending = Some(p),
+                        // A fresh start: the pauses grow from the beginning again.
+                        Ok(Cmd::Retry) => {
+                            attempt = 0;
+                            break;
+                        }
                         // From the old connection's client: the next welcome starts over.
                         Ok(_) => {}
                         Err(RecvTimeoutError::Timeout) => break,
@@ -267,6 +279,7 @@ fn session(
     let hello = hello(cfg, resume);
     let mut welcomed = false;
     let mut throttle = Throttle::new(PRESENCE_INTERVAL);
+    let mut pace = Pace::new(Instant::now());
     let outcome = if send(&mut writer, &hello) {
         loop {
             let ping_at = last_ping + cfg.limits.keepalive;
@@ -274,7 +287,11 @@ fn session(
             let mut out = None;
             let mut now_send = Vec::new();
             match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
-                Ok(Cmd::Send(m)) if welcomed => now_send.push(m),
+                Ok(Cmd::Send(m)) if welcomed => {
+                    // A long queue from while offline doesn't go out faster than the server takes it.
+                    std::thread::sleep(pace.wait(Instant::now()));
+                    now_send.push(m);
+                }
                 // Made for the previous connection (the sync client sends again what the server
                 // didn't get once it has caught up with this connection's welcome).
                 Ok(Cmd::Send(_)) => {}
@@ -292,7 +309,7 @@ fn session(
                     break Outcome::Left;
                 }
                 // From an earlier connection.
-                Ok(Cmd::Welcomed(_) | Cmd::Lost(..)) => {}
+                Ok(Cmd::Welcomed(_) | Cmd::Lost(..) | Cmd::Retry) => {}
                 Err(RecvTimeoutError::Timeout) => {}
             }
             if !now_send.iter().all(|m| send(&mut writer, m)) {

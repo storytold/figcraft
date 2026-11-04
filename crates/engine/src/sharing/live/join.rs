@@ -48,6 +48,24 @@ fn leave(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"ended": ended.is_some_and(|l| l.status.active())}))
 }
 
+/// Back into the open file's session now: a reconnect that is waiting tries at once, and a session
+/// that couldn't go on is joined again in its tab.
+fn reconnect(s: &mut Session, _: &Value) -> Result<Value> {
+    const CMD: &str = "collab.reconnect";
+    let live = s.live();
+    let (id, reconnecting, rejoinable) = (live.id, matches!(live.status, Status::Reconnecting { .. }), live.rejoinable());
+    if reconnecting {
+        if let Some(net) = s.live.link() {
+            net.retry(id);
+        }
+    } else if rejoinable {
+        s.live_rejoin(CMD, id)?;
+    } else {
+        return Err(bad(CMD, "this file has no lost live session to reconnect"));
+    }
+    Ok(json!({"status": s.live().status.id()}))
+}
+
 fn stop(s: &mut Session, p: &Value) -> Result<Value> {
     // A file shared online stays its owner's on the server: stopping takes the others' links (and
     // their codes) away, which disconnects whoever joined with them, and the owner stays in the
@@ -193,9 +211,16 @@ pub fn specs() -> Vec<CommandSpec> {
             join
         ),
         spec!(
+            "collab.reconnect",
+            "Reconnect live session",
+            "{} → {status}: for the open file's session when it is disconnected: a reconnect that is waiting tries now, and a session that couldn't go on (`failed`, the file open in its tab) is joined again there, what you changed since opening beside it. Refused when nothing was lost",
+            false,
+            reconnect
+        ),
+        spec!(
             "collab.leave",
             "Leave live session",
-            "{session? (a session's id from `collab.peers`'s `sessions`, e.g. a join still on its way; default: the open file's session)} → {ended}: the synced file stays open as a local copy",
+            "{session? (a session's id from `collab.peers`'s `sessions`, e.g. a join still on its way; default: the open file's session)} → {ended}: the synced file stays open as a local copy (also how a tab stops showing a session that couldn't go on)",
             false,
             leave
         ),

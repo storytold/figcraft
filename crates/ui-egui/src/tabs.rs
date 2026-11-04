@@ -149,6 +149,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             let name = &d.doc.name;
             // In a live session: a mark after the name says whether others get in.
             let live = live_mark(app, d.uid);
+            let lost = live_lost(app, d.uid);
             let dirty = d.is_dirty();
             let r = tab_rects[slot];
             let body_r = Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y));
@@ -171,8 +172,8 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                     }
                 });
             }
-            let label = tab_label(name, live);
-            let resp = if live.is_some() { resp.on_hover_text(&label) } else { resp };
+            let label = if lost { trf("{name}, disconnected from its live session", &[("name", name)]) } else { tab_label(name, live) };
+            let resp = if live.is_some() || lost { resp.on_hover_text(&label) } else { resp };
             crate::a11y::tab(&resp, &label, active);
             let progress = open_progress(&opening, d.uid, now);
             let tab = TabPaint {
@@ -182,6 +183,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 width: w,
                 state: [active, resp.hovered(), cresp.hovered(), dirty],
                 live,
+                lost,
                 progress,
             };
             paint_tab(ui, &t, &tab);
@@ -432,7 +434,7 @@ fn detach_tab(app: &mut FigApp, ui: &Ui, i: usize, at: Option<egui::Pos2>) {
 /// How wide document tab `i` wants to be: its name, the live mark and the unsaved dot.
 fn preferred_width(app: &FigApp, i: usize) -> f32 {
     let d = &app.session.docs[i];
-    let mark_w = if live_mark(app, d.uid).is_some() { 18.0 } else { 0.0 };
+    let mark_w = if live_mark(app, d.uid).is_some() || live_lost(app, d.uid) { 18.0 } else { 0.0 };
     let dot_w = if d.is_dirty() && mark_w > 0.0 { 12.0 } else { 0.0 };
     (regular(12.0).size * 0.6 * d.doc.name.chars().count() as f32 + 64.0 + mark_w + dot_w).clamp(120.0, 220.0)
 }
@@ -457,14 +459,16 @@ struct TabPaint<'a> {
     state: [bool; 4],
     /// In a live session: whether others get in.
     live: Option<bool>,
+    /// Disconnected from its live session.
+    lost: bool,
     /// How far the opening animation is (0..=1).
     progress: f32,
 }
 
 /// Draws a document tab: background, icon, name, live mark, unsaved dot and close button.
 fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
-    let TabPaint { name, kind, rects: [r, close_r], width: w, state: [active, hovered, close_hovered, dirty], live, progress } = *tab;
-    let mark_w = if live.is_some() { 18.0 } else { 0.0 };
+    let TabPaint { name, kind, rects: [r, close_r], width: w, state: [active, hovered, close_hovered, dirty], live, lost, progress } = *tab;
+    let mark_w = if live.is_some() || lost { 18.0 } else { 0.0 };
     let paint_r = r.translate(vec2(-28.0 * (1.0 - progress).powi(2), 0.0));
     let painter = ui.painter().with_clip_rect(r);
     if active {
@@ -487,8 +491,10 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
         t.text.linear_multiply(progress),
         (w - mark_w - if dirty { 72.0 } else { 60.0 }).max(0.0),
     );
-    if let Some(shared) = live {
-        let at = Rect::from_center_size(pos2(paint_r.max.x - 38.0, paint_r.center().y), vec2(14.0, 14.0));
+    let at = Rect::from_center_size(pos2(paint_r.max.x - 38.0, paint_r.center().y), vec2(14.0, 14.0));
+    if lost {
+        icons::paint(&painter, at, Icon::LiveDisconnected, t.danger.linear_multiply(progress));
+    } else if let Some(shared) = live {
         icons::paint(&painter, at, crate::online::mark(shared), if shared { t.success } else { t.icon_secondary }.linear_multiply(progress));
     }
     if dirty {
@@ -670,6 +676,12 @@ pub fn relink_presents(app: &mut FigApp) {
 pub fn live_mark(app: &FigApp, uid: u64) -> Option<bool> {
     let live = app.session.live_of(uid);
     live.shared().filter(|_| live.doc_uid == Some(uid))
+}
+
+/// Document `uid` is a live session's whose connection is gone: what happens in it reaches no one.
+pub fn live_lost(app: &FigApp, uid: u64) -> bool {
+    let live = app.session.live_of(uid);
+    live.disconnected() && live.doc_uid == Some(uid)
 }
 
 /// Minimise, maximise/restore and close at the right end of the title bar; returns their width.

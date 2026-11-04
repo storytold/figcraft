@@ -18,6 +18,7 @@
 
 use figcraft_collab::message::{self, ClientMsg, Presence, ServerMsg};
 use figcraft_engine::live::{Event, Status};
+use std::collections::VecDeque;
 use std::time::Duration;
 // `std::time::Instant` on native builds; the browser's clock in the web build.
 use web_time::Instant;
@@ -28,7 +29,7 @@ use crate::invite::Endpoint;
 use crate::join::{GuestConfig, Next, Outcome, Resuming, Seen, Taken, after, ask, closed, hello, resolved, take, too_large, unresolved};
 use crate::limits::NetLimits;
 use crate::requests::Publish;
-use crate::throttle::{PRESENCE_INTERVAL, Throttle, earliest};
+use crate::throttle::{PRESENCE_INTERVAL, Pace, Throttle, earliest};
 
 /// A WebSocket the driver opens, writes and closes; what it receives comes back through the
 /// driver's event methods.
@@ -79,6 +80,9 @@ pub(crate) struct Driver<S: Socket> {
     /// Your latest presence while not welcomed (sent with the welcome).
     pending: Option<Presence>,
     throttle: Throttle<Presence>,
+    /// Sync messages waiting their turn (a long queue from while offline), and when each may go.
+    pace: Pace,
+    paced: VecDeque<(Instant, ClientMsg)>,
     reconnect_at: Option<Instant>,
     /// What this connection asks a server (a managing one), and what follows its answers.
     asking: Option<(Box<Exchange>, Then)>,
@@ -86,7 +90,7 @@ pub(crate) struct Driver<S: Socket> {
 }
 
 impl<S: Socket> Driver<S> {
-    fn new(sock: S, cfg: GuestConfig, inbox: Inbox) -> Self {
+    fn new(sock: S, cfg: GuestConfig, inbox: Inbox, now: Instant) -> Self {
         Self {
             sock,
             cfg,
@@ -97,6 +101,8 @@ impl<S: Socket> Driver<S> {
             resume: Resuming::default(),
             pending: None,
             throttle: Throttle::new(PRESENCE_INTERVAL),
+            pace: Pace::new(now),
+            paced: VecDeque::new(),
             reconnect_at: None,
             asking: None,
             done: false,
@@ -105,7 +111,7 @@ impl<S: Socket> Driver<S> {
 
     /// Start joining (progress arrives in `inbox`).
     pub(crate) fn start(sock: S, cfg: GuestConfig, inbox: Inbox, now: Instant) -> Self {
-        let mut d = Self::new(sock, cfg, inbox);
+        let mut d = Self::new(sock, cfg, inbox, now);
         d.inbox.push(Event::Status(Status::Connecting));
         d.connect(now);
         d
@@ -114,7 +120,7 @@ impl<S: Socket> Driver<S> {
     /// Start with what `next` asks a server (a background request): the events it ends in go to
     /// `inbox`, then the join it ends in, if any, as `cfg` says.
     pub(crate) fn asking(sock: S, cfg: GuestConfig, next: exchange::Next, inbox: Inbox, now: Instant) -> Self {
-        let mut d = Self::new(sock, cfg, inbox);
+        let mut d = Self::new(sock, cfg, inbox, now);
         d.follow(next, now);
         d
     }
@@ -303,8 +309,31 @@ impl<S: Socket> Driver<S> {
         if !self.conn.as_ref().is_some_and(|c| c.welcomed) {
             return;
         }
-        if !self.write(&msg) {
-            self.end(Outcome::Retry("the connection dropped".into()), now);
+        let wait = self.pace.wait(now);
+        if wait.is_zero() && self.paced.is_empty() {
+            if !self.write(&msg) {
+                self.end(Outcome::Retry("the connection dropped".into()), now);
+            }
+        } else {
+            self.paced.push_back((now + wait, msg));
+        }
+    }
+
+    /// Send the sync messages whose turn has come; false when one couldn't go.
+    fn send_paced(&mut self, now: Instant) -> bool {
+        while let Some((_, msg)) = self.paced.pop_front_if(|(at, _)| *at <= now) {
+            if !self.write(&msg) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Reconnect now, if it is waiting to: the pauses grow from the beginning again.
+    pub(crate) fn retry(&mut self, now: Instant) {
+        if !self.done && self.reconnect_at.is_some() {
+            self.attempt = 0;
+            self.connect(now);
         }
     }
 
@@ -327,7 +356,7 @@ impl<S: Socket> Driver<S> {
                 [Some(c.last_ping + l.keepalive), Some(c.last_heard + c.silence_limit(l)), if c.welcomed { self.throttle.due() } else { None }]
             }
         });
-        earliest(conn.into_iter().flatten().chain([self.reconnect_at]))
+        earliest(conn.into_iter().flatten().chain([self.reconnect_at, self.paced.front().map(|(at, _)| *at)]))
     }
 
     /// Do what's due at `now`: reconnect, send held presence or a ping, give up on a connection
@@ -357,7 +386,7 @@ impl<S: Socket> Driver<S> {
         if now >= last_heard + silence {
             return self.end(Outcome::Retry("the host stopped answering".into()), now);
         }
-        let ok = self.throttle.take_due(now).is_none_or(|p| self.write(&ClientMsg::Presence(p)));
+        let ok = self.send_paced(now) && self.throttle.take_due(now).is_none_or(|p| self.write(&ClientMsg::Presence(p)));
         let ok = ok && (now < last_ping + l.keepalive || self.ping(now));
         if !ok {
             self.end(Outcome::Retry("the connection dropped".into()), now);
@@ -388,6 +417,8 @@ impl<S: Socket> Driver<S> {
             self.sock.close();
         }
         self.throttle = Throttle::new(PRESENCE_INTERVAL);
+        // Made for this connection: the sync client sends again what the server didn't get.
+        self.paced.clear();
         match after(outcome, &self.cfg, self.was_live, &mut self.attempt, &self.inbox) {
             Next::Stop(e) => {
                 if let Some(e) = e {

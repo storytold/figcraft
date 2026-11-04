@@ -809,6 +809,14 @@ fn draw(p: &P, icon: Icon) {
                 p.arc(8.0, 8.0, r, PI - FRAC_PI_4, PI + FRAC_PI_4);
             }
         }
+        LiveDisconnected => {
+            p.dot(8.0, 8.0, 1.6);
+            for r in [3.6, 6.0] {
+                p.arc(8.0, 8.0, r, -FRAC_PI_4, FRAC_PI_4);
+                p.arc(8.0, 8.0, r, PI - FRAC_PI_4, PI + FRAC_PI_4);
+            }
+            p.line(3.0, 13.0, 13.0, 3.0);
+        }
         LivePrivate => {
             p.dot(8.0, 8.0, 1.6);
             p.circle(8.0, 8.0, 5.0);

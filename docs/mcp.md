@@ -1478,7 +1478,10 @@ only: a host stops hosting it, a guest leaves it.
   see `FIGCRAFT_CA_FILE` in [`server.md`](server.md#behind-a-reverse-proxy-tls)). `collab.leave {}`
   leaves the active document's session (or ends a join started from it that is still on its way
   or failed), and `collab.leave {session}` the session with that id (from `sessions`), whichever
-  document is active; the synced document stays open as your copy.
+  document is active; the synced document stays open as your copy. `collab.reconnect {}` acts on
+  the active document's lost session: a reconnect that is waiting tries now, and a session you
+  joined that couldn't go on is joined again in its tab. A dropped connection keeps reconnecting
+  until you leave (see *Reconnect* in [`collab-protocol.md`](collab-protocol.md)).
 - `collab.publish {server, name?, key?}` puts the active document on a `figcraft-server`
   ([`server.md`](server.md)) and syncs it from there (as that document's session; others go on): `server` is the address
   `figcraft-server key` prints (`ws://host:47900/?key=…`; or give `key` separately), `name` the

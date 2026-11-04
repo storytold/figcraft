@@ -118,7 +118,14 @@ impl Session {
         for m in std::mem::take(&mut live.deferred) {
             match client.receive(m, &EngineRecompute) {
                 Ok(more) => out.extend(more),
-                Err(e) => return self.live_fail(id, format!("The live session got out of step ({e}); join again")),
+                Err(e) => {
+                    self.live_fail(id, format!("The live session got out of step ({e})"));
+                    // A fresh join has nothing to get out of step with.
+                    if let Err(e) = self.live_rejoin("collab.reconnect", id) {
+                        log::warn!("live session: couldn't join again: {e}");
+                    }
+                    return;
+                }
             }
         }
         let doc = Arc::new(client.document().clone());
