@@ -169,6 +169,15 @@ fn a_preview_is_held_to_the_permissions_of_the_command_it_shows() {
 }
 
 #[test]
+fn a_nested_preview_is_refused_by_the_preview_itself() {
+    let mut s = Session::new();
+    let nested = json!({"command": "text.preview", "params": {"command": "node.set", "params": {"props": {"name": "x"}}}});
+    install(&mut s, manifest("org.test.nested", "write", &["text.preview"]), &script(&[("text.preview", nested)], OnRefusal::Fail, ""));
+    let e = run_err(&mut s, "org.test.nested");
+    assert!(e.contains("can't be previewed"), "{e}");
+}
+
+#[test]
 fn files_dialogs_history_and_plugins_are_off_limits() {
     let mut s = Session::new();
     let a = rect(&mut s, 0.0);
