@@ -304,7 +304,9 @@ pub fn decode_frames(bytes: &[u8]) -> Option<Vec<(Pixmap, f64)>> {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_SIDE);
     limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(MAX_ANIMATION_BYTES);
+    // The decoder charges its canvas, its composited output and the partial frame against this
+    // together, besides the frames kept (capped by `most` below): one frame of working room.
+    limits.max_alloc = Some(MAX_ANIMATION_BYTES.saturating_add(frame_bytes));
     dec.set_limits(limits).ok()?;
     let most = (MAX_ANIMATION_BYTES / frame_bytes).min(MAX_FRAMES as u64) as usize;
     let mut out = Vec::new();
