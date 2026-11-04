@@ -105,7 +105,8 @@ fn a_status_check_that_cant_be_made_still_lists_the_sessions() {
     let (mut s, script) = session();
     join(&mut s, &script, "Team file");
     // This link has no way to ask: nothing is known about the server, and the list still comes.
+    s.live.reach.insert("127.0.0.1:47900".into(), crate::live::Reach::Online);
     let listed = s.execute("collab.joinedFiles", &json!({"refresh": true})).unwrap();
     assert_eq!(listed["files"][0]["name"], "Team file");
-    assert!(listed["files"][0]["reach"].is_null());
+    assert!(listed["files"][0]["reach"].is_null(), "what an earlier check said no longer stands");
 }

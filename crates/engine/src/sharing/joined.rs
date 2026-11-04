@@ -126,14 +126,17 @@ impl Session {
             servers.entry(f.address.clone()).or_insert_with(|| f.link.clone());
         }
         for (address, link) in servers {
-            // A check that can't be made says nothing: the list still shows. Only a request on its
-            // way goes up, for the command to run again with its answer.
+            // A check that can't be made says nothing, and what an earlier one said no longer
+            // stands: the list still shows. Only a request on its way goes up, for the command to
+            // run again with its answer.
             match self.net(NetRequest::Probe { link }) {
                 Ok((NetReply::Probe(Some(reach)), _)) => {
                     self.live.reach.insert(address, reach);
                 }
                 Err(e @ EngineError::Waiting) => return Err(e),
-                Ok(_) | Err(_) => {}
+                Ok(_) | Err(_) => {
+                    self.live.reach.remove(&address);
+                }
             }
         }
         Ok(())
