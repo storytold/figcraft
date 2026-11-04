@@ -346,6 +346,9 @@ fn leave_paced(writer: &mut WebSocket<Duplex>, paced: &mut Paced<ClientMsg>) {
     let give_up = Instant::now() + LEAVE_DRAIN;
     loop {
         let now = Instant::now();
+        if now >= give_up {
+            return;
+        }
         if let Some(m) = paced.take_due(now) {
             if !send(writer, &m) {
                 return;
