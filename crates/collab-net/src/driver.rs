@@ -339,6 +339,12 @@ impl<S: Socket> Driver<S> {
 
     /// Leave the session.
     pub(crate) fn leave(&mut self, now: Instant) {
+        // What you did before leaving still reaches the others, whatever its turn.
+        while let Some((_, msg)) = self.paced.pop_front() {
+            if !self.write(&msg) {
+                break;
+            }
+        }
         self.end(Outcome::Left, now);
     }
 

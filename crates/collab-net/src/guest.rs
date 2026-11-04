@@ -306,6 +306,8 @@ fn session(
                 }
                 Ok(Cmd::Lost(e, o)) if e == epoch => break o,
                 Ok(Cmd::Leave) | Err(RecvTimeoutError::Disconnected) => {
+                    // What you did before leaving still reaches the others, whatever its turn.
+                    while paced.pop_front().is_some_and(|(_, m)| send(&mut writer, &m)) {}
                     let _ = writer.close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }));
                     break Outcome::Left;
                 }
