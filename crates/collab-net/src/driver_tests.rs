@@ -393,6 +393,24 @@ fn a_long_queue_goes_out_paced_and_in_order() {
 }
 
 #[test]
+fn a_new_connection_starts_with_a_fresh_pace() {
+    let t0 = Instant::now();
+    let (mut d, _inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    for seq in 0..500 {
+        d.send(ClientMsg::Ack { seq }, t0);
+    }
+    d.closed(1006, "", t0);
+    let back = d.deadline().unwrap();
+    d.tick(back);
+    d.opened(back);
+    d.message(&welcome(), back);
+    d.send(ClientMsg::Ack { seq: 900 }, back);
+    assert!(d.sock.sent.iter().any(|m| matches!(m, ClientMsg::Ack { seq: 900 })), "sent at once");
+}
+
+#[test]
 fn leaving_sends_what_was_waiting_its_turn() {
     let t0 = Instant::now();
     let (mut d, _inbox) = start(Script::default(), t0);

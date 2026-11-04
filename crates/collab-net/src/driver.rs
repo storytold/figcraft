@@ -165,6 +165,8 @@ impl<S: Socket> Driver<S> {
 
     fn connect(&mut self, now: Instant) {
         self.reconnect_at = None;
+        // A server counts per connection.
+        self.pace = Pace::new(now);
         self.conn = Some(Conn::new(now));
         if let Err(e) = self.sock.open(&self.server().url()) {
             self.dropped(e, now);
