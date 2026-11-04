@@ -244,9 +244,7 @@ fn build(s: &mut Session, plugin: &str, w: NodeId, r: &WidgetRender) -> Result<(
     if !is_widget(n) || n.plugin_data.get(PLUGIN).map(String::as_str) != Some(plugin) {
         return Err(bad(cmd, "the layer is no longer this plugin's widget"));
     }
-    for c in n.children.clone() {
-        doc.remove(c)?;
-    }
+    doc.remove_children(w)?;
     crate::cmd::props::apply(cmd, doc, w, &props(&r.root, true))?;
     let n = doc.get_mut(w)?;
     n.locked = false;

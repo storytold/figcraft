@@ -156,14 +156,20 @@ impl BatchScope {
         lookup(result, path).cloned().map_err(|why| fail(format!("{who}'s result has no `{path}`{why}")))
     }
 
+    /// Most step names a missing-reference error lists.
+    const NAME_HINTS: usize = 12;
+
     fn known_names(&self) -> String {
         let mut names: Vec<_> = self.names.iter().collect();
         names.sort_by_key(|(_, i)| **i);
         if names.is_empty() {
             return "no step has an `as` name".into();
         }
-        let list: Vec<_> = names.iter().map(|(name, i)| format!("\"{name}\" is step {i}")).collect();
-        list.join(", ")
+        // A few of them: the list is built for every missing reference and, with `onError:
+        // continue`, kept for each, so a long table would cost its length per failed step.
+        let list: Vec<_> = names.iter().take(Self::NAME_HINTS).map(|(name, i)| format!("\"{name}\" is step {i}")).collect();
+        let more = names.len().saturating_sub(Self::NAME_HINTS);
+        if more > 0 { format!("{}, {more} more", list.join(", ")) } else { list.join(", ") }
     }
 }
 

@@ -109,7 +109,10 @@ pub(super) fn html(doc: &Document, id: NodeId) -> String {
     let ctx = Ctx::new(doc, id);
     let mut out = Markup::new(&ctx, CodeLang::Html);
     out.node(id, None, 0, "");
-    format!("{}\n<style>\n{}{}</style>\n", out.markup, out.tokens.root_rule(), out.styles)
+    // Document text can reach the stylesheet through any property: `<\/` reads back as `</` inside a CSS
+    // string and can never close the element early.
+    let css = format!("{}{}", out.tokens.root_rule(), out.styles).replace("</", "<\\/");
+    format!("{}\n<style>\n{css}</style>\n", out.markup)
 }
 
 /// Markup being built for a layer tree: HTML (`class`), React JSX (`className`), Vue
