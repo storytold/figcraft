@@ -53,7 +53,7 @@ impl FigApp {
             "reduceMotion": self.reduce_motion(),
             "presenting": self.ui.present.is_some(),
             "presenter": tabs::shown_or_paused(self).map(present::Presenter::inspect),
-            "presentOptions": {"scale": self.ui.present_view.scale.id(), "deviceFrame": self.ui.present_view.device_frame, "comments": self.ui.present_view.comments, "hotspotHints": self.ui.present_view.hotspot_hints, "inspect": self.ui.present_view.inspect},
+            "presentOptions": {"scale": self.ui.present_view.scale.id(), "deviceFrame": self.ui.present_view.device_frame, "comments": self.ui.present_view.comments, "hotspotHints": self.ui.present_view.hotspot_hints, "inspect": self.ui.present_view.inspect, "hideUi": self.ui.present_view.hide_ui},
             "preview": self.ui.preview.as_ref().map(|p| p.player.inspect()),
             "mainMenu": self.ui.main_menu,
             "palette": self.ui.palette.is_some(),
@@ -102,6 +102,7 @@ impl FigApp {
             "importReport": self.ui.import_report.as_ref().map(import_report::Report::inspect),
         });
         state["homeSearch"] = json!(self.ui.home_view.file_query);
+        state["panels"]["minimized"] = json!(self.session.ds().is_ok_and(|d| d.view.ui_minimized));
         // Set apart from the literal above, which is at the macro recursion limit.
         state["uiScale"] = json!({"choice": self.session.prefs.ui_scale, "zoom": self.ui.ui_scale.zoom, "drawn": self.ui.ui_scale.drawn, "limited": self.ui.ui_scale.limited});
         state["pendingOpens"] = json!(self.ui.pending_opens.len());

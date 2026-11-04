@@ -247,6 +247,22 @@ impl FigApp {
         });
     }
 
+    /// The way back from a minimized interface by mouse: a small Panels button at the top left of
+    /// the canvas, where the navigation bar was (the shortcut works too).
+    pub(super) fn expand_button(&mut self, ctx: &egui::Context, at: egui::Pos2) {
+        use a11y::Tip as _;
+        let t = theme::Tokens::get(ctx);
+        egui::Area::new(egui::Id::unique("expand_interface")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::click());
+            let resp = resp.tip(i18n::tr("Expand the interface"));
+            ui.painter().rect(r, 8.0, t.panel, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            icons::paint(ui.painter(), r.shrink(8.0), icons::Icon::Panels, t.icon);
+            if resp.clicked() {
+                self.run("view.minimize", serde_json::json!({}));
+            }
+        });
+    }
+
     /// Draw the toast: start its lifetime on the frame **after** the first drawn frame, request
     /// that frame and the frame that hides it, expire and remove it at the deadline, and place it
     /// at the bottom centre.

@@ -859,7 +859,7 @@ in the file) the presented frame is instead resized to the device's screen, or w
 the presenter's window at 100%, and its constraints and auto layout respond as when it is resized
 in the editor (an axis it hugs keeps hugging its content); the file's frames don't change. `proto.present {start?}` plays the prototype full-window and `proto.preview
 {start?}` in a resizable pane over the canvas that follows edits live; `proto.closePreview` closes
-it. `proto.presentOptions {scale?, deviceFrame?, hotspotHints?, inspect?}` sets how the
+it. `proto.presentOptions {scale?, deviceFrame?, hotspotHints?, inspect?, hideUi?}` sets how the
 full-window presenter sizes the prototype (`fit` scales it down to fit, `fitWidth` fills the width,
 `fill` covers the window, `actual` shows it at 100%; what overflows pans), whether it draws the
 device, whether a click where nothing reacts briefly flashes the screen's hotspots (the layers with

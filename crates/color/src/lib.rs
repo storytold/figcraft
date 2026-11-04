@@ -407,26 +407,32 @@ impl Gradient {
         s
     }
 
-    /// The colour at `t` (0..1) along the gradient.
+    /// The colour at `t` (0..1) along the gradient. Sorts the stops on every call: to sample one
+    /// gradient many times, sort once with [`Self::sorted_stops`] and use [`sample_sorted`].
     pub fn sample(&self, t: f32) -> Color {
-        let stops = self.sorted_stops();
-        let t = clamp01(t);
-        let mut prev = match stops.first() {
-            Some(s) => *s,
-            None => return Color::BLACK,
-        };
-        if t <= prev.position {
-            return prev.color;
+        sample_sorted(&self.sorted_stops(), t)
+    }
+}
+
+/// The colour at `t` (0..1) along stops already sorted by [`Gradient::sorted_stops`]: found by a
+/// binary search, so a renderer sampling a file's gradient per pixel doesn't scan or sort its
+/// stops each time.
+pub fn sample_sorted(stops: &[ColorStop], t: f32) -> Color {
+    let t = clamp01(t);
+    let Some(first) = stops.first() else { return Color::BLACK };
+    if t <= first.position {
+        return first.color;
+    }
+    // The first stop after the first one at or past `t`, and the stop before it.
+    let rest = stops.get(1..).unwrap_or_default();
+    let i = rest.partition_point(|s| s.position < t);
+    match (rest.get(i), stops.get(i)) {
+        (Some(s), Some(prev)) => {
+            let span = s.position - prev.position;
+            let f = if span > 1e-6 { (t - prev.position) / span } else { 1.0 };
+            prev.color.lerp(s.color, f)
         }
-        for s in stops.iter().skip(1) {
-            if t <= s.position {
-                let span = s.position - prev.position;
-                let f = if span > 1e-6 { (t - prev.position) / span } else { 1.0 };
-                return prev.color.lerp(s.color, f);
-            }
-            prev = *s;
-        }
-        prev.color
+        _ => stops.last().map_or(Color::BLACK, |s| s.color),
     }
 }
 

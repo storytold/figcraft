@@ -129,6 +129,28 @@ fn list_keys_at_list_items() {
             "silent: Backspace at an item's start removes its bullet",
         ),
         ("a\nbc", vec![(B, 0), (B, 0)], 4, "Backspace", false, "a\nb", vec![(B, 0), (B, 0)], "Backspace inside an item deletes text"),
+        (
+            "a\nb",
+            vec![(B, 0), (B, 1)],
+            2,
+            "Backspace",
+            false,
+            "a\nb",
+            vec![(B, 0), (P, 1)],
+            "Backspace at a nested item's start removes its bullet and keeps its level",
+        ),
+        ("a\nb", vec![(N, 0), (N, 2)], 2, "Delete", false, "a\nb", vec![(N, 0), (P, 2)], "Delete at an item's start does the same"),
+        ("a\nbc", vec![(B, 0), (B, 1)], 3, "Delete", false, "a\nb", vec![(B, 0), (B, 1)], "Delete inside an item deletes text"),
+        (
+            "a\nb",
+            vec![(B, 0), (P, 1)],
+            2,
+            "Tab",
+            false,
+            "a\n\tb",
+            vec![(B, 0), (P, 1)],
+            "a plain paragraph at a level isn't an item: Tab types a tab",
+        ),
         ("a\nb", vec![(P, 0), (P, 0)], 3, "Tab", false, "a\nb\t", vec![(P, 0), (P, 0)], "outside a list Tab types a tab"),
         ("a", vec![(B, 8)], 1, "Tab", false, "a", vec![(B, 8)], "silent: nesting stops at 8 levels"),
     ];
@@ -317,4 +339,31 @@ fn rest_import_lists_and_decorations() {
         (look.style, look.thickness, look.offset, look.skip_ink, look.color),
         (DecorationStyle::Wavy, DecorationLength::Pixels(2.0), DecorationLength::Auto, true, Some(Color::new(0.0, 0.0, 1.0, 1.0)))
     );
+}
+
+/// "From within the text layer, there are a couple of ways to start a numbered list: Enter one of
+/// the creation characters below followed by a Space: 1. 1)" (Create bulleted and numbered lists);
+/// "-" and "*" start a bulleted one the same way.
+#[test]
+fn typing_a_creation_character_and_a_space_starts_a_list() {
+    for (start, want) in [("1.", N), ("1)", N), ("-", B), ("*", B)] {
+        let mut s = Session::new();
+        let t = text(&mut s, "x");
+        s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+        begin(&mut s, t, Some(0), false).unwrap();
+        for c in start.chars() {
+            insert(&mut s, &c.to_string()).unwrap();
+        }
+        insert(&mut s, " ").unwrap();
+        assert_eq!((data(&s, t).characters.as_str(), lists(&s, t)), ("", vec![(want, 0)]), "{start}");
+    }
+    // "2)" is not a creation character: it stays text.
+    let mut s = Session::new();
+    let t = text(&mut s, "x");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+    begin(&mut s, t, Some(0), false).unwrap();
+    for c in ["2", ")", " "] {
+        insert(&mut s, c).unwrap();
+    }
+    assert_eq!((data(&s, t).characters.as_str(), lists(&s, t)), ("2) ", vec![(P, 0)]));
 }

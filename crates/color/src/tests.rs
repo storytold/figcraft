@@ -60,6 +60,44 @@ fn gradient_sampling() {
 }
 
 #[test]
+fn sampling_sorted_stops_matches_a_scan() {
+    // The scan `sample` used to make: the first stop at or past `t`, mixed with the one before.
+    fn scan(stops: &[ColorStop], t: f32) -> Color {
+        let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+        let mut prev = stops[0];
+        if t <= prev.position {
+            return prev.color;
+        }
+        for s in &stops[1..] {
+            if t <= s.position {
+                let span = s.position - prev.position;
+                let f = if span > 1e-6 { (t - prev.position) / span } else { 1.0 };
+                return prev.color.lerp(s.color, f);
+            }
+            prev = *s;
+        }
+        prev.color
+    }
+    let grey = |v: f32| Color { r: v, g: v, b: v, a: 1.0 };
+    let positions = [0.3, 0.0, 0.3, 1.0, 0.7, f32::NAN, 0.5, 0.5, 0.9];
+    let g = Gradient {
+        kind: GradientKind::Diamond,
+        stops: positions.iter().enumerate().map(|(i, p)| ColorStop { position: *p, color: grey(i as f32 / 10.0) }).collect(),
+        from: (0.5, 0.5),
+        to: (1.0, 0.5),
+        width: (0.5, 1.0),
+    };
+    let sorted = g.sorted_stops();
+    for i in -10..=110 {
+        let t = i as f32 / 100.0;
+        assert_eq!(sample_sorted(&sorted, t), scan(&sorted, t), "t = {t}");
+        assert_eq!(g.sample(t), scan(&sorted, t), "t = {t}");
+    }
+    assert_eq!(sample_sorted(&sorted, f32::NAN), scan(&sorted, f32::NAN));
+    assert_eq!(sample_sorted(&[], 0.5), Color::BLACK);
+}
+
+#[test]
 fn paint_serde_shape() {
     let p = Paint::solid(Color::from_hex("FF0000").unwrap());
     let j = serde_json::to_value(&p).unwrap();

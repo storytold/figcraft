@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use figcraft_doc::{Document, NodeId};
 use serde::{Deserialize, Serialize};
 
-use crate::change::{Change, Entry, Prop, Target};
+use crate::change::{Change, Entry, Family, Prop, Target};
 use crate::message::{
     Accepted, Access, CatchUp, ClientMsg, Hello, PROTOCOL, Peer, Presence, Processed, Resume, ServerMsg, Signal, reads_comments, reads_signals,
 };
@@ -557,6 +557,7 @@ impl Server {
     fn check_entries(&self, from: u32, changes: &[Change], after: &Document) -> Result<Vec<(Entry, bool)>, Error> {
         let before = self.state.document();
         let mut touched: BTreeSet<Entry> = BTreeSet::new();
+        let mut listed: BTreeMap<Family, (BTreeSet<Entry>, BTreeSet<Entry>)> = BTreeMap::new();
         for c in changes {
             match c {
                 Change::Put { entry, .. } | Change::Remove { entry } if entry.id_space().is_some() => {
@@ -565,8 +566,10 @@ impl Server {
                 // A whole list replaced (the fallback for lists whose ids aren't unique).
                 Change::SetDoc { prop, .. } => {
                     if let Some(Ok(family)) = prop.list() {
-                        touched.extend(docprops::entries(before, family));
-                        touched.extend(docprops::entries(after, family));
+                        let (b, a) = (docprops::entries(before, family), docprops::entries(after, family));
+                        touched.extend(b.iter().chain(&a).cloned());
+                        // Looked up in sets below: a linear search per entry would be quadratic.
+                        listed.entry(family).or_insert_with(|| (b.into_iter().collect(), a.into_iter().collect()));
                     }
                 }
                 _ => {}
@@ -574,7 +577,10 @@ impl Server {
         }
         let mut out = Vec::new();
         for entry in touched {
-            let (was, now) = (docprops::has(before, &entry), docprops::has(after, &entry));
+            let (was, now) = match entry.family().and_then(|f| listed.get(&f)) {
+                Some((b, a)) => (b.contains(&entry), a.contains(&entry)),
+                None => (docprops::has(before, &entry), docprops::has(after, &entry)),
+            };
             if was == now {
                 continue;
             }

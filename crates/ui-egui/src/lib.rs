@@ -243,6 +243,8 @@ mod table_paste_tests;
 #[cfg(test)]
 mod text_enter_tests;
 #[cfg(test)]
+mod text_link_tests;
+#[cfg(test)]
 mod titlebar_tests;
 #[cfg(test)]
 mod ui_params_tests;
