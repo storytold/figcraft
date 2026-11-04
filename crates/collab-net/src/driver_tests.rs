@@ -393,6 +393,22 @@ fn a_long_queue_goes_out_paced_and_in_order() {
 }
 
 #[test]
+fn messages_held_up_by_a_stall_dont_leave_together() {
+    let t0 = Instant::now();
+    let (mut d, _inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    for seq in 0..700 {
+        d.send(ClientMsg::Ack { seq }, t0);
+    }
+    let acks = |d: &Driver<Script>| d.sock.sent.iter().filter(|m| matches!(m, ClientMsg::Ack { .. })).count();
+    let first = acks(&d);
+    // Nothing ran for 8 s.
+    d.tick(t0 + Duration::from_secs(8));
+    assert!(acks(&d) - first <= 200, "{} at once: a server drops a connection past 400", acks(&d) - first);
+}
+
+#[test]
 fn a_new_connection_starts_with_a_fresh_pace() {
     let t0 = Instant::now();
     let (mut d, _inbox) = start(Script::default(), t0);

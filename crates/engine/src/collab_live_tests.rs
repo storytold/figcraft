@@ -420,6 +420,18 @@ fn a_session_out_of_step_joins_again_by_itself() {
 }
 
 #[test]
+fn leaving_with_changes_unconfirmed_says_so() {
+    let mut room = Room::new(base(), 1, 7);
+    let (_, r) = frame_and_rect(room.server.document());
+    room.s(0).execute("collab.leave", &json!({})).unwrap();
+    assert_eq!(room.s(0).message.as_deref(), Some("You left the session; your copy stays open here"));
+    let mut room = Room::new(base(), 1, 7);
+    room.s(0).execute("node.set", &json!({"id": r, "props": {"name": "Unconfirmed"}})).unwrap();
+    room.s(0).execute("collab.leave", &json!({})).unwrap();
+    assert!(room.s(0).message.as_deref().is_some_and(|m| m.contains("before your last changes were confirmed")));
+}
+
+#[test]
 fn leaving_a_lost_session_makes_the_tab_a_plain_copy() {
     let mut room = Room::new(base(), 1, 7);
     room.disconnect(0);

@@ -9,7 +9,6 @@
 //! Publishing ([`Guest::publish`]) first uploads the document to a server over a managing
 //! connection, then joins the new file with its edit link on the same thread.
 
-use std::collections::VecDeque;
 use std::io;
 use std::net::TcpStream;
 use std::sync::Arc;
@@ -32,7 +31,7 @@ use crate::manage;
 use crate::net::{Duplex, NetLimits, config, open, shutdown};
 use crate::requests;
 pub use crate::requests::Publish;
-use crate::throttle::{PRESENCE_INTERVAL, Pace, Throttle, earliest};
+use crate::throttle::{PRESENCE_INTERVAL, Paced, Throttle, earliest};
 
 /// A joined (or joining) session. Dropping it leaves.
 pub struct Guest {
@@ -280,19 +279,15 @@ fn session(
     let hello = hello(cfg, resume);
     let mut welcomed = false;
     let mut throttle = Throttle::new(PRESENCE_INTERVAL);
-    let mut pace = Pace::new(Instant::now());
-    // Sync messages waiting their turn (a long queue from while offline), and when each may go.
-    let mut paced: VecDeque<(Instant, ClientMsg)> = VecDeque::new();
+    // Sync messages waiting their turn (a long queue from while offline).
+    let mut paced: Paced<ClientMsg> = Paced::new(Instant::now());
     let outcome = if send(&mut writer, &hello) {
         loop {
             let ping_at = last_ping + cfg.limits.keepalive;
-            let wake = earliest([throttle.due(), Some(ping_at), paced.front().map(|(at, _)| *at)]).unwrap_or(ping_at);
+            let wake = earliest([throttle.due(), Some(ping_at), paced.due()]).unwrap_or(ping_at);
             let mut out = None;
             match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
-                Ok(Cmd::Send(m)) if welcomed => {
-                    let now = Instant::now();
-                    paced.push_back((now + pace.wait(now), m));
-                }
+                Ok(Cmd::Send(m)) if welcomed => paced.push(m),
                 // Made for the previous connection (the sync client sends again what the server
                 // didn't get once it has caught up with this connection's welcome).
                 Ok(Cmd::Send(_)) => {}
@@ -307,7 +302,7 @@ fn session(
                 Ok(Cmd::Lost(e, o)) if e == epoch => break o,
                 Ok(Cmd::Leave) | Err(RecvTimeoutError::Disconnected) => {
                     // What you did before leaving still reaches the others, whatever its turn.
-                    while paced.pop_front().is_some_and(|(_, m)| send(&mut writer, &m)) {}
+                    while paced.take_now().is_some_and(|m| send(&mut writer, &m)) {}
                     let _ = writer.close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }));
                     break Outcome::Left;
                 }
@@ -317,7 +312,7 @@ fn session(
             }
             let now = Instant::now();
             let mut sent = true;
-            while sent && let Some((_, m)) = paced.pop_front_if(|(at, _)| *at <= now) {
+            while sent && let Some(m) = paced.take_due(now) {
                 sent = send(&mut writer, &m);
             }
             if !sent {
