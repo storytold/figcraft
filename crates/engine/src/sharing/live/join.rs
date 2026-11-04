@@ -60,6 +60,9 @@ fn reconnect(s: &mut Session, _: &Value) -> Result<Value> {
     let live = s.live();
     let (id, reconnecting, rejoinable) = (live.id, matches!(live.status, Status::Reconnecting { .. }), live.rejoinable());
     if reconnecting {
+        if let Some(why) = crate::file_access::network_refused() {
+            return Err(EngineError::Disabled(CMD.to_string(), why));
+        }
         if let Some(net) = s.live.link() {
             net.retry(id);
         }
