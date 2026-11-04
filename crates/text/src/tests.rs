@@ -608,11 +608,14 @@ fn justified_ideographs_spread_the_room_between_characters() {
     };
     // Box width cut inside char `fit`, so the first line is chars 0..fit; how many gaps lie before
     // each of its chars.
-    for (s, fit, gaps_before, why) in [
-        ("一二三四五六七八九十", 6, [0, 1, 2, 3, 4, 5], "one gap between each pair of ideographs"),
-        ("一二三。四五六七八九", 6, [0, 1, 2, 2, 3, 4], "none before the full stop, which never starts a line"),
-        ("一二三「四五六七八九", 6, [0, 1, 2, 3, 3, 4], "none after the opening bracket, which never ends a line"),
-    ] {
+    let rows: [(&str, usize, &[i32], &str); 5] = [
+        ("一二三四五六七八九十", 6, &[0, 1, 2, 3, 4, 5], "one gap between each pair of ideographs"),
+        ("一二三。四五六七八九", 6, &[0, 1, 2, 2, 3, 4], "none before the full stop, which never starts a line"),
+        ("一二三「四五六七八九", 6, &[0, 1, 2, 3, 3, 4], "none after the opening bracket, which never ends a line"),
+        ("一二三\u{20DD}四五六七八九", 6, &[0, 1, 2, 2, 3, 4], "none inside a grapheme cluster: a combining mark stays on its base"),
+        ("漢אב字一二三", 4, &[0, 1, 1, 2], "beside a right-to-left word (laid out ב then א), not inside it"),
+    ];
+    for (s, fit, gaps_before, why) in rows {
         let natural = lay_out(s, TextAlignH::Left, None);
         let (fits, next) = (natural.caret(fit).0, natural.caret(fit + 1).0);
         assert!(next > fits, "{why}: chars need advances");
@@ -621,6 +624,7 @@ fn justified_ideographs_spread_the_room_between_characters() {
         let just = lay_out(s, TextAlignH::Justified, Some(w));
         assert!(just.lines.len() >= 2 && just.lines[0].char_end == fit, "{why}: {:?}", just.lines);
         let extra = (w - left.lines[0].width) / f64::from(gaps_before[fit - 1]);
+        assert_eq!(left.lines[0].char_end, fit, "{why}: {:?}", left.lines);
         assert!(extra > 0.0, "{why}");
         assert_eq!(left.glyphs.len(), just.glyphs.len());
         for (l, j) in left.glyphs.iter().zip(&just.glyphs).filter(|(g, _)| g.char_end <= fit) {
