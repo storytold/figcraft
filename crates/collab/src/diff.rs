@@ -133,7 +133,8 @@ fn depth(doc: &Document, id: NodeId, memo: &mut BTreeMap<NodeId, usize>) -> usiz
             base = *d + 1;
             break;
         }
-        if chain.len() > 100_000 {
+        // An acyclic chain is no longer than the document: this only stops a cycle.
+        if chain.len() > doc.node_count() {
             break;
         }
         chain.push(p);
@@ -207,4 +208,22 @@ fn increasing_run(keys: &[Option<&str>]) -> Vec<bool> {
         cur = prev.get(i).copied().flatten();
     }
     kept
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use figcraft_doc::NodeKind;
+
+    #[test]
+    fn a_chain_longer_than_a_fixed_bound_is_walked_whole() {
+        let mut doc = Document::new("File");
+        let mut parent = doc.first_page().unwrap();
+        let mut last = parent;
+        for i in 0..100_050 {
+            last = doc.create(parent, NodeKind::Frame, &format!("F{i}"), 0.0, 0.0, 1.0, 1.0).unwrap();
+            parent = last;
+        }
+        assert_eq!(depth(&doc, last, &mut BTreeMap::new()), 100_050);
+    }
 }
