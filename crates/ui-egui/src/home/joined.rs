@@ -47,6 +47,8 @@ pub struct JoinedUi {
     /// Sessions forgotten while their preview may be on its way: it isn't kept. Held across the
     /// move into place, so forgetting either waits for it and removes it, or stops it.
     forgotten: Arc<Mutex<HashSet<String>>>,
+    /// Previews taken since the section last drew: their cards read them again.
+    taken: Arc<Mutex<Vec<String>>>,
 }
 
 impl JoinedUi {
@@ -55,6 +57,20 @@ impl JoinedUi {
     pub(crate) fn shown_again(&mut self) {
         self.pictures.clear();
         self.probed = None;
+    }
+}
+
+/// Remove the previews in `dir` of sessions no longer listed (the list keeps the latest
+/// [`MAX_JOINED_FILES`](figcraft_engine::joined::MAX_JOINED_FILES): older ones have no card to forget
+/// them from).
+pub(crate) fn prune_previews(dir: &Path, files: &[JoinedFile]) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let path = e.path();
+        let listed = path.file_stem().is_some_and(|stem| files.iter().any(|f| f.preview_key() == stem.to_string_lossy()));
+        if !listed && path.extension().is_some_and(|x| x == "png") {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -87,7 +103,7 @@ fn picture(ctx: &egui::Context, key: &str, bytes: &[u8]) -> Option<Picture> {
 /// Keep previews of the sessions you're in, for the home screen: when one has none yet, then at
 /// most every [`CAPTURE_SECS`] while its file changes. They're drawn away from the window's thread,
 /// one at a time.
-pub(crate) fn capture(app: &mut FigApp, time: f64) {
+pub(crate) fn capture(app: &mut FigApp, ctx: &egui::Context, time: f64) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let state = &mut app.ui.online.joined;
@@ -108,6 +124,8 @@ pub(crate) fn capture(app: &mut FigApp, time: f64) {
             state.capturing.store(true, Ordering::Release);
             let busy = state.capturing.clone();
             let forgotten = state.forgotten.clone();
+            let taken = state.taken.clone();
+            let ctx = ctx.clone();
             forgotten.lock().unwrap_or_else(PoisonError::into_inner).remove(&key);
             let path = preview_file(&dir, &key);
             let spawned = std::thread::Builder::new().name("joined-preview".into()).spawn(move || {
@@ -120,6 +138,9 @@ pub(crate) fn capture(app: &mut FigApp, time: f64) {
                         let _ = std::fs::remove_file(&tmp);
                     } else if let Err(e) = std::fs::rename(&tmp, &path) {
                         log::warn!("couldn't keep a session's preview: {e}");
+                    } else {
+                        taken.lock().unwrap_or_else(PoisonError::into_inner).push(key.clone());
+                        ctx.request_repaint();
                     }
                 }
                 busy.store(false, Ordering::Release);
@@ -132,7 +153,7 @@ pub(crate) fn capture(app: &mut FigApp, time: f64) {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (app, time);
+        let _ = (app, ctx, time);
     }
 }
 
@@ -217,6 +238,10 @@ pub(crate) fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     }
     let ctx = ui.ctx().clone();
     let time = ui.input(|i| i.time);
+    let taken = std::mem::take(&mut *app.ui.online.joined.taken.lock().unwrap_or_else(PoisonError::into_inner));
+    for key in taken {
+        app.ui.online.joined.pictures.remove(&key);
+    }
     if app.ui.online.joined.probed.is_none_or(|at| time >= at + PROBE_SECS) && !app.session.waiting_for(JOINED) {
         app.ui.online.joined.probed = Some(time);
         app.run_background(&ctx, JOINED, json!({"refresh": true}), Box::new(|_, _, _| {}));

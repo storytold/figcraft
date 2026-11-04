@@ -100,6 +100,9 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, main: Rect, t: &Tokens) {
     if app.ui.online.drawn.replace(frame).is_none_or(|d| d.saturating_add(1) < frame) {
         refresh(app, &ctx);
         app.ui.online.joined.shown_again();
+        if let Some(dir) = app.services.joined_previews_dir() {
+            super::joined::prune_previews(&dir, &app.session.prefs.joined_files);
+        }
     }
     ui.painter().text(main.min, Align2::LEFT_TOP, tr("Online files"), semibold(18.0), t.text);
     let body = Rect::from_min_max(pos2(main.min.x, main.min.y + 40.0), main.max);

@@ -75,6 +75,8 @@ fn healthy(server: &crate::invite::Endpoint, limits: &NetLimits) -> bool {
     use std::io::Write;
     let Ok((mut rd, mut wr, sock)) = crate::net::open(server, CONNECT, limits) else { return false };
     let request = format!("GET {}healthz HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", server.path, server.host);
+    // One deadline for all of it: a server that sends a byte now and then doesn't hold up the others.
+    rd.read_until(Some(std::time::Instant::now() + CONNECT));
     let mut head = [0u8; 16];
     let read = wr.write_all(request.as_bytes()).and_then(|()| wr.flush()).and_then(|()| read_status(&mut rd, &mut head));
     crate::net::shutdown(&sock);

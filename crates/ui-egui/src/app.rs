@@ -408,7 +408,7 @@ impl FigApp {
         // changed), from the window with its file.
         let windows = &self.windows;
         self.session.live_sync_in(|uid| uid.map_or(0, |u| windows.of(u)) == windows.current);
-        crate::home::joined::capture(self, ctx.input(|i| i.time));
+        crate::home::joined::capture(self, &ctx, ctx.input(|i| i.time));
         // The canvas editor's IME context is observed exactly once per pass, after every command
         // this pass ran (shortcuts, menus, dialogs, window requests and live sync). A focused panel
         // field or an open palette owns the platform IME instead; the early `home`/present paths
