@@ -546,10 +546,13 @@ resuming with its offline edits, and leaving the session going back to snapshot 
 - Disconnected: while it reconnects, and after it can't go on, the tab shows a red mark and a strip
   across the top of the canvas says so, with **Retry now** (`collab.reconnect`). The tab can still
   be edited. A session you joined that ended stays on its tab with **Try again**, **Save a copy…**
-  and **Dismiss** (`collab.leave`). **Try again** joins it in the same tab as someone new; if the
-  tab changed since it lost the server, what changed opens beside it as an unsaved
-  "offline copy" and the tab shows the server's version. A session that gets out of step does the
-  same by itself. A reconnect resumes as the same
+  and **Dismiss** (`collab.leave`). **Try again** joins it in the same tab, as the same client when
+  the server still knows it, and what changed since it lost the server goes on top as one undoable
+  edit, through the three-way merge of `crates/collab/src/merge.rs`. The same thing changed both
+  ways keeps the other person's, and layers a new client can't make aren't sent; in those cases
+  your whole version also opens beside it as an unsaved "offline copy", so nothing is lost. A
+  session that gets out of step, or a server that no longer knows you, does the same by itself. A
+  reconnect resumes as the same
   client: the guest's connection keeps the session id, client id and last sequence number from
   the messages it read and sends them in its next `Hello` (see Offline and reconnect).
 - The browser build joins and publishes to a server (see *Built (the browser client)*); hosting

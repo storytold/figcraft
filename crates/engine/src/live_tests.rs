@@ -18,6 +18,8 @@ pub(crate) struct Script {
     pub(crate) sent: Vec<Presence>,
     pub(crate) hosted: Vec<HostOptions>,
     pub(crate) joined: Vec<String>,
+    /// What the last join asked to resume as.
+    pub(crate) resumed: Option<crate::live::Resume>,
     /// The sessions told to reconnect now, in order.
     pub(crate) retried: Vec<u64>,
     pub(crate) left: usize,
@@ -48,6 +50,11 @@ impl LiveLink for Mock {
         i.url = format!("ws://{}/?file=f&token=t", i.address);
         Ok(i)
     }
+    fn join_resuming(&mut self, session: u64, link: &str, name: &str, resume: Option<crate::live::Resume>) -> Result<(), String> {
+        self.0.lock().unwrap().resumed = resume;
+        self.join(session, link, name)
+    }
+
     fn retry(&mut self, session: u64) {
         self.0.lock().unwrap().retried.push(session);
     }
