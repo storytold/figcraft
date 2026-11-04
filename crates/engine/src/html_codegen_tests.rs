@@ -163,3 +163,16 @@ fn rem_preserves_text_property_default() {
         }
     }
 }
+
+#[test]
+fn the_stylesheet_never_contains_a_closing_style_tag_from_document_text() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());
+    let t = id(s.execute("text.create", &json!({"text": "x", "x": 0, "y": 0})).unwrap());
+    s.execute("node.set", &json!({"id": t, "props": {"fontFamily": "a</style><script>alert(1)</script>"}})).unwrap();
+    s.execute("node.reparent", &json!({"ids": [t], "parent": f})).unwrap();
+    let code = code_for(s.doc().unwrap(), f, CodeLang::Html);
+    let (_, css) = code.split_once("<style>").unwrap();
+    assert_eq!(css.matches("</style>").count(), 1, "{code}");
+    assert!(!code.contains("<script>"), "{code}");
+}
