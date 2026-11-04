@@ -3,10 +3,10 @@
 //! server can be reached. A card whose server can't be reached shows its preview grey, and says
 //! whether the server is down or this computer is offline. A click joins again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::Document;
@@ -44,6 +44,9 @@ pub struct JoinedUi {
     /// By preview key: when its preview was last taken, and of which document.
     captured: HashMap<String, (f64, Weak<Document>)>,
     capturing: Arc<AtomicBool>,
+    /// Sessions forgotten while their preview may be on its way: it isn't kept. Held across the
+    /// move into place, so forgetting either waits for it and removes it, or stops it.
+    forgotten: Arc<Mutex<HashSet<String>>>,
 }
 
 impl JoinedUi {
@@ -104,13 +107,18 @@ pub(crate) fn capture(app: &mut FigApp, time: f64) {
             state.captured.insert(key.clone(), (time, Arc::downgrade(&doc)));
             state.capturing.store(true, Ordering::Release);
             let busy = state.capturing.clone();
+            let forgotten = state.forgotten.clone();
+            forgotten.lock().unwrap_or_else(PoisonError::into_inner).remove(&key);
             let path = preview_file(&dir, &key);
             let spawned = std::thread::Builder::new().name("joined-preview".into()).spawn(move || {
                 let png = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| figcraft_engine::cmd::file::thumbnail(&doc))).ok().flatten();
                 if let Some(png) = png {
                     let tmp = path.with_extension("tmp");
                     let written = path.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok()) && std::fs::write(&tmp, png).is_ok();
-                    if written && let Err(e) = std::fs::rename(&tmp, &path) {
+                    let forgotten = forgotten.lock().unwrap_or_else(PoisonError::into_inner);
+                    if !written || forgotten.contains(&key) {
+                        let _ = std::fs::remove_file(&tmp);
+                    } else if let Err(e) = std::fs::rename(&tmp, &path) {
                         log::warn!("couldn't keep a session's preview: {e}");
                     }
                 }
@@ -276,6 +284,8 @@ pub(crate) fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
         app.run("collab.forgetJoined", json!({"file": f.file, "address": f.address}));
         app.services.save_prefs(&app.session.prefs);
         if let Some(dir) = dir {
+            let mut forgotten = app.ui.online.joined.forgotten.lock().unwrap_or_else(PoisonError::into_inner);
+            forgotten.insert(f.preview_key());
             let _ = std::fs::remove_file(preview_file(&dir, &f.preview_key()));
         }
         app.ui.online.joined.pictures.remove(&f.preview_key());

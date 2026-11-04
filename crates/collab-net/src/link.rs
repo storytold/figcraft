@@ -57,13 +57,26 @@ fn probe(link: &str, limits: &NetLimits) -> Reach {
     }
 }
 
+/// Read the start of an answer into `head`, however the network splits it: until `head` is full,
+/// the status line has ended or the other end closes. How many bytes it read.
+fn read_status(rd: &mut impl std::io::Read, head: &mut [u8]) -> std::io::Result<usize> {
+    let mut n = 0;
+    while n < head.len() && !head[..n].contains(&b'\n') {
+        match rd.read(&mut head[n..])? {
+            0 => break,
+            k => n += k,
+        }
+    }
+    Ok(n)
+}
+
 /// `server` answers a health check.
 fn healthy(server: &crate::invite::Endpoint, limits: &NetLimits) -> bool {
-    use std::io::{Read, Write};
+    use std::io::Write;
     let Ok((mut rd, mut wr, sock)) = crate::net::open(server, CONNECT, limits) else { return false };
     let request = format!("GET {}healthz HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", server.path, server.host);
     let mut head = [0u8; 16];
-    let read = wr.write_all(request.as_bytes()).and_then(|()| wr.flush()).and_then(|()| rd.read(&mut head));
+    let read = wr.write_all(request.as_bytes()).and_then(|()| wr.flush()).and_then(|()| read_status(&mut rd, &mut head));
     crate::net::shutdown(&sock);
     let Ok(n) = read else { return false };
     let status = String::from_utf8_lossy(&head[..n]);
@@ -388,6 +401,24 @@ mod probe_tests {
         let asked = t.join().unwrap();
         assert!(asked.starts_with("GET /healthz HTTP/1.1"), "{asked}");
         assert!(!asked.contains("secret"), "{asked}");
+    }
+
+    #[test]
+    fn an_answer_split_by_the_network_is_read_whole() {
+        struct Pieces(Vec<&'static [u8]>);
+        impl Read for Pieces {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let Some(piece) = self.0.pop() else { return Ok(0) };
+                let n = piece.len().min(buf.len());
+                buf[..n].copy_from_slice(&piece[..n]);
+                Ok(n)
+            }
+        }
+        let mut head = [0u8; 16];
+        let n = read_status(&mut Pieces(vec![b"1 200 OK\r\n", b"TP/1.", b"HT"]), &mut head).unwrap();
+        assert_eq!(&head[..n], b"HTTP/1.1 200 OK\r");
+        let n = read_status(&mut Pieces(vec![b"HT"]), &mut head).unwrap();
+        assert_eq!(n, 2, "the other end closed");
     }
 
     #[test]
