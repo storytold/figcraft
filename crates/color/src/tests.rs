@@ -271,3 +271,26 @@ fn to_css_sanitizes_an_unclamped_alpha() {
     }
     assert_eq!(Color { r: 1.0, g: 0.0, b: 0.0, a: f32::INFINITY }.to_css(), "#FF0000");
 }
+
+#[test]
+fn css_hue_wraps_a_whole_turn_and_calc_is_not_a_number() {
+    // A hue is an angle (CSS Color 4 §4.3): a whole turn (360, 1turn, 400grad, 2 pi rad) is 0 and a
+    // negative hue counts back from it, in hsl() and in the polar spaces alike. `calc()` is not
+    // read, so `calc(NaN)` and `calc(infinity)` are refused like any other non-number rather than
+    // read as 0 or clamped.
+    let red = Color::parse_css("hsl(0 100% 50%)").unwrap().to_rgba8();
+    for s in ["hsl(360 100% 50%)", "hsl(1turn 100% 50%)", "hsl(400grad 100% 50%)", "hsl(6.2831855rad 100% 50%)", "hsl(-1turn 100% 50%)"] {
+        assert_eq!(Color::parse_css(s).map(|c| c.to_rgba8()), Some(red), "{s}");
+    }
+    let violet = Color::parse_css("hsl(270 100% 50%)").unwrap().to_rgba8();
+    for s in ["hsl(-90deg 100% 50%)", "hsl(-0.25turn 100% 50%)", "hsl(-100grad 100% 50%)", "hsl(630 100% 50%)"] {
+        assert_eq!(Color::parse_css(s).map(|c| c.to_rgba8()), Some(violet), "{s}");
+    }
+    assert_eq!(Color::parse_css("oklch(0.5 0.1 1turn)").map(|c| c.to_rgba8()), Color::parse_css("oklch(0.5 0.1 0)").map(|c| c.to_rgba8()));
+    assert_eq!(Color::parse_css("lch(50 50 400grad)").map(|c| c.to_rgba8()), Color::parse_css("lch(50 50 0)").map(|c| c.to_rgba8()));
+    assert_eq!(Color::parse_css("oklch(0.5 0.1 -90deg)").map(|c| c.to_rgba8()), Color::parse_css("oklch(0.5 0.1 270)").map(|c| c.to_rgba8()));
+    for s in ["hsl(calc(NaN) 100% 50%)", "rgb(calc(infinity) 0 0)", "rgb(0 0 0 / calc(1))", "oklch(0.5 0.1 calc(20deg))", "hsl(calc(1turn) 100% 50%)"]
+    {
+        assert_eq!(Color::parse_css(s), None, "{s}");
+    }
+}
