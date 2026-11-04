@@ -64,7 +64,7 @@ all end with the same geometry.
 | Audio and huddles | missing | |
 | AI features (summaries, sorting stickies, generating boards) | missing | |
 | Grid on the page | done | the canvas render draws it after the page colour and before the layers (`figcraft_render::Dots`), so objects cover it. Dots by default, or lines, graph paper (a strong line every 2–12 cells over fainter ones, like Japanese section paper) or none; spacing (4–512), mark size and contrast are settings kept with the preferences (`board.grid`; Preferences ▸ Board grid). Zoomed out it thins out (dots and lines by halves, graph paper down to its strong lines) until the marks are at least 14 points apart (10 for lines), the marks the next step drops fading out first; dots stay about a point and a half across on screen (1 to 3 points), scaled by the size setting. Dark marks on a light page, light ones on a dark page, from the theme's ink; written straight into the image, no allocation per mark, a crossing of two lines blended once; never in exports. FigCraft's own settings: the incumbent's board grid has none |
-| `.jam` import and export | **partial**: a `.jam` opens as a board, best effort (#1342): its stickies and shapes with text come in as frames with their generated layers and its connectors as vectors, not as native board objects; no export | see [`file-format-parity.md`](file-format-parity.md) |
+| `.jam` import and export | **partial**: a `.jam` opens as a board, best effort (#1342): its stickies and shapes with text come in as frames with their generated layers and its connectors as vectors, not as native board objects (an elbowed connector keeps the path it was saved with, #1910); no export | see [`file-format-parity.md`](file-format-parity.md) |
 
 ## Revision history
 

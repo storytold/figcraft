@@ -863,3 +863,80 @@ fn write_fixture() {
         std::fs::write(out, zip_file(&tail_canvas())).unwrap();
     }
 }
+
+/// An elbow connector saved with its path (#1910): FigJam's control points, one per run between
+/// the first and the last, each on its run with the run's axis, give the path the connector keeps;
+/// the first run leaves the start's side and the last arrives at the end's.
+#[test]
+fn an_elbow_connector_saved_with_its_path_keeps_it() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x, y| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, y))]);
+    let point = |x, y, ax, ay| o(vec![("position", xy(x, y)), ("axis", xy(ax, ay))]);
+    // From A's bottom, across at y 740, down at x 200, into B's left: four runs.
+    let saved = node(
+        66,
+        Some((1, "+")),
+        "CONNECTOR",
+        "Saved",
+        vec![
+            ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+            ("connectorStart", o(vec![("endpointNodeID", g(64)), ("relativePosition", xy(0.5, 1.0))])),
+            ("connectorEnd", o(vec![("endpointNodeID", g(65)), ("relativePosition", xy(0.0, 0.5))])),
+            ("connectorLineStyle", e("ELBOWED")),
+            ("connectorControlPoints", arr(vec![point(150.0, 740.0, 1.0, 0.0), point(200.0, 800.0, 0.0, 1.0)])),
+        ],
+    );
+    nodes.extend([box_at(64, "A", 0.0, 600.0), box_at(65, "B", 300.0, 800.0), saved]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Saved path").unwrap();
+    let world = doc.world_transform(named(&doc, "Saved").id);
+    let line: Vec<_> =
+        network_of(&doc, "Saved").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
+    assert_eq!(line, [(50.0, 700.0), (50.0, 740.0), (200.0, 740.0), (200.0, 850.0), (300.0, 850.0)]);
+    // The fixture's own Link, saved without a path, is routed here: the note counts it alone.
+    let routed: Vec<_> = warnings.iter().filter(|w| w.contains("FigCraft's own routing")).collect();
+    assert_eq!(routed.len(), 1, "{warnings:?}");
+    assert!(!routed[0].contains('×'), "a connector with its path isn't counted among those routed here: {routed:?}");
+}
+
+/// Saved control points that don't make a path from the connector's sides (#1910): a first run
+/// that would leave the bottom sideways, a point off both axes, or two runs in a row the same way
+/// leave the connector to FigCraft's routing, as one saved without a path is.
+#[test]
+fn an_elbow_whose_saved_path_doesnt_fit_its_sides_is_routed_here() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x, y| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, y))]);
+    let point = |x, y, ax, ay| o(vec![("position", xy(x, y)), ("axis", xy(ax, ay))]);
+    let elbow = |id, name: &str, points: Vec<Kv<'static>>| {
+        let mut fields = vec![
+            ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+            ("connectorStart", o(vec![("endpointNodeID", g(64)), ("relativePosition", xy(0.5, 1.0))])),
+            ("connectorEnd", o(vec![("endpointNodeID", g(65)), ("relativePosition", xy(0.0, 0.5))])),
+            ("connectorLineStyle", e("ELBOWED")),
+        ];
+        if !points.is_empty() {
+            fields.push(("connectorControlPoints", arr(points)));
+        }
+        node(id, Some((1, "+")), "CONNECTOR", name, fields)
+    };
+    nodes.extend([
+        box_at(64, "A", 0.0, 600.0),
+        box_at(65, "B", 300.0, 800.0),
+        elbow(66, "Plain", vec![]),
+        elbow(67, "Sideways", vec![point(100.0, 650.0, 0.0, 1.0)]),
+        elbow(68, "Askew", vec![point(150.0, 740.0, 1.0, 1.0)]),
+        elbow(69, "Repeated", vec![point(150.0, 740.0, 1.0, 0.0), point(150.0, 760.0, 1.0, 0.0)]),
+    ]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Unfit paths").unwrap();
+    let line = |name: &str| -> Vec<(f64, f64)> {
+        let world = doc.world_transform(named(&doc, name).id);
+        network_of(&doc, name).vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect()
+    };
+    let plain = line("Plain");
+    assert!(plain.len() >= 3, "routed in right angles: {plain:?}");
+    for name in ["Sideways", "Askew", "Repeated"] {
+        assert_eq!(line(name), plain, "{name} is routed as one without a path");
+    }
+    assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
+}
