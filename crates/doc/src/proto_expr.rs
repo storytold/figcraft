@@ -275,12 +275,13 @@ fn apply(op: ExprOp, vals: &[VariableValue]) -> Option<VariableValue> {
             let mut s = String::new();
             let mut chars = 0;
             for v in vals {
-                // Stop at the cap rather than building the whole concatenation first.
+                // Every operand is checked (a colour makes the whole expression None); only the
+                // characters it adds are counted, and appending stops at the cap.
                 let t = as_text(v)?;
-                s.extend(t.chars().take(MAX_STRING - chars));
-                chars = s.chars().count();
-                if chars >= MAX_STRING {
-                    break;
+                if chars < MAX_STRING {
+                    let before = s.len();
+                    s.extend(t.chars().take(MAX_STRING - chars));
+                    chars += s[before..].chars().count();
                 }
             }
             Some(VariableValue::String(s))

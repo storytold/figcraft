@@ -124,6 +124,13 @@ fn deep_and_hostile_expressions_are_bounded() {
     let joined = Expr::op(ExprOp::Add, vec![s(&long), s(&long)]);
     let Some(VariableValue::String(t)) = eval(&joined) else { panic!() };
     assert_eq!(t.chars().count(), 10_000, "capped");
+    // Past the cap a colour operand still fails the expression, and empty operands add nothing.
+    let color = Expr::Value(VariableValue::Color(Color::BLACK));
+    let mut ops = vec![s(&"x".repeat(10_000))];
+    ops.extend((0..50).map(|_| s("")));
+    assert!(matches!(eval(&Expr::op(ExprOp::Add, ops.clone())), Some(VariableValue::String(t)) if t.chars().count() == 10_000));
+    ops.push(color);
+    assert_eq!(eval(&Expr::op(ExprOp::Add, ops)), None, "a colour past the cap is still a type error");
 }
 
 fn nav(id: u64) -> Action {
