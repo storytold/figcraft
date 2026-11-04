@@ -1259,8 +1259,13 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         let hang_r =
             items.get(vis_end.wrapping_sub(1)).filter(|it| hang_end && !rtl_line && vis_end > *s + 1 && closes(it.ch)).map_or(0.0, |it| it.adv);
         let gstart = out.glyphs.len();
-        // Justify: extra space per gap.
-        let gaps = items.get(*s..vis_end).unwrap_or(&[]).iter().filter(|it| it.stretches()).count();
+        // Justify: extra space per gap (a space, or between ideographs, whose text has no spaces).
+        let widens = |k: usize| {
+            items.get(k).is_some_and(|it| {
+                it.stretches() || (k + 1 < vis_end && items.get(k + 1).is_some_and(|next| crate::breaks::justify_between(it.ch, next.ch)))
+            })
+        };
+        let gaps = (*s..vis_end).filter(|k| widens(*k)).count();
         let justify_extra = match (text.align_h, wrap) {
             (TextAlignH::Justified, Some(maxw)) if !para_end && !line_break_after(&items, *e) && gaps > 0 => {
                 ((maxw - line_indent + hang_l + hang_r - width) / gaps as f64).max(0.0)
@@ -1349,13 +1354,14 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         } else {
             (0..line_items.len()).collect()
         };
-        for it in order.iter().filter_map(|k| line_items.get(*k)) {
+        for k in order.iter().copied() {
+            let Some(it) = line_items.get(k) else { continue };
             if is_line_break(it.ch) {
                 continue;
             }
             out.glyphs.extend(glyph_at(&styles, it, pen, baseline));
             pen += it.adv;
-            if it.stretches() {
+            if widens(*s + k) {
                 pen += justify_extra;
             }
         }
