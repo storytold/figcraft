@@ -927,6 +927,10 @@ fn an_elbow_whose_saved_path_doesnt_fit_its_sides_is_routed_here() {
         elbow(67, "Sideways", vec![point(100.0, 650.0, 0.0, 1.0)]),
         elbow(68, "Askew", vec![point(150.0, 740.0, 1.0, 1.0)]),
         elbow(69, "Repeated", vec![point(150.0, 740.0, 1.0, 0.0), point(150.0, 760.0, 1.0, 0.0)]),
+        // The first run would go up from A's bottom, through A; the last would arrive at B's left
+        // from inside B. Each run is at right angles to its side, so only the way it goes is wrong.
+        elbow(70, "Backwards", vec![point(100.0, 650.0, 1.0, 0.0), point(200.0, 740.0, 0.0, 1.0)]),
+        elbow(71, "Inside", vec![point(150.0, 740.0, 1.0, 0.0), point(350.0, 800.0, 0.0, 1.0)]),
     ]);
     let (doc, warnings) = import(&canvas(&schema(), &message), "Unfit paths").unwrap();
     let line = |name: &str| -> Vec<(f64, f64)> {
@@ -935,7 +939,7 @@ fn an_elbow_whose_saved_path_doesnt_fit_its_sides_is_routed_here() {
     };
     let plain = line("Plain");
     assert!(plain.len() >= 3, "routed in right angles: {plain:?}");
-    for name in ["Sideways", "Askew", "Repeated"] {
+    for name in ["Sideways", "Askew", "Repeated", "Backwards", "Inside"] {
         assert_eq!(line(name), plain, "{name} is routed as one without a path");
     }
     assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");

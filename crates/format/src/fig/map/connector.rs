@@ -440,12 +440,16 @@ fn saved_runs(v: &View<'_>, from: RouteEnd, to: RouteEnd) -> Option<ConnectorPat
         last = Some(sideways);
         at.push(if sideways { pos.y - mid.y } else { pos.x - mid.x });
     }
-    // The run through each end goes the way its side faces: the first at right angles to the first
-    // saved run, the last to the last.
+    // The run through each end goes the way its side faces, out of the object: the first leaves
+    // the start's side for the first saved run, the last arrives at the end's from the last saved
+    // run. One along the side, or back into the object, doesn't.
     let (across, last) = (first?, last?);
-    let faces_across = |s: Side| matches!(s, Side::Left | Side::Right);
+    let (&a0, &a1) = (at.first()?, at.last()?);
+    // Where the run from `p` (`sideways`: going across) meets the saved run at `v`.
+    let onto = |sideways: bool, p: Point, v: f64| if sideways { Point::new(mid.x + v, p.y) } else { Point::new(p.x, mid.y + v) };
+    let out_of = |s: Option<Side>, p: Point, q: Point| s.is_none_or(|s| (q - p).dot(s.normal()) > 0.0);
     let (s0, s1) = attached_sides(from, to);
-    let fits = s0.is_none_or(|s| faces_across(s) == across) && s1.is_none_or(|s| faces_across(s) != last);
+    let fits = out_of(s0, p0, onto(across, p0, a0)) && out_of(s1, p1, onto(!last, p1, a1));
     fits.then_some(ConnectorPath::Runs { across, at })
 }
 
