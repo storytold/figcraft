@@ -183,6 +183,8 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle) || i.pointer.primary_down()) {
             app.canvas.middle_pan = None;
         }
+        // So is a handle drag.
+        crate::handles::end_released_drag(app, &ctx);
         return true;
     };
     // A press on the canvas gives the keyboard back to it (arrows nudge again).
@@ -238,6 +240,11 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     }
     if !app.canvas.dragging && resp.hovered() && crate::handles::input(app, &ctx, pos) {
         return false;
+    }
+    // The pointer is on the canvas but over something drawn above it (the colour picker, a card):
+    // a handle drag whose button went up there ends too.
+    if !resp.hovered() {
+        crate::handles::end_released_drag(app, &ctx);
     }
     if resp.secondary_clicked() {
         open_context_menu(app, pos, mods.command);

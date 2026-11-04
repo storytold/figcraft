@@ -260,3 +260,53 @@ fn dragging_a_gradient_handle_on_the_canvas_keeps_the_picker_open() {
     u.frame(vec![]);
     assert!(u.app.ui.picker.is_none(), "a plain canvas press closes it");
 }
+
+#[test]
+fn a_gradient_drag_released_off_the_canvas_ends_there() {
+    // A handle drag whose button goes up over the sidebar or over the picker itself ends there:
+    // the edit commits, the picker stays, and the next press on the canvas is a plain press (it
+    // closes the picker) rather than a move of the handle to wherever it landed.
+    for over in ["sidebar", "picker"] {
+        let mut s = Session::new();
+        let a = NodeId(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+        s.execute("fill.set", &json!({"id": a, "paint": {"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}})).unwrap();
+        s.execute("select.set", &json!({"ids": [a]})).unwrap();
+        let mut u = Ui::new(s);
+        let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![a] };
+        u.app.open_picker(target.clone(), None);
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        let depth = u.app.session.undo_depth().0;
+        let from_handle = |u: &Ui| match &u.app.session.doc().unwrap().node(a).unwrap().fills[0].kind {
+            figcraft_color::PaintKind::Gradient(g) => g.from,
+            _ => panic!("the fill is a gradient"),
+        };
+        u.button(u.app.to_screen(200.0, 100.0), true);
+        u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0, 200.0))]);
+        assert!(crate::handles::gradient_dragging(&u.ctx), "{over}: the handle is being dragged");
+        let spot = match over {
+            "sidebar" => u.app.ui.right_panel_rect.unwrap().center(),
+            _ => u.app.ui.picker_popover.as_ref().unwrap().rect.center(),
+        };
+        if over == "picker" {
+            assert!(u.app.canvas.rect.contains(spot), "the picker lies over the canvas");
+        } else {
+            assert!(!u.app.canvas.rect.contains(spot), "the sidebar is off the canvas");
+        }
+        u.button(spot, false);
+        u.frame(vec![]);
+        assert!(!crate::handles::gradient_dragging(&u.ctx), "{over}: the release ended the drag");
+        assert_eq!(u.app.ui.picker, Some(target.clone()), "{over}: the picker is still open");
+        assert_eq!(u.app.session.undo_depth().0, depth + 1, "{over}: the drag is one undo step");
+        let moved = from_handle(&u);
+        assert!(moved.0.abs() < 0.02 && (moved.1 - 0.5).abs() < 0.02, "{over}: the handle stayed where it was dragged: {moved:?}");
+        // The next press on the layer is a plain one: the handle stays put and the picker closes.
+        let body = u.app.to_screen(250.0, 250.0);
+        u.button(body, true);
+        u.frame(vec![]);
+        assert_eq!(from_handle(&u), moved, "{over}: a later press doesn't move the handle");
+        assert!(u.app.ui.picker.is_none(), "{over}: a later press closes the picker as any outside press does");
+        u.button(body, false);
+    }
+}

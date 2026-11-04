@@ -192,6 +192,17 @@ pub fn gradient_dragging(ctx: &egui::Context) -> bool {
     matches!(ctx.data(|d| d.get_temp::<Drag>(drag_id())), Some(Drag::Gradient { .. }))
 }
 
+/// A handle drag whose button went up while the pointer was off the canvas (over a panel or the
+/// colour picker, outside the window) ends as a release on the canvas would: the edit commits now,
+/// instead of waiting, uncommitted, to move the handle to wherever the pointer next presses.
+pub fn end_released_drag(app: &mut FigApp, ctx: &egui::Context) {
+    let stashed = ctx.data(|d| d.get_temp::<Drag>(drag_id())).is_some();
+    if stashed && !ctx.input(|i| i.pointer.primary_down()) {
+        let _ = app.session.commit_interaction();
+        ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+    }
+}
+
 /// The gradient being edited (single node, picker open on a gradient paint).
 fn gradient_target(app: &FigApp) -> Option<(NodeId, bool, usize, figcraft_color::Gradient)> {
     let Some(PickerTarget::Paint { fills, index, ids }) = &app.ui.picker else { return None };
