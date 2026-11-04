@@ -18,7 +18,6 @@
 
 use figcraft_collab::message::{self, ClientMsg, Presence, ServerMsg};
 use figcraft_engine::live::{Event, Status};
-use std::collections::VecDeque;
 use std::time::Duration;
 // `std::time::Instant` on native builds; the browser's clock in the web build.
 use web_time::Instant;
@@ -29,7 +28,7 @@ use crate::invite::Endpoint;
 use crate::join::{GuestConfig, Next, Outcome, Resuming, Seen, Taken, after, ask, closed, hello, resolved, take, too_large, unresolved};
 use crate::limits::NetLimits;
 use crate::requests::Publish;
-use crate::throttle::{PRESENCE_INTERVAL, Pace, Throttle, earliest};
+use crate::throttle::{PRESENCE_INTERVAL, Paced, Throttle, earliest};
 
 /// A WebSocket the driver opens, writes and closes; what it receives comes back through the
 /// driver's event methods.
@@ -80,9 +79,8 @@ pub(crate) struct Driver<S: Socket> {
     /// Your latest presence while not welcomed (sent with the welcome).
     pending: Option<Presence>,
     throttle: Throttle<Presence>,
-    /// Sync messages waiting their turn (a long queue from while offline), and when each may go.
-    pace: Pace,
-    paced: VecDeque<(Instant, ClientMsg)>,
+    /// Sync messages waiting their turn (a long queue from while offline).
+    paced: Paced<ClientMsg>,
     reconnect_at: Option<Instant>,
     /// What this connection asks a server (a managing one), and what follows its answers.
     asking: Option<(Box<Exchange>, Then)>,
@@ -101,8 +99,7 @@ impl<S: Socket> Driver<S> {
             resume: Resuming::default(),
             pending: None,
             throttle: Throttle::new(PRESENCE_INTERVAL),
-            pace: Pace::new(now),
-            paced: VecDeque::new(),
+            paced: Paced::new(now),
             reconnect_at: None,
             asking: None,
             done: false,
@@ -165,8 +162,8 @@ impl<S: Socket> Driver<S> {
 
     fn connect(&mut self, now: Instant) {
         self.reconnect_at = None;
-        // A server counts per connection.
-        self.pace = Pace::new(now);
+        // A server counts per connection, and these were made for the last one.
+        self.paced = Paced::new(now);
         self.conn = Some(Conn::new(now));
         if let Err(e) = self.sock.open(&self.server().url()) {
             self.dropped(e, now);
@@ -311,19 +308,15 @@ impl<S: Socket> Driver<S> {
         if !self.conn.as_ref().is_some_and(|c| c.welcomed) {
             return;
         }
-        let wait = self.pace.wait(now);
-        if wait.is_zero() && self.paced.is_empty() {
-            if !self.write(&msg) {
-                self.end(Outcome::Retry("the connection dropped".into()), now);
-            }
-        } else {
-            self.paced.push_back((now + wait, msg));
+        self.paced.push(msg);
+        if !self.send_paced(now) {
+            self.end(Outcome::Retry("the connection dropped".into()), now);
         }
     }
 
     /// Send the sync messages whose turn has come; false when one couldn't go.
     fn send_paced(&mut self, now: Instant) -> bool {
-        while let Some((_, msg)) = self.paced.pop_front_if(|(at, _)| *at <= now) {
+        while let Some(msg) = self.paced.take_due(now) {
             if !self.write(&msg) {
                 return false;
             }
@@ -342,7 +335,7 @@ impl<S: Socket> Driver<S> {
     /// Leave the session.
     pub(crate) fn leave(&mut self, now: Instant) {
         // What you did before leaving still reaches the others, whatever its turn.
-        while let Some((_, msg)) = self.paced.pop_front() {
+        while let Some(msg) = self.paced.take_now() {
             if !self.write(&msg) {
                 break;
             }
@@ -364,7 +357,7 @@ impl<S: Socket> Driver<S> {
                 [Some(c.last_ping + l.keepalive), Some(c.last_heard + c.silence_limit(l)), if c.welcomed { self.throttle.due() } else { None }]
             }
         });
-        earliest(conn.into_iter().flatten().chain([self.reconnect_at, self.paced.front().map(|(at, _)| *at)]))
+        earliest(conn.into_iter().flatten().chain([self.reconnect_at, self.paced.due()]))
     }
 
     /// Do what's due at `now`: reconnect, send held presence or a ping, give up on a connection
@@ -426,7 +419,7 @@ impl<S: Socket> Driver<S> {
         }
         self.throttle = Throttle::new(PRESENCE_INTERVAL);
         // Made for this connection: the sync client sends again what the server didn't get.
-        self.paced.clear();
+        self.paced = Paced::new(now);
         match after(outcome, &self.cfg, self.was_live, &mut self.attempt, &self.inbox) {
             Next::Stop(e) => {
                 if let Some(e) = e {

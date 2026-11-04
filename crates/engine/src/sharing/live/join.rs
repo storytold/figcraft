@@ -42,8 +42,13 @@ fn leave(s: &mut Session, p: &Value) -> Result<Value> {
         None => s.live.shown(s.tab()),
     };
     let ended = id.and_then(|id| s.live.end(id));
-    if ended.as_ref().is_some_and(|l| l.syncing() && l.role() == Some(Role::Guest)) {
-        s.message = Some("You left the session; your copy stays open here".into());
+    if let Some(l) = ended.as_ref().filter(|l| l.syncing() && l.role() == Some(Role::Guest)) {
+        // What was still on its way may be held back for what's before it (an undo waits for its edit).
+        s.message = Some(if l.client().is_some_and(|c| c.pending() > 0) {
+            "You left before your last changes were confirmed: others may not see them all, and your copy stays open here".into()
+        } else {
+            "You left the session; your copy stays open here".into()
+        });
     }
     Ok(json!({"ended": ended.is_some_and(|l| l.status.active())}))
 }
