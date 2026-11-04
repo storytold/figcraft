@@ -658,8 +658,16 @@ pub fn connect(net: &mut VectorNetwork, a: usize, b: usize, ta: (f64, f64), tb: 
     net.segments.push(Segment { a, b, ta: finite_t(ta), tb: finite_t(tb) });
     let si = net.segments.len() - 1;
     if ends && let Some(mut lp) = path_between(net, b, a, si) {
-        let unfilled = !net.regions.iter().any(|r| r.loops.iter().flatten().any(|s| lp.contains(s)));
-        if unfilled {
+        let filled = net.regions.iter().any(|r| r.loops.iter().flatten().any(|s| lp.contains(s)));
+        if filled {
+            // A loop broken open at these ends (a point of it deleted, say) closes through the new
+            // segment, so the fill follows it instead of a straight line across the gap (#1951).
+            for l in net.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
+                if l.len() == lp.len() && l.iter().all(|s| lp.contains(s)) {
+                    *l = std::iter::once(si).chain(lp.iter().copied()).collect();
+                }
+            }
+        } else {
             lp.insert(0, si);
             net.regions.push(Region { loops: vec![lp], winding: WindingRule::NonZero, fills: None, ..Default::default() });
         }
