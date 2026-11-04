@@ -101,8 +101,7 @@ impl Session {
     /// is in [`crate::online`] already (one published with the server's key isn't: it has no owner).
     pub(crate) fn joined_record(&mut self, info: &SessionInfo, name: &str) {
         let file = query_value(&info.link, "file").unwrap_or_default();
-        if info.role != Role::Guest || self.prefs.online_files.iter().any(|f| f.file == file && crate::online::server_host(&f.server) == info.address)
-        {
+        if info.role != Role::Guest || self.prefs.online_files.iter().any(|f| f.file == file && crate::online::same_server(&f.server, &info.url)) {
             return;
         }
         let access = serde_json::to_value(info.access).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();

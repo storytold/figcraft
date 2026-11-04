@@ -114,7 +114,7 @@ fn a_status_check_that_cant_be_made_still_lists_the_sessions() {
 #[test]
 fn a_file_you_own_stays_in_its_own_list() {
     let (mut s, script) = session();
-    s.prefs.online_files.push(crate::online::OnlineFile { server: "ws://127.0.0.1:47900/".into(), file: "f".into(), ..Default::default() });
+    s.prefs.online_files.push(crate::online::OnlineFile { server: "WS://127.0.0.1:47900".into(), file: "f".into(), ..Default::default() });
     join(&mut s, &script, "Team file");
     assert!(s.prefs.joined_files.is_empty());
     // The same id on another server is another file.
