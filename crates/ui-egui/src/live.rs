@@ -441,7 +441,9 @@ pub fn chat_box(app: &mut FigApp, ctx: &egui::Context) {
 pub fn connection_banner(app: &mut FigApp, ctx: &egui::Context, canvas: Rect) -> f32 {
     const H: f32 = 30.0;
     let live = app.session.live();
-    let Some(uid) = app.session.docs.get(app.session.active).map(|d| d.uid).filter(|u| crate::tabs::live_lost(app, *u)) else { return 0.0 };
+    if !app.session.docs.get(app.session.active).is_some_and(|d| crate::tabs::live_lost(app, d.uid)) {
+        return 0.0;
+    }
     let (text, retry, gone) = match &live.status {
         Status::Failed { reason } => {
             (trf("Not connected: {reason}. Your work is still in this tab.", &[("reason", &failure_text(reason))]), Some(tr("Try again")), true)
@@ -451,11 +453,6 @@ pub fn connection_banner(app: &mut FigApp, ctx: &egui::Context, canvas: Rect) ->
         }
         _ => (tr("Disconnected. Reconnecting…").to_string(), None, false),
     };
-    // Saved as a file of its own: it is one now.
-    if gone && app.session.docs.iter().any(|d| d.uid == uid && d.path.is_some()) {
-        app.run("collab.leave", json!({}));
-        return 0.0;
-    }
     let t = Tokens::get(ctx);
     let ink = text_on(t.danger);
     let (mut try_now, mut save, mut dismiss) = (false, false, false);
