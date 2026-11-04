@@ -663,13 +663,20 @@ pub fn connect(net: &mut VectorNetwork, a: usize, b: usize, ta: (f64, f64), tb: 
             // A loop broken open at these ends (a point of it deleted, say) closes through the new
             // segment, so the fill follows it instead of a straight line across the gap (#1951). The
             // segment goes in at the gap, in the loop's own order, so the loop keeps its direction: a
-            // hole wound against its outline stays a hole whichever end was clicked first.
+            // hole wound against its outline stays a hole whichever end was clicked first. Only a
+            // loop the segment makes one continuous chain is closed; one listed out of walking order
+            // is left as it was.
             let segs = &net.segments;
             let shares = |x: usize, y: usize| segs.get(x).zip(segs.get(y)).is_some_and(|(p, q)| p.a == q.a || p.a == q.b || p.b == q.a || p.b == q.b);
             for l in net.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
                 if l.len() == lp.len() && l.iter().all(|s| lp.contains(s)) {
                     let gap = (1..l.len()).find(|&k| l.get(k - 1).zip(l.get(k)).is_some_and(|(&x, &y)| !shares(x, y))).unwrap_or(l.len());
-                    l.insert(gap, si);
+                    let mut closed = l.clone();
+                    closed.insert(gap, si);
+                    let n = closed.len();
+                    if (0..n).all(|k| closed.get(k).zip(closed.get((k + 1) % n)).is_some_and(|(&x, &y)| shares(x, y))) {
+                        *l = closed;
+                    }
                 }
             }
         } else {
@@ -1039,6 +1046,18 @@ mod tests {
             assert!(!m.fill_contains(hole), "{first:?} first: the hole is filled, {loops:?}");
             assert!(m.fill_contains(ring) && m.fill_contains(cut), "{first:?} first: the ring is filled");
         }
+    }
+
+    #[test]
+    fn connecting_leaves_a_loop_out_of_walking_order_alone() {
+        // The open chain A-B-C-D-E with its loop listed out of walking order: no place for the new
+        // segment makes it one continuous chain, so the loop is left as it was, and no region is added.
+        let pts = [Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 100.0), Point::new(0.0, 100.0), Point::new(-50.0, 50.0)];
+        let mut n = VectorNetwork::from_points(&pts, false);
+        n.regions.push(Region { loops: vec![vec![0, 2, 1, 3]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        let s = connect(&mut n, 0, 4, (0.0, 0.0), (0.0, 0.0)).unwrap();
+        assert_eq!(n.regions.len(), 1);
+        assert_eq!(n.regions[0].loops, vec![vec![0, 2, 1, 3]], "left as it was, without segment {s}");
     }
 
     #[test]
