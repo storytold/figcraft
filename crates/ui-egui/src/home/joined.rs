@@ -235,7 +235,12 @@ pub(crate) fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
                 Some(Reach::NoNetwork) => tr("You're offline"),
                 None => "",
             };
-            a11y::named_button(&resp, &trf("{name}, {status}, on {address}", &[("name", &file.name), ("status", &said), ("address", &file.address)]));
+            let spoken = if said.is_empty() {
+                trf("{name}, on {address}", &[("name", &file.name), ("address", &file.address)])
+            } else {
+                trf("{name}, {status}, on {address}", &[("name", &file.name), ("status", &said), ("address", &file.address)])
+            };
+            a11y::named_button(&resp, &spoken);
             let resp = resp.on_hover_text(&file.address);
             if !ui.is_rect_visible(rect) {
                 continue;

@@ -99,3 +99,13 @@ fn a_preview_key_is_stable_and_safe_in_a_path() {
     assert_ne!(preview_key("a", "b/c"), preview_key("a/b", "c"));
     assert!(preview_key("../../etc", "/x").chars().all(|c| c.is_ascii_hexdigit()));
 }
+
+#[test]
+fn a_status_check_that_cant_be_made_still_lists_the_sessions() {
+    let (mut s, script) = session();
+    join(&mut s, &script, "Team file");
+    // This link has no way to ask: nothing is known about the server, and the list still comes.
+    let listed = s.execute("collab.joinedFiles", &json!({"refresh": true})).unwrap();
+    assert_eq!(listed["files"][0]["name"], "Team file");
+    assert!(listed["files"][0]["reach"].is_null());
+}

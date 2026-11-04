@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::cmd::CommandSpec;
 use crate::live::{NetReply, NetRequest, Role, SessionInfo};
 use crate::params::{req_string, string};
-use crate::{Result, Session, bad, spec};
+use crate::{EngineError, Result, Session, bad, spec};
 
 /// How many sessions are remembered; the ones opened longest ago go first.
 pub const MAX_JOINED_FILES: usize = 100;
@@ -126,9 +126,14 @@ impl Session {
             servers.entry(f.address.clone()).or_insert_with(|| f.link.clone());
         }
         for (address, link) in servers {
-            let (reply, _) = self.net(NetRequest::Probe { link })?;
-            if let NetReply::Probe(Some(reach)) = reply {
-                self.live.reach.insert(address, reach);
+            // A check that can't be made says nothing: the list still shows. Only a request on its
+            // way goes up, for the command to run again with its answer.
+            match self.net(NetRequest::Probe { link }) {
+                Ok((NetReply::Probe(Some(reach)), _)) => {
+                    self.live.reach.insert(address, reach);
+                }
+                Err(e @ EngineError::Waiting) => return Err(e),
+                Ok(_) | Err(_) => {}
             }
         }
         Ok(())
