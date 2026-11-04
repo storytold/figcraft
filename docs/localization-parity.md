@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (six German translations for the text-wrap control (M10): Auto, balanced and pretty wrapping; catalog remains a draft; Bosnian draft catalog, one/few/other plurals; German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft; Arabic draft catalog, count-neutral plurals and web font gate; Thai draft catalog and Thai UI fonts; a missing translation fails no check: `cargo xtask i18n-report` lists them; Vietnamese draft catalog; string counts re-measured: 2,352 entries; Russian and Turkish catalogs reviewed by native speakers, Russian one/few/many plurals; Czech and Indonesian drafts; the Japanese draft completed; counts re-measured; Windows UI language from the first preferred language; draft catalogs catch up: every draft translates every string again; Simplified Chinese draft catalog; macOS finds its downloadable CJK system fonts (#406); string counts re-measured: 2,272 entries, the drafts at 95–99%; Swedish command labels and menu wordings; Russian, Swedish, Turkish, Czech and Indonesian listed; a duplicated paragraph removed) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (German coverage re-measured at 2,592 / 2,647 entries (97.9%, 2026-11-04); six German translations for the text-wrap control (M10): Auto, balanced and pretty wrapping; catalog remains a draft; Bosnian draft catalog, one/few/other plurals; German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft; Arabic draft catalog, count-neutral plurals and web font gate; Thai draft catalog and Thai UI fonts; a missing translation fails no check: `cargo xtask i18n-report` lists them; Vietnamese draft catalog; string counts re-measured: 2,352 entries; Russian and Turkish catalogs reviewed by native speakers, Russian one/few/many plurals; Czech and Indonesian drafts; the Japanese draft completed; counts re-measured; Windows UI language from the first preferred language; draft catalogs catch up: every draft translates every string again; Simplified Chinese draft catalog; macOS finds its downloadable CJK system fonts (#406); string counts re-measured: 2,272 entries, the drafts at 95–99%; Swedish command labels and menu wordings; Russian, Swedish, Turkish, Czech and Indonesian listed; a duplicated paragraph removed) · **Target:** Figma Design (desktop app 126.10.7)
 
 FigCraft's interface has a localization layer with an English catalog, a Russian catalog reviewed
 by a native speaker, and Spanish (with a Latin American overlay), French, German, Brazilian
@@ -85,7 +85,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
 
 ## Languages
 
-| Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Hours to full |
+| Language | Code | Translated catalog entries | Dialogs / tooltips / help | Script support | Native review | Status | Hours to full |
 |---|---|---|---|---|---|---|---|
 | English | en | 2,352 / 2,352 (100%, source) | yes | Latin | yes (source) | full | 0 |
 | Simplified Chinese (Mandarin) | zh-Hans | 2,216 / 2,352 (94.2%, draft) | yes | CJK text and IME in documents; UI text in an installed Chinese face, ahead of Japanese ones (web: the `FIGCRAFT_EMBED_CJK` build); no Traditional Chinese catalog (zh-TW, zh-HK read English) | no | draft | 1–2 (after native review) |
@@ -96,10 +96,18 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
 | Portuguese | pt-BR | 2,331 / 2,352 (99.1%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
 | Indonesian | id | 2,292 / 2,352 (97.4%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
 | Japanese | ja | 2,304 / 2,352 (98.0%, draft) | yes | CJK text and IME in documents; UI text in an installed Japanese face (web: the `FIGCRAFT_EMBED_CJK` build) | no | draft | 1–2 (after native review) |
-| German | de | 2,226 / 2,352 (94.6%, draft) | yes | Latin; long words elide in narrow fields | no | draft | 1–2 (after native review) |
+| German | de | 2,592 / 2,647 entries (97.9%, measured 2026-11-04) | yes | Latin; long words elide in narrow fields | no | draft | 1–2 (after native review) |
 | Korean | ko | 2,216 / 2,352 (94.2%, draft) | yes | Hangul text and IME in documents; UI text in an installed Korean face (web: the `FIGCRAFT_EMBED_CJK` build) | no | draft | 1–2 (after native review) |
 | Vietnamese | vi | 2,352 / 2,352 (100%, draft) | yes | Latin with stacked diacritics | no | draft | 1–2 (after native review) |
 | Thai | th | 1,791 / 1,791 UI strings, 589 of 598 command labels, 31 menu wordings (draft) | yes | Thai text in documents; UI text (and layer and page names in Thai, whatever the UI language) in an installed Thai face, desktop only; the web build leaves Thai out | no | draft | 1–2 (after native review) |
+
+German was re-measured on **2026-11-04** with `cargo xtask i18n-report`: **1,969 / 1,975 UI keys**,
+**594 / 641 command labels** and **29 / 31 menu wordings**, totaling **2,592 / 2,647 entries (97.9%)**.
+The report confirms 6 UI keys, 47 command labels and 2 menu wordings are missing. The denominator uses
+the report's key sets: English UI keys, the union of registered command ids and main-menu ids,
+and menu labels worded differently from their command. A plural entry counts as one key, and a
+present translation counts even when its wording matches English. This is catalog coverage;
+German remains a draft awaiting full native-speaker review. The other rows retain their dated measurements.
 
 Other languages (measured 2026-10-22): Russian (`ru`) 2,352 / 2,352 (100%), reviewed and approved
 by VanTan, one/few/many integer plurals; Swedish (`sv`) 2,314 / 2,352 (98.4%), its command labels and menu
@@ -125,6 +133,7 @@ Hindi and Arabic. Traditional Chinese is not planned (no catalog; its users see 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | German coverage re-measured with `cargo xtask i18n-report`: 1,969 / 1,975 UI keys, 594 / 641 command labels and 29 / 31 menu wordings; both language rows now show 2,592 / 2,647 (97.9%). Missing: 6 UI keys, 47 command labels, 2 menu wordings. Older measurements are dated; native review, grade and estimates unchanged |
 | 2026-11-04 | minor | six German translations for the text-wrap control (M10): Auto, balanced and pretty wrapping; catalog remains a draft. Six previously missing UI entries added to `de.toml`; command labels and menu wordings unchanged. Full native review is still pending; grade and estimates unchanged |
 | 2026-10-30 | minor | Bosnian (`bs`, Bosanski) draft catalog: every UI string (1,906), command label (629) and menu wording (31), machine-drafted in Latin script with ijekavian forms and marked as a draft awaiting native review. Bosnian plurals: one for 1, 21, 31… (not 11), few for 2–4, 22–24… (not 12–14), other for the rest. Grade and hours unchanged (Bosnian is not one of the twelve key languages) |
 | 2026-10-29 | minor | German terminology corrections (M10): gradient stops, OpenType stylistic sets and the Home-screen preference; partial review, catalog remains a draft. Nine existing translations corrected; keys, placeholders, coverage, grade and estimates unchanged |
