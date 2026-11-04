@@ -56,19 +56,26 @@ pub(crate) fn draw_text(ex: &mut Exporter, s: &mut Surface, n: &Node, xf: Affine
     let styles: BTreeSet<usize> = layout.glyphs.iter().map(|g| g.style).chain(layout.decorations.iter().map(|d| d.style)).collect();
     // Every run's fills, then the inner shadows over them, then the strokes on top.
     let mut stroked = Vec::new();
-    // Each style's outlines and decorations in one pass, not one scan of every glyph per style.
-    let mut decoration_paths: BTreeMap<usize, BezPath> = BTreeMap::new();
-    for d in &layout.decorations {
-        decoration_paths.entry(d.style).or_default().extend(d.path());
+    // Glyphs and decorations are grouped by style in one pass; each style's paths are built (and
+    // dropped) inside its own iteration, so only one style's paths are held at a time.
+    let mut decoration_of: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, d) in layout.decorations.iter().enumerate() {
+        decoration_of.entry(d.style).or_default().push(i);
     }
-    let mut outline_paths: BTreeMap<usize, BezPath> = BTreeMap::new();
-    for g in &layout.glyphs {
-        outline_paths.entry(g.style).or_default().extend(g.path());
+    let mut glyph_of: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, g) in layout.glyphs.iter().enumerate() {
+        glyph_of.entry(g.style).or_default().push(i);
     }
     for k in styles {
         let fills = layout.styles.get(k).and_then(|st| st.fills.as_ref()).unwrap_or(&n.fills);
-        let decorations = decoration_paths.remove(&k).unwrap_or_default();
-        let mut outlines = outline_paths.remove(&k).unwrap_or_default();
+        let mut decorations = BezPath::new();
+        for d in decoration_of.remove(&k).unwrap_or_default().into_iter().filter_map(|i| layout.decorations.get(i)) {
+            decorations.extend(d.path());
+        }
+        let mut outlines = BezPath::new();
+        for g in glyph_of.remove(&k).unwrap_or_default().into_iter().filter_map(|i| layout.glyphs.get(i)) {
+            outlines.extend(g.path());
+        }
         outlines.extend(decorations.iter());
         let mut real_text_written = false;
         for p in fills {
