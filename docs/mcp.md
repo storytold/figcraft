@@ -2074,11 +2074,13 @@ A name a tool or command doesn't take (`run_command {args}` for `params`, a step
 | `mobile_screen` | `screen` (required), `device` (default "iPhone 16"), `brand_color` |
 | `design_system` | `name`, `primary` |
 | `landing_page` | `product` (required), `width` (default 1440), `accent` |
+| `design_review` | `target` (selection, page or document; default page) |
 | `prototype_flow` | `screens` (comma-separated), `transition` |
 | `fix_comments` | `page` (default "all"), `auto_resolve` (default "yes"), `author` (default "AI") |
 | `watch_comments` | `minutes` (default 5) |
 
 Each returns a step-by-step plan naming the exact tools and commands to use and how to verify.
+The design review's commands, rules and window are described in [design-review.md](design-review.md).
 
 ## Examples
 

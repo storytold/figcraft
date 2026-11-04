@@ -299,6 +299,9 @@ pub(crate) fn command_sections(q: &str) -> Vec<(String, Vec<ActionRow>)> {
             hits.push((group, command_row(id, label.into_owned())));
         }
     }
+    if ql.is_empty() {
+        hits.push((Some("Design"), command_row("design.audit", tr("Review design").to_string())));
+    }
     if !ql.is_empty() {
         hits.sort_by_cached_key(|(_, row)| (!row.label.to_lowercase().starts_with(&ql), row.label.chars().count()));
         hits.truncate(MAX_HITS);

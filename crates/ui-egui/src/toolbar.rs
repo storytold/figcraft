@@ -148,7 +148,7 @@ fn main_width(groups: &[Group], board: bool) -> f32 {
     let tools: f32 = groups.iter().map(|g| TOOL_CELL + if g.has_flyout() { FLYOUT_GAP + FLYOUT_W } else { 0.0 }).sum();
     // The end, and the gaps that aren't a group's own: after Actions and after the divider (and
     // between a board's two buttons, which the end counts as one item).
-    let (end, gaps) = if board { (2.0 * TOOL_CELL, 3.0) } else { (4.0 * TOOL_CELL, 2.0) };
+    let (end, gaps) = if board { (2.0 * TOOL_CELL, 3.0) } else { (5.0 * TOOL_CELL + GAP, 2.0) };
     PAD * 2.0 + tools + (groups.len() as f32 + gaps) * GAP + TOOL_CELL + DIVIDER + end
 }
 
@@ -167,6 +167,9 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
         x = group_cell(app, ui, g, pos2(x, cy), rect.min.y, t);
     }
     x = actions_button(app, ui, x, cy, t);
+    if !board {
+        x = review_button(app, ui, x, cy, t);
+    }
     divider(ui, t, x, cy);
     x += DIVIDER + GAP;
     if board {
@@ -271,6 +274,28 @@ fn actions_button(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) ->
     icons::paint(ui.painter(), glyph_rect(r), Icon::Actions, if open { t.accent_on } else { t.icon });
     if resp.clicked() {
         crate::menus::toggle_palette(&mut app.ui);
+    }
+    x + TOOL_CELL + GAP
+}
+
+/// The Design review button, from `x`. Where the next part starts.
+fn review_button(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) -> f32 {
+    let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
+    let resp = ui.interact(r, ui.scope_id().with("review"), Sense::click()).tip(tr("Review design"));
+    a11y::button(&resp, tr("Review design"));
+    let open = app.ui.design_review.is_some();
+    if open {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.accent);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+    }
+    icons::paint(ui.painter(), glyph_rect(r), Icon::Check, if open { t.accent_on } else { t.icon });
+    if resp.clicked() {
+        if open {
+            app.ui.design_review = None;
+        } else {
+            crate::design_review::open(app);
+        }
     }
     x + TOOL_CELL + GAP
 }
@@ -675,6 +700,9 @@ mod tests {
                 x += TOOL_CELL + if g.has_flyout() { FLYOUT_GAP + FLYOUT_W } else { 0.0 } + GAP;
             }
             x += TOOL_CELL + GAP; // Actions
+            if !board {
+                x += TOOL_CELL + GAP; // Review design
+            }
             x += DIVIDER + GAP; // the divider
             let end = if board { 2.0 * TOOL_CELL + GAP } else { 4.0 * TOOL_CELL };
             assert!((x + end - (pill.max.x - PAD)).abs() < 0.01, "board {board}: {} vs {}", x + end, pill.max.x - PAD);

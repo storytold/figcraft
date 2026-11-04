@@ -40,6 +40,7 @@ pub const NODE_KEYS: &[&str] = &[
     "fontFamily",
     "fontSize",
     "fontStyle",
+    "fontWeight",
     "fontVariations",
     "gridCell",
     "grids",
@@ -396,6 +397,7 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
     });
     insert_prop(o, options, "fontFamily", || json!(t.style.font_family));
     insert_prop(o, options, "fontStyle", || json!(t.style.font_style));
+    insert_prop(o, options, "fontWeight", || json!(t.style.weight()));
     insert_prop(o, options, "fontSize", || json!(t.style.font_size));
     if !t.style.variations.is_empty() {
         insert_prop(o, options, "fontVariations", || json!(t.style.variations));

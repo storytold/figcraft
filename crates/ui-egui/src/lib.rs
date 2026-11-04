@@ -94,6 +94,8 @@ mod dash_pattern_tests;
 #[cfg(test)]
 mod design_paste_tests;
 #[cfg(test)]
+mod design_review_tests;
+#[cfg(test)]
 mod dev_mode_tests;
 #[cfg(test)]
 mod devmode_tail_tests;
@@ -341,6 +343,7 @@ pub use control::{ControlReply, ControlRequest, RequestGate, RequestState};
 
 mod app;
 mod clock;
+mod design_review;
 mod open;
 mod selection_cache;
 mod services;
@@ -453,6 +456,8 @@ pub struct UiState {
     pub icon_gallery: bool,
     /// A message at the bottom of the window and how long it has been showing.
     pub toast: Option<(String, ToastClock)>,
+    /// The Design review window, when open.
+    pub design_review: Option<design_review::State>,
     pub present: Option<present::Presenter>,
     pub presents: Vec<present::PresentTab>,
     /// The tab shown last. It is on screen while `present` has a value.
@@ -697,6 +702,7 @@ impl Default for UiState {
             versions: versions::VersionUi::default(),
             branch_review: None,
             dev: dev_mode::DevUi::default(),
+            design_review: None,
 
             last_copy: None,
             last_copy_generation: 0,
