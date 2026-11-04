@@ -4,7 +4,8 @@ pub const MAX_CLIPBOARD_PNG_BYTES: usize = 256 * 1024 * 1024;
 
 /// Platform services the app crate provides (file dialogs, clipboard, URLs).
 pub trait Services {
-    /// Where previews of sessions you joined are kept between runs (`None`: nowhere).
+    /// The folder of its own where previews of sessions you joined are kept between runs (`None`:
+    /// nowhere). Previews of sessions no longer listed are removed from it.
     fn joined_previews_dir(&self) -> Option<std::path::PathBuf> {
         None
     }

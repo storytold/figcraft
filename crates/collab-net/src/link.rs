@@ -43,8 +43,8 @@ impl Active {
     }
 }
 
-/// Whether the server of invite link `link` can be reached: it answers `/healthz` with anything but
-/// a proxy's word that the server behind it is down. When it doesn't, whether this computer has a
+/// Whether the server of invite link `link` can be reached: it answers `/healthz` with `200` (a
+/// proxy in front of a server that's down says otherwise). When it doesn't, whether this computer has a
 /// network tells a server that is down from being offline, without asking anyone else.
 fn probe(link: &str, limits: &NetLimits) -> Reach {
     let answered = crate::invite::Invite::parse(link).ok().is_some_and(|invite| healthy(&invite.server, limits));
@@ -82,7 +82,7 @@ fn healthy(server: &crate::invite::Endpoint, limits: &NetLimits) -> bool {
     crate::net::shutdown(&sock);
     let Ok(n) = read else { return false };
     let status = String::from_utf8_lossy(&head[..n]);
-    status.starts_with("HTTP/") && !["502", "503", "504"].iter().any(|code| status.contains(code))
+    status.starts_with("HTTP/") && status.split_whitespace().nth(1) == Some("200")
 }
 
 /// Hosts and joins sessions, any number at once (one per open document).
@@ -425,7 +425,7 @@ mod probe_tests {
 
     #[test]
     fn a_proxy_saying_its_server_is_down_counts_as_down() {
-        for answer in ["HTTP/1.1 502 Bad Gateway\r\n\r\n", "HTTP/1.1 503 Unavailable\r\n\r\n", "HTTP/1.1 504 Timeout\r\n\r\n"] {
+        for answer in ["HTTP/1.1 502 Bad Gateway\r\n\r\n", "HTTP/1.1 503 Unavailable\r\n\r\n", "HTTP/1.1 404 Not Found\r\n\r\n"] {
             let (addr, t) = answering(answer);
             assert_eq!(probe(&link(addr), &NetLimits::default()), Reach::ServerDown, "{answer}");
             t.join().unwrap();

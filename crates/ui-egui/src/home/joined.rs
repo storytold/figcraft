@@ -67,8 +67,10 @@ pub(crate) fn prune_previews(dir: &Path, files: &[JoinedFile]) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {
         let path = e.path();
-        let listed = path.file_stem().is_some_and(|stem| files.iter().any(|f| f.preview_key() == stem.to_string_lossy()));
-        if !listed && path.extension().is_some_and(|x| x == "png") {
+        // Only a file named as these previews are: anything else there isn't this list's to remove.
+        let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };
+        let ours = stem.len() == 16 && stem.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if ours && path.extension().is_some_and(|x| x == "png") && !files.iter().any(|f| f.preview_key() == stem) {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -140,10 +142,11 @@ pub(crate) fn capture(app: &mut FigApp, ctx: &egui::Context, time: f64) {
                         log::warn!("couldn't keep a session's preview: {e}");
                     } else {
                         taken.lock().unwrap_or_else(PoisonError::into_inner).push(key.clone());
-                        ctx.request_repaint();
                     }
                 }
                 busy.store(false, Ordering::Release);
+                // After the flag: the frame this asks for may start the next one.
+                ctx.request_repaint();
             });
             if spawned.is_err() {
                 state.capturing.store(false, Ordering::Release);

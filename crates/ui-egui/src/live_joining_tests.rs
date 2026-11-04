@@ -146,11 +146,13 @@ fn previews_of_sessions_no_longer_listed_are_removed() {
     let dir = std::env::temp_dir().join(format!("figcraft-joined-previews-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let kept = figcraft_engine::joined::JoinedFile { address: "a:1".into(), file: "f".into(), ..Default::default() };
-    let (mine, old, other) = (dir.join(format!("{}.png", kept.preview_key())), dir.join("0123456789abcdef.png"), dir.join("not-a-preview.txt"));
-    for p in [&mine, &old, &other] {
+    let (mine, old) = (dir.join(format!("{}.png", kept.preview_key())), dir.join("0123456789abcdef.png"));
+    let (text, picture) = (dir.join("0123456789abcdef.txt"), dir.join("holiday.png"));
+    for p in [&mine, &old, &text, &picture] {
         std::fs::write(p, b"x").unwrap();
     }
     crate::home::joined::prune_previews(&dir, &[kept]);
-    assert!(mine.exists() && !old.exists() && other.exists());
+    assert!(mine.exists() && !old.exists());
+    assert!(text.exists() && picture.exists(), "what isn't named as a preview stays");
     std::fs::remove_dir_all(&dir).unwrap();
 }
