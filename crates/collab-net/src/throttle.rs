@@ -57,11 +57,6 @@ impl<T> Paced<T> {
         let wait = ((1.0 - self.tokens).max(0.0) / PACE_RATE * 1e6).ceil() as u64;
         Some(self.last + Duration::from_micros(wait))
     }
-
-    /// The next message, whatever its turn (leaving).
-    pub fn take_now(&mut self) -> Option<T> {
-        self.queue.pop_front()
-    }
 }
 
 #[derive(Debug)]

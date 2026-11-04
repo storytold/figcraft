@@ -334,12 +334,9 @@ impl<S: Socket> Driver<S> {
 
     /// Leave the session.
     pub(crate) fn leave(&mut self, now: Instant) {
-        // What you did before leaving still reaches the others, whatever its turn.
-        while let Some(msg) = self.paced.take_now() {
-            if !self.write(&msg) {
-                break;
-            }
-        }
+        // What may go now still reaches the others. The rest would get the connection refused, and
+        // a page can't wait: the sync client says so when you leave.
+        let _ = self.send_paced(now);
         self.end(Outcome::Left, now);
     }
 

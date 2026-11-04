@@ -162,6 +162,9 @@ impl Drop for Guest {
     }
 }
 
+/// How long leaving keeps sending what was waiting its turn.
+const LEAVE_DRAIN: Duration = Duration::from_secs(10);
+
 /// A connected socket: reader and writer ends.
 struct Conn {
     reader: WebSocket<Duplex>,
@@ -301,8 +304,7 @@ fn session(
                 }
                 Ok(Cmd::Lost(e, o)) if e == epoch => break o,
                 Ok(Cmd::Leave) | Err(RecvTimeoutError::Disconnected) => {
-                    // What you did before leaving still reaches the others, whatever its turn.
-                    while paced.take_now().is_some_and(|m| send(&mut writer, &m)) {}
+                    leave_paced(&mut writer, &mut paced);
                     let _ = writer.close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }));
                     break Outcome::Left;
                 }
@@ -335,6 +337,25 @@ fn session(
     shutdown(&sock);
     let _ = reader.join();
     outcome
+}
+
+/// Send what was waiting its turn before leaving, at its pace, for at most [`LEAVE_DRAIN`]: nothing
+/// waits for this thread (the app has moved on), and going faster would get the rest refused. What
+/// doesn't go is left to the sync client, which says so when you leave.
+fn leave_paced(writer: &mut WebSocket<Duplex>, paced: &mut Paced<ClientMsg>) {
+    let give_up = Instant::now() + LEAVE_DRAIN;
+    loop {
+        let now = Instant::now();
+        if let Some(m) = paced.take_due(now) {
+            if !send(writer, &m) {
+                return;
+            }
+        } else if let Some(at) = paced.due().filter(|at| *at < give_up) {
+            std::thread::sleep(at.saturating_duration_since(now));
+        } else {
+            return;
+        }
+    }
 }
 
 /// Send one message; false when the connection is gone.

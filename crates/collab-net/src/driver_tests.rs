@@ -427,17 +427,24 @@ fn a_new_connection_starts_with_a_fresh_pace() {
 }
 
 #[test]
-fn leaving_sends_what_was_waiting_its_turn() {
+fn leaving_sends_what_may_go_at_its_pace() {
     let t0 = Instant::now();
     let (mut d, _inbox) = start(Script::default(), t0);
     d.opened(t0);
     d.message(&welcome(), t0);
-    for seq in 0..300 {
+    for seq in 0..150 {
         d.send(ClientMsg::Ack { seq }, t0);
     }
-    d.leave(t0);
+    let later = t0 + Duration::from_secs(1);
+    for seq in 150..600 {
+        d.send(ClientMsg::Ack { seq }, later);
+    }
+    let before = d.sock.sent.iter().filter(|m| matches!(m, ClientMsg::Ack { .. })).count();
+    d.leave(later + Duration::from_secs(1));
     let seqs: Vec<u64> = d.sock.sent.iter().filter_map(|m| if let ClientMsg::Ack { seq } = m { Some(*seq) } else { None }).collect();
-    assert_eq!(seqs, (0..300).collect::<Vec<u64>>());
+    assert!(seqs.len() > before, "more goes on leaving");
+    assert!(seqs.len() - before <= 200, "{} at once: a server drops a connection past 400", seqs.len() - before);
+    assert_eq!(seqs, (0..seqs.len() as u64).collect::<Vec<u64>>(), "in order");
     assert!(d.done());
 }
 
