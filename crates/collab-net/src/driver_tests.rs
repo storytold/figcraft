@@ -349,6 +349,19 @@ fn a_session_that_was_live_only_stops_for_a_refusal_that_is_for_good() {
         assert!(d.done(), "{reason}");
         assert!(matches!(statuses(&inbox.drain()).last(), Some(Status::Failed { reason: r }) if r.contains(reason)), "{reason}");
     }
+    // What this end finds it can't talk to: a text frame, or a message it can't read.
+    for text in [true, false] {
+        let (mut d, inbox) = start(Script::default(), t0);
+        d.opened(t0);
+        d.message(&welcome(), t0);
+        if text {
+            d.text(t0);
+        } else {
+            d.message(&[0xFF, 1, 2, 3], t0);
+        }
+        assert!(d.done(), "text: {text}");
+        assert!(matches!(statuses(&inbox.drain()).last(), Some(Status::Failed { .. })));
+    }
 }
 
 #[test]

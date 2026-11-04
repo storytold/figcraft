@@ -158,7 +158,7 @@ pub(crate) enum Next {
 /// gone, or the two versions can't talk. Anything else a server refuses a session with (it is
 /// busy, a limit was hit, the file couldn't be read just now) may pass, and servers of any version
 /// say so in these words, so a reason not listed here means try again.
-const FINAL_REFUSALS: [&str; 11] = [
+const FINAL_REFUSALS: [&str; 12] = [
     "isn't valid",
     "isn't on the server",
     "was removed from the server",
@@ -170,6 +170,7 @@ const FINAL_REFUSALS: [&str; 11] = [
     "couldn't be read",
     "message too large",
     "this version can't read",
+    "sent a text message",
 ];
 
 /// Whether `reason`, from a server refusing a session that was live, is for good.

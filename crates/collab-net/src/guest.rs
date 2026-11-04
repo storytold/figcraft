@@ -9,6 +9,7 @@
 //! Publishing ([`Guest::publish`]) first uploads the document to a server over a managing
 //! connection, then joins the new file with its edit link on the same thread.
 
+use std::collections::VecDeque;
 use std::io;
 use std::net::TcpStream;
 use std::sync::Arc;
@@ -280,17 +281,17 @@ fn session(
     let mut welcomed = false;
     let mut throttle = Throttle::new(PRESENCE_INTERVAL);
     let mut pace = Pace::new(Instant::now());
+    // Sync messages waiting their turn (a long queue from while offline), and when each may go.
+    let mut paced: VecDeque<(Instant, ClientMsg)> = VecDeque::new();
     let outcome = if send(&mut writer, &hello) {
         loop {
             let ping_at = last_ping + cfg.limits.keepalive;
-            let wake = earliest([throttle.due(), Some(ping_at)]).unwrap_or(ping_at);
+            let wake = earliest([throttle.due(), Some(ping_at), paced.front().map(|(at, _)| *at)]).unwrap_or(ping_at);
             let mut out = None;
-            let mut now_send = Vec::new();
             match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
                 Ok(Cmd::Send(m)) if welcomed => {
-                    // A long queue from while offline doesn't go out faster than the server takes it.
-                    std::thread::sleep(pace.wait(Instant::now()));
-                    now_send.push(m);
+                    let now = Instant::now();
+                    paced.push_back((now + pace.wait(now), m));
                 }
                 // Made for the previous connection (the sync client sends again what the server
                 // didn't get once it has caught up with this connection's welcome).
@@ -312,10 +313,14 @@ fn session(
                 Ok(Cmd::Welcomed(_) | Cmd::Lost(..) | Cmd::Retry) => {}
                 Err(RecvTimeoutError::Timeout) => {}
             }
-            if !now_send.iter().all(|m| send(&mut writer, m)) {
+            let now = Instant::now();
+            let mut sent = true;
+            while sent && let Some((_, m)) = paced.pop_front_if(|(at, _)| *at <= now) {
+                sent = send(&mut writer, &m);
+            }
+            if !sent {
                 break Outcome::Retry("the connection dropped".into());
             }
-            let now = Instant::now();
             let out = out.or_else(|| throttle.take_due(now));
             let ok = out.is_none_or(|p| send(&mut writer, &ClientMsg::Presence(p)));
             let ok = ok
