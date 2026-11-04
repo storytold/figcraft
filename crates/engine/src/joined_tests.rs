@@ -110,3 +110,11 @@ fn a_status_check_that_cant_be_made_still_lists_the_sessions() {
     assert_eq!(listed["files"][0]["name"], "Team file");
     assert!(listed["files"][0]["reach"].is_null(), "what an earlier check said no longer stands");
 }
+
+#[test]
+fn a_file_you_own_stays_in_its_own_list() {
+    let (mut s, script) = session();
+    s.prefs.online_files.push(crate::online::OnlineFile { file: "f".into(), ..Default::default() });
+    join(&mut s, &script, "Team file");
+    assert!(s.prefs.joined_files.is_empty());
+}

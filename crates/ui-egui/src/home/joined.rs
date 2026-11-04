@@ -113,7 +113,7 @@ pub(crate) fn capture(app: &mut FigApp, ctx: &egui::Context, time: f64) {
             return;
         }
         let Some(dir) = app.services.joined_previews_dir() else { return };
-        for live in app.session.live.iter().filter(|l| l.status == Status::Live && l.syncing() && l.published.is_none()) {
+        for live in app.session.live.iter().filter(|l| l.status == Status::Live && l.syncing()) {
             let Some(info) = live.info.as_ref().filter(|i| i.role == Role::Guest) else { continue };
             let Some(doc) = live.doc_uid.and_then(|u| app.session.docs.iter().find(|d| d.uid == u)).map(|d| d.doc.clone()) else { continue };
             let Some(file) = app.session.prefs.joined_files.iter().find(|f| f.link == info.link) else { continue };

@@ -435,9 +435,8 @@ impl Session {
         live.synced = synced;
         live.client = Some(client);
         live.deferred.clear();
-        let (info, published) = (live.info.clone(), live.published.is_some());
-        if let Some(info) = info {
-            self.joined_record(&info, &info.file_name, published);
+        if let Some(info) = live.info.clone() {
+            self.joined_record(&info, &info.file_name);
         }
     }
 

@@ -97,10 +97,11 @@ fn now() -> u64 {
 }
 
 impl Session {
-    /// You're in the session `info` says, with its file called `name`: remember it. A file you
-    /// published yourself is in [`crate::online`] already.
-    pub(crate) fn joined_record(&mut self, info: &SessionInfo, name: &str, published: bool) {
-        if published || info.role != Role::Guest {
+    /// You're in the session `info` says, with its file called `name`: remember it. A file you own
+    /// is in [`crate::online`] already (one published with the server's key isn't: it has no owner).
+    pub(crate) fn joined_record(&mut self, info: &SessionInfo, name: &str) {
+        let file = query_value(&info.link, "file").unwrap_or_default();
+        if info.role != Role::Guest || self.prefs.online_files.iter().any(|f| f.file == file) {
             return;
         }
         let access = serde_json::to_value(info.access).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
