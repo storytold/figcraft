@@ -81,15 +81,24 @@ impl<'a> Walker<'a> {
         let base: String = name.chars().take(200).collect();
         let base = if base.trim().is_empty() { "layer".to_string() } else { base };
         let mut k = self.next_suffix.get(&base).copied().unwrap_or(1);
-        // Bounded: a set of n names leaves one of the first n + 1 candidates free.
+        let mut stem = base.clone();
+        // Bounded: a set of n names leaves one of the first n + 1 candidates free. A counter
+        // that has run out (`usize::MAX`) continues from a longer stem instead of repeating.
         let name = loop {
-            let candidate = if k == 1 { base.clone() } else { format!("{base}_{k}") };
-            k = k.saturating_add(1);
+            let candidate = if k == 1 { stem.clone() } else { format!("{stem}_{k}") };
             if !self.names.contains(&candidate) {
+                k = k.saturating_add(1);
                 break candidate;
             }
+            if k == usize::MAX {
+                stem = candidate;
+                k = 2;
+            } else {
+                k += 1;
+            }
         };
-        self.next_suffix.insert(base, k);
+        let longer = stem.len() > base.len();
+        self.next_suffix.insert(base, if longer { usize::MAX } else { k });
         self.names.insert(name.clone());
         name
     }
@@ -408,5 +417,22 @@ impl<'a> Walker<'a> {
             }
             (None, Some(GradOut::Nothing) | None) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod unique_tests {
+    use super::*;
+
+    #[test]
+    fn an_exhausted_suffix_counter_still_finds_a_free_name() {
+        let (doc, opts) = (Document::new("File"), VdOptions::default());
+        let mut w = Walker::new(&doc, &opts);
+        w.next_suffix.insert("a".into(), usize::MAX);
+        w.names.insert(format!("a_{}", usize::MAX));
+        let first = w.unique("a");
+        let second = w.unique("a");
+        assert_ne!(first, second);
+        assert!(w.names.len() == 3 && w.names.contains(&first) && w.names.contains(&second));
     }
 }
