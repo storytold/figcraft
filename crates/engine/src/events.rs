@@ -7,7 +7,11 @@
 
 use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex, PoisonError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+// The browser has no `std::time` clock: reading it there panics, and the web app stopped when a
+// comment was added. `web_time` is `std::time` on native builds.
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::Value;

@@ -240,3 +240,23 @@ fn restoring_after_an_internal_error_keeps_the_outer_group_context() {
     assert_eq!(r.events.len(), 1);
     assert_eq!(r.events[0].kind, "comment.added");
 }
+
+/// A comment added in the web app stopped the page: the browser has no `std::time` clock, and
+/// the log's timestamp read `SystemTime::now` there. The log reads `web_time`'s clock, as the
+/// other engine clocks do; only `Duration` (plain arithmetic) may come from `std::time`. There is
+/// no way to run this crate's tests in a browser, so this reads the source.
+#[test]
+fn the_log_reads_a_clock_the_browser_has() {
+    let code: Vec<&str> = include_str!("events.rs").lines().map(|l| l.split("//").next().unwrap_or("")).collect();
+    for line in &code {
+        for clock in ["Instant", "SystemTime", "UNIX_EPOCH"] {
+            assert!(!(line.contains("std::time") && line.contains(clock)), "a std::time clock the browser lacks: {line}");
+        }
+    }
+    assert!(code.iter().any(|l| l.contains("web_time")), "the log's clock comes from web_time");
+    // The clock still tells the time on native builds: an event from now, in seconds since 1970.
+    let mut s = Session::new();
+    s.execute("comment.add", &json!({"x": 1, "y": 2, "text": "When"})).unwrap();
+    let time = s.events.poll(0, &comments(), 10, Duration::ZERO).events.first().map(|e| e.time);
+    assert!(time.is_some_and(|t| t > 1.7e9), "{time:?}");
+}
