@@ -264,16 +264,20 @@ impl figcraft_plugin::Host for EngineHost<'_> {
         r.map(|mut v| {
             // A plugin gets the open files' and libraries' names, not where they are on disk or
             // the share links (with their tokens) that reach them (#1117).
-            if matches!(command, "doc.list" | "library.list") {
-                // `doc.list` is a list; `library.list` keeps its list under `libraries`.
-                let list = if command == "library.list" { v.get_mut("libraries") } else { Some(&mut v) };
+            if matches!(command, "doc.list" | "library.list" | "library.updates") {
+                // `doc.list` is a list; `library.list` keeps its list under `libraries`, and
+                // `library.updates` its failures under `errors`.
+                let list = match command {
+                    "library.list" => v.get_mut("libraries"),
+                    "library.updates" => v.get_mut("errors"),
+                    _ => Some(&mut v),
+                };
                 for e in list.and_then(Value::as_array_mut).into_iter().flatten().filter_map(Value::as_object_mut) {
-                    // An error may quote the path too.
-                    if let Some(Value::String(path)) = e.remove("path")
-                        && !path.is_empty()
-                        && let Some(Value::String(err)) = e.get_mut("error")
-                    {
-                        *err = err.replace(&path, "the library");
+                    e.remove("path");
+                    // A failure's text may quote the path, a token or another form of it: the
+                    // plugin gets a fixed message.
+                    if let Some(err) = e.get_mut("error").filter(|v| v.is_string()) {
+                        *err = json!("the library could not be read");
                     }
                 }
             }

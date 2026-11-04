@@ -63,3 +63,20 @@ fn a_plugin_gets_library_names_but_not_their_links() {
     assert!(out.contains("Kit"), "{out}");
     assert!(!out.contains("per-file-secret") && !out.contains("\\\"path\\\""), "{out}");
 }
+
+#[test]
+fn a_plugin_gets_a_fixed_message_for_library_update_failures() {
+    const LINK: &str = "/home/someone/private/kits/kit.figcraft";
+    let mut s = Session::new();
+    s.doc_mut().unwrap().libraries_mut().enabled.push(figcraft_doc::LibraryLink {
+        id: "lib".into(),
+        name: "Kit".into(),
+        path: LINK.into(),
+        version: 3,
+    });
+    let tail = "(call $set_output (i32.const 40000) (call $reply_read (i32.const 40000) (i32.const 20000))) (return (i32.const 0))";
+    install(&mut s, manifest("org.test.upd", "read", &[]), &script(&[("library.updates", json!({}))], OnRefusal::Fail, tail));
+    let out = ex(&mut s, "plugin.run", json!({"id": "org.test.upd"}))["output"].to_string();
+    assert!(out.contains("could not be read"), "{out}");
+    assert!(!out.contains("someone") && !out.contains("private"), "{out}");
+}
