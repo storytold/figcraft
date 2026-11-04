@@ -787,6 +787,11 @@ pub struct Interaction {
     /// Mouse enter, leave, down and up: how long after the gesture the actions run (ms).
     #[serde(default, alias = "delayMs", skip_serializing_if = "is_zero")]
     pub delay_ms: u32,
+    /// Reset component state: when true, this interaction doesn't share or memorize the
+    /// interactive component's variant state across frames/instances (Figma's "Reset component
+    /// state" checkbox in the Interaction details panel).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reset_component_state: bool,
 }
 
 impl Interaction {

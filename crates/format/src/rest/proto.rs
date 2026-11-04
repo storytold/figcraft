@@ -138,6 +138,7 @@ impl Ctx<'_> {
             duration_ms: if ms > 0 { ms } else { DEFAULT_MS },
             easing: easing_type(text(j, "transitionEasing"), None),
             delay_ms: 0,
+            reset_component_state: false,
         })
     }
 
@@ -148,8 +149,9 @@ impl Ctx<'_> {
         let delay_ms = num(t, "delay").or_else(|| num(t, "timeout")).filter(|d| d.is_finite()).map_or(0, |d| d.clamp(0.0, MAX_MS) as u32);
         let mut actions = Vec::new();
         let mut transition: Option<&Value> = None;
+        let mut reset_component_state = false;
         for a in list(it, "actions") {
-            self.action(a, &mut actions, &mut transition, 0);
+            self.action(a, &mut actions, &mut transition, 0, &mut reset_component_state);
         }
         if actions.is_empty() {
             self.warn("prototype interactions without supported actions were skipped");
@@ -159,7 +161,7 @@ impl Ctx<'_> {
             Some(t) => self.transition(t),
             None => (Transition::Instant, DEFAULT_MS, Easing::default()),
         };
-        let mut it = Interaction { trigger, actions, transition, duration_ms, easing, delay_ms };
+        let mut it = Interaction { trigger, actions, transition, duration_ms, easing, delay_ms, reset_component_state };
         if it.delay_secs() == 0.0 {
             it.delay_ms = 0;
         }
@@ -224,7 +226,19 @@ impl Ctx<'_> {
     }
 
     /// Append the action `a` maps to (a lone conditional block without a condition is inlined).
-    fn action<'v>(&mut self, a: &'v Value, out: &mut Vec<Action>, transition: &mut Option<&'v Value>, depth: usize) {
+    fn action<'v>(
+        &mut self,
+        a: &'v Value,
+        out: &mut Vec<Action>,
+        transition: &mut Option<&'v Value>,
+        depth: usize,
+        reset_component_state: &mut bool,
+    ) {
+        // Figma's "Reset component state" checkbox is a per-action flag; the interaction resets
+        // component state when any action enables it.
+        if a.get("resetInteractiveComponents").and_then(Value::as_bool).unwrap_or(false) {
+            *reset_component_state = true;
+        }
         let mapped = match text(a, "type") {
             Some("BACK") => Some(Action::Back),
             Some("CLOSE") => Some(Action::CloseOverlay),
@@ -250,11 +264,11 @@ impl Ctx<'_> {
                 // A lone block without a condition always runs.
                 [only] if only.get("condition").is_none_or(Value::is_null) => {
                     for inner in list(only, "actions") {
-                        self.action(inner, out, transition, depth + 1);
+                        self.action(inner, out, transition, depth + 1, reset_component_state);
                     }
                     None
                 }
-                blocks => self.conditional(blocks, transition, depth),
+                blocks => self.conditional(blocks, transition, depth, reset_component_state),
             },
             Some("UPDATE_MEDIA_RUNTIME") => {
                 self.warn("video actions are not supported and were skipped");
@@ -270,7 +284,13 @@ impl Ctx<'_> {
 
     /// If / else if / else blocks; skipped whole when a condition can't be imported (running the
     /// wrong branch would be worse than none).
-    fn conditional<'v>(&mut self, blocks: &'v [Value], transition: &mut Option<&'v Value>, depth: usize) -> Option<Action> {
+    fn conditional<'v>(
+        &mut self,
+        blocks: &'v [Value],
+        transition: &mut Option<&'v Value>,
+        depth: usize,
+        reset_component_state: &mut bool,
+    ) -> Option<Action> {
         let mut out = Vec::new();
         for b in blocks.iter().take(MAX_BLOCKS) {
             let condition = match b.get("condition").filter(|c| !c.is_null()) {
@@ -285,7 +305,7 @@ impl Ctx<'_> {
             };
             let mut actions = Vec::new();
             for inner in list(b, "actions") {
-                self.action(inner, &mut actions, transition, depth + 1);
+                self.action(inner, &mut actions, transition, depth + 1, reset_component_state);
             }
             let otherwise = condition.is_none();
             out.push(ConditionalBlock { condition, actions });

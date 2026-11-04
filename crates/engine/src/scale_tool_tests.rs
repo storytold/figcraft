@@ -90,6 +90,7 @@ fn dragging_a_handle_scales_strokes_effects_and_radii_in_one_undo_step() {
     s.doc_mut().unwrap().get_mut(r).unwrap().effects = vec![Effect::drop_shadow()];
     ex(&mut s, "select.set", json!({"ids": [r]}));
     ex(&mut s, "tool.scale", json!({}));
+    ex(&mut s, "tool.scaleAnchor", json!({"anchor": "tl"})); // test assumes top-left anchor
     let before = undo_len(&s);
     drag(&mut s, (100.0, 50.0), (200.0, 100.0), false);
     assert_rect(bounds(&s, r), [0.0, 0.0, 200.0, 100.0]);
@@ -110,6 +111,7 @@ fn the_live_readout_shows_the_factor_and_pivot() {
     let r = rect(&mut s, 10.0, 10.0, 100.0, 100.0);
     ex(&mut s, "select.set", json!({"ids": [r]}));
     ex(&mut s, "tool.set", json!({"tool": "scale"}));
+    ex(&mut s, "tool.scaleAnchor", json!({"anchor": "tl"})); // test assumes top-left anchor
     s.pointer(&PointerEvent::at(PointerKind::Down, 110.0, 110.0, 1.0)).unwrap();
     s.pointer(&PointerEvent::at(PointerKind::Move, 160.0, 160.0, 1.0)).unwrap();
     let hint = s.tool.overlay.scale.unwrap();
@@ -149,6 +151,7 @@ fn frames_scale_their_children_whatever_their_constraints() {
     let (fs, _) = size(&s);
     ex(&mut s, "select.set", json!({"ids": [f]}));
     ex(&mut s, "tool.scale", json!({}));
+    ex(&mut s, "tool.scaleAnchor", json!({"anchor": "tl"})); // test assumes top-left anchor
     drag(&mut s, (200.0, 100.0), (300.0, 150.0), false);
     assert_rect(bounds(&s, f), [0.0, 0.0, 300.0, 150.0]);
     assert_rect(bounds(&s, c), [225.0, 90.0, 285.0, 135.0]);
@@ -164,6 +167,7 @@ fn several_layers_scale_together_about_the_pivot() {
     ex(&mut s, "node.set", json!({"ids": [a, b], "props": {"strokes": ["#000000"], "strokeWeight": 1}}));
     ex(&mut s, "select.set", json!({"ids": [a, b]}));
     ex(&mut s, "tool.scale", json!({}));
+    ex(&mut s, "tool.scaleAnchor", json!({"anchor": "tl"})); // test assumes top-left anchor
     let before = undo_len(&s);
     drag(&mut s, (150.0, 100.0), (300.0, 200.0), false);
     assert_rect(bounds(&s, a), [0.0, 0.0, 100.0, 100.0]);
@@ -179,6 +183,7 @@ fn rotated_layers_and_lines_scale_along_their_own_axes() {
     ex(&mut s, "node.set", json!({"id": r, "props": {"rotation": 30}}));
     ex(&mut s, "select.set", json!({"ids": [r]}));
     ex(&mut s, "tool.scale", json!({}));
+    ex(&mut s, "tool.scaleAnchor", json!({"anchor": "tl"})); // test assumes top-left anchor
     let w = s.doc().unwrap().world_transform(r);
     let (origin, from, to) = (w * Point::ZERO, w * Point::new(100.0, 50.0), w * Point::new(200.0, 100.0));
     drag(&mut s, (from.x, from.y), (to.x, to.y), false);
@@ -204,6 +209,7 @@ fn dragging_past_the_pivot_turns_the_layer_over() {
     let r = rect(&mut s, 0.0, 0.0, 100.0, 50.0);
     ex(&mut s, "select.set", json!({"ids": [r]}));
     ex(&mut s, "tool.scale", json!({}));
+    ex(&mut s, "tool.scaleAnchor", json!({"anchor": "tl"})); // test assumes top-left anchor
     drag(&mut s, (100.0, 50.0), (-100.0, -50.0), false);
     assert_rect(bounds(&s, r), [-100.0, -50.0, 0.0, 0.0]);
     let n = s.doc().unwrap().node(r).unwrap();

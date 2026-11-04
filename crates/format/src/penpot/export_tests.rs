@@ -681,6 +681,7 @@ fn prototype_interactions_and_flows_round_trip() {
             duration_ms: 300,
             easing: Easing::EaseOut,
             delay_ms: 0,
+            reset_component_state: false,
         },
         Interaction {
             trigger: Trigger::MouseEnter,
@@ -696,6 +697,7 @@ fn prototype_interactions_and_flows_round_trip() {
             duration_ms: 200,
             easing: Easing::Linear,
             delay_ms: 0,
+            reset_component_state: false,
         },
         Interaction {
             trigger: Trigger::AfterDelay { ms: 1500 },
@@ -704,6 +706,7 @@ fn prototype_interactions_and_flows_round_trip() {
             duration_ms: 0,
             easing: Easing::Linear,
             delay_ms: 0,
+            reset_component_state: false,
         },
     ];
     if let NodeKind::Page { flows, .. } = &mut doc.node_mut(p).unwrap().kind {
