@@ -277,6 +277,9 @@ pub fn default_selection(doc: &Document, prev: Option<&LibraryManifest>) -> Sele
 fn alias_closure(vars: &Variables, seeds: impl IntoIterator<Item = VariableId>) -> BTreeSet<VariableId> {
     let mut out = BTreeSet::new();
     let mut stack: Vec<VariableId> = seeds.into_iter().collect();
+    if stack.is_empty() {
+        return out;
+    }
     // Indexed once (the first of equal ids, as `get_by_id` finds it): a scan per step is quadratic on a long alias chain.
     let mut by_id = std::collections::HashMap::new();
     for v in &vars.variables {
