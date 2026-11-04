@@ -297,46 +297,35 @@ pub(crate) fn is_rtl_char(c: char) -> bool {
     matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF | 0x200F | 0x202B | 0x202E | 0x2067)
 }
 
-/// Which visual positions of `order` (the logical index at each) a justify gap follows. A gap
-/// after logical item k (`after[k]`) opens between logically neighbouring glyphs where they are,
-/// or where two runs meet (a right-to-left run is laid out reversed) between the runs, so a gap
-/// beside a Hebrew word in Chinese text opens beside the word, not inside it; each opens once.
-/// From item `trailing` on (a line's trailing spaces) a gap opens after the item itself.
-fn visual_gaps(order: &[usize], after: &[bool], trailing: usize) -> Vec<bool> {
-    let run_min = visual_run_starts(order);
-    let mut applied = vec![false; after.len()];
+/// Which visual positions of a line's items (in `visual_order(levels)`) a justify gap follows. The
+/// gap after logical item k (`after[k]`) is reordered like a glyph of no width at the lower of its
+/// two neighbours' levels, as rule N1 resolves a space between them: between logically neighbouring
+/// glyphs it opens where they are, and where runs meet it opens beside the run it belongs to, so a
+/// gap beside a Hebrew word in Chinese text opens beside the word, not inside it, and so does one
+/// beside a Chinese word within that Hebrew. From item `trailing` on (a line's trailing spaces) a
+/// gap opens after the item itself.
+fn visual_gaps(levels: &[u8], after: &[bool], trailing: usize) -> Vec<bool> {
     let gap_after = |k: usize| after.get(k).copied().unwrap_or(false);
-    order
-        .iter()
-        .enumerate()
-        .map(|(i, &k)| {
+    let level = |k: usize| levels.get(k).copied().unwrap_or(0);
+    // Items at the even indices, the gap after item k at 2k + 1 (a gap's level never exceeds its
+    // neighbours', so every run reversed starts and ends on an item and the two keep alternating).
+    let mut both = Vec::with_capacity(after.len() * 2);
+    for k in 0..after.len() {
+        if k > 0 {
+            both.push(level(k).min(level(k - 1)));
+        }
+        both.push(level(k));
+    }
+    let order = visual_order(&both);
+    (0..after.len())
+        .map(|i| {
+            let k = order.get(2 * i).copied().unwrap_or(0) / 2;
             if k >= trailing {
                 return gap_after(k);
             }
-            let at = match order.get(i + 1) {
-                Some(&n) if n == k + 1 || k == n + 1 => Some(k.min(n)),
-                Some(_) => run_min.get(i).copied().max(run_min.get(i + 1).copied()).and_then(|m| m.checked_sub(1)),
-                None => None,
-            };
-            at.is_some_and(|g| gap_after(g) && applied.get_mut(g).is_some_and(|a| !std::mem::replace(a, true)))
+            order.get(2 * i + 1).is_some_and(|&g| g % 2 == 1 && g / 2 < trailing && gap_after(g / 2))
         })
         .collect()
-}
-
-/// For each position of `order` (the logical index at each visual position), the smallest
-/// logical index of its run: the visually consecutive glyphs whose logical indices step one way.
-fn visual_run_starts(order: &[usize]) -> Vec<usize> {
-    let mut out = Vec::with_capacity(order.len());
-    let mut start = 0;
-    for i in 1..=order.len() {
-        let joined = i < order.len() && order.get(i - 1).zip(order.get(i)).is_some_and(|(&p, &k)| p + 1 == k || k + 1 == p);
-        if !joined {
-            let m = order.get(start..i).and_then(|run| run.iter().copied().min()).unwrap_or(0);
-            out.extend(std::iter::repeat_n(m, i - start));
-            start = i;
-        }
-    }
-    out
 }
 
 /// Visual order of a line's items from their levels (rule L2: from the highest level down to the
@@ -1396,16 +1385,12 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         // Right-to-left runs are placed in visual order; trailing spaces take the paragraph's
         // direction (rule L1).
         let line_items = items.get(*s..*e).unwrap_or(&[]);
-        let order: Vec<usize> = if bidi.is_some() {
-            let para_level = u8::from(rtl_line);
-            let levels: Vec<u8> = line_items.iter().enumerate().map(|(k, it)| if *s + k >= vis_end { para_level } else { it.level }).collect();
-            visual_order(&levels)
-        } else {
-            (0..line_items.len()).collect()
-        };
+        let para_level = u8::from(rtl_line);
+        let levels: Vec<u8> = line_items.iter().enumerate().map(|(k, it)| if *s + k >= vis_end { para_level } else { it.level }).collect();
+        let order = visual_order(&levels);
         // Each gap opens at its visual boundary; trailing spaces widen where they are.
         let after: Vec<bool> = (0..line_items.len()).map(|k| widens(*s + k)).collect();
-        let gaps_at = visual_gaps(&order, &after, vis_end - *s);
+        let gaps_at = visual_gaps(&levels, &after, vis_end - *s);
         for (i, &k) in order.iter().enumerate() {
             let Some(it) = line_items.get(k) else { continue };
             if is_line_break(it.ch) {

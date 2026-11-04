@@ -608,12 +608,18 @@ fn justified_ideographs_spread_the_room_between_characters() {
     };
     // Box width cut inside char `fit`, so the first line is chars 0..fit; how many gaps lie before
     // each of its chars.
-    let rows: [(&str, usize, &[i32], &str); 5] = [
+    let rows: [(&str, usize, &[i32], &str); 6] = [
         ("一二三四五六七八九十", 6, &[0, 1, 2, 3, 4, 5], "one gap between each pair of ideographs"),
         ("一二三。四五六七八九", 6, &[0, 1, 2, 2, 3, 4], "none before the full stop, which never starts a line"),
         ("一二三「四五六七八九", 6, &[0, 1, 2, 3, 3, 4], "none after the opening bracket, which never ends a line"),
         ("一二三\u{20DD}四五六七八九", 6, &[0, 1, 2, 2, 3, 4], "none inside a grapheme cluster: a combining mark stays on its base"),
         ("漢אב字一二三", 4, &[0, 1, 1, 2], "beside a right-to-left word (laid out ב then א), not inside it"),
+        (
+            "漢\u{202B}אב字一גד\u{202C}文一二三",
+            10,
+            &[0, 1, 4, 4, 2, 3, 1, 1, 1, 5],
+            "beside a Chinese word embedded in a Hebrew phrase embedded in Chinese (laid out 漢 ד ג 字 一 ב א 文, the embedding marks of no width), and beside the phrase",
+        ),
     ];
     for (s, fit, gaps_before, why) in rows {
         let natural = lay_out(s, TextAlignH::Left, None);
