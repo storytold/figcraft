@@ -1098,6 +1098,9 @@ impl Document {
         // lookups: a wide parent or a long page list doesn't make validation quadratic.
         let edges: std::collections::BTreeSet<(NodeId, NodeId)> = self.nodes.iter().flat_map(|(p, n)| n.children.iter().map(|c| (*p, *c))).collect();
         let page_ids: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
+        if page_ids.len() != self.pages.len() {
+            note(&mut issues, || "a page is listed twice".to_string());
+        }
         for (id, n) in self.nodes.iter() {
             if n.id != *id {
                 note(&mut issues, || format!("node key {id} has id {}", n.id));
@@ -1191,9 +1194,10 @@ impl Document {
         if store != self.libraries.store {
             Arc::make_mut(&mut self.libraries).store = store;
         }
-        self.pages.retain(|p| self.nodes.get(p).is_some_and(|n| n.is_page()) && Some(*p) != store);
+        // A page listed twice would be imported, exported and walked once per listing.
+        let mut listed = std::collections::BTreeSet::new();
+        self.pages.retain(|p| self.nodes.get(p).is_some_and(|n| n.is_page()) && Some(*p) != store && listed.insert(*p));
         // Unlisted pages join the list; a set keeps many pages from making this quadratic (#1078).
-        let mut listed: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
         for (k, n) in self.nodes.iter() {
             if n.is_page() && Some(*k) != store && listed.insert(*k) {
                 self.pages.push(*k);

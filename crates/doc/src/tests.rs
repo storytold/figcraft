@@ -349,6 +349,20 @@ fn repair_drops_cycles_and_repeated_children() {
 }
 
 #[test]
+fn repair_lists_a_page_once_however_often_the_file_lists_it() {
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let q = d.add_page("Two");
+    let mut v = serde_json::to_value(&d).unwrap();
+    v["pages"] = serde_json::json!([p, q, p, q, p]);
+    let mut bad: Document = serde_json::from_value(v).unwrap();
+    assert!(bad.validate().iter().any(|i| i.contains("listed twice")), "{:?}", bad.validate());
+    bad.repair();
+    assert!(bad.validate().is_empty(), "{:?}", bad.validate());
+    assert_eq!(bad.pages, vec![p, q]);
+}
+
+#[test]
 fn validate_caps_the_issue_list() {
     let mut d = Document::new("x");
     let p = page(&d);
