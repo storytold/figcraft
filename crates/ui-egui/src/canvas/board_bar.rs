@@ -299,10 +299,13 @@ fn shape_part(app: &mut FigApp, ui: &mut Ui, shape: BoardShape, at: Pos2, t: &To
                 let (r, cell) = ui.allocate_exact_size(vec2(CELL, CELL), Sense::click());
                 let cell = cell.on_hover_text(tr(b.label()));
                 a11y::menu_item(&cell, tr(b.label()), "", Some(b == shape));
-                if b == shape || cell.hovered() {
+                let lit = b == shape || cell.hovered();
+                if lit {
                     ui.painter().rect_filled(r, CornerRadius::same(5), t.menu_hover);
                 }
-                paint_choice(ui.painter(), r.shrink(6.0), &Mark::Shape(b), t.menu_text);
+                // The menu is the theme's popup (white in the light theme): the theme's icon
+                // colour, white only on the green highlight.
+                paint_choice(ui.painter(), r.shrink(6.0), &Mark::Shape(b), if lit { t.menu_text } else { t.icon });
                 if cell.clicked() {
                     app.run("board.setStyle", json!({"shape": b.id()}));
                     ui.close();

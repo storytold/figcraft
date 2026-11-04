@@ -216,11 +216,14 @@ pub struct PresentView {
     pub hotspot_hints: bool,
     /// A panel beside the prototype shows the Inspect properties of the layer under the pointer.
     pub inspect: bool,
+    /// Hide UI: the bar above the prototype and the navigation bar under it are gone, so the
+    /// prototype shows alone (Cmd/Ctrl+\, the editor's Show/Hide UI key, brings them back).
+    pub hide_ui: bool,
 }
 
 impl Default for PresentView {
     fn default() -> Self {
-        Self { scale: PresentScale::Fit, device_frame: true, comments: false, hotspot_hints: true, inspect: false }
+        Self { scale: PresentScale::Fit, device_frame: true, comments: false, hotspot_hints: true, inspect: false, hide_ui: false }
     }
 }
 
