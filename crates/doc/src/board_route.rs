@@ -28,9 +28,15 @@ impl RouteEnd {
 /// How far an elbow connector going around the objects it joins keeps from them.
 const ROOM: f64 = 24.0;
 
-/// The points a connector runs through from `from` to `to`: from the middle of the side of each
-/// box facing the other end (or the side it names), straight, in right angles, or (curved) its two
-/// ends with the curve's two control points between them. `None` when a point isn't finite.
+/// How far outside the border a connector attached to a side starts and ends (#1916): the stroke's
+/// round cap never lies on the fill, and several connectors leaving one side run together along the
+/// side's normal for this much before they part, as FigJam's do.
+pub const END_GAP: f64 = 4.0;
+
+/// The points a connector runs through from `from` to `to`: from [`END_GAP`] outside the middle of
+/// the side of each box facing the other end (or the side it names), straight, in right angles, or
+/// (curved) its two ends with the curve's two control points between them. `None` when a point isn't
+/// finite.
 pub fn route_points(from: RouteEnd, to: RouteEnd, routing: Routing) -> Option<Vec<Point>> {
     let (p0, s0) = attach(from, to.centre());
     let (p1, s1) = attach(to, from.centre());
@@ -169,8 +175,9 @@ fn attach(e: RouteEnd, other: Point) -> (Point, Option<Side>) {
         RouteEnd::Point(p) => (p, None),
         RouteEnd::Box(b, side) => {
             let side = named_or_facing(b, side, other);
-            (side.point(b), Some(side))
+            (side.point(b) + side.normal() * END_GAP, Some(side))
         }
+        // Placed by hand: the point is the user's, gap or not.
         RouteEnd::On(b, side, p) => (p, Some(named_or_facing(b, side, other))),
     }
 }
