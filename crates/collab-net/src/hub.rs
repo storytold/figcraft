@@ -737,6 +737,9 @@ impl<B: Backend> Hub<B> {
                         continue;
                     }
                     let Some(&conn) = room.ids.get(&id) else { continue };
+                    if matches!(msg, ServerMsg::Presence { .. }) && self.conns.get(&conn).is_some_and(|c| !c.out.takes_presence()) {
+                        continue;
+                    }
                     let Some(b) = bytes.get_or_insert_with(|| encode(&msg)).clone() else { continue };
                     if !deliver(&self.conns, conn, &b, &mut held, &mut stuck) {
                         stuck.push(conn);
