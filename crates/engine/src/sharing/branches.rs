@@ -140,8 +140,9 @@ pub struct ConflictRow {
 }
 
 /// Put each branch tab's document into its branch, so saving the main file (and its unsaved
-/// state) covers the branch. Runs before every command.
-pub(crate) fn sync(s: &mut Session) {
+/// state) covers the branch. Runs before every command; frontends must also synchronize before
+/// deciding whether a window can close, since a branch may have changed since the last command.
+pub fn sync(s: &mut Session) {
     if !s.docs.iter().any(|d| d.branch_of.is_some()) {
         return;
     }

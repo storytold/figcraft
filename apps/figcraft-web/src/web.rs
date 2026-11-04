@@ -61,6 +61,9 @@ pub fn start() {
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
                     let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    if let Err(error) = crate::file_providers::install(fig.file_providers.clone(), cc.egui_ctx.clone()) {
+                        log::error!("file provider capability could not be installed: {error:?}");
+                    }
                     fig.note_recovered(recovered);
                     if let Err(e) = crate::pasted::install(cc.egui_ctx.clone()) {
                         log::error!("couldn't listen for pasted images: {e:?}");
@@ -155,6 +158,7 @@ impl eframe::App for WebShell {
         // Every frame, hidden or not, starts here: what the last one left is what a panic keeps.
         UNSAVED.with(|u| u.try_borrow_mut().map(|mut u| u.follow(&self.fig.session))).ok();
         figcraft_ui_egui::windows::guard(&mut self.fig, ctx, |fig| fig.background_tick(ctx));
+        crate::file_providers::publish(&self.fig.file_providers);
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -170,6 +174,7 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
+        crate::file_providers::publish(&self.fig.file_providers);
         crate::api::poll_replies();
         // The fonts on this computer that text asked for this frame are read; once one is in,
         // auto-sizing text measured in a fallback fits it.

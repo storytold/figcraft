@@ -354,6 +354,7 @@ fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(28.0);
         getting_started(app, ui, t);
     }
+    app.file_providers.recent_ui(ui);
     open_files(app, ui, t, "");
     if crate::home_recents::listed(&app.session.prefs.recent_files).next().is_none() {
         // A first run: nothing to reopen yet, so offer something to start from.
