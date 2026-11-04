@@ -280,7 +280,7 @@ fn renaming_several_layers_by_the_documented_codes() {
     // A template is expanded once per match, so its length is capped (1,000 characters).
     let long = "$nn".repeat(400);
     assert!(crate::rename::BatchRename::new(Some("a"), false, &long, None, None).is_err());
-    assert!(crate::rename::BatchRename::new(None, false, "x", Some(&long), None).is_err());
+    assert!(crate::rename::BatchRename::new(None, false, "x", Some(&long), None).is_err_and(|e| e.contains("pattern")));
     assert!(crate::rename::BatchRename::new(Some("a"), false, &"$nn".repeat(300), None, None).is_ok());
 }
 

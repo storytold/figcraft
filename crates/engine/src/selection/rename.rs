@@ -53,8 +53,11 @@ impl BatchRename {
             }
             Some(f) => Some(Find::Text(f.to_string())),
         };
-        if replace.chars().count() > MAX_TEMPLATE || pattern.is_some_and(|p| p.chars().count() > MAX_TEMPLATE) {
+        if replace.chars().count() > MAX_TEMPLATE {
             return Err(format!("the replacement is longer than {MAX_TEMPLATE} characters"));
+        }
+        if pattern.is_some_and(|p| p.chars().count() > MAX_TEMPLATE) {
+            return Err(format!("the pattern is longer than {MAX_TEMPLATE} characters"));
         }
         let start = start.filter(|s| s.is_finite()).map_or(1, |s| s.clamp(0.0, 1e12).round() as u64);
         Ok(Self { find, replace: replace.to_string(), pattern: pattern.map(str::to_string), start })
