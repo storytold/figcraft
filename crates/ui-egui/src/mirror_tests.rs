@@ -89,3 +89,18 @@ fn switching_back_unmirrors_the_window_and_egui() {
     assert_eq!(canvas(&u), (layers::RAIL_WIDTH + PANEL_DEFAULT, WINDOW_W - PANEL_DEFAULT));
     assert!(!u.ctx.global_style().right_to_left);
 }
+
+#[test]
+fn a_minimized_window_has_its_expand_button_where_the_rail_was() {
+    use egui::accesskit::Role;
+    for mirrored in [true, false] {
+        let mut u = ui(mirrored);
+        u.app.run("select.set", json!({"ids": []}));
+        u.app.run("view.minimize", json!({"on": true}));
+        u.frame(vec![]);
+        let expand = crate::panel_width_tests::control(&mut u, Role::Button, "Expand the interface").expect("the Expand button");
+        // 32 wide, 8 from the window's edge.
+        let x = if mirrored { WINDOW_W - 24.0 } else { 24.0 };
+        assert_eq!(expand.x, x, "mirrored: {mirrored}");
+    }
+}
