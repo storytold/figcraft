@@ -1498,10 +1498,12 @@ fn jpg_quality_1_to_100<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D:
     if (1..=100).contains(&q) { Ok(q) } else { Err(serde::de::Error::custom(format!("jpgQuality: 1 to 100, not {q}"))) }
 }
 
-/// A JPG quality to a file, `node.get` or `to_json`: 1 to 100, anything else refused before it is
-/// written, so a value a Rust caller put in the public field can't make a file that won't reopen.
+/// A JPG quality to a file, `node.get` or `to_json`: written within 1 to 100. The field is public,
+/// so Rust code can put anything in it; writing it in range means a save never fails over it, a
+/// file always reopens, and `node.get` never drops the export settings (its props are built
+/// without a way to fail). What is read stays strict: see [`jpg_quality_1_to_100`].
 fn jpg_quality_written<S: serde::Serializer>(q: &u8, s: S) -> Result<S::Ok, S::Error> {
-    if (1..=100).contains(q) { s.serialize_u8(*q) } else { Err(serde::ser::Error::custom(format!("jpgQuality: 1 to 100, not {q}"))) }
+    s.serialize_u8((*q).clamp(1, 100))
 }
 
 /// How an Android Vector Drawable export handles what the format can't draw exactly (layer

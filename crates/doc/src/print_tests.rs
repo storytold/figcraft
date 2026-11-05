@@ -55,8 +55,8 @@ fn print_settings_save_only_when_set() {
 }
 
 /// #2004: a JPG quality is 1 to 100 both ways: a saved setting carries it (and not the default),
-/// a file or `node.set` with one outside the range is refused, and so is writing one, so a value
-/// put in the public field can't make a file that won't reopen.
+/// a file or `node.set` with one outside the range is refused, and one put in the public field is
+/// written within range, so a save never fails over it and the file reopens.
 #[test]
 fn jpg_quality_is_1_to_100_both_ways() {
     let plain = ExportSetting { format: ExportFormat::Jpg, ..Default::default() };
@@ -73,7 +73,7 @@ fn jpg_quality_is_1_to_100_both_ways() {
     for bad in [0, 101] {
         let err = serde_json::from_value::<ExportSetting>(serde_json::json!({"format": "jpg", "jpgQuality": bad})).unwrap_err().to_string();
         assert!(err.contains("1 to 100"), "{bad}: {err}");
-        let err = serde_json::to_value(ExportSetting { jpg_quality: bad, ..plain.clone() }).unwrap_err().to_string();
-        assert!(err.contains("1 to 100"), "writing {bad}: {err}");
+        let written = serde_json::to_value(ExportSetting { jpg_quality: bad, ..plain.clone() }).unwrap();
+        assert_eq!(written["jpgQuality"], serde_json::json!(bad.clamp(1, 100)), "written within range, so the file reopens");
     }
 }
