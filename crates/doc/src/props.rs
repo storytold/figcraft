@@ -662,8 +662,8 @@ pub struct Glass {
     pub dispersion: f64,
     /// Blur of the backdrop (a blur radius, document units, 0–[`Self::MAX_FROST`]).
     pub frost: f64,
-    /// Which way the curved edge bends the backdrop: along the edge's normal (0) to away from the
-    /// layer's centre (1).
+    /// Which way the curved edge bends the backdrop: towards the shape's core (0; along the edge's
+    /// normal for a shape too big to work one out) to away from the layer's centre (1).
     pub splay: f64,
 }
 
