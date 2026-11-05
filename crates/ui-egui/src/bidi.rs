@@ -49,17 +49,18 @@ pub fn single_line(ui: &mut Ui, id: Id, text: &mut String, font: FontId, width: 
 }
 
 /// One letter per script the UI's own fonts may lack: Hebrew, Arabic, Ethiopic, Devanagari,
-/// Bengali, Gurmukhi, Gujarati, Tamil, Telugu, Kannada, Malayalam, Sinhala, Thai, Lao, Myanmar,
-/// Khmer, Armenian and Georgian. egui's shaper selects the joined contextual forms itself.
-pub(crate) const SCRIPT_SAMPLES: [char; 18] = [
-    '\u{05D0}', '\u{0628}', '\u{1200}', '\u{0915}', '\u{0995}', '\u{0A15}', '\u{0A95}', '\u{0B95}', '\u{0C15}', '\u{0C95}', '\u{0D15}', '\u{0D9A}',
-    '\u{0E01}', '\u{0E81}', '\u{1000}', '\u{1780}', '\u{0531}', '\u{10D0}',
+/// Gurmukhi, Gujarati, Tamil, Telugu, Kannada, Malayalam, Sinhala, Lao, Myanmar, Khmer, Armenian
+/// and Georgian. egui's shaper selects the joined contextual forms itself. Bengali and Thai are
+/// not here: [`crate::cjk`] picks their faces, in its own order of preference, after this list.
+pub(crate) const SCRIPT_SAMPLES: [char; 16] = [
+    '\u{05D0}', '\u{0628}', '\u{1200}', '\u{0915}', '\u{0A15}', '\u{0A95}', '\u{0B95}', '\u{0C15}', '\u{0C95}', '\u{0D15}', '\u{0D9A}', '\u{0E81}',
+    '\u{1000}', '\u{1780}', '\u{0531}', '\u{10D0}',
 ];
 
 /// System families that draw those scripts, in order of preference: the first installed one that
 /// has a script's letter is taken, so a family covering several scripts (Segoe UI, Nirmala UI,
 /// Kohinoor, Noto Sans) joins once. Windows, macOS and the common Linux fonts for each script.
-pub(crate) const SCRIPT_FAMILIES: [&str; 50] = [
+pub(crate) const SCRIPT_FAMILIES: [&str; 46] = [
     // Hebrew and Arabic.
     "Segoe UI",
     "Arial",
@@ -81,7 +82,6 @@ pub(crate) const SCRIPT_FAMILIES: [&str; 50] = [
     // The Indic scripts and Sinhala.
     "Nirmala UI",
     "Kohinoor Devanagari",
-    "Kohinoor Bangla",
     "Kohinoor Gujarati",
     "Kohinoor Telugu",
     "Gurmukhi MN",
@@ -90,7 +90,6 @@ pub(crate) const SCRIPT_FAMILIES: [&str; 50] = [
     "Malayalam Sangam MN",
     "Sinhala Sangam MN",
     "Noto Sans Devanagari",
-    "Noto Sans Bengali",
     "Noto Sans Gurmukhi",
     "Noto Sans Gujarati",
     "Noto Sans Tamil",
@@ -99,14 +98,12 @@ pub(crate) const SCRIPT_FAMILIES: [&str; 50] = [
     "Noto Sans Malayalam",
     "Noto Sans Sinhala",
     "Lohit Devanagari",
-    // Thai, Lao, Myanmar and Khmer.
+    // Lao, Myanmar and Khmer.
     "Leelawadee UI",
-    "Thonburi",
     "Lao Sangam MN",
     "Myanmar Text",
     "Myanmar Sangam MN",
     "Khmer Sangam MN",
-    "Noto Sans Thai",
     "Noto Sans Lao",
     "Noto Sans Myanmar",
     "Noto Sans Khmer",
@@ -120,7 +117,8 @@ pub(crate) const SCRIPT_FAMILIES: [&str; 50] = [
 /// Faces the UI adds for scripts its own fonts lack (desktop: from the system), as egui font data;
 /// `taken` as for [`crate::theme::system_fallbacks`]. Hebrew and Arabic names were covered first;
 /// Ethiopic and the other scripts in [`SCRIPT_SAMPLES`] drew as boxes in the panels (a String
-/// variable's Amharic value, #2014) until the system face for each was taken too.
+/// variable's Amharic value, #2014) until the system face for each was taken too. Bengali and
+/// Thai keep [`crate::cjk`]'s choice, made after this list.
 pub fn script_fallbacks(have: &dyn Fn(char) -> bool, taken: &mut Vec<Arc<figcraft_text::Face>>) -> Vec<(String, egui::FontData)> {
     crate::theme::system_fallbacks(SCRIPT_SAMPLES, &SCRIPT_FAMILIES, have, taken)
 }
