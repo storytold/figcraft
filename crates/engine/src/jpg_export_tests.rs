@@ -77,6 +77,28 @@ fn bad_qualities_are_refused() {
 }
 
 #[test]
+fn a_bad_quality_is_refused_whatever_the_format() {
+    // As `vdCompat`, `bleed` and the SVG flags are: a value is checked for every format, so a
+    // setting that becomes a JPG later never holds one the encoder can't take.
+    let mut s = Session::new();
+    let r = gradient_rect(&mut s);
+    assert!(s.execute("file.export", &json!({"ids": [r], "format": "png", "vdCompat": "junk"})).is_err());
+    let png = std::env::temp_dir().join(format!("figcraft-bad-quality-{}.png", std::process::id()));
+    for mut p in [json!({"format": "png"}), json!({"format": "webp"}), json!({"format": "svg"}), json!({"path": png.to_string_lossy()})] {
+        p["ids"] = json!([r]);
+        p["quality"] = json!(0);
+        let e = s.execute("file.export", &p).unwrap_err();
+        assert!(e.to_string().contains("quality: a whole number from 1 to 100"), "{p}: {e}");
+    }
+    assert!(!png.exists(), "the refused export wrote nothing");
+    // A valid quality on a PNG setting is kept, and used once the setting is a JPG.
+    s.execute("export.add", &json!({"ids": [r], "setting": {"format": "png", "quality": 40}})).unwrap();
+    s.execute("export.update", &json!({"ids": [r], "index": 0, "format": "jpg"})).unwrap();
+    let files = s.execute("file.exportLayers", &json!({"ids": [r]})).unwrap()["files"].as_array().unwrap().clone();
+    assert_eq!(bytes(&files[0]), jpg(&mut s, r, json!({"quality": 40})));
+}
+
+#[test]
 fn export_settings_keep_their_quality() {
     let mut s = Session::new();
     let r = gradient_rect(&mut s);
