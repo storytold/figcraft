@@ -1483,7 +1483,12 @@ pub struct ExportSetting {
     pub vd_compat: VdCompat,
     /// JPG: the encoder's quality, 1 to 100 (ours: Figma's JPG export has no quality setting).
     /// The snake_case aliases above and here take the keys `node.set` normalises to (#2004).
-    #[serde(alias = "jpg_quality", deserialize_with = "jpg_quality_1_to_100", skip_serializing_if = "is_default_jpg_quality")]
+    #[serde(
+        alias = "jpg_quality",
+        deserialize_with = "jpg_quality_1_to_100",
+        serialize_with = "jpg_quality_written",
+        skip_serializing_if = "is_default_jpg_quality"
+    )]
     pub jpg_quality: u8,
 }
 
@@ -1491,6 +1496,12 @@ pub struct ExportSetting {
 fn jpg_quality_1_to_100<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
     let q = <u8 as Deserialize>::deserialize(d)?;
     if (1..=100).contains(&q) { Ok(q) } else { Err(serde::de::Error::custom(format!("jpgQuality: 1 to 100, not {q}"))) }
+}
+
+/// A JPG quality to a file, `node.get` or `to_json`: 1 to 100, anything else refused before it is
+/// written, so a value a Rust caller put in the public field can't make a file that won't reopen.
+fn jpg_quality_written<S: serde::Serializer>(q: &u8, s: S) -> Result<S::Ok, S::Error> {
+    if (1..=100).contains(q) { s.serialize_u8(*q) } else { Err(serde::ser::Error::custom(format!("jpgQuality: 1 to 100, not {q}"))) }
 }
 
 /// How an Android Vector Drawable export handles what the format can't draw exactly (layer
