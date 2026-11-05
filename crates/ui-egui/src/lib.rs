@@ -257,6 +257,8 @@ mod variables_export_ui_tests;
 #[cfg(test)]
 mod variables_rename_tests;
 #[cfg(test)]
+mod variables_select_tests;
+#[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]
 mod vector_keys_tests;
