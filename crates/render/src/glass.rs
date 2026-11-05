@@ -265,6 +265,17 @@ fn dispersed(frosted: &Pixmap, x: f32, y: f32, dx: f32, dy: f32, k: f32) -> [f32
     [(acc[0] / sum).min(a), (acc[1] / sum).min(a), (acc[2] / sum).min(a), a]
 }
 
+/// `base`, a premultiplied backdrop pixel (channels 0–255), with `add` (levels, below 0 darkens)
+/// added to its colour, at coverage `c`. Where that is more than the backdrop's alpha holds (all of
+/// it over a transparent backdrop, an export with nothing under the glass), the alpha rises with
+/// it, so the light shows there too.
+fn lit(base: [f32; 4], add: f32, c: f32) -> [u8; 4] {
+    let [r, g, b, a] = base;
+    let (r, g, b) = (r + add, g + add, b + add);
+    let a = a.max(0.0).max(r).max(g).max(b).min(255.0);
+    [r, g, b, a].map(|v| (v.clamp(0.0, a) * c).round().clamp(0.0, 255.0) as u8)
+}
+
 /// Bilinear sample of premultiplied `p` at pixel coordinates `(x, y)` (centres at +0.5), each
 /// channel 0..=255; transparent outside.
 fn sample(p: &Pixmap, x: f32, y: f32) -> [f32; 4] {
@@ -548,41 +559,37 @@ pub fn glass(g: &Glass, frame: EffectFrame<'_>) -> Option<Pixmap> {
             if c <= 0.0 {
                 continue;
             }
-            // The curve's outward direction: the edge's normal, turned by `splay` towards the way
-            // away from the centre (not renormalised: where the two part, the bend is less).
-            let away = if splay > 0.0 {
-                let px = ((x as i64 - sx) as f64 + 0.5 - centre.x) as f32;
-                let py = ((y as i64 - sy) as f64 + 0.5 - centre.y) as f32;
-                let len = (px * px + py * py).sqrt();
-                if len > 1e-6 { (px / len, py / len) } else { (0.0, 0.0) }
-            } else {
-                (0.0, 0.0)
-            };
-            let out_dir = (-inward.0 * (1.0 - splay) + away.0 * splay, -inward.1 * (1.0 - splay) + away.1 * splay);
-            let bend = bend_at(d, depth, bevel, refraction);
             let (bx, by) = (x as f32 + pad as f32 + 0.5, y as f32 + pad as f32 + 0.5);
-            let base = if bend == 0.0 {
-                // Nothing bends (past `depth` + `bevel`, or no refraction): the channels' samples
-                // are at the same point, so one sample.
-                let s = sample(&frosted, bx, by);
-                [s[0].min(s[3]), s[1].min(s[3]), s[2].min(s[3]), s[3]]
+            let (base, add) = if d >= depth + bevel {
+                // Past the curve nothing bends and no light falls (the rim light and the gradient
+                // are 0 there): the channels' samples are at the same point, so one sample.
+                (dispersed(&frosted, bx, by, 0.0, 0.0, 0.0), 0.0)
             } else {
-                dispersed(&frosted, bx, by, -out_dir.0 * bend, -out_dir.1 * bend, dispersion)
+                // The curve's outward direction: the edge's normal, turned by `splay` towards the
+                // way away from the centre (not renormalised: where the two part, the bend is less).
+                let away = if splay > 0.0 {
+                    let px = ((x as i64 - sx) as f64 + 0.5 - centre.x) as f32;
+                    let py = ((y as i64 - sy) as f64 + 0.5 - centre.y) as f32;
+                    let len = (px * px + py * py).sqrt();
+                    if len > 1e-6 { (px / len, py / len) } else { (0.0, 0.0) }
+                } else {
+                    (0.0, 0.0)
+                };
+                let out_dir = (-inward.0 * (1.0 - splay) + away.0 * splay, -inward.1 * (1.0 - splay) + away.1 * splay);
+                // No refraction: nothing bends, so one sample (`dispersed` with no move).
+                let bend = bend_at(d, depth, bevel, refraction);
+                let k = if bend == 0.0 { 0.0 } else { dispersion };
+                let base = dispersed(&frosted, bx, by, -out_dir.0 * bend, -out_dir.1 * bend, k);
+                // The bevel catches the light as a line added to the backdrop, by how much the edge
+                // faces it; across the curve a faint gradient, darker on the side facing it.
+                let facing = -(inward.0 * light.0 + inward.1 * light.1);
+                let rim = rim_light_at(d, bevel) * catches(facing);
+                let sheen = -(out_dir.0 * light.0 + out_dir.1 * light.1) * sheen_at(d, depth, bevel) * BROAD;
+                (base, 255.0 * intensity * (rim + sheen))
             };
-            // The bevel catches the light as a line added to the backdrop, by how much the edge
-            // faces it; across the curve a faint gradient, darker on the side facing it.
-            let facing = -(inward.0 * light.0 + inward.1 * light.1);
-            let rim = rim_light_at(d, bevel) * catches(facing);
-            let sheen = -(out_dir.0 * light.0 + out_dir.1 * light.1) * sheen_at(d, depth, bevel) * BROAD;
-            let add = 255.0 * intensity * (rim + sheen);
             let i = (y * w as usize + x) * 4;
             if let Some(p) = dst.get_mut(i..i + 4) {
-                let a = base[3];
-                for (k, o) in p.iter_mut().enumerate() {
-                    let v = base.get(k).copied().unwrap_or(0.0);
-                    let v = if k < 3 { (v + add).clamp(0.0, a) } else { v };
-                    *o = (v * c).round().clamp(0.0, 255.0) as u8;
-                }
+                p.copy_from_slice(&lit(base, add, c));
             }
         }
     }
