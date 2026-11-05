@@ -262,6 +262,12 @@ impl<'d> Exporter<'d> {
             if n.exports.iter().any(|x| x.format == figcraft_doc::ExportFormat::VectorDrawable) {
                 self.warn("Android Vector Drawable (XML) export settings were written as SVG");
             }
+            if n.exports
+                .iter()
+                .any(|x| x.format == figcraft_doc::ExportFormat::Jpg && x.jpg_quality != figcraft_doc::ExportSetting::DEFAULT_JPG_QUALITY)
+            {
+                self.warn("JPG export settings were written without their quality (Figma has no quality setting)");
+            }
             f.push(("exportSettings", arr(n.exports.iter().map(export_setting).collect())));
         }
         self.prototype(n, f);

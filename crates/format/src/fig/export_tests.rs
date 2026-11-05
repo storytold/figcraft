@@ -1256,6 +1256,27 @@ fn a_vector_drawable_export_setting_is_written_as_svg_with_a_warning() {
     assert_eq!(icon.exports.iter().map(|x| x.format).collect::<Vec<_>>(), [ExportFormat::Svg]);
 }
 
+/// #2004: a JPG export setting's quality has no field in a `.fig`, so one that isn't the default
+/// is written without it, with a warning; the default one says nothing.
+#[test]
+fn a_jpg_export_setting_with_a_quality_is_written_without_it_and_a_warning() {
+    let mut doc = Document::new("jpg");
+    let page = doc.first_page().unwrap();
+    let r = doc.create(page, NodeKind::Rectangle, "Cover", 0.0, 0.0, 24.0, 24.0).unwrap();
+    doc.get_mut(r).unwrap().exports = vec![ExportSetting { format: ExportFormat::Jpg, ..Default::default() }];
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert_eq!(warnings, Vec::<String>::new(), "the default quality is what Figma writes");
+    doc.get_mut(r).unwrap().exports[0].jpg_quality = 40;
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert_eq!(warnings, ["JPG export settings were written without their quality (Figma has no quality setting)"]);
+    let (back, _) = import(&bytes, "x").unwrap();
+    let cover = back.nodes().find(|n| n.name == "Cover").unwrap();
+    assert_eq!(
+        cover.exports.iter().map(|x| (x.format, x.jpg_quality)).collect::<Vec<_>>(),
+        [(ExportFormat::Jpg, ExportSetting::DEFAULT_JPG_QUALITY)]
+    );
+}
+
 #[test]
 fn images_are_named_by_the_sha1_of_their_bytes() {
     // FIPS 180 test vectors.

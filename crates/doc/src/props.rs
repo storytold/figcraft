@@ -1464,26 +1464,33 @@ pub struct ExportSetting {
     #[serde(skip_serializing_if = "PrintSettings::is_default")]
     pub print: PrintSettings,
     /// Only the layer itself (on), or every layer that shows in its area (off).
-    #[serde(skip_serializing_if = "is_true")]
+    #[serde(alias = "contents_only", skip_serializing_if = "is_true")]
     pub contents_only: bool,
     /// The layer's own box, cutting off what it paints outside it (shadows, outside strokes).
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(alias = "include_bounding_box", skip_serializing_if = "is_false")]
     pub include_bounding_box: bool,
     /// SVG: text as outlines (on) or as `<text>` elements (off).
-    #[serde(skip_serializing_if = "is_true")]
+    #[serde(alias = "svg_outline_text", skip_serializing_if = "is_true")]
     pub svg_outline_text: bool,
     /// SVG: layer names as `id` attributes.
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(alias = "svg_id_attribute", skip_serializing_if = "is_false")]
     pub svg_id_attribute: bool,
     /// SVG: strokes as `stroke` attributes where that's exact (on), else as outlines.
-    #[serde(skip_serializing_if = "is_true")]
+    #[serde(alias = "svg_simplify_stroke", skip_serializing_if = "is_true")]
     pub svg_simplify_stroke: bool,
     /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
-    #[serde(skip_serializing_if = "VdCompat::is_default")]
+    #[serde(alias = "vd_compat", skip_serializing_if = "VdCompat::is_default")]
     pub vd_compat: VdCompat,
     /// JPG: the encoder's quality, 1 to 100 (ours: Figma's JPG export has no quality setting).
-    #[serde(skip_serializing_if = "is_default_jpg_quality")]
+    /// The snake_case aliases above and here take the keys `node.set` normalises to (#2004).
+    #[serde(alias = "jpg_quality", deserialize_with = "jpg_quality_1_to_100", skip_serializing_if = "is_default_jpg_quality")]
     pub jpg_quality: u8,
+}
+
+/// A JPG quality from a file or `node.set`: 1 to 100, anything else refused.
+fn jpg_quality_1_to_100<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    let q = <u8 as Deserialize>::deserialize(d)?;
+    if (1..=100).contains(&q) { Ok(q) } else { Err(serde::de::Error::custom(format!("jpgQuality: 1 to 100, not {q}"))) }
 }
 
 /// How an Android Vector Drawable export handles what the format can't draw exactly (layer
@@ -1539,6 +1546,7 @@ impl Default for ExportSetting {
     }
 }
 
+/// A JPG quality at its default, left out of a saved setting.
 fn is_default_jpg_quality(q: &u8) -> bool {
     *q == ExportSetting::DEFAULT_JPG_QUALITY
 }
