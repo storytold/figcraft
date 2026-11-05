@@ -498,7 +498,8 @@ fn measure_components(table: &mut Table, col: usize, instances: usize) -> CliRes
     static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("figcraft-perf-{}-{run}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(failed)?;
+    // `create_dir`, not `create_dir_all`: a directory or link already at this predictable name is refused.
+    std::fs::create_dir(&dir).map_err(failed)?;
     let path = dir.join("design-system.figcraft").to_string_lossy().into_owned();
     let (lib_doc, lib_ds) = design_system_document(&spec).map_err(failed)?;
     let mut lib_s = Session::with_document(lib_doc);

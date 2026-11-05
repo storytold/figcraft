@@ -42,8 +42,8 @@ fn set_track(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(CMD, format!("node {id} is not a grid auto layout frame")));
         };
         let count = tracks_now.len().max(if columns { l.grid_columns } else { l.grid_rows } as usize).min(MAX_TRACKS);
-        if !(0.0..count as f64).contains(&index) {
-            return Err(bad(CMD, format!("`index` must be 0..{count}")));
+        if index.fract() != 0.0 || !(0.0..count as f64).contains(&index) {
+            return Err(bad(CMD, format!("`index` must be an integer in 0..{count}")));
         }
         let i = index as usize;
         let track = match kind {
@@ -256,6 +256,7 @@ mod tests {
             json!({"ids": [f], "axis": "diagonal", "index": 0, "sizing": "fixed"}),
             json!({"ids": [f], "axis": "columns", "index": 9, "sizing": "fixed"}),
             json!({"ids": [f], "axis": "columns", "index": -1, "sizing": "hug"}),
+            json!({"ids": [f], "axis": "columns", "index": 1.5, "sizing": "fixed", "value": 50}),
             json!({"ids": [f], "axis": "columns", "index": 0, "sizing": "stretchy"}),
             json!({"ids": [kids[1]], "axis": "columns", "index": 0, "sizing": "hug"}),
         ] {
