@@ -127,12 +127,15 @@ pub fn topics(v: Option<&Value>) -> Result<Vec<String>, String> {
     for t in list {
         let Some(s) = t.as_str() else { return Err("`topics` must be an array of strings".into()) };
         match s {
+            // Each once: the list is scanned for every retained event under the log's lock, so
+            // a long list of repeats would multiply that work.
+            "comments" | "document" | "all" if out.iter().any(|t| t == s) => {}
             "comments" | "document" | "all" => out.push(s.to_string()),
             other => return Err(format!("unknown topic `{other}` (comments, document, all)")),
         }
     }
-    if out.is_empty() {
-        out.push("all".into());
+    if out.is_empty() || out.iter().any(|t| t == "all") {
+        out = vec!["all".into()];
     }
     Ok(out)
 }
