@@ -310,3 +310,65 @@ fn a_gradient_drag_released_off_the_canvas_ends_there() {
         u.button(body, false);
     }
 }
+
+/// A rectangle with a linear gradient fill, selected, its picker open and the canvas settled; a
+/// second layer drawn after it leaves an undo step that isn't the gradient's. Rulers on or off.
+fn gradient_ui(rulers: bool) -> Ui {
+    let mut s = Session::new();
+    if rulers {
+        s.execute("view.rulers", &json!({"on": true})).unwrap();
+    }
+    let a = NodeId(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+    s.execute("fill.set", &json!({"id": a, "paint": {"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}})).unwrap();
+    s.execute("shape.rectangle", &json!({"x": 400, "y": 100, "width": 20, "height": 20})).unwrap();
+    s.execute("select.set", &json!({"ids": [a]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.open_picker(PickerTarget::Paint { fills: true, index: 0, ids: vec![a] }, None);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    u
+}
+
+#[test]
+fn a_gradient_drag_released_over_a_ruler_ends_there() {
+    // The rulers take the pointer on the canvas before the handles do: the release still ends the
+    // drag, as one undo step, instead of leaving it waiting for the next press.
+    let mut u = gradient_ui(true);
+    let depth = u.app.session.undo_depth().0;
+    u.button(u.app.to_screen(200.0, 100.0), true);
+    u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0, 200.0))]);
+    assert!(crate::handles::gradient_dragging(&u.ctx), "the handle is being dragged");
+    let r = u.app.canvas.rect;
+    let ruler = egui::Pos2::new(r.min.x + 5.0, r.center().y);
+    assert!(!u.app.ui.picker_popover.as_ref().unwrap().rect.contains(ruler), "the ruler is not under the picker");
+    u.button(ruler, false);
+    assert!(!crate::handles::gradient_dragging(&u.ctx), "the release over the ruler ended the drag");
+    assert_eq!(u.app.session.undo_depth().0, depth + 1, "the drag is one undo step");
+}
+
+#[test]
+fn a_gradient_drag_whose_gesture_closes_under_the_held_button_stops_editing() {
+    // Escape (the picker closes and commits) or Undo ends the gesture while the button is still
+    // down: moving on edits nothing more, rather than adding an undo step every frame.
+    for close in ["escape", "undo"] {
+        let mut u = gradient_ui(false);
+        u.button(u.app.to_screen(200.0, 100.0), true);
+        u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0, 200.0))]);
+        assert!(crate::handles::gradient_dragging(&u.ctx), "{close}: the handle is being dragged");
+        if close == "escape" {
+            crate::colorpicker::close(&mut u.app);
+        } else {
+            assert!(u.app.session.undo().unwrap(), "{close}: there is a step to undo");
+        }
+        let depth = u.app.session.undo_depth().0;
+        let doc = u.app.session.doc().unwrap().clone();
+        for k in 1..=4 {
+            u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0 + 20.0 * f64::from(k), 200.0))]);
+        }
+        assert!(!crate::handles::gradient_dragging(&u.ctx), "{close}: the drag is over");
+        assert_eq!(u.app.session.undo_depth().0, depth, "{close}: no undo step a frame");
+        assert!(*u.app.session.doc().unwrap() == doc, "{close}: the gradient stays where the gesture left it");
+        u.button(u.app.to_screen(180.0, 200.0), false);
+    }
+}

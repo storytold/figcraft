@@ -192,15 +192,24 @@ pub fn gradient_dragging(ctx: &egui::Context) -> bool {
     matches!(ctx.data(|d| d.get_temp::<Drag>(drag_id())), Some(Drag::Gradient { .. }))
 }
 
-/// A handle drag whose button went up while the pointer was off the canvas (over a panel or the
-/// colour picker, outside the window) ends as a release on the canvas would: the edit commits now,
-/// instead of waiting, uncommitted, to move the handle to wherever the pointer next presses.
-pub fn end_released_drag(app: &mut FigApp, ctx: &egui::Context) {
+/// Whether the document has a gesture open: a handle drag edits only inside its own.
+fn gesture_open(app: &FigApp) -> bool {
+    app.session.ds().is_ok_and(|d| d.interaction.is_some())
+}
+
+/// A handle drag whose button went up wherever the pointer was (off the canvas, over a panel, the
+/// colour picker or a ruler, outside the window) ends as a release on the handle would: the edit
+/// commits now, instead of waiting, uncommitted, to move the handle to wherever the pointer next
+/// presses. So does one whose gesture Escape or Undo closed under the held button: it stops there
+/// rather than editing on with no gesture open, an undo step a frame. True when a drag ended.
+pub fn end_released_drag(app: &mut FigApp, ctx: &egui::Context) -> bool {
     let stashed = ctx.data(|d| d.get_temp::<Drag>(drag_id())).is_some();
-    if stashed && !ctx.input(|i| i.pointer.primary_down()) {
-        let _ = app.session.commit_interaction();
-        ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+    if !stashed || (ctx.input(|i| i.pointer.primary_down()) && gesture_open(app)) {
+        return false;
     }
+    let _ = app.session.commit_interaction();
+    ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+    true
 }
 
 /// The gradient being edited (single node, picker open on a gradient paint).
@@ -534,6 +543,11 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
     });
     let dragging: Option<Drag> = ctx.data(|d| d.get_temp(drag_id()));
     if let Some(drag) = dragging {
+        // Escape or Undo closed the gesture under the held button: the drag is over.
+        if !gesture_open(app) {
+            ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+            return true;
+        }
         if down {
             apply(app, &drag, pos, shift);
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);

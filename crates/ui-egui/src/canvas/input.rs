@@ -232,6 +232,12 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         }
         return true;
     }
+    // A handle drag whose button went up ends first, wherever on the canvas the pointer is: over a
+    // ruler or a comment pin, which take the pointer below, or over something drawn above the
+    // canvas (the colour picker, a card). The handle had the press, so it has the release too.
+    if crate::handles::end_released_drag(app, &ctx) {
+        return false;
+    }
     if !app.canvas.dragging && (resp.hovered() || app.ui.comments.dragging()) && crate::comments::input(app, &ctx, pos) {
         return false;
     }
@@ -240,11 +246,6 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     }
     if !app.canvas.dragging && resp.hovered() && crate::handles::input(app, &ctx, pos) {
         return false;
-    }
-    // The pointer is on the canvas but over something drawn above it (the colour picker, a card):
-    // a handle drag whose button went up there ends too.
-    if !resp.hovered() {
-        crate::handles::end_released_drag(app, &ctx);
     }
     if resp.secondary_clicked() {
         open_context_menu(app, pos, mods.command);
