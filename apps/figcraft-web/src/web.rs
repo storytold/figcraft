@@ -32,18 +32,12 @@ pub fn start() {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
             return;
         };
-        // Host modes: `?host=parent`, a same-origin page framing FigCraft, opens documents in it
-        // and stores what it saves (`host`); unframed there is no parent, so that URL on its own
-        // stays the normal app with downloads. `data-host="page"` on the canvas opts a page in
-        // instead: it runs FigCraft in its own document and talks over DOM `CustomEvent`s on the
-        // canvas (`host`).
-        let bridge = if query_param("host").as_deref() == Some("parent") {
-            crate::host::Bridge::new()
-        } else if crate::hostmode::page_host_requested(canvas.get_attribute("data-host").as_deref()) {
-            Some(crate::host::Bridge::for_page(&canvas))
-        } else {
-            None
-        };
+        // Host modes (`craft-web-host`): `?host=parent`, a same-origin page framing FigCraft, opens
+        // documents in it and stores what it saves (`host`); unframed there is no parent, so that URL
+        // on its own stays the normal app with downloads. `data-host="page"` on the canvas opts a
+        // page in instead: it runs FigCraft in its own document and talks over DOM `CustomEvent`s on
+        // the canvas.
+        let bridge = crate::host::Bridge::connect(&canvas);
         let app_bridge = bridge.clone();
         // Files the host sends, on their way into the app's own open queue each frame.
         let opens: crate::host::OpenQueue = std::rc::Rc::default();

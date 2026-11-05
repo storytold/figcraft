@@ -1,10 +1,6 @@
 //! Pure host-mode rules, shared by the bridge ([`crate::host`]) and testable without a browser
-//! (like [`crate::query`]): what opts a page into hosting FigCraft in its own document, the name
-//! the bridge fills in when an open request has none, and whether a handed-over file becomes the
-//! document's file.
-
-/// The one `data-host` value that opts a page in: the exact string `"page"`.
-pub const PAGE_HOST: &str = "page";
+//! (like [`crate::query`]): the name the bridge fills in when an open request has none, and whether
+//! a handed-over file becomes the document's file. Which pages host the app is `craft-web-host`'s.
 
 /// The file name used when an open request carries no usable one.
 pub const DEFAULT_OPEN_NAME: &str = "Untitled.figcraft";
@@ -19,17 +15,14 @@ const DOC_EXTS: &[&str] = &["figcraft", "json"];
 /// document, so its extension alone can't tell the `saveAs` decision.
 const VARIABLES_SIDECAR: &str = ".variables.json";
 
-/// Does this `data-host` value ask for page host mode? Only the exact value [`PAGE_HOST`] counts;
-/// anything else is ignored, so the page host mode stays opt-in. `?host=parent`, the parent
-/// bridge's URL opt-in, is answered before this is asked.
-pub fn page_host_requested(data_host: Option<&str>) -> bool {
-    data_host == Some(PAGE_HOST)
-}
+/// The name `craft-web-host` gives an open request that carries no usable one (it cleans a host's
+/// name and falls back to this).
+const NAMELESS: &str = "document";
 
-/// A usable file name for an open request: the host's name when it isn't blank, else the
-/// [`DEFAULT_OPEN_NAME`].
-pub fn open_name(name: Option<&str>) -> String {
-    name.filter(|n| !n.trim().is_empty()).unwrap_or(DEFAULT_OPEN_NAME).to_string()
+/// A usable file name for an open request: the cleaned name the crate hands over, or
+/// [`DEFAULT_OPEN_NAME`] when the host sent none.
+pub fn open_name(name: &str) -> String {
+    if name == NAMELESS { DEFAULT_OPEN_NAME.to_string() } else { name.to_string() }
 }
 
 /// Whether the file `name` becomes the document's own file when handed over (`saveAs: true`),
@@ -61,20 +54,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_exact_page_value_opts_in() {
-        assert!(page_host_requested(Some("page")));
-        for off in [None, Some(""), Some("Page"), Some("PAGE"), Some(" page"), Some("page "), Some("parent")] {
-            assert!(!page_host_requested(off), "{off:?} must keep the page host mode off");
-        }
-    }
-
-    #[test]
-    fn open_names_fall_back_to_the_default_when_blank() {
-        assert_eq!(open_name(Some("Poster.figcraft")), "Poster.figcraft");
-        assert_eq!(open_name(Some(" Poster.figcraft ")), " Poster.figcraft ", "a name with its spacing is kept");
-        assert_eq!(open_name(Some("")), DEFAULT_OPEN_NAME);
-        assert_eq!(open_name(Some("   ")), DEFAULT_OPEN_NAME);
-        assert_eq!(open_name(None), DEFAULT_OPEN_NAME);
+    fn open_names_fall_back_to_the_default_when_the_host_sent_none() {
+        assert_eq!(open_name("Poster.figcraft"), "Poster.figcraft");
+        assert_eq!(open_name("Poster 2.json"), "Poster 2.json");
+        assert_eq!(open_name("document"), DEFAULT_OPEN_NAME, "what the crate says for a missing or blank name");
     }
 
     #[test]

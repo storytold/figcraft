@@ -123,7 +123,7 @@ unsaved changes. Two opt-in transports carry the same messages:
 
 | Message | Direction | Fields |
 |---|---|---|
-| `figcraft:ready` | app → page | `version`: the app is running and listening; send a file now |
+| `figcraft:ready` | app → page | `version`, `appVersion`: the app is running and listening; send a file now |
 | `figcraft:open` | page → app | `name`, `bytes` (an `ArrayBuffer` or `Uint8Array`): open like File › Open (a payload over the browser open limit of 512 MB is refused; anything malformed is ignored) |
 | `figcraft:save` | app → page | `name`, `saveAs`, `bytes` (a transferred `ArrayBuffer`): every file the app would otherwise download. The page stores it and reports failures itself. `saveAs` says whether the file becomes the document's file: `false` after Save of the file the page sent, under its own name; `true` for a document file (`.figcraft`, `.json`) under a name the page didn't send — Save As, or a Save of a document the page never sent — after which the next Save carries that name with `false`; `false` for copies and exports that don't become the document (rendered images, SVG, PDF, `.fig` copies, the variables exports) |
 | `figcraft:dirty` | app → page | `dirty`: unsaved changes appeared or went away |
@@ -196,6 +196,8 @@ await init({ module_or_path: "./figcraft-web-<hash>_bg.wasm" });
   `data-host="page"` turns this mode on only when `?host=parent` is absent: if `?host=parent` is
   present it takes precedence, so a same-origin framed page uses the parent bridge, while an
   unframed or cross-origin page gets no bridge and keeps normal downloads.
+
+The messages and both transports are the shared contract of [`craft-web-host`](https://github.com/storytold/craft-libs/tree/main/crates/web-host) (storytold/craft-libs#420), the same for every Craft app: its README lists every message, including `saved`, with the compatibility notes. In `figcraft:ready`, `version` is the contract's (`"1"`) and `appVersion` is this app's release. FigCraft reads bytes, so a host sends `bytes`, not a `File`.
 
 ### Trust and limits
 
