@@ -1159,6 +1159,11 @@ pub fn write_file_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Resul
         let tmp = std::path::PathBuf::from(name);
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(mut file) => {
+                // The replacement keeps the destination's permissions from the start, so a private
+                // file's content is never readable under default ones (the open handle still writes).
+                if let Ok(old) = std::fs::metadata(path) {
+                    let _ = file.set_permissions(old.permissions());
+                }
                 if let Err(e) = file.write_all(bytes) {
                     let _ = std::fs::remove_file(&tmp);
                     return Err(e);

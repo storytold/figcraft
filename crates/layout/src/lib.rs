@@ -216,8 +216,9 @@ fn coherent_own_sizing(doc: &mut Document, id: NodeId) -> bool {
 
 /// Padding `(top, right, bottom, left)` of an auto layout frame, sanitised, plus the frame's own
 /// inside stroke (per side) when strokes are included in the layout; center and outside strokes
-/// never take up space.
-fn insets(f: &figcraft_doc::Node, al: &AutoLayout) -> (f64, f64, f64, f64) {
+/// never take up space. The frame's size less these is its children's room, the "full available
+/// space" a child resized to it fills.
+pub fn insets(f: &figcraft_doc::Node, al: &AutoLayout) -> (f64, f64, f64, f64) {
     let included = al.strokes_included && f.has_visible_stroke() && f.stroke.align == StrokeAlign::Inside;
     let stroke = if included { f.stroke.sides.unwrap_or([f.stroke.weight; 4]) } else { [0.0; 4] };
     let [pt, pr, pb, pl] = al.padding.map(|p| finite_or_zero(p).max(0.0));
@@ -327,6 +328,10 @@ struct Item {
     max_main: Option<f64>,
     min_cross: Option<f64>,
     max_cross: Option<f64>,
+    /// The item's own insets along the main axis (an auto layout frame's padding and included
+    /// inside stroke): fill children share the free space by their content area, border-box
+    /// fashion, so these come on top of each one's share.
+    inset_main: f64,
     /// Baseline alignment: distance from the item's top to its first baseline.
     baseline: Option<f64>,
     /// Baseline alignment: offset from the line's top (computed per line).
@@ -414,6 +419,10 @@ fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool,
         let (sm, sc) = if horizontal { (cl.sizing_h, cl.sizing_v) } else { (cl.sizing_v, cl.sizing_h) };
         let (min_main, max_main, min_cross, max_cross) =
             if horizontal { (cl.min_w, cl.max_w, cl.min_h, cl.max_h) } else { (cl.min_h, cl.max_h, cl.min_w, cl.max_w) };
+        let inset_main = node.layout.as_ref().map_or(0.0, |al| {
+            let (pt, pr, pb, pl) = insets(node, al);
+            if horizontal { pl + pr } else { pt + pb }
+        });
         items.push(Item {
             id: *child,
             main: if horizontal { w } else { h },
@@ -425,6 +434,7 @@ fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool,
             max_main,
             min_cross,
             max_cross,
+            inset_main,
             baseline: None,
             base_off: 0.0,
         });
@@ -596,27 +606,51 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     }
 }
 
-/// Share `free` main-axis space among the fill items `open` like CSS flexbox: each takes an equal
-/// share within its min/max; when clamping adds more than it removes, the items held at their min
-/// keep it (otherwise those held at their max do) and the rest share what is left again.
+/// Share `free` among the fill items `open` by their content areas: each one's own insets (an
+/// auto layout frame's padding and included inside stroke) come off the top and go back on its
+/// share, so a child with more padding or a thicker inside stroke takes a little more and the
+/// content areas come out the same, as in the CSS border-box model ("Figma distributes space
+/// amongst fill container children by the children's content area instead of by their size").
+/// Min and max sizes still clamp each item's outer size; the clamped ones are frozen and the rest
+/// share what is left, as before.
 fn distribute(items: &mut [Item], mut open: Vec<usize>, free: f64) {
     let mut free = free.max(0.0);
     while !open.is_empty() {
-        let share = free / open.len() as f64;
-        let sized: Vec<(usize, f64)> =
-            open.iter().filter_map(|i| items.get(*i).map(|it| (*i, clamp_size(share, it.min_main, it.max_main)))).collect();
-        let violation: f64 = sized.iter().map(|(_, v)| v - share).sum();
-        let frozen = |v: f64| violation.abs() < 1e-9 || (violation > 0.0 && v > share + 1e-9) || (violation < 0.0 && v < share - 1e-9);
-        for (i, v) in &sized {
-            if frozen(*v)
+        let insets: f64 = open.iter().filter_map(|i| items.get(*i)).map(|it| it.inset_main).sum();
+        let content_share = ((free - insets) / open.len() as f64).max(0.0);
+        let sized: Vec<(usize, f64, f64)> = open
+            .iter()
+            .filter_map(|i| {
+                items.get(*i).map(|it| {
+                    let want = content_share + it.inset_main;
+                    (*i, want, clamp_size(want, it.min_main, it.max_main))
+                })
+            })
+            .collect();
+        let violation: f64 = sized.iter().map(|(_, want, v)| v - want).sum();
+        let frozen = |want: f64, v: f64| violation.abs() < 1e-9 || (violation > 0.0 && v > want + 1e-9) || (violation < 0.0 && v < want - 1e-9);
+        let mut progressed = false;
+        for (i, want, v) in &sized {
+            if frozen(*want, *v)
                 && let Some(it) = items.get_mut(*i)
             {
                 it.main = *v;
                 free -= *v;
+                progressed = true;
             }
         }
+        if !progressed {
+            // Several clampings each under the tolerance added up past it, so none froze: settle
+            // them all as clamped rather than go round again with nothing changed.
+            for (i, _, v) in &sized {
+                if let Some(it) = items.get_mut(*i) {
+                    it.main = *v;
+                }
+            }
+            break;
+        }
         free = free.max(0.0);
-        open = sized.into_iter().filter(|(_, v)| !frozen(*v)).map(|(i, _)| i).collect();
+        open = sized.into_iter().filter(|(_, want, v)| !frozen(*want, *v)).map(|(i, _, _)| i).collect();
     }
 }
 

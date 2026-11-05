@@ -226,11 +226,16 @@ impl<'b> Archive<'b> {
         };
         let refs = document.get("pages").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
         let mut pages = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for r in refs.iter().take(MAX_PAGES) {
             let Some(id) = r.get("_ref").and_then(Value::as_str).and_then(|s| s.strip_prefix("pages/")).filter(|id| valid_id(id)) else {
                 warnings.push("pages the document lists without a valid reference were skipped".into());
                 continue;
             };
+            // A page listed twice is read once: a repeated reference must not repeat the unpacking.
+            if !seen.insert(id) {
+                continue;
+            }
             match json_member(&mut z, &format!("pages/{id}.json"), max_member, &mut total) {
                 Ok(page) if page.is_object() => pages.push((id.to_string(), page)),
                 Ok(_) => warnings.push("pages that aren't JSON objects were skipped".into()),

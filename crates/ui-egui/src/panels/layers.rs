@@ -159,13 +159,15 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
         ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 46.0), Align2::LEFT_CENTER, tr("Drafts"), regular(11.0), t.text_secondary);
     }
     let hr = Rect::from_center_size(pos2(head.max.x - 24.0, head.min.y + 24.0), vec2(24.0, 24.0));
-    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Collapse panel"));
+    // Minimize, by the file name: "click Minimize next to the file name to collapse the
+    // navigation bar, left sidebar, and right sidebar" (Explore the navigation bar and left sidebar).
+    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Minimize"));
     if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::same(5), t.hover);
     }
     icons::paint(ui.painter(), hr.shrink(5.0), Icon::Panels, t.icon);
     if hresp.clicked() {
-        app.ui.close_left_panel();
+        app.run("view.minimize", json!({}));
     }
     ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, t.border));
     match app.ui.left_tab {

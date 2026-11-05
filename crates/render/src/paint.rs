@@ -79,11 +79,13 @@ fn diamond_pixmap(g: &Gradient, opacity: f32) -> Option<Arc<Pixmap>> {
     const N: u32 = 256;
     let mut p = Pixmap::new(N, N)?;
     let half = f64::from(N) / 2.0;
+    // Sorted once for the 65 536 samples below, not once per sample.
+    let stops = g.sorted_stops();
     for (i, px) in p.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = ((i as u32 % N) as f64 + 0.5 - half) / half;
         let y = ((i as u32 / N) as f64 + 0.5 - half) / half;
         let t = (x.abs() + y.abs()) as f32;
-        let c = g.sample(t);
+        let c = figcraft_color::sample_sorted(&stops, t);
         let a = c.a * opacity;
         let q = |v: f32| (v * a * 255.0).round().clamp(0.0, 255.0) as u8;
         px.copy_from_slice(&[q(c.r), q(c.g), q(c.b), (a * 255.0).round().clamp(0.0, 255.0) as u8]);
