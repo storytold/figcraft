@@ -852,6 +852,11 @@ impl TextData {
 
     fn set_para_lists_with(&mut self, start: usize, end: usize, keep_levels: bool, f: impl Fn(&mut ParaList)) {
         let (a, b) = self.para_span(start, end);
+        self.set_para_lists_between(a, b, keep_levels, f);
+    }
+
+    /// As [`set_para_lists`](Self::set_para_lists), for paragraphs `a..=b` addressed directly.
+    fn set_para_lists_between(&mut self, a: usize, b: usize, keep_levels: bool, f: impl Fn(&mut ParaList)) {
         self.fill_paragraphs();
         for pl in self.paragraphs.get_mut(a..=b).unwrap_or(&mut []) {
             f(pl);
@@ -894,8 +899,12 @@ impl TextData {
     /// Take what text style `ps` sets at the paragraph and layer level: the spacing, indent and
     /// features on the layer, the list style on every paragraph.
     pub fn take_paragraph_style(&mut self, ps: &ParagraphStyle) {
-        let len = self.char_count();
-        self.take_paragraph_style_in(0, len, ps);
+        self.paragraph_spacing = ps.paragraph_spacing;
+        self.paragraph_indent = ps.paragraph_indent;
+        self.features.clone_from(&ps.features);
+        // Every paragraph by index: `para_span` leaves out an empty one after a final newline.
+        let last = self.paragraph_count() - 1;
+        self.set_para_lists_between(0, last, false, |pl| pl.list = ps.list);
     }
 
     /// As [`take_paragraph_style`](Self::take_paragraph_style), with the list style going to the
@@ -1105,5 +1114,24 @@ mod title_case_tests {
         assert_eq!(TextCase::Title.apply("re\u{301}sume\u{301} bon"), "Re\u{301}sume\u{301} Bon");
         assert_eq!(TextCase::Title.apply("a \u{301}b"), "A \u{301}B");
         assert_eq!(TextCase::Title.apply("cafe\u{301}'s"), "Cafe\u{301}'s");
+    }
+}
+
+#[cfg(test)]
+mod whole_text_paragraph_style_tests {
+    use super::*;
+
+    #[test]
+    fn a_text_style_on_the_whole_layer_reaches_a_trailing_empty_paragraph() {
+        let ps = ParagraphStyle { list: ListStyle::Bulleted, ..Default::default() };
+        let mut t = TextData::new("a\nb\n");
+        t.take_paragraph_style(&ps);
+        assert_eq!(t.paragraph_count(), 3);
+        assert_eq!(t.para_list(2).list, ListStyle::Bulleted);
+        assert_eq!(t.list, ListStyle::Bulleted);
+        assert!(t.paragraphs.is_empty());
+        let mut plain = TextData::new("a\nb");
+        plain.take_paragraph_style(&ps);
+        assert_eq!((plain.list, plain.paragraphs.len()), (t.list, t.paragraphs.len()));
     }
 }
