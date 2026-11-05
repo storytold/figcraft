@@ -321,6 +321,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.snapObjects", "Snap to objects", "{on?}", false, |s, p| toggle(s, p, "view.snapObjects")),
         spec!("view.snapPixel", "Snap to pixel grid", "{on?}", false, |s, p| toggle(s, p, "view.snapPixel")),
         spec!("view.toggleUi", "Show/Hide UI", "{on?}", false, |s, p| flag(s, p, |v| &mut v.ui_hidden)),
+        spec!(
+            "view.minimize",
+            "Minimize the interface",
+            "{on?}  collapses the navigation bar and both sidebars and keeps the toolbar (Shift+Cmd/Ctrl+\\, the Minimize button by the file name); the right sidebar shows while something is selected",
+            false,
+            |s, p| flag(s, p, |v| &mut v.ui_minimized)
+        ),
         spec!("view.fullscreen", "Full screen", "{on?}  the window fills the screen (the desktop app; a no-op headless)", false, |s, p| {
             s.request_ui("window.fullscreen", json!({"on": boolean(p, "on")}));
             ok()

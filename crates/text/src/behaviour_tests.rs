@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::breaks::{break_between, grapheme_starts};
-use figcraft_doc::{LeadingTrim, LetterSpacing, LineHeight, TextAlignH, TextAutoResize, TextData, TextDecoration};
+use figcraft_doc::{LeadingTrim, LetterSpacing, LineHeight, ListStyle, ParaList, TextAlignH, TextAutoResize, TextData, TextDecoration};
 
 /// The default face once system fonts are indexed (a Latin face where the system has one, so CJK
 /// and emoji come from fallback faces), or None (skip) on a machine without fonts.
@@ -98,6 +98,36 @@ fn letter_spacing_percent_and_pixels() {
         let w = layout(&t, None, None).width;
         assert!((w - plain - extra).abs() < 1e-3, "{why}: {w} vs {plain} + {extra}");
     }
+}
+
+/// "Use Backspace or Delete at the beginning of a list item to delete the counter, but keep the
+/// same level of indentation" (Create bulleted and numbered lists): a plain paragraph at a list
+/// level starts where that level's item text starts, even once no list is left; a plain
+/// paragraph at level 0 starts at the box as always.
+#[test]
+fn a_plain_paragraph_at_a_list_level_starts_where_the_items_text_does() {
+    if face().is_none() {
+        return;
+    }
+    let level = |list: ListStyle, indent: u8| ParaList { list, indent, start_offset: 0 };
+    let mut t = text("a\nb\nc", TextAutoResize::WidthAndHeight);
+    t.paragraphs = vec![level(ListStyle::Bulleted, 1), level(ListStyle::None, 1), level(ListStyle::None, 0)];
+    let l = layout(&t, None, None);
+    // Where a line's text starts: its first character's glyph (the indent is in the glyphs); a
+    // list marker shares that character and sits in the gutter to its left, so the text is the
+    // rightmost of them.
+    let text_x = |l: &TextLayout, li: usize| {
+        l.glyphs.iter().filter(|g| g.char_start == l.lines[li].char_start).map(|g| g.x).fold(f64::NAN, |a, b| if a.is_nan() { b } else { a.max(b) })
+    };
+    let (x0, x1, x2) = (text_x(&l, 0), text_x(&l, 1), text_x(&l, 2));
+    assert!((x1 - x0).abs() < EPS, "the plain paragraph keeps the item's text start: {x1} vs {x0}");
+    assert!(x0 > 20.0, "a nested item's text starts two gutters in: {x0}");
+    assert!(x2.abs() < EPS, "a level-0 plain paragraph starts at the box: {x2}");
+    // No list left at all: the level still indents, by the same gutters.
+    let mut alone = text("b", TextAutoResize::WidthAndHeight);
+    alone.paragraphs = vec![level(ListStyle::None, 1)];
+    let a = layout(&alone, None, None);
+    assert!((text_x(&a, 0) - x1).abs() < EPS, "{} vs {x1}", text_x(&a, 0));
 }
 
 #[test]

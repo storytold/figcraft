@@ -147,6 +147,10 @@ pub fn inside_instance(doc: &Document, id: NodeId) -> bool {
 /// main layer's, for files from before `modes` was an override group. Copies follow their main
 /// layer's modes, so a layer on other modes chose them itself.
 pub fn mark_layer_modes(doc: &mut Document) {
+    // Without an instance nothing can be inside one: skip the per-layer ancestry lookups.
+    if !doc.nodes().any(|n| matches!(n.kind, NodeKind::Instance { .. })) {
+        return;
+    }
     let chose: Vec<NodeId> = doc
         .nodes()
         .filter(|n| !n.overrides.contains("modes") && n.source.and_then(|s| doc.node(s)).is_some_and(|m| m.var_modes != n.var_modes))

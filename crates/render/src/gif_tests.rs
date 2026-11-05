@@ -79,6 +79,20 @@ fn decoding_is_capped() {
 }
 
 #[test]
+fn a_large_partial_frame_plays_when_two_whole_frames_fit() {
+    // Canvas 4000 x 3000 (48 MB a frame, two fit the cap) with a 3500 x 2800 second frame: the
+    // decoder's canvas, composited output and partial frame together need more than the cap.
+    let mut out = Vec::new();
+    {
+        let mut enc = GifEncoder::new(&mut out);
+        enc.set_repeat(Repeat::Infinite).unwrap();
+        let frame = |w, h, c| Frame::from_parts(RgbaImage::from_pixel(w, h, image::Rgba(c)), 0, 0, Delay::from_numer_denom_ms(100, 1));
+        enc.encode_frames([frame(4000, 3000, RED), frame(3500, 2800, GREEN)]).unwrap();
+    }
+    assert_eq!(images::decode_frames(&out).map(|f| f.len()), Some(2));
+}
+
+#[test]
 fn the_first_frame_draws_unless_time_moves_on() {
     let mut d = Document::new("t");
     let page = d.add_page("Page 1");
@@ -97,4 +111,17 @@ fn the_first_frame_draws_unless_time_moves_on() {
     assert!(frame != images::animation_clock(&d, page, 0.05).unwrap().0 && (next - 0.05).abs() < 1e-9);
     d.get_mut(id).unwrap().visible = false;
     assert!(images::animation_clock(&d, page, 0.15).is_none(), "hidden layers don't keep the presenter awake");
+}
+
+#[test]
+fn a_frame_descriptor_bigger_than_the_canvas_is_refused_before_it_is_allocated() {
+    // A 4 × 4 canvas whose first frame descriptor claims 16,383 × 16,383 (a gigabyte of RGBA):
+    // the decoder's limits refuse the frame buffer instead of allocating it.
+    let mut bytes = gif(&[(RED, 100), (GREEN, 100)], 4, 4);
+    let at = bytes.windows(9).position(|w| w == [0x2c, 0, 0, 0, 0, 4, 0, 4, 0]).expect("an image descriptor for a 4 × 4 frame");
+    let (w, h) = ((16_383u16).to_le_bytes(), (16_383u16).to_le_bytes());
+    bytes[at + 5..at + 9].copy_from_slice(&[w[0], w[1], h[0], h[1]]);
+    let start = std::time::Instant::now();
+    assert!(images::decode_frames(&bytes).is_none());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
 }
