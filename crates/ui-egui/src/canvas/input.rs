@@ -25,6 +25,14 @@ impl HoverKey {
     }
 }
 
+/// Whether a button that pans the canvas is held: the middle button, or a mouse's side buttons
+/// (4 and 5), which the incumbent treats the same way (#1758). Space + primary pans too, handled
+/// with the Space key.
+fn pan_button_down(i: &egui::InputState) -> bool {
+    use egui::PointerButton::{Extra1, Extra2, Middle};
+    [Middle, Extra1, Extra2].into_iter().any(|b| i.pointer.button_down(b))
+}
+
 /// The pointer left the canvas (or something over it took the pointer): nothing is hovered there.
 fn left(app: &mut FigApp) {
     app.canvas.last_hover = None;
@@ -180,7 +188,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
             left(app);
         }
         // A pan whose button was released off the canvas is over.
-        if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle) || i.pointer.primary_down()) {
+        if !ctx.input(|i| pan_button_down(i) || i.pointer.primary_down()) {
             app.canvas.middle_pan = None;
         }
         return true;
@@ -211,8 +219,8 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     if zoom_tool(app, ui, resp, pos, mods, editing_text || typing_elsewhere) {
         return true;
     }
-    // Middle-button / space panning.
-    let middle_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+    // Middle-button (or side-button) / space panning.
+    let middle_down = ctx.input(pan_button_down);
     if (middle_down || (app.canvas.space_pan && ctx.input(|i| i.pointer.primary_down()))) && resp.hovered() || app.canvas.middle_pan.is_some() {
         if let Ok(ds) = app.session.ds_mut() {
             match app.canvas.middle_pan {
