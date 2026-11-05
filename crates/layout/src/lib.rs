@@ -629,13 +629,25 @@ fn distribute(items: &mut [Item], mut open: Vec<usize>, free: f64) {
             .collect();
         let violation: f64 = sized.iter().map(|(_, want, v)| v - want).sum();
         let frozen = |want: f64, v: f64| violation.abs() < 1e-9 || (violation > 0.0 && v > want + 1e-9) || (violation < 0.0 && v < want - 1e-9);
+        let mut progressed = false;
         for (i, want, v) in &sized {
             if frozen(*want, *v)
                 && let Some(it) = items.get_mut(*i)
             {
                 it.main = *v;
                 free -= *v;
+                progressed = true;
             }
+        }
+        if !progressed {
+            // Several clampings each under the tolerance added up past it, so none froze: settle
+            // them all as clamped rather than go round again with nothing changed.
+            for (i, _, v) in &sized {
+                if let Some(it) = items.get_mut(*i) {
+                    it.main = *v;
+                }
+            }
+            break;
         }
         free = free.max(0.0);
         open = sized.into_iter().filter(|(_, want, v)| !frozen(*want, *v)).map(|(i, _, _)| i).collect();
