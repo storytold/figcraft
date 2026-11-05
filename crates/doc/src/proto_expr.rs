@@ -12,6 +12,8 @@ use crate::{CollectionId, ModeId, VariableValue, Variables};
 pub const MAX_EXPR_DEPTH: usize = 32;
 /// Longest string an expression builds (characters).
 const MAX_STRING: usize = 10_000;
+/// The most string bytes one operation's operands may hold together (generous: results cap at `MAX_STRING`).
+const MAX_OPERAND_BYTES: usize = 1 << 20;
 
 /// An expression over variables.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -115,7 +117,19 @@ impl Expr {
             }
             Expr::Op { op, args } => (*op, args),
         };
-        let vals: Vec<VariableValue> = args.iter().map(|a| a.eval_at(vars, modes, depth + 1)).collect::<Option<_>>()?;
+        // Retained operands are bounded by bytes, so repeated references to one long string can't multiply it.
+        let mut text_bytes = 0usize;
+        let mut vals = Vec::with_capacity(args.len());
+        for a in args {
+            let v = a.eval_at(vars, modes, depth + 1)?;
+            if let VariableValue::String(s) = &v {
+                text_bytes = text_bytes.saturating_add(s.len());
+                if text_bytes > MAX_OPERAND_BYTES {
+                    return None;
+                }
+            }
+            vals.push(v);
+        }
         apply(op, &vals)
     }
 
@@ -259,10 +273,18 @@ fn apply(op: ExprOp, vals: &[VariableValue]) -> Option<VariableValue> {
     match op {
         Add if vals.iter().any(|v| matches!(v, VariableValue::String(_))) => {
             let mut s = String::new();
+            let mut chars = 0;
             for v in vals {
-                s.push_str(&as_text(v)?);
+                // Every operand is checked (a colour makes the whole expression None); only the
+                // characters it adds are counted, and appending stops at the cap.
+                let t = as_text(v)?;
+                if chars < MAX_STRING {
+                    let before = s.len();
+                    s.extend(t.chars().take(MAX_STRING - chars));
+                    chars += s[before..].chars().count();
+                }
             }
-            Some(VariableValue::String(s.chars().take(MAX_STRING).collect()))
+            Some(VariableValue::String(s))
         }
         Add => fold(|a, b| Some(a + b)),
         Subtract => fold(|a, b| Some(a - b)),
