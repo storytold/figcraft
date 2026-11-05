@@ -252,3 +252,20 @@ fn publishing_sends_a_checked_folder() {
     assert_eq!(r["id"], ID);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn builtin_store_lists_and_installs_without_network() {
+    let mut s = Session::new();
+    let r = s.execute("plugin.directory.list", &json!({"server": "builtin"})).unwrap();
+    assert_eq!(r["server"], "builtin");
+    let plugins = r["plugins"].as_array().unwrap();
+    assert!(plugins.len() >= 4, "builtin store has all 4 example plugins");
+    assert!(plugins.iter().any(|p| p["id"] == "org.figcraft.examples.tidy-names"));
+    assert!(plugins.iter().any(|p| p["id"] == "org.figcraft.examples.counter" && p["widget"] == true));
+
+    let installed = s
+        .execute("plugin.directory.install", &json!({"id": "org.figcraft.examples.tidy-names", "server": "builtin", "confirm": true}))
+        .unwrap();
+    assert_eq!(installed["installed"], "org.figcraft.examples.tidy-names");
+    assert!(s.execute("plugin.run", &json!({"id": "org.figcraft.examples.tidy-names"})).is_ok());
+}

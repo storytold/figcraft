@@ -30,15 +30,17 @@ pub enum PluginsTab {
     #[default]
     Installed,
     Browse,
+    Development,
 }
 
 impl PluginsTab {
-    pub const ALL: [PluginsTab; 2] = [PluginsTab::Installed, PluginsTab::Browse];
+    pub const ALL: [PluginsTab; 3] = [PluginsTab::Installed, PluginsTab::Browse, PluginsTab::Development];
 
     fn label(self) -> &'static str {
         match self {
             PluginsTab::Installed => tr("Installed"),
             PluginsTab::Browse => tr("Browse"),
+            PluginsTab::Development => tr("Development"),
         }
     }
 }
@@ -52,6 +54,12 @@ pub struct PluginsWindow {
     pub server: Option<String>,
     pub query: String,
     pub confirm: Option<String>,
+    /// Category filter in Browse (`0`: All, `1`: Commands, `2`: Widgets).
+    pub filter_kind: u8,
+    /// Fields for the "Create New Plugin" form in the Development tab.
+    pub new_name: String,
+    pub new_id: String,
+    pub new_template: String,
 }
 
 /// Width of the plugin windows' fields.
@@ -267,9 +275,18 @@ enum Manage {
     Remove(String),
     Import,
     Browse(String),
+    BrowseLocalFolder,
     Confirm(String),
     /// Stop waiting for the directory's listing.
     StopBrowsing,
+    RunPlugin(String),
+    ReloadPlugin(String),
+    BuildAndReloadPlugin(String, String),
+    RevealPlugin(String),
+    CreatePlugin,
+    SwitchTab(PluginsTab),
+    ClearLogs,
+    CopyLogs(String),
 }
 
 /// The directory requests the window sends without waiting (the server answers later).
@@ -277,12 +294,12 @@ const LIST: &str = "plugin.directory.list";
 const INSTALL: &str = "plugin.directory.install";
 
 /// Width of the Manage plugins window, and of a plugin's text beside its button.
-const MANAGE_W: f32 = 400.0;
-const ROW_TEXT_W: f32 = 300.0;
+const MANAGE_W: f32 = 440.0;
+const ROW_TEXT_W: f32 = 280.0;
 
-/// Draw the Plugins window with installed and browse tabs, dispatching remove, import,
-/// browse, confirm and stop actions; closing the window cancels its directory requests and
-/// clears confirmation.
+/// Draw the Plugins window with installed, browse and development tabs, dispatching remove, import,
+/// browse, confirm, stop and development actions; closing the window cancels its directory requests
+/// and clears confirmation.
 fn manage_window(app: &mut FigApp, ctx: &Context) {
     let t = Tokens::get(ctx);
     let mut open = true;
@@ -295,6 +312,7 @@ fn manage_window(app: &mut FigApp, ctx: &Context) {
         asked = match tab {
             PluginsTab::Installed => installed_tab(app, ui, &t),
             PluginsTab::Browse => browse_tab(app, ui, &t),
+            PluginsTab::Development => development_tab(app, ui, &t),
         };
     });
     app.ui.plugins_manage.tab = tab;
@@ -305,12 +323,96 @@ fn manage_window(app: &mut FigApp, ctx: &Context) {
         }
         Some(Manage::Import) => import_dialog(app),
         Some(Manage::Browse(server)) => {
+            app.ui.plugins_manage.tab = PluginsTab::Browse;
             app.ui.plugins_manage.confirm = None;
             app.cancel_background(INSTALL);
             app.run_background(ctx, LIST, json!({"server": server}), Box::new(|_, _, _| {}));
         }
+        Some(Manage::BrowseLocalFolder) => {
+            app.pick_folder(tr("Choose plugins folder"), |app, path| {
+                let server = path.to_string_lossy().to_string();
+                app.ui.plugins_manage.server = Some(server.clone());
+                app.ui.plugins_manage.confirm = None;
+                app.run(LIST, json!({"server": server}));
+            });
+        }
         Some(Manage::Confirm(id)) => app.ui.plugins_manage.confirm = Some(id),
         Some(Manage::StopBrowsing) => app.cancel_background(LIST),
+        Some(Manage::RunPlugin(id)) => {
+            let is_widget = app.session.prefs.plugins.iter().any(|p| p.manifest.id == id && p.manifest.widget && p.manifest.commands.is_empty());
+            if is_widget {
+                app.run("widget.insert", json!({"plugin": id}));
+            } else {
+                start(app, &id, "");
+            }
+        }
+        Some(Manage::ReloadPlugin(id)) => {
+            if let Some(v) = app.run("plugin.reload", json!({"id": id})) {
+                let name = v["name"].as_str().unwrap_or(tr("the plugin")).to_string();
+                app.toast(trf("Reloaded {name}", &[("name", &name)]));
+            }
+        }
+        Some(Manage::BuildAndReloadPlugin(id, path)) => {
+            match app.services.build_plugin(std::path::Path::new(&path)) {
+                Ok(_msg) => {
+                    if let Some(v) = app.run("plugin.reload", json!({"id": id})) {
+                        let name = v["name"].as_str().unwrap_or(tr("the plugin")).to_string();
+                        app.toast(trf("Built and reloaded {name}", &[("name", &name)]));
+                    }
+                }
+                Err(err) => app.toast(err),
+            }
+        }
+        Some(Manage::RevealPlugin(path)) => {
+            app.services.reveal_path(std::path::Path::new(&path));
+        }
+        Some(Manage::CreatePlugin) => {
+            let name = app.ui.plugins_manage.new_name.trim().to_string();
+            let id = app.ui.plugins_manage.new_id.trim().to_string();
+            let template = if app.ui.plugins_manage.new_template.is_empty() {
+                "command".to_string()
+            } else {
+                app.ui.plugins_manage.new_template.clone()
+            };
+            if name.is_empty() {
+                app.toast(tr("Enter a plugin name first."));
+            } else {
+                app.pick_folder(tr("Choose parent folder for new plugin"), move |app, parent| {
+                    let slug: String = name
+                        .chars()
+                        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+                        .collect::<String>()
+                        .trim_matches('-')
+                        .to_string();
+                    let folder_name = if slug.is_empty() { "figcraft-plugin".to_string() } else { slug };
+                    let target = parent.join(folder_name);
+                    let mut params = json!({
+                        "dir": target.to_string_lossy(),
+                        "name": name,
+                        "template": template,
+                    });
+                    if !id.is_empty() {
+                        params["id"] = json!(id);
+                    }
+                    if let Some(v) = app.run("plugin.create", params) {
+                        let created = v["name"].as_str().unwrap_or(tr("plugin")).to_string();
+                        app.ui.plugins_manage.new_name.clear();
+                        app.ui.plugins_manage.new_id.clear();
+                        app.toast(trf("Created and imported {name}", &[("name", &created)]));
+                    }
+                });
+            }
+        }
+        Some(Manage::SwitchTab(next)) => {
+            app.ui.plugins_manage.tab = next;
+        }
+        Some(Manage::ClearLogs) => {
+            app.run("plugin.logs", json!({"clear": true}));
+        }
+        Some(Manage::CopyLogs(text)) => {
+            ctx.copy_text(text);
+            app.toast(tr("Copied plugin logs"));
+        }
         None => {}
     }
     if !open {
@@ -324,11 +426,15 @@ fn manage_window(app: &mut FigApp, ctx: &Context) {
     }
 }
 
-fn installed_tab(app: &FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
+fn installed_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
     let mut asked = None;
     let plugins = &app.session.prefs.plugins;
     if plugins.is_empty() {
-        widgets::label(ui, tr("No plugins yet. Import a development plugin from its figcraft-plugin.json."), t.text_secondary);
+        widgets::label(
+            ui,
+            tr("No plugins yet. Browse the Built-in Store, or import/create a development plugin."),
+            t.text_secondary,
+        );
     }
     for (i, p) in plugins.iter().enumerate() {
         if i > 0 {
@@ -344,13 +450,29 @@ fn installed_tab(app: &FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
                 if widgets::button(ui, tr("Remove"), false, true).clicked() {
                     asked = Some(Manage::Remove(p.manifest.id.clone()));
                 }
+                if p.path.is_some() && p.source.is_none() && widgets::button(ui, tr("Reload"), false, true).clicked() {
+                    asked = Some(Manage::ReloadPlugin(p.manifest.id.clone()));
+                }
+                if (!p.manifest.commands.is_empty() || p.manifest.widget) && widgets::button(ui, tr("Run"), true, true).clicked() {
+                    asked = Some(Manage::RunPlugin(p.manifest.id.clone()));
+                }
             });
         });
     }
     ui.add_space(12.0);
-    if widgets::button(ui, tr("Import plugin from manifest…"), true, true).clicked() {
-        asked = Some(Manage::Import);
-    }
+    ui.horizontal(|ui| {
+        if widgets::button(ui, tr("Import plugin from manifest…"), true, true).clicked() {
+            asked = Some(Manage::Import);
+        }
+        if widgets::button(ui, tr("New plugin…"), false, true).clicked() {
+            asked = Some(Manage::SwitchTab(PluginsTab::Development));
+        }
+        if widgets::button(ui, tr("Built-in Store"), false, true).clicked() {
+            app.ui.plugins_manage.server = Some("builtin".to_string());
+            app.ui.plugins_manage.tab = PluginsTab::Browse;
+            asked = Some(Manage::Browse("builtin".to_string()));
+        }
+    });
     asked
 }
 
@@ -364,7 +486,7 @@ fn browse_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
         // The field commits on Enter (which also browses) or when Browse takes the focus.
         let mut enter = false;
         if let Some(s) =
-            widgets::text_field(ui, Id::unique("plugin_directory_server"), &server, MANAGE_W - 90.0, tr("Server address (ws://host:47900/)"))
+            widgets::text_field(ui, Id::unique("plugin_directory_server"), &server, MANAGE_W - 90.0, tr("Server address (builtin, folder, or ws://host:47900/)"))
         {
             enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             server = s.clone();
@@ -378,6 +500,17 @@ fn browse_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
             asked = Some(Manage::Browse(server.trim().to_string()));
         }
     });
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        widgets::label(ui, tr("Sources:"), t.text_secondary);
+        if widgets::button(ui, tr("Built-in Store"), server.trim() == "builtin", !loading).clicked() {
+            app.ui.plugins_manage.server = Some("builtin".to_string());
+            asked = Some(Manage::Browse("builtin".to_string()));
+        }
+        if widgets::button(ui, tr("Local Folder…"), false, !loading).clicked() {
+            asked = Some(Manage::BrowseLocalFolder);
+        }
+    });
     if loading {
         ui.add_space(8.0);
         widgets::label(ui, tr("Fetching from the server…"), t.text_secondary);
@@ -385,18 +518,37 @@ fn browse_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
     }
     let Some(listing) = app.session.plugins.directory.as_ref() else {
         ui.add_space(8.0);
-        widgets::label(ui, tr("Enter the address of a figcraft-server and press Browse to see the plugins it offers."), t.text_secondary);
+        widgets::label(
+            ui,
+            tr("Click Built-in Store, pick a Local Folder, or enter a figcraft-server address and press Browse."),
+            t.text_secondary,
+        );
         return asked;
     };
     ui.add_space(8.0);
     if let Some(q) = widgets::text_field(ui, Id::unique("plugin_directory_query"), &app.ui.plugins_manage.query, MANAGE_W, tr("Search plugins")) {
         app.ui.plugins_manage.query = q;
     }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        let filter = app.ui.plugins_manage.filter_kind;
+        for (idx, label) in [(0u8, tr("All")), (1u8, tr("Commands")), (2u8, tr("Widgets"))] {
+            if widgets::button(ui, label, filter == idx, true).clicked() {
+                app.ui.plugins_manage.filter_kind = idx;
+            }
+        }
+    });
     ui.add_space(8.0);
     let q = app.ui.plugins_manage.query.trim().to_lowercase();
+    let filter_kind = app.ui.plugins_manage.filter_kind;
     let shown: Vec<&PluginEntry> = listing
         .entries
         .iter()
+        .filter(|e| match filter_kind {
+            1 => !e.widget,
+            2 => e.widget,
+            _ => true,
+        })
         .filter(|e| q.is_empty() || [&e.name, &e.description, &e.author, &e.id].iter().any(|f| f.to_lowercase().contains(&q)))
         .collect();
     if shown.is_empty() {
@@ -432,6 +584,202 @@ fn browse_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
         }
     });
     asked
+}
+
+/// Plugin development workflow: scaffold new plugins from templates, reload or build+reload
+/// local development plugins, and inspect recent plugin execution logs, fuel, and host calls.
+fn development_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
+    let mut asked = None;
+
+    ui.label(RichText::new(tr("Create New Plugin")).font(semibold(12.0)).color(t.text));
+    ui.add_space(4.0);
+    egui::Grid::new("plugin_dev_new_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+        widgets::label(ui, tr("Name"), t.text_secondary);
+        if let Some(name) = widgets::text_field(
+            ui,
+            Id::unique("plugin_new_name"),
+            &app.ui.plugins_manage.new_name,
+            MANAGE_W - 100.0,
+            tr("My Plugin"),
+        ) {
+            app.ui.plugins_manage.new_name = name;
+        }
+        ui.end_row();
+
+        widgets::label(ui, tr("Plugin ID"), t.text_secondary);
+        if let Some(id) = widgets::text_field(
+            ui,
+            Id::unique("plugin_new_id"),
+            &app.ui.plugins_manage.new_id,
+            MANAGE_W - 100.0,
+            tr("org.example.my-plugin (optional)"),
+        ) {
+            app.ui.plugins_manage.new_id = id;
+        }
+        ui.end_row();
+
+        widgets::label(ui, tr("Template"), t.text_secondary);
+        ui.horizontal(|ui| {
+            let current = if app.ui.plugins_manage.new_template.is_empty() {
+                "command".to_string()
+            } else {
+                app.ui.plugins_manage.new_template.clone()
+            };
+            for (tpl, label) in [
+                ("command", tr("Command")),
+                ("panel", tr("UI Panel")),
+                ("widget", tr("Widget")),
+                ("exporter", tr("Exporter")),
+            ] {
+                if widgets::button(ui, label, current == tpl, true).clicked() {
+                    app.ui.plugins_manage.new_template = tpl.to_string();
+                }
+            }
+        });
+        ui.end_row();
+    });
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        if widgets::button(ui, tr("Create in Folder…"), true, true).clicked() {
+            asked = Some(Manage::CreatePlugin);
+        }
+        if widgets::button(ui, tr("Import Manifest…"), false, true).clicked() {
+            asked = Some(Manage::Import);
+        }
+    });
+
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(8.0);
+
+    ui.label(RichText::new(tr("Development Plugins")).font(semibold(12.0)).color(t.text));
+    ui.add_space(4.0);
+    let dev_plugins: Vec<&InstalledPlugin> =
+        app.session.prefs.plugins.iter().filter(|p| p.path.is_some() && p.source.is_none()).collect();
+    if dev_plugins.is_empty() {
+        widgets::label(
+            ui,
+            tr("No development plugins imported yet. Create one above or import a figcraft-plugin.json."),
+            t.text_secondary,
+        );
+    } else {
+        for (i, p) in dev_plugins.iter().enumerate() {
+            if i > 0 {
+                ui.add_space(8.0);
+            }
+            let path = p.path.clone().unwrap_or_default();
+            ui.vertical(|ui| {
+                ui.label(RichText::new(&p.manifest.name).font(semibold(12.0)).color(t.text));
+                widgets::label(ui, &format!("{} · {}", p.manifest.id, path), t.text_secondary);
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    if widgets::button(ui, tr("Run"), true, true).clicked() {
+                        asked = Some(Manage::RunPlugin(p.manifest.id.clone()));
+                    }
+                    if widgets::button(ui, tr("Reload"), false, true).clicked() {
+                        asked = Some(Manage::ReloadPlugin(p.manifest.id.clone()));
+                    }
+                    if widgets::button(ui, tr("Build & Reload"), false, true).clicked() {
+                        asked = Some(Manage::BuildAndReloadPlugin(p.manifest.id.clone(), path.clone()));
+                    }
+                    if widgets::button(ui, tr("Show in Folder"), false, true).clicked() {
+                        asked = Some(Manage::RevealPlugin(path));
+                    }
+                    if widgets::button(ui, tr("Remove"), false, true).clicked() {
+                        asked = Some(Manage::Remove(p.manifest.id.clone()));
+                    }
+                });
+            });
+        }
+    }
+
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(8.0);
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tr("Plugin Dev Console")).font(semibold(12.0)).color(t.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let has_history = !app.session.plugins.history.is_empty();
+            if widgets::button(ui, tr("Clear"), false, has_history).clicked() {
+                asked = Some(Manage::ClearLogs);
+            }
+            if widgets::button(ui, tr("Copy Logs"), false, has_history).clicked() {
+                let text = format_run_history(&app.session.plugins.history);
+                asked = Some(Manage::CopyLogs(text));
+            }
+        });
+    });
+    ui.add_space(4.0);
+
+    if app.session.plugins.history.is_empty() {
+        widgets::label(
+            ui,
+            tr("Run a plugin or widget to inspect its logs, host calls, fuel usage, and output here."),
+            t.text_secondary,
+        );
+    } else {
+        egui::ScrollArea::vertical().id_salt("plugin_dev_console_scroll").max_height(180.0).show(ui, |ui| {
+            for (idx, rec) in app.session.plugins.history.iter().rev().enumerate() {
+                if idx > 0 {
+                    ui.add_space(6.0);
+                }
+                egui::Frame::NONE
+                    .fill(t.field)
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.set_min_width(MANAGE_W - 24.0);
+                        ui.horizontal(|ui| {
+                            let badge = if rec.ok { tr("OK") } else { tr("ERR") };
+                            let color = if rec.ok { t.accent } else { t.text };
+                            ui.label(RichText::new(badge).font(semibold(10.0)).color(color));
+                            ui.label(RichText::new(format!("{} · {}", rec.plugin, rec.command)).font(semibold(11.0)).color(t.text));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let stats = format!("{} calls · {} / {} fuel", rec.calls, rec.fuel, rec.fuel_limit);
+                                widgets::label(ui, &stats, t.text_secondary);
+                            });
+                        });
+                        for line in &rec.logs {
+                            ui.label(RichText::new(format!("› {line}")).font(egui::FontId::monospace(10.5)).color(t.text));
+                        }
+                        if let Some(err) = &rec.error {
+                            ui.label(RichText::new(format!("Error: {err}")).font(egui::FontId::monospace(10.5)).color(t.text));
+                        } else if !rec.output.is_null() {
+                            let out_str = match &rec.output {
+                                Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            if !out_str.is_empty() {
+                                widgets::label(ui, &format!("Output: {out_str}"), t.text_secondary);
+                            }
+                        }
+                    });
+            }
+        });
+    }
+
+    asked
+}
+
+fn format_run_history(history: &[figcraft_engine::plugins::PluginRunRecord]) -> String {
+    let mut lines = Vec::new();
+    for rec in history {
+        let status = if rec.ok { "OK" } else { "ERR" };
+        lines.push(format!(
+            "[{status}] {} ({}) - {} calls, {}/{} fuel",
+            rec.plugin, rec.command, rec.calls, rec.fuel, rec.fuel_limit
+        ));
+        for l in &rec.logs {
+            lines.push(format!("  log: {l}"));
+        }
+        if let Some(err) = &rec.error {
+            lines.push(format!("  error: {err}"));
+        } else if !rec.output.is_null() {
+            lines.push(format!("  output: {}", rec.output));
+        }
+    }
+    lines.join("\n")
 }
 
 /// "1.2.0 · by Ada · 54 KB · can edit the document" under a directory plugin's name.

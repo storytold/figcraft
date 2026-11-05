@@ -36,6 +36,7 @@ pub use assets::token_roles;
 pub use automation::batch;
 pub use automation::doc_urls;
 pub use automation::file_access;
+pub use automation::harness;
 pub use automation::inspect;
 pub use automation::params;
 pub use boards::board;
@@ -110,7 +111,9 @@ mod view_state;
 pub use derived::{changed_nodes, normalize};
 pub use doc_state::{DocState, History, HistoryEntry, Interaction, PREVIEW_READ_ONLY, Preedit, TextEdit, VersionPreview};
 pub use error::{EngineError, Result, bad};
-pub use prefs::{Clipboard, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UI_SCALE_SIZES, UiRequest, clamp_ui_scale};
+pub use prefs::{
+    Clipboard, DEFAULT_MCP_PORT, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UI_SCALE_SIZES, UiRequest, clamp_ui_scale,
+};
 pub use session::Forward;
 pub use view_state::ViewState;
 

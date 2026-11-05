@@ -23,7 +23,7 @@ use serde_json::{Map, Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::params::{id, num, string};
-use crate::plugins::{InstalledPlugin, call_plugin, close_panel, installed, limits, module_of, open_panel, plugin_error};
+use crate::plugins::{InstalledPlugin, PluginRunRecord, call_plugin, close_panel, installed, limits, module_of, open_panel, plugin_error, record_run};
 use crate::{Result, Session, bad, spec};
 
 /// Layer data FigCraft keeps for widgets starts with this; plugins can't write it.
@@ -187,8 +187,42 @@ fn callback(s: &mut Session, p: &InstalledPlugin, w: NodeId, event: Option<Value
     let state = state_of(s.doc()?, w);
     let input =
         json!({"api": m.api, "command": "widget", "params": {}, "selection": s.selection(), "widget": {"id": w, "state": state, "event": event}});
-    let mut instance = Instance::new(&wasm, &limits(fuel)).map_err(|e| plugin_error(&m.name, e))?;
-    let mut out = call_plugin(s, m, &m.name, &mut instance, &input.to_string()).map_err(|(e, _)| e)?;
+    let lim = limits(fuel);
+    let mut instance = Instance::new(&wasm, &lim).map_err(|e| plugin_error(&m.name, e))?;
+    let mut out = match call_plugin(s, m, &m.name, &mut instance, &input.to_string()) {
+        Ok(out) => out,
+        Err((e, _)) => {
+            record_run(
+                s,
+                PluginRunRecord {
+                    plugin: m.id.clone(),
+                    command: "widget".into(),
+                    ok: false,
+                    output: Value::Null,
+                    error: Some(e.to_string()),
+                    logs: Vec::new(),
+                    calls: 0,
+                    fuel: 0,
+                    fuel_limit: lim.fuel,
+                },
+            );
+            return Err(e);
+        }
+    };
+    record_run(
+        s,
+        PluginRunRecord {
+            plugin: m.id.clone(),
+            command: "widget".into(),
+            ok: true,
+            output: serde_json::from_str::<Value>(&out.output).unwrap_or_else(|_| Value::String(out.output.clone())),
+            error: None,
+            logs: out.logs.clone(),
+            calls: out.calls,
+            fuel: out.fuel,
+            fuel_limit: lim.fuel,
+        },
+    );
     match out.widget.take() {
         Some(r) if m.api < 4 && r.uses_api_4() => return Err(bad("widget.render", format!("{}: fields and menus need plugin API 4", m.name))),
         Some(r) if m.api < 6 && r.uses_api_6() => return Err(bad("widget.render", format!("{}: lines and SVG need plugin API 6", m.name))),

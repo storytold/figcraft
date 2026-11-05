@@ -6,6 +6,9 @@ pub const UI_SCALE_MIN: f64 = 0.75;
 
 pub const UI_SCALE_MAX: f64 = 3.0;
 
+/// Default localhost port for the desktop app's control and MCP server (`127.0.0.1:47800`).
+pub const DEFAULT_MCP_PORT: u16 = 47800;
+
 /// `scale` kept between [`UI_SCALE_MIN`] and [`UI_SCALE_MAX`]; not a finite number: `None`.
 /// The interface sizes Preferences offers, relative to the system's scale (the keys step through
 /// them; `pref.uiScale` takes any size up to [`UI_SCALE_MAX`]).
@@ -62,6 +65,10 @@ pub struct Prefs {
     pub auto_save: bool,
     /// The desktop app starts on the Home screen instead of in a new file.
     pub start_on_home: bool,
+    /// Whether the desktop app listens on localhost for MCP / control connections (`pref.mcp`).
+    pub mcp_enabled: bool,
+    /// Localhost TCP port for the desktop app's MCP / control server (`127.0.0.1:<mcp_port>`).
+    pub mcp_port: u16,
     /// `figcraft://` invite links open this app (`collab.registerLinks`); `None`: on for installed
     /// builds, off for development builds.
     pub invite_links: Option<bool>,
@@ -145,6 +152,8 @@ impl Default for Prefs {
             ui_scale: 1.0,
             auto_save: false,
             start_on_home: false,
+            mcp_enabled: true,
+            mcp_port: DEFAULT_MCP_PORT,
             invite_links: None,
             plugins: Vec::new(),
             plugin_settings: BTreeMap::new(),

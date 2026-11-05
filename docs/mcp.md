@@ -127,27 +127,69 @@ built-in fonts. Attached, the app's own fonts apply. The browser build has no sy
 
 ## Configure a client
 
+By default, the desktop app starts its local control listener on `127.0.0.1:47800` when `prefs.mcp_enabled` is on (controlled from **File ▸ Local MCP server…** or the `app.mcp` / `pref.mcp` commands). You can configure LLM harnesses either from the **Local MCP server…** window in the app (1-click **Configure** / **Update** for **Antigravity**, **Claude Code**, **Claude Desktop**, and **Codex**), or from the CLI:
+
+```sh
+# Inspect harness MCP configuration status
+figcraft-cli mcp --status
+
+# Automatically register/update FigCraft MCP in one or all harnesses (attached on port 47800 by default)
+figcraft-cli mcp --install antigravity
+figcraft-cli mcp --install claude-code
+figcraft-cli mcp --install claude-desktop
+figcraft-cli mcp --install codex
+figcraft-cli mcp --install all
+
+# Register for headless mode instead of attached mode
+figcraft-cli mcp --install all --port 0
+```
+
 Build the CLI first (`cargo build --release -p figcraft-cli`) and use the absolute path to
 `target/release/figcraft-cli`.
 
 The Linux AppImage bundles the CLI: `FigCraft.AppImage cli <args>` runs `figcraft-cli <args>`, so
 `/path/to/FigCraft.AppImage cli mcp` works wherever `/path/to/figcraft-cli mcp` appears below.
 
+### Antigravity
+
+`~/.gemini/antigravity/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "figcraft": {
+      "command": "/path/to/figcraft-cli",
+      "args": ["mcp", "--attach", "47800"]
+    }
+  }
+}
+```
+
+### Codex
+
+`~/.codex/config.toml`:
+
+```toml
+[mcp_servers.figcraft]
+command = "/path/to/figcraft-cli"
+args = ["mcp", "--attach", "47800"]
+```
+
 ### Claude Code
 
 ```sh
 # headless
 claude mcp add figcraft -- /path/to/figcraft-cli mcp
-# drive the running app (start it with: figcraft --control 7979)
-claude mcp add figcraft-app -- /path/to/figcraft-cli mcp --attach 7979
+# drive the running app (default port 47800, or start with: figcraft --control 7979)
+claude mcp add figcraft-app -- /path/to/figcraft-cli mcp --attach 47800
 ```
 
-Or in a project's `.mcp.json`:
+Or in `~/.claude.json` or a project's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "figcraft": { "command": "/path/to/figcraft-cli", "args": ["mcp"] }
+    "figcraft": { "command": "/path/to/figcraft-cli", "args": ["mcp", "--attach", "47800"] }
   }
 }
 ```
@@ -160,7 +202,7 @@ Or in a project's `.mcp.json`:
 {
   "mcpServers": {
     "figcraft": { "command": "/path/to/figcraft-cli", "args": ["mcp"] },
-    "figcraft-app": { "command": "/path/to/figcraft-cli", "args": ["mcp", "--attach", "7979"] }
+    "figcraft-app": { "command": "/path/to/figcraft-cli", "args": ["mcp", "--attach", "47800"] }
   }
 }
 ```

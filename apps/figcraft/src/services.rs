@@ -25,6 +25,8 @@ pub struct Desktop {
     recovery: crate::recovery::Shared,
     /// The folder of the last file or folder a dialog picked, where the next one starts.
     last_folder: Arc<Mutex<Option<PathBuf>>>,
+    /// Shared handle to the local control/MCP server.
+    pub control: crate::control_server::ControlHandle,
 }
 
 /// The settings folder's name in the platform folder, as it always was (the suite keeps existing
@@ -112,6 +114,7 @@ impl Desktop {
             language: system_language(),
             recovery,
             last_folder: Arc::default(),
+            control: crate::control_server::ControlHandle::new(),
         }
     }
 
@@ -566,6 +569,45 @@ impl Services for Desktop {
     }
     fn system_language(&self) -> Option<String> {
         self.language.clone()
+    }
+    fn mcp_server_status(&self) -> Option<(u16, usize, Option<String>)> {
+        Some(self.control.status())
+    }
+    fn mcp_server_apply(&mut self, enabled: bool, port: u16) {
+        self.control.apply(enabled, port, std::time::Duration::from_millis(250));
+    }
+    fn build_plugin(&mut self, manifest_or_dir: &Path) -> Result<String, String> {
+        let manifest_path = if manifest_or_dir.file_name().is_some_and(|n| n == "figcraft-plugin.json") {
+            manifest_or_dir.to_path_buf()
+        } else {
+            manifest_or_dir.join("figcraft-plugin.json")
+        };
+        let root = manifest_path.parent().unwrap_or(manifest_or_dir);
+        let raw = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        let manifest: Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        let main_wasm = manifest["main"].as_str().unwrap_or("plugin.wasm");
+        let output = std::process::Command::new("cargo")
+            .args(["build", "--release", "--target", "wasm32-unknown-unknown"])
+            .current_dir(root)
+            .output()
+            .map_err(|e| format!("failed to run cargo: {e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("cargo build failed:\n{}", stderr.trim()));
+        }
+        let wasm_out = root.join(main_wasm);
+        let rel = root.join("target").join("wasm32-unknown-unknown").join("release");
+        if let Ok(entries) = std::fs::read_dir(&rel) {
+            for entry in entries.flatten() {
+                if entry.path().extension().is_some_and(|e| e == "wasm") {
+                    let _ = std::fs::copy(entry.path(), &wasm_out);
+                    break;
+                }
+            }
+        }
+        Ok(wasm_out.display().to_string())
     }
 }
 

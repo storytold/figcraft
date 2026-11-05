@@ -228,6 +228,7 @@ fn main() -> eframe::Result {
     // The interface language from the first frame on, and for the message when the window can't
     // open (no frame then).
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
+    let control = svc.control.clone();
     let mut fig = FigApp::new(session, Box::new(svc));
     fig.set_startup_update_check(true);
     fig.automation_roots = roots;
@@ -242,8 +243,11 @@ fn main() -> eframe::Result {
         figcraft_ui_egui::live::open_invite(&mut fig, link);
     }
     let queue: Arc<Mutex<Vec<ControlRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    control.bind_deps(queue.clone(), ctx_slot.clone(), fig.session.events.clone());
     if let Some(p) = port {
-        control_server::start(p, graphics::port_wait(), queue.clone(), ctx_slot.clone(), fig.session.events.clone());
+        control.apply(true, p, graphics::port_wait());
+    } else if fig.session.prefs.mcp_enabled {
+        control.apply(true, fig.session.prefs.mcp_port, graphics::port_wait());
     }
     let icon = services::window_icon();
     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name

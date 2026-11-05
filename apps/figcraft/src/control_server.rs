@@ -3,6 +3,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -103,24 +104,92 @@ pub fn bind(port: u16, busy: Duration) -> std::io::Result<TcpListener> {
     }
 }
 
-pub fn start(port: u16, busy: Duration, queue: Queue, ctx: CtxSlot, events: Arc<EventLog>) {
-    let listener = match bind(port, busy) {
-        Ok(l) => l,
-        Err(e) => {
-            log::error!("control server: can't bind 127.0.0.1:{port}: {e} (another app may own it; pick another port)");
-            eprintln!("FigCraft control server failed to bind port {port}: {e}");
+/// Shared handle to the local control server, used by the UI to inspect status and toggle/rebind.
+#[derive(Clone, Default)]
+pub struct ControlHandle {
+    inner: Arc<ControlInner>,
+}
+
+#[derive(Default)]
+struct ControlInner {
+    listening_port: AtomicU16,
+    active_connections: AtomicUsize,
+    generation: AtomicU64,
+    last_error: Mutex<Option<String>>,
+    deps: Mutex<Option<(Queue, CtxSlot, Arc<EventLog>)>>,
+}
+
+impl ControlHandle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn bind_deps(&self, queue: Queue, ctx: CtxSlot, events: Arc<EventLog>) {
+        if let Ok(mut d) = self.inner.deps.lock() {
+            *d = Some((queue, ctx, events));
+        }
+    }
+
+    pub fn status(&self) -> (u16, usize, Option<String>) {
+        let port = self.inner.listening_port.load(Ordering::Relaxed);
+        let active = self.inner.active_connections.load(Ordering::Relaxed);
+        let err = self.inner.last_error.lock().ok().and_then(|e| e.clone());
+        (port, active, err)
+    }
+
+    pub fn apply(&self, enabled: bool, port: u16, busy: Duration) {
+        let old_port = self.inner.listening_port.swap(0, Ordering::SeqCst);
+        let next_gen = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if old_port != 0 {
+            let _ = TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], old_port)),
+                Duration::from_millis(50),
+            );
+        }
+        if let Ok(mut err) = self.inner.last_error.lock() {
+            *err = None;
+        }
+        if !enabled || port == 0 {
             return;
         }
-    };
-    eprintln!("FigCraft control server listening on 127.0.0.1:{port}");
-    let spawned = std::thread::Builder::new().name("figcraft-control".into()).spawn(move || {
-        let mut workers = Vec::new();
-        for stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
-            spawn_connection(stream, queue.clone(), ctx.clone(), events.clone(), &mut workers, TIMEOUT);
+        let Some((queue, ctx, events)) = self.inner.deps.lock().ok().and_then(|d| d.clone()) else {
+            return;
+        };
+        let listener = match bind(port, busy) {
+            Ok(l) => l,
+            Err(e) => {
+                let msg = format!("can't bind 127.0.0.1:{port}: {e}");
+                log::error!("control server: {msg} (another app may own it; pick another port)");
+                eprintln!("FigCraft control server failed to bind port {port}: {e}");
+                if let Ok(mut err) = self.inner.last_error.lock() {
+                    *err = Some(msg);
+                }
+                return;
+            }
+        };
+        self.inner.listening_port.store(port, Ordering::SeqCst);
+        eprintln!("FigCraft control server listening on 127.0.0.1:{port}");
+        let inner = self.inner.clone();
+        let spawned = std::thread::Builder::new().name("figcraft-control".into()).spawn(move || {
+            let mut workers = Vec::new();
+            for stream in accepted(listener.incoming(), || std::thread::sleep(ACCEPT_RETRY)) {
+                if inner.generation.load(Ordering::SeqCst) != next_gen {
+                    break;
+                }
+                spawn_connection_tracked(
+                    stream,
+                    queue.clone(),
+                    ctx.clone(),
+                    events.clone(),
+                    Some(inner.clone()),
+                    &mut workers,
+                    TIMEOUT,
+                );
+            }
+        });
+        if let Err(e) = spawned {
+            log::error!("control server thread: {e}");
         }
-    });
-    if let Err(e) = spawned {
-        log::error!("control server thread: {e}");
     }
 }
 
@@ -129,6 +198,7 @@ fn accepted<T>(incoming: impl Iterator<Item = std::io::Result<T>>, mut wait: imp
     incoming.filter_map(move |stream| stream.map_err(|_| wait()).ok())
 }
 
+#[cfg(test)]
 fn spawn_connection(
     stream: TcpStream,
     queue: Queue,
@@ -137,12 +207,30 @@ fn spawn_connection(
     workers: &mut Vec<std::thread::JoinHandle<()>>,
     timeout: Duration,
 ) {
+    spawn_connection_tracked(stream, queue, ctx, events, None, workers, timeout);
+}
+
+fn spawn_connection_tracked(
+    stream: TcpStream,
+    queue: Queue,
+    ctx: CtxSlot,
+    events: Arc<EventLog>,
+    inner: Option<Arc<ControlInner>>,
+    workers: &mut Vec<std::thread::JoinHandle<()>>,
+    timeout: Duration,
+) {
     workers.retain(|worker| !worker.is_finished());
     if workers.len() >= MAX_CONNECTIONS {
         return;
     }
     match std::thread::Builder::new().name("figcraft-control-conn".into()).spawn(move || {
+        if let Some(ref inner) = inner {
+            inner.active_connections.fetch_add(1, Ordering::Relaxed);
+        }
         let _ = serve_with_events(stream, queue, ctx, events, timeout);
+        if let Some(ref inner) = inner {
+            inner.active_connections.fetch_sub(1, Ordering::Relaxed);
+        }
     }) {
         Ok(worker) => workers.push(worker),
         Err(e) => log::error!("control connection thread: {e}"),

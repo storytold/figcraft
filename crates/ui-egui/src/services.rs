@@ -86,6 +86,18 @@ pub trait Services {
     /// Ask for them (the browser asks the person): they join the font list by name, each read when
     /// text uses it.
     fn ask_for_local_fonts(&mut self) {}
+    /// Live status of the local MCP/control server: `(listening_port, active_connections, last_error)`.
+    /// `listening_port == 0` when stopped or failed to bind.
+    fn mcp_server_status(&self) -> Option<(u16, usize, Option<String>)> {
+        None
+    }
+    /// Start, stop or rebind the local MCP/control server when the user toggles it or changes its port.
+    fn mcp_server_apply(&mut self, _enabled: bool, _port: u16) {}
+    /// Build a Rust plugin project (`cargo build --release --target wasm32-unknown-unknown`) and copy
+    /// the resulting `.wasm` to its manifest's `main` path.
+    fn build_plugin(&mut self, _manifest_or_dir: &std::path::Path) -> Result<String, String> {
+        Err("building plugins requires the desktop app".into())
+    }
 }
 
 pub type DialogFuture = Pin<Box<dyn Future<Output = Option<PathBuf>>>>;

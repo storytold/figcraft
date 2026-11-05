@@ -566,3 +566,51 @@ fn reinstalling_under_an_existing_id_drops_the_old_settings() {
     install(&mut s, m, &script(&[], OnRefusal::Fail, ""));
     assert!(!s.prefs.plugin_settings.contains_key("org.test.reuse"), "{:?}", s.prefs.plugin_settings);
 }
+
+#[test]
+fn create_reload_and_logs_commands_work_for_all_templates() {
+    let base = std::env::temp_dir().join(format!("figcraft_plugin_create_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let mut s = Session::new();
+
+    for tpl in ["command", "panel", "widget", "exporter"] {
+        let dir = base.join(tpl);
+        let out = ex(
+            &mut s,
+            "plugin.create",
+            json!({
+                "dir": dir.to_string_lossy(),
+                "name": format!("Test {tpl}"),
+                "id": format!("org.test.created.{tpl}"),
+                "template": tpl
+            }),
+        );
+        assert_eq!(out["id"], format!("org.test.created.{tpl}"));
+        assert_eq!(out["template"], tpl);
+
+        let reloaded = ex(&mut s, "plugin.reload", json!({"id": format!("org.test.created.{tpl}")}));
+        assert_eq!(reloaded["id"], format!("org.test.created.{tpl}"));
+        assert_eq!(reloaded["reloaded"], true);
+
+        if tpl == "widget" {
+            let w = ex(&mut s, "widget.insert", json!({"plugin": "org.test.created.widget"}));
+            assert_eq!(w["plugin"], "org.test.created.widget");
+        } else {
+            let r = ex(&mut s, "plugin.run", json!({"id": format!("org.test.created.{tpl}")}));
+            assert_eq!(r["plugin"], format!("org.test.created.{tpl}"));
+        }
+    }
+
+    let logs = ex(&mut s, "plugin.logs", json!({}));
+    let records = logs["runs"].as_array().unwrap();
+    assert_eq!(records.len(), 4);
+
+    let filtered = ex(&mut s, "plugin.logs", json!({"id": "org.test.created.command"}));
+    assert_eq!(filtered["runs"].as_array().unwrap().len(), 1);
+
+    let cleared = ex(&mut s, "plugin.logs", json!({"clear": true}));
+    assert!(cleared["runs"].as_array().unwrap().is_empty());
+    assert!(s.plugins.history.is_empty());
+
+    let _ = std::fs::remove_dir_all(&base);
+}

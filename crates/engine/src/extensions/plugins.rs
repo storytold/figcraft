@@ -22,6 +22,23 @@ pub use figcraft_plugin::{Access, MANIFEST_FILE, Manifest, Panel, Param, ParamKi
 /// What one plugin may keep in its settings (keys and JSON values, in bytes), and its longest key.
 const MAX_SETTINGS_BYTES: usize = 64 * 1024;
 const MAX_SETTING_KEY: usize = 128;
+/// Maximum number of plugin execution records kept in [`Runtime::history`].
+pub const MAX_RUN_HISTORY: usize = 50;
+
+/// A recorded plugin execution (command, panel event or widget callback) for the Plugin Dev Console.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PluginRunRecord {
+    pub plugin: String,
+    pub command: String,
+    pub ok: bool,
+    pub output: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub logs: Vec<String>,
+    pub calls: u32,
+    pub fuel: u64,
+    pub fuel_limit: u64,
+}
 
 /// An installed plugin (in the preferences).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,6 +75,16 @@ pub struct Runtime {
     /// The installed plugins or their settings changed since the app last saved the preferences
     /// (it saves them at once, so a crash keeps them).
     pub unsaved: bool,
+    /// Recent plugin executions (oldest first, capped at [`MAX_RUN_HISTORY`]).
+    pub history: Vec<PluginRunRecord>,
+}
+
+pub(crate) fn record_run(s: &mut Session, rec: PluginRunRecord) {
+    s.plugins.history.push(rec);
+    let over = s.plugins.history.len().saturating_sub(MAX_RUN_HISTORY);
+    if over > 0 {
+        s.plugins.history.drain(..over);
+    }
 }
 
 impl Runtime {
@@ -524,13 +551,47 @@ pub fn run(s: &mut Session, id: &str, command: Option<&str>, params: &Value, fue
     s.plugins.last = Some((m.id.clone(), c.id.clone(), params.clone()));
     let label = if m.commands.len() > 1 { format!("{}: {}", m.name, c.label.trim_end_matches(['…', '.'])) } else { m.name.clone() };
     let mut instance = Instance::new(&wasm, &limits).map_err(|e| plugin_error(&m.name, e))?;
-    let mut out = call_plugin(s, m, &label, &mut instance, &input).map_err(|(e, _)| e)?;
+    let mut out = match call_plugin(s, m, &label, &mut instance, &input) {
+        Ok(out) => out,
+        Err((e, _)) => {
+            record_run(
+                s,
+                PluginRunRecord {
+                    plugin: m.id.clone(),
+                    command: c.id.clone(),
+                    ok: false,
+                    output: Value::Null,
+                    error: Some(e.to_string()),
+                    logs: Vec::new(),
+                    calls: 0,
+                    fuel: 0,
+                    fuel_limit: limits.fuel,
+                },
+            );
+            return Err(e);
+        }
+    };
     match out.ui.take() {
         Some(UiChange::Show(panel)) => open_panel(s, m, (&c.id, params, label), panel, instance, None),
         Some(UiChange::Close) => close_panel(s, &m.id),
         None => {}
     }
-    Ok(report(s, &m.id, &c.id, out))
+    let res = report(s, &m.id, &c.id, out);
+    record_run(
+        s,
+        PluginRunRecord {
+            plugin: m.id.clone(),
+            command: c.id.clone(),
+            ok: true,
+            output: res["output"].clone(),
+            error: None,
+            logs: res["logs"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+            calls: res["calls"].as_u64().unwrap_or(0) as u32,
+            fuel: res["fuel"].as_u64().unwrap_or(0),
+            fuel_limit: limits.fuel,
+        },
+    );
+    Ok(res)
 }
 
 /// Call the plugin with `input` as one undo step (none when it changed nothing), rolled back when
@@ -614,6 +675,20 @@ fn event(s: &mut Session, p: &Value) -> Result<Value> {
             if usable {
                 keep(s, at, open);
             }
+            record_run(
+                s,
+                PluginRunRecord {
+                    plugin: id,
+                    command,
+                    ok: false,
+                    output: Value::Null,
+                    error: Some(e.to_string()),
+                    logs: Vec::new(),
+                    calls: 0,
+                    fuel: 0,
+                    fuel_limit: Limits::default().fuel,
+                },
+            );
             return Err(e);
         }
     };
@@ -626,7 +701,22 @@ fn event(s: &mut Session, p: &Value) -> Result<Value> {
         Some(UiChange::Close) => {}
         None => keep(s, at, open),
     }
-    Ok(report(s, &id, &command, out))
+    let res = report(s, &id, &command, out);
+    record_run(
+        s,
+        PluginRunRecord {
+            plugin: id,
+            command,
+            ok: true,
+            output: res["output"].clone(),
+            error: None,
+            logs: res["logs"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+            calls: res["calls"].as_u64().unwrap_or(0) as u32,
+            fuel: res["fuel"].as_u64().unwrap_or(0),
+            fuel_limit: Limits::default().fuel,
+        },
+    );
+    Ok(res)
 }
 
 /// Put a panel taken out for a callback back in its place among the open ones.
@@ -658,6 +748,302 @@ fn run_last(s: &mut Session, _p: &Value) -> Result<Value> {
 fn manage(s: &mut Session, p: &Value) -> Result<Value> {
     s.request_ui("dialog.plugins", json!({}));
     list(s, p)
+}
+
+fn reload(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "plugin.reload";
+    let id = string(p, "id").ok_or_else(|| bad(cmd, "`id` required"))?;
+    let existing = installed(s, cmd, &id)?.clone();
+    let Some(path) = existing.path.as_deref() else {
+        return Err(bad(cmd, format!("`{id}` was imported without a manifest file and cannot be reloaded from disk")));
+    };
+    let (manifest, abs_path, wasm) = load_from_disk(cmd, path)?;
+    figcraft_plugin::check_module(&wasm, &Limits::default()).map_err(|e| plugin_error(&manifest.name, e))?;
+    let name = manifest.name.clone();
+    let version = manifest.version.clone();
+    let new_id = manifest.id.clone();
+    register(s, InstalledPlugin { manifest, path: Some(abs_path), source: existing.source }, wasm);
+    Ok(json!({"id": new_id, "name": name, "version": version, "reloaded": true}))
+}
+
+fn slugify(name: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for c in name.trim().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() { "my-plugin".into() } else { trimmed }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn create(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "plugin.create";
+    let dir_str = string(p, "dir").filter(|d| !d.trim().is_empty()).ok_or_else(|| bad(cmd, "`dir` required"))?;
+    let dir = std::path::PathBuf::from(crate::library::absolute_path(dir_str.trim()));
+    let name = string(p, "name")
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| dir.file_name().and_then(|n| n.to_str()).map(str::to_string))
+        .unwrap_or_else(|| "My Plugin".into());
+    let slug = slugify(&name);
+    let id = string(p, "id")
+        .filter(|i| !i.trim().is_empty())
+        .unwrap_or_else(|| format!("org.example.{slug}"));
+    let template = string(p, "template").unwrap_or_else(|| "command".into()).to_ascii_lowercase();
+    let wasm_file = format!("{}.wasm", slug.replace('-', "_"));
+
+    let (manifest_val, lib_rs, fallback_call): (Value, String, Option<(&str, bool, &[u8])>) = match template.as_str() {
+        "command" => (
+            json!({
+                "id": id,
+                "name": name,
+                "version": "0.1.0",
+                "api": 4,
+                "description": "A custom FigCraft command plugin.",
+                "main": wasm_file,
+                "permissions": {
+                    "access": "write",
+                    "commands": ["node.get", "node.set", "shape.rectangle"]
+                },
+                "commands": [
+                    { "id": "run", "label": name }
+                ]
+            }),
+            format!(
+                r#"use figcraft_plugin_sdk::{{CallInput, Value, call, entry, json, log, notify, set_output}};
+
+entry!(run);
+
+fn run(input: CallInput) -> Result<(), String> {{
+    log(&format!("Running {{}} on {{}} selected layer(s)", input.command, input.selection.len()));
+    notify("Hello from {name}!");
+    set_output(&json!({{"selected": input.selection.len()}}));
+    Ok(())
+}}
+"#
+            ),
+            Some(("notify", false, b"Hello from plugin!")),
+        ),
+        "panel" => (
+            json!({
+                "id": id,
+                "name": name,
+                "version": "0.1.0",
+                "api": 4,
+                "description": "An interactive panel plugin for FigCraft.",
+                "main": wasm_file,
+                "permissions": {
+                    "access": "write",
+                    "commands": ["shape.rectangle", "node.set"]
+                },
+                "commands": [
+                    { "id": "open", "label": format!("{name}…") }
+                ]
+            }),
+            format!(
+                r##"use figcraft_plugin_sdk::{{CallInput, call, entry, json, notify, show_panel}};
+
+entry!(run);
+
+fn run(input: CallInput) -> Result<(), String> {{
+    if let Some(ev) = &input.event {{
+        if ev.control == "create" {{
+            let color = input.values.get("color").and_then(|v| v.as_str()).unwrap_or("#02da96");
+            call("shape.rectangle", &json!({{"x": 0, "y": 0, "width": 120, "height": 120, "props": {{"fill": color}}}}))?;
+            notify("Created rectangle");
+        }}
+        return Ok(());
+    }}
+    show_panel(&json!({{
+        "title": "{name}",
+        "controls": [
+            {{"name": "color", "label": "Color", "type": "color", "default": "#02da96"}},
+            {{"name": "create", "label": "Create Rectangle", "type": "button"}}
+        ]
+    }}))
+}}
+"##
+            ),
+            Some((
+                "ui_show",
+                true,
+                br##"{"title":"Plugin Panel","controls":[{"name":"color","label":"Color","type":"color","default":"#02da96"},{"name":"create","label":"Create Rectangle","type":"button"}]}"##,
+            )),
+        ),
+        "widget" => (
+            json!({
+                "id": id,
+                "name": name,
+                "version": "0.1.0",
+                "api": 4,
+                "description": "An interactive canvas widget plugin.",
+                "main": wasm_file,
+                "widget": true,
+                "permissions": {
+                    "access": "read"
+                }
+            }),
+            format!(
+                r##"use figcraft_plugin_sdk::{{CallInput, entry, json, render_widget}};
+
+entry!(run);
+
+fn run(input: CallInput) -> Result<(), String> {{
+    let mut count = input
+        .widget
+        .as_ref()
+        .and_then(|w| w.state.get("count"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if let Some(ev) = input.widget.as_ref().and_then(|w| w.event.as_ref()) {{
+        if ev.get("target").and_then(|t| t.as_str()) == Some("inc") {{
+            count += 1;
+        }}
+    }}
+    render_widget(&json!({{
+        "state": {{"count": count}},
+        "root": {{
+            "type": "frame",
+            "name": "{name}",
+            "layout": "horizontal",
+            "padding": 10,
+            "gap": 8,
+            "fill": "#ffffff",
+            "stroke": "#d8d8d8",
+            "radius": 8,
+            "children": [
+                {{"type": "text", "text": format!("{name}: {{count}}"), "size": 14, "color": "#1e1e1e"}},
+                {{"type": "frame", "name": "Add", "target": "inc", "layout": "horizontal", "padding": 6, "fill": "#02da96", "radius": 4, "children": [
+                    {{"type": "text", "text": "+1", "size": 12, "bold": true, "color": "#ffffff"}}
+                ]}}
+            ]
+        }}
+    }}))
+}}
+"##
+            ),
+            Some((
+                "widget_render",
+                true,
+                br##"{"state":{"count":0},"root":{"type":"frame","name":"Widget","layout":"horizontal","padding":10,"gap":8,"fill":"#ffffff","stroke":"#d8d8d8","radius":8,"children":[{"type":"text","text":"Count: 0","size":14,"color":"#1e1e1e"},{"type":"frame","name":"Add","target":"inc","layout":"horizontal","padding":6,"fill":"#02da96","radius":4,"children":[{"type":"text","text":"+1","size":12,"bold":true,"color":"#ffffff"}]}]}}"##,
+            )),
+        ),
+        "exporter" => (
+            json!({
+                "id": id,
+                "name": name,
+                "version": "0.1.0",
+                "api": 4,
+                "description": "Exports data from the current document to a file.",
+                "main": wasm_file,
+                "permissions": {
+                    "access": "read",
+                    "saveFile": true,
+                    "commands": ["node.list"]
+                },
+                "commands": [
+                    { "id": "export", "label": format!("{name}…") }
+                ]
+            }),
+            format!(
+                r#"use figcraft_plugin_sdk::{{CallInput, call, entry, json, save_file, set_output}};
+
+entry!(run);
+
+fn run(_input: CallInput) -> Result<(), String> {{
+    let nodes = call("node.list", &json!({{}}))?;
+    let bytes = serde_json::to_vec_pretty(&nodes).map_err(|e| e.to_string())?;
+    save_file("layers.json", "application/json", &bytes)?;
+    set_output(&json!({{"saved": "layers.json"}}));
+    Ok(())
+}}
+"#
+            ),
+            Some(("set_output", false, br#"{"saved":"layers.json"}"#)),
+        ),
+        other => {
+            return Err(bad(
+                cmd,
+                format!("unknown template `{other}` (expected command, panel, widget or exporter)"),
+            ));
+        }
+    };
+
+    let manifest_text = serde_json::to_string_pretty(&manifest_val).map_err(|e| bad(cmd, e.to_string()))?;
+    // Validate the generated manifest before touching the disk.
+    Manifest::parse(&manifest_text).map_err(|e| bad(cmd, e))?;
+
+    let cargo_toml = format!(
+        r#"[package]
+name = "{slug}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+figcraft-plugin-sdk = {{ path = "../sdk" }}
+serde_json = "1"
+"#
+    );
+
+    crate::file_access::create_dir_all(&dir.join("src"))?;
+    let manifest_path = dir.join(MANIFEST_FILE);
+    crate::file_access::write(&manifest_path, manifest_text.as_bytes())?;
+    crate::file_access::write(&dir.join("Cargo.toml"), cargo_toml.as_bytes())?;
+    crate::file_access::write(&dir.join("src").join("lib.rs"), lib_rs.as_bytes())?;
+    let stub_wasm = crate::plugin_directory::encode_wasm_module(fallback_call);
+    crate::file_access::write(&dir.join(&wasm_file), &stub_wasm)?;
+
+    let manifest_path_str = manifest_path.to_string_lossy().into_owned();
+    let _ = import(s, &json!({"path": manifest_path_str}))?;
+    Ok(json!({
+        "id": id,
+        "name": name,
+        "dir": dir.to_string_lossy(),
+        "manifest": manifest_path_str,
+        "template": template,
+    }))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn create(_s: &mut Session, _p: &Value) -> Result<Value> {
+    Err(bad("plugin.create", "creating plugin projects on disk requires the desktop app or CLI"))
+}
+
+fn logs(s: &mut Session, p: &Value) -> Result<Value> {
+    let filter_id = string(p, "id");
+    if get(p, "clear") == Some(&Value::Bool(true)) {
+        match &filter_id {
+            Some(id) => s.plugins.history.retain(|r| r.plugin != *id),
+            None => s.plugins.history.clear(),
+        }
+    }
+    let runs: Vec<&PluginRunRecord> = s
+        .plugins
+        .history
+        .iter()
+        .filter(|r| filter_id.as_ref().is_none_or(|id| r.plugin == *id))
+        .collect();
+    Ok(json!({"runs": runs}))
+}
+
+fn console(s: &mut Session, p: &Value) -> Result<Value> {
+    s.request_ui("dialog.pluginConsole", json!({}));
+    logs(s, p)
+}
+
+fn new_dialog(s: &mut Session, _p: &Value) -> Result<Value> {
+    s.request_ui("dialog.pluginNew", json!({}));
+    crate::cmd::ok()
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -693,6 +1079,17 @@ pub fn specs() -> Vec<CommandSpec> {
             event
         ),
         spec!("plugin.close", "Close plugin panel", "{id} → {closed}", false, close),
+        spec!("plugin.reload", "Reload plugin from disk", "{id} → {id, name, version, reloaded}", false, reload),
+        spec!(
+            "plugin.create",
+            "Create new plugin project",
+            "{dir, name?, id?, template? (command|panel|widget|exporter)} → {id, name, dir, manifest, template}",
+            false,
+            create
+        ),
+        spec!("plugin.logs", "Plugin execution logs", "{id?, clear?} → {runs}", false, logs),
+        spec!("plugin.newDialog", "New plugin…", "{}", false, new_dialog),
+        spec!("plugins.console", "Plugin console…", "{id?, clear?} → {runs}", false, console),
         spec!("plugins.runLast", "Run last plugin", "{}", false, run_last),
         spec!("plugins.manage", "Manage plugins…", "{}  opens the plugins window; returns the list like `plugin.list`", false, manage),
     ]

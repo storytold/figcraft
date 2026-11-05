@@ -63,10 +63,16 @@ large data instead of logging it in full.
   with a field per parameter, drawn with FigCraft's own widgets; **Run** runs it.
 - **Plugins ▸ Run last plugin** (⌥⌘P on macOS, Ctrl+Alt+Shift+P on Windows and Linux, where
   Ctrl+Alt+P is Pixel preview) runs the last plugin command again with the same parameters.
-- **Plugins ▸ Manage plugins…** has two tabs. **Installed** lists the installed plugins (version,
-  access, where each comes from: its manifest path or the server it was installed from) with a
-  Remove button for each, and an Import button. **Browse** shows a server's plugin directory, with
-  Install, Update and Remove (see [Plugin directories](#plugin-directories)).
+- **Plugins ▸ Manage plugins…** has three tabs. **Installed** lists the installed plugins (version,
+  access, where each comes from: its manifest path or the server it was installed from) with
+  Run, Reload (for development plugins) and Remove buttons for each, plus Import, New plugin… and
+  Built-in Store buttons. **Browse** shows the **Built-in Store** (`builtin`), a **Local Folder**
+  of plugins on disk, or a remote `figcraft-server`'s plugin directory, with category filters
+  (All, Commands, Widgets) and Install, Update and Remove (see [Plugin directories](#plugin-directories)).
+  **Development** scaffolds new plugins from templates (`command`, `panel`, `widget`, `exporter`),
+  manages local development plugins (Run, Reload, Build & Reload, Show in Folder), and provides the
+  **Plugin Dev Console** showing recent plugin runs with their logs, host calls, fuel consumption,
+  and JSON output or errors.
 - **Plugins ▸ Widgets** lists the installed widget plugins; picking one puts its widget in the
   middle of the view.
 
@@ -152,6 +158,11 @@ plugins: import them in the script.
 | `plugin.list` | `{}` | `{plugins: [{id, name, version, description, main, api, permissions, commands, path, loaded}], last: {id, command}}` |
 | `plugin.import` | `{path}` or `{manifest, wasm}` | `path` is a `figcraft-plugin.json` or its folder. Without files (the browser, tests), pass the manifest (an object or JSON text) and the module as base64 `wasm`; such a plugin lasts for the session only. A plugin with the same id is replaced. The module is checked first. |
 | `plugin.remove` | `{id}` | Uninstalls it. |
+| `plugin.reload` | `{id?}` | Reloads a local development plugin (default: the last run plugin) from its manifest on disk, re-validating its manifest and WebAssembly module and clearing any open panel session. Returns `{reloaded, name, version, path}`. |
+| `plugin.create` | `{path, name, id?, template?, import?}` | Scaffolds a new plugin project at `path` (`Cargo.toml`, `src/lib.rs`, `figcraft-plugin.json`, and a starter `.wasm` binary) using `template` (`command`, `panel`, `widget`, or `exporter`). When `import: true` (the default), imports it as a development plugin immediately. Returns `{created, name, template, path, manifest, imported}`. |
+| `plugin.logs` | `{id?, clear?}` | Returns the recent plugin run history `{logs: [{plugin, command, ok, calls, fuel, fuel_limit, logs, output, error}]}`, optionally filtered by `id`; with `clear: true`, clears the history. |
+| `plugin.newDialog` | `{}` | Opens the Manage plugins window on the Development tab (`New plugin…`). |
+| `plugins.console` | `{}` | Opens the Manage plugins window on the Development tab (`Plugin console…`). |
 | `plugin.run` | `{id, command?, params?, fuel?}` | Runs a command (default: the first) with its parameters checked against the manifest and the missing ones filled with their defaults; `fuel` lowers the instruction budget (for the panel's callbacks too). Returns `{plugin, command, output, logs, calls, fuel, panel}`; `output` is the plugin's result, parsed as JSON when it is JSON; `panel` is the plugin's open panel (as `plugin.ui` returns it) or null. |
 | `plugin.ui` | `{id?}` | Plugin `id`'s open panel: `{plugin, command, title, controls, values}` (`values`: every field's current value by name), or null. Without `id`, the panel opened last. |
 | `plugin.event` | `{id, control, value?}` | Uses a control of plugin `id`'s open panel, as a click would: a button (no `value`), or a field set to `value` (checked like a parameter: a number is clamped, a list or menu value must be one of its options, a colour must be hex). The plugin is called back; returns like `plugin.run`. |
@@ -171,10 +182,11 @@ plugins: import them in the script.
 
 ## Plugin directories
 
-A `figcraft-server` ([`server.md`](server.md#plugin-directory)) can keep a directory of plugins for a
-team. Anyone who can reach the server may browse it and install from it; only whoever has the
-server's key may publish to it or unpublish from it. There are no accounts: the server's operator
-decides who gets the key and moderates what's there.
+Plugins can be browsed and installed from three directory sources in **Plugins ▸ Manage plugins… ▸ Browse** or through `plugin.directory.list` / `plugin.directory.install`:
+
+1. **Built-in Store (`builtin`)**: works offline out of the box with no server required, offering the built-in starter and example plugins (`Tidy names`, `Swatch grid`, `Counter`, `Export names`).
+2. **Local Folder**: any folder path on disk containing plugin subfolders (with `figcraft-plugin.json` and `.wasm` modules) or `.figcraft-plugin` bundle files.
+3. **Team Server (`ws://host:47900/` or `wss://…`)**: a `figcraft-server` ([`server.md`](server.md#plugin-directory)) can keep a directory of plugins for a team. Anyone who can reach the server may browse it and install from it; only whoever has the server's key may publish to it or unpublish from it. There are no accounts: the server's operator decides who gets the key and moderates what's there.
 
 **Installing.** In **Plugins ▸ Manage plugins… ▸ Browse**, type the server's address
 (`ws://host:47900/`, or `wss://…` behind TLS) and press **Browse**: nothing is fetched before that.
@@ -527,7 +539,20 @@ entry!(run);
 
 Build it with `cargo build --release --target wasm32-unknown-unknown`, put
 `target/wasm32-unknown-unknown/release/my_plugin.wasm` next to a `figcraft-plugin.json` whose `main`
-names it, and import the manifest. The SDK gives `call`, `selection`, `log`, `notify` and the
+names it, and import the manifest — or use the CLI and in-app developer tools:
+
+```sh
+# Scaffold a new plugin project (templates: command, panel, widget, exporter)
+figcraft-cli plugin new ./my-plugin --name "My Plugin" --template panel
+
+# Compile to wasm32-unknown-unknown and copy the .wasm next to figcraft-plugin.json
+figcraft-cli plugin build ./my-plugin
+
+# Run a plugin command or widget headlessly against a document and inspect logs, calls, and fuel
+figcraft-cli plugin run ./my-plugin --in design.figcraft --out out.figcraft
+```
+
+The SDK gives `call`, `selection`, `log`, `notify` and the
 `Input` (`command`, `params` with `str`/`f64`/`bool` helpers, `selection`, and `event` when the
 panel calls back: `control`, `value` and every field's `values`); returning `Err` fails the run and
 rolls it back. With `"api": 2` in the manifest: `show_ui(&json!({...}))` and `close_ui()` for the
