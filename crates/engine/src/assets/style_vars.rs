@@ -33,6 +33,7 @@ pub fn field_type(kind: &StyleKind, key: &str) -> Option<VariableType> {
             (EffectKind::DropShadow(_) | EffectKind::InnerShadow(_), "color") => Some(Color),
             (EffectKind::DropShadow(_) | EffectKind::InnerShadow(_), "radius" | "spread" | "offsetX" | "offsetY") => Some(Number),
             (EffectKind::LayerBlur(_) | EffectKind::BackgroundBlur(_), "radius" | "startRadius") => Some(Number),
+            (EffectKind::Glass(_), f) if figcraft_doc::Glass::BOUND_FIELDS.contains(&f) => Some(Number),
             _ => None,
         },
         (StyleKind::Grid { grids }, Some((BoundList::Grids, i, "size" | "count" | "gutter" | "offset"))) => grids.get(i).map(|_| Number),

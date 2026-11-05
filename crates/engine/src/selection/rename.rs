@@ -9,6 +9,9 @@ use figcraft_doc::{Document, NodeId};
 
 /// Longest match pattern accepted (characters).
 const MAX_FIND: usize = 1_000;
+/// Longest replacement or pattern template accepted (characters): each is expanded again for
+/// every match, so its length multiplies the work of a rename.
+const MAX_TEMPLATE: usize = 1_000;
 /// Longest name a rename produces (characters).
 const MAX_NAME: usize = 10_000;
 /// Widest zero padding of a number code.
@@ -50,6 +53,12 @@ impl BatchRename {
             }
             Some(f) => Some(Find::Text(f.to_string())),
         };
+        if replace.chars().count() > MAX_TEMPLATE {
+            return Err(format!("the replacement is longer than {MAX_TEMPLATE} characters"));
+        }
+        if pattern.is_some_and(|p| p.chars().count() > MAX_TEMPLATE) {
+            return Err(format!("the pattern is longer than {MAX_TEMPLATE} characters"));
+        }
         let start = start.filter(|s| s.is_finite()).map_or(1, |s| s.clamp(0.0, 1e12).round() as u64);
         Ok(Self { find, replace: replace.to_string(), pattern: pattern.map(str::to_string), start })
     }

@@ -50,6 +50,47 @@ fn glass_values_are_clamped_and_reach_their_backdrop() {
 }
 
 #[test]
+fn glass_frost_stays_within_the_reference_range() {
+    // A file from before the 0–100 range draws its frost at 100, and reaches no further.
+    let g = Glass { frost: 150.0, ..Glass::default() };
+    assert_eq!(g.sanitized().frost, Glass::MAX_FROST);
+    let e = Effect { kind: EffectKind::Glass(g), visible: true };
+    let capped = Effect { kind: EffectKind::Glass(Glass { frost: Glass::MAX_FROST, ..Glass::default() }), visible: true };
+    assert_eq!(e.backdrop_radius(), capped.backdrop_radius());
+}
+
+#[test]
+fn glass_fields_take_bound_numbers_as_the_panel_shows_them() {
+    let mut g = Glass::default();
+    for (field, x) in [
+        ("lightAngle", 30.0),
+        ("lightIntensity", 25.0),
+        ("refraction", 40.0),
+        ("depth", 12.0),
+        ("dispersion", 10.0),
+        ("radius", 8.0),
+        ("splay", 50.0),
+    ] {
+        assert!(g.set_bound(field, x), "{field}");
+    }
+    assert_eq!((g.light_angle, g.light_intensity, g.refraction, g.depth, g.dispersion, g.frost, g.splay), (30.0, 0.25, 0.4, 12.0, 0.1, 8.0, 0.5));
+    // Out of range: clamped to the field's range.
+    for (field, x) in [("lightAngle", 270.0), ("lightIntensity", 250.0), ("depth", 0.0), ("radius", 150.0), ("splay", -5.0)] {
+        assert!(g.set_bound(field, x), "{field}");
+    }
+    assert_eq!((g.light_angle, g.light_intensity, g.depth, g.frost, g.splay), (180.0, 1.0, 1.0, Glass::MAX_FROST, 0.0));
+    // A field glass doesn't have, or a value that isn't a number, changes nothing.
+    let before = g.clone();
+    assert!(!g.set_bound("spread", 3.0));
+    assert!(!g.set_bound("splay", f64::NAN));
+    assert!(!g.set_bound("depth", f64::INFINITY));
+    assert_eq!(g, before);
+    for field in Glass::BOUND_FIELDS {
+        assert!(Glass::default().set_bound(field, 1.0), "{field}");
+    }
+}
+
+#[test]
 fn effect_colours() {
     let mut e = Effect::noise();
     assert!(e.color(true).is_some());

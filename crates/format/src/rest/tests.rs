@@ -756,3 +756,44 @@ fn the_fig_import_sets_its_own_layer_cap() {
     assert_eq!(doc.node_count(), 5);
     assert!(warnings.iter().any(|w| w.contains("more than 4 layers")), "{warnings:?}");
 }
+
+/// Angles written many turns round keep the arc they draw: the sweep is the difference as
+/// written, and the start comes within a turn of zero, the same way round.
+#[test]
+fn an_arc_written_many_turns_round_keeps_its_sweep() {
+    let tau = std::f64::consts::TAU;
+    for (start, end) in [
+        (999.0, 999.0 + tau),
+        (1500.0, 1501.0),
+        (-5000.0, -5000.0 - 2.5),
+        (1e6, 1e6 + tau),
+        (1e6, 1e6 + 5.9),
+        (1e6, 1e6 + 6.1),
+        (3e7, 3e7),
+        (-4e5, -4e5 + tau - 0.01),
+        (-182.212373908208, -182.212373908208 + tau),
+    ] {
+        let mut arc = json!({"id": "Arc", "name": "Arc", "type": "ELLIPSE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}});
+        arc["arcData"] = json!({"startingAngle": start, "endingAngle": end, "innerRadius": 0});
+        let (doc, _) = one(json!([arc]));
+        let NodeKind::Ellipse { start: s, sweep, .. } = named(&doc, "Arc").kind else { panic!("{start}: not an ellipse") };
+        let want = end - start;
+        let want = if (want.abs() - tau).abs() < 1e-6 { tau.copysign(want) } else { want };
+        assert!((sweep - want).abs() < 1e-9, "{start}..{end}: sweep {sweep}, not {want}");
+        assert!(s.abs() < tau, "{start}: start {s} left past a turn");
+        let off = (s - start).rem_euclid(tau);
+        assert!(off.min(tau - off) < 1e-6, "{start}: start {s} isn't the same way round");
+    }
+}
+
+/// An arc with a start but no end goes all the way round, however far out the start is.
+#[test]
+fn an_arc_without_an_end_is_whole_wherever_it_starts() {
+    for start in [0.0, 2.0, -5000.0, 1e8, 1e15] {
+        let mut arc = json!({"id": "Arc", "name": "Arc", "type": "ELLIPSE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}});
+        arc["arcData"] = json!({"startingAngle": start, "innerRadius": 0});
+        let (doc, _) = one(json!([arc]));
+        let NodeKind::Ellipse { sweep, .. } = named(&doc, "Arc").kind else { panic!("{start}: not an ellipse") };
+        assert_eq!(sweep, std::f64::consts::TAU, "start {start}");
+    }
+}
