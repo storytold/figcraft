@@ -423,17 +423,23 @@ fn forced_direction_sets_a_paragraphs_base_level() {
     // Latin letters forced right to left: an embedded left-to-right run (level 2) in a
     // right-to-left paragraph; the next paragraph, unforced, stays left to right.
     let b = Bidi::of("ab\ncd", &[Some(true), None]).unwrap();
-    assert_eq!(b.rtl_para, [true, true, true, false, false]);
+    assert_eq!(b.rtl_para, [true, true, true, false, false, false], "and the position after the last char");
     assert_eq!((b.levels.get(..2), b.levels.get(3..)), (Some(&[2, 2][..]), Some(&[0, 0][..])));
     // Hebrew forced left to right: a right-to-left run (level 1) in a left-to-right paragraph.
     let b = Bidi::of("\u{5D0}\u{5D1}", &[Some(false)]).unwrap();
-    assert_eq!(b.rtl_para, [false, false]);
+    assert_eq!(b.rtl_para, [false, false, false]);
     assert_eq!(b.levels, [1, 1]);
     // Forcing what the letters already say changes nothing; a paragraph past the forced list is
     // detected.
     let b = Bidi::of("\u{5D0}\n\u{5D1}", &[Some(true)]).unwrap();
-    assert_eq!(b.rtl_para, [true, true, true]);
+    assert_eq!(b.rtl_para, [true, true, true, true]);
     assert_eq!((b.levels.first(), b.levels.last()), (Some(&1), Some(&1)));
+    // The empty paragraph after a final newline has its own direction: forced, else left to right.
+    let b = Bidi::of("ab\n", &[None, Some(true)]).unwrap();
+    assert_eq!(b.rtl_para, [false, false, false, true]);
+    let b = Bidi::of("\u{5D0}\n", &[]).unwrap();
+    assert_eq!(b.rtl_para, [true, true, false]);
+    assert_eq!(Bidi::of("", &[Some(true)]).map(|b| b.rtl_para), Some(vec![true]));
 }
 
 /// The x of the glyph for char `i`.

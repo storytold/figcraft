@@ -265,7 +265,8 @@ impl Item {
     }
 }
 
-/// Bidi embedding levels per char, and whether each char's paragraph runs right to left.
+/// Bidi embedding levels per char, and whether each char's paragraph runs right to left;
+/// `rtl_para` has one more entry, for the position after the last char (an empty last paragraph).
 pub(crate) struct Bidi {
     pub(crate) levels: Vec<u8>,
     pub(crate) rtl_para: Vec<bool>,
@@ -296,6 +297,15 @@ impl Bidi {
                 rtl_para.push(paras.peek().is_some_and(|q| q.level.is_rtl()));
             }
         }
+        // The position after the last char: in the last paragraph, or in the empty one after a
+        // final newline (its forced direction, else left to right), so an empty last line knows
+        // its direction too.
+        let after = if text.is_empty() || text.ends_with('\n') {
+            forced.get(text.matches('\n').count()).copied().flatten().unwrap_or(false)
+        } else {
+            rtl_para.last().copied().unwrap_or(false)
+        };
+        rtl_para.push(after);
         Some(Bidi { levels, rtl_para })
     }
 }
@@ -1271,7 +1281,8 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         // Letter spacing separates glyphs: none after the line's last visible one.
         let end_spacing = vis_end.checked_sub(1).filter(|i| *i >= *s).and_then(|i| items.get(i)).map_or(0.0, |it| it.spacing);
         let width: f64 = items.get(*s..vis_end).unwrap_or(&[]).iter().map(|it| it.adv).sum::<f64>() - end_spacing;
-        let first_char = items.get(*s).map(|it| it.char_start).unwrap_or(0);
+        // An empty last line has no item: the position after the last char is its paragraph's.
+        let first_char = items.get(*s).map_or(chars.len(), |it| it.char_start);
         let rtl_line = rtl_para_at(first_char);
         let line_indent = line_indent_of(*para, para_start_line, first_char);
         // Hanging punctuation at the line's edges (the visible text's first and last chars).

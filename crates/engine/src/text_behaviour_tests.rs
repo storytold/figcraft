@@ -393,6 +393,7 @@ fn text_direction_is_forced_per_paragraph() {
     assert_eq!(inspect(&s)["textDirection"], json!("rtl"));
     let css = |s: &mut Session| s.execute("inspect.code", &json!({"id": t})).unwrap()["code"].as_str().unwrap().to_string();
     assert!(css(&mut s).contains("direction: rtl;"), "{}", css(&mut s));
+    assert!(css(&mut s).contains("text-align: left;"), "Left stays the left edge, which `start` would not be: {}", css(&mut s));
     s.execute("node.set", &json!({"id": t, "props": {"textDirection": "ltr"}})).unwrap();
     assert_eq!(rtl(&s), [false, false, false]);
     assert_eq!(inspect(&s)["textDirection"], json!("ltr"));
@@ -413,6 +414,12 @@ fn text_direction_is_forced_per_paragraph() {
     s.execute("text.edit.insert", &json!({"text": "\n"})).unwrap();
     s.execute("text.edit.end", &json!({})).unwrap();
     assert_eq!(rtl(&s), [false, true, true, false]);
+    // An empty last paragraph (after a final newline) keeps the direction forced on it.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abc\n", "textDirection": "auto"}})).unwrap();
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 4})).unwrap();
+    s.execute("text.directionRtl", &json!({})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(rtl(&s), [false, true], "the empty last line runs right to left");
     // A direction the document has words for; junk is refused.
     s.execute("node.set", &json!({"id": t, "props": {"characters": "\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc", "textDirection": "auto"}})).unwrap();
     assert_eq!(rtl(&s), [true], "Hebrew first: right to left by detection");

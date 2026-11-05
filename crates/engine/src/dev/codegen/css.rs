@@ -311,7 +311,13 @@ fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tok
     let dir = tx.paragraphs.first().map(|p| p.direction).filter(|d| tx.paragraphs.iter().all(|p| p.direction == *d));
     match dir {
         Some(figcraft_doc::TextDirection::Ltr) => put("direction", "ltr".into()),
-        Some(figcraft_doc::TextDirection::Rtl) => put("direction", "rtl".into()),
+        Some(figcraft_doc::TextDirection::Rtl) => {
+            put("direction", "rtl".into());
+            // Left alignment is absolute on the canvas; `start` would be the right edge here.
+            if tx.align_h == TextAlignH::Left {
+                put("text-align", "left".into());
+            }
+        }
         _ => {}
     }
     match s.case {

@@ -10,7 +10,7 @@ use figcraft_doc::{
 use serde_json::Value;
 
 use super::Ctx;
-use super::props::{flag, len, list, num, paints, text};
+use super::props::{flag, len, num, paints, text};
 
 /// Most characters read from one text node.
 const MAX_CHARS: usize = 1 << 20;
@@ -259,10 +259,11 @@ fn runs(cx: &mut Ctx, v: &Value, td: &TextData) -> Vec<StyleRun> {
 /// Each paragraph's list type, nesting level, start number and base direction from `lineTypes`,
 /// `lineIndentations` and (from `.fig` files) `listStartOffsets` and `lineDirections`.
 fn lists(v: &Value, td: &mut TextData) {
-    let types = list(v, "lineTypes");
-    let indents = list(v, "lineIndentations");
-    let starts = list(v, "listStartOffsets");
-    let dirs = list(v, "lineDirections");
+    // One entry per paragraph: read up to the paragraph count (bounded by the text's size), not the
+    // general list limit, so a long text keeps every paragraph's settings.
+    let n = td.paragraph_count();
+    let column = |k: &str| v.get(k).and_then(Value::as_array).map(|a| a.get(..a.len().min(n)).unwrap_or_default()).unwrap_or_default();
+    let (types, indents, starts, dirs) = (column("lineTypes"), column("lineIndentations"), column("listStartOffsets"), column("lineDirections"));
     td.paragraphs = (0..types.len().max(dirs.len()))
         .map(|i| ParaList {
             list: match types.get(i).and_then(Value::as_str) {
