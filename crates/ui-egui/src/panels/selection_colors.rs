@@ -157,15 +157,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
                                     d.remove::<OpacityScrub>(scrub_key);
                                 }
                             });
-                            if scrub {
-                                let _ = app.session.begin_interaction("Opacity");
-                                let _ = app.session.execute("selection.setPaint", &json!({"targets": group.targets, "paint": paint}));
-                                if done {
-                                    let _ = app.session.commit_interaction();
-                                }
-                            } else {
-                                app.run("selection.setPaint", json!({"targets": group.targets, "paint": paint}));
-                            }
+                            app.field_run_named(Some(edit), "Opacity", "selection.setPaint", |_| json!({"targets": group.targets, "paint": paint}));
                         }
                         widgets::tight_end(ui, |ui| {
                             if linked_name.is_some() {
@@ -469,6 +461,7 @@ mod tests {
         for dx in [-10.0, -20.0, -30.0] {
             p.frame(vec![Event::PointerMoved(start + vec2(dx, 0.0))]);
         }
+        assert!(p.app.session.ds().unwrap().interaction.is_some(), "the scrub commits only on release");
         assert!(p.frame(vec![]).iter().any(|(text, _)| text == "70%"), "the live opacity stays visible while scrubbing");
         p.frame(vec![Event::PointerButton {
             pos: start - vec2(30.0, 0.0),
@@ -478,6 +471,7 @@ mod tests {
         }]);
         assert!(p.app.session.ds().unwrap().interaction.is_none());
         assert_eq!(p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity, 0.7);
+        assert_eq!(p.app.session.undo_labels(1), ["Opacity"], "the shared helper preserves the scrub's undo label");
         p.app.run("edit.undo", json!({}));
         assert_eq!(p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity, 1.0);
         assert_eq!(p.app.session.selection().len(), 2);
