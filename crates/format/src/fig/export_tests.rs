@@ -1244,6 +1244,25 @@ fn local_samples_round_trip() {
 }
 
 #[test]
+fn a_glass_frost_is_written_as_it_draws() {
+    // A frost saved before the 0–100 range (or not a number) is written at what it draws: 100, or
+    // the default.
+    for (frost, written) in [(12.0, 12.0), (500.0, Glass::MAX_FROST), (f64::NAN, Glass::default().frost)] {
+        let mut doc = Document::new("glass");
+        let page = doc.first_page().unwrap();
+        let r = doc.create(page, NodeKind::Rectangle, "Pane", 0.0, 0.0, 24.0, 24.0).unwrap();
+        doc.get_mut(r).unwrap().effects = vec![Effect { kind: EffectKind::Glass(Glass { frost, ..Glass::default() }), visible: true }];
+        let (bytes, _) = export(&doc, None).unwrap();
+        let archive = Archive::open(&bytes).unwrap();
+        let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+        let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+        let pane = msg.get("nodeChanges").unwrap().list().iter().find(|nc| nc.get("name").and_then(Kv::str) == Some("Pane")).unwrap();
+        let radius = pane.get("effects").unwrap().list()[0].get("radius").and_then(Kv::f64).unwrap();
+        assert_eq!(radius, written, "frost {frost}");
+    }
+}
+
+#[test]
 fn a_vector_drawable_export_setting_is_written_as_svg_with_a_warning() {
     let mut doc = Document::new("vd");
     let page = doc.first_page().unwrap();
