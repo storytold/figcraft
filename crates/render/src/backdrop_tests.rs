@@ -294,6 +294,25 @@ fn splay_turns_the_bend_towards_the_centre() {
     assert!(diff(80..96, 40..56) > 40, "corner: {}", diff(80..96, 40..56));
 }
 
+/// Glass with nothing under it (an export of the pane alone): the light on the bevel still shows,
+/// the alpha rising with it, and the flat inside and the outside stay clear.
+#[test]
+fn glass_over_nothing_still_catches_the_light() {
+    let mut d = Document::new("glass");
+    let p = d.first_page().unwrap();
+    let pane = d.create(p, NodeKind::Rectangle, "Glass", 40.0, 30.0, 120.0, 80.0).unwrap();
+    let n = d.get_mut(pane).unwrap();
+    n.fills.clear();
+    n.effects = vec![Effect { kind: EffectKind::Glass(Glass { light_intensity: 1.0, ..Glass::default() }), visible: true }];
+    let out = render_area(&d, &[pane], Rect::new(0.0, 0.0, 200.0, 140.0), 1.0).unwrap();
+    // The top-left corner faces the light (from the top left): white, as opaque as it is bright.
+    let corner = px(&out, 40, 30);
+    assert!(corner[3] > 100 && corner.iter().all(|v| v.abs_diff(corner[3]) <= 2), "{corner:?}");
+    assert!(out.data().chunks_exact(4).all(|q| q[0] <= q[3] && q[1] <= q[3] && q[2] <= q[3]), "premultiplied");
+    assert_eq!(px(&out, 100, 70), [0; 4]);
+    assert_eq!(px(&out, 10, 10), [0; 4]);
+}
+
 #[test]
 fn glass_and_backdrop_blur_survive_bands_and_partial_renders() {
     let (d, _, _) = glass_scene(Glass::default());

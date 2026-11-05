@@ -139,7 +139,10 @@ fn macos_font_assets_are_found_in_the_asset_store() {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    let tmp = TempDir(std::env::temp_dir().join(format!("figcraft-font-assets-{}", std::process::id())));
+    // Created fresh: a directory or link already at this predictable name is refused, and not removed.
+    let root = std::env::temp_dir().join(format!("figcraft-font-assets-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tmp = TempDir(root);
     let store = tmp.0.join("AssetsV2");
     let fonts = store.join("com_apple_MobileAsset_Font7");
     let data = |kind: &std::path::Path| kind.join("0f1e2d.asset").join("AssetData");
