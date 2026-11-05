@@ -183,6 +183,26 @@ fn deleted_nodes_can_come_back_but_ids_are_never_handed_out_twice() {
 }
 
 #[test]
+fn a_viewers_refused_deletion_gets_no_repair() {
+    let (d, _, frame) = doc();
+    let mut s = Server::new(d, "tok", Limits::default());
+    let (id, out) = s.join_as(hello("tok"), crate::message::Access::View).unwrap();
+    let Some(Outgoing::To(_, welcome)) = out.into_iter().next() else { panic!() };
+    let mut v = Client::join(welcome).unwrap();
+    let del = edit(&mut v, |d| d.remove(frame).unwrap());
+    let (reason, fixes) = rejected(
+        &mut s,
+        id,
+        match del {
+            ClientMsg::Changes { changes, .. } => changes,
+            _ => panic!(),
+        },
+    );
+    assert_eq!(reason, crate::VIEW_ONLY);
+    assert!(fixes.is_empty(), "{fixes:?}");
+}
+
+#[test]
 fn fixes_roll_a_rejected_client_back_to_the_server_state() {
     let (d, _, frame) = doc();
     let mut s = Server::new(d, "tok", Limits::default());

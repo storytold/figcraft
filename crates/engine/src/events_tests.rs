@@ -193,6 +193,10 @@ fn topics_parse_and_reject_unknown_names() {
     assert_eq!(events::topics(Some(&json!([]))).unwrap(), vec!["all".to_string()]);
     assert_eq!(events::topics(Some(&json!(["comments", "document"]))).unwrap(), vec!["comments".to_string(), "document".to_string()]);
     assert!(events::topics(Some(&json!(["nope"]))).is_err());
+    // Repeats collapse (the list is scanned per event under the log's lock), and `all` is all.
+    let many: Vec<&str> = std::iter::repeat_n("comments", 10_000).chain(["document"]).collect();
+    assert_eq!(events::topics(Some(&json!(many))).unwrap(), vec!["comments".to_string(), "document".to_string()]);
+    assert_eq!(events::topics(Some(&json!(["comments", "all", "document"]))).unwrap(), vec!["all".to_string()]);
     assert!(events::topics(Some(&json!("comments"))).is_err());
 }
 
