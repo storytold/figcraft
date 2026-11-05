@@ -278,3 +278,48 @@ fn add_auto_layout_still_makes_a_single_row() {
     got.sort();
     assert_eq!(got, sq.to_vec(), "no nested frames");
 }
+
+#[test]
+fn a_centred_title_above_a_card_is_lined_up_at_the_card_edge_with_a_warning() {
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, 0.0, 200.0, 200.0);
+    let title = rect(&mut s, f, 60.0, 0.0, 80.0, 30.0);
+    let card = rect(&mut s, f, 0.0, 40.0, 200.0, 100.0);
+    let result = ex(&mut s, "layout.suggest", json!({"ids": [f]}));
+    assert_eq!(mode(&s, f), Some(LayoutMode::Vertical));
+    assert_eq!(kids(&s, f), vec![title, card]);
+    let w = warnings(&result);
+    assert_eq!(w.len(), 1, "{result}");
+    assert!(w[0].contains("different offsets"), "{}", w[0]);
+    assert_eq!(page_box(&s, title), [0.0, 0.0, 80.0, 30.0], "the title's left edge is the card's now");
+    assert_eq!(page_box(&s, card), [0.0, 40.0, 200.0, 140.0], "the rest stays");
+}
+
+#[test]
+fn instances_and_layers_inside_them_are_refused_and_a_main_component_works() {
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, 0.0, 200.0, 200.0);
+    rect(&mut s, f, 0.0, 0.0, 50.0, 50.0);
+    rect(&mut s, f, 0.0, 60.0, 50.0, 30.0);
+    let nested = id(&ex(&mut s, "frame.create", json!({"parent": f, "x": 0, "y": 100, "width": 100, "height": 50})));
+    rect(&mut s, nested, 0.0, 0.0, 20.0, 20.0);
+    rect(&mut s, nested, 40.0, 0.0, 20.0, 20.0);
+    let comp = id(&ex(&mut s, "component.create", json!({"ids": [f]})));
+    let inst = id(&ex(&mut s, "instance.create", json!({"component": comp, "x": 400, "y": 0})));
+    let inside: Vec<NodeId> = kids(&s, inst).into_iter().filter(|k| matches!(s.doc().unwrap().node(*k).unwrap().kind, NodeKind::Frame)).collect();
+    assert!(!inside.is_empty(), "the instance has a frame of its own");
+    let page = s.page().unwrap();
+    let snapshot = |s: &Session| (kids(s, page), kids(s, inst), kids(s, inside[0]));
+    let before = snapshot(&s);
+    let steps = s.ds().unwrap().history.undo.len();
+    for target in [inst, inside[0]] {
+        let e = s.execute("layout.suggest", &json!({"ids": [target]})).unwrap_err().to_string();
+        assert!(e.contains("instance"), "{e}");
+    }
+    assert_eq!(snapshot(&s), before, "nothing changed");
+    assert_eq!(s.ds().unwrap().history.undo.len(), steps, "no history step");
+    assert!(s.doc().unwrap().node(inst).unwrap().layout.is_none());
+    // The main component is a frame and works.
+    let result = ex(&mut s, "layout.suggest", json!({"ids": [comp]}));
+    assert_eq!(result["ids"], json!([comp]));
+}

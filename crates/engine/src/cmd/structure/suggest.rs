@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::{Wrap, convert, infer_layout, sort_layout_children, wrap};
 use crate::params::{id_of, req_targets, string};
-use crate::{EngineError, Result, Session};
+use crate::{EngineError, Result, Session, bad};
 
 /// How deep nested band frames go before a frame is laid out as a single list.
 const MAX_DEPTH: usize = 16;
@@ -102,6 +102,18 @@ fn layout_for(bands: &[Band], vertical: bool, frame_w: f64, frame_h: f64, name: 
     let main_end = (main_size - bands.last().map_or(0.0, |b| b.hi)).max(0.0);
     let cross_start = bands.iter().map(|b| b.cross_lo).fold(f64::INFINITY, f64::min).max(0.0);
     let cross_end = bands.iter().map(|b| cross_size - b.cross_hi).fold(f64::INFINITY, f64::min).max(0.0);
+    // Every band is lined up at the start across the flow, so one that starts further in (a
+    // centred title above a card) moves to the smallest offset.
+    let widest_start = bands.iter().map(|b| b.cross_lo).fold(f64::NEG_INFINITY, f64::max);
+    let smallest_start = bands.iter().map(|b| b.cross_lo).fold(f64::INFINITY, f64::min);
+    if widest_start - smallest_start > GAP_TOLERANCE {
+        let what = if vertical { "rows" } else { "columns" };
+        warnings.push(format!(
+            "\"{name}\": the {what} start at different offsets ({} to {}), so they are lined up at the smallest and some move",
+            finite_or_zero(smallest_start),
+            finite_or_zero(widest_start)
+        ));
+    }
     let [ms, me, cs, ce] = [main_start, main_end, cross_start, cross_end].map(finite_or_zero);
     AutoLayout {
         mode: if vertical { LayoutMode::Vertical } else { LayoutMode::Horizontal },
@@ -215,6 +227,17 @@ pub(super) fn layout_suggest(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("layout.suggest", s, p)?;
     let direction = string(p, "direction");
     let doc = s.doc()?;
+    // An instance's layers come from its main component: nothing is added to them. Checked
+    // before anything changes, with the words Convert to group uses.
+    for i in &ids {
+        let n = doc.get(*i)?;
+        if matches!(n.kind, NodeKind::Instance { .. }) {
+            return Err(bad("layout.suggest", format!("\"{}\" is an instance: its layers come from its main component (detach it first)", n.name)));
+        }
+        if crate::components::owning_instance(doc, *i).is_some() {
+            return Err(bad("layout.suggest", format!("\"{}\" is inside an instance: edit its main component, or detach the instance", n.name)));
+        }
+    }
     let all_frames = ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() && n.layout.is_none()));
     let single_group = ids.len() == 1 && ids.first().and_then(|i| doc.node(*i)).is_some_and(|n| matches!(n.kind, NodeKind::Group));
     // A frame with auto layout already is wrapped, like a layer, and so are several layers.

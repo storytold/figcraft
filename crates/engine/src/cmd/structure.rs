@@ -114,7 +114,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "layout.suggest",
             "Suggest auto layout",
-            "{ids?, direction? (horizontal|vertical|grid)}  splits each frame's layers into rows or columns by the gaps between them, wraps every band of several layers in a frame without fill that hugs it and does the same inside, so the layers keep their place where the gaps are even; the frame keeps its size, and the result carries `warnings` for gaps that differ or layers that overlap. `direction` sets the top level's direction (nested frames follow the gaps); grid lays the layers out in one grid. A group is converted to a frame and several layers are wrapped in one, as Add auto layout does",
+            "{ids?, direction? (horizontal|vertical|grid)}  splits each frame's layers into rows or columns by the gaps between them, wraps every band of several layers in a frame without fill that hugs it and does the same inside, so the layers keep their place where the gaps are even and the bands start at the same offset across the flow; the frame keeps its size, and the result carries `warnings` for gaps that differ, bands that start at different offsets (they line up at the smallest and some move) and layers that overlap. Instances and the layers inside them are refused. `direction` sets the top level's direction (nested frames follow the gaps); grid lays the layers out in one grid. A group is converted to a frame and several layers are wrapped in one, as Add auto layout does",
             true,
             suggest::layout_suggest
         ),
