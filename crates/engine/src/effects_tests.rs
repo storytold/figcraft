@@ -108,6 +108,20 @@ fn scaling_a_frost_from_an_older_file_starts_from_what_it_draws() {
 }
 
 #[test]
+fn inspect_shows_a_frost_from_an_older_file_as_it_draws() {
+    // A frost of 150, saved before the 0–100 range, draws at 100: Dev Mode says 100 as CSS does.
+    let mut s = Session::new();
+    let r = rect(&mut s);
+    s.execute("effect.add", &json!({"ids": [r], "type": "glass"})).unwrap();
+    s.execute("effect.set", &json!({"ids": [r], "index": 0, "effect": {"type": "glass", "frost": 150}})).unwrap();
+    let doc = s.doc().unwrap();
+    let sections = crate::devinspect::properties(doc, r);
+    let glass = &sections.iter().find(|s| s.title == "Effects").unwrap().rows[0];
+    assert!(glass.value.contains(" frost 100 "), "{}", glass.value);
+    assert!(code_for(doc, r, CodeLang::Css).contains("backdrop-filter: blur(50px);"));
+}
+
+#[test]
 fn inspect_and_css_show_the_new_effects() {
     let mut s = Session::new();
     let r = rect(&mut s);
