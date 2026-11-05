@@ -140,6 +140,14 @@ fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui:
     }
 }
 
+/// A press ends the keyboard selection box and pick select.
+fn end_keyboard_box(app: &mut FigApp, ctx: &egui::Context) {
+    if ctx.input(|i| i.pointer.any_pressed()) {
+        app.ui.key_box = None;
+        app.ui.pick = None;
+    }
+}
+
 /// The pointer and keys on the canvas. False when something on it with a cursor of its own has
 /// the pointer (a comment pin, a ruler guide, a gradient or padding handle): the tool's cursor
 /// then doesn't show.
@@ -147,6 +155,8 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     if crate::proto_canvas::input(app, ui, resp) {
         // A prototype gesture is a press on the canvas too: the Pages list gives up the keyboard.
         app.ui.pages_focus = None;
+        // And it ends the keyboard selection box and pick select, as any canvas press does.
+        end_keyboard_box(app, ui.ctx());
         return true;
     }
     let ctx = ui.ctx().clone();

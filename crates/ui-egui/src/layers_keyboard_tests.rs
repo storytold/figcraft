@@ -311,3 +311,22 @@ fn tab_switches_the_selection_box_to_pick_select() {
     assert!(u.app.session.selection().is_empty(), "nothing selected in the new document");
     assert!(u.app.ui.pick.is_none());
 }
+
+/// A press on a prototype connection handle is a press on the canvas too: it ends pick select
+/// like any other canvas press, rather than leaving the pink outline up.
+#[test]
+fn a_prototype_handle_press_ends_pick_select() {
+    let (mut u, a, _) = setup();
+    u.app.run("select.set", json!({"ids": [a]}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(a));
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    u.frame(vec![]);
+    assert_eq!(u.app.picked(), Some(a), "still picking in the Prototype tab");
+    let b = u.app.session.doc().unwrap().world_bounds(a).unwrap();
+    let handle = u.app.to_screen(b.x1, (b.y0 + b.y1) / 2.0) + egui::vec2(11.0, 0.0);
+    u.button(handle, true);
+    u.button(handle, false);
+    assert!(u.app.ui.pick.is_none(), "the handle press ends pick select");
+}
