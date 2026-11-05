@@ -227,6 +227,10 @@ pub(crate) fn sheen_at(x: f32, depth: f32, bevel: f32) -> f32 {
 /// the edge, falling off as the 3.5th power of the way out of the curve to nothing `depth` further
 /// in, and a fifth as much on the bevel itself, eased between the two over its outer 70%.
 pub(crate) fn bend_at(x: f32, depth: f32, bevel: f32, refraction: f32) -> f32 {
+    // Past the curve (and the bevel's easing) nothing bends: the flat inside of the pane.
+    if x >= depth.max(1e-4) + bevel {
+        return 0.0;
+    }
     let sd = -x;
     let t = lin(-depth - bevel, -bevel, sd);
     let most = MAX_BEND * depth;
@@ -658,6 +662,30 @@ mod tests {
         let spread = dispersed(&impulse, 10.5, 0.5, 8.0, 0.0, 1.0);
         assert!((spread[0] - 33.392857).abs() < 1e-3 && (spread[1] - 33.392857).abs() < 1e-3, "{spread:?}");
         assert_eq!(spread[2], 0.0);
+    }
+
+    /// At full dispersion red's furthest step stays within `Glass::max_bend` of the pixel, all
+    /// along the bend, so the backdrop read around a pane covers it: one white pixel further out
+    /// than that is never seen.
+    #[test]
+    fn full_dispersion_reads_no_further_than_max_bend() {
+        let bound = Glass { refraction: 1.0, depth: 20.0, dispersion: 1.0, ..Glass::default() }.max_bend() as f32;
+        let k = Glass::DISPERSION_SPREAD as f32;
+        let mut furthest = 0usize;
+        for i in 0..100 {
+            let bend = bend_at(i as f32 * 0.25, 20.0, 1.0, 1.0);
+            for at in 0..40 {
+                let mut impulse = Pixmap::new(40, 1).unwrap();
+                impulse.fill(tiny_skia::Color::BLACK);
+                impulse.data_mut()[at * 4..at * 4 + 4].copy_from_slice(&[255, 255, 255, 255]);
+                let s = dispersed(&impulse, 0.5, 0.5, bend, 0.0, k);
+                if s[0].max(s[1]).max(s[2]) > 0.0 {
+                    furthest = furthest.max(at);
+                }
+            }
+        }
+        // A sample `o` pixels along picks up the pixel `at` while |o − at| < 1.
+        assert!(furthest > 0 && (furthest as f32) < bound + 1.0, "pixel {furthest} seen, past {bound}");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Text: real, selectable text in embedded (subset) fonts, positioned glyph by glyph from the
 //! `figcraft_text` layout the renderer uses, with outline fallbacks.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -56,14 +56,24 @@ pub(crate) fn draw_text(ex: &mut Exporter, s: &mut Surface, n: &Node, xf: Affine
     let styles: BTreeSet<usize> = layout.glyphs.iter().map(|g| g.style).chain(layout.decorations.iter().map(|d| d.style)).collect();
     // Every run's fills, then the inner shadows over them, then the strokes on top.
     let mut stroked = Vec::new();
+    // Glyphs and decorations are grouped by style in one pass; each style's paths are built (and
+    // dropped) inside its own iteration, so only one style's paths are held at a time.
+    let mut decoration_of: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, d) in layout.decorations.iter().enumerate() {
+        decoration_of.entry(d.style).or_default().push(i);
+    }
+    let mut glyph_of: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, g) in layout.glyphs.iter().enumerate() {
+        glyph_of.entry(g.style).or_default().push(i);
+    }
     for k in styles {
         let fills = layout.styles.get(k).and_then(|st| st.fills.as_ref()).unwrap_or(&n.fills);
         let mut decorations = BezPath::new();
-        for d in layout.decorations.iter().filter(|d| d.style == k) {
+        for d in decoration_of.remove(&k).unwrap_or_default().into_iter().filter_map(|i| layout.decorations.get(i)) {
             decorations.extend(d.path());
         }
         let mut outlines = BezPath::new();
-        for g in layout.glyphs.iter().filter(|g| g.style == k) {
+        for g in glyph_of.remove(&k).unwrap_or_default().into_iter().filter_map(|i| layout.glyphs.get(i)) {
             outlines.extend(g.path());
         }
         outlines.extend(decorations.iter());
