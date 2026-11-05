@@ -34,7 +34,7 @@ pub use css::{CssNames, css_var_name, css_var_of};
 use css::{css, tok};
 pub(crate) use flutter::{FLUTTER_IMPORT, Place, flutter, flutter_indent};
 use html::html;
-pub(crate) use html::{Markup, class_name};
+pub(crate) use html::{Markup, Names, class_name};
 pub(crate) use swift::swift;
 
 pub fn specs() -> Vec<CommandSpec> {
