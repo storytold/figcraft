@@ -348,7 +348,23 @@ pub fn install_at(kind: HarnessKind, path: &Path, cli_bin: &str, port: Option<u1
         HarnessKind::Codex => merge_codex_toml(existing.as_deref(), cli_bin, port),
     };
     let tmp = target.with_extension(format!("figcraft-{}.tmp", std::process::id()));
-    std::fs::write(&tmp, updated).map_err(|e| format!("couldn't write {}: {e}", target.display()))?;
+    let _ = std::fs::remove_file(&tmp);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(&tmp)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(updated.as_bytes())
+        })
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("couldn't write {}: {e}", target.display())
+        })?;
     if let Some(perms) = existing_perms {
         std::fs::set_permissions(&tmp, perms).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
