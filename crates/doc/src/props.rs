@@ -660,7 +660,7 @@ pub struct Glass {
     pub depth: f64,
     /// Colour splitting along the curved edge (0–1).
     pub dispersion: f64,
-    /// Blur of the backdrop (a blur radius, document units).
+    /// Blur of the backdrop (a blur radius, document units, 0–[`Self::MAX_FROST`]).
     pub frost: f64,
     /// Which way the curved edge bends the backdrop: along the edge's normal (0) to away from the
     /// layer's centre (1).
@@ -674,6 +674,34 @@ impl Default for Glass {
 }
 
 impl Glass {
+    /// The most frost a glass takes, as the reference tool's Frost field (0–100).
+    pub const MAX_FROST: f64 = 100.0;
+
+    /// The fields a variable binds on a glass effect (`effects/<i>/<field>`), see [`Self::set_bound`].
+    pub const BOUND_FIELDS: [&'static str; 7] = ["lightAngle", "lightIntensity", "refraction", "depth", "dispersion", "radius", "splay"];
+
+    /// Sets `field` (one of [`Self::BOUND_FIELDS`]) from a bound number variable, read as the
+    /// Design panel's field shows it: intensity, refraction, dispersion and splay in percent, the
+    /// frost as `radius`, each clamped to the field's range. False for a field glass doesn't have
+    /// or a value that isn't finite (nothing changes).
+    pub fn set_bound(&mut self, field: &str, x: f64) -> bool {
+        if !x.is_finite() {
+            return false;
+        }
+        let pct = (x / 100.0).clamp(0.0, 1.0);
+        match field {
+            "lightAngle" => self.light_angle = x.clamp(-180.0, 180.0),
+            "lightIntensity" => self.light_intensity = pct,
+            "refraction" => self.refraction = pct,
+            "depth" => self.depth = x.clamp(1.0, 1000.0),
+            "dispersion" => self.dispersion = pct,
+            "radius" => self.frost = x.clamp(0.0, Self::MAX_FROST),
+            "splay" => self.splay = pct,
+            _ => return false,
+        }
+        true
+    }
+
     /// The values clamped to their ranges (non-finite ones at their defaults).
     pub fn sanitized(&self) -> Glass {
         let d = Glass::default();
@@ -684,7 +712,7 @@ impl Glass {
             refraction: ok(self.refraction, d.refraction, 0.0, 1.0),
             depth: ok(self.depth, d.depth, 1.0, 1000.0),
             dispersion: ok(self.dispersion, d.dispersion, 0.0, 1.0),
-            frost: ok(self.frost, d.frost, 0.0, 1000.0),
+            frost: ok(self.frost, d.frost, 0.0, Self::MAX_FROST),
             splay: ok(self.splay, d.splay, 0.0, 1.0),
         }
     }
