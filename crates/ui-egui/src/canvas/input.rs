@@ -183,6 +183,8 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle) || i.pointer.primary_down()) {
             app.canvas.middle_pan = None;
         }
+        // So is a handle drag.
+        crate::handles::end_released_drag(app, &ctx);
         return true;
     };
     // A press on the canvas gives the keyboard back to it (arrows nudge again).
@@ -229,6 +231,12 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
             app.canvas.middle_pan = None;
         }
         return true;
+    }
+    // A handle drag whose button went up ends first, wherever on the canvas the pointer is: over a
+    // ruler or a comment pin, which take the pointer below, or over something drawn above the
+    // canvas (the colour picker, a card). The handle had the press, so it has the release too.
+    if crate::handles::end_released_drag(app, &ctx) {
+        return false;
     }
     if !app.canvas.dragging && (resp.hovered() || app.ui.comments.dragging()) && crate::comments::input(app, &ctx, pos) {
         return false;

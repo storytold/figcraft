@@ -236,7 +236,9 @@ impl Replica {
                         self.doc.insert_page(node).map_err(doc_err)?;
                     }
                     (false, Some(p)) => {
-                        let at = self.slot(&self.doc.get(*p).map_err(doc_err)?.children, *id, position);
+                        // A new id sits in no sibling list yet: no scan for it, just the binary search.
+                        let siblings = &self.doc.get(*p).map_err(doc_err)?.children;
+                        let at = siblings.partition_point(|c| (self.key(*c), *c) < (position.as_str(), *id));
                         self.doc.insert(node, *p, Some(at)).map_err(doc_err)?;
                     }
                     _ => return Err(Error::Invalid("pages, and only pages, have no parent".into())),
