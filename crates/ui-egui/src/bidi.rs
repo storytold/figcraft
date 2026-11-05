@@ -79,7 +79,7 @@ pub(crate) const SCRIPT_FAMILIES: [&str; 46] = [
     "Kefa",
     "Noto Sans Ethiopic",
     "Abyssinica SIL",
-    // The Indic scripts and Sinhala.
+    // Devanagari, Gurmukhi, Gujarati, Tamil, Telugu, Kannada, Malayalam and Sinhala.
     "Nirmala UI",
     "Kohinoor Devanagari",
     "Kohinoor Gujarati",
