@@ -633,5 +633,30 @@ fn create_reload_and_logs_commands_work_for_all_templates() {
     assert!(cleared["runs"].as_array().unwrap().is_empty());
     assert!(s.plugins.history.is_empty());
 
+    // Digit-leading names and special characters produce a valid Cargo package name and escaped Rust literals.
+    let special_dir = base.join("special");
+    let special = ex(
+        &mut s,
+        "plugin.create",
+        json!({
+            "dir": special_dir.to_string_lossy(),
+            "name": "3D \"Special\" {Widget}",
+            "template": "widget"
+        }),
+    );
+    assert_eq!(special["id"], "org.example.plugin-3d-special-widget");
+    let cargo_toml = std::fs::read_to_string(special_dir.join("Cargo.toml")).unwrap();
+    assert!(cargo_toml.contains("name = \"plugin-3d-special-widget\""), "{cargo_toml}");
+    let special_lib = std::fs::read_to_string(special_dir.join("src").join("lib.rs")).unwrap();
+    assert!(special_lib.contains(r#"\"Special\""#), "{special_lib}");
+    assert!(special_lib.contains("{{Widget}}"), "{special_lib}");
+
+    // Changing the manifest id on disk causes `plugin.reload` to refuse rather than duplicating the plugin.
+    let manifest_path = special_dir.join("figcraft-plugin.json");
+    let edited = std::fs::read_to_string(&manifest_path).unwrap().replace("org.example.plugin-3d-special-widget", "org.example.renamed");
+    std::fs::write(&manifest_path, edited).unwrap();
+    let reload_err = s.execute("plugin.reload", &json!({"id": "org.example.plugin-3d-special-widget"})).unwrap_err().to_string();
+    assert!(reload_err.contains("changed"), "{reload_err}");
+
     let _ = std::fs::remove_dir_all(&base);
 }

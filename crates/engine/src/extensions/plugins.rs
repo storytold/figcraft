@@ -760,6 +760,9 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, format!("`{id}` was imported without a manifest file and cannot be reloaded from disk")));
     };
     let (manifest, abs_path, wasm) = load_from_disk(cmd, path)?;
+    if manifest.id != id {
+        return Err(bad(cmd, format!("the manifest id changed from `{id}` to `{}`: remove the plugin and import it again", manifest.id)));
+    }
     figcraft_plugin::check_module(&wasm, &Limits::default()).map_err(|e| plugin_error(&manifest.name, e))?;
     let name = manifest.name.clone();
     let version = manifest.version.clone();
@@ -786,7 +789,13 @@ fn slugify(name: &str) -> String {
         }
     }
     let trimmed = out.trim_matches('-').to_string();
-    if trimmed.is_empty() { "my-plugin".into() } else { trimmed }
+    if trimmed.is_empty() {
+        "my-plugin".into()
+    } else if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("plugin-{trimmed}")
+    } else {
+        trimmed
+    }
 }
 
 /// Compute a forward-slash relative path from `base_dir` to `target_dir` when they share a root.
@@ -826,7 +835,9 @@ fn resolve_sdk_path(cmd: &str, project_dir: &std::path::Path, explicit: Option<&
     }
     if let Some(repo_root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(std::path::Path::parent) {
         let sdk_dir = repo_root.join("plugins").join("sdk");
-        return Ok(relative_sdk_path(project_dir, &sdk_dir));
+        if crate::file_access::exists(sdk_dir.join("Cargo.toml")) {
+            return Ok(relative_sdk_path(project_dir, &sdk_dir));
+        }
     }
     Err(bad(cmd, "couldn't determine the `figcraft-plugin-sdk` location; set `sdk` or `FIGCRAFT_PLUGIN_SDK`"))
 }
@@ -845,6 +856,8 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let id = string(p, "id").filter(|i| !i.trim().is_empty()).unwrap_or_else(|| format!("org.example.{slug}"));
     let template = string(p, "template").unwrap_or_else(|| "command".into()).to_ascii_lowercase();
     let wasm_file = format!("{}.wasm", slug.replace('-', "_"));
+    let name_lit = name.escape_default().to_string();
+    let name_fmt = name.replace('{', "{{").replace('}', "}}").escape_default().to_string();
 
     let (manifest_val, lib_rs, fallback_call): (Value, String, Option<crate::plugin_directory::FallbackCall>) = match template.as_str() {
         "command" => (
@@ -870,7 +883,7 @@ entry!(run);
 
 fn run(input: Input) -> Result<Value> {{
     log(&format!("Running {{}} on {{}} selected layer(s)", input.command, input.selection.len()));
-    notify("Hello from {name}!");
+    notify("Hello from {name_lit}!");
     Ok(json!({{"selected": input.selection.len()}}))
 }}
 "#
@@ -908,7 +921,7 @@ fn run(input: Input) -> Result<Value> {{
         return Ok(Value::Null);
     }}
     show_ui(&json!({{
-        "title": "{name}",
+        "title": "{name_lit}",
         "controls": [
             {{"name": "color", "label": "Color", "type": "color", "default": "#02da96"}},
             {{"name": "create", "label": "Create Rectangle", "type": "button"}}
@@ -956,7 +969,7 @@ fn run(input: Input) -> Result<Value> {{
         "state": {{"count": count}},
         "root": {{
             "type": "frame",
-            "name": "{name}",
+            "name": "{name_lit}",
             "layout": "horizontal",
             "padding": 10,
             "gap": 8,
@@ -964,7 +977,7 @@ fn run(input: Input) -> Result<Value> {{
             "stroke": "#d8d8d8",
             "radius": 8,
             "children": [
-                {{"type": "text", "text": format!("{name}: {{count}}"), "size": 14, "color": "#1e1e1e"}},
+                {{"type": "text", "text": format!("{name_fmt}: {{count}}"), "size": 14, "color": "#1e1e1e"}},
                 {{"type": "frame", "name": "Add", "target": "inc", "layout": "horizontal", "padding": 6, "fill": "#02da96", "radius": 4, "children": [
                     {{"type": "text", "text": "+1", "size": 12, "bold": true, "color": "#ffffff"}}
                 ]}}

@@ -545,14 +545,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "plugin.directory.list",
             "Browse plugin directory",
-            "{server? (ws://host:port/; default: the one browsed last), query?} → {server, plugins: [{id, name, version, description, author, api, access, commands, widget, bytes, sha256, published, versions, installed, update}]}",
+            "{server? (`builtin`, a local folder path, or ws://host:port/; default: the one browsed last, or `builtin`), query?} → {server, plugins: [{id, name, version, description, author, api, access, commands, widget, bytes, sha256, published, versions, installed, update}]}",
             false,
             list
         ),
         spec!(
             "plugin.directory.install",
             "Install plugin from directory",
-            "{id, version? (default: the latest), confirm: true (required: installing runs the plugin's code), server?, sha256? (the one shown)} downloads, checks the SHA-256 and installs or updates it → {installed, name, version, permissions, sha256, path, source, replaced}",
+            "{id, version? (default: the latest), confirm: true (required: installing runs the plugin's code), server? (`builtin`, a local folder path, or ws://host:port/; default: the one browsed last, or `builtin`), sha256? (the one shown)} downloads, checks the SHA-256 and installs or updates it → {installed, name, version, permissions, sha256, path, source, replaced}",
             false,
             install
         ),

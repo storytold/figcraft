@@ -299,26 +299,65 @@ pub fn inspect_all(cli_bin: &str, port: Option<u16>) -> Vec<HarnessStatus> {
     HarnessKind::ALL.into_iter().filter_map(|k| config_path(k).map(|p| inspect_at(k, &p, cli_bin, port))).collect()
 }
 
+/// Resolve symlinks (including relative and dangling symlinks) so atomic replacement updates the
+/// underlying target file instead of replacing the symlink itself.
+#[allow(clippy::disallowed_methods)]
+fn resolve_install_target(path: &Path) -> Result<PathBuf, String> {
+    let mut cur = path.to_path_buf();
+    for _ in 0..32 {
+        match std::fs::symlink_metadata(&cur) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let link = std::fs::read_link(&cur).map_err(|e| format!("couldn't read symlink {}: {e}", cur.display()))?;
+                cur = if link.is_absolute() {
+                    link
+                } else if let Some(parent) = cur.parent() {
+                    parent.join(link)
+                } else {
+                    link
+                };
+            }
+            _ => return Ok(cur),
+        }
+    }
+    Err(format!("too many symlink levels resolving {}", path.display()))
+}
+
 /// Install or update the `figcraft` MCP server entry in `path` for `kind`, preserving all other
-/// settings in the file and writing atomically via a temporary file rename.
+/// settings in the file, existing file permissions, and symlinks, writing atomically via a temporary
+/// file rename.
 #[allow(clippy::disallowed_methods)]
 pub fn install_at(kind: HarnessKind, path: &Path, cli_bin: &str, port: Option<u16>) -> Result<HarnessStatus, String> {
-    if let Some(parent) = path.parent()
+    let target = resolve_install_target(path)?;
+    if let Some(parent) = target.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent).map_err(|e| format!("couldn't create {}: {e}", parent.display()))?;
     }
-    let existing =
-        if path.exists() { Some(std::fs::read_to_string(path).map_err(|e| format!("couldn't read {}: {e}", path.display()))?) } else { None };
+    let existing_perms = match std::fs::metadata(&target) {
+        Ok(meta) => Some(meta.permissions()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("couldn't stat {}: {e}", target.display())),
+    };
+    let existing = if existing_perms.is_some() {
+        Some(std::fs::read_to_string(&target).map_err(|e| format!("couldn't read {}: {e}", target.display()))?)
+    } else {
+        None
+    };
     let updated = match kind {
         HarnessKind::Antigravity | HarnessKind::ClaudeCode | HarnessKind::ClaudeDesktop => merge_json_config(existing.as_deref(), cli_bin, port)?,
         HarnessKind::Codex => merge_codex_toml(existing.as_deref(), cli_bin, port),
     };
-    let tmp = path.with_extension(format!("figcraft-{}.tmp", std::process::id()));
-    std::fs::write(&tmp, updated).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
+    let tmp = target.with_extension(format!("figcraft-{}.tmp", std::process::id()));
+    std::fs::write(&tmp, updated).map_err(|e| format!("couldn't write {}: {e}", target.display()))?;
+    if let Some(perms) = existing_perms {
+        std::fs::set_permissions(&tmp, perms).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("couldn't set permissions on {}: {e}", target.display())
+        })?;
+    }
+    std::fs::rename(&tmp, &target).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("couldn't write {}: {e}", path.display())
+        format!("couldn't write {}: {e}", target.display())
     })?;
     Ok(inspect_at(kind, path, cli_bin, port))
 }
@@ -497,5 +536,38 @@ args = ["serve"]
         let win_toml = merge_codex_toml(None, win_bin, Some(47800));
         assert!(win_toml.contains(r#"command = "C:\\Program Files\\FigCraft\\figcraft-cli.exe""#));
         assert_eq!(inspect_codex_toml(&win_toml), (true, Some(47800)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn install_at_preserves_symlinks_and_permissions() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = std::env::temp_dir().join(format!("figcraft-harness-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("dotfiles")).unwrap();
+
+        let real_cfg = dir.join("dotfiles").join("claude.json");
+        std::fs::write(&real_cfg, r#"{"theme":"dark"}"#).unwrap();
+        std::fs::set_permissions(&real_cfg, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let link_cfg = dir.join(".claude.json");
+        symlink("dotfiles/claude.json", &link_cfg).unwrap();
+
+        let status = install_at(HarnessKind::ClaudeCode, &link_cfg, "/usr/local/bin/figcraft-cli", Some(47800)).unwrap();
+        assert!(status.configured);
+        assert!(std::fs::symlink_metadata(&link_cfg).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::metadata(&real_cfg).unwrap().permissions().mode() & 0o777, 0o600);
+
+        // Also test a dangling relative symlink.
+        let dangling_link = dir.join("dangling.json");
+        let dangling_target = dir.join("dotfiles").join("new_mcp.json");
+        symlink("dotfiles/new_mcp.json", &dangling_link).unwrap();
+        let status2 = install_at(HarnessKind::Antigravity, &dangling_link, "/usr/local/bin/figcraft-cli", Some(47800)).unwrap();
+        assert!(status2.configured);
+        assert!(std::fs::symlink_metadata(&dangling_link).unwrap().file_type().is_symlink());
+        assert!(dangling_target.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

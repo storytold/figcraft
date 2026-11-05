@@ -36,6 +36,23 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     }
 }
 
+/// Cached CLI binary path and harness inspection results for the open MCP dialog.
+#[derive(Clone, Default)]
+struct McpHarnessCache {
+    port: u16,
+    cli_bin: String,
+    statuses: Vec<figcraft_engine::harness::HarnessStatus>,
+}
+
+/// Recompute and store the cached CLI binary path and harness statuses for `active_port`.
+fn refresh_harness_cache(ui: &mut egui::Ui, cache_id: egui::Id, active_port: u16) -> McpHarnessCache {
+    let cli_bin = detect_cli_binary();
+    let statuses = inspect_all(&cli_bin, Some(active_port));
+    let cache = McpHarnessCache { port: active_port, cli_bin, statuses };
+    ui.data_mut(|d| d.insert_temp(cache_id, cache.clone()));
+    cache
+}
+
 /// Draw the responsive Local MCP Server controls and LLM harness cards inside `ui`.
 pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
     let avail_w = ui.available_width();
@@ -45,6 +62,7 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
     let pref_port = app.session.prefs.mcp_port;
     let pending_id = egui::Id::unique("mcp_pending_port");
     let synced_id = egui::Id::unique("mcp_last_pref_port");
+    let cache_id = egui::Id::unique("mcp_harness_cache");
     let mut port = ui.data_mut(|d| {
         let last_pref = *d.get_temp_mut_or(synced_id, pref_port);
         let p = d.get_temp_mut_or(pending_id, pref_port);
@@ -68,6 +86,7 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.data_mut(|d| {
             d.insert_temp(pending_id, new_port);
             d.insert_temp(synced_id, new_port);
+            d.remove::<McpHarnessCache>(cache_id);
         });
         app.run("pref.mcp", json!({"port": new_port}));
     };
@@ -131,9 +150,12 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
         );
     }
 
-    let cli_bin = detect_cli_binary();
     let active_port = server_status.as_ref().map(|(listening, _, _)| *listening).filter(|p| *p != 0).unwrap_or(app.session.prefs.mcp_port);
-    let attach_cmd = attach_command(&cli_bin, active_port);
+    let mut cache = ui
+        .data_mut(|d| d.get_temp::<McpHarnessCache>(cache_id))
+        .filter(|c| c.port == active_port && !c.cli_bin.is_empty())
+        .unwrap_or_else(|| refresh_harness_cache(ui, cache_id, active_port));
+    let attach_cmd = attach_command(&cache.cli_bin, active_port);
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -164,16 +186,20 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
                 let mut ok_count = 0usize;
                 let mut last_err = None;
                 for kind in HarnessKind::ALL {
-                    match install(kind, &cli_bin, Some(active_port)) {
+                    match install(kind, &cache.cli_bin, Some(active_port)) {
                         Ok(_) => ok_count += 1,
                         Err(e) => last_err = Some(e),
                     }
                 }
+                cache = refresh_harness_cache(ui, cache_id, active_port);
                 if let Some(e) = last_err {
                     app.show_error(e);
                 } else {
                     app.toast(trf("Configured {count} MCP harnesses", &[("count", &ok_count)]));
                 }
+            }
+            if crate::widgets::button(ui, tr("Refresh"), false, true).on_hover_text(tr("Re-check harness configuration files")).clicked() {
+                cache = refresh_harness_cache(ui, cache_id, active_port);
             }
         });
     });
@@ -187,7 +213,9 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
     );
     ui.add_space(8.0);
 
-    let statuses = inspect_all(&cli_bin, Some(active_port));
+    let mut installed_any = false;
+    let cli_bin = cache.cli_bin.clone();
+    let statuses = cache.statuses;
     let scroll_max_h = (ui.ctx().content_rect().height() - 260.0).clamp(180.0, 380.0);
     egui::ScrollArea::vertical().id_salt("mcp_harnesses_scroll").max_height(scroll_max_h).show(ui, |ui| {
         let card_inner_w = (avail_w - 20.0).max(160.0);
@@ -196,13 +224,14 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
                 ui.set_width(card_inner_w);
                 ui.set_max_width(card_inner_w);
                 let (badge, color) = if h.configured { (tr("Configured"), t.accent) } else { (tr("Not configured"), t.text_secondary) };
-                let action_buttons = |ui: &mut egui::Ui, app: &mut FigApp| {
+                let mut action_buttons = |ui: &mut egui::Ui, app: &mut FigApp| {
                     let btn_label = if h.configured { tr("Update") } else { tr("Configure") };
                     if crate::widgets::button(ui, btn_label, !h.configured, true).clicked()
                         && let Some(kind) = HarnessKind::parse(&h.id)
                     {
                         match install(kind, &cli_bin, Some(active_port)) {
                             Ok(res) => {
+                                installed_any = true;
                                 app.toast(trf("Configured {name} ({path})", &[("name", &h.label), ("path", &res.config_path.display())]));
                             }
                             Err(e) => app.show_error(e),
@@ -238,4 +267,7 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
             ui.add_space(6.0);
         }
     });
+    if installed_any {
+        let _ = refresh_harness_cache(ui, cache_id, active_port);
+    }
 }

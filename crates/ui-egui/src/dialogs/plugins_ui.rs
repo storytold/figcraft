@@ -227,6 +227,8 @@ pub fn menu(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> bool {
 
 /// The plugin windows (Manage plugins, a command's parameters, the plugins' panels).
 pub fn show(app: &mut FigApp, ctx: &Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    poll_plugin_build(app, ctx);
     if app.ui.plugins_window {
         manage_window(app, ctx);
     }
@@ -343,6 +345,14 @@ fn start_plugin_build(app: &mut FigApp, ctx: &Context, id: String, path: String)
     use std::sync::{Arc, Mutex};
     type BuildSlot = Arc<Mutex<Option<Receiver<(String, Result<String, String>)>>>>;
     let slot_id = Id::unique("plugin_build_worker_rx");
+    let busy = ctx.data_mut(|d| {
+        let slot: &mut BuildSlot = d.get_temp_mut_or_default(slot_id);
+        slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()
+    });
+    if busy {
+        app.toast(tr("A plugin build is already running."));
+        return;
+    }
     let (tx, rx) = std::sync::mpsc::channel();
     ctx.data_mut(|d| {
         let slot: &mut BuildSlot = d.get_temp_mut_or_default(slot_id);
@@ -358,6 +368,10 @@ fn start_plugin_build(app: &mut FigApp, ctx: &Context, id: String, path: String)
         repaint_ctx.request_repaint();
     });
     if spawned.is_err() {
+        ctx.data_mut(|d| {
+            let slot: &mut BuildSlot = d.get_temp_mut_or_default(slot_id);
+            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        });
         match app.services.build_plugin(std::path::Path::new(&path)) {
             Ok(_msg) => {
                 if let Some(v) = app.run("plugin.reload", json!({"id": id})) {
@@ -376,8 +390,6 @@ fn start_plugin_build(app: &mut FigApp, ctx: &Context, id: String, path: String)
 /// browse, confirm, stop and development actions; closing the window cancels its directory requests
 /// and clears confirmation.
 fn manage_window(app: &mut FigApp, ctx: &Context) {
-    #[cfg(not(target_arch = "wasm32"))]
-    poll_plugin_build(app, ctx);
     let t = Tokens::get(ctx);
     let mut open = true;
     let mut asked = None;
