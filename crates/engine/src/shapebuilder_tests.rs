@@ -218,6 +218,15 @@ fn remove_mode_and_escape() {
 }
 
 #[test]
+fn a_group_named_many_times_is_walked_once() {
+    let mut s = Session::new();
+    let (a, b) = squares(&mut s);
+    let g = id(&ex(&mut s, "object.group", json!({"ids": [a, b]})));
+    let r = ex(&mut s, "shapeBuilder.regions", json!({"ids": vec![g; 500]}));
+    assert_eq!(r["sources"], json!([a, b]));
+}
+
+#[test]
 fn groups_rotated_and_ineligible_layers() {
     let mut s = Session::new();
     let (a, b) = squares(&mut s);

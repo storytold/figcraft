@@ -1031,6 +1031,11 @@ fn masked_area(ctx: &Ctx, pix: &Pixmap, mask_id: NodeId, content: &[NodeId], xf:
 /// Mask `m` drawn as if it weren't a mask into a `w` × `h` pixmap at `xf` (a vector mask: its
 /// outline, fully opaque).
 fn mask_pixels(ctx: &Ctx, m: &Node, (w, h): (u32, u32), xf: Affine, depth: usize) -> Option<Pixmap> {
+    // A mask's content is drawn here, not through `draw_layer`, so a chain of masks inside
+    // masks needs the nesting limit checked here too, or it runs down the stack.
+    if depth > crate::MAX_EXPORT_DEPTH {
+        return None;
+    }
     let mut mask_px = Pixmap::new(w, h)?;
     let mut m2 = m.clone();
     m2.is_mask = false;
