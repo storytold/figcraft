@@ -19,6 +19,8 @@ figcraft-format = { workspace = true }
 figcraft-ui-egui = { workspace = true }
 figcraft-collab-net = { workspace = true }
 figcraft-text = { workspace = true }
+# The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
+craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "2e2312ddaf21bc3d85cd3395d0955c7d239306f6", version = "0.1.0" }
 base64 = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
@@ -30,4 +32,4 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement", "HtmlAnchorElement", "Node", "Blob", "BlobPropertyBag", "ClipboardEvent", "DataTransfer", "File", "FileList", "HtmlInputElement", "EventTarget", "Url", "Location", "MediaQueryList", "Navigator", "Gamepad", "GamepadButton", "GamepadMappingType", "Storage"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement", "HtmlAnchorElement", "Node", "Blob", "BlobPropertyBag", "ClipboardEvent", "DataTransfer", "File", "FileList", "HtmlInputElement", "EventTarget", "Url", "Location", "MediaQueryList", "Navigator", "Gamepad", "GamepadButton", "GamepadMappingType", "Storage", "Event", "MessageEvent", "UrlSearchParams", "CustomEvent", "CustomEventInit"] }
