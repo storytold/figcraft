@@ -583,12 +583,11 @@ impl Services for Desktop {
             manifest_or_dir.join("figcraft-plugin.json")
         };
         let root = manifest_path.parent().unwrap_or(manifest_or_dir);
-        let raw = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-        let manifest: Value = serde_json::from_str(&raw)
-            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        let raw = std::fs::read_to_string(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        let manifest: Value = serde_json::from_str(&raw).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
         let main_wasm = manifest["main"].as_str().unwrap_or("plugin.wasm");
-        let output = std::process::Command::new("cargo")
+        let cargo = cargo_binary();
+        let output = std::process::Command::new(&cargo)
             .args(["build", "--release", "--target", "wasm32-unknown-unknown"])
             .current_dir(root)
             .output()
@@ -609,6 +608,23 @@ impl Services for Desktop {
         }
         Ok(wasm_out.display().to_string())
     }
+}
+
+fn cargo_binary() -> PathBuf {
+    if let Some(c) = std::env::var_os("CARGO").filter(|v| !v.is_empty()).map(PathBuf::from)
+        && c.is_file()
+    {
+        return c;
+    }
+    let name = if cfg!(windows) { "cargo.exe" } else { "cargo" };
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    if let Some(h) = home {
+        let candidate = h.join(".cargo").join("bin").join(name);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from(name)
 }
 
 /// The window icon from the bundled app icon (if present).

@@ -196,14 +196,7 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     {
         return;
     }
-    for flag in [
-        &mut u.confirm_close,
-        &mut u.export_preview,
-        &mut u.shortcuts_panel,
-        &mut u.mcp_window,
-        &mut u.preferences,
-        &mut u.about,
-    ] {
+    for flag in [&mut u.confirm_close, &mut u.export_preview, &mut u.shortcuts_panel, &mut u.mcp_window, &mut u.preferences, &mut u.about] {
         if std::mem::take(flag) {
             return;
         }

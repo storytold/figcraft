@@ -141,10 +141,7 @@ impl ControlHandle {
         let old_port = self.inner.listening_port.swap(0, Ordering::SeqCst);
         let next_gen = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
         if old_port != 0 {
-            let _ = TcpStream::connect_timeout(
-                &std::net::SocketAddr::from(([127, 0, 0, 1], old_port)),
-                Duration::from_millis(50),
-            );
+            let _ = TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], old_port)), Duration::from_millis(50));
         }
         if let Ok(mut err) = self.inner.last_error.lock() {
             *err = None;
@@ -176,15 +173,7 @@ impl ControlHandle {
                 if inner.generation.load(Ordering::SeqCst) != next_gen {
                     break;
                 }
-                spawn_connection_tracked(
-                    stream,
-                    queue.clone(),
-                    ctx.clone(),
-                    events.clone(),
-                    Some(inner.clone()),
-                    &mut workers,
-                    TIMEOUT,
-                );
+                spawn_connection_tracked(stream, queue.clone(), ctx.clone(), events.clone(), Some(inner.clone()), &mut workers, TIMEOUT);
             }
         });
         if let Err(e) = spawned {

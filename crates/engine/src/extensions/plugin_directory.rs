@@ -208,9 +208,11 @@ fn entry_from_bundle(bundle: &Bundle) -> Option<(PluginEntry, Vec<u8>)> {
     Some((entry, bytes))
 }
 
+pub(crate) type FallbackCall = (&'static str, bool, &'static [u8]);
+
 #[allow(clippy::disallowed_methods)]
 fn builtin_bundles() -> Vec<(PluginEntry, Vec<u8>)> {
-    let specs: [(&str, &str, Option<(&str, bool, &[u8])>); 4] = [
+    let specs: [(&str, &str, Option<FallbackCall>); 4] = [
         (
             "tidy-names",
             include_str!("../../../../plugins/examples/tidy-names/figcraft-plugin.json"),
@@ -312,20 +314,12 @@ fn request(s: &mut Session, cmd: &str, server: &str, req: PluginReq) -> Result<P
                 let entries = bundles
                     .into_iter()
                     .map(|(e, _)| e)
-                    .filter(|e| {
-                        q.is_empty()
-                            || [&e.id, &e.name, &e.description, &e.author]
-                                .iter()
-                                .any(|f| f.to_lowercase().contains(&q))
-                    })
+                    .filter(|e| q.is_empty() || [&e.id, &e.name, &e.description, &e.author].iter().any(|f| f.to_lowercase().contains(&q)))
                     .collect();
                 Ok(PluginReply::List(entries))
             }
             PluginReq::Fetch { id, version } => {
-                match bundles
-                    .into_iter()
-                    .find(|(e, _)| e.id == id && version.as_ref().is_none_or(|v| *v == e.version))
-                {
+                match bundles.into_iter().find(|(e, _)| e.id == id && version.as_ref().is_none_or(|v| *v == e.version)) {
                     Some((entry, bundle)) => Ok(PluginReply::Bundle { entry, bundle }),
                     None => Err(EngineError::Other(format!("no plugin `{id}` in `{trimmed}`"))),
                 }
@@ -370,7 +364,8 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let server = server(s, cmd, p)?;
     let version = string(p, "version");
-    let PluginReply::Bundle { entry, bundle: bytes } = request(s, cmd, &server, PluginReq::Fetch { id: id.clone(), version: version.clone() })? else {
+    let PluginReply::Bundle { entry, bundle: bytes } = request(s, cmd, &server, PluginReq::Fetch { id: id.clone(), version: version.clone() })?
+    else {
         return Err(unexpected(cmd));
     };
     let fail = |why: &str| EngineError::Other(format!("{id} wasn't installed: {why}"));

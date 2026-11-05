@@ -63,7 +63,7 @@ large data instead of logging it in full.
   with a field per parameter, drawn with FigCraft's own widgets; **Run** runs it.
 - **Plugins ▸ Run last plugin** (⌥⌘P on macOS, Ctrl+Alt+Shift+P on Windows and Linux, where
   Ctrl+Alt+P is Pixel preview) runs the last plugin command again with the same parameters.
-- **Plugins ▸ Manage plugins…** has three tabs. **Installed** lists the installed plugins (version,
+- **Plugins ▸ Manage plugins…** has four tabs. **Installed** lists the installed plugins (version,
   access, where each comes from: its manifest path or the server it was installed from) with
   Run, Reload (for development plugins) and Remove buttons for each, plus Import, New plugin… and
   Built-in Store buttons. **Browse** shows the **Built-in Store** (`builtin`), a **Local Folder**
@@ -72,7 +72,8 @@ large data instead of logging it in full.
   **Development** scaffolds new plugins from templates (`command`, `panel`, `widget`, `exporter`),
   manages local development plugins (Run, Reload, Build & Reload, Show in Folder), and provides the
   **Plugin Dev Console** showing recent plugin runs with their logs, host calls, fuel consumption,
-  and JSON output or errors.
+  and JSON output or errors. **MCP** configures the local MCP control server and 1-click LLM
+  harnesses (**Antigravity**, **Claude Code**, **Claude Desktop**, **Codex**).
 - **Plugins ▸ Widgets** lists the installed widget plugins; picking one puts its widget in the
   middle of the view.
 
@@ -158,9 +159,9 @@ plugins: import them in the script.
 | `plugin.list` | `{}` | `{plugins: [{id, name, version, description, main, api, permissions, commands, path, loaded}], last: {id, command}}` |
 | `plugin.import` | `{path}` or `{manifest, wasm}` | `path` is a `figcraft-plugin.json` or its folder. Without files (the browser, tests), pass the manifest (an object or JSON text) and the module as base64 `wasm`; such a plugin lasts for the session only. A plugin with the same id is replaced. The module is checked first. |
 | `plugin.remove` | `{id}` | Uninstalls it. |
-| `plugin.reload` | `{id?}` | Reloads a local development plugin (default: the last run plugin) from its manifest on disk, re-validating its manifest and WebAssembly module and clearing any open panel session. Returns `{reloaded, name, version, path}`. |
-| `plugin.create` | `{path, name, id?, template?, import?}` | Scaffolds a new plugin project at `path` (`Cargo.toml`, `src/lib.rs`, `figcraft-plugin.json`, and a starter `.wasm` binary) using `template` (`command`, `panel`, `widget`, or `exporter`). When `import: true` (the default), imports it as a development plugin immediately. Returns `{created, name, template, path, manifest, imported}`. |
-| `plugin.logs` | `{id?, clear?}` | Returns the recent plugin run history `{logs: [{plugin, command, ok, calls, fuel, fuel_limit, logs, output, error}]}`, optionally filtered by `id`; with `clear: true`, clears the history. |
+| `plugin.reload` | `{id?}` | Reloads a local development plugin (default: the last run plugin) from its manifest on disk, re-validating its manifest and WebAssembly module and clearing any open panel session. Returns `{id, name, version, reloaded}`. |
+| `plugin.create` | `{dir, name?, id?, template?}` | Scaffolds a new plugin project at `dir` (`Cargo.toml`, `src/lib.rs`, `figcraft-plugin.json`, and a starter `.wasm` binary) using `template` (`command`, `panel`, `widget`, or `exporter`) and imports it as a development plugin immediately. Returns `{id, name, dir, manifest, template}`. |
+| `plugin.logs` | `{id?, clear?}` | Returns the recent plugin run history `{runs: [{plugin, command, ok, calls, fuel, fuel_limit, logs, output, error}]}`, optionally filtered by `id`; with `clear: true`, clears the history. |
 | `plugin.newDialog` | `{}` | Opens the Manage plugins window on the Development tab (`New plugin…`). |
 | `plugins.console` | `{}` | Opens the Manage plugins window on the Development tab (`Plugin console…`). |
 | `plugin.run` | `{id, command?, params?, fuel?}` | Runs a command (default: the first) with its parameters checked against the manifest and the missing ones filled with their defaults; `fuel` lowers the instruction budget (for the panel's callbacks too). Returns `{plugin, command, output, logs, calls, fuel, panel}`; `output` is the plugin's result, parsed as JSON when it is JSON; `panel` is the plugin's open panel (as `plugin.ui` returns it) or null. |

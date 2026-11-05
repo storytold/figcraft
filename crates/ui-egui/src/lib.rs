@@ -164,6 +164,8 @@ mod local_fonts_tests;
 #[cfg(test)]
 mod make_slot_naming_tests;
 #[cfg(test)]
+mod mcp_ui_tests;
+#[cfg(test)]
 mod measure_nudge_tests;
 #[cfg(test)]
 mod menu_aim_tests;
@@ -292,8 +294,8 @@ pub use canvas::widget_bar;
 pub use dialogs::branch_ui;
 pub use dialogs::credits;
 pub use dialogs::import_report;
-pub use dialogs::missing_fonts;
 pub use dialogs::mcp_ui;
+pub use dialogs::missing_fonts;
 pub use dialogs::plugins_ui;
 pub use dialogs::sampled_color;
 pub use dialogs::updates_ui;

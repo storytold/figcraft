@@ -190,9 +190,7 @@ fn mcp_harness(status: bool, install_target: Option<&str>, port: u16) -> CliResu
             HarnessKind::ALL.to_vec()
         } else {
             let kind = HarnessKind::parse(target).ok_or_else(|| {
-                CliError::Usage(format!(
-                    "unknown harness `{target}` (expected antigravity, claude-code, claude-desktop, codex or all)"
-                ))
+                CliError::Usage(format!("unknown harness `{target}` (expected antigravity, claude-code, claude-desktop, codex or all)"))
             })?;
             vec![kind]
         };
@@ -216,13 +214,8 @@ fn mcp_harness(status: bool, install_target: Option<&str>, port: u16) -> CliResu
 
 fn plugin_new(a: &args::PluginNewArgs) -> CliResult<ExitCode> {
     let mut s = figcraft_engine::Session::new();
-    let name = a.name.clone().unwrap_or_else(|| {
-        std::path::Path::new(&a.folder)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("My Plugin")
-            .to_string()
-    });
+    let name =
+        a.name.clone().unwrap_or_else(|| std::path::Path::new(&a.folder).file_name().and_then(|n| n.to_str()).unwrap_or("My Plugin").to_string());
     let mut params = json!({
         "dir": a.folder,
         "name": name,
@@ -243,18 +236,14 @@ fn plugin_new(a: &args::PluginNewArgs) -> CliResult<ExitCode> {
 
 fn plugin_build(folder: &str) -> CliResult<ExitCode> {
     let dir = std::path::Path::new(folder);
-    let manifest_path = if dir.file_name().is_some_and(|n| n == "figcraft-plugin.json") {
-        dir.to_path_buf()
-    } else {
-        dir.join("figcraft-plugin.json")
-    };
+    let manifest_path =
+        if dir.file_name().is_some_and(|n| n == "figcraft-plugin.json") { dir.to_path_buf() } else { dir.join("figcraft-plugin.json") };
     let root = manifest_path.parent().unwrap_or(dir);
-    let raw = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| CliError::Failed(format!("{}: {e}", manifest_path.display())))?;
-    let manifest: Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::Failed(format!("{}: {e}", manifest_path.display())))?;
+    let raw = std::fs::read_to_string(&manifest_path).map_err(|e| CliError::Failed(format!("{}: {e}", manifest_path.display())))?;
+    let manifest: Value = serde_json::from_str(&raw).map_err(|e| CliError::Failed(format!("{}: {e}", manifest_path.display())))?;
     let main_wasm = manifest["main"].as_str().unwrap_or("plugin.wasm");
-    let status = std::process::Command::new("cargo")
+    let cargo = cargo_binary();
+    let status = std::process::Command::new(&cargo)
         .arg("build")
         .arg("--release")
         .arg("--target")
@@ -277,28 +266,18 @@ fn plugin_build(folder: &str) -> CliResult<ExitCode> {
         }
     }
     let mut s = figcraft_engine::Session::new();
-    let imported = s
-        .execute("plugin.import", &json!({"path": manifest_path.to_string_lossy()}))
-        .map_err(|e| CliError::Failed(e.to_string()))?;
-    println!(
-        "Built {} ({}) -> {}",
-        imported["name"].as_str().unwrap_or_default(),
-        imported["id"].as_str().unwrap_or_default(),
-        wasm_out.display()
-    );
+    let imported = s.execute("plugin.import", &json!({"path": manifest_path.to_string_lossy()})).map_err(|e| CliError::Failed(e.to_string()))?;
+    println!("Built {} ({}) -> {}", imported["name"].as_str().unwrap_or_default(), imported["id"].as_str().unwrap_or_default(), wasm_out.display());
     Ok(ExitCode::SUCCESS)
 }
 
 fn plugin_run(a: &args::PluginRunArgs) -> CliResult<ExitCode> {
-    let params_val: Value = serde_json::from_str(&a.params)
-        .map_err(|e| CliError::Usage(format!("--params is not valid JSON: {e}")))?;
+    let params_val: Value = serde_json::from_str(&a.params).map_err(|e| CliError::Usage(format!("--params is not valid JSON: {e}")))?;
     let mut s = match &a.input {
         Some(path) => figcraft_engine::Session::with_document(files::load(path)?),
         None => figcraft_engine::Session::new(),
     };
-    let imported = s
-        .execute("plugin.import", &json!({"path": a.folder}))
-        .map_err(|e| CliError::Failed(e.to_string()))?;
+    let imported = s.execute("plugin.import", &json!({"path": a.folder})).map_err(|e| CliError::Failed(e.to_string()))?;
     let id = imported["id"].as_str().unwrap_or_default().to_string();
     let mut run_params = json!({"id": id, "params": params_val});
     if let Some(cmd) = &a.command {
@@ -307,8 +286,25 @@ fn plugin_run(a: &args::PluginRunArgs) -> CliResult<ExitCode> {
     let out = s.execute("plugin.run", &run_params).map_err(|e| CliError::Failed(e.to_string()))?;
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
     if let Some(out_path) = &a.out {
-        s.execute("file.saveAs", &json!({"path": out_path}))
-            .map_err(|e| CliError::Failed(e.to_string()))?;
+        s.execute("file.saveAs", &json!({"path": out_path})).map_err(|e| CliError::Failed(e.to_string()))?;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn cargo_binary() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    if let Some(c) = std::env::var_os("CARGO").filter(|v| !v.is_empty()).map(PathBuf::from)
+        && c.is_file()
+    {
+        return c;
+    }
+    let name = if cfg!(windows) { "cargo.exe" } else { "cargo" };
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    if let Some(h) = home {
+        let candidate = h.join(".cargo").join("bin").join(name);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from(name)
 }

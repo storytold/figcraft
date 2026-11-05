@@ -23,7 +23,9 @@ use serde_json::{Map, Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::params::{id, num, string};
-use crate::plugins::{InstalledPlugin, PluginRunRecord, call_plugin, close_panel, installed, limits, module_of, open_panel, plugin_error, record_run};
+use crate::plugins::{
+    InstalledPlugin, PluginRunRecord, call_plugin, close_panel, installed, limits, module_of, open_panel, plugin_error, record_run,
+};
 use crate::{Result, Session, bad, spec};
 
 /// Layer data FigCraft keeps for widgets starts with this; plugins can't write it.

@@ -263,9 +263,8 @@ fn builtin_store_lists_and_installs_without_network() {
     assert!(plugins.iter().any(|p| p["id"] == "org.figcraft.examples.tidy-names"));
     assert!(plugins.iter().any(|p| p["id"] == "org.figcraft.examples.counter" && p["widget"] == true));
 
-    let installed = s
-        .execute("plugin.directory.install", &json!({"id": "org.figcraft.examples.tidy-names", "server": "builtin", "confirm": true}))
-        .unwrap();
+    let installed =
+        s.execute("plugin.directory.install", &json!({"id": "org.figcraft.examples.tidy-names", "server": "builtin", "confirm": true})).unwrap();
     assert_eq!(installed["installed"], "org.figcraft.examples.tidy-names");
     assert!(s.execute("plugin.run", &json!({"id": "org.figcraft.examples.tidy-names"})).is_ok());
 }

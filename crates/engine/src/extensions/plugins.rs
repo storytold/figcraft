@@ -792,13 +792,11 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
         .or_else(|| dir.file_name().and_then(|n| n.to_str()).map(str::to_string))
         .unwrap_or_else(|| "My Plugin".into());
     let slug = slugify(&name);
-    let id = string(p, "id")
-        .filter(|i| !i.trim().is_empty())
-        .unwrap_or_else(|| format!("org.example.{slug}"));
+    let id = string(p, "id").filter(|i| !i.trim().is_empty()).unwrap_or_else(|| format!("org.example.{slug}"));
     let template = string(p, "template").unwrap_or_else(|| "command".into()).to_ascii_lowercase();
     let wasm_file = format!("{}.wasm", slug.replace('-', "_"));
 
-    let (manifest_val, lib_rs, fallback_call): (Value, String, Option<(&str, bool, &[u8])>) = match template.as_str() {
+    let (manifest_val, lib_rs, fallback_call): (Value, String, Option<crate::plugin_directory::FallbackCall>) = match template.as_str() {
         "command" => (
             json!({
                 "id": id,
@@ -951,20 +949,19 @@ fn run(input: CallInput) -> Result<(), String> {{
                     { "id": "export", "label": format!("{name}…") }
                 ]
             }),
-            format!(
-                r#"use figcraft_plugin_sdk::{{CallInput, call, entry, json, save_file, set_output}};
+            r#"use figcraft_plugin_sdk::{CallInput, call, entry, json, save_file, set_output};
 
 entry!(run);
 
-fn run(_input: CallInput) -> Result<(), String> {{
-    let nodes = call("node.list", &json!({{}}))?;
+fn run(_input: CallInput) -> Result<(), String> {
+    let nodes = call("node.list", &json!({}))?;
     let bytes = serde_json::to_vec_pretty(&nodes).map_err(|e| e.to_string())?;
     save_file("layers.json", "application/json", &bytes)?;
-    set_output(&json!({{"saved": "layers.json"}}));
+    set_output(&json!({"saved": "layers.json"}));
     Ok(())
-}}
+}
 "#
-            ),
+            .to_string(),
             Some(("set_output", false, br#"{"saved":"layers.json"}"#)),
         ),
         other => {
@@ -995,13 +992,13 @@ serde_json = "1"
 "#
     );
 
-    crate::file_access::create_dir_all(&dir.join("src"))?;
+    crate::file_access::create_dir_all(dir.join("src"))?;
     let manifest_path = dir.join(MANIFEST_FILE);
     crate::file_access::write(&manifest_path, manifest_text.as_bytes())?;
-    crate::file_access::write(&dir.join("Cargo.toml"), cargo_toml.as_bytes())?;
-    crate::file_access::write(&dir.join("src").join("lib.rs"), lib_rs.as_bytes())?;
+    crate::file_access::write(dir.join("Cargo.toml"), cargo_toml.as_bytes())?;
+    crate::file_access::write(dir.join("src").join("lib.rs"), lib_rs.as_bytes())?;
     let stub_wasm = crate::plugin_directory::encode_wasm_module(fallback_call);
-    crate::file_access::write(&dir.join(&wasm_file), &stub_wasm)?;
+    crate::file_access::write(dir.join(&wasm_file), &stub_wasm)?;
 
     let manifest_path_str = manifest_path.to_string_lossy().into_owned();
     let _ = import(s, &json!({"path": manifest_path_str}))?;
@@ -1027,12 +1024,7 @@ fn logs(s: &mut Session, p: &Value) -> Result<Value> {
             None => s.plugins.history.clear(),
         }
     }
-    let runs: Vec<&PluginRunRecord> = s
-        .plugins
-        .history
-        .iter()
-        .filter(|r| filter_id.as_ref().is_none_or(|id| r.plugin == *id))
-        .collect();
+    let runs: Vec<&PluginRunRecord> = s.plugins.history.iter().filter(|r| filter_id.as_ref().is_none_or(|id| r.plugin == *id)).collect();
     Ok(json!({"runs": runs}))
 }
 
