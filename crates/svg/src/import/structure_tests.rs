@@ -153,8 +153,9 @@ fn an_image_stretched_into_its_box_stays_stretched() {
 
 #[test]
 fn linked_files_are_never_read() {
-    let dir = std::env::temp_dir().join("figcraft-svg-linked");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::env::temp_dir().join(format!("figcraft-svg-linked-{}", std::process::id()));
+    // `create_dir` refuses a directory or link someone else planted at this name.
+    std::fs::create_dir(&dir).unwrap();
     let png = dir.join("secret.png");
     std::fs::write(&png, base64::Engine::decode(&base64::engine::general_purpose::STANDARD, PNG).unwrap()).unwrap();
     let href = png.to_string_lossy().replace('\\', "/");
