@@ -385,6 +385,18 @@ fn type_settings(
         if let Some(i) = text_seg(ui, "trim", &items, trim, w) {
             app.set_props(ids, json!({"leadingTrim": if i == 1 { "capHeight" } else { "none" }}));
         }
+        // Where lines break when the text wraps (Explore text properties).
+        caption(ui, tr("Wrap style"));
+        let wrap = common(doc, ids, |n| n.kind.text().map(|t| t.wrap_style as usize)).flatten();
+        let items = [
+            (tr("Auto"), tr_noop("Auto: as many words as fit on each line")),
+            (tr("Balance"), tr_noop("Balance: every line close to the same length")),
+            (tr("Pretty"), tr_noop("Pretty: full lines, no one word alone on the last")),
+        ];
+        if let Some(i) = text_seg(ui, "wrap", &items, wrap, w) {
+            let style = ["auto", "balance", "pretty"].get(i).copied().unwrap_or("auto");
+            app.set_props(ids, json!({"wrapStyle": style}));
+        }
         let resize = common(doc, ids, |n| n.kind.text().map(|t| t.auto_resize)).flatten();
         // Auto-height text with a line limit truncates too.
         let truncating = common(doc, ids, |n| n.kind.text().map(TextData::truncates)).flatten();

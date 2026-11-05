@@ -103,11 +103,34 @@ pub(crate) struct Ctx<'a> {
     pattern_depth: usize,
     /// Tiles drawn so far, by pattern and scale (see [`paint`]'s `render_tile`).
     tiles: HashMap<(*const usvg::Pattern, u64), Option<paint::Tile>>,
+    /// The document image key of each embedded image's bytes already added, so an image a
+    /// pattern paints on many shapes is hashed once, not once per shape.
+    image_keys: HashMap<*const Vec<u8>, String>,
 }
 
 impl<'a> Ctx<'a> {
     pub(crate) fn new(doc: &'a mut Document) -> Self {
-        Ctx { doc, count: 0, anonymous: HashSet::new(), notes: BTreeSet::new(), fonts: None, pattern_depth: 0, tiles: HashMap::new() }
+        Ctx {
+            doc,
+            count: 0,
+            anonymous: HashSet::new(),
+            notes: BTreeSet::new(),
+            fonts: None,
+            pattern_depth: 0,
+            tiles: HashMap::new(),
+            image_keys: HashMap::new(),
+        }
+    }
+
+    /// [`add_image`] for `bytes`, once per distinct buffer.
+    pub(crate) fn image(&mut self, bytes: std::sync::Arc<Vec<u8>>, w: f64, h: f64) -> String {
+        if let Some(k) = self.image_keys.get(&std::sync::Arc::as_ptr(&bytes)) {
+            return k.clone();
+        }
+        let ptr = std::sync::Arc::as_ptr(&bytes);
+        let key = add_image(self.doc, bytes, w, h);
+        self.image_keys.insert(ptr, key.clone());
+        key
     }
 
     pub(crate) fn full(&self) -> bool {
@@ -605,7 +628,7 @@ fn image(cx: &mut Ctx, img: &usvg::Image, id: &str, parent: NodeId, base: Affine
     let size = img.size();
     let (iw, ih) = (f64::from(size.width()), f64::from(size.height()));
     let (transform, w, h) = place(world, Point::ZERO, iw, ih).unwrap_or((world, iw, ih));
-    let hash = add_image(cx.doc, bytes, iw, ih);
+    let hash = cx.image(bytes, iw, ih);
     let mut n = Node::new(cx.doc.alloc_id(), NodeKind::Rectangle, layer_name(id, "Image"), w, h);
     n.transform = transform;
     let mut fill = Paint::image(hash, ImageScaleMode::Fill);

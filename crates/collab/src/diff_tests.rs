@@ -310,3 +310,14 @@ fn many_sibling_placements_keep_the_order_of_counting_them() {
         assert_eq!(r.document().node(p).unwrap().children, kids[&p], "children of {p}");
     }
 }
+
+#[test]
+fn a_chain_of_new_nested_layers_is_created_parents_first() {
+    let (a, _, frame, _) = setup();
+    let mut b = a.document().clone();
+    let mut parent = frame;
+    for i in 0..400 {
+        parent = b.create(parent, NodeKind::Frame, &format!("F{i}"), 0.0, 0.0, 10.0, 10.0).unwrap();
+    }
+    assert_eq!(round_trip(&a, &b).iter().filter(|c| matches!(c, Change::Create { .. })).count(), 400);
+}
