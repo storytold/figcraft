@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use figcraft_doc::{
     DecorationLength, DecorationStyle, LetterSpacing, LineHeight, ListStyle, ParaList, StyleRun, TextAlignH, TextAlignV, TextAutoResize, TextCase,
-    TextData, TextDecoration, TextPath, TextStyle,
+    TextData, TextDecoration, TextDirection, TextPath, TextStyle,
 };
 use serde_json::Value;
 
@@ -256,23 +256,27 @@ fn runs(cx: &mut Ctx, v: &Value, td: &TextData) -> Vec<StyleRun> {
     out
 }
 
-/// Each paragraph's list type, nesting level and start number from `lineTypes`,
-/// `lineIndentations` and (from `.fig` files) `listStartOffsets`.
+/// Each paragraph's list type, nesting level, start number and base direction from `lineTypes`,
+/// `lineIndentations` and (from `.fig` files) `listStartOffsets` and `lineDirections`.
 fn lists(v: &Value, td: &mut TextData) {
     let types = list(v, "lineTypes");
     let indents = list(v, "lineIndentations");
     let starts = list(v, "listStartOffsets");
-    td.paragraphs = types
-        .iter()
-        .enumerate()
-        .map(|(i, t)| ParaList {
-            list: match t.as_str() {
+    let dirs = list(v, "lineDirections");
+    td.paragraphs = (0..types.len().max(dirs.len()))
+        .map(|i| ParaList {
+            list: match types.get(i).and_then(Value::as_str) {
                 Some("UNORDERED") => ListStyle::Bulleted,
                 Some("ORDERED") => ListStyle::Numbered,
                 _ => ListStyle::None,
             },
             indent: indents.get(i).and_then(Value::as_f64).filter(|d| d.is_finite()).map_or(0, |d| d.clamp(0.0, 255.0) as u8),
             start_offset: starts.get(i).and_then(Value::as_f64).filter(|n| n.is_finite()).map_or(0, |n| n.clamp(0.0, f64::from(u32::MAX)) as u32),
+            direction: match dirs.get(i).and_then(Value::as_str) {
+                Some("LTR") => TextDirection::Ltr,
+                Some("RTL") => TextDirection::Rtl,
+                _ => TextDirection::Auto,
+            },
         })
         .collect();
     // Clamp the levels and fold one style for all back into the layer's list style.

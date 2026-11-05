@@ -130,6 +130,18 @@ impl<'a> Mapper<'a> {
         if lines.iter().any(|l| *l != "NONE") {
             o.insert("lineTypes".into(), json!(lines));
         }
+        // A forced base direction per paragraph (`sourceDirectionality`; not a REST field).
+        let dirs: Vec<&str> = raw
+            .iter()
+            .map(|l| match l.get("sourceDirectionality").and_then(Kv::str) {
+                Some("LTR") => "LTR",
+                Some("RTL") => "RTL",
+                _ => "AUTO",
+            })
+            .collect();
+        if dirs.iter().any(|d| *d != "AUTO") {
+            o.insert("lineDirections".into(), json!(dirs));
+        }
         // Where a numbered list starts counting, less one (not a REST field).
         let starts: Vec<u32> =
             raw.iter().map(|l| num(l, "listStartOffset").filter(|n| n.is_finite()).map_or(0, |n| n.clamp(0.0, f64::from(u32::MAX)) as u32)).collect();

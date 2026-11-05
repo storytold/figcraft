@@ -372,6 +372,57 @@ fn max_lines_on_auto_height_text_hugs_that_many_lines() {
 }
 
 #[test]
+fn text_direction_is_forced_per_paragraph() {
+    // Add right-to-left text: "By default, Figma automatically handles text direction based on
+    // language detection. However, controls are available to override text direction per
+    // paragraph" ("Go to Text > Text direction. Select Left to right or Right to left.").
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "abc def\nghi\njkl", json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24}));
+    let rtl = |s: &Session| -> Vec<bool> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.lines.iter().map(|l| l.rtl).collect()
+    };
+    let inspect = |s: &Session| crate::inspect::node_json(s.doc().unwrap(), t, 0);
+    assert_eq!(rtl(&s), [false, false, false], "Latin letters read left to right");
+    assert!(inspect(&s).get("textDirection").is_none() && inspect(&s).get("lineDirections").is_none());
+    // The layer's paragraphs at once, by the command or `node.set`; inspect reports the one
+    // direction they share, and Dev Mode's CSS has it.
+    s.execute("text.direction", &json!({"ids": [t], "direction": "rtl"})).unwrap();
+    assert_eq!(rtl(&s), [true, true, true], "forced right to left whatever the letters");
+    assert_eq!(inspect(&s)["textDirection"], json!("rtl"));
+    let css = |s: &mut Session| s.execute("inspect.code", &json!({"id": t})).unwrap()["code"].as_str().unwrap().to_string();
+    assert!(css(&mut s).contains("direction: rtl;"), "{}", css(&mut s));
+    s.execute("node.set", &json!({"id": t, "props": {"textDirection": "ltr"}})).unwrap();
+    assert_eq!(rtl(&s), [false, false, false]);
+    assert_eq!(inspect(&s)["textDirection"], json!("ltr"));
+    assert!(css(&mut s).contains("direction: ltr;"));
+    s.execute("text.directionAuto", &json!({"ids": [t]})).unwrap();
+    assert!(inspect(&s).get("textDirection").is_none(), "auto throughout says nothing");
+    assert!(!css(&mut s).contains("direction:"));
+    // While editing, the caret's paragraph alone (the menu's Right to left); inspect lists each
+    // paragraph's direction when they differ, and the CSS stays quiet.
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 9})).unwrap();
+    s.execute("text.directionRtl", &json!({})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(rtl(&s), [false, true, false], "the second paragraph only");
+    assert_eq!(inspect(&s)["lineDirections"], json!(["auto", "rtl", "auto"]));
+    assert!(!css(&mut s).contains("direction:"));
+    // Enter inside a forced paragraph keeps the direction for the new one, as list settings carry.
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 10})).unwrap();
+    s.execute("text.edit.insert", &json!({"text": "\n"})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(rtl(&s), [false, true, true, false]);
+    // A direction the document has words for; junk is refused.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc", "textDirection": "auto"}})).unwrap();
+    assert_eq!(rtl(&s), [true], "Hebrew first: right to left by detection");
+    s.execute("node.set", &json!({"id": t, "props": {"textDirection": "ltr"}})).unwrap();
+    assert_eq!(rtl(&s), [false], "forced left to right");
+    assert!(s.execute("node.set", &json!({"id": t, "props": {"textDirection": "sideways"}})).is_err());
+    assert!(s.execute("text.direction", &json!({"ids": [t], "direction": "up"})).is_err());
+}
+
+#[test]
 fn balance_and_pretty_wrap_styles_break_lines_as_documented() {
     // Explore text properties: "Auto: Figma fits as many words as possible on each line before
     // wrapping to the next." "Balance: Figma distributes text as evenly as possible across every

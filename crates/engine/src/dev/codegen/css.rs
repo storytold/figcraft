@@ -307,6 +307,13 @@ fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tok
         figcraft_doc::WrapStyle::Balance => put("text-wrap", "balance".into()),
         figcraft_doc::WrapStyle::Pretty => put("text-wrap", "pretty".into()),
     }
+    // A base direction forced on every paragraph (CSS has one per element).
+    let dir = tx.paragraphs.first().map(|p| p.direction).filter(|d| tx.paragraphs.iter().all(|p| p.direction == *d));
+    match dir {
+        Some(figcraft_doc::TextDirection::Ltr) => put("direction", "ltr".into()),
+        Some(figcraft_doc::TextDirection::Rtl) => put("direction", "rtl".into()),
+        _ => {}
+    }
     match s.case {
         TextCase::Original => {}
         TextCase::Upper => put("text-transform", "uppercase".into()),

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use figcraft_doc::{
     DecorationLength, DecorationStyle, LeadingTrim, LetterSpacing, LineHeight, ListStyle, ParaList, TextAlignH, TextAutoResize, TextCase, TextData,
-    TextDecoration, TextStyle, WrapStyle, color::PaintKind, valid_feature_tag,
+    TextDecoration, TextDirection, TextStyle, WrapStyle, color::PaintKind, valid_feature_tag,
 };
 use figcraft_geom::{Affine, BezPath, Rect};
 use harfrust::{Direction, Feature, ShapeOptions, ShaperInstance, Tag, UnicodeBuffer, Variation};
@@ -272,21 +272,29 @@ pub(crate) struct Bidi {
 }
 
 impl Bidi {
-    /// None when the text has nothing right to left (the common case costs one scan).
-    pub(crate) fn of(text: &str) -> Option<Bidi> {
-        if !text.chars().any(is_rtl_char) {
+    /// None when the text has nothing right to left and no paragraph forces its direction (the
+    /// common case costs one scan). `forced`, by paragraph: `Some(true)` runs right to left and
+    /// `Some(false)` left to right whatever the letters, `None` goes by the first letter with a
+    /// direction (Text ▸ Text direction, #1830).
+    pub(crate) fn of(text: &str, forced: &[Option<bool>]) -> Option<Bidi> {
+        if forced.iter().all(Option::is_none) && !text.chars().any(is_rtl_char) {
             return None;
         }
-        let info = unicode_bidi::BidiInfo::new(text, None);
-        let mut paras = info.paragraphs.iter().peekable();
         let n = text.chars().count();
         let (mut levels, mut rtl_para) = (Vec::with_capacity(n), Vec::with_capacity(n));
-        for (b, _) in text.char_indices() {
-            while paras.peek().is_some_and(|p| p.range.end <= b) {
-                paras.next();
+        // Paragraph by paragraph (the algorithm starts over at each one), so each can be given its
+        // base level.
+        for (p, para) in text.split_inclusive('\n').enumerate() {
+            let base = forced.get(p).copied().flatten().map(|rtl| if rtl { unicode_bidi::Level::rtl() } else { unicode_bidi::Level::ltr() });
+            let info = unicode_bidi::BidiInfo::new(para, base);
+            let mut paras = info.paragraphs.iter().peekable();
+            for (b, _) in para.char_indices() {
+                while paras.peek().is_some_and(|q| q.range.end <= b) {
+                    paras.next();
+                }
+                levels.push(info.levels.get(b).map(|l| l.number()).unwrap_or(0));
+                rtl_para.push(paras.peek().is_some_and(|q| q.level.is_rtl()));
             }
-            levels.push(info.levels.get(b).map(|l| l.number()).unwrap_or(0));
-            rtl_para.push(paras.peek().is_some_and(|p| p.level.is_rtl()));
         }
         Some(Bidi { levels, rtl_para })
     }
@@ -479,8 +487,20 @@ fn shape_text(text: &TextData) -> ShapedText {
         .filter_map(|(k, on)| <[u8; 4]>::try_from(k.as_bytes()).ok().map(|t| Feature::new(Tag::new(&t), u32::from(*on), ..)))
         .collect();
 
-    // Shape each span, split by paragraph, bidi run and fallback face.
-    let bidi = Bidi::of(&text.characters);
+    // Shape each span, split by paragraph, bidi run and fallback face. A paragraph's direction is
+    // its letters' unless forced (Text ▸ Text direction).
+    let forced: Vec<Option<bool>> = if text.paragraphs.is_empty() {
+        Vec::new()
+    } else {
+        (0..text.paragraph_count())
+            .map(|p| match text.para_list(p).direction {
+                TextDirection::Auto => None,
+                TextDirection::Ltr => Some(false),
+                TextDirection::Rtl => Some(true),
+            })
+            .collect()
+    };
+    let bidi = Bidi::of(&text.characters, &forced);
     let level_at = |i: usize| bidi.as_ref().and_then(|b| b.levels.get(i)).copied().unwrap_or(0);
     // A grapheme cluster (emoji sequence, letter with marks) is shaped with one face.
     let cluster_start = crate::breaks::grapheme_starts(&text.characters);
