@@ -214,7 +214,10 @@ fn a_client_resuming_past_a_replaced_image_in_the_saved_log_catches_up() {
     let mut s = Server::new(base(), "", Limits::default());
     let mut a = join_as(&mut s, Access::Edit);
     let m = edit(&mut a, |d| {
-        d.images.insert("img1".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(b"the first bytes".to_vec()), width: 2, height: 1 });
+        d.images.insert(
+            "img1".into(),
+            figcraft_doc::ImageData { asset: None, bytes: std::sync::Arc::new(b"the first bytes".to_vec()), width: 2, height: 1 },
+        );
     });
     send(&mut s, a.id(), m, &mut [&mut a]);
     let r = resume_past(&s, &mut a, vec![crate::image_tests::put("img1", 2, 1, b"other bytes")], true);
@@ -228,7 +231,10 @@ fn add_image_layer(s: &mut Server, a: &mut Client) -> figcraft_doc::NodeId {
     let m = edit(a, |d| {
         let r = d.create(page, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
         d.get_mut(r).unwrap().fills = vec![figcraft_color::Paint::image("img1", figcraft_color::ImageScaleMode::Fill)];
-        d.images.insert("img1".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(b"the first bytes".to_vec()), width: 2, height: 1 });
+        d.images.insert(
+            "img1".into(),
+            figcraft_doc::ImageData { asset: None, bytes: std::sync::Arc::new(b"the first bytes".to_vec()), width: 2, height: 1 },
+        );
         id = Some(r);
     });
     send(s, a.id(), m, &mut [a]);

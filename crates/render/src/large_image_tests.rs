@@ -15,8 +15,11 @@ const W: u32 = 6000;
 const H: u32 = 8;
 
 /// A `W` × `H` PNG of one-pixel black and white columns, black first unless `phase` is odd.
-fn stripes(phase: u32) -> Vec<u8> {
-    let img = image::RgbaImage::from_fn(W, H, |x, _| image::Rgba(if (x + phase).is_multiple_of(2) { [0, 0, 0, 255] } else { [255, 255, 255, 255] }));
+fn stripes(phase: u32, tag: &str) -> Vec<u8> {
+    let mut img =
+        image::RgbaImage::from_fn(W, H, |x, _| image::Rgba(if (x + phase).is_multiple_of(2) { [0, 0, 0, 255] } else { [255, 255, 255, 255] }));
+    // Distinct encoded content isolates fixtures now that resident cache identity is content-based.
+    img.put_pixel(W - 1, H - 1, image::Rgba([tag.len() as u8, 0, 0, 255]));
     let mut out = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
     out
@@ -29,7 +32,7 @@ fn doc(tag: &str) -> (Document, NodeId, [String; 2]) {
     let page = d.first_page().unwrap();
     let keys = [format!("{tag}-a"), format!("{tag}-b")];
     for (i, key) in (0u32..).zip(&keys) {
-        d.images.insert(key.clone(), ImageData { bytes: Arc::new(stripes(i)), width: W, height: H });
+        d.images.insert(key.clone(), ImageData { asset: None, bytes: Arc::new(stripes(i, tag)), width: W, height: H });
         let r = d.create(page, NodeKind::Rectangle, "Image", 0.0, f64::from(i * 2 * H), f64::from(W), f64::from(H)).unwrap();
         d.get_mut(r).unwrap().fills = vec![Paint::image(key, ImageScaleMode::Fill)];
     }
@@ -68,7 +71,7 @@ fn zoomed_out_the_canvas_draws_both_images_from_copies_that_stay_decoded() {
     let first = keys.each_ref().map(|k| shown(&d, k, 1500.0));
     for (k, p) in keys.iter().zip(&first) {
         assert_eq!((p.width(), p.height()), (DISPLAY_SIDES[0], 5), "{k}");
-        assert_eq!(images::cached_sides(k), vec![DISPLAY_SIDES[0]], "{k}: only its copy is decoded");
+        assert_eq!(images::cached_sides(&images::cache_key(k, d.images.get(k))), vec![DISPLAY_SIDES[0]], "{k}: only its copy is decoded");
     }
     // Drawn again (a drag, a pan), both are still the copies decoded the first time.
     render_view(&d, page, &view(0.25), &canvas()).unwrap();
@@ -87,7 +90,7 @@ fn exports_and_close_ups_draw_from_the_image_itself() {
     assert!(sharp_stripes(&at_100, 4, true, 1) && sharp_stripes(&at_100, 2 * H + 4, false, 1));
     let at_200 = render_view(&d, page, &view(2.0), &canvas()).unwrap();
     assert!(sharp_stripes(&at_200, 8, true, 2));
-    assert_eq!(images::cached_sides(&keys[0]), vec![16_384], "the image itself, as exports draw it");
+    assert_eq!(images::cached_sides(&images::cache_key(&keys[0], d.images.get(&keys[0]))), vec![16_384], "the image itself, as exports draw it");
 }
 
 #[test]

@@ -15,6 +15,7 @@ replaced.
 | Layer | Crate | Lines | Role |
 |---|---|---|---|
 | L0 | `figcraft-geom` | ~0.5k | Affine transforms, shape path builders (rounded and smoothed corners, polygons, stars, arcs) on kurbo |
+| L0 | `figcraft-assets` | ~0.6k | Immutable SHA-256 image references, raw binary payloads, scoped bounded encoded-image cache and asynchronous loader hooks; no scene, UI or transport dependency |
 | L0 | `figcraft-color` | ~1.3k | Colours (HSB/HSL, LCH/OKLCH, hex/CSS, Display P3), paints (solid, gradients, image), blend modes |
 | L1 | `figcraft-doc` | ~8.5k | Document model: pages, node tree in a persistent map (`imbl`, stable ids), properties, components, styles, variables, prototype data, comments, versions. Serde everywhere |
 | L2 | `figcraft-layout` | ~1.8k | Auto layout (horizontal, vertical, wrap, grid; hug/fill/fixed; min/max), constraints, layout grid geometry |
@@ -83,6 +84,10 @@ input.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | M9: progressive display previews negotiate on the original-image resource protocol without chunk transport. Bounded workers/caches, explicit preview clearing, main’s local-image display copies and exact-original exports retained. Readiness unchanged. |
+| 2026-10-29 | minor | M9: original-image downloads negotiate independently on main without chunk transport; disk cache capped at 512 MiB, explicit clearing, and a bounded background reader for paint misses. Export/rasterisation explicitly waits for exact originals. Existing image validation and replay limits retained; readiness estimates unchanged. |
+| 2026-10-22 | minor | Scoped immutable original-image references and authorized binary downloads; exact originals remain authoritative for saves/exports. Recovery authority and cache/request regressions covered. No previews. Readiness estimates unchanged. |
+| 2026-10-20 | minor | Added L0 `figcraft-assets`; image payloads can live outside guest document/undo clones in a bounded scoped disk cache. Native transport sends manifests and checked binary payloads; render generations invalidate pixels without document edits. Normal saves remain self-contained. |
 | 2026-10-18 | minor | Added `vectordrawable` (L4), the Android Vector Drawable (XML) writer |
 | 2026-10-11 | minor | `collab-net` hosts through one hub for the app's sessions and the standalone server; added the `figcraft-server` app |
 | 2026-10-10 | minor | Merged main after #101–#103: WASM plugins (plugins area 0% → 35% breadth, 20% ready; ecosystem 5% → 20%) and the multiplayer core without networking (multiplayer 5% → 15% breadth, 5% ready; collaboration 8% → 12%); menu breadth 97.5% → 98.5% (200/203); ready for real work ~46% → ~47%; full parity 420–790 h → 390–745 h; beta 210–380 h → 200–365 h. Fixed the stated weight sums (areas 1–16 sum to 94, total 113; percentages were already computed with those) |

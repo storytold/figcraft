@@ -221,7 +221,7 @@ fn images_and_masks_take_the_exact_path() {
     let mut bytes = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
     // Its own id: image ids key the shared decode cache (see band_tests).
-    d.images.insert("lod-tests-photo".into(), ImageData { bytes: Arc::new(bytes), width: 8, height: 8 });
+    d.images.insert("lod-tests-photo".into(), ImageData { asset: None, bytes: Arc::new(bytes), width: 8, height: 8 });
     let photo = d.create(p, NodeKind::Rectangle, "Photo", 0.0, 0.0, 20.0, 20.0).unwrap();
     d.get_mut(photo).unwrap().fills = vec![Paint::image("lod-tests-photo", ImageScaleMode::Fill)];
     let group = d.create(p, NodeKind::Group, "Masked", 40.0, 0.0, 20.0, 20.0).unwrap();

@@ -74,6 +74,8 @@ pub(crate) enum Push {
 /// the server hold more than that for it.
 #[derive(Clone)]
 pub(crate) struct Line {
+    pub(crate) assets: bool,
+    pub(crate) previews: bool,
     pub(crate) tx: SyncSender<Out>,
     pub(crate) queued: Arc<AtomicUsize>,
     pub(crate) block: Arc<AtomicUsize>,

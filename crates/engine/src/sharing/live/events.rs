@@ -168,6 +168,11 @@ impl Session {
         let open = self.docs.iter().find(|d| Some(d.uid) == live.doc_uid).map(|d| d.doc.name.as_str());
         let behind = open.or(live.file_name()).filter(|_| live.tab != front).map(|n| format!(" {n}")).unwrap_or_default();
         match e {
+            Event::AssetsChanged => {
+                if let Some(ds) = self.docs.iter_mut().find(|d| Some(d.uid) == live.doc_uid) {
+                    ds.revision += 1;
+                }
+            }
             Event::Status(Status::Failed { reason }) => self.live_fail(id, reason),
             Event::Status(Status::Off) => {
                 self.live.end(id);

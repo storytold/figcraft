@@ -252,6 +252,8 @@ pub const NO_SESSION: SessionId = 0;
 /// What happened in a session since the last [`LiveLink::poll`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
+    /// Image bytes arrived in the external cache. This invalidates drawing, never undo/history.
+    AssetsChanged,
     Status(Status),
     /// Joined, or joined again after a reconnect: who you are and who else is here.
     Welcome {
