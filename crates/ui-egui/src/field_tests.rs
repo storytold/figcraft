@@ -667,11 +667,11 @@ fn the_glass_light_intensity_field_has_a_label() {
     u.ctx.data_mut(|d| d.insert_temp(Id::unique(("fx_open", 0usize)), true));
     u.frame(vec![]);
     let shapes = u.frame_output(vec![]).shapes;
-    let lead = u.ctx.read_response(Id::unique(("fx_gi", 0usize)).with("lead")).expect("the intensity field is shown").rect;
+    let lead = u.ctx.read_response(Id::unique(("fx", "lightIntensity", 0usize)).with("lead")).expect("the intensity field is shown").rect;
     let labels: Vec<(String, bool)> =
         painted_texts(&shapes).into_iter().filter(|(_, _, at)| lead.contains(at.center())).map(|(text, cut, _)| (text, cut)).collect();
     assert_eq!(labels, [("Intensity".to_string(), false)], "labelled, and not cut short");
-    let field = u.ctx.read_response(Id::unique(("fx_gi", 0usize)).with("field")).expect("its value").rect;
+    let field = u.ctx.read_response(Id::unique(("fx", "lightIntensity", 0usize)).with("field")).expect("its value").rect;
     assert_eq!(field.max.x - lead.min.x, GLASS_FIELD_W, "the width the next test measures against");
 }
 
