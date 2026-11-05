@@ -658,5 +658,15 @@ fn create_reload_and_logs_commands_work_for_all_templates() {
     let reload_err = s.execute("plugin.reload", &json!({"id": "org.example.plugin-3d-special-widget"})).unwrap_err().to_string();
     assert!(reload_err.contains("changed"), "{reload_err}");
 
+    // For a workspace member under `plugins/examples/tidy-names`, `cargo_target_dir` resolves the
+    // workspace target directory via `cargo metadata` rather than `<member>/target`.
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let tidy_dir = repo_root.join("plugins").join("examples").join("tidy-names");
+    let cargo = crate::plugins::cargo_binary();
+    let resolved_target = crate::plugins::cargo_target_dir(&cargo, &tidy_dir);
+    if std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()).is_none() {
+        assert_eq!(resolved_target, repo_root.join("plugins").join("target"));
+    }
+
     let _ = std::fs::remove_dir_all(&base);
 }

@@ -347,8 +347,9 @@ pub fn install_at(kind: HarnessKind, path: &Path, cli_bin: &str, port: Option<u1
         HarnessKind::Antigravity | HarnessKind::ClaudeCode | HarnessKind::ClaudeDesktop => merge_json_config(existing.as_deref(), cli_bin, port)?,
         HarnessKind::Codex => merge_codex_toml(existing.as_deref(), cli_bin, port),
     };
-    let tmp = target.with_extension(format!("figcraft-{}.tmp", std::process::id()));
-    let _ = std::fs::remove_file(&tmp);
+    static NEXT_TMP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = NEXT_TMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = target.with_extension(format!("figcraft-{}-{seq}.tmp", std::process::id()));
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]

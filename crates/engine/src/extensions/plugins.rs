@@ -1088,7 +1088,7 @@ fn create(_s: &mut Session, _p: &Value) -> Result<Value> {
 /// Locate the `cargo` executable for building WebAssembly plugins.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::disallowed_methods)]
-fn cargo_binary() -> std::path::PathBuf {
+pub(crate) fn cargo_binary() -> std::path::PathBuf {
     use std::path::PathBuf;
     if let Some(c) = std::env::var_os("CARGO").filter(|v| !v.is_empty()).map(PathBuf::from)
         && c.is_file()
@@ -1104,6 +1104,27 @@ fn cargo_binary() -> std::path::PathBuf {
         }
     }
     PathBuf::from(name)
+}
+
+/// Resolve Cargo's effective `target_directory` for the plugin manifest in `root` via
+/// `cargo metadata`, preserving `CARGO_TARGET_DIR` and workspace target directories, and falling
+/// back to `CARGO_TARGET_DIR` or `<root>/target` if metadata cannot be queried.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+pub(crate) fn cargo_target_dir(cargo: &std::path::Path, root: &std::path::Path) -> std::path::PathBuf {
+    let cargo_toml = root.join("Cargo.toml");
+    if let Ok(output) = std::process::Command::new(cargo)
+        .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path"])
+        .arg(&cargo_toml)
+        .current_dir(root)
+        .output()
+        && output.status.success()
+        && let Ok(meta) = serde_json::from_slice::<Value>(&output.stdout)
+        && let Some(dir) = meta["target_directory"].as_str().filter(|s| !s.is_empty())
+    {
+        return std::path::PathBuf::from(dir);
+    }
+    std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"))
 }
 
 /// Extract the expected `<crate_name>.wasm` filename from a plugin's `Cargo.toml`, if present.
@@ -1169,8 +1190,7 @@ pub fn build_plugin_project(manifest_or_dir: &std::path::Path) -> std::result::R
             format!("cargo build failed:\n{detail}")
         });
     }
-    let target_base =
-        std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"));
+    let target_base = cargo_target_dir(&cargo, root);
     let rel = target_base.join("wasm32-unknown-unknown").join("release");
     let expected = crate_wasm_name(root).map(|n| rel.join(n)).filter(|p| p.is_file());
     let built_wasm = match expected {
