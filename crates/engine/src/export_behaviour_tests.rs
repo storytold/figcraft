@@ -166,7 +166,43 @@ fn export_formats_and_what_each_keeps() {
     let corner = *pixels(&jpg).get_pixel(0, 0);
     assert!(corner[0] > 245 && corner[1] > 245 && corner[2] > 245, "JPG has no transparency: transparent areas are white");
     let mid = *pixels(&jpg).get_pixel(20, 20);
-    assert!(mid[0] > 240 && mid[1] < 16 && mid[2] < 16, "docs silent: JPG quality is fixed and high (flat colours come back within a few levels)");
+    assert!(mid[0] > 240 && mid[1] < 16 && mid[2] < 16, "docs silent: the default JPG quality is high (flat colours come back within a few levels)");
+}
+
+/// #2004: `quality` sets a JPG's encoder quality (1 to 100) on `file.export`, and on an export
+/// setting, which Export layers writes at. Without it the file is the quality-90 one it always
+/// was; out of range is refused; a PNG takes no notice.
+#[test]
+fn jpg_export_quality_is_an_option() {
+    let mut s = Session::new();
+    let e = id(&ex(&mut s, "shape.ellipse", json!({"x": 0, "y": 0, "width": 120, "height": 120})));
+    set(&mut s, &[e], json!({"fills": ["#FF0000"]}));
+    let default = export(&mut s, json!({"ids": [e], "format": "jpg"}));
+    let ninety = export(&mut s, json!({"ids": [e], "format": "jpg", "quality": 90}));
+    let low = export(&mut s, json!({"ids": [e], "format": "jpg", "quality": 40}));
+    let high = export(&mut s, json!({"ids": [e], "format": "jpg", "quality": 100}));
+    assert_eq!(default, ninety, "no quality: the quality-90 file it always was");
+    assert!(low.len() < ninety.len() && ninety.len() < high.len(), "coarser tables, smaller file: {} < {} < {}", low.len(), ninety.len(), high.len());
+    let mid = *pixels(&low).get_pixel(60, 60);
+    assert!(low.starts_with(b"\xFF\xD8\xFF") && mid[0] > 200 && mid[1] < 60, "still the red JPG: {mid:?}");
+    for bad in [0, 101, -1] {
+        let err = s.execute("file.export", &json!({"ids": [e], "format": "jpg", "quality": bad})).unwrap_err().to_string();
+        assert!(err.contains("quality: 1 to 100"), "{bad}: {err}");
+    }
+    assert_eq!(
+        export(&mut s, json!({"ids": [e], "format": "png", "quality": 40})),
+        export(&mut s, json!({"ids": [e], "format": "png"})),
+        "a PNG takes no notice"
+    );
+    // An export setting carries it, and Export layers writes the file at it.
+    let written = |s: &mut Session| {
+        let r = ex(s, "file.exportLayers", json!({"ids": [e]}));
+        base64::engine::general_purpose::STANDARD.decode(r["files"][0]["data"].as_str().unwrap()).unwrap()
+    };
+    ex(&mut s, "export.add", json!({"ids": [e], "setting": {"format": "jpg", "quality": 40}}));
+    assert_eq!(written(&mut s), low, "the setting's quality");
+    ex(&mut s, "export.update", json!({"ids": [e], "index": 0, "quality": 100}));
+    assert_eq!(written(&mut s), high, "export.update changes it");
 }
 
 #[test]

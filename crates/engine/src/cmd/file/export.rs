@@ -173,6 +173,13 @@ pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value)
     if let Some(c) = vd_compat_param(cmd, p)? {
         e.vd_compat = c;
     }
+    match get(p, "quality") {
+        None | Some(Value::Null) => {}
+        Some(v) => {
+            let q = v.as_f64().filter(|q| (1.0..=100.0).contains(q)).ok_or_else(|| bad(cmd, "quality: 1 to 100 (JPG)"))?;
+            e.jpg_quality = q.round() as u8;
+        }
+    }
     e.print = print_param(cmd, p, e.print)?;
     for (key, slot) in [
         ("contentsOnly", &mut e.contents_only),

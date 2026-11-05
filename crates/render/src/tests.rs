@@ -490,16 +490,16 @@ fn exports_carry_the_colour_profile() {
     let (d, _, r) = doc_with_rect(Color::from_hex("00FF00").unwrap());
     let pix = render_node(&d, r, 1.0).unwrap();
     for profile in ColorProfile::ALL {
-        let png = encode_export(&pix, ExportFormat::Png, profile).unwrap();
+        let png = encode_export(&pix, ExportFormat::Png, profile, 90).unwrap();
         // The inserted chunk has a valid CRC: the decoder accepts the file and keeps the pixels.
         let mut dec = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&png)).unwrap();
         let icc = dec.icc_profile().unwrap();
         assert_eq!(icc.is_some(), !profile.is_srgb(), "{profile:?}");
         assert_eq!(image::load_from_memory(&png).unwrap().to_rgba8().get_pixel(5, 5).0, [0, 255, 0, 255]);
         for f in [ExportFormat::Jpg, ExportFormat::Webp] {
-            assert!(!encode_export(&pix, f, profile).unwrap().is_empty());
+            assert!(!encode_export(&pix, f, profile, 90).unwrap().is_empty());
         }
-        assert!(encode_export(&pix, ExportFormat::Svg, profile).is_err());
+        assert!(encode_export(&pix, ExportFormat::Svg, profile, 90).is_err());
     }
     assert_eq!(png_insert_chunk(b"not a png".to_vec(), b"sRGB", &[0]), b"not a png");
 }
