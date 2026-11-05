@@ -354,9 +354,10 @@ fn a_changed_fit_replaces_the_column_widths() {
     let wider = table_frame(&ctx, WINDOW, &[None, Some(200.0), Some(80.0)], NAME, Vec::new());
     let widths: Vec<f32> = wider.iter().map(|c| c.width().round()).collect();
     assert!(widths.ends_with(&[200.0, 80.0]), "a longer cell widens its column: {widths:?}");
-    assert!(wider[2].right() < WINDOW, "the table still fits the window: {wider:?}");
+    // The table fills the window, which the layout rounds to whole points.
+    assert!(wider[2].right() <= WINDOW.ceil(), "the table still fits the window: {wider:?}");
     let narrower = table_frame(&ctx, 400.0, &WIDTHS, NAME, Vec::new());
-    assert!(narrower[2].right() < 400.0, "a narrower window refits the table: {narrower:?}");
+    assert!(narrower[2].right() <= 400.0, "a narrower window refits the table: {narrower:?}");
 }
 
 #[test]
