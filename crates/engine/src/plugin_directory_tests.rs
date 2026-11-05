@@ -253,6 +253,7 @@ fn publishing_sends_a_checked_folder() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Verifies listing and installing builtin example plugins offline.
 #[test]
 fn builtin_store_lists_and_installs_without_network() {
     let mut s = Session::new();

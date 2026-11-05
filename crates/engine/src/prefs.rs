@@ -152,7 +152,7 @@ impl Default for Prefs {
             ui_scale: 1.0,
             auto_save: false,
             start_on_home: false,
-            mcp_enabled: true,
+            mcp_enabled: false,
             mcp_port: DEFAULT_MCP_PORT,
             invite_links: None,
             plugins: Vec::new(),

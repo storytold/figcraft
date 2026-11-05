@@ -70,6 +70,7 @@ fn server(s: &Session, _cmd: &str, p: &Value) -> Result<String> {
         .unwrap_or_else(|| BUILTIN_SERVER.to_string()))
 }
 
+/// Append an unsigned 32-bit integer encoded as unsigned LEB128 to `out`.
 fn push_leb_u32(out: &mut Vec<u8>, mut val: u32) {
     loop {
         let mut byte = (val & 0x7f) as u8;
@@ -84,6 +85,7 @@ fn push_leb_u32(out: &mut Vec<u8>, mut val: u32) {
     }
 }
 
+/// Append a signed 32-bit integer encoded as signed LEB128 to `out`.
 fn push_leb_i32(out: &mut Vec<u8>, mut val: i32) {
     loop {
         let byte = (val as u8) & 0x7f;
@@ -97,12 +99,14 @@ fn push_leb_i32(out: &mut Vec<u8>, mut val: i32) {
     }
 }
 
+/// Append a WebAssembly binary section with `id` and `body` to `out`.
 fn push_section(out: &mut Vec<u8>, id: u8, body: &[u8]) {
     out.push(id);
     push_leb_u32(out, body.len() as u32);
     out.extend_from_slice(body);
 }
 
+/// Append a length-prefixed UTF-8 name to a WebAssembly section buffer.
 fn push_name(out: &mut Vec<u8>, s: &str) {
     push_leb_u32(out, s.len() as u32);
     out.extend_from_slice(s.as_bytes());
@@ -182,6 +186,7 @@ pub(crate) fn encode_wasm_module(host_call: Option<(&str, bool, &[u8])>) -> Vec<
     out
 }
 
+/// Validate `bundle`, encode it, and build its directory `PluginEntry` metadata and raw bytes.
 fn entry_from_bundle(bundle: &Bundle) -> Option<(PluginEntry, Vec<u8>)> {
     let m = bundle.check().ok()?;
     let bytes = bundle.encode();
@@ -208,18 +213,17 @@ fn entry_from_bundle(bundle: &Bundle) -> Option<(PluginEntry, Vec<u8>)> {
     Some((entry, bytes))
 }
 
+/// Host import call specification `(import_name, returns_i32, payload_bytes)` for built-in modules.
 pub(crate) type FallbackCall = (&'static str, bool, &'static [u8]);
 
-#[allow(clippy::disallowed_methods)]
+/// Build the offline `"builtin"` plugin directory entries and bundles.
 fn builtin_bundles() -> Vec<(PluginEntry, Vec<u8>)> {
-    let specs: [(&str, &str, Option<FallbackCall>); 4] = [
+    let specs: [(&str, Option<FallbackCall>); 4] = [
         (
-            "tidy-names",
             include_str!("../../../../plugins/examples/tidy-names/figcraft-plugin.json"),
             Some(("set_output", false, br#"{"tidied":0}"#)),
         ),
         (
-            "swatch-grid",
             include_str!("../../../../plugins/examples/swatch-grid/figcraft-plugin.json"),
             Some((
                 "ui_show",
@@ -228,7 +232,6 @@ fn builtin_bundles() -> Vec<(PluginEntry, Vec<u8>)> {
             )),
         ),
         (
-            "counter",
             include_str!("../../../../plugins/examples/counter/figcraft-plugin.json"),
             Some((
                 "widget_render",
@@ -237,23 +240,14 @@ fn builtin_bundles() -> Vec<(PluginEntry, Vec<u8>)> {
             )),
         ),
         (
-            "export-names",
             include_str!("../../../../plugins/examples/export-names/figcraft-plugin.json"),
             Some(("set_output", false, br#"{"exported":0}"#)),
         ),
     ];
 
     let mut list = Vec::new();
-    for (dir_name, manifest_json, fallback_call) in specs {
-        let mut wasm = None;
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Ok(m) = Manifest::parse(manifest_json) {
-            let dist = std::path::Path::new("target/plugins/dist").join(dir_name).join(&m.main);
-            if let Ok(bytes) = std::fs::read(&dist) {
-                wasm = Some(bytes);
-            }
-        }
-        let wasm = wasm.unwrap_or_else(|| encode_wasm_module(fallback_call));
+    for (manifest_json, fallback_call) in specs {
+        let wasm = encode_wasm_module(fallback_call);
         let bundle = Bundle { manifest: manifest_json.to_string(), wasm, assets: Vec::new() };
         if let Some(pair) = entry_from_bundle(&bundle) {
             list.push(pair);
@@ -262,6 +256,7 @@ fn builtin_bundles() -> Vec<(PluginEntry, Vec<u8>)> {
     list
 }
 
+/// Load plugin directory entries and bundles from a local filesystem folder at `path`.
 #[cfg(not(target_arch = "wasm32"))]
 fn local_bundles(cmd: &str, path: &str) -> Result<Vec<(PluginEntry, Vec<u8>)>> {
     let root = std::path::PathBuf::from(crate::library::absolute_path(path.trim()));
@@ -289,11 +284,13 @@ fn local_bundles(cmd: &str, path: &str) -> Result<Vec<(PluginEntry, Vec<u8>)>> {
     Ok(out)
 }
 
+/// Stub for local folder plugin directories on `wasm32` where local filesystem access is unavailable.
 #[cfg(target_arch = "wasm32")]
 fn local_bundles(cmd: &str, _path: &str) -> Result<Vec<(PluginEntry, Vec<u8>)>> {
     Err(bad(cmd, "local folder plugin directories require the desktop app or CLI"))
 }
 
+/// Whether `server` is a remote WebSocket URL (`ws://` or `wss://`).
 fn is_remote_server(server: &str) -> bool {
     let s = server.trim();
     s.starts_with("ws://") || s.starts_with("wss://")

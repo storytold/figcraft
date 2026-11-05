@@ -181,6 +181,7 @@ fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine
     Ok(ExitCode::SUCCESS)
 }
 
+/// Inspect or install FigCraft MCP configuration for supported LLM coding harnesses.
 fn mcp_harness(status: bool, install_target: Option<&str>, port: u16) -> CliResult<ExitCode> {
     use figcraft_engine::harness::{HarnessKind, detect_cli_binary, inspect_all, install};
     let cli = detect_cli_binary();
@@ -212,6 +213,7 @@ fn mcp_harness(status: bool, install_target: Option<&str>, port: u16) -> CliResu
     Ok(ExitCode::SUCCESS)
 }
 
+/// Scaffold a new plugin project on disk via `plugin.create`.
 fn plugin_new(a: &args::PluginNewArgs) -> CliResult<ExitCode> {
     let mut s = figcraft_engine::Session::new();
     let name =
@@ -234,43 +236,17 @@ fn plugin_new(a: &args::PluginNewArgs) -> CliResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Compile a Rust plugin project for `wasm32-unknown-unknown`, copy its `.wasm` module to `main`, and validate it.
 fn plugin_build(folder: &str) -> CliResult<ExitCode> {
     let dir = std::path::Path::new(folder);
-    let manifest_path =
-        if dir.file_name().is_some_and(|n| n == "figcraft-plugin.json") { dir.to_path_buf() } else { dir.join("figcraft-plugin.json") };
-    let root = manifest_path.parent().unwrap_or(dir);
-    let raw = std::fs::read_to_string(&manifest_path).map_err(|e| CliError::Failed(format!("{}: {e}", manifest_path.display())))?;
-    let manifest: Value = serde_json::from_str(&raw).map_err(|e| CliError::Failed(format!("{}: {e}", manifest_path.display())))?;
-    let main_wasm = manifest["main"].as_str().unwrap_or("plugin.wasm");
-    let cargo = cargo_binary();
-    let status = std::process::Command::new(&cargo)
-        .arg("build")
-        .arg("--release")
-        .arg("--target")
-        .arg("wasm32-unknown-unknown")
-        .current_dir(root)
-        .status()
-        .map_err(|e| CliError::Failed(format!("failed to run cargo: {e}")))?;
-    if !status.success() {
-        return Err(CliError::Failed("cargo build --release --target wasm32-unknown-unknown failed".into()));
-    }
-    let wasm_out = root.join(main_wasm);
-    // Copy the built .wasm from target/wasm32-unknown-unknown/release/*.wasm to the manifest's `main` path.
-    let rel = root.join("target").join("wasm32-unknown-unknown").join("release");
-    if let Ok(entries) = std::fs::read_dir(&rel) {
-        for entry in entries.flatten() {
-            if entry.path().extension().is_some_and(|e| e == "wasm") {
-                let _ = std::fs::copy(entry.path(), &wasm_out);
-                break;
-            }
-        }
-    }
+    let (manifest_path, wasm_out) = figcraft_engine::plugins::build_plugin_project(dir).map_err(CliError::Failed)?;
     let mut s = figcraft_engine::Session::new();
     let imported = s.execute("plugin.import", &json!({"path": manifest_path.to_string_lossy()})).map_err(|e| CliError::Failed(e.to_string()))?;
     println!("Built {} ({}) -> {}", imported["name"].as_str().unwrap_or_default(), imported["id"].as_str().unwrap_or_default(), wasm_out.display());
     Ok(ExitCode::SUCCESS)
 }
 
+/// Import and run a plugin in a headless session, optionally loading `--in` and saving `--out`.
 fn plugin_run(a: &args::PluginRunArgs) -> CliResult<ExitCode> {
     let params_val: Value = serde_json::from_str(&a.params).map_err(|e| CliError::Usage(format!("--params is not valid JSON: {e}")))?;
     let mut s = match &a.input {
@@ -289,22 +265,4 @@ fn plugin_run(a: &args::PluginRunArgs) -> CliResult<ExitCode> {
         s.execute("file.saveAs", &json!({"path": out_path})).map_err(|e| CliError::Failed(e.to_string()))?;
     }
     Ok(ExitCode::SUCCESS)
-}
-
-fn cargo_binary() -> std::path::PathBuf {
-    use std::path::PathBuf;
-    if let Some(c) = std::env::var_os("CARGO").filter(|v| !v.is_empty()).map(PathBuf::from)
-        && c.is_file()
-    {
-        return c;
-    }
-    let name = if cfg!(windows) { "cargo.exe" } else { "cargo" };
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
-    if let Some(h) = home {
-        let candidate = h.join(".cargo").join("bin").join(name);
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    PathBuf::from(name)
 }

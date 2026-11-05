@@ -588,9 +588,30 @@ fn create_reload_and_logs_commands_work_for_all_templates() {
         assert_eq!(out["id"], format!("org.test.created.{tpl}"));
         assert_eq!(out["template"], tpl);
 
-        let reloaded = ex(&mut s, "plugin.reload", json!({"id": format!("org.test.created.{tpl}")}));
-        assert_eq!(reloaded["id"], format!("org.test.created.{tpl}"));
+        // Creating again in the same directory refuses to overwrite existing files.
+        assert!(
+            s.execute(
+                "plugin.create",
+                &json!({
+                    "dir": dir.to_string_lossy(),
+                    "name": format!("Test {tpl}"),
+                    "id": format!("org.test.created.{tpl}"),
+                    "template": tpl
+                }),
+            )
+            .is_err()
+        );
+
+        let lib_rs = std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap();
+        assert!(lib_rs.contains("Input"), "{lib_rs}");
+        assert!(!lib_rs.contains("CallInput"), "{lib_rs}");
+
+        let plugin_id = format!("org.test.created.{tpl}");
+        s.prefs.plugin_settings.entry(plugin_id.clone()).or_default().insert("savedKey".into(), json!("savedVal"));
+        let reloaded = ex(&mut s, "plugin.reload", json!({"id": plugin_id}));
+        assert_eq!(reloaded["id"], plugin_id);
         assert_eq!(reloaded["reloaded"], true);
+        assert_eq!(s.prefs.plugin_settings.get(&plugin_id).and_then(|m| m.get("savedKey")), Some(&json!("savedVal")));
 
         if tpl == "widget" {
             let w = ex(&mut s, "widget.insert", json!({"plugin": "org.test.created.widget"}));

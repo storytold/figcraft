@@ -211,35 +211,59 @@ fn callback(s: &mut Session, p: &InstalledPlugin, w: NodeId, event: Option<Value
             return Err(e);
         }
     };
-    record_run(
-        s,
-        PluginRunRecord {
-            plugin: m.id.clone(),
-            command: "widget".into(),
-            ok: true,
-            output: serde_json::from_str::<Value>(&out.output).unwrap_or_else(|_| Value::String(out.output.clone())),
-            error: None,
-            logs: out.logs.clone(),
-            calls: out.calls,
-            fuel: out.fuel,
-            fuel_limit: lim.fuel,
-        },
-    );
-    match out.widget.take() {
-        Some(r) if m.api < 4 && r.uses_api_4() => return Err(bad("widget.render", format!("{}: fields and menus need plugin API 4", m.name))),
-        Some(r) if m.api < 6 && r.uses_api_6() => return Err(bad("widget.render", format!("{}: lines and SVG need plugin API 6", m.name))),
-        Some(r) => build(s, &m.id, w, &r)?,
-        None if inserting => return Err(bad("widget.insert", format!("{} drew no widget", m.name))),
-        None => {}
+    let post_res: Result<()> = (|| {
+        match out.widget.take() {
+            Some(r) if m.api < 4 && r.uses_api_4() => return Err(bad("widget.render", format!("{}: fields and menus need plugin API 4", m.name))),
+            Some(r) if m.api < 6 && r.uses_api_6() => return Err(bad("widget.render", format!("{}: lines and SVG need plugin API 6", m.name))),
+            Some(r) => build(s, &m.id, w, &r)?,
+            None if inserting => return Err(bad("widget.insert", format!("{} drew no widget", m.name))),
+            None => {}
+        }
+        // API 5: a widget can open its plugin's panel (an older one's `ui_show` is ignored, as before);
+        // the module stays loaded for the panel's callbacks, which can redraw this widget.
+        match out.ui.take() {
+            Some(UiChange::Show(panel)) if m.api >= 5 => open_panel(s, m, ("widget", json!({}), m.name.clone()), panel, instance, Some(w)),
+            Some(UiChange::Close) if m.api >= 5 => close_panel(s, &m.id),
+            _ => {}
+        }
+        Ok(())
+    })();
+    match post_res {
+        Ok(()) => {
+            record_run(
+                s,
+                PluginRunRecord {
+                    plugin: m.id.clone(),
+                    command: "widget".into(),
+                    ok: true,
+                    output: serde_json::from_str::<Value>(&out.output).unwrap_or_else(|_| Value::String(out.output.clone())),
+                    error: None,
+                    logs: out.logs.clone(),
+                    calls: out.calls,
+                    fuel: out.fuel,
+                    fuel_limit: lim.fuel,
+                },
+            );
+            Ok(out)
+        }
+        Err(e) => {
+            record_run(
+                s,
+                PluginRunRecord {
+                    plugin: m.id.clone(),
+                    command: "widget".into(),
+                    ok: false,
+                    output: Value::Null,
+                    error: Some(e.to_string()),
+                    logs: out.logs,
+                    calls: out.calls,
+                    fuel: out.fuel,
+                    fuel_limit: lim.fuel,
+                },
+            );
+            Err(e)
+        }
     }
-    // API 5: a widget can open its plugin's panel (an older one's `ui_show` is ignored, as before);
-    // the module stays loaded for the panel's callbacks, which can redraw this widget.
-    match out.ui.take() {
-        Some(UiChange::Show(panel)) if m.api >= 5 => open_panel(s, m, ("widget", json!({}), m.name.clone()), panel, instance, Some(w)),
-        Some(UiChange::Close) if m.api >= 5 => close_panel(s, &m.id),
-        _ => {}
-    }
-    Ok(out)
 }
 
 /// A callback of a panel widget `w` opened: the input gets the widget (its id and state, no

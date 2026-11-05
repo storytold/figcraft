@@ -442,19 +442,30 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             |s, p| {
                 const CMD: &str = "pref.mcp";
-                if let Some(port_val) = get(p, "port") {
-                    let n = port_val.as_u64().ok_or_else(|| bad(CMD, "`port` must be an integer between 1024 and 65535"))?;
-                    if !(1024..=65535).contains(&n) {
-                        return Err(bad(CMD, "`port` must be between 1024 and 65535"));
+                let next_port = match get(p, "port") {
+                    Some(port_val) => {
+                        let n = port_val.as_u64().ok_or_else(|| bad(CMD, "`port` must be an integer between 1024 and 65535"))?;
+                        if !(1024..=65535).contains(&n) {
+                            return Err(bad(CMD, "`port` must be between 1024 and 65535"));
+                        }
+                        Some(n as u16)
                     }
-                    s.prefs.mcp_port = n as u16;
+                    None => None,
+                };
+                let next_enabled = if let Some(en) = boolean(p, "enabled").or_else(|| boolean(p, "on")) {
+                    Some(en)
+                } else if get(p, "enabled").is_some() || get(p, "on").is_some() {
+                    return Err(bad(CMD, "`enabled` must be a boolean"));
+                } else {
+                    None
+                };
+                if let Some(port) = next_port {
+                    s.prefs.mcp_port = port;
                     s.prefs_unsaved = true;
                 }
-                if let Some(en) = boolean(p, "enabled").or_else(|| boolean(p, "on")) {
+                if let Some(en) = next_enabled {
                     s.prefs.mcp_enabled = en;
                     s.prefs_unsaved = true;
-                } else if get(p, "port").is_none() && (get(p, "enabled").is_some() || get(p, "on").is_some()) {
-                    return Err(bad(CMD, "`enabled` must be a boolean"));
                 }
                 Ok(json!({"enabled": s.prefs.mcp_enabled, "port": s.prefs.mcp_port}))
             }

@@ -79,6 +79,7 @@ pub struct Runtime {
     pub history: Vec<PluginRunRecord>,
 }
 
+/// Record a completed plugin execution in `s.plugins.history`, trimming oldest entries past [`MAX_RUN_HISTORY`].
 pub(crate) fn record_run(s: &mut Session, rec: PluginRunRecord) {
     s.plugins.history.push(rec);
     let over = s.plugins.history.len().saturating_sub(MAX_RUN_HISTORY);
@@ -750,6 +751,7 @@ fn manage(s: &mut Session, p: &Value) -> Result<Value> {
     list(s, p)
 }
 
+/// Reload an installed local development plugin from its manifest on disk, preserving its saved settings.
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "plugin.reload";
     let id = string(p, "id").ok_or_else(|| bad(cmd, "`id` required"))?;
@@ -762,10 +764,15 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     let name = manifest.name.clone();
     let version = manifest.version.clone();
     let new_id = manifest.id.clone();
+    let settings = s.prefs.plugin_settings.get(&existing.manifest.id).cloned();
     register(s, InstalledPlugin { manifest, path: Some(abs_path), source: existing.source }, wasm);
+    if let Some(v) = settings {
+        s.prefs.plugin_settings.insert(new_id.clone(), v);
+    }
     Ok(json!({"id": new_id, "name": name, "version": version, "reloaded": true}))
 }
 
+/// Convert a human-readable plugin name into a lowercase ASCII hyphen-separated slug.
 fn slugify(name: &str) -> String {
     let mut out = String::new();
     let mut prev_dash = false;
@@ -782,6 +789,49 @@ fn slugify(name: &str) -> String {
     if trimmed.is_empty() { "my-plugin".into() } else { trimmed }
 }
 
+/// Compute a forward-slash relative path from `base_dir` to `target_dir` when they share a root.
+#[cfg(not(target_arch = "wasm32"))]
+fn relative_sdk_path(base_dir: &std::path::Path, target_dir: &std::path::Path) -> String {
+    use std::path::Component;
+    let base: Vec<Component<'_>> = base_dir.components().filter(|c| !matches!(c, Component::CurDir)).collect();
+    let target: Vec<Component<'_>> = target_dir.components().filter(|c| !matches!(c, Component::CurDir)).collect();
+    let common = base.iter().zip(target.iter()).take_while(|(a, b)| a == b).count();
+    if common == 0 {
+        return target_dir.to_string_lossy().replace('\\', "/");
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for c in &base[common..] {
+        if matches!(c, Component::Normal(_)) {
+            parts.push("..".into());
+        }
+    }
+    for c in &target[common..] {
+        if let Component::Normal(s) = c {
+            parts.push(s.to_string_lossy().into_owned());
+        }
+    }
+    if parts.is_empty() { ".".into() } else { parts.join("/") }
+}
+
+/// Resolve the path to `figcraft-plugin-sdk` relative to `project_dir`.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_sdk_path(cmd: &str, project_dir: &std::path::Path, explicit: Option<&str>) -> Result<String> {
+    if let Some(sdk) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
+        let abs = std::path::PathBuf::from(crate::library::absolute_path(sdk));
+        return Ok(relative_sdk_path(project_dir, &abs));
+    }
+    if let Some(env_sdk) = std::env::var_os("FIGCRAFT_PLUGIN_SDK").filter(|v| !v.is_empty()) {
+        let abs = std::path::PathBuf::from(crate::library::absolute_path(&env_sdk.to_string_lossy()));
+        return Ok(relative_sdk_path(project_dir, &abs));
+    }
+    if let Some(repo_root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(std::path::Path::parent) {
+        let sdk_dir = repo_root.join("plugins").join("sdk");
+        return Ok(relative_sdk_path(project_dir, &sdk_dir));
+    }
+    Err(bad(cmd, "couldn't determine the `figcraft-plugin-sdk` location; set `sdk` or `FIGCRAFT_PLUGIN_SDK`"))
+}
+
+/// Scaffold a new plugin project on disk from `template` and import it into the session.
 #[cfg(not(target_arch = "wasm32"))]
 fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "plugin.create";
@@ -814,15 +864,14 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
                 ]
             }),
             format!(
-                r#"use figcraft_plugin_sdk::{{CallInput, Value, call, entry, json, log, notify, set_output}};
+                r#"use figcraft_plugin_sdk::{{Input, Result, Value, entry, json, log, notify}};
 
 entry!(run);
 
-fn run(input: CallInput) -> Result<(), String> {{
+fn run(input: Input) -> Result<Value> {{
     log(&format!("Running {{}} on {{}} selected layer(s)", input.command, input.selection.len()));
     notify("Hello from {name}!");
-    set_output(&json!({{"selected": input.selection.len()}}));
-    Ok(())
+    Ok(json!({{"selected": input.selection.len()}}))
 }}
 "#
             ),
@@ -845,26 +894,27 @@ fn run(input: CallInput) -> Result<(), String> {{
                 ]
             }),
             format!(
-                r##"use figcraft_plugin_sdk::{{CallInput, call, entry, json, notify, show_panel}};
+                r##"use figcraft_plugin_sdk::{{Input, Result, Value, call, entry, json, notify, show_ui}};
 
 entry!(run);
 
-fn run(input: CallInput) -> Result<(), String> {{
+fn run(input: Input) -> Result<Value> {{
     if let Some(ev) = &input.event {{
         if ev.control == "create" {{
-            let color = input.values.get("color").and_then(|v| v.as_str()).unwrap_or("#02da96");
+            let color = ev.values.get("color").and_then(Value::as_str).unwrap_or("#02da96");
             call("shape.rectangle", &json!({{"x": 0, "y": 0, "width": 120, "height": 120, "props": {{"fill": color}}}}))?;
             notify("Created rectangle");
         }}
-        return Ok(());
+        return Ok(Value::Null);
     }}
-    show_panel(&json!({{
+    show_ui(&json!({{
         "title": "{name}",
         "controls": [
             {{"name": "color", "label": "Color", "type": "color", "default": "#02da96"}},
             {{"name": "create", "label": "Create Rectangle", "type": "button"}}
         ]
-    }}))
+    }}))?;
+    Ok(Value::Null)
 }}
 "##
             ),
@@ -888,21 +938,19 @@ fn run(input: CallInput) -> Result<(), String> {{
                 }
             }),
             format!(
-                r##"use figcraft_plugin_sdk::{{CallInput, entry, json, render_widget}};
+                r##"use figcraft_plugin_sdk::{{Input, Result, Value, entry, json, render_widget}};
 
 entry!(run);
 
-fn run(input: CallInput) -> Result<(), String> {{
+fn run(input: Input) -> Result<Value> {{
     let mut count = input
         .widget
         .as_ref()
         .and_then(|w| w.state.get("count"))
-        .and_then(|v| v.as_i64())
+        .and_then(Value::as_i64)
         .unwrap_or(0);
-    if let Some(ev) = input.widget.as_ref().and_then(|w| w.event.as_ref()) {{
-        if ev.get("target").and_then(|t| t.as_str()) == Some("inc") {{
-            count += 1;
-        }}
+    if input.widget.as_ref().and_then(|w| w.target.as_deref()) == Some("inc") {{
+        count += 1;
     }}
     render_widget(&json!({{
         "state": {{"count": count}},
@@ -922,7 +970,8 @@ fn run(input: CallInput) -> Result<(), String> {{
                 ]}}
             ]
         }}
-    }}))
+    }}))?;
+    Ok(json!({{"count": count}}))
 }}
 "##
             ),
@@ -949,16 +998,15 @@ fn run(input: CallInput) -> Result<(), String> {{
                     { "id": "export", "label": format!("{name}…") }
                 ]
             }),
-            r#"use figcraft_plugin_sdk::{CallInput, call, entry, json, save_file, set_output};
+            r#"use figcraft_plugin_sdk::{Input, Result, Value, call, entry, json, save_file};
 
 entry!(run);
 
-fn run(_input: CallInput) -> Result<(), String> {
+fn run(_input: Input) -> Result<Value> {
     let nodes = call("node.list", &json!({}))?;
     let bytes = serde_json::to_vec_pretty(&nodes).map_err(|e| e.to_string())?;
     save_file("layers.json", "application/json", &bytes)?;
-    set_output(&json!({"saved": "layers.json"}));
-    Ok(())
+    Ok(json!({"saved": "layers.json"}))
 }
 "#
             .to_string(),
@@ -976,6 +1024,13 @@ fn run(_input: CallInput) -> Result<(), String> {
     // Validate the generated manifest before touching the disk.
     Manifest::parse(&manifest_text).map_err(|e| bad(cmd, e))?;
 
+    for rel in [MANIFEST_FILE, "Cargo.toml", "src/lib.rs", wasm_file.as_str()] {
+        if crate::file_access::exists(dir.join(rel)) {
+            return Err(bad(cmd, format!("`{rel}` already exists in `{}`", dir.display())));
+        }
+    }
+
+    let sdk_path = resolve_sdk_path(cmd, &dir, string(p, "sdk").as_deref())?;
     let cargo_toml = format!(
         r#"[package]
 name = "{slug}"
@@ -987,7 +1042,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-figcraft-plugin-sdk = {{ path = "../sdk" }}
+figcraft-plugin-sdk = {{ path = {sdk_path:?} }}
 serde_json = "1"
 "#
     );
@@ -1011,11 +1066,130 @@ serde_json = "1"
     }))
 }
 
+/// Stub for `plugin.create` on `wasm32` where local project creation on disk is unavailable.
 #[cfg(target_arch = "wasm32")]
 fn create(_s: &mut Session, _p: &Value) -> Result<Value> {
     Err(bad("plugin.create", "creating plugin projects on disk requires the desktop app or CLI"))
 }
 
+/// Locate the `cargo` executable for building WebAssembly plugins.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::disallowed_methods)]
+fn cargo_binary() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    if let Some(c) = std::env::var_os("CARGO").filter(|v| !v.is_empty()).map(PathBuf::from)
+        && c.is_file()
+    {
+        return c;
+    }
+    let name = if cfg!(windows) { "cargo.exe" } else { "cargo" };
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    if let Some(h) = home {
+        let candidate = h.join(".cargo").join("bin").join(name);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from(name)
+}
+
+/// Extract the expected `<crate_name>.wasm` filename from a plugin's `Cargo.toml`, if present.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::disallowed_methods)]
+fn crate_wasm_name(root: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join("Cargo.toml")).ok()?;
+    let mut in_pkg = false;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_pkg = line == "[package]";
+            continue;
+        }
+        if in_pkg
+            && let Some((k, v)) = line.split_once('=')
+            && k.trim() == "name"
+        {
+            let name = v.trim().trim_matches('"').trim_matches('\'');
+            if !name.is_empty() {
+                return Some(format!("{}.wasm", name.replace('-', "_")));
+            }
+        }
+    }
+    None
+}
+
+/// Build a Rust plugin project at `manifest_or_dir` for `wasm32-unknown-unknown` in release mode
+/// and copy the resulting `.wasm` artifact to the manifest's `main` path inside the plugin folder.
+/// Returns `(manifest_path, wasm_out_path)`.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+pub fn build_plugin_project(manifest_or_dir: &std::path::Path) -> std::result::Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let manifest_path = if manifest_or_dir.file_name().is_some_and(|n| n == MANIFEST_FILE) {
+        manifest_or_dir.to_path_buf()
+    } else {
+        manifest_or_dir.join(MANIFEST_FILE)
+    };
+    let root = manifest_path.parent().unwrap_or(manifest_or_dir);
+    let raw = std::fs::read_to_string(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let manifest = Manifest::parse(&raw).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+    let main_rel = std::path::Path::new(&manifest.main);
+    if main_rel.is_absolute()
+        || main_rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)))
+    {
+        return Err(format!("{}: `main` must be a relative path inside the plugin folder", manifest_path.display()));
+    }
+    let wasm_out = root.join(main_rel);
+    let cargo = cargo_binary();
+    let output = std::process::Command::new(&cargo)
+        .args(["build", "--release", "--target", "wasm32-unknown-unknown"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| format!("failed to run cargo: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        return Err(if detail.is_empty() {
+            "cargo build --release --target wasm32-unknown-unknown failed".into()
+        } else {
+            format!("cargo build failed:\n{detail}")
+        });
+    }
+    let target_base =
+        std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"));
+    let rel = target_base.join("wasm32-unknown-unknown").join("release");
+    let expected = crate_wasm_name(root).map(|n| rel.join(n)).filter(|p| p.is_file());
+    let built_wasm = match expected {
+        Some(p) => p,
+        None => {
+            let entries = std::fs::read_dir(&rel).map_err(|e| format!("{}: {e}", rel.display()))?;
+            let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("{}: {e}", rel.display()))?;
+                let p = entry.path();
+                if p.extension().is_some_and(|ext| ext == "wasm") && p.is_file() {
+                    let mtime = entry.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    candidates.push((mtime, p));
+                }
+            }
+            candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            candidates.pop().map(|(_, p)| p).ok_or_else(|| format!("no `.wasm` artifact found in {}", rel.display()))?
+        }
+    };
+    if built_wasm != wasm_out {
+        if let Some(parent) = wasm_out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::copy(&built_wasm, &wasm_out).map_err(|e| format!("couldn't copy {} to {}: {e}", built_wasm.display(), wasm_out.display()))?;
+    }
+    if !wasm_out.is_file() {
+        return Err(format!("expected built module at {} does not exist", wasm_out.display()));
+    }
+    Ok((manifest_path, wasm_out))
+}
+
+/// Return recent plugin execution history (`plugin.logs`), optionally filtered by `id` or cleared.
 fn logs(s: &mut Session, p: &Value) -> Result<Value> {
     let filter_id = string(p, "id");
     if get(p, "clear") == Some(&Value::Bool(true)) {
@@ -1028,11 +1202,13 @@ fn logs(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"runs": runs}))
 }
 
+/// Request the Plugin Dev Console dialog (`plugins.console`) and return recent execution logs.
 fn console(s: &mut Session, p: &Value) -> Result<Value> {
     s.request_ui("dialog.pluginConsole", json!({}));
     logs(s, p)
 }
 
+/// Request the New Plugin dialog (`plugin.newDialog`).
 fn new_dialog(s: &mut Session, _p: &Value) -> Result<Value> {
     s.request_ui("dialog.pluginNew", json!({}));
     crate::cmd::ok()

@@ -37,6 +37,7 @@ pub enum PluginsTab {
 impl PluginsTab {
     pub const ALL: [PluginsTab; 4] = [PluginsTab::Installed, PluginsTab::Browse, PluginsTab::Development, PluginsTab::Mcp];
 
+    /// Localized label for this tab in the Manage plugins window.
     fn label(self) -> &'static str {
         match self {
             PluginsTab::Installed => tr("Installed"),
@@ -299,10 +300,84 @@ const INSTALL: &str = "plugin.directory.install";
 const MANAGE_W: f32 = 440.0;
 const ROW_TEXT_W: f32 = 280.0;
 
+/// Poll any in-flight background plugin build on the UI thread, reloading and showing a toast when finished.
+#[cfg(not(target_arch = "wasm32"))]
+fn poll_plugin_build(app: &mut FigApp, ctx: &Context) {
+    use std::sync::mpsc::{Receiver, TryRecvError};
+    use std::sync::{Arc, Mutex};
+    type BuildSlot = Arc<Mutex<Option<Receiver<(String, Result<String, String>)>>>>;
+    let slot_id = Id::unique("plugin_build_worker_rx");
+    let finished = ctx.data_mut(|d| {
+        let slot: &mut BuildSlot = d.get_temp_mut_or_default(slot_id);
+        let mut guard = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let rx = guard.as_ref()?;
+        match rx.try_recv() {
+            Ok(done) => {
+                *guard = None;
+                Some(done)
+            }
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                *guard = None;
+                None
+            }
+        }
+    });
+    if let Some((id, res)) = finished {
+        match res {
+            Ok(_wasm_out) => {
+                if let Some(v) = app.run("plugin.reload", json!({"id": id})) {
+                    let name = v["name"].as_str().unwrap_or(tr("the plugin")).to_string();
+                    app.toast(trf("Built and reloaded {name}", &[("name", &name)]));
+                }
+            }
+            Err(err) => app.toast(err),
+        }
+    }
+}
+
+/// Start a background worker thread to compile a plugin project without blocking the UI frame.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_plugin_build(app: &mut FigApp, ctx: &Context, id: String, path: String) {
+    use std::sync::mpsc::Receiver;
+    use std::sync::{Arc, Mutex};
+    type BuildSlot = Arc<Mutex<Option<Receiver<(String, Result<String, String>)>>>>;
+    let slot_id = Id::unique("plugin_build_worker_rx");
+    let (tx, rx) = std::sync::mpsc::channel();
+    ctx.data_mut(|d| {
+        let slot: &mut BuildSlot = d.get_temp_mut_or_default(slot_id);
+        *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rx);
+    });
+    let repaint_ctx = ctx.clone();
+    let id_clone = id.clone();
+    let path_clone = path.clone();
+    let spawned = std::thread::Builder::new().name("figcraft-plugin-build".into()).spawn(move || {
+        let res =
+            figcraft_engine::plugins::build_plugin_project(std::path::Path::new(&path_clone)).map(|(_, wasm_out)| wasm_out.display().to_string());
+        let _ = tx.send((id_clone, res));
+        repaint_ctx.request_repaint();
+    });
+    if spawned.is_err() {
+        match app.services.build_plugin(std::path::Path::new(&path)) {
+            Ok(_msg) => {
+                if let Some(v) = app.run("plugin.reload", json!({"id": id})) {
+                    let name = v["name"].as_str().unwrap_or(tr("the plugin")).to_string();
+                    app.toast(trf("Built and reloaded {name}", &[("name", &name)]));
+                }
+            }
+            Err(err) => app.toast(err),
+        }
+    } else {
+        app.toast(tr("Building plugin…"));
+    }
+}
+
 /// Draw the Plugins window with installed, browse and development tabs, dispatching remove, import,
 /// browse, confirm, stop and development actions; closing the window cancels its directory requests
 /// and clears confirmation.
 fn manage_window(app: &mut FigApp, ctx: &Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    poll_plugin_build(app, ctx);
     let t = Tokens::get(ctx);
     let mut open = true;
     let mut asked = None;
@@ -360,15 +435,20 @@ fn manage_window(app: &mut FigApp, ctx: &Context) {
                 app.toast(trf("Reloaded {name}", &[("name", &name)]));
             }
         }
-        Some(Manage::BuildAndReloadPlugin(id, path)) => match app.services.build_plugin(std::path::Path::new(&path)) {
-            Ok(_msg) => {
-                if let Some(v) = app.run("plugin.reload", json!({"id": id})) {
-                    let name = v["name"].as_str().unwrap_or(tr("the plugin")).to_string();
-                    app.toast(trf("Built and reloaded {name}", &[("name", &name)]));
+        Some(Manage::BuildAndReloadPlugin(id, path)) => {
+            #[cfg(not(target_arch = "wasm32"))]
+            start_plugin_build(app, ctx, id, path);
+            #[cfg(target_arch = "wasm32")]
+            match app.services.build_plugin(std::path::Path::new(&path)) {
+                Ok(_msg) => {
+                    if let Some(v) = app.run("plugin.reload", json!({"id": id})) {
+                        let name = v["name"].as_str().unwrap_or(tr("the plugin")).to_string();
+                        app.toast(trf("Built and reloaded {name}", &[("name", &name)]));
+                    }
                 }
+                Err(err) => app.toast(err),
             }
-            Err(err) => app.toast(err),
-        },
+        }
         Some(Manage::RevealPlugin(path)) => {
             app.services.reveal_path(std::path::Path::new(&path));
         }
@@ -429,6 +509,7 @@ fn manage_window(app: &mut FigApp, ctx: &Context) {
     }
 }
 
+/// Draw the Installed plugins tab in the Manage plugins window.
 fn installed_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
     let avail_w = ui.available_width();
     let row_text_w = (avail_w - 160.0).clamp(120.0, ROW_TEXT_W);

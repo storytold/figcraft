@@ -570,61 +570,19 @@ impl Services for Desktop {
     fn system_language(&self) -> Option<String> {
         self.language.clone()
     }
+    /// Return `(listening_port, active_connections, last_error)` of the local MCP/control server.
     fn mcp_server_status(&self) -> Option<(u16, usize, Option<String>)> {
         Some(self.control.status())
     }
+    /// Apply `enabled` and `port` to the running local MCP/control server.
     fn mcp_server_apply(&mut self, enabled: bool, port: u16) {
         self.control.apply(enabled, port, std::time::Duration::from_millis(250));
     }
+    /// Build a Rust plugin project at `manifest_or_dir` for `wasm32-unknown-unknown`.
     fn build_plugin(&mut self, manifest_or_dir: &Path) -> Result<String, String> {
-        let manifest_path = if manifest_or_dir.file_name().is_some_and(|n| n == "figcraft-plugin.json") {
-            manifest_or_dir.to_path_buf()
-        } else {
-            manifest_or_dir.join("figcraft-plugin.json")
-        };
-        let root = manifest_path.parent().unwrap_or(manifest_or_dir);
-        let raw = std::fs::read_to_string(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-        let manifest: Value = serde_json::from_str(&raw).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-        let main_wasm = manifest["main"].as_str().unwrap_or("plugin.wasm");
-        let cargo = cargo_binary();
-        let output = std::process::Command::new(&cargo)
-            .args(["build", "--release", "--target", "wasm32-unknown-unknown"])
-            .current_dir(root)
-            .output()
-            .map_err(|e| format!("failed to run cargo: {e}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("cargo build failed:\n{}", stderr.trim()));
-        }
-        let wasm_out = root.join(main_wasm);
-        let rel = root.join("target").join("wasm32-unknown-unknown").join("release");
-        if let Ok(entries) = std::fs::read_dir(&rel) {
-            for entry in entries.flatten() {
-                if entry.path().extension().is_some_and(|e| e == "wasm") {
-                    let _ = std::fs::copy(entry.path(), &wasm_out);
-                    break;
-                }
-            }
-        }
+        let (_, wasm_out) = figcraft_engine::plugins::build_plugin_project(manifest_or_dir)?;
         Ok(wasm_out.display().to_string())
     }
-}
-
-fn cargo_binary() -> PathBuf {
-    if let Some(c) = std::env::var_os("CARGO").filter(|v| !v.is_empty()).map(PathBuf::from)
-        && c.is_file()
-    {
-        return c;
-    }
-    let name = if cfg!(windows) { "cargo.exe" } else { "cargo" };
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
-    if let Some(h) = home {
-        let candidate = h.join(".cargo").join("bin").join(name);
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    PathBuf::from(name)
 }
 
 /// The window icon from the bundled app icon (if present).

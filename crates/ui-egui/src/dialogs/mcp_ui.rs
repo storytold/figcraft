@@ -12,6 +12,7 @@ use crate::theme::{Tokens, regular, semibold};
 /// Default width of the standalone Local MCP Server window on desktop viewports.
 pub const MCP_WINDOW_W: f32 = 440.0;
 
+/// Draw the standalone Local MCP Server window when `app.ui.mcp_window` is open.
 pub fn show(app: &mut FigApp, ctx: &Context) {
     if !app.ui.mcp_window {
         return;
@@ -35,69 +36,84 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     }
 }
 
+/// Draw the responsive Local MCP Server controls and LLM harness cards inside `ui`.
 pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
     let avail_w = ui.available_width();
     ui.set_max_width(avail_w);
 
     let enabled = app.session.prefs.mcp_enabled;
-    let mut port = app.session.prefs.mcp_port;
-    let mut changed = false;
+    let pref_port = app.session.prefs.mcp_port;
+    let pending_id = egui::Id::unique("mcp_pending_port");
+    let synced_id = egui::Id::unique("mcp_last_pref_port");
+    let mut port = ui.data_mut(|d| {
+        let last_pref = *d.get_temp_mut_or(synced_id, pref_port);
+        let p = d.get_temp_mut_or(pending_id, pref_port);
+        if last_pref != pref_port {
+            *p = pref_port;
+            let cur = *p;
+            d.insert_temp(synced_id, pref_port);
+            cur
+        } else {
+            *p
+        }
+    });
 
-    let toggle_checkbox = |ui: &mut egui::Ui, app: &mut FigApp, changed: &mut bool| {
-        if crate::widgets::checkbox(ui, enabled, tr("Enable local MCP control server")) && app.run("pref.mcp", json!({"enabled": !enabled})).is_some()
-        {
-            *changed = true;
+    let toggle_checkbox = |ui: &mut egui::Ui, app: &mut FigApp| {
+        if crate::widgets::checkbox(ui, enabled, tr("Enable local MCP control server")) {
+            app.run("pref.mcp", json!({"enabled": !enabled}));
         }
     };
 
-    let port_controls = |ui: &mut egui::Ui, app: &mut FigApp, port: &mut u16, changed: &mut bool| {
-        let is_default = *port == figcraft_engine::DEFAULT_MCP_PORT;
-        if crate::widgets::button(ui, tr("Reset"), false, !is_default).on_hover_text(tr("Reset to default port 47800")).clicked() {
-            *port = figcraft_engine::DEFAULT_MCP_PORT;
-            if app.run("pref.mcp", json!({"port": *port})).is_some() {
-                *changed = true;
-            }
-        }
-        let drag = ui.add(egui::DragValue::new(port).range(1024..=65535));
-        if drag.changed() && app.run("pref.mcp", json!({"port": *port})).is_some() {
-            *changed = true;
-        }
-        ui.label(RichText::new(tr("Port")).color(t.text_secondary).font(regular(11.0)));
+    let commit_port = |ui: &mut egui::Ui, app: &mut FigApp, new_port: u16| {
+        ui.data_mut(|d| {
+            d.insert_temp(pending_id, new_port);
+            d.insert_temp(synced_id, new_port);
+        });
+        app.run("pref.mcp", json!({"port": new_port}));
     };
 
     if avail_w >= 380.0 {
         ui.horizontal(|ui| {
-            toggle_checkbox(ui, app, &mut changed);
+            toggle_checkbox(ui, app);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                port_controls(ui, app, &mut port, &mut changed);
+                let is_default = port == figcraft_engine::DEFAULT_MCP_PORT;
+                if crate::widgets::button(ui, tr("Reset"), false, !is_default).on_hover_text(tr("Reset to default port 47800")).clicked() {
+                    port = figcraft_engine::DEFAULT_MCP_PORT;
+                    commit_port(ui, app, port);
+                }
+                let drag = ui.add(egui::DragValue::new(&mut port).range(1024..=65535));
+                if drag.changed() {
+                    ui.data_mut(|d| d.insert_temp(pending_id, port));
+                }
+                if (drag.drag_stopped() || drag.lost_focus()) && port != app.session.prefs.mcp_port {
+                    commit_port(ui, app, port);
+                }
+                ui.label(RichText::new(tr("Port")).color(t.text_secondary).font(regular(11.0)));
             });
         });
     } else {
-        toggle_checkbox(ui, app, &mut changed);
+        toggle_checkbox(ui, app);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new(tr("Port")).color(t.text_secondary).font(regular(11.0)));
             let drag = ui.add(egui::DragValue::new(&mut port).range(1024..=65535));
-            if drag.changed() && app.run("pref.mcp", json!({"port": port})).is_some() {
-                changed = true;
+            if drag.changed() {
+                ui.data_mut(|d| d.insert_temp(pending_id, port));
+            }
+            if (drag.drag_stopped() || drag.lost_focus()) && port != app.session.prefs.mcp_port {
+                commit_port(ui, app, port);
             }
             let is_default = port == figcraft_engine::DEFAULT_MCP_PORT;
             if crate::widgets::button(ui, tr("Reset"), false, !is_default).on_hover_text(tr("Reset to default port 47800")).clicked() {
                 port = figcraft_engine::DEFAULT_MCP_PORT;
-                if app.run("pref.mcp", json!({"port": port})).is_some() {
-                    changed = true;
-                }
+                commit_port(ui, app, port);
             }
         });
     }
 
-    if changed {
-        app.services.mcp_server_apply(app.session.prefs.mcp_enabled, app.session.prefs.mcp_port);
-        app.services.save_prefs(&app.session.prefs);
-    }
-
     ui.add_space(6.0);
-    if let Some((listening, active, err)) = app.services.mcp_server_status() {
+    let server_status = app.services.mcp_server_status();
+    if let Some((listening, active, ref err)) = server_status {
         if listening != 0 {
             let status_text = trf("Listening on 127.0.0.1:{port} · {count} active connection(s)", &[("port", &listening), ("count", &active)]);
             ui.add(egui::Label::new(RichText::new(status_text).color(t.accent).font(semibold(11.0))).wrap());
@@ -116,7 +132,7 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 
     let cli_bin = detect_cli_binary();
-    let active_port = app.session.prefs.mcp_port;
+    let active_port = server_status.as_ref().map(|(listening, _, _)| *listening).filter(|p| *p != 0).unwrap_or(app.session.prefs.mcp_port);
     let attach_cmd = attach_command(&cli_bin, active_port);
 
     ui.add_space(6.0);

@@ -24,6 +24,7 @@ pub enum HarnessKind {
 impl HarnessKind {
     pub const ALL: [HarnessKind; 4] = [HarnessKind::Antigravity, HarnessKind::ClaudeCode, HarnessKind::ClaudeDesktop, HarnessKind::Codex];
 
+    /// Machine-readable identifier used in CLI flags and status output.
     pub fn id(self) -> &'static str {
         match self {
             Self::Antigravity => "antigravity",
@@ -33,6 +34,7 @@ impl HarnessKind {
         }
     }
 
+    /// Human-readable display name shown in the UI and CLI output.
     pub fn label(self) -> &'static str {
         match self {
             Self::Antigravity => "Antigravity",
@@ -42,6 +44,7 @@ impl HarnessKind {
         }
     }
 
+    /// Parse a harness identifier or alias (`antigravity`, `claude-code`, `claude-desktop`, `codex`).
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "antigravity" | "agy" => Some(Self::Antigravity),
@@ -108,6 +111,7 @@ pub fn config_path_in(kind: HarnessKind, home: &Path) -> PathBuf {
     config_path_for_os(kind, std::env::consts::OS, home, None, None, None)
 }
 
+/// Read a non-empty environment variable as a `PathBuf`.
 fn non_empty_env_path(var: &str) -> Option<PathBuf> {
     std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
@@ -122,12 +126,17 @@ pub fn config_path(kind: HarnessKind) -> Option<PathBuf> {
 }
 
 /// Locate the `figcraft-cli` binary to invoke from MCP harness configs.
-/// Checks alongside the current executable first, then Linux `APPIMAGE`, common workspace target
-/// directories, `~/.cargo/bin`, and falls back to `"figcraft-cli"` (or `"figcraft-cli.exe"` on
+/// Checks `FIGCRAFT_CLI` first, then the current executable and its sibling directory, Linux
+/// `APPIMAGE`, `~/.cargo/bin`, and falls back to `"figcraft-cli"` (or `"figcraft-cli.exe"` on
 /// Windows) on `PATH`.
 #[allow(clippy::disallowed_methods)]
 pub fn detect_cli_binary() -> String {
     let bin_name = if cfg!(windows) { "figcraft-cli.exe" } else { "figcraft-cli" };
+    if let Some(explicit) = non_empty_env_path("FIGCRAFT_CLI")
+        && explicit.is_file()
+    {
+        return explicit.to_string_lossy().into_owned();
+    }
     if let Ok(exe) = std::env::current_exe() {
         if exe.file_name().and_then(|n| n.to_str()) == Some(bin_name) && exe.is_file() {
             return exe.to_string_lossy().into_owned();
@@ -143,19 +152,6 @@ pub fn detect_cli_binary() -> String {
         && appimage.is_file()
     {
         return appimage.to_string_lossy().into_owned();
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        for rel in [
-            Path::new("target/release").join(bin_name),
-            Path::new("target/debug").join(bin_name),
-            Path::new("figcraft-ihpnull/target/release").join(bin_name),
-            Path::new("figcraft-ihpnull/target/debug").join(bin_name),
-        ] {
-            let candidate = cwd.join(rel);
-            if candidate.is_file() {
-                return candidate.to_string_lossy().into_owned();
-            }
-        }
     }
     if let Some(home) = home_dir() {
         let cargo_bin = home.join(".cargo").join("bin").join(bin_name);
@@ -235,6 +231,7 @@ pub fn inspect_at(kind: HarnessKind, path: &Path, cli_bin: &str, port: Option<u1
     }
 }
 
+/// Inspect a JSON MCP config (`mcpServers.figcraft`) and return `(configured, attached_port)`.
 fn inspect_json(text: &str) -> (bool, Option<u16>) {
     let Ok(val) = serde_json::from_str::<Value>(text) else {
         return (false, None);
@@ -261,6 +258,7 @@ fn inspect_json(text: &str) -> (bool, Option<u16>) {
     (has_cmd, attached_port)
 }
 
+/// Inspect a Codex TOML config (`[mcp_servers.figcraft]`) and return `(configured, attached_port)`.
 fn inspect_codex_toml(text: &str) -> (bool, Option<u16>) {
     let mut in_section = false;
     let mut has_cmd = false;
@@ -302,7 +300,7 @@ pub fn inspect_all(cli_bin: &str, port: Option<u16>) -> Vec<HarnessStatus> {
 }
 
 /// Install or update the `figcraft` MCP server entry in `path` for `kind`, preserving all other
-/// settings in the file.
+/// settings in the file and writing atomically via a temporary file rename.
 #[allow(clippy::disallowed_methods)]
 pub fn install_at(kind: HarnessKind, path: &Path, cli_bin: &str, port: Option<u16>) -> Result<HarnessStatus, String> {
     if let Some(parent) = path.parent()
@@ -316,7 +314,12 @@ pub fn install_at(kind: HarnessKind, path: &Path, cli_bin: &str, port: Option<u1
         HarnessKind::Antigravity | HarnessKind::ClaudeCode | HarnessKind::ClaudeDesktop => merge_json_config(existing.as_deref(), cli_bin, port)?,
         HarnessKind::Codex => merge_codex_toml(existing.as_deref(), cli_bin, port),
     };
-    std::fs::write(path, updated).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+    let tmp = path.with_extension(format!("figcraft-{}.tmp", std::process::id()));
+    std::fs::write(&tmp, updated).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("couldn't write {}: {e}", path.display())
+    })?;
     Ok(inspect_at(kind, path, cli_bin, port))
 }
 
@@ -326,6 +329,7 @@ pub fn install(kind: HarnessKind, cli_bin: &str, port: Option<u16>) -> Result<Ha
     install_at(kind, &path, cli_bin, port)
 }
 
+/// Merge `figcraft` into a JSON `mcpServers` object while preserving all other keys.
 fn merge_json_config(existing: Option<&str>, cli_bin: &str, port: Option<u16>) -> Result<String, String> {
     let mut root = match existing {
         Some(s) if !s.trim().is_empty() => serde_json::from_str::<Value>(s).map_err(|e| format!("existing config is not valid JSON: {e}"))?,
@@ -346,6 +350,7 @@ fn merge_json_config(existing: Option<&str>, cli_bin: &str, port: Option<u16>) -
     Ok(out)
 }
 
+/// Merge `[mcp_servers.figcraft]` into a Codex TOML configuration while preserving other sections.
 fn merge_codex_toml(existing: Option<&str>, cli_bin: &str, port: Option<u16>) -> String {
     let block = snippet(HarnessKind::Codex, cli_bin, port);
     let Some(text) = existing.filter(|s| !s.trim().is_empty()) else {

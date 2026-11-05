@@ -35,11 +35,13 @@ impl crate::Services for MockMcpServices {
     }
 }
 
+/// Returns the center position of an AccessKit node's bounding box.
 fn centre(n: &Node) -> Pos2 {
     let b = n.bounds().unwrap();
     Pos2::new(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
 }
 
+/// Runs one egui frame at `screen` resolution and collects all AccessKit nodes.
 fn nodes_at(u: &mut Ui, screen: egui::Vec2) -> Vec<Node> {
     let raw = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, screen)), ..Default::default() };
     let app = &mut u.app;
@@ -48,19 +50,23 @@ fn nodes_at(u: &mut Ui, screen: egui::Vec2) -> Vec<Node> {
     out.platform_output.accesskit_update.unwrap().nodes.into_iter().map(|(_, n)| n).collect()
 }
 
+/// Finds all AccessKit nodes whose label equals `label` at 1440×900.
 fn named(u: &mut Ui, label: &str) -> Vec<Node> {
     nodes_at(u, vec2(1440.0, 900.0)).into_iter().filter(|n| n.label() == Some(label)).collect()
 }
 
+/// Returns whether any AccessKit node label or value contains `text` at 1440×900.
 fn shows(u: &mut Ui, text: &str) -> bool {
     nodes_at(u, vec2(1440.0, 900.0)).iter().any(|n| n.label().or(n.value()).is_some_and(|l| l.contains(text)))
 }
 
+/// Simulates a primary mouse press and release at `at`.
 fn click(u: &mut Ui, at: Pos2) {
     u.button(at, true);
     u.button(at, false);
 }
 
+/// Verifies that the MCP tab and standalone MCP dialog fit within both standard and narrow viewports.
 #[test]
 fn mcp_tab_and_window_fit_standard_and_narrow_viewports() {
     for screen in [vec2(1440.0, 900.0), vec2(340.0, 600.0)] {
@@ -119,6 +125,7 @@ fn mcp_tab_and_window_fit_standard_and_narrow_viewports() {
     }
 }
 
+/// Verifies toggling the MCP server, resetting the port, and copying the CLI command from the MCP tab.
 #[test]
 fn mcp_tab_toggles_server_resets_port_and_copies_command() {
     let log = Arc::new(Mutex::new(McpLog::default()));
@@ -135,12 +142,13 @@ fn mcp_tab_toggles_server_resets_port_and_copies_command() {
     assert_eq!(u.app.ui.plugins_manage.tab, PluginsTab::Mcp);
     assert!(shows(&mut u, "Listening on 127.0.0.1:47800"));
 
-    // Toggle the local MCP server off and verify Services::mcp_server_apply and save_prefs run.
+    // Toggle the local MCP server on (from its opt-in `false` default) and verify Services::mcp_server_apply and save_prefs run.
+    assert!(!u.app.session.prefs.mcp_enabled);
     let toggle = centre(&named(&mut u, "Enable local MCP control server")[0]);
     click(&mut u, toggle);
-    assert!(!u.app.session.prefs.mcp_enabled);
-    assert_eq!(log.lock().unwrap().applied.last(), Some(&(false, 47800)));
-    assert_eq!(log.lock().unwrap().saved.last().map(|p| p.mcp_enabled), Some(false));
+    assert!(u.app.session.prefs.mcp_enabled);
+    assert_eq!(log.lock().unwrap().applied.last(), Some(&(true, 47800)));
+    assert_eq!(log.lock().unwrap().saved.last().map(|p| p.mcp_enabled), Some(true));
 
     // Change the port, then click Reset to restore 47800.
     u.app.run("pref.mcp", json!({"port": 47911}));
@@ -156,6 +164,7 @@ fn mcp_tab_toggles_server_resets_port_and_copies_command() {
     assert!(u.app.ui.toast.as_ref().is_some_and(|(t, _)| t.contains("Copied MCP command")), "{:?}", u.app.ui.toast);
 }
 
+/// Verifies that the Development tab displays and clears plugin execution console logs.
 #[test]
 fn development_tab_shows_and_clears_plugin_console_logs() {
     use base64::Engine as _;

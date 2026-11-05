@@ -120,16 +120,19 @@ struct ControlInner {
 }
 
 impl ControlHandle {
+    /// Create an unstarted `ControlHandle`.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Attach the shared request queue, egui context slot, and session event log before starting.
     pub fn bind_deps(&self, queue: Queue, ctx: CtxSlot, events: Arc<EventLog>) {
         if let Ok(mut d) = self.inner.deps.lock() {
             *d = Some((queue, ctx, events));
         }
     }
 
+    /// Return `(listening_port, active_connections, last_error)`.
     pub fn status(&self) -> (u16, usize, Option<String>) {
         let port = self.inner.listening_port.load(Ordering::Relaxed);
         let active = self.inner.active_connections.load(Ordering::Relaxed);
@@ -137,6 +140,7 @@ impl ControlHandle {
         (port, active, err)
     }
 
+    /// Start, rebind, or stop the localhost TCP control listener.
     pub fn apply(&self, enabled: bool, port: u16, busy: Duration) {
         let old_port = self.inner.listening_port.swap(0, Ordering::SeqCst);
         let next_gen = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -178,6 +182,10 @@ impl ControlHandle {
         });
         if let Err(e) = spawned {
             log::error!("control server thread: {e}");
+            self.inner.listening_port.store(0, Ordering::SeqCst);
+            if let Ok(mut err) = self.inner.last_error.lock() {
+                *err = Some(format!("can't start the server thread: {e}"));
+            }
         }
     }
 }
@@ -199,6 +207,7 @@ fn spawn_connection(
     spawn_connection_tracked(stream, queue, ctx, events, None, workers, timeout);
 }
 
+/// Spawn a worker thread for an accepted control connection while tracking active connection count.
 fn spawn_connection_tracked(
     stream: TcpStream,
     queue: Queue,
