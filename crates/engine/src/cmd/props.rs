@@ -115,6 +115,8 @@ pub(crate) fn enum_of<T: serde::de::DeserializeOwned>(v: &Value) -> Option<T> {
     let norm: String = {
         let mut out = String::new();
         let mut up = false;
+        // Once, not per character: a long value made this quadratic before it was refused.
+        let no_lowercase = s.chars().all(|c| !c.is_lowercase() || !c.is_alphabetic());
         for (i, ch) in s.trim().chars().enumerate() {
             if ch == '_' || ch == '-' || ch == ' ' {
                 up = true;
@@ -125,7 +127,7 @@ pub(crate) fn enum_of<T: serde::de::DeserializeOwned>(v: &Value) -> Option<T> {
             } else if up {
                 out.extend(ch.to_uppercase());
                 up = false;
-            } else if s.chars().all(|c| !c.is_lowercase() || !c.is_alphabetic()) {
+            } else if no_lowercase {
                 out.extend(ch.to_lowercase());
             } else {
                 out.push(ch);

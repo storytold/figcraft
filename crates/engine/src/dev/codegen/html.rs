@@ -30,7 +30,7 @@ fn kind_word(n: &Node) -> &str {
 /// `rogeuin-hwamyeon`, кнопка → `knopka`, über → `uber` (per-codepoint transliteration, the slug
 /// libraries' way); a name left with nothing (symbols only) takes `kind`, and one starting with a
 /// digit keeps the `layer-` prefix.
-pub(crate) fn class_name(name: &str, kind: &str, used: &mut Vec<String>) -> String {
+pub(crate) fn class_name(name: &str, kind: &str, used: &mut Names) -> String {
     let mut base = String::new();
     for c in deunicode::deunicode(name).chars().flat_map(char::to_lowercase) {
         if c.is_ascii_alphanumeric() {
@@ -57,9 +57,28 @@ pub(crate) fn class_name(name: &str, kind: &str, used: &mut Vec<String>) -> Stri
     } else {
         base.to_string()
     };
-    let name = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base}-{k}") }).find(|n| !used.contains(n)).unwrap_or(base);
-    used.push(name.clone());
+    let from = used.next.get(&base).copied().unwrap_or(1);
+    let (k, name) = (from..)
+        .map(|k| (k, if k == 1 { base.clone() } else { format!("{base}-{k}") }))
+        .find(|(_, n)| !used.used.contains(n))
+        .unwrap_or((from, base.clone()));
+    used.next.insert(base, k + 1);
+    used.insert(name.clone());
     name
+}
+
+/// The names [`class_name`] has given out, and the next suffix to try per base, so many layers
+/// sharing one name don't each retry every suffix from 2 (that was cubic in their number).
+#[derive(Default)]
+pub(crate) struct Names {
+    used: std::collections::BTreeSet<String>,
+    next: std::collections::BTreeMap<String, u64>,
+}
+
+impl Names {
+    pub fn insert(&mut self, name: String) {
+        self.used.insert(name);
+    }
 }
 
 fn html_escape(s: &str) -> String {
@@ -90,7 +109,10 @@ pub(super) fn html(doc: &Document, id: NodeId) -> String {
     let ctx = Ctx::new(doc, id);
     let mut out = Markup::new(&ctx, CodeLang::Html);
     out.node(id, None, 0, "");
-    format!("{}\n<style>\n{}{}</style>\n", out.markup, out.tokens.root_rule(), out.styles)
+    // Document text can reach the stylesheet through any property: `<\/` reads back as `</` inside a CSS
+    // string and can never close the element early.
+    let css = format!("{}{}", out.tokens.root_rule(), out.styles).replace("</", "<\\/");
+    format!("{}\n<style>\n{css}</style>\n", out.markup)
 }
 
 /// Markup being built for a layer tree: HTML (`class`), React JSX (`className`), Vue
@@ -101,7 +123,7 @@ pub(crate) struct Markup<'c, 'a> {
     ctx: &'c Ctx<'a>,
     /// Html, React, Vue or Leptos.
     lang: CodeLang,
-    used: Vec<String>,
+    used: Names,
     pub markup: String,
     pub styles: String,
     pub tokens: Tokens,
@@ -158,7 +180,7 @@ impl<'c, 'a> Markup<'c, 'a> {
         Markup {
             ctx,
             lang,
-            used: Vec::new(),
+            used: Names::default(),
             markup: String::new(),
             styles: String::new(),
             tokens: Tokens::default(),
@@ -273,7 +295,7 @@ impl<'c, 'a> Markup<'c, 'a> {
         let root = n.id == self.ctx.root;
         let class = match self.root_class.take().filter(|_| root) {
             Some(c) => {
-                self.used.push(c.clone());
+                self.used.insert(c.clone());
                 c
             }
             None => {
@@ -329,7 +351,7 @@ impl<'c, 'a> Markup<'c, 'a> {
                 let open = open("div");
                 let slot_ident = slot.map(|p| match self.ctx.comp {
                     Some(c) => crate::component_codegen::slot_name(c, p),
-                    None => class_name(&p.ident, "slot", &mut Vec::new()),
+                    None => class_name(&p.ident, "slot", &mut Names::default()),
                 });
                 if let Some(p) = slot.filter(|_| kids.is_empty()) {
                     let content = if leptos {
