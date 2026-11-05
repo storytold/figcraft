@@ -16,7 +16,9 @@
 //! later render asks for the same shape at the same zoom they are worked out for the whole shape,
 //! in its own pixel frame, and kept in a cache of at most [`MAX_CACHED_BYTES`]: moving or editing
 //! what lies under the glass, dragging its sliders, panning and patching the canvas reuse them.
-//! Zooming doesn't (each zoom is new).
+//! Zooming doesn't (each zoom is new). The bend directions towards the core depend on the depth
+//! too: they are kept beside them for the last two depths asked for, so dragging the Depth slider
+//! works out only those again.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -440,10 +442,10 @@ fn sample(p: &Pixmap, x: f32, y: f32) -> [f32; 4] {
     })
 }
 
-/// A shape's coverage (alpha), distance to its edge, smoothed inward normals (which the light
-/// reads) and inward bend directions ([`bend_directions`]) over a window of pixels whose top-left
-/// pixel is (`x0`, `y0`).
-struct Fields {
+/// A shape's coverage (alpha), distance to its edge and smoothed inward normals (which the light
+/// reads) over a window of pixels whose top-left pixel is (`x0`, `y0`): what the shape and the zoom
+/// alone decide, so it is kept whatever the depth ([`whole_shape`]).
+struct EdgeFields {
     x0: i64,
     y0: i64,
     w: usize,
@@ -451,48 +453,101 @@ struct Fields {
     cov: Vec<u8>,
     dist: Vec<f32>,
     normals: Vec<(f32, f32)>,
-    /// `None` for a shape too big to work out a core ([`fits_whole`]): it bends along its normals.
-    bends: Option<Vec<(f32, f32)>>,
+    /// How far the normals and the bend directions are smoothed (pixels).
+    r: usize,
+    /// The bend directions for the last [`KEPT_BENDS`] core depths asked for, by their bits, the
+    /// most recent last ([`EdgeFields::bends()`]).
+    bends: Mutex<Vec<(u32, Bends)>>,
 }
 
-/// Bytes a field pixel holds: coverage, distance, a normal and a bend direction.
-const FIELD_PX_BYTES: u64 = 1 + 4 + 8 + 8;
+/// How many depths' bend directions a kept shape holds: two glass layers of the same shape with
+/// different depths don't take turns working theirs out.
+const KEPT_BENDS: usize = 2;
+
+/// Inward bend directions ([`bend_directions`]) over an [`EdgeFields`] window.
+type Bends = Arc<Vec<(f32, f32)>>;
+
+/// The fields `glass` reads: a shape's [`EdgeFields`] and its bend directions for one depth.
+struct Fields {
+    edge: Arc<EdgeFields>,
+    /// `None` for a shape too big to work out a core ([`fits_whole`]): it bends along its normals.
+    bends: Option<Bends>,
+}
+
+/// Bytes a field pixel holds: coverage, distance, a normal and [`KEPT_BENDS`] bend directions.
+const FIELD_PX_BYTES: u64 = 1 + 4 + 8 + 8 * KEPT_BENDS as u64;
 
 /// A pixel of [`Fields`]: coverage (0–1), distance to the edge, inward normal, inward bend direction.
 type FieldPx = (f32, f32, (f32, f32), (f32, f32));
+
+impl EdgeFields {
+    /// The fields of `cov`, the shape's coverage on the window at (`x0`, `y0`), normals smoothed
+    /// over `r` pixels.
+    fn new(cov: &Pixmap, x0: i64, y0: i64, r: usize) -> EdgeFields {
+        FIELDS_COMPUTED.with(|n| n.set(n.get() + 1));
+        let dist = inside_distance(cov);
+        let (w, h) = (cov.width() as usize, cov.height() as usize);
+        let normals = smooth_normals(&dist, w, h, r);
+        let cov = cov.data().chunks_exact(4).map(|p| p.get(3).copied().unwrap_or(0)).collect();
+        EdgeFields { x0, y0, w, h, cov, dist, normals, r, bends: Mutex::new(Vec::new()) }
+    }
+
+    /// The bend directions towards the core `reach` pixels in: kept from a recent render at the
+    /// same depth, else worked out and kept in place of the least recent (bands of one render
+    /// asking at once wait for the first).
+    fn bends(&self, reach: f32) -> Bends {
+        let bits = reach.to_bits();
+        let mut kept = self.bends.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(i) = kept.iter().position(|(b, _)| *b == bits) {
+            let hit = kept.remove(i);
+            let bends = hit.1.clone();
+            kept.push(hit);
+            return bends;
+        }
+        BENDS_COMPUTED.with(|n| n.set(n.get() + 1));
+        let bends = Arc::new(bend_directions(&self.dist, self.w, self.h, reach, self.r));
+        if kept.len() >= KEPT_BENDS {
+            kept.remove(0);
+        }
+        kept.push((bits, bends.clone()));
+        bends
+    }
+}
 
 impl Fields {
     /// The fields of `cov`, the shape's coverage on the window at (`x0`, `y0`), normals and bend
     /// directions smoothed over `r` pixels, bending towards the core `reach` pixels in (along the
     /// normals without a `reach`).
     fn new(cov: &Pixmap, x0: i64, y0: i64, r: usize, reach: Option<f32>) -> Fields {
-        FIELDS_COMPUTED.with(|n| n.set(n.get() + 1));
-        let dist = inside_distance(cov);
-        let (w, h) = (cov.width() as usize, cov.height() as usize);
-        let normals = smooth_normals(&dist, w, h, r);
-        let bends = reach.map(|reach| bend_directions(&dist, w, h, reach, r));
-        let cov = cov.data().chunks_exact(4).map(|p| p.get(3).copied().unwrap_or(0)).collect();
-        Fields { x0, y0, w, h, cov, dist, normals, bends }
+        Fields::of(Arc::new(EdgeFields::new(cov, x0, y0, r)), reach)
+    }
+
+    /// `edge`'s fields bending towards the core `reach` pixels in (along the normals without one).
+    fn of(edge: Arc<EdgeFields>, reach: Option<f32>) -> Fields {
+        let bends = reach.map(|reach| edge.bends(reach));
+        Fields { edge, bends }
     }
 
     /// The fields at pixel (`x`, `y`); `None` outside the window.
     fn at(&self, x: i64, y: i64) -> Option<FieldPx> {
-        let (fx, fy) = (x.checked_sub(self.x0)?, y.checked_sub(self.y0)?);
-        if fx < 0 || fy < 0 || fx >= self.w as i64 || fy >= self.h as i64 {
+        let e = &*self.edge;
+        let (fx, fy) = (x.checked_sub(e.x0)?, y.checked_sub(e.y0)?);
+        if fx < 0 || fy < 0 || fx >= e.w as i64 || fy >= e.h as i64 {
             return None;
         }
-        let i = fy as usize * self.w + fx as usize;
-        let normal = *self.normals.get(i)?;
+        let i = fy as usize * e.w + fx as usize;
+        let normal = *e.normals.get(i)?;
         let bend = match &self.bends {
             Some(bends) => *bends.get(i)?,
             None => normal,
         };
-        Some((f32::from(*self.cov.get(i)?) / 255.0, *self.dist.get(i)?, normal, bend))
+        Some((f32::from(*e.cov.get(i)?) / 255.0, *e.dist.get(i)?, normal, bend))
     }
 }
 
 thread_local! {
     static FIELDS_COMPUTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static BENDS_COMPUTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// How many times this thread has worked out a glass shape's fields: what a cache miss costs. For
@@ -501,9 +556,16 @@ pub fn glass_fields_computed() -> u64 {
     FIELDS_COMPUTED.with(std::cell::Cell::get)
 }
 
-/// What a glass shape's fields depend on, with the transform's translation reduced to its fraction
-/// of a pixel: the same shape at the same zoom has the same key wherever it is and however a render
-/// cuts it.
+/// How many times this thread has worked out a glass shape's bend directions towards its core: a
+/// new shape, or a kept one at a new depth. For tests and benchmarks.
+pub fn glass_bends_computed() -> u64 {
+    BENDS_COMPUTED.with(std::cell::Cell::get)
+}
+
+/// What a glass shape's [`EdgeFields`] depend on, with the transform's translation reduced to its
+/// fraction of a pixel: the same shape at the same zoom has the same key wherever it is and however
+/// a render cuts it. Not the depth (beyond the margin and smoothing): the bend directions that
+/// depend on it are worked out from the kept fields ([`EdgeFields::bends()`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ShapeKey {
     path: u64,
@@ -511,9 +573,6 @@ struct ShapeKey {
     frac: (i64, i64),
     margin: u32,
     r: usize,
-    /// The core's depth ([`bend_directions`]), exact (fields for another depth bend elsewhere), or
-    /// [`NO_SITE`] for fields bending along the normals.
-    reach: u32,
 }
 
 /// The cached fields of a shape whose window holds at most this many pixels; bigger shapes (a
@@ -529,7 +588,7 @@ const MAX_CACHED_BYTES: u64 = 128 << 20;
 const MAX_CACHED_BYTES: u64 = 32 << 20;
 
 /// A shape's fields once worked out; parallel bands wanting the same shape wait for one of them.
-type Slot = Arc<OnceLock<Option<Arc<Fields>>>>;
+type Slot = Arc<OnceLock<Option<Arc<EdgeFields>>>>;
 
 /// The shapes' fields by key, at most `budget` bytes; the least recently used go first. A shape is
 /// kept from the second render that asks for it: one asked for once (each step of a zoom, a pane
@@ -614,12 +673,12 @@ fn fits_whole(shape: &Outline, xf: Affine, m: u32) -> bool {
 /// whole, in its own frame (the translation's fraction of a pixel), and kept: a band, a canvas
 /// patch or the next frame of a drag reads the same fields. Otherwise it is worked out for the part
 /// shown plus the margin.
-fn shape_fields(shape: &Outline, xf: Affine, w: u32, h: u32, m: u32, r: usize, reach: Option<f32>) -> Option<(Arc<Fields>, (i64, i64))> {
-    if let Some(whole) = whole_shape(shape, xf, m, r, reach) {
-        return Some(whole);
+fn shape_fields(shape: &Outline, xf: Affine, w: u32, h: u32, m: u32, r: usize, reach: Option<f32>) -> Option<(Fields, (i64, i64))> {
+    if let Some((edge, shift)) = whole_shape(shape, xf, m, r) {
+        return Some((Fields::of(edge, reach), shift));
     }
     let cov = spread_alpha(std::slice::from_ref(shape), 0.0, Affine::translate((f64::from(m), f64::from(m))) * xf, w + 2 * m, h + 2 * m)?;
-    Some((Arc::new(Fields::new(&cov, -i64::from(m), -i64::from(m), r, reach)), (0, 0)))
+    Some((Fields::new(&cov, -i64::from(m), -i64::from(m), r, reach), (0, 0)))
 }
 
 /// A layer transform split so the same shape at the same zoom lands on the same pixels of its own
@@ -650,9 +709,9 @@ fn own_frame(xf: Affine) -> Option<OwnFrame> {
     Some(OwnFrame { shift, frac, xf: Affine::new([a, b, c, d, frac.0 as f64 / STEPS, frac.1 as f64 / STEPS]) })
 }
 
-/// [`shape_fields`] for a whole shape, from the cache; `None` when it isn't kept (first asked for
-/// in this render, too big, or its transform too far out).
-fn whole_shape(shape: &Outline, xf: Affine, m: u32, r: usize, reach: Option<f32>) -> Option<(Arc<Fields>, (i64, i64))> {
+/// [`shape_fields`]' [`EdgeFields`] for a whole shape, from the cache; `None` when it isn't kept
+/// (first asked for in this render, too big, or its transform too far out).
+fn whole_shape(shape: &Outline, xf: Affine, m: u32, r: usize) -> Option<(Arc<EdgeFields>, (i64, i64))> {
     let [a, b, c, d, _, _] = xf.as_coeffs();
     let OwnFrame { shift, frac, xf: own } = own_frame(xf)?;
     let bb = (own * shape.0.clone()).bounding_box();
@@ -671,7 +730,7 @@ fn whole_shape(shape: &Outline, xf: Affine, m: u32, r: usize, reach: Option<f32>
     let mut hasher = DefaultHasher::new();
     crate::draw::hash_path(&shape.0, &mut hasher);
     matches!(shape.1, tiny_skia::FillRule::EvenOdd).hash(&mut hasher);
-    let key = ShapeKey { path: hasher.finish(), linear: [a, b, c, d].map(f64::to_bits), frac, margin, r, reach: reach.map_or(NO_SITE, f32::to_bits) };
+    let key = ShapeKey { path: hasher.finish(), linear: [a, b, c, d].map(f64::to_bits), frac, margin, r };
     let compute = || {
         // Rastered against the shape's own bounds (not the window), so the margin can't move a
         // coverage value.
@@ -684,7 +743,7 @@ fn whole_shape(shape: &Outline, xf: Affine, m: u32, r: usize, reach: Option<f32>
             win.data_mut().get_mut(start..start + row)?.copy_from_slice(src);
         }
         let origin = (x0 as i64 - 1 - i64::from(margin), y0 as i64 - 1 - i64::from(margin));
-        Some(Fields::new(&win, origin.0, origin.1, r, reach))
+        Some(EdgeFields::new(&win, origin.0, origin.1, r))
     };
     let slot =
         shape_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).slot(&key, ww * wh * FIELD_PX_BYTES, crate::render_number())?;
@@ -813,7 +872,7 @@ impl AnalyticRect {
 /// coverage otherwise.
 enum Geometry {
     Rect(AnalyticRect),
-    Fields(Arc<Fields>, (i64, i64)),
+    Fields(Fields, (i64, i64)),
 }
 
 impl Geometry {
@@ -839,11 +898,11 @@ pub fn glass(g: &Glass, frame: EffectFrame<'_>, rect: Option<RoundedRect>) -> Op
     let reach = (depth + bevel) as f32;
     // Coverage with a margin, so wherever the layer is cut every field the pixels read is the
     // whole render's: the distances the bend and the gradient read (within `depth` + `bevel`; the
-    // light lies on the bevel), the core they bend towards (within `reach` further, its depths
-    // exact within [`RIDGE_PX`] of it), and those the normals and bends are smoothed from (2r + 1
-    // further).
+    // light lies on the bevel), the core they bend towards (its nearest pixel up to √2 × `reach`
+    // further, round a sharp corner, so 1.5 × `reach`; its depths exact within `reach` and
+    // [`RIDGE_PX`] of it), and those the normals and bends are smoothed from (2r + 1 further).
     let plain = (depth + bevel).ceil() as u32 + 4 * r as u32 + 4;
-    let cored = plain + reach.ceil() as u32 + RIDGE_PX as u32;
+    let cored = plain + (1.5 * reach).ceil() as u32 + RIDGE_PX as u32;
     // A core takes a wider margin and more bytes a pixel, so only a shape whose whole window fits
     // [`MAX_SHAPE_PX`] works one out: a bigger one bends along its edge normals, so no render
     // allocates a core's fields over more pixels than a kept shape holds.
@@ -1147,7 +1206,7 @@ mod tests {
 
     #[test]
     fn the_shape_cache_stays_within_its_bytes() {
-        let key = |i: u64| ShapeKey { path: i, linear: [0; 4], frac: (0, 0), margin: 0, r: 1, reach: 0 };
+        let key = |i: u64| ShapeKey { path: i, linear: [0; 4], frac: (0, 0), margin: 0, r: 1 };
         let mut c = ShapeCache::new(100);
         // Kept from the second render that asks, not the first (nor again within the first).
         assert!(c.slot(&key(1), 40, 1).is_none());

@@ -121,13 +121,15 @@ fn glass_digests() {
 
 #[test]
 fn a_cut_through_the_pane_matches_the_whole_render() {
-    // The last look is deep (300 units), so the curve reaches far in from every cut.
+    // The last two looks are deep, so the curve reaches far in from every cut: 60 units (at 2× a
+    // core 122 px in, which takes the widest margin a core gets) and 300 (too big for a core).
     let looks = [
         wide_light(),
         Glass::default(),
         Glass { splay: 0.5, frost: 0.0, refraction: 0.0, ..Glass::default() },
         // Splay with the bend and dispersion on: the dispersed samples follow the turned bend.
         Glass { splay: 1.0, frost: 0.0, ..Glass::default() },
+        Glass { depth: 60.0, ..Glass::default() },
         Glass { depth: 300.0, ..wide_light() },
     ];
     // Rounded corners without the pane's fill: a fill's curved edge rasters 1–2 levels apart in a
@@ -179,6 +181,14 @@ fn computed(f: impl FnOnce()) -> u64 {
     crate::glass::glass_fields_computed() - before
 }
 
+/// How many glass shapes, and how many shapes' bend directions towards their core, `f` works out
+/// on this thread.
+fn computed_and_bent(f: impl FnOnce()) -> (u64, u64) {
+    let before = (crate::glass::glass_fields_computed(), crate::glass::glass_bends_computed());
+    f();
+    (crate::glass::glass_fields_computed() - before.0, crate::glass::glass_bends_computed() - before.1)
+}
+
 #[test]
 fn kept_fields_render_the_same_pixels_as_fresh_ones() {
     let (d, p, _) = pane(Glass::default(), 40.0, 30.0, 211.0, 137.0);
@@ -217,9 +227,13 @@ fn what_the_shape_depends_on_works_it_out_again_and_nothing_else_does() {
     assert_eq!(computed(|| drop(render(&d, p, (0.0, 0.0), 1.0))), 1, "part of a pixel");
     d.get_mut(pane).unwrap().width = 230.0;
     assert_eq!(computed(|| drop(render(&d, p, (0.0, 0.0), 1.0))), 1, "shape");
-    // A depth a unit more keeps the same margin but moves the core the edge bends towards.
+    let _ = render(&d, p, (0.0, 0.0), 1.0);
+    // A depth a unit more keeps the same margin: the kept shape is reused, and only the bend
+    // towards the core, which moves with the depth, is worked out again, once (a Depth slider
+    // dragged works out nothing else).
     set(&mut d, Glass { depth: 21.0, ..Glass::default() });
-    assert_eq!(computed(|| drop(render(&d, p, (0.0, 0.0), 1.0))), 1, "depth, within the same margin");
+    assert_eq!(computed_and_bent(|| drop(render(&d, p, (0.0, 0.0), 1.0))), (0, 1), "depth, within the same margin");
+    assert_eq!(computed_and_bent(|| drop(render(&d, p, (0.0, 0.0), 1.0))), (0, 0), "the same depth again");
     set(&mut d, Glass { depth: 70.0, ..Glass::default() });
     assert_eq!(computed(|| drop(render(&d, p, (0.0, 0.0), 1.0))), 1, "depth");
 }
