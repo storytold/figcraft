@@ -198,6 +198,7 @@ fn shows(changes: &[Change], doc: &Document) -> Result<(), String> {
     let r = Replica::new(doc.clone());
     for c in changes {
         let ok = match c {
+            Change::Image(image) => image.data().ok().as_ref() == doc.images.get(&image.key),
             Change::Create { id, .. } => doc.contains(*id),
             Change::Delete { id } => !doc.contains(*id),
             Change::Set { prop: figcraft_collab::Prop::Position, .. } => true,

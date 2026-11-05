@@ -17,6 +17,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+figcraft-assets = { workspace = true }
 figcraft-collab = { workspace = true }
 figcraft-collab-net = { workspace = true }
 # Checking a team library before keeping it (read as files using it read it).

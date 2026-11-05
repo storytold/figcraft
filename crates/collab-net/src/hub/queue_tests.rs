@@ -16,7 +16,7 @@ use super::{BlockUse, Blocks, Charges, Conn, Kind, Line, Out, Push, deliver};
 /// A line with its own queue counter, the given block counter and the server's.
 fn line(block: &Arc<AtomicUsize>, all: &Arc<AtomicUsize>, max_block: usize, max_all: usize) -> (Line, Receiver<Out>) {
     let (tx, rx) = sync_channel(64);
-    (Line { tx, queued: Arc::default(), block: block.clone(), all: all.clone(), max: 1 << 20, max_block, max_all }, rx)
+    (Line { assets: false, tx, queued: Arc::default(), block: block.clone(), all: all.clone(), max: 1 << 20, max_block, max_all }, rx)
 }
 
 fn socket() -> TcpStream {
@@ -65,7 +65,7 @@ fn the_biggest_consumer_is_shed_when_the_budget_runs_out() {
     for id in 1..=3u64 {
         let (l, rx) = line(&Arc::default(), &all, usize::MAX, 10_000);
         receivers.push(rx);
-        conns.insert(id, Conn { out: l, sock: socket(), kind: Kind::Managing { comments: true }, ip });
+        conns.insert(id, Conn { out: l, sock: socket(), kind: Kind::Managing { comments: true }, ip, packed: false });
     }
     // Connection 1 doesn't read: it holds most of the budget.
     let big = Bytes::from(vec![0u8; 9_000]);

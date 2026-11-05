@@ -64,6 +64,9 @@ type Nodes = BTreeMap<NodeId, Sides<Option<Change>>>;
 /// One entry of the undo history.
 #[derive(Clone, Debug)]
 pub(crate) struct Step {
+    /// Only actual image edits retain resident payloads for undo. Viewing a deferred image
+    /// never populates this map or an undo snapshot.
+    images: BTreeMap<figcraft_assets::AssetRef, std::sync::Arc<Vec<u8>>>,
     /// Unique within the client (batches name their step by it).
     pub id: u64,
     pub label: String,
@@ -132,6 +135,7 @@ impl Step {
     pub fn new(id: u64, label: &str, batch: u64, pre: &Replica, post: &Replica, changes: &[Change]) -> Result<Step, Error> {
         let (writes, nodes) = capture(pre, post, changes, false)?;
         Ok(Step {
+            images: image_bodies(pre, post, changes),
             id,
             label: label.to_string(),
             batch,
@@ -152,6 +156,7 @@ impl Step {
     /// inside a layer it deletes comes back with an undo); an undo or redo only updates the nodes
     /// of the step (what it takes with it beyond them was someone else's).
     pub fn refresh(&mut self, pre: &Replica, post: &Replica, changes: &[Change], kind: BatchKind) -> Result<(), Error> {
+        self.images.extend(image_bodies(pre, post, changes));
         let (writes, nodes) = capture(pre, post, changes, true)?;
         let (p, q) = if kind == BatchKind::Undo { (FWD, BACK) } else { (BACK, FWD) };
         for (t, [x, y]) in writes {
@@ -312,8 +317,35 @@ impl Step {
         // Changes that apply one by one can still fail the batch's checks together (rare): keep
         // only those that pass them in order.
         view.clone().apply_kept(&mut out, |_| true)?;
+        for change in &mut out {
+            if let Change::Put { entry: Entry::Image(key), value } = change
+                && value.0.get("asset").is_some()
+            {
+                let mut image: crate::change::ImageChange = value.read("image history")?;
+                image.key = key.clone();
+                if let Some((_, bytes)) = self.images.iter().find(|(asset, _)| asset.same_content(&image.asset)) {
+                    image.bytes = Some(figcraft_assets::Blob(bytes.clone()));
+                }
+                *change = Change::Image(image);
+            }
+        }
         Ok(out)
     }
+}
+
+fn image_bodies(pre: &Replica, post: &Replica, changes: &[Change]) -> BTreeMap<figcraft_assets::AssetRef, std::sync::Arc<Vec<u8>>> {
+    let mut bodies = BTreeMap::new();
+    for change in changes {
+        let Some(Target::Entry(Entry::Image(key))) = Target::of(change) else { continue };
+        for replica in [pre, post] {
+            if let Some(image) = replica.document().images.get(&key)
+                && image.asset.is_none()
+            {
+                bodies.insert(image.reference(), image.bytes.clone());
+            }
+        }
+    }
+    bodies
 }
 
 /// Apply `todo` to `work` change by change, keeping in `out` those that apply; changes that don't
@@ -389,6 +421,9 @@ impl Touches {
                     if let Some(l) = entry.list() {
                         t.lists.insert(l);
                     }
+                }
+                Change::Image(image) => {
+                    t.entries.insert(Entry::Image(image.key.clone()));
                 }
             }
         }

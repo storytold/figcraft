@@ -35,6 +35,7 @@ pub(crate) struct PaintFrame {
 }
 
 pub(crate) struct Exporter<'a> {
+    pub asset_error: Option<String>,
     pub doc: &'a Document,
     pub opts: &'a PdfOptions,
     /// Page coordinates → PDF page coordinates for the page being drawn.
@@ -222,6 +223,7 @@ fn sniff(b: &[u8]) -> Sniffed {
 impl<'a> Exporter<'a> {
     pub(crate) fn new(doc: &'a Document, opts: &'a PdfOptions) -> Self {
         Self {
+            asset_error: None,
             doc,
             opts,
             page_origin: Affine::IDENTITY,
@@ -499,8 +501,15 @@ impl<'a> Exporter<'a> {
             let (pw, ph) = (pm.width(), pm.height());
             // Unadjusted RGB images embed their original bytes (JPEG stays JPEG).
             let original = data.filter(|_| img.filters.is_identity() && ink == Ink::Rgb).and_then(|d| {
-                let bytes = krilla::Data::from(d.bytes.clone());
-                match sniff(&d.bytes) {
+                let encoded = match figcraft_assets::require(&d.bytes, d.asset.as_ref()) {
+                    Ok(bytes) => bytes,
+                    Err(reason) => {
+                        self.asset_error = Some(reason);
+                        return None;
+                    }
+                };
+                let bytes = krilla::Data::from(encoded.clone());
+                match sniff(&encoded) {
                     Sniffed::Png => Image::from_png(bytes, true).ok(),
                     Sniffed::Jpeg => Image::from_jpeg(bytes, true).ok(),
                     Sniffed::Gif => Image::from_gif(bytes, true).ok(),

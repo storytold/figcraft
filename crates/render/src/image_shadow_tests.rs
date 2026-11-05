@@ -27,7 +27,7 @@ fn scene(circle: bool, effect: EffectKind, opacity: f32) -> (Document, NodeId) {
     let p = d.first_page().unwrap();
     // Image ids key the shared decode cache: fixtures running in parallel need ids of their own.
     let id = if circle { "image-shadow-tests-circle" } else { "image-shadow-tests-opaque" };
-    d.images.insert(id.into(), ImageData { bytes: Arc::new(png(circle)), width: 200, height: 200 });
+    d.images.insert(id.into(), ImageData { asset: None, bytes: Arc::new(png(circle)), width: 200, height: 200 });
     let n = d.create(p, NodeKind::Rectangle, "R", 100.0, 100.0, 200.0, 200.0).unwrap();
     let node = d.get_mut(n).unwrap();
     node.fills = vec![Paint::image(id, ImageScaleMode::Fill)];

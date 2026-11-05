@@ -69,6 +69,7 @@ pub fn export_bytes_with(doc: &Document, ids: &[NodeId], setting: &ExportSetting
 /// What Copy as PNG puts on the clipboard: the layers together, at 2x (in the document's colour
 /// profile; the clipboard wants sRGB).
 pub fn copy_png(doc: &Document, ids: &[NodeId]) -> Option<figcraft_render::Pixmap> {
+    let _originals = figcraft_render::images::require_for_nodes(doc, ids).ok()?;
     let area = export_area(doc, ids, &ExportSetting::default())?;
     figcraft_render::render_area(doc, &crate::cmd::edit::z_sorted(doc, ids), area, 2.0)
 }
