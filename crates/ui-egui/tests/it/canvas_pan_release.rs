@@ -109,3 +109,25 @@ fn side_buttons_pan_like_the_middle_button() {
         check_button(b, false, true);
     }
 }
+
+/// A primary drag under way when a pan starts (a side or the middle button pressed mid-drag) ends
+/// when the primary button is let go during the pan: the engine gets the release, so its gesture
+/// isn't left open once the pan is over.
+#[test]
+fn a_primary_drag_released_during_a_pan_ends() {
+    for pan in [PointerButton::Middle, PointerButton::Extra1] {
+        let mut u = Frames::new();
+        let rect = u.app.canvas.rect;
+        let start = Pos2::new(rect.min.x + 200.0, rect.center().y);
+        let moved = Pos2::new(rect.min.x + 400.0, rect.center().y);
+        u.frame(vec![Event::PointerMoved(start)]);
+        u.frame(vec![button(start, PointerButton::Primary, true)]);
+        u.frame(vec![Event::PointerMoved(moved)]);
+        assert!(u.app.session.tool.busy(), "{pan:?}: a primary drag is under way");
+        u.frame(vec![button(moved, pan, true)]);
+        u.frame(vec![button(moved, PointerButton::Primary, false)]);
+        u.frame(vec![button(moved, pan, false)]);
+        u.frame(vec![]);
+        assert!(!u.app.session.tool.busy(), "{pan:?}: the primary release reached the engine");
+    }
+}

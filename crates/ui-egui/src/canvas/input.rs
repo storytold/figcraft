@@ -148,6 +148,31 @@ fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui:
     }
 }
 
+/// One frame of a pan (the middle or a side button held, or Space + drag): the view follows the
+/// pointer from where the pan began, and the pan ends once no button that pans is held.
+fn pan_view(app: &mut FigApp, ctx: &egui::Context, pos: Pos2, mods: &egui::Modifiers, middle_down: bool) {
+    if let Ok(ds) = app.session.ds_mut() {
+        match app.canvas.middle_pan {
+            None => app.canvas.middle_pan = Some((pos, ds.view.cx, ds.view.cy)),
+            Some((p0, cx, cy)) => {
+                let z = ds.view.zoom.max(1e-6);
+                ds.view.cx = cx - f64::from(pos.x - p0.x) / z;
+                ds.view.cy = cy - f64::from(pos.y - p0.y) / z;
+                ds.revision += 1;
+            }
+        }
+    }
+    // A primary drag under way when the pan began ends when its button is let go, pan or
+    // not: the engine gets its release here, as it does over the canvas or off it.
+    if app.canvas.dragging && !ctx.input(|i| i.pointer.primary_down()) {
+        app.canvas.dragging = false;
+        send(app, PointerKind::Up, pos, mods);
+    }
+    if !middle_down && !ctx.input(|i| i.pointer.primary_down()) {
+        app.canvas.middle_pan = None;
+    }
+}
+
 /// The pointer and keys on the canvas. False when something on it with a cursor of its own has
 /// the pointer (a comment pin, a ruler guide, a gradient or padding handle): the tool's cursor
 /// then doesn't show.
@@ -224,20 +249,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     // Middle-button (or side-button) / space panning.
     let middle_down = ctx.input(pan_button_down);
     if (middle_down || (app.canvas.space_pan && ctx.input(|i| i.pointer.primary_down()))) && resp.hovered() || app.canvas.middle_pan.is_some() {
-        if let Ok(ds) = app.session.ds_mut() {
-            match app.canvas.middle_pan {
-                None => app.canvas.middle_pan = Some((pos, ds.view.cx, ds.view.cy)),
-                Some((p0, cx, cy)) => {
-                    let z = ds.view.zoom.max(1e-6);
-                    ds.view.cx = cx - f64::from(pos.x - p0.x) / z;
-                    ds.view.cy = cy - f64::from(pos.y - p0.y) / z;
-                    ds.revision += 1;
-                }
-            }
-        }
-        if !middle_down && !ctx.input(|i| i.pointer.primary_down()) {
-            app.canvas.middle_pan = None;
-        }
+        pan_view(app, &ctx, pos, &mods, middle_down);
         return true;
     }
     // A handle drag whose button went up ends first, wherever on the canvas the pointer is: over a
