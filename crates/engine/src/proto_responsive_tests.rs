@@ -40,6 +40,30 @@ fn rect(doc: &Document, id: NodeId) -> (f64, f64, f64, f64) {
     (c[4], c[5], n.width, n.height)
 }
 
+/// A device name is matched as a colour's is, in any case, and stored as the list writes it; a
+/// name that is no device is refused with the list and changes nothing, nor records a step
+/// (#2027).
+#[test]
+fn an_unknown_device_is_refused_with_the_devices() {
+    let mut s = Session::new();
+    ex(&mut s, "proto.settings", json!({"device": "iPhone 16"}));
+    let steps = s.ds().unwrap().history.undo.len();
+    let before = settings(&s);
+    for bad in [json!("Pixel Nonexistent"), json!("iPhone 16 Mini"), json!(""), json!(16), json!(true), json!({}), json!(["iPhone 16"])] {
+        let e = s.execute("proto.settings", &json!({"device": bad, "color": "Black"})).unwrap_err().to_string();
+        assert!(e.contains("iPhone 16 Pro") && e.contains("Custom size") && e.contains("None"), "{bad}: {e}");
+        assert_eq!(settings(&s), before, "{bad}: nothing changes");
+    }
+    assert_eq!(s.ds().unwrap().history.undo.len(), steps, "no step for a refusal");
+    for (given, stored) in
+        [("iphone 16 pro", "iPhone 16 Pro"), ("  iPad Mini ", "iPad mini"), ("custom size", "Custom size"), ("none", "None"), ("DESKTOP", "Desktop")]
+    {
+        ex(&mut s, "proto.settings", json!({"device": given}));
+        assert_eq!(settings(&s).device, stored, "{given}");
+        assert!(stored == "None" || settings(&s).model().is_some(), "{given}: the presenter finds the model");
+    }
+}
+
 #[test]
 fn device_colours_pick_by_name_and_follow_the_device() {
     let mut s = Session::new();

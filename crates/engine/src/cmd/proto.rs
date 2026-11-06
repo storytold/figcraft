@@ -112,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.settings",
             "Prototype settings",
-            "{device? (a device name, \"Custom size\" or \"None\"), background?, rotation? portrait|landscape (or 0|90; phones and tablets turn), color? (one of the device's colours by name), width?, height? (the custom size's screen, 1–10000 points; picks \"Custom size\"), responsive? bool (frames resize to the screen and their constraints and auto layout respond)}",
+            "{device? (a device name, \"Custom size\" or \"None\", in any case; another name is refused with the list), background?, rotation? portrait|landscape (or 0|90; phones and tablets turn), color? (one of the device's colours by name), width?, height? (the custom size's screen, 1–10000 points; picks \"Custom size\"), responsive? bool (frames resize to the screen and their constraints and auto layout respond)}",
             true,
             settings
         ),
@@ -173,12 +173,30 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// The device `name` stands for, as its list writes it ("iphone 16" → "iPhone 16", as a colour's
+/// name is matched): one of [`PrototypeSettings::DEVICES`], "Custom size" or "None". `None` for a
+/// name that is none of them, which `proto.settings` refuses (#2027).
+fn device_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    let mut names = ["None", PrototypeSettings::CUSTOM_DEVICE].into_iter().chain(PrototypeSettings::DEVICES.iter().map(|d| d.name));
+    names.find(|n| n.eq_ignore_ascii_case(name)).map(str::to_string)
+}
+
+/// The refusal of an unknown device: the names to pick from.
+fn device_choices() -> String {
+    let names: Vec<&str> = ["None", PrototypeSettings::CUSTOM_DEVICE].into_iter().chain(PrototypeSettings::DEVICES.iter().map(|d| d.name)).collect();
+    format!("device: {}", names.join("|"))
+}
+
 /// `proto.settings`: everything is checked before anything changes.
 fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "proto.settings";
     let page = s.page()?;
     let bg = color(p, "background");
-    let dev = string(p, "device");
+    let dev = match p.get("device") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(string(p, "device").as_deref().and_then(device_name).ok_or_else(|| bad(cmd, device_choices()))?),
+    };
     let rot = match p.get("rotation") {
         None | Some(Value::Null) => None,
         Some(v) => Some(rotation_of(v).ok_or_else(|| bad(cmd, "rotation: portrait|landscape"))?),
