@@ -63,7 +63,7 @@ fn open_menu(u: &mut Ui) -> Vec<Node> {
     nodes(u)
 }
 
-/// How many strokes and fills sit in the left 24 points of `row` (where the icon is).
+/// How many strokes and fills sit in the left 40 points of `row` (where the icon is).
 fn marks_in_lead(shapes: &[egui::epaint::ClippedShape], row: Rect) -> usize {
     fn walk(s: &Shape, area: Rect, n: &mut usize) {
         match s {
@@ -72,7 +72,7 @@ fn marks_in_lead(shapes: &[egui::epaint::ClippedShape], row: Rect) -> usize {
             _ => {}
         }
     }
-    let area = Rect::from_min_max(row.min, pos2(row.min.x + 24.0, row.max.y));
+    let area = Rect::from_min_max(row.min, pos2(row.min.x + 40.0, row.max.y));
     let mut n = 0;
     shapes.iter().for_each(|c| walk(&c.shape, area, &mut n));
     n
@@ -103,5 +103,38 @@ fn every_boolean_menu_entry_still_runs_its_command() {
         let sel = u.app.session.selection();
         assert_eq!(sel.len(), 1, "{name} made one boolean group");
         assert_eq!(crate::layers::node_icon(u.app.session.doc().unwrap(), sel[0]), icon, "{name}'s group shows {icon:?}");
+    }
+}
+
+/// The x every label (checked or not, with an icon or without, Flatten) starts at.
+fn label_xs(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, f32)> {
+    fn walk(s: &Shape, out: &mut Vec<(String, f32)>) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            Shape::Text(t) => out.push((t.galley.text().to_owned(), t.pos.x)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+    out
+}
+
+#[test]
+fn every_boolean_menu_label_starts_at_the_same_x() {
+    for checked in [false, true] {
+        let mut u = two_layers();
+        if checked {
+            u.app.run("bool.union", json!({}));
+            u.frame(vec![]);
+        }
+        open_menu(&mut u);
+        let out = u.frame_output(vec![]);
+        let xs = label_xs(&out.shapes);
+        let at: Vec<f32> = ["Union", "Subtract", "Intersect", "Exclude", "Flatten"]
+            .iter()
+            .map(|n| xs.iter().rev().find(|(t, _)| t == n).unwrap_or_else(|| panic!("{n} label (checked: {checked})")).1)
+            .collect();
+        assert!(at.iter().all(|x| (x - at[0]).abs() < 0.01), "labels line up (checked: {checked}): {at:?}");
     }
 }

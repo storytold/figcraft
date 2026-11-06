@@ -486,14 +486,14 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     // Each entry leads with its operation's icon (the result it previews).
                     let key = crate::shortcuts::shortcut(c).unwrap_or("");
                     let icon = crate::layers::op_icon(op);
-                    let picked = menu_icon_item(ui, icon, current.map(|cur| cur == op), tr(op.label()), key);
+                    let picked = menu_icon_item(ui, Some(icon), current.map(|cur| cur == op), tr(op.label()), key);
                     if picked {
                         app.run(c, json!({}));
                         ui.close();
                     }
                 }
                 let key = crate::shortcuts::shortcut("vector.flatten").unwrap_or("");
-                let flatten = if current.is_some() { menu_item_beside_checks(ui, tr("Flatten"), key) } else { menu_item(ui, tr("Flatten"), key) };
+                let flatten = menu_icon_item(ui, None, None, tr("Flatten"), key);
                 if flatten {
                     app.run("vector.flatten", json!({}));
                     ui.close();

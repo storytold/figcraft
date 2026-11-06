@@ -163,14 +163,25 @@ pub(crate) fn block(ui: &mut Ui, h: f32, inset_y: f32, add: impl FnOnce(&mut Ui)
     r
 }
 
-/// A menu item led by `icon` (16 px, in the row's text colour), with a check mark when `on` is
-/// `Some(true)` (the unchecked ones line up with it): the boolean operations in the Design panel.
-pub fn menu_icon_item(ui: &mut Ui, icon: crate::icons::Icon, on: Option<bool>, label: &str, shortcut: &str) -> bool {
-    let shown = format!("{}{label}", if on == Some(true) { "✓ " } else { "    " });
+/// Width of the check column of [`menu_icon_item`] (the mark, or nothing, so labels line up).
+const CHECK_COL: f32 = 14.0;
+
+/// A menu item in a menu whose entries lead with a 16 px icon (in the row's text colour): the
+/// boolean operations in the Design panel. `icon` is `None` for an entry without one (Flatten):
+/// its slot stays empty, so every label starts at the same x. The check mark (`on` is
+/// `Some(true)`) is drawn in its own column ahead of the icon, so a checked entry's label does
+/// not move against the unchecked ones.
+pub fn menu_icon_item(ui: &mut Ui, icon: Option<crate::icons::Icon>, on: Option<bool>, label: &str, shortcut: &str) -> bool {
     let paint = |p: &egui::Painter, r: Rect, col: Color32| {
-        crate::icons::paint(p, Rect::from_min_size(pos2(r.min.x + MENU_PAD, r.center().y - 8.0), vec2(16.0, 16.0)), icon, col);
+        if on == Some(true) {
+            let mark = p.layout_no_wrap("✓".to_owned(), regular(11.5), col);
+            p.galley(pos2(r.min.x + MENU_PAD, r.center().y - mark.size().y / 2.0), mark, col);
+        }
+        if let Some(icon) = icon {
+            crate::icons::paint(p, Rect::from_min_size(pos2(r.min.x + MENU_PAD + CHECK_COL, r.center().y - 8.0), vec2(16.0, 16.0)), icon, col);
+        }
     };
-    let resp = lit_row(ui, &shown, shortcut, 0.0, 22.0, paint, false);
+    let resp = lit_row(ui, label, shortcut, 0.0, CHECK_COL + 22.0, paint, false);
     a11y::menu_item(&resp, label, shortcut, on);
     resp.clicked()
 }
