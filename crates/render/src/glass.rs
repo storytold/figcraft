@@ -379,15 +379,27 @@ pub(crate) fn bend_at(x: f32, depth: f32, bevel: f32, refraction: f32) -> f32 {
     core + (rim - core) * u
 }
 
+/// Below this split (pixels: the move's length × `k`) the dispersion window takes one sample: its
+/// steps lie within 1/256 px of the moved point, so one sample is within one level (of 255) of the
+/// window even across the hardest edge, from black to white or opaque to clear in a pixel.
+const ONE_SAMPLE_SPLIT_PX: f32 = 1.0 / 256.0;
+
 /// The backdrop seen at pixel coordinates (`x`, `y`) moved by (`dx`, `dy`), its channels split by
 /// `k` (dispersion, 0–1): red moves up to `k` further, blue up to `k` less, each smeared along the
-/// move by a triangular window of [`DISPERSION_STEPS`]. One sample when `k` is too small to show.
+/// move by a triangular window of [`DISPERSION_STEPS`]. One sample when the split is too small to
+/// show: `k` under 0.001, or the channels under [`ONE_SAMPLE_SPLIT_PX`] apart (where the curve
+/// flattens out and the move is short).
 fn dispersed(frosted: &Pixmap, x: f32, y: f32, dx: f32, dy: f32, k: f32) -> [f32; 4] {
-    let at = |s: f32| sample(frosted, x + dx * s, y + dy * s);
-    if k < 0.001 {
-        let s = at(1.0);
+    if k < 0.001 || (dx * dx + dy * dy).sqrt() * k < ONE_SAMPLE_SPLIT_PX {
+        let s = sample(frosted, x + dx, y + dy);
         return [s[0].min(s[3]), s[1].min(s[3]), s[2].min(s[3]), s[3]];
     }
+    dispersion_window(frosted, x, y, dx, dy, k)
+}
+
+/// [`dispersed`]'s triangular window, every step sampled.
+fn dispersion_window(frosted: &Pixmap, x: f32, y: f32, dx: f32, dy: f32, k: f32) -> [f32; 4] {
+    let at = |s: f32| sample(frosted, x + dx * s, y + dy * s);
     let last = (DISPERSION_STEPS - 1) as f32;
     let (mut acc, mut sum) = ([0.0f32; 4], 0.0f32);
     for i in 1..DISPERSION_STEPS - 1 {
@@ -1046,6 +1058,40 @@ mod tests {
         let spread = dispersed(&impulse, 10.5, 0.5, 8.0, 0.0, 1.0);
         assert!((spread[0] - 33.392857).abs() < 1e-3 && (spread[1] - 33.392857).abs() < 1e-3, "{spread:?}");
         assert_eq!(spread[2], 0.0);
+    }
+
+    /// Where the channels split under [`ONE_SAMPLE_SPLIT_PX`], one sample stands in for the window
+    /// within one level, even over the hardest backdrops: 1 px columns of black and white, and of
+    /// white and nothing.
+    #[test]
+    fn a_split_too_narrow_to_show_takes_one_sample() {
+        for clear in [false, true] {
+            let mut p = Pixmap::new(64, 4).unwrap();
+            for (i, px) in p.data_mut().chunks_exact_mut(4).enumerate() {
+                let on = i % 2 == 1;
+                let v = if on { 255 } else { 0 };
+                px.copy_from_slice(&[v, v, v, if clear { v } else { 255 }]);
+            }
+            let mut worst = 0.0f32;
+            for step in 0..400 {
+                let x = 20.0 + step as f32 / 100.0;
+                // Along the columns' rows and across them, and out past the backdrop's last row.
+                for (dx, dy) in [(2.0f32, 0.0f32), (-2.0, 0.0), (1.2, 1.6), (0.0, 2.0), (40.0, 0.0)] {
+                    let k = ONE_SAMPLE_SPLIT_PX * 0.999 / (dx * dx + dy * dy).sqrt();
+                    let one = dispersed(&p, x, 2.0, dx, dy, k);
+                    assert_eq!(one, dispersed(&p, x, 2.0, dx, dy, 0.0), "one sample at {x}");
+                    let window = dispersion_window(&p, x, 2.0, dx, dy, k);
+                    worst = one.iter().zip(window).fold(worst, |m, (a, b)| m.max((a - b).abs()));
+                }
+            }
+            assert!(worst <= 1.0, "clear {clear}: {worst}");
+        }
+        // A wider split still takes the window.
+        let mut p = Pixmap::new(64, 4).unwrap();
+        p.data_mut().chunks_exact_mut(4).step_by(2).for_each(|px| px.copy_from_slice(&[255; 4]));
+        let k = ONE_SAMPLE_SPLIT_PX * 2.0 / 2.0;
+        assert_eq!(dispersed(&p, 20.3, 2.0, 2.0, 0.0, k), dispersion_window(&p, 20.3, 2.0, 2.0, 0.0, k));
+        assert_ne!(dispersed(&p, 20.3, 2.0, 2.0, 0.0, k), dispersed(&p, 20.3, 2.0, 2.0, 0.0, 0.0));
     }
 
     /// A `w` × `h` coverage with the rectangles `rects` (x, y, width, height) filled.
