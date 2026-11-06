@@ -392,6 +392,9 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let query_id = Id::unique("variable_picker_query");
     let mut query: String = ctx.data(|d| d.get_temp(query_id)).unwrap_or_default();
+    // The height its bottom edge was dragged taller by (#2043).
+    let grow_id = Id::unique("variable_picker_grow");
+    let mut grow: f32 = ctx.data(|d| d.get_temp(grow_id)).unwrap_or_default();
     let q = query.trim().to_lowercase();
     // Bindings offer variables scoped to the property; aliases, any that wouldn't loop (library
     // variables never lead back to this file's).
@@ -423,7 +426,9 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
     let mut chosen: Option<Pick> = None;
     let mut close = false;
     let area = egui::Area::new(Id::unique("variable_picker_area")).order(egui::Order::Foreground).fixed_pos(p.at + vec2(0.0, 4.0)).show(ctx, |ui| {
-        egui::Frame::NONE.fill(t.menu).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+        // Not last frame's size, which a search with few matches would keep short (#2043).
+        ui.set_max_height(ctx.content_rect().height());
+        let frame = egui::Frame::NONE.fill(t.menu).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
             ui.set_width(240.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tr("Variables")).font(semibold(11.0)).color(t.menu_text));
@@ -435,7 +440,7 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
                 r.request_focus();
             }
             ui.add_space(4.0);
-            egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(280.0 + grow).show(ui, |ui| {
                 for (lib, c, vars) in &groups {
                     group_caption(ui, *lib, c);
                     let all = lib.map_or(&doc.variables, |l| &l.doc.variables);
@@ -467,6 +472,7 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
                 ui.label(egui::RichText::new(msg).font(regular(11.0)).color(t.menu_dim));
             }
         });
+        crate::popover::resize_grip(ui, Id::unique("variable_picker_grip"), frame.response.rect, &mut grow);
     });
     let rect = area.response.rect;
     ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("variable_picker_border"))).rect_stroke(
@@ -499,9 +505,13 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
         ctx.data_mut(|d| {
             d.remove::<Picker>(picker_id());
             d.remove::<String>(query_id);
+            d.remove::<f32>(grow_id);
         });
     } else {
-        ctx.data_mut(|d| d.insert_temp(query_id, query));
+        ctx.data_mut(|d| {
+            d.insert_temp(query_id, query);
+            d.insert_temp(grow_id, grow);
+        });
     }
 }
 

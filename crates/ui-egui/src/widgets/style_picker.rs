@@ -517,7 +517,7 @@ fn offered<'a>(doc: &'a Document, lib: Option<&'a PublishedLibrary>, slot: Style
 
 /// The style list: header, search, this file's and the libraries' styles by folder, and (colour
 /// slots) colour variables.
-fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
+fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, grow: f32, out: &mut Frame) {
     let t = Tokens::get(ui.ctx());
     let slot = p.slot;
     let link = link_of(app, doc, &p.ids, slot);
@@ -569,7 +569,8 @@ fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut 
     } else {
         Vec::new()
     };
-    egui::ScrollArea::vertical().id_salt("style_picker_scroll").max_height(320.0).show(ui, |ui| {
+    // The popover's bottom edge drags the list taller (#2043).
+    egui::ScrollArea::vertical().id_salt("style_picker_scroll").max_height(320.0 + grow).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         if sources.iter().all(|(_, l)| l.is_empty()) {
             let any = library::local_styles(doc).any(|s| slot.holds(&s.kind));
@@ -1091,7 +1092,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let mut out = Frame { act: None, hover: None, budget: 4 };
     // The title and the X are the shared popover's now; the list keeps its tools row.
     let title = if p.edit.is_some() { tr("Edit style") } else { p.slot.title() };
-    let mut pop = app.ui.style_picker_popover.take().unwrap_or_else(|| Popover::new("style_picker_area", title).pad(PAD).surface(Surface::Menu));
+    let mut pop =
+        app.ui.style_picker_popover.take().unwrap_or_else(|| Popover::new("style_picker_area", title).pad(PAD).surface(Surface::Menu).resizable());
     pop.title = title.to_string();
     // Clicks in the colour picker editing this picker's style, in the variable picker binding one
     // of its fields, or in a menu the editor opened, keep it open.
@@ -1099,11 +1101,12 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         app.ui.picker.as_ref().filter(|t| matches!(t, PickerTarget::Style { .. })).and(ctx.memory(|m| m.area_rect(crate::colorpicker::window_id())));
     let variables = crate::variable_ui::picker_rect(ctx);
     let holds: Vec<Rect> = picker_rect.into_iter().chain(variables).collect();
+    let grow = pop.grow;
     let closed = pop.show(ctx, Open::At(pos2(x, y)), Hold { rects: &holds, escape: variables.is_some() || picker_rect.is_some() }, |ui| {
         if p.edit.is_some() {
             editor(ui, &doc, &mut p, &mut out);
         } else {
-            listing(app, ui, &doc, &mut p, &mut out);
+            listing(app, ui, &doc, &mut p, grow, &mut out);
         }
     });
     let mut close = closed;

@@ -93,6 +93,10 @@ pub struct Popover {
     pub close: Rect,
     /// The panel's size as laid out last frame.
     size: Vec2,
+    /// Whether its bottom edge drags it taller ([`Popover::resizable`]).
+    resize: bool,
+    /// The height that drag added, for the slot's list to take.
+    pub grow: f32,
 }
 
 impl Popover {
@@ -118,7 +122,15 @@ impl Popover {
             slot: Rect::NOTHING,
             close: Rect::NOTHING,
             size: vec2(WIDTH, 0.0),
+            resize: false,
+            grow: 0.0,
         }
+    }
+
+    /// Its bottom edge drags it taller: [`Popover::grow`] is the height added.
+    pub fn resizable(mut self) -> Self {
+        self.resize = true;
+        self
     }
 
     /// `width` points wide instead of [`WIDTH`].
@@ -177,6 +189,9 @@ impl Popover {
                 ui.set_invisible();
                 ctx.request_repaint();
             }
+            // An area lays out in last frame's size: a list that was short once (a search with few
+            // matches) would stay short, even reopened (#2043). The screen's height is the room.
+            ui.set_max_height(screen.height());
             // The panel is painted into a place kept before the content: the shadow and the fill
             // go under it, though its size is only known once the slot is laid out.
             let bg = ui.painter().add(egui::Shape::Noop);
@@ -238,6 +253,9 @@ impl Popover {
             self.slot = slot;
             self.close = close_rect;
             self.size = panel.size();
+            if self.resize {
+                resize_grip(ui, self.id.with("grip"), panel, &mut self.grow);
+            }
         });
         // Closing is the widget's: the X above, Escape and a press outside (a child popup or a
         // held-out rect keeps it open, so the button that opened it can click it shut).
@@ -265,6 +283,18 @@ fn close_button(ui: &mut Ui, id: Id, rect: Rect, dark: bool, t: Tokens) -> bool 
     }
     icons::paint(ui.painter(), rect.shrink(6.0), Icon::Close, if dark { t.menu_text } else { t.icon });
     resp.clicked()
+}
+
+/// A grip along the inside of `panel`'s bottom edge: dragging it changes `grow`, the height added to
+/// the panel's list, from none up to what keeps the panel on screen (#2043).
+pub fn resize_grip(ui: &Ui, id: Id, panel: Rect, grow: &mut f32) {
+    let grip = Rect::from_min_max(pos2(panel.min.x + f32::from(RADIUS), panel.max.y - 6.0), pos2(panel.max.x - f32::from(RADIUS), panel.max.y));
+    let resp = ui.interact(grip, id, Sense::drag());
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    let room = ui.ctx().content_rect().max.y - EDGE - panel.max.y;
+    *grow = (*grow + resp.drag_delta().y.min(room)).clamp(0.0, ui.ctx().content_rect().height());
 }
 
 /// The opening position: the right edge on `anchor.x` (the right panel's left edge), the top on

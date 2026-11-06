@@ -438,3 +438,67 @@ fn text_style_editor_binds_variables_from_its_fields() {
     assert_eq!((def.font_size, def.font_style.as_str()), (18.0, "Bold"), "the style takes the variables' values");
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
 }
+
+/// Asserts the picker grows back after a search with one match is cleared, and opens full height
+/// again: it used to keep the short search's size, a list of three rows (#2043).
+#[test]
+fn the_picker_grows_back_after_a_short_search() {
+    let mut s = Session::new();
+    let r = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    for i in 0..30 {
+        s.execute("style.create", &json!({"type": "paint", "name": format!("Blue {i}"), "value": [{"type": "solid", "color": "#0D99FF"}]})).unwrap();
+    }
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut app = FigApp::new(s, Box::new(NoServices));
+    let ctx = egui::Context::default();
+    let mut t = 0.0;
+    let mut height = |app: &mut FigApp| {
+        for _ in 0..3 {
+            frame(&ctx, app, &mut t);
+        }
+        ctx.memory(|m| m.area_rect(Id::unique("style_picker_area"))).expect("the picker shows").height()
+    };
+    open_for_selection(&mut app, StyleSlot::Fill, None);
+    let full = height(&mut app);
+    app.ui.style_picker.as_mut().unwrap().query = "Blue 3".into();
+    assert!(height(&mut app) < full, "one match: a short list");
+    app.ui.style_picker.as_mut().unwrap().query.clear();
+    assert_eq!(height(&mut app), full, "the search cleared");
+    app.ui.style_picker = None;
+    height(&mut app);
+    open_for_selection(&mut app, StyleSlot::Fill, None);
+    assert_eq!(height(&mut app), full, "reopened");
+}
+
+/// Asserts dragging the picker's bottom edge makes it taller, so a long list shows more rows (#2043).
+#[test]
+fn the_bottom_edge_drags_the_picker_taller() {
+    let mut s = Session::new();
+    let r = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    for i in 0..30 {
+        s.execute("style.create", &json!({"type": "paint", "name": format!("Blue {i}"), "value": [{"type": "solid", "color": "#0D99FF"}]})).unwrap();
+    }
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut app = FigApp::new(s, Box::new(NoServices));
+    let ctx = egui::Context::default();
+    let mut t = 0.0;
+    open_for_selection(&mut app, StyleSlot::Fill, None);
+    for _ in 0..3 {
+        frame(&ctx, &mut app, &mut t);
+    }
+    let area = || ctx.memory(|m| m.area_rect(Id::unique("style_picker_area"))).expect("the picker shows");
+    let before = area();
+    let grip = Pos2::new(before.center().x, before.max.y - 2.0);
+    let press = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    frame_with(&ctx, &mut app, &mut t, vec![egui::Event::PointerMoved(grip)]);
+    frame_with(&ctx, &mut app, &mut t, vec![press(grip, true)]);
+    for dy in (20..=200).step_by(20) {
+        frame_with(&ctx, &mut app, &mut t, vec![egui::Event::PointerMoved(grip + vec2(0.0, dy as f32))]);
+    }
+    frame_with(&ctx, &mut app, &mut t, vec![press(grip + vec2(0.0, 200.0), false)]);
+    frame(&ctx, &mut app, &mut t);
+    let after = area();
+    assert!(app.ui.style_picker.is_some(), "dragging the edge keeps the picker open");
+    assert!(after.height() >= before.height() + 190.0, "{before:?} -> {after:?}");
+    assert_eq!(after.min, before.min, "its top stays put");
+}
