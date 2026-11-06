@@ -661,11 +661,12 @@ fn effect_field(doc: &Document, node: NodeId, i: usize, field: &str) -> Option<V
 }
 
 /// Whether `node` has the field a binding key names. Only effect fields are checked: a layer has
-/// `effects/<i>/<field>` when its effect `i` has that field (a drop shadow has no `refraction`).
+/// `effects/<i>/<field>` when its effect `i` has that field (a drop shadow has no `refraction`),
+/// and an `effects…` key naming no effect's field (`effects/x/radius`, `effects/0`) has none.
 pub fn has_field(doc: &Document, node: NodeId, field: &str) -> bool {
     match super::lists::list_binding(field) {
         Some((BoundList::Effects, i, f)) => effect_field(doc, node, i, f).is_some(),
-        _ => true,
+        _ => field.split('/').next() != Some(BoundList::Effects.prefix()),
     }
 }
 

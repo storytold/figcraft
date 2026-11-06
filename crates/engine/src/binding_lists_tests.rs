@@ -134,12 +134,15 @@ fn a_layer_binds_only_fields_its_effects_have() {
     let (mut s, r) = setup();
     ex(&mut s, "effect.add", json!({"ids": [r], "type": "dropShadow"}));
     ex(&mut s, "effect.add", json!({"ids": [r], "type": "glass"}));
-    // As an effect style does: a drop shadow has no refraction, glass no spread, and there is no
-    // effect 5. Nothing is bound.
+    // As an effect style does: a drop shadow has no refraction, glass no spread, there is no
+    // effect 5, and a key that names no effect's field names nothing. Nothing is bound.
     for (field, var, says) in [
         ("effects/0/refraction", "large", "no field"),
         ("effects/1/spread", "large", "no field"),
         ("effects/5/radius", "large", "no field"),
+        ("effects/x/radius", "large", "no field"),
+        ("effects/0", "large", "no field"),
+        ("effects", "large", "no field"),
         ("effects/1/lightAngle", "brand", "doesn't take a color variable"),
         ("effects/0/color", "large", "doesn't take a number variable"),
     ] {
