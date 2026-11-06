@@ -442,3 +442,34 @@ fn a_click_that_hides_the_right_panel_does_not_move_the_frame() {
     assert_eq!(frame_x(&u, ids[4]), 1880.0);
     assert_eq!(u.app.session.ds().unwrap().history.undo.len(), steps);
 }
+
+/// The left sidebar and rail appearing while a press is held (Minimize toggled off mid-press)
+/// moves the canvas's left edge: a still pointer keeps its page point, so the release moves nothing.
+#[test]
+fn a_held_press_keeps_its_page_point_when_the_canvas_moves() {
+    let (mut u, ids) = minimized_row();
+    u.app.run("select.set", json!({"ids": [ids[3]]}));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let steps = u.app.session.ds().unwrap().history.undo.len();
+    let left = u.app.canvas.rect.min.x;
+    let p = u.app.to_screen(1880.0 + 200.0, 300.0);
+    u.frame(vec![Event::PointerMoved(p)]);
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+    u.frame(vec![]);
+    let before = u.app.to_page(p);
+    u.app.run("view.minimize", json!({"on": false}));
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(u.app.canvas.rect.min.x > left + 100.0, "the left sidebar and rail moved the canvas's edge");
+    let after = u.app.to_page(p);
+    assert!((after.x - before.x).abs() < 0.5 && (after.y - before.y).abs() < 0.5, "the pointer's page point moved: {before:?} to {after:?}");
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(frame_x(&u, ids[4]), 1880.0, "the frame did not move");
+    assert_eq!(frame_x(&u, ids[3]), 1410.0);
+    assert_eq!(u.app.session.ds().unwrap().history.undo.len(), steps, "no history step");
+}

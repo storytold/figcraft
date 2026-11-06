@@ -195,32 +195,37 @@ fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers
 /// labels, handles, comments, versions/branch/dev/live UI and the cursor.
 pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let rect = ui.max_rect();
-    app.canvas.rect = rect;
+    let old_rect = std::mem::replace(&mut app.canvas.rect, rect);
     let ctx = ui.ctx().clone();
     let ppp = ctx.pixels_per_point();
     let resp = ui.interact(rect, ui.scope_id().with("canvas"), Sense::click_and_drag());
     let key_box = app.ui.key_box;
     crate::a11y::canvas(&mut app.ui.nav, &resp, || key_box.map_or_else(|| describe(&app.session), describe_box));
-    if let Ok(ds) = app.session.ds_mut()
-        && ((ds.view.vw - f64::from(rect.width())).abs() > 0.5 || (ds.view.vh - f64::from(rect.height())).abs() > 0.5)
-    {
-        // Keep the centre; the first sizing after opening re-fits.
+    if let Ok(ds) = app.session.ds_mut() {
+        let resized = (ds.view.vw - f64::from(rect.width())).abs() > 0.5 || (ds.view.vh - f64::from(rect.height())).abs() > 0.5;
+        // The first sizing after opening re-fits.
         let first = ds.view.vw == 1200.0 && ds.view.vh == 800.0;
-        // While a button is held that went down on the canvas (a click that selects shows the right panel, minimized, and a
-        // click that deselects hides it) the page point under the pointer stays where it is: the
-        // gesture's own pointer events would otherwise move by half the panel's width over the
-        // zoom, and the move handling would take that for a drag. Keep the top-left instead.
-        let held = resp.is_pointer_button_down_on() && !first;
+        // While a button is held that went down on the canvas (a click that selects shows the
+        // right panel, minimized, and a click that deselects hides it; the left panel and rail
+        // can appear too) the page point under a still pointer stays where it is: the gesture's
+        // own pointer events would otherwise map to another page point and the move handling
+        // would take that for a drag. `to_page` is `origin + (p - rect.min) / z` with
+        // `origin = c - vw / 2 / z`, so the centre moves by half the size change plus the
+        // rect's own move, over the zoom.
+        let held = resp.is_pointer_button_down_on() && !first && old_rect.is_finite();
         let z = ds.view.zoom.max(1e-9);
-        let (dw, dh) = (f64::from(rect.width()) - ds.view.vw, f64::from(rect.height()) - ds.view.vh);
-        ds.view.vw = f64::from(rect.width());
-        ds.view.vh = f64::from(rect.height());
-        if held {
-            ds.view.cx += dw / 2.0 / z;
-            ds.view.cy += dh / 2.0 / z;
+        let (dw, dh) = if resized { (f64::from(rect.width()) - ds.view.vw, f64::from(rect.height()) - ds.view.vh) } else { (0.0, 0.0) };
+        if resized {
+            // Otherwise keep the centre.
+            ds.view.vw = f64::from(rect.width());
+            ds.view.vh = f64::from(rect.height());
+            if first {
+                ds.zoom_to_fit();
+            }
         }
-        if first {
-            ds.zoom_to_fit();
+        if held {
+            ds.view.cx += (dw / 2.0 + f64::from(rect.min.x - old_rect.min.x)) / z;
+            ds.view.cy += (dh / 2.0 + f64::from(rect.min.y - old_rect.min.y)) / z;
         }
     }
     let own_cursor = input(app, ui, &resp);
