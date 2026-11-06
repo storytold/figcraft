@@ -128,7 +128,7 @@ pub fn get(name: &str, args: &Value) -> Result<Value, String> {
     if !(args.is_object() || args.is_null()) {
         return Err("`arguments` must be an object of strings".into());
     }
-    let mut text = p.template.replace("{verify}", VERIFY);
+    let mut values: Vec<(&str, String)> = vec![("verify", VERIFY.to_string())];
     for a in p.args {
         let v = match args.get(a.name) {
             Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
@@ -142,7 +142,49 @@ pub fn get(name: &str, args: &Value) -> Result<Value, String> {
             Some(Value::String(_)) => p.defaults.iter().find(|(k, _)| *k == a.name).map(|(_, d)| (*d).to_string()).unwrap_or_default(),
             Some(_) => return Err(format!("argument `{}` must be a string", a.name)),
         };
-        text = text.replace(&format!("{{{}}}", a.name), &v);
+        values.push((a.name, v));
     }
+    // One pass over the template, so an argument's text is never read as `{…}` syntax itself (a
+    // value holding placeholders used to be expanded again by every later replacement).
+    let mut text = String::with_capacity(p.template.len());
+    let mut rest = p.template;
+    while let Some(open) = rest.find('{') {
+        text.push_str(rest.get(..open).unwrap_or_default());
+        let after = rest.get(open..).unwrap_or_default();
+        let found = after.find('}').and_then(|close| {
+            let key = after.get(1..close)?;
+            values.iter().find(|(k, _)| *k == key).map(|(_, v)| (close, v.as_str()))
+        });
+        match found {
+            Some((close, v)) => {
+                text.push_str(v);
+                rest = after.get(close + 1..).unwrap_or_default();
+            }
+            None => {
+                text.push('{');
+                rest = after.get(1..).unwrap_or_default();
+            }
+        }
+    }
+    text.push_str(rest);
     Ok(json!({"description": p.description, "messages": [{"role": "user", "content": {"type": "text", "text": text}}]}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arguments_are_text_not_template_syntax() {
+        let text = |args: Value| get("mobile_screen", &args).unwrap()["messages"][0]["content"]["text"].as_str().unwrap().to_string();
+        let plain = text(json!({"screen": "login"}));
+        assert!(plain.contains("Design a login screen") && plain.contains("iPhone 16") && plain.ends_with(VERIFY), "{plain}");
+        assert!(!plain.contains("{screen}") && !plain.contains("{verify}"), "{plain}");
+        // A value made of placeholders stays as typed, however many there are: it is never
+        // expanded again by the replacements after it (that multiplied the output without bound).
+        let bomb = "{device}{brand_color}{verify}".repeat(1000);
+        let out = text(json!({"screen": bomb.clone()}));
+        assert!(out.contains(&bomb));
+        assert!(out.len() < 3 * bomb.len(), "{}", out.len());
+    }
 }

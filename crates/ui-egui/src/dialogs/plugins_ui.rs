@@ -138,7 +138,7 @@ pub(crate) fn save_file(app: &mut FigApp, data: &Value) {
     let shown = name.clone();
     app.pick_save(tr("Save file"), &name, &exts, move |app, path| {
         let file = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(shown);
-        match std::fs::write(&path, &bytes) {
+        match figcraft_engine::file_access::write(&path, &bytes) {
             Ok(()) => app.toast(trf("Saved {name}", &[("name", &file)])),
             Err(_) => app.toast(tr("Couldn't save the file")),
         }

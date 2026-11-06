@@ -465,7 +465,8 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
                 }
                 EffectKind::Glass(g) => {
                     g.depth *= k;
-                    g.frost *= k;
+                    // From the frost it draws with (an older file's past 100 draws at 100).
+                    g.frost = (g.sanitized().frost * k).min(figcraft_doc::Glass::MAX_FROST);
                 }
             }
         }
