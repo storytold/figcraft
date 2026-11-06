@@ -42,7 +42,8 @@ replaced then, so a pause between calls is not an error.
 
 The app keeps answering while its window is minimised or covered by other windows (see
 `docs/control-protocol.md`): edits, inspection (`inspect_ui` too), pointer, key and text input and
-renders work as usual (minimised, each request to the app takes up to about 0.1 s). Only a capture
+renders work as usual (minimised, each request to the app takes up to about 0.1 s; under Wayland,
+which can't report a minimised window, about half a second). Only a capture
 of the window itself (`screenshot` with `window`) needs it on screen: it is then an error at once;
 `screenshot` without `window` renders the document instead.
 

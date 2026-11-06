@@ -642,8 +642,9 @@ Carried over from the ROADMAP's "Shipped so far" (2026-10-10). The test count th
   `figcraft-cli mcp` and the desktop app, #715). A minimised or covered window answers every
   request that acts on the app's state without drawing (about 100 ms each on Windows), and the
   ones that need a drawn frame (`ui.screenshot`, `ui.input`, `window.new`) fail at once instead of
-  waiting 60 s (#720; not tested on macOS, and under Wayland a minimised window can't be told
-  apart).
+  waiting 60 s (#720; not tested on macOS). Under Wayland a minimised window can't be told apart,
+  so a window that draws nothing for 0.2 s while a request waits is answered as a hidden one
+  (about half a second a request, #1906).
 - **Tests:** 963 `#[test]` functions (2026-10-10) including junk-parameter sweeps over every command (and every vector-edit command while editing), importer fuzzing and render regressions.
 
 ## Revision history
