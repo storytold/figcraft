@@ -98,6 +98,7 @@ fn resolve_one(want: &str) -> Option<usize> {
     alias.or_else(|| find(&tag)).or_else(|| find(base)).or_else(regional).filter(|i| LANGS.get(*i).is_some_and(|l| crate::cjk::can_show(l.code)))
 }
 
+/// Look `key` up in one of the sorted catalog tables.
 fn find(table: &'static [(&'static str, Text)], key: &str) -> Option<&'static Text> {
     table.binary_search_by(|(k, _)| (*k).cmp(key)).ok().and_then(|i| table.get(i)).map(|(_, t)| t)
 }
@@ -242,6 +243,8 @@ pub fn menu_item<'a>(id: &str, english: &'a str) -> Cow<'a, str> {
     label(true, id, english)
 }
 
+/// A command's or menu item's label: the catalog wording from `chain`, keeping a dialog's trailing
+/// ellipsis when the English label has one.
 fn label<'a>(menu: bool, id: &str, english: &'a str) -> Cow<'a, str> {
     let text = chain(CURRENT.load(Ordering::Relaxed)).find_map(|l| menu.then(|| find(l.menu, id)).flatten().or_else(|| find(l.commands, id)));
     match text {
