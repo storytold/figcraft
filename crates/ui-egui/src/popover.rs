@@ -293,8 +293,11 @@ pub fn resize_grip(ui: &Ui, id: Id, panel: Rect, grow: &mut f32) {
     if resp.hovered() || resp.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
     }
-    let room = ui.ctx().content_rect().max.y - EDGE - panel.max.y;
-    *grow = (*grow + resp.drag_delta().y.min(room)).clamp(0.0, ui.ctx().content_rect().height());
+    // Only a drag changes it: a panel past the screen's bottom is moved up by `show`, not shrunk.
+    if resp.dragged() {
+        let room = ui.ctx().content_rect().max.y - EDGE - panel.max.y;
+        *grow = (*grow + resp.drag_delta().y.min(room)).clamp(0.0, ui.ctx().content_rect().height());
+    }
 }
 
 /// The opening position: the right edge on `anchor.x` (the right panel's left edge), the top on

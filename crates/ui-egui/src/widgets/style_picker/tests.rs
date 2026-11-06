@@ -502,3 +502,31 @@ fn the_bottom_edge_drags_the_picker_taller() {
     assert!(after.height() >= before.height() + 190.0, "{before:?} -> {after:?}");
     assert_eq!(after.min, before.min, "its top stays put");
 }
+
+/// Asserts a dragged height survives the picker running past the screen's bottom: the popover
+/// moves up to fit instead of losing the height (#2043, review).
+#[test]
+fn a_dragged_height_survives_the_picker_moving_up() {
+    let mut s = Session::new();
+    let r = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    for i in 0..30 {
+        s.execute("style.create", &json!({"type": "paint", "name": format!("Blue {i}"), "value": [{"type": "solid", "color": "#0D99FF"}]})).unwrap();
+    }
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut app = FigApp::new(s, Box::new(NoServices));
+    let ctx = egui::Context::default();
+    let mut t = 0.0;
+    open_for_selection(&mut app, StyleSlot::Fill, None);
+    // Opened low on the screen: its default height fits there, 200 more doesn't.
+    app.ui.style_picker.as_mut().unwrap().y = 900.0;
+    for _ in 0..3 {
+        frame(&ctx, &mut app, &mut t);
+    }
+    app.ui.style_picker_popover.as_mut().unwrap().grow = 200.0;
+    for _ in 0..4 {
+        frame(&ctx, &mut app, &mut t);
+    }
+    assert_eq!(app.ui.style_picker_popover.as_ref().unwrap().grow, 200.0, "no drag, no change");
+    let area = ctx.memory(|m| m.area_rect(Id::unique("style_picker_area"))).expect("the picker shows");
+    assert!(area.max.y <= 900.0, "moved up to fit: {area:?}");
+}
