@@ -626,6 +626,43 @@ fn smart_guides_snap_to_edges_centres_and_equal_spacing() {
 }
 
 #[test]
+fn snapping_to_layers_wins_over_the_pixel_grid_on_the_axis_it_snapped() {
+    // Both snaps on (the defaults). A is at a fractional x, so landing on its edge is off the grid.
+    let mut s = Session::new();
+    let a = rect(&mut s, 200.7, 0.0, 100.0, 100.0, None);
+    let b = rect(&mut s, 0.0, 300.0, 100.0, 100.0, None);
+    ex(&mut s, "select.set", json!({"ids": [b]}));
+    // Moved: B's left edge, dropped 3 px before A's, snaps to it (not to the pixel next to it); y,
+    // with nothing in reach, still rounds to whole pixels.
+    drag(&mut s, Point::new(50.0, 350.0), Point::new(247.7, 349.6), NONE);
+    let o = bounds(&s, b).origin();
+    assert!(near(o.x, 200.7), "B's left edge sits on A's, not on the pixel grid next to it: x = {}", o.x);
+    assert!(near(o.y, o.y.round()), "the free axis still rounds to the pixel grid: y = {}", o.y);
+    ex(&mut s, "edit.undo", json!({}));
+    // Resized: the bottom-right handle dragged 2 px short of A's left edge lands on it.
+    let r = rect(&mut s, 0.0, 0.0, 100.0, 50.0, None);
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    drag(&mut s, Point::new(100.0, 50.0), Point::new(198.7, 52.2), NONE);
+    let w = size(&s, r).0;
+    assert!(near(w, 200.7), "the dragged side sits on A's left edge: width = {w}");
+    let _ = a;
+}
+
+#[test]
+fn a_shape_drawn_to_a_layers_edge_ends_on_it_with_the_pixel_grid_on() {
+    let mut s = Session::new();
+    rect(&mut s, 200.7, 0.0, 100.0, 100.0, None);
+    ex(&mut s, "select.none", json!({}));
+    ex(&mut s, "tool.set", json!({"tool": "rectangle"}));
+    drag(&mut s, Point::new(0.0, 300.0), Point::new(198.7, 340.2), NONE);
+    let sel = s.selection();
+    let drawn = *sel.first().expect("the drawn rectangle is selected");
+    let b = bounds(&s, drawn);
+    assert!(near(b.x1, 200.7), "the drawn rectangle's right edge sits on A's left edge: x1 = {}", b.x1);
+    assert!(near(b.y1, b.y1.round()), "the free axis still rounds to the pixel grid: y1 = {}", b.y1);
+}
+
+#[test]
 fn corner_cursors_stay_diagonal_whatever_the_proportions() {
     let mut s = session();
     let mod180 = |a: f64, b: f64| near((a - b).rem_euclid(180.0).min((b - a).rem_euclid(180.0)), 0.0);

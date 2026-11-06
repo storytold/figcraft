@@ -29,10 +29,12 @@ impl Session {
         let tool = self.tool.tool;
         let mut p = ev.p();
         let mut guides = Vec::new();
+        let mut held = (false, false);
         if self.ds().map(|d| d.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl {
-            let (dx, dy, g) = targets.snap_point(p.x, p.y, SNAP_PX / ev.zoom.max(1e-6));
+            let (dx, dy, h, g) = targets.snap_point_held(p.x, p.y, SNAP_PX / ev.zoom.max(1e-6));
             p.x += dx;
             p.y += dy;
+            held = h;
             guides = g;
         }
         let pixel = self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
@@ -42,7 +44,8 @@ impl Session {
             let (mut a, mut b) = (start, p);
             if pixel {
                 a = Point::new(a.x.round(), a.y.round());
-                b = Point::new(b.x.round(), b.y.round());
+                // The pointer end rounds only on the axes not snapped to layers.
+                b = Point::new(if held.0 { b.x } else { b.x.round() }, if held.1 { b.y } else { b.y.round() });
             }
             let pw = doc.world_transform(parent);
             let (kind, base) = match tool {

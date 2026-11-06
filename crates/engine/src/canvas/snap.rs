@@ -228,7 +228,14 @@ impl Targets {
     /// vector) and the guides to draw. Besides lines, the box snaps to equal spacing with the
     /// layers beside it (whichever is nearer on each axis), and equal gaps show labelled.
     pub fn snap_move(&self, d: Vec2, threshold: f64) -> (Vec2, Vec<Guide>) {
-        let Some(b) = self.moving else { return (Vec2::ZERO, Vec::new()) };
+        let (c, _, guides) = self.snap_move_held(d, threshold);
+        (c, guides)
+    }
+
+    /// [`Self::snap_move`] that also says which snap-space axes (x, y) it snapped on, so that the
+    /// pixel grid can leave those alone ([`Self::round_move`]).
+    pub fn snap_move_held(&self, d: Vec2, threshold: f64) -> (Vec2, (bool, bool), Vec<Guide>) {
+        let Some(b) = self.moving else { return (Vec2::ZERO, (false, false), Vec::new()) };
         let r = b + self.to_space_vec(d);
         let (xs, ys) = rect_spans(r);
         let (mut dx, mut dy, _) = self.snap_spans(&xs, &ys, threshold);
@@ -244,7 +251,19 @@ impl Targets {
         let mut guides = self.guides_for(at);
         guides.extend(self.spacing_guides(at, true));
         guides.extend(self.spacing_guides(at, false));
-        (self.to_page_vec(c), self.to_page(guides))
+        (self.to_page_vec(c), (dx.is_some(), dy.is_some()), self.to_page(guides))
+    }
+
+    /// The page axes (x, y) held by snapping on the snap-space axes `x` and `y`: the same ones when
+    /// the snap space is upright, both when it is turned and either axis snapped.
+    fn page_axes(&self, x: bool, y: bool) -> (bool, bool) {
+        if self.upright() { (x, y) } else { (x || y, x || y) }
+    }
+
+    /// Whether the snap space's axes run along the page's (no turn; a flip or scale is fine).
+    fn upright(&self) -> bool {
+        let [_, b, c, _, _, _] = self.space.as_coeffs();
+        b.abs() < 1e-9 && c.abs() < 1e-9
     }
 
     /// The ways `r` can be spaced equally in its row (`horizontal`) or column, worked out as a row
@@ -306,20 +325,32 @@ impl Targets {
     }
 
     /// Page move `d` adjusted so that the moving layers' box keeps its origin on whole pixels of
-    /// the snap space (a rotated frame's own, inside one).
-    pub fn round_move(&self, d: Vec2) -> Vec2 {
+    /// the snap space (a rotated frame's own, inside one). The snap-space axes in `held` (snapped to
+    /// layers) stay as they are: the pixel grid only rounds what is not snapped to something.
+    pub fn round_move(&self, d: Vec2, held: (bool, bool)) -> Vec2 {
         let Some(b) = self.moving else { return d };
+        if held.0 && held.1 {
+            return d;
+        }
         let l = self.to_space_vec(d);
-        self.to_page_vec(Vec2::new((b.x0 + l.x).round() - b.x0, (b.y0 + l.y).round() - b.y0))
+        let r = Vec2::new((b.x0 + l.x).round() - b.x0, (b.y0 + l.y).round() - b.y0);
+        let l = Vec2::new(if held.0 { l.x } else { r.x }, if held.1 { l.y } else { r.y });
+        self.to_page_vec(l)
+    }
+
+    /// [`Self::snap_point`] that also says which page axes (x, y) it snapped on.
+    pub fn snap_point_held(&self, x: f64, y: f64, threshold: f64) -> (f64, f64, (bool, bool), Vec<Guide>) {
+        let q = self.space.inverse() * Point::new(x, y);
+        let (dx, dy, guides) = self.snap_spans(&[(q.x, q.y, q.y)], &[(q.y, q.x, q.x)], threshold);
+        let d = self.to_page_vec(Vec2::new(dx.unwrap_or(0.0), dy.unwrap_or(0.0)));
+        (d.x, d.y, self.page_axes(dx.is_some(), dy.is_some()), self.to_page(guides))
     }
 
     /// Snap a single page point (resize handles, drawing): the correction (a page vector) and
     /// the guides to draw.
     pub fn snap_point(&self, x: f64, y: f64, threshold: f64) -> (f64, f64, Vec<Guide>) {
-        let q = self.space.inverse() * Point::new(x, y);
-        let (dx, dy, guides) = self.snap_spans(&[(q.x, q.y, q.y)], &[(q.y, q.x, q.x)], threshold);
-        let d = self.to_page_vec(Vec2::new(dx.unwrap_or(0.0), dy.unwrap_or(0.0)));
-        (d.x, d.y, self.to_page(guides))
+        let (dx, dy, _, guides) = self.snap_point_held(x, y, threshold);
+        (dx, dy, guides)
     }
 
     /// Page vector `v` in snap space.

@@ -218,14 +218,17 @@ impl Session {
                 // Cmd/Ctrl (and Control on macOS) held while dragging suspends snapping.
                 let snap_on = self.ds().map(|ds| ds.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl;
                 let mut guides = Vec::new();
+                let mut held = (false, false);
                 if snap_on {
-                    let (c, g2) = targets.snap_move(d, SNAP_PX / ev.zoom.max(1e-6));
+                    let (c, h, g2) = targets.snap_move_held(d, SNAP_PX / ev.zoom.max(1e-6));
                     d += c;
+                    held = h;
                     guides = g2;
                 }
                 if self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
-                    // Keep the box's origin on whole pixels (a rotated parent frame's, inside one).
-                    d = targets.round_move(d);
+                    // Keep the box's origin on whole pixels (a rotated parent frame's, inside one),
+                    // except on the axes snapped to layers.
+                    d = targets.round_move(d, held);
                 }
                 let ids = ids.clone();
                 let dup = *duplicate;
@@ -475,10 +478,12 @@ impl Session {
         let targets = if snap { Some(Targets::gather(self.doc()?, page, &ids)) } else { None };
         let mut p = ev.p();
         let mut guides = Vec::new();
+        let mut held = (false, false);
         if let Some(t) = &targets {
-            let (dx, dy, g) = t.snap_point(p.x, p.y, SNAP_PX / ev.zoom.max(1e-6));
+            let (dx, dy, h, g) = t.snap_point_held(p.x, p.y, SNAP_PX / ev.zoom.max(1e-6));
             p.x += dx;
             p.y += dy;
+            held = h;
             guides = g;
         }
         let _ = start;
@@ -487,7 +492,8 @@ impl Session {
         // The pixel grid: an upright box's dragged sides land on whole pixels (the Scale tool
         // scales by the factor as dragged).
         if !scale_tool && self.ds().map(|d| d.view.snap_pixel).unwrap_or(true) && crate::guides::axis_aligned(frame) {
-            p = Point::new(p.x.round(), p.y.round());
+            // (Not on an axis snapped to layers.)
+            p = Point::new(if held.0 { p.x } else { p.x.round() }, if held.1 { p.y } else { p.y.round() });
         }
         let q = frame.inverse() * p;
         let is_line = r.single && ids.first().and_then(|i| self.doc().ok()?.node(*i).map(|n| matches!(n.kind, NodeKind::Line))).unwrap_or(false);
