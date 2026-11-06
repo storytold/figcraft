@@ -38,6 +38,13 @@ impl Session {
         let pixel = self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
         let mut created = id;
         let page = self.page()?;
+        // Edit ▸ Set default properties: what new shapes take (not frames, sections, slices, lines
+        // or arrows, which keep their own look).
+        let defaults = if matches!(tool, ToolId::Rectangle | ToolId::Ellipse | ToolId::Polygon | ToolId::Star) {
+            self.default_props.shape.clone()
+        } else {
+            None
+        };
         self.preview(|doc, sel| {
             let (mut a, mut b) = (start, p);
             if pixel {
@@ -89,6 +96,10 @@ impl Session {
                 n.transform = pw.inverse() * Affine::translate((r.x0, r.y0));
             }
             doc.insert(n, parent, None)?;
+            if let Some(d) = &defaults {
+                // Best effort: a default the shape can't take leaves it as drawn.
+                let _ = crate::cmd::edit::apply_copied_props("edit.setDefaultProperties", doc, nid, d);
+            }
             *sel = vec![nid];
             created = Some(nid);
             let _ = page;
