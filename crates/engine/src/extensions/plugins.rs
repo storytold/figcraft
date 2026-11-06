@@ -1112,10 +1112,8 @@ pub(crate) fn cargo_binary() -> std::path::PathBuf {
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 pub(crate) fn cargo_target_dir(cargo: &std::path::Path, root: &std::path::Path) -> std::path::PathBuf {
-    let cargo_toml = root.join("Cargo.toml");
     if let Ok(output) = std::process::Command::new(cargo)
-        .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path"])
-        .arg(&cargo_toml)
+        .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path", "Cargo.toml"])
         .current_dir(root)
         .output()
         && output.status.success()
@@ -1125,6 +1123,55 @@ pub(crate) fn cargo_target_dir(cargo: &std::path::Path, root: &std::path::Path) 
         return std::path::PathBuf::from(dir);
     }
     std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()).map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"))
+}
+
+/// Extract expected `.wasm` artifact filenames for the package in `root` from Cargo metadata.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+pub(crate) fn cargo_package_target_wasm_names(cargo: &std::path::Path, root: &std::path::Path) -> Vec<String> {
+    let cargo_toml = root.join("Cargo.toml");
+    let Ok(output) = std::process::Command::new(cargo)
+        .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path", "Cargo.toml"])
+        .current_dir(root)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let Ok(meta) = serde_json::from_slice::<Value>(&output.stdout) else {
+        return Vec::new();
+    };
+    let Some(packages) = meta["packages"].as_array() else {
+        return Vec::new();
+    };
+
+    let target_pkg = packages
+        .iter()
+        .find(|pkg| {
+            let Some(manifest) = pkg["manifest_path"].as_str() else { return false };
+            same_file::is_same_file(manifest, &cargo_toml).unwrap_or(false)
+                || std::fs::canonicalize(manifest).ok().is_some_and(|m| std::fs::canonicalize(&cargo_toml).ok().is_some_and(|c| m == c))
+                || std::path::Path::new(manifest) == cargo_toml
+        })
+        .or_else(|| if packages.len() == 1 { packages.first() } else { None });
+
+    let mut names = Vec::new();
+    if let Some(pkg) = target_pkg
+        && let Some(targets) = pkg["targets"].as_array()
+    {
+        for target in targets {
+            let is_artifact_kind = target["kind"].as_array().is_none_or(|kinds| kinds.iter().any(|k| k == "cdylib" || k == "bin"));
+            if is_artifact_kind && let Some(name) = target["name"].as_str().filter(|s| !s.is_empty()) {
+                let wasm_name = format!("{}.wasm", name.replace('-', "_"));
+                if !names.contains(&wasm_name) {
+                    names.push(wasm_name);
+                }
+            }
+        }
+    }
+    names
 }
 
 /// Extract the expected `<crate_name>.wasm` filename from a plugin's `Cargo.toml`, if present.
@@ -1196,18 +1243,17 @@ pub fn build_plugin_project(manifest_or_dir: &std::path::Path) -> std::result::R
     let built_wasm = match expected {
         Some(p) => p,
         None => {
-            let entries = std::fs::read_dir(&rel).map_err(|e| format!("{}: {e}", rel.display()))?;
+            let target_names = cargo_package_target_wasm_names(&cargo, root);
             let mut candidates: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
-            for entry in entries {
-                let entry = entry.map_err(|e| format!("{}: {e}", rel.display()))?;
-                let p = entry.path();
-                if p.extension().is_some_and(|ext| ext == "wasm") && p.is_file() {
-                    let mtime = entry.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            for name in target_names {
+                let p = rel.join(name);
+                if p.is_file() {
+                    let mtime = p.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
                     candidates.push((mtime, p));
                 }
             }
             candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-            candidates.pop().map(|(_, p)| p).ok_or_else(|| format!("no `.wasm` artifact found in {}", rel.display()))?
+            candidates.pop().map(|(_, p)| p).ok_or_else(|| format!("no `.wasm` artifact found for package in {}", rel.display()))?
         }
     };
     if built_wasm != wasm_out {

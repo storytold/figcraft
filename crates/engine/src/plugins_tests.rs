@@ -664,9 +664,105 @@ fn create_reload_and_logs_commands_work_for_all_templates() {
     let tidy_dir = repo_root.join("plugins").join("examples").join("tidy-names");
     let cargo = crate::plugins::cargo_binary();
     let resolved_target = crate::plugins::cargo_target_dir(&cargo, &tidy_dir);
-    if std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()).is_none() {
+
+    if !cargo_has_target_dir_override(&tidy_dir) {
         assert_eq!(resolved_target, repo_root.join("plugins").join("target"));
     }
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn cargo_target_dir_resolves_relative_root() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let tidy_dir = repo_root.join("plugins").join("examples").join("tidy-names");
+    let cargo = crate::plugins::cargo_binary();
+    let rel_tidy = std::path::PathBuf::from("../../plugins/examples/tidy-names");
+    if rel_tidy.is_dir() {
+        let resolved = crate::plugins::cargo_target_dir(&cargo, &rel_tidy);
+        if !cargo_has_target_dir_override(&tidy_dir) {
+            assert_eq!(resolved, repo_root.join("plugins").join("target"));
+        }
+    }
+}
+
+fn cargo_has_target_dir_override(tidy_dir: &std::path::Path) -> bool {
+    if std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()).is_some() {
+        return true;
+    }
+    if std::env::var_os("CARGO_BUILD_TARGET_DIR").filter(|v| !v.is_empty()).is_some() {
+        return true;
+    }
+    let check_config = |path: &std::path::Path| -> bool {
+        let Ok(text) = std::fs::read_to_string(path) else { return false };
+        let mut in_build = false;
+        for raw in text.lines() {
+            let line = raw.trim();
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            if line.starts_with('[') && line.ends_with(']') {
+                in_build = line == "[build]";
+                continue;
+            }
+            if in_build && (line.starts_with("target-dir") || line.starts_with("target_dir")) {
+                return true;
+            }
+            if line.starts_with("build.target-dir") || line.starts_with("build.target_dir") {
+                return true;
+            }
+        }
+        false
+    };
+    let mut dir = Some(tidy_dir);
+    while let Some(d) = dir {
+        if check_config(&d.join(".cargo").join("config.toml")) || check_config(&d.join(".cargo").join("config")) {
+            return true;
+        }
+        dir = d.parent();
+    }
+    let home = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join(".cargo")));
+    if let Some(cargo_home) = home
+        && (check_config(&cargo_home.join("config.toml")) || check_config(&cargo_home.join("config")))
+    {
+        return true;
+    }
+    false
+}
+
+#[test]
+fn test_artifact_selection_tied_to_package_and_excludes_cached_artifacts() {
+    let base = std::env::temp_dir().join(format!("figcraft-plugin-artifact-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+
+    let plugin_dir = base.join("my-plugin");
+    std::fs::create_dir_all(plugin_dir.join("src")).unwrap();
+
+    // Package has target name "my_custom_target" different from package name "my-plugin"
+    std::fs::write(
+        plugin_dir.join("Cargo.toml"),
+        r#"[package]
+name = "my-plugin"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "my_custom_target"
+crate-type = ["cdylib"]
+"#,
+    )
+    .unwrap();
+    std::fs::write(plugin_dir.join("src").join("lib.rs"), "").unwrap();
+
+    let cargo = crate::plugins::cargo_binary();
+    let names = crate::plugins::cargo_package_target_wasm_names(&cargo, &plugin_dir);
+    assert_eq!(names, vec!["my_custom_target.wasm"]);
+
+    // Ensure foreign artifact names are NOT in target names
+    assert!(!names.contains(&"other_cached.wasm".to_string()));
 
     let _ = std::fs::remove_dir_all(&base);
 }
