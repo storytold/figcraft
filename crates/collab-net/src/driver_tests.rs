@@ -419,6 +419,8 @@ fn pump(d: &mut Driver<Loopback>) {
     }
 }
 
+/// The browser's driver joins a real host over loopback, edits with it, sends presence and hears
+/// the session end.
 #[test]
 fn joins_a_real_host_and_edits_with_it() {
     let host_probe = Inbox::new(Arc::new(|| {}));
@@ -428,6 +430,7 @@ fn joins_a_real_host_and_edits_with_it() {
             any_port_if_taken: false,
             file: FILE.into(),
             token: TOKEN.into(),
+            view_token: None,
             doc: shared(),
             name: "Hana".into(),
             limits: fast_limits(),

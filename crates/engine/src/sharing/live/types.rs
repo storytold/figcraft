@@ -119,9 +119,13 @@ pub struct SessionInfo {
     pub address: String,
     /// Reachable from other machines (the host listens on a network address, not loopback).
     pub network: bool,
-    /// What you may do: edit, only view (a server's view link), or view and comment (its comment
-    /// link).
+    /// What you may do: edit, only view (a view link or code), or view and comment (a server's
+    /// comment link).
     pub access: Access,
+    /// A session this app hosts with a way in for looking only ([`HostOptions::view`]): its
+    /// invite link, which carries the view secret (`None`: everyone who joins edits, or you
+    /// joined).
+    pub view_link: Option<String>,
 }
 
 /// A file you published to a server: where, and its first share links (they carry their tokens:
@@ -390,6 +394,9 @@ pub struct HostOptions {
     pub doc: Arc<Document>,
     /// Shared with a join code (`collab.share`): the session's secret is short enough to type.
     pub short: bool,
+    /// Also make a second secret whose holders only look: they see every change, and the session
+    /// refuses theirs ([`SessionInfo::view_link`]).
+    pub view: bool,
 }
 
 /// What [`LiveLink::publish`] needs to put the open file on a server.

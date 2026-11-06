@@ -1,5 +1,5 @@
-//! Join codes over the network: a file shared on the local network joined by its code (two
-//! engine sessions over loopback), what the browser's driver does with an online code, a server
+//! Join codes over the network: a file shared on the local network joined by its code, and by
+//! its view-only code to look without editing (engine sessions over loopback), what the browser's driver does with an online code, a server
 //! older than join codes, and the links that name a code. (A `figcraft-server` handing codes out
 //! and resolving them is tested in its own crate, with the same link.)
 
@@ -53,6 +53,7 @@ fn layers(s: &Session) -> usize {
     s.doc().map_or(0, |d| d.node_count())
 }
 
+/// A local network share's code joins its session from another app, and edits sync both ways.
 #[test]
 fn a_local_share_is_joined_by_its_code_and_edits_sync() {
     let (mut host, mut guest) = (session("Hana"), session("Ada"));
@@ -65,7 +66,13 @@ fn a_local_share_is_joined_by_its_code_and_edits_sync() {
     assert_eq!(local.ip, Ipv4Addr::LOCALHOST);
     assert_eq!(shared["address"], format!("127.0.0.1:{}", local.port));
     assert_eq!(shared["link"], local.link(), "the code and the invite link name the same session");
-    assert!(shared["share"]["viewCode"].is_null(), "everyone edits on the local network");
+    // A view-only code too, with its own secret, and no comment code.
+    let view = shared["share"]["viewCode"].as_str().unwrap();
+    let Code::Local(viewing) = code::parse(view).unwrap() else { panic!("not a local code") };
+    assert_eq!((viewing.ip, viewing.port), (local.ip, local.port), "the same session");
+    assert_ne!(viewing.secret, local.secret, "a secret of its own");
+    assert_eq!(shared["share"]["viewLink"], viewing.link());
+    assert!(shared["share"]["commentCode"].is_null());
     // Typed the way people type: lower case, spaces for the dashes.
     let typed = shown.to_lowercase().replace('-', " ");
     assert_eq!(guest.execute("collab.join", &json!({"code": typed})).unwrap()["status"], "connecting");
@@ -93,6 +100,8 @@ fn a_local_share_is_joined_by_its_code_and_edits_sync() {
     assert!(label.contains("Couldn't join") || label.contains("The host refused"), "{label}");
 }
 
+/// A well-formed code with the wrong secret is refused by the host, a mistyped one never connects,
+/// and there is no comment code on the local network.
 #[test]
 fn a_local_code_with_the_wrong_secret_or_a_typo_doesnt_join() {
     let (mut host, mut guest) = (session("Hana"), session("Ada"));
@@ -112,9 +121,42 @@ fn a_local_code_with_the_wrong_secret_or_a_typo_doesnt_join() {
     *last = if *last == 'A' { 'B' } else { 'A' };
     let e = guest.execute("collab.join", &json!({"code": typo.iter().collect::<String>()})).unwrap_err().to_string();
     assert!(e.contains("typing mistake"), "{e}");
-    // A view-only code doesn't exist here, and says where it does.
-    let e = host.execute("collab.share", &json!({"access": "view"})).unwrap_err().to_string();
+    // A comment code doesn't exist here, and says where it does.
+    let e = host.execute("collab.share", &json!({"access": "comment"})).unwrap_err().to_string();
     assert!(e.contains("share it online"), "{e}");
+}
+
+/// A local network share started for looking only shows its view code: whoever joins with it sees
+/// every change and can't make one, the edit code (picked later) still edits, and stopping ends
+/// both.
+#[test]
+fn a_local_view_code_lets_people_look_and_not_edit() {
+    let (mut host, mut viewer, mut editor) = (session("Hana"), session("Ada"), session("Bo"));
+    let shared = host.execute("collab.share", &json!({"via": "local", "bind": "local", "access": "view"})).unwrap();
+    assert_eq!(shared["share"]["access"], "view");
+    let (shown, edit) = (shared["code"].as_str().unwrap().to_string(), shared["share"]["editCode"].as_str().unwrap().to_string());
+    assert_eq!(shared["share"]["viewCode"], shown, "the code shown is the view code");
+    assert_ne!(shown, edit);
+    viewer.execute("collab.join", &json!({"code": shown})).unwrap();
+    pump(&mut [&mut host, &mut viewer], "the viewer's join", |s| live(s[1]) && s[0].live().peers.len() == 1);
+    let summary = viewer.live_summary();
+    assert_eq!((&summary["access"], &summary["readOnly"]), (&json!("view"), &json!(true)));
+    // The host's edit reaches the viewer; the viewer's is refused before it leaves.
+    let before = layers(&host);
+    host.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 40, "height": 30})).unwrap();
+    pump(&mut [&mut host, &mut viewer], "the host's edit", |s| layers(s[1]) == before + 1);
+    let e = viewer.execute("shape.ellipse", &json!({"x": 80, "y": 10, "width": 40, "height": 30})).unwrap_err().to_string();
+    assert!(e.contains("View only"), "{e}");
+    // The edit code, picked now, still edits, and the viewer sees it.
+    assert_eq!(host.execute("collab.share", &json!({"access": "edit"})).unwrap()["code"], edit);
+    editor.execute("collab.join", &json!({"code": edit})).unwrap();
+    pump(&mut [&mut host, &mut viewer, &mut editor], "the editor's join", |s| live(s[2]) && s[0].live().peers.len() == 2);
+    assert_eq!(editor.live_summary()["access"], "edit");
+    editor.execute("shape.ellipse", &json!({"x": 80, "y": 10, "width": 40, "height": 30})).unwrap();
+    pump(&mut [&mut host, &mut viewer, &mut editor], "the editor's edit", |s| layers(s[0]) == before + 2 && layers(s[1]) == before + 2);
+    assert_eq!(viewer.live_summary()["readOnly"], true, "picking the edit code changes nothing for who joined to look");
+    assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
+    pump(&mut [&mut host, &mut viewer, &mut editor], "the end", |s| !s[1].live().status.active() && !s[2].live().status.active());
 }
 
 /// An invite naming only `server` (what a join code is asked at).

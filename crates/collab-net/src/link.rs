@@ -97,6 +97,26 @@ impl NetLink {
     }
 }
 
+/// A new secret for a hosted session: one a join code can carry (`short`: 44 bits, see
+/// `figcraft_collab::code`), else a full one.
+fn session_secret(short: bool) -> Result<String, String> {
+    match short {
+        true => Ok(code::Local::new(Ipv4Addr::UNSPECIFIED, 0, token::random()?).token()),
+        false => token::secret(),
+    }
+}
+
+/// A view-only secret for a session whose edit secret is `edit`: of the same kind, never the same.
+fn view_secret(short: bool, edit: &str) -> Result<String, String> {
+    for _ in 0..3 {
+        let view = session_secret(short)?;
+        if view != edit {
+            return Ok(view);
+        }
+    }
+    Err("couldn't make a view-only secret".into())
+}
+
 /// This machine's address on the local network: the interface the default route leaves by (no
 /// packet is sent).
 pub fn lan_ip() -> Option<IpAddr> {
@@ -115,6 +135,8 @@ pub fn lan_ip() -> Option<IpAddr> {
 }
 
 impl LiveLink for NetLink {
+    /// Host the open file on `o.bind`: a join code's short secret when `o.short`, and a second,
+    /// view-only secret with its invite link when `o.view`.
     fn host(&mut self, session: SessionId, o: HostOptions) -> Result<SessionInfo, String> {
         let ip = match o.bind {
             Bind::Local => IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -123,11 +145,10 @@ impl LiveLink for NetLink {
         };
         // A session shared with a join code: its secret is short enough to be typed with the
         // address (see `figcraft_collab::code`); the code and the invite link name the same session.
-        let (file, token) = if o.short {
-            (code::LOCAL_FILE.to_string(), code::Local::new(Ipv4Addr::UNSPECIFIED, 0, token::random()?).token())
-        } else {
-            (token::file_id()?, token::secret()?)
-        };
+        let file = if o.short { code::LOCAL_FILE.to_string() } else { token::file_id()? };
+        let token = session_secret(o.short)?;
+        // A way in for looking only: a second secret of the same kind, never the edit one.
+        let view_token = o.view.then(|| view_secret(o.short, &token)).transpose()?;
         let inbox = self.sessions.inbox();
         let doc = (*o.doc).clone();
         let pages = doc.pages.iter().map(|p| PageInfo { id: p.0, name: doc.node(*p).map(|n| n.name.clone()).unwrap_or_default() }).collect();
@@ -137,12 +158,14 @@ impl LiveLink for NetLink {
             any_port_if_taken: o.port.is_none(),
             file: file.clone(),
             token: token.clone(),
+            view_token: view_token.clone(),
             doc,
             name: o.name,
             limits: self.limits,
             core: figcraft_collab::Limits::default(),
         };
         let host = Host::start(cfg, inbox.clone()).map_err(|e| format!("can't listen on {ip}: {e}"))?;
+        let view_link = view_token.map(|v| Invite::new(host.addr().to_string(), file.clone(), v).link());
         let invite = Invite::new(host.addr().to_string(), file, token);
         let info = SessionInfo {
             role: Role::Host,
@@ -156,6 +179,7 @@ impl LiveLink for NetLink {
             address: host.addr().to_string(),
             network: !ip.is_loopback(),
             access: Access::Edit,
+            view_link,
         };
         self.started(session, Active::Host(host), inbox);
         Ok(info)
