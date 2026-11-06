@@ -1,4 +1,4 @@
-use super::{Arc, BTreeMap, Deserialize, Document, NodeId, Serialize, Value, cmd, live, online, plugins};
+use super::{Arc, BTreeMap, Deserialize, Document, NodeId, Serialize, Value, cmd, joined, live, online, plugins};
 
 /// The smallest and largest interface size, relative to the system's display scale (1.0 is the
 /// system's own size).
@@ -86,6 +86,10 @@ pub struct Prefs {
     /// [`online`]), most recently opened first, at most [`online::MAX_ONLINE_FILES`].
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "online::read")]
     pub online_files: Vec<online::OnlineFile>,
+    /// The sessions you joined by a link or a code (each with its link, a secret: see
+    /// [`joined`]), most recently opened first, at most [`joined::MAX_JOINED_FILES`].
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "joined::read")]
+    pub joined_files: Vec<joined::JoinedFile>,
     /// The Getting started tips on the home screen were closed (Help ▸ Getting started shows them
     /// again).
     pub getting_started_dismissed: bool,
@@ -152,6 +156,7 @@ impl Default for Prefs {
             publish_server: live::DEFAULT_SERVER.into(),
             recent_files: Vec::new(),
             online_files: Vec::new(),
+            joined_files: Vec::new(),
             getting_started_dismissed: false,
             link_notice_skipped: false,
             home_views: BTreeMap::new(),

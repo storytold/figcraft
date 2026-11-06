@@ -17,7 +17,7 @@ pub(crate) struct Script {
     pub(crate) events: Vec<Event>,
     pub(crate) sent: Vec<Presence>,
     pub(crate) hosted: Vec<HostOptions>,
-    joined: Vec<String>,
+    pub(crate) joined: Vec<String>,
     pub(crate) left: usize,
     pub(crate) msgs: Vec<ClientMsg>,
     pub(crate) published: Vec<PublishOptions>,

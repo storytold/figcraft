@@ -1479,6 +1479,9 @@ only: a host stops hosting it, a guest leaves it.
   leaves the active document's session (or ends a join started from it that is still on its way
   or failed), and `collab.leave {session}` the session with that id (from `sessions`), whichever
   document is active; the synced document stays open as your copy.
+- `collab.joinedFiles {refresh?}` lists the sessions you joined on this computer, without their
+  links (`refresh: true` asks each server whether it can be reached), `collab.openJoined {file,
+  address?}` joins one again, and `collab.forgetJoined {file, address?}` takes it off the list.
 - `collab.publish {server, name?, key?}` puts the active document on a `figcraft-server`
   ([`server.md`](server.md)) and syncs it from there (as that document's session; others go on): `server` is the address
   `figcraft-server key` prints (`ws://host:47900/?key=…`; or give `key` separately), `name` the

@@ -24,6 +24,8 @@ use crate::icons::{self, Icon};
 use crate::theme::{Tokens, semibold};
 use crate::widgets;
 
+/// How wide the rows and text of the section get; the cards of joined sessions take the whole width.
+const ROWS_W: f32 = 720.0;
 const FILES: &str = "collab.files";
 const MANAGE: &str = "collab.manageFile";
 
@@ -33,6 +35,8 @@ const ROW: f32 = 36.0;
 /// UI-only state of the Online section.
 #[derive(Default)]
 pub struct OnlineUi {
+    /// The sessions you joined, as the section shows them.
+    pub joined: super::joined::JoinedUi,
     /// The frame the section last drew in: it asks the servers when it shows again after a gap.
     drawn: Option<u64>,
     /// Remove from server… was chosen for this file (server, id, name): its confirmation shows.
@@ -95,12 +99,18 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, main: Rect, t: &Tokens) {
     let frame = ctx.cumulative_frame_nr();
     if app.ui.online.drawn.replace(frame).is_none_or(|d| d.saturating_add(1) < frame) {
         refresh(app, &ctx);
+        app.ui.online.joined.shown_again();
+        if let Some(dir) = app.services.joined_previews_dir() {
+            super::joined::prune_previews(&dir, &app.session.prefs.joined_files);
+        }
     }
     ui.painter().text(main.min, Align2::LEFT_TOP, tr("Online files"), semibold(18.0), t.text);
-    let body = Rect::from_min_max(pos2(main.min.x, main.min.y + 40.0), pos2(main.min.x + main.width().min(720.0), main.max.y));
+    let body = Rect::from_min_max(pos2(main.min.x, main.min.y + 40.0), main.max);
     ui.scope_builder(egui::UiBuilder::new().max_rect(body).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
         ui.spacing_mut().item_spacing.y = 6.0;
+        let body_w = ui.available_width();
+        ui.set_max_width(body_w.min(ROWS_W));
         widgets::label(
             ui,
             tr("The files you shared or published online from this computer. They stay on their server until you remove them."),
@@ -112,14 +122,23 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, main: Rect, t: &Tokens) {
         }
         let files = app.session.prefs.online_files.clone();
         let team = app.session.team().cloned();
-        if files.is_empty() {
+        let joined = !app.session.prefs.joined_files.is_empty();
+        if files.is_empty() && !joined {
             ui.add_space(8.0);
             widgets::label(ui, tr("Nothing online yet. Use Share on a file to put it online and it is listed here."), t.text_secondary);
         }
         ui.add_space(6.0);
         let busy = app.session.waiting_for(MANAGE);
+        ui.set_max_width(body_w);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            super::joined::section(app, ui, t);
+            ui.set_max_width(body_w.min(ROWS_W));
             ui.spacing_mut().item_spacing.y = 2.0;
+            if joined && !files.is_empty() {
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new(tr("Files you published")).font(semibold(13.0)).color(t.text));
+                ui.add_space(6.0);
+            }
             for f in &files {
                 row(app, ui, t, f, busy);
             }

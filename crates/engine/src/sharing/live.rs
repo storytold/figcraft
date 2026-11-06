@@ -72,7 +72,7 @@ pub(crate) use join::start_join;
 pub use join::{can_remove_people, specs};
 pub use types::{
     Bind, DEFAULT_SERVER, Event, HostOptions, LiveLink, MAX_NAME, MAX_PEERS, MAX_SELECTION, NO_HOSTING, NO_SESSION, NetReply, NetRequest, ONLINE_OFF,
-    PEOPLE, PageInfo, PublishOptions, Published, Role, SessionId, SessionInfo, Share, Shared, SharedLink, Status, TOO_LARGE_TO_JOIN, Via,
+    PEOPLE, PageInfo, PublishOptions, Published, Reach, Role, SessionId, SessionInfo, Share, Shared, SharedLink, Status, TOO_LARGE_TO_JOIN, Via,
     join_target, parse_color,
 };
 
@@ -204,6 +204,8 @@ pub struct Lives {
     /// The team list of the server in Preferences, as it answered at the last `collab.files
     /// {refresh}` ([`crate::team`]).
     pub team: Option<crate::team::Team>,
+    /// Whether each server of a session you joined could be reached when last asked, by address.
+    pub reach: BTreeMap<String, Reach>,
     /// Recovery copies of your online files waiting for their file to arrive from its server
     /// (`collab.recoverFile`).
     pub(crate) recovering: Vec<crate::online::Recovering>,

@@ -435,6 +435,9 @@ impl Session {
         live.synced = synced;
         live.client = Some(client);
         live.deferred.clear();
+        if let Some(info) = live.info.clone() {
+            self.joined_record(&info, &info.file_name);
+        }
     }
 
     /// Session `id` is over with a message: it couldn't be joined, the connection was lost for

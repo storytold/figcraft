@@ -16,6 +16,7 @@ use crate::icons::{self, Icon};
 use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::widgets;
 pub mod home_recents;
+pub mod joined;
 pub mod online;
 
 /// The section the home screen shows.

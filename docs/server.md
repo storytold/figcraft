@@ -116,6 +116,21 @@ that needs its key is reached under **Advanced ▸ Publish to another server…*
   no migration, existing files get codes the next time they are shared, and no setting turns codes
   on or off. Behind the reverse proxy nothing changes (codes travel inside the WebSocket).
 
+## Sessions you joined
+
+**Home ▸ Online** remembers the sessions you joined on this computer, by link or by code, as a grid of
+cards like Recents. Each shows a preview from the last time it was open here, and clicking one joins
+again with the link it was opened with, so you never need to find the link again. The link is kept
+in the app's preferences file, readable only by your user; **Forget on this computer** in a card's
+menu takes it off (the link itself still works).
+
+While the section shows, the app asks each session's server `/healthz` every 30 seconds. A green
+dot means it answers. **Server not reachable** means this computer has a network and the server
+doesn't answer; **You're offline** means this computer has no network route at all. That second
+check reads the local routing table, so nothing is sent to anyone but your own server. Cards of
+sessions that can't be reached show their preview grey. The browser build keeps nothing between
+reloads yet, so this list is the desktop app's.
+
 ## Your online files
 
 A file you put on a server without its key is yours, and stays where it is when its tab closes or

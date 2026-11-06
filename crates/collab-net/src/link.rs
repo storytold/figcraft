@@ -8,8 +8,8 @@ use std::time::Duration;
 use figcraft_collab::code;
 use figcraft_collab::message::{Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, PluginReply, PluginReq};
 use figcraft_engine::live::{
-    Bind, Event, HostInfo, HostOptions, LiveLink, NO_SESSION, NetReply, NetRequest, PageInfo, Presence, PublishOptions, Published, Resume, Role,
-    SessionId, SessionInfo, Shared,
+    Bind, Event, HostInfo, HostOptions, LiveLink, NO_SESSION, NetReply, NetRequest, PageInfo, Presence, PublishOptions, Published, Reach, Resume,
+    Role, SessionId, SessionInfo, Shared,
 };
 
 use crate::guest::{Guest, GuestConfig, Publish, upload_file};
@@ -41,6 +41,48 @@ impl Active {
             Active::Guest(mut g) => g.leave(),
         }
     }
+}
+
+/// Whether the server of invite link `link` can be reached: it answers `/healthz` with `200` (a
+/// proxy in front of a server that's down says otherwise). When it doesn't, whether this computer has a
+/// network tells a server that is down from being offline, without asking anyone else.
+fn probe(link: &str, limits: &NetLimits) -> Reach {
+    let answered = crate::invite::Invite::parse(link).ok().is_some_and(|invite| healthy(&invite.server, limits));
+    if answered {
+        Reach::Online
+    } else if lan_ip().is_some() || crate::invite::Invite::parse(link).is_ok_and(|i| i.loopback()) {
+        Reach::ServerDown
+    } else {
+        Reach::NoNetwork
+    }
+}
+
+/// Read the start of an answer into `head`, however the network splits it: until `head` is full,
+/// the status line has ended or the other end closes. How many bytes it read.
+fn read_status(rd: &mut impl std::io::Read, head: &mut [u8]) -> std::io::Result<usize> {
+    let mut n = 0;
+    while n < head.len() && !head[..n].contains(&b'\n') {
+        match rd.read(&mut head[n..])? {
+            0 => break,
+            k => n += k,
+        }
+    }
+    Ok(n)
+}
+
+/// `server` answers a health check.
+fn healthy(server: &crate::invite::Endpoint, limits: &NetLimits) -> bool {
+    use std::io::Write;
+    let Ok((mut rd, mut wr, sock)) = crate::net::open(server, CONNECT, limits) else { return false };
+    let request = format!("GET {}healthz HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", server.path, server.host);
+    // One deadline for all of it: a server that sends a byte now and then doesn't hold up the others.
+    rd.read_until(Some(std::time::Instant::now() + CONNECT));
+    let mut head = [0u8; 16];
+    let read = wr.write_all(request.as_bytes()).and_then(|()| wr.flush()).and_then(|()| read_status(&mut rd, &mut head));
+    crate::net::shutdown(&sock);
+    let Ok(n) = read else { return false };
+    let status = String::from_utf8_lossy(&head[..n]);
+    status.starts_with("HTTP/") && status.split_whitespace().nth(1) == Some("200")
 }
 
 /// Hosts and joins sessions, any number at once (one per open document).
@@ -212,6 +254,7 @@ impl LiveLink for NetLink {
         let (failed, failure) = (inbox.clone(), req.failure());
         let spawned = std::thread::Builder::new().name("server-request".into()).spawn(move || {
             let reply = match req {
+                NetRequest::Probe { link } => NetReply::Probe(Some(probe(&link, &limits))),
                 NetRequest::Plugins { server, req } => NetReply::Plugins(plugins(&server, req, &limits)),
                 NetRequest::Library { link, req } => NetReply::Library(manage::library(&link, req, &limits, CONNECT)),
                 NetRequest::Upload(o) => NetReply::Upload(upload(o, &limits)),
@@ -325,5 +368,73 @@ impl Drop for NetLink {
         for id in self.sessions.ids() {
             self.leave(id);
         }
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    use super::*;
+
+    /// An address that answers every connection with `answer`, and the request it got.
+    fn answering(answer: &'static str) -> (std::net::SocketAddr, std::thread::JoinHandle<String>) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 512];
+            let n = s.read(&mut buf).unwrap();
+            s.write_all(answer.as_bytes()).unwrap();
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        (addr, t)
+    }
+
+    fn link(addr: std::net::SocketAddr) -> String {
+        format!("figcraft://join?host={addr}&file=f&token=secret0123456789ab")
+    }
+
+    #[test]
+    fn a_server_that_answers_is_online_and_never_gets_the_token() {
+        let (addr, t) = answering("HTTP/1.1 200 OK\r\n\r\nok");
+        assert_eq!(probe(&link(addr), &NetLimits::default()), Reach::Online);
+        let asked = t.join().unwrap();
+        assert!(asked.starts_with("GET /healthz HTTP/1.1"), "{asked}");
+        assert!(!asked.contains("secret"), "{asked}");
+    }
+
+    #[test]
+    fn an_answer_split_by_the_network_is_read_whole() {
+        struct Pieces(Vec<&'static [u8]>);
+        impl Read for Pieces {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let Some(piece) = self.0.pop() else { return Ok(0) };
+                let n = piece.len().min(buf.len());
+                buf[..n].copy_from_slice(&piece[..n]);
+                Ok(n)
+            }
+        }
+        let mut head = [0u8; 16];
+        let n = read_status(&mut Pieces(vec![b"1 200 OK\r\n", b"TP/1.", b"HT"]), &mut head).unwrap();
+        assert_eq!(&head[..n], b"HTTP/1.1 200 OK\r");
+        let n = read_status(&mut Pieces(vec![b"HT"]), &mut head).unwrap();
+        assert_eq!(n, 2, "the other end closed");
+    }
+
+    #[test]
+    fn a_proxy_saying_its_server_is_down_counts_as_down() {
+        for answer in ["HTTP/1.1 502 Bad Gateway\r\n\r\n", "HTTP/1.1 503 Unavailable\r\n\r\n", "HTTP/1.1 404 Not Found\r\n\r\n"] {
+            let (addr, t) = answering(answer);
+            assert_eq!(probe(&link(addr), &NetLimits::default()), Reach::ServerDown, "{answer}");
+            t.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn nothing_listening_on_this_machine_is_a_server_down_with_or_without_a_network() {
+        let addr = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        assert_eq!(probe(&link(addr), &NetLimits::default()), Reach::ServerDown);
     }
 }

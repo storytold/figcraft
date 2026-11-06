@@ -210,6 +210,8 @@ fn codes(s: Sharing, links: requests::Links, then: LinksThen) -> Next {
 pub(crate) fn background(job: u64, req: NetRequest) -> Option<Next> {
     let answer = move |reply: NetReply| Next::Done(vec![Event::Net { job, reply: Box::new(reply) }], None);
     Some(match req {
+        // A browser page can't ask for a health check on another site.
+        NetRequest::Probe { .. } => return None,
         NetRequest::Hosting { server, file, owner, req } => match Endpoint::parse(&server) {
             Err(e) => answer(NetReply::Hosting(Err(e))),
             Ok((server, _)) => Next::Ask(
