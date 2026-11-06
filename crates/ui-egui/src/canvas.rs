@@ -206,8 +206,19 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     {
         // Keep the centre; the first sizing after opening re-fits.
         let first = ds.view.vw == 1200.0 && ds.view.vh == 800.0;
+        // While a button is held that went down on the canvas (a click that selects shows the right panel, minimized, and a
+        // click that deselects hides it) the page point under the pointer stays where it is: the
+        // gesture's own pointer events would otherwise move by half the panel's width over the
+        // zoom, and the move handling would take that for a drag. Keep the top-left instead.
+        let held = resp.is_pointer_button_down_on() && !first;
+        let z = ds.view.zoom.max(1e-9);
+        let (dw, dh) = (f64::from(rect.width()) - ds.view.vw, f64::from(rect.height()) - ds.view.vh);
         ds.view.vw = f64::from(rect.width());
         ds.view.vh = f64::from(rect.height());
+        if held {
+            ds.view.cx += dw / 2.0 / z;
+            ds.view.cy += dh / 2.0 / z;
+        }
         if first {
             ds.zoom_to_fit();
         }
