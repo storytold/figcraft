@@ -150,7 +150,7 @@ fn info(role: Role, name: &str, link: &str) -> SessionInfo {
         address: SERVER.into(),
         network: true,
         access: Access::Edit,
-        view_link: None,
+        view: None,
     }
 }
 

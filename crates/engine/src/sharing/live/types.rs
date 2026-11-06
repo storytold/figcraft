@@ -123,9 +123,29 @@ pub struct SessionInfo {
     /// comment link).
     pub access: Access,
     /// A session this app hosts with a way in for looking only ([`HostOptions::view`]): its
-    /// invite link, which carries the view secret (`None`: everyone who joins edits, or you
-    /// joined).
-    pub view_link: Option<String>,
+    /// invite link and WebSocket URL, which carry the view secret (`None`: everyone who joins
+    /// edits, or you joined).
+    pub view: Option<WayIn>,
+}
+
+impl SessionInfo {
+    /// The invite link and WebSocket URL that let people into a session this app hosts with
+    /// `access` (its own link and URL edit). `None`: no way in gives that.
+    pub fn way_in(&self, access: Access) -> Option<(&str, &str)> {
+        match access {
+            Access::Edit => Some((&self.link, &self.url)),
+            Access::View => self.view.as_ref().map(|v| (v.link.as_str(), v.url.as_str())),
+            Access::Comment => None,
+        }
+    }
+}
+
+/// A way into a session this app hosts: an invite link and the WebSocket URL it connects to,
+/// which carry the same secret.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct WayIn {
+    pub link: String,
+    pub url: String,
 }
 
 /// A file you published to a server: where, and its first share links (they carry their tokens:
@@ -395,7 +415,7 @@ pub struct HostOptions {
     /// Shared with a join code (`collab.share`): the session's secret is short enough to type.
     pub short: bool,
     /// Also make a second secret whose holders only look: they see every change, and the session
-    /// refuses theirs ([`SessionInfo::view_link`]).
+    /// refuses theirs ([`SessionInfo::view`]).
     pub view: bool,
 }
 

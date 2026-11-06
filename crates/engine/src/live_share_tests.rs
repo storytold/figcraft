@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::live::{
     Access, Bind, DEFAULT_SERVER, Event, HostOptions, LiveLink, Presence, PublishOptions, Published, Role, SessionInfo, Shared, SharedLink, Status,
-    join_target,
+    WayIn, join_target,
 };
 use crate::{EngineError, Session};
 
@@ -39,6 +39,11 @@ const HOST: Local = Local { ip: Ipv4Addr::new(192, 168, 1, 20), port: 47_900, se
 /// The same session's view-only secret.
 const VIEW: Local = Local { secret: 0xBA9_8765_4321, ..HOST };
 
+/// The WebSocket URL the scripted link gives with an invite `link` (the same secret).
+fn mock_url(link: &str) -> String {
+    link.replace("figcraft://join?host=", "ws://")
+}
+
 impl LiveLink for Link {
     /// Host as the network link does: a code's short secret when shared with a code, and the
     /// view-only link when asked for one.
@@ -47,7 +52,7 @@ impl LiveLink for Link {
         s.session = session;
         // As the network link does: a short secret when the session is shared with a code.
         let link = if opts.short { HOST.link() } else { "figcraft://join?host=192.168.1.20:47900&file=f&token=AbCdEfGhIjKlMnOpQrStUv".to_string() };
-        let view_link = opts.view.then(|| VIEW.link());
+        let view = opts.view.then(|| WayIn { link: VIEW.link(), url: mock_url(&VIEW.link()) });
         s.hosted.push(opts);
         Ok(SessionInfo {
             role: Role::Host,
@@ -56,12 +61,12 @@ impl LiveLink for Link {
             color: "#0D99FF".into(),
             file_name: "Shared".into(),
             pages: vec![],
-            url: link.replace("figcraft://join?host=", "ws://"),
+            url: mock_url(&link),
             link,
             address: "192.168.1.20:47900".into(),
             network: true,
             access: Access::Edit,
-            view_link,
+            view,
         })
     }
     fn join(&mut self, session: u64, link: &str, _: &str) -> Result<(), String> {
@@ -152,7 +157,7 @@ fn on_the_server(s: &mut Session, script: &Arc<Mutex<Script>>, codes: Option<(&s
         address: "wss://share.example:443/".into(),
         network: true,
         access: Access::Edit,
-        view_link: None,
+        view: None,
     };
     let events = vec![Event::Published(published), Event::Shared(Ok(links(0, codes))), Event::Welcome { info, peers: vec![] }];
     script.lock().unwrap().events.extend(events);
@@ -383,9 +388,9 @@ fn sharing_on_the_local_network_shows_a_code_that_carries_the_address() {
     // The link goes with the code: a view-only code's link doesn't edit.
     let r = ex(&mut s, "collab.share", json!({"access": "view"}));
     assert_eq!((&r["code"], &r["share"]["access"]), (&json!(view), &json!("view")));
-    assert_eq!((&r["link"], &r["sessions"][0]["link"]), (&json!(VIEW.link()), &json!(VIEW.link())));
+    assert_eq!((&r["link"], &r["url"], &r["sessions"][0]["link"]), (&json!(VIEW.link()), &json!(mock_url(&VIEW.link())), &json!(VIEW.link())));
     let r = ex(&mut s, "collab.share", json!({"access": "edit"}));
-    assert_eq!((&r["code"], &r["link"]), (&json!(code::grouped(&HOST.code())), &json!(HOST.link())));
+    assert_eq!((&r["code"], &r["link"], &r["url"]), (&json!(code::grouped(&HOST.code())), &json!(HOST.link()), &json!(mock_url(&HOST.link()))));
     assert!(err(&mut s, "collab.share", json!({"access": "comment"})).contains("share it online"));
     assert_eq!(script.lock().unwrap().hosted.len(), 1);
     assert_eq!(ex(&mut s, "collab.stop", json!({}))["ended"], true);
@@ -393,7 +398,8 @@ fn sharing_on_the_local_network_shows_a_code_that_carries_the_address() {
     // Shared for looking only from the start: the edit code isn't the one shown.
     let r = ex(&mut s, "collab.share", json!({"via": "local", "access": "view"}));
     assert_eq!((&r["code"], &r["share"]["access"]), (&json!(view), &json!("view")));
-    assert_eq!((&r["link"], &r["sessions"][0]["link"]), (&json!(VIEW.link()), &json!(VIEW.link())), "the edit link isn't handed out");
+    assert_eq!((&r["link"], &r["url"]), (&json!(VIEW.link()), &json!(mock_url(&VIEW.link()))), "the edit link and URL aren't handed out");
+    assert_eq!(r["sessions"][0]["link"], json!(VIEW.link()));
     ex(&mut s, "collab.stop", json!({}));
     assert!(err(&mut s, "collab.share", json!({"via": "local", "access": "comment"})).contains("share it online"));
     // Where to listen is the advanced part.

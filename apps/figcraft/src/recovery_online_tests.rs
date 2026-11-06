@@ -91,7 +91,7 @@ fn info() -> SessionInfo {
         address: SERVER.into(),
         network: true,
         access: Access::Edit,
-        view_link: None,
+        view: None,
     }
 }
 

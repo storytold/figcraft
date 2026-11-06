@@ -229,7 +229,7 @@ pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mu
                 address: inv.server.display(),
                 network: !inv.loopback(),
                 access,
-                view_link: None,
+                view: None,
             };
             seen.peers = peers.clone();
             seen.info = Some(info.clone());

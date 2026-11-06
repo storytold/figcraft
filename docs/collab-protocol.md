@@ -603,8 +603,8 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   see every change and everyone's presence, the app makes the file read-only for them, and the
   session refuses any batch they send anyway, as a server does for its view links. The Share
   popover picks which code shows (Can edit / Can view, also before sharing starts, so the edit
-  code need never be on screen; `collab.share {access}`, whose `link` is the one that goes with
-  the code shown, so a view-only share never hands out the edit link); picking one later changes
+  code need never be on screen; `collab.share {access}`, whose `link` and `url` are the ones that
+  go with the code shown, so a view-only share never hands out the edit secret); picking one later changes
   nothing for who already joined. There is no comment code on the local network. A host without an IPv4
   address gets no codes and shares its links.
 - **In the browser** a code joins like a link (the page asks the server over its own WebSocket,

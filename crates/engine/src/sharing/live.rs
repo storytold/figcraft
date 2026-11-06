@@ -72,7 +72,7 @@ pub(crate) use join::start_join;
 pub use join::{can_remove_people, specs};
 pub use types::{
     Bind, DEFAULT_SERVER, Event, HostOptions, LiveLink, MAX_NAME, MAX_PEERS, MAX_SELECTION, NO_HOSTING, NO_SESSION, NetReply, NetRequest, ONLINE_OFF,
-    PEOPLE, PageInfo, PublishOptions, Published, Role, SessionId, SessionInfo, Share, Shared, SharedLink, Status, TOO_LARGE_TO_JOIN, Via,
+    PEOPLE, PageInfo, PublishOptions, Published, Role, SessionId, SessionInfo, Share, Shared, SharedLink, Status, TOO_LARGE_TO_JOIN, Via, WayIn,
     join_target, parse_color,
 };
 
@@ -147,14 +147,15 @@ impl Live {
         self.info.as_ref().map(|i| i.role)
     }
 
-    /// The session's invite link as `collab.peers` gives it. A file shared on the local network
-    /// gives the link that goes with the code shown: the session's own link is the edit way in,
-    /// and a view-only share must not hand it out. Otherwise the session's own link (online, the
-    /// owner's: `share` has the links for others).
-    pub fn invite_link(&self) -> Option<&str> {
+    /// The session's invite link and WebSocket URL as `collab.peers` gives them. A file shared
+    /// on the local network gives the ones that go with the code shown: the session's own link
+    /// and URL are the edit way in, and a view-only share must not hand them out. Otherwise the
+    /// session's own (online, the owner's: `share` has the links for others).
+    pub fn invite(&self) -> (Option<&str>, Option<&str>) {
+        let info = self.info.as_ref();
         match &self.share {
-            Some(sh) if sh.via == Via::Local => sh.link(),
-            _ => self.info.as_ref().map(|i| i.link.as_str()),
+            Some(sh) if sh.via == Via::Local => info.and_then(|i| i.way_in(sh.access)).unzip(),
+            _ => (info.map(|i| i.link.as_str()), info.map(|i| i.url.as_str())),
         }
     }
 

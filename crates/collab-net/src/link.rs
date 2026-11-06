@@ -9,7 +9,7 @@ use figcraft_collab::code;
 use figcraft_collab::message::{Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, PluginReply, PluginReq};
 use figcraft_engine::live::{
     Bind, Event, HostInfo, HostOptions, LiveLink, NO_SESSION, NetReply, NetRequest, PageInfo, Presence, PublishOptions, Published, Resume, Role,
-    SessionId, SessionInfo, Shared,
+    SessionId, SessionInfo, Shared, WayIn,
 };
 
 use crate::guest::{Guest, GuestConfig, Publish, upload_file};
@@ -165,7 +165,7 @@ impl LiveLink for NetLink {
             core: figcraft_collab::Limits::default(),
         };
         let host = Host::start(cfg, inbox.clone()).map_err(|e| format!("can't listen on {ip}: {e}"))?;
-        let view_link = view_token.map(|v| Invite::new(host.addr().to_string(), file.clone(), v).link());
+        let view = view_token.map(|v| Invite::new(host.addr().to_string(), file.clone(), v)).map(|v| WayIn { link: v.link(), url: v.url() });
         let invite = Invite::new(host.addr().to_string(), file, token);
         let info = SessionInfo {
             role: Role::Host,
@@ -179,7 +179,7 @@ impl LiveLink for NetLink {
             address: host.addr().to_string(),
             network: !ip.is_loopback(),
             access: Access::Edit,
-            view_link,
+            view,
         };
         self.started(session, Active::Host(host), inbox);
         Ok(info)

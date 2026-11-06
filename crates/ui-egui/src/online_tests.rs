@@ -62,7 +62,7 @@ fn info(role: Role, name: &str) -> SessionInfo {
         address: "192.168.1.20:47900".into(),
         network: true,
         access: Access::Edit,
-        view_link: None,
+        view: None,
     }
 }
 

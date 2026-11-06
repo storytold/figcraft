@@ -151,7 +151,7 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
         // that link's secret. (Online they arrive with the file.)
         let links = live.info.as_ref().filter(|_| via == Via::Local).map(|i| Shared {
             edit: local_link(&i.link),
-            view: i.view_link.as_deref().map(local_link),
+            view: i.view.as_ref().map(|v| local_link(&v.link)),
             comment: None,
         });
         live.share = Some(Share { via, server, access, links });

@@ -32,7 +32,7 @@ impl LiveLink for Hosting {
             address,
             network: false,
             access: Access::Edit,
-            view_link: None,
+            view: None,
         })
     }
     fn join(&mut self, _: u64, _: &str, _: &str) -> Result<(), String> {

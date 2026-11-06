@@ -159,31 +159,41 @@ fn a_local_view_code_lets_people_look_and_not_edit() {
     pump(&mut [&mut host, &mut viewer, &mut editor], "the end", |s| !s[1].live().status.active() && !s[2].live().status.active());
 }
 
-/// A local network share's `link` is the one that goes with the code shown: started for looking
-/// only, whoever joins through it can't edit, and the session's line in `sessions` says the same.
+/// A local network share's `link` and `url` are the ones that go with the code shown: started for
+/// looking only, whoever joins through either can't edit, and the session's line in `sessions`
+/// says the same.
 #[test]
-fn a_local_view_share_s_link_only_lets_people_look() {
-    let (mut host, mut viewer) = (session("Hana"), session("Ada"));
+fn a_local_view_share_s_link_and_url_only_let_people_look() {
+    let mut host = session("Hana");
     let shared = host.execute("collab.share", &json!({"via": "local", "bind": "local", "access": "view"})).unwrap();
-    let link = shared["link"].as_str().unwrap().to_string();
-    viewer.execute("collab.join", &json!({"link": link})).unwrap();
-    pump(&mut [&mut host, &mut viewer], "the link's join", |s| live(s[1]) && s[0].live().peers.len() == 1);
-    let summary = viewer.live_summary();
-    assert_eq!((&summary["access"], &summary["readOnly"]), (&json!("view"), &json!(true)), "joined with {link}");
-    let before = layers(&host);
-    let e = viewer.execute("shape.ellipse", &json!({"x": 80, "y": 10, "width": 40, "height": 30})).unwrap_err().to_string();
-    assert!(e.contains("View only"), "{e}");
-    host.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 40, "height": 30})).unwrap();
-    pump(&mut [&mut host, &mut viewer], "the host's edit", |s| layers(s[1]) == before + 1);
-    assert_eq!(layers(&host), before + 1, "nothing of the viewer's reached the host");
-    // The link and the code name the same way in, wherever the session is listed.
+    for key in ["link", "url"] {
+        let way = shared[key].as_str().unwrap().to_string();
+        let mut viewer = session("Ada");
+        viewer.execute("collab.join", &json!({"link": way})).unwrap();
+        pump(&mut [&mut host, &mut viewer], "the join", |s| live(s[1]) && s[0].live().peers.len() == 1);
+        let summary = viewer.live_summary();
+        assert_eq!((&summary["access"], &summary["readOnly"]), (&json!("view"), &json!(true)), "joined with {key} {way}");
+        let before = layers(&host);
+        let e = viewer.execute("shape.ellipse", &json!({"x": 80, "y": 10, "width": 40, "height": 30})).unwrap_err().to_string();
+        assert!(e.contains("View only"), "{key}: {e}");
+        host.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 40, "height": 30})).unwrap();
+        pump(&mut [&mut host, &mut viewer], "the host's edit", |s| layers(s[1]) == before + 1);
+        assert_eq!(layers(&host), before + 1, "nothing of the viewer's reached the host ({key})");
+        viewer.execute("collab.leave", &json!({})).unwrap();
+        pump(&mut [&mut host, &mut viewer], "the leave", |s| s[0].live().peers.is_empty());
+    }
+    // The link, the URL and the code name the same way in, wherever the session is listed.
     let Code::Local(local) = code::parse(shared["code"].as_str().unwrap()).unwrap() else { panic!("not a local code") };
     assert_eq!((&shared["link"], &shared["share"]["viewLink"]), (&json!(local.link()), &json!(local.link())));
+    let url = shared["url"].as_str().unwrap();
+    assert!(url.starts_with("ws://") && url.ends_with(&format!("&token={}", local.token())), "{url}");
     assert_eq!(shared["sessions"][0]["link"], shared["link"]);
-    // Picking the edit code makes the link the edit one too.
+    // Picking the edit code makes them the edit ones too.
     let edit = host.execute("collab.share", &json!({"access": "edit"})).unwrap();
     assert_eq!((&edit["link"], &edit["sessions"][0]["link"]), (&edit["share"]["editLink"], &edit["share"]["editLink"]));
-    assert_ne!(edit["link"], shared["link"]);
+    let edit_token = edit["link"].as_str().unwrap().rsplit("token=").next().unwrap();
+    assert!(edit["url"].as_str().unwrap().ends_with(&format!("&token={edit_token}")), "{}", edit["url"]);
+    assert_ne!((&edit["link"], &edit["url"]), (&shared["link"], &shared["url"]));
     assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
 }
 

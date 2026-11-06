@@ -13,7 +13,7 @@ use figcraft_engine::figcraft_collab::code::{self, Local};
 use figcraft_engine::figcraft_collab::message::ClientMsg;
 use figcraft_engine::live::{
     Access, DEFAULT_SERVER, Event as LiveEvent, HostOptions, LiveLink, NetReply, NetRequest, Peer, Presence, PublishOptions, Published, Role,
-    SessionInfo, Shared as SharedLinks, SharedLink, Status,
+    SessionInfo, Shared as SharedLinks, SharedLink, Status, WayIn,
 };
 use serde_json::json;
 
@@ -72,7 +72,7 @@ fn info(role: Role, link: &str) -> SessionInfo {
         address: "192.168.1.20:47900".into(),
         network: true,
         access: Access::Edit,
-        view_link: None,
+        view: None,
     }
 }
 
@@ -83,9 +83,9 @@ impl LiveLink for Link {
         let mut s = self.0.lock().unwrap();
         s.session = session;
         let (link, view) = if opts.port == Some(6) { (PLAIN.to_string(), PLAIN.replace("AbCd", "View")) } else { (HOST.link(), VIEW.link()) };
-        let view_link = opts.view.then_some(view);
+        let view = opts.view.then(|| WayIn { url: view.replace("figcraft://join?host=", "ws://"), link: view });
         s.hosted.push(opts);
-        Ok(SessionInfo { view_link, ..info(Role::Host, &link) })
+        Ok(SessionInfo { view, ..info(Role::Host, &link) })
     }
     fn join(&mut self, session: u64, link: &str, _: &str) -> Result<(), String> {
         let mut s = self.0.lock().unwrap();
