@@ -522,11 +522,13 @@ fn a_dragged_height_survives_the_picker_moving_up() {
     for _ in 0..3 {
         frame(&ctx, &mut app, &mut t);
     }
+    let before = ctx.memory(|m| m.area_rect(Id::unique("style_picker_area"))).expect("the picker shows");
     app.ui.style_picker_popover.as_mut().unwrap().grow = 200.0;
     for _ in 0..4 {
         frame(&ctx, &mut app, &mut t);
     }
     assert_eq!(app.ui.style_picker_popover.as_ref().unwrap().grow, 200.0, "no drag, no change");
     let area = ctx.memory(|m| m.area_rect(Id::unique("style_picker_area"))).expect("the picker shows");
-    assert!(area.max.y <= 900.0, "moved up to fit: {area:?}");
+    assert!(area.height() >= before.height() + 190.0, "{before:?} -> {area:?}");
+    assert!(area.min.y < before.min.y && area.max.y <= 900.0, "moved up to fit: {before:?} -> {area:?}");
 }
