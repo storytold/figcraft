@@ -319,6 +319,63 @@ fn a_dropped_connection_keeps_editing_and_catches_up() {
 }
 
 #[test]
+fn repeated_retries_preserve_comments_edits_and_lost_confirmations() {
+    for accepted in [false, true] {
+        let mut room = Room::new(base(), 2, 71);
+        room.settle();
+        let (_, r) = frame_and_rect(room.server.document());
+        let thread = room.s(0).execute("comment.add", &json!({"x": 10, "y": 20, "text": "Before the drop"})).unwrap()["id"].clone();
+        room.pump();
+        let msg = room.people[0].up.pop_front().unwrap();
+        assert!(matches!(msg, ClientMsg::Changes { .. }));
+        if accepted {
+            // The server saved the comment, but its confirmation never reaches the author.
+            let out = room.server.receive(room.people[0].id, msg);
+            room.route(out);
+        }
+        room.disconnect(0);
+        for attempt in 2..=32 {
+            let p = &mut room.people[0];
+            p.script.lock().unwrap().events.push(Event::Status(Status::Reconnecting { attempt }));
+            p.s.live_poll();
+            if attempt == 13 {
+                p.s.execute("comment.add", &json!({"x": 30, "y": 40, "text": "While offline"})).unwrap();
+                p.s.execute("comment.reply", &json!({"id": thread, "text": "Queued reply"})).unwrap();
+                p.s.execute("node.set", &json!({"id": r, "props": {"name": "Offline edit"}})).unwrap();
+            }
+        }
+        room.pump();
+        assert!(room.people[0].up.is_empty(), "nothing is sent before the resume welcome");
+        assert!(room.s(0).live().client().unwrap().pending() >= 4);
+        room.s(1).execute("transform.move", &json!({"ids": [r], "dx": 5, "dy": 5})).unwrap();
+        room.settle();
+        let moved = room.server.document().node(r).unwrap().transform;
+        room.reconnect(0);
+        room.settle();
+        room.check();
+        let doc = room.server.document();
+        assert_eq!(doc.node(r).unwrap().name, "Offline edit");
+        assert_eq!(doc.node(r).unwrap().transform, moved, "concurrent remote edits survive");
+        assert_eq!(doc.comments.len(), 2, "the lost confirmation must not duplicate the comment");
+        let sent = doc.comments.iter().find(|c| c.first.text == "Before the drop").unwrap();
+        assert_eq!(sent.replies.len(), 1);
+        assert_eq!(sent.replies[0].text, "Queued reply");
+        assert_eq!(doc.comments.iter().filter(|c| c.first.text == "While offline").count(), 1);
+        let seq = room.server.seq();
+        room.disconnect(0);
+        room.reconnect(0);
+        room.settle();
+        room.check();
+        assert_eq!(room.server.seq(), seq, "a second reconnect replays no confirmed work");
+        // A fresh connection sees server state, not the author's optimistic canvas.
+        let ClientMsg::Hello(h) = Client::hello("f", "t", "Fresh reader", "") else { panic!("no hello") };
+        let (id, out) = room.server.join(h).unwrap();
+        let fresh = Client::join(welcome_of(&out, id)).unwrap();
+        assert_eq!(fresh.document(), room.server.document());
+    }
+}
+
+#[test]
 fn random_commands_with_undo_and_drops_converge_through_the_engine() {
     for seed in 0..6 {
         let mut room = Room::new(base(), 3, seed);

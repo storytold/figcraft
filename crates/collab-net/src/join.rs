@@ -39,7 +39,7 @@ pub struct GuestConfig {
     /// The pause before the first reconnect; it doubles each time up to `max_backoff`.
     pub backoff: Duration,
     pub max_backoff: Duration,
-    /// Reconnect attempts before giving up.
+    /// Reconnect attempts before giving up; zero means no limit (the default).
     pub attempts: u32,
     /// Join as the client you were (an app that starts over after a crash): the first hello
     /// carries it, and a server that still knows the id gives it back.
@@ -56,7 +56,7 @@ impl GuestConfig {
             connect_timeout: Duration::from_secs(5),
             backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(10),
-            attempts: 12,
+            attempts: 0,
             resume: None,
         }
     }
@@ -144,8 +144,8 @@ pub(crate) enum Next {
 }
 
 /// After `outcome`: a refusal or the end of the session is final, and so is a first join that
-/// can't reach the host; a live connection that dropped tries again with growing pauses until the
-/// attempts run out.
+/// can't reach the host; a live connection that dropped tries again with capped, growing pauses,
+/// indefinitely unless an attempt limit was configured.
 pub(crate) fn after(outcome: Outcome, cfg: &GuestConfig, was_live: bool, attempt: &mut u32, inbox: &Inbox) -> Next {
     let failed = |reason: String| Next::Stop(Some(Event::Status(Status::Failed { reason })));
     match outcome {
@@ -155,10 +155,10 @@ pub(crate) fn after(outcome: Outcome, cfg: &GuestConfig, was_live: bool, attempt
         Outcome::Ended(reason) => Next::Stop(Some(Event::Ended { reason })),
         Outcome::Retry(why) if !was_live => failed(format!("Couldn't join the live session: {why}")),
         Outcome::Retry(why) => {
-            *attempt += 1;
-            if *attempt > cfg.attempts {
+            if cfg.attempts != 0 && *attempt >= cfg.attempts {
                 return failed(format!("Lost the connection to the host ({why})"));
             }
+            *attempt = attempt.saturating_add(1);
             log::info!("live session: connection lost ({why}); reconnecting, attempt {attempt}");
             inbox.push(Event::Status(Status::Reconnecting { attempt: *attempt }));
             Next::Reconnect(cfg.backoff(*attempt))

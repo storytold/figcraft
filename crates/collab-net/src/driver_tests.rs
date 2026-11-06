@@ -1,6 +1,6 @@
 //! The browser client's connection logic ([`Driver`]) on native: against a scripted socket with a
 //! made-up clock (hello, holding presence until the welcome, throttling, pings, a silent host,
-//! reconnecting as the same client, refusals, giving up), and against a real host over loopback through
+//! reconnecting as the same client, refusals, optional retry limits), and against a real host over loopback through
 //! a small blocking socket, which checks that what the browser sends is what the host speaks.
 
 use std::net::TcpStream;
@@ -233,7 +233,7 @@ fn a_silent_host_counts_as_dropped_and_the_client_reconnects() {
     d.tick(silent);
     assert_eq!(d.sock.closes, 1);
     assert_eq!(statuses(&inbox.drain()), vec![Status::Reconnecting { attempt: 1 }]);
-    // Changes made while disconnected are dropped (the next welcome starts over); presence waits.
+    // Stale transport messages are dropped (the sync client retains edits); presence waits.
     d.send(ClientMsg::Ack { seq: 9 }, silent);
     d.presence(cursor(7.0), silent);
     let again = d.deadline().unwrap();
@@ -254,7 +254,9 @@ fn a_silent_host_counts_as_dropped_and_the_client_reconnects() {
 #[test]
 fn reconnects_back_off_then_give_up() {
     let t0 = Instant::now();
-    let (mut d, inbox) = start(Script::default(), t0);
+    let inbox = Inbox::new(Arc::new(|| {}));
+    let cfg = GuestConfig { attempts: 12, ..GuestConfig::new(invite(), "Ada".into()) };
+    let mut d = Driver::start(Script::default(), cfg, inbox.clone(), t0);
     d.opened(t0);
     d.message(&welcome(), t0);
     let mut now = t0;
@@ -274,6 +276,85 @@ fn reconnects_back_off_then_give_up() {
     assert_eq!(st.len(), 14, "connecting, 12 reconnects, then failed");
     assert!(matches!(st.last(), Some(Status::Failed { reason }) if reason.starts_with("Lost the connection to the host")), "{st:?}");
     assert_eq!(d.deadline(), None);
+}
+
+#[test]
+fn default_retries_survive_a_long_outage_and_reset_after_welcome() {
+    let t0 = Instant::now();
+    let (mut d, inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    inbox.drain();
+    let mut now = t0;
+    for attempt in 1..=128 {
+        d.closed(1006, "", now);
+        assert!(!d.done(), "gave up at attempt {attempt}");
+        assert_eq!(statuses(&inbox.drain()), vec![Status::Reconnecting { attempt }]);
+        let next = d.deadline().unwrap();
+        let expected = GuestConfig::new(invite(), "Ada".into()).backoff(attempt);
+        assert_eq!(next - now, expected);
+        assert!(expected <= Duration::from_secs(10));
+        now = next;
+        d.tick(now);
+    }
+    d.opened(now);
+    let Some(ClientMsg::Hello(h)) = d.sock.sent.last() else { panic!("no resume hello") };
+    assert!(h.resume.is_some());
+    d.message(&welcome(), now);
+    assert!(!d.done());
+    inbox.drain();
+    d.closed(1006, "", now);
+    assert_eq!(statuses(&inbox.drain()), vec![Status::Reconnecting { attempt: 1 }]);
+    assert_eq!(d.deadline(), Some(now + ms(500)));
+}
+
+#[test]
+fn indefinite_retry_attempts_saturate_instead_of_overflowing() {
+    use crate::join::{Next, Outcome, after};
+
+    let cfg = GuestConfig::new(invite(), "Ada".into());
+    let inbox = Inbox::new(Arc::new(|| {}));
+    let mut attempt = u32::MAX - 1;
+    for _ in 0..3 {
+        assert!(matches!(
+            after(Outcome::Retry("offline".into()), &cfg, true, &mut attempt, &inbox),
+            Next::Reconnect(pause) if pause == cfg.max_backoff
+        ));
+        assert_eq!(attempt, u32::MAX);
+        assert_eq!(statuses(&inbox.drain()), vec![Status::Reconnecting { attempt: u32::MAX }]);
+    }
+    let bounded = GuestConfig { attempts: u32::MAX, ..cfg };
+    assert!(matches!(
+        after(Outcome::Retry("offline".into()), &bounded, true, &mut attempt, &inbox),
+        Next::Stop(Some(Event::Status(Status::Failed { .. })))
+    ));
+}
+
+#[test]
+fn retrying_stops_on_leave_refusal_or_session_end() {
+    let t0 = Instant::now();
+    for code in [1000, 1008, 1001] {
+        let (mut d, inbox) = start(Script::default(), t0);
+        d.opened(t0);
+        d.message(&welcome(), t0);
+        d.closed(1006, "", t0);
+        inbox.drain();
+        let now = d.deadline().unwrap();
+        d.tick(now);
+        if code == 1000 {
+            d.leave(now);
+            assert!(inbox.drain().is_empty());
+        } else {
+            d.opened(now);
+            d.closed(code, "no longer shared", now);
+            let events = inbox.drain();
+            assert!(events.iter().any(|e| matches!(e, Event::Ended { .. } | Event::Status(Status::Failed { .. }))));
+        }
+        assert!(d.done());
+        assert_eq!(d.deadline(), None);
+        d.tick(now + Duration::from_secs(600));
+        assert!(inbox.drain().is_empty());
+    }
 }
 
 #[test]

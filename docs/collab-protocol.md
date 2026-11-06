@@ -536,7 +536,8 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   dialog (its field has the keyboard when it opens; Escape closes it), or opened from anywhere:
   see *Opening invite links* below.
 - Reconnect: a connection that drops after it was live reconnects with growing pauses (0.5 s,
-  doubling up to 10 s, 12 attempts); a refusal (wrong token, full) or the host ending the session
+  doubling up to 10 s, indefinitely by default; `GuestConfig::attempts` can set a finite limit);
+  a refusal (wrong token, full) or the host ending the session
   is final; a first join that can't reach the host fails at once. A reconnect resumes as the same
   client: the guest's connection keeps the session id, client id and last sequence number from
   the messages it read and sends them in its next `Hello` (see Offline and reconnect).
@@ -947,7 +948,9 @@ Decisions, as built:
 Tests: random sessions where clients drop and come back mid-session converge, with the default log
 and with logs short enough that long absences fall back to snapshots; targeted tests cover a lost
 echo, a batch refused while offline, a long absence, an unknown client and a restart from the
-saved state.
+saved state. Driver tests cover 128 failed reconnects followed by success, capped backoff, counter
+saturation and terminal outcomes; engine tests keep comments, replies and edits across repeated
+retries with either an unsent batch or a lost confirmation, without duplicating confirmed work.
 
 ## Agents, MCP and the CLI
 
