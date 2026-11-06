@@ -654,10 +654,28 @@ pub fn field_scope(doc: &Document, node: NodeId, field: &str) -> Option<&'static
     })
 }
 
+/// The type of variable effect `i` of `node` takes on `field`, as an effect style's does: None when
+/// the layer has no effect `i` or that effect has no such field.
+fn effect_field(doc: &Document, node: NodeId, i: usize, field: &str) -> Option<VariableType> {
+    crate::style_vars::effect_field_type(&doc.node(node)?.effects.get(i)?.kind, field)
+}
+
+/// Whether `node` has the field a binding key names. Only effect fields are checked: a layer has
+/// `effects/<i>/<field>` when its effect `i` has that field (a drop shadow has no `refraction`).
+pub fn has_field(doc: &Document, node: NodeId, field: &str) -> bool {
+    match super::lists::list_binding(field) {
+        Some((BoundList::Effects, i, f)) => effect_field(doc, node, i, f).is_some(),
+        _ => true,
+    }
+}
+
 /// Whether property `field` of `node` takes a variable of type `kind`: the type its scope belongs
 /// to (number variables also fill text content), booleans for visibility, numbers for layout grid
-/// fields; fields without a known type take any.
+/// fields, an effect's field the type its effect takes there; fields without a known type take any.
 pub fn field_takes(doc: &Document, node: NodeId, field: &str, kind: VariableType) -> bool {
+    if let Some((BoundList::Effects, i, f)) = super::lists::list_binding(field) {
+        return effect_field(doc, node, i, f) == Some(kind);
+    }
     match (field, field_scope(doc, node, field)) {
         ("visible", _) => kind == VariableType::Boolean,
         (_, Some(scope)) => scope_known(kind, scope),
