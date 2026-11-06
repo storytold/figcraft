@@ -147,6 +147,17 @@ impl Live {
         self.info.as_ref().map(|i| i.role)
     }
 
+    /// The session's invite link as `collab.peers` gives it. A file shared on the local network
+    /// gives the link that goes with the code shown: the session's own link is the edit way in,
+    /// and a view-only share must not hand it out. Otherwise the session's own link (online, the
+    /// owner's: `share` has the links for others).
+    pub fn invite_link(&self) -> Option<&str> {
+        match &self.share {
+            Some(sh) if sh.via == Via::Local => sh.link(),
+            _ => self.info.as_ref().map(|i| i.link.as_str()),
+        }
+    }
+
     /// Stop following. False when you weren't following anyone.
     fn unfollow(&mut self) -> bool {
         self.followed = None;

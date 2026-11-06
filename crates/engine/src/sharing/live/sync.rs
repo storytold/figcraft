@@ -295,7 +295,7 @@ impl Session {
                     "reason": reason(o),
                     "role": o.role(),
                     "fileName": info.map(|i| i.file_name.as_str()),
-                    "link": info.map(|i| i.link.as_str()),
+                    "link": o.invite_link(),
                     "peers": o.peers.len(),
                 })
             })
@@ -313,7 +313,7 @@ impl Session {
             "color": info.map(|i| i.color.as_str()),
             "fileName": info.map(|i| i.file_name.as_str()),
             "pages": info.map(|i| &i.pages),
-            "link": info.map(|i| i.link.as_str()),
+            "link": l.invite_link(),
             "url": info.map(|i| i.url.as_str()),
             "address": info.map(|i| i.address.as_str()),
             "network": info.map(|i| i.network),

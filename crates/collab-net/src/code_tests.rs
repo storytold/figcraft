@@ -159,6 +159,34 @@ fn a_local_view_code_lets_people_look_and_not_edit() {
     pump(&mut [&mut host, &mut viewer, &mut editor], "the end", |s| !s[1].live().status.active() && !s[2].live().status.active());
 }
 
+/// A local network share's `link` is the one that goes with the code shown: started for looking
+/// only, whoever joins through it can't edit, and the session's line in `sessions` says the same.
+#[test]
+fn a_local_view_share_s_link_only_lets_people_look() {
+    let (mut host, mut viewer) = (session("Hana"), session("Ada"));
+    let shared = host.execute("collab.share", &json!({"via": "local", "bind": "local", "access": "view"})).unwrap();
+    let link = shared["link"].as_str().unwrap().to_string();
+    viewer.execute("collab.join", &json!({"link": link})).unwrap();
+    pump(&mut [&mut host, &mut viewer], "the link's join", |s| live(s[1]) && s[0].live().peers.len() == 1);
+    let summary = viewer.live_summary();
+    assert_eq!((&summary["access"], &summary["readOnly"]), (&json!("view"), &json!(true)), "joined with {link}");
+    let before = layers(&host);
+    let e = viewer.execute("shape.ellipse", &json!({"x": 80, "y": 10, "width": 40, "height": 30})).unwrap_err().to_string();
+    assert!(e.contains("View only"), "{e}");
+    host.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 40, "height": 30})).unwrap();
+    pump(&mut [&mut host, &mut viewer], "the host's edit", |s| layers(s[1]) == before + 1);
+    assert_eq!(layers(&host), before + 1, "nothing of the viewer's reached the host");
+    // The link and the code name the same way in, wherever the session is listed.
+    let Code::Local(local) = code::parse(shared["code"].as_str().unwrap()).unwrap() else { panic!("not a local code") };
+    assert_eq!((&shared["link"], &shared["share"]["viewLink"]), (&json!(local.link()), &json!(local.link())));
+    assert_eq!(shared["sessions"][0]["link"], shared["link"]);
+    // Picking the edit code makes the link the edit one too.
+    let edit = host.execute("collab.share", &json!({"access": "edit"})).unwrap();
+    assert_eq!((&edit["link"], &edit["sessions"][0]["link"]), (&edit["share"]["editLink"], &edit["share"]["editLink"]));
+    assert_ne!(edit["link"], shared["link"]);
+    assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
+}
+
 /// An invite naming only `server` (what a join code is asked at).
 fn code_at(server: &Endpoint) -> Invite {
     Invite { server: server.clone(), file: String::new(), token: String::new() }

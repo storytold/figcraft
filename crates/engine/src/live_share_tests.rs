@@ -380,9 +380,12 @@ fn sharing_on_the_local_network_shows_a_code_that_carries_the_address() {
         assert!(h.short && h.view && h.bind == Bind::Lan && h.port.is_none(), "the local network unless told otherwise");
     }
     // Which code shows: the view code, then the edit code again (nothing is hosted twice).
+    // The link goes with the code: a view-only code's link doesn't edit.
     let r = ex(&mut s, "collab.share", json!({"access": "view"}));
     assert_eq!((&r["code"], &r["share"]["access"]), (&json!(view), &json!("view")));
-    assert_eq!(ex(&mut s, "collab.share", json!({"access": "edit"}))["code"], json!(code::grouped(&HOST.code())));
+    assert_eq!((&r["link"], &r["sessions"][0]["link"]), (&json!(VIEW.link()), &json!(VIEW.link())));
+    let r = ex(&mut s, "collab.share", json!({"access": "edit"}));
+    assert_eq!((&r["code"], &r["link"]), (&json!(code::grouped(&HOST.code())), &json!(HOST.link())));
     assert!(err(&mut s, "collab.share", json!({"access": "comment"})).contains("share it online"));
     assert_eq!(script.lock().unwrap().hosted.len(), 1);
     assert_eq!(ex(&mut s, "collab.stop", json!({}))["ended"], true);
@@ -390,6 +393,7 @@ fn sharing_on_the_local_network_shows_a_code_that_carries_the_address() {
     // Shared for looking only from the start: the edit code isn't the one shown.
     let r = ex(&mut s, "collab.share", json!({"via": "local", "access": "view"}));
     assert_eq!((&r["code"], &r["share"]["access"]), (&json!(view), &json!("view")));
+    assert_eq!((&r["link"], &r["sessions"][0]["link"]), (&json!(VIEW.link()), &json!(VIEW.link())), "the edit link isn't handed out");
     ex(&mut s, "collab.stop", json!({}));
     assert!(err(&mut s, "collab.share", json!({"via": "local", "access": "comment"})).contains("share it online"));
     // Where to listen is the advanced part.
