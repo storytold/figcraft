@@ -3,7 +3,7 @@
 //! older than join codes, and the links that name a code. (A `figcraft-server` handing codes out
 //! and resolving them is tested in its own crate, with the same link.)
 
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,8 +18,9 @@ use crate::driver::{Driver, Socket};
 use crate::guest::GuestConfig;
 use crate::inbox::Inbox;
 use crate::invite::{Endpoint, Invite, Lookup};
+use crate::link::reachable;
 use crate::loopback_tests::{fast_limits, quick};
-use crate::{NetLink, manage};
+use crate::{NetLink, lan_ip, manage};
 
 fn session(name: &str) -> Session {
     let mut s = Session::new();
@@ -195,6 +196,44 @@ fn a_local_view_share_s_link_and_url_only_let_people_look() {
     assert!(edit["url"].as_str().unwrap().ends_with(&format!("&token={edit_token}")), "{}", edit["url"]);
     assert_ne!((&edit["link"], &edit["url"]), (&shared["link"], &shared["url"]));
     assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
+}
+
+/// A share listening on every interface (`bind` 0.0.0.0) names where others reach it, never
+/// 0.0.0.0: this machine's local network address (loopback without one) in its codes, links, URL
+/// and address, and its view code and edit link both join it.
+#[test]
+fn a_share_on_every_interface_names_an_address_others_reach() {
+    let (mut host, mut viewer, mut editor) = (session("Hana"), session("Ada"), session("Bo"));
+    let shared = host.execute("collab.share", &json!({"via": "local", "bind": "0.0.0.0", "access": "view"})).unwrap();
+    let Code::Local(viewing) = code::parse(shared["code"].as_str().unwrap()).unwrap() else { panic!("not a local code") };
+    let at = lan_ip().unwrap_or(Ipv4Addr::LOCALHOST.into());
+    assert_eq!(IpAddr::from(viewing.ip), at);
+    let address = format!("{at}:{}", viewing.port);
+    assert_eq!(shared["address"], address);
+    let Code::Local(editing) = code::parse(shared["share"]["editCode"].as_str().unwrap()).unwrap() else { panic!("not a local code") };
+    assert_eq!((editing.ip, editing.port), (viewing.ip, viewing.port));
+    for way in [&shared["link"], &shared["url"], &shared["share"]["viewLink"], &shared["share"]["editLink"], &shared["sessions"][0]["link"]] {
+        let way = way.as_str().unwrap_or_default();
+        assert!(way.contains(&address) && !way.contains("0.0.0.0"), "{way}");
+    }
+    viewer.execute("collab.join", &json!({"code": shared["code"]})).unwrap();
+    editor.execute("collab.join", &json!({"link": shared["share"]["editLink"]})).unwrap();
+    pump(&mut [&mut host, &mut viewer, &mut editor], "the joins", |s| live(s[1]) && live(s[2]) && s[0].live().peers.len() == 2);
+    assert_eq!((&viewer.live_summary()["access"], &editor.live_summary()["access"]), (&json!("view"), &json!("edit")));
+    assert_eq!(host.execute("collab.stop", &json!({})).unwrap()["ended"], true);
+}
+
+/// A listener on one address is reached at it; one on every interface at an address of its own
+/// family, on its port.
+#[test]
+fn a_listener_on_every_interface_is_reached_at_an_address_of_its_family() {
+    let one: SocketAddr = "192.168.1.20:47900".parse().unwrap();
+    assert_eq!(reachable(one), one);
+    for any in ["0.0.0.0:47900", "[::]:47901"] {
+        let any: SocketAddr = any.parse().unwrap();
+        let at = reachable(any);
+        assert!(!at.ip().is_unspecified() && at.is_ipv4() == any.is_ipv4() && at.port() == any.port(), "{any}: {at}");
+    }
 }
 
 /// An invite naming only `server` (what a join code is asked at).

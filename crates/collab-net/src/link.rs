@@ -1,6 +1,6 @@
 //! [`NetLink`]: the engine's [`LiveLink`] over the network.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -120,18 +120,34 @@ fn view_secret(short: bool, edit: &str) -> Result<String, String> {
 /// This machine's address on the local network: the interface the default route leaves by (no
 /// packet is sent).
 pub fn lan_ip() -> Option<IpAddr> {
-    let sock = UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).ok()?;
     // Documentation and private ranges: only the route matters.
-    for probe in ["192.0.2.1:9", "10.255.255.255:9"] {
-        if sock.connect(probe).is_ok()
-            && let Ok(a) = sock.local_addr()
-            && !a.ip().is_loopback()
-            && !a.ip().is_unspecified()
-        {
-            return Some(a.ip());
-        }
-    }
-    None
+    route_ip(Ipv4Addr::UNSPECIFIED.into(), &["192.0.2.1:9", "10.255.255.255:9"])
+}
+
+/// The address of `any`'s family that the route to the first of `probes` that has one leaves by
+/// (no packet is sent): never a loopback, unspecified or IPv6 link-local one, which others can't
+/// reach this machine at.
+fn route_ip(any: IpAddr, probes: &[&str]) -> Option<IpAddr> {
+    let sock = UdpSocket::bind(SocketAddr::new(any, 0)).ok()?;
+    probes.iter().find_map(|probe| {
+        sock.connect(probe).ok()?;
+        let ip = sock.local_addr().ok()?.ip();
+        let link_local = matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local());
+        (!ip.is_loopback() && !ip.is_unspecified() && !link_local).then_some(ip)
+    })
+}
+
+/// Where others reach a session listening on `addr`: `addr` itself, or for a listener on every
+/// interface (`0.0.0.0`, `::`) this machine's local network address of the same family (its
+/// loopback without one), on the same port. Links name it; the listener keeps every interface.
+pub(crate) fn reachable(addr: SocketAddr) -> SocketAddr {
+    let ip = match addr.ip() {
+        ip if !ip.is_unspecified() => ip,
+        IpAddr::V4(_) => lan_ip().unwrap_or(Ipv4Addr::LOCALHOST.into()),
+        // Documentation and unique local ranges, as for IPv4.
+        IpAddr::V6(_) => route_ip(Ipv6Addr::UNSPECIFIED.into(), &["[2001:db8::1]:9", "[fd00::1]:9"]).unwrap_or(Ipv6Addr::LOCALHOST.into()),
+    };
+    SocketAddr::new(ip, addr.port())
 }
 
 impl LiveLink for NetLink {
@@ -165,8 +181,10 @@ impl LiveLink for NetLink {
             core: figcraft_collab::Limits::default(),
         };
         let host = Host::start(cfg, inbox.clone()).map_err(|e| format!("can't listen on {ip}: {e}"))?;
-        let view = view_token.map(|v| Invite::new(host.addr().to_string(), file.clone(), v)).map(|v| WayIn { link: v.link(), url: v.url() });
-        let invite = Invite::new(host.addr().to_string(), file, token);
+        // Listening on every interface (`0.0.0.0`, `::`), the links name an address others reach.
+        let at = reachable(host.addr()).to_string();
+        let view = view_token.map(|v| Invite::new(at.clone(), file.clone(), v)).map(|v| WayIn { link: v.link(), url: v.url() });
+        let invite = Invite::new(at.clone(), file, token);
         let info = SessionInfo {
             role: Role::Host,
             me: host.me().client_id,
@@ -176,7 +194,7 @@ impl LiveLink for NetLink {
             pages,
             link: invite.link(),
             url: invite.url(),
-            address: host.addr().to_string(),
+            address: at,
             network: !ip.is_loopback(),
             access: Access::Edit,
             view,
