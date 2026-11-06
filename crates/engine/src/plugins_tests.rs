@@ -766,3 +766,114 @@ crate-type = ["cdylib"]
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+fn make_symlink_file(target: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(target, link).is_ok()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        false
+    }
+}
+
+fn make_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(target, link).is_ok()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        false
+    }
+}
+
+#[test]
+fn wasm_out_destination_symlink_and_folder_confinement() {
+    let base = std::env::temp_dir().join(format!("figcraft-plugin-dest-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+
+    let plugin_root = base.join("plugin");
+    let outside_dir = base.join("outside");
+    std::fs::create_dir_all(&plugin_root).unwrap();
+    std::fs::create_dir_all(&outside_dir).unwrap();
+
+    // 1. Valid destination inside plugin folder (file not yet created)
+    let dest_valid = plugin_root.join("pkg.wasm");
+    assert!(crate::plugins::resolve_destination_in_folder(&dest_valid, &plugin_root).is_ok());
+
+    // 2. Valid destination in a nested subdirectory that doesn't exist yet
+    let dest_nested = plugin_root.join("dist").join("sub").join("pkg.wasm");
+    assert!(crate::plugins::resolve_destination_in_folder(&dest_nested, &plugin_root).is_ok());
+
+    // 3. Valid destination that already exists inside plugin folder
+    std::fs::write(&dest_valid, b"existing").unwrap();
+    assert!(crate::plugins::resolve_destination_in_folder(&dest_valid, &plugin_root).is_ok());
+
+    // 4. Destination pointing to folder itself should be rejected
+    assert!(crate::plugins::resolve_destination_in_folder(&plugin_root, &plugin_root).is_err());
+
+    // 5. Destination with symlinks if platform supports them
+    let link_outside = plugin_root.join("escaped.wasm");
+    let target_outside = outside_dir.join("secret.wasm");
+    std::fs::write(&target_outside, b"victim").unwrap();
+
+    if make_symlink_file(&target_outside, &link_outside) {
+        let err = crate::plugins::resolve_destination_in_folder(&link_outside, &plugin_root);
+        assert!(err.is_err(), "destination symlink pointing to an outside file must be rejected");
+    }
+
+    // 6. Dangling symlink pointing outside
+    let link_dangling = plugin_root.join("dangling.wasm");
+    let target_dangling = outside_dir.join("nonexistent.wasm");
+    if make_symlink_file(&target_dangling, &link_dangling) {
+        let err = crate::plugins::resolve_destination_in_folder(&link_dangling, &plugin_root);
+        assert!(err.is_err(), "dangling destination symlink pointing outside must be rejected");
+    }
+
+    // 7. Relative symlink pointing outside via ..
+    let link_rel_outside = plugin_root.join("rel_outside.wasm");
+    if make_symlink_file(std::path::Path::new("../outside/secret.wasm"), &link_rel_outside) {
+        let err = crate::plugins::resolve_destination_in_folder(&link_rel_outside, &plugin_root);
+        assert!(err.is_err(), "relative symlink escaping plugin folder must be rejected");
+    }
+
+    // 8. Intermediate directory is a symlink pointing outside
+    let dir_link = plugin_root.join("ext_dist");
+    if make_symlink_dir(&outside_dir, &dir_link) {
+        let dest_via_dir = dir_link.join("output.wasm");
+        let err = crate::plugins::resolve_destination_in_folder(&dest_via_dir, &plugin_root);
+        assert!(err.is_err(), "destination under symlinked outside directory must be rejected");
+    }
+
+    // 9. Symlink pointing inside plugin folder is permitted
+    let link_in = plugin_root.join("in_folder_link.wasm");
+    let target_in = plugin_root.join("real.wasm");
+    std::fs::write(&target_in, b"in-folder").unwrap();
+    if make_symlink_file(&target_in, &link_in) {
+        let ok = crate::plugins::resolve_destination_in_folder(&link_in, &plugin_root);
+        assert!(ok.is_ok(), "symlink within plugin folder must remain valid");
+    }
+
+    // 10. Symlink loop is rejected
+    let loop_a = plugin_root.join("loop_a.wasm");
+    let loop_b = plugin_root.join("loop_b.wasm");
+    if make_symlink_file(&loop_b, &loop_a) && make_symlink_file(&loop_a, &loop_b) {
+        let err = crate::plugins::resolve_destination_in_folder(&loop_a, &plugin_root);
+        assert!(err.is_err(), "symlink loop must be rejected");
+    }
+
+    let _ = std::fs::remove_dir_all(&base);
+}

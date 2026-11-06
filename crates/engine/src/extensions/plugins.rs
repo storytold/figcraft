@@ -1199,6 +1199,83 @@ fn crate_wasm_name(root: &std::path::Path) -> Option<String> {
     None
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn normalize_lexical(path: &std::path::Path) -> std::path::PathBuf {
+    let mut lexical = std::path::PathBuf::new();
+    for c in path.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                lexical.pop();
+            }
+            std::path::Component::CurDir => {}
+            c => lexical.push(c),
+        }
+    }
+    lexical
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
+pub(crate) fn resolve_destination_in_folder(dest: &std::path::Path, root: &std::path::Path) -> std::result::Result<std::path::PathBuf, String> {
+    let canonical_root = std::fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
+
+    let abs_dest = if dest.is_absolute() {
+        dest.to_path_buf()
+    } else {
+        std::path::absolute(dest).map_err(|e| format!("{}: {e}", dest.display()))?
+    };
+
+    let mut current = normalize_lexical(&abs_dest);
+    let mut hops = 0;
+    while hops < 32 {
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let link = std::fs::read_link(&current).map_err(|e| format!("{}: {e}", current.display()))?;
+                let next = if link.is_absolute() {
+                    link
+                } else if let Some(parent) = current.parent() {
+                    parent.join(link)
+                } else {
+                    link
+                };
+                current = normalize_lexical(&next);
+                hops += 1;
+            }
+            _ => break,
+        }
+    }
+    if hops >= 32 {
+        return Err(format!("{}: too many symbolic links", dest.display()));
+    }
+
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let mut at = current.as_path();
+    let resolved = loop {
+        match std::fs::canonicalize(at) {
+            Ok(mut base) => {
+                base.extend(rest.iter().rev());
+                break base;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if std::fs::symlink_metadata(at).is_ok() {
+                    return Err(format!("{}: symbolic link leads to non-existent location", at.display()));
+                }
+                match at.file_name() {
+                    Some(name) => rest.push(name.to_os_string()),
+                    None => return Err(format!("{}: invalid path", current.display())),
+                }
+                at = at.parent().ok_or_else(|| format!("{}: no existing parent folder", current.display()))?;
+            }
+            Err(e) => return Err(format!("{}: {e}", at.display())),
+        }
+    };
+
+    if !resolved.starts_with(&canonical_root) || resolved == canonical_root {
+        return Err(format!("{}: destination must remain within the plugin folder", dest.display()));
+    }
+    Ok(resolved)
+}
+
 /// Build a Rust plugin project at `manifest_or_dir` for `wasm32-unknown-unknown` in release mode
 /// and copy the resulting `.wasm` artifact to the manifest's `main` path inside the plugin folder.
 /// Returns `(manifest_path, wasm_out_path)`.
@@ -1257,7 +1334,11 @@ pub fn build_plugin_project(manifest_or_dir: &std::path::Path) -> std::result::R
         }
     };
     if built_wasm != wasm_out {
+        let resolved_dest = resolve_destination_in_folder(&wasm_out, root)?;
         if let Some(parent) = wasm_out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        if let Some(parent) = resolved_dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
         std::fs::copy(&built_wasm, &wasm_out).map_err(|e| format!("couldn't copy {} to {}: {e}", built_wasm.display(), wasm_out.display()))?;
