@@ -207,6 +207,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     let library = library.to_string();
                     return go_to_library_main(s, &library, &name, key);
                 }
+                if doc.is_remote(component) {
+                    return Err(EngineError::Disabled(
+                        cmd.into(),
+                        "the main component is a library copy with no link to its library (it came with an imported file): enable that library to reach it"
+                            .into(),
+                    ));
+                }
                 super::edit::select_and_page(s, vec![component])?;
                 let ds = s.ds_mut()?;
                 if let Some(b) = ds.doc.world_bounds(component) {

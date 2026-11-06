@@ -458,6 +458,11 @@ fn going_to_a_library_main_opens_the_library_file() {
     let e = s.execute("component.goToMain", &json!({"id": card})).unwrap_err();
     assert!(e.to_string().contains("isn't at"), "{e}");
     assert_eq!(s.docs.len(), 1);
+
+    let NodeKind::Instance { component: copy, .. } = node(&s, card).kind else { panic!("not an instance") };
+    s.doc_mut().unwrap().libraries_mut().components.retain(|r| r.root != copy);
+    let e = s.execute("component.goToMain", &json!({"id": card})).unwrap_err();
+    assert!(e.to_string().contains("no link to its library"), "an imported copy without its record: {e}");
     let _ = std::fs::remove_dir_all(&d);
 }
 
