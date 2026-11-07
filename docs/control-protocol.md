@@ -117,6 +117,14 @@ temporary files.
 
 ### `engine.execute {command, params?}`
 
+Optional `expected: {document, revision}` guards a command against the live `id`
+and `revision` returned by `document.inspect`. The comparison runs on the engine
+thread immediately before dispatch. A mismatch returns `conflict: ...` without
+an edit or history change. Tokens are process-local: inspect again after a file
+reopens or the app restarts. This is an optimistic guard, not authentication;
+control-token hardening is tracked separately in #1473. Calls without `expected`
+keep their existing behavior. The document selector still targets an open file.
+
 Run any command (the same ids as the menus, shortcuts, Actions palette, CLI and MCP). Programmatic
 calls never open dialogs: dialog requests are dropped. Returns the command's result (creation
 commands return `{"id": N}`). Paints (`fills`, `strokes`, `paint`) take a colour, the full paint
@@ -161,8 +169,15 @@ Every command: `[{id, label, params, menu, shortcut, undoable}]`.
 
 Wait for live changes: the app's in-memory event log records `comment.added`, `comment.replied`,
 `comment.edited`, `comment.reacted`, `comment.resolved`, `comment.moved` and `comment.deleted`
-(`topics`: `comments` (default), `document`, `all`). Only comment events are emitted today;
-`document` and `all` are accepted for forward compatibility. Returns pending events after `after`
+(`topics`: `comments` (default), `document`, `all`). Successful engine commands also
+emit `document.changed` before save, including command-based undo/redo. Its data
+contains `documentId`, live `revision`, `command`, changed node `ids` (at most 256),
+and `reset` (true, ids null, when the changed set exceeds that bound). Failed or
+rolled-back edits and unchanged inspections emit none. Batch children are buffered
+until their group commits; comment commands keep their existing comment events.
+Direct mutations outside command dispatch are not covered by this first hook.
+Consumers must re-inspect after overflow or restart and treat events as invalidation,
+never native snapshots. Returns pending events after `after`
 at once, otherwise waits up to `timeoutMs` (default 20 000, max 25 000; 0 = no wait):
 
 ```json

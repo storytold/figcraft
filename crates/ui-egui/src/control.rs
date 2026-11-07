@@ -1459,7 +1459,19 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let layers_generation = app.session.clipboard.layers_generation;
             let agent = p.get("agent").and_then(Value::as_str);
-            let r = in_document(app, p, |s| s.execute_as(agent, cmd, &params).map_err(|e| e.to_string()));
+            let r = in_document(app, p, |s| {
+                if let Some(expected) = p.get("expected") {
+                    let expected = expected.as_object().ok_or("`expected` must be {document, revision}")?;
+                    if expected.len() != 2 {
+                        return Err("`expected` takes exactly document and revision".into());
+                    }
+                    let document = expected.get("document").and_then(Value::as_u64).ok_or("`expected.document` must be a live document id")?;
+                    let revision = expected.get("revision").and_then(Value::as_u64).ok_or("`expected.revision` must be an unsigned revision")?;
+                    s.execute_as_if_revision(agent, cmd, &params, document, revision).map_err(|e| e.to_string())
+                } else {
+                    s.execute_as(agent, cmd, &params).map_err(|e| e.to_string())
+                }
+            });
             app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             app.invalidate_synthetic_copy(layers_generation);
             // Programmatic calls never open dialogs.

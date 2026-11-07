@@ -60,3 +60,21 @@ fn a_command_that_opens_a_file_still_brings_it_to_the_front() {
     handle(&mut app, "engine.execute", json!({"command": "file.new", "document": back})).unwrap();
     assert_eq!(app.session.active, 2, "a new file opens in front");
 }
+
+#[test]
+fn conditional_execution_guards_the_named_document_and_preserves_the_front_tab() {
+    let (mut app, back) = two_files();
+    let state = handle(&mut app, "document.inspect", json!({"document":back})).unwrap();
+    let params = json!({"document":back,"command":"shape.rectangle","params":{"x":0,"y":0,"width":10,"height":10},"expected":{"document":back,"revision":state["revision"]}});
+    handle(&mut app, "engine.execute", params.clone()).unwrap();
+    let before = app.session.docs[0].doc.clone();
+    let front = app.session.active;
+    assert!(handle(&mut app, "engine.execute", params).unwrap_err().contains("conflict:"));
+    assert_eq!(app.session.docs[0].doc, before);
+    assert_eq!(app.session.active, front);
+    assert_eq!(layers(&app, 0), 1);
+    assert_eq!(layers(&app, 1), 0);
+    let malformed = json!({"document":back,"command":"shape.rectangle","params":{"width":10,"height":10},"expected":{"document":back}});
+    assert!(handle(&mut app, "engine.execute", malformed).is_err());
+    assert_eq!(app.session.docs[0].doc, before);
+}
