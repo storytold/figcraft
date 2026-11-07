@@ -575,10 +575,7 @@ fn pick_sibling(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, dir: i64
 
 /// Keys while the pick cursor shows ([`FigApp::start_pick_select`]): Tab and Shift+Tab move it between
 /// sibling layers in Layers-panel order, Enter into the top child of a frame or group, Shift+Enter
-/// out to the parent (never the page), Space selects the layer under it, Escape drops it ("Use
-/// Tab to move between parent objects on the canvas, Return/Enter and ⇧Shift Return / Enter to
-/// move between parent and child layers. Press Space to make you selection. Press Esc or click
-/// anywhere on the canvas to exit selection mode.", Accessibility at Figma, #1836).
+/// out to the parent (never the page), Space selects the layer under it, Escape or a click on the canvas drops it (#1836).
 pub(crate) fn key_pick(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
     if app.ui.pick.is_none() {
         return false;
@@ -623,8 +620,7 @@ impl FigApp {
     }
 
     /// Pick select: the pink outline on the first selected layer, or on the page's top layer when
-    /// nothing is selected ("Once activated, a pink outline is placed on a selected objects on the
-    /// canvas, or any node if nothing is selected", Accessibility at Figma); the keys walk the
+    /// nothing is selected; the keys walk the
     /// layer tree from there ([`key_pick`]).
     pub(crate) fn start_pick_select(&mut self) {
         let Ok(ds) = self.session.ds() else { return };
