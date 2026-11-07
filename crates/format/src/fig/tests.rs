@@ -1529,6 +1529,9 @@ mod image_filters;
 #[path = "text_list_tests.rs"]
 mod text_list;
 
+#[path = "text_direction_tests.rs"]
+mod text_direction;
+
 /// `.fig` files in the folder `FIGCRAFT_FIG_SAMPLES` names (none when it's unset).
 pub(super) fn samples() -> Vec<std::path::PathBuf> {
     let Some(dir) = std::env::var_os("FIGCRAFT_FIG_SAMPLES") else { return Vec::new() };
