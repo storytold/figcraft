@@ -597,3 +597,85 @@ fn the_pen_shows_its_ghost_anchor_on_the_segment_under_it() {
     assert_eq!(net(&s, id).vertices.len(), 5, "the press added the point");
     assert_eq!(ve(&s).anchor, None, "the click ended the pen's path");
 }
+
+/// A rectangle's corner cut off in the editor (a point added on each edge next to it, the corner
+/// deleted with Shift+Delete so the two join) and the shape rounded: the fill, which the fill and
+/// the selection outline draw, traces the stroke's outline, cut at both ends of the diagonal (#1951).
+#[test]
+fn a_rounded_chamfer_cut_in_the_editor_fills_along_its_arcs() {
+    for top_first in [true, false] {
+        let mut s = Session::new();
+        let id = rect(&mut s);
+        // Splitting keeps the split edge's index, so the other edge's stays: top 0, right 1.
+        let (first, second) = if top_first { (0, 1) } else { (1, 0) };
+        ex(&mut s, "vector.edit.addVertex", json!({"segment": first, "t": 0.5}));
+        ex(&mut s, "vector.edit.addVertex", json!({"segment": second, "t": 0.5}));
+        let corner = vertex_at(&net(&s, id), 100.0, 0.0);
+        ex(&mut s, "vector.edit.select", json!({"vertices": [corner]}));
+        ex(&mut s, "vector.deleteHeal", json!({}));
+        let n = net(&s, id);
+        assert_eq!((n.vertices.len(), n.segments.len(), n.regions.len()), (5, 5, 1), "top first {top_first}: a pentagon");
+        ex(&mut s, "vector.edit.cornerRadius", json!({"radius": 43, "vertices": [0, 1, 2, 3, 4]}));
+        fill_traces_stroke(&s, id, &format!("top first {top_first}"));
+        // A region with a fill of its own is drawn through the region path and the planar normaliser.
+        if let NodeKind::Vector { network } = &mut s.doc_mut().unwrap().get_mut(id).unwrap().kind {
+            network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+        }
+        fill_traces_stroke(&s, id, &format!("top first {top_first}, region fill"));
+    }
+}
+
+/// The chamfer made other ways: the corner deleted plainly, which opens the path between the two
+/// new points, and the two connected again; or the pentagon drawn with the pen (#1951).
+#[test]
+fn a_rounded_chamfer_made_other_ways_fills_along_its_arcs() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    ex(&mut s, "vector.edit.addVertex", json!({"segment": 0, "t": 0.5}));
+    ex(&mut s, "vector.edit.addVertex", json!({"segment": 1, "t": 0.5}));
+    let corner = vertex_at(&net(&s, id), 100.0, 0.0);
+    ex(&mut s, "vector.edit.select", json!({"vertices": [corner]}));
+    ex(&mut s, "vector.edit.delete", json!({}));
+    let n = net(&s, id);
+    assert_eq!((n.segments.len(), n.regions[0].loops[0].len()), (4, 4), "the path opened: {:?}", n.regions);
+    let (top, right) = (vertex_at(&n, 50.0, 0.0), vertex_at(&n, 100.0, 50.0));
+    ex(&mut s, "vector.edit.connect", json!({"a": top, "b": right}));
+    assert_eq!(net(&s, id).segments.len(), 5, "connected again");
+    ex(&mut s, "vector.edit.cornerRadius", json!({"radius": 43, "vertices": [0, 1, 2, 3, 4]}));
+    fill_traces_stroke(&s, id, "deleted and connected");
+    // Drawn with the pen: continue from the end of an open two-point path and close on its start.
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[0, 0], [50, 0]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.tool", json!({"tool": "pen"}));
+    click(&mut s, 50.0, 0.0);
+    for (x, y) in [(100.0, 50.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)] {
+        click(&mut s, x, y);
+    }
+    let n = net(&s, id);
+    assert_eq!((n.vertices.len(), n.segments.len(), n.regions.len()), (5, 5, 1), "closed by the pen");
+    ex(&mut s, "vector.edit.cornerRadius", json!({"radius": 43, "vertices": [0, 1, 2, 3, 4]}));
+    fill_traces_stroke(&s, id, "drawn with the pen");
+}
+
+/// The rounded chamfered rectangle `id` (five points on the origin's 100×100 box, the top-right
+/// corner cut off between (50, 0) and (100, 50)): one region with every segment in its loop, and a
+/// fill that keeps off every sharp point and traces the same outline as the stroke.
+fn fill_traces_stroke(s: &Session, id: NodeId, why: &str) {
+    use figcraft_geom::BezPath;
+    use figcraft_geom::kurbo::{ParamCurveArclen, ParamCurveNearest};
+    let n = net(s, id);
+    assert_eq!(n.regions.len(), 1, "{why}: one region, {:?}", n.regions);
+    assert_eq!(n.regions[0].loops[0].len(), n.segments.len(), "{why}: every segment in the loop, {:?}", n.regions[0].loops);
+    let doc = s.doc().unwrap();
+    let (fill, _) = figcraft_render::node_outline(doc, doc.node(id).unwrap()).unwrap();
+    let stroke = n.stroke_path();
+    let keeps_off = |path: &BezPath, p: Point| path.segments().map(|s| s.nearest(p, 1e-9).distance_sq.sqrt()).fold(f64::INFINITY, f64::min);
+    let length = |path: &BezPath| path.segments().map(|s| s.arclen(1e-9)).sum::<f64>();
+    for p in [pt(50.0, 0.0), pt(100.0, 50.0), pt(0.0, 0.0), pt(100.0, 100.0), pt(0.0, 100.0)] {
+        assert!(keeps_off(&stroke, p) > 2.0, "{why}: the stroke is cut at {p:?} ({:.2} from it)", keeps_off(&stroke, p));
+        assert!(keeps_off(&fill, p) > 2.0, "{why}: the fill runs into {p:?} ({:.2} from it)", keeps_off(&fill, p));
+    }
+    assert!((length(&fill) - length(&stroke)).abs() < 1e-3, "{why}: fill {} and stroke {} trace the same outline", length(&fill), length(&stroke));
+}
