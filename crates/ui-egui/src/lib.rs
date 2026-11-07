@@ -225,6 +225,8 @@ mod proto_reorder_tests;
 #[cfg(test)]
 mod proto_responsive_tests;
 #[cfg(test)]
+mod region_fill_rows_tests;
+#[cfg(test)]
 mod resources_tests;
 #[cfg(test)]
 mod sampled_color_tests;

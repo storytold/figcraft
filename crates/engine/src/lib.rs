@@ -393,6 +393,8 @@ mod jpg_export_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
+mod layout_suggest_tests;
+#[cfg(test)]
 mod library_beacon_tests;
 #[cfg(test)]
 mod library_path_tests;
@@ -588,6 +590,8 @@ mod text_motion_tests;
 mod text_style_picker_tests;
 #[cfg(test)]
 mod text_tail_tests;
+#[cfg(test)]
+mod text_weight_step_tests;
 #[cfg(test)]
 mod textfit_tests;
 #[cfg(test)]

@@ -439,8 +439,9 @@ pub fn style_weight(style: &str) -> u16 {
     {
         return n;
     }
-    let table: [(&str, u16); 10] = [
+    let table: [(&str, u16); 11] = [
         ("thin", 100),
+        ("hairline", 100),
         ("extralight", 200),
         ("ultralight", 200),
         ("light", 300),
@@ -567,7 +568,7 @@ impl TextPath {
 
     /// The path (empty when `d` doesn't parse).
     pub fn path(&self) -> figcraft_geom::BezPath {
-        figcraft_geom::BezPath::from_svg(&self.d).unwrap_or_default()
+        figcraft_geom::svg_path(&self.d).unwrap_or_default()
     }
 
     /// The start offset clamped into 0..1 (NaN: 0).

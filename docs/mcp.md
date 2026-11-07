@@ -730,7 +730,11 @@ made active), add?}`, `vector.edit.selectAll` (every edited layer's points), `ve
 `vector.edit.addVertex`, `vector.edit.connect {a, b}`, `vector.edit.pen {x, y, dx?, dy?}` (continues
 from the pen's open end; clicking a point connects or branches), `vector.edit.penEnd`,
 `vector.edit.paint {x, y} | {points}` (paint bucket: fills or unfills the closed area under a page
-point; with `points`, the areas under the rest go the way the first went, like a drag),
+point; with `points`, the areas under the rest go the way the first went, like a drag), `fill.set`,
+`fill.add`, `fill.remove`, `fill.move` and `fill.paste` on the edited layer while regions are
+selected (`vector.edit.select {regions}`), which edit those regions' own fills and leave the
+layer's (`regions: [index, ...]` names them on any vector layer; `fill.copy` copies the selected
+regions' paint),
 `vector.edit.cut {segment, t} | {vertex} | {from: [x, y], to: [x, y]}` (the last cuts every path the
 page line crosses; parts that come apart move to layers of their own above, listed in `layers`),
 `vector.edit.erase {points, radius?}` (the eraser),
@@ -1492,7 +1496,10 @@ only: a host stops hosting it, a guest leaves it.
   see `FIGCRAFT_CA_FILE` in [`server.md`](server.md#behind-a-reverse-proxy-tls)). `collab.leave {}`
   leaves the active document's session (or ends a join started from it that is still on its way
   or failed), and `collab.leave {session}` the session with that id (from `sessions`), whichever
-  document is active; the synced document stays open as your copy.
+  document is active; the synced document stays open as your copy. `collab.reconnect {}` acts on
+  the active document's lost session: a reconnect that is waiting tries now, and a session you
+  joined that couldn't go on is joined again in its tab. A dropped connection keeps reconnecting
+  until you leave (see *Reconnect* in [`collab-protocol.md`](collab-protocol.md)).
 - `collab.publish {server, name?, key?}` puts the active document on a `figcraft-server`
   ([`server.md`](server.md)) and syncs it from there (as that document's session; others go on): `server` is the address
   `figcraft-server key` prints (`ws://host:47900/?key=…`; or give `key` separately), `name` the
