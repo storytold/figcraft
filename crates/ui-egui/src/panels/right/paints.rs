@@ -53,7 +53,7 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
     let radius_ok = crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_radius());
     // Only rectangles and frames round each corner on its own.
     let indep_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_independent_corners());
-    // For polygons and stars the same panel holds only the Corner smoothing row.
+    // For polygons, stars and closed vectors the same panel holds only the Corner smoothing row.
     let smooth_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_smoothing());
     let r = common(doc, sel, |n| n.corners.uniform().map(|r| (r * 100.0).round() / 100.0));
     widgets::sublabels(ui, tr("Opacity"), radius_ok.then_some(tr("Corner radius")));
@@ -293,7 +293,8 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
     }
     let t = Tokens::get(ui.ctx());
     let ids = sel.to_vec();
-    let list = common(doc, sel, |n| if fills { n.fills.clone() } else { n.strokes.clone() });
+    // A text's fills are what its characters show: one list they share, or mixed (#1856).
+    let list = common(doc, sel, |n| if fills { figcraft_engine::cmd::lists::character_fills(n) } else { Some(n.strokes.clone()) }).flatten();
     let title = if fills { tr("Fill") } else { tr("Stroke") };
     let empty = list.as_ref().is_none_or(|l| l.is_empty());
     let slot = if fills { StyleSlot::Fill } else { StyleSlot::Stroke };

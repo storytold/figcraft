@@ -15,6 +15,7 @@ use crate::params::{bool_of, boolean, get, id, num, num_or, req_index, req_strin
 use crate::{DocState, EngineError, Result, Session, bad, spec};
 
 mod export;
+mod import_ids;
 mod load;
 mod open;
 mod save;

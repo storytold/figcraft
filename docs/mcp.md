@@ -42,7 +42,8 @@ replaced then, so a pause between calls is not an error.
 
 The app keeps answering while its window is minimised or covered by other windows (see
 `docs/control-protocol.md`): edits, inspection (`inspect_ui` too), pointer, key and text input and
-renders work as usual (minimised, each request to the app takes up to about 0.1 s). Only a capture
+renders work as usual (minimised, each request to the app takes up to about 0.1 s; under Wayland,
+which can't report a minimised window, about half a second). Only a capture
 of the window itself (`screenshot` with `window`) needs it on screen: it is then an error at once;
 `screenshot` without `window` renders the document instead.
 
@@ -312,10 +313,16 @@ Or in a project's `.mcp.json`:
   `style.detach {which: "text", start?, end?}` unlinks them (values stay). A layer's `styles.text` is
   the style all its chars share (none when they differ); `get_node` lists the linked chars as
   `textStyleRanges` (`[start, end, style id]`).
+  A text style also carries paragraph spacing and indent, the list style and the OpenType features
+  (`paragraph` beside `style` in `style.list`): applying it sets them (on a range, the list goes to
+  the paragraphs touched; the rest is the layer's), `style.update` moves them too, and a `.fig`
+  file keeps them with the style.
   Changing what a text style sets (font, size, line height, letter spacing, decoration, case, axis
-  values) on linked chars unlinks them; `style.update` moves every linked char. `style.create
-  {type: "text", name}` takes the selected chars while editing; a `value` may use the `node.set`
-  spellings (`{"fontSize": 32, "lineHeight": "120%", "letterSpacing": "2%"}`).
+  values; at the paragraph level the spacing, indent, list and features) on linked chars unlinks
+  them; `style.update` moves every linked char. `style.create {type: "text", name}` takes the
+  selected chars while editing; a `value` may use the `node.set` spellings (`{"fontSize": 32,
+  "lineHeight": "120%", "letterSpacing": "2%", "paragraphSpacing": 12, "listStyle": "bulleted",
+  "features": {"liga": false}}`).
 - **Styles stay true to their layers**: editing a styled fill, stroke, effect or layout grid list
   (`node.set`, `fill.set`, `fill.add`, a bound variable…) unlinks that style (`styles.fill` etc. go
   `null`), so a later `style.update` doesn't overwrite the edit; `style.apply` replaces variables
@@ -847,11 +854,15 @@ removes the whole conditional). Every one is an undo step and applies to all `id
 with the same interactions). Flows `proto.flow.add` / `rename` / `remove`,
 and the device, its rotation and the background `proto.settings {device?, background?,
 rotation?, color?, width?, height?, responsive?}` (`None`, `iPhone 16`, `iPhone 16 Pro Max`,
-`Android Compact`, `iPad mini`, `MacBook Air`, `Desktop` or `Custom size`; `rotation` `portrait` or
+`Android Compact`, `iPad mini`, `MacBook Air`, `Desktop` or `Custom size`, in any case; another
+name is an error that lists the devices, and nothing changes; `rotation` `portrait` or
 `landscape`, which turns phones and tablets; `color` one of the device's colours by name, e.g.
 `Black`, `White`, `Pink`, `Teal`, `Blue` for the iPhone 16 (an error lists them), `""` for the
 default; `width` / `height` set the custom size's screen, 1–10000 points, and pick `Custom size`,
-which is a bare screen without a body). On a device the presented frame is sized to the device's
+which is a bare screen without a body). Every call answers the page's settings as they are after
+it, so `proto.settings {}` reads them: `{device, background, rotation, color (the colour shown, null
+without a body), screen ({width, height} as presented, null without a device), customSize,
+responsive}`. On a device the presented frame is sized to the device's
 screen: a frame bigger than the screen scrolls through its whole size whatever its `overflow`, content
 past the frame's own edges scrolls only as its `overflow` allows (else it's clipped), and `fixed`
 layers stay on screen (pinned to the edges their constraints name). With `responsive: true` (saved
