@@ -545,6 +545,8 @@ mod slot_tests;
 #[cfg(test)]
 mod stored_ids_tests;
 #[cfg(test)]
+mod stroke_cap_error_tests;
+#[cfg(test)]
 mod stroke_style_tests;
 #[cfg(test)]
 mod style_tests;
