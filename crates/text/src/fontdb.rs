@@ -544,10 +544,13 @@ fn names(f: &skrifa::FontRef) -> (Option<String>, Option<String>) {
     (family, style)
 }
 
-/// Families tried, in order, for characters a text's own font lacks. The symbol fonts come last:
-/// Apple Symbols (macOS), Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for
-/// signs such as ⌖ and ⤒ that no text face has.
-const FALLBACK_FAMILIES: [&str; 29] = [
+/// Families tried, in order, for characters a text's own font lacks. Every script face craft-fonts
+/// can embed (Noto Sans Arabic, Thai, Hebrew, Devanagari, Georgian) is here after the Latin faces,
+/// so a web build that embeds one (`FIGCRAFT_EMBED_SCRIPTS`, #1902) draws that script in an Inter
+/// document: the browser has no other fonts. The symbol fonts come last: Apple Symbols (macOS),
+/// Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for signs such as ⌖ and ⤒
+/// that no text face has.
+const FALLBACK_FAMILIES: [&str; 32] = [
     "Inter",
     "Helvetica Neue",
     "Arial",
@@ -571,6 +574,9 @@ const FALLBACK_FAMILIES: [&str; 29] = [
     "Leelawadee UI",
     "Thonburi",
     "Tahoma",
+    "Noto Sans Hebrew",
+    "Noto Sans Devanagari",
+    "Noto Sans Georgian",
     "Apple Symbols",
     "Segoe UI Symbol",
     "Noto Sans Symbols",
@@ -640,6 +646,9 @@ struct FallbackLists {
 
 /// The most styles whose fallback faces are kept (a file naming more starts the list again).
 const MAX_FALLBACK_STYLES: usize = 64;
+/// Most faces loaded from one font collection given as bytes (the largest real collections,
+/// the CJK ones, hold a few dozen).
+const MAX_COLLECTION_FACES: u32 = 64;
 
 /// [`FontDb::key`]'s and [`FontDb::resolve`]'s answers for the families known in one generation.
 #[derive(Default)]
@@ -711,7 +720,10 @@ impl FontDb {
     pub fn add_bytes(&mut self, bytes: Vec<u8>) -> Vec<Arc<Face>> {
         let shared = Arc::new(bytes);
         let count = match FileRef::new(shared.as_slice()) {
-            Ok(FileRef::Collection(c)) => c.len(),
+            // A collection's header may name any number of faces, each a few bytes pointing at
+            // the same tables, and every face keeps its own character map: at most
+            // [`MAX_COLLECTION_FACES`] of them are loaded.
+            Ok(FileRef::Collection(c)) => c.len().min(MAX_COLLECTION_FACES),
             Ok(FileRef::Font(_)) => 1,
             Err(_) => 0,
         };

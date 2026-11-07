@@ -1020,15 +1020,34 @@ fn reveal_selection(app: &mut FigApp, doc: &Document, page: NodeId, sel: &[NodeI
     reveal
 }
 
+/// The outermost selected layer owning a row's continuous hierarchy highlight.
+fn selection_root(doc: &Document, sel: &BTreeSet<NodeId>, id: NodeId) -> Option<NodeId> {
+    if sel.is_empty() {
+        return None;
+    }
+    doc.ancestors(id).into_iter().rev().find(|a| sel.contains(a)).or_else(|| sel.contains(&id).then_some(id))
+}
+
+fn hierarchy_bg(roots: &[Option<NodeId>], i: usize, mut rr: Rect, gap: f32) -> Option<(Rect, CornerRadius)> {
+    let root = roots.get(i).copied().flatten()?;
+    let joins = |neighbor: &Option<NodeId>| *neighbor == Some(root);
+    let above = i.checked_sub(1).and_then(|j| roots.get(j)).is_some_and(joins);
+    let below = roots.get(i + 1).is_some_and(joins);
+    if below {
+        rr.max.y += gap;
+    }
+    let top = if above { 0 } else { 5 };
+    let bottom = if below { 0 } else { 5 };
+    Some((rr, CornerRadius { nw: top, ne: top, sw: bottom, se: bottom }))
+}
+
 /// A row's background: selected, inside a selected layer, or outlined when hovered.
 /// `state` is [selected, in_selected, component].
 fn paint_row_bg(ui: &Ui, t: &Tokens, rr: Rect, state: [bool; 3], hovered: bool) {
     let [selected, in_selected, is_comp] = state;
     if selected {
         ui.painter().rect_filled(rr, CornerRadius::same(5), if is_comp { t.component_row } else { t.selected_row });
-    } else if in_selected {
-        ui.painter().rect_filled(rr, CornerRadius::ZERO, t.selected_row_child);
-    } else if hovered {
+    } else if !in_selected && hovered {
         ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(1.0, if is_comp { COMPONENT } else { ACCENT }), egui::StrokeKind::Inside);
     }
 }
@@ -1137,15 +1156,20 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         drag_autoscroll(ui, dragging.is_some());
         let first = ((viewport.min.y / pitch).floor().max(0.0) as usize).min(rows.len());
         let last = ((viewport.max.y / pitch).ceil().max(0.0) as usize).saturating_add(1).min(rows.len());
+        // Compute each visible row's root once, plus one neighbor outside each end
+        // so scrolling never rounds a seam in the middle of a selected subtree.
+        let selected_ids: BTreeSet<_> = sel.iter().copied().collect();
+        let roots_start = first.saturating_sub(1);
+        let roots: Vec<_> = rows.iter().take(last.saturating_add(1)).skip(roots_start).map(|r| selection_root(&doc, &selected_ids, r.id)).collect();
         let band = Rect::from_x_y_ranges(left..=(left + row_w), (top + first as f32 * pitch)..=(top + last as f32 * pitch));
         let mut band_ui = ui.new_child(egui::UiBuilder::new().max_rect(band));
         // Stable widget ids for a row wherever the list is scrolled.
         band_ui.skip_ahead_auto_ids(first);
         let ui = &mut band_ui;
-        for row in rows.iter().take(last).skip(first) {
+        for (i, row) in rows.iter().enumerate().take(last).skip(first) {
             let Some(n) = doc.node(row.id) else { continue };
             let (r, resp) = ui.allocate_exact_size(vec2(row_w, ROW), Sense::click_and_drag());
-            let selected = sel.contains(&row.id);
+            let selected = selected_ids.contains(&row.id);
             a11y::layer_row(&mut app.ui.nav, &resp);
             if sel.last() == Some(&row.id) {
                 a11y::prefer(&mut app.ui.nav, Region::Layers, resp.id);
@@ -1159,9 +1183,13 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 locked: n.locked,
             };
             a11y::tree_item(&resp, if n.name.is_empty() { tr(n.kind.label()) } else { &n.name }, &info);
-            let in_selected = !selected && doc.ancestors(row.id).iter().any(|a| sel.contains(a));
             let is_comp = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
             let rr = r.shrink2(vec2(8.0, 0.0));
+            let bg = hierarchy_bg(&roots, i - roots_start, rr, pitch - ROW);
+            let in_selected = !selected && bg.is_some();
+            if let Some((rect, corners)) = bg {
+                ui.painter().rect_filled(rect, corners, t.selected_row_child);
+            }
             a11y::ring_around(ui, rr, &resp);
             // Over the row, its eye and padlock included (they sit on top of it).
             let over = resp.contains_pointer();
