@@ -301,11 +301,8 @@ fn drag(u: &mut Ui, from: Pos2, dx: f32, modifiers: Modifiers) {
     u.frame(vec![]);
 }
 
-/// "Change the speed that you scrub the field by moving the cursor towards the top of the screen
-/// to increase the scrubbing speed, or towards the bottom of the screen to reduce it. You'll see a
-/// notification at the bottom of the screen for the current speed [...] There are four scrubbing
-/// speeds: 2x, 1x, 1/2, and 1/4" (Adjust alignment, rotation, position and dimensions, #1837):
-/// more than 100 points above where the scrub began is 2x, that far below 1/2, twice as far 1/4.
+/// Scrub speed follows the pointer's height, with a notice of the speed (#1837): more than 100
+/// points above where the scrub began is 2x, that far below 1/2, twice as far 1/4.
 #[test]
 fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
     let (mut u, a, _) = setup();
