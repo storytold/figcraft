@@ -795,6 +795,44 @@ fn hashes_naming_one_blob_share_one_copy_of_it() {
     assert_eq!(*copies[&"63".repeat(20)], [7; 16]);
 }
 
+/// Hashes naming one blob are imported as one image: every alias is renamed to the first hash
+/// before layers are built, so the blob is copied and hashed once, not once per hash.
+#[test]
+fn hashes_naming_one_blob_are_imported_once() {
+    let rect = |i: u64, hash: u8, blob: u64| {
+        let paint = o(vec![("type", e("IMAGE")), ("image", o(vec![("hash", Kv::Bytes(vec![hash; 20])), ("dataBlob", u(blob))]))]);
+        node(i, Some((1, &format!("{i:04}"))), "RECTANGLE", &format!("R{i}"), vec![("size", xy(10.0, 10.0)), ("fillPaints", arr(vec![paint]))])
+    };
+    let mut nodes = vec![node(0, None, "DOCUMENT", "D", vec![]), node(1, Some((0, "!")), "CANVAS", "P", vec![])];
+    nodes.extend((2..42).map(|i| rect(i, i as u8, 0)));
+    let msg = o(vec![("nodeChanges", arr(nodes)), ("blobs", arr(vec![o(vec![("bytes", Kv::Bytes(png()))])]))]);
+    let copies = embedded_copies(&msg);
+    let aliases = embedded_aliases(&copies, |_| false);
+    assert_eq!(aliases.len(), 39);
+    assert!(aliases.values().all(|c| *c == "02".repeat(20)));
+    // A hash `images/` also holds keeps its own name.
+    assert!(!embedded_aliases(&copies, |h| h == "05".repeat(20)).contains_key(&"05".repeat(20)));
+    let (doc, warnings) = import(&canvas(&schema(), &msg), "x").unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+    assert_eq!(doc.images.len(), 1);
+    let key = doc.images.keys().next().unwrap();
+    for i in 2..42 {
+        let figcraft_doc::color::PaintKind::Image(img) = &named(&doc, &format!("R{i}")).fills[0].kind else { panic!("not an image fill") };
+        assert_eq!(&img.image, key);
+    }
+}
+
+#[test]
+fn image_refs_are_renamed_wherever_they_sit() {
+    let aliases: BTreeMap<String, String> = [("b".to_string(), "a".to_string())].into();
+    let mut json = serde_json::json!({"fills": [{"imageRef": "b"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "b"}]}}, "name": "b"});
+    canonical_image_refs(&mut json, &aliases);
+    assert_eq!(
+        json,
+        serde_json::json!({"fills": [{"imageRef": "a"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "a"}]}}, "name": "b"})
+    );
+}
+
 mod image_budget {
     use super::*;
 
@@ -1177,6 +1215,60 @@ fn scalar_fields_count_against_the_value_budget() {
     let e = sc.decode_message_within(0, &data, 10).unwrap_err();
     assert_eq!(e.0, "message: too many values");
     assert!(sc.decode_message_within(0, &data, 1001).is_ok());
+}
+
+#[test]
+fn empty_arrays_count_against_the_value_budget() {
+    // 1000 empty `uint[]` fields: each field is a value even with no elements, so a small budget
+    // can't be outgrown by piling up empty containers.
+    let fields = vec![Field { name: "a".into(), ty: Some(Type::Uint), array: true, value: 1 }];
+    let sc = Schema { defs: vec![Def { name: "Message".into(), kind: Kind::Message, fields }] };
+    let mut data = [1u8, 0].repeat(1000);
+    data.push(0);
+    let e = sc.decode_message_within(0, &data, 10).unwrap_err();
+    assert_eq!(e.0, "message: too many values");
+    assert!(sc.decode_message_within(0, &data, 1001).is_ok());
+}
+
+#[test]
+fn message_tags_find_their_field_by_id_in_a_wide_definition() {
+    // A wide definition: every tag is looked up by id, and the first field with an id wins, as
+    // before the lookup was indexed.
+    let mut fields: Vec<Field> = (1..=5000).map(|i| Field { name: format!("f{i}"), ty: Some(Type::Bool), array: false, value: i }).collect();
+    fields.push(Field { name: "shadow".into(), ty: Some(Type::Bool), array: false, value: 7 });
+    let sc = Schema { defs: vec![Def { name: "Message".into(), kind: Kind::Message, fields }] };
+    let mut w = encode::Writer::default();
+    for _ in 0..20_000 {
+        w.var_uint(5000);
+        w.byte(1);
+    }
+    w.var_uint(7);
+    w.byte(0);
+    w.var_uint(0);
+    let Kv::Object(out) = sc.decode_message(0, &w.0).unwrap() else { panic!() };
+    assert_eq!(out.len(), 20_001);
+    assert!(out.iter().take(20_000).all(|(n, v)| *n == "f5000" && *v == Kv::Bool(true)));
+    assert_eq!(out.last().map(|(n, _)| *n), Some("f7"));
+}
+
+#[test]
+fn a_schema_is_refused_past_its_total_field_count() {
+    // 25 definitions of 10 000 fields each: every one is within the per-definition cap, but
+    // together they pass the schema's total.
+    let mut w = encode::Writer::default();
+    w.var_uint(25);
+    for d in 0..25 {
+        w.string(&format!("D{d}"));
+        w.byte(0);
+        w.var_uint(10_000);
+        for i in 0..10_000u32 {
+            w.string("");
+            w.var_int(0);
+            w.byte(0);
+            w.var_uint(i);
+        }
+    }
+    assert_eq!(Schema::decode(&w.0).unwrap_err().0, "schema: too many fields");
 }
 
 #[test]

@@ -81,22 +81,30 @@ pub(crate) fn menu_row_width(label_w: f32, trail: f32) -> f32 {
 /// A menu row (see [`menu_item_with`]); its response tells hovering too. It spans the menu and
 /// is at least as wide as its label, shortcut and art.
 pub fn menu_row(ui: &mut Ui, label: &str, shortcut: &str, art_w: f32, art: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
-    lit_row(ui, label, shortcut, art_w, art, false)
+    lit_row(ui, label, shortcut, art_w, 0.0, art, false)
 }
 
 /// A plain menu row highlighted when `lit`, as if hovered: the row Up and Down are on in a menu
 /// whose search field keeps the keyboard.
 pub(crate) fn menu_row_lit(ui: &mut Ui, label: &str, lit: bool) -> egui::Response {
-    lit_row(ui, label, "", 0.0, |_, _, _| {}, lit)
+    lit_row(ui, label, "", 0.0, 0.0, |_, _, _| {}, lit)
 }
 
-fn lit_row(ui: &mut Ui, label: &str, shortcut: &str, art_w: f32, art: impl FnOnce(&egui::Painter, Rect, Color32), lit: bool) -> egui::Response {
+fn lit_row(
+    ui: &mut Ui,
+    label: &str,
+    shortcut: &str,
+    art_w: f32,
+    lead: f32,
+    art: impl FnOnce(&egui::Painter, Rect, Color32),
+    lit: bool,
+) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let text = ui.painter().layout_no_wrap(label.to_owned(), regular(11.5), Color32::PLACEHOLDER);
     let keys =
         (!shortcut.is_empty()).then(|| ui.painter().layout_no_wrap(crate::toolbar::pretty_shortcut(shortcut), regular(11.0), Color32::PLACEHOLDER));
     let trail = keys.as_ref().map_or(0.0, |k| k.size().x + MENU_PAD).max(art_w);
-    let w = ui.available_width().max(menu_row_width(text.size().x, trail).ceil());
+    let w = ui.available_width().max(menu_row_width(lead + text.size().x, trail).ceil());
     let (r, resp) = ui.allocate_exact_size(vec2(w, 26.0), Sense::click());
     a11y::menu_item(&resp, label, shortcut, None);
     // The keyboard's item is highlighted like the hovered one.
@@ -108,7 +116,7 @@ fn lit_row(ui: &mut Ui, label: &str, shortcut: &str, art_w: f32, art: impl FnOnc
     // These menus sit on the theme's popup fill (white in the light theme), not on the dark
     // `t.menu` of the menu bar: the theme's text, white only on the green highlight (#972).
     let col = if hovered { t.menu_text } else { t.text };
-    ui.painter().galley(pos2(r.min.x + MENU_PAD, r.center().y - text.size().y / 2.0), text, col);
+    ui.painter().galley(pos2(r.min.x + MENU_PAD + lead, r.center().y - text.size().y / 2.0), text, col);
     if let Some(k) = keys {
         let at = pos2(r.max.x - MENU_PAD - k.size().x, r.center().y - k.size().y / 2.0);
         ui.painter().galley(at, k, if hovered { t.menu_text } else { t.text_secondary });
@@ -153,4 +161,27 @@ pub(crate) fn block(ui: &mut Ui, h: f32, inset_y: f32, add: impl FnOnce(&mut Ui)
     child.spacing_mut().item_spacing = vec2(crate::widgets::GUTTER, 0.0);
     add(&mut child);
     r
+}
+
+/// Width of the check column of [`menu_icon_item`] (the mark, or nothing, so labels line up).
+const CHECK_COL: f32 = 14.0;
+
+/// A menu item in a menu whose entries lead with a 16 px icon (in the row's text colour): the
+/// boolean operations in the Design panel. `icon` is `None` for an entry without one (Flatten):
+/// its slot stays empty, so every label starts at the same x. The check mark (`on` is
+/// `Some(true)`) is drawn in its own column ahead of the icon, so a checked entry's label does
+/// not move against the unchecked ones.
+pub fn menu_icon_item(ui: &mut Ui, icon: Option<crate::icons::Icon>, on: Option<bool>, label: &str, shortcut: &str) -> bool {
+    let paint = |p: &egui::Painter, r: Rect, col: Color32| {
+        if on == Some(true) {
+            let mark = p.layout_no_wrap("✓".to_owned(), regular(11.5), col);
+            p.galley(pos2(r.min.x + MENU_PAD, r.center().y - mark.size().y / 2.0), mark, col);
+        }
+        if let Some(icon) = icon {
+            crate::icons::paint(p, Rect::from_min_size(pos2(r.min.x + MENU_PAD + CHECK_COL, r.center().y - 8.0), vec2(16.0, 16.0)), icon, col);
+        }
+    };
+    let resp = lit_row(ui, label, shortcut, 0.0, CHECK_COL + 22.0, paint, false);
+    a11y::menu_item(&resp, label, shortcut, on);
+    resp.clicked()
 }
