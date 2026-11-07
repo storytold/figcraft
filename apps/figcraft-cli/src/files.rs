@@ -505,6 +505,19 @@ pub fn connect_publish(file: &str, mappings: &str, dry_run: bool) -> CliResult<E
 mod tests {
     use super::*;
 
+    /// `info` and a script's failure print what a file and its steps name, controls escaped.
+    #[test]
+    fn info_and_a_failed_script_print_what_they_were_given() {
+        let dir = std::env::temp_dir().join(format!("figcraft-cli-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (svg, script) = (dir.join("a.svg"), dir.join("s.json"));
+        std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>"#).unwrap();
+        std::fs::write(&script, r#"[{"command":"no.such\u001b"}]"#).unwrap();
+        assert_eq!(info(svg.to_str().unwrap(), false).unwrap(), ExitCode::SUCCESS);
+        assert_eq!(run_script(script.to_str().unwrap(), None, None).unwrap(), ExitCode::from(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn plain_escapes_controls_and_leaves_quotes_and_paths() {
         assert_eq!(plain("a\u{1b}[31m\nb"), r"a\u{1b}[31m\nb");
