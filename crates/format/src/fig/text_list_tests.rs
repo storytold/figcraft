@@ -75,7 +75,7 @@ fn the_export_writes_where_a_list_starts() {
     let page = doc.first_page().unwrap();
     use ListStyle::{Bulleted as B, None as P, Numbered as N};
     let mut td = figcraft_doc::TextData::new("two\nthree\nplain\nsix\ndot");
-    let pl = |list, start_offset| ParaList { list, indent: 0, start_offset };
+    let pl = |list, start_offset| ParaList { list, indent: 0, start_offset, ..ParaList::default() };
     td.paragraphs = vec![pl(N, 1), pl(N, 0), pl(P, 0), pl(N, 5), pl(B, 4)];
     doc.create(page, NodeKind::Text(td), "List", 0.0, 0.0, 200.0, 80.0).unwrap();
     let (bytes, _) = super::super::export(&doc, None).unwrap();

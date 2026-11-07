@@ -427,6 +427,9 @@ pub(crate) struct Ctx<'a> {
     component_meta: BTreeMap<&'a str, &'a Value>,
     set_meta: BTreeMap<&'a str, &'a Value>,
     style_meta: BTreeMap<&'a str, &'a Value>,
+    /// The ids of the styles imported so far (`doc.styles` is a Vec: a lookup per reference
+    /// would be quadratic in a document with many distinct references).
+    style_ids: BTreeSet<String>,
     /// Instances (imported as frames until their main is resolved) with their JSON.
     instances: Vec<(NodeId, &'a Value)>,
     /// `SLOT` layers (imported as frames until their slot property is resolved) with their JSON.
@@ -468,6 +471,7 @@ impl<'a> Ctx<'a> {
             component_meta: BTreeMap::new(),
             set_meta: BTreeMap::new(),
             style_meta: BTreeMap::new(),
+            style_ids: BTreeSet::new(),
             instances: Vec::new(),
             slots: Vec::new(),
             slot_defaults: BTreeMap::new(),
@@ -918,14 +922,18 @@ impl<'a> Ctx<'a> {
     fn style_definitions(&mut self, v: &'a Value) {
         for d in list(v, "styleDefinitions").iter().take(MAX_STYLES) {
             let (Some(id), Some(node)) = (text(d, "id").filter(|i| !i.is_empty()).map(clip_str), d.get("node")) else { continue };
-            if self.doc.styles.iter().any(|s| s.id == id) {
+            if self.style_ids.contains(id) {
                 continue;
             }
             let kind = match text(d, "styleType") {
                 Some("FILL") => StyleKind::Paint { paints: props::paints(self, node, "fills").unwrap_or_default() },
                 Some("EFFECT") => StyleKind::Effect { effects: props::effects(self, node) },
                 Some("GRID") => StyleKind::Grid { grids: props::layout_grids(node) },
-                Some("TEXT") => StyleKind::Text { style: text::text_data(self, node).style.as_text_style() },
+                Some("TEXT") => {
+                    // The sample layer carries the paragraph-level values too (#1829).
+                    let td = text::text_data(self, node);
+                    StyleKind::Text { style: td.style.as_text_style(), paragraph: Box::new(td.paragraph_style()) }
+                }
                 _ => continue,
             };
             let name = text(d, "name").filter(|s| !s.is_empty()).map_or_else(|| format!("Style {id}"), |s| clip_str(s).to_string());
@@ -953,6 +961,7 @@ impl<'a> Ctx<'a> {
             };
             self.bindings(&mut sample, node);
             let bound = sample.bound.iter().filter_map(|(k, v)| Some((style_binding(slot, k)?, v.clone()))).collect();
+            self.style_ids.insert(id.to_string());
             self.doc.styles.push(Style { id: id.to_string(), name, description, kind, bound });
         }
     }
@@ -967,19 +976,22 @@ impl<'a> Ctx<'a> {
                 "effect" | "effects" => (StyleKind::Effect { effects: n.effects.clone() }, &mut n.styles.effect),
                 "grid" | "grids" => (StyleKind::Grid { grids: n.grids.clone() }, &mut n.styles.grid),
                 "text" => match &n.kind {
-                    NodeKind::Text(t) => (StyleKind::Text { style: t.style.as_text_style() }, &mut n.styles.text),
+                    NodeKind::Text(t) => {
+                        (StyleKind::Text { style: t.style.as_text_style(), paragraph: Box::new(t.paragraph_style()) }, &mut n.styles.text)
+                    }
                     _ => continue,
                 },
                 _ => continue,
             };
             *target = Some(sid.to_string());
-            if self.doc.styles.iter().any(|s| s.id == sid) {
+            if self.style_ids.contains(sid) {
                 continue;
             }
             let meta = self.style_meta.get(sid);
             let name =
                 meta.and_then(|m| text(m, "name")).filter(|s| !s.is_empty()).map_or_else(|| format!("Style {sid}"), |s| clip_str(s).to_string());
             let description = meta.and_then(|m| text(m, "description")).map(|s| clip_str(s).to_string()).unwrap_or_default();
+            self.style_ids.insert(sid.to_string());
             self.doc.styles.push(Style { id: sid.to_string(), name, description, kind, bound: BTreeMap::new() });
         }
     }

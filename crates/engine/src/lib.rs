@@ -367,6 +367,8 @@ mod images_left_in_file_tests;
 #[cfg(test)]
 mod import_export_tests;
 #[cfg(test)]
+mod import_ids_tests;
+#[cfg(test)]
 mod import_journal_tests;
 #[cfg(test)]
 mod inspect_behaviour_tests;
@@ -382,6 +384,8 @@ mod interaction_rollback_tests;
 mod invite_links_tests;
 #[cfg(test)]
 mod jam_open_tests;
+#[cfg(test)]
+mod jpg_export_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
@@ -457,11 +461,15 @@ mod pen_end_tests;
 #[cfg(test)]
 mod pen_overlay_tests;
 #[cfg(test)]
+mod pen_undo_tests;
+#[cfg(test)]
 mod pen_vector_edit_tests;
 #[cfg(test)]
 mod penpot_export_tests;
 #[cfg(test)]
 mod pixel_preview_tests;
+#[cfg(test)]
+mod place_crosshair_tests;
 #[cfg(test)]
 mod placed_image_size_tests;
 #[cfg(test)]
@@ -544,6 +552,8 @@ mod sketch_import_tests;
 mod slot_tests;
 #[cfg(test)]
 mod stored_ids_tests;
+#[cfg(test)]
+mod stroke_cap_error_tests;
 #[cfg(test)]
 mod stroke_style_tests;
 #[cfg(test)]
