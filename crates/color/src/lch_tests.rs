@@ -73,7 +73,10 @@ fn css_hue_units_and_none() {
         assert_eq!(Color::parse_css(&format!("oklch(0.6 0.2 {h})")).unwrap().to_hex(), blue.to_hex(), "{h}");
     }
     assert_eq!(Color::parse_css("lch(50 none none)").unwrap().to_hex(), Color::parse_css("lch(50 0 0)").unwrap().to_hex());
-    assert_eq!(Color::parse_css("oklch(none 0 0 / none)").unwrap().to_rgba8(), [0, 0, 0, 255]);
+    // A missing alpha is zero like any other missing component (CSS Color 4 §4.4), so it is
+    // transparent; only an *omitted* alpha defaults to opaque.
+    assert_eq!(Color::parse_css("oklch(none 0 0 / none)").unwrap().to_rgba8(), [0, 0, 0, 0]);
+    assert_eq!(Color::parse_css("oklch(none 0 0)").unwrap().to_rgba8(), [0, 0, 0, 255]);
 }
 
 #[test]
