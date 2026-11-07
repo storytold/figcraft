@@ -663,7 +663,9 @@ pub struct Glass {
     /// Blur of the backdrop (a blur radius, document units, 0–[`Self::MAX_FROST`]).
     pub frost: f64,
     /// Which way the curved edge bends the backdrop: towards the shape's core (0; along the edge's
-    /// normal for a shape too big to work one out) to away from the layer's centre (1).
+    /// normal for a shape too big to work one out) to away from the centre of the layer's bounds
+    /// (1; on a ring or an L, whose centre lies outside the shape, an inner edge bends towards the
+    /// hole, as the reference tool's does).
     pub splay: f64,
 }
 
@@ -1518,6 +1520,9 @@ pub struct ExportSetting {
     /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
     #[serde(skip_serializing_if = "VdCompat::is_default")]
     pub vd_compat: VdCompat,
+    /// JPG: the encoder's quality, 1 (smallest file) to 100 (see [`ExportSetting::quality`]).
+    #[serde(skip_serializing_if = "is_default_quality")]
+    pub quality: u8,
 }
 
 /// How an Android Vector Drawable export handles what the format can't draw exactly (layer
@@ -1568,6 +1573,7 @@ impl Default for ExportSetting {
             svg_id_attribute: false,
             svg_simplify_stroke: true,
             vd_compat: VdCompat::BestEffort,
+            quality: ExportSetting::DEFAULT_QUALITY,
         }
     }
 }
@@ -1580,7 +1586,19 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn is_default_quality(q: &u8) -> bool {
+    *q == ExportSetting::DEFAULT_QUALITY
+}
+
 impl ExportSetting {
+    /// The JPG quality a setting has unless it sets one.
+    pub const DEFAULT_QUALITY: u8 = 90;
+
+    /// The JPG quality made safe: within `1..=100`.
+    pub fn quality(&self) -> u8 {
+        self.quality.clamp(1, 100)
+    }
+
     /// The row adding a setting after `last` creates: 1x first, then one scale step up with a
     /// matching "@2x"-style suffix.
     pub fn next_after(last: Option<&ExportSetting>) -> ExportSetting {
