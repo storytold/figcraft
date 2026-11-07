@@ -1,0 +1,104 @@
+name: clawku
+
+# Clawku builds: browser zip + Linux x86_64 CLI, published as a GitHub release on clawku-v* tags.
+# Standalone file: nothing here edits or replaces the shared craft-common-actions workflows.
+on:
+  push:
+    tags: ['clawku-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  web:
+    name: Web build (wasm zip)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install trunk (prebuilt release binary)
+        run: |
+          set -euo pipefail
+          curl -sSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | sudo tar -xz -C /usr/local/bin
+          sudo chmod +x /usr/local/bin/trunk
+          trunk --version
+
+      # packaging/web/package.sh sources packaging/env.sh itself:
+      # VERSION from [workspace.package], DIST defaults to $ROOT/dist/release.
+      - name: Build and zip the web app
+        run: bash packaging/web/package.sh
+
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: dist/release/figcraft-web-*.zip
+          if-no-files-found: error
+
+  cli:
+    name: Linux x86_64 CLI
+    # ubuntu-22.04 => glibc <= 2.35, so the binary also runs on Debian bookworm.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Same package list the CI gate installs for the Linux build (ci.yml `packages:`).
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
+            libgtk-3-dev
+
+      - name: Build figcraft-cli
+        run: cargo build --release --locked -p figcraft-cli
+
+      - name: Package tarball and checksum
+        working-directory: target/release
+        run: |
+          set -euo pipefail
+          tar -czf figcraft-cli-linux-x86_64.tar.gz figcraft-cli
+          sha256sum figcraft-cli-linux-x86_64.tar.gz > figcraft-cli-linux-x86_64.tar.gz.sha256
+
+      - name: Upload cli artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli
+          path: |
+            target/release/figcraft-cli-linux-x86_64.tar.gz
+            target/release/figcraft-cli-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: [web, cli]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          files=(artifacts/web/* artifacts/cli/*)
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --notes "Clawku build" --prerelease \
+          || gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
