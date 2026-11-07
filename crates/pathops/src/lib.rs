@@ -459,6 +459,8 @@ fn path_end(path: &BezPath, at_end: bool) -> Option<(Point, Vec2)> {
 
 /// The filled arrowhead shape for `cap` at one end of an open path.
 pub fn arrowhead(path: &BezPath, cap: StrokeCap, weight: f64, at_end: bool) -> Option<BezPath> {
+    // Capped like a stroke's width: the circle below is flattened at a fixed tolerance.
+    let weight = weight.min(MAX_STROKE_WIDTH);
     let (tip, dir) = path_end(path, at_end)?;
     let n = Vec2::new(-dir.y, dir.x);
     let s = (weight * 3.0).max(6.0);
@@ -758,6 +760,15 @@ mod tests {
         let center = stroke_outline(&r, &StrokeProps { align: StrokeAlign::Center, ..props }, true);
         let b = center.bounding_box();
         assert!((b.x0 + 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn an_absurd_arrow_weight_is_capped() {
+        let mut line = BezPath::new();
+        line.move_to((0.0, 0.0));
+        line.line_to((100.0, 0.0));
+        let head = arrowhead(&line, StrokeCap::CircleFilled, 1e300, true).unwrap();
+        assert!(head.elements().len() < 10_000, "{}", head.elements().len());
     }
 
     #[test]
