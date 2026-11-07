@@ -806,3 +806,71 @@ fn a_link_is_underlined_by_default_and_underline_takes_it_off() {
     s.execute("text.underline", &json!({"ids": [f]})).unwrap();
     assert_eq!(inner_style(&s).decoration, TextDecoration::None, "Underline on the frame reads the text inside it");
 }
+
+fn layer_name(s: &Session, t: NodeId) -> String {
+    s.doc().unwrap().node(t).unwrap().name.clone()
+}
+
+/// Select everything in the layer being edited and delete it.
+fn clear_edited_text(s: &mut Session, t: NodeId) {
+    let len = s.doc().unwrap().node(t).unwrap().kind.text().unwrap().char_count();
+    crate::textedit::set_caret(s, 0, false).unwrap();
+    crate::textedit::set_caret(s, len, true).unwrap();
+    crate::textedit::key(s, "Backspace", false, false, false).unwrap();
+}
+
+#[test]
+fn typing_renames_a_text_layer_that_still_carries_the_name_its_characters_gave_it() {
+    // The Layers panel shows a layer's name, so a layer still carrying the name its characters
+    // gave it has to follow them while they are typed or the panel and the canvas disagree
+    // (#1747). The target app's plugin API calls this `autoRename`: "Whether updating the
+    // characters in the text node should update the name of the node… This is automatically reset
+    // to false if `name` is modified in order to allow the node to keep the new name."
+    let mut s = Session::new();
+
+    // Nobody renamed this layer, so typing in it keeps its name up to date.
+    let t = text(&mut s, "hello", json!({}));
+    assert_eq!(layer_name(&s, t), "hello", "a new layer is named after its first line");
+    crate::textedit::begin(&mut s, t, Some(5), false).unwrap();
+    crate::textedit::insert(&mut s, " there").unwrap();
+    assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("hello there", "hello there"), "the name follows what is typed");
+
+    // A name the author typed is theirs: later typing leaves it alone.
+    s.execute("node.set", &json!({"id": t, "props": {"name": "Greeting"}})).unwrap();
+    crate::textedit::begin(&mut s, t, Some(11), false).unwrap();
+    crate::textedit::insert(&mut s, "!").unwrap();
+    assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("hello there!", "Greeting"), "a chosen name is kept");
+
+    // Only the first line names the layer.
+    let v = text(&mut s, "first", json!({}));
+    crate::textedit::begin(&mut s, v, Some(5), false).unwrap();
+    crate::textedit::insert(&mut s, "\nsecond").unwrap();
+    assert_eq!((chars(&s, v).as_str(), layer_name(&s, v).as_str()), ("first\nsecond", "first"), "the first line alone names it");
+
+    // Emptied text reads as a new empty text layer does, not as the word that was deleted.
+    clear_edited_text(&mut s, v);
+    assert_eq!((chars(&s, v).as_str(), layer_name(&s, v).as_str()), ("", ""), "emptied text has no name of its own, so the panel shows its kind");
+
+    // The usual way a layer is made: the Text tool, a click, then typing into the empty layer.
+    use crate::tools::{PointerEvent, PointerKind, ToolId};
+    s.set_tool(ToolId::Text);
+    s.pointer(&PointerEvent::at(PointerKind::Down, 300.0, 300.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 300.0, 300.0, 1.0)).unwrap();
+    let drawn = s.ds().unwrap().text_edit.as_ref().unwrap().id;
+    assert_eq!(layer_name(&s, drawn), "", "a layer the tool drew has no name of its own yet");
+    crate::textedit::insert(&mut s, "Pricing").unwrap();
+    assert_eq!((chars(&s, drawn).as_str(), layer_name(&s, drawn).as_str()), ("Pricing", "Pricing"), "the first word typed names it");
+}
+
+#[test]
+fn setting_characters_as_a_command_never_renames_the_layer() {
+    // Only the editor follows the characters. Layer names are field keys for `data.fill`,
+    // component property bindings and templates, which write `characters` into a layer named for
+    // its role ("Title") and look it up by that name again, so a command must leave the name as it
+    // is even when it reads like the text it replaces.
+    let mut s = Session::new();
+    let t = text(&mut s, "Title", json!({}));
+    assert_eq!(layer_name(&s, t), "Title");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "Site em 7 dias"}})).unwrap();
+    assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("Site em 7 dias", "Title"), "the field keeps its name");
+}
