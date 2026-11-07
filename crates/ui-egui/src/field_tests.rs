@@ -266,6 +266,25 @@ fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
     drag(u, from, dx, modifiers);
 }
 
+/// Press at field `name`'s label, move `rise` points up (down when negative), then `dx` sideways
+/// in small steps at that height, and let go.
+fn scrub_at_height(u: &mut Ui, name: &str, rise: f32, dx: f32) {
+    let from = label(u, name);
+    let m = Modifiers::NONE;
+    let press = |pressed, pos| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: m };
+    u.frame_with(vec![Event::PointerMoved(from), press(true, from)], m);
+    for k in 1..=5 {
+        u.frame_with(vec![Event::PointerMoved(pos2(from.x, from.y - rise * k as f32 / 5.0))], m);
+    }
+    let up = pos2(from.x, from.y - rise);
+    for k in 1..=10 {
+        u.frame_with(vec![Event::PointerMoved(pos2(up.x + dx * k as f32 / 10.0, up.y))], m);
+    }
+    let to = pos2(up.x + dx, up.y);
+    u.frame_with(vec![Event::PointerMoved(to), press(false, to)], m);
+    u.frame(vec![]);
+}
+
 /// Press at `from`, move `dx` points sideways in small steps with `modifiers` held, then let go.
 fn drag(u: &mut Ui, from: Pos2, dx: f32, modifiers: Modifiers) {
     let press = |pressed| Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed, modifiers };
@@ -280,6 +299,64 @@ fn drag(u: &mut Ui, from: Pos2, dx: f32, modifiers: Modifiers) {
         modifiers,
     );
     u.frame(vec![]);
+}
+
+/// Scrub speed follows the pointer's height, with a notice of the speed (#1837): more than 100
+/// points above where the scrub began is 2x, that far below 1/2, twice as far 1/4.
+#[test]
+fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
+    let (mut u, a, _) = setup();
+    let toast = |u: &Ui| u.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+    // (rise in points, how far 40 points of scrub move X, the notice)
+    for (rise, want, notice) in [(150.0, 80.0, "2x"), (0.0, 40.0, ""), (-150.0, 20.0, "1/2"), (-300.0, 10.0, "1/4"), (40.0, 40.0, "")] {
+        let x0 = geom(&u, a).0;
+        u.app.ui.toast = None;
+        scrub_at_height(&mut u, "X", rise, 40.0);
+        assert_eq!(geom(&u, a).0 - x0, want, "rise {rise}");
+        if notice.is_empty() {
+            assert!(toast(&u).is_empty(), "no notice at the usual speed: {}", toast(&u));
+        } else {
+            assert!(toast(&u).contains(notice), "rise {rise}: the notice says {}", toast(&u));
+        }
+    }
+    // Speeds compose with the modifiers' rates: 2x with Shift is twenty steps a point.
+    let x0 = geom(&u, a).0;
+    let from = label(&mut u, "X");
+    let shift = Modifiers { shift: true, ..Modifiers::NONE };
+    let press = |pressed, pos| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: shift };
+    u.frame_with(vec![Event::PointerMoved(from), press(true, from)], shift);
+    let up = pos2(from.x, from.y - 150.0);
+    u.frame_with(vec![Event::PointerMoved(up)], shift);
+    for k in 1..=5 {
+        u.frame_with(vec![Event::PointerMoved(pos2(up.x + 2.0 * k as f32, up.y))], shift);
+    }
+    let to = pos2(up.x + 10.0, up.y);
+    u.frame_with(vec![Event::PointerMoved(to), press(false, to)], shift);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, a).0 - x0, 200.0, "ten points at 2x with Shift");
+    // The pointer reported gone from the window (egui's PointerGone) with the button still down
+    // keeps the speed it had: no notice of 1x, and the scrub goes on at 2x once it is back.
+    let x0 = geom(&u, a).0;
+    let from = label(&mut u, "X");
+    let m = Modifiers::NONE;
+    let press = |pressed, pos| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: m };
+    u.frame_with(vec![Event::PointerMoved(from), press(true, from)], m);
+    let up = pos2(from.x, from.y - 150.0);
+    u.frame_with(vec![Event::PointerMoved(up)], m);
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 10.0, up.y))], m);
+    assert!(toast(&u).contains("2x"), "{}", toast(&u));
+    u.app.ui.toast = None;
+    u.frame_with(vec![Event::PointerGone], m);
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 20.0, up.y))], m);
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 30.0, up.y))], m);
+    assert!(toast(&u).is_empty(), "no notice while the pointer was gone or back at the same height: {}", toast(&u));
+    // Back down to the press height and gone in the same frame: that last position counts (1x).
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 30.0, from.y)), Event::PointerGone], m);
+    assert!(toast(&u).contains("1x"), "{}", toast(&u));
+    let to = pos2(up.x + 30.0, up.y);
+    u.frame_with(vec![Event::PointerMoved(to), press(false, to)], m);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, a).0 - x0, 40.0, "ten points before and ten after the pointer was gone, at 2x both");
 }
 
 #[test]
