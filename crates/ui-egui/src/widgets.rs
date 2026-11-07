@@ -223,6 +223,12 @@ pub fn number_field(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, suffix:
     number_field_mixed(ui, id, lead, value, suffix, width, step)?.settled()
 }
 
+/// Whether the edit of number field `id` began with a Cmd/Ctrl-click. A padding field edited
+/// that way sets every side (Guide to auto layout, Keyboard shortcut guide).
+pub fn edit_began_with_command(ui: &Ui, id: Id) -> bool {
+    ui.data(|d| d.get_temp::<bool>(id.with("cmdstart"))).unwrap_or(false)
+}
+
 /// [`number_field`] over several layers: without a single value (`value` None, "Mixed") a relative
 /// edit comes back as one for each layer ([`Edit::Each`]).
 pub fn number_field_mixed(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, suffix: &str, width: f32, step: f64) -> Option<Edit> {
@@ -398,14 +404,28 @@ fn number_field_impl(
     // The text the field would commit to no effect: what it showed when the edit began, or the
     // value the arrows last stepped it to.
     let kept_id = id.with("kept");
+    // Whether Cmd/Ctrl was held while the button was down on the field: a click's modifier is
+    // read on its press, so letting go of the key before the release still counts.
+    let cmd_press_id = id.with("cmdpress");
+    let cmd_held_before = ui.data(|d| d.get_temp::<bool>(cmd_press_id)).unwrap_or(false);
+    let (cmd_pressed, any_down) = ui.input(|i| (field_resp.is_pointer_button_down_on() && i.modifiers.command, i.pointer.any_down()));
+    ui.data_mut(|d| d.insert_temp(cmd_press_id, cmd_pressed || (cmd_held_before && any_down)));
     if started {
         editing = Some(if typed_now { String::new() } else { value.map(fmt_num).unwrap_or_default() });
+        // Whether Cmd/Ctrl was held on the click that began the edit: a padding field then sets
+        // every side ([`edit_began_with_command`]). The flag lives as long as the edit.
+        let with_command = !typed_now && (cmd_pressed || cmd_held_before || ui.input(|i| i.modifiers.command));
         ui.data_mut(|d| {
             d.insert_temp(editing_id, editing.clone().unwrap_or_default());
             d.insert_temp(kept_id, value.map(fmt_num).unwrap_or_default());
             d.insert_temp(id.with("selectall"), !typed_now);
+            d.insert_temp(id.with("cmdstart"), with_command);
+            d.remove::<bool>(id.with("edited"));
         });
         ui.memory_mut(|m| m.request_focus(id.with("te")));
+    } else if editing.is_none() {
+        // No edit under way: an arrow step on the focused field is its own side's.
+        ui.data_mut(|d| d.remove::<bool>(id.with("cmdstart")));
     }
     match editing {
         Some(mut text) => {
@@ -419,6 +439,11 @@ fn number_field_impl(
             // top would move its baseline below the centered value painted while idle.
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit_rect));
             let r = child.add(te);
+            if r.changed() {
+                // Typing (the same value again included) is what lets a Cmd/Ctrl-begun edit commit
+                // to every side; a field left as it was commits nothing.
+                ui.data_mut(|d| d.insert_temp(id.with("edited"), true));
+            }
             a11y::own_focus(&r);
             keep_focus(&r, started);
             crate::shortcuts::release_field_for_save(&r);
@@ -445,6 +470,7 @@ fn number_field_impl(
                         ui.data_mut(|d| {
                             d.insert_temp(kept_id, text.clone());
                             d.insert_temp(id.with("selectall"), true);
+                            d.insert_temp(id.with("edited"), true);
                         });
                         out = Some(set(nv));
                     }
@@ -460,7 +486,11 @@ fn number_field_impl(
                 // Enter, Tab or a click elsewhere commits what was typed (a field left as it was
                 // commits nothing: no undo step, and a rounded display isn't written back).
                 let kept: String = ui.data(|d| d.get_temp(kept_id)).unwrap_or_default();
-                if text != kept
+                // An edit begun with Cmd/Ctrl commits the value even retyped as it was: the other
+                // sides are to take it ([`edit_began_with_command`]).
+                let for_all = ui.data(|d| d.get_temp::<bool>(id.with("cmdstart"))).unwrap_or(false);
+                let edited = ui.data(|d| d.get_temp::<bool>(id.with("edited"))).unwrap_or(false);
+                if (text != kept || (for_all && edited))
                     && let Some(e) = typed(&text)
                 {
                     out = Some(e);
