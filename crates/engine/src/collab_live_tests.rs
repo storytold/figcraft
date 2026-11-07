@@ -318,6 +318,195 @@ fn a_dropped_connection_keeps_editing_and_catches_up() {
     assert_eq!((doc.node(r).unwrap().name.as_str(), doc.node(f).unwrap().name.as_str()), ("Sent", "Offline"));
 }
 
+impl Room {
+    /// Person `i` has been told to join again: the server takes them as `resume` says.
+    fn welcome_as(&mut self, i: usize, resume: Option<figcraft_collab::Resume>) {
+        let ClientMsg::Hello(mut h) = Client::hello("f", "t", "Person", "") else { panic!("not a hello") };
+        h.resume = resume;
+        let (id, out) = self.server.join(h).unwrap();
+        let w = welcome_of(&out, id);
+        let p = &mut self.people[i];
+        p.id = id;
+        p.online = true;
+        p.script.lock().unwrap().events.extend([Event::Welcome { info: info(Role::Guest, id), peers: vec![] }, Event::Sync(w)]);
+        p.s.live_poll();
+    }
+
+    fn event(&mut self, i: usize, e: Event) {
+        let p = &mut self.people[i];
+        p.script.lock().unwrap().events.push(e);
+        p.s.live_poll();
+    }
+}
+
+#[test]
+fn reconnecting_can_be_told_to_try_now_and_shows_as_disconnected() {
+    let mut room = Room::new(base(), 1, 7);
+    assert!(!room.s(0).live().disconnected());
+    assert!(room.s(0).execute("collab.reconnect", &json!({})).is_err(), "nothing was lost");
+    room.disconnect(0);
+    assert!(room.s(0).live().disconnected());
+    assert_eq!(room.s(0).execute("collab.reconnect", &json!({})).unwrap()["status"], "reconnecting");
+    let session = room.s(0).live().id;
+    assert_eq!(room.people[0].script.lock().unwrap().retried, [session]);
+}
+
+#[test]
+fn a_session_that_cant_go_on_stays_on_its_tab_and_merges_when_it_joins_again() {
+    let mut room = Room::new(base(), 2, 7);
+    let (f, r) = frame_and_rect(room.server.document());
+    let uid = room.s(0).ds().unwrap().uid;
+    let tabs = room.s(0).docs.len();
+    room.disconnect(0);
+    room.s(0).execute("node.set", &json!({"id": r, "props": {"name": "Offline"}})).unwrap();
+    room.event(0, Event::Status(Status::Failed { reason: "The host refused: this link isn't valid".into() }));
+    // The tab says so, and is yours to go on working in.
+    let live = room.s(0).live();
+    assert!(live.disconnected() && live.rejoinable() && live.doc_uid == Some(uid));
+    assert!(room.s(0).live_read_only(uid).is_none());
+    let made = room.s(0).execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 5, "height": 5})).unwrap();
+    let made = NodeId(made["id"].as_u64().unwrap());
+    // A try that fails leaves it just as it was.
+    assert_eq!(room.s(0).execute("collab.reconnect", &json!({})).unwrap()["status"], "connecting");
+    assert!(room.s(0).live().disconnected() && !room.s(0).live().rejoinable());
+    assert!(room.s(0).live_read_only(uid).is_none(), "it can still be edited while it tries");
+    room.event(0, Event::Status(Status::Failed { reason: "Couldn't join the live session: no answer".into() }));
+    assert!(room.s(0).live().rejoinable());
+    // Someone else's edit lands meanwhile.
+    room.s(1).execute("transform.move", &json!({"ids": [f], "dx": 5, "dy": 5})).unwrap();
+    let theirs = |d: &Document| d.node(f).unwrap().transform;
+    room.settle();
+    let moved = theirs(room.server.document());
+    // The next try joins in the same tab, as the same client, and everything goes on top.
+    room.s(0).execute("collab.reconnect", &json!({})).unwrap();
+    let resumed = room.people[0].script.lock().unwrap().resumed.expect("as who you were");
+    assert_eq!((resumed.client_id, resumed.seq), (room.people[0].id, u64::MAX));
+    room.welcome_as(0, Some(resumed));
+    room.settle();
+    room.check();
+    let s = room.s(0);
+    assert_eq!(s.live().status, Status::Live);
+    assert!(!s.live().disconnected());
+    assert_eq!(s.docs.len(), tabs, "no copy: it all went in");
+    let doc = room.server.document();
+    assert_eq!(doc.node(r).unwrap().name, "Offline");
+    assert!(doc.contains(made), "layers you made too");
+    assert_eq!(theirs(doc), moved, "and the other edit is still there");
+    assert!(room.s(0).message.as_deref().is_some_and(|m| m.contains("is in the file")));
+}
+
+#[test]
+fn the_same_thing_changed_both_ways_keeps_the_others_and_opens_your_version_beside_it() {
+    let mut room = Room::new(base(), 2, 7);
+    let (f, r) = frame_and_rect(room.server.document());
+    let tabs = room.s(0).docs.len();
+    room.disconnect(0);
+    room.s(0).execute("node.set", &json!({"id": r, "props": {"name": "Mine"}})).unwrap();
+    room.s(0).execute("node.set", &json!({"id": f, "props": {"name": "Only mine"}})).unwrap();
+    room.event(0, Event::Status(Status::Failed { reason: "gone".into() }));
+    room.s(1).execute("node.set", &json!({"id": r, "props": {"name": "Theirs"}})).unwrap();
+    room.settle();
+    room.s(0).execute("collab.reconnect", &json!({})).unwrap();
+    let resumed = room.people[0].script.lock().unwrap().resumed;
+    room.welcome_as(0, resumed);
+    room.settle();
+    room.check();
+    let doc = room.server.document();
+    assert_eq!(doc.node(r).unwrap().name, "Theirs", "what conflicts isn't written over");
+    assert_eq!(doc.node(f).unwrap().name, "Only mine", "what doesn't goes in");
+    let s = room.s(0);
+    assert_eq!(s.docs.len(), tabs + 1);
+    let copy = s.docs.last().unwrap();
+    assert!(copy.doc.name.ends_with("(offline copy)") && copy.is_dirty(), "closing the copy asks first");
+    assert_eq!(copy.doc.node(r).unwrap().name, "Mine");
+}
+
+#[test]
+fn layers_the_new_client_cant_make_open_beside_the_file() {
+    let mut room = Room::new(base(), 1, 7);
+    let tabs = room.s(0).docs.len();
+    room.disconnect(0);
+    let made = room.s(0).execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 5, "height": 5})).unwrap();
+    let made = NodeId(made["id"].as_u64().unwrap());
+    room.event(0, Event::Status(Status::Failed { reason: "gone".into() }));
+    room.s(0).execute("collab.reconnect", &json!({})).unwrap();
+    // The server takes you as someone new.
+    room.welcome_as(0, None);
+    room.settle();
+    room.check();
+    assert!(!room.server.document().contains(made));
+    let s = room.s(0);
+    assert_eq!(s.docs.len(), tabs + 1);
+    assert!(s.docs.last().unwrap().doc.contains(made), "it isn't lost");
+}
+
+#[test]
+fn a_server_that_forgot_you_keeps_your_offline_edits() {
+    let mut room = Room::new(base(), 1, 7);
+    let (_, r) = frame_and_rect(room.server.document());
+    room.disconnect(0);
+    room.s(0).execute("node.set", &json!({"id": r, "props": {"name": "Offline"}})).unwrap();
+    // The same file under a new session: it knows no one.
+    room.server = Server::new(room.server.document().clone(), "t", Limits::default());
+    room.welcome_as(0, None);
+    room.settle();
+    assert_eq!(room.server.document().node(r).unwrap().name, "Offline");
+    assert_eq!(room.s(0).live().status, Status::Live);
+}
+
+#[test]
+fn joining_again_with_nothing_changed_opens_no_copy() {
+    let mut room = Room::new(base(), 1, 7);
+    let tabs = room.s(0).docs.len();
+    room.disconnect(0);
+    room.event(0, Event::Ended { reason: "Sharing was stopped".into() });
+    assert!(room.s(0).live().rejoinable(), "the end of a session you were in shows on its tab too");
+    assert_eq!(room.s(0).message.as_deref(), Some("Sharing was stopped"));
+    room.s(0).execute("collab.reconnect", &json!({})).unwrap();
+    let resumed = room.people[0].script.lock().unwrap().resumed;
+    room.welcome_as(0, resumed);
+    assert_eq!(room.s(0).docs.len(), tabs);
+    assert_eq!(room.s(0).live().status, Status::Live);
+}
+
+#[test]
+fn a_session_out_of_step_joins_again_by_itself() {
+    let mut room = Room::new(base(), 1, 7);
+    let joins = room.people[0].script.lock().unwrap().joined.len();
+    let tabs = room.s(0).docs.len();
+    // A batch from far in the future: it can't be applied.
+    room.event(0, Event::Sync(ServerMsg::Changes(figcraft_collab::Accepted { seq: 999, author: 42, batch_id: 1, changes: vec![] })));
+    assert_eq!(room.s(0).live().status, Status::Connecting);
+    assert!(room.s(0).live().disconnected());
+    assert_eq!(room.people[0].script.lock().unwrap().joined.len(), joins + 1);
+    let resumed = room.people[0].script.lock().unwrap().resumed;
+    room.welcome_as(0, resumed);
+    assert_eq!(room.s(0).live().status, Status::Live);
+    assert_eq!(room.s(0).docs.len(), tabs);
+}
+
+#[test]
+fn leaving_with_changes_unconfirmed_says_so() {
+    let mut room = Room::new(base(), 1, 7);
+    let (_, r) = frame_and_rect(room.server.document());
+    room.s(0).execute("collab.leave", &json!({})).unwrap();
+    assert_eq!(room.s(0).message.as_deref(), Some("You left the session; your copy stays open here"));
+    let mut room = Room::new(base(), 1, 7);
+    room.s(0).execute("node.set", &json!({"id": r, "props": {"name": "Unconfirmed"}})).unwrap();
+    room.s(0).execute("collab.leave", &json!({})).unwrap();
+    assert!(room.s(0).message.as_deref().is_some_and(|m| m.contains("before your last changes were confirmed")));
+}
+
+#[test]
+fn leaving_a_lost_session_makes_the_tab_a_plain_copy() {
+    let mut room = Room::new(base(), 1, 7);
+    room.disconnect(0);
+    room.event(0, Event::Status(Status::Failed { reason: "gone".into() }));
+    room.s(0).execute("collab.leave", &json!({})).unwrap();
+    assert_eq!(room.s(0).live().status, Status::Off);
+    assert!(!room.s(0).live().disconnected());
+}
+
 #[test]
 fn random_commands_with_undo_and_drops_converge_through_the_engine() {
     for seed in 0..6 {

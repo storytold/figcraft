@@ -140,6 +140,20 @@ pub struct Live {
     /// The branches of the session's file made or last updated from main in this session: every
     /// layer of their base was in it (see [`crate::branches`]).
     branch_bases: BTreeSet<String>,
+    /// You were in this session and aren't now: what joining it again takes (`collab.reconnect`).
+    stranded: Option<Stranded>,
+}
+
+/// What's kept of a session you joined once it can't go on by itself. The tab stays yours to work
+/// in, and says so.
+#[derive(Clone)]
+struct Stranded {
+    /// The invite link you joined with (it holds the token: never shown).
+    link: String,
+    /// The server's state when it stopped: what's different from it in the tab is your own work.
+    confirmed: Box<figcraft_collab::Replica>,
+    /// Who you were: the layers you made are in that client's id space.
+    resume: Resume,
 }
 
 impl Live {
@@ -168,6 +182,43 @@ impl Live {
     /// Back to no session, still shown on its tab (a failure's reason stays there).
     fn reset(&mut self) {
         *self = Live { id: self.id, tab: self.tab, ..Live::default() };
+    }
+
+    /// Remember what joining this session again takes, if it is one you joined (see [`Stranded`]).
+    fn hold(&mut self) {
+        let joined = self.info.as_ref().filter(|i| i.role == Role::Guest && !i.link.is_empty());
+        if let (None, Some(client), Some(info)) = (&self.stranded, &self.client, joined) {
+            self.stranded = Some(Stranded { link: info.link.clone(), confirmed: Box::new(client.confirmed().clone()), resume: client.resume() });
+        }
+    }
+
+    /// Keep this session on its tab for joining again: a session you joined, or one that already
+    /// is; any other goes back to no session.
+    fn strand(&mut self) {
+        self.hold();
+        let Some(held) = self.stranded.take() else { return self.reset() };
+        *self = Live {
+            id: self.id,
+            tab: self.tab,
+            doc_uid: self.doc_uid,
+            info: self.info.take(),
+            server: std::mem::take(&mut self.server),
+            published: self.published.take(),
+            share: self.share.take(),
+            stranded: Some(held),
+            ..Live::default()
+        };
+    }
+
+    /// You were in this session and aren't now: the connection dropped and it is trying again, or
+    /// it can't go on by itself. What you do in its tab isn't reaching anyone.
+    pub fn disconnected(&self) -> bool {
+        matches!(self.status, Status::Reconnecting { .. }) || self.stranded.is_some()
+    }
+
+    /// The session can be joined again in its tab (`collab.reconnect`).
+    pub fn rejoinable(&self) -> bool {
+        self.stranded.is_some() && !self.status.active()
     }
 
     /// The document sync client (once the welcome arrived): peers, pending batches, the user's

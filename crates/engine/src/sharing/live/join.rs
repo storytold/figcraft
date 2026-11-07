@@ -42,10 +42,36 @@ fn leave(s: &mut Session, p: &Value) -> Result<Value> {
         None => s.live.shown(s.tab()),
     };
     let ended = id.and_then(|id| s.live.end(id));
-    if ended.as_ref().is_some_and(|l| l.syncing() && l.role() == Some(Role::Guest)) {
-        s.message = Some("You left the session; your copy stays open here".into());
+    if let Some(l) = ended.as_ref().filter(|l| l.syncing() && l.role() == Some(Role::Guest)) {
+        // What was still on its way may be held back for what's before it (an undo waits for its edit).
+        s.message = Some(if l.client().is_some_and(|c| c.pending() > 0) {
+            "You left before your last changes were confirmed: others may not see them all, and your copy stays open here".into()
+        } else {
+            "You left the session; your copy stays open here".into()
+        });
     }
     Ok(json!({"ended": ended.is_some_and(|l| l.status.active())}))
+}
+
+/// Back into the open file's session now: a reconnect that is waiting tries at once, and a session
+/// that couldn't go on is joined again in its tab.
+fn reconnect(s: &mut Session, _: &Value) -> Result<Value> {
+    const CMD: &str = "collab.reconnect";
+    let live = s.live();
+    let (id, reconnecting, rejoinable) = (live.id, matches!(live.status, Status::Reconnecting { .. }), live.rejoinable());
+    if reconnecting {
+        if let Some(why) = crate::file_access::network_refused() {
+            return Err(EngineError::Disabled(CMD.to_string(), why));
+        }
+        if let Some(net) = s.live.link() {
+            net.retry(id);
+        }
+    } else if rejoinable {
+        s.live_rejoin(CMD, id)?;
+    } else {
+        return Err(bad(CMD, "this file has no lost live session to reconnect"));
+    }
+    Ok(json!({"status": s.live().status.id()}))
 }
 
 fn stop(s: &mut Session, p: &Value) -> Result<Value> {
@@ -194,9 +220,16 @@ pub fn specs() -> Vec<CommandSpec> {
             join
         ),
         spec!(
+            "collab.reconnect",
+            "Reconnect live session",
+            "{} → {status}: for the open file's session when it is disconnected: a reconnect that is waiting tries now, and a session that couldn't go on (`failed`, the file open in its tab) is joined again there, what you changed since going on top (your whole version opening beside it when some of it can't). Refused when nothing was lost",
+            false,
+            reconnect
+        ),
+        spec!(
             "collab.leave",
             "Leave live session",
-            "{session? (a session's id from `collab.peers`'s `sessions`, e.g. a join still on its way; default: the open file's session)} → {ended}: the synced file stays open as a local copy",
+            "{session? (a session's id from `collab.peers`'s `sessions`, e.g. a join still on its way; default: the open file's session)} → {ended}: the synced file stays open as a local copy (also how a tab stops showing a session that couldn't go on)",
             false,
             leave
         ),

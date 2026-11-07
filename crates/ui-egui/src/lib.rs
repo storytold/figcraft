@@ -146,6 +146,8 @@ mod layers_keys_tests;
 #[cfg(test)]
 mod layers_rename_tests;
 #[cfg(test)]
+mod layers_wide_names_tests;
+#[cfg(test)]
 mod library_beacon_tests;
 #[cfg(test)]
 mod live_chat_tests;
@@ -225,6 +227,8 @@ mod proto_reorder_tests;
 #[cfg(test)]
 mod proto_responsive_tests;
 #[cfg(test)]
+mod region_fill_rows_tests;
+#[cfg(test)]
 mod resources_tests;
 #[cfg(test)]
 mod sampled_color_tests;
@@ -249,6 +253,8 @@ mod text_enter_tests;
 #[cfg(test)]
 mod text_link_tests;
 #[cfg(test)]
+mod text_mixed_fill_tests;
+#[cfg(test)]
 mod titlebar_tests;
 #[cfg(test)]
 mod ui_params_tests;
@@ -260,6 +266,8 @@ mod variable_picker_tests;
 mod variables_export_ui_tests;
 #[cfg(test)]
 mod variables_rename_tests;
+#[cfg(test)]
+mod variables_select_tests;
 #[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]

@@ -14,6 +14,7 @@ impl Session {
             docs: Vec::new(),
             active: 0,
             clipboard: Clipboard::default(),
+            default_props: Default::default(),
             prefs: Prefs::default(),
             prefs_unsaved: false,
             tool: tools::ToolState::default(),

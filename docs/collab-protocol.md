@@ -535,9 +535,24 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   `ws://<ip:port>/` and sends the token only inside its `Hello`. Links are pasted into the Join
   dialog (its field has the keyboard when it opens; Escape closes it), or opened from anywhere:
   see *Opening invite links* below.
-- Reconnect: a connection that drops after it was live reconnects with growing pauses (0.5 s,
-  doubling up to 10 s, 12 attempts); a refusal (wrong token, full) or the host ending the session
-  is final; a first join that can't reach the host fails at once. A reconnect resumes as the same
+- Reconnect: a connection that drops after it was live reconnects until you leave, with growing
+  pauses (0.5 s, doubling up to 10 s, 12 attempts), then a minute's pause and as many again. A
+  server turning a live session away is taken as passing (busy, a limit, a file it couldn't read
+  just now) unless it says why in words that are for good: the link, the file or your place in it
+  is gone, or the versions can't talk (`FINAL_REFUSALS` in `crates/collab-net/src/join.rs`). Those
+  and the host ending the session are final; a first join that can't reach the host fails at once.
+  Messages queued while offline go out paced, so they stay within what a server takes from a
+  connection.
+- Disconnected: while it reconnects, and after it can't go on, the tab shows a red mark and a strip
+  across the top of the canvas says so, with **Retry now** (`collab.reconnect`). The tab can still
+  be edited. A session you joined that ended stays on its tab with **Try again**, **Save a copy…**
+  and **Dismiss** (`collab.leave`). **Try again** joins it in the same tab, as the same client when
+  the server still knows it, and what changed since it lost the server goes on top as one undoable
+  edit, through the three-way merge of `crates/collab/src/merge.rs`. The same thing changed both
+  ways keeps the other person's, and layers a new client can't make aren't sent; in those cases
+  your whole version also opens beside it as an unsaved "offline copy", so nothing is lost. A
+  session that gets out of step, or a server that no longer knows you, does the same by itself. A
+  reconnect resumes as the same
   client: the guest's connection keeps the session id, client id and last sequence number from
   the messages it read and sends them in its next `Hello` (see Offline and reconnect).
 - The browser build joins and publishes to a server (see *Built (the browser client)*); hosting
