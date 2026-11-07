@@ -136,6 +136,7 @@ fn edit_link(server: &str, file: &str) -> String {
     format!("figcraft://join?server={server}&file={file}&token={EDIT_TOKEN}")
 }
 
+/// A session you are in as `role` under `name`, invited with `link`.
 fn info(role: Role, name: &str, link: &str) -> SessionInfo {
     SessionInfo {
         role,
@@ -149,6 +150,7 @@ fn info(role: Role, name: &str, link: &str) -> SessionInfo {
         address: SERVER.into(),
         network: true,
         access: Access::Edit,
+        view: None,
     }
 }
 

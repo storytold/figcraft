@@ -1352,6 +1352,15 @@ pub fn library_of(doc: &Document, id: NodeId) -> Option<&str> {
     doc.libraries.import_of(root).map(|r| r.library.as_str())
 }
 
+pub fn library_source(doc: &Document, id: NodeId) -> Option<(&str, NodeId)> {
+    if !doc.is_remote(id) {
+        return None;
+    }
+    let record = doc.libraries.import_of(asset_root(doc, id)?)?;
+    let key = record.ids.iter().find(|(_, local)| **local == id).map_or(record.key, |(key, _)| *key);
+    Some((record.library.as_str(), key))
+}
+
 /// The display name of library `id` in `doc` (its link's name, else the id).
 pub fn library_name<'a>(doc: &'a Document, id: &'a str) -> &'a str {
     doc.libraries.link(id).map_or(id, |l| l.name.as_str())

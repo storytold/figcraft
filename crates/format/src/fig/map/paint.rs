@@ -162,8 +162,17 @@ pub(crate) fn paint(p: &Kv, warn: &mut dyn FnMut(String)) -> Option<Value> {
             o.insert("gradientStops".into(), Value::Array(stops));
         }
         "IMAGE" => {
-            let hash: String =
-                p.get("image").and_then(|i| i.get("hash")).and_then(Kv::bytes).unwrap_or_default().iter().map(|b| format!("{b:02x}")).collect();
+            // A hash longer than any the file's images can be named by resolves to nothing: it
+            // isn't spelled out, which a shared style would repeat for every layer using it.
+            let hash: String = p
+                .get("image")
+                .and_then(|i| i.get("hash"))
+                .and_then(Kv::bytes)
+                .filter(|h| h.len() <= crate::fig::MAX_IMAGE_HASH)
+                .unwrap_or_default()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
             o.insert("imageRef".into(), json!(hash));
             let mode = p.get("imageScaleMode").and_then(Kv::str).unwrap_or("FILL");
             o.insert("scaleMode".into(), json!(mode));
