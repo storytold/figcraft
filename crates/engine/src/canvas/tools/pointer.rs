@@ -76,6 +76,10 @@ impl Session {
         if !matches!(t, ToolId::Move | ToolId::Scale | ToolId::Hand) && self.ds().is_ok_and(|d| d.vector_edit.is_some()) {
             let _ = crate::vectoredit::end(self);
         }
+        // The placement crosshair goes with a change of tool, not with the same tool chosen again.
+        if self.tool.tool != t {
+            self.tool.place_at = None;
+        }
         self.tool.tool = t;
         self.tool.gesture = Gesture::None;
         self.tool.pick_only = false;

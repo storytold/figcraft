@@ -354,6 +354,7 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Tools, "Pan with nothing selected (Shift: farther)", "← ↑ → ↓", "← ↑ → ↓"),
     (Transform, "Rotate a degree (Shift: 15)", "⌥⌘ ← ↑ → ↓", "Ctrl+Alt+← ↑ → ↓"),
     (Tools, "Place a shape or frame (its tool chosen)", "↵", "Enter"),
+    (Tools, "Show and move the placement crosshair (its tool chosen, nothing selected)", "← ↑ → ↓", "← ↑ → ↓"),
     (Zoom, "Zoom tool: click to zoom in, drag an area", "Hold Z", "Hold Z"),
     (Zoom, "Zoom tool: zoom out", "Hold ⌥Z", "Hold Alt+Z"),
     (Zoom, "Zoom around the pointer", "⌘ scroll", "Ctrl+scroll"),

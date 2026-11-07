@@ -37,6 +37,7 @@ impl FigApp {
             field_focus: false,
             panels_unsaved: false,
             control_queue: Vec::new(),
+            control_waits: Default::default(),
             control_input: Vec::new(),
             frame_stats: frame_stats::FrameStats::default(),
             windows: windows::Windows::default(),

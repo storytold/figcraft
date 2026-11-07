@@ -913,6 +913,49 @@ fn written_files_decode_and_list_parents_first() {
 }
 
 #[test]
+fn closed_vector_geometry_is_written_with_its_corner_smoothing() {
+    // A closed vector with rounded points: its written fill and stroke outlines take the layer's
+    // corner smoothing, and the smoothing and each point's radius come back on import.
+    let mut doc = Document::new("smoothing");
+    let page = doc.first_page().unwrap();
+    let mut network = VectorNetwork::from_points(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y)), true);
+    for (v, r) in network.vertices.iter_mut().zip([20.0, 0.0, 10.0, 0.0]) {
+        v.radius = r;
+    }
+    let id = doc.create(page, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.node_mut(id).unwrap().strokes = vec![Paint::solid(Color::BLACK)];
+    // The vector's written fill and stroke outlines.
+    let outlines = |doc: &Document| -> Vec<Vec<u8>> {
+        let (bytes, _) = export(doc, None).unwrap();
+        let archive = Archive::open(&bytes).unwrap();
+        let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+        let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+        let blobs = msg.get("blobs").unwrap().list();
+        let changes = msg.get("nodeChanges").unwrap().list();
+        let nc = changes.iter().find(|nc| nc.get("type").and_then(Kv::str) == Some("VECTOR")).unwrap();
+        ["fillGeometry", "strokeGeometry"]
+            .iter()
+            .map(|key| {
+                let paths = nc.get(key).map(Kv::list).unwrap_or_default();
+                let blob = paths.first().unwrap_or_else(|| panic!("{key} is written")).get("commandsBlob").unwrap().f64().unwrap() as usize;
+                blobs[blob].get("bytes").and_then(Kv::bytes).unwrap().to_vec()
+            })
+            .collect()
+    };
+    let plain = outlines(&doc);
+    doc.node_mut(id).unwrap().corners.smoothing = 0.6;
+    let smoothed = outlines(&doc);
+    assert_ne!(smoothed[0], plain[0], "the fill outline takes the smoothing");
+    assert_ne!(smoothed[1], plain[1], "the stroke outline takes the smoothing");
+    let (back, _) = round_trip(&doc, "smoothed vector");
+    let v = back.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).unwrap();
+    assert!((v.corners.smoothing - 0.6).abs() < 1e-6, "smoothing comes back: {}", v.corners.smoothing);
+    let NodeKind::Vector { network } = &v.kind else { panic!("vector") };
+    let radii: Vec<f64> = network.vertices.iter().map(|x| x.radius).collect();
+    assert_eq!(radii, vec![20.0, 0.0, 10.0, 0.0], "each point keeps its own radius");
+}
+
+#[test]
 fn the_written_schema_parses_and_round_trips() {
     let schema = Schema::parse(export::SCHEMA).unwrap();
     let back = Schema::decode(&encode::schema(&schema)).unwrap();
