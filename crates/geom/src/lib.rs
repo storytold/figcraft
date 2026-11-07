@@ -484,6 +484,7 @@ pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> B
         p.curve_to(c + Vec2::new(-kx, ry), c + Vec2::new(-rx, ky), c + Vec2::new(-rx, 0.0));
         p.curve_to(c + Vec2::new(-rx, -ky), c + Vec2::new(-kx, -ry), c + Vec2::new(0.0, -ry));
         p.curve_to(c + Vec2::new(kx, -ry), c + Vec2::new(rx, -ky), c + Vec2::new(rx, 0.0));
+        p.close_path();
         p
     };
     if full && inner <= 0.0 {
