@@ -730,7 +730,11 @@ made active), add?}`, `vector.edit.selectAll` (every edited layer's points), `ve
 `vector.edit.addVertex`, `vector.edit.connect {a, b}`, `vector.edit.pen {x, y, dx?, dy?}` (continues
 from the pen's open end; clicking a point connects or branches), `vector.edit.penEnd`,
 `vector.edit.paint {x, y} | {points}` (paint bucket: fills or unfills the closed area under a page
-point; with `points`, the areas under the rest go the way the first went, like a drag),
+point; with `points`, the areas under the rest go the way the first went, like a drag), `fill.set`,
+`fill.add`, `fill.remove`, `fill.move` and `fill.paste` on the edited layer while regions are
+selected (`vector.edit.select {regions}`), which edit those regions' own fills and leave the
+layer's (`regions: [index, ...]` names them on any vector layer; `fill.copy` copies the selected
+regions' paint),
 `vector.edit.cut {segment, t} | {vertex} | {from: [x, y], to: [x, y]}` (the last cuts every path the
 page line crosses; parts that come apart move to layers of their own above, listed in `layers`),
 `vector.edit.erase {points, radius?}` (the eraser),

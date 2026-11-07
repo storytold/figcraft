@@ -15,7 +15,7 @@ use crate::{Result, Session, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        spec!("fill.move", "Move fill", "{ids?, from, to} (indices in the fill list, bottom first)", true, |s, p| {
+        spec!("fill.move", "Move fill", "{ids?, from, to, regions?} (indices in the fill list, bottom first)", true, |s, p| {
             move_item(s, p, "fill.move", BoundList::Fills)
         }),
         spec!("stroke.move", "Move stroke", "{ids?, from, to} (indices in the stroke list, bottom first)", true, |s, p| {
@@ -295,7 +295,20 @@ fn reorder<T>(v: &mut Vec<T>, from: usize, to: usize) -> bool {
 fn move_item(s: &mut Session, p: &Value, cmd: &str, list: BoundList) -> Result<Value> {
     let from = req_index(cmd, p, "from")?;
     let to = req_index(cmd, p, "to")?;
-    for id in req_targets(cmd, s, p)? {
+    let ids = req_targets(cmd, s, p)?;
+    // Fills of the regions selected (or named) in a vector: their own stacks move (#1875).
+    if matches!(list, BoundList::Fills)
+        && let Some((id, regions)) = crate::cmd::edit::fill_regions(s, cmd, p, &ids)?
+    {
+        crate::cmd::edit::edit_region_fills(s.doc_mut()?, id, &regions, |fills| {
+            if from < fills.len() && to < fills.len() {
+                reorder(fills, from, to);
+            }
+            Ok(())
+        })?;
+        return ok();
+    }
+    for id in ids {
         // A text's characters' shared fills are the list the Design panel shows and reorders.
         let len = s
             .doc()?
