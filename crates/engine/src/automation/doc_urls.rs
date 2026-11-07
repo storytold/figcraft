@@ -28,6 +28,11 @@ pub fn openable(url: &str) -> bool {
     if url.is_empty() || url.chars().any(char::is_control) {
         return false;
     }
+    // Never valid in a URL unencoded, and read as syntax by the shells some openers go through
+    // (webbrowser on WSL hands the address to `cmd.exe /c start`, escaping only `&` and `^`).
+    if url.chars().any(|c| c.is_whitespace() || matches!(c, '|' | '<' | '>' | '"' | '`' | '\\' | '^')) {
+        return false;
+    }
     let Some((scheme, rest)) = url.split_once(':') else { return false };
     // An RFC 3986 scheme, so a stray colon in text cannot look like one.
     let mut chars = scheme.chars();
@@ -44,5 +49,11 @@ pub fn openable(url: &str) -> bool {
     // `http` and `https` name a host, so the authority is required: `http:x` is not a web link,
     // and `http:///p` has no host.
     let Some(after) = rest.strip_prefix("//") else { return false };
-    !after.is_empty() && !after.starts_with('/')
+    if after.is_empty() || after.starts_with('/') {
+        return false;
+    }
+    // The authority is made of host characters only (an opener that can't parse the address may
+    // fall back to treating it as a file path).
+    let authority = after.split(['/', '?', '#']).next().unwrap_or_default();
+    authority.chars().all(|c| !c.is_ascii() || c.is_ascii_alphanumeric() || "-._~:@[]%!$&'()*+,;=".contains(c))
 }

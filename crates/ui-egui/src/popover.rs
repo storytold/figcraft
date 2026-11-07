@@ -181,6 +181,7 @@ impl Popover {
                 ui.set_invisible();
                 ctx.request_repaint();
             }
+            ui.set_max_height(max_height(screen));
             // The panel is painted into a place kept before the content: the shadow and the fill
             // go under it, though its size is only known once the slot is laid out.
             let bg = ui.painter().add(egui::Shape::Noop);
@@ -284,6 +285,16 @@ fn open_pos(anchor: Pos2, size: Vec2, screen: Rect) -> Pos2 {
 /// `gap` out over the canvas: left of the panel, or right of it in a mirrored window.
 pub fn beside_panel(panel: egui::Rangef, width: f32, gap: f32, mirrored: bool) -> f32 {
     if mirrored { panel.max + gap } else { panel.min - gap - width }
+}
+
+/// The height a popover's content is offered: the screen's, less [`EDGE`] above and below.
+///
+/// egui offers an area the size it had last frame, so content that fills what it is offered (a
+/// scrolling list) could only ever shrink: a search that narrowed a picker's list left it a few
+/// rows high after the search was cleared (#2043). The list takes what it needs of this, and the
+/// placement keeps the panel on the screen.
+pub(crate) fn max_height(screen: Rect) -> f32 {
+    (screen.height() - 2.0 * EDGE).max(HEADER_H)
 }
 
 /// Keeps the panel inside the screen: whole when it fits, its top-left corner when it doesn't.

@@ -282,9 +282,11 @@ fn capped_member(
     if size > allowed {
         return Err(corrupt(format!("{name} is too large")));
     }
-    let data = crate::read_member(z, name, allowed)?;
-    *total += data.len() as u64;
-    Ok(data)
+    let data = crate::read_member(z, name, allowed);
+    // A failed read (a bad checksum at the end, say) unpacked all the same: charged in full, so
+    // a page list naming the member again can't repeat it within the budget.
+    *total += data.as_ref().map_or(size, |d| d.len() as u64);
+    data
 }
 
 /// JSON member `name`, read by [`capped_member`] within the file's [`MAX_JSON_TOTAL`].

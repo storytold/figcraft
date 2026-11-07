@@ -384,8 +384,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Landed (2026-10-12):** several Bezier handles selected with Shift-click and dragged together,
   sharp points beside curved segments rounded, a stroke cap and join per point (canvas, PNG, SVG,
   PDF, outline stroke), the Pen outside edit mode connecting to its own points and continuing a
-  selected open path. Left: corner smoothing on vectors, corner radius and smoothing on boolean
-  groups that contain rectangles, per-point caps and joins on dashed, variable-width and brush
+  selected open path. Left: corner radius and smoothing on boolean groups that contain
+  rectangles, per-point caps and joins on dashed, variable-width and brush
   strokes.
 - **Landed (2026-10-11):** boolean groups are clicked where their result is (a click in a
   subtracted hole reaches what's behind; with the group or an operand selected its operands are
