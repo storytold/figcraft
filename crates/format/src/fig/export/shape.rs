@@ -56,16 +56,24 @@ impl<'d> Exporter<'d> {
         }
         let spans = td.spans();
         let mut table: Vec<&TextStyle> = Vec::new();
+        // Each distinct style once, found by its serialized form rather than by comparing it
+        // with every earlier one (quadratic in the number of distinct styles).
+        let mut index: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         let mut span_ids = Vec::with_capacity(spans.len());
         for (_, _, st) in &spans {
             span_ids.push(if **st == td.style {
                 0
             } else {
-                let i = table.iter().position(|t| *t == *st).unwrap_or_else(|| {
-                    table.push(st);
-                    table.len() - 1
-                });
-                i as u32 + 1
+                match serde_json::to_string(st) {
+                    Ok(key) => *index.entry(key).or_insert_with(|| {
+                        table.push(st);
+                        table.len() as u32
+                    }),
+                    Err(_) => {
+                        table.push(st);
+                        table.len() as u32
+                    }
+                }
             });
         }
         let mut chars = String::new();
