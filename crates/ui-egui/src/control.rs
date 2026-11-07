@@ -1030,6 +1030,12 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
                 "ArrowUp" => (0, -1),
                 _ => (0, 1),
             };
+            // A shape or frame tool chosen and nothing selected: the arrows show and move the
+            // placement crosshair, as the window's key path does.
+            if app.session.selection().is_empty() && app.session.tool.tool.draws_shape() && !app.session.tool.dev_mode && !(m.cmd || m.ctrl || m.alt)
+            {
+                return app.session.execute("tool.crosshair", &json!({"dx": dx, "dy": dy, "big": m.shift})).map_err(|e| e.to_string());
+            }
             let (cmd, params) = if (m.cmd || m.ctrl) && m.alt {
                 // Rotate a degree, 15 with Shift: down and right clockwise, up and left back, about
                 // the selection's rotation origin; nothing while points are being edited.
