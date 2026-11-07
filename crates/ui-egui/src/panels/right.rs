@@ -89,12 +89,18 @@ impl FigApp {
 
     /// Apply a field edit through any command: `params` builds the command's params from the value.
     pub fn field_run(&mut self, edit: Option<FieldEdit>, cmd: &str, params: impl Fn(f64) -> Value) {
+        self.field_run_named(edit, "Edit", cmd, params);
+    }
+
+    /// Apply a field edit with a specific undo label for scrubs; commit only on release.
+    /// Typed edits use `run`; scrub errors are discarded as in `field_run`.
+    pub(crate) fn field_run_named(&mut self, edit: Option<FieldEdit>, label: &str, cmd: &str, params: impl Fn(f64) -> Value) {
         match edit {
             Some(FieldEdit::Set(v)) => {
                 self.run(cmd, params(v));
             }
             Some(FieldEdit::Scrub(v, done)) => {
-                let _ = self.session.begin_interaction("Edit");
+                let _ = self.session.begin_interaction(label);
                 let _ = self.session.execute(cmd, &params(v));
                 if done {
                     let _ = self.session.commit_interaction();
