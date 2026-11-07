@@ -986,6 +986,12 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
                 t.set_para_lists(start, end, |p| p.indent = d.clamp(0.0, f64::from(MAX_LIST_INDENT)) as u8);
             }
         }
+        "textDirection" | "direction" => {
+            let d: figcraft_doc::TextDirection = enum_of(v).ok_or_else(|| bad(cmd, "textDirection: auto|ltr|rtl"))?;
+            let t = text_mut(cmd, doc.get_mut(id)?)?;
+            let (start, end) = range_of(props, t.char_count());
+            t.set_para_lists(start, end, |p| p.direction = d);
+        }
         "listSpacing" => text_mut(cmd, doc.get_mut(id)?)?.list_spacing = f64_of(v).filter(|s| s.is_finite()).unwrap_or(0.0).clamp(0.0, 10_000.0),
         "hangingPunctuation" | "hangingList" => {
             let on = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be true or false")))?;
@@ -1240,7 +1246,7 @@ pub fn override_group(k: &str) -> &'static str {
         "name" => "name",
         "characters" | "text" => "characters",
         "features" | "fontFeatures" | "openTypeFeatures" | "listStyle" | "indentation" | "listSpacing" | "maxLines" | "variationSettings"
-        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" => "textStyle",
+        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" | "textDirection" | "direction" => "textStyle",
         "cornerRadius" | "cornerSmoothing" | "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "corners",
         "width" | "height" | "w" | "h" => "size",
         "sizingH" | "sizingV" | "layoutSizingHorizontal" | "layoutSizingVertical" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "resizing",

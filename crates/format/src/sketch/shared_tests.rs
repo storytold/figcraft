@@ -91,7 +91,7 @@ fn text_style_links() {
     let sid = n.styles.text.clone().expect("text style linked");
     let s = style(&doc, &sid);
     assert_eq!(s.name, "Heading/H1");
-    let StyleKind::Text { style: ts } = &s.kind else { panic!("not a text style") };
+    let StyleKind::Text { style: ts, .. } = &s.kind else { panic!("not a text style") };
     assert_eq!((ts.font_family.as_str(), ts.font_style.as_str(), ts.font_size), ("Helvetica", "Bold", 32.0));
     assert!(n.fills.iter().any(|p| matches!(p.kind, PaintKind::Solid { color } if color.r == 1.0 && color.g == 0.0)));
 }

@@ -520,7 +520,7 @@ fn sketch_shared_text_styles_match_their_layers() {
         .styles
         .iter()
         .find_map(|st| match &st.kind {
-            figcraft_doc::StyleKind::Text { style } if st.name == "Body" => Some(style.clone()),
+            figcraft_doc::StyleKind::Text { style, .. } if st.name == "Body" => Some(style.clone()),
             _ => None,
         })
         .unwrap();

@@ -600,6 +600,8 @@ pub struct UiState {
     pub online: online::OnlineUi,
     /// The window was asked to close with unsaved changes: the question shows.
     pub confirm_close: bool,
+    /// A tab was asked to close with unsaved changes: the question for it, then its save.
+    pub close_tab: Option<windows::TabClose>,
     /// The file a Save as started from the unsaved-changes question is saving: the window closes
     /// once it is saved, and stays open if the dialog is cancelled or the save fails.
     pub close_after_save_as: Option<u64>,
@@ -723,6 +725,7 @@ impl Default for UiState {
             live: live::LiveUi::default(),
             online: online::OnlineUi::default(),
             confirm_close: false,
+            close_tab: None,
             close_after_save_as: None,
             save_on_close: false,
         }
@@ -758,6 +761,9 @@ pub struct FigApp {
     panels_unsaved: bool,
     /// Control-channel requests waiting for the next frame.
     pub control_queue: Vec<ControlRequest>,
+    /// Windows a control request waits for: the window's pass count when the wait began and the
+    /// app-clock time it began, to tell a window that stopped drawing ([`control::background`]).
+    control_waits: std::collections::BTreeMap<u64, (u64, f64)>,
     /// Input events from the control channel (`ui.input`) for the next frame's raw input.
     pub control_input: Vec<egui::Event>,
     /// Frames drawn and what asked for them (`ui.inspect`).

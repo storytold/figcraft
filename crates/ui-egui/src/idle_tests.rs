@@ -434,6 +434,53 @@ fn a_hidden_window_answers_at_once() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #1906: under Wayland a minimised window still reports itself visible (no `minimized`, no
+/// `occluded`) and draws no frames; eframe runs only its logic. A request waiting for that
+/// window's frame is answered from the logic passes once the window has drawn nothing for
+/// [`crate::control::NOT_DRAWING_AFTER`], instead of timing out after 60 s. A window that draws
+/// keeps answering from its frame.
+#[test]
+fn a_window_that_stopped_drawing_answers_from_its_logic_passes() {
+    let (mut h, text) = document();
+    h.settle();
+    h.time += 120.0;
+    h.app.clock.set_test_now(Some(h.time));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let rename = |id: u64, name: &str| ControlRequest {
+        id: json!(id),
+        method: "engine.execute".into(),
+        params: json!({"command": "node.set", "params": {"ids": [text.clone()], "props": {"name": name}}}),
+        reply: tx.clone(),
+        state: Default::default(),
+    };
+    let node = figcraft_doc::NodeId(text.as_u64().unwrap());
+    let name = |h: &Harness| h.app.session.doc().unwrap().node(node).unwrap().name.clone();
+    // What Wayland reports for a minimised window: nothing about its visibility.
+    let unknown = RawInput::default();
+    let ctx = h.ctx.clone();
+    h.app.control_queue.push(rename(1, "while minimised"));
+    let _ = ctx.run_logic(&unknown, |ctx| crate::control::background(&mut h.app, ctx));
+    assert!(rx.try_recv().is_err(), "a window that may still draw answers from its frame");
+    assert_eq!(h.app.control_queue.len(), 1);
+    // No frame comes: the next logic pass answers.
+    h.app.clock.set_test_now(Some(h.time + crate::control::NOT_DRAWING_AFTER + 0.05));
+    let _ = ctx.run_logic(&unknown, |ctx| crate::control::background(&mut h.app, ctx));
+    let reply = rx.try_recv().expect("answered while the window draws nothing");
+    assert_eq!(reply.id, json!(1));
+    assert!(reply.result.is_ok(), "{:?}", reply.result);
+    assert_eq!(name(&h), "while minimised");
+    assert!(h.app.control_queue.is_empty(), "nothing waits for the window");
+    // Back on screen: a frame drawn after the wait began starts it again, and the frame answers.
+    h.time += 1.0;
+    h.app.clock.set_test_now(Some(h.time));
+    h.app.control_queue.push(rename(2, "on screen"));
+    let _ = ctx.run_logic(&unknown, |ctx| crate::control::background(&mut h.app, ctx));
+    h.app.clock.set_test_now(Some(h.time + crate::control::NOT_DRAWING_AFTER + 0.05));
+    h.frame(vec![]);
+    let reply = rx.try_recv().expect("the frame answers");
+    assert_eq!((reply.id, name(&h)), (json!(2), "on screen".to_string()));
+}
+
 #[test]
 fn auto_save_writes_a_changed_file_then_rests() {
     let dir = std::env::temp_dir().join(format!("figcraft-auto-save-{}", std::process::id()));
