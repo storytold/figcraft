@@ -169,9 +169,40 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
         let acks = app.take_input_acks(viewport_id);
         app.applied_acks.extend(acks);
         app.applied_input = Some(events.clone());
+        app.applied_doc = tagged;
         app.applied_frame = Some(viewport_id);
     }
     events
+}
+
+/// After this frame's control requests ran: the batch it took for one file never reaches another
+/// the window switched to meanwhile (`ui.input` then `doc.switch`, unacknowledged). Its
+/// acknowledgements fail once and its events leave this pass's input; other events stay.
+pub(crate) fn revalidate_input(app: &mut FigApp, ctx: &Context) {
+    if app.applied_frame != Some(ctx.viewport_id()) {
+        return;
+    }
+    let current = app.session.docs.get(app.session.active).map(|d| d.uid);
+    if app.applied_doc == current {
+        return;
+    }
+    // Only the pass holding the batch: a discarded pass's rerun has none (it was applied).
+    let Some(batch) = app.applied_input.take() else { return };
+    for ack in app.applied_acks.drain(..) {
+        let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err("the document changed before the input could be applied".into()) });
+    }
+    // The hooks append the batch after the platform's events: remove one copy of each from the
+    // end, so an identical event of the user's own stays.
+    ctx.input_mut(|i| {
+        for e in batch.iter().rev() {
+            if let Some(at) = i.events.iter().rposition(|x| x == e) {
+                i.events.remove(at);
+            }
+            if let Some(at) = i.raw.events.iter().rposition(|x| x == e) {
+                i.raw.events.remove(at);
+            }
+        }
+    });
 }
 
 /// Error, once, the `ui.input` acknowledgements waiting for `viewport`'s batch: its file changed

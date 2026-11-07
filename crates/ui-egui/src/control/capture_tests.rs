@@ -655,3 +655,80 @@ fn injected_text_lands_once_across_a_discarded_sizing_pass() {
     assert_eq!(rx.try_recv().expect("acknowledged once").id, json!(22));
     assert!(app.input_acks.is_empty() && app.applied_acks.is_empty());
 }
+
+/// Two files, each with one selected rectangle; the first is active. Returns the rectangles.
+fn two_files_with_selected_rectangles() -> (Ui, NodeId, NodeId) {
+    let mut s = Session::new();
+    let a = NodeId(s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap()["id"].as_u64().unwrap());
+    s.execute("file.new", &json!({"name": "B"})).unwrap();
+    let b = NodeId(s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap()["id"].as_u64().unwrap());
+    s.execute("doc.switch", &json!({"index": 0})).unwrap();
+    (Ui::new(s), a, b)
+}
+
+/// Queue `ui.input` pressing Delete for the active file.
+fn push_delete(u: &mut Ui, id: u64) -> std::sync::mpsc::Receiver<ControlReply> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(id),
+        method: "ui.input".into(),
+        params: json!({"events": [{"key": "Delete"}]}),
+        reply: tx,
+        state: Default::default(),
+    });
+    rx
+}
+
+/// Asserts a `ui.input` batch for one file followed, unacknowledged, by `doc.switch` never edits
+/// the newly active file: its acknowledgement fails once, its events are taken out of the pass,
+/// and the window's other input still arrives.
+#[test]
+fn input_queued_before_a_document_switch_never_edits_the_new_document() {
+    let (mut u, a, b) = two_files_with_selected_rectangles();
+    let rx = push_delete(&mut u, 30);
+    u.frame(vec![]);
+    let mut events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    assert!(!events.is_empty(), "the batch was taken for file A");
+    let (tx, switched) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(31),
+        method: "engine.execute".into(),
+        params: json!({"command": "doc.switch", "params": {"index": 1}}),
+        reply: tx,
+        state: Default::default(),
+    });
+    let undo_b = u.app.session.docs[1].history.undo.len();
+    let unrelated = egui::Event::PointerMoved(egui::pos2(321.0, 123.0));
+    events.insert(0, unrelated.clone());
+    u.frame(events);
+    assert!(switched.try_recv().expect("switched").result.is_ok());
+    assert_eq!(u.app.session.active, 1);
+    let seen = u.ctx.input(|i| i.events.clone());
+    assert!(seen.contains(&unrelated), "the window's own input still arrives");
+    assert!(!seen.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Delete, .. })), "the batch's keys are taken out");
+    u.frame(vec![]);
+    let reply = rx.try_recv().expect("the batch's acknowledgement");
+    assert_eq!(reply.id, json!(30));
+    assert!(reply.result.is_err(), "the batch was not applied: {:?}", reply.result);
+    u.frame(vec![]);
+    assert!(rx.try_recv().is_err(), "no later acknowledgement");
+    assert!(u.app.session.docs[1].doc.node(b).is_some(), "file B's rectangle is untouched");
+    assert_eq!(u.app.session.docs[1].history.undo.len(), undo_b, "nothing was recorded in file B");
+    assert!(u.app.session.docs[0].doc.node(a).is_some());
+    assert!(u.app.input_acks.is_empty() && u.app.applied_acks.is_empty());
+}
+
+/// Asserts a batch whose file is still active after the control requests is applied and
+/// acknowledged as before.
+#[test]
+fn input_for_the_still_active_document_is_applied_and_acknowledged() {
+    let (mut u, a, b) = two_files_with_selected_rectangles();
+    let rx = push_delete(&mut u, 32);
+    u.frame(vec![]);
+    let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    u.frame(events);
+    u.frame(vec![]);
+    assert!(rx.try_recv().expect("acknowledged").result.is_ok());
+    assert!(u.app.session.docs[0].doc.node(a).is_none(), "the Delete applied to file A");
+    assert!(u.app.session.docs[1].doc.node(b).is_some());
+}
