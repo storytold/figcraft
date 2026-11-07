@@ -152,6 +152,8 @@ struct Stranded {
     link: String,
     /// The server's state when it stopped: what's different from it in the tab is your own work.
     confirmed: Box<figcraft_collab::Replica>,
+    /// Who you were: the layers you made are in that client's id space.
+    resume: Resume,
 }
 
 impl Live {
@@ -182,17 +184,19 @@ impl Live {
         *self = Live { id: self.id, tab: self.tab, ..Live::default() };
     }
 
-    /// Keep this session on its tab for joining again (see [`Stranded`]): a session you joined, or
-    /// one that already is; any other goes back to no session.
-    fn strand(&mut self) {
+    /// Remember what joining this session again takes, if it is one you joined (see [`Stranded`]).
+    fn hold(&mut self) {
         let joined = self.info.as_ref().filter(|i| i.role == Role::Guest && !i.link.is_empty());
-        let held = self.stranded.take().or_else(|| {
-            let (client, info) = (self.client.as_ref()?, joined?);
-            Some(Stranded { link: info.link.clone(), confirmed: Box::new(client.confirmed().clone()) })
-        });
-        if held.is_none() {
-            return self.reset();
+        if let (None, Some(client), Some(info)) = (&self.stranded, &self.client, joined) {
+            self.stranded = Some(Stranded { link: info.link.clone(), confirmed: Box::new(client.confirmed().clone()), resume: client.resume() });
         }
+    }
+
+    /// Keep this session on its tab for joining again: a session you joined, or one that already
+    /// is; any other goes back to no session.
+    fn strand(&mut self) {
+        self.hold();
+        let Some(held) = self.stranded.take() else { return self.reset() };
         *self = Live {
             id: self.id,
             tab: self.tab,
@@ -201,7 +205,7 @@ impl Live {
             server: std::mem::take(&mut self.server),
             published: self.published.take(),
             share: self.share.take(),
-            stranded: held,
+            stranded: Some(held),
             ..Live::default()
         };
     }
