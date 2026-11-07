@@ -69,6 +69,20 @@ fn types_and_their_starting_values() {
 }
 
 #[test]
+fn move_mode_rejects_negative_and_fractional_indexes() {
+    let mut s = Session::new();
+    theme(&mut s);
+    run(&mut s, "variable.addMode", json!({"collection": "Theme", "name": "Dim"}));
+    let order =
+        |s: &Session| -> Vec<String> { s.doc().unwrap().variables.collection("Theme").unwrap().modes.iter().map(|m| m.name.clone()).collect() };
+    let before = order(&s);
+    for to in [json!(-1), json!(1.9)] {
+        assert!(s.execute("variable.moveMode", &json!({"collection": "Theme", "mode": "Dim", "to": to})).is_err(), "{to}");
+        assert_eq!(order(&s), before, "{to}");
+    }
+}
+
+#[test]
 fn modes_new_duplicated_reordered_and_the_default() {
     // Documented: a new mode starts with the default mode's values and a duplicated one with its
     // source's; the default is the left-most mode (set as default = move it there); layers on
