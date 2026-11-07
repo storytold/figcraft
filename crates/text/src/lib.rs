@@ -9,6 +9,8 @@
 mod breaks;
 pub mod color;
 pub mod display;
+#[cfg(target_arch = "wasm32")]
+mod embedded;
 pub mod fontdb;
 mod layout;
 mod onpath;

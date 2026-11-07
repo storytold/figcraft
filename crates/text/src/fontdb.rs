@@ -695,7 +695,7 @@ pub fn db() -> &'static RwLock<FontDb> {
 fn raw_db() -> &'static RwLock<FontDb> {
     DB.get_or_init(|| {
         let mut db = FontDb::default();
-        for f in CRAFT_FONTS {
+        for f in CRAFT_FONTS.iter() {
             if let Some(face) = Face::from_bytes(FontBytes::Static(f.bytes), 0, Some(f.family), Some(f.style)) {
                 db.add(face);
             }
