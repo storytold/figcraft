@@ -423,6 +423,9 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
     let mut chosen: Option<Pick> = None;
     let mut close = false;
     let area = egui::Area::new(Id::unique("variable_picker_area")).order(egui::Order::Foreground).fixed_pos(p.at + vec2(0.0, 4.0)).show(ctx, |ui| {
+        // The whole screen's height, not last frame's, so the list grows back after a search (#2043);
+        // egui keeps the area on the screen.
+        ui.set_max_height(crate::popover::max_height(ctx.content_rect()));
         egui::Frame::NONE.fill(t.menu).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
             ui.set_width(240.0);
             ui.horizontal(|ui| {

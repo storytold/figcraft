@@ -187,13 +187,18 @@ fn setup() -> (Ui, NodeId, NodeId) {
     (u, a, b)
 }
 
-/// The field named `name` in the Design panel: the middle of its value, and what it shows.
+/// The topmost field named `name` in the Design panel: its value centre and displayed text.
+/// Layer opacity precedes the equally named opacity fields in paint rows.
 fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
-    let n =
-        nodes.iter().map(|(_, n)| n).find(|n| n.role() == Role::SpinButton && n.label() == Some(name)).unwrap_or_else(|| panic!("no field {name:?}"));
+    let n = nodes
+        .iter()
+        .map(|(_, n)| n)
+        .filter(|n| n.role() == Role::SpinButton && n.label() == Some(name))
+        .min_by(|a, b| a.bounds().map_or(f64::INFINITY, |r| r.y0).total_cmp(&b.bounds().map_or(f64::INFINITY, |r| r.y0)))
+        .unwrap_or_else(|| panic!("no field {name:?}"));
     let b = n.bounds().expect("bounds");
     (pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32), n.value().unwrap_or_default().to_string())
 }
@@ -203,9 +208,24 @@ fn label(u: &mut Ui, name: &str) -> Pos2 {
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
-    let n = nodes.iter().map(|(_, n)| n).find(|n| n.role() == Role::SpinButton && n.label() == Some(name)).unwrap();
+    let n = nodes
+        .iter()
+        .map(|(_, n)| n)
+        .filter(|n| n.role() == Role::SpinButton && n.label() == Some(name))
+        .min_by(|a, b| a.bounds().map_or(f64::INFINITY, |r| r.y0).total_cmp(&b.bounds().map_or(f64::INFINITY, |r| r.y0)))
+        .unwrap();
     let b = n.bounds().unwrap();
     pos2(b.x0 as f32 - 12.0, ((b.y0 + b.y1) / 2.0) as f32)
+}
+
+/// Layer and fill opacity are both named for assistive technology, even without a visible lead.
+#[test]
+fn paint_opacity_has_an_accessible_name() {
+    let (mut u, _, _) = setup();
+    let output = u.frame_output(vec![]);
+    let nodes = output.platform_output.accesskit_update.unwrap().nodes;
+    let opacity_fields = nodes.iter().filter(|(_, n)| n.role() == Role::SpinButton && n.label() == Some("Opacity")).count();
+    assert_eq!(opacity_fields, 2, "both layer and fill opacity must have an accessible name");
 }
 
 fn geom(u: &Ui, n: NodeId) -> (f64, f64, f64, f64) {
