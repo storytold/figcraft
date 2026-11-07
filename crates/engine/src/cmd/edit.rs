@@ -326,7 +326,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("node.reorder", "Reorder layer", "{id, index}", true, |s, p| {
             let i = req_id("node.reorder", p, "id")?;
-            let idx = req_num("node.reorder", p, "index")?.max(0.0) as usize;
+            let idx = req_index("node.reorder", p, "index")?;
             s.doc_mut()?.reorder(i, idx)?;
             ok()
         }),
@@ -544,6 +544,15 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("edit.delete", s, p)?;
     let doc = s.doc_mut()?;
     let ids = roots(doc, &ids);
+    // A layer inside an instance can't be removed: Delete hides it instead, an override ("Figma
+    // will only toggle the layer's visibility instead of removing it", Guide to auto layout).
+    let (hidden, ids): (Vec<_>, Vec<_>) = ids.into_iter().partition(|i| crate::assets::components::inside_instance(doc, *i));
+    for i in &hidden {
+        doc.get_mut(*i)?.visible = false;
+    }
+    if ids.is_empty() {
+        return Ok(json!({"deleted": [], "hidden": hidden}));
+    }
     let mut parents = Vec::new();
     for i in &ids {
         if doc.node(*i).is_some_and(Node::is_page) {
@@ -556,7 +565,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Select the parent frame like Figma? Figma clears the selection.
     s.set_selection(vec![]);
-    Ok(json!({"deleted": ids}))
+    Ok(json!({"deleted": ids, "hidden": hidden}))
 }
 
 /// Layers duplicated last (Duplicate or Alt-drag) and their copies, in the same order. While the

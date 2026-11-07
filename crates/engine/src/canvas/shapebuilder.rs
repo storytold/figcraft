@@ -109,7 +109,9 @@ pub fn eligible(doc: &Document, ids: &[NodeId]) -> Vec<NodeId> {
             out.push(id);
         }
     }
-    let ids: Vec<NodeId> = ids.iter().copied().filter(|i| doc.contains(*i)).collect();
+    // Each id counts once: a repeated group must not be walked once per repeat.
+    let mut seen = std::collections::BTreeSet::new();
+    let ids: Vec<NodeId> = ids.iter().copied().filter(|i| doc.contains(*i) && seen.insert(*i)).collect();
     let mut out = Vec::new();
     for id in roots(doc, &ids) {
         walk(doc, id, 0, &mut out);

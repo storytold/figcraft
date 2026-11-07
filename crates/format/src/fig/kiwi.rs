@@ -6,6 +6,7 @@
 //! Everything here reads untrusted bytes: reads are bounds-checked, nesting is capped, array
 //! counts can't exceed the bytes left, and the total number of decoded values is capped.
 
+use std::collections::HashMap;
 use std::fmt;
 
 /// Deepest struct/message nesting decoded.
@@ -32,6 +33,9 @@ const MAX_VALUES: usize = 32 << 20;
 /// Most definitions in a schema, and fields in one definition.
 const MAX_DEFS: usize = 10_000;
 const MAX_FIELDS: usize = 10_000;
+/// Most fields in a schema, every definition together: Figma's own schema has a few thousand, and
+/// without a total a schema of [`MAX_DEFS`] wide definitions could hold 100 million field records.
+const MAX_SCHEMA_FIELDS: usize = 200_000;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct KiwiError(pub String);
@@ -252,6 +256,7 @@ impl Schema {
         }
         let mut defs = Vec::with_capacity(count);
         let mut raw_types = Vec::new();
+        let mut total_fields = 0usize;
         for _ in 0..count {
             let name = r.string()?;
             let kind = match r.byte()? {
@@ -261,7 +266,8 @@ impl Schema {
                 k => return err(format!("schema: unknown definition kind {k}")),
             };
             let n = r.var_uint()? as usize;
-            if n > MAX_FIELDS || n > r.left() {
+            total_fields = total_fields.saturating_add(n);
+            if n > MAX_FIELDS || n > r.left() || total_fields > MAX_SCHEMA_FIELDS {
                 return err("schema: too many fields");
             }
             let mut fields = Vec::with_capacity(n);
@@ -311,7 +317,7 @@ impl Schema {
 
     /// [`Self::decode_message`] within `budget` values (see [`value_budget`]).
     pub fn decode_message_within<'s>(&'s self, root: usize, data: &[u8], budget: usize) -> Result<Kv<'s>, KiwiError> {
-        let mut d = Decoder { schema: self, r: Reader { data, pos: 0 }, budget };
+        let mut d = Decoder { schema: self, r: Reader { data, pos: 0 }, budget, ids: vec![None; self.defs.len()] };
         d.def(root, 0)
     }
 }
@@ -325,12 +331,29 @@ struct Decoder<'s, 'b> {
     schema: &'s Schema,
     r: Reader<'b>,
     budget: usize,
+    /// Per definition, the index of the first field with each id (message field ids, enum
+    /// values), built the first time the definition is decoded: a message can carry many tags
+    /// against a wide definition, and a scan per tag would multiply the two.
+    ids: Vec<Option<HashMap<u32, usize>>>,
 }
 
 impl<'s> Decoder<'s, '_> {
     fn spend(&mut self, n: usize) -> Result<(), KiwiError> {
         self.budget = self.budget.checked_sub(n).ok_or_else(|| KiwiError("message: too many values".into()))?;
         Ok(())
+    }
+
+    /// The first field of definition `i` with id (or enum value) `id`.
+    fn field_by_id(&mut self, i: usize, id: u32) -> Option<&'s Field> {
+        let fields = &self.schema.defs.get(i)?.fields;
+        let ids = self.ids.get_mut(i)?.get_or_insert_with(|| {
+            let mut m = HashMap::with_capacity(fields.len());
+            for (j, f) in fields.iter().enumerate() {
+                m.entry(f.value).or_insert(j);
+            }
+            m
+        });
+        fields.get(*ids.get(&id)?)
     }
 
     fn def(&mut self, i: usize, depth: usize) -> Result<Kv<'s>, KiwiError> {
@@ -343,7 +366,7 @@ impl<'s> Decoder<'s, '_> {
         match d.kind {
             Kind::Enum => {
                 let v = self.r.var_uint()?;
-                Ok(d.fields.iter().find(|f| f.value == v).map_or(Kv::Uint(u64::from(v)), |f| Kv::Enum(f.name.as_str())))
+                Ok(self.field_by_id(i, v).map_or(Kv::Uint(u64::from(v)), |f| Kv::Enum(f.name.as_str())))
             }
             Kind::Struct => {
                 let mut out = Vec::with_capacity(d.fields.len());
@@ -361,7 +384,7 @@ impl<'s> Decoder<'s, '_> {
                         out.shrink_to_fit();
                         return Ok(Kv::Object(out));
                     }
-                    let f = d.fields.iter().find(|f| f.value == id).ok_or_else(|| KiwiError(format!("message: {} has no field {id}", d.name)))?;
+                    let f = self.field_by_id(i, id).ok_or_else(|| KiwiError(format!("message: {} has no field {id}", d.name)))?;
                     out.push((f.name.as_str(), self.field(f, depth)?));
                 }
             }
@@ -382,8 +405,9 @@ impl<'s> Decoder<'s, '_> {
         if n > self.r.left() {
             return err("message: array longer than the data");
         }
+        // The field itself counts, so empty arrays can't pile up for free.
+        self.spend(1)?;
         if ty == Type::Byte {
-            self.spend(1)?;
             return Ok(Kv::Bytes(self.r.take(n)?.to_vec()));
         }
         self.spend(n)?;

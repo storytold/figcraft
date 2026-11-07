@@ -162,9 +162,10 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 None => {}
             }
             if several {
-                resp.context_menu(|ui| {
-                    ui.set_width(200.0);
-                    if crate::menus::item(ui, tr("Open in new window"), "", true, false, &t) {
+                // The tab strip's own menu takes the theme like its overflow menus (the in-app
+                // menus stay dark, #843): its rows read on the white popup of the light theme.
+                crate::right::context_popup(&resp).show(|ui| {
+                    if crate::right::menu_item(ui, tr("Open in new window"), "") {
                         detach = Some((i, None));
                         ui.close();
                     }
