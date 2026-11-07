@@ -520,6 +520,81 @@ fn double_clicking_a_page_renames_it_with_the_focus_in_the_screen_reader_tree() 
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
 }
 
+/// A press of `key` in the frame that's next, then a few frames to settle.
+fn press_page_field_key(u: &mut Ui, key: egui::Key) {
+    u.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+}
+
+/// Asserts a click on the name of page `page`, away from page `other`, opens it and starts no
+/// rename: the pages list is back to plain rows however the last rename ended.
+fn assert_clicking_page_opens_it(u: &mut Ui, page: NodeId, other: NodeId, row: Pos2) {
+    assert!(u.app.ui.rename_page.is_none(), "the rename is over");
+    u.app.session.execute("page.select", &json!({"id": other})).unwrap();
+    for _ in 0..30 {
+        u.frame(vec![Event::PointerMoved(row)]);
+    }
+    u.button(row, true);
+    u.button(row, false);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.page().unwrap(), page, "the click opens the page");
+    assert!(!u.ctx.memory(|m| m.has_focus(Id::unique(("pagename", page)).with("te"))), "and doesn't edit its name");
+}
+
+/// Asserts a page's row is a plain row after a rename that was cancelled, committed unchanged or
+/// committed with a new name: a click on its name opens the page rather than editing the name.
+#[test]
+fn a_finished_page_rename_leaves_a_row_that_a_click_opens() {
+    for (key, text) in [(egui::Key::Escape, None), (egui::Key::Enter, None), (egui::Key::Enter, Some("Renamed"))] {
+        let mut s = Session::new();
+        let p1 = s.page().unwrap();
+        let p2 = id(s.execute("page.add", &json!({})).unwrap());
+        let mut u = Ui::new(s);
+        let r2 = page_row(&mut u, p2, p1);
+        u.ctx.enable_accesskit();
+        double_click_checking_focus(&mut u, r2);
+        assert_eq!(u.app.ui.rename_page.as_ref().map(|r| r.0), Some(p2), "a double click renames the page");
+        if let Some(text) = text {
+            u.frame(vec![Event::Text(text.into())]);
+        }
+        press_page_field_key(&mut u, key);
+        assert_clicking_page_opens_it(&mut u, p2, p1, r2);
+    }
+}
+
+/// Asserts the row's Rename page puts the keyboard in the name, and a name typed there is kept.
+#[test]
+fn the_page_menus_rename_starts_with_the_keyboard_in_the_name() {
+    let mut s = Session::new();
+    let p1 = s.page().unwrap();
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    let mut u = Ui::new(s);
+    let r2 = page_row(&mut u, p2, p1);
+    u.frame(vec![
+        Event::PointerMoved(r2),
+        Event::PointerButton { pos: r2, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![Event::PointerButton { pos: r2, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+    let shapes: Vec<egui::Shape> = u.frame_output(vec![]).shapes.into_iter().map(|c| c.shape).collect();
+    let item = crate::live_tests::text_center(&shapes, "Rename page");
+    u.frame(vec![Event::PointerMoved(item)]);
+    u.button(item, true);
+    u.button(item, false);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.ui.rename_page.as_ref().map(|r| r.0), Some(p2), "the menu renames the page");
+    assert!(u.ctx.memory(|m| m.has_focus(Id::unique(("pagename", p2)).with("te"))), "with the keyboard in its name");
+    u.frame(vec![Event::Text("Renamed".into())]);
+    press_page_field_key(&mut u, egui::Key::Enter);
+    assert_eq!(u.app.session.doc().unwrap().node(p2).map(|n| n.name.clone()).as_deref(), Some("Renamed"));
+    assert_clicking_page_opens_it(&mut u, p2, p1, r2);
+}
+
 /// The y of the line between the pages and the layers, above the layers' row at `layer` (found by
 /// the resize cursor it shows when hovered).
 fn pages_edge_at(u: &mut Ui, layer: f32) -> f32 {

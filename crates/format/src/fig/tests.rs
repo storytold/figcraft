@@ -563,6 +563,11 @@ fn oversized_grid_track_lists_warn_and_use_default_tracks() {
 }
 
 #[test]
+fn duplicate_explicit_field_ids_are_ambiguous() {
+    assert!(Schema::parse("message M uint a=1, uint b=1").is_err());
+}
+
+#[test]
 fn kiwi_round_trip() {
     let sc = schema();
     let back = Schema::decode(&encode::schema(&sc)).unwrap();

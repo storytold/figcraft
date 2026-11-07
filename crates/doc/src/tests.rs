@@ -681,6 +681,61 @@ fn two_segment_closed_loop_rounded_corners() {
     assert!(!path.elements().is_empty());
 }
 
+/// A rectangle whose top-right corner was cut off in the vector editor (a diagonal between a point
+/// on the top edge and one on the right edge), then rounded: the fill, which the fill and the
+/// selection outline draw, is cut by an arc at every point just as the stroke is, however the loop
+/// lists its segments and whichever way each one runs (#1951, #1506).
+#[test]
+fn a_chamfered_rectangles_rounded_fill_is_cut_at_every_point() {
+    use figcraft_geom::BezPath;
+    use figcraft_geom::kurbo::{ParamCurveArclen, ParamCurveNearest};
+    let corners = [Point::new(0.0, 0.0), Point::new(50.0, 0.0), Point::new(100.0, 50.0), Point::new(100.0, 100.0), Point::new(0.0, 100.0)];
+    let keeps_off = |path: &BezPath, p: Point| path.segments().map(|s| s.nearest(p, 1e-9).distance_sq.sqrt()).fold(f64::INFINITY, f64::min);
+    let length = |path: &BezPath| path.segments().map(|s| s.arclen(1e-9)).sum::<f64>();
+    for first in 0..corners.len() {
+        for backwards in [false, true] {
+            for flipped in 0..(1u32 << corners.len()) {
+                let mut net = VectorNetwork::from_points(&corners, true);
+                for v in &mut net.vertices {
+                    v.radius = 43.0;
+                }
+                for (i, s) in net.segments.iter_mut().enumerate() {
+                    if flipped & (1 << i) != 0 {
+                        std::mem::swap(&mut s.a, &mut s.b);
+                        std::mem::swap(&mut s.ta, &mut s.tb);
+                    }
+                }
+                let lp = &mut net.regions[0].loops[0];
+                lp.rotate_left(first);
+                if backwards {
+                    lp.reverse();
+                }
+                let why = format!("loop from segment {first}{}, segments flipped {flipped:05b}", if backwards { " backwards" } else { "" });
+                let stroke = net.stroke_path();
+                let fill = net.fill_path();
+                let region = net.rounded().unwrap().region_path(0).unwrap();
+                for (i, p) in corners.iter().enumerate() {
+                    assert!(keeps_off(&stroke, *p) > 2.0, "{why}: the stroke is cut at point {i} ({:.2} from it)", keeps_off(&stroke, *p));
+                    assert!(keeps_off(&fill, *p) > 2.0, "{why}: the fill runs into point {i} ({:.2} from it)", keeps_off(&fill, *p));
+                    assert!(keeps_off(&region, *p) > 2.0, "{why}: the region runs into point {i} ({:.2} from it)", keeps_off(&region, *p));
+                }
+                assert!(
+                    (length(&fill) - length(&stroke)).abs() < 1e-6,
+                    "{why}: fill {} and stroke {} trace the same outline",
+                    length(&fill),
+                    length(&stroke)
+                );
+                assert!(
+                    (length(&region) - length(&stroke)).abs() < 1e-6,
+                    "{why}: region {} and stroke {} trace the same outline",
+                    length(&region),
+                    length(&stroke)
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn stored_variable_ids_resolve_only_their_exact_collection() {
     let mut vars = crate::proto_expr_tests::vars();

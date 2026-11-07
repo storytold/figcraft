@@ -754,6 +754,9 @@ pub struct FigApp {
     panels_unsaved: bool,
     /// Control-channel requests waiting for the next frame.
     pub control_queue: Vec<ControlRequest>,
+    /// Windows a control request waits for: the window's pass count when the wait began and the
+    /// app-clock time it began, to tell a window that stopped drawing ([`control::background`]).
+    control_waits: std::collections::BTreeMap<u64, (u64, f64)>,
     /// Input events from the control channel (`ui.input`) for the next frame's raw input.
     pub control_input: Vec<egui::Event>,
     /// Frames drawn and what asked for them (`ui.inspect`).
