@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use figcraft_doc::{
     DecorationLength, DecorationStyle, LeadingTrim, LetterSpacing, LineHeight, ListStyle, ParaList, TextAlignH, TextAutoResize, TextCase, TextData,
-    TextDecoration, TextStyle, WrapStyle, color::PaintKind, valid_feature_tag,
+    TextDecoration, TextDirection, TextStyle, WrapStyle, color::PaintKind, valid_feature_tag,
 };
 use figcraft_geom::{Affine, BezPath, Rect};
 use harfrust::{Direction, Feature, ShapeOptions, ShaperInstance, Tag, UnicodeBuffer, Variation};
@@ -265,29 +265,47 @@ impl Item {
     }
 }
 
-/// Bidi embedding levels per char, and whether each char's paragraph runs right to left.
+/// Bidi embedding levels per char, and whether each char's paragraph runs right to left;
+/// `rtl_para` has one more entry, for the position after the last char (an empty last paragraph).
 pub(crate) struct Bidi {
     pub(crate) levels: Vec<u8>,
     pub(crate) rtl_para: Vec<bool>,
 }
 
 impl Bidi {
-    /// None when the text has nothing right to left (the common case costs one scan).
-    pub(crate) fn of(text: &str) -> Option<Bidi> {
-        if !text.chars().any(is_rtl_char) {
+    /// None when the text has nothing right to left and no paragraph forces its direction (the
+    /// common case costs one scan). `forced`, by paragraph: `Some(true)` runs right to left and
+    /// `Some(false)` left to right whatever the letters, `None` goes by the first letter with a
+    /// direction (Text ▸ Text direction, #1830).
+    pub(crate) fn of(text: &str, forced: &[Option<bool>]) -> Option<Bidi> {
+        if forced.iter().all(Option::is_none) && !text.chars().any(is_rtl_char) {
             return None;
         }
-        let info = unicode_bidi::BidiInfo::new(text, None);
-        let mut paras = info.paragraphs.iter().peekable();
         let n = text.chars().count();
         let (mut levels, mut rtl_para) = (Vec::with_capacity(n), Vec::with_capacity(n));
-        for (b, _) in text.char_indices() {
-            while paras.peek().is_some_and(|p| p.range.end <= b) {
-                paras.next();
+        // Paragraph by paragraph (the algorithm starts over at each one), so each can be given its
+        // base level.
+        for (p, para) in text.split_inclusive('\n').enumerate() {
+            let base = forced.get(p).copied().flatten().map(|rtl| if rtl { unicode_bidi::Level::rtl() } else { unicode_bidi::Level::ltr() });
+            let info = unicode_bidi::BidiInfo::new(para, base);
+            let mut paras = info.paragraphs.iter().peekable();
+            for (b, _) in para.char_indices() {
+                while paras.peek().is_some_and(|q| q.range.end <= b) {
+                    paras.next();
+                }
+                levels.push(info.levels.get(b).map(|l| l.number()).unwrap_or(0));
+                rtl_para.push(paras.peek().is_some_and(|q| q.level.is_rtl()));
             }
-            levels.push(info.levels.get(b).map(|l| l.number()).unwrap_or(0));
-            rtl_para.push(paras.peek().is_some_and(|p| p.level.is_rtl()));
         }
+        // The position after the last char: in the last paragraph, or in the empty one after a
+        // final newline (its forced direction, else left to right), so an empty last line knows
+        // its direction too.
+        let after = if text.is_empty() || text.ends_with('\n') {
+            forced.get(text.matches('\n').count()).copied().flatten().unwrap_or(false)
+        } else {
+            rtl_para.last().copied().unwrap_or(false)
+        };
+        rtl_para.push(after);
         Some(Bidi { levels, rtl_para })
     }
 }
@@ -295,6 +313,37 @@ impl Bidi {
 /// Characters of right-to-left scripts and the explicit right-to-left marks.
 pub(crate) fn is_rtl_char(c: char) -> bool {
     matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF | 0x200F | 0x202B | 0x202E | 0x2067)
+}
+
+/// Which visual positions of a line's items (in `visual_order(levels)`) a justify gap follows. The
+/// gap after logical item k (`after[k]`) is reordered like a glyph of no width at the lower of its
+/// two neighbours' levels, as rule N1 resolves a space between them: between logically neighbouring
+/// glyphs it opens where they are, and where runs meet it opens beside the run it belongs to, so a
+/// gap beside a Hebrew word in Chinese text opens beside the word, not inside it, and so does one
+/// beside a Chinese word within that Hebrew. From item `trailing` on (a line's trailing spaces) a
+/// gap opens after the item itself.
+fn visual_gaps(levels: &[u8], after: &[bool], trailing: usize) -> Vec<bool> {
+    let gap_after = |k: usize| after.get(k).copied().unwrap_or(false);
+    let level = |k: usize| levels.get(k).copied().unwrap_or(0);
+    // Items at the even indices, the gap after item k at 2k + 1 (a gap's level never exceeds its
+    // neighbours', so every run reversed starts and ends on an item and the two keep alternating).
+    let mut both = Vec::with_capacity(after.len() * 2);
+    for k in 0..after.len() {
+        if k > 0 {
+            both.push(level(k).min(level(k - 1)));
+        }
+        both.push(level(k));
+    }
+    let order = visual_order(&both);
+    (0..after.len())
+        .map(|i| {
+            let k = order.get(2 * i).copied().unwrap_or(0) / 2;
+            if k >= trailing {
+                return gap_after(k);
+            }
+            order.get(2 * i + 1).is_some_and(|&g| g % 2 == 1 && g / 2 < trailing && gap_after(g / 2))
+        })
+        .collect()
 }
 
 /// Visual order of a line's items from their levels (rule L2: from the highest level down to the
@@ -479,8 +528,20 @@ fn shape_text(text: &TextData) -> ShapedText {
         .filter_map(|(k, on)| <[u8; 4]>::try_from(k.as_bytes()).ok().map(|t| Feature::new(Tag::new(&t), u32::from(*on), ..)))
         .collect();
 
-    // Shape each span, split by paragraph, bidi run and fallback face.
-    let bidi = Bidi::of(&text.characters);
+    // Shape each span, split by paragraph, bidi run and fallback face. A paragraph's direction is
+    // its letters' unless forced (Text ▸ Text direction).
+    let forced: Vec<Option<bool>> = if text.paragraphs.is_empty() {
+        Vec::new()
+    } else {
+        (0..text.paragraph_count())
+            .map(|p| match text.para_list(p).direction {
+                TextDirection::Auto => None,
+                TextDirection::Ltr => Some(false),
+                TextDirection::Rtl => Some(true),
+            })
+            .collect()
+    };
+    let bidi = Bidi::of(&text.characters, &forced);
     let level_at = |i: usize| bidi.as_ref().and_then(|b| b.levels.get(i)).copied().unwrap_or(0);
     // A grapheme cluster (emoji sequence, letter with marks) is shaped with one face.
     let cluster_start = crate::breaks::grapheme_starts(&text.characters);
@@ -1251,7 +1312,8 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         // Letter spacing separates glyphs: none after the line's last visible one.
         let end_spacing = vis_end.checked_sub(1).filter(|i| *i >= *s).and_then(|i| items.get(i)).map_or(0.0, |it| it.spacing);
         let width: f64 = items.get(*s..vis_end).unwrap_or(&[]).iter().map(|it| it.adv).sum::<f64>() - end_spacing;
-        let first_char = items.get(*s).map(|it| it.char_start).unwrap_or(0);
+        // An empty last line has no item: the position after the last char is its paragraph's.
+        let first_char = items.get(*s).map_or(chars.len(), |it| it.char_start);
         let rtl_line = rtl_para_at(first_char);
         let line_indent = line_indent_of(*para, para_start_line, first_char);
         // Hanging punctuation at the line's edges (the visible text's first and last chars).
@@ -1259,8 +1321,20 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         let hang_r =
             items.get(vis_end.wrapping_sub(1)).filter(|it| hang_end && !rtl_line && vis_end > *s + 1 && closes(it.ch)).map_or(0.0, |it| it.adv);
         let gstart = out.glyphs.len();
-        // Justify: extra space per gap.
-        let gaps = items.get(*s..vis_end).unwrap_or(&[]).iter().filter(|it| it.stretches()).count();
+        // Justify: extra space per gap (a space, or between ideographs, whose text has no spaces;
+        // never inside a grapheme cluster, so a mark stays on its base).
+        let widens = |k: usize| {
+            items.get(k).is_some_and(|it| {
+                it.stretches()
+                    || (k + 1 < vis_end
+                        && items.get(k + 1).is_some_and(|next| {
+                            next.char_start > it.char_start
+                                && cluster_start.get(next.char_start).copied().unwrap_or(true)
+                                && crate::breaks::justify_between(it.ch, next.ch)
+                        }))
+            })
+        };
+        let gaps = (*s..vis_end).filter(|k| widens(*k)).count();
         let justify_extra = match (text.align_h, wrap) {
             (TextAlignH::Justified, Some(maxw)) if !para_end && !line_break_after(&items, *e) && gaps > 0 => {
                 ((maxw - line_indent + hang_l + hang_r - width) / gaps as f64).max(0.0)
@@ -1342,20 +1416,20 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         // Right-to-left runs are placed in visual order; trailing spaces take the paragraph's
         // direction (rule L1).
         let line_items = items.get(*s..*e).unwrap_or(&[]);
-        let order: Vec<usize> = if bidi.is_some() {
-            let para_level = u8::from(rtl_line);
-            let levels: Vec<u8> = line_items.iter().enumerate().map(|(k, it)| if *s + k >= vis_end { para_level } else { it.level }).collect();
-            visual_order(&levels)
-        } else {
-            (0..line_items.len()).collect()
-        };
-        for it in order.iter().filter_map(|k| line_items.get(*k)) {
+        let para_level = u8::from(rtl_line);
+        let levels: Vec<u8> = line_items.iter().enumerate().map(|(k, it)| if *s + k >= vis_end { para_level } else { it.level }).collect();
+        let order = visual_order(&levels);
+        // Each gap opens at its visual boundary; trailing spaces widen where they are.
+        let after: Vec<bool> = (0..line_items.len()).map(|k| widens(*s + k)).collect();
+        let gaps_at = visual_gaps(&levels, &after, vis_end - *s);
+        for (i, &k) in order.iter().enumerate() {
+            let Some(it) = line_items.get(k) else { continue };
             if is_line_break(it.ch) {
                 continue;
             }
             out.glyphs.extend(glyph_at(&styles, it, pen, baseline));
             pen += it.adv;
-            if it.stretches() {
+            if gaps_at.get(i).copied().unwrap_or(false) {
                 pen += justify_extra;
             }
         }

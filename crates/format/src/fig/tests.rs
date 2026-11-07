@@ -563,6 +563,11 @@ fn oversized_grid_track_lists_warn_and_use_default_tracks() {
 }
 
 #[test]
+fn duplicate_explicit_field_ids_are_ambiguous() {
+    assert!(Schema::parse("message M uint a=1, uint b=1").is_err());
+}
+
+#[test]
 fn kiwi_round_trip() {
     let sc = schema();
     let back = Schema::decode(&encode::schema(&sc)).unwrap();
@@ -793,6 +798,44 @@ fn hashes_naming_one_blob_share_one_copy_of_it() {
     assert_eq!(**first, *png());
     assert_eq!(copies.values().filter(|c| Arc::ptr_eq(c, first)).count(), 50);
     assert_eq!(*copies[&"63".repeat(20)], [7; 16]);
+}
+
+/// Hashes naming one blob are imported as one image: every alias is renamed to the first hash
+/// before layers are built, so the blob is copied and hashed once, not once per hash.
+#[test]
+fn hashes_naming_one_blob_are_imported_once() {
+    let rect = |i: u64, hash: u8, blob: u64| {
+        let paint = o(vec![("type", e("IMAGE")), ("image", o(vec![("hash", Kv::Bytes(vec![hash; 20])), ("dataBlob", u(blob))]))]);
+        node(i, Some((1, &format!("{i:04}"))), "RECTANGLE", &format!("R{i}"), vec![("size", xy(10.0, 10.0)), ("fillPaints", arr(vec![paint]))])
+    };
+    let mut nodes = vec![node(0, None, "DOCUMENT", "D", vec![]), node(1, Some((0, "!")), "CANVAS", "P", vec![])];
+    nodes.extend((2..42).map(|i| rect(i, i as u8, 0)));
+    let msg = o(vec![("nodeChanges", arr(nodes)), ("blobs", arr(vec![o(vec![("bytes", Kv::Bytes(png()))])]))]);
+    let copies = embedded_copies(&msg);
+    let aliases = embedded_aliases(&copies, |_| false);
+    assert_eq!(aliases.len(), 39);
+    assert!(aliases.values().all(|c| *c == "02".repeat(20)));
+    // A hash `images/` also holds keeps its own name.
+    assert!(!embedded_aliases(&copies, |h| h == "05".repeat(20)).contains_key(&"05".repeat(20)));
+    let (doc, warnings) = import(&canvas(&schema(), &msg), "x").unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+    assert_eq!(doc.images.len(), 1);
+    let key = doc.images.keys().next().unwrap();
+    for i in 2..42 {
+        let figcraft_doc::color::PaintKind::Image(img) = &named(&doc, &format!("R{i}")).fills[0].kind else { panic!("not an image fill") };
+        assert_eq!(&img.image, key);
+    }
+}
+
+#[test]
+fn image_refs_are_renamed_wherever_they_sit() {
+    let aliases: BTreeMap<String, String> = [("b".to_string(), "a".to_string())].into();
+    let mut json = serde_json::json!({"fills": [{"imageRef": "b"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "b"}]}}, "name": "b"});
+    canonical_image_refs(&mut json, &aliases);
+    assert_eq!(
+        json,
+        serde_json::json!({"fills": [{"imageRef": "a"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "a"}]}}, "name": "b"})
+    );
 }
 
 mod image_budget {
@@ -1490,6 +1533,9 @@ mod image_filters;
 
 #[path = "text_list_tests.rs"]
 mod text_list;
+
+#[path = "text_direction_tests.rs"]
+mod text_direction;
 
 /// `.fig` files in the folder `FIGCRAFT_FIG_SAMPLES` names (none when it's unset).
 pub(super) fn samples() -> Vec<std::path::PathBuf> {
