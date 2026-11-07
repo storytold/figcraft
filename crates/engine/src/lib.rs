@@ -383,6 +383,8 @@ mod invite_links_tests;
 #[cfg(test)]
 mod jam_open_tests;
 #[cfg(test)]
+mod jpg_export_tests;
+#[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
 mod library_beacon_tests;
