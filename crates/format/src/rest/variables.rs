@@ -20,6 +20,9 @@ const MAX_VARIABLES: usize = 100_000;
 const MAX_MODES: usize = 1_000;
 /// Longest string variable value kept (characters).
 const MAX_STRING: usize = 10_000;
+/// The copies of fallback values that fill missing modes, in bytes, for one import: variables, modes
+/// and string length are each capped, but not their product. Past it, modes stay empty.
+const MAX_FILLED_BYTES: usize = 64 << 20;
 
 /// The object holding `variableCollections` and `variables`: a local variables response's `meta`,
 /// or `v` itself.
@@ -287,14 +290,10 @@ impl Ctx<'_> {
         if dropped {
             self.warn("variable aliases to variables that aren't in the variables JSON (or of another type) were skipped");
         }
+        let mut budget = MAX_FILLED_BYTES;
         for v in found.iter_mut() {
             let Some(modes) = self.var_modes.get(&v.collection) else { continue };
-            let fallback = modes.first().and_then(|m| v.values.get(m)).or_else(|| v.values.values().next()).cloned();
-            if let Some(f) = fallback {
-                for m in modes {
-                    v.values.entry(m.clone()).or_insert_with(|| f.clone());
-                }
-            }
+            fill_modes(&mut v.values, modes, &mut budget);
         }
     }
 
@@ -519,5 +518,38 @@ fn field_type(field: &str) -> VariableType {
         "characters" | "fontFamily" | "fontStyle" => VariableType::String,
         "visible" => VariableType::Boolean,
         _ => VariableType::Number,
+    }
+}
+
+/// Give each of `modes` without a value a copy of the first mode's (else any) value, while the
+/// copies' bytes fit in `budget`.
+fn fill_modes(values: &mut BTreeMap<String, VariableValue>, modes: &[String], budget: &mut usize) {
+    let Some(f) = modes.first().and_then(|m| values.get(m)).or_else(|| values.values().next()).cloned() else { return };
+    let cost =
+        64 + modes.iter().map(String::len).max().unwrap_or(0) + if let VariableValue::String(t) | VariableValue::Alias(t) = &f { t.len() } else { 0 };
+    for m in modes {
+        if values.contains_key(m) {
+            continue;
+        }
+        let Some(left) = budget.checked_sub(cost) else { return };
+        *budget = left;
+        values.insert(m.clone(), f.clone());
+    }
+}
+
+#[cfg(test)]
+mod fill_tests {
+    use super::*;
+
+    #[test]
+    fn missing_modes_are_filled_only_within_the_budget() {
+        let modes: Vec<String> = (0..10).map(|i| format!("m{i}")).collect();
+        let mut v = BTreeMap::from([("m0".to_string(), VariableValue::String("x".repeat(100)))]);
+        let mut budget = 1_000;
+        fill_modes(&mut v, &modes, &mut budget);
+        assert!(v.len() > 1 && v.len() < 10, "{}", v.len());
+        let mut v = BTreeMap::from([("m0".to_string(), VariableValue::Number(1.0))]);
+        fill_modes(&mut v, &modes, &mut { MAX_FILLED_BYTES });
+        assert_eq!(v.len(), 10);
     }
 }

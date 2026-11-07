@@ -127,6 +127,16 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     if manifest.id != entry.id || manifest.version != entry.version {
         return Err(fail("its manifest doesn't match the directory's entry"));
     }
+    // What was shown and approved is the entry's access and commands: a bundle whose manifest
+    // asks for more is refused, since the manifest is what the plugin then runs under.
+    if manifest.permissions.access == figcraft_plugin::manifest::Access::Write && !entry.access.trim().eq_ignore_ascii_case("write") {
+        return Err(fail("its manifest asks to write the document, but the directory showed it as read-only"));
+    }
+    if !entry.commands.is_empty()
+        && (manifest.permissions.commands.is_empty() || manifest.permissions.commands.iter().any(|c| !entry.commands.contains(c)))
+    {
+        return Err(fail("its manifest asks for commands the directory didn't show"));
+    }
     let source = address(&server);
     let path = save(s, &mut manifest, &bundle).map_err(|e| fail(&e))?;
     let out = json!({
