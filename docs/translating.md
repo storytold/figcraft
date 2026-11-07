@@ -87,16 +87,17 @@ Traditional Chinese is left out unless that build has a Noto Sans CJK TC face. A
 Chinese UI puts its Chinese face first so Han takes Simplified Chinese shapes, and a Traditional
 Chinese UI puts an installed Noto Sans CJK TC first, then the system's Taiwan faces (Microsoft
 JhengHei, PingFang TC, Heiti TC), so Han takes Traditional shapes. No font is added to this
-repository. Georgian is drawn in
-`FIGCRAFT_EMBED_CJK=1` (Noto Sans CJK SC, +16 MB); otherwise they are left out of the picker. The other
-scripts' faces (Noto Sans Arabic, Hebrew, Thai, Devanagari) join a web build only with
-`FIGCRAFT_EMBED_SCRIPTS=Arab,Hebr,Thai,Deva` (one tag per script wanted, as the manifest lists them), for
-documents in those scripts; with `Arab` embedded the picker offers Arabic too (#1902). A
-Chinese UI puts its Chinese face first so Han takes Simplified Chinese shapes. Georgian is drawn in
-craft-fonts' Noto Sans Georgian, one of the built-in faces in `theme::install_fonts`, or else in an
-installed font on the desktop. Web builds keep it only when the craft-fonts they're built with has
-it (`crates/text/build.rs`); the commit releases pin doesn't yet (`docs/releasing.md`), so the web
-picker leaves Georgian out. A new CJK or other non-Latin language also needs its script in
+repository.
+
+Web builds with craft-fonts embed Noto Sans Arabic Regular by default for Persian and Arabic
+documents, and the picker offers Arabic without extra build flags (#1902). Required web builds
+reject a catalog without that face (`crates/text/build.rs`). Web faces are compressed losslessly
+at build time and restored once at runtime to preserve the WASM size budget. Additional script
+faces (Noto Sans Hebrew, Thai, Devanagari) join a web build with
+`FIGCRAFT_EMBED_SCRIPTS=Hebr,Thai,Deva` (one tag per script wanted, as the manifest lists them).
+Georgian is drawn in craft-fonts' Noto Sans Georgian, one of the built-in faces in
+`theme::install_fonts`, or else in an installed font on the desktop. Required web builds also
+require Noto Sans Georgian Regular. A new CJK or other non-Latin language needs its script in
 `cjk::language`, or a built-in craft-fonts face.
 
 ## Arabic draft
@@ -112,10 +113,12 @@ This is deliberate: the current plural `Forms` have no zero/two fields. It is no
 of Arabic's six CLDR categories; wording remains valid for 0, 1, 2 and larger integer counts.
 
 Arabic text uses the existing bidi/shaping and Arabic system-font fallback on desktop. Web builds
-require an embedded Noto Sans Arabic face to offer Arabic. The current web font budget filters
-that face out, so Arabic is not offered on the web yet. No font is added to
-this repository. The interface's panels are not mirrored; this catalog does not claim a complete
-right-to-left interface. Native review and representative in-app checks remain required.
+with craft-fonts include Noto Sans Arabic by default and offer Arabic. This fallback makes Persian
+and Arabic text readable; matching Iran Sans exactly still requires that installed font. In a
+browser that supports local font access, choose “Use fonts installed on this computer…” in the
+Design panel's font menu and grant the browser's permission. No font is added to this repository.
+The window mirrors (the panels swap sides), but rows inside the panels keep their left-to-right
+order. Native review and representative in-app checks remain required.
 
 ## Traditional Chinese (Taiwan) draft
 
