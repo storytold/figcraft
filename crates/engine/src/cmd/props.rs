@@ -413,6 +413,9 @@ fn layout_mut<'a>(cmd: &str, k: &str, n: &'a mut Node) -> Result<&'a mut AutoLay
 /// Replace a node's fills (or strokes). Bindings on the paints whose bound values the new list
 /// changed let go, as an explicit edit does (see `lists::rebind_edited_paint`).
 fn set_paints(n: &mut Node, fills: bool, paints: Vec<Paint>) {
+    if fills {
+        super::lists::take_character_fills(n);
+    }
     let old = std::mem::replace(if fills { &mut n.fills } else { &mut n.strokes }, paints);
     for (i, p) in old.iter().enumerate() {
         super::lists::rebind_edited_paint(n, fills, i, p);
