@@ -115,3 +115,6 @@ display_name = "Hamza0101"
 
 [people.ashokram-si]
 real_name = "Ashok Ram"
+
+[people.pamburus]
+sync_github_name = true

@@ -57,6 +57,10 @@ pub struct CanvasState {
     pub tex_coarse: bool,
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
+    /// Refined images of the files and pages shown before, newest first: switching back to one
+    /// shows its image at once while it renders again, instead of a blank canvas (and, where
+    /// renders are slow, a coarse preview).
+    kept: Vec<Kept>,
     submitted: Option<JobKey>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
@@ -98,6 +102,7 @@ impl Default for CanvasState {
             tex_of: None,
             tex_coarse: false,
             tex_seq: 0,
+            kept: Vec::new(),
             submitted: None,
             want_view: None,
             render_work: None,
@@ -116,6 +121,39 @@ impl Default for CanvasState {
             pressure: None,
             wheel_is_mouse: false,
         }
+    }
+}
+
+/// At most this many images of files and pages not shown are kept (each is a canvas-sized texture).
+const KEPT: usize = 4;
+
+/// A refined canvas image of a file and page not shown now ([`CanvasState::kept`]).
+struct Kept {
+    texture: egui::TextureHandle,
+    view: figcraft_render::View,
+    of: (u64, NodeId),
+    seq: u64,
+}
+
+impl CanvasState {
+    /// When the file or page shown is no longer the one the texture is of, set the texture aside
+    /// (if refined) and bring back the image kept for `shown`, if any. Images of files that are no
+    /// longer open (`open` says which are) are dropped every frame, not only on a switch: a
+    /// background tab can close while the file shown stays the same.
+    fn switch_texture(&mut self, shown: Option<(u64, NodeId)>, open: impl Fn(u64) -> bool) {
+        if shown.is_some() && self.tex_of != shown {
+            let back = self.kept.iter().position(|k| Some(k.of) == shown).map(|i| self.kept.remove(i));
+            let (texture, view, of) = (self.texture.take(), self.tex_view.take(), self.tex_of.take());
+            if let (Some(texture), Some(view), Some(of), false) = (texture, view, of, self.tex_coarse) {
+                self.kept.insert(0, Kept { texture, view, of, seq: self.tex_seq });
+            }
+            self.tex_coarse = false;
+            if let Some(k) = back {
+                (self.texture, self.tex_view, self.tex_of, self.tex_seq) = (Some(k.texture), Some(k.view), Some(k.of), k.seq);
+            }
+        }
+        self.kept.retain(|k| open(k.of.0));
+        self.kept.truncate(KEPT);
     }
 }
 
@@ -264,6 +302,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
+    let docs = &app.session.docs;
+    app.canvas.switch_texture(shown, |uid| docs.iter().any(|d| d.uid == uid));
     if let Some(done) = worker.poll()
         && shows(&app.canvas, &done, shown)
     {
@@ -408,3 +448,6 @@ mod wheel_zoom_tests;
 
 #[cfg(test)]
 mod zoom_preview_tests;
+
+#[cfg(test)]
+mod tab_switch_tests;
