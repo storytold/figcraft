@@ -278,6 +278,45 @@ fn legacy_evenodd_holes_survive_bucket_offset_and_flatten() {
     assert!(!net(&s, flattened).fill_contains(Point::new(100.0, 100.0)), "flatten retains the even-odd hole");
 }
 
+#[test]
+fn simplify_and_offset_keep_a_closed_vectors_smoothed_corners() {
+    // A closed 100 × 100 vector with radius 20 on every point and corner smoothing 0.6 draws a
+    // smoothed rectangle's outline; simplify and offset rebuild it from that outline.
+    let drawn = figcraft_geom::rounded_rect(100.0, 100.0, [20.0; 4], 0.6);
+    let plain = figcraft_geom::rounded_rect(100.0, 100.0, [20.0; 4], 0.0).area().abs();
+    let (area, d) = (drawn.area().abs(), 2.0);
+    // Offsetting a convex outline by d adds its perimeter times d and a circle of radius d.
+    let grown = area + drawn.perimeter(1e-6) * d + std::f64::consts::PI * d * d;
+    assert!((area - plain).abs() > 10.0, "smoothing changes the outline: {area} vs {plain}");
+    // (command, params, region paints of its own, expected area, tolerance: the offset ring is
+    // flattened before the union)
+    let rows = [
+        ("vector.simplify", json!({"tolerance": 0.01}), false, area, 1.0),
+        ("vector.simplify", json!({"tolerance": 0.01}), true, area, 1.0),
+        ("vector.offset", json!({"offset": d}), false, grown, 4.0),
+        ("vector.offset", json!({"offset": d}), true, grown, 4.0),
+    ];
+    let mut wrong = Vec::new();
+    for (cmd, mut params, painted, expected, tolerance) in rows {
+        let mut s = Session::new();
+        let id = id_of(&ex(&mut s, "vector.create", json!({"points": [[0, 0], [100, 0], [100, 100], [0, 100]], "closed": true}))["id"]).unwrap();
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerRadius": 20}}));
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerSmoothing": 0.6}}));
+        if painted {
+            let doc = s.doc_mut().unwrap();
+            let NodeKind::Vector { network } = &mut doc.get_mut(id).unwrap().kind else { panic!("expected vector fixture") };
+            network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+        }
+        params["ids"] = json!([id]);
+        ex(&mut s, cmd, params);
+        let got = net(&s, id).fill_path().area().abs();
+        if (got - expected).abs() >= tolerance {
+            wrong.push(format!("{cmd} (region paints: {painted}): {got} vs {expected}"));
+        }
+    }
+    assert!(wrong.is_empty(), "simplify and offset keep the smoothed corners: {wrong:?}");
+}
+
 /// Give vector `id` a painted region, converting a plain shape to a vector first.
 fn ex_to_vector(doc: &mut figcraft_doc::Document, id: NodeId) {
     let n = doc.get(id).unwrap();

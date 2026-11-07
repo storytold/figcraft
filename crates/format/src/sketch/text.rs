@@ -14,6 +14,9 @@ use super::tree::{Cx, color};
 const MAX_CHARS: usize = 1 << 20;
 /// Most runs read from one text layer.
 const MAX_RUNS: usize = 10_000;
+/// Most characters that styled runs may write in all, overlaps counted again (a run's range is
+/// rewritten in full, even where later runs overwrite it).
+const MAX_RUN_WORK: usize = 16 * MAX_CHARS;
 
 /// Fill `node` (a TEXT node) from text layer `l`.
 pub(crate) fn node(cx: &mut Cx, l: &Value, node: &mut JsonMap<String, Value>) {
@@ -80,9 +83,15 @@ pub(crate) fn node(cx: &mut Cx, l: &Value, node: &mut JsonMap<String, Value>) {
     // Runs that differ from the first: a style id per UTF-16 unit.
     let mut ids = vec![0u64; units];
     let mut table = JsonMap::new();
+    let mut work = 0usize;
     for (start, end, s) in &styles {
         if *s == base {
             continue;
+        }
+        work = work.saturating_add(end.saturating_sub(*start));
+        if work > MAX_RUN_WORK {
+            cx.warn("text whose styled runs overlap a great deal keeps the first runs' styles");
+            break;
         }
         let id = table.len() as u64 + 1;
         table.insert(id.to_string(), s.clone());
