@@ -211,7 +211,7 @@ fn minimize_ui_hides_the_panels_and_keeps_their_widths() {
 }
 
 /// The middle of the accessible control with `role` and `label`, if one shows.
-fn control(u: &mut Ui, role: egui::accesskit::Role, label: &str) -> Option<Pos2> {
+pub(crate) fn control(u: &mut Ui, role: egui::accesskit::Role, label: &str) -> Option<Pos2> {
     u.ctx.enable_accesskit();
     u.frame(vec![]);
     let out = u.frame_output(vec![]);

@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::a11y::{self, Region, RowInfo, Tip};
 use crate::i18n::{tr, trf, trn};
 use crate::icons::{self, Icon};
-use crate::theme::{ACCENT, COMPONENT, Tokens, regular, semibold};
+use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::{FigApp, LeftTab};
 
 pub const ROW: f32 = 32.0;
@@ -802,14 +802,22 @@ fn drag_autoscroll(ui: &mut Ui, dragging: bool) {
     }
 }
 
-/// A row's icon or name colour: the component tint (faded when hidden), else `normal` or `faded`.
-fn row_color(component: bool, shown: bool, normal: Color32, faded: Color32) -> Color32 {
-    if component {
-        COMPONENT.gamma_multiply(if shown { 1.0 } else { 0.5 })
-    } else if shown {
-        normal
-    } else {
+/// Whether a layer is a component, a variant set or an instance: its rows take the component tint.
+fn is_component(kind: &NodeKind) -> bool {
+    matches!(kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. })
+}
+
+/// A row's icon or name colour: the theme's component tint when shown (it reads at AA on the
+/// panel and on the selected row, where the canvas purple doesn't, #1903), else `normal` or, when
+/// hidden, `faded` (halving the tint's alpha would drop it to about 2.2:1, under the 3:1 floor
+/// for dim text).
+fn row_color(t: &Tokens, component: bool, shown: bool, normal: Color32, faded: Color32) -> Color32 {
+    if !shown {
         faded
+    } else if component {
+        t.component
+    } else {
+        normal
     }
 }
 
@@ -1045,13 +1053,14 @@ fn hierarchy_bg(roots: &[Option<NodeId>], i: usize, mut rr: Rect, gap: f32) -> O
 }
 
 /// A row's background: selected, inside a selected layer, or outlined when hovered.
-/// `state` is [selected, in_selected, component].
+/// `state` is [selected, in_selected, component]: a selected component's row takes the component
+/// tint, not the plain selection's green; the rows inside it are tinted by the caller (#1903).
 fn paint_row_bg(ui: &Ui, t: &Tokens, rr: Rect, state: [bool; 3], hovered: bool) {
     let [selected, in_selected, is_comp] = state;
     if selected {
         ui.painter().rect_filled(rr, CornerRadius::same(5), if is_comp { t.component_row } else { t.selected_row });
     } else if !in_selected && hovered {
-        ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(1.0, if is_comp { COMPONENT } else { ACCENT }), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(1.0, if is_comp { t.component } else { ACCENT }), egui::StrokeKind::Inside);
     }
 }
 
@@ -1186,12 +1195,14 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 locked: n.locked,
             };
             a11y::tree_item(&resp, if n.name.is_empty() { tr(n.kind.label()) } else { &n.name }, &info);
-            let is_comp = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
+            let is_comp = is_component(&n.kind);
             let rr = r.shrink2(vec2(8.0, 0.0));
             let bg = hierarchy_bg(&roots, i - roots_start, rr, pitch - ROW);
             let in_selected = !selected && bg.is_some();
             if let Some((rect, corners)) = bg {
-                ui.painter().rect_filled(rect, corners, t.selected_row_child);
+                // Inside a selected component, variant set or instance the rows take its tint.
+                let in_comp = roots.get(i - roots_start).copied().flatten().and_then(|r| doc.node(r)).is_some_and(|r| is_component(&r.kind));
+                ui.painter().rect_filled(rect, corners, if in_comp { t.component_row_child } else { t.selected_row_child });
             }
             a11y::ring_around(ui, rr, &resp);
             // Over the row, its eye and padlock included (they sit on top of it).
@@ -1218,7 +1229,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             }
             let icon = node_icon(&doc, row.id);
             let shown = n.visible && !row.dimmed;
-            let icon_col = row_color(is_comp || icon == Icon::Slot, shown, t.icon, t.text_tertiary);
+            let icon_col = row_color(&t, is_comp || icon == Icon::Slot, shown, t.icon, t.text_tertiary);
             icons::paint(ui.painter(), Rect::from_center_size(pos2(x0 + 22.0, r.center().y), vec2(14.0, 14.0)), icon, icon_col);
             let name_x = x0 + 36.0;
             if app.ui.rename.is_some_and(|rn| rn.id == row.id) {
@@ -1226,7 +1237,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     rename_done = Some((row.id, new));
                 }
             } else {
-                let col = row_color(is_comp, shown, t.text, t.text_tertiary);
+                let col = row_color(&t, is_comp, shown, t.text, t.text_tertiary);
                 let font = name_font(&doc, page, n);
                 let name = row_name(n).to_string();
                 // Room left of the lock and eye buttons (the row is wide enough for the whole

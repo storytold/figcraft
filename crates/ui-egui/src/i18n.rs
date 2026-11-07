@@ -60,6 +60,18 @@ pub fn current() -> Option<&'static Lang> {
     LANGS.get(CURRENT.load(Ordering::Relaxed))
 }
 
+/// Whether the language the UI shows is written right to left, so the window mirrors.
+pub fn right_to_left() -> bool {
+    current().is_some_and(|l| writes_right_to_left(l.code))
+}
+
+/// Whether language `code` ("ar", "he-IL"…) is written right to left: Arabic, Hebrew, Persian,
+/// Urdu, Pashto, Sindhi, Kurdish (Sorani), Uyghur, Dhivehi and Yiddish.
+fn writes_right_to_left(code: &str) -> bool {
+    let base = code.split(['-', '_']).next().unwrap_or("");
+    ["ar", "he", "fa", "ur", "ps", "sd", "ckb", "ug", "dv", "yi"].iter().any(|rtl| rtl.eq_ignore_ascii_case(base))
+}
+
 /// Show the language of `pref` (a language code, or "system" for `system`, the OS or browser
 /// languages, most preferred first and comma-separated). Unknown languages show English.
 pub fn set(pref: &str, system: Option<&str>) {
