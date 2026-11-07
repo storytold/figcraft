@@ -63,7 +63,7 @@ jobs:
             libgtk-3-dev
 
       - name: Build figcraft-cli
-        run: cargo build --release --locked -p figcraft-cli
+        run: cargo build --release --locked -p figcraft-cli -p figcraft-server
 
       - name: Package tarball and checksum
         working-directory: target/release
@@ -71,6 +71,8 @@ jobs:
           set -euo pipefail
           tar -czf figcraft-cli-linux-x86_64.tar.gz figcraft-cli
           sha256sum figcraft-cli-linux-x86_64.tar.gz > figcraft-cli-linux-x86_64.tar.gz.sha256
+          tar -czf figcraft-server-linux-x86_64.tar.gz figcraft-server
+          sha256sum figcraft-server-linux-x86_64.tar.gz > figcraft-server-linux-x86_64.tar.gz.sha256
 
       - name: Upload cli artifact
         uses: actions/upload-artifact@v4
@@ -78,6 +80,8 @@ jobs:
           name: cli
           path: |
             target/release/figcraft-cli-linux-x86_64.tar.gz
+            target/release/figcraft-server-linux-x86_64.tar.gz
+            target/release/figcraft-server-linux-x86_64.tar.gz.sha256
             target/release/figcraft-cli-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
 
