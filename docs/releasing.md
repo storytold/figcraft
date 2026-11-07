@@ -127,7 +127,7 @@ allowlist: Inter, Noto Sans Georgian and Archivo SemiBold when supplied. A distr
 users write another script adds the manifest families it needs, comma-separated, with
 `FIGCRAFT_WEB_FONTS` (`FIGCRAFT_WEB_FONTS="Noto Sans Thai" trunk build --release`); a named family
 the build doesn't embed gets a warning, and each one adds its size to the wasm, which must stay
-under the 24.5 MiB gate in `packaging/web/package.sh`. Packages carry each embedded font's licence as `OFL-<family>.txt`
+under the size gate in `packaging/web/package.sh`. Packages carry each embedded font's licence as `OFL-<family>.txt`
 (`copy_font_licences` in `packaging/env.sh`; `Contents/Resources/Licenses` in the macOS app).
 
 ### macOS
