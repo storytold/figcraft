@@ -100,8 +100,9 @@ fn an_srgb_export_of_a_display_p3_file_converts_back() {
 fn jpg_and_webp_follow_the_setting() {
     let (mut s, r) = session();
     for f in ["jpg", "webp"] {
-        // sRGB files stay untagged (read as sRGB); Display P3 files embed the generated profile.
-        assert!(!has_icc(&export(&mut s, json!({"ids": [r], "format": f}))), "{f}");
+        // sRGB JPGs embed their profile and sRGB WebPs stay untagged (read as sRGB); Display P3 files
+        // embed the generated profile.
+        assert_eq!(has_icc(&export(&mut s, json!({"ids": [r], "format": f}))), f == "jpg", "{f}");
         let p3 = export(&mut s, json!({"ids": [r], "format": f, "colorProfile": "displayP3"}));
         assert!(has_icc(&p3), "{f}");
         let want = red_in_p3();
@@ -110,7 +111,7 @@ fn jpg_and_webp_follow_the_setting() {
     s.execute("file.colorProfile", &json!({"profile": "displayP3"})).unwrap();
     for f in ["jpg", "webp"] {
         let srgb = export(&mut s, json!({"ids": [r], "format": f, "colorProfile": "srgb"}));
-        assert!(!has_icc(&srgb), "{f}");
+        assert_eq!(has_icc(&srgb), f == "jpg", "{f}");
         assert!(close(middle(&srgb), [255, 0, 0], 8), "{f}: {:?}", middle(&srgb));
     }
 }
