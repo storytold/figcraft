@@ -53,6 +53,7 @@ pub const NODE_KEYS: &[&str] = &[
     "layout",
     "leadingTrim",
     "letterSpacing",
+    "lineDirections",
     "lineHeight",
     "lineIndentations",
     "lineTypes",
@@ -96,6 +97,7 @@ pub const NODE_KEYS: &[&str] = &[
     "textDecorationSkipInk",
     "textDecorationStyle",
     "textDecorationThickness",
+    "textDirection",
     "textPath",
     "textStyleRanges",
     "type",
@@ -431,6 +433,16 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
         if t.paragraphs.iter().any(|p| p.start_offset > 0) {
             insert_prop(o, options, "listStartOffsets", || t.paragraphs.iter().map(|p| json!(p.start_offset)).collect());
         }
+    }
+    // The paragraphs' base direction: one for the layer when they agree, else each one's (Auto
+    // throughout says nothing).
+    let dirs: Vec<figcraft_doc::TextDirection> = t.paragraphs.iter().map(|p| p.direction).collect();
+    if let Some(first) = dirs.first().copied().filter(|d| *d != figcraft_doc::TextDirection::Auto)
+        && dirs.iter().all(|d| *d == first)
+    {
+        insert_prop(o, options, "textDirection", || json!(first));
+    } else if dirs.iter().any(|d| *d != figcraft_doc::TextDirection::Auto) {
+        insert_prop(o, options, "lineDirections", || dirs.iter().map(|d| json!(d)).collect());
     }
     if t.list_spacing != 0.0 {
         insert_prop(o, options, "listSpacing", || json!(t.list_spacing));
