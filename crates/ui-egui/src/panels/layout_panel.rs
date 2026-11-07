@@ -16,7 +16,7 @@ use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::right::{block, common, menu_item, menu_popup, row};
 use crate::theme::{ACCENT, Tokens, regular};
-use crate::widgets::{self, FIELD_H, Lead};
+use crate::widgets::{self, FIELD_H, FieldEdit, Lead};
 
 /// Most tracks listed in the panel (the rest are still laid out; edit them through commands).
 const MAX_TRACK_ROWS: usize = 24;
@@ -416,6 +416,15 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
     }
 }
 
+/// Commit a padding field's edit: a value typed after a Cmd/Ctrl-click goes to all four sides
+/// (Guide to auto layout); otherwise to the field's own side or axis.
+fn padding_field(app: &mut FigApp, ui: &Ui, ids: &[NodeId], key: &str, id: Id, e: Option<FieldEdit>) {
+    match e {
+        Some(FieldEdit::Set(v)) if widgets::edit_began_with_command(ui, id) => app.set_props(ids, json!({"padding": v.max(0.0)})),
+        e => app.field(ids, key, e, |v| json!(v.max(0.0))),
+    }
+}
+
 /// The Spacing row: the H/V padding pair, or, with Individual padding on, two rows of one field
 /// per side (like Individual corners).
 fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
@@ -439,9 +448,9 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
         for (r, pair) in sides.chunks(2).enumerate() {
             row(ui, 32.0, |ui| {
                 for (key, name, icon, v, k) in pair {
-                    let e =
-                        crate::variable_ui::number_field(app, ui, ids, key, Id::unique(("padding", *k)), Lead::Icon(*icon, name), Some(*v), "", col);
-                    app.field(ids, key, e, |v| json!(v.max(0.0)));
+                    let id = Id::unique(("padding", *k));
+                    let e = crate::variable_ui::number_field(app, ui, ids, key, id, Lead::Icon(*icon, name), Some(*v), "", col);
+                    padding_field(app, ui, ids, key, id, e);
                 }
                 if r == 0 {
                     toggle(ui);
@@ -461,7 +470,7 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 "",
                 col,
             );
-            app.field(ids, "paddingHorizontal", e, |v| json!(v.max(0.0)));
+            padding_field(app, ui, ids, "paddingHorizontal", Id::unique("al_padh"), e);
             let e = crate::variable_ui::number_field(
                 app,
                 ui,
@@ -473,7 +482,7 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 "",
                 col,
             );
-            app.field(ids, "paddingVertical", e, |v| json!(v.max(0.0)));
+            padding_field(app, ui, ids, "paddingVertical", Id::unique("al_padv"), e);
             toggle(ui);
         });
     }
