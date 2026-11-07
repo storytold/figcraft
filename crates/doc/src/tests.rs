@@ -349,6 +349,20 @@ fn repair_drops_cycles_and_repeated_children() {
 }
 
 #[test]
+fn repair_lists_a_page_once_however_often_the_file_lists_it() {
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let q = d.add_page("Two");
+    let mut v = serde_json::to_value(&d).unwrap();
+    v["pages"] = serde_json::json!([p, q, p, q, p]);
+    let mut bad: Document = serde_json::from_value(v).unwrap();
+    assert!(bad.validate().iter().any(|i| i.contains("listed twice")), "{:?}", bad.validate());
+    bad.repair();
+    assert!(bad.validate().is_empty(), "{:?}", bad.validate());
+    assert_eq!(bad.pages, vec![p, q]);
+}
+
+#[test]
 fn validate_caps_the_issue_list() {
     let mut d = Document::new("x");
     let p = page(&d);
@@ -858,4 +872,18 @@ fn frame_relative_ends_on_a_looping_parent_chain() {
     v["nodes"][f.to_string()]["parent"] = serde_json::json!(g);
     let bad: Document = serde_json::from_value(v).unwrap();
     let _ = bad.frame_relative(g);
+}
+
+#[test]
+fn remove_children_removes_every_subtree_and_keeps_the_parent() {
+    let mut doc = Document::new("T");
+    let page = doc.first_page().unwrap();
+    let frame = doc.create(page, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let inner = doc.create(frame, NodeKind::Frame, "Inner", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let leaf = doc.create(inner, NodeKind::Rectangle, "Leaf", 0.0, 0.0, 5.0, 5.0).unwrap();
+    let other = doc.create(page, NodeKind::Rectangle, "Other", 0.0, 0.0, 5.0, 5.0).unwrap();
+    doc.remove_children(frame).unwrap();
+    assert!(doc.contains(frame) && doc.contains(other));
+    assert!(!doc.contains(inner) && !doc.contains(leaf));
+    assert!(doc.get(frame).unwrap().children.is_empty());
 }

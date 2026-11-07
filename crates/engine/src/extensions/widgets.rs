@@ -157,8 +157,9 @@ fn state_of(doc: &Document, w: NodeId) -> Map<String, Value> {
 /// fields), each once, in layer order.
 fn names(doc: &Document, w: NodeId, key: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for t in doc.subtree(w).into_iter().filter_map(|i| doc.node(i)?.plugin_data.get(key).cloned()) {
-        if !out.contains(&t) {
+        if seen.insert(t.clone()) {
             out.push(t);
         }
     }
@@ -243,9 +244,7 @@ fn build(s: &mut Session, plugin: &str, w: NodeId, r: &WidgetRender) -> Result<(
     if !is_widget(n) || n.plugin_data.get(PLUGIN).map(String::as_str) != Some(plugin) {
         return Err(bad(cmd, "the layer is no longer this plugin's widget"));
     }
-    for c in n.children.clone() {
-        doc.remove(c)?;
-    }
+    doc.remove_children(w)?;
     crate::cmd::props::apply(cmd, doc, w, &props(&r.root, true))?;
     let n = doc.get_mut(w)?;
     n.locked = false;

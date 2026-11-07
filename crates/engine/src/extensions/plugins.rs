@@ -149,6 +149,16 @@ fn refusal(m: &Manifest, command: &str, params: &Value) -> Option<String> {
     if DENIED.iter().any(|p| command.starts_with(p)) && !ALLOWED.contains(&command) {
         return Some(format!("`{command}` isn't available to plugins"));
     }
+    // A preview runs its inner command, which the plugin's permissions and the denied list must cover too.
+    // An inner command that can't be previewed (a nested preview) is refused by the preview itself,
+    // before it runs: descending into its parameters first would only rescan them.
+    if command == "text.preview"
+        && let Some(inner) = get(params, "command").and_then(Value::as_str)
+        && crate::textpreview::PREVIEWABLE.contains(&inner)
+        && let Some(why) = refusal(m, inner, get(params, "params").unwrap_or(&Value::Null))
+    {
+        return Some(why);
+    }
     // A widget's own data is FigCraft's to write, so no plugin can forge or retarget a widget.
     if writes_widget_data(params, 0) {
         return Some(format!("plugins can't write `{}…` layer data", crate::widgets::DATA_PREFIX));
