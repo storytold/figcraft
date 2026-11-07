@@ -626,6 +626,33 @@ fn smart_guides_snap_to_edges_centres_and_equal_spacing() {
 }
 
 #[test]
+fn snapping_to_layers_wins_over_the_pixel_grid() {
+    // Both on (the defaults): a layer's centre at x = 5.5 is still a target.
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0, 11.0, 11.0, None);
+    let b = rect(&mut s, 200.0, 300.0, 100.0, 100.0, None);
+    let _ = a;
+    ex(&mut s, "select.set", json!({"ids": [b]}));
+    // Moving: B's centre (grabbed) snaps to A's; the free axis stays on whole pixels.
+    s.pointer(&ev(PointerKind::Down, Point::new(250.0, 350.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Move, Point::new(6.0, 352.4), NONE)).unwrap();
+    assert!(s.tool.overlay.guides.iter().any(|g| near(g.x0, 5.5) && near(g.x1, 5.5)), "{:?}", s.tool.overlay.guides);
+    s.pointer(&ev(PointerKind::Up, Point::new(6.0, 352.4), NONE)).unwrap();
+    assert_eq!(bounds(&s, b).origin(), Point::new(-44.5, 302.0), "moved onto A's centre");
+    ex(&mut s, "edit.undo", json!({}));
+    // Out of reach of any layer, a move lands on whole pixels.
+    drag(&mut s, Point::new(250.0, 350.0), Point::new(260.3, 360.6), NONE);
+    assert_eq!(bounds(&s, b).origin(), Point::new(210.0, 311.0));
+    ex(&mut s, "edit.undo", json!({}));
+    // Resizing: the left handle snaps to A's centre; the bottom one lands on whole pixels.
+    drag(&mut s, Point::new(200.0, 350.0), Point::new(6.0, 350.0), NONE);
+    assert!(near(bounds(&s, b).x0, 5.5), "{:?}", bounds(&s, b));
+    ex(&mut s, "edit.undo", json!({}));
+    drag(&mut s, Point::new(250.0, 400.0), Point::new(250.0, 450.6), NONE);
+    assert_eq!(size(&s, b), (100.0, 151.0));
+}
+
+#[test]
 fn corner_cursors_stay_diagonal_whatever_the_proportions() {
     let mut s = session();
     let mod180 = |a: f64, b: f64| near((a - b).rem_euclid(180.0).min((b - a).rem_euclid(180.0)), 0.0);

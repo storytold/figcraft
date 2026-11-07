@@ -1244,6 +1244,25 @@ fn local_samples_round_trip() {
 }
 
 #[test]
+fn a_glass_frost_is_written_as_it_draws() {
+    // A frost saved before the 0–100 range (or not a number) is written at what it draws: 100, or
+    // the default.
+    for (frost, written) in [(12.0, 12.0), (500.0, Glass::MAX_FROST), (f64::NAN, Glass::default().frost)] {
+        let mut doc = Document::new("glass");
+        let page = doc.first_page().unwrap();
+        let r = doc.create(page, NodeKind::Rectangle, "Pane", 0.0, 0.0, 24.0, 24.0).unwrap();
+        doc.get_mut(r).unwrap().effects = vec![Effect { kind: EffectKind::Glass(Glass { frost, ..Glass::default() }), visible: true }];
+        let (bytes, _) = export(&doc, None).unwrap();
+        let archive = Archive::open(&bytes).unwrap();
+        let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+        let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+        let pane = msg.get("nodeChanges").unwrap().list().iter().find(|nc| nc.get("name").and_then(Kv::str) == Some("Pane")).unwrap();
+        let radius = pane.get("effects").unwrap().list()[0].get("radius").and_then(Kv::f64).unwrap();
+        assert_eq!(radius, written, "frost {frost}");
+    }
+}
+
+#[test]
 fn a_vector_drawable_export_setting_is_written_as_svg_with_a_warning() {
     let mut doc = Document::new("vd");
     let page = doc.first_page().unwrap();
@@ -1626,4 +1645,28 @@ fn text_with_thousands_of_distinct_styles_exports_in_linear_time() {
     let (bytes, _) = export(&doc, None).unwrap();
     assert!(!bytes.is_empty());
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+}
+
+/// An ellipse whose start has gone round many times (a start typed in degrees past a few hundred
+/// turns) comes back drawn the same: the same sweep, and a start the same way round.
+#[test]
+fn an_ellipse_starting_many_turns_round_comes_back_the_same() {
+    let tau = std::f64::consts::TAU;
+    // Not all of them hold exactly as 32-bit floats, the way a start typed in degrees doesn't.
+    for start in [999.0, 1500.0, -5000.0, 1e6, 1e6 + 0.1, 1234.567] {
+        for sweep in [tau, -tau, 1.0, -2.5, 1.3, tau - 0.1] {
+            let mut doc = Document::new("turns");
+            let page = doc.first_page().unwrap();
+            doc.create(page, NodeKind::Ellipse { start, sweep, inner: 0.0 }, "Ellipse", 0.0, 0.0, 100.0, 100.0).unwrap();
+            let (bytes, _) = export(&doc, None).unwrap();
+            let (back, _) = import(&bytes, "x").unwrap();
+            let kinds: Vec<NodeKind> =
+                back.ids().filter_map(|id| back.node(id)).map(|n| n.kind.clone()).filter(|k| matches!(k, NodeKind::Ellipse { .. })).collect();
+            let Some(NodeKind::Ellipse { start: s, sweep: w, .. }) = kinds.first() else { panic!("start {start}: no ellipse") };
+            // Where the arc starts, the same way round (as close as a 32-bit angle holds it).
+            let off = (s - start).rem_euclid(tau);
+            assert!(off.min(tau - off) < 1e-5, "start {start}, sweep {sweep}: came back starting at {s}");
+            assert!((w - sweep).abs() < 1e-5, "start {start}, sweep {sweep}: came back sweeping {w}");
+        }
+    }
 }

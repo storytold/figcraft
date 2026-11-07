@@ -37,7 +37,8 @@ pub(crate) use load::{load_fig, read_capped, recovered, recovered_from, variable
 pub use open::MAX_RECENT;
 #[cfg(test)]
 use open::append_pages;
-use open::{import, open, open_recent, revert};
+pub(crate) use open::open;
+use open::{import, open_recent, revert};
 pub(crate) use save::save_ends_preview;
 pub use save::{FileSnapshot, file_bytes, thumbnail};
 use save::{color_profile, mark_saved, save, save_as};

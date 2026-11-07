@@ -2030,27 +2030,51 @@ fn token_theme_groups<'a>(value: &'a Value, tokens: &BTreeMap<&str, BTreeMap<Str
 }
 
 /// Drops the resolved tokens that alias a variable which isn't being made, until none does; how
-/// many were dropped.
+/// many were dropped. Each token is looked at once to start with, and again only when a variable
+/// it aliases goes: a chain of aliases dropped one link per round would otherwise rescan every
+/// token per link.
 fn drop_dangling_aliases(
     resolved: &mut BTreeMap<&str, (usize, VariableType, BTreeMap<String, VariableValue>)>,
     var_id: &dyn Fn(&str) -> String,
 ) -> usize {
-    let mut dropped = 0;
-    loop {
-        let ids: BTreeSet<String> = resolved.keys().map(|p| var_id(p)).collect();
-        let dangling: Vec<&str> = resolved
-            .iter()
-            .filter(|(_, (_, _, values))| values.values().any(|v| matches!(v, VariableValue::Alias(target) if !ids.contains(target))))
-            .map(|(path, _)| *path)
-            .collect();
-        if dangling.is_empty() {
-            return dropped;
+    // How many tokens make each variable id, and the tokens aliasing each id.
+    let mut makers: BTreeMap<String, usize> = BTreeMap::new();
+    for path in resolved.keys() {
+        *makers.entry(var_id(path)).or_default() += 1;
+    }
+    let mut aliased_by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut gone: Vec<&str> = Vec::new();
+    for (path, (_, _, values)) in resolved.iter() {
+        let mut dangling = false;
+        for v in values.values() {
+            if let VariableValue::Alias(target) = v {
+                dangling |= !makers.contains_key(target);
+                aliased_by.entry(target.as_str()).or_default().push(*path);
+            }
         }
-        dropped += dangling.len();
-        for path in dangling {
-            resolved.remove(path);
+        if dangling {
+            gone.push(*path);
         }
     }
+    let mut dropped: BTreeSet<&str> = gone.iter().copied().collect();
+    while let Some(path) = gone.pop() {
+        let id = var_id(path);
+        let Some(left) = makers.get_mut(&id) else { continue };
+        *left -= 1;
+        if *left > 0 {
+            continue;
+        }
+        makers.remove(&id);
+        for &by in aliased_by.get(id.as_str()).into_iter().flatten() {
+            if dropped.insert(by) {
+                gone.push(by);
+            }
+        }
+    }
+    for path in &dropped {
+        resolved.remove(path);
+    }
+    dropped.len()
 }
 
 /// Moves a base token whose expression refers to a themed token into that token's collection, so
@@ -6516,5 +6540,45 @@ mod tests {
         assert!(issues.is_empty(), "{issues:?}");
         let button = opened.nodes().find(|n| n.name == "Go").unwrap();
         assert_eq!(button.interactions.len(), 1, "the prototype link survives the round trip");
+    }
+}
+
+#[cfg(test)]
+mod dangling_alias_tests {
+    use super::*;
+
+    type Resolved<'a> = BTreeMap<&'a str, (usize, VariableType, BTreeMap<String, VariableValue>)>;
+
+    fn token(alias: Option<&str>) -> (usize, VariableType, BTreeMap<String, VariableValue>) {
+        let value = alias.map_or(VariableValue::Number(1.0), |a| VariableValue::Alias(format!("v:{a}")));
+        (0, VariableType::Number, [("m".to_string(), value)].into())
+    }
+
+    #[test]
+    fn a_chain_ending_in_a_missing_variable_is_dropped_whole() {
+        // t0 → t1 → … → t1999 → missing: every link goes, in one pass along the chain.
+        let names: Vec<String> = (0..2000).map(|i| format!("t{i}")).collect();
+        let mut resolved: Resolved = BTreeMap::new();
+        for (i, n) in names.iter().enumerate() {
+            let next = names.get(i + 1).map_or("missing", String::as_str);
+            resolved.insert(n, token(Some(next)));
+        }
+        resolved.insert("plain", token(None));
+        resolved.insert("to-plain", token(Some("plain")));
+        let var_id = |p: &str| format!("v:{p}");
+        assert_eq!(drop_dangling_aliases(&mut resolved, &var_id), 2000);
+        assert_eq!(resolved.keys().copied().collect::<Vec<_>>(), ["plain", "to-plain"]);
+    }
+
+    #[test]
+    fn a_variable_made_by_two_tokens_stays_while_one_does() {
+        // `a` and `b` both make `v:x`; `a` dangles, `b` doesn't, so `c` (aliasing `v:x`) stays.
+        let mut resolved: Resolved = BTreeMap::new();
+        resolved.insert("a", token(Some("missing")));
+        resolved.insert("b", token(None));
+        resolved.insert("c", token(Some("x")));
+        let var_id = |p: &str| if p == "a" || p == "b" { "v:x".to_string() } else { format!("v:{p}") };
+        assert_eq!(drop_dangling_aliases(&mut resolved, &var_id), 1);
+        assert_eq!(resolved.keys().copied().collect::<Vec<_>>(), ["b", "c"]);
     }
 }

@@ -54,7 +54,7 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
-pub(super) fn open(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let variables = variables_param("file.open", p)?;
     if string(p, "path").is_none()
         && let Some(d) = string(p, "data")

@@ -124,6 +124,8 @@ mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
 #[cfg(test)]
+mod host_save_tests;
+#[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
 mod ime_tests;
@@ -250,6 +252,8 @@ mod titlebar_tests;
 mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
+#[cfg(test)]
+mod variable_picker_tests;
 #[cfg(test)]
 mod variables_export_ui_tests;
 #[cfg(test)]
