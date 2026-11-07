@@ -788,6 +788,9 @@ pub(crate) fn bind_variable(cmd: &str, doc: &mut Document, ids: &[NodeId], field
         for i in ids {
             match field.strip_prefix(crate::components::PROP_BINDING) {
                 Some(name) => super::component::check_prop_binding(doc, *i, name, v.kind).map_err(|e| bad(cmd, e))?,
+                None if !super::variables::has_field(doc, *i, field) => {
+                    return Err(bad(cmd, format!("the layer has no field `{field}` to bind")));
+                }
                 None if !super::variables::field_takes(doc, *i, field, v.kind) => {
                     return Err(bad(cmd, format!("`{field}` doesn't take a {} variable", v.kind.id())));
                 }
