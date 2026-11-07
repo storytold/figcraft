@@ -371,6 +371,8 @@ mod images_left_in_file_tests;
 #[cfg(test)]
 mod import_export_tests;
 #[cfg(test)]
+mod import_ids_tests;
+#[cfg(test)]
 mod import_journal_tests;
 #[cfg(test)]
 mod inspect_behaviour_tests;
