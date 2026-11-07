@@ -201,6 +201,7 @@ impl ToolId {
                 | ToolId::Star
                 | ToolId::Line
                 | ToolId::Arrow
+                | ToolId::BoardShape
         )
     }
 }
@@ -544,6 +545,8 @@ pub struct PenPath {
     pub closed: bool,
     /// The path ends connected to this anchor of its own (a vector network).
     pub join: Option<usize>,
+    /// Anchors taken back by undo, the last one first to come back on redo.
+    pub undone: Vec<(Point, Vec2, Vec2)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -589,6 +592,13 @@ pub struct ToolState {
     pub picked: Option<figcraft_color::Color>,
     /// The widget layers whose hover styles show while the pointer is over them (a live preview).
     pub(crate) widget_hover: Vec<NodeId>,
+    /// The placement crosshair: where Enter puts the next shape or frame once the arrows have
+    /// shown it (in the middle of the view) and moved it (`tool.crosshair`), in page coordinates
+    /// of the document and page in `place_on` (elsewhere it isn't shown: `Session::crosshair`).
+    /// Placing, Escape and a change of tool take it away.
+    pub place_at: Option<Point>,
+    /// The document (uid) and page the crosshair was shown on.
+    pub(crate) place_on: Option<(u64, NodeId)>,
 }
 
 impl ToolState {

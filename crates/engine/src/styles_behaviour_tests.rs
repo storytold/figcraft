@@ -5,10 +5,11 @@
 //! line; "docs silent" marks behaviour the documentation doesn't describe (pinned as it is).
 
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 use crate::Session;
 use crate::params::id_of;
-use figcraft_doc::{Node, NodeId};
+use figcraft_doc::{ListStyle, Node, NodeId, ParagraphStyle, StyleKind, TextData};
 
 fn id(v: Value) -> NodeId {
     id_of(&v["id"]).unwrap()
@@ -356,6 +357,68 @@ fn text_styles_go_on_text_layers_and_chars() {
 }
 
 #[test]
+fn text_styles_carry_paragraph_spacing_indent_lists_and_features() {
+    // "Supported in text styles": "Paragraph spacing and indentation", "Lists" and "OpenType
+    // features", beside the character properties (Create and apply text styles). A style made
+    // from a text takes them, applying it sets them, editing one on a styled text unlinks it.
+    let mut s = Session::new();
+    let td = |s: &Session, n: NodeId| -> TextData { node(s, n).kind.text().unwrap().clone() };
+    let t = text(&mut s, 0.0);
+    let props = json!({"characters": "One\nTwo", "paragraphSpacing": 12, "paragraphIndent": 8, "listStyle": "bulleted", "features": {"tnum": true, "liga": false}});
+    run(&mut s, "node.set", json!({"id": t, "props": props}));
+    let st = sid(run(&mut s, "style.create", json!({"type": "text", "name": "Audit", "from": t})));
+    let listed = run(&mut s, "style.list", json!({"type": "text"}));
+    let audit = listed.as_array().unwrap().iter().find(|x| x["id"] == json!(st)).unwrap();
+    assert_eq!(
+        audit["paragraph"],
+        json!({"paragraph_spacing": 12.0, "paragraph_indent": 8.0, "list": "bulleted", "features": {"liga": false, "tnum": true}})
+    );
+    // Applying it sets them on a plain text, every paragraph in the list; the layer links.
+    let t2 = text(&mut s, 300.0);
+    run(&mut s, "node.set", json!({"id": t2, "props": {"characters": "A\nB\nC"}}));
+    run(&mut s, "style.apply", json!({"ids": [t2], "style": st}));
+    let d = td(&s, t2);
+    assert_eq!((d.paragraph_spacing, d.paragraph_indent), (12.0, 8.0));
+    assert!((0..3).all(|p| d.para_list(p).list == ListStyle::Bulleted), "{:?}", d.paragraphs);
+    assert_eq!(d.features, BTreeMap::from([("liga".to_string(), false), ("tnum".to_string(), true)]));
+    assert_eq!(node(&s, t2).styles.text.as_deref(), Some(st.as_str()));
+    // Redefining the style moves its layers' paragraph values with the rest.
+    let value = json!({"fontSize": 22, "paragraphSpacing": 20, "listStyle": "numbered", "openTypeFeatures": {"tnum": true}});
+    run(&mut s, "style.update", json!({"style": st, "value": value}));
+    let d = td(&s, t2);
+    assert_eq!((d.paragraph_spacing, d.paragraph_indent, d.para_list(1).list), (20.0, 0.0, ListStyle::Numbered));
+    assert_eq!(d.features, BTreeMap::from([("tnum".to_string(), true)]));
+    assert_eq!(font_size(&s, t2), 22.0);
+    assert_eq!(node(&s, t2).styles.text.as_deref(), Some(st.as_str()), "still linked after the update");
+    // Editing a paragraph value the style sets unlinks the text, as editing its font does.
+    run(&mut s, "node.set", json!({"id": t2, "props": {"paragraphSpacing": 5}}));
+    assert_eq!(node(&s, t2).styles.text, None, "paragraph spacing edited: unlinked");
+    assert!(td(&s, t2).spans().iter().all(|(_, _, x)| x.style_id.is_none()));
+    // On a range, the list goes to the paragraphs touched; the spacing is the layer's. Taking
+    // the paragraph out of the style's list unlinks its chars.
+    let t3 = text(&mut s, 600.0);
+    run(&mut s, "node.set", json!({"id": t3, "props": {"characters": "A\nB\nC"}}));
+    run(&mut s, "style.apply", json!({"ids": [t3], "style": st, "start": 0, "end": 1}));
+    let d = td(&s, t3);
+    assert_eq!((d.para_list(0).list, d.para_list(1).list, d.paragraph_spacing), (ListStyle::Numbered, ListStyle::None, 20.0));
+    assert_eq!(d.style_at(0).style_id.as_deref(), Some(st.as_str()));
+    run(&mut s, "node.set", json!({"id": t3, "props": {"start": 0, "end": 1, "listStyle": "none"}}));
+    assert_eq!(td(&s, t3).style_at(0).style_id, None, "its paragraph left the style's list");
+    // A definition given as a value takes the node.set spellings; junk is refused.
+    let value = json!({"fontSize": 11, "paragraphSpacing": 4, "listStyle": "bulleted", "features": {"liga": false}});
+    let st2 = sid(run(&mut s, "style.create", json!({"type": "text", "name": "Note", "value": value})));
+    let want = ParagraphStyle {
+        paragraph_spacing: 4.0,
+        list: ListStyle::Bulleted,
+        features: BTreeMap::from([("liga".to_string(), false)]),
+        ..Default::default()
+    };
+    assert!(matches!(&s.doc().unwrap().style(&st2).unwrap().kind, StyleKind::Text { paragraph, .. } if **paragraph == want));
+    assert!(s.execute("style.create", &json!({"type": "text", "name": "Bad", "value": {"listStyle": "dotted"}})).is_err());
+    assert!(s.execute("style.create", &json!({"type": "text", "name": "Bad", "value": {"paragraphSpacing": "wide"}})).is_err());
+}
+
+#[test]
 fn styles_are_organised_by_slash_names_order_and_duplicates() {
     // Documented: "/" in a name groups styles in folders; moving a style to another folder renames
     // it to match ("Brand/Teal" into Brand/Site → "Brand/Site/Teal"); dragging changes the
@@ -409,4 +472,22 @@ fn descriptions_and_library_styles() {
     assert_eq!(s.doc().unwrap().style(&st).unwrap().description, "Primary text");
     run(&mut s, "style.update", json!({"style": st, "description": "Body text"}));
     assert_eq!(s.doc().unwrap().style(&st).unwrap().description, "Body text");
+}
+
+#[test]
+fn a_style_without_paragraph_values_keeps_a_bulleted_text_linked() {
+    // Styles from older files set no paragraph values, so a list or spacing on their text isn't
+    // an edit of the style: it stays linked (docs silent, pinned to how such files worked).
+    let mut s = Session::new();
+    let t = text(&mut s, 0.0);
+    run(
+        &mut s,
+        "node.set",
+        json!({"id": t, "props": {"characters": "A
+B"}}),
+    );
+    let st = sid(run(&mut s, "style.create", json!({"type": "text", "name": "Plain", "value": {"fontSize": 11}})));
+    run(&mut s, "style.apply", json!({"ids": [t], "style": st}));
+    run(&mut s, "node.set", json!({"id": t, "props": {"listStyle": "bulleted", "paragraphSpacing": 6}}));
+    assert_eq!(node(&s, t).styles.text.as_deref(), Some(st.as_str()));
 }

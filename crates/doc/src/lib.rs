@@ -27,7 +27,7 @@ pub mod vector_faces;
 pub mod vector_regions;
 
 pub use board::*;
-pub use board_route::{RouteEnd, attached_sides, path_handles, reshaped, route_along, route_points};
+pub use board_route::{END_GAP, RouteEnd, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
 pub use facilitation::*;
@@ -574,6 +574,19 @@ impl Document {
         Ok(())
     }
 
+    /// Remove every child of `id` with its subtree, in one pass over `id`'s child list (removing
+    /// them one by one would search that list once per child).
+    pub fn remove_children(&mut self, id: NodeId) -> DocResult<()> {
+        let kids = std::mem::take(&mut self.get_mut(id)?.children);
+        for c in kids {
+            for d in self.subtree(c) {
+                self.nodes.remove(&d);
+                self.dirty.touch(d);
+            }
+        }
+        Ok(())
+    }
+
     /// Whether sections may go in `parent`: a page or another section (never a frame or a group).
     pub fn takes_sections(&self, parent: NodeId) -> bool {
         self.node(parent).is_some_and(|p| p.is_page() || matches!(p.kind, NodeKind::Section { .. }))
@@ -585,7 +598,14 @@ impl Document {
         let Some(n) = self.node(id) else { return Affine::IDENTITY };
         let mut t = n.transform;
         let mut parent = n.parent;
+        // More hops than nodes means the parent chain loops (a restored snapshot can leave one):
+        // stop rather than spin.
+        let mut hops = 0;
         while let Some(p) = parent.and_then(|p| self.node(p)).filter(|p| p.kind.bounds_follow_children()) {
+            hops += 1;
+            if hops > self.nodes.len() {
+                break;
+            }
             t = p.transform * t;
             parent = p.parent;
         }
@@ -1085,6 +1105,9 @@ impl Document {
         // lookups: a wide parent or a long page list doesn't make validation quadratic.
         let edges: std::collections::BTreeSet<(NodeId, NodeId)> = self.nodes.iter().flat_map(|(p, n)| n.children.iter().map(|c| (*p, *c))).collect();
         let page_ids: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
+        if page_ids.len() != self.pages.len() {
+            note(&mut issues, || "a page is listed twice".to_string());
+        }
         for (id, n) in self.nodes.iter() {
             if n.id != *id {
                 note(&mut issues, || format!("node key {id} has id {}", n.id));
@@ -1178,9 +1201,10 @@ impl Document {
         if store != self.libraries.store {
             Arc::make_mut(&mut self.libraries).store = store;
         }
-        self.pages.retain(|p| self.nodes.get(p).is_some_and(|n| n.is_page()) && Some(*p) != store);
+        // A page listed twice would be imported, exported and walked once per listing.
+        let mut listed = std::collections::BTreeSet::new();
+        self.pages.retain(|p| self.nodes.get(p).is_some_and(|n| n.is_page()) && Some(*p) != store && listed.insert(*p));
         // Unlisted pages join the list; a set keeps many pages from making this quadratic (#1078).
-        let mut listed: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
         for (k, n) in self.nodes.iter() {
             if n.is_page() && Some(*k) != store && listed.insert(*k) {
                 self.pages.push(*k);
@@ -1206,7 +1230,7 @@ impl Document {
             .styles
             .iter()
             .filter_map(|s| match &s.kind {
-                StyleKind::Text { style } => Some((s.id.clone(), style.clone())),
+                StyleKind::Text { style, .. } => Some((s.id.clone(), style.clone())),
                 _ => None,
             })
             .collect();
@@ -1285,6 +1309,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 
 #[cfg(test)]
 mod blur_tests;
+#[cfg(test)]
+mod board_route_tests;
 #[cfg(test)]
 mod board_shape_tests;
 #[cfg(test)]

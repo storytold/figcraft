@@ -59,8 +59,10 @@ queue. A screenshot settles on three completed, presented UI frames (a discarded
 not count), then is issued, and expires once at its 60 s deadline if no paint arrives. `window.new`
 remains an error at once (`window 0 is minimised or hidden: …`) instead of waiting for the window
 to show; `ui.render` draws the document without it. Under Wayland the app can't tell that its
-window is minimised: where the compositor then stops drawing it, a request waits for the window
-and gets the 60 s timeout error. The browser's shared eframe runner does not implement
+window is minimised, and the compositor stops asking it to draw: a window that draws no frame for
+0.2 s while a request waits for it is treated as hidden, so the requests that act on the app's
+state are answered without a frame (about half a second each), while `ui.screenshot` and
+`ui.input` keep waiting for one. The browser's shared eframe runner does not implement
 `RequestPaintWhileHidden` yet, so hidden-tab screenshots and injected input are unqualified there.
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent

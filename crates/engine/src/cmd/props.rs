@@ -41,6 +41,30 @@ pub(crate) fn normalize_line_endings(s: &str) -> String {
     s.replace("\r\n", "\n").replace(['\r', '\u{2028}', '\u{2029}'], "\n")
 }
 
+/// The name a text layer derives from its characters: the first line, at most 64 characters, or
+/// None when that line is blank (a layer with no name of its own, which the Layers panel shows by
+/// its kind).
+///
+/// A layer whose name is this derived name is one nobody has renamed, so the editor keeps its name
+/// in step as the characters are typed ([`crate::textedit`]); any other name was chosen by the
+/// author and is kept. Commands never rename, so a layer named for its role keeps that name as a
+/// field key even when `characters` replace text that reads like it.
+pub(crate) fn text_layer_name(characters: &str) -> Option<String> {
+    let first: String = characters.lines().next().unwrap_or("").chars().take(64).collect();
+    (!first.trim().is_empty()).then_some(first)
+}
+
+/// Whether `name` is one a text layer was given for its characters rather than by its author, so
+/// the editor may keep it in step with them. Blank text leaves a layer named `""` when the Text
+/// tool draws it and `Text` when `node.create` makes it, and both read as unnamed in the panel.
+pub(crate) fn text_name_is_derived(name: &str, derived: Option<&String>) -> bool {
+    match derived {
+        Some(d) => name == d,
+        // `NodeKind::Text(_).label()`, which the panel falls back to for an unnamed layer.
+        None => name.is_empty() || name == "Text",
+    }
+}
+
 /// camelCase object keys → snake_case (accept the inspect/camel forms for serde-backed values).
 pub fn snake(v: &Value) -> Value {
     match v {
@@ -115,6 +139,8 @@ pub(crate) fn enum_of<T: serde::de::DeserializeOwned>(v: &Value) -> Option<T> {
     let norm: String = {
         let mut out = String::new();
         let mut up = false;
+        // Once, not per character: a long value made this quadratic before it was refused.
+        let no_lowercase = s.chars().all(|c| !c.is_lowercase() || !c.is_alphabetic());
         for (i, ch) in s.trim().chars().enumerate() {
             if ch == '_' || ch == '-' || ch == ' ' {
                 up = true;
@@ -125,7 +151,7 @@ pub(crate) fn enum_of<T: serde::de::DeserializeOwned>(v: &Value) -> Option<T> {
             } else if up {
                 out.extend(ch.to_uppercase());
                 up = false;
-            } else if s.chars().all(|c| !c.is_lowercase() || !c.is_alphabetic()) {
+            } else if no_lowercase {
                 out.extend(ch.to_lowercase());
             } else {
                 out.push(ch);
@@ -193,6 +219,9 @@ fn set_operand_op(doc: &mut Document, id: NodeId, v: &Value, cmd: &str) -> Resul
 }
 
 pub(crate) const WIDTH_PROFILE_HELP: &str = "widthProfile: a preset (uniform|wedge|taper|eye|rounded|pinch), points [[t (0-1 along the path), scale (× stroke weight)] | [t, left, right] (one-sided: each side's scale, looking along the path), ...] or [{t, scale} | {t, left, right}], {preset} | {points}, or null (uniform)";
+
+/// The stroke caps `strokeCap`, `startCap` and `endCap` take (every [`StrokeCap`]).
+pub(crate) const STROKE_CAP_HELP: &str = "none|round|square|lineArrow|triangleArrow|reversedTriangle|circleFilled|diamondFilled";
 
 pub(crate) const BRUSH_HELP: &str = "brush: a preset (taper|ink|ribbon|bristle: stretched; dots|stars|confetti|leaves: scattered), {preset, spacing? (× weight), sizeJitter? (0-1), rotationJitter? (0-1), scatter? (0-4 × weight), seed?}, or null (a plain stroke)";
 
@@ -609,13 +638,13 @@ fn apply_look(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -> 
             st.sides = Some(sides);
         }
         "strokeCap" => {
-            let c: StrokeCap = enum_of(v).ok_or_else(|| bad(cmd, "unknown stroke cap"))?;
+            let c: StrokeCap = enum_of(v).ok_or_else(|| bad(cmd, format!("strokeCap: {STROKE_CAP_HELP}")))?;
             let n = doc.get_mut(id)?;
             n.stroke.cap_start = c;
             n.stroke.cap_end = c;
         }
-        "startCap" => doc.get_mut(id)?.stroke.cap_start = enum_of(v).ok_or_else(|| bad(cmd, "unknown stroke cap"))?,
-        "endCap" => doc.get_mut(id)?.stroke.cap_end = enum_of(v).ok_or_else(|| bad(cmd, "unknown stroke cap"))?,
+        "startCap" => doc.get_mut(id)?.stroke.cap_start = enum_of(v).ok_or_else(|| bad(cmd, format!("startCap: {STROKE_CAP_HELP}")))?,
+        "endCap" => doc.get_mut(id)?.stroke.cap_end = enum_of(v).ok_or_else(|| bad(cmd, format!("endCap: {STROKE_CAP_HELP}")))?,
         "strokeJoin" => doc.get_mut(id)?.stroke.join = enum_of(v).ok_or_else(|| bad(cmd, "strokeJoin: miter|bevel|round"))?,
         "miterLimit" => doc.get_mut(id)?.stroke.miter_limit = f64_of(v).unwrap_or(4.0).clamp(1.0, 100.0),
         "miterAngle" => {
@@ -954,6 +983,12 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
                 t.set_para_lists(start, end, |p| p.indent = d.clamp(0.0, f64::from(MAX_LIST_INDENT)) as u8);
             }
         }
+        "textDirection" | "direction" => {
+            let d: figcraft_doc::TextDirection = enum_of(v).ok_or_else(|| bad(cmd, "textDirection: auto|ltr|rtl"))?;
+            let t = text_mut(cmd, doc.get_mut(id)?)?;
+            let (start, end) = range_of(props, t.char_count());
+            t.set_para_lists(start, end, |p| p.direction = d);
+        }
         "listSpacing" => text_mut(cmd, doc.get_mut(id)?)?.list_spacing = f64_of(v).filter(|s| s.is_finite()).unwrap_or(0.0).clamp(0.0, 10_000.0),
         "hangingPunctuation" | "hangingList" => {
             let on = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be true or false")))?;
@@ -1208,7 +1243,7 @@ pub fn override_group(k: &str) -> &'static str {
         "name" => "name",
         "characters" | "text" => "characters",
         "features" | "fontFeatures" | "openTypeFeatures" | "listStyle" | "indentation" | "listSpacing" | "maxLines" | "variationSettings"
-        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" => "textStyle",
+        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" | "textDirection" | "direction" => "textStyle",
         "cornerRadius" | "cornerSmoothing" | "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "corners",
         "width" | "height" | "w" | "h" => "size",
         "sizingH" | "sizingV" | "layoutSizingHorizontal" | "layoutSizingVertical" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "resizing",

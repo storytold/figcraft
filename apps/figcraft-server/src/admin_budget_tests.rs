@@ -75,3 +75,11 @@ fn codes_are_found_through_the_index_as_before() {
     assert_eq!(store.resolve_code(who(105), &codes[2]).unwrap_err(), CODE_GONE);
     assert_eq!(store.resolve_code(who(106), &codes[3]).unwrap().0, files[3].0);
 }
+
+#[test]
+fn a_name_taken_from_the_file_is_cleaned_like_a_given_one() {
+    let dir = TempDir::new("embedded-name");
+    let mut store = Store::open(dir.path(), config(dir.path()).store()).unwrap();
+    let (file, ..) = store.publish("", &snapshot("Bad\u{1b}[2Jname\u{202E}")).unwrap();
+    assert_eq!(file.name, "Bad[2Jname");
+}

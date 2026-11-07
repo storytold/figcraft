@@ -403,10 +403,10 @@ fn the_schema_numbers_what_the_format_numbers() {
 
 #[test]
 fn schema_text_takes_numbers_and_refuses_bad_ones() {
-    let s = Schema::parse("enum E A=3 B C=9\nmessage M uint a=7, E b, string c=2").unwrap();
+    let s = Schema::parse("enum E A=3 B C=9\nmessage M uint a=7, E b, string c=5").unwrap();
     let values = |i: usize| s.defs[i].fields.iter().map(|f| (f.name.as_str(), f.value)).collect::<Vec<_>>();
     assert_eq!(values(0), [("A", 3), ("B", 1), ("C", 9)]);
-    assert_eq!(values(1), [("a", 7), ("b", 2), ("c", 2)]);
+    assert_eq!(values(1), [("a", 7), ("b", 2), ("c", 5)]);
     for bad in ["enum E A=", "enum E A=x", "enum E A=-1", "message M uint a=1.5", "message M uint a=99999999999", "enum E =", "message M uint ="] {
         assert!(Schema::parse(bad).is_err() || bad.ends_with('='), "{bad}");
     }
