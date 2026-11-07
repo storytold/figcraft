@@ -448,7 +448,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "export.add",
             "Add export setting",
-            "{ids?, setting? {size: 2x|512w|512h|{by: scale|width|height, value}, suffix?, format?: png|jpg|svg|pdf|webp|xml (Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), quality? (JPG: 1-100, default 90)}} (without a setting: 1x, then one scale step up with an \"@2x\"-style suffix)",
+            "{ids?, setting? {size: 2x|512w|512h|{by: scale|width|height, value}, suffix?, format?: png|jpg|svg|pdf|webp|xml (Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), colorProfile? (PNG, JPG and WebP: sameAsFile|srgb|displayP3), quality? (JPG: 1-100, default 90)}} (without a setting: 1x, then one scale step up with an \"@2x\"-style suffix)",
             true,
             |s, p| {
                 let cmd = "export.add";
@@ -466,7 +466,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "export.update",
             "Edit export setting",
-            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp|xml: Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), quality? (JPG: 1-100), contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?}",
+            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp|xml: Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), colorProfile? (PNG, JPG and WebP: sameAsFile (the document's profile when it exports)|srgb|displayP3; kept when the format changes), quality? (JPG: 1-100), contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?}",
             true,
             |s, p| {
                 let cmd = "export.update";

@@ -4,7 +4,7 @@
 
 FigCraft's interface has a localization layer with an English catalog, a Russian catalog reviewed
 by a native speaker, and Spanish (with a Latin American overlay), French, German, Brazilian
-Portuguese, Japanese, Korean, Simplified Chinese, Indonesian, Vietnamese, Bosnian and Czech drafts (machine-drafted,
+Portuguese, Japanese, Korean, Simplified Chinese, Traditional Chinese, Indonesian, Vietnamese, Bosnian and Czech drafts (machine-drafted,
 waiting for native speakers' review), plus Swedish and Turkish catalogs. This page lists the twelve key
 languages, then the other languages Figma ships. How to add a
 language: [`translating.md`](translating.md).
@@ -32,15 +32,15 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   channel stay English. Accessibility names come from the same strings.
 - **Language preference:** Preferences ▸ Language (System, then each catalog by its own name:
   English, Bosanski, Čeština, Deutsch, Español, Español (Latinoamérica), Français, Bahasa Indonesia, 日本語,
-  한국어, Português (Brasil), Русский, Svenska, Türkçe, Tiếng Việt, 简体中文), applied at once without a
+  한국어, Português (Brasil), Русский, Svenska, Türkçe, Tiếng Việt, 简体中文, 繁體中文（台灣）), applied at once without a
   restart; System takes the first of the OS's preferred languages that has a catalog (on Windows
   only the first preferred language counts, since that list also holds the languages added for a
   keyboard; macOS AppleLanguages, `LANGUAGE` then the locale variables on Linux and BSD; a regional
   tag falls back to its language, pt-PT or pt to pt-BR, and es-419, es-MX, es-AR, es-CO and the
   other Latin American and US Spanish tags to es-419; regional ru, tr, cs and id tags (ru-RU,
   tr-TR, cs-CZ, id-ID) to their catalogs; zh, zh-CN, zh-SG and zh-Hans read zh-Hans,
-  while Traditional Chinese (zh-Hant, zh-TW, zh-HK, zh-MO) has no catalog and reads English or the
-  next OS language, never Simplified) or the browser's language on the web.
+  while zh-Hant, zh-TW, zh-HK and zh-MO read zh-Hant; an explicit Hans such as zh-Hans-TW still
+  reads Simplified) or the browser's language on the web.
   `pref.language {language}` sets it from the CLI, MCP and the control channel.
 - **Regional overlays:** a regional catalog whose language has a catalog lists only what differs
   (`es-419.toml` over `es.toml`); its UI strings, command labels and menu wordings read the
@@ -87,10 +87,15 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   Linux and BSD: Noto Sans CJK, Source Han Sans, Nanum, WenQuanYi; the craft-fonts build's BIZ
   UDPGothic first), the UI language's script first; Han without kana outside a Japanese or Korean UI
   reads as Chinese, and a Chinese UI puts its Chinese face (Microsoft YaHei, PingFang SC, Noto Sans
-  CJK SC) ahead of the built-in Japanese one, so Han takes Simplified Chinese shapes; changing the
+  CJK SC) ahead of the built-in Japanese one, so Han takes Simplified Chinese shapes, while a
+  Traditional Chinese UI puts an installed Noto Sans CJK TC first, then Microsoft JhengHei, PingFang
+  TC and Heiti TC, so Han takes Traditional shapes; changing the
   UI language lays the faces out again. Only that face's file is read and egui shares its bytes, so English users load
   nothing (startup and memory measured unchanged); no CJK font installed means tofu, never a
   crash. The web build has no system fonts: built with craft-fonts and `FIGCRAFT_EMBED_CJK=1` it
+  embeds Noto Sans CJK SC (+16 MB) and offers Japanese, Korean and Simplified Chinese; without a
+  Noto Sans CJK TC face built in it leaves Traditional Chinese out too; otherwise the language picker and
+  System leave them out. No font file is in this repo.
   embeds Noto Sans CJK SC (+16 MB) and offers Japanese, Korean and Simplified Chinese; otherwise the language picker and
   System leave them out. `FIGCRAFT_EMBED_SCRIPTS=Arab,Hebr,Thai,Deva` (one tag per script wanted, as
   the craft-fonts manifest lists them) embeds those scripts' faces as well, so an Arabic or Persian
@@ -102,7 +107,8 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Hours to full |
 |---|---|---|---|---|---|---|---|
 | English | en | 2,352 / 2,352 (100%, source) | yes | Latin | yes (source) | full | 0 |
-| Simplified Chinese (Mandarin) | zh-Hans | 2,216 / 2,352 (94.2%, draft) | yes | CJK text and IME in documents; UI text in an installed Chinese face, ahead of Japanese ones (web: the `FIGCRAFT_EMBED_CJK` build); no Traditional Chinese catalog (zh-TW, zh-HK read English) | no | draft | 1–2 (after native review) |
+| Simplified Chinese (Mandarin) | zh-Hans | 2,216 / 2,352 (94.2%, draft) | yes | CJK text and IME in documents; UI text in an installed Chinese face, ahead of Japanese ones (web: the `FIGCRAFT_EMBED_CJK` build) | no | draft | 1–2 (after native review) |
+| Traditional Chinese (Taiwan) | zh-Hant | 2,647 / 2,647 (100%: 1,975 UI strings, 641 command labels, 31 menu wordings; draft, counted 2026-11-03) | yes | CJK text and IME in documents; UI text in an installed Noto Sans CJK TC, then Microsoft JhengHei, PingFang TC or Heiti TC (web: only with a built-in TC face); zh-TW, zh-HK, zh-MO and zh-Hant read it, an explicit Hans stays Simplified | no | draft | 1–2 (after native review) |
 | Spanish | es, es-419 | 2,352 / 2,352 (100%, draft); es-419 overlays 104 Latin American wordings (draft) | yes | Latin | no | draft | 0–1 (after native review) |
 | Hindi | hi | 0 (0%) | no | Devanagari shaping works in documents; UI font fallback to check | no | none | 4–7 |
 | Arabic | ar | 1,857 / 1,857 UI strings, 620 command labels, 31 menu wordings (draft, counted 2026-10-28) | catalog complete; native review pending | Existing bidi/shaping and Arabic system fallback; web: only a build with `FIGCRAFT_EMBED_SCRIPTS=Arab` embeds Noto Sans Arabic (the font budget leaves it out otherwise, #1902); documents draw in it and the picker offers the Arabic UI then; panels do not mirror | no | draft | review + panel mirroring (not re-estimated) |
@@ -136,13 +142,14 @@ mirrors since 2026-10-31). Total: **29–51 h** (kept on
 every string adds).
 
 Priority: native reviews of the drafts and the es-419 overlay (every one of Figma's languages
-and variants has one, plus Simplified Chinese, Indonesian, Vietnamese and Czech, which Figma doesn't ship), then
-Hindi and Arabic. Traditional Chinese is not planned (no catalog; its users see English).
+and variants has one, plus Simplified Chinese, Traditional Chinese, Indonesian, Vietnamese and Czech, which Figma doesn't ship), then
+Hindi and Arabic.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`, 繁體中文（台灣）) draft catalog: every UI string (1,975), command label (641) and menu wording (31), translated clean-room from the English source and marked as a draft awaiting native review. `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant` read it; an explicit Hans still reads Simplified Chinese. The desktop UI prefers an installed Noto Sans CJK TC, then Microsoft JhengHei, PingFang TC and Heiti TC; no font is bundled. No plural forms. Localization grade and estimates unchanged |
 | 2026-11-03 | patch | M10, #1902: the web build drew Persian and Arabic text as missing-glyph boxes. The browser has no system fonts, and `crates/text/build.rs` keeps the web catalog to Inter, Noto Sans Georgian, the wordmark and (with `FIGCRAFT_EMBED_CJK`) Noto Sans CJK, so craft-fonts' Noto Sans Arabic never reached it. `FIGCRAFT_EMBED_SCRIPTS=Arab,Hebr,…` (script tags as the manifest's scripts column lists them) now embeds those scripts' faces in a web build; the default build and its size are unchanged, and with `Arab` embedded the picker offers the Arabic UI as well (`cjk::can_show`, as on the desktop). Noto Sans Hebrew, Devanagari and Georgian join Arabic and Thai among the document fallbacks, so an embedded face draws its script in an Inter document. Tests: `web_embeds_other_scripts_faces_only_when_asked` in the build script, `every_embeddable_script_face_is_a_document_fallback`. |
 | 2026-11-05 | patch | #2014: the panels drew a String variable's Amharic value as boxes: the UI took a system face for Hebrew and Arabic only. `bidi::script_fallbacks` now samples one letter of each of 16 scripts (Ethiopic, Devanagari, Gurmukhi, Gujarati, Tamil, Telugu, Kannada and Malayalam, Sinhala, Lao, Myanmar, Khmer, Armenian and Georgian as well as Hebrew and Arabic; Bengali and Thai keep `crate::cjk`'s faces) against the system's families for each (Windows, macOS, the common Linux fonts), the first installed one that draws the letter taken once. Desktop only: the web build has no system fonts. Test: `bidi::tests::other_scripts_take_an_installed_system_face` (skips scripts the machine has no face for). |
 | 2026-11-05 | minor | Documents: a paragraph's base direction can be forced left to right or right to left (Text ▸ Text direction, `text.direction`, `node.set textDirection`, the Type settings control, the `.fig` lines' `sourceDirectionality`), as Add right-to-left text says (#1830); detection stays the default. Four new UI strings (English only; other catalogs fall back). |
