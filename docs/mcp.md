@@ -854,11 +854,15 @@ removes the whole conditional). Every one is an undo step and applies to all `id
 with the same interactions). Flows `proto.flow.add` / `rename` / `remove`,
 and the device, its rotation and the background `proto.settings {device?, background?,
 rotation?, color?, width?, height?, responsive?}` (`None`, `iPhone 16`, `iPhone 16 Pro Max`,
-`Android Compact`, `iPad mini`, `MacBook Air`, `Desktop` or `Custom size`; `rotation` `portrait` or
+`Android Compact`, `iPad mini`, `MacBook Air`, `Desktop` or `Custom size`, in any case; another
+name is an error that lists the devices, and nothing changes; `rotation` `portrait` or
 `landscape`, which turns phones and tablets; `color` one of the device's colours by name, e.g.
 `Black`, `White`, `Pink`, `Teal`, `Blue` for the iPhone 16 (an error lists them), `""` for the
 default; `width` / `height` set the custom size's screen, 1–10000 points, and pick `Custom size`,
-which is a bare screen without a body). On a device the presented frame is sized to the device's
+which is a bare screen without a body). Every call answers the page's settings as they are after
+it, so `proto.settings {}` reads them: `{device, background, rotation, color (the colour shown, null
+without a body), screen ({width, height} as presented, null without a device), customSize,
+responsive}`. On a device the presented frame is sized to the device's
 screen: a frame bigger than the screen scrolls through its whole size whatever its `overflow`, content
 past the frame's own edges scrolls only as its `overflow` allows (else it's clipped), and `fixed`
 layers stay on screen (pinned to the edges their constraints name). With `responsive: true` (saved
