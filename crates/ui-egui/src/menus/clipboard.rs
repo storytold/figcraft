@@ -129,9 +129,6 @@ fn clipboard_png(app: &mut FigApp) -> Option<(Vec<u8>, f64, f64)> {
         Some(readable) => readable,
         None => with_pixel_size(encoded_clipboard_image(app)?)?,
     };
-    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PASTED_IMAGE_PIXELS {
-        return None;
-    }
     let density = figcraft_format::pixel_density(&png);
     let (w, h) = figcraft_format::placed_size(w, h, density, figcraft_engine::cmd::create::PLACED_IMAGE_MAX_SIDE);
     Some((png, w, h))
@@ -140,8 +137,14 @@ fn clipboard_png(app: &mut FigApp) -> Option<(Vec<u8>, f64, f64)> {
 const MAX_PASTED_IMAGE_PIXELS: u64 = 100_000_000;
 
 fn with_pixel_size(png: Vec<u8>) -> Option<(Vec<u8>, (u32, u32))> {
-    let size = image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().ok()?.into_dimensions().ok()?;
-    Some((png, size))
+    use image::ImageDecoder as _;
+    let decoder = image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().ok()?.into_decoder().ok()?;
+    let (w, h) = decoder.dimensions();
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PASTED_IMAGE_PIXELS {
+        return None;
+    }
+    image::DynamicImage::from_decoder(decoder).ok()?;
+    Some((png, (w, h)))
 }
 
 fn encoded_clipboard_image(app: &mut FigApp) -> Option<Vec<u8>> {

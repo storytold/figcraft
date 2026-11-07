@@ -189,8 +189,6 @@ fn assert_remote_read_only(s: &mut Session, b: NodeId, remote_button: NodeId) {
     let style = s.doc().unwrap().styles[0].id.clone();
     assert!(s.execute("style.update", &json!({"style": style, "name": "Mine"})).is_err());
     assert!(s.execute("style.delete", &json!({"style": style})).is_err());
-    let e = s.execute("component.goToMain", &json!({"id": b})).unwrap_err();
-    assert!(e.to_string().contains("library"), "{e}");
     assert!(s.execute("select.set", &json!({"ids": [remote_button]})).is_err(), "library copies can't be selected");
     assert!(s.doc().unwrap().pages.contains(&s.page().unwrap()));
     assert!(s.execute("component.pushChanges", &json!({"id": b})).is_err());
@@ -396,6 +394,75 @@ fn add_place_and_update_keep_overrides() {
     assert_eq!(doc.libraries.components.len(), 1, "only the Button is still used");
     assert!(doc.contains(remote_button) && !doc.contains(main));
     healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+fn go_to_main(s: &mut Session, id: NodeId) -> Value {
+    s.active = 0;
+    ex(s, "component.goToMain", json!({"id": id}))
+}
+
+#[test]
+fn going_to_a_library_main_opens_the_library_file() {
+    let d = dir("go-to-main");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    let k = kit(&mut lib);
+    let mut chips = Vec::new();
+    for (i, color) in ["#ff0000", "#00ff00"].iter().enumerate() {
+        let f = idv(&ex(&mut lib, "frame.create", json!({"x": 400.0 + i as f64 * 100.0, "y": 0, "width": 60, "height": 20, "name": "Chip"})));
+        ex(&mut lib, "node.set", json!({"id": f, "props": {"fill": color}}));
+        chips.push(idv(&ex(&mut lib, "component.create", json!({"ids": [f]}))));
+    }
+    ex(&mut lib, "component.combineVariants", json!({"ids": chips}));
+    let kit_page = lib.doc().unwrap().page_of(k.card).unwrap();
+    ex(&mut lib, "page.add", json!({"name": "Notes"}));
+    let lid = publish_to(&mut lib, &lib_path);
+
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let card = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Card", "x": 0, "y": 0})));
+    let nested_button = node(&s, card).children[0];
+    let chip = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Chip", "x": 0, "y": 200})));
+    ex(&mut s, "instance.setProperties", json!({"ids": [chip], "properties": {"Property 1": "Variant2"}}));
+    s.ds_mut().unwrap().view.vw = 900.0;
+    s.ds_mut().unwrap().view.vh = 500.0;
+    let using = s.doc().unwrap().clone();
+
+    let r = go_to_main(&mut s, card);
+    assert_eq!((id_of(&r["id"]), r["index"].as_u64()), (Some(k.card), Some(1)), "{r}");
+    let ds = s.ds().unwrap();
+    assert_eq!(ds.path.as_deref(), Some(lib_path.as_str()));
+    assert_eq!((ds.selection.clone(), ds.page), (vec![k.card], kit_page));
+    assert_eq!((ds.view.vw, ds.view.vh), (900.0, 500.0), "the canvas it opens on is the one shown, so the fit stands");
+    let shown = ds.doc.world_bounds(k.card).unwrap().center();
+    assert_eq!((ds.view.cx, ds.view.cy), (shown.x, shown.y));
+
+    for (layer, main) in [(nested_button, k.button), (chip, chips[1])] {
+        let r = go_to_main(&mut s, layer);
+        assert_eq!((id_of(&r["id"]), r["index"].as_u64()), (Some(main), Some(1)), "{r}");
+        assert_eq!(s.ds().unwrap().selection, vec![main]);
+    }
+    assert_eq!(s.docs.len(), 2, "the open library file comes to the front");
+    assert_eq!(s.docs[0].doc.as_ref(), &using, "the file going there is unchanged");
+
+    s.active = 1;
+    ex(&mut s, "edit.delete", json!({"ids": [k.card]}));
+    let r = go_to_main(&mut s, card);
+    assert!(r["id"].is_null() && r["index"] == 1, "{r}");
+    assert!(s.message.take().is_some_and(|m| m.contains("isn't in this file any more")));
+
+    ex(&mut s, "file.close", json!({"index": 1, "force": true}));
+    std::fs::rename(&lib_path, d.join("moved.figcraft")).unwrap();
+    s.active = 0;
+    let e = s.execute("component.goToMain", &json!({"id": card})).unwrap_err();
+    assert!(e.to_string().contains("isn't at"), "{e}");
+    assert_eq!(s.docs.len(), 1);
+
+    let NodeKind::Instance { component: copy, .. } = node(&s, card).kind else { panic!("not an instance") };
+    s.doc_mut().unwrap().libraries_mut().components.retain(|r| r.root != copy);
+    let e = s.execute("component.goToMain", &json!({"id": card})).unwrap_err();
+    assert!(e.to_string().contains("no link to its library"), "an imported copy without its record: {e}");
     let _ = std::fs::remove_dir_all(&d);
 }
 
