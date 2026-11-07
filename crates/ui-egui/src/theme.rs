@@ -108,7 +108,9 @@ impl Tokens {
             text: Color32::from_rgb(0x1E, 0x1E, 0x1E),
             // 4.7:1 on fields and hovered rows (#F5F5F5), 4.6:1 on selected rows: WCAG AA.
             text_secondary: Color32::from_rgb(0x6E, 0x6E, 0x6E),
-            text_tertiary: Color32::from_rgb(0x8A, 0x8A, 0x8A),
+            // Dim text: 3.2:1 on the selected component row (#F1E9FF, the tightest of the
+            // rows it lands on; #8A8A8A was 2.93:1 there), still dimmer than secondary text.
+            text_tertiary: Color32::from_rgb(0x84, 0x84, 0x84),
             icon: Color32::from_rgb(0x1E, 0x1E, 0x1E),
             icon_secondary: Color32::from_rgb(0x75, 0x75, 0x75),
             hover: Color32::from_rgb(0xF5, 0xF5, 0xF5),
@@ -507,7 +509,7 @@ mod tests {
             let theme = if t.dark { "dark" } else { "light" };
             // Disabled text (a disabled button's label, placeholders) on panels, fields and
             // selected rows, still dimmer than secondary text.
-            for bg in [t.panel, t.field, t.hover, t.selected_row, t.selected_row_child] {
+            for bg in [t.panel, t.field, t.hover, t.selected_row, t.selected_row_child, t.component_row, t.component_row_child] {
                 let ratio = c(t.text_tertiary).contrast(c(bg));
                 assert!(ratio >= 3.0, "{theme}: dim text {:?} on {bg:?} is {ratio:.2}:1", t.text_tertiary);
                 assert!(ratio < c(t.text_secondary).contrast(c(bg)), "{theme}: dim text reads dimmer than secondary text");

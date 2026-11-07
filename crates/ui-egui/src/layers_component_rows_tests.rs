@@ -92,14 +92,14 @@ fn rows_inside_a_selected_component_take_a_tone_of_its_row() {
     }
 }
 
-/// The Layers panel with the component "Button" hidden and nothing selected.
-fn drawn_hidden(dark: bool) -> (Vec<Shape>, Tokens) {
+/// The Layers panel with the component "Button" hidden, and selected or not.
+fn drawn_hidden(dark: bool, selected: bool) -> (Vec<Shape>, Tokens) {
     let mut s = Session::new();
     let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 40, "props": {"name": "Button"}})).unwrap());
     let c = id(s.execute("component.create", &json!({"ids": [f]})).unwrap());
     s.execute(if dark { "view.themeDark" } else { "view.themeLight" }, &json!({})).unwrap();
     s.execute("node.set", &json!({"id": c, "props": {"visible": false}})).unwrap();
-    s.execute("select.set", &json!({"ids": []})).unwrap();
+    s.execute("select.set", &json!({"ids": if selected { vec![c] } else { vec![] }})).unwrap();
     let mut u = Ui::new(s);
     u.frame(vec![]);
     let shapes = crate::live_tests::flat(&u.frame_output(vec![]).shapes);
@@ -116,12 +116,16 @@ fn over(fg: Color32, bg: Color32) -> Color32 {
 #[test]
 fn a_hidden_component_name_keeps_the_dim_text_floor_of_3_to_1() {
     for dark in [false, true] {
-        let (shapes, t) = drawn_hidden(dark);
-        assert_eq!(t.dark, dark);
-        let col = name_colour(&shapes, "Button");
-        for (what, bg) in [("the panel", t.panel), ("a hovered row", t.hover)] {
-            let ratio = color(over(col, bg)).contrast(color(bg));
-            assert!(ratio >= 3.0, "hidden component name {col:?} is {ratio:.2}:1 on {what} (dark {dark})");
+        for (selected, rows) in [(false, 0), (true, 1)] {
+            let (shapes, t) = drawn_hidden(dark, selected);
+            assert_eq!(t.dark, dark);
+            let col = name_colour(&shapes, "Button");
+            let all = [("the panel", t.panel), ("a hovered row", t.hover), ("the selected component row", t.component_row)];
+            // Unselected, the row shows the panel (or the hover); selected, its own tinted row.
+            for (what, bg) in &all[..2 + rows] {
+                let ratio = color(over(col, *bg)).contrast(color(*bg));
+                assert!(ratio >= 3.0, "hidden component name {col:?} is {ratio:.2}:1 on {what} (dark {dark}, selected {selected})");
+            }
         }
     }
 }
