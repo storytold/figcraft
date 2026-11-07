@@ -53,27 +53,3 @@ fn print_settings_save_only_when_set() {
     let old: ExportSetting = serde_json::from_value(serde_json::json!({"format": "pdf", "suffix": ""})).unwrap();
     assert!(old.print.is_default());
 }
-
-/// #2004: a JPG quality is 1 to 100 both ways: a saved setting carries it (and not the default),
-/// a file or `node.set` with one outside the range is refused, and one put in the public field is
-/// written within range, so a save never fails over it and the file reopens.
-#[test]
-fn jpg_quality_is_1_to_100_both_ways() {
-    let plain = ExportSetting { format: ExportFormat::Jpg, ..Default::default() };
-    assert_eq!(serde_json::to_value(&plain).unwrap().get("jpgQuality"), None, "the default is left out");
-    let low = ExportSetting { jpg_quality: 40, ..plain.clone() };
-    let json = serde_json::to_value(&low).unwrap();
-    assert_eq!(json["jpgQuality"], serde_json::json!(40));
-    assert_eq!(serde_json::from_value::<ExportSetting>(json).unwrap(), low);
-    assert_eq!(
-        serde_json::from_value::<ExportSetting>(serde_json::json!({"format": "jpg", "jpg_quality": 40})).unwrap(),
-        low,
-        "node.set's snake_case"
-    );
-    for bad in [0, 101] {
-        let err = serde_json::from_value::<ExportSetting>(serde_json::json!({"format": "jpg", "jpgQuality": bad})).unwrap_err().to_string();
-        assert!(err.contains("1 to 100"), "{bad}: {err}");
-        let written = serde_json::to_value(ExportSetting { jpg_quality: bad, ..plain.clone() }).unwrap();
-        assert_eq!(written["jpgQuality"], serde_json::json!(bad.clamp(1, 100)), "written within range, so the file reopens");
-    }
-}

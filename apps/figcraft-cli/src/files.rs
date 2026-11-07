@@ -102,11 +102,10 @@ pub fn render_page(doc: &Document, page: NodeId, scale: f64) -> CliResult<figcra
     figcraft_render::render_view(doc, page, &view, &Default::default()).ok_or_else(|| CliError::Failed("render failed".into()))
 }
 
-/// Encode a render as the format extension `e` names, tagged with `doc`'s colour profile; a JPG
-/// at the default quality.
+/// Encode a render as the format extension `e` names, tagged with `doc`'s colour profile.
 fn encode(doc: &Document, pix: &figcraft_render::Pixmap, e: &str) -> CliResult<Vec<u8>> {
     let format = ExportFormat::from_ext(e).unwrap_or_default();
-    figcraft_render::encode_export(pix, format, doc.color_profile, ExportSetting::DEFAULT_JPG_QUALITY).map_err(CliError::Failed)
+    figcraft_render::encode_export(pix, format, doc.color_profile).map_err(CliError::Failed)
 }
 
 /// Write `doc` to `out`, choosing the format by extension.

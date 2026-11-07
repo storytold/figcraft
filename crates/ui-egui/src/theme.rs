@@ -271,7 +271,8 @@ pub fn on_dark<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) -> R) -> R {
 
 /// UI fonts: Inter and the Archivo wordmark (from the craft-fonts build input) when present;
 /// otherwise egui's defaults. With
-/// `system`, also system faces for scripts those lack (Hebrew, joined Arabic) so names in them show,
+/// `system`, also system faces for scripts those lack (Hebrew, joined Arabic, Ethiopic, the Indic
+/// scripts and the others [`crate::bidi::script_fallbacks`] names) so names in them show,
 /// and faces for the CJK scripts in `cjk` ([`crate::cjk`]).
 ///
 /// The craft-fonts set embeds Noto Sans Arabic and Noto Sans Hebrew; with `system` off those

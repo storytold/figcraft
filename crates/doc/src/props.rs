@@ -660,9 +660,12 @@ pub struct Glass {
     pub depth: f64,
     /// Colour splitting along the curved edge (0–1).
     pub dispersion: f64,
-    /// Blur of the backdrop (a blur radius, document units).
+    /// Blur of the backdrop (a blur radius, document units, 0–[`Self::MAX_FROST`]).
     pub frost: f64,
-    /// How widely the light spreads over the glass (0–1).
+    /// Which way the curved edge bends the backdrop: towards the shape's core (0; along the edge's
+    /// normal for a shape too big to work one out) to away from the centre of the layer's bounds
+    /// (1; on a ring or an L, whose centre lies outside the shape, an inner edge bends towards the
+    /// hole, as the reference tool's does).
     pub splay: f64,
 }
 
@@ -672,7 +675,43 @@ impl Default for Glass {
     }
 }
 
+/// `deg` (finite) as the same direction within -180 (exclusive) to 180 degrees.
+fn wrap_degrees(deg: f64) -> f64 {
+    // `+ 0.0`: -0 reads as 0, so a saved file says 0.
+    let a = deg.rem_euclid(360.0) + 0.0;
+    if a > 180.0 { a - 360.0 } else { a }
+}
+
 impl Glass {
+    /// The most frost a glass takes, as the reference tool's Frost field (0–100).
+    pub const MAX_FROST: f64 = 100.0;
+
+    /// The fields a variable binds on a glass effect (`effects/<i>/<field>`), see [`Self::set_bound`].
+    pub const BOUND_FIELDS: [&'static str; 7] = ["lightAngle", "lightIntensity", "refraction", "depth", "dispersion", "radius", "splay"];
+
+    /// Sets `field` (one of [`Self::BOUND_FIELDS`]) from a bound number variable, read as the
+    /// Design panel's field shows it: intensity, refraction, dispersion and splay in percent, the
+    /// frost as `radius`, each clamped to the field's range, and the light angle turned into
+    /// -180–180 (270 is -90, the same way). False for a field glass doesn't have or a value that
+    /// isn't finite (nothing changes).
+    pub fn set_bound(&mut self, field: &str, x: f64) -> bool {
+        if !x.is_finite() {
+            return false;
+        }
+        let pct = (x / 100.0).clamp(0.0, 1.0);
+        match field {
+            "lightAngle" => self.light_angle = wrap_degrees(x),
+            "lightIntensity" => self.light_intensity = pct,
+            "refraction" => self.refraction = pct,
+            "depth" => self.depth = x.clamp(1.0, 1000.0),
+            "dispersion" => self.dispersion = pct,
+            "radius" => self.frost = x.clamp(0.0, Self::MAX_FROST),
+            "splay" => self.splay = pct,
+            _ => return false,
+        }
+        true
+    }
+
     /// The values clamped to their ranges (non-finite ones at their defaults).
     pub fn sanitized(&self) -> Glass {
         let d = Glass::default();
@@ -683,15 +722,23 @@ impl Glass {
             refraction: ok(self.refraction, d.refraction, 0.0, 1.0),
             depth: ok(self.depth, d.depth, 1.0, 1000.0),
             dispersion: ok(self.dispersion, d.dispersion, 0.0, 1.0),
-            frost: ok(self.frost, d.frost, 0.0, 1000.0),
+            frost: ok(self.frost, d.frost, 0.0, Self::MAX_FROST),
             splay: ok(self.splay, d.splay, 0.0, 1.0),
         }
     }
 
-    /// Furthest the curved edge moves the backdrop (document units).
+    /// How far `dispersion` splits the colour channels, as a share of the bend: at full dispersion
+    /// red moves up to this much further and blue as much less. Matched to the reference tool:
+    /// across a black-to-white edge in the bend, red and blue part about 4.7 px at 100% and 2.4 px
+    /// at 50% (at 2×, depth 20, refraction 80%).
+    pub const DISPERSION_SPREAD: f64 = 0.16;
+
+    /// Furthest the curved edge moves the backdrop (document units): at most `depth` × `refraction`
+    /// (all of it a bevel in from the edge), and red's dispersion steps up to
+    /// [`Self::DISPERSION_SPREAD`] × `dispersion` times that again.
     pub fn max_bend(&self) -> f64 {
         let g = self.sanitized();
-        g.refraction * g.depth * (1.0 + g.dispersion * 0.25)
+        g.refraction * g.depth * (1.0 + Self::DISPERSION_SPREAD * g.dispersion)
     }
 }
 
@@ -1481,29 +1528,9 @@ pub struct ExportSetting {
     /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
     #[serde(alias = "vd_compat", skip_serializing_if = "VdCompat::is_default")]
     pub vd_compat: VdCompat,
-    /// JPG: the encoder's quality, 1 to 100 (ours: Figma's JPG export has no quality setting).
-    /// The snake_case aliases above and here take the keys `node.set` normalises to (#2004).
-    #[serde(
-        alias = "jpg_quality",
-        deserialize_with = "jpg_quality_1_to_100",
-        serialize_with = "jpg_quality_written",
-        skip_serializing_if = "is_default_jpg_quality"
-    )]
-    pub jpg_quality: u8,
-}
-
-/// A JPG quality from a file or `node.set`: 1 to 100, anything else refused.
-fn jpg_quality_1_to_100<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
-    let q = <u8 as Deserialize>::deserialize(d)?;
-    if (1..=100).contains(&q) { Ok(q) } else { Err(serde::de::Error::custom(format!("jpgQuality: 1 to 100, not {q}"))) }
-}
-
-/// A JPG quality to a file, `node.get` or `to_json`: written within 1 to 100. The field is public,
-/// so Rust code can put anything in it; writing it in range means a save never fails over it, a
-/// file always reopens, and `node.get` never drops the export settings (its props are built
-/// without a way to fail). What is read stays strict: see [`jpg_quality_1_to_100`].
-fn jpg_quality_written<S: serde::Serializer>(q: &u8, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_u8((*q).clamp(1, 100))
+    /// JPG: the encoder's quality, 1 (smallest file) to 100 (see [`ExportSetting::quality`]).
+    #[serde(skip_serializing_if = "is_default_quality")]
+    pub quality: u8,
 }
 
 /// How an Android Vector Drawable export handles what the format can't draw exactly (layer
@@ -1554,14 +1581,9 @@ impl Default for ExportSetting {
             svg_id_attribute: false,
             svg_simplify_stroke: true,
             vd_compat: VdCompat::BestEffort,
-            jpg_quality: Self::DEFAULT_JPG_QUALITY,
+            quality: ExportSetting::DEFAULT_QUALITY,
         }
     }
-}
-
-/// A JPG quality at its default, left out of a saved setting.
-fn is_default_jpg_quality(q: &u8) -> bool {
-    *q == ExportSetting::DEFAULT_JPG_QUALITY
 }
 
 fn is_true(b: &bool) -> bool {
@@ -1572,9 +1594,18 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn is_default_quality(q: &u8) -> bool {
+    *q == ExportSetting::DEFAULT_QUALITY
+}
+
 impl ExportSetting {
-    /// The JPG quality an export has unless set: what every JPG export was written at before.
-    pub const DEFAULT_JPG_QUALITY: u8 = 90;
+    /// The JPG quality a setting has unless it sets one.
+    pub const DEFAULT_QUALITY: u8 = 90;
+
+    /// The JPG quality made safe: within `1..=100`.
+    pub fn quality(&self) -> u8 {
+        self.quality.clamp(1, 100)
+    }
 
     /// The row adding a setting after `last` creates: 1x first, then one scale step up with a
     /// matching "@2x"-style suffix.

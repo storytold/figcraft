@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use figcraft_color::{Color, Paint, PaintKind};
+use figcraft_doc::ParagraphStyle;
 use figcraft_doc::{
     Collection, CollectionId, Document, Effect, EffectKind, Mode, ModeId, Node, NodeId, NodeKind, Style, StyleId, StyleKind, TextData, TextStyle,
     Variable, VariableId, VariableType, VariableValue, Variables, trim_num,
@@ -53,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "style.bind",
             "Bind variable in style",
-            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>`, a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing` (numbers, px) and `fontFamily|fontStyle` (strings). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
+            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` (glass: `lightAngle|lightIntensity|refraction|depth|dispersion|radius|splay`), a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing` (numbers, px) and `fontFamily|fontStyle` (strings). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
             true,
             bind_style
         ),
@@ -196,7 +197,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "variable.bind",
             "Bind variable",
-            "{ids?, field (fill|stroke (first paint)|fills/<i>/color|strokes/<i>/color|fills/<i>/stops/<j>/color (gradient stops)|effects/<i>/<offsetX|offsetY|radius|startRadius|spread|color>|layoutGrids/<i>/<size|count|gutter|offset>|componentProperties/<name> (instances: boolean/text properties; variant properties take string variables naming a value)|width|height|opacity (percent)|cornerRadius|gap|paddingHorizontal|characters|visible|fontSize…; list indices bottom first), variable (null unbinds)}",
+            "{ids?, field (fill|stroke (first paint)|fills/<i>/color|strokes/<i>/color|fills/<i>/stops/<j>/color (gradient stops)|effects/<i>/<offsetX|offsetY|radius|startRadius|spread|color|lightAngle|lightIntensity|refraction|depth|dispersion|splay> (glass: `radius` is its frost; intensity, refraction, dispersion and splay in percent)|layoutGrids/<i>/<size|count|gutter|offset>|componentProperties/<name> (instances: boolean/text properties; variant properties take string variables naming a value)|width|height|opacity (percent)|cornerRadius|gap|paddingHorizontal|characters|visible|fontSize…; list indices bottom first), variable (null unbinds)}",
             true,
             bind
         ),
@@ -261,6 +262,41 @@ fn text_style_of(n: &Node, at: Option<usize>) -> Option<TextStyle> {
     Some(at.map_or(&t.style, |a| t.style_at(a)).as_text_style())
 }
 
+/// What a text style definition from JSON sets at the paragraph level, in the `node.set`
+/// spellings (`paragraphSpacing`, `paragraphIndent`, `listStyle`: none|bulleted|numbered,
+/// `features` or `openTypeFeatures`: `{tag: bool}`); keys left out are the defaults.
+fn paragraph_style_json(cmd: &str, v: &Value) -> Result<ParagraphStyle> {
+    let Value::Object(m) = v else { return Ok(ParagraphStyle::default()) };
+    let mut ps = ParagraphStyle::default();
+    let length =
+        |k: &str, x: &Value| f64_of(x).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 10_000.0)).ok_or_else(|| bad(cmd, format!("{k}: a number")));
+    for (k, x) in m {
+        match k.as_str() {
+            "paragraphSpacing" | "paragraph_spacing" => ps.paragraph_spacing = length(k, x)?,
+            "paragraphIndent" | "paragraph_indent" => ps.paragraph_indent = length(k, x)?,
+            "listStyle" | "list" => ps.list = super::props::enum_of(x).ok_or_else(|| bad(cmd, "listStyle: none|bulleted|numbered"))?,
+            "features" | "openTypeFeatures" | "fontFeatures" | "textFeatures" => {
+                ps.features = super::props::features_of(cmd, x)?.into_iter().filter_map(|(tag, on)| Some((tag, on?))).collect();
+            }
+            _ => {}
+        }
+    }
+    Ok(ps)
+}
+
+/// What a layer's text sets at the paragraph level, the list style being that of the paragraphs
+/// chars `range` touch when given (the layer's when they differ).
+fn paragraph_style_of(n: &Node, range: Option<(usize, usize)>) -> Option<ParagraphStyle> {
+    let t = n.kind.text()?;
+    let mut ps = t.paragraph_style();
+    if let Some((a, b)) = range
+        && let Some(pl) = t.common_para_list(a, b)
+    {
+        ps.list = pl.list;
+    }
+    Some(ps)
+}
+
 fn detach(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "style.detach";
     let which = req_string(cmd, p, "which")?;
@@ -295,7 +331,7 @@ fn kind_from_node(t: &str, n: &Node) -> Option<StyleKind> {
     Some(match t {
         "paint" | "color" | "fill" => StyleKind::Paint { paints: n.fills.clone() },
         "stroke" => StyleKind::Paint { paints: n.strokes.clone() },
-        "text" => StyleKind::Text { style: text_style_of(n, None)? },
+        "text" => StyleKind::Text { style: text_style_of(n, None)?, paragraph: Box::new(paragraph_style_of(n, None)?) },
         "effect" => StyleKind::Effect { effects: n.effects.clone() },
         "grid" => StyleKind::Grid { grids: n.grids.clone() },
         _ => return None,
@@ -317,13 +353,17 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = if let Some(v) = get(p, "value") {
         match t.as_str() {
             "paint" | "color" | "fill" => StyleKind::Paint { paints: paints_of(v).ok_or_else(|| bad(cmd, "value: paints"))? },
-            "text" => StyleKind::Text { style: text_style_json(cmd, v)? },
+            "text" => StyleKind::Text { style: text_style_json(cmd, v)?, paragraph: Box::new(paragraph_style_json(cmd, v)?) },
             "effect" => StyleKind::Effect { effects: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
             "grid" => StyleKind::Grid { grids: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
             _ => return Err(bad(cmd, "type: paint|text|effect|grid")),
         }
-    } else if let Some((tid, a, _)) = range {
-        StyleKind::Text { style: doc.node(tid).and_then(|n| text_style_of(n, Some(a))).ok_or_else(|| bad(cmd, "not a text layer"))? }
+    } else if let Some((tid, a, b)) = range {
+        let n = doc.node(tid).ok_or_else(|| bad(cmd, "not a text layer"))?;
+        StyleKind::Text {
+            style: text_style_of(n, Some(a)).ok_or_else(|| bad(cmd, "not a text layer"))?,
+            paragraph: Box::new(paragraph_style_of(n, Some((a, b))).ok_or_else(|| bad(cmd, "not a text layer"))?),
+        }
     } else {
         let n = from.and_then(|f| doc.node(f)).ok_or_else(|| bad(cmd, "pass `value` or select a layer to take it from"))?;
         kind_from_node(&t, n).ok_or_else(|| bad(cmd, "that layer has no such property"))?
@@ -343,7 +383,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     };
     doc.styles.push(Style { id: sid.clone(), name, description: string(p, "description").unwrap_or_default(), kind: kind.clone(), bound });
     // The source layer (or the selected chars) becomes linked to the new style.
-    if let (Some((tid, a, b)), StyleKind::Text { style }) = (range, &kind) {
+    if let (Some((tid, a, b)), StyleKind::Text { style, .. }) = (range, &kind) {
         if let NodeKind::Text(td) = &mut doc.get_mut(tid)?.kind {
             td.link_text_style(a, b, style, &sid);
         }
@@ -387,11 +427,13 @@ pub fn apply_style_ref(doc: &mut Document, id: NodeId, field: &str, sid: Option<
             n.grids = grids.clone();
             n.styles.grid = Some(id.clone());
         }
-        ("textStyle", Some(Style { kind: StyleKind::Text { style }, id, .. })) => {
-            // Every char takes the style's typography (their fills and links stay).
+        ("textStyle", Some(Style { kind: StyleKind::Text { style, paragraph }, id, .. })) => {
+            // Every char takes the style's typography (their fills and links stay), and the layer
+            // what the style sets at the paragraph level (#1829).
             if let NodeKind::Text(t) = &mut n.kind {
                 let len = t.char_count();
                 t.link_text_style(0, len, style, id);
+                t.take_paragraph_style(paragraph);
             }
             n.styles.text = Some(id.clone());
         }
@@ -416,7 +458,7 @@ pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let st = req_string(cmd, p, "style")?;
     let style = s.doc()?.style(&st).cloned().ok_or_else(|| bad(cmd, format!("no style `{st}`")))?;
     // Text styles go on chars: a range, the selected chars of the edited text, or whole layers.
-    if let StyleKind::Text { style: def } = &style.kind {
+    if let StyleKind::Text { style: def, paragraph } = &style.kind {
         // A text style is no property of other layers: they're left alone.
         let doc = s.doc()?;
         let targets: Vec<TextTarget> =
@@ -430,6 +472,8 @@ pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
                 Some((a, b)) => {
                     if let NodeKind::Text(t) = &mut doc.get_mut(i)?.kind {
                         t.link_text_style(a, b, def, &style.id);
+                        // The list goes to the paragraphs touched; the rest is the layer's.
+                        t.take_paragraph_style_in(a, b, paragraph);
                     }
                 }
                 None => apply_style_ref(doc, i, "textStyle", Some(&style.id))?,
@@ -506,7 +550,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         let cur = doc.styles.get(idx).map(|x| x.kind.type_name()).unwrap_or("paint");
         Some(match cur {
             "paint" => StyleKind::Paint { paints: paints_of(v).ok_or_else(|| bad(cmd, "value: paints"))? },
-            "text" => StyleKind::Text { style: text_style_json(cmd, v)? },
+            "text" => StyleKind::Text { style: text_style_json(cmd, v)?, paragraph: Box::new(paragraph_style_json(cmd, v)?) },
             "effect" => StyleKind::Effect { effects: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
             _ => StyleKind::Grid { grids: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
         })
@@ -651,22 +695,23 @@ fn rename_folder(s: &mut Session, p: &Value) -> Result<Value> {
 /// Re-apply style `sid` to every node (and text chars) linked to it.
 pub fn propagate_style(doc: &mut Document, sid: &str) {
     let text_def = match doc.style(sid).map(|s| &s.kind) {
-        Some(StyleKind::Text { style }) => Some(style.clone()),
+        Some(StyleKind::Text { style, paragraph }) => Some((style.clone(), paragraph.clone())),
         _ => None,
     };
     let ids: Vec<NodeId> = doc.ids().collect();
     for i in ids {
         let Some(n) = doc.node(i) else { continue };
-        if let Some(def) = &text_def {
+        if let Some((def, paragraph)) = &text_def {
             if n.kind.text().is_some_and(|t| t.links_text_style(sid)) {
                 let def = match doc.style(sid).map(|st| crate::style_vars::kind_for(doc, st, i).into_owned()) {
-                    Some(StyleKind::Text { style }) => style,
+                    Some(StyleKind::Text { style, .. }) => style,
                     _ => def.clone(),
                 };
                 if let Ok(n) = doc.get_mut(i)
                     && let NodeKind::Text(t) = &mut n.kind
                 {
                     t.update_text_style(sid, &def);
+                    t.update_paragraph_style(sid, paragraph);
                 }
             }
             continue;
@@ -695,7 +740,16 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
         .styles
         .iter()
         .filter_map(|s| match &s.kind {
-            StyleKind::Text { style } => Some((s.id.clone(), style.clone())),
+            StyleKind::Text { style, .. } => Some((s.id.clone(), style.clone())),
+            _ => None,
+        })
+        .collect();
+    // What each text style sets at the paragraph level (#1829); no variable binds those.
+    let paras: BTreeMap<&str, &ParagraphStyle> = doc
+        .styles
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StyleKind::Text { paragraph, .. } => Some((s.id.as_str(), paragraph.as_ref())),
             _ => None,
         })
         .collect();
@@ -707,7 +761,7 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
         // Styles with bound fields read as this layer sees them.
         let mut defs = std::borrow::Cow::Borrowed(&defs);
         for st in &varying {
-            if let StyleKind::Text { style } = crate::style_vars::kind_for(doc, st, id).into_owned() {
+            if let StyleKind::Text { style, .. } = crate::style_vars::kind_for(doc, st, id).into_owned() {
                 defs.to_mut().insert(st.id.clone(), style);
             }
         }
@@ -717,11 +771,28 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
             && t2.text_style_link() == Some(None)
             && let Some(def) = defs.get(sid)
             && t2.spans().iter().all(|(_, _, s)| s.shows_text_style(def))
+            && paras.get(sid.as_str()).is_some_and(|ps| t2.shows_paragraph_style(ps))
         {
             let len = t2.char_count();
             t2.restyle(0, len, |s| s.style_id = Some(sid.clone()));
         }
         t2.check_text_styles(|sid| defs.get(sid));
+        // Chars whose paragraphs left their style's list, and every char of a layer whose
+        // paragraph spacing, indent or features were edited, unlink too (#1829).
+        let gone: Vec<(usize, usize)> = t2
+            .spans()
+            .iter()
+            .filter(|(a, b, s)| {
+                // A style with no paragraph values (every style in older files) asks nothing of them.
+                s.style_id
+                    .as_deref()
+                    .is_some_and(|sid| paras.get(sid).is_none_or(|ps| **ps != ParagraphStyle::default() && !t2.shows_paragraph_style_in(*a, *b, ps)))
+            })
+            .map(|(a, b, _)| (*a, *b))
+            .collect();
+        for (a, b) in gone {
+            t2.unlink_text_style(a, b);
+        }
         let link = t2.text_style_link().flatten().map(str::to_string);
         if t2 != *t || link != n.styles.text {
             updates.push((id, link, t2));
@@ -788,6 +859,9 @@ pub(crate) fn bind_variable(cmd: &str, doc: &mut Document, ids: &[NodeId], field
         for i in ids {
             match field.strip_prefix(crate::components::PROP_BINDING) {
                 Some(name) => super::component::check_prop_binding(doc, *i, name, v.kind).map_err(|e| bad(cmd, e))?,
+                None if !super::variables::has_field(doc, *i, field) => {
+                    return Err(bad(cmd, format!("the layer has no field `{field}` to bind")));
+                }
                 None if !super::variables::field_takes(doc, *i, field, v.kind) => {
                     return Err(bad(cmd, format!("`{field}` doesn't take a {} variable", v.kind.id())));
                 }
@@ -1304,6 +1378,9 @@ pub(crate) fn set_effect_field(effects: &mut [Effect], i: usize, prop: &str, val
         (EffectKind::DropShadow(s) | EffectKind::InnerShadow(s), "color", _, VariableValue::Color(c)) => s.color = *c,
         (EffectKind::LayerBlur(b) | EffectKind::BackgroundBlur(b), "radius", Some(x), _) => b.radius = x.max(0.0),
         (EffectKind::LayerBlur(b) | EffectKind::BackgroundBlur(b), "startRadius", Some(x), _) => b.start_radius = x.max(0.0),
+        (EffectKind::Glass(g), field, Some(x), _) => {
+            g.set_bound(field, x);
+        }
         _ => {}
     }
 }

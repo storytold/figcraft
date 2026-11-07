@@ -338,8 +338,8 @@ impl<'a> Exporter<'a> {
                     if let NodeKind::Vector { network } = &n.kind
                         && network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some())
                     {
-                        let rounded = network.rounded();
-                        let net = rounded.as_ref().unwrap_or(network);
+                        let drawn = figcraft_doc::geometry::drawn_network(network, n.corners.smoothing);
+                        let net = drawn.as_ref();
                         for (i, region) in net.regions.iter().enumerate() {
                             let paints = region.fills.as_deref().unwrap_or(&n.fills);
                             if let Some(mut region_path) = net.region_path(i) {

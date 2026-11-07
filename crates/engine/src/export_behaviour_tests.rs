@@ -187,7 +187,7 @@ fn jpg_export_quality_is_an_option() {
     assert!(low.starts_with(b"\xFF\xD8\xFF") && mid[0] > 200 && mid[1] < 60, "still the red JPG: {mid:?}");
     for bad in [0, 101, -1] {
         let err = s.execute("file.export", &json!({"ids": [e], "format": "jpg", "quality": bad})).unwrap_err().to_string();
-        assert!(err.contains("quality: 1 to 100"), "{bad}: {err}");
+        assert!(err.contains("1 to 100"), "{bad}: {err}");
     }
     assert_eq!(
         export(&mut s, json!({"ids": [e], "format": "png", "quality": 40})),
@@ -204,22 +204,15 @@ fn jpg_export_quality_is_an_option() {
     ex(&mut s, "export.update", json!({"ids": [e], "index": 0, "quality": 100}));
     assert_eq!(written(&mut s), high, "export.update changes it");
     // node.get lists the setting as saved (camelCase) and node.set takes it back, quality and all,
-    // in that form or in the snake_case it normalises to; out of range is refused there too.
+    // in that form or in the snake_case it normalises to.
     ex(&mut s, "export.update", json!({"ids": [e], "index": 0, "quality": 40, "contentsOnly": false}));
     let got = ex(&mut s, "node.get", json!({"id": e}));
-    assert_eq!(
-        (got["exports"][0]["jpgQuality"].as_u64(), got["exports"][0]["contentsOnly"].as_bool()),
-        (Some(40), Some(false)),
-        "{}",
-        got["exports"]
-    );
+    assert_eq!((got["exports"][0]["quality"].as_u64(), got["exports"][0]["contentsOnly"].as_bool()), (Some(40), Some(false)), "{}", got["exports"]);
     ex(&mut s, "node.set", json!({"ids": [e], "props": {"exports": got["exports"]}}));
     assert_eq!(ex(&mut s, "node.get", json!({"id": e}))["exports"], got["exports"], "node.set keeps what node.get gave");
     assert_eq!(written(&mut s), low);
-    ex(&mut s, "node.set", json!({"ids": [e], "props": {"exports": [{"format": "jpg", "jpg_quality": 100, "contents_only": false}]}}));
+    ex(&mut s, "node.set", json!({"ids": [e], "props": {"exports": [{"format": "jpg", "quality": 100, "contents_only": false}]}}));
     assert_eq!(written(&mut s), high, "snake_case keys are taken too");
-    let err = s.execute("node.set", &json!({"ids": [e], "props": {"exports": [{"format": "jpg", "jpgQuality": 150}]}})).unwrap_err().to_string();
-    assert!(err.contains("1 to 100"), "{err}");
 }
 
 #[test]

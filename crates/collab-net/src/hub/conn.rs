@@ -235,6 +235,8 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     let out = Line {
         tx,
         queued: Arc::default(),
+        waiting: Arc::default(),
+        max_presence: limits.queue.max(4) / 2,
         block: block.queued.clone(),
         all: shared.queued.clone(),
         max: limits.max_queued_bytes,

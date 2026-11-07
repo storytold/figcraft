@@ -490,16 +490,23 @@ fn exports_carry_the_colour_profile() {
     let (d, _, r) = doc_with_rect(Color::from_hex("00FF00").unwrap());
     let pix = render_node(&d, r, 1.0).unwrap();
     for profile in ColorProfile::ALL {
-        let png = encode_export(&pix, ExportFormat::Png, profile, 90).unwrap();
+        let png = encode_export(&pix, ExportFormat::Png, profile).unwrap();
         // The inserted chunk has a valid CRC: the decoder accepts the file and keeps the pixels.
         let mut dec = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&png)).unwrap();
         let icc = dec.icc_profile().unwrap();
         assert_eq!(icc.is_some(), !profile.is_srgb(), "{profile:?}");
         assert_eq!(image::load_from_memory(&png).unwrap().to_rgba8().get_pixel(5, 5).0, [0, 255, 0, 255]);
-        for f in [ExportFormat::Jpg, ExportFormat::Webp] {
-            assert!(!encode_export(&pix, f, profile, 90).unwrap().is_empty());
-        }
-        assert!(encode_export(&pix, ExportFormat::Svg, profile, 90).is_err());
+        // A JPEG always embeds the profile (it has no small sRGB marker); an sRGB WebP is untagged.
+        let jpg = encode_export(&pix, ExportFormat::Jpg, profile).unwrap();
+        let icc = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&jpg)).unwrap().icc_profile().unwrap();
+        assert_eq!(icc, Some(profile.icc()), "{profile:?}");
+        assert_eq!(jpg, encode_export_with(&pix, ExportFormat::Jpg, profile, 90).unwrap(), "quality 90 by default");
+        assert_ne!(jpg, encode_export_with(&pix, ExportFormat::Jpg, profile, 30).unwrap());
+        let webp = encode_export(&pix, ExportFormat::Webp, profile).unwrap();
+        let icc = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&webp)).unwrap().icc_profile().unwrap();
+        assert_eq!(icc.is_some(), !profile.is_srgb(), "{profile:?}");
+        assert_eq!(webp, encode_export_with(&pix, ExportFormat::Webp, profile, 30).unwrap(), "WebP takes no quality");
+        assert!(encode_export(&pix, ExportFormat::Svg, profile).is_err());
     }
     assert_eq!(png_insert_chunk(b"not a png".to_vec(), b"sRGB", &[0]), b"not a png");
 }
