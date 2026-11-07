@@ -76,6 +76,10 @@ impl Session {
         if !matches!(t, ToolId::Move | ToolId::Scale | ToolId::Hand) && self.ds().is_ok_and(|d| d.vector_edit.is_some()) {
             let _ = crate::vectoredit::end(self);
         }
+        // The placement crosshair goes with a change of tool, not with the same tool chosen again.
+        if self.tool.tool != t {
+            self.tool.place_at = None;
+        }
         self.tool.tool = t;
         self.tool.gesture = Gesture::None;
         self.tool.pick_only = false;
@@ -156,6 +160,8 @@ impl Session {
                 ToolId::TextOnPath => self.text_on_path_down(ev),
                 ToolId::Pen => self.pen_down(ev),
                 ToolId::Pencil => {
+                    // The preview draws in the colour the stroke will have (#1741).
+                    self.tool.overlay.pen_color = self.pencil_color_at(ev.p()).ok();
                     self.tool.gesture = Gesture::Pencil { points: vec![ev.p()], pressure: vec![ev.pressure] };
                     Ok(())
                 }

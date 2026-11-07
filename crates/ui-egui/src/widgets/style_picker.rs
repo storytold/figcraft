@@ -10,7 +10,9 @@
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{Paint, PaintKind};
-use figcraft_doc::{Document, GridKind, Node, NodeId, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, trim_num};
+use figcraft_doc::{
+    Document, GridKind, ListStyle, Node, NodeId, ParagraphStyle, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, trim_num,
+};
 use figcraft_engine::library;
 use serde_json::{Value, json};
 
@@ -354,7 +356,7 @@ fn by_folder<'a>(styles: impl Iterator<Item = &'a Style>) -> Vec<(&'a str, Vec<&
 /// A text style's definition, if `s` is one.
 fn text_def(s: &Style) -> Option<&TextStyle> {
     match &s.kind {
-        StyleKind::Text { style } => Some(style),
+        StyleKind::Text { style, .. } => Some(style),
         _ => None,
     }
 }
@@ -974,6 +976,39 @@ fn text_properties(ui: &mut Ui, doc: &Document, style: &Style, def: &TextStyle, 
     if let Some(sr) = style_resp {
         font_style_menu(id, def, &sr, out);
     }
+    if let StyleKind::Text { paragraph, .. } = &style.kind {
+        paragraph_rows(ui, paragraph);
+    }
+}
+
+/// What a text style sets at the paragraph level (#1829), when it sets anything: the spacing,
+/// indent, list style and OpenType features (as `+tnum -liga`). A layer's Type settings edit
+/// them; Update from selection takes them into the style.
+fn paragraph_rows(ui: &mut Ui, ps: &ParagraphStyle) {
+    let mut rows: Vec<String> = Vec::new();
+    if ps.paragraph_spacing != 0.0 {
+        let label = tr("Paragraph spacing");
+        rows.push(format!("{label}: {}", trim_num(ps.paragraph_spacing)));
+    }
+    if ps.paragraph_indent != 0.0 {
+        let label = tr("Paragraph indent");
+        rows.push(format!("{label}: {}", trim_num(ps.paragraph_indent)));
+    }
+    match ps.list {
+        ListStyle::None => {}
+        ListStyle::Bulleted => rows.push(tr("Bulleted list").into()),
+        ListStyle::Numbered => rows.push(tr("Numbered list").into()),
+    }
+    if !ps.features.is_empty() {
+        rows.push(ps.features.iter().map(|(tag, on)| format!("{}{tag}", if *on { '+' } else { '-' })).collect::<Vec<_>>().join(" "));
+    }
+    if rows.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    for row in rows {
+        caption(ui, &row);
+    }
 }
 
 /// Editing one style: name, description, its values (paints open the colour picker; text styles
@@ -1038,7 +1073,7 @@ fn editor(ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
                     binding_cell(ui, doc, &style, &format!("layoutGrids/{i}/size"), figcraft_doc::VariableType::Number, out);
                 }
             }
-            StyleKind::Text { style: def } => text_properties(ui, doc, &style, def, out),
+            StyleKind::Text { style: def, .. } => text_properties(ui, doc, &style, def, out),
         }
     });
     ui.add_space(8.0);

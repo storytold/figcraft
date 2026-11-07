@@ -119,9 +119,33 @@ pub struct SessionInfo {
     pub address: String,
     /// Reachable from other machines (the host listens on a network address, not loopback).
     pub network: bool,
-    /// What you may do: edit, only view (a server's view link), or view and comment (its comment
-    /// link).
+    /// What you may do: edit, only view (a view link or code), or view and comment (a server's
+    /// comment link).
     pub access: Access,
+    /// A session this app hosts with a way in for looking only ([`HostOptions::view`]): its
+    /// invite link and WebSocket URL, which carry the view secret (`None`: everyone who joins
+    /// edits, or you joined).
+    pub view: Option<WayIn>,
+}
+
+impl SessionInfo {
+    /// The invite link and WebSocket URL that let people into a session this app hosts with
+    /// `access` (its own link and URL edit). `None`: no way in gives that.
+    pub fn way_in(&self, access: Access) -> Option<(&str, &str)> {
+        match access {
+            Access::Edit => Some((&self.link, &self.url)),
+            Access::View => self.view.as_ref().map(|v| (v.link.as_str(), v.url.as_str())),
+            Access::Comment => None,
+        }
+    }
+}
+
+/// A way into a session this app hosts: an invite link and the WebSocket URL it connects to,
+/// which carry the same secret.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct WayIn {
+    pub link: String,
+    pub url: String,
 }
 
 /// A file you published to a server: where, and its first share links (they carry their tokens:
@@ -390,6 +414,9 @@ pub struct HostOptions {
     pub doc: Arc<Document>,
     /// Shared with a join code (`collab.share`): the session's secret is short enough to type.
     pub short: bool,
+    /// Also make a second secret whose holders only look: they see every change, and the session
+    /// refuses theirs ([`SessionInfo::view`]).
+    pub view: bool,
 }
 
 /// What [`LiveLink::publish`] needs to put the open file on a server.
@@ -496,6 +523,8 @@ pub trait LiveLink: Send {
     /// End session `session` (stop hosting or leave); the others go on. Nothing for a session
     /// that is over already.
     fn leave(&mut self, session: SessionId);
+    /// Session `session` is waiting to reconnect: try now.
+    fn retry(&mut self, _session: SessionId) {}
     /// Your latest presence in `session` (the link throttles and coalesces).
     fn presence(&mut self, session: SessionId, p: &Presence);
     /// A message for `session`'s server (document changes), sent in order.

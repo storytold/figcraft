@@ -302,10 +302,11 @@ fn baseline_alignment_horizontal() {
     let rect = d.create(f, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 20.0).unwrap();
     let m = FakeMeasure([(small, (30.0, 14.0, 10.0)), (big, (60.0, 40.0, 30.0))].into_iter().collect());
     layout_frame(&mut d, f, &m);
-    // Baselines line up at 5 + 30; the rectangle (no baseline) sits at the top.
+    // Baselines line up at 5 + 30; the rectangle (no text baseline) sits on it with its bottom
+    // edge: 35 - 20 (#1825).
     assert_eq!(pos(&d, small).1, 25.0);
     assert_eq!(pos(&d, big).1, 5.0);
-    assert_eq!(pos(&d, rect).1, 5.0);
+    assert_eq!(pos(&d, rect).1, 15.0);
     // Hug height covers the shifted small text: max(20 + 14, 40) + padding.
     assert_eq!(d.node(f).unwrap().height, 50.0);
     // Nested auto layout frames align on their first child's baseline.
@@ -445,5 +446,26 @@ fn grid_hostile_values() {
     for id in d.node(f).unwrap().children.clone() {
         let (x, y, w, h) = pos(&d, id);
         assert!(x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite());
+    }
+}
+
+#[test]
+fn fill_children_whose_tiny_clampings_add_up_past_the_tolerance_still_settle() {
+    // Three fill children sharing 300 px, each with a minimum 5e-10 over its 100 px share: no
+    // single clamping passes the 1e-9 tolerance, but together they do, so no child froze and the
+    // distribution loop went round forever without changing anything.
+    let mut d = Document::new("t");
+    let p = d.first_page().unwrap();
+    let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 300.0, 100.0).unwrap();
+    d.get_mut(f).unwrap().layout = Some(AutoLayout { mode: LayoutMode::Horizontal, gap: 0.0, padding: [0.0; 4], ..Default::default() });
+    let kids: Vec<NodeId> = (0..3).map(|i| d.create(f, NodeKind::Rectangle, "K", 0.0, 0.0, 10.0, 20.0 + i as f64).unwrap()).collect();
+    for k in &kids {
+        let n = d.get_mut(*k).unwrap();
+        n.child_layout.sizing_h = Sizing::Fill;
+        n.child_layout.min_w = Some(100.0 + 5e-10);
+    }
+    layout_frame(&mut d, f, &NoMeasure);
+    for k in &kids {
+        assert!((pos(&d, *k).2 - 100.0).abs() < 1e-6, "{:?}", pos(&d, *k));
     }
 }

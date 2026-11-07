@@ -145,6 +145,7 @@ pub(super) fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec
     }
     // Pen path.
     pen_overlay(app, painter, zoom);
+    crosshair_overlay(app, painter);
     // Eraser brush (vector edit mode).
     if let Some([x, y, r]) = ov.brush {
         let c = app.to_screen(x, y);
@@ -416,13 +417,27 @@ fn attach_points(app: &FigApp, painter: &egui::Painter, points: &[([f64; 2], boo
     }
 }
 
+/// The placement crosshair the arrows showed and moved: where Enter puts the next shape or frame.
+fn crosshair_overlay(app: &FigApp, painter: &egui::Painter) {
+    let Some(p) = app.session.crosshair().filter(|_| app.session.tool.tool.draws_shape()) else { return };
+    let c = app.to_screen(p.x, p.y);
+    let col = accent(painter);
+    for d in [vec2(1.0, 0.0), vec2(0.0, 1.0)] {
+        painter.line_segment([c - d * 12.0, c - d * 3.0], stroke(col, 1.5));
+        painter.line_segment([c + d * 3.0, c + d * 12.0], stroke(col, 1.5));
+    }
+    painter.circle_stroke(c, 3.0, stroke(col, 1.5));
+}
+
 fn pen_overlay(app: &FigApp, painter: &egui::Painter, zoom: f64) {
     let ov = &app.session.tool.overlay;
     if !ov.pen.is_empty() {
         let pts: Vec<Pos2> = ov.pen.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
         if app.session.tool.tool == ToolId::Pencil {
-            // The stroke it will make, in its colour and weight (at least a point when zoomed out).
-            let (color, weight) = figcraft_engine::tools::PENCIL_STROKE;
+            // The stroke it will make, in its colour and weight (at least a point when zoomed out):
+            // white over a dark page or frame, as the stroke will be (#1741).
+            let (default, weight) = figcraft_engine::tools::PENCIL_STROKE;
+            let color = ov.pen_color.unwrap_or(default);
             painter.add(Shape::line(pts, stroke(doc_c32(painter.ctx(), color), ((weight * zoom) as f32).max(1.0))));
         } else {
             for [x0, y0, x1, y1] in &ov.pen_handles {

@@ -98,6 +98,75 @@ fn effect_moves_and_removals_reject_junk() {
     assert_eq!(s.doc().unwrap().node(r).unwrap().effects.len(), 1);
 }
 
+fn glass(s: &Session, r: NodeId) -> figcraft_doc::Glass {
+    match s.doc().unwrap().node(r).unwrap().effects.first().map(|e| &e.kind) {
+        Some(EffectKind::Glass(g)) => g.clone(),
+        k => panic!("{k:?}"),
+    }
+}
+
+#[test]
+fn glass_fields_take_number_variables() {
+    let (mut s, r) = setup();
+    ex(&mut s, "effect.add", json!({"ids": [r], "type": "glass"}));
+    // Percent fields read the variable as the Design panel shows them; `radius` is the frost.
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/splay", "variable": "large"}));
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/radius", "variable": "small"}));
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/depth", "variable": "large"}));
+    let g = glass(&s, r);
+    assert_eq!((g.splay, g.frost, g.depth), (0.3, 2.0, 30.0));
+    // A new value follows, clamped to the field's range (frost stops at 100).
+    ex(&mut s, "variable.set", json!({"variable": "small", "value": 150}));
+    ex(&mut s, "variable.set", json!({"variable": "large", "value": 75}));
+    let g = glass(&s, r);
+    assert_eq!((g.splay, g.frost, g.depth), (0.75, figcraft_doc::Glass::MAX_FROST, 75.0));
+    // A colour variable doesn't fit a glass field.
+    assert!(s.execute("variable.bind", &json!({"ids": [r], "field": "effects/0/refraction", "variable": "brand"})).is_err());
+    // An effect style binds them too, and every layer using it follows.
+    let fx = ex_value(&mut s, "style.create", json!({"type": "effect", "name": "Pane", "from": r}))["id"].as_str().unwrap().to_string();
+    ex(&mut s, "style.bind", json!({"style": fx, "field": "effects/0/refraction", "variable": "large"}));
+    assert_eq!(glass(&s, r).refraction, 0.75);
+    assert!(s.execute("style.bind", &json!({"style": fx, "field": "effects/0/spread", "variable": "large"})).is_err(), "glass has no spread");
+}
+
+#[test]
+fn a_layer_binds_only_fields_its_effects_have() {
+    let (mut s, r) = setup();
+    ex(&mut s, "effect.add", json!({"ids": [r], "type": "dropShadow"}));
+    ex(&mut s, "effect.add", json!({"ids": [r], "type": "glass"}));
+    // As an effect style does: a drop shadow has no refraction, glass no spread, there is no
+    // effect 5, and a key that names no effect's field names nothing. Nothing is bound.
+    for (field, var, says) in [
+        ("effects/0/refraction", "large", "no field"),
+        ("effects/1/spread", "large", "no field"),
+        ("effects/5/radius", "large", "no field"),
+        ("effects/x/radius", "large", "no field"),
+        ("effects/0", "large", "no field"),
+        ("effects", "large", "no field"),
+        ("effects/1/lightAngle", "brand", "doesn't take a color variable"),
+        ("effects/0/color", "large", "doesn't take a number variable"),
+    ] {
+        let e = s.execute("variable.bind", &json!({"ids": [r], "field": field, "variable": var})).unwrap_err().to_string();
+        assert!(e.contains(says), "{field} ← {var}: {e}");
+    }
+    assert!(s.doc().unwrap().node(r).unwrap().bound.is_empty());
+    // The fields each effect has still bind.
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/spread", "variable": "small"}));
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/1/refraction", "variable": "large"}));
+    assert_eq!(s.doc().unwrap().node(r).unwrap().bound.len(), 2);
+    // A binding an older file already has on a field its effect lacks does nothing, and unbinds.
+    let large = s.doc().unwrap().variables.get("large").unwrap().id.clone();
+    s.doc_mut().unwrap().get_mut(r).unwrap().bound.insert("effects/0/refraction".into(), large);
+    ex(&mut s, "variable.set", json!({"variable": "large", "value": 40}));
+    assert!(matches!(&s.doc().unwrap().node(r).unwrap().effects[0].kind, EffectKind::DropShadow(_)));
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/refraction"}));
+    assert!(!s.doc().unwrap().node(r).unwrap().bound.contains_key("effects/0/refraction"));
+}
+
+fn ex_value(s: &mut Session, cmd: &str, p: serde_json::Value) -> serde_json::Value {
+    s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"))
+}
+
 fn fill_hex(s: &Session, r: NodeId) -> Vec<String> {
     s.doc().unwrap().node(r).unwrap().fills.iter().filter_map(|p| p.solid_color()).map(|c| c.to_hex()).collect()
 }

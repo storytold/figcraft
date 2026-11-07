@@ -184,3 +184,36 @@ fn polygons_and_stars_take_corner_smoothing() {
         assert_eq!(u.app.session.undo_depth().0, history + 1, "{cmd}: one undo step");
     }
 }
+
+/// A closed vector shows the same Corner smoothing control, and its iOS button sets 60% in one
+/// undo step; an open vector, which has no closed shape to smooth, shows no smoothing control.
+#[test]
+fn closed_vectors_take_corner_smoothing() {
+    let rows = [(true, json!([[0, 0], [120, 0], [120, 120], [0, 120]])), (false, json!([[0, 0], [120, 0], [120, 120]]))];
+    for (closed, points) in rows {
+        let mut s = Session::new();
+        let id = NodeId(s.execute("vector.create", &json!({"points": points, "closed": closed})).unwrap()["id"].as_u64().unwrap());
+        s.execute("node.set", &json!({"ids": [id], "props": {"cornerRadius": 8}})).unwrap();
+        s.execute("select.set", &json!({"ids": [id]})).unwrap();
+        let mut u = Ui::new(s);
+        u.ctx.enable_accesskit();
+        u.frame(vec![]);
+        let out = u.frame_output(vec![]);
+        let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
+        let toggle = nodes.iter().any(|(_, n)| n.role() == Role::Button && n.label() == Some("Corner smoothing"));
+        assert_eq!(toggle, closed, "closed {closed}: the Corner smoothing button shows only for a closed vector");
+        if !closed {
+            continue;
+        }
+        let t = named_button(&mut u, "Corner smoothing");
+        click(&mut u, t);
+        assert!((0..4).all(|k| u.ctx.read_response(Id::unique(("corner", k)).with("field")).is_none()), "no field per corner");
+        assert!(u.ctx.read_response(Id::unique("smoothing").with("field")).is_some(), "the smoothing field shows");
+        let history = u.app.session.undo_depth().0;
+        let ios = named_button(&mut u, "iOS");
+        click(&mut u, ios);
+        let n = u.app.session.doc().unwrap().node(id).unwrap().clone();
+        assert!((n.corners.smoothing - 0.6).abs() < 1e-9, "iOS sets 60%: {}", n.corners.smoothing);
+        assert_eq!(u.app.session.undo_depth().0, history + 1, "one undo step");
+    }
+}
