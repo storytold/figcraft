@@ -88,6 +88,11 @@ Chinese UI puts its Chinese face first so Han takes Simplified Chinese shapes, a
 Chinese UI puts an installed Noto Sans CJK TC first, then the system's Taiwan faces (Microsoft
 JhengHei, PingFang TC, Heiti TC), so Han takes Traditional shapes. No font is added to this
 repository. Georgian is drawn in
+`FIGCRAFT_EMBED_CJK=1` (Noto Sans CJK SC, +16 MB); otherwise they are left out of the picker. The other
+scripts' faces (Noto Sans Arabic, Hebrew, Thai, Devanagari) join a web build only with
+`FIGCRAFT_EMBED_SCRIPTS=Arab,Hebr,Thai,Deva` (one tag per script wanted, as the manifest lists them), for
+documents in those scripts; with `Arab` embedded the picker offers Arabic too (#1902). A
+Chinese UI puts its Chinese face first so Han takes Simplified Chinese shapes. Georgian is drawn in
 craft-fonts' Noto Sans Georgian, one of the built-in faces in `theme::install_fonts`, or else in an
 installed font on the desktop. Web builds keep it only when the craft-fonts they're built with has
 it (`crates/text/build.rs`); the commit releases pin doesn't yet (`docs/releasing.md`), so the web

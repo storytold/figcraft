@@ -109,10 +109,18 @@ pub fn effect_from(cmd: &str, p: &Value, key: &str) -> Result<Option<Effect>> {
     Ok(Some(effect))
 }
 
+/// Most keys an effect object may carry (the widest effect takes about a dozen).
+const MAX_EFFECT_KEYS: usize = 32;
+
 /// Refuse the keys of effect `given` that `parse` ignores, naming the keys the effect takes. Set to
 /// null, a key it reads fails to parse or changes the effect; a key it ignores changes nothing.
 fn refuse_ignored_effect_keys(cmd: &str, at: &str, given: &Value, parse: impl Fn(&Value) -> Option<Effect>) -> Result<()> {
     let Some(fields) = given.as_object() else { return Ok(()) };
+    // Each key is probed by reparsing the whole object without it: bounded, or a long list of
+    // unknown keys costs its length squared before it is refused.
+    if fields.len() > MAX_EFFECT_KEYS {
+        return Err(bad(cmd, format!("{at}: more than {MAX_EFFECT_KEYS} properties")));
+    }
     let parsed = parse(given);
     let ignored: Vec<&str> = fields
         .iter()
@@ -405,6 +413,9 @@ fn layout_mut<'a>(cmd: &str, k: &str, n: &'a mut Node) -> Result<&'a mut AutoLay
 /// Replace a node's fills (or strokes). Bindings on the paints whose bound values the new list
 /// changed let go, as an explicit edit does (see `lists::rebind_edited_paint`).
 fn set_paints(n: &mut Node, fills: bool, paints: Vec<Paint>) {
+    if fills {
+        super::lists::take_character_fills(n);
+    }
     let old = std::mem::replace(if fills { &mut n.fills } else { &mut n.strokes }, paints);
     for (i, p) in old.iter().enumerate() {
         super::lists::rebind_edited_paint(n, fills, i, p);
@@ -983,6 +994,12 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
                 t.set_para_lists(start, end, |p| p.indent = d.clamp(0.0, f64::from(MAX_LIST_INDENT)) as u8);
             }
         }
+        "textDirection" | "direction" => {
+            let d: figcraft_doc::TextDirection = enum_of(v).ok_or_else(|| bad(cmd, "textDirection: auto|ltr|rtl"))?;
+            let t = text_mut(cmd, doc.get_mut(id)?)?;
+            let (start, end) = range_of(props, t.char_count());
+            t.set_para_lists(start, end, |p| p.direction = d);
+        }
         "listSpacing" => text_mut(cmd, doc.get_mut(id)?)?.list_spacing = f64_of(v).filter(|s| s.is_finite()).unwrap_or(0.0).clamp(0.0, 10_000.0),
         "hangingPunctuation" | "hangingList" => {
             let on = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be true or false")))?;
@@ -1237,7 +1254,7 @@ pub fn override_group(k: &str) -> &'static str {
         "name" => "name",
         "characters" | "text" => "characters",
         "features" | "fontFeatures" | "openTypeFeatures" | "listStyle" | "indentation" | "listSpacing" | "maxLines" | "variationSettings"
-        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" => "textStyle",
+        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" | "textDirection" | "direction" => "textStyle",
         "cornerRadius" | "cornerSmoothing" | "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "corners",
         "width" | "height" | "w" | "h" => "size",
         "sizingH" | "sizingV" | "layoutSizingHorizontal" | "layoutSizingVertical" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "resizing",
