@@ -324,6 +324,23 @@ pub struct TextStyle {
     pub style_id: Option<String>,
 }
 
+/// What a text style sets at the paragraph and layer level, beside its character style
+/// ([`TextStyle`]): paragraph spacing and indent, the list style and the OpenType features
+/// ("Supported in text styles": "Paragraph spacing and indentation", "Lists", "OpenType
+/// features", Create and apply text styles).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ParagraphStyle {
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub paragraph_spacing: f64,
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub paragraph_indent: f64,
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub list: ListStyle,
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub features: std::collections::BTreeMap<String, bool>,
+}
+
 /// The font new text starts in. A build can name another (`FIGCRAFT_DEFAULT_FONT="Noto Sans Thai"`,
 /// for a distribution whose users mostly write a script Inter lacks); empty means Inter.
 pub const DEFAULT_FONT: &str = match option_env!("FIGCRAFT_DEFAULT_FONT") {
@@ -852,6 +869,11 @@ impl TextData {
 
     fn set_para_lists_with(&mut self, start: usize, end: usize, keep_levels: bool, f: impl Fn(&mut ParaList)) {
         let (a, b) = self.para_span(start, end);
+        self.set_para_lists_between(a, b, keep_levels, f);
+    }
+
+    /// As [`set_para_lists`](Self::set_para_lists), for paragraphs `a..=b` addressed directly.
+    fn set_para_lists_between(&mut self, a: usize, b: usize, keep_levels: bool, f: impl Fn(&mut ParaList)) {
         self.fill_paragraphs();
         for pl in self.paragraphs.get_mut(a..=b).unwrap_or(&mut []) {
             f(pl);
@@ -878,6 +900,61 @@ impl TextData {
         let (a, b) = self.para_span(start, end);
         let first = self.para_list(a);
         (a..=b).all(|p| self.para_list(p).list == first.list && self.para_list(p).indent == first.indent).then_some(first)
+    }
+
+    /// What a text style made from this text sets at the paragraph and layer level: the paragraph
+    /// spacing and indent, the list style (the one every paragraph shares; the base one when they
+    /// differ) and the OpenType features.
+    pub fn paragraph_style(&self) -> ParagraphStyle {
+        let list = match self.paragraphs.first() {
+            Some(first) if self.paragraphs.iter().all(|p| p.list == first.list) => first.list,
+            _ => self.list,
+        };
+        ParagraphStyle { paragraph_spacing: self.paragraph_spacing, paragraph_indent: self.paragraph_indent, list, features: self.features.clone() }
+    }
+
+    /// Take what text style `ps` sets at the paragraph and layer level: the spacing, indent and
+    /// features on the layer, the list style on every paragraph.
+    pub fn take_paragraph_style(&mut self, ps: &ParagraphStyle) {
+        self.paragraph_spacing = ps.paragraph_spacing;
+        self.paragraph_indent = ps.paragraph_indent;
+        self.features.clone_from(&ps.features);
+        // Every paragraph by index: `para_span` leaves out an empty one after a final newline.
+        let last = self.paragraph_count() - 1;
+        self.set_para_lists_between(0, last, false, |pl| pl.list = ps.list);
+    }
+
+    /// As [`take_paragraph_style`](Self::take_paragraph_style), with the list style going to the
+    /// paragraphs chars `start..end` touch only; the spacing, indent and features are the
+    /// layer's, as in Figma.
+    pub fn take_paragraph_style_in(&mut self, start: usize, end: usize, ps: &ParagraphStyle) {
+        self.paragraph_spacing = ps.paragraph_spacing;
+        self.paragraph_indent = ps.paragraph_indent;
+        self.features.clone_from(&ps.features);
+        self.set_para_lists(start, end, |pl| pl.list = ps.list);
+    }
+
+    /// Follow text style `id`'s paragraph-level definition wherever chars link to it.
+    pub fn update_paragraph_style(&mut self, id: &str, ps: &ParagraphStyle) {
+        let linked: Vec<(usize, usize)> =
+            self.spans().into_iter().filter(|(_, _, s)| s.style_id.as_deref() == Some(id)).map(|(a, b, _)| (a, b)).collect();
+        for (a, b) in linked {
+            self.take_paragraph_style_in(a, b, ps);
+        }
+    }
+
+    /// Whether chars `start..end` show what text style `ps` sets at the paragraph and layer
+    /// level: the layer's spacing, indent and features, and their paragraphs' list style.
+    pub fn shows_paragraph_style_in(&self, start: usize, end: usize, ps: &ParagraphStyle) -> bool {
+        self.paragraph_spacing == ps.paragraph_spacing
+            && self.paragraph_indent == ps.paragraph_indent
+            && self.features == ps.features
+            && self.common_para_list(start, end).is_some_and(|pl| pl.list == ps.list)
+    }
+
+    /// Whether the whole text shows what text style `ps` sets at the paragraph and layer level.
+    pub fn shows_paragraph_style(&self, ps: &ParagraphStyle) -> bool {
+        self.shows_paragraph_style_in(0, self.char_count(), ps)
     }
 
     /// Link chars `start..end` (all of them when the range is empty or the whole text) to text
@@ -1054,5 +1131,24 @@ mod title_case_tests {
         assert_eq!(TextCase::Title.apply("re\u{301}sume\u{301} bon"), "Re\u{301}sume\u{301} Bon");
         assert_eq!(TextCase::Title.apply("a \u{301}b"), "A \u{301}B");
         assert_eq!(TextCase::Title.apply("cafe\u{301}'s"), "Cafe\u{301}'s");
+    }
+}
+
+#[cfg(test)]
+mod whole_text_paragraph_style_tests {
+    use super::*;
+
+    #[test]
+    fn a_text_style_on_the_whole_layer_reaches_a_trailing_empty_paragraph() {
+        let ps = ParagraphStyle { list: ListStyle::Bulleted, ..Default::default() };
+        let mut t = TextData::new("a\nb\n");
+        t.take_paragraph_style(&ps);
+        assert_eq!(t.paragraph_count(), 3);
+        assert_eq!(t.para_list(2).list, ListStyle::Bulleted);
+        assert_eq!(t.list, ListStyle::Bulleted);
+        assert!(t.paragraphs.is_empty());
+        let mut plain = TextData::new("a\nb");
+        plain.take_paragraph_style(&ps);
+        assert_eq!((plain.list, plain.paragraphs.len()), (t.list, t.paragraphs.len()));
     }
 }
