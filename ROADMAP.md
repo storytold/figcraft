@@ -361,6 +361,7 @@ Ranked; detail and milestones in [`docs/roadmap.md`](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | patch | M1, #2028: Edit ▸ Set default properties gives new rectangles, ellipses, polygons and stars drawn with the tools (and, set from a text layer, new text) the selected layer's properties; it only copied them for Paste properties. Tests: `default_props_tests` (3). Numbers unchanged |
 | 2026-11-06 | patch | M5, #2027: `proto.settings` refuses an unknown device name with the list of devices (it saved any string, and the presenter showed no device), takes known names in any case, and answers the page's prototype settings, so `proto.settings {}` reads them back over MCP. Test: `proto_present_tests::unknown_devices_are_refused_and_settings_read_back`. Numbers unchanged |
 | 2026-11-06 | patch | M7, #2032: closing a tab whose file has unsaved changes asks Don't Save / Cancel / Save, as closing the window does, instead of a toast that left the tab open; Alt+close still discards at once. Tests: `titlebar_tests::closing_a_tab_with_unsaved_changes_asks`, `titlebar_tests::save_in_the_tab_question_saves_then_closes`. Numbers unchanged |
 | 2026-11-06 | patch | M8, #1906: under Wayland a minimised window answers control-channel and attached-MCP requests from its logic passes once it has drawn nothing for 0.2 s while a request waits (about half a second each; every request timed out after 60 s before). Test: `idle_tests::a_window_that_stopped_drawing_answers_from_its_logic_passes`. Numbers unchanged |
