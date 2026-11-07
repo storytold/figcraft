@@ -609,8 +609,16 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   `local`), so a local share is protected by 44 bits, not 128: a code is guessed over the network
   at the rate the host accepts connections, which makes 44 bits years of trying, but treat it as
   a secret for the local network, not for the internet. The invite link names the same session.
-  Whoever sees the code learns the host's address. Everyone who joins edits; a host without an
-  IPv4 address gets no code and shares its link.
+  Whoever sees the code learns the host's address. The session has two secrets, so two codes:
+  the **edit code** and a **view-only code** (the same address and port, a 44-bit secret of its
+  own). The host welcomes whoever joins with the view secret as a viewer (`Access::View`): they
+  see every change and everyone's presence, the app makes the file read-only for them, and the
+  session refuses any batch they send anyway, as a server does for its view links. The Share
+  popover picks which code shows (Can edit / Can view, also before sharing starts, so the edit
+  code need never be on screen; `collab.share {access}`, whose `link` and `url` are the ones that
+  go with the code shown, so a view-only share never hands out the edit secret); picking one later changes
+  nothing for who already joined. There is no comment code on the local network. A host without an IPv4
+  address gets no codes and shares its links.
 - **In the browser** a code joins like a link (the page asks the server over its own WebSocket,
   then opens the session's); it shares online through the server in Preferences as the desktop
   app does, and not on the local network (a page can't listen).

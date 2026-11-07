@@ -27,7 +27,7 @@ pub mod vector_faces;
 pub mod vector_regions;
 
 pub use board::*;
-pub use board_route::{RouteEnd, attached_sides, path_handles, reshaped, route_along, route_points};
+pub use board_route::{END_GAP, RouteEnd, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
 pub use facilitation::*;
@@ -598,7 +598,14 @@ impl Document {
         let Some(n) = self.node(id) else { return Affine::IDENTITY };
         let mut t = n.transform;
         let mut parent = n.parent;
+        // More hops than nodes means the parent chain loops (a restored snapshot can leave one):
+        // stop rather than spin.
+        let mut hops = 0;
         while let Some(p) = parent.and_then(|p| self.node(p)).filter(|p| p.kind.bounds_follow_children()) {
+            hops += 1;
+            if hops > self.nodes.len() {
+                break;
+            }
             t = p.transform * t;
             parent = p.parent;
         }
@@ -1302,6 +1309,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 
 #[cfg(test)]
 mod blur_tests;
+#[cfg(test)]
+mod board_route_tests;
 #[cfg(test)]
 mod board_shape_tests;
 #[cfg(test)]

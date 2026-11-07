@@ -148,8 +148,9 @@ pub(crate) fn closed(code: u16, reason: &str) -> Outcome {
 
 /// What a guest does after a connection ended.
 pub(crate) enum Next {
-    /// Done: tell the UI this (nothing when you left).
-    Stop(Option<Event>),
+    /// Done: tell the UI this (nothing when you left). Boxed: an event can be large (a welcome),
+    /// and this one is only ever a status or the end of the session.
+    Stop(Option<Box<Event>>),
     /// Connect again after this pause (the UI has been told: `Reconnecting`).
     Reconnect(Duration),
 }
@@ -182,7 +183,7 @@ pub(crate) fn final_refusal(reason: &str) -> bool {
 /// join that can't reach the host. A live connection that dropped or was turned away for now tries
 /// again until you leave: with growing pauses, and a longer one between rounds.
 pub(crate) fn after(outcome: Outcome, cfg: &GuestConfig, was_live: bool, attempt: &mut u32, inbox: &Inbox) -> Next {
-    let failed = |reason: String| Next::Stop(Some(Event::Status(Status::Failed { reason })));
+    let failed = |reason: String| Next::Stop(Some(Box::new(Event::Status(Status::Failed { reason }))));
     let outcome = match outcome {
         Outcome::Refused(why) if was_live && !final_refusal(&why) => Outcome::Retry(why),
         o => o,
@@ -191,7 +192,7 @@ pub(crate) fn after(outcome: Outcome, cfg: &GuestConfig, was_live: bool, attempt
         Outcome::Left => Next::Stop(None),
         Outcome::Refused(why) => failed(format!("The host refused: {why}")),
         Outcome::Failed(why) => failed(why),
-        Outcome::Ended(reason) => Next::Stop(Some(Event::Ended { reason })),
+        Outcome::Ended(reason) => Next::Stop(Some(Box::new(Event::Ended { reason }))),
         Outcome::Retry(why) if !was_live => failed(format!("Couldn't join the live session: {why}")),
         Outcome::Retry(why) => {
             *attempt = attempt.saturating_add(1);
@@ -264,6 +265,7 @@ pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mu
                 address: inv.server.display(),
                 network: !inv.loopback(),
                 access,
+                view: None,
             };
             seen.peers = peers.clone();
             seen.info = Some(info.clone());

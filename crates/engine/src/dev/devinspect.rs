@@ -475,7 +475,7 @@ pub fn properties_with(doc: &Document, id: NodeId, fmt: ColorFormat) -> Vec<Sect
                     pct(g.refraction),
                     num(g.depth),
                     pct(g.dispersion),
-                    num(g.frost),
+                    num(g.sanitized().frost),
                     pct(g.splay)
                 ),
             ),

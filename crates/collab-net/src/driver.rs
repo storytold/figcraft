@@ -420,7 +420,7 @@ impl<S: Socket> Driver<S> {
         match after(outcome, &self.cfg, self.was_live, &mut self.attempt, &self.inbox) {
             Next::Stop(e) => {
                 if let Some(e) = e {
-                    self.inbox.push(e);
+                    self.inbox.push(*e);
                 }
                 self.done = true;
             }
