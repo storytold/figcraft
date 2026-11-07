@@ -102,6 +102,11 @@ pub struct Face {
     pub underline_pos: f64,
     pub underline_thickness: f64,
     pub strike_pos: f64,
+    /// Synthesised superscript and subscript (the OS/2 table's values, or the usual ones without
+    /// it): the glyph size as a fraction of the em, and the baseline shift up in font units
+    /// (negative for a subscript, which sits below).
+    pub superscript: (f64, f64),
+    pub subscript: (f64, f64),
     pub shaper: harfrust::ShaperData,
     /// OpenType GSUB feature tags the face provides (e.g. `smcp`).
     gsub_features: Vec<[u8; 4]>,
@@ -179,6 +184,17 @@ impl Face {
         let colr = has_table(b"COLR");
         let under = m.underline.map(|d| (f64::from(d.offset), f64::from(d.thickness))).unwrap_or((-upem * 0.1, upem * 0.06));
         let strike = m.strikeout.map(|d| f64::from(d.offset)).unwrap_or(ascent * 0.3);
+        // Superscript and subscript sizes and offsets: the OS/2 table's, else the usual 0.65 em,
+        // 0.35 em up and 0.14 em down (what common fonts carry); a zero counts as unset, as some
+        // fonts leave these fields.
+        let os2 = f.os2().ok();
+        let script = |size: Option<i16>, offset: Option<i16>, up: bool, usual_offset: f64| -> (f64, f64) {
+            let size = size.map(f64::from).filter(|v| *v > 0.0).map_or(0.65, |v| v / upem);
+            let offset = offset.map(f64::from).filter(|v| *v != 0.0).unwrap_or(usual_offset * upem);
+            (size, if up { offset } else { -offset })
+        };
+        let superscript = script(os2.as_ref().map(|t| t.y_superscript_y_size()), os2.as_ref().map(|t| t.y_superscript_y_offset()), true, 0.35);
+        let subscript = script(os2.as_ref().map(|t| t.y_subscript_y_size()), os2.as_ref().map(|t| t.y_subscript_y_offset()), false, 0.14);
         let weight = {
             let w = attrs.weight.value();
             if w.is_finite() && w > 0.0 { w.round() as u16 } else { figcraft_doc::style_weight(&style) }
@@ -200,6 +216,8 @@ impl Face {
             underline_pos: under.0,
             underline_thickness: under.1.max(upem * 0.02),
             strike_pos: strike,
+            superscript,
+            subscript,
             shaper,
             gsub_features,
             track,
@@ -1250,14 +1268,17 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        v.push("/usr/share/fonts".into());
-        v.push("/usr/local/share/fonts".into());
-        v.extend(unix_user_font_dirs(std::env::var_os("HOME"), std::env::var_os("XDG_DATA_HOME")));
+        // The standard folders, the user's (`~/.fonts`, `$XDG_DATA_HOME/fonts`), `$XDG_DATA_DIRS`
+        // and those fontconfig names (NixOS and Guix keep fonts only there).
+        v.extend(craft_font_catalog::font_dirs(&craft_font_catalog::FontEnv::from_process()));
     }
     // Fonts any Craft app downloaded into the suite's font store (a download being installed is a
     // `.part` file, which the walk skips).
     #[cfg(not(target_arch = "wasm32"))]
     v.extend(craft_font_catalog::font_store_dir(&craft_font_catalog::FontEnv::from_process()));
+    // Fontconfig usually lists folders already here (`/usr/share/fonts`): walk each once.
+    let mut seen = std::collections::HashSet::new();
+    v.retain(|d| seen.insert(d.clone()));
     v
 }
 
@@ -1268,22 +1289,6 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
 fn font_asset_dirs(store: &std::path::Path) -> Vec<std::path::PathBuf> {
     let Ok(rd) = std::fs::read_dir(store) else { return Vec::new() };
     rd.flatten().filter(|e| e.file_name().to_str().is_some_and(|n| n.starts_with("com_apple_MobileAsset_Font"))).map(|e| e.path()).collect()
-}
-
-// Fontconfig's default configuration uses $XDG_DATA_HOME/fonts for user fonts.
-// Ignore relative XDG paths, as required by the XDG Base Directory Specification.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn unix_user_font_dirs(home: Option<std::ffi::OsString>, data_home: Option<std::ffi::OsString>) -> Vec<std::path::PathBuf> {
-    let home = home.map(std::path::PathBuf::from);
-    let data = data_home.map(std::path::PathBuf::from).filter(|p| p.is_absolute()).or_else(|| home.as_ref().map(|h| h.join(".local/share")));
-    let mut dirs = Vec::new();
-    if let Some(home) = home {
-        dirs.push(home.join(".fonts"));
-    }
-    if let Some(data) = data {
-        dirs.push(data.join("fonts"));
-    }
-    dirs
 }
 
 /// Adds the faces of every font file under `dir` (up to six folders deep) to `out`, keyed by

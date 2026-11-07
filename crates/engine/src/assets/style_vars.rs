@@ -29,18 +29,26 @@ pub fn field_type(kind: &StyleKind, key: &str) -> Option<VariableType> {
             };
             ok.then_some(Color)
         }
-        (StyleKind::Effect { effects }, Some((BoundList::Effects, i, field))) => match (&effects.get(i)?.kind, field) {
-            (EffectKind::DropShadow(_) | EffectKind::InnerShadow(_), "color") => Some(Color),
-            (EffectKind::DropShadow(_) | EffectKind::InnerShadow(_), "radius" | "spread" | "offsetX" | "offsetY") => Some(Number),
-            (EffectKind::LayerBlur(_) | EffectKind::BackgroundBlur(_), "radius" | "startRadius") => Some(Number),
-            _ => None,
-        },
+        (StyleKind::Effect { effects }, Some((BoundList::Effects, i, field))) => effect_field_type(&effects.get(i)?.kind, field),
         (StyleKind::Grid { grids }, Some((BoundList::Grids, i, "size" | "count" | "gutter" | "offset"))) => grids.get(i).map(|_| Number),
         (StyleKind::Text { .. }, None) => match key {
             "fontSize" | "lineHeight" | "letterSpacing" => Some(Number),
             "fontFamily" | "fontStyle" => Some(String),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+/// The type of variable an effect of `kind` takes on `field` (the last part of an
+/// `effects/<i>/<field>` key), on a layer or in an effect style; None when it has no such field.
+pub fn effect_field_type(kind: &EffectKind, field: &str) -> Option<VariableType> {
+    use VariableType::{Color, Number};
+    match (kind, field) {
+        (EffectKind::DropShadow(_) | EffectKind::InnerShadow(_), "color") => Some(Color),
+        (EffectKind::DropShadow(_) | EffectKind::InnerShadow(_), "radius" | "spread" | "offsetX" | "offsetY") => Some(Number),
+        (EffectKind::LayerBlur(_) | EffectKind::BackgroundBlur(_), "radius" | "startRadius") => Some(Number),
+        (EffectKind::Glass(_), f) if figcraft_doc::Glass::BOUND_FIELDS.contains(&f) => Some(Number),
         _ => None,
     }
 }

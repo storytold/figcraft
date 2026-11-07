@@ -110,7 +110,7 @@ mod view_state;
 pub use derived::{changed_nodes, normalize};
 pub use doc_state::{DocState, History, HistoryEntry, Interaction, PREVIEW_READ_ONLY, Preedit, TextEdit, VersionPreview};
 pub use error::{EngineError, Result, bad};
-pub use prefs::{Clipboard, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UiRequest, clamp_ui_scale};
+pub use prefs::{Clipboard, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UI_SCALE_SIZES, UiRequest, clamp_ui_scale};
 pub use session::Forward;
 pub use view_state::ViewState;
 
@@ -367,6 +367,8 @@ mod images_left_in_file_tests;
 #[cfg(test)]
 mod import_export_tests;
 #[cfg(test)]
+mod import_ids_tests;
+#[cfg(test)]
 mod import_journal_tests;
 #[cfg(test)]
 mod inspect_behaviour_tests;
@@ -382,6 +384,8 @@ mod interaction_rollback_tests;
 mod invite_links_tests;
 #[cfg(test)]
 mod jam_open_tests;
+#[cfg(test)]
+mod jpg_export_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
@@ -456,6 +460,8 @@ mod pdf_print_tests;
 mod pen_end_tests;
 #[cfg(test)]
 mod pen_overlay_tests;
+#[cfg(test)]
+mod pen_undo_tests;
 #[cfg(test)]
 mod pen_vector_edit_tests;
 #[cfg(test)]
@@ -545,6 +551,8 @@ mod slot_tests;
 #[cfg(test)]
 mod stored_ids_tests;
 #[cfg(test)]
+mod stroke_cap_error_tests;
+#[cfg(test)]
 mod stroke_style_tests;
 #[cfg(test)]
 mod style_tests;
@@ -564,6 +572,8 @@ mod tests;
 mod text_behaviour_tests;
 #[cfg(test)]
 mod text_fill_tests;
+#[cfg(test)]
+mod text_link_tests;
 #[cfg(test)]
 mod text_metrics_local_tests;
 #[cfg(test)]

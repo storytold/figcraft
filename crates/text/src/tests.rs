@@ -158,6 +158,49 @@ fn small_caps_native_or_synthesised() {
 }
 
 #[test]
+fn superscript_native_or_synthesised_and_never_mixed() {
+    // "Figma tries to use any superscript/subscript glyphs provided by the font. If it isn't
+    // provided, Figma draws a synthesized version by using the font's standard version of the
+    // character, shrinking it, and positioning it accordingly." and a layer mixing both "will all
+    // update to the synthesized form for consistency" (Explore text properties).
+    let Some(face) = inter() else { return };
+    let mut t = TextData::new("x2");
+    t.style.font_size = 20.0;
+    let plain = layout(&t, None, None);
+    t.features.insert("sups".into(), true);
+    let sup = layout(&t, None, None);
+    let at = |l: &TextLayout, i: usize| l.glyphs.iter().find(|g| g.char_start == i).cloned().unwrap();
+    let native = |i: usize| at(&sup, i).gid != at(&plain, i).gid && (at(&sup, i).size - 20.0).abs() < 1e-9;
+    let synthesised = |i: usize| at(&sup, i).gid == at(&plain, i).gid && at(&sup, i).size < 20.0 && at(&sup, i).y < at(&plain, i).y;
+    assert!((native(0) && native(1)) || (synthesised(0) && synthesised(1)), "both glyphs the same way: {:?} {:?}", at(&sup, 0), at(&sup, 1));
+    if !face.has_feature(b"sups") {
+        assert!(synthesised(0) && synthesised(1), "no sups in the face: synthesised");
+    }
+    t.features.insert("sups".into(), false);
+    t.features.insert("subs".into(), true);
+    let sub = layout(&t, None, None);
+    let g = at(&sub, 1);
+    let p = at(&plain, 1);
+    assert!((g.gid != p.gid && (g.size - 20.0).abs() < 1e-9) || (g.size < 20.0 && g.y > p.y), "subscript: native, or shrunk and lowered: {g:?}");
+    // Capitalised, the same holds: the check against the face's own glyphs sees the characters
+    // shaping saw (an X, not an x), so a face with a superscript 2 and no superscript X
+    // synthesises both rather than mixing them.
+    t.features.clear();
+    t.style.case = figcraft_doc::TextCase::Upper;
+    let plain_up = layout(&t, None, None);
+    t.features.insert("sups".into(), true);
+    let up = layout(&t, None, None);
+    let native_up = |i: usize| at(&up, i).gid != at(&plain_up, i).gid && (at(&up, i).size - 20.0).abs() < 1e-9;
+    let synth_up = |i: usize| at(&up, i).gid == at(&plain_up, i).gid && at(&up, i).size < 20.0 && at(&up, i).y < at(&plain_up, i).y;
+    assert!(
+        (native_up(0) && native_up(1)) || (synth_up(0) && synth_up(1)),
+        "upper case: both glyphs the same way: {:?} {:?}",
+        at(&up, 0),
+        at(&up, 1)
+    );
+}
+
+#[test]
 fn title_case_across_runs() {
     let Some(face) = inter() else { return };
     let mut t = TextData::new("hello world");
@@ -363,12 +406,40 @@ fn bidi_visual_order_follows_levels() {
     assert_eq!(crate::layout::visual_order(&[0, 0, 0]), vec![0, 1, 2]);
     assert!(crate::layout::visual_order(&[]).is_empty());
     // Plain left-to-right text skips the analysis.
-    assert!(crate::layout::Bidi::of("Hello, world 123").is_none());
-    let b = crate::layout::Bidi::of("abc \u{5D0}\u{5D1}\u{5D2}\n\u{5D3} x").unwrap();
+    assert!(crate::layout::Bidi::of("Hello, world 123", &[]).is_none());
+    assert!(crate::layout::Bidi::of("Hello, world 123", &[None, None]).is_none());
+    let b = crate::layout::Bidi::of("abc \u{5D0}\u{5D1}\u{5D2}\n\u{5D3} x", &[]).unwrap();
     assert_eq!(b.levels.get(..4), Some(&[0, 0, 0, 0][..]));
     assert!(b.levels.get(4..7).unwrap().iter().all(|l| l % 2 == 1));
     // Paragraph direction comes from each paragraph's first strong char.
     assert!(!b.rtl_para[0] && b.rtl_para[8]);
+}
+
+/// A paragraph's forced base direction (Text ▸ Text direction, #1830): the base level is given,
+/// the letters' own levels still follow the rules, and the other paragraphs keep theirs.
+#[test]
+fn forced_direction_sets_a_paragraphs_base_level() {
+    use crate::layout::Bidi;
+    // Latin letters forced right to left: an embedded left-to-right run (level 2) in a
+    // right-to-left paragraph; the next paragraph, unforced, stays left to right.
+    let b = Bidi::of("ab\ncd", &[Some(true), None]).unwrap();
+    assert_eq!(b.rtl_para, [true, true, true, false, false, false], "and the position after the last char");
+    assert_eq!((b.levels.get(..2), b.levels.get(3..)), (Some(&[2, 2][..]), Some(&[0, 0][..])));
+    // Hebrew forced left to right: a right-to-left run (level 1) in a left-to-right paragraph.
+    let b = Bidi::of("\u{5D0}\u{5D1}", &[Some(false)]).unwrap();
+    assert_eq!(b.rtl_para, [false, false, false]);
+    assert_eq!(b.levels, [1, 1]);
+    // Forcing what the letters already say changes nothing; a paragraph past the forced list is
+    // detected.
+    let b = Bidi::of("\u{5D0}\n\u{5D1}", &[Some(true)]).unwrap();
+    assert_eq!(b.rtl_para, [true, true, true, true]);
+    assert_eq!((b.levels.first(), b.levels.last()), (Some(&1), Some(&1)));
+    // The empty paragraph after a final newline has its own direction: forced, else left to right.
+    let b = Bidi::of("ab\n", &[None, Some(true)]).unwrap();
+    assert_eq!(b.rtl_para, [false, false, false, true]);
+    let b = Bidi::of("\u{5D0}\n", &[]).unwrap();
+    assert_eq!(b.rtl_para, [true, true, false]);
+    assert_eq!(Bidi::of("", &[Some(true)]).map(|b| b.rtl_para), Some(vec![true]));
 }
 
 /// The x of the glyph for char `i`.

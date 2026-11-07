@@ -946,7 +946,12 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
 /// of them ending at the section's 8 pt margin, whatever the row has before it. (The columns around
 /// them keep the 8 pt gutter.)
 pub fn tight_end<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let group = 24.0 * 2.0 + 4.0;
+    tight_end_n(ui, 2, add)
+}
+
+/// `tight_end` for a group of `count` 24 pt buttons.
+pub fn tight_end_n<R>(ui: &mut Ui, count: usize, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let group = 24.0 * count as f32 + 4.0 * count.saturating_sub(1) as f32;
     let avail = ui.available_rect_before_wrap();
     let rect = Rect::from_min_max(pos2((avail.max.x - group).max(avail.min.x), avail.min.y), avail.max);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -1039,6 +1044,35 @@ pub fn checker(painter: &egui::Painter, rect: Rect, cell: f32) {
             painter.rect_filled(r, CornerRadius::ZERO, Color32::from_gray(0xE6));
         }
     }
+}
+
+/// Shared Fill/Stroke/Selection colors control: one background, a 16 pt swatch,
+/// caller-provided colour content, and a separated, scrubbable opacity field.
+/// The caller owns picker routing and commands; this widget only draws and reports edits.
+pub fn paint_field(
+    ui: &mut Ui,
+    id: Id,
+    opacity_id: Id,
+    paint: &figcraft_color::Paint,
+    width: f32,
+    content: impl FnOnce(&mut Ui, Rect),
+) -> (Response, Option<FieldEdit>) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
+    ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
+    let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
+    paint_swatch(ui.painter(), sw, paint);
+    let swatch = ui.interact(sw.expand(2.0), id, Sense::click()).tip(tr("Edit colour"));
+    let value = if a11y::active(&swatch.ctx) { paint_name(paint) } else { String::new() };
+    a11y::color(&swatch, tr("Edit colour"), &value);
+    let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
+    content(&mut child, text_r);
+    let op_r = Rect::from_min_max(pos2(r.max.x - 48.0, r.min.y), r.max);
+    ui.painter().line_segment([pos2(op_r.min.x, r.min.y + 4.0), pos2(op_r.min.x, r.max.y - 4.0)], Stroke::new(1.0, t.panel));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(op_r));
+    let opacity = number_field(&mut child, opacity_id, Lead::Named(tr("Opacity")), Some(f64::from(paint.opacity) * 100.0), "%", 48.0, 1.0);
+    (swatch, opacity)
 }
 
 /// A paint swatch (with checkerboard under transparent colours).

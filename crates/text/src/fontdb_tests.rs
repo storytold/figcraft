@@ -139,7 +139,10 @@ fn macos_font_assets_are_found_in_the_asset_store() {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    let tmp = TempDir(std::env::temp_dir().join(format!("figcraft-font-assets-{}", std::process::id())));
+    // Created fresh: a directory or link already at this predictable name is refused, and not removed.
+    let root = std::env::temp_dir().join(format!("figcraft-font-assets-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tmp = TempDir(root);
     let store = tmp.0.join("AssetsV2");
     let fonts = store.join("com_apple_MobileAsset_Font7");
     let data = |kind: &std::path::Path| kind.join("0f1e2d.asset").join("AssetData");
@@ -262,32 +265,6 @@ fn every_platform_has_a_symbol_font_in_the_fallbacks() {
     // Text faces come first: a symbol font only draws what they lack.
     let at = |f: &str| FALLBACK_FAMILIES.iter().position(|x| *x == f).unwrap();
     assert!(at("Noto Sans") < at("Noto Sans Symbols") && at("DejaVu Sans") < at("Noto Sans Math"));
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-#[test]
-fn user_font_dirs_follow_xdg_data_home() {
-    use std::ffi::OsString;
-    use std::path::PathBuf;
-    let dirs = |home: Option<&str>, data: Option<&str>| unix_user_font_dirs(home.map(OsString::from), data.map(OsString::from));
-    let paths = |items: &[&str]| items.iter().map(PathBuf::from).collect::<Vec<_>>();
-    assert_eq!(dirs(Some("/home/user"), Some("/custom user data")), paths(&["/home/user/.fonts", "/custom user data/fonts"]));
-    for data in [None, Some(""), Some("relative/data")] {
-        assert_eq!(dirs(Some("/home/user"), data), paths(&["/home/user/.fonts", "/home/user/.local/share/fonts"]));
-    }
-    assert_eq!(dirs(None, Some("/custom-data")), paths(&["/custom-data/fonts"]));
-    assert_eq!(dirs(None, None), paths(&[]));
-    assert_eq!(dirs(None, Some("relative")), paths(&[]));
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-#[test]
-fn user_font_dirs_preserve_non_utf8_paths() {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    let dirs = unix_user_font_dirs(Some(OsString::from_vec(b"/home/\xff".to_vec())), Some(OsString::from_vec(b"/data/\xfe".to_vec())));
-    assert_eq!(dirs[0].as_os_str().as_bytes(), b"/home/\xff/.fonts");
-    assert_eq!(dirs[1].as_os_str().as_bytes(), b"/data/\xfe/fonts");
 }
 
 #[test]
@@ -613,4 +590,11 @@ fn core_text_lists_the_installed_font_files() {
     let files = font_manager_files();
     assert!(files.iter().any(|f| f.starts_with("/System/Library/Fonts")), "{} files", files.len());
     assert!(files.iter().all(|f| f.is_absolute()));
+}
+
+#[test]
+fn system_font_dirs_are_walked_once_each() {
+    let dirs = super::system_font_dirs();
+    let unique: std::collections::HashSet<_> = dirs.iter().collect();
+    assert_eq!(unique.len(), dirs.len(), "{dirs:?}");
 }

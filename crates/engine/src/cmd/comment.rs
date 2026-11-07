@@ -52,7 +52,12 @@ pub fn link(id: u64) -> String {
 /// The thread id in a link (or a bare id).
 pub fn parse_link(s: &str) -> Option<u64> {
     let s = s.trim();
-    s.strip_prefix(LINK_PREFIX).unwrap_or(s).trim_end_matches('/').parse().ok()
+    let s = s.strip_prefix(LINK_PREFIX).unwrap_or(s).trim_end_matches('/');
+    // Digits only: `u64::parse` would also accept a leading '+'.
+    if !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
 }
 
 /// Which threads a list shows.
@@ -368,10 +373,11 @@ fn listed<'s>(cmd: &str, s: &'s Session, p: &Value, who: &str, people: &[&str]) 
 
 /// Add the names `text` @mentions to `named` as `{name, known, you}`, each once.
 fn push_mentions(named: &mut Vec<Value>, text: &str, people: &[&str], user: &str) {
+    // `known` and `you` follow from the name, so the name alone tells a repeat.
+    let mut seen: std::collections::BTreeSet<String> = named.iter().filter_map(|v| v.get("name")?.as_str().map(str::to_string)).collect();
     for (name, known) in mentioned(text, people) {
-        let v = json!({"name": name, "known": known, "you": known && name.eq_ignore_ascii_case(user)});
-        if !named.contains(&v) {
-            named.push(v);
+        if seen.insert(name.to_string()) {
+            named.push(json!({"name": name, "known": known, "you": known && name.eq_ignore_ascii_case(user)}));
         }
     }
 }
@@ -996,6 +1002,15 @@ mod tests {
     use serde_json::json;
 
     use crate::Session;
+
+    #[test]
+    fn parse_link_rejects_sign() {
+        assert_eq!(super::parse_link("+5"), None);
+        assert_eq!(super::parse_link("figcraft://comment/+5"), None);
+        assert_eq!(super::parse_link(""), None);
+        assert_eq!(super::parse_link("5"), Some(5));
+        assert_eq!(super::parse_link("figcraft://comment/5/"), Some(5));
+    }
 
     #[test]
     fn comment_thread_lifecycle_and_anchoring() {

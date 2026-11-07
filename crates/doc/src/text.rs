@@ -234,6 +234,22 @@ pub enum LeadingTrim {
     CapHeight,
 }
 
+/// Where lines break when text wraps to more than one line ("Wrap style controls where lines
+/// break when text wraps to more than one line", Explore text properties).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WrapStyle {
+    /// "Figma fits as many words as possible on each line before wrapping to the next."
+    #[default]
+    Auto,
+    /// "Figma distributes text as evenly as possible across every line, so each line is close to
+    /// the same length."
+    Balance,
+    /// "Figma keeps each line full, but adjusts the last four lines to avoid an orphan -- a single
+    /// word stranded alone on the last line."
+    Pretty,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum ListStyle {
@@ -243,20 +259,40 @@ pub enum ListStyle {
     Numbered,
 }
 
+/// A paragraph's base direction: by its letters, or forced ("controls are available to override
+/// text direction per paragraph", Add right-to-left text).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextDirection {
+    /// The first letter with a direction decides (Unicode rules P2 and P3).
+    #[default]
+    Auto,
+    /// Left to right, whatever the letters.
+    Ltr,
+    /// Right to left, whatever the letters.
+    Rtl,
+}
+
 /// Deepest list nesting (levels 0..=MAX_LIST_INDENT).
 pub const MAX_LIST_INDENT: u8 = 8;
 
-/// One paragraph's list settings.
+/// One paragraph's list settings and base direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ParaList {
     pub list: ListStyle,
-    /// Nesting level (0 = outermost; plain paragraphs are always 0).
+    /// Nesting level (0 = outermost). A plain paragraph is 0, except one that left its list by
+    /// Backspace or Delete at its start ([`TextData::unlist_keeping_levels`]): it keeps the level
+    /// it had and starts where that level's item text does ("delete the counter, but keep the
+    /// same level of indentation").
     pub indent: u8,
     /// A numbered list that starts counting at this paragraph counts from `start_offset + 1`
     /// (items that go on counting ignore it; other paragraphs are always 0).
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub start_offset: u32,
+    /// The paragraph's base direction (Text ▸ Text direction); `Auto` follows its letters.
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub direction: TextDirection,
 }
 
 /// Character style. In runs, every field is an override; `None` means "inherit the base".
@@ -463,6 +499,10 @@ pub struct TextData {
     /// as fit).
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub max_lines: u32,
+    /// Where lines break when the text wraps: greedily (Auto), as evenly as the words allow
+    /// (Balance), or full with no one word alone on the last line (Pretty).
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub wrap_style: WrapStyle,
     /// OpenType feature toggles (e.g. "liga": false).
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub features: std::collections::BTreeMap<String, bool>,
@@ -606,12 +646,14 @@ impl TextData {
     }
 
     /// Whether text that runs out of room ends in an ellipsis: a truncating box, or auto height
-    /// with a line limit (the box hugs up to `max_lines` lines).
+    /// or auto width with a line limit (the box hugs up to `max_lines` lines: "Max lines is
+    /// available only if truncate text is enabled, and: Text resizing is set to auto height or
+    /// auto width").
     pub fn truncates(&self) -> bool {
         match self.auto_resize {
             TextAutoResize::Truncate => true,
-            TextAutoResize::Height => self.max_lines > 0,
-            TextAutoResize::WidthAndHeight | TextAutoResize::None => false,
+            TextAutoResize::Height | TextAutoResize::WidthAndHeight => self.max_lines > 0,
+            TextAutoResize::None => false,
         }
     }
 
@@ -798,11 +840,22 @@ impl TextData {
     /// paragraphs stay at level 0, only numbered ones keep a start, levels stop at
     /// [`MAX_LIST_INDENT`]); one style for all with no nesting or start folds back into `list`.
     pub fn set_para_lists(&mut self, start: usize, end: usize, f: impl Fn(&mut ParaList)) {
+        self.set_para_lists_with(start, end, false, f);
+    }
+
+    /// Take the list items among the paragraphs chars `start..end` touch out of their list at the
+    /// level they had, as Backspace or Delete at an item's start does: "delete the counter, but
+    /// keep the same level of indentation" (Create bulleted and numbered lists).
+    pub fn unlist_keeping_levels(&mut self, start: usize, end: usize) {
+        self.set_para_lists_with(start, end, true, |pl| pl.list = ListStyle::None);
+    }
+
+    fn set_para_lists_with(&mut self, start: usize, end: usize, keep_levels: bool, f: impl Fn(&mut ParaList)) {
         let (a, b) = self.para_span(start, end);
         self.fill_paragraphs();
         for pl in self.paragraphs.get_mut(a..=b).unwrap_or(&mut []) {
             f(pl);
-            if pl.list == ListStyle::None {
+            if pl.list == ListStyle::None && !keep_levels {
                 pl.indent = 0;
             }
             if pl.list != ListStyle::Numbered {
@@ -955,20 +1008,20 @@ mod case_tests {
         // Files written before start numbers load with none, and write the same bytes.
         let old = r#"{"list":"numbered","indent":1}"#;
         let pl: ParaList = serde_json::from_str(old).unwrap();
-        assert_eq!(pl, ParaList { list: N, indent: 1, start_offset: 0 });
+        assert_eq!(pl, ParaList { list: N, indent: 1, start_offset: 0, ..ParaList::default() });
         assert_eq!(serde_json::to_string(&pl).unwrap(), old);
         // One numbered paragraph with a start keeps it (it doesn't fold into `list`).
         let mut t = TextData { characters: "Next".into(), ..Default::default() };
-        t.set_para_lists(0, 0, |p| *p = ParaList { list: N, indent: 0, start_offset: 1 });
-        assert_eq!(t.para_list(0), ParaList { list: N, indent: 0, start_offset: 1 });
+        t.set_para_lists(0, 0, |p| *p = ParaList { list: N, indent: 0, start_offset: 1, ..ParaList::default() });
+        assert_eq!(t.para_list(0), ParaList { list: N, indent: 0, start_offset: 1, ..ParaList::default() });
         // Enter copies it to the new item; different starts don't make the list mixed.
         t.replace_range(4, 4, "\nMore");
         assert_eq!(t.para_list(1).start_offset, 1);
         t.set_para_lists(5, 5, |p| p.start_offset = 0);
         assert!(t.common_para_list(0, t.char_count()).is_some_and(|p| p.list == N));
         // Bullets have no number, so no start.
-        t.set_para_lists(0, 0, |p| *p = ParaList { list: B, indent: 1, start_offset: 4 });
-        assert_eq!(t.para_list(0), ParaList { list: B, indent: 1, start_offset: 0 });
+        t.set_para_lists(0, 0, |p| *p = ParaList { list: B, indent: 1, start_offset: 4, ..ParaList::default() });
+        assert_eq!(t.para_list(0), ParaList { list: B, indent: 1, start_offset: 0, ..ParaList::default() });
         // A plain paragraph has none.
         t.set_para_lists(0, 0, |p| p.list = P);
         assert_eq!(t.para_list(0), ParaList::default());

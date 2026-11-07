@@ -79,10 +79,13 @@ pub fn usage(doc: &Document, library: &str) -> Usage {
     let records: std::collections::BTreeMap<NodeId, NodeId> =
         doc.libraries.components.iter().filter(|r| r.library == library).map(|r| (r.root, r.key)).collect();
     if !records.is_empty() {
+        // One component's asset root is looked up once, however many instances use it.
+        let mut roots = std::collections::BTreeMap::<NodeId, Option<NodeId>>::new();
         for n in doc.nodes() {
             if let NodeKind::Instance { component, .. } = &n.kind
                 && store.is_none_or(|st| doc.page_of(n.id) != Some(st))
-                && let Some(key) = crate::library::asset_root(doc, *component).and_then(|r| records.get(&r))
+                && let Some(key) =
+                    roots.entry(*component).or_insert_with(|| crate::library::asset_root(doc, *component)).and_then(|r| records.get(&r))
             {
                 let c = counts.entry(*key).or_default();
                 *c = c.saturating_add(1);
