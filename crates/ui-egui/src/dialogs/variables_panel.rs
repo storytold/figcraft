@@ -836,11 +836,10 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
         if !inherited && resp.double_clicked() && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| p.x < name_r.max.x) {
             start_rename(st, target.clone());
         }
-        let bulk = bulk_ids(view, st, v);
-        let coll_groups = groups(view.in_collection(&coll.id).map(|x| x.name.as_str()));
         crate::right::context_popup(&resp).show(|ui| {
-            if let Some(vars) = &bulk {
-                bulk_menu(app, ui, &coll_groups, vars);
+            if let Some(vars) = bulk_ids(view, st, v) {
+                let coll_groups = groups(view.in_collection(&coll.id).map(|x| x.name.as_str()));
+                bulk_menu(app, ui, &coll_groups, &vars);
                 return;
             }
             if menu_item(ui, tr("Edit variable"), "") {
