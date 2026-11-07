@@ -454,6 +454,24 @@ fn hidden(ctx: &Context, id: u64) -> bool {
     visibility(ctx, id) == Some(false)
 }
 
+/// How long, in seconds, a window may draw no frame while a control request waits for it before
+/// [`background`] answers the request as it answers one for a hidden window. eframe runs the app's
+/// logic for a window whose redraw is 0.25 s overdue, so the second such pass answers.
+pub const NOT_DRAWING_AFTER: f64 = 0.2;
+
+/// Whether window `id` has drawn no frame for [`NOT_DRAWING_AFTER`] while a request waited for it.
+/// The platform may still call it visible: under Wayland an app can't tell that its window is
+/// minimised, and the compositor then stops asking it to draw. The wait starts again whenever the
+/// window draws.
+fn stopped_drawing(app: &mut FigApp, ctx: &Context, id: u64, now: f64) -> bool {
+    let pass = ctx.cumulative_pass_nr_for(crate::windows::viewport(id));
+    let wait = app.control_waits.entry(id).or_insert((pass, now));
+    if wait.0 != pass {
+        *wait = (pass, now);
+    }
+    now - wait.1 >= NOT_DRAWING_AFTER
+}
+
 /// Send `RequestPaintWhileHidden` for work that needs a real UI pass (a queued capture or
 /// synthetic input), and schedule a wakeup for the next capture deadline. Native eframe honours
 /// this command; the shared web runner does not implement it yet, so a hidden browser tab remains
@@ -511,7 +529,7 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             let _ = r.reply.send(ControlReply { id: r.id, result: Err(format!("no window {target}")) });
             continue;
         }
-        let is_hidden = hidden(ctx, target);
+        let is_hidden = hidden(ctx, target) || stopped_drawing(app, ctx, target, now);
         if r.method == "ui.screenshot" && visibility(ctx, target) != Some(true) {
             // Hidden, minimised, or with visibility the platform has not reported: admit it now
             // so the request gets its deadline and a forced paint. Waiting for a frame that may
@@ -563,6 +581,14 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             }
         }
         let _ = r.reply.send(ControlReply { id: r.id, result: res.unwrap_or_else(|| Err(format!("no window {target}"))) });
+    }
+    // A window a request still waits for is checked again soon: if it draws, its frame answers;
+    // if it doesn't (minimised under Wayland), the next logic pass does.
+    let waiting: std::collections::BTreeSet<u64> =
+        app.control_queue.iter().map(|r| r.params.get("window").and_then(Value::as_u64).unwrap_or(app.windows.focused)).collect();
+    app.control_waits.retain(|id, _| waiting.contains(id));
+    if !waiting.is_empty() {
+        crate::repaint_in(ctx, NOT_DRAWING_AFTER);
     }
     request_paint(app, ctx);
 }
