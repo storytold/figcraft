@@ -445,6 +445,15 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
         app.ui.confirm_close = false;
         return;
     }
+    if let Some(a) = unsaved_question(ctx, &names) {
+        answer_close(app, ctx, a);
+    }
+}
+
+/// The unsaved-changes question about files `names` (Don't Save / Cancel / Save, as the other
+/// Craft apps ask it; Enter answers Save, the dialog's close button Cancel): `None` while it is
+/// unanswered.
+fn unsaved_question(ctx: &Context, names: &[String]) -> Option<CloseAnswer> {
     let t = crate::theme::Tokens::get(ctx);
     let mut open = true;
     let mut answer = None;
@@ -471,8 +480,114 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
     if !open {
         answer = Some(CloseAnswer::Cancel);
     }
-    if let Some(a) = answer {
-        answer_close(app, ctx, a);
+    answer
+}
+
+/// Where closing a tab whose file has unsaved changes is (each step names the file's uid).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabClose {
+    /// The unsaved-changes question shows for it.
+    Ask(u64),
+    /// Save was answered: it saves next frame, once a panel field the click took the keyboard
+    /// from has committed what was typed, then the tab closes.
+    Save(u64),
+    /// Its Save as dialog (a file without a path, or a .fig) is open: the tab closes once the file
+    /// is saved, and stays open if the dialog is cancelled or the save fails.
+    AfterSaveAs(u64),
+}
+
+/// Close tab `i` (its X, a middle click, File ▸ Close tab): at once when its file has no unsaved
+/// changes (a branch tab's edits are in its main file already), else after the unsaved-changes
+/// question ([`confirm_close_tab`]).
+pub(crate) fn ask_close_tab(app: &mut FigApp, i: usize) {
+    let Some(d) = app.session.docs.get(i) else { return };
+    if d.is_dirty() && d.branch_of.is_none() {
+        app.ui.find = None;
+        app.ui.close_tab = Some(TabClose::Ask(d.uid));
+    } else {
+        app.run("file.close", json!({"index": i}));
+    }
+}
+
+/// Act on the unsaved-changes question's answer for the tab it asks about: Cancel keeps the tab,
+/// Don't Save closes it and drops the changes, Save saves the file next frame, then closes it.
+pub(crate) fn answer_close_tab(app: &mut FigApp, ctx: &Context, answer: CloseAnswer) {
+    let Some(TabClose::Ask(uid)) = app.ui.close_tab else { return };
+    app.ui.close_tab = None;
+    match answer {
+        CloseAnswer::Cancel => {}
+        CloseAnswer::DontSave => {
+            if let Some(i) = tab_of(app, uid) {
+                app.run("file.close", json!({"index": i, "force": true}));
+            }
+        }
+        CloseAnswer::Save => {
+            app.ui.close_tab = Some(TabClose::Save(uid));
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// Tab `i` of the session whose file has uid `uid`, if it is still open.
+fn tab_of(app: &FigApp, uid: u64) -> Option<usize> {
+    app.session.docs.iter().position(|d| d.uid == uid)
+}
+
+/// The unsaved-changes question for a closing tab and what its answer starts: Don't Save closes
+/// the tab and drops the changes, Cancel keeps it, Save saves the file (Save as for one without a
+/// path or saved as .fig) and closes the tab once it is saved.
+pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
+    let Some(step) = app.ui.close_tab else { return };
+    let (TabClose::Ask(uid) | TabClose::Save(uid) | TabClose::AfterSaveAs(uid)) = step;
+    let Some(i) = tab_of(app, uid) else {
+        app.ui.close_tab = None;
+        return;
+    };
+    let dirty = app.session.docs.get(i).is_some_and(DocState::is_dirty);
+    match step {
+        TabClose::Ask(_) if !dirty => {
+            // Saved meanwhile: nothing is lost by closing.
+            app.ui.close_tab = None;
+            app.run("file.close", json!({"index": i}));
+        }
+        TabClose::Ask(_) => {
+            let names: Vec<String> = app.session.docs.get(i).map(|d| d.doc.name.clone()).into_iter().collect();
+            if let Some(a) = unsaved_question(ctx, &names) {
+                answer_close_tab(app, ctx, a);
+            }
+        }
+        TabClose::Save(_) => {
+            app.ui.close_tab = None;
+            // Saving acts on the file shown.
+            app.session.active = i;
+            let native = app.session.docs.get(i).and_then(|d| d.path.as_deref()).is_some_and(|p| {
+                !std::path::Path::new(p).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("fig"))
+            });
+            if !native {
+                app.ui.close_tab = Some(TabClose::AfterSaveAs(uid));
+                app.save_as_dialog();
+                if app.pending_dialog.is_none() {
+                    // No dialog could start: the tab stays open.
+                    app.ui.close_tab = None;
+                }
+                ctx.request_repaint();
+                return;
+            }
+            if app.run("file.save", json!({})).is_some()
+                && let Some(i) = tab_of(app, uid)
+            {
+                app.run("file.close", json!({"index": i}));
+            }
+        }
+        TabClose::AfterSaveAs(_) => {
+            if app.pending_dialog.is_some() {
+                return;
+            }
+            app.ui.close_tab = None;
+            if !dirty {
+                app.run("file.close", json!({"index": i}));
+            }
+        }
     }
 }
 
