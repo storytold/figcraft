@@ -41,6 +41,30 @@ pub(crate) fn normalize_line_endings(s: &str) -> String {
     s.replace("\r\n", "\n").replace(['\r', '\u{2028}', '\u{2029}'], "\n")
 }
 
+/// The name a text layer derives from its characters: the first line, at most 64 characters, or
+/// None when that line is blank (a layer with no name of its own, which the Layers panel shows by
+/// its kind).
+///
+/// A layer whose name is this derived name is one nobody has renamed, so the editor keeps its name
+/// in step as the characters are typed ([`crate::textedit`]); any other name was chosen by the
+/// author and is kept. Commands never rename, so a layer named for its role keeps that name as a
+/// field key even when `characters` replace text that reads like it.
+pub(crate) fn text_layer_name(characters: &str) -> Option<String> {
+    let first: String = characters.lines().next().unwrap_or("").chars().take(64).collect();
+    (!first.trim().is_empty()).then_some(first)
+}
+
+/// Whether `name` is one a text layer was given for its characters rather than by its author, so
+/// the editor may keep it in step with them. Blank text leaves a layer named `""` when the Text
+/// tool draws it and `Text` when `node.create` makes it, and both read as unnamed in the panel.
+pub(crate) fn text_name_is_derived(name: &str, derived: Option<&String>) -> bool {
+    match derived {
+        Some(d) => name == d,
+        // `NodeKind::Text(_).label()`, which the panel falls back to for an unnamed layer.
+        None => name.is_empty() || name == "Text",
+    }
+}
+
 /// camelCase object keys → snake_case (accept the inspect/camel forms for serde-backed values).
 pub fn snake(v: &Value) -> Value {
     match v {
