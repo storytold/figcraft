@@ -1,8 +1,8 @@
 use super::host::hosting_json;
 use super::types::{NO_SESSION, SessionId, Share, SharedLink, Status};
 use super::{
-    Access, Arc, Client, EditingText, EngineError, EngineRecompute, FollowedView, Live, Result, Session, Value, ViewState, bad, busy, close, code,
-    editing_of, json,
+    Access, Arc, Client, EditingText, EngineError, EngineRecompute, FollowedView, Live, Result, ServerMsg, Session, Value, ViewState, bad, busy,
+    close, code, editing_of, json,
 };
 
 impl Session {
@@ -115,7 +115,23 @@ impl Session {
         let Some(live) = self.live.sessions.get_mut(&id) else { return };
         let Some(client) = live.client.as_mut() else { return };
         let mut out = Vec::new();
-        for m in std::mem::take(&mut live.deferred) {
+        let mut waiting = std::mem::take(&mut live.deferred).into_iter();
+        while let Some(m) = waiting.next() {
+            // The server no longer knows this client (it restarted without its saved state, say):
+            // it welcomed you as someone new. What you did goes on top like after any rejoin.
+            if let ServerMsg::Welcome { session, client_id, .. } = &m {
+                let me = client.resume();
+                if (*session, *client_id) != (me.session, me.client_id) {
+                    live.hold();
+                    live.client = None;
+                    let rest: Vec<_> = waiting.collect();
+                    self.live_welcome(id, m);
+                    if let Some(live) = self.live.sessions.get_mut(&id) {
+                        live.deferred = rest;
+                    }
+                    return;
+                }
+            }
             match client.receive(m, &EngineRecompute) {
                 Ok(more) => out.extend(more),
                 Err(e) => {
