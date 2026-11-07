@@ -88,7 +88,12 @@ pub fn start() {
                     let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
                     if let Some(link) = crate::query::join_link(&hash) {
                         let link = js_sys::decode_uri_component(link).ok().and_then(|s| s.as_string()).unwrap_or_else(|| link.to_string());
-                        figcraft_ui_egui::live::open_invite(&mut fig, &link);
+                        if app_bridge.is_some() {
+                            // Hosted (Clawku): the page made the link for this person; join at once.
+                            figcraft_ui_egui::live::join_from_host(&mut fig, &link);
+                        } else {
+                            figcraft_ui_egui::live::open_invite(&mut fig, &link);
+                        }
                     }
                     // `?control`: `window.figcraft`, the page's control channel (crate::api), opt-in.
                     if crate::query::control(&query()) {

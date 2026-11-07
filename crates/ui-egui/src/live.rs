@@ -1323,6 +1323,16 @@ pub fn open_invite(app: &mut FigApp, link: &str) {
     open_join(app, link.trim());
 }
 
+/// A join link the hosting page handed over (Clawku, which signed the person in and checked their
+/// access): join at once, with the usual progress, instead of asking first as for a link from
+/// anywhere else ([`open_invite`]).
+pub fn join_from_host(app: &mut FigApp, link: &str) {
+    let link = link.trim();
+    if start_join(app, link).is_none() {
+        open_join(app, link);
+    }
+}
+
 /// Escape closes the Join or Publish dialog, and calls off the join the Join dialog follows
 /// (before the canvas's shortcuts see it: it doesn't deselect).
 pub fn dialog_keys(app: &mut FigApp, ctx: &egui::Context) {
