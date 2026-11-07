@@ -435,6 +435,41 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("pref.uiScaleReset", "Default interface size", "{}  back to the system's own size (1) → {scale}", false, |s, _| ui_scale_step(s, 0)),
         spec!("pref.autoSave", "Save files automatically", "{on?}", false, |s, p| pref(s, p, |x| &mut x.auto_save)),
         spec!("pref.startOnHome", "Start on the Home screen", "{on?}", false, |s, p| pref(s, p, |x| &mut x.start_on_home)),
+        spec!(
+            "pref.mcp",
+            "Local MCP server",
+            "{enabled?, on?, port? (1024..65535; default 47800)} → {enabled, port}: toggle or configure the desktop app's localhost MCP / control server",
+            false,
+            |s, p| {
+                const CMD: &str = "pref.mcp";
+                let next_port = match get(p, "port") {
+                    Some(port_val) => {
+                        let n = port_val.as_u64().ok_or_else(|| bad(CMD, "`port` must be an integer between 1024 and 65535"))?;
+                        if !(1024..=65535).contains(&n) {
+                            return Err(bad(CMD, "`port` must be between 1024 and 65535"));
+                        }
+                        Some(n as u16)
+                    }
+                    None => None,
+                };
+                let next_enabled = if let Some(en) = boolean(p, "enabled").or_else(|| boolean(p, "on")) {
+                    Some(en)
+                } else if get(p, "enabled").is_some() || get(p, "on").is_some() {
+                    return Err(bad(CMD, "`enabled` must be a boolean"));
+                } else {
+                    None
+                };
+                if let Some(port) = next_port {
+                    s.prefs.mcp_port = port;
+                    s.prefs_unsaved = true;
+                }
+                if let Some(en) = next_enabled {
+                    s.prefs.mcp_enabled = en;
+                    s.prefs_unsaved = true;
+                }
+                Ok(json!({"enabled": s.prefs.mcp_enabled, "port": s.prefs.mcp_port}))
+            }
+        ),
         spec!("pref.nudge", "Nudge amount", "{small?, big?}", false, |s, p| {
             s.prefs.nudge_small = num(p, "small").unwrap_or(s.prefs.nudge_small).clamp(0.01, 1000.0);
             s.prefs.nudge_big = num(p, "big").unwrap_or(s.prefs.nudge_big).clamp(0.01, 10000.0);
@@ -496,6 +531,10 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         spec!("app.preferences", "Preferences", "{}", false, |s, _| ui(s, "dialog.preferences")),
+        spec!("app.mcp", "Local MCP server", "{}", false, |s, _| {
+            s.request_ui("dialog.mcp", json!({}));
+            Ok(json!({"enabled": s.prefs.mcp_enabled, "port": s.prefs.mcp_port}))
+        }),
         spec!("app.actions", "Actions", "{}", false, |s, _| ui(s, "palette.actions")),
         spec!("help.shortcuts", "Keyboard shortcuts", "{}", false, |s, _| ui(s, "panel.shortcuts")),
         spec!("help.about", "About FigCraft", "{}", false, |s, _| ui(s, "dialog.about")),

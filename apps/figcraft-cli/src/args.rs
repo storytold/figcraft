@@ -36,7 +36,7 @@ pub enum Command {
     Run(RunArgs),
     Commands(CommandsArgs),
     Mcp(McpArgs),
-    /// Publish plugins to a server's plugin directory
+    /// Create, build, run or publish plugins
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
@@ -212,13 +212,72 @@ pub struct McpArgs {
     /// How long the attached app may take over each request, in seconds (1–600; default 60)
     #[arg(long, value_name = "SECONDS", requires = "attach", value_parser = clap::value_parser!(u64).range(1..=600))]
     pub timeout: Option<u64>,
+    /// Install FigCraft into an MCP harness config (antigravity, claude-code, claude-desktop, codex or all)
+    #[arg(long, value_name = "HARNESS")]
+    pub install: Option<String>,
+    /// Show MCP harness configuration status and snippets
+    #[arg(long)]
+    pub status: bool,
+    /// Control port used by --install and --status (default 47800; 0 for headless)
+    #[arg(long, value_name = "PORT", default_value = "47800")]
+    pub port: u16,
     #[command(flatten)]
     pub roots: RootArgs,
 }
 
 #[derive(Subcommand)]
 pub enum PluginCommand {
+    New(PluginNewArgs),
+    Build(PluginBuildArgs),
+    Run(PluginRunArgs),
     Publish(PublishArgs),
+}
+
+/// Scaffold a new Rust/WebAssembly plugin project in a folder
+#[derive(Args)]
+pub struct PluginNewArgs {
+    /// The folder to create the plugin in
+    #[arg(value_name = "FOLDER")]
+    pub folder: String,
+    /// Human-readable plugin name (defaults to the folder name)
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+    /// Reverse-DNS plugin id (e.g. org.example.my-plugin)
+    #[arg(long, value_name = "ID")]
+    pub id: Option<String>,
+    /// Starter template: command, panel, widget or exporter
+    #[arg(long, value_name = "TEMPLATE", default_value = "command")]
+    pub template: String,
+}
+
+/// Compile a Rust plugin crate to wasm32-unknown-unknown and copy the .wasm next to figcraft-plugin.json
+#[derive(Args)]
+pub struct PluginBuildArgs {
+    /// The plugin folder containing Cargo.toml and figcraft-plugin.json
+    #[arg(value_name = "FOLDER")]
+    pub folder: String,
+}
+
+/// Load a plugin folder into a headless session, run it and print its output, logs and fuel usage
+#[derive(Args)]
+pub struct PluginRunArgs {
+    /// The plugin folder or figcraft-plugin.json path
+    #[arg(value_name = "FOLDER")]
+    pub folder: String,
+    /// Menu command id to run (defaults to the first command or widget)
+    #[arg(long, value_name = "CMD")]
+    pub command: Option<String>,
+    /// JSON parameters for the plugin run
+    #[arg(long, value_name = "JSON", default_value = "{}")]
+    pub params: String,
+    /// Open this design file first instead of a new document
+    #[arg(long = "in", value_name = "FILE")]
+    pub input: Option<String>,
+    /// Save the resulting document here, by extension
+    #[arg(long, value_name = "FILE")]
+    pub out: Option<String>,
+    #[command(flatten)]
+    pub roots: RootArgs,
 }
 
 /// Send a plugin folder to a figcraft-server's plugin directory as a new version
@@ -465,6 +524,20 @@ mod tests {
         assert_eq!(a.timeout, Some(300));
         let Command::Mcp(a) = ok(&["mcp", "--automation-read-root", "in", "--automation-write-root", "out"]) else { panic!("mcp") };
         assert_eq!((a.roots.automation_read_root, a.roots.automation_write_root), (vec!["in".to_owned()], vec!["out".to_owned()]));
+        let Command::Mcp(a) = ok(&["mcp", "--install", "antigravity", "--port", "47800"]) else { panic!("mcp") };
+        assert_eq!((a.install.as_deref(), a.port), (Some("antigravity"), 47800));
+        let Command::Mcp(a) = ok(&["mcp", "--status"]) else { panic!("mcp") };
+        assert!(a.status);
+        let Command::Plugin { command: PluginCommand::New(a) } = ok(&["plugin", "new", "my-plugin", "--template", "panel"]) else {
+            panic!("plugin new")
+        };
+        assert_eq!((a.folder.as_str(), a.template.as_str()), ("my-plugin", "panel"));
+        let Command::Plugin { command: PluginCommand::Build(a) } = ok(&["plugin", "build", "my-plugin"]) else { panic!("plugin build") };
+        assert_eq!(a.folder, "my-plugin");
+        let Command::Plugin { command: PluginCommand::Run(a) } = ok(&["plugin", "run", "my-plugin", "--command", "run"]) else {
+            panic!("plugin run")
+        };
+        assert_eq!((a.folder.as_str(), a.command.as_deref()), ("my-plugin", Some("run")));
         let Command::Plugin { command: PluginCommand::Publish(a) } = ok(&["plugin", "publish", "dist/counter", "--server", "ws://h:47900/"]) else {
             panic!("plugin")
         };

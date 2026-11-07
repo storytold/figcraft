@@ -566,3 +566,314 @@ fn reinstalling_under_an_existing_id_drops_the_old_settings() {
     install(&mut s, m, &script(&[], OnRefusal::Fail, ""));
     assert!(!s.prefs.plugin_settings.contains_key("org.test.reuse"), "{:?}", s.prefs.plugin_settings);
 }
+
+#[test]
+fn create_reload_and_logs_commands_work_for_all_templates() {
+    let base = std::env::temp_dir().join(format!("figcraft_plugin_create_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let mut s = Session::new();
+
+    for tpl in ["command", "panel", "widget", "exporter"] {
+        let dir = base.join(tpl);
+        let out = ex(
+            &mut s,
+            "plugin.create",
+            json!({
+                "dir": dir.to_string_lossy(),
+                "name": format!("Test {tpl}"),
+                "id": format!("org.test.created.{tpl}"),
+                "template": tpl
+            }),
+        );
+        assert_eq!(out["id"], format!("org.test.created.{tpl}"));
+        assert_eq!(out["template"], tpl);
+
+        // Creating again in the same directory refuses to overwrite existing files.
+        assert!(
+            s.execute(
+                "plugin.create",
+                &json!({
+                    "dir": dir.to_string_lossy(),
+                    "name": format!("Test {tpl}"),
+                    "id": format!("org.test.created.{tpl}"),
+                    "template": tpl
+                }),
+            )
+            .is_err()
+        );
+
+        let lib_rs = std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap();
+        assert!(lib_rs.contains("Input"), "{lib_rs}");
+        assert!(!lib_rs.contains("CallInput"), "{lib_rs}");
+
+        let plugin_id = format!("org.test.created.{tpl}");
+        s.prefs.plugin_settings.entry(plugin_id.clone()).or_default().insert("savedKey".into(), json!("savedVal"));
+        let reloaded = ex(&mut s, "plugin.reload", json!({"id": plugin_id}));
+        assert_eq!(reloaded["id"], plugin_id);
+        assert_eq!(reloaded["reloaded"], true);
+        assert_eq!(s.prefs.plugin_settings.get(&plugin_id).and_then(|m| m.get("savedKey")), Some(&json!("savedVal")));
+
+        if tpl == "widget" {
+            let w = ex(&mut s, "widget.insert", json!({"plugin": "org.test.created.widget"}));
+            assert_eq!(w["plugin"], "org.test.created.widget");
+        } else {
+            let r = ex(&mut s, "plugin.run", json!({"id": format!("org.test.created.{tpl}")}));
+            assert_eq!(r["plugin"], format!("org.test.created.{tpl}"));
+        }
+    }
+
+    let logs = ex(&mut s, "plugin.logs", json!({}));
+    let records = logs["runs"].as_array().unwrap();
+    assert_eq!(records.len(), 4);
+
+    let filtered = ex(&mut s, "plugin.logs", json!({"id": "org.test.created.command"}));
+    assert_eq!(filtered["runs"].as_array().unwrap().len(), 1);
+
+    let cleared = ex(&mut s, "plugin.logs", json!({"clear": true}));
+    assert!(cleared["runs"].as_array().unwrap().is_empty());
+    assert!(s.plugins.history.is_empty());
+
+    // Digit-leading names and special characters produce a valid Cargo package name and escaped Rust literals.
+    let special_dir = base.join("special");
+    let special = ex(
+        &mut s,
+        "plugin.create",
+        json!({
+            "dir": special_dir.to_string_lossy(),
+            "name": "3D \"Special\" {Widget}",
+            "template": "widget"
+        }),
+    );
+    assert_eq!(special["id"], "org.example.plugin-3d-special-widget");
+    let cargo_toml = std::fs::read_to_string(special_dir.join("Cargo.toml")).unwrap();
+    assert!(cargo_toml.contains("name = \"plugin-3d-special-widget\""), "{cargo_toml}");
+    let special_lib = std::fs::read_to_string(special_dir.join("src").join("lib.rs")).unwrap();
+    assert!(special_lib.contains(r#"\"Special\""#), "{special_lib}");
+    assert!(special_lib.contains("{{Widget}}"), "{special_lib}");
+
+    // Changing the manifest id on disk causes `plugin.reload` to refuse rather than duplicating the plugin.
+    let manifest_path = special_dir.join("figcraft-plugin.json");
+    let edited = std::fs::read_to_string(&manifest_path).unwrap().replace("org.example.plugin-3d-special-widget", "org.example.renamed");
+    std::fs::write(&manifest_path, edited).unwrap();
+    let reload_err = s.execute("plugin.reload", &json!({"id": "org.example.plugin-3d-special-widget"})).unwrap_err().to_string();
+    assert!(reload_err.contains("changed"), "{reload_err}");
+
+    // For a workspace member under `plugins/examples/tidy-names`, `cargo_target_dir` resolves the
+    // workspace target directory via `cargo metadata` rather than `<member>/target`.
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let tidy_dir = repo_root.join("plugins").join("examples").join("tidy-names");
+    let cargo = crate::plugins::cargo_binary();
+    let resolved_target = crate::plugins::cargo_target_dir(&cargo, &tidy_dir);
+
+    if !cargo_has_target_dir_override(&tidy_dir) {
+        assert_eq!(resolved_target, repo_root.join("plugins").join("target"));
+    }
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn cargo_target_dir_resolves_relative_root() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let tidy_dir = repo_root.join("plugins").join("examples").join("tidy-names");
+    let cargo = crate::plugins::cargo_binary();
+    let rel_tidy = std::path::PathBuf::from("../../plugins/examples/tidy-names");
+    if rel_tidy.is_dir() {
+        let resolved = crate::plugins::cargo_target_dir(&cargo, &rel_tidy);
+        if !cargo_has_target_dir_override(&tidy_dir) {
+            assert_eq!(resolved, repo_root.join("plugins").join("target"));
+        }
+    }
+}
+
+fn cargo_has_target_dir_override(tidy_dir: &std::path::Path) -> bool {
+    if std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()).is_some() {
+        return true;
+    }
+    if std::env::var_os("CARGO_BUILD_TARGET_DIR").filter(|v| !v.is_empty()).is_some() {
+        return true;
+    }
+    let check_config = |path: &std::path::Path| -> bool {
+        let Ok(text) = std::fs::read_to_string(path) else { return false };
+        let mut in_build = false;
+        for raw in text.lines() {
+            let line = raw.trim();
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            if line.starts_with('[') && line.ends_with(']') {
+                in_build = line == "[build]";
+                continue;
+            }
+            if in_build && (line.starts_with("target-dir") || line.starts_with("target_dir")) {
+                return true;
+            }
+            if line.starts_with("build.target-dir") || line.starts_with("build.target_dir") {
+                return true;
+            }
+        }
+        false
+    };
+    let mut dir = Some(tidy_dir);
+    while let Some(d) = dir {
+        if check_config(&d.join(".cargo").join("config.toml")) || check_config(&d.join(".cargo").join("config")) {
+            return true;
+        }
+        dir = d.parent();
+    }
+    let home = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join(".cargo")));
+    if let Some(cargo_home) = home
+        && (check_config(&cargo_home.join("config.toml")) || check_config(&cargo_home.join("config")))
+    {
+        return true;
+    }
+    false
+}
+
+#[test]
+fn test_artifact_selection_tied_to_package_and_excludes_cached_artifacts() {
+    let base = std::env::temp_dir().join(format!("figcraft-plugin-artifact-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+
+    let plugin_dir = base.join("my-plugin");
+    std::fs::create_dir_all(plugin_dir.join("src")).unwrap();
+
+    // Package has target name "my_custom_target" different from package name "my-plugin"
+    std::fs::write(
+        plugin_dir.join("Cargo.toml"),
+        r#"[package]
+name = "my-plugin"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "my_custom_target"
+crate-type = ["cdylib"]
+"#,
+    )
+    .unwrap();
+    std::fs::write(plugin_dir.join("src").join("lib.rs"), "").unwrap();
+
+    let cargo = crate::plugins::cargo_binary();
+    let names = crate::plugins::cargo_package_target_wasm_names(&cargo, &plugin_dir);
+    assert_eq!(names, vec!["my_custom_target.wasm"]);
+
+    // Ensure foreign artifact names are NOT in target names
+    assert!(!names.contains(&"other_cached.wasm".to_string()));
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+fn make_symlink_file(target: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(target, link).is_ok()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        false
+    }
+}
+
+fn make_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(target, link).is_ok()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        false
+    }
+}
+
+#[test]
+fn wasm_out_destination_symlink_and_folder_confinement() {
+    let base = std::env::temp_dir().join(format!("figcraft-plugin-dest-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+
+    let plugin_root = base.join("plugin");
+    let outside_dir = base.join("outside");
+    std::fs::create_dir_all(&plugin_root).unwrap();
+    std::fs::create_dir_all(&outside_dir).unwrap();
+
+    // 1. Valid destination inside plugin folder (file not yet created)
+    let dest_valid = plugin_root.join("pkg.wasm");
+    assert!(crate::plugins::resolve_destination_in_folder(&dest_valid, &plugin_root).is_ok());
+
+    // 2. Valid destination in a nested subdirectory that doesn't exist yet
+    let dest_nested = plugin_root.join("dist").join("sub").join("pkg.wasm");
+    assert!(crate::plugins::resolve_destination_in_folder(&dest_nested, &plugin_root).is_ok());
+
+    // 3. Valid destination that already exists inside plugin folder
+    std::fs::write(&dest_valid, b"existing").unwrap();
+    assert!(crate::plugins::resolve_destination_in_folder(&dest_valid, &plugin_root).is_ok());
+
+    // 4. Destination pointing to folder itself should be rejected
+    assert!(crate::plugins::resolve_destination_in_folder(&plugin_root, &plugin_root).is_err());
+
+    // 5. Destination with symlinks if platform supports them
+    let link_outside = plugin_root.join("escaped.wasm");
+    let target_outside = outside_dir.join("secret.wasm");
+    std::fs::write(&target_outside, b"victim").unwrap();
+
+    if make_symlink_file(&target_outside, &link_outside) {
+        let err = crate::plugins::resolve_destination_in_folder(&link_outside, &plugin_root);
+        assert!(err.is_err(), "destination symlink pointing to an outside file must be rejected");
+    }
+
+    // 6. Dangling symlink pointing outside
+    let link_dangling = plugin_root.join("dangling.wasm");
+    let target_dangling = outside_dir.join("nonexistent.wasm");
+    if make_symlink_file(&target_dangling, &link_dangling) {
+        let err = crate::plugins::resolve_destination_in_folder(&link_dangling, &plugin_root);
+        assert!(err.is_err(), "dangling destination symlink pointing outside must be rejected");
+    }
+
+    // 7. Relative symlink pointing outside via ..
+    let link_rel_outside = plugin_root.join("rel_outside.wasm");
+    if make_symlink_file(std::path::Path::new("../outside/secret.wasm"), &link_rel_outside) {
+        let err = crate::plugins::resolve_destination_in_folder(&link_rel_outside, &plugin_root);
+        assert!(err.is_err(), "relative symlink escaping plugin folder must be rejected");
+    }
+
+    // 8. Intermediate directory is a symlink pointing outside
+    let dir_link = plugin_root.join("ext_dist");
+    if make_symlink_dir(&outside_dir, &dir_link) {
+        let dest_via_dir = dir_link.join("output.wasm");
+        let err = crate::plugins::resolve_destination_in_folder(&dest_via_dir, &plugin_root);
+        assert!(err.is_err(), "destination under symlinked outside directory must be rejected");
+    }
+
+    // 9. Symlink pointing inside plugin folder is permitted
+    let link_in = plugin_root.join("in_folder_link.wasm");
+    let target_in = plugin_root.join("real.wasm");
+    std::fs::write(&target_in, b"in-folder").unwrap();
+    if make_symlink_file(&target_in, &link_in) {
+        let ok = crate::plugins::resolve_destination_in_folder(&link_in, &plugin_root);
+        assert!(ok.is_ok(), "symlink within plugin folder must remain valid");
+    }
+
+    // 10. Symlink loop is rejected
+    let loop_a = plugin_root.join("loop_a.wasm");
+    let loop_b = plugin_root.join("loop_b.wasm");
+    if make_symlink_file(&loop_b, &loop_a) && make_symlink_file(&loop_a, &loop_b) {
+        let err = crate::plugins::resolve_destination_in_folder(&loop_a, &plugin_root);
+        assert!(err.is_err(), "symlink loop must be rejected");
+    }
+
+    let _ = std::fs::remove_dir_all(&base);
+}
