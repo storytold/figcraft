@@ -618,6 +618,61 @@ fn lower_case_writes_final_sigma() {
     assert_eq!(gids(&t).iter().map(|g| g.0).collect::<Vec<_>>(), want.iter().map(|g| g.0).collect::<Vec<_>>(), "split runs");
 }
 
+/// Chinese is written without spaces: justified, the room goes between its characters (each a word
+/// of its own, as for line breaking), so the last one reaches the right edge too, and none opens
+/// where a line couldn't break (before a closing mark, after an opening one). "Justify aligns the
+/// first word in each line of text to the left-most edge, and the last to the right-most edge."
+#[test]
+fn justified_ideographs_spread_the_room_between_characters() {
+    if !have_fonts() {
+        return;
+    }
+    let lay_out = |s: &str, align, w| {
+        let mut t = TextData::new(s);
+        t.style.font_size = 20.0;
+        t.align_h = align;
+        t.auto_resize = figcraft_doc::TextAutoResize::Height;
+        layout(&t, w, None)
+    };
+    // Box width cut inside char `fit`, so the first line is chars 0..fit; how many gaps lie before
+    // each of its chars.
+    let rows: [(&str, usize, &[i32], &str); 6] = [
+        ("一二三四五六七八九十", 6, &[0, 1, 2, 3, 4, 5], "one gap between each pair of ideographs"),
+        ("一二三。四五六七八九", 6, &[0, 1, 2, 2, 3, 4], "none before the full stop, which never starts a line"),
+        ("一二三「四五六七八九", 6, &[0, 1, 2, 3, 3, 4], "none after the opening bracket, which never ends a line"),
+        ("一二三\u{20DD}四五六七八九", 6, &[0, 1, 2, 2, 3, 4], "none inside a grapheme cluster: a combining mark stays on its base"),
+        ("漢אב字一二三", 4, &[0, 1, 1, 2], "beside a right-to-left word (laid out ב then א), not inside it"),
+        (
+            "漢\u{202B}אב字一גד\u{202C}文一二三",
+            10,
+            &[0, 1, 4, 4, 2, 3, 1, 1, 1, 5],
+            "beside a Chinese word embedded in a Hebrew phrase embedded in Chinese (laid out 漢 ד ג 字 一 ב א 文, the embedding marks of no width), and beside the phrase",
+        ),
+    ];
+    for (s, fit, gaps_before, why) in rows {
+        let natural = lay_out(s, TextAlignH::Left, None);
+        let (fits, next) = (natural.caret(fit).0, natural.caret(fit + 1).0);
+        assert!(next > fits, "{why}: chars need advances");
+        let w = fits + (next - fits) / 4.0;
+        let left = lay_out(s, TextAlignH::Left, Some(w));
+        let just = lay_out(s, TextAlignH::Justified, Some(w));
+        assert!(just.lines.len() >= 2 && just.lines[0].char_end == fit, "{why}: {:?}", just.lines);
+        let extra = (w - left.lines[0].width) / f64::from(gaps_before[fit - 1]);
+        assert_eq!(left.lines[0].char_end, fit, "{why}: {:?}", left.lines);
+        assert!(extra > 0.0, "{why}");
+        assert_eq!(left.glyphs.len(), just.glyphs.len());
+        for (l, j) in left.glyphs.iter().zip(&just.glyphs).filter(|(g, _)| g.char_end <= fit) {
+            let want = f64::from(gaps_before[l.char_start]) * extra;
+            assert!((j.x - l.x - want).abs() < 1e-6, "{why}: char {} moved {} (want {want})", l.char_start, j.x - l.x);
+        }
+        let last = just.glyphs.iter().rfind(|g| g.char_end <= fit).unwrap();
+        assert!((last.x + last.advance - w).abs() < 1e-6, "{why}: the last char ends at the right edge, not {}", last.x + last.advance);
+        // The last line is left-aligned, as always.
+        let (l2, j2) = (left.glyphs.iter().find(|g| g.char_start == fit).unwrap(), just.glyphs.iter().find(|g| g.char_start == fit).unwrap());
+        assert!((j2.x - l2.x).abs() < 1e-6, "{why}: the last line is not justified");
+    }
+}
+
 /// Thai is written without spaces between words; U+200B ZERO WIDTH SPACE marks where a line may
 /// break. ภาษา|ไทย|เขียน|ติดกัน ("Thai is written joined up") ไม่มี|ช่องว่าง|ระหว่าง|คำ ("with no
 /// spaces between words"), with one real space between the two phrases.

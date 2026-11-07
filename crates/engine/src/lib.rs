@@ -367,6 +367,8 @@ mod images_left_in_file_tests;
 #[cfg(test)]
 mod import_export_tests;
 #[cfg(test)]
+mod import_ids_tests;
+#[cfg(test)]
 mod import_journal_tests;
 #[cfg(test)]
 mod inspect_behaviour_tests;
@@ -468,6 +470,8 @@ mod pen_vector_edit_tests;
 mod penpot_export_tests;
 #[cfg(test)]
 mod pixel_preview_tests;
+#[cfg(test)]
+mod place_crosshair_tests;
 #[cfg(test)]
 mod placed_image_size_tests;
 #[cfg(test)]

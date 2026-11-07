@@ -225,7 +225,7 @@ fn same_after_round_trip(doc: &Document, what: &str) -> Vec<String> {
                     normalize(&mut n, &|i| i);
                     *paints = n.fills;
                 }
-                StyleKind::Text { style } => {
+                StyleKind::Text { style, .. } => {
                     if let NodeKind::Text(td) = &mut n.kind {
                         td.style = style.clone();
                     }
@@ -444,7 +444,7 @@ fn styled() -> Document {
         bound: Default::default(),
     };
     doc.styles = vec![
-        style("s-text", "Heading", StyleKind::Text { style: heading.clone() }),
+        style("s-text", "Heading", StyleKind::Text { style: heading.clone(), paragraph: Default::default() }),
         style("s-brand", "Brand/Primary", StyleKind::Paint { paints: vec![solid(0.25, 0.5, 1.0)] }),
         style("s-unused", "Brand/Unused", StyleKind::Paint { paints: vec![solid(1.0, 0.0, 0.0), solid(0.0, 1.0, 0.0)] }),
         style("s-shadow", "Elevation/1", StyleKind::Effect { effects: vec![shadow.clone()] }),
