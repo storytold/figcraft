@@ -146,10 +146,16 @@ impl Brush {
         }
     }
 
-    /// How much wider than the stroke weight the brush can paint (larger copies, strays).
-    pub fn reach_factor(&self) -> f64 {
+    /// The farthest a built-in brush shape reaches from the path, in stroke weights: the ink
+    /// brush's ragged edges stand a little past half the weight.
+    pub const SHAPE_REACH: f64 = 0.54;
+
+    /// How much wider than the stroke weight the brush can paint where a width profile scales it
+    /// at most `scale`: its shapes' edges and larger copies, which the profile scales, and strays,
+    /// which it doesn't.
+    pub fn reach_factor(&self, scale: f64) -> f64 {
         let b = self.sanitized();
-        1.0 + b.size_jitter + 2.0 * b.scatter
+        2.0 * Self::SHAPE_REACH * (1.0 + b.size_jitter) * scale + 2.0 * b.scatter
     }
 }
 
@@ -188,7 +194,8 @@ impl StrokeProps {
     /// The widest the stroke gets anywhere along the path (the weight, scaled by a width profile
     /// and widened by a brush's reach).
     pub fn max_weight(&self) -> f64 {
-        self.profile().map_or(self.weight, |p| self.weight * p.max_scale()) * self.brush.as_ref().map_or(1.0, Brush::reach_factor)
+        let scale = self.profile().map_or(1.0, WidthProfile::max_scale);
+        self.weight * self.brush.as_ref().map_or(scale, |b| b.reach_factor(scale))
     }
 
     /// The miter limit as the angle (degrees) below which joins bevel: limit = 1 / sin(angle / 2),
