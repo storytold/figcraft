@@ -235,6 +235,8 @@ static ROWS: &[Row] = &[
         "then the arrows move it, Cmd/Ctrl+arrows draw it out (Shift: farther), Enter selects, Escape closes; F8 kept")
         .reserved("Ctrl+Space switches the input method with some Chinese, Japanese and Korean input methods on Windows and Linux"),
     doc(Selection, "Select nested layers", &["Cmd"], &[], Gesture("Deep select"), "held while clicking or dragging"),
+    doc(Selection, "Pick select (while the keyboard box selection shows)", &["Tab"], &[], Gesture("Selection box: switch to pick select"),
+        "or the chord again; then Tab and Shift+Tab move the pick cursor between layers, Enter and Shift+Enter into and out of a layer, Space selects, Escape ends"),
     pin(Selection, "object.rename", &["F2"], &[]),
     pin(Selection, "select.area", &["F8"], &[]),
     // Edit
@@ -414,7 +416,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (135, 134, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (136, 135, 1, 0, 2, 57));
 }
 
 #[test]

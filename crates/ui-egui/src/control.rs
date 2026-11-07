@@ -1008,6 +1008,13 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
         figcraft_engine::textedit::key(&mut app.session, key, m.shift, word, line).map_err(|e| e.to_string())?;
         return Ok(json!({"ok": true}));
     }
+    // The keyboard selection box and pick select take their keys first, as on the keyboard.
+    if let Some(k) = normalize(key).and_then(|(name, _)| egui::Key::from_name(name)) {
+        let mods = egui::Modifiers { alt: m.alt, ctrl: m.ctrl, shift: m.shift, mac_cmd: false, command: m.cmd || m.ctrl };
+        if crate::shortcuts::key_pick(app, k, mods) || crate::shortcuts::key_box(app, k, mods) {
+            return Ok(json!({"ok": true}));
+        }
+    }
     // Vector edit mode and shape builder keys (tools, nudging points, delete, join, Enter).
     if app.session.tool_key(key, m.shift, m.alt, m.cmd).map_err(|e| e.to_string())? {
         return Ok(json!({"ok": true}));
