@@ -5,7 +5,7 @@ use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, Str
 
 use crate::a11y::{self, Tip};
 pub use crate::field_math::{Rel, Typed, eval, parse, stepped};
-use crate::i18n::tr;
+use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::theme::{Tokens, regular, semibold};
 pub(crate) mod board_picker;
@@ -125,6 +125,30 @@ pub fn scrub_amount(dx: f64, step: f64, shift: bool, alt: bool) -> f64 {
         }
 }
 
+/// How far above where a scrub began the pointer has to be for the fast speed (points); the same
+/// below for the slow one and twice that for the slowest.
+pub const SCRUB_BAND: f64 = 100.0;
+
+/// The scrubbing speed by the pointer's height, `rise` points above where the scrub began (below
+/// when negative): a factor on the scrub and the notice for it. Higher on the screen is faster,
+/// lower is slower, in four speeds (2x, 1x, 1/2 and 1/4).
+pub fn scrub_speed(rise: f64) -> (f64, &'static str) {
+    if rise > SCRUB_BAND {
+        (2.0, tr_noop("Scrubbing at 2x"))
+    } else if rise < -2.0 * SCRUB_BAND {
+        (0.25, tr_noop("Scrubbing at 1/4"))
+    } else if rise < -SCRUB_BAND {
+        (0.5, tr_noop("Scrubbing at 1/2"))
+    } else {
+        (1.0, tr_noop("Scrubbing at 1x"))
+    }
+}
+
+/// Where a scrub leaves the notice of a changed speed for the window to show as a toast.
+pub fn scrub_notice_id() -> Id {
+    Id::unique("scrub_speed_notice")
+}
+
 /// The value a scrub that began at `from` and has moved `amount` (see [`scrub_amount`]) shows:
 /// whole steps of `quantum` away from where it began.
 pub fn scrubbed(from: f64, amount: f64, quantum: f64) -> f64 {
@@ -141,8 +165,9 @@ pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, st
     let scrub_id = id.with("scrub");
     if response.dragged() || response.drag_stopped() {
         let began = response.drag_started();
-        let (v0, mut amount): (f64, f64) = ui.data(|d| d.get_temp(scrub_id)).filter(|_| !began).unwrap_or((v, 0.0));
-        let (dx, shift, alt) = ui.input(|i| {
+        let (v0, mut amount, last_speed, last_rise): (f64, f64, &'static str, f64) =
+            ui.data(|d| d.get_temp(scrub_id)).filter(|_| !began).unwrap_or((v, 0.0, "", 0.0));
+        let (dx, rise, shift, alt) = ui.input(|i| {
             let p = &i.pointer;
             // As it begins: all the way from the press (a drag is one only after a few points).
             let moved = if began { p.hover_pos().zip(p.press_origin()).map_or(0.0, |(at, from)| at.x - from.x) } else { p.delta().x };
@@ -151,12 +176,24 @@ pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, st
             // does too. Elsewhere the scrub just stops there.
             let raw = p.motion().map_or(0.0, |m| m.x / i.pixels_per_point);
             let at_edge = moved == 0.0 && p.hover_pos().is_none_or(|at| at.x <= 1.0 || at.x >= i.content_rect().max.x - 1.0);
-            (f64::from(if at_edge { raw } else { moved }), i.modifiers.shift, i.modifiers.alt && fine_on_alt)
+            // How far above where the scrub began the pointer is: the speed (`scrub_speed`). Gone
+            // from the window this frame, the pointer's last position still counts (a move and
+            // the leaving in one frame); None once egui has no position for it.
+            let rise = p.hover_pos().or(p.interact_pos()).zip(p.press_origin()).map(|(at, from)| f64::from(from.y - at.y));
+            (f64::from(if at_edge { raw } else { moved }), rise, i.modifiers.shift, i.modifiers.alt && fine_on_alt)
         });
+        // Gone from the window (egui says so, the button still down), the pointer keeps the speed
+        // it had rather than falling back to the usual one.
+        let rise = rise.unwrap_or(last_rise);
+        let (speed, notice) = scrub_speed(rise);
         // The frame the button goes up moves nothing: the scrub ends where the last one left it.
         if response.dragged() {
-            amount += scrub_amount(dx, step, shift, alt);
-            ui.data_mut(|d| d.insert_temp(scrub_id, (v0, amount)));
+            amount += scrub_amount(dx, step, shift, alt) * speed;
+            // A change of speed is said once (not the usual speed a scrub starts at).
+            if notice != last_speed && !(last_speed.is_empty() && speed == 1.0) {
+                ui.data_mut(|d| d.insert_temp(scrub_notice_id(), notice));
+            }
+            ui.data_mut(|d| d.insert_temp(scrub_id, (v0, amount, notice, rise)));
         }
         let quantum = if alt { step * 0.1 } else { step };
         return Some(FieldEdit::Scrub(scrubbed(v0, amount, quantum), response.drag_stopped()));

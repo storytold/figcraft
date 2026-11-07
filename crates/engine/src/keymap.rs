@@ -367,6 +367,12 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Edit, "Duplicate by dragging", "⌥ drag", "Alt+drag"),
     (Transform, "Nudge (Shift: big nudge)", "← ↑ → ↓", "← ↑ → ↓"),
     (Transform, "Resize by the nudge amount", "⌘ arrows", "Ctrl+arrows"),
+    (
+        Transform,
+        "Scrub a field faster (2x) or slower (1/2, 1/4)",
+        "Move up or down while dragging its label",
+        "Move up or down while dragging its label",
+    ),
     (Transform, "Opacity 10%…90%, 0: 100%", "1…9, 0", "1…9, 0"),
     (Transform, "Exact opacity (4 then 5: 45%)", "Two digits", "Two digits"),
     (Transform, "Suspend snapping while dragging", "Hold ⌃ or ⌘", "Hold Ctrl"),
