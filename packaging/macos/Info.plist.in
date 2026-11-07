@@ -90,6 +90,24 @@
         <array><string>sketch</string></array>
       </dict>
     </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.figma.document</string>
+      <key>UTTypeDescription</key>
+      <string>Figma Document</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.content</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>fig</string><string>jam</string></array>
+        <key>public.mime-type</key>
+        <array><string>application/x-figma</string></array>
+      </dict>
+    </dict>
   </array>
 
   <!-- figcraft://join?... live session invite links open FigCraft. -->
@@ -139,6 +157,18 @@
       <string>Alternate</string>
       <key>LSItemContentTypes</key>
       <array><string>com.bohemiancoding.sketch.drawing.single</string></array>
+    </dict>
+    <!-- Figma Design and FigJam files, opened as a copy (best effort); without this entry Finder
+         greys FigCraft out under Open With (#1788). -->
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Figma Document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.figma.document</string></array>
     </dict>
     <dict>
       <key>CFBundleTypeName</key>
