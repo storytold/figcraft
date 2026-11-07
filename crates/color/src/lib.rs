@@ -158,14 +158,9 @@ impl Color {
         }
         if let Some(inner) = t.strip_prefix("rgba(").or_else(|| t.strip_prefix("rgb(")).and_then(|r| r.strip_suffix(')')) {
             let parts = css_args(inner)?;
-            let num = |i: usize| -> Option<f32> {
-                let p = parts.get(i)?;
-                if let Some(pc) = p.strip_suffix('%') {
-                    pc.trim().parse::<f32>().ok().map(|v| v / 100.0)
-                } else {
-                    p.parse::<f32>().ok().map(|v| v / 255.0)
-                }
-            };
+            // A channel is a number of 255, a percentage or `none`; out-of-range values (a number
+            // too big for f32 included) clamp in `Color::new`, as CSS Color 4 §5.1 asks.
+            let num = |i: usize| css_fraction(parts.get(i)?, 255.0);
             let alpha = match parts.get(3) {
                 Some(a) => parse_alpha(a)?,
                 None => 1.0,
@@ -177,10 +172,12 @@ impl Color {
         }
         if let Some(inner) = t.strip_prefix("hsla(").or_else(|| t.strip_prefix("hsl(")).and_then(|r| r.strip_suffix(')')) {
             let parts = css_args(inner)?;
-            let h = parts.first()?.trim_end_matches("deg").parse::<f32>().ok()?;
-            let s = parts.get(1)?.trim_end_matches('%').parse::<f32>().ok()? / 100.0;
-            let l = parts.get(2)?.trim_end_matches('%').parse::<f32>().ok()? / 100.0;
-            if !(h.is_finite() && s.is_finite() && l.is_finite()) {
+            // The hue takes every CSS angle unit; saturation and lightness are percentages, numbers
+            // read as percentages (CSS Color 4 §7) or `none`.
+            let h = css_hue(parts.first()?)?;
+            let s = css_fraction(parts.get(1)?, 100.0)?;
+            let l = css_fraction(parts.get(2)?, 100.0)?;
+            if !(s.is_finite() && l.is_finite()) {
                 return None;
             }
             let alpha = match parts.get(3) {
@@ -209,14 +206,23 @@ impl Color {
 
     /// CSS `rgba(...)` / hex text for copy-as-CSS.
     pub fn to_css(self) -> String {
-        let [r, g, b, _] = self.to_rgba8();
-        if self.a >= 0.999 {
+        let [r, g, b, a8] = self.to_rgba8();
+        let a = clamp01(self.a);
+        if a >= 0.999 {
             return self.to_css_hex();
         }
-        // Two decimals when they keep the 8-bit alpha, three otherwise (near-transparent colours).
-        let a8 = |a: f32| (a.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let short = format!("{:.2}", self.a);
-        let alpha = if short.parse::<f32>().is_ok_and(|v| a8(v) == a8(self.a)) { short } else { format!("{:.3}", self.a) };
+        // The fewest decimals that read back as the same 8-bit alpha: two, else three, else three
+        // of the 8-bit value itself (within half a step of it, so it always reads back).
+        let keeps = |s: &str| s.parse::<f32>().is_ok_and(|v| (v * 255.0).round() as u8 == a8);
+        let two = format!("{a:.2}");
+        let three = format!("{a:.3}");
+        let alpha = if keeps(&two) {
+            two
+        } else if keeps(&three) {
+            three
+        } else {
+            format!("{:.3}", f32::from(a8) / 255.0)
+        };
         format!("rgba({r}, {g}, {b}, {alpha})")
     }
 
@@ -268,19 +274,42 @@ fn css_polar(inner: &str, l_full: f32, c_full: f32) -> Option<([f32; 3], f32)> {
     let l = css_number(parts.first()?, l_full)?;
     let c = css_number(parts.get(1)?, c_full)?;
     let h = css_hue(parts.get(2)?)?;
-    let alpha = match parts.get(3).map(String::as_str) {
-        None | Some("none") => 1.0,
+    let alpha = match parts.get(3) {
+        None => 1.0,
         Some(a) => parse_alpha(a)?,
     };
     Some(([l, c, h], alpha))
+}
+
+/// A CSS `<number>` as f32: a sign, digits, a decimal point and an exponent only. Rust's float
+/// parser also reads `inf`, `infinity` and `nan`, which are identifiers in CSS, not numbers. A
+/// value too big for f32 comes back as an infinity for the caller to clamp or refuse.
+fn css_f32(s: &str) -> Option<f32> {
+    if !s.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E')) {
+        return None;
+    }
+    s.parse::<f32>().ok()
+}
+
+/// A CSS number, percentage or `none` as a fraction of one: a percentage is of 100, a bare number
+/// of `number_full` (255 for an rgb() channel, 100 for hsl() saturation and lightness, 1 for
+/// alpha) and `none` is 0 (CSS Color 4 §4.4).
+fn css_fraction(p: &str, number_full: f32) -> Option<f32> {
+    if p == "none" {
+        return Some(0.0);
+    }
+    match p.strip_suffix('%') {
+        Some(pc) => Some(css_f32(pc)? / 100.0),
+        None => Some(css_f32(p)? / number_full),
+    }
 }
 
 /// A CSS number, a percentage of `full` or `none` (0); finite only.
 fn css_number(p: &str, full: f32) -> Option<f32> {
     let v = match p.strip_suffix('%') {
         _ if p == "none" => 0.0,
-        Some(pc) => pc.trim().parse::<f32>().ok()? / 100.0 * full,
-        None => p.parse::<f32>().ok()?,
+        Some(pc) => css_f32(pc)? / 100.0 * full,
+        None => css_f32(p)?,
     };
     v.is_finite().then_some(v)
 }
@@ -294,12 +323,14 @@ fn css_hue(p: &str) -> Option<f32> {
         .into_iter()
         .find_map(|(unit, k)| p.strip_suffix(unit).map(|n| (n, k)))
         .unwrap_or((p, 1.0));
-    let v = num.parse::<f32>().ok()? / per_degree;
+    let v = css_f32(num)? / per_degree;
     v.is_finite().then_some(v)
 }
 
+/// A CSS `<alpha-value>`: a number, a percentage or `none` (0: a missing alpha is transparent, CSS
+/// Color 4 §4.4); finite only. An *omitted* alpha is the caller's default of 1.
 fn parse_alpha(a: &str) -> Option<f32> {
-    let v = if let Some(pc) = a.strip_suffix('%') { pc.parse::<f32>().ok().map(|v| v / 100.0) } else { a.parse::<f32>().ok() }?;
+    let v = css_fraction(a, 1.0)?;
     v.is_finite().then_some(v)
 }
 
