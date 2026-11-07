@@ -21,14 +21,25 @@ fn props(weight: f64, b: &Brush) -> StrokeProps {
     StrokeProps { weight, align: StrokeAlign::Center, brush: Some(b.clone()), ..Default::default() }
 }
 
+/// What a brush paints stays within half [`StrokeProps::max_weight`] of the path, which the
+/// stroke's bounds go by: plain, with copies grown, turned and strayed all they can, and with a
+/// width profile thinning or widening it (strays keep their distance, whatever the profile).
 #[test]
 fn every_preset_draws_inside_its_reach() {
     for p in PRESETS {
-        let b = brush(p.id);
-        let out = outline(&line(200.0), 10.0, &props(10.0, &b), &b).unwrap();
-        let bb = out.bounding_box();
-        assert!(!out.elements().is_empty(), "{}", p.id);
-        assert!(bb.y0 >= -5.5 && bb.y1 <= 5.5 && bb.x0 >= -5.5 && bb.x1 <= 205.5, "{}: {bb:?}", p.id);
+        let wild = Brush { size_jitter: 1.0, rotation_jitter: 1.0, scatter: 4.0, ..brush(p.id) };
+        for (b, profile) in [(brush(p.id), None), (wild.clone(), None), (wild.clone(), Some(0.2)), (wild, Some(2.0))] {
+            let k = StrokeProps { width_profile: profile.map(|s| WidthProfile::new([(0.0, s), (1.0, s)])), ..props(10.0, &b) };
+            let out = outline(&line(200.0), 10.0, &k, &b).unwrap();
+            let bb = out.bounding_box();
+            let reach = k.max_weight() / 2.0;
+            assert!(!out.elements().is_empty(), "{}", p.id);
+            assert!(
+                bb.y0 >= -reach && bb.y1 <= reach && bb.x0 >= -reach && bb.x1 <= 200.0 + reach,
+                "{} {b:?} {profile:?}: {bb:?}, reach {reach}",
+                p.id
+            );
+        }
     }
     assert!(outline(&line(10.0), 1.0, &props(1.0, &brush("nope")), &brush("nope")).is_none());
 }
@@ -71,4 +82,15 @@ fn a_width_profile_scales_the_brush() {
     let parts = figcraft_geom::split_subpaths(&out);
     let (first, last) = (parts.first().unwrap().bounding_box(), parts.last().unwrap().bounding_box());
     assert!(last.width() > first.width() * 3.0, "{first:?} {last:?}");
+}
+
+#[test]
+fn an_unsanitized_profile_is_bounded_before_sampling() {
+    // 100k points, all past the 64-point cap and out of range: the brush reads the clamped profile.
+    let raw = WidthProfile { points: (0..100_000).map(|i| figcraft_doc::WidthPoint::new(f64::from(i), 1e300)).collect() };
+    let b = brush("taper");
+    let mut p = props(1.0, &b);
+    p.width_profile = Some(raw);
+    let out = outline(&line(50.0), 1.0, &p, &b).unwrap();
+    assert!(out.bounding_box().height() <= 2.0 * WidthProfile::MAX_SCALE);
 }

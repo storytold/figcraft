@@ -1,6 +1,6 @@
 //! Node property types: strokes, effects, corners, constraints, auto layout, grids, exports.
 
-use figcraft_color::{BlendMode, Color};
+use figcraft_color::{BlendMode, Color, ColorProfile};
 use serde::{Deserialize, Serialize};
 
 /// Where a stroke sits relative to the shape edge.
@@ -146,10 +146,16 @@ impl Brush {
         }
     }
 
-    /// How much wider than the stroke weight the brush can paint (larger copies, strays).
-    pub fn reach_factor(&self) -> f64 {
+    /// The farthest a built-in brush shape reaches from the path, in stroke weights: the ink
+    /// brush's ragged edges stand a little past half the weight.
+    pub const SHAPE_REACH: f64 = 0.54;
+
+    /// How much wider than the stroke weight the brush can paint where a width profile scales it
+    /// at most `scale`: its shapes' edges and larger copies, which the profile scales, and strays,
+    /// which it doesn't.
+    pub fn reach_factor(&self, scale: f64) -> f64 {
         let b = self.sanitized();
-        1.0 + b.size_jitter + 2.0 * b.scatter
+        2.0 * Self::SHAPE_REACH * (1.0 + b.size_jitter) * scale + 2.0 * b.scatter
     }
 }
 
@@ -188,7 +194,8 @@ impl StrokeProps {
     /// The widest the stroke gets anywhere along the path (the weight, scaled by a width profile
     /// and widened by a brush's reach).
     pub fn max_weight(&self) -> f64 {
-        self.profile().map_or(self.weight, |p| self.weight * p.max_scale()) * self.brush.as_ref().map_or(1.0, Brush::reach_factor)
+        let scale = self.profile().map_or(1.0, WidthProfile::max_scale);
+        self.weight * self.brush.as_ref().map_or(scale, |b| b.reach_factor(scale))
     }
 
     /// The miter limit as the angle (degrees) below which joins bevel: limit = 1 / sin(angle / 2),
@@ -660,9 +667,12 @@ pub struct Glass {
     pub depth: f64,
     /// Colour splitting along the curved edge (0–1).
     pub dispersion: f64,
-    /// Blur of the backdrop (a blur radius, document units).
+    /// Blur of the backdrop (a blur radius, document units, 0–[`Self::MAX_FROST`]).
     pub frost: f64,
-    /// How widely the light spreads over the glass (0–1).
+    /// Which way the curved edge bends the backdrop: towards the shape's core (0; along the edge's
+    /// normal for a shape too big to work one out) to away from the centre of the layer's bounds
+    /// (1; on a ring or an L, whose centre lies outside the shape, an inner edge bends towards the
+    /// hole, as the reference tool's does).
     pub splay: f64,
 }
 
@@ -672,7 +682,43 @@ impl Default for Glass {
     }
 }
 
+/// `deg` (finite) as the same direction within -180 (exclusive) to 180 degrees.
+fn wrap_degrees(deg: f64) -> f64 {
+    // `+ 0.0`: -0 reads as 0, so a saved file says 0.
+    let a = deg.rem_euclid(360.0) + 0.0;
+    if a > 180.0 { a - 360.0 } else { a }
+}
+
 impl Glass {
+    /// The most frost a glass takes, as the reference tool's Frost field (0–100).
+    pub const MAX_FROST: f64 = 100.0;
+
+    /// The fields a variable binds on a glass effect (`effects/<i>/<field>`), see [`Self::set_bound`].
+    pub const BOUND_FIELDS: [&'static str; 7] = ["lightAngle", "lightIntensity", "refraction", "depth", "dispersion", "radius", "splay"];
+
+    /// Sets `field` (one of [`Self::BOUND_FIELDS`]) from a bound number variable, read as the
+    /// Design panel's field shows it: intensity, refraction, dispersion and splay in percent, the
+    /// frost as `radius`, each clamped to the field's range, and the light angle turned into
+    /// -180–180 (270 is -90, the same way). False for a field glass doesn't have or a value that
+    /// isn't finite (nothing changes).
+    pub fn set_bound(&mut self, field: &str, x: f64) -> bool {
+        if !x.is_finite() {
+            return false;
+        }
+        let pct = (x / 100.0).clamp(0.0, 1.0);
+        match field {
+            "lightAngle" => self.light_angle = wrap_degrees(x),
+            "lightIntensity" => self.light_intensity = pct,
+            "refraction" => self.refraction = pct,
+            "depth" => self.depth = x.clamp(1.0, 1000.0),
+            "dispersion" => self.dispersion = pct,
+            "radius" => self.frost = x.clamp(0.0, Self::MAX_FROST),
+            "splay" => self.splay = pct,
+            _ => return false,
+        }
+        true
+    }
+
     /// The values clamped to their ranges (non-finite ones at their defaults).
     pub fn sanitized(&self) -> Glass {
         let d = Glass::default();
@@ -683,15 +729,23 @@ impl Glass {
             refraction: ok(self.refraction, d.refraction, 0.0, 1.0),
             depth: ok(self.depth, d.depth, 1.0, 1000.0),
             dispersion: ok(self.dispersion, d.dispersion, 0.0, 1.0),
-            frost: ok(self.frost, d.frost, 0.0, 1000.0),
+            frost: ok(self.frost, d.frost, 0.0, Self::MAX_FROST),
             splay: ok(self.splay, d.splay, 0.0, 1.0),
         }
     }
 
-    /// Furthest the curved edge moves the backdrop (document units).
+    /// How far `dispersion` splits the colour channels, as a share of the bend: at full dispersion
+    /// red moves up to this much further and blue as much less. Matched to the reference tool:
+    /// across a black-to-white edge in the bend, red and blue part about 4.7 px at 100% and 2.4 px
+    /// at 50% (at 2×, depth 20, refraction 80%).
+    pub const DISPERSION_SPREAD: f64 = 0.16;
+
+    /// Furthest the curved edge moves the backdrop (document units): at most `depth` × `refraction`
+    /// (all of it a bevel in from the edge), and red's dispersion steps up to
+    /// [`Self::DISPERSION_SPREAD`] × `dispersion` times that again.
     pub fn max_bend(&self) -> f64 {
         let g = self.sanitized();
-        g.refraction * g.depth * (1.0 + g.dispersion * 0.25)
+        g.refraction * g.depth * (1.0 + Self::DISPERSION_SPREAD * g.dispersion)
     }
 }
 
@@ -1481,6 +1535,54 @@ pub struct ExportSetting {
     /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
     #[serde(skip_serializing_if = "VdCompat::is_default")]
     pub vd_compat: VdCompat,
+    /// PNG, JPG and WebP: the color profile the file is written in. SVG, PDF and XML are always
+    /// sRGB, whatever this says.
+    #[serde(skip_serializing_if = "ExportColorProfile::is_default")]
+    pub color_profile: ExportColorProfile,
+    /// JPG: the encoder's quality, 1 (smallest file) to 100 (see [`ExportSetting::quality`]).
+    #[serde(skip_serializing_if = "is_default_quality")]
+    pub quality: u8,
+}
+
+/// The color profile an export setting writes PNG, JPG and WebP files in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportColorProfile {
+    /// The document's own profile at the time of the export.
+    #[default]
+    SameAsFile,
+    Srgb,
+    DisplayP3,
+}
+
+impl ExportColorProfile {
+    pub const ALL: [ExportColorProfile; 3] = [ExportColorProfile::SameAsFile, ExportColorProfile::Srgb, ExportColorProfile::DisplayP3];
+
+    fn is_default(&self) -> bool {
+        *self == ExportColorProfile::SameAsFile
+    }
+
+    /// The name commands and files use ("sameAsFile", "srgb", "displayP3").
+    pub fn key(self) -> &'static str {
+        match self {
+            ExportColorProfile::SameAsFile => "sameAsFile",
+            ExportColorProfile::Srgb => "srgb",
+            ExportColorProfile::DisplayP3 => "displayP3",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == s)
+    }
+
+    /// The profile the file is written in when the document is in `file`.
+    pub fn resolve(self, file: ColorProfile) -> ColorProfile {
+        match self {
+            ExportColorProfile::SameAsFile => file,
+            ExportColorProfile::Srgb => ColorProfile::Srgb,
+            ExportColorProfile::DisplayP3 => ColorProfile::DisplayP3,
+        }
+    }
 }
 
 /// How an Android Vector Drawable export handles what the format can't draw exactly (layer
@@ -1531,6 +1633,8 @@ impl Default for ExportSetting {
             svg_id_attribute: false,
             svg_simplify_stroke: true,
             vd_compat: VdCompat::BestEffort,
+            color_profile: ExportColorProfile::SameAsFile,
+            quality: ExportSetting::DEFAULT_QUALITY,
         }
     }
 }
@@ -1543,7 +1647,19 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn is_default_quality(q: &u8) -> bool {
+    *q == ExportSetting::DEFAULT_QUALITY
+}
+
 impl ExportSetting {
+    /// The JPG quality a setting has unless it sets one.
+    pub const DEFAULT_QUALITY: u8 = 90;
+
+    /// The JPG quality made safe: within `1..=100`.
+    pub fn quality(&self) -> u8 {
+        self.quality.clamp(1, 100)
+    }
+
     /// The row adding a setting after `last` creates: 1x first, then one scale step up with a
     /// matching "@2x"-style suffix.
     pub fn next_after(last: Option<&ExportSetting>) -> ExportSetting {

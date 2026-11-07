@@ -454,6 +454,24 @@ fn hidden(ctx: &Context, id: u64) -> bool {
     visibility(ctx, id) == Some(false)
 }
 
+/// How long, in seconds, a window may draw no frame while a control request waits for it before
+/// [`background`] answers the request as it answers one for a hidden window. eframe runs the app's
+/// logic for a window whose redraw is 0.25 s overdue, so the second such pass answers.
+pub const NOT_DRAWING_AFTER: f64 = 0.2;
+
+/// Whether window `id` has drawn no frame for [`NOT_DRAWING_AFTER`] while a request waited for it.
+/// The platform may still call it visible: under Wayland an app can't tell that its window is
+/// minimised, and the compositor then stops asking it to draw. The wait starts again whenever the
+/// window draws.
+fn stopped_drawing(app: &mut FigApp, ctx: &Context, id: u64, now: f64) -> bool {
+    let pass = ctx.cumulative_pass_nr_for(crate::windows::viewport(id));
+    let wait = app.control_waits.entry(id).or_insert((pass, now));
+    if wait.0 != pass {
+        *wait = (pass, now);
+    }
+    now - wait.1 >= NOT_DRAWING_AFTER
+}
+
 /// Send `RequestPaintWhileHidden` for work that needs a real UI pass (a queued capture or
 /// synthetic input), and schedule a wakeup for the next capture deadline. Native eframe honours
 /// this command; the shared web runner does not implement it yet, so a hidden browser tab remains
@@ -511,7 +529,7 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             let _ = r.reply.send(ControlReply { id: r.id, result: Err(format!("no window {target}")) });
             continue;
         }
-        let is_hidden = hidden(ctx, target);
+        let is_hidden = hidden(ctx, target) || stopped_drawing(app, ctx, target, now);
         if r.method == "ui.screenshot" && visibility(ctx, target) != Some(true) {
             // Hidden, minimised, or with visibility the platform has not reported: admit it now
             // so the request gets its deadline and a forced paint. Waiting for a frame that may
@@ -545,6 +563,7 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
         }
         // Outside a frame, so outside the frame's guard: within the window's swap, a panic still
         // ends in recovery copies and leaves every window its own state.
+        let prefs = app.session.prefs.clone();
         let res = crate::windows::as_window(app, target, |app| {
             let mut res = Err("internal error".to_string());
             // Every control-channel gesture is fenced from the user's system clipboard.
@@ -554,7 +573,22 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             app.control_synthetic = before;
             res
         });
+        // A preference the command changed (the interface size, the theme) applies as each
+        // window's next frame begins; no frame's end-of-frame check ran here, so ask every window.
+        if app.session.prefs != prefs {
+            for id in std::iter::once(0).chain(app.windows.list.iter().map(|w| w.id)) {
+                ctx.request_repaint_of(crate::windows::viewport(id));
+            }
+        }
         let _ = r.reply.send(ControlReply { id: r.id, result: res.unwrap_or_else(|| Err(format!("no window {target}"))) });
+    }
+    // A window a request still waits for is checked again soon: if it draws, its frame answers;
+    // if it doesn't (minimised under Wayland), the next logic pass does.
+    let waiting: std::collections::BTreeSet<u64> =
+        app.control_queue.iter().map(|r| r.params.get("window").and_then(Value::as_u64).unwrap_or(app.windows.focused)).collect();
+    app.control_waits.retain(|id, _| waiting.contains(id));
+    if !waiting.is_empty() {
+        crate::repaint_in(ctx, NOT_DRAWING_AFTER);
     }
     request_paint(app, ctx);
 }
@@ -996,11 +1030,33 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
                 "ArrowUp" => (0, -1),
                 _ => (0, 1),
             };
-            let (cmd, params) = if m.cmd || m.ctrl {
+            // A shape or frame tool chosen and nothing selected: the arrows show and move the
+            // placement crosshair, as the window's key path does.
+            if app.session.selection().is_empty() && app.session.tool.tool.draws_shape() && !app.session.tool.dev_mode && !(m.cmd || m.ctrl || m.alt)
+            {
+                return app.session.execute("tool.crosshair", &json!({"dx": dx, "dy": dy, "big": m.shift})).map_err(|e| e.to_string());
+            }
+            // Otherwise, with nothing selected the arrows pan the view, as the window's own key path does.
+            let (cmd, params) = if app.session.selection().is_empty() {
+                ("view.pan", json!({"dx": dx, "dy": dy, "big": m.shift}))
+            } else if (m.cmd || m.ctrl) && m.alt {
+                // Rotate a degree, 15 with Shift: down and right clockwise, up and left back, about
+                // the selection's rotation origin; nothing while points are being edited.
+                if app.session.ds().is_ok_and(|d| d.vector_edit.is_some()) {
+                    return Ok(json!({}));
+                }
+                let step = if m.shift { 15.0 } else { 1.0 };
+                let origin = app.session.ds().ok().and_then(|d| d.origin_point());
+                ("transform.rotate", json!({"degrees": if dx + dy < 0 { -step } else { step }, "cx": origin.map(|o| o.x), "cy": origin.map(|o| o.y)}))
+            } else if m.cmd || m.ctrl {
                 ("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}))
             } else {
                 ("transform.nudge", json!({"dx": dx, "dy": dy, "big": m.shift}))
             };
+            // Dev Mode only inspects, as the window's key path says.
+            if crate::menus::dev_mode_refuses(app, cmd) {
+                return Err("Dev Mode only inspects: switch to Design to edit".into());
+            }
             app.session.execute(cmd, &params).map_err(|e| e.to_string())
         }
         _ => {

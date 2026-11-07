@@ -132,8 +132,9 @@ pub fn scrubbed(from: f64, amount: f64, quantum: f64) -> f64 {
 }
 
 /// The shared label-scrub gesture, including changing modifier rates and raw edge motion.
-/// Callers supply the hit area and apply live values until the final `Scrub(_, true)`.
-pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, step: f64) -> Option<FieldEdit> {
+/// Callers supply the hit area and apply live values until the final `Scrub(_, true)`. `fine_on_alt`:
+/// Alt gives tenths (off where Alt is what makes the drag a scrub at all).
+pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, step: f64, fine_on_alt: bool) -> Option<FieldEdit> {
     let v = value?;
     // Where the scrub began and how far it has taken the value (the modifiers can change on
     // the way: each stretch counts at its own rate).
@@ -150,7 +151,7 @@ pub(crate) fn scrub(ui: &Ui, id: Id, response: &Response, value: Option<f64>, st
             // does too. Elsewhere the scrub just stops there.
             let raw = p.motion().map_or(0.0, |m| m.x / i.pixels_per_point);
             let at_edge = moved == 0.0 && p.hover_pos().is_none_or(|at| at.x <= 1.0 || at.x >= i.content_rect().max.x - 1.0);
-            (f64::from(if at_edge { raw } else { moved }), i.modifiers.shift, i.modifiers.alt)
+            (f64::from(if at_edge { raw } else { moved }), i.modifiers.shift, i.modifiers.alt && fine_on_alt)
         });
         // The frame the button goes up moves nothing: the scrub ends where the last one left it.
         if response.dragged() {
@@ -183,6 +184,12 @@ pub enum BindEvent {
 /// after the number. Typing supports simple math (`10+5`, `*2`).
 pub fn number_field(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, suffix: &str, width: f32, step: f64) -> Option<FieldEdit> {
     number_field_mixed(ui, id, lead, value, suffix, width, step)?.settled()
+}
+
+/// Whether the edit of number field `id` began with a Cmd/Ctrl-click. A padding field edited
+/// that way sets every side (Guide to auto layout, Keyboard shortcut guide).
+pub fn edit_began_with_command(ui: &Ui, id: Id) -> bool {
+    ui.data(|d| d.get_temp::<bool>(id.with("cmdstart"))).unwrap_or(false)
 }
 
 /// [`number_field`] over several layers: without a single value (`value` None, "Mixed") a relative
@@ -265,7 +272,20 @@ fn number_field_impl(
     let edit_rect = Rect::from_min_max(pos2(rect.min.x + lead_w, rect.min.y), rect.max);
     let editing_id = id.with("editing");
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
-    let field_resp = ui.interact(edit_rect, id.with("field"), Sense::click());
+    // Alt held over the field scrubs it too, as the label always does: "hover the input field
+    // itself and hold down the modifier key" (Adjust alignment, rotation, position, and
+    // dimensions). The field senses drags only while Alt is held, or while a scrub begun that way
+    // goes on (Alt released or not), so a plain press or a touch swipe on it stays the scroll
+    // area's; egui assigns a press by the frame before it, so Alt is held over the field before
+    // the press, as a hand does. Alt as the drag begins is what makes it a scrub.
+    let field_id = id.with("field");
+    let alt_now = ui.input(|i| i.modifiers.alt);
+    let scrubbing_id = id.with("altscrub");
+    let scrubbing = ui.data(|d| d.get_temp::<bool>(scrubbing_id)).unwrap_or(false);
+    let field_sense = if editing.is_none() && (alt_now || scrubbing) { Sense::click_and_drag() } else { Sense::click() };
+    let field_resp = ui.interact(edit_rect, field_id, field_sense);
+    let alt_scrub = editing.is_none() && if field_resp.drag_started() { alt_now } else { scrubbing };
+    ui.data_mut(|d| d.insert_temp(scrubbing_id, alt_scrub && field_resp.dragged() && !field_resp.drag_stopped()));
     a11y::number(&field_resp, lead.name(), value, suffix, empty.text());
     a11y::ring_around(ui, rect, &field_resp);
     // The label scrubs with the pointer; the keyboard stops at the value only.
@@ -291,10 +311,13 @@ fn number_field_impl(
         }
         Lead::None | Lead::Named(_) => {}
     }
-    if lead_resp.hovered() || lead_resp.dragged() {
+    if lead_resp.hovered() || lead_resp.dragged() || (alt_now && editing.is_none() && field_resp.hovered()) || (alt_scrub && field_resp.dragged()) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
-    if let Some(edit) = scrub(ui, id, &lead_resp, value, step) {
+    // On the field, Alt is what makes the drag a scrub, so it is not the fine rate there.
+    if let Some(edit) =
+        scrub(ui, id, &lead_resp, value, step, true).or_else(|| alt_scrub.then(|| scrub(ui, id, &field_resp, value, step, false)).flatten())
+    {
         out = Some(Edit::All(edit));
     }
     let (key_step, key_big) = key_steps(ui.ctx(), suffix, step);
@@ -340,18 +363,32 @@ fn number_field_impl(
     }
     // Typing on a field the keyboard reached (Tab) edits it: the editor takes the typed text.
     let typed_now = editing.is_none() && on_field && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))));
-    let started = editing.is_none() && (field_resp.clicked() || typed_now);
+    let started = editing.is_none() && ((field_resp.clicked() && !alt_now) || typed_now);
     // The text the field would commit to no effect: what it showed when the edit began, or the
     // value the arrows last stepped it to.
     let kept_id = id.with("kept");
+    // Whether Cmd/Ctrl was held while the button was down on the field: a click's modifier is
+    // read on its press, so letting go of the key before the release still counts.
+    let cmd_press_id = id.with("cmdpress");
+    let cmd_held_before = ui.data(|d| d.get_temp::<bool>(cmd_press_id)).unwrap_or(false);
+    let (cmd_pressed, any_down) = ui.input(|i| (field_resp.is_pointer_button_down_on() && i.modifiers.command, i.pointer.any_down()));
+    ui.data_mut(|d| d.insert_temp(cmd_press_id, cmd_pressed || (cmd_held_before && any_down)));
     if started {
         editing = Some(if typed_now { String::new() } else { value.map(fmt_num).unwrap_or_default() });
+        // Whether Cmd/Ctrl was held on the click that began the edit: a padding field then sets
+        // every side ([`edit_began_with_command`]). The flag lives as long as the edit.
+        let with_command = !typed_now && (cmd_pressed || cmd_held_before || ui.input(|i| i.modifiers.command));
         ui.data_mut(|d| {
             d.insert_temp(editing_id, editing.clone().unwrap_or_default());
             d.insert_temp(kept_id, value.map(fmt_num).unwrap_or_default());
             d.insert_temp(id.with("selectall"), !typed_now);
+            d.insert_temp(id.with("cmdstart"), with_command);
+            d.remove::<bool>(id.with("edited"));
         });
         ui.memory_mut(|m| m.request_focus(id.with("te")));
+    } else if editing.is_none() {
+        // No edit under way: an arrow step on the focused field is its own side's.
+        ui.data_mut(|d| d.remove::<bool>(id.with("cmdstart")));
     }
     match editing {
         Some(mut text) => {
@@ -365,6 +402,11 @@ fn number_field_impl(
             // top would move its baseline below the centered value painted while idle.
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit_rect));
             let r = child.add(te);
+            if r.changed() {
+                // Typing (the same value again included) is what lets a Cmd/Ctrl-begun edit commit
+                // to every side; a field left as it was commits nothing.
+                ui.data_mut(|d| d.insert_temp(id.with("edited"), true));
+            }
             a11y::own_focus(&r);
             keep_focus(&r, started);
             crate::shortcuts::release_field_for_save(&r);
@@ -391,6 +433,7 @@ fn number_field_impl(
                         ui.data_mut(|d| {
                             d.insert_temp(kept_id, text.clone());
                             d.insert_temp(id.with("selectall"), true);
+                            d.insert_temp(id.with("edited"), true);
                         });
                         out = Some(set(nv));
                     }
@@ -406,7 +449,11 @@ fn number_field_impl(
                 // Enter, Tab or a click elsewhere commits what was typed (a field left as it was
                 // commits nothing: no undo step, and a rounded display isn't written back).
                 let kept: String = ui.data(|d| d.get_temp(kept_id)).unwrap_or_default();
-                if text != kept
+                // An edit begun with Cmd/Ctrl commits the value even retyped as it was: the other
+                // sides are to take it ([`edit_began_with_command`]).
+                let for_all = ui.data(|d| d.get_temp::<bool>(id.with("cmdstart"))).unwrap_or(false);
+                let edited = ui.data(|d| d.get_temp::<bool>(id.with("edited"))).unwrap_or(false);
+                if (text != kept || (for_all && edited))
                     && let Some(e) = typed(&text)
                 {
                     out = Some(e);
@@ -946,7 +993,12 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
 /// of them ending at the section's 8 pt margin, whatever the row has before it. (The columns around
 /// them keep the 8 pt gutter.)
 pub fn tight_end<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let group = 24.0 * 2.0 + 4.0;
+    tight_end_n(ui, 2, add)
+}
+
+/// `tight_end` for a group of `count` 24 pt buttons.
+pub fn tight_end_n<R>(ui: &mut Ui, count: usize, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let group = 24.0 * count as f32 + 4.0 * count.saturating_sub(1) as f32;
     let avail = ui.available_rect_before_wrap();
     let rect = Rect::from_min_max(pos2((avail.max.x - group).max(avail.min.x), avail.min.y), avail.max);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -1039,6 +1091,35 @@ pub fn checker(painter: &egui::Painter, rect: Rect, cell: f32) {
             painter.rect_filled(r, CornerRadius::ZERO, Color32::from_gray(0xE6));
         }
     }
+}
+
+/// Shared Fill/Stroke/Selection colors control: one background, a 16 pt swatch,
+/// caller-provided colour content, and a separated, scrubbable opacity field.
+/// The caller owns picker routing and commands; this widget only draws and reports edits.
+pub fn paint_field(
+    ui: &mut Ui,
+    id: Id,
+    opacity_id: Id,
+    paint: &figcraft_color::Paint,
+    width: f32,
+    content: impl FnOnce(&mut Ui, Rect),
+) -> (Response, Option<FieldEdit>) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
+    ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
+    let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
+    paint_swatch(ui.painter(), sw, paint);
+    let swatch = ui.interact(sw.expand(2.0), id, Sense::click()).tip(tr("Edit colour"));
+    let value = if a11y::active(&swatch.ctx) { paint_name(paint) } else { String::new() };
+    a11y::color(&swatch, tr("Edit colour"), &value);
+    let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
+    content(&mut child, text_r);
+    let op_r = Rect::from_min_max(pos2(r.max.x - 48.0, r.min.y), r.max);
+    ui.painter().line_segment([pos2(op_r.min.x, r.min.y + 4.0), pos2(op_r.min.x, r.max.y - 4.0)], Stroke::new(1.0, t.panel));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(op_r));
+    let opacity = number_field(&mut child, opacity_id, Lead::Named(tr("Opacity")), Some(f64::from(paint.opacity) * 100.0), "%", 48.0, 1.0);
+    (swatch, opacity)
 }
 
 /// A paint swatch (with checkerboard under transparent colours).

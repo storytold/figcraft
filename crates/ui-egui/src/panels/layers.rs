@@ -162,13 +162,15 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
         ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 46.0), Align2::LEFT_CENTER, tr("Drafts"), regular(11.0), t.text_secondary);
     }
     let hr = Rect::from_center_size(pos2(head.max.x - 24.0, head.min.y + 24.0), vec2(24.0, 24.0));
-    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Collapse panel"));
+    // Minimize, by the file name: "click Minimize next to the file name to collapse the
+    // navigation bar, left sidebar, and right sidebar" (Explore the navigation bar and left sidebar).
+    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Minimize"));
     if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::same(5), t.hover);
     }
     icons::paint(ui.painter(), hr.shrink(5.0), Icon::Panels, t.icon);
     if hresp.clicked() {
-        app.ui.close_left_panel();
+        app.run("view.minimize", json!({}));
     }
     ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, t.border));
     match app.ui.left_tab {
@@ -294,8 +296,13 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 let tr = Rect::from_min_max(pos2(r.min.x + 8.0, r.min.y + 4.0), pos2(r.max.x - 4.0, r.max.y - 4.0));
                 let start = ui.data_mut(|d| d.remove_temp::<bool>(page_rename_start_id())).unwrap_or(false);
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
-                if let (Some(new), _) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start) {
+                let (out, open) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start);
+                if let Some(new) = out {
                     rename_done = Some((id, new));
+                } else if !open {
+                    // Cancelled, or committed unchanged: the row goes back to its name, or the idle
+                    // field would catch the next click and a click wouldn't open this page.
+                    app.ui.rename_page = None;
                 }
             } else if !divider {
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
@@ -316,6 +323,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 if ui.button(tr("Rename page")).clicked() {
                     if !crate::menus::dev_mode_refuses(app, "page.rename") {
                         app.ui.rename_page = Some((id, name.clone()));
+                        ui.data_mut(|d| d.insert_temp(page_rename_start_id(), true));
                     }
                     ui.close();
                 }
@@ -487,6 +495,8 @@ struct RowCache {
     expanded: u64,
     filter: String,
     rows: Arc<Vec<Row>>,
+    /// The width the widest row needs to show its whole name ([`widest_row`]).
+    width: f32,
 }
 
 fn hash_expanded(expanded: &BTreeSet<NodeId>) -> u64 {
@@ -499,15 +509,71 @@ fn hash_expanded(expanded: &BTreeSet<NodeId>) -> u64 {
 /// The rows to list: the expanded tree, or the layers matching `filter` (lowercase).
 pub(crate) fn rows_for(ui: &Ui, doc: &Arc<Document>, page: NodeId, expanded: &BTreeSet<NodeId>, filter: &str) -> Arc<Vec<Row>> {
     let ex = if filter.is_empty() { hash_expanded(expanded) } else { 0 };
+    let id = Id::unique("layer_rows");
+    let fresh = ui
+        .data(|d| d.get_temp::<RowCache>(id))
+        .filter(|c| c.doc.as_ref().is_some_and(|d| Arc::ptr_eq(d, doc)) && c.page == Some(page) && c.expanded == ex && c.filter == filter);
+    if let Some(c) = fresh {
+        return c.rows;
+    }
+    let rows = Arc::new(listed_rows(doc, page, expanded, filter));
+    // Outside the context's data lock: laying out the names takes the context too.
+    let width = widest_row(ui, doc, page, &rows);
     ui.data_mut(|d| {
-        let c = d.get_temp_mut_or_default::<RowCache>(Id::unique("layer_rows"));
-        let fresh = c.doc.as_ref().is_some_and(|d| Arc::ptr_eq(d, doc)) && c.page == Some(page) && c.expanded == ex && c.filter == filter;
-        if !fresh {
-            let rows = listed_rows(doc, page, expanded, filter);
-            *c = RowCache { doc: Some(doc.clone()), page: Some(page), expanded: ex, filter: filter.to_string(), rows: Arc::new(rows) };
+        d.insert_temp(id, RowCache { doc: Some(doc.clone()), page: Some(page), expanded: ex, filter: filter.to_string(), rows: rows.clone(), width })
+    });
+    rows
+}
+
+/// The width the rows [`rows_for`] last listed need to show their names in full, from the
+/// panel's left edge (0 before any were listed).
+pub(crate) fn list_width(ui: &Ui) -> f32 {
+    ui.data(|d| d.get_temp::<RowCache>(Id::unique("layer_rows"))).map_or(0.0, |c| c.width)
+}
+
+/// A name's room on a row stops growing here: a name of thousands of characters (#1650) elides
+/// past it instead of making the list that wide.
+pub(crate) const NAME_ROOM: f32 = 1200.0;
+
+/// A row's name: the layer's, or its kind's label when it has none.
+fn row_name(n: &figcraft_doc::Node) -> &str {
+    if n.name.is_empty() { tr(n.kind.label()) } else { &n.name }
+}
+
+/// The font a row's name is drawn in: top-level frames and sections stand out.
+fn name_font(doc: &Document, page: NodeId, n: &figcraft_doc::Node) -> egui::FontId {
+    let top_level = doc.node(n.parent.unwrap_or(page)).is_some_and(|p| p.is_page());
+    if top_level && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. })) { semibold(11.0) } else { regular(11.0) }
+}
+
+/// The width the widest of `rows` needs to show its whole name, from the panel's left edge: the
+/// row's margins, its indent, the disclosure triangle and icon, the name in its font (up to
+/// [`NAME_ROOM`]) and the eye and padlock's room. The list is made this wide, so it scrolls
+/// sideways when a name doesn't fit the panel (#1904). A name's bytes at the widest glyph bound
+/// its width, and the rows are laid out in descending order of that bound until the bound falls
+/// under the widest found, so no name that could be the widest is skipped: a list with one long
+/// name lays out a handful, a list of names all alike lays them all out, through egui's galley
+/// cache. A name is laid out as it is painted: on one line, cut at [`NAME_ROOM`].
+fn widest_row(ui: &Ui, doc: &Document, page: NodeId, rows: &[Row]) -> f32 {
+    // What sits left of the name (the row's margin, the indent's start, the triangle and icon)
+    // and right of it (the eye and padlock, the margin): see the row loop in `layers`.
+    const AROUND: f32 = 8.0 + 4.0 + 36.0 + 56.0 + 8.0;
+    // No glyph of the 11 pt fonts is wider than this: a name's byte count bounds its width.
+    const GLYPH: f32 = 12.0;
+    let indent = |r: &Row| r.depth as f32 * 16.0;
+    let mut bounds: Vec<(f32, usize)> =
+        rows.iter().enumerate().filter_map(|(i, r)| doc.node(r.id).map(|n| (indent(r) + row_name(n).len() as f32 * GLYPH, i))).collect();
+    bounds.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut widest = 0.0f32;
+    for (bound, i) in bounds {
+        if bound <= widest {
+            break;
         }
-        c.rows.clone()
-    })
+        let Some((r, n)) = rows.get(i).and_then(|r| doc.node(r.id).map(|n| (r, n))) else { continue };
+        let w = crate::bidi::name_galley(ui.painter(), row_name(n), name_font(doc, page, n), Color32::WHITE, NAME_ROOM).size().x;
+        widest = widest.max(indent(r) + w);
+    }
+    widest + AROUND
 }
 
 /// The rows to list, uncached: the expanded tree, or the layers matching `filter` (lowercase).
@@ -957,15 +1023,34 @@ fn reveal_selection(app: &mut FigApp, doc: &Document, page: NodeId, sel: &[NodeI
     reveal
 }
 
+/// The outermost selected layer owning a row's continuous hierarchy highlight.
+fn selection_root(doc: &Document, sel: &BTreeSet<NodeId>, id: NodeId) -> Option<NodeId> {
+    if sel.is_empty() {
+        return None;
+    }
+    doc.ancestors(id).into_iter().rev().find(|a| sel.contains(a)).or_else(|| sel.contains(&id).then_some(id))
+}
+
+fn hierarchy_bg(roots: &[Option<NodeId>], i: usize, mut rr: Rect, gap: f32) -> Option<(Rect, CornerRadius)> {
+    let root = roots.get(i).copied().flatten()?;
+    let joins = |neighbor: &Option<NodeId>| *neighbor == Some(root);
+    let above = i.checked_sub(1).and_then(|j| roots.get(j)).is_some_and(joins);
+    let below = roots.get(i + 1).is_some_and(joins);
+    if below {
+        rr.max.y += gap;
+    }
+    let top = if above { 0 } else { 5 };
+    let bottom = if below { 0 } else { 5 };
+    Some((rr, CornerRadius { nw: top, ne: top, sw: bottom, se: bottom }))
+}
+
 /// A row's background: selected, inside a selected layer, or outlined when hovered.
 /// `state` is [selected, in_selected, component].
 fn paint_row_bg(ui: &Ui, t: &Tokens, rr: Rect, state: [bool; 3], hovered: bool) {
     let [selected, in_selected, is_comp] = state;
     if selected {
         ui.painter().rect_filled(rr, CornerRadius::same(5), if is_comp { t.component_row } else { t.selected_row });
-    } else if in_selected {
-        ui.painter().rect_filled(rr, CornerRadius::ZERO, t.selected_row_child);
-    } else if hovered {
+    } else if !in_selected && hovered {
         ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(1.0, if is_comp { COMPONENT } else { ACCENT }), egui::StrokeKind::Inside);
     }
 }
@@ -1006,6 +1091,10 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
     let reveal = reveal_selection(app, &doc, page, &sel);
     let filter = app.ui.layer_filter.trim().to_lowercase();
     let rows = rows_for(ui, &doc, page, &app.ui.expanded, &filter);
+    // The rows are as wide as the panel, or as the widest name needs: the list then scrolls
+    // sideways too, so long and deeply nested names read in full without widening the sidebar,
+    // as the reference app's Layers panel does with its horizontal scrollbar (#1904).
+    let row_w = w.max(list_width(ui));
     let mut scroll_to = if reveal { sel.first().and_then(|s| rows.iter().position(|r| r.id == *s)) } else { None };
     // A rename in progress ends when its layer isn't listed any more; Tab / Shift+Tab commit it and
     // go on to the next / previous row.
@@ -1047,13 +1136,17 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
     // The drag is over a row that takes no drop: the not-allowed cursor shows.
     let mut refused = false;
     // Only the rows in view are laid out and drawn; the rest is empty scroll space.
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
+    egui::ScrollArea::both().auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
         let pitch = ROW + ui.spacing().item_spacing.y;
         let top = ui.max_rect().top();
+        let left = ui.max_rect().left();
         let total = rows.len() as f32 * pitch;
+        let row_w = row_w.max(viewport.width());
         ui.set_height(total.max(viewport.height()));
+        ui.set_width(row_w);
         if let Some(i) = scroll_to {
-            ui.scroll_to_rect(Rect::from_min_size(pos2(ui.max_rect().left(), top + i as f32 * pitch), vec2(w, ROW)), None);
+            // The row at the width in view: revealing a layer scrolls up or down, not sideways.
+            ui.scroll_to_rect(Rect::from_min_size(pos2(left + viewport.min.x, top + i as f32 * pitch), vec2(viewport.width(), ROW)), None);
         }
         if rows.is_empty() {
             ui.add_space(8.0);
@@ -1066,15 +1159,20 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         drag_autoscroll(ui, dragging.is_some());
         let first = ((viewport.min.y / pitch).floor().max(0.0) as usize).min(rows.len());
         let last = ((viewport.max.y / pitch).ceil().max(0.0) as usize).saturating_add(1).min(rows.len());
-        let band = Rect::from_x_y_ranges(ui.max_rect().x_range(), (top + first as f32 * pitch)..=(top + last as f32 * pitch));
+        // Compute each visible row's root once, plus one neighbor outside each end
+        // so scrolling never rounds a seam in the middle of a selected subtree.
+        let selected_ids: BTreeSet<_> = sel.iter().copied().collect();
+        let roots_start = first.saturating_sub(1);
+        let roots: Vec<_> = rows.iter().take(last.saturating_add(1)).skip(roots_start).map(|r| selection_root(&doc, &selected_ids, r.id)).collect();
+        let band = Rect::from_x_y_ranges(left..=(left + row_w), (top + first as f32 * pitch)..=(top + last as f32 * pitch));
         let mut band_ui = ui.new_child(egui::UiBuilder::new().max_rect(band));
         // Stable widget ids for a row wherever the list is scrolled.
         band_ui.skip_ahead_auto_ids(first);
         let ui = &mut band_ui;
-        for row in rows.iter().take(last).skip(first) {
+        for (i, row) in rows.iter().enumerate().take(last).skip(first) {
             let Some(n) = doc.node(row.id) else { continue };
-            let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), Sense::click_and_drag());
-            let selected = sel.contains(&row.id);
+            let (r, resp) = ui.allocate_exact_size(vec2(row_w, ROW), Sense::click_and_drag());
+            let selected = selected_ids.contains(&row.id);
             a11y::layer_row(&mut app.ui.nav, &resp);
             if sel.last() == Some(&row.id) {
                 a11y::prefer(&mut app.ui.nav, Region::Layers, resp.id);
@@ -1088,9 +1186,13 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 locked: n.locked,
             };
             a11y::tree_item(&resp, if n.name.is_empty() { tr(n.kind.label()) } else { &n.name }, &info);
-            let in_selected = !selected && doc.ancestors(row.id).iter().any(|a| sel.contains(a));
             let is_comp = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
             let rr = r.shrink2(vec2(8.0, 0.0));
+            let bg = hierarchy_bg(&roots, i - roots_start, rr, pitch - ROW);
+            let in_selected = !selected && bg.is_some();
+            if let Some((rect, corners)) = bg {
+                ui.painter().rect_filled(rect, corners, t.selected_row_child);
+            }
             a11y::ring_around(ui, rr, &resp);
             // Over the row, its eye and padlock included (they sit on top of it).
             let over = resp.contains_pointer();
@@ -1125,12 +1227,11 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 }
             } else {
                 let col = row_color(is_comp, shown, t.text, t.text_tertiary);
-                let top_level = doc.node(n.parent.unwrap_or(page)).is_some_and(|p| p.is_page());
-                let font =
-                    if top_level && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. })) { semibold(11.0) } else { regular(11.0) };
-                let name = if n.name.is_empty() { tr(n.kind.label()).to_string() } else { n.name.clone() };
-                // Room left of the lock and eye buttons.
-                let max_w = (rr.max.x - 56.0 - name_x).max(20.0);
+                let font = name_font(&doc, page, n);
+                let name = row_name(n).to_string();
+                // Room left of the lock and eye buttons (the row is wide enough for the whole
+                // name, up to `NAME_ROOM`: a row widened by a deeper name gives no more).
+                let max_w = (rr.max.x - 56.0 - name_x).clamp(20.0, NAME_ROOM);
                 crate::bidi::paint_name(ui.painter(), pos2(name_x, r.center().y), &name, font, col, max_w);
             }
             let (v, l) = eye_lock(ui, &t, [r, rr], row, n, over && !dev, dev, &mut sweep);
@@ -1154,7 +1255,10 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             if resp.drag_started() && !crate::menus::dev_mode_refuses(app, "node.reparent") {
                 ui.data_mut(|d| d.insert_temp(drag_id, row.id));
             }
-            let over = dragging.is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));
+            // In the row and in the list's view: a wide row runs on under the canvas (#1904), and a
+            // drag released there lands nowhere.
+            let clip = ui.clip_rect();
+            let over = dragging.is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p) && clip.contains(p));
             // What is inside the dragged layers, and inside an instance, takes no drop.
             refused |= over
                 && (doc.ancestors(row.id).iter().any(|a| moving.contains(a))
@@ -1163,6 +1267,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 && !blocked(row.id)
                 && let Some(p) = ui.input(|i| i.pointer.hover_pos())
                 && r.contains(p)
+                && clip.contains(p)
             {
                 let collapsed = row.has_kids && !app.ui.expanded.contains(&row.id);
                 let (zone, open, released) = drop_zone(ui, p, [r, rr], x0, row.id, collapsed, n);
@@ -1178,7 +1283,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         if let Some((i, id, depth)) = rename_row.filter(|(i, ..)| !(first..last).contains(i))
             && let Some(n) = doc.node(id)
         {
-            let r = Rect::from_min_size(pos2(band.min.x, top + i as f32 * pitch), vec2(w, ROW));
+            let r = Rect::from_min_size(pos2(band.min.x, top + i as f32 * pitch), vec2(row_w, ROW));
             if let Some(new) = rename_field(app, ui, id, depth, &n.name, r) {
                 rename_done = Some((id, new));
             }

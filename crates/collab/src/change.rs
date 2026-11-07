@@ -333,6 +333,17 @@ impl Change {
 }
 
 impl Entry {
+    /// The synced list this entry belongs to (`None` for entries kept in maps).
+    pub(crate) fn family(&self) -> Option<Family> {
+        match self {
+            Entry::Style(_) => Some(Family::Styles),
+            Entry::Comment(_) => Some(Family::Comments),
+            Entry::Collection(_) => Some(Family::Collections),
+            Entry::Variable(_) => Some(Family::Variables),
+            Entry::DevSnapshot(_) | Entry::Image(_) | Entry::Ballot(_) => None,
+        }
+    }
+
     /// The client id space the entry's id lies in ([`figcraft_doc::ids`]): ids made during a live
     /// session carry their creator's client id, ids from before and ids of other forms are in
     /// space 0. `None` for entries keyed by something else (dev snapshots by layer, images by
