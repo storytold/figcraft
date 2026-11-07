@@ -473,3 +473,21 @@ fn descriptions_and_library_styles() {
     run(&mut s, "style.update", json!({"style": st, "description": "Body text"}));
     assert_eq!(s.doc().unwrap().style(&st).unwrap().description, "Body text");
 }
+
+#[test]
+fn a_style_without_paragraph_values_keeps_a_bulleted_text_linked() {
+    // Styles from older files set no paragraph values, so a list or spacing on their text isn't
+    // an edit of the style: it stays linked (docs silent, pinned to how such files worked).
+    let mut s = Session::new();
+    let t = text(&mut s, 0.0);
+    run(
+        &mut s,
+        "node.set",
+        json!({"id": t, "props": {"characters": "A
+B"}}),
+    );
+    let st = sid(run(&mut s, "style.create", json!({"type": "text", "name": "Plain", "value": {"fontSize": 11}})));
+    run(&mut s, "style.apply", json!({"ids": [t], "style": st}));
+    run(&mut s, "node.set", json!({"id": t, "props": {"listStyle": "bulleted", "paragraphSpacing": 6}}));
+    assert_eq!(node(&s, t).styles.text.as_deref(), Some(st.as_str()));
+}

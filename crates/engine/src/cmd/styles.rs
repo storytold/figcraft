@@ -782,7 +782,12 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
         let gone: Vec<(usize, usize)> = t2
             .spans()
             .iter()
-            .filter(|(a, b, s)| s.style_id.as_deref().is_some_and(|sid| paras.get(sid).is_none_or(|ps| !t2.shows_paragraph_style_in(*a, *b, ps))))
+            .filter(|(a, b, s)| {
+                // A style with no paragraph values (every style in older files) asks nothing of them.
+                s.style_id
+                    .as_deref()
+                    .is_some_and(|sid| paras.get(sid).is_none_or(|ps| **ps != ParagraphStyle::default() && !t2.shows_paragraph_style_in(*a, *b, ps)))
+            })
             .map(|(a, b, _)| (*a, *b))
             .collect();
         for (a, b) in gone {
