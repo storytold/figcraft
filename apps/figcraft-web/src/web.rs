@@ -225,7 +225,6 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
-        crate::api::poll_replies();
         // The fonts on this computer that text asked for this frame are read; once one is in,
         // auto-sizing text measured in a fallback fits it.
         crate::local_fonts::load_wanted(ui.ctx());

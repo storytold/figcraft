@@ -465,11 +465,15 @@ app. It is opt-in: the page installs `window.figcraft` only when its URL has a `
 |---|---|
 | `figcraft.request(method, params)` | any control method of this document → its `result` |
 | `figcraft.execute(command, params)` | `engine.execute` |
-| `figcraft.commands()` / `figcraft.inspect()` | `engine.commands` / the inspect method |
-| `figcraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline) |
+| `figcraft.commands()` | `engine.commands` |
+| `figcraft.docInspect(params)` / `figcraft.uiInspect(params)` | `document.inspect` / `ui.inspect` |
+| `figcraft.inspect()` | `document.inspect` (the name before `docInspect`) |
+| `figcraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline, also as `data`) |
 | `figcraft.openFile(name, bytes)` | runs `file.open` with the bytes as `data` and resolves with its result |
 | `figcraft.captureDownloads(on)` | while on, a save or export is kept in the page instead of downloaded |
 | `figcraft.files()` / `figcraft.readFile(name)` | the kept files (`{path, size}`) / one of them as a `Uint8Array` |
 
 Errors reject with an `Error` carrying the method's message. Requests run on the UI's next frame, so a
 hidden tab (whose frames the browser pauses) answers when it is shown again.
+
+`request`, `execute`, `commands`, `docInspect`, `uiInspect` and `screenshot` come from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app. A call the app does not answer within 30 seconds rejects, and the app drops it unrun if it had not started it. `openFile`, `captureDownloads`, `files`, `readFile` and `inspect` are FigCraft's own.

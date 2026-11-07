@@ -639,30 +639,33 @@ fn interactions(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId, nod
         && n == id
         && let Some(it) = list.get(k)
     {
-        let panel_left = ui.clip_rect().min.x;
+        let panel = ui.clip_rect().x_range();
         let y = anchor.map(|a| a.min.y).unwrap_or(ui.clip_rect().min.y + 80.0);
-        editor_popover(app, ui.ctx(), InteractionPopover { doc, page, node: id, index: k, interaction: it, anchor: pos2(panel_left - 8.0, y) });
+        editor_popover(app, ui.ctx(), InteractionPopover { doc, page, node: id, index: k, interaction: it, panel, y });
     } else if open.is_some_and(|(n, _)| n == id) {
         open_editor(ui.ctx(), None);
     }
 }
 
-/// The interaction editor, floating left of the panel (`at` is its top-right corner).
+/// The interaction editor, floating beside the panel (`panel`, its x range) on the canvas side,
+/// its top at `y`.
 struct InteractionPopover<'a> {
     doc: &'a Document,
     page: NodeId,
     node: NodeId,
     index: usize,
     interaction: &'a Interaction,
-    anchor: Pos2,
+    panel: egui::Rangef,
+    y: f32,
 }
 
 fn editor_popover(app: &mut FigApp, ctx: &egui::Context, popover: InteractionPopover<'_>) {
-    let InteractionPopover { doc, page, node, index: k, interaction: it, anchor: at } = popover;
+    let InteractionPopover { doc, page, node, index: k, interaction: it, panel, y } = popover;
     let t = Tokens::get(ctx);
     let width = 280.0;
     let screen = ctx.content_rect();
-    let pos = pos2(at.x - width, at.y.min(screen.max.y - 420.0).max(screen.min.y + 48.0));
+    let x = crate::popover::beside_panel(panel, width, 8.0, app.ui.mirrored);
+    let pos = pos2(x, y.min(screen.max.y - 420.0).max(screen.min.y + 48.0));
     let mut close = false;
     egui::Area::new(Id::unique("proto_editor_area")).fixed_pos(pos).order(egui::Order::Foreground).show(ctx, |ui| {
         egui::Frame::new()
