@@ -293,8 +293,13 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 let tr = Rect::from_min_max(pos2(r.min.x + 8.0, r.min.y + 4.0), pos2(r.max.x - 4.0, r.max.y - 4.0));
                 let start = ui.data_mut(|d| d.remove_temp::<bool>(page_rename_start_id())).unwrap_or(false);
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
-                if let (Some(new), _) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start) {
+                let (out, open) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start);
+                if let Some(new) = out {
                     rename_done = Some((id, new));
+                } else if !open {
+                    // Cancelled, or committed unchanged: the row goes back to its name, or the idle
+                    // field would catch the next click and a click wouldn't open this page.
+                    app.ui.rename_page = None;
                 }
             } else if !divider {
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
@@ -315,6 +320,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 if ui.button(tr("Rename page")).clicked() {
                     if !crate::menus::dev_mode_refuses(app, "page.rename") {
                         app.ui.rename_page = Some((id, name.clone()));
+                        ui.data_mut(|d| d.insert_temp(page_rename_start_id(), true));
                     }
                     ui.close();
                 }
