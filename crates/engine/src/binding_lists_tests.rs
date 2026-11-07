@@ -129,6 +129,40 @@ fn glass_fields_take_number_variables() {
     assert!(s.execute("style.bind", &json!({"style": fx, "field": "effects/0/spread", "variable": "large"})).is_err(), "glass has no spread");
 }
 
+#[test]
+fn a_layer_binds_only_fields_its_effects_have() {
+    let (mut s, r) = setup();
+    ex(&mut s, "effect.add", json!({"ids": [r], "type": "dropShadow"}));
+    ex(&mut s, "effect.add", json!({"ids": [r], "type": "glass"}));
+    // As an effect style does: a drop shadow has no refraction, glass no spread, there is no
+    // effect 5, and a key that names no effect's field names nothing. Nothing is bound.
+    for (field, var, says) in [
+        ("effects/0/refraction", "large", "no field"),
+        ("effects/1/spread", "large", "no field"),
+        ("effects/5/radius", "large", "no field"),
+        ("effects/x/radius", "large", "no field"),
+        ("effects/0", "large", "no field"),
+        ("effects", "large", "no field"),
+        ("effects/1/lightAngle", "brand", "doesn't take a color variable"),
+        ("effects/0/color", "large", "doesn't take a number variable"),
+    ] {
+        let e = s.execute("variable.bind", &json!({"ids": [r], "field": field, "variable": var})).unwrap_err().to_string();
+        assert!(e.contains(says), "{field} ← {var}: {e}");
+    }
+    assert!(s.doc().unwrap().node(r).unwrap().bound.is_empty());
+    // The fields each effect has still bind.
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/spread", "variable": "small"}));
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/1/refraction", "variable": "large"}));
+    assert_eq!(s.doc().unwrap().node(r).unwrap().bound.len(), 2);
+    // A binding an older file already has on a field its effect lacks does nothing, and unbinds.
+    let large = s.doc().unwrap().variables.get("large").unwrap().id.clone();
+    s.doc_mut().unwrap().get_mut(r).unwrap().bound.insert("effects/0/refraction".into(), large);
+    ex(&mut s, "variable.set", json!({"variable": "large", "value": 40}));
+    assert!(matches!(&s.doc().unwrap().node(r).unwrap().effects[0].kind, EffectKind::DropShadow(_)));
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/refraction"}));
+    assert!(!s.doc().unwrap().node(r).unwrap().bound.contains_key("effects/0/refraction"));
+}
+
 fn ex_value(s: &mut Session, cmd: &str, p: serde_json::Value) -> serde_json::Value {
     s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"))
 }
