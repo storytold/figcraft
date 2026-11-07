@@ -118,8 +118,45 @@ impl Session {
             p = at_45_degrees(*last, p);
         }
         pen.points.push((p, Vec2::ZERO, Vec2::ZERO));
+        pen.undone.clear();
         self.tool.gesture = Gesture::PenDrag { anchor: p };
         self.pen_update()
+    }
+
+    /// Undo while the pen draws (#1745): its last anchor goes (before two anchors, with the layer
+    /// they made; with the only one, the whole path). Returns whether there was a path.
+    pub(crate) fn pen_undo(&mut self) -> Result<bool> {
+        let Some(pen) = self.tool.pen.as_mut() else { return Ok(false) };
+        let Some(last) = pen.points.pop() else {
+            self.tool.pen = None;
+            return Ok(false);
+        };
+        pen.undone.push(last);
+        let drop_layer = pen.points.len() < 2 && pen.id.take().is_some();
+        let empty = pen.points.is_empty();
+        self.tool.gesture = Gesture::None;
+        self.tool.overlay.rubber = None;
+        self.tool.overlay.rubber_handle = None;
+        if drop_layer {
+            self.cancel_interaction()?;
+        }
+        if empty {
+            self.pen_finish()?;
+            return Ok(true);
+        }
+        self.pen_update()?;
+        Ok(true)
+    }
+
+    /// Redo while the pen draws: the last anchor undo took back returns. Returns whether there was
+    /// one.
+    pub(crate) fn pen_redo(&mut self) -> Result<bool> {
+        let Some(pen) = self.tool.pen.as_mut() else { return Ok(false) };
+        let Some(point) = pen.undone.pop() else { return Ok(false) };
+        pen.points.push(point);
+        self.tool.gesture = Gesture::None;
+        self.pen_update()?;
+        Ok(true)
     }
 
     /// Rebuild the pen's vector node from its anchors.
