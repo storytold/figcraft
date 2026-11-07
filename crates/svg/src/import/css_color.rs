@@ -27,8 +27,50 @@ const GREY_CHROMA: f32 = 0.000_2;
 /// The attributes that can hold a colour (with `style`, which can hold any property).
 const COLOR_ATTRS: [&str; 8] = ["fill", "stroke", "stop-color", "flood-color", "lighting-color", "color", "solid-color", "style"];
 
-/// A colour read from a call, with why it is only an approximation; or why it can't be read.
-type Eval = Result<(Color, Option<&'static str>), &'static str>;
+/// A colour read from a call, with why it is only an approximation (or why it can't be read) and
+/// which of its components a mix should treat as missing.
+type Eval = Result<(Color, Option<&'static str>, Missing), &'static str>;
+
+/// Which components a colour gave as `none`: red, green, blue and alpha. A mix takes a missing
+/// component from its other colour before interpolating (CSS Color 5 section 4.1): red, green and
+/// blue only in an sRGB mix (in another space they are converted first, and a missing one is 0),
+/// the alpha in every mix. Missing in both colours, a component stays missing (and 0).
+#[derive(Clone, Copy)]
+struct Missing {
+    r: bool,
+    g: bool,
+    b: bool,
+    a: bool,
+}
+
+impl Missing {
+    const NONE: Self = Self { r: false, g: false, b: false, a: false };
+
+    /// What a colour function's text (lower case) gives as `none`: the four values of `rgb()` or
+    /// `rgba()`, else only an alpha after a `/`.
+    fn of(color: &str) -> Self {
+        let rgb = color.strip_prefix("rgba(").or_else(|| color.strip_prefix("rgb(")).and_then(|r| r.strip_suffix(')'));
+        match rgb {
+            Some(inner) => {
+                let parts = split_top(inner, |c| c == ',' || c == '/' || c.is_whitespace());
+                let at = |i: usize| parts.get(i).is_some_and(|p| *p == "none");
+                Self { r: at(0), g: at(1), b: at(2), a: at(3) }
+            }
+            None => Self { a: alpha_is_none(color), ..Self::NONE },
+        }
+    }
+}
+
+/// Fill a component missing on one side from the other; true when it is missing on both.
+fn carry(a: &mut f32, b: &mut f32, a_missing: bool, b_missing: bool) -> bool {
+    match (a_missing, b_missing) {
+        (true, false) => *a = *b,
+        (false, true) => *b = *a,
+        (true, true) => return true,
+        (false, false) => {}
+    }
+    false
+}
 
 /// `data` with its `color()` and `color-mix()` calls replaced by colours usvg reads, and notes on
 /// those it read only approximately or not at all; `None` when there are none (or `data` isn't
@@ -90,8 +132,8 @@ fn rewrite_calls(text: &str, range: Range<usize>, profile: ColorProfile, edits: 
         };
         let call = s.get(start..end).unwrap_or_default();
         let color = match eval(call, profile, 0) {
-            Ok((c, None)) => c,
-            Ok((c, Some(why))) => {
+            Ok((c, None, _)) => c,
+            Ok((c, Some(why), _)) => {
                 notes.push(note(call, why));
                 c
             }
@@ -176,12 +218,15 @@ fn color_fn(args: &str, profile: ColorProfile) -> Eval {
         None => 1.0,
     };
     let c = Color::new(value(r)?, value(g)?, value(b)?, a);
+    // A `none` is 0 here and missing in a mix: reds, greens and blues are analogous across the RGB
+    // spaces (CSS Color 4 section 12.2), so a missing channel stays missing through the conversion.
+    let missing = Missing { r: *r == "none", g: *g == "none", b: *b == "none", a: alpha == Some("none") };
     let (from, why) = match *space {
         "srgb" => (ColorProfile::Srgb, None),
         "display-p3" => (ColorProfile::DisplayP3, None),
         _ => (ColorProfile::Srgb, Some("only the srgb and display-p3 spaces are read: its values were taken as sRGB")),
     };
-    Ok((from.conversion_to(profile).apply(c), why))
+    Ok((from.conversion_to(profile).apply(c), why, missing))
 }
 
 /// A CSS number, a percentage (100% is 1) or `none` (0); finite only.
@@ -219,9 +264,18 @@ fn mix(args: &str, profile: ColorProfile, depth: usize) -> Eval {
         ["in", ..] => (Space::Srgb, Some("only srgb, oklab and oklch mixes are read: it was mixed in sRGB")),
         _ => return Err("color-mix() starts with `in` and a colour space"),
     };
-    let (a, pa, why_a) = operand(first, profile, depth)?;
-    let (b, pb, why_b) = operand(second, profile, depth)?;
+    let (mut a, pa, why_a, ma) = operand(first, profile, depth)?;
+    let (mut b, pb, why_b, mb) = operand(second, profile, depth)?;
     why = why.or(why_a).or(why_b);
+    // Missing components are carried over from the other colour before the mix (see `Missing`);
+    // rendered on its own, the same colour has them at 0.
+    let srgb = matches!(space, Space::Srgb);
+    let missing = Missing {
+        r: srgb && carry(&mut a.r, &mut b.r, ma.r, mb.r),
+        g: srgb && carry(&mut a.g, &mut b.g, ma.g, mb.g),
+        b: srgb && carry(&mut a.b, &mut b.b, ma.b, mb.b),
+        a: carry(&mut a.a, &mut b.a, ma.a, mb.a),
+    };
     if [pa, pb].into_iter().flatten().any(|p| !(0.0..=100.0).contains(&p)) {
         return Err("mix percentages are between 0% and 100%");
     }
@@ -236,11 +290,14 @@ fn mix(args: &str, profile: ColorProfile, depth: usize) -> Eval {
         return Err("mix percentages add up to 0%");
     }
     let mixed = interpolate(space, a, b, pb / sum);
-    Ok((mixed.with_alpha(mixed.a * (sum / 100.0).min(1.0)), why))
+    Ok((mixed.with_alpha(mixed.a * (sum / 100.0).min(1.0)), why, missing))
 }
 
-/// One colour of a mix and its percentage (before or after it).
-fn operand(s: &str, profile: ColorProfile, depth: usize) -> Result<(Color, Option<f32>, Option<&'static str>), &'static str> {
+/// One colour of a mix: the colour, its percentage (before or after it), a note, and the
+/// components it gave as `none` (see [`Missing`]).
+type Operand = (Color, Option<f32>, Option<&'static str>, Missing);
+
+fn operand(s: &str, profile: ColorProfile, depth: usize) -> Result<Operand, &'static str> {
     let words = split_top(s, char::is_whitespace);
     let pct = |w: &str| w.strip_suffix('%').and_then(|p| p.parse::<f32>().ok()).filter(|p| p.is_finite());
     let (color, p) = match words.as_slice() {
@@ -249,12 +306,18 @@ fn operand(s: &str, profile: ColorProfile, depth: usize) -> Result<(Color, Optio
         [p, c] if pct(p).is_some() => (*c, pct(p)),
         _ => return Err("a mix colour is a colour and an optional percentage"),
     };
-    let (c, why) = if color.starts_with("color(") || color.starts_with("color-mix(") {
+    let (c, why, missing) = if color.starts_with("color(") || color.starts_with("color-mix(") {
         eval(color, profile, depth + 1)?
     } else {
-        (Color::parse_css(color).ok_or("a mix colour isn't read")?, None)
+        (Color::parse_css(color).ok_or("a mix colour isn't read")?, None, Missing::of(color))
     };
-    Ok((c, p, why))
+    Ok((c, p, why, missing))
+}
+
+/// Whether a colour function's text (already lower case) gives its alpha as `none`: what follows
+/// its last `/`.
+fn alpha_is_none(color: &str) -> bool {
+    color.rsplit_once('/').is_some_and(|(_, rest)| rest.trim().trim_end_matches(')').trim_end() == "none")
 }
 
 /// `a` and `b` mixed `t` of the way to `b`, premultiplied by their alpha.

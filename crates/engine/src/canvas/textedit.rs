@@ -184,14 +184,21 @@ fn edit_if(s: &mut Session, f: impl FnOnce(&mut TextData, &mut TextEdit) -> bool
     let doc = ds.doc_mut();
     let n = doc.get_mut(te.id)?;
     let NodeKind::Text(t) = &mut n.kind else { return Err(EngineError::Other("not a text layer".into())) };
+    let derived_before = crate::cmd::props::text_layer_name(&t.characters);
     if !f(t, &mut te) {
         return Ok(false);
     }
     // Any edit ends a composition (a commit replaces it with the final text).
     te.preedit = None;
     let len = t.char_count();
+    let derived_after = crate::cmd::props::text_layer_name(&t.characters);
     te.caret = te.caret.min(len);
     te.anchor = te.anchor.min(len);
+    // The layer's name follows the characters while it is the name they derive, so the Layers
+    // panel keeps up with what the canvas shows; a name the author typed is left alone.
+    if crate::cmd::props::text_name_is_derived(&n.name, derived_before.as_ref()) {
+        n.name = derived_after.unwrap_or_default();
+    }
     if n.source.is_some() {
         n.overrides.insert("characters".into());
     }
@@ -277,14 +284,15 @@ fn insert_model(s: &mut Session, text: &str, ime_commit: bool) -> Result<ImeInse
     let text = normalized;
     edit(s, |t, te| {
         let (a, b) = range(te);
-        // "- ", "* " or "1. " typed at the start of a plain paragraph starts a list.
+        // "- ", "* ", "1. " or "1) " typed at the start of a plain paragraph starts a list (the
+        // creation characters of Create bulleted and numbered lists).
         if text == " " && a == b && t.para_list(t.para_of(a)).list == ListStyle::None {
             let chars: Vec<char> = t.characters.chars().collect();
             let start = line_start(&chars, a);
             let typed: String = chars.get(start..a).unwrap_or(&[]).iter().collect();
             let list = match typed.as_str() {
                 "-" | "*" => ListStyle::Bulleted,
-                "1." => ListStyle::Numbered,
+                "1." | "1)" => ListStyle::Numbered,
                 _ => ListStyle::None,
             };
             if list != ListStyle::None {
@@ -302,9 +310,21 @@ fn insert_model(s: &mut Session, text: &str, ime_commit: bool) -> Result<ImeInse
     Ok(outcome)
 }
 
-/// List keys: Tab nests the selected list items a level deeper; Shift+Tab, Backspace at an item's
-/// start and Enter on an empty item move it a level out (at the top: out of the list). Returns
-/// whether the key was taken.
+/// What a list key does to the selected items.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListMove {
+    /// A level deeper (Tab).
+    Deeper,
+    /// A level out; at the top, out of the list (Shift+Tab, Enter on an empty item).
+    Out,
+    /// Out of the list at the level it had: "Use Backspace or Delete at the beginning of a list
+    /// item to delete the counter, but keep the same level of indentation."
+    Unlist,
+}
+
+/// List keys: Tab nests the selected list items a level deeper; Shift+Tab and Enter on an empty
+/// item move it a level out (at the top: out of the list); Backspace and Delete at an item's start
+/// take its marker and keep its level. Returns whether the key was taken.
 fn list_key(s: &mut Session, key: &str, shift: bool) -> Result<bool> {
     let Some(te) = s.ds()?.text_edit.clone() else { return Ok(false) };
     let t = text_of(s, te.id)?;
@@ -314,19 +334,24 @@ fn list_key(s: &mut Session, key: &str, shift: bool) -> Result<bool> {
     let item = t.para_list(t.para_of(a)).list != ListStyle::None;
     let (pa, pb) = t.para_span(a, b);
     let any_item = (pa..=pb).any(|p| t.para_list(p).list != ListStyle::None);
-    let deeper = match key {
-        "Tab" if any_item => !shift,
-        "Backspace" if item && at_start => false,
-        "Enter" if item && at_start && chars.get(a).is_none_or(|c| *c == '\n') => false,
+    let mv = match key {
+        "Tab" if any_item && !shift => ListMove::Deeper,
+        "Tab" if any_item => ListMove::Out,
+        "Backspace" | "Delete" if item && at_start => ListMove::Unlist,
+        "Enter" if item && at_start && chars.get(a).is_none_or(|c| *c == '\n') => ListMove::Out,
         _ => return Ok(false),
     };
     edit(s, |t, _| {
-        t.set_para_lists(a, b, |pl| match pl.list {
-            ListStyle::None => {}
-            _ if deeper => pl.indent = pl.indent.saturating_add(1),
-            _ if pl.indent > 0 => pl.indent -= 1,
-            _ => pl.list = ListStyle::None,
-        })
+        if mv == ListMove::Unlist {
+            t.unlist_keeping_levels(a, b);
+        } else {
+            t.set_para_lists(a, b, |pl| match (pl.list, mv) {
+                (ListStyle::None, _) | (_, ListMove::Unlist) => {}
+                (_, ListMove::Deeper) => pl.indent = pl.indent.saturating_add(1),
+                (_, ListMove::Out) if pl.indent > 0 => pl.indent -= 1,
+                (_, ListMove::Out) => pl.list = ListStyle::None,
+            });
+        }
     })?;
     Ok(true)
 }
@@ -410,7 +435,7 @@ pub fn key(s: &mut Session, key: &str, shift: bool, word: bool, line: bool) -> R
     let t = text_of(s, te.id)?;
     let chars: Vec<char> = t.characters.chars().collect();
     let n = chars.len();
-    if matches!(key, "Tab" | "Backspace" | "Enter") && !word && !line && list_key(s, key, shift)? {
+    if matches!(key, "Tab" | "Backspace" | "Delete" | "Enter") && !word && !line && list_key(s, key, shift)? {
         return Ok(());
     }
     match key {

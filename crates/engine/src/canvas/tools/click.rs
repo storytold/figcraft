@@ -22,6 +22,29 @@ impl Session {
         }
     }
 
+    /// A double-click on an edge handle of the one selected layer auto layout sizes: Hug contents
+    /// on that axis for an auto layout frame, Fill container with Alt for a child of one (a
+    /// vertical edge sizes the width, a horizontal one the height). Whether it applied: on any
+    /// other layer, or off the edges, the double-click goes on as before.
+    fn edge_double_click(&mut self, doc: &Document, sel: &[NodeId], ev: &PointerEvent) -> Result<bool> {
+        let [id] = sel[..] else { return Ok(false) };
+        let Some(super::Handle::Edge(edge)) = super::handles::handle_at(doc, sel, ev.p(), ev.zoom) else { return Ok(false) };
+        let Some(n) = doc.node(id) else { return Ok(false) };
+        let applies = if ev.alt {
+            !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+        } else {
+            n.layout.is_some()
+        };
+        if !applies {
+            return Ok(false);
+        }
+        // Edges run top, right, bottom, left: the odd ones are vertical and size the width.
+        let mut props = serde_json::Map::new();
+        props.insert(if edge % 2 == 1 { "sizingH" } else { "sizingV" }.to_string(), json!(if ev.alt { "fill" } else { "hug" }));
+        self.execute("node.set", &json!({"id": id, "props": props}))?;
+        Ok(true)
+    }
+
     pub(super) fn double_click(&mut self, ev: &PointerEvent) -> Result<()> {
         let ds = self.ds()?;
         let (doc, sel, page) = (ds.doc.clone(), ds.selection.clone(), ds.page);
@@ -60,6 +83,14 @@ impl Session {
             self.tool.gesture = Gesture::None;
             self.tool.overlay.marquee = None;
             self.cancel_interaction()?;
+        }
+        // An edge of an auto layout object's bounding box: Hug contents on that axis, with Alt
+        // Fill container ("Tip: Double-click the vertical or horizontal edge of an auto layout
+        // object's bounding box to set it to Hug contents." and "Hold ⌥ Option or Alt and
+        // double-click the vertical or horizontal edge of an auto layout object's bounding box to
+        // set it to Fill container.", Guide to auto layout).
+        if edits && matches!(self.tool.tool, ToolId::Move | ToolId::Scale) && !(ev.shift || ev.cmd) && self.edge_double_click(&doc, &sel, ev)? {
+            return Ok(());
         }
         let hit_here = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
         // A double-click anywhere on the one selected shape edits its points, like Enter: also
@@ -162,6 +193,7 @@ impl Session {
         }
         // New text at the click (Figma puts the baseline-ish top-left there).
         let parent = frame_at(&doc, page, ev.p(), &[]).unwrap_or(page);
+        let defaults = self.default_props.text.clone();
         let ds = self.ds_mut()?;
         let d = ds.doc_mut();
         let id = d.alloc_id();
@@ -173,12 +205,18 @@ impl Session {
         if let Some(fills) = readable_text_fills(d, parent) {
             n.fills = fills;
         }
-        if let Some((w, h)) = figcraft_text::auto_size(&n) {
-            n.width = w.max(1.0);
-            n.height = h;
-        }
-        let line = n.height;
         d.insert(n, parent, None)?;
+        // Edit ▸ Set default properties from a text layer: its fills and font (best effort).
+        if let Some(defaults) = &defaults {
+            let _ = crate::cmd::edit::apply_copied_props("edit.setDefaultProperties", d, id, defaults);
+        }
+        let line = d.node_mut(id).map_or(14.0, |n| {
+            if let Some((w, h)) = figcraft_text::auto_size(n) {
+                n.width = w.max(1.0);
+                n.height = h;
+            }
+            n.height
+        });
         ds.selection = vec![id];
         textedit::begin(self, id, Some(0), true)?;
         self.tool.gesture = Gesture::TextBox { id, start: ev.p(), line };

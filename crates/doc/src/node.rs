@@ -416,9 +416,13 @@ impl NodeKind {
         self.has_corner_radius() && !matches!(self, NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. })
     }
 
-    /// Kinds whose rounded corners are drawn with corner smoothing (a vector's rounded points are drawn without it).
+    /// Kinds whose rounded corners are drawn with corner smoothing: a vector only when its network
+    /// has a closed region (an open path's rounded points are drawn without it).
     pub fn has_corner_smoothing(&self) -> bool {
-        self.has_corner_radius() && !matches!(self, NodeKind::Vector { .. })
+        match self {
+            NodeKind::Vector { network } => !network.regions.is_empty(),
+            _ => self.has_corner_radius(),
+        }
     }
 
     pub fn text(&self) -> Option<&TextData> {
@@ -942,9 +946,9 @@ impl Node {
                 matches!(&self.kind, NodeKind::Vector { network } if network.vertices.iter().any(|v| v.cap.is_some_and(StrokeCap::is_arrow)));
             let caps =
                 if self.stroke.cap_start.is_arrow() || self.stroke.cap_end.is_arrow() || point_arrows { w.max(self.stroke.weight) * 3.0 } else { w };
-            // Right-angled or smooth outlines (boxes, ellipses) end their mitres on the grown box.
-            let boxy = matches!(self.kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Section { .. }) || self.kind.is_frame_like();
-            let miter = if boxy { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
+            // Right-angled or smooth outlines (boxes, whole ellipses) end their mitres on the grown
+            // box; an arc's corners don't.
+            let miter = if self.outline_mitres_end_on_its_box() { 1.0 } else { self.stroke.miter_limit.clamp(1.0, 4.0) };
             base.max(if matches!(self.kind, NodeKind::Line | NodeKind::Vector { .. }) { caps } else { 0.0 }) * miter
         } else {
             0.0
@@ -960,14 +964,31 @@ impl Node {
         !(matches!(self.kind, NodeKind::Group) || (matches!(self.kind, NodeKind::Text(_)) && self.has_visible_stroke()))
     }
 
-    /// Whether a spread grows this node's outline by exactly the spread (no sharp corners).
+    /// Whether this node's outline has no sharp corners (right-angled ones aside), so mitres along
+    /// it end on its box grown by as much: a box or a whole ellipse. An arc (an ellipse that doesn't
+    /// go all the way round) has corners where its ends meet its sides.
+    fn outline_mitres_end_on_its_box(&self) -> bool {
+        match self.kind {
+            NodeKind::Rectangle | NodeKind::Section { .. } => true,
+            NodeKind::Ellipse { sweep, .. } => figcraft_geom::full_sweep(sweep),
+            _ => self.kind.is_frame_like(),
+        }
+    }
+
+    /// Whether a spread grows this node by exactly the spread: its outline mitres end on its box
+    /// (see [`Node::outline_mitres_end_on_its_box`]), and so does its stroke. A dashed stroke is
+    /// cut into dashes with corners wherever they fall round the outline, and a width profile or a
+    /// brush can give the stroke corners of its own, which the spread mitres out.
     fn grows_by_exactly_its_spread(&self) -> bool {
-        matches!(self.kind, NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Section { .. }) || self.kind.is_frame_like()
+        let s = &self.stroke;
+        let cornered = self.has_visible_stroke() && (!s.dashes.is_empty() || s.profile().is_some() || s.brush.is_some());
+        !cornered && self.outline_mitres_end_on_its_box()
     }
 
     /// How much further than its spread a drop shadow can reach at the outline's sharp corners:
     /// spread moves the edges out in parallel and they meet in a mitre (see
-    /// [`SPREAD_MITER_LIMIT`]). Rectangles, frames and ellipses grow by exactly the spread.
+    /// [`SPREAD_MITER_LIMIT`]). Rectangles, frames and whole ellipses grow by exactly the spread,
+    /// unless their stroke has corners (see [`Node::grows_by_exactly_its_spread`]).
     fn spread_miter_reach(&self) -> f64 {
         if self.grows_by_exactly_its_spread() {
             return 0.0;

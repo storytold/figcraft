@@ -194,6 +194,22 @@ fn region(s: &mut Session, step: i64) -> Result<Value> {
     ok()
 }
 
+/// Step the interface size through the Preferences sizes: `dir` 1 up, -1 down, 0 back to the
+/// system's size (1). At an end it stays. Kept at once, as a size picked in Preferences is.
+fn ui_scale_step(s: &mut Session, dir: i32) -> Result<Value> {
+    let now = s.prefs.ui_scale;
+    let next = match dir {
+        0 => 1.0,
+        1 => crate::UI_SCALE_SIZES.iter().copied().find(|v| *v > now + 1e-9).unwrap_or(now),
+        _ => crate::UI_SCALE_SIZES.iter().rev().copied().find(|v| *v < now - 1e-9).unwrap_or(now),
+    };
+    if (next - now).abs() > 1e-9 {
+        s.prefs.ui_scale = next;
+        s.prefs_unsaved = true;
+    }
+    Ok(json!({"scale": s.prefs.ui_scale}))
+}
+
 fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Result<Value> {
     let slot = f(&mut s.prefs);
     *slot = boolean(p, "on").unwrap_or(!*slot);
@@ -305,6 +321,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.snapObjects", "Snap to objects", "{on?}", false, |s, p| toggle(s, p, "view.snapObjects")),
         spec!("view.snapPixel", "Snap to pixel grid", "{on?}", false, |s, p| toggle(s, p, "view.snapPixel")),
         spec!("view.toggleUi", "Show/Hide UI", "{on?}", false, |s, p| flag(s, p, |v| &mut v.ui_hidden)),
+        spec!(
+            "view.minimize",
+            "Minimize the interface",
+            "{on?}  collapses the navigation bar and both sidebars and keeps the toolbar (Shift+Cmd/Ctrl+\\, the Minimize button by the file name); the right sidebar shows while something is selected",
+            false,
+            |s, p| flag(s, p, |v| &mut v.ui_minimized)
+        ),
         spec!("view.fullscreen", "Full screen", "{on?}  the window fills the screen (the desktop app; a no-op headless)", false, |s, p| {
             s.request_ui("window.fullscreen", json!({"on": boolean(p, "on")}));
             ok()
@@ -395,6 +418,21 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"scale": s.prefs.ui_scale}))
             }
         ),
+        spec!(
+            "pref.uiScaleUp",
+            "Larger interface",
+            "{}  the next of the Preferences sizes above the current one (the interface size keys of Accessibility at Figma); at the largest it stays → {scale}",
+            false,
+            |s, _| ui_scale_step(s, 1)
+        ),
+        spec!(
+            "pref.uiScaleDown",
+            "Smaller interface",
+            "{}  the next of the Preferences sizes below the current one; at the smallest it stays → {scale}",
+            false,
+            |s, _| ui_scale_step(s, -1)
+        ),
+        spec!("pref.uiScaleReset", "Default interface size", "{}  back to the system's own size (1) → {scale}", false, |s, _| ui_scale_step(s, 0)),
         spec!("pref.autoSave", "Save files automatically", "{on?}", false, |s, p| pref(s, p, |x| &mut x.auto_save)),
         spec!("pref.startOnHome", "Start on the Home screen", "{on?}", false, |s, p| pref(s, p, |x| &mut x.start_on_home)),
         spec!("pref.nudge", "Nudge amount", "{small?, big?}", false, |s, p| {
@@ -489,6 +527,42 @@ pub fn specs() -> Vec<CommandSpec> {
                     crate::board::require(s, &format!("tool.{}", t.id()))?;
                 }
                 tool(s, t)
+            }
+        ),
+        spec!(
+            "tool.crosshair",
+            "Move the placement crosshair",
+            "{dx?, dy? (arrow-key steps, e.g. 1 or -1), big? (the large nudge, like Shift)} — the arrows with a shape or frame tool chosen and nothing selected: the first shows the crosshair in the middle of the view, the next move it by the nudge amount; Enter (`tool.place`) puts the object there",
+            false,
+            |s, p| {
+                if !s.tool.tool.draws_shape() {
+                    return Err(EngineError::Disabled("tool.crosshair".into(), "choose a shape or frame tool first".into()));
+                }
+                let step = if boolean(p, "big").unwrap_or(false) { s.prefs.nudge_big } else { s.prefs.nudge_small };
+                let dir = |k| num(p, k).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100.0, 100.0) * step;
+                let (dx, dy) = (dir("dx"), dir("dy"));
+                let (uid, page, centre, half) = {
+                    let ds = s.ds()?;
+                    let z = ds.view.zoom.max(1e-6);
+                    (ds.uid, ds.page, figcraft_geom::Point::new(ds.view.cx, ds.view.cy), (ds.view.vw / z / 2.0, ds.view.vh / z / 2.0))
+                };
+                // "It will appear in the middle of the viewport": the first arrow shows it there (a
+                // crosshair left on another page or document starts over).
+                let at = match s.crosshair() {
+                    Some(c) => figcraft_geom::Point::new(c.x + dx, c.y + dy),
+                    None => centre,
+                };
+                s.tool.place_at = Some(at);
+                s.tool.place_on = Some((uid, page));
+                if let Ok(ds) = s.ds_mut() {
+                    // "Move the crosshair around the canvas": nudged past an edge of the view, the
+                    // view pans by the overshoot to keep it in sight.
+                    let v = &mut ds.view;
+                    v.cx += (at.x - (v.cx + half.0)).max(0.0) + (at.x - (v.cx - half.0)).min(0.0);
+                    v.cy += (at.y - (v.cy + half.1)).max(0.0) + (at.y - (v.cy - half.1)).min(0.0);
+                    ds.revision += 1;
+                }
+                Ok(json!({"x": at.x, "y": at.y}))
             }
         ),
         spec!(

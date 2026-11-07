@@ -73,8 +73,15 @@ fn bundle() -> Vec<u8> {
 
 fn directory(req: PluginReq) -> PluginReply {
     let bytes = bundle();
-    let entry =
-        PluginEntry { id: ID.into(), name: "Tiny tool".into(), version: "1.0.0".into(), sha256: sha256_hex(&bytes), ..PluginEntry::default() };
+    let entry = PluginEntry {
+        id: ID.into(),
+        name: "Tiny tool".into(),
+        version: "1.0.0".into(),
+        access: "write".into(),
+        commands: vec!["shape.rectangle".into()],
+        sha256: sha256_hex(&bytes),
+        ..PluginEntry::default()
+    };
     match req {
         PluginReq::List { .. } => PluginReply::List(vec![entry]),
         PluginReq::Fetch { .. } => PluginReply::Bundle { entry, bundle: bytes },

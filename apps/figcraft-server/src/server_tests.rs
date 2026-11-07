@@ -160,7 +160,7 @@ fn revoked_links_stop_working_at_once() {
     assert_eq!((files.len(), files[0].people), (1, 3));
     // Revoked: Cy is out at once, the others stay.
     assert_eq!(ask(Admin::Revoke { file: file.clone(), link: review.link.id.clone() }), AdminReply::Done);
-    pump(&mut [&mut a, &mut b, &mut c], "Cy out", |s| s[2].live().status == Status::Off && s[0].live().peers.len() == 1);
+    pump(&mut [&mut a, &mut b, &mut c], "Cy out", |s| s[2].live().rejoinable() && s[0].live().peers.len() == 1);
     // Told as when a host stops: the session is over for Cy, whose copy stays open (no retries).
     assert!(c.message.as_deref().unwrap_or_default().contains("Sharing was stopped"), "{:?}", c.message);
     assert!(live(&b));

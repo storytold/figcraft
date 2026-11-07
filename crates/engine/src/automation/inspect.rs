@@ -53,6 +53,7 @@ pub const NODE_KEYS: &[&str] = &[
     "layout",
     "leadingTrim",
     "letterSpacing",
+    "lineDirections",
     "lineHeight",
     "lineIndentations",
     "lineTypes",
@@ -96,6 +97,7 @@ pub const NODE_KEYS: &[&str] = &[
     "textDecorationSkipInk",
     "textDecorationStyle",
     "textDecorationThickness",
+    "textDirection",
     "textPath",
     "textStyleRanges",
     "type",
@@ -103,6 +105,7 @@ pub const NODE_KEYS: &[&str] = &[
     "visible",
     "width",
     "widthProfile",
+    "wrapStyle",
     "x",
     "y",
 ];
@@ -431,6 +434,16 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
             insert_prop(o, options, "listStartOffsets", || t.paragraphs.iter().map(|p| json!(p.start_offset)).collect());
         }
     }
+    // The paragraphs' base direction: one for the layer when they agree, else each one's (Auto
+    // throughout says nothing).
+    let dirs: Vec<figcraft_doc::TextDirection> = t.paragraphs.iter().map(|p| p.direction).collect();
+    if let Some(first) = dirs.first().copied().filter(|d| *d != figcraft_doc::TextDirection::Auto)
+        && dirs.iter().all(|d| *d == first)
+    {
+        insert_prop(o, options, "textDirection", || json!(first));
+    } else if dirs.iter().any(|d| *d != figcraft_doc::TextDirection::Auto) {
+        insert_prop(o, options, "lineDirections", || dirs.iter().map(|d| json!(d)).collect());
+    }
     if t.list_spacing != 0.0 {
         insert_prop(o, options, "listSpacing", || json!(t.list_spacing));
     }
@@ -441,6 +454,9 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
     }
     if t.leading_trim != figcraft_doc::LeadingTrim::None {
         insert_prop(o, options, "leadingTrim", || json!(t.leading_trim));
+    }
+    if t.wrap_style != figcraft_doc::WrapStyle::Auto {
+        insert_prop(o, options, "wrapStyle", || json!(t.wrap_style));
     }
     if !t.runs.is_empty() {
         insert_prop(o, options, "styledRuns", || serde_json::to_value(&t.runs).unwrap_or(Value::Null));

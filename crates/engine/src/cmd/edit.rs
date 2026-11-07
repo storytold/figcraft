@@ -17,6 +17,7 @@ mod clipboard;
 mod props;
 mod select;
 
+pub(crate) use clipboard::apply_copied_props;
 pub use clipboard::{CLIP_CLOSE, CLIP_OPEN, copy_to_clipboard, design_clipboard_buffer, paste_into};
 use clipboard::{copy, copy_props, copy_props_of, cut, paste, paste_design_layers, paste_over, paste_props, paste_replace};
 use props::{
@@ -142,12 +143,26 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             find_replace
         ),
-        spec!("edit.setDefaultProperties", "Set default properties", "{id?}", false, |s, p| {
-            let id = targets(s, p).first().copied().ok_or_else(|| bad("edit.setDefaultProperties", "select a layer"))?;
-            let v = copy_props_of(s.doc()?, id);
-            s.clipboard.props = Some(v);
-            ok()
-        }),
+        spec!(
+            "edit.setDefaultProperties",
+            "Set default properties",
+            "{id?}  the layer's fills, strokes, effects, opacity and corners (a text layer's: also its font) become what new rectangles, ellipses, polygons and stars (or, from a text layer, new text) drawn with the tools take → {for: shapes|text, properties}",
+            false,
+            |s, p| {
+                let id = targets(s, p).first().copied().ok_or_else(|| bad("edit.setDefaultProperties", "select a layer"))?;
+                let doc = s.doc()?;
+                let text = matches!(doc.get(id)?.kind, NodeKind::Text(_));
+                let v = copy_props_of(doc, id);
+                let kind = if text {
+                    s.default_props.text = Some(v.clone());
+                    "text"
+                } else {
+                    s.default_props.shape = Some(v.clone());
+                    "shapes"
+                };
+                Ok(json!({"for": kind, "properties": v}))
+            }
+        ),
         spec!("select.set", "Select", "{ids: [..]}  (replace the selection)", false, |s, p| {
             let ids = match get(p, "ids") {
                 Some(Value::Array(a)) => a.iter().filter_map(id_of).collect(),
@@ -326,7 +341,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("node.reorder", "Reorder layer", "{id, index}", true, |s, p| {
             let i = req_id("node.reorder", p, "id")?;
-            let idx = req_num("node.reorder", p, "index")?.max(0.0) as usize;
+            let idx = req_index("node.reorder", p, "index")?;
             s.doc_mut()?.reorder(i, idx)?;
             ok()
         }),
@@ -418,7 +433,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "export.add",
             "Add export setting",
-            "{ids?, setting? {size: 2x|512w|512h|{by: scale|width|height, value}, suffix?, format?: png|jpg|svg|pdf|webp|xml (Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore)}} (without a setting: 1x, then one scale step up with an \"@2x\"-style suffix)",
+            "{ids?, setting? {size: 2x|512w|512h|{by: scale|width|height, value}, suffix?, format?: png|jpg|svg|pdf|webp|xml (Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), quality? (JPG: 1-100, default 90)}} (without a setting: 1x, then one scale step up with an \"@2x\"-style suffix)",
             true,
             |s, p| {
                 let cmd = "export.add";
@@ -436,7 +451,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "export.update",
             "Edit export setting",
-            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp|xml: Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?}",
+            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp|xml: Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), quality? (JPG: 1-100), contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?}",
             true,
             |s, p| {
                 let cmd = "export.update";
@@ -544,6 +559,15 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("edit.delete", s, p)?;
     let doc = s.doc_mut()?;
     let ids = roots(doc, &ids);
+    // A layer inside an instance can't be removed: Delete hides it instead, an override ("Figma
+    // will only toggle the layer's visibility instead of removing it", Guide to auto layout).
+    let (hidden, ids): (Vec<_>, Vec<_>) = ids.into_iter().partition(|i| crate::assets::components::inside_instance(doc, *i));
+    for i in &hidden {
+        doc.get_mut(*i)?.visible = false;
+    }
+    if ids.is_empty() {
+        return Ok(json!({"deleted": [], "hidden": hidden}));
+    }
     let mut parents = Vec::new();
     for i in &ids {
         if doc.node(*i).is_some_and(Node::is_page) {
@@ -556,7 +580,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Select the parent frame like Figma? Figma clears the selection.
     s.set_selection(vec![]);
-    Ok(json!({"deleted": ids}))
+    Ok(json!({"deleted": ids, "hidden": hidden}))
 }
 
 /// Layers duplicated last (Duplicate or Alt-drag) and their copies, in the same order. While the

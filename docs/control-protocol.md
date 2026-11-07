@@ -59,8 +59,10 @@ queue. A screenshot settles on three completed, presented UI frames (a discarded
 not count), then is issued, and expires once at its 60 s deadline if no paint arrives. `window.new`
 remains an error at once (`window 0 is minimised or hidden: …`) instead of waiting for the window
 to show; `ui.render` draws the document without it. Under Wayland the app can't tell that its
-window is minimised: where the compositor then stops drawing it, a request waits for the window
-and gets the 60 s timeout error. The browser's shared eframe runner does not implement
+window is minimised, and the compositor stops asking it to draw: a window that draws no frame for
+0.2 s while a request waits for it is treated as hidden, so the requests that act on the app's
+state are answered without a frame (about half a second each), while `ui.screenshot` and
+`ui.input` keep waiting for one. The browser's shared eframe runner does not implement
 `RequestPaintWhileHidden` yet, so hidden-tab screenshots and injected input are unqualified there.
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent
@@ -250,9 +252,9 @@ far the view is panned (`pan`, `panRange`), whether a scroll is still coasting (
 active screen's `hotspots` (`[{id, rect: [x0, y0, x1, y1]}]` in window points, bottom-most first),
 whether a click where nothing reacts flashes them (`hotspotHints`) and they are flashing now
 (`hotspotFlash`), and whether the Inspect panel shows (`inspect`) with the layer it shows
-(`inspected`), and the link an Open link notice waits to open (`linkNotice`, else `null`) (`null`
+(`inspected`), whether its bars are hidden (`hideUi`), and the link an Open link notice waits to open (`linkNotice`, else `null`) (`null`
 when nothing plays). `presentOptions` holds the options the next presentation
-starts with (`scale`, `deviceFrame`, `comments`, `hotspotHints`, `inspect`).
+starts with (`scale`, `deviceFrame`, `comments`, `hotspotHints`, `inspect`, `hideUi`).
 `textPreview` is true while a live text preview shows on the canvas (a hovered text style or named
 instance, a dragged axis slider; see `text.preview` in [mcp.md](mcp.md)).
 `focus` is keyboard navigation's state: the `region` with the keyboard (`toolbar`, `layers`,

@@ -102,6 +102,11 @@ pub struct Face {
     pub underline_pos: f64,
     pub underline_thickness: f64,
     pub strike_pos: f64,
+    /// Synthesised superscript and subscript (the OS/2 table's values, or the usual ones without
+    /// it): the glyph size as a fraction of the em, and the baseline shift up in font units
+    /// (negative for a subscript, which sits below).
+    pub superscript: (f64, f64),
+    pub subscript: (f64, f64),
     pub shaper: harfrust::ShaperData,
     /// OpenType GSUB feature tags the face provides (e.g. `smcp`).
     gsub_features: Vec<[u8; 4]>,
@@ -179,6 +184,17 @@ impl Face {
         let colr = has_table(b"COLR");
         let under = m.underline.map(|d| (f64::from(d.offset), f64::from(d.thickness))).unwrap_or((-upem * 0.1, upem * 0.06));
         let strike = m.strikeout.map(|d| f64::from(d.offset)).unwrap_or(ascent * 0.3);
+        // Superscript and subscript sizes and offsets: the OS/2 table's, else the usual 0.65 em,
+        // 0.35 em up and 0.14 em down (what common fonts carry); a zero counts as unset, as some
+        // fonts leave these fields.
+        let os2 = f.os2().ok();
+        let script = |size: Option<i16>, offset: Option<i16>, up: bool, usual_offset: f64| -> (f64, f64) {
+            let size = size.map(f64::from).filter(|v| *v > 0.0).map_or(0.65, |v| v / upem);
+            let offset = offset.map(f64::from).filter(|v| *v != 0.0).unwrap_or(usual_offset * upem);
+            (size, if up { offset } else { -offset })
+        };
+        let superscript = script(os2.as_ref().map(|t| t.y_superscript_y_size()), os2.as_ref().map(|t| t.y_superscript_y_offset()), true, 0.35);
+        let subscript = script(os2.as_ref().map(|t| t.y_subscript_y_size()), os2.as_ref().map(|t| t.y_subscript_y_offset()), false, 0.14);
         let weight = {
             let w = attrs.weight.value();
             if w.is_finite() && w > 0.0 { w.round() as u16 } else { figcraft_doc::style_weight(&style) }
@@ -200,6 +216,8 @@ impl Face {
             underline_pos: under.0,
             underline_thickness: under.1.max(upem * 0.02),
             strike_pos: strike,
+            superscript,
+            subscript,
             shaper,
             gsub_features,
             track,
@@ -526,10 +544,13 @@ fn names(f: &skrifa::FontRef) -> (Option<String>, Option<String>) {
     (family, style)
 }
 
-/// Families tried, in order, for characters a text's own font lacks. The symbol fonts come last:
-/// Apple Symbols (macOS), Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for
-/// signs such as ⌖ and ⤒ that no text face has.
-const FALLBACK_FAMILIES: [&str; 29] = [
+/// Families tried, in order, for characters a text's own font lacks. Every script face craft-fonts
+/// can embed (Noto Sans Arabic, Thai, Hebrew, Devanagari, Georgian) is here after the Latin faces,
+/// so a web build that embeds one (`FIGCRAFT_EMBED_SCRIPTS`, #1902) draws that script in an Inter
+/// document: the browser has no other fonts. The symbol fonts come last: Apple Symbols (macOS),
+/// Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for signs such as ⌖ and ⤒
+/// that no text face has.
+const FALLBACK_FAMILIES: [&str; 32] = [
     "Inter",
     "Helvetica Neue",
     "Arial",
@@ -553,6 +574,9 @@ const FALLBACK_FAMILIES: [&str; 29] = [
     "Leelawadee UI",
     "Thonburi",
     "Tahoma",
+    "Noto Sans Hebrew",
+    "Noto Sans Devanagari",
+    "Noto Sans Georgian",
     "Apple Symbols",
     "Segoe UI Symbol",
     "Noto Sans Symbols",
@@ -622,6 +646,9 @@ struct FallbackLists {
 
 /// The most styles whose fallback faces are kept (a file naming more starts the list again).
 const MAX_FALLBACK_STYLES: usize = 64;
+/// Most faces loaded from one font collection given as bytes (the largest real collections,
+/// the CJK ones, hold a few dozen).
+const MAX_COLLECTION_FACES: u32 = 64;
 
 /// [`FontDb::key`]'s and [`FontDb::resolve`]'s answers for the families known in one generation.
 #[derive(Default)]
@@ -693,7 +720,10 @@ impl FontDb {
     pub fn add_bytes(&mut self, bytes: Vec<u8>) -> Vec<Arc<Face>> {
         let shared = Arc::new(bytes);
         let count = match FileRef::new(shared.as_slice()) {
-            Ok(FileRef::Collection(c)) => c.len(),
+            // A collection's header may name any number of faces, each a few bytes pointing at
+            // the same tables, and every face keeps its own character map: at most
+            // [`MAX_COLLECTION_FACES`] of them are loaded.
+            Ok(FileRef::Collection(c)) => c.len().min(MAX_COLLECTION_FACES),
             Ok(FileRef::Font(_)) => 1,
             Err(_) => 0,
         };
@@ -725,6 +755,12 @@ impl FontDb {
 
     /// Style names of a family, by weight then italic.
     pub fn styles(&mut self, family: &str) -> Vec<String> {
+        self.style_weights(family).into_iter().map(|(name, _)| name).collect()
+    }
+
+    /// [`styles`](Self::styles) with the weight each is listed by: the face's own (Segoe UI
+    /// Semilight is 350), a named instance's `wght`, or for a face not read yet its name's.
+    pub fn style_weights(&mut self, family: &str) -> Vec<(String, u16)> {
         self.load_family(family, None);
         let key = self.key(family);
         // (weight, italic, order in the font, name): named instances keep the font's order.
@@ -743,14 +779,29 @@ impl FontDb {
                 v.push((w, f.italic || italic_name(&inst.name), k, inst.name.clone()));
             }
         }
-        // A family installed as one family per weight offers those weights too.
-        for (_, style) in self.split_families(&key) {
-            v.push((pending_weight(&style).clamp(1, 1000) as u16, italic_name(&style), 0, style));
+        // A family installed as one family per weight offers those weights too, upright and italic
+        // as that family's faces are ("Foo Bold" with Regular and Italic faces: Bold and Bold
+        // Italic, the names `resolve` finds them by). A face read gives its own weight, one not
+        // read the name's; the families aren't read for this.
+        for (k, style) in self.split_families(&key) {
+            let named = pending_weight(&style).clamp(1, 1000) as u16;
+            let italic = italic_name(&style);
+            let read = self.families.get(&k).map(|(_, idx)| idx.as_slice()).unwrap_or_default().iter().filter_map(|i| self.faces.get(*i));
+            let unread = self.pending.get(&k).into_iter().flat_map(|(_, entries)| entries).map(|e| (named, italic_name(&e.style)));
+            let faces: Vec<(u16, bool)> = read.map(|f| (f.weight, f.italic)).chain(unread).collect();
+            if faces.is_empty() {
+                v.push((named, italic, 0, style));
+                continue;
+            }
+            for (w, slanted) in faces {
+                let name = if slanted && !italic { format!("{style} Italic") } else { style.clone() };
+                v.push((w, slanted || italic, 0, name));
+            }
         }
         v.sort();
         let mut seen = std::collections::HashSet::new();
         v.retain(|x| seen.insert(norm_style(&x.3)));
-        v.into_iter().map(|x| x.3).collect()
+        v.into_iter().map(|x| (x.3, x.0)).collect()
     }
 
     /// The key `family` is known under: itself in any case; for a name designs use for Apple's
@@ -1482,6 +1533,11 @@ pub fn has_family(family: &str) -> bool {
 /// Style names of a family in the global db.
 pub fn family_styles(family: &str) -> Vec<String> {
     db().write().unwrap_or_else(std::sync::PoisonError::into_inner).styles(family)
+}
+
+/// [`family_styles`] with the weight each is listed by (see [`FontDb::style_weights`]).
+pub fn family_style_weights(family: &str) -> Vec<(String, u16)> {
+    db().write().unwrap_or_else(std::sync::PoisonError::into_inner).style_weights(family)
 }
 
 /// Scan system fonts into the global db (desktop; a no-op on the web, or with
