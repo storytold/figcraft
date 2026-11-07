@@ -56,20 +56,58 @@ fn view(scale: f64) -> View {
     View { origin: (-10.0, -10.0), scale, width: (440.0 * scale) as u32, height: (240.0 * scale) as u32 }
 }
 
-/// Per row: the mean channel difference and how many pixels differ by more than 2. A band artifact
-/// differs along a whole row; edge antialiasing may differ in a few pixels per edge (a curve
-/// clipped at a band's edge rasterises a hair differently, most where it runs nearly level).
+/// A pixel whose largest channel differs by at most this much between two renders is edge
+/// antialiasing noise (a curve clipped at a band's edge rasterises a hair differently, most where
+/// it runs level, as at the top of an ellipse), not a band artifact.
+const NOISE: u8 = 24;
+
+/// One row of two renders: the mean channel difference over the pixels that are not noise (see
+/// `NOISE`), and how many pixels differ by more than 2 at all. A band artifact differs along a
+/// whole row, by more than noise.
+fn row_stats(x: &[u8], y: &[u8]) -> (f64, usize) {
+    let mut sum = 0.0;
+    let mut off = 0;
+    for (p, q) in x.chunks(4).zip(y.chunks(4)) {
+        let worst = p.iter().zip(q).map(|(c, d)| c.abs_diff(*d)).max().unwrap_or(0);
+        if worst > 2 {
+            off += 1;
+        }
+        if worst > NOISE {
+            sum += p.iter().zip(q).map(|(c, d)| f64::from(c.abs_diff(*d))).sum::<f64>();
+        }
+    }
+    (sum / x.len().max(1) as f64, off)
+}
+
 fn row_diffs(a: &Pixmap, b: &Pixmap) -> Vec<(f64, usize)> {
     let row = a.width() as usize * 4;
-    a.data()
-        .chunks(row)
-        .zip(b.data().chunks(row))
-        .map(|(x, y)| {
-            let sum: f64 = x.iter().zip(y).map(|(p, q)| f64::from(p.abs_diff(*q))).sum();
-            let off = x.chunks(4).zip(y.chunks(4)).filter(|(p, q)| p.iter().zip(*q).any(|(c, d)| c.abs_diff(*d) > 2)).count();
-            (sum / row as f64, off)
-        })
-        .collect()
+    a.data().chunks(row).zip(b.data().chunks(row)).map(|(x, y)| row_stats(x, y)).collect()
+}
+
+/// Whether a row passes: the original mean limit over non-noise pixels, and at most a twentieth
+/// of the row differing at all.
+fn row_ok(mean: f64, off: usize, width: usize) -> bool {
+    mean < 0.25 && off * 20 <= width
+}
+
+#[test]
+fn a_real_band_artifact_fails_but_edge_noise_passes() {
+    let width = 880; // scale 2
+    let flat = vec![100u8; width * 4];
+    // 44 pixels differing by 60 per channel: under the old mean allowance, but a real artifact.
+    let mut artifact = flat.clone();
+    for px in artifact.chunks_mut(4).take(44) {
+        px.iter_mut().for_each(|c| *c += 60);
+    }
+    let (mean, off) = row_stats(&flat, &artifact);
+    assert!(!row_ok(mean, off, width), "{mean} {off}");
+    // 8 pixels differing by 16 (the ellipse top's antialiasing): forgiven.
+    let mut noise = flat.clone();
+    for px in noise.chunks_mut(4).take(8) {
+        px.iter_mut().for_each(|c| *c += 16);
+    }
+    let (mean, off) = row_stats(&flat, &noise);
+    assert!(row_ok(mean, off, width), "{mean} {off}");
 }
 
 #[test]
@@ -82,11 +120,7 @@ fn bands_match_one_piece_rendering() {
             let banded = render_bands(&d, p, &v, &Options::default(), bands).unwrap();
             assert_eq!((banded.width(), banded.height()), (one.width(), one.height()));
             for (y, (mean, off)) in row_diffs(&one, &banded).into_iter().enumerate() {
-                assert!(
-                    // Each pixel antialiased differently (the level top of an ellipse, where a cubic ends at its extreme) may add up to 0.05 to the row's mean.
-                    mean < 0.25 + 0.05 * off as f64 && off * 20 <= v.width as usize,
-                    "scale {scale}, {bands} bands: row {y} differs ({off} pixels, {mean:.2} on average)"
-                );
+                assert!(row_ok(mean, off, v.width as usize), "scale {scale}, {bands} bands: row {y} differs ({off} pixels, {mean:.2} on average)");
             }
         }
     }
