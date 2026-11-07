@@ -186,28 +186,42 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             reset_override
         ),
-        spec!("component.goToMain", "Go to main component", "{id?}", false, |s, p| {
-            let cmd = "component.goToMain";
-            let i = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select an instance"))?;
-            let doc = s.doc()?;
-            let inst = owning_instance(doc, i).ok_or_else(|| bad(cmd, "not an instance"))?;
-            let Some(NodeKind::Instance { component, .. }) = doc.node(inst).map(|n| n.kind.clone()) else {
-                return Err(bad(cmd, "not an instance"));
-            };
-            if !doc.contains(component) {
-                return Err(EngineError::Disabled(cmd.into(), "the main component was deleted (use component.restoreMain)".into()));
+        spec!(
+            "component.goToMain",
+            "Go to main component",
+            "{id?}  selects the instance's main component; a library component's main is in its library file, which opens in a tab (or comes to the front) with the main selected. Returns {id} (the main in the file now shown), and `index` (the tab) when it went to a library file",
+            false,
+            |s, p| {
+                let cmd = "component.goToMain";
+                let i = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select an instance"))?;
+                let doc = s.doc()?;
+                let inst = owning_instance(doc, i).ok_or_else(|| bad(cmd, "not an instance"))?;
+                let Some(NodeKind::Instance { component, .. }) = doc.node(inst).map(|n| n.kind.clone()) else {
+                    return Err(bad(cmd, "not an instance"));
+                };
+                if !doc.contains(component) {
+                    return Err(EngineError::Disabled(cmd.into(), "the main component was deleted (use component.restoreMain)".into()));
+                }
+                if let Some((library, key)) = crate::library::library_source(doc, component) {
+                    let name = crate::library::library_name(doc, library).to_string();
+                    let library = library.to_string();
+                    return go_to_library_main(s, &library, &name, key);
+                }
+                if doc.is_remote(component) {
+                    return Err(EngineError::Disabled(
+                        cmd.into(),
+                        "the main component is a library copy with no link to its library (it came with an imported file): enable that library to reach it"
+                            .into(),
+                    ));
+                }
+                super::edit::select_and_page(s, vec![component])?;
+                let ds = s.ds_mut()?;
+                if let Some(b) = ds.doc.world_bounds(component) {
+                    ds.view.fit(b, 2.0);
+                }
+                Ok(json!({"id": component}))
             }
-            if let Some(lib) = crate::library::library_of(doc, component) {
-                let name = crate::library::library_name(doc, lib);
-                return Err(EngineError::Disabled(cmd.into(), format!("the main component is in the library \"{name}\": open that file to edit it")));
-            }
-            super::edit::select_and_page(s, vec![component])?;
-            let ds = s.ds_mut()?;
-            if let Some(b) = ds.doc.world_bounds(component) {
-                ds.view.fit(b, 2.0);
-            }
-            Ok(json!({"id": component}))
-        }),
+        ),
         spec!("component.pushChanges", "Push changes to main component", "{id?}", true, push_changes),
         spec!(
             "component.restoreMain",
@@ -281,6 +295,43 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
     ]
+}
+
+fn go_to_library_main(s: &mut Session, library: &str, name: &str, key: NodeId) -> Result<Value> {
+    let cmd = "component.goToMain";
+    let refuse = |why: String| EngineError::Disabled(cmd.into(), why);
+    let path = s
+        .doc()?
+        .libraries
+        .link(library)
+        .map(|l| l.path.clone())
+        .ok_or_else(|| refuse(format!("the library \"{name}\" was removed from this file")))?;
+    if crate::library_server::is_server_link(&path) {
+        return Err(refuse(format!("the main component is in the team library \"{name}\": open its file from the server to edit it")));
+    }
+    if !craft_docpath::is_local(&path) {
+        return Err(refuse(format!("{path}: a library is opened only from this computer")));
+    }
+    if !crate::file_access::exists(&path) {
+        return Err(refuse(format!("the library file of \"{name}\" isn't at {path} any more")));
+    }
+    let viewport = s.ds().map(|d| (d.view.vw, d.view.vh))?;
+    let opened = super::file::open(s, &json!({"path": path}))?;
+    let ds = s.ds_mut()?;
+    (ds.view.vw, ds.view.vh) = viewport;
+    let doc = &ds.doc;
+    let same_library = doc.published.as_ref().is_some_and(|p| p.manifest.id == library);
+    let main = doc.node(key).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }));
+    if !same_library || !main || doc.is_remote(key) {
+        s.message = Some(format!("{name}: the main component isn't in this file any more"));
+        return Ok(json!({"id": null, "index": opened["index"]}));
+    }
+    super::edit::select_and_page(s, vec![key])?;
+    let ds = s.ds_mut()?;
+    if let Some(b) = ds.doc.world_bounds(key) {
+        ds.view.fit(b, 2.0);
+    }
+    Ok(json!({"id": key, "index": opened["index"]}))
 }
 
 /// Place an instance of `component` centred on page point (`x`, `y`), in the frame or auto layout
