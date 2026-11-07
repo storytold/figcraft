@@ -28,9 +28,15 @@ impl RouteEnd {
 /// How far an elbow connector going around the objects it joins keeps from them.
 const ROOM: f64 = 24.0;
 
-/// The points a connector runs through from `from` to `to`: from the middle of the side of each
-/// box facing the other end (or the side it names), straight, in right angles, or (curved) its two
-/// ends with the curve's two control points between them. `None` when a point isn't finite.
+/// How far outside the border a connector attached to a side starts and ends (#1916): the stroke's
+/// round cap never lies on the fill, and elbows leaving one side share their first run along the
+/// side's normal (curves leave tangent to it), as FigJam's connectors do.
+pub const END_GAP: f64 = 4.0;
+
+/// The points a connector runs through from `from` to `to`: from [`END_GAP`] outside the middle of
+/// the side of each box facing the other end (or the side it names), straight, in right angles, or
+/// (curved) its two ends with the curve's two control points between them. `None` when a point isn't
+/// finite.
 pub fn route_points(from: RouteEnd, to: RouteEnd, routing: Routing) -> Option<Vec<Point>> {
     let (p0, s0) = attach(from, to.centre());
     let (p1, s1) = attach(to, from.centre());
@@ -66,6 +72,12 @@ pub fn attached_sides(from: RouteEnd, to: RouteEnd) -> (Option<Side>, Option<Sid
     (attach(from, to.centre()).1, attach(to, from.centre()).1)
 }
 
+/// Where a connector's ends attach, as routed now: the points [`ConnectorPath::Runs`] is measured
+/// from the middle of.
+pub fn attach_points(from: RouteEnd, to: RouteEnd) -> (Point, Point) {
+    (attach(from, to.centre()).0, attach(to, from.centre()).0)
+}
+
 /// The route's path handles: one for each run of an elbow and one for a curve, with the portion
 /// of the path each moves and where it sits.
 pub fn path_handles(pts: &[Point], routing: Routing) -> Vec<(usize, Point)> {
@@ -90,8 +102,9 @@ pub fn reshaped(from: RouteEnd, to: RouteEnd, routing: Routing, path: Option<&Co
     }
 }
 
-/// A path of more runs than this can't be made by hand: [`reshaped`] refuses another.
-const MAX_RUNS: usize = 64;
+/// A path of more runs than this can't be made by hand: [`reshaped`] refuses another, and an
+/// importer leaves a saved one to the router.
+pub const MAX_RUNS: usize = 64;
 
 /// The runs of the right-angled route `pts` with run `portion` moved to `p`.
 fn reshaped_runs(pts: &[Point], portion: usize, p: Point) -> Option<ConnectorPath> {
@@ -169,8 +182,9 @@ fn attach(e: RouteEnd, other: Point) -> (Point, Option<Side>) {
         RouteEnd::Point(p) => (p, None),
         RouteEnd::Box(b, side) => {
             let side = named_or_facing(b, side, other);
-            (side.point(b), Some(side))
+            (side.point(b) + side.normal() * END_GAP, Some(side))
         }
+        // Placed by hand: the point is the user's, gap or not.
         RouteEnd::On(b, side, p) => (p, Some(named_or_facing(b, side, other))),
     }
 }

@@ -45,6 +45,19 @@ fn events_keep_sequence_and_filter_topics() {
 }
 
 #[test]
+fn events_are_stamped_with_the_wall_clock() {
+    // The stamp is read through `web_time`, the clock the browser build has as well: with
+    // `std::time::SystemTime` every comment posted on the web panicked (#1764).
+    let log = EventLog::default();
+    log.push("comment.added", "Doc", None, json!({"commentId": 1}));
+    let r = log.poll(0, &comments(), 10, Duration::ZERO);
+    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap().as_secs_f64();
+    let time = r.events[0].time;
+    // Within a minute of the same clock read afterwards (not ordered: the wall clock can step).
+    assert!(time > 1_700_000_000.0 && (time - now).abs() < 60.0, "{time} is seconds since the Unix epoch, read next to {now}");
+}
+
+#[test]
 fn a_poll_wakes_for_a_push() {
     let log = Arc::new(EventLog::default());
     let writer = log.clone();
@@ -193,6 +206,10 @@ fn topics_parse_and_reject_unknown_names() {
     assert_eq!(events::topics(Some(&json!([]))).unwrap(), vec!["all".to_string()]);
     assert_eq!(events::topics(Some(&json!(["comments", "document"]))).unwrap(), vec!["comments".to_string(), "document".to_string()]);
     assert!(events::topics(Some(&json!(["nope"]))).is_err());
+    // Repeats collapse (the list is scanned per event under the log's lock), and `all` is all.
+    let many: Vec<&str> = std::iter::repeat_n("comments", 10_000).chain(["document"]).collect();
+    assert_eq!(events::topics(Some(&json!(many))).unwrap(), vec!["comments".to_string(), "document".to_string()]);
+    assert_eq!(events::topics(Some(&json!(["comments", "all", "document"]))).unwrap(), vec!["all".to_string()]);
     assert!(events::topics(Some(&json!("comments"))).is_err());
 }
 

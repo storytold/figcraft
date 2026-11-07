@@ -118,8 +118,45 @@ impl Session {
             p = at_45_degrees(*last, p);
         }
         pen.points.push((p, Vec2::ZERO, Vec2::ZERO));
+        pen.undone.clear();
         self.tool.gesture = Gesture::PenDrag { anchor: p };
         self.pen_update()
+    }
+
+    /// Undo while the pen draws (#1745): its last anchor goes (before two anchors, with the layer
+    /// they made; with the only one, the whole path). Returns whether there was a path.
+    pub(crate) fn pen_undo(&mut self) -> Result<bool> {
+        let Some(pen) = self.tool.pen.as_mut() else { return Ok(false) };
+        let Some(last) = pen.points.pop() else {
+            self.tool.pen = None;
+            return Ok(false);
+        };
+        pen.undone.push(last);
+        let drop_layer = pen.points.len() < 2 && pen.id.take().is_some();
+        let empty = pen.points.is_empty();
+        self.tool.gesture = Gesture::None;
+        self.tool.overlay.rubber = None;
+        self.tool.overlay.rubber_handle = None;
+        if drop_layer {
+            self.cancel_interaction()?;
+        }
+        if empty {
+            self.pen_finish()?;
+            return Ok(true);
+        }
+        self.pen_update()?;
+        Ok(true)
+    }
+
+    /// Redo while the pen draws: the last anchor undo took back returns. Returns whether there was
+    /// one.
+    pub(crate) fn pen_redo(&mut self) -> Result<bool> {
+        let Some(pen) = self.tool.pen.as_mut() else { return Ok(false) };
+        let Some(point) = pen.undone.pop() else { return Ok(false) };
+        pen.points.push(point);
+        self.tool.gesture = Gesture::None;
+        self.pen_update()?;
+        Ok(true)
     }
 
     /// Rebuild the pen's vector node from its anchors.
@@ -296,7 +333,9 @@ impl Session {
         let mut local = fitted.clone();
         local.apply_affine(pw.inverse());
         let _ = d;
-        let (color, weight) = PENCIL_STROKE;
+        // Black, or white on a dark page or frame (#1741).
+        let (_, weight) = PENCIL_STROKE;
+        let color = super::handles::pencil_color(self.doc()?, parent);
         let mut props = json!({"fills": [], "strokes": [color.to_css_hex()], "strokeWeight": weight, "strokeCap": "round", "strokeJoin": "round", "strokeAlign": "center"});
         // Pen pressure becomes the stroke's width profile (brushes follow it too).
         if let Some(points) = pressure_profile(points, pressure) {
@@ -310,5 +349,14 @@ impl Session {
             &json!({"type": "vector", "path": local.to_svg(), "closed": false, "parent": parent, "name": "Vector", "props": props}),
         )?;
         Ok(())
+    }
+
+    /// The colour a Pencil stroke starting at `p` will have: it goes into the frame under `p`
+    /// (else the page), and is white when that is dark (`pencil_color`).
+    pub(super) fn pencil_color_at(&self, p: figcraft_geom::Point) -> Result<figcraft_color::Color> {
+        let page = self.page()?;
+        let doc = self.doc()?;
+        let parent = frame_at(doc, page, p, &[]).unwrap_or(page);
+        Ok(super::handles::pencil_color(doc, parent))
     }
 }

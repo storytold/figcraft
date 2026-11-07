@@ -118,7 +118,14 @@ impl Session {
         for m in std::mem::take(&mut live.deferred) {
             match client.receive(m, &EngineRecompute) {
                 Ok(more) => out.extend(more),
-                Err(e) => return self.live_fail(id, format!("The live session got out of step ({e}); join again")),
+                Err(e) => {
+                    self.live_fail(id, format!("The live session got out of step ({e})"));
+                    // A fresh join has nothing to get out of step with.
+                    if let Err(e) = self.live_rejoin("collab.reconnect", id) {
+                        log::warn!("live session: couldn't join again: {e}");
+                    }
+                    return;
+                }
             }
         }
         let doc = Arc::new(client.document().clone());
@@ -283,6 +290,7 @@ impl Session {
             })
             .collect();
         let mine = synced.and_then(|d| d.text_edit.as_ref()).map(|t| editing(&editing_of(t)));
+        let (link, url) = l.invite();
         let sessions: Vec<Value> = self
             .live
             .iter()
@@ -295,7 +303,7 @@ impl Session {
                     "reason": reason(o),
                     "role": o.role(),
                     "fileName": info.map(|i| i.file_name.as_str()),
-                    "link": info.map(|i| i.link.as_str()),
+                    "link": o.invite().0,
                     "peers": o.peers.len(),
                 })
             })
@@ -313,8 +321,8 @@ impl Session {
             "color": info.map(|i| i.color.as_str()),
             "fileName": info.map(|i| i.file_name.as_str()),
             "pages": info.map(|i| &i.pages),
-            "link": info.map(|i| i.link.as_str()),
-            "url": info.map(|i| i.url.as_str()),
+            "link": link,
+            "url": url,
             "address": info.map(|i| i.address.as_str()),
             "network": info.map(|i| i.network),
             "access": l.client.as_ref().map(Client::access).or(info.map(|i| i.access)),

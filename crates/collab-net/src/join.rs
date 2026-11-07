@@ -39,8 +39,10 @@ pub struct GuestConfig {
     /// The pause before the first reconnect; it doubles each time up to `max_backoff`.
     pub backoff: Duration,
     pub max_backoff: Duration,
-    /// Reconnect attempts before giving up.
+    /// Reconnect attempts in a row before the longer pause (`round_pause`), after which it tries
+    /// as many again: a connection that was live is never given up on by itself.
     pub attempts: u32,
+    pub round_pause: Duration,
     /// Join as the client you were (an app that starts over after a crash): the first hello
     /// carries it, and a server that still knows the id gives it back.
     pub resume: Option<Resume>,
@@ -57,6 +59,7 @@ impl GuestConfig {
             backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(10),
             attempts: 12,
+            round_pause: Duration::from_secs(60),
             resume: None,
         }
     }
@@ -64,6 +67,14 @@ impl GuestConfig {
     /// The pause before reconnect `attempt` (from 1).
     pub(crate) fn backoff(&self, attempt: u32) -> Duration {
         self.backoff.saturating_mul(1u32 << attempt.saturating_sub(1).min(16)).min(self.max_backoff)
+    }
+
+    /// The pause before reconnect attempt `attempt` (from 1): growing within a round of
+    /// [`attempts`](Self::attempts), and [`round_pause`](Self::round_pause) between rounds.
+    pub(crate) fn pause(&self, attempt: u32) -> Duration {
+        let round = self.attempts.max(1);
+        let into_round = attempt.saturating_sub(1) % round;
+        if into_round == 0 && attempt > round { self.round_pause } else { self.backoff(into_round + 1) }
     }
 }
 
@@ -137,31 +148,57 @@ pub(crate) fn closed(code: u16, reason: &str) -> Outcome {
 
 /// What a guest does after a connection ended.
 pub(crate) enum Next {
-    /// Done: tell the UI this (nothing when you left).
-    Stop(Option<Event>),
+    /// Done: tell the UI this (nothing when you left). Boxed: an event can be large (a welcome),
+    /// and this one is only ever a status or the end of the session.
+    Stop(Option<Box<Event>>),
     /// Connect again after this pause (the UI has been told: `Reconnecting`).
     Reconnect(Duration),
 }
 
-/// After `outcome`: a refusal or the end of the session is final, and so is a first join that
-/// can't reach the host; a live connection that dropped tries again with growing pauses until the
-/// attempts run out.
+/// What a server refuses for good, whenever you ask: the link, the file or your place in it is
+/// gone, or the two versions can't talk. Anything else a server refuses a session with (it is
+/// busy, a limit was hit, the file couldn't be read just now) may pass, and servers of any version
+/// say so in these words, so a reason not listed here means try again.
+const FINAL_REFUSALS: [&str; 12] = [
+    "isn't valid",
+    "isn't on the server",
+    "was removed from the server",
+    "were removed from this session",
+    "no longer accepts connections",
+    "doesn't accept connections",
+    "wrong session token",
+    "isn't supported",
+    "couldn't be read",
+    "message too large",
+    "this version can't read",
+    "sent a text message",
+];
+
+/// Whether `reason`, from a server refusing a session that was live, is for good.
+pub(crate) fn final_refusal(reason: &str) -> bool {
+    FINAL_REFUSALS.iter().any(|f| reason.contains(f))
+}
+
+/// After `outcome`: the end of the session is final, and so are a refusal for good and a first
+/// join that can't reach the host. A live connection that dropped or was turned away for now tries
+/// again until you leave: with growing pauses, and a longer one between rounds.
 pub(crate) fn after(outcome: Outcome, cfg: &GuestConfig, was_live: bool, attempt: &mut u32, inbox: &Inbox) -> Next {
-    let failed = |reason: String| Next::Stop(Some(Event::Status(Status::Failed { reason })));
+    let failed = |reason: String| Next::Stop(Some(Box::new(Event::Status(Status::Failed { reason }))));
+    let outcome = match outcome {
+        Outcome::Refused(why) if was_live && !final_refusal(&why) => Outcome::Retry(why),
+        o => o,
+    };
     match outcome {
         Outcome::Left => Next::Stop(None),
         Outcome::Refused(why) => failed(format!("The host refused: {why}")),
         Outcome::Failed(why) => failed(why),
-        Outcome::Ended(reason) => Next::Stop(Some(Event::Ended { reason })),
+        Outcome::Ended(reason) => Next::Stop(Some(Box::new(Event::Ended { reason }))),
         Outcome::Retry(why) if !was_live => failed(format!("Couldn't join the live session: {why}")),
         Outcome::Retry(why) => {
-            *attempt += 1;
-            if *attempt > cfg.attempts {
-                return failed(format!("Lost the connection to the host ({why})"));
-            }
+            *attempt = attempt.saturating_add(1);
             log::info!("live session: connection lost ({why}); reconnecting, attempt {attempt}");
             inbox.push(Event::Status(Status::Reconnecting { attempt: *attempt }));
-            Next::Reconnect(cfg.backoff(*attempt))
+            Next::Reconnect(cfg.pause(*attempt))
         }
     }
 }
@@ -228,6 +265,7 @@ pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mu
                 address: inv.server.display(),
                 network: !inv.loopback(),
                 access,
+                view: None,
             };
             seen.peers = peers.clone();
             seen.info = Some(info.clone());
