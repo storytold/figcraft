@@ -77,7 +77,7 @@ fn every_gradient_samples_where_figcraft_samples_it() {
                         let stops: Vec<_> = g.sorted_stops().iter().map(|s| (f64::from(s.position), s.color)).collect();
                         let (a, b) = (color_at(&stops, want), color_at(&grad.stops, got));
                         // Away from the sweep's seam a turn's worth either side is the same colour.
-                        let near_seam = kind == GradientKind::Angular && (want < 1e-3 || want > 1.0 - 1e-3);
+                        let near_seam = kind == GradientKind::Angular && !want.is_nan() && !(1e-3..=1.0 - 1e-3).contains(&want);
                         if !near_seam {
                             assert!(
                                 (a.r - b.r).abs() < 1e-3 && (a.g - b.g).abs() < 1e-3 && (a.b - b.b).abs() < 1e-3,
@@ -107,7 +107,7 @@ fn the_written_gradient_matches_the_rendered_pixels() {
             for x in (2..98).step_by(3) {
                 let pt = Point::new(x as f64 + 0.5, y as f64 + 0.5);
                 let ft = figcraft_t(kind, f, pt);
-                if kind == GradientKind::Angular && (ft < 0.03 || ft > 0.97 || (ft - 0.6).abs() < 0.01) {
+                if kind == GradientKind::Angular && !ft.is_nan() && (!(0.03..=0.97).contains(&ft) || (ft - 0.6).abs() < 0.01) {
                     continue;
                 }
                 let (t, grad) = vd_t(&out, pt).unwrap();
@@ -149,7 +149,7 @@ fn turned_stops_keep_every_colour_where_it_was() {
         for i in 1..200 {
             let t = i as f64 / 200.0;
             let moved = (t + shift).rem_euclid(1.0);
-            if moved < 1e-6 || moved > 1.0 - 1e-6 {
+            if !moved.is_nan() && !(1e-6..=1.0 - 1e-6).contains(&moved) {
                 continue;
             }
             let (a, b) = (color_at(&stops, t), color_at(&turned, moved));

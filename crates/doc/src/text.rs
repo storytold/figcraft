@@ -568,7 +568,7 @@ impl TextPath {
 
     /// The path (empty when `d` doesn't parse).
     pub fn path(&self) -> figcraft_geom::BezPath {
-        figcraft_geom::BezPath::from_svg(&self.d).unwrap_or_default()
+        figcraft_geom::svg_path(&self.d).unwrap_or_default()
     }
 
     /// The start offset clamped into 0..1 (NaN: 0).
