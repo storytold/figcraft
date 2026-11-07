@@ -36,14 +36,16 @@ pub(super) fn unavailable(cmd: &str) -> EngineError {
     )
 }
 
+/// `collab.host`: host the open file (on this machine unless `p` says where) with an invite link.
 pub(super) fn host(s: &mut Session, p: &Value) -> Result<Value> {
-    start_host(s, "collab.host", p, Bind::Local, false)?;
+    start_host(s, "collab.host", p, Bind::Local, false, false)?;
     Ok(s.live_summary())
 }
 
 /// Start hosting the open file for command `cmd` (on `bind` unless `p` says where; `short`: with
-/// a secret a join code can carry): the new session.
-fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool) -> Result<SessionId> {
+/// a secret a join code can carry; `view`: with a second secret for looking only): the new
+/// session.
+fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool, view: bool) -> Result<SessionId> {
     let port = match get(p, "port") {
         None => None,
         Some(v) => Some(v.as_u64().and_then(|n| u16::try_from(n).ok()).ok_or_else(|| bad(cmd, "`port` must be a whole number from 0 to 65535"))?),
@@ -55,7 +57,7 @@ fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool) ->
         Some(other) => other.parse::<IpAddr>().map(Bind::Addr).map_err(|_| bad(cmd, "`bind` must be \"local\", \"lan\" or an IP address"))?,
     };
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
-    let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc, short };
+    let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc, short, view };
     let (id, info) = s.live.start(cmd, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
     s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), ..Live::default() });
     Ok(id)
@@ -82,8 +84,9 @@ fn start_publish(s: &mut Session, cmd: &str, server: &str, p: &Value, share: boo
     Ok(id)
 }
 
-/// Why a local network share has no view-only or comment code.
-const LOCAL_EDITS: &str = "everyone who joins a file shared on the local network can edit it: share it online for a view-only or comment code";
+/// Why a local network share has no comment code.
+const LOCAL_COMMENTS: &str =
+    "a file shared on the local network has an edit code and a view-only code, not a comment code: share it online for a comment code";
 
 /// Why a share has no comment code.
 const NO_COMMENT_LINK: &str =
@@ -94,6 +97,8 @@ fn access_param(cmd: &str, p: &Value) -> Result<Option<Access>> {
     string(p, "access").map(|a| Access::parse(&a).ok_or_else(|| bad(cmd, "`access` must be \"edit\", \"comment\" or \"view\""))).transpose()
 }
 
+/// `collab.share`: share the open file with join codes, online or on the local network, or (shared
+/// already) switch which code shows.
 pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "collab.share";
     let via = match string(p, "via").as_deref().map(str::trim) {
@@ -112,8 +117,8 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
                 "this file is shared the other way already: stop sharing it first (collab.stop), or leave its session (collab.leave)",
             ));
         }
-        if access.is_some_and(|a| a != Access::Edit) && shared == Via::Local {
-            return Err(bad(CMD, LOCAL_EDITS));
+        if access == Some(Access::Comment) && shared == Via::Local {
+            return Err(bad(CMD, LOCAL_COMMENTS));
         }
         if let Some(req) = share_request(s, Vec::new(), true).filter(|_| s.live().share.as_ref().is_some_and(|sh| sh.links.is_none())) {
             let links = share_answer(s, req)?.ok_or_else(|| EngineError::Other("the server made no links".into()))?;
@@ -130,8 +135,8 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
     let access = access.unwrap_or_default();
     let mut server = String::new();
     let id = match via {
-        Via::Local if access != Access::Edit => return Err(bad(CMD, LOCAL_EDITS)),
-        Via::Local => start_host(s, CMD, p, Bind::Lan, true)?,
+        Via::Local if access == Access::Comment => return Err(bad(CMD, LOCAL_COMMENTS)),
+        Via::Local => start_host(s, CMD, p, Bind::Lan, true, true)?,
         Via::Online => {
             server = string(p, "server").unwrap_or_else(|| s.prefs.publish_server.clone()).trim().to_string();
             if server.is_empty() {
@@ -141,15 +146,23 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     if let Some(live) = s.live.sessions.get_mut(&id) {
-        // On the local network the session's own link is what others join with, and the code says
-        // what the link says: where the session is and its secret. (Online they arrive with the file.)
-        let links = live.info.as_ref().filter(|_| via == Via::Local).map(|i| {
-            let code = code::Local::from_link(&i.link).map(|l| l.code());
-            Shared { edit: SharedLink { id: String::new(), link: i.link.clone(), code }, ..Shared::default() }
+        // On the local network the session's own links are what others join with (its view link
+        // only lets them look), and each code says what its link says: where the session is and
+        // that link's secret. (Online they arrive with the file.)
+        let links = live.info.as_ref().filter(|_| via == Via::Local).map(|i| Shared {
+            edit: local_link(&i.link),
+            view: i.view.as_ref().map(|v| local_link(&v.link)),
+            comment: None,
         });
         live.share = Some(Share { via, server, access, links });
     }
     Ok(s.live_summary())
+}
+
+/// A way into a session this app hosts: its invite link and the join code that stands for it
+/// (none when the link can't be put in one: a host without an IPv4 address).
+fn local_link(link: &str) -> SharedLink {
+    SharedLink { id: String::new(), link: link.to_string(), code: code::Local::from_link(link).map(|l| l.code()) }
 }
 
 /// What others join the open file's server file with changed: in its session and its record.
