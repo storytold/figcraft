@@ -184,14 +184,21 @@ fn edit_if(s: &mut Session, f: impl FnOnce(&mut TextData, &mut TextEdit) -> bool
     let doc = ds.doc_mut();
     let n = doc.get_mut(te.id)?;
     let NodeKind::Text(t) = &mut n.kind else { return Err(EngineError::Other("not a text layer".into())) };
+    let derived_before = crate::cmd::props::text_layer_name(&t.characters);
     if !f(t, &mut te) {
         return Ok(false);
     }
     // Any edit ends a composition (a commit replaces it with the final text).
     te.preedit = None;
     let len = t.char_count();
+    let derived_after = crate::cmd::props::text_layer_name(&t.characters);
     te.caret = te.caret.min(len);
     te.anchor = te.anchor.min(len);
+    // The layer's name follows the characters while it is the name they derive, so the Layers
+    // panel keeps up with what the canvas shows; a name the author typed is left alone.
+    if crate::cmd::props::text_name_is_derived(&n.name, derived_before.as_ref()) {
+        n.name = derived_after.unwrap_or_default();
+    }
     if n.source.is_some() {
         n.overrides.insert("characters".into());
     }
