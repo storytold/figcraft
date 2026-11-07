@@ -21,6 +21,10 @@ Rust crate dependencies keep their own licenses (MIT, Apache-2.0, BSD, ISC, Zlib
 default fonts, CDLA-Permissive-2.0 for the root certificate list webpki-roots compiles in, and
 similar permissive licenses); see each crate's metadata.
 
+The Windows DX12 window-presentation fix uses wgpu-hal 30.0.1 from craft-libs,
+MIT OR Apache-2.0. The shared vendored source, upstream licenses, archive SHA-256,
+exact patch and verification command are in craft-libs/vendor/wgpu-hal/CRAFT-PATCH.md.
+
 Linux Wayland window decorations
 -------------------------------
 sctk-adwaita 0.10.1 (https://github.com/PolyMeilex/sctk-adwaita,
