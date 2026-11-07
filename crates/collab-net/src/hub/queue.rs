@@ -48,6 +48,7 @@ pub(crate) struct Charges {
 pub(super) struct Charge {
     n: usize,
     mine: Arc<AtomicUsize>,
+    waiting: Arc<AtomicUsize>,
     _all: Arc<Held>,
     _block: Option<Arc<Held>>,
 }
@@ -55,6 +56,7 @@ pub(super) struct Charge {
 impl Drop for Charge {
     fn drop(&mut self) {
         self.mine.fetch_sub(self.n, Ordering::Relaxed);
+        self.waiting.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -76,6 +78,10 @@ pub(crate) enum Push {
 pub(crate) struct Line {
     pub(crate) tx: SyncSender<Out>,
     pub(crate) queued: Arc<AtomicUsize>,
+    /// Messages waiting in the queue.
+    pub(crate) waiting: Arc<AtomicUsize>,
+    /// With this many waiting, presence is left out (see [`Line::takes_presence`]).
+    pub(crate) max_presence: usize,
     pub(crate) block: Arc<AtomicUsize>,
     pub(crate) all: Arc<AtomicUsize>,
     pub(crate) max: usize,
@@ -84,6 +90,15 @@ pub(crate) struct Line {
 }
 
 impl Line {
+    /// Whether presence goes in the queue now. A client still taking in a long message (the welcome
+    /// of a large file on a slow link) would otherwise have its queue filled by everyone's cursors
+    /// and be dropped, again on every try. Presence is latest-wins, so what's left out is made up
+    /// for by the next update, and this keeps room for what can't be: other people's edits. A client
+    /// that reads nothing at all still ends at the write timeout.
+    pub(crate) fn takes_presence(&self) -> bool {
+        self.waiting.load(Ordering::Relaxed) < self.max_presence
+    }
+
     /// Queue `b`. One message always fits an empty queue (a welcome as large as the largest file
     /// gets out). `charges` is what the message counts against, shared by its recipients;
     /// `over_budget` lets it past the server's budget (the hub just dropped the biggest consumer
@@ -118,7 +133,8 @@ impl Line {
             }
         };
         self.queued.fetch_add(n, Ordering::Relaxed);
-        let charge = Charge { n, mine: self.queued.clone(), _all: all, _block: block };
+        self.waiting.fetch_add(1, Ordering::Relaxed);
+        let charge = Charge { n, mine: self.queued.clone(), waiting: self.waiting.clone(), _all: all, _block: block };
         self.tx.try_send(Out::Bytes(b.clone(), Some(charge))).map_err(|e| match e {
             TrySendError::Full(_) => Push::Full,
             TrySendError::Disconnected(_) => Push::Gone,
