@@ -88,6 +88,11 @@ impl P<'_> {
         // A hairline around the mesh gives it the same soft edge as the convex fills.
         self.painter.add(Shape::closed_line(v, Stroke::new(self.px, self.color)));
     }
+    /// A polygon filled in the icon colour at reduced alpha, so the strokes over it stay readable.
+    fn fill_soft(&self, pts: &[(f32, f32)]) {
+        let soft = P { painter: self.painter, o: self.o, s: self.s, px: self.px, stroke: self.stroke, color: self.color.gamma_multiply(0.4) };
+        soft.fill(pts);
+    }
     /// Triangles `tris` over `verts` (x, y, alpha): the colour fades between the vertices.
     fn shade(&self, verts: &[(f32, f32, f32)], tris: &[u32]) {
         let mut mesh = Mesh::default();
@@ -427,24 +432,28 @@ fn draw(p: &P, icon: Icon) {
             p.fill_rect(11.5, 2.0, 14.5, 5.0, 0.0);
         }
         Boolean | Union => {
-            p.rect(2.5, 2.5, 9.5, 9.5, 0.0);
-            p.rect(6.5, 6.5, 13.5, 13.5, 0.0);
+            // Two squares offset diagonally: the outline of both together, filled.
+            p.fill_soft(&[(2.5, 2.5), (9.5, 2.5), (9.5, 6.5), (13.5, 6.5), (13.5, 13.5), (6.5, 13.5), (6.5, 9.5), (2.5, 9.5)]);
+            p.poly(&[(2.5, 2.5), (9.5, 2.5), (9.5, 6.5), (13.5, 6.5), (13.5, 13.5), (6.5, 13.5), (6.5, 9.5), (2.5, 9.5)], true);
         }
         Subtract => {
-            p.fill_rect(2.0, 2.0, 10.0, 10.0, 0.0);
+            // The first square less the overlap, filled; both squares outlined.
+            p.fill_soft(&[(2.5, 2.5), (9.5, 2.5), (9.5, 6.5), (6.5, 6.5), (6.5, 9.5), (2.5, 9.5)]);
+            p.rect(2.5, 2.5, 9.5, 9.5, 0.0);
             p.rect(6.5, 6.5, 13.5, 13.5, 0.0);
         }
         Intersect => {
+            // Only the overlap filled; both squares outlined.
+            p.fill_soft(&[(6.5, 6.5), (9.5, 6.5), (9.5, 9.5), (6.5, 9.5)]);
             p.rect(2.5, 2.5, 9.5, 9.5, 0.0);
             p.rect(6.5, 6.5, 13.5, 13.5, 0.0);
-            p.fill_rect(6.0, 6.0, 10.0, 10.0, 0.0);
         }
         Exclude => {
-            p.fill_rect(2.0, 2.0, 10.0, 6.0, 0.0);
-            p.fill_rect(2.0, 6.0, 6.0, 10.0, 0.0);
-            p.fill_rect(10.0, 6.0, 14.0, 14.0, 0.0);
-            p.fill_rect(6.0, 10.0, 10.0, 14.0, 0.0);
-            p.rect(6.5, 6.5, 9.5, 9.5, 0.0);
+            // Both squares less the overlap, filled; both squares outlined.
+            p.fill_soft(&[(2.5, 2.5), (9.5, 2.5), (9.5, 6.5), (6.5, 6.5), (6.5, 9.5), (2.5, 9.5)]);
+            p.fill_soft(&[(13.5, 6.5), (13.5, 13.5), (6.5, 13.5), (6.5, 9.5), (9.5, 9.5), (9.5, 6.5)]);
+            p.rect(2.5, 2.5, 9.5, 9.5, 0.0);
+            p.rect(6.5, 6.5, 13.5, 13.5, 0.0);
         }
         Page => {
             p.poly(&[(3.5, 2.5), (9.5, 2.5), (12.5, 5.5), (12.5, 13.5), (3.5, 13.5)], true);

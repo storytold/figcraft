@@ -378,6 +378,30 @@ mod tests {
         }
     }
 
+    /// The four boolean operation icons each paint shapes and no two paint the same ones, so the
+    /// buttons can be told apart (#2003).
+    #[test]
+    fn the_boolean_operation_icons_paint_and_differ() {
+        let ctx = egui::Context::default();
+        let ops = [Icon::Union, Icon::Subtract, Icon::Intersect, Icon::Exclude];
+        let painted: Vec<String> = ops
+            .iter()
+            .map(|&icon| {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, Vec2::splat(16.0)), icon, Color32::WHITE);
+                });
+                out.textures_delta.clear();
+                assert!(!out.shapes.is_empty(), "{icon:?} paints at least one shape");
+                format!("{:?}", out.shapes.iter().map(|c| &c.shape).collect::<Vec<_>>())
+            })
+            .collect();
+        for i in 0..ops.len() {
+            for j in (i + 1)..ops.len() {
+                assert_ne!(painted[i], painted[j], "{:?} and {:?} paint different shapes", ops[i], ops[j]);
+            }
+        }
+    }
+
     #[test]
     fn concave_polygons_triangulate() {
         let arrow = [pos2(4.0, 2.0), pos2(4.0, 13.6), pos2(6.9, 10.9), pos2(8.8, 14.8), pos2(10.6, 14.0), pos2(8.7, 10.2), pos2(12.6, 10.2)];
