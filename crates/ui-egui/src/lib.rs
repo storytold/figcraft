@@ -54,6 +54,8 @@ mod async_dialog_tests;
 #[cfg(test)]
 mod blend_preview_tests;
 #[cfg(test)]
+mod bool_menu_icon_tests;
+#[cfg(test)]
 mod branch_ui_tests;
 #[cfg(test)]
 mod canvas_double_click_tests;
@@ -252,6 +254,8 @@ mod titlebar_tests;
 mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
+#[cfg(test)]
+mod variable_picker_tests;
 #[cfg(test)]
 mod variables_export_ui_tests;
 #[cfg(test)]
