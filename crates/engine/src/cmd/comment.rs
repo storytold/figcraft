@@ -373,10 +373,11 @@ fn listed<'s>(cmd: &str, s: &'s Session, p: &Value, who: &str, people: &[&str]) 
 
 /// Add the names `text` @mentions to `named` as `{name, known, you}`, each once.
 fn push_mentions(named: &mut Vec<Value>, text: &str, people: &[&str], user: &str) {
+    // `known` and `you` follow from the name, so the name alone tells a repeat.
+    let mut seen: std::collections::BTreeSet<String> = named.iter().filter_map(|v| v.get("name")?.as_str().map(str::to_string)).collect();
     for (name, known) in mentioned(text, people) {
-        let v = json!({"name": name, "known": known, "you": known && name.eq_ignore_ascii_case(user)});
-        if !named.contains(&v) {
-            named.push(v);
+        if seen.insert(name.to_string()) {
+            named.push(json!({"name": name, "known": known, "you": known && name.eq_ignore_ascii_case(user)}));
         }
     }
 }
