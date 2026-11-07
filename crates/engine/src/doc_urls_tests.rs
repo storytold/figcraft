@@ -85,3 +85,25 @@ fn a_scheme_is_required_and_control_characters_are_refused() {
         assert!(!openable(url), "{url:?} must be refused");
     }
 }
+
+#[test]
+fn shell_syntax_and_malformed_authorities_are_refused() {
+    for url in [
+        // Never valid unencoded, and command syntax to the `cmd.exe /c start` an opener may use.
+        "https://example.com/?a=b|calc",
+        "https://example.com/<x>",
+        "https://example.com/\"x\"",
+        "https://example.com/a b",
+        "https://example.com/`x`",
+        "https://example.com/x^y",
+        "https://example.com\\x",
+        // An authority an opener can't parse may be reopened as a file path.
+        "http://exam ple.com/",
+        "http://a{b}/",
+    ] {
+        assert!(!openable(url), "{url:?} must be refused");
+    }
+    for url in ["https://example.com/?a=b&c=d%20e", "https://[::1]:8080/x", "https://bücher.example/", "https://a.b-c_d.example:443/"] {
+        assert!(openable(url), "{url:?} should open");
+    }
+}

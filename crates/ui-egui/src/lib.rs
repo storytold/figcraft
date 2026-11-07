@@ -249,6 +249,8 @@ mod text_enter_tests;
 #[cfg(test)]
 mod text_link_tests;
 #[cfg(test)]
+mod text_mixed_fill_tests;
+#[cfg(test)]
 mod titlebar_tests;
 #[cfg(test)]
 mod ui_params_tests;
@@ -260,6 +262,8 @@ mod variable_picker_tests;
 mod variables_export_ui_tests;
 #[cfg(test)]
 mod variables_rename_tests;
+#[cfg(test)]
+mod variables_select_tests;
 #[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]
