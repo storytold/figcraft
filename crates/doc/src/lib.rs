@@ -27,7 +27,7 @@ pub mod vector_faces;
 pub mod vector_regions;
 
 pub use board::*;
-pub use board_route::{END_GAP, RouteEnd, attached_sides, path_handles, reshaped, route_along, route_points};
+pub use board_route::{END_GAP, MAX_RUNS, RouteEnd, attach_points, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
 pub use facilitation::*;

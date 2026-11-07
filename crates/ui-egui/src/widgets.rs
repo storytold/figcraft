@@ -187,9 +187,7 @@ pub fn number_field(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, suffix:
 }
 
 /// Whether the edit of number field `id` began with a Cmd/Ctrl-click. A padding field edited
-/// that way sets every side: "Edit padding on all sides (from right panel): ⌘ Command + Click
-/// padding input field / Ctrl + Click padding input field" (Guide to auto layout, Keyboard
-/// shortcut guide).
+/// that way sets every side (Guide to auto layout, Keyboard shortcut guide).
 pub fn edit_began_with_command(ui: &Ui, id: Id) -> bool {
     ui.data(|d| d.get_temp::<bool>(id.with("cmdstart"))).unwrap_or(false)
 }

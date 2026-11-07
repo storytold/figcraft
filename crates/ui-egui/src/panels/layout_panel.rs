@@ -417,8 +417,7 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
 }
 
 /// Commit a padding field's edit: a value typed after a Cmd/Ctrl-click goes to all four sides
-/// ("Edit padding on all sides (from right panel): ⌘ Command + Click padding input field / Ctrl +
-/// Click padding input field", Guide to auto layout); otherwise to the field's own side or axis.
+/// (Guide to auto layout); otherwise to the field's own side or axis.
 fn padding_field(app: &mut FigApp, ui: &Ui, ids: &[NodeId], key: &str, id: Id, e: Option<FieldEdit>) {
     match e {
         Some(FieldEdit::Set(v)) if widgets::edit_began_with_command(ui, id) => app.set_props(ids, json!({"padding": v.max(0.0)})),

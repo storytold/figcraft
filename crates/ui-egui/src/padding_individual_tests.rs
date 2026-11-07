@@ -123,8 +123,7 @@ fn command_click(u: &mut Ui, p: Pos2) {
     u.frame(vec![]);
 }
 
-/// "Edit padding on all sides (from right panel): ⌘ Command + Click padding input field / Ctrl +
-/// Click padding input field" (Guide to auto layout, Keyboard shortcut guide): a value typed
+/// A value typed
 /// after a Cmd/Ctrl-click on any padding field goes to all four sides in one undo step; a plain
 /// click keeps editing that side or axis alone.
 #[test]
