@@ -54,6 +54,8 @@ mod async_dialog_tests;
 #[cfg(test)]
 mod blend_preview_tests;
 #[cfg(test)]
+mod bool_menu_icon_tests;
+#[cfg(test)]
 mod branch_ui_tests;
 #[cfg(test)]
 mod canvas_double_click_tests;
