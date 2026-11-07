@@ -692,6 +692,7 @@ pub fn db() -> &'static RwLock<FontDb> {
     raw_db()
 }
 
+/// Initialize and return the shared database, loading valid embedded faces exactly once.
 fn raw_db() -> &'static RwLock<FontDb> {
     DB.get_or_init(|| {
         let mut db = FontDb::default();

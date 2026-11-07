@@ -29,6 +29,21 @@ fn main() {
     let embed_scripts = scripts_from(std::env::var("FIGCRAFT_EMBED_SCRIPTS").ok().as_deref());
     let web_fonts = web_fonts(&std::env::var("FIGCRAFT_WEB_FONTS").unwrap_or_default());
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default());
+    let entries = match input_fonts(dir.as_deref(), wasm, required, embed_cjk, &embed_scripts, &web_fonts, wasm.then_some(out_dir.as_path())) {
+        Ok(entries) => entries,
+        Err(e) => {
+            println!("cargo::error={e}");
+            String::new()
+        }
+    };
+    let out = out_dir.join("craft_fonts.rs");
+    if let Err(e) = std::fs::write(&out, catalog_source(&entries, wasm)) {
+        println!("cargo::error=writing {}: {e}", out.display());
+    }
+}
+
+/// Wrap generated face entries in the native static slice or lazily decoded web catalog.
+fn catalog_source(entries: &str, wasm: bool) -> String {
     // Compress the complete web catalog so adding the Arabic fallback stays within the WASM
     // size budget. Each face is restored once, byte-for-byte, before the existing font consumers.
     let mut src = if wasm {
@@ -38,18 +53,12 @@ fn main() {
     } else {
         String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n")
     };
-    match input_fonts(dir.as_deref(), wasm, required, embed_cjk, &embed_scripts, &web_fonts, wasm.then_some(out_dir.as_path())) {
-        Ok(entries) => src.push_str(&entries),
-        Err(e) => println!("cargo::error={e}"),
-    }
+    src.push_str(entries);
     src.push_str("];\n");
     if wasm {
-        src.push_str("    PACKED.iter().filter_map(|(family, style, font)| Some(CraftFont { family, style, bytes: font.data()? })).collect()\n});\n");
+        src.push_str("    PACKED.iter().filter_map(|(family, style, font)| Some(CraftFont { family, style, bytes: font.data(family, style)? })).collect()\n});\n");
     }
-    let out = out_dir.join("craft_fonts.rs");
-    if let Err(e) = std::fs::write(&out, src) {
-        println!("cargo::error=writing {}: {e}", out.display());
-    }
+    src
 }
 
 /// The script tags `FIGCRAFT_EMBED_SCRIPTS` names (comma- or space-separated), trimmed; none when
@@ -227,6 +236,10 @@ fn pack_font(path: &std::path::Path, out_dir: &std::path::Path) -> Result<(PathB
     std::fs::write(&output, packed).map_err(|e| format!("{}: {e}", output.display()))?;
     Ok((output, bytes.len()))
 }
+
+#[cfg(test)]
+#[path = "tests/support/generated_catalog.rs"]
+mod generated_catalog;
 
 #[cfg(test)]
 #[path = "tests/support/web_fallback.rs"]

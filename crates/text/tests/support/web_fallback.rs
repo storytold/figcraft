@@ -6,6 +6,8 @@ use super::{craft_fonts, pack_font};
 mod embedded;
 use figcraft_text::fontdb::{Face, FontBytes};
 
+/// The default web faces render Persian and Arabic with joined letters and bidi ordering even
+/// when the requested font is unavailable and system-font discovery is disabled.
 #[test]
 fn default_web_fonts_render_persian_and_arabic_without_system_fonts() {
     let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(std::path::PathBuf::from).filter(|p| p.join("fonts/manifest.txt").is_file()) else {
