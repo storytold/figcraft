@@ -87,7 +87,7 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
     if lresp.hovered() || app.ui.main_menu {
         ui.painter().rect_filled(lr, CornerRadius::same(6), t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(lr.center(), vec2(18.0, 18.0)), Icon::Logo, t.icon);
+    crate::theme::paint_app_icon(ui, Rect::from_center_size(lr.center(), vec2(22.0, 22.0)));
     if lresp.clicked() {
         app.ui.main_menu = !app.ui.main_menu;
     }

@@ -72,6 +72,9 @@ impl FigApp {
     }
 
     pub fn open_dialog(&mut self) {
+        if self.services.host_open() {
+            return; // the host page shows its own file browser and sends the file
+        }
         // Opening needs no file in front: it goes ahead even if that file closed meanwhile.
         self.pick_file(i18n::tr("Open"), OPEN_EXTENSIONS, false, |app, file| {
             if app.run_user("file.open", file).is_some() {

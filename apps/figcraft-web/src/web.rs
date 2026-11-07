@@ -261,6 +261,9 @@ impl Services for WebServices {
     fn downloads(&self) -> bool {
         true
     }
+    fn host_open(&mut self) -> bool {
+        self.host.is_some() && crate::clawku_pick::host_pick("figcraft", "document")
+    }
     /// A Blob behind a temporary `<a download>` link, clicked and removed; in host mode the file
     /// goes to the host page instead ([`crate::host`]).
     fn download(&mut self, name: &str, bytes: &[u8]) -> bool {

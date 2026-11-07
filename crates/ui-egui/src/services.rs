@@ -20,6 +20,10 @@ pub trait Services {
     fn downloads(&self) -> bool {
         false
     }
+    /// Clawku: hand File › Open to the host page (its storage browser); true when it took it.
+    fn host_open(&mut self) -> bool {
+        false
+    }
     /// Hand `bytes` over as a download named `name`; false when nothing was delivered.
     fn download(&mut self, _name: &str, _bytes: &[u8]) -> bool {
         false
