@@ -35,7 +35,7 @@ pub(crate) use inspect::{inspect_section, prop_row};
 pub(crate) use menu::menu_row_width;
 #[cfg(test)]
 pub(crate) use menu::preview_blend;
-pub use menu::{blend_menu, context_popup, menu_check, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
+pub use menu::{blend_menu, context_popup, menu_check, menu_icon_item, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
 pub(crate) use menu::{block, menu_row_lit, menu_style, row, row_rect};
 use paints::{appearance, paints, variable_modes};
 pub(crate) use stroke::{CAP_ART_W, cap_art, join_label};
@@ -483,18 +483,17 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     (BoolOp::Intersect, "bool.intersect"),
                     (BoolOp::Exclude, "bool.exclude"),
                 ] {
+                    // Each entry leads with its operation's icon (the result it previews).
                     let key = crate::shortcuts::shortcut(c).unwrap_or("");
-                    let picked = match current {
-                        Some(cur) => menu_check(ui, cur == op, tr(op.label()), key),
-                        None => menu_item(ui, tr(op.label()), key),
-                    };
+                    let icon = crate::layers::op_icon(op);
+                    let picked = menu_icon_item(ui, Some(icon), current.map(|cur| cur == op), tr(op.label()), key);
                     if picked {
                         app.run(c, json!({}));
                         ui.close();
                     }
                 }
                 let key = crate::shortcuts::shortcut("vector.flatten").unwrap_or("");
-                let flatten = if current.is_some() { menu_item_beside_checks(ui, tr("Flatten"), key) } else { menu_item(ui, tr("Flatten"), key) };
+                let flatten = menu_icon_item(ui, None, None, tr("Flatten"), key);
                 if flatten {
                     app.run("vector.flatten", json!({}));
                     ui.close();
