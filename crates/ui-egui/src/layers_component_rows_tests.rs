@@ -91,3 +91,37 @@ fn rows_inside_a_selected_component_take_a_tone_of_its_row() {
         assert!(!rect_under(&shapes, t.selected_row_child, label), "not the plain selection's child tone (dark {dark})");
     }
 }
+
+/// The Layers panel with the component "Button" hidden and nothing selected.
+fn drawn_hidden(dark: bool) -> (Vec<Shape>, Tokens) {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 40, "props": {"name": "Button"}})).unwrap());
+    let c = id(s.execute("component.create", &json!({"ids": [f]})).unwrap());
+    s.execute(if dark { "view.themeDark" } else { "view.themeLight" }, &json!({})).unwrap();
+    s.execute("node.set", &json!({"id": c, "props": {"visible": false}})).unwrap();
+    s.execute("select.set", &json!({"ids": []})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let shapes = crate::live_tests::flat(&u.frame_output(vec![]).shapes);
+    (shapes, Tokens::get(&u.ctx))
+}
+
+/// `fg` (premultiplied, as egui paints it) composited over the opaque `bg`.
+fn over(fg: Color32, bg: Color32) -> Color32 {
+    let k = 1.0 - f32::from(fg.a()) / 255.0;
+    let mix = |f: u8, b: u8| (f32::from(f) + f32::from(b) * k).round().min(255.0) as u8;
+    Color32::from_rgb(mix(fg.r(), bg.r()), mix(fg.g(), bg.g()), mix(fg.b(), bg.b()))
+}
+
+#[test]
+fn a_hidden_component_name_keeps_the_dim_text_floor_of_3_to_1() {
+    for dark in [false, true] {
+        let (shapes, t) = drawn_hidden(dark);
+        assert_eq!(t.dark, dark);
+        let col = name_colour(&shapes, "Button");
+        for (what, bg) in [("the panel", t.panel), ("a hovered row", t.hover)] {
+            let ratio = color(over(col, bg)).contrast(color(bg));
+            assert!(ratio >= 3.0, "hidden component name {col:?} is {ratio:.2}:1 on {what} (dark {dark})");
+        }
+    }
+}

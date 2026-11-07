@@ -746,16 +746,17 @@ fn is_component(kind: &NodeKind) -> bool {
     matches!(kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. })
 }
 
-/// A row's icon or name colour: the theme's component tint (faded when hidden; it reads at AA on
-/// the panel and on the selected row, where the canvas purple doesn't, #1903), else `normal` or
-/// `faded`.
+/// A row's icon or name colour: the theme's component tint when shown (it reads at AA on the
+/// panel and on the selected row, where the canvas purple doesn't, #1903), else `normal` or, when
+/// hidden, `faded` (halving the tint's alpha would drop it to about 2.2:1, under the 3:1 floor
+/// for dim text).
 fn row_color(t: &Tokens, component: bool, shown: bool, normal: Color32, faded: Color32) -> Color32 {
-    if component {
-        t.component.gamma_multiply(if shown { 1.0 } else { 0.5 })
-    } else if shown {
-        normal
-    } else {
+    if !shown {
         faded
+    } else if component {
+        t.component
+    } else {
+        normal
     }
 }
 
