@@ -340,3 +340,16 @@ fn per_corner_radii_with_a_variable_first_keep_every_corner() {
         classes("border-radius: var(--radius-a, 4px) 8px 8px 8px;\nborder-radius: var(--radius-card, 4px);\n").into_iter().map(|(_, c)| c).collect();
     assert_eq!(got, ["rounded-[var(--radius-a,_4px)_8px_8px_8px]", "rounded-card"]);
 }
+
+#[test]
+fn font_family_with_quote_and_bracket_stays_a_valid_class_token() {
+    let mut s = Session::new();
+    let t = idv(&ex(&mut s, "text.create", json!({"text": "hi", "x": 0, "y": 0, "props": {"fontFamily": "A\"B]C"}})));
+    let out = code(&mut s, t, json!({}));
+    let rest = out.split("className=\"").nth(1).unwrap_or_default();
+    let (attr, after) = rest.split_once('"').unwrap_or_default();
+    let family = attr.split(' ').find(|c| c.starts_with("font-[")).unwrap_or_default();
+    let inner = family.strip_prefix("font-[").and_then(|f| f.strip_suffix(']')).unwrap_or("\\");
+    assert!(after.starts_with('>') && !attr.contains('\\'), "{out}");
+    assert!(!inner.is_empty() && !inner.contains(['\\', '"', ']']), "{out}");
+}
