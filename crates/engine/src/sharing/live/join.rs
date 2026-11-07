@@ -222,7 +222,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "collab.reconnect",
             "Reconnect live session",
-            "{} → {status}: for the open file's session when it is disconnected: a reconnect that is waiting tries now, and a session that couldn't go on (`failed`, the file open in its tab) is joined again there, what you changed since opening beside it. Refused when nothing was lost",
+            "{} → {status}: for the open file's session when it is disconnected: a reconnect that is waiting tries now, and a session that couldn't go on (`failed`, the file open in its tab) is joined again there, what you changed since going on top (your whole version opening beside it when some of it can't). Refused when nothing was lost",
             false,
             reconnect
         ),
