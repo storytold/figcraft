@@ -68,7 +68,9 @@ impl Backend for Store {
                 Err(err) => log::error!("file {file}: a change couldn't be logged: {err}"),
             }
         }
-        log.entries += journal.len();
+        // A refusal changes nothing in the document: it counts toward the log's size (bytes), but
+        // not toward the entries that make a snapshot rewrite worthwhile.
+        log.entries += journal.iter().filter(|j| !matches!(j, figcraft_collab::Journal::Refused { .. })).count();
         log.dirty = true;
         e.meta.updated = now();
         if log.entries >= after || log.bytes + log.pending.len() as u64 >= max_bytes {
