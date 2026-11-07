@@ -29,6 +29,7 @@ enum StrokeJoin MITER BEVEL ROUND
 enum VectorMirror NONE ANGLE ANGLE_AND_LENGTH
 enum ShapeWithTextType SQUARE ELLIPSE
 enum ConnectorLineStyle ELBOWED STRAIGHT CURVED
+enum ConnectorMagnet NONE AUTO TOP LEFT BOTTOM RIGHT CENTER
 enum ExpressionFunction ADDITION SUBTRACTION RESOLVE_VARIANT MULTIPLY DIVIDE EQUALS
 enum NavigationType NAVIGATE OVERLAY
 enum TransitionType INSTANT_TRANSITION DISSOLVE SMART_ANIMATE
@@ -50,7 +51,8 @@ message VariableTarget VariableID id
 message VariableSetID GUID guid, AssetRef assetRef
 message ConditionalActions Action[] actions, VariableData condition
 message VectorData uint vectorNetworkBlob, Vector normalizedSize, NodeChange[] styleOverrideTable
-message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition
+message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition, ConnectorMagnet magnet
+message ConnectorControlPoint Vector position, Vector axis
 message VariableData AnyValue value, DataType dataType
 message Paint PaintType type, Color color, float opacity, bool visible, Image image, Matrix transform, ColorStop[] stops, VariableData colorVar, ImageScaleMode imageScaleMode
 message ParentIndex GUID guid, string position
@@ -74,7 +76,7 @@ message Event InteractionType interactionType
 message Action GUID transitionNodeID, TransitionType transitionType, float transitionDuration, EasingType easingType, ConnectionType connectionType, NavigationType navigationType, VariableTarget targetVariable, VariableData targetVariableData, VariableSetID targetVariableSetID, GUID targetVariableModeID, ConditionalActions[] conditionalActions
 message Interaction Event event, Action[] actions
 message StartingPoint string name, string position
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern, ConnectorControlPoint[] connectorControlPoints
 message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";

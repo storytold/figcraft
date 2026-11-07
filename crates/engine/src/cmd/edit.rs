@@ -15,6 +15,7 @@ use crate::{BatchStep, EngineError, Result, Session, bad, spec};
 
 mod clipboard;
 mod props;
+pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;
 
 pub(crate) use clipboard::apply_copied_props;
@@ -345,14 +346,28 @@ pub fn specs() -> Vec<CommandSpec> {
             s.doc_mut()?.reorder(i, idx)?;
             ok()
         }),
-        spec!("fill.add", "Add fill", "{ids?, paint? | color? (default #D9D9D9 or white for frames)}", true, |s, p| paint_list(s, p, true, true)),
+        spec!(
+            "fill.add",
+            "Add fill",
+            "{ids?, paint? | color? (default #D9D9D9 or white for frames), regions? (a vector's regions by index: their own fills, as the regions selected in edit mode)}",
+            true,
+            |s, p| paint_list(s, p, true, true)
+        ),
         spec!("stroke.add", "Add stroke", "{ids?, paint? | color? (default black)}", true, |s, p| paint_list(s, p, false, true)),
-        spec!("fill.remove", "Remove fill", "{ids?, index}", true, |s, p| paint_list(s, p, true, false)),
+        spec!("fill.remove", "Remove fill", "{ids?, index, regions?}", true, |s, p| paint_list(s, p, true, false)),
         spec!("stroke.remove", "Remove stroke", "{ids?, index}", true, |s, p| paint_list(s, p, false, false)),
-        spec!("fill.set", "Set fill", "{ids?, index?, paint | color, opacity?, visible?, blend?}", true, |s, p| paint_set(s, p, true)),
+        spec!(
+            "fill.set",
+            "Set fill",
+            "{ids?, index?, paint | color, opacity?, visible?, blend?, regions? (a vector's regions by index: their own fills, as the regions selected in edit mode)}",
+            true,
+            |s, p| paint_set(s, p, true)
+        ),
         spec!("stroke.set", "Set stroke", "{ids?, index?, paint | color, opacity?, visible?, blend?}", true, |s, p| paint_set(s, p, false)),
         spec!("fill.copy", "Copy fill", "{id?, index? (default the top fill)}", false, |s, p| paint_copy(s, p, true)),
-        spec!("fill.paste", "Paste fill", "{ids?, index? (replace the fill there; without: add one)}", true, |s, p| paint_paste(s, p, true)),
+        spec!("fill.paste", "Paste fill", "{ids?, index? (replace the fill there; without: add one), regions?}", true, |s, p| paint_paste(
+            s, p, true
+        )),
         spec!(
             "stroke.copy",
             "Copy stroke",

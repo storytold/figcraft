@@ -57,6 +57,9 @@ pub fn rotate_about(xf: Affine, pivot: Point, degrees: f64) -> Affine {
 /// Round a value to `digits` decimals for display (avoids `-0` and float noise).
 pub fn round_to(v: f64, digits: i32) -> f64 {
     let f = 10f64.powi(digits);
+    if v.is_finite() && !f.is_finite() {
+        return v;
+    }
     let r = (v * f).round() / f;
     if r == 0.0 { 0.0 } else { r }
 }

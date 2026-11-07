@@ -308,6 +308,12 @@ impl LiveLink for NetLink {
         }
     }
 
+    fn retry(&mut self, session: SessionId) {
+        if let Some(Active::Guest(g)) = self.sessions.get(session) {
+            g.retry();
+        }
+    }
+
     fn presence(&mut self, session: SessionId, p: &Presence) {
         match self.sessions.get(session) {
             Some(Active::Host(h)) => h.presence(p.clone()),

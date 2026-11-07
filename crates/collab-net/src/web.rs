@@ -242,6 +242,10 @@ impl LiveLink for NetLink {
         }
     }
 
+    fn retry(&mut self, session: SessionId) {
+        self.with(session, |d, now| d.retry(now));
+    }
+
     fn presence(&mut self, session: SessionId, p: &Presence) {
         self.with(session, |d, now| d.presence(p.clone(), now));
     }
