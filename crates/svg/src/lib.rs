@@ -537,8 +537,8 @@ impl W<'_> {
             if let NodeKind::Vector { network } = &n.kind
                 && network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some())
             {
-                let rounded = network.rounded();
-                let net = rounded.as_ref().unwrap_or(network);
+                let drawn = figcraft_doc::geometry::drawn_network(network, n.corners.smoothing);
+                let net = drawn.as_ref();
                 for (i, region) in net.regions.iter().enumerate() {
                     let paints = region.fills.as_deref().unwrap_or(&n.fills);
                     let fr = if region.winding == figcraft_doc::WindingRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };
@@ -802,7 +802,7 @@ impl W<'_> {
                     return None;
                 }
                 match n.kind {
-                    NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && sweep >= std::f64::consts::TAU - 1e-9 => {
+                    NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && figcraft_geom::full_sweep(sweep) => {
                         figcraft_geom::kurbo::Shape::to_path(&figcraft_geom::kurbo::Ellipse::from_rect(r), 0.1)
                     }
                     NodeKind::Rectangle | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. } if n.corners.smoothing == 0.0 => {

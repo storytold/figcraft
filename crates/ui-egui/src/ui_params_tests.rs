@@ -31,6 +31,7 @@ fn export_settings_with_every_option_are_taken() {
             svg_simplify_stroke: false,
             vd_compat: VdCompat::Exact,
             color_profile: ExportColorProfile::DisplayP3,
+            quality: 70,
             ..ExportSetting::default()
         };
         let mut p = crate::export_panel::setting_params(&setting);

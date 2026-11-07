@@ -192,3 +192,58 @@ fn arc_stroke_mitres_are_not_cut_off() {
         assert!(worst <= 2, "{align:?}: {worst} levels cut off");
     }
 }
+
+/// A dashed stroke is cut into separate dashes with square ends, a width profile can step its
+/// width and a brush lays down shapes of its own: round a whole ellipse or a rounded box, a spread
+/// mitres out at their corners, past the box grown by the spread, and keeps its whole shadow.
+#[test]
+fn stroke_corners_spread_mitres_are_not_cut_off() {
+    use figcraft_doc::{Brush, Node, StrokeAlign, StrokeCap, WidthProfile};
+    type Style = fn(&mut Node);
+    let strokes: [(&str, Style); 4] = [
+        ("dashed", |n| n.stroke.dashes = vec![30.0, 30.0]),
+        ("dashed with square caps", |n| (n.stroke.dashes, n.stroke.dash_cap) = (vec![30.0, 30.0], Some(StrokeCap::Square))),
+        ("stepped", |n| n.stroke.width_profile = Some(WidthProfile::new([(0.0, 1.0), (0.25, 4.0), (0.26, 0.2), (0.75, 4.0)]))),
+        ("starry", |n| n.stroke.brush = Some(Brush::new("stars"))),
+    ];
+    let shapes = [(NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, 0.0), (NodeKind::Rectangle, 100.0)];
+    for (kind, radius) in shapes {
+        for (name, style) in strokes {
+            for align in [StrokeAlign::Outside, StrokeAlign::Center] {
+                let make = |effects: Vec<EffectKind>| {
+                    let (mut d, n) = shape(kind.clone(), effects);
+                    let node = d.get_mut(n).unwrap();
+                    node.corners.radii = [radius; 4];
+                    node.strokes = vec![Paint::solid(Color::WHITE)];
+                    (node.stroke.weight, node.stroke.align) = (20.0, align);
+                    style(node);
+                    (d, n)
+                };
+                let (d, n) = make(vec![EffectKind::DropShadow(shadow(30.0))]);
+                let clear = Shadow { color: Color::new(0.0, 0.0, 0.0, 0.0), ..shadow(120.0) };
+                let (roomy, m) = make(vec![EffectKind::DropShadow(shadow(30.0)), EffectKind::DropShadow(clear)]);
+                let (a, b) = (render(&d, n), render(&roomy, m));
+                let worst = a.data().chunks(4).zip(b.data().chunks(4)).map(|(p, q)| p[3].abs_diff(q[3])).max().unwrap_or(0);
+                // The stroke lands a little differently on a layer of another size, even when
+                // both have room to spare: up to 16 levels at a pixel or two. Cut off is 255.
+                assert!(worst <= 16, "{kind:?} radius {radius}, {name} {align:?}: {worst} levels cut off");
+            }
+        }
+    }
+}
+
+/// Without a spread, a dashed stroke reaches no further than a solid one: the bounds an export
+/// goes by stay the box grown by the stroke.
+#[test]
+fn a_dashed_stroke_without_a_spread_keeps_its_bounds() {
+    use figcraft_doc::StrokeAlign;
+    for kind in [NodeKind::Rectangle, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }] {
+        let (mut d, n) = shape(kind.clone(), vec![]);
+        let node = d.get_mut(n).unwrap();
+        node.strokes = vec![Paint::solid(Color::WHITE)];
+        (node.stroke.weight, node.stroke.align) = (20.0, StrokeAlign::Outside);
+        node.stroke.dashes = vec![30.0, 30.0];
+        let b = crate::export_bounds(&d, n).unwrap();
+        assert_eq!((b.x0, b.y0, b.x1, b.y1), (80.0, 80.0, 320.0, 320.0), "{kind:?}");
+    }
+}

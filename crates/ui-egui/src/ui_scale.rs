@@ -47,8 +47,9 @@ pub fn percent(scale: f32) -> u32 {
     (scale * 100.0).round().clamp(0.0, 100_000.0) as u32
 }
 
-/// The sizes Preferences offers, relative to the system's scale (`pref.uiScale` takes up to 3).
-pub const SIZES: [f64; 8] = [0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+/// The sizes Preferences offers, relative to the system's scale (`pref.uiScale` takes up to 3);
+/// the interface size keys step through the same list.
+pub const SIZES: [f64; 8] = figcraft_engine::UI_SCALE_SIZES;
 
 #[cfg(test)]
 mod tests {

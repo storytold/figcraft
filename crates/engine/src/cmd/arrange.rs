@@ -465,7 +465,8 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
                 }
                 EffectKind::Glass(g) => {
                     g.depth *= k;
-                    g.frost *= k;
+                    // From the frost it draws with (an older file's past 100 draws at 100).
+                    g.frost = (g.sanitized().frost * k).min(figcraft_doc::Glass::MAX_FROST);
                 }
             }
         }
@@ -569,18 +570,19 @@ pub(crate) fn resize_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         let n = doc.get_mut(i)?;
         let after = n.transform * Point::new(w * ax, h * ay);
         n.transform = Affine::translate(before - after) * n.transform;
-        if num(p, "width").is_some() {
-            n.child_layout.sizing_h = Sizing::Fixed;
-        }
-        if num(p, "height").is_some() {
-            n.child_layout.sizing_v = Sizing::Fixed;
-        }
         if let NodeKind::Text(t) = &mut n.kind {
             if num(p, "height").is_some() {
                 t.fix_size(num(p, "width").is_some(), true);
             } else if t.auto_resize != TextAutoResize::Truncate {
                 t.auto_resize = TextAutoResize::Height;
             }
+        }
+        // A side given is fixed, or fills its auto layout parent when it is the full space there.
+        if num(p, "width").is_some() {
+            super::props::fix_axis(doc, i, true)?;
+        }
+        if num(p, "height").is_some() {
+            super::props::fix_axis(doc, i, false)?;
         }
         super::props::restore_worlds(doc, &kept)?;
     }

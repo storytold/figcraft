@@ -480,10 +480,29 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
         _ => (0.0, 0.0),
     };
     if (dx, dy) != (0.0, 0.0) {
-        if app.session.selection().is_empty() {
+        if app.session.selection().is_empty() && app.session.tool.tool.draws_shape() && !app.session.tool.dev_mode && !m.command && !m.alt {
+            // A shape or frame tool chosen: the arrows show the placement crosshair in the middle
+            // of the view and move it; Enter places there (Accessibility at Figma).
+            app.run("tool.crosshair", json!({"dx": dx, "dy": dy, "big": m.shift}));
+        } else if app.session.selection().is_empty() {
             app.run("view.pan", json!({"dx": dx, "dy": dy, "big": m.shift}));
         } else if crate::menus::dev_mode_refuses(app, "transform.nudge") {
             // Dev Mode: said so, nothing moves.
+        } else if m.command && m.alt {
+            // Cmd/Ctrl+Alt+arrows rotate a degree at a time, 15 with Shift (Accessibility at
+            // Figma); down and right turn clockwise, up and left back (the documentation doesn't
+            // say which way). Not while points are being edited: the layer must not turn under
+            // the editor, and no key rotates points. About the selection's rotation origin (the
+            // moved one, else the centre of the rotated selection box), so repeated turns stay put.
+            if app.session.ds().is_ok_and(|d| d.vector_edit.is_some()) {
+                return true;
+            }
+            let step = if m.shift { 15.0 } else { 1.0 };
+            let origin = app.session.ds().ok().and_then(|d| d.origin_point());
+            app.run(
+                "transform.rotate",
+                json!({"degrees": if dx + dy < 0.0 { -step } else { step }, "cx": origin.map(|o| o.x), "cy": origin.map(|o| o.y)}),
+            );
         } else if m.command {
             // Cmd/Ctrl+arrows resize: right/down grow, left/up shrink.
             app.run("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}));

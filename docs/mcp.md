@@ -42,7 +42,8 @@ replaced then, so a pause between calls is not an error.
 
 The app keeps answering while its window is minimised or covered by other windows (see
 `docs/control-protocol.md`): edits, inspection (`inspect_ui` too), pointer, key and text input and
-renders work as usual (minimised, each request to the app takes up to about 0.1 s). Only a capture
+renders work as usual (minimised, each request to the app takes up to about 0.1 s; under Wayland,
+which can't report a minimised window, about half a second). Only a capture
 of the window itself (`screenshot` with `window`) needs it on screen: it is then an error at once;
 `screenshot` without `window` renders the document instead.
 
@@ -312,10 +313,16 @@ Or in a project's `.mcp.json`:
   `style.detach {which: "text", start?, end?}` unlinks them (values stay). A layer's `styles.text` is
   the style all its chars share (none when they differ); `get_node` lists the linked chars as
   `textStyleRanges` (`[start, end, style id]`).
+  A text style also carries paragraph spacing and indent, the list style and the OpenType features
+  (`paragraph` beside `style` in `style.list`): applying it sets them (on a range, the list goes to
+  the paragraphs touched; the rest is the layer's), `style.update` moves them too, and a `.fig`
+  file keeps them with the style.
   Changing what a text style sets (font, size, line height, letter spacing, decoration, case, axis
-  values) on linked chars unlinks them; `style.update` moves every linked char. `style.create
-  {type: "text", name}` takes the selected chars while editing; a `value` may use the `node.set`
-  spellings (`{"fontSize": 32, "lineHeight": "120%", "letterSpacing": "2%"}`).
+  values; at the paragraph level the spacing, indent, list and features) on linked chars unlinks
+  them; `style.update` moves every linked char. `style.create {type: "text", name}` takes the
+  selected chars while editing; a `value` may use the `node.set` spellings (`{"fontSize": 32,
+  "lineHeight": "120%", "letterSpacing": "2%", "paragraphSpacing": 12, "listStyle": "bulleted",
+  "features": {"liga": false}}`).
 - **Styles stay true to their layers**: editing a styled fill, stroke, effect or layout grid list
   (`node.set`, `fill.set`, `fill.add`, a bound variable…) unlinks that style (`styles.fill` etc. go
   `null`), so a later `style.update` doesn't overwrite the edit; `style.apply` replaces variables
@@ -373,7 +380,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `select {ids}` | Replace the selection (`[]` deselects). |
-| `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`. The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (SVG, PDF and XML are always sRGB). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
+| `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (SVG, PDF and XML are always sRGB). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
 | `open_file {path, variables?, reload?}` / `save_file {path?}` | Open `.figcraft`, `.json` (FigCraft JSON or REST API file JSON with its variables, see below), `.fig` or FigJam `.jam` (best effort, see below), `.sketch` (Sketch 48 and newer, best effort), `.svg` (see Importing SVG below) or an image; save as `.figcraft`. `open_file` returns `opened` (for a file opened anew, a `summary` of `name`, `pages`, `layers` and `images`, and `warnings` or `repairs`; a file that was already open gives its `index`, with `stale: true` when the file changed on disk since that tab read or saved it; `reload: true` reads it again into the tab, refused while the tab has unsaved changes) and the document's `document` outline. |
 | `undo` / `redo` | Step through history. |
@@ -847,11 +854,15 @@ removes the whole conditional). Every one is an undo step and applies to all `id
 with the same interactions). Flows `proto.flow.add` / `rename` / `remove`,
 and the device, its rotation and the background `proto.settings {device?, background?,
 rotation?, color?, width?, height?, responsive?}` (`None`, `iPhone 16`, `iPhone 16 Pro Max`,
-`Android Compact`, `iPad mini`, `MacBook Air`, `Desktop` or `Custom size`; `rotation` `portrait` or
+`Android Compact`, `iPad mini`, `MacBook Air`, `Desktop` or `Custom size`, in any case; another
+name is an error that lists the devices, and nothing changes; `rotation` `portrait` or
 `landscape`, which turns phones and tablets; `color` one of the device's colours by name, e.g.
 `Black`, `White`, `Pink`, `Teal`, `Blue` for the iPhone 16 (an error lists them), `""` for the
 default; `width` / `height` set the custom size's screen, 1–10000 points, and pick `Custom size`,
-which is a bare screen without a body). On a device the presented frame is sized to the device's
+which is a bare screen without a body). Every call answers the page's settings as they are after
+it, so `proto.settings {}` reads them: `{device, background, rotation, color (the colour shown, null
+without a body), screen ({width, height} as presented, null without a device), customSize,
+responsive}`. On a device the presented frame is sized to the device's
 screen: a frame bigger than the screen scrolls through its whole size whatever its `overflow`, content
 past the frame's own edges scrolls only as its `overflow` allows (else it's clipped), and `fixed`
 layers stay on screen (pinned to the edges their constraints name). With `responsive: true` (saved
@@ -859,7 +870,7 @@ in the file) the presented frame is instead resized to the device's screen, or w
 the presenter's window at 100%, and its constraints and auto layout respond as when it is resized
 in the editor (an axis it hugs keeps hugging its content); the file's frames don't change. `proto.present {start?}` plays the prototype full-window and `proto.preview
 {start?}` in a resizable pane over the canvas that follows edits live; `proto.closePreview` closes
-it. `proto.presentOptions {scale?, deviceFrame?, hotspotHints?, inspect?}` sets how the
+it. `proto.presentOptions {scale?, deviceFrame?, hotspotHints?, inspect?, hideUi?}` sets how the
 full-window presenter sizes the prototype (`fit` scales it down to fit, `fitWidth` fills the width,
 `fill` covers the window, `actual` shows it at 100%; what overflows pans), whether it draws the
 device, whether a click where nothing reacts briefly flashes the screen's hotspots (the layers with
@@ -1353,7 +1364,10 @@ branches). Driven with `run_command`:
   export settings, guides, prototype interactions, annotations and Dev Mode resources compare item
   by item, so changing different items of one list on each side, or adding items at its end on one
   side, merges without a conflict; other lists, such as code links, compare whole; a layer's parent
-  and position are one property, `parent`), a layer deleted on one side while the other edited it or what's inside it
+  and position are one property, `parent`; auto layout settings, `layout` and `childLayout`, compare
+  field by field, each field changed both ways its own conflict, `<layer id>/layout.padding`; sizes and
+  places auto layout works out, and values a layer in an instance takes from its main, are never
+  conflicts: the merged file works them out again), a layer deleted on one side while the other edited it or what's inside it
   (`<layer id>/layer`, with `deletedBy`), or a document-level entry or setting changed on both sides
   (`style/<id>`, `variable/<id>`, `comment/<id>`, `doc/<property>`…).
 - `branch.merge {id?, resolutions?}` merges the branch into the main file as one undo step,
@@ -1478,7 +1492,10 @@ only: a host stops hosting it, a guest leaves it.
   see `FIGCRAFT_CA_FILE` in [`server.md`](server.md#behind-a-reverse-proxy-tls)). `collab.leave {}`
   leaves the active document's session (or ends a join started from it that is still on its way
   or failed), and `collab.leave {session}` the session with that id (from `sessions`), whichever
-  document is active; the synced document stays open as your copy.
+  document is active; the synced document stays open as your copy. `collab.reconnect {}` acts on
+  the active document's lost session: a reconnect that is waiting tries now, and a session you
+  joined that couldn't go on is joined again in its tab. A dropped connection keeps reconnecting
+  until you leave (see *Reconnect* in [`collab-protocol.md`](collab-protocol.md)).
 - `collab.publish {server, name?, key?}` puts the active document on a `figcraft-server`
   ([`server.md`](server.md)) and syncs it from there (as that document's session; others go on): `server` is the address
   `figcraft-server key` prints (`ws://host:47900/?key=…`; or give `key` separately), `name` the

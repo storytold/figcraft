@@ -281,6 +281,7 @@ fn tools() -> Vec<Value> {
                     "svgSimplifyStroke": boolean("SVG: strokes as `stroke` attributes where exact (default true); false writes outlines"),
                     "vdCompat": {"type": "string", "enum": ["bestEffort", "exact", "ignore"], "description": "XML: what a Vector Drawable can't draw exactly is approximated with a warning (bestEffort, default), left out with a warning (exact), or written as far as it maps without warnings (ignore: overlapping layer opacity dropped, even-odd fills kept as fillType=evenOdd, diamond gradients left out)"},
                     "colorProfile": {"type": "string", "enum": ["sameAsFile", "srgb", "displayP3"], "description": "PNG, JPG and WebP: the color profile of the file (default sameAsFile: the document's); colors are converted and out-of-gamut ones clip. SVG, PDF and XML are always sRGB"},
+                    "quality": {"type": "integer", "minimum": 1, "maximum": 100, "description": "JPG: the encoder's quality, 1 (smallest file) to 100; default 90"},
                 }),
                 &[],
             ),
@@ -1061,6 +1062,7 @@ fn export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Str
         "svgSimplifyStroke",
         "vdCompat",
         "colorProfile",
+        "quality",
     ] {
         if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
             params.insert(k.into(), v.clone());

@@ -1,6 +1,7 @@
 use super::load::{ext, write};
 use super::save::thumbnail;
 use super::*;
+use crate::params::f64_of;
 
 /// Encode `ids` (or the page) in `format` at `scale`.
 pub fn export_bytes(doc: &Document, ids: &[NodeId], format: ExportFormat, scale: f64) -> Result<Vec<u8>> {
@@ -159,7 +160,8 @@ pub fn export_scale(doc: &Document, ids: &[NodeId], setting: &ExportSetting) -> 
     export_area(doc, ids, setting).map_or(1.0, |b| setting.size.scale_for(b.width(), b.height()))
 }
 
-/// `e` with the `size` ("2x", "512w", "512h" or `{by, value}`), `suffix` and `format` that `p` sets.
+/// `e` with the `size` ("2x", "512w", "512h" or `{by, value}`), `suffix`, `format` and the
+/// format options (`quality`, `vdCompat`, PDF print options, the SVG flags) that `p` sets.
 pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value) -> Result<ExportSetting> {
     if let Some(size) = size_param(cmd, p)? {
         e.size = size;
@@ -176,6 +178,9 @@ pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value)
     if let Some(c) = color_profile_param(cmd, p)? {
         e.color_profile = c;
     }
+    if let Some(q) = quality_param(cmd, p)? {
+        e.quality = q;
+    }
     e.print = print_param(cmd, p, e.print)?;
     for (key, slot) in [
         ("contentsOnly", &mut e.contents_only),
@@ -190,6 +195,16 @@ pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value)
         }
     }
     Ok(e)
+}
+
+/// The JPG `quality` `p` passes: a whole number from 1 to 100 (anything else is an error).
+fn quality_param(cmd: &str, p: &Value) -> Result<Option<u8>> {
+    let Some(v) = get(p, "quality") else { return Ok(None) };
+    let q = if v.is_boolean() { None } else { f64_of(v) };
+    match q.filter(|q| q.fract() == 0.0 && (1.0..=100.0).contains(q)) {
+        Some(q) => Ok(Some(q as u8)),
+        None => Err(bad(cmd, "quality: a whole number from 1 to 100 (JPG)")),
+    }
 }
 
 /// Whether `p` sets any PDF print option.

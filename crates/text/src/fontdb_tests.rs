@@ -139,7 +139,10 @@ fn macos_font_assets_are_found_in_the_asset_store() {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    let tmp = TempDir(std::env::temp_dir().join(format!("figcraft-font-assets-{}", std::process::id())));
+    // Created fresh: a directory or link already at this predictable name is refused, and not removed.
+    let root = std::env::temp_dir().join(format!("figcraft-font-assets-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tmp = TempDir(root);
     let store = tmp.0.join("AssetsV2");
     let fonts = store.join("com_apple_MobileAsset_Font7");
     let data = |kind: &std::path::Path| kind.join("0f1e2d.asset").join("AssetData");
@@ -538,6 +541,31 @@ fn every_platform_has_a_thai_font_in_the_fallbacks() {
     }
 }
 
+/// #1902: a web build has no system fonts, so a document's missing characters can only come from
+/// the embedded faces. Every script face craft-fonts can embed (`FIGCRAFT_EMBED_SCRIPTS`) is a
+/// document fallback after the Latin faces; else Hebrew or Devanagari typed into an Inter layer
+/// would stay missing glyphs with its face embedded.
+#[test]
+fn every_embeddable_script_face_is_a_document_fallback() {
+    let at = |family: &str| FALLBACK_FAMILIES.iter().position(|f| *f == family);
+    let latin = at("Segoe UI").unwrap();
+    for face in [
+        "Noto Sans Arabic",
+        "Noto Sans Thai",
+        "Noto Sans Hebrew",
+        "Noto Sans Devanagari",
+        "Noto Sans Georgian",
+        "Noto Sans Symbols",
+        "Noto Sans Symbols 2",
+    ] {
+        assert!(at(face).is_some_and(|i| i > latin), "{face} is a fallback after the Latin faces");
+    }
+    // And whatever script face this build embeds (CI builds have craft-fonts; CJK by request).
+    for f in CRAFT_FONTS.iter().filter(|f| f.family.starts_with("Noto Sans") && !f.family.contains("CJK")) {
+        assert!(FALLBACK_FAMILIES.contains(&f.family), "embedded {} is a document fallback", f.family);
+    }
+}
+
 // The paths are Unix absolute paths (font managers are a macOS thing): on Windows they aren't absolute.
 #[cfg(unix)]
 #[test]
@@ -594,4 +622,16 @@ fn system_font_dirs_are_walked_once_each() {
     let dirs = super::system_font_dirs();
     let unique: std::collections::HashSet<_> = dirs.iter().collect();
     assert_eq!(unique.len(), dirs.len(), "{dirs:?}");
+}
+
+#[test]
+fn a_collection_header_naming_billions_of_faces_loads_a_bounded_few() {
+    // Four bytes per face offset: a header can name far more faces than the data holds, and each
+    // one would be parsed (and keep a character map) in turn.
+    let mut bytes = synthetic_font_collection(32);
+    bytes[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
+    let start = std::time::Instant::now();
+    let faces = FontDb::default().add_bytes(bytes);
+    assert!(faces.len() <= 64, "{}", faces.len());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
 }
