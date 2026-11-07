@@ -78,8 +78,13 @@ impl<'a> Mapper<'a> {
                     let (w, h) = n.get("size").map_or((0.0, 0.0), |s| (num(s, "x").unwrap_or(0.0), num(s, "y").unwrap_or(0.0)));
                     let at = e.get("relativePosition").and_then(|r| Some((num(r, "x")?, num(r, "y")?)));
                     let t = n.get("transform").and_then(matrix).unwrap_or_default();
+                    // An automatic magnet (`AUTO`: the side is picked when the connector is drawn;
+                    // `CENTER`: the end aims at the layer's middle) attaches to the side facing the
+                    // other end, as a board connector drawn here does; the file's `relativePosition`
+                    // is not where such an end sits (#1909).
+                    let automatic = matches!(e.get("magnet").and_then(Kv::str), Some("AUTO" | "CENTER"));
                     match routing {
-                        Routing::Straight => {
+                        Routing::Straight if !automatic => {
                             let (rx, ry) = at.unwrap_or((0.5, 0.5));
                             RouteEnd::Point(t * Point::new(w * rx, h * ry))
                         }
@@ -453,7 +458,8 @@ fn saved_runs(v: &View<'_>, from: RouteEnd, to: RouteEnd) -> Option<ConnectorPat
     fits.then_some(ConnectorPath::Runs { across, at })
 }
 
-/// The side of its layer a connector end leaves from: the `magnet` the file names, else the edge
+/// The side of its layer a connector end leaves from: the `magnet` the file names (`AUTO` and
+/// `CENTER`: the side facing the other end, whatever `relativePosition` says; #1909), else the edge
 /// its point on the layer (`relativePosition`, 0–1) lies on, else the side facing the other end.
 fn side(e: &Kv<'_>, at: Option<(f64, f64)>) -> Side {
     match e.get("magnet").and_then(Kv::str) {
@@ -461,6 +467,7 @@ fn side(e: &Kv<'_>, at: Option<(f64, f64)>) -> Side {
         Some("RIGHT") => Side::Right,
         Some("BOTTOM") => Side::Bottom,
         Some("LEFT") => Side::Left,
+        Some("AUTO" | "CENTER") => Side::Auto,
         _ => match at {
             Some((x, _)) if x <= 0.0 => Side::Left,
             Some((x, _)) if x >= 1.0 => Side::Right,

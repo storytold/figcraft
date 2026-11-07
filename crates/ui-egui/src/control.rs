@@ -1036,7 +1036,10 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
             {
                 return app.session.execute("tool.crosshair", &json!({"dx": dx, "dy": dy, "big": m.shift})).map_err(|e| e.to_string());
             }
-            let (cmd, params) = if (m.cmd || m.ctrl) && m.alt {
+            // Otherwise, with nothing selected the arrows pan the view, as the window's own key path does.
+            let (cmd, params) = if app.session.selection().is_empty() {
+                ("view.pan", json!({"dx": dx, "dy": dy, "big": m.shift}))
+            } else if (m.cmd || m.ctrl) && m.alt {
                 // Rotate a degree, 15 with Shift: down and right clockwise, up and left back, about
                 // the selection's rotation origin; nothing while points are being edited.
                 if app.session.ds().is_ok_and(|d| d.vector_edit.is_some()) {

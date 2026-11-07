@@ -17,7 +17,9 @@ pub(crate) struct Script {
     pub(crate) events: Vec<Event>,
     pub(crate) sent: Vec<Presence>,
     pub(crate) hosted: Vec<HostOptions>,
-    joined: Vec<String>,
+    pub(crate) joined: Vec<String>,
+    /// The sessions told to reconnect now, in order.
+    pub(crate) retried: Vec<u64>,
     pub(crate) left: usize,
     pub(crate) msgs: Vec<ClientMsg>,
     pub(crate) published: Vec<PublishOptions>,
@@ -46,6 +48,10 @@ impl LiveLink for Mock {
         i.url = format!("ws://{}/?file=f&token=t", i.address);
         Ok(i)
     }
+    fn retry(&mut self, session: u64) {
+        self.0.lock().unwrap().retried.push(session);
+    }
+
     fn join(&mut self, session: u64, link: &str, _: &str) -> Result<(), String> {
         if !link.starts_with("figcraft://") {
             return Err("not an invite".into());
@@ -231,7 +237,7 @@ fn events_build_who_is_here() {
     assert_eq!(s.live_summary()["attempt"], 1);
     push(&script, vec![Event::Status(Status::Failed { reason: "Lost the connection".into() })]);
     s.live_poll();
-    assert!(s.live().info.is_none());
+    assert!(s.live().peers.is_empty() && !s.live().syncing());
     assert_eq!(s.live_summary()["reason"], "Lost the connection");
     assert_eq!(s.message.as_deref(), Some("Lost the connection"));
     assert!(!s.live_poll(), "nothing new");
