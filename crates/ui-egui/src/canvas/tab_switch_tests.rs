@@ -9,6 +9,7 @@ use serde_json::json;
 use crate::idle_tests::wait_for_render;
 use crate::{FigApp, NoServices};
 
+/// The whole UI, driven headless, with files of their own names open.
 struct Harness {
     ctx: egui::Context,
     app: FigApp,
@@ -16,6 +17,7 @@ struct Harness {
 }
 
 impl Harness {
+    /// The UI with a file named after each of `names` (each with a rectangle); the last is shown.
     fn new(names: &[&str]) -> Self {
         figcraft_text::scan_system_fonts();
         let mut s = Session::empty();
@@ -26,6 +28,7 @@ impl Harness {
         Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0 }
     }
 
+    /// One frame with no input, 1/60 s after the last.
     fn frame(&mut self) {
         self.time += 1.0 / 60.0;
         self.app.clock.set_test_now(Some(self.time));
@@ -49,11 +52,13 @@ impl Harness {
         panic!("the canvas never showed a refined image");
     }
 
+    /// Show the file named `name`, as clicking its tab does.
     fn switch(&mut self, name: &str) {
         let i = self.app.session.docs.iter().position(|d| d.doc.name == name).unwrap();
         self.app.run("doc.switch", json!({"index": i}));
     }
 
+    /// The file and page on screen.
     fn shown(&self) -> (u64, figcraft_doc::NodeId) {
         let ds = self.app.session.ds().unwrap();
         (ds.uid, ds.page)
@@ -95,8 +100,10 @@ fn kept_images_are_bounded_and_dropped_with_their_files() {
     let f = h.app.session.docs.iter().position(|d| d.doc.name == "F").unwrap();
     let f_uid = h.app.session.docs[f].uid;
     assert!(h.app.canvas.kept.iter().any(|k| k.of.0 == f_uid));
+    // A tab closed in the background: the file shown stays the same.
+    let before = h.shown();
     h.app.run("file.close", json!({"index": f, "force": true}));
-    h.switch("A");
     h.frame();
+    assert_eq!(h.shown(), before);
     assert!(h.app.canvas.kept.iter().all(|k| k.of.0 != f_uid), "a closed file's image goes");
 }
