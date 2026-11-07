@@ -72,6 +72,12 @@ pub fn attached_sides(from: RouteEnd, to: RouteEnd) -> (Option<Side>, Option<Sid
     (attach(from, to.centre()).1, attach(to, from.centre()).1)
 }
 
+/// Where a connector's ends attach, as routed now: the points [`ConnectorPath::Runs`] is measured
+/// from the middle of.
+pub fn attach_points(from: RouteEnd, to: RouteEnd) -> (Point, Point) {
+    (attach(from, to.centre()).0, attach(to, from.centre()).0)
+}
+
 /// The route's path handles: one for each run of an elbow and one for a curve, with the portion
 /// of the path each moves and where it sits.
 pub fn path_handles(pts: &[Point], routing: Routing) -> Vec<(usize, Point)> {
@@ -96,8 +102,9 @@ pub fn reshaped(from: RouteEnd, to: RouteEnd, routing: Routing, path: Option<&Co
     }
 }
 
-/// A path of more runs than this can't be made by hand: [`reshaped`] refuses another.
-const MAX_RUNS: usize = 64;
+/// A path of more runs than this can't be made by hand: [`reshaped`] refuses another, and an
+/// importer leaves a saved one to the router.
+pub const MAX_RUNS: usize = 64;
 
 /// The runs of the right-angled route `pts` with run `portion` moved to `p`.
 fn reshaped_runs(pts: &[Point], portion: usize, p: Point) -> Option<ConnectorPath> {
