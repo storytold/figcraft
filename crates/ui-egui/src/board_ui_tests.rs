@@ -290,7 +290,7 @@ fn a_selected_connector_shows_its_ends_as_handles() {
     let b = u.app.session.execute("board.sticky", &json!({"x": 400, "y": 0})).unwrap()["id"].clone();
     u.app.session.execute("board.connector", &json!({"from": a, "to": b, "style": "straight"})).unwrap();
     let shapes = flat(&u.frame_output(vec![]).shapes);
-    let ends = [u.app.to_screen(200.0, 100.0), u.app.to_screen(400.0, 100.0)];
+    let ends = [u.app.to_screen(204.0, 100.0), u.app.to_screen(396.0, 100.0)];
     for end in ends {
         let ring = shapes.iter().any(|s| matches!(s, egui::Shape::Circle(c) if (c.center - end).length() < 0.5 && c.radius == 5.0));
         assert!(ring, "a handle at {end:?}");
