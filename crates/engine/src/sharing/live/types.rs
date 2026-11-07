@@ -523,6 +523,8 @@ pub trait LiveLink: Send {
     /// End session `session` (stop hosting or leave); the others go on. Nothing for a session
     /// that is over already.
     fn leave(&mut self, session: SessionId);
+    /// Session `session` is waiting to reconnect: try now.
+    fn retry(&mut self, _session: SessionId) {}
     /// Your latest presence in `session` (the link throttles and coalesces).
     fn presence(&mut self, session: SessionId, p: &Presence);
     /// A message for `session`'s server (document changes), sent in order.

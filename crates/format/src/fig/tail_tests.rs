@@ -666,6 +666,54 @@ fn connectors_without_a_saved_path_follow_their_line_style() {
     assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
 }
 
+/// #1909: a connector end whose magnet is `AUTO` (FigJam picks the side when it draws) or `CENTER`
+/// (the end aims at the layer's middle) leaves the side facing the other end, as a board connector
+/// drawn here does, whatever `relativePosition` the file kept for it; a named magnet still wins.
+#[test]
+fn connectors_with_an_automatic_side_leave_the_side_facing_the_target() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, 600.0))]);
+    // The ends keep a stale point on the left of A and the right of B, as the reporter's file did.
+    let end = |node, magnet: &'static str, x| o(vec![("endpointNodeID", g(node)), ("magnet", e(magnet)), ("relativePosition", xy(x, 0.5))]);
+    let joined = |id, name: &str, style: &'static str, start: &'static str, finish: &'static str| {
+        node(
+            id,
+            Some((1, "+")),
+            "CONNECTOR",
+            name,
+            vec![
+                ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+                ("connectorStart", end(60, start, 0.0)),
+                ("connectorEnd", end(61, finish, 1.0)),
+                ("connectorLineStyle", e(style)),
+            ],
+        )
+    };
+    nodes.extend([
+        box_at(60, "A", 0.0),
+        box_at(61, "B", 300.0),
+        joined(62, "Elbow", "ELBOWED", "AUTO", "AUTO"),
+        joined(63, "Line", "STRAIGHT", "CENTER", "CENTER"),
+        joined(64, "Curve", "CURVED", "AUTO", "AUTO"),
+        joined(65, "Named", "ELBOWED", "BOTTOM", "AUTO"),
+    ]);
+    let (doc, _) = import(&canvas(&schema(), &message), "Sides").unwrap();
+    let ends = |name: &str| -> ((f64, f64), (f64, f64)) {
+        let world = doc.world_transform(named(&doc, name).id);
+        let pts: Vec<(f64, f64)> =
+            network_of(&doc, name).vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
+        (pts[0], pts[pts.len() - 1])
+    };
+    // From A's right side (facing B) to B's left side (facing A), not from the stale left point; each
+    // end starts `END_GAP` (4) outside its side.
+    for name in ["Elbow", "Line", "Curve"] {
+        assert_eq!(ends(name), ((104.0, 650.0), (296.0, 650.0)), "{name}");
+    }
+    // A named magnet keeps its side: the bottom of A; the automatic end still faces A.
+    assert_eq!(ends("Named"), ((50.0, 704.0), (296.0, 650.0)));
+}
+
 /// A connector with a label but no saved snapshot: a frame holding its line and its label,
 /// centred on the line's middle, in black when the connector gives no paint.
 #[test]

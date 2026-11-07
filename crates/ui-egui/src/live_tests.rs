@@ -126,7 +126,7 @@ impl Harness {
             color: "#14AE5C".into(),
             file_name: "Shared".into(),
             pages: vec![],
-            link: String::new(),
+            link: "figcraft://join?host=127.0.0.1:47900&file=f&token=t".into(),
             url: String::new(),
             address: "127.0.0.1:47900".into(),
             network: false,

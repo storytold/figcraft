@@ -29,6 +29,7 @@ enum StrokeJoin MITER BEVEL ROUND
 enum VectorMirror NONE ANGLE ANGLE_AND_LENGTH
 enum ShapeWithTextType SQUARE ELLIPSE
 enum ConnectorLineStyle ELBOWED STRAIGHT CURVED
+enum ConnectorMagnet NONE AUTO TOP LEFT BOTTOM RIGHT CENTER
 enum ExpressionFunction ADDITION SUBTRACTION RESOLVE_VARIANT MULTIPLY DIVIDE EQUALS
 enum NavigationType NAVIGATE OVERLAY
 enum TransitionType INSTANT_TRANSITION DISSOLVE SMART_ANIMATE
@@ -50,7 +51,7 @@ message VariableTarget VariableID id
 message VariableSetID GUID guid, AssetRef assetRef
 message ConditionalActions Action[] actions, VariableData condition
 message VectorData uint vectorNetworkBlob, Vector normalizedSize, NodeChange[] styleOverrideTable
-message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition
+message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition, ConnectorMagnet magnet
 message ConnectorControlPoint Vector position, Vector axis
 message VariableData AnyValue value, DataType dataType
 message Paint PaintType type, Color color, float opacity, bool visible, Image image, Matrix transform, ColorStop[] stops, VariableData colorVar, ImageScaleMode imageScaleMode

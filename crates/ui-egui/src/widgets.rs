@@ -993,7 +993,12 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
 /// of them ending at the section's 8 pt margin, whatever the row has before it. (The columns around
 /// them keep the 8 pt gutter.)
 pub fn tight_end<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let group = 24.0 * 2.0 + 4.0;
+    tight_end_n(ui, 2, add)
+}
+
+/// `tight_end` for a group of `count` 24 pt buttons.
+pub fn tight_end_n<R>(ui: &mut Ui, count: usize, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let group = 24.0 * count as f32 + 4.0 * count.saturating_sub(1) as f32;
     let avail = ui.available_rect_before_wrap();
     let rect = Rect::from_min_max(pos2((avail.max.x - group).max(avail.min.x), avail.min.y), avail.max);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));

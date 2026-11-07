@@ -439,6 +439,67 @@ pub fn chat_box(app: &mut FigApp, ctx: &egui::Context) {
     app.ui.live.chat = Some(chat);
 }
 
+/// While the active document's live session is disconnected: a thin strip across the top of the
+/// canvas that says so, with what can be done about it. Returns how much of the canvas it takes.
+pub fn connection_banner(app: &mut FigApp, ctx: &egui::Context, canvas: Rect) -> f32 {
+    const H: f32 = 30.0;
+    let live = app.session.live();
+    if !app.session.docs.get(app.session.active).is_some_and(|d| crate::tabs::live_lost(app, d.uid)) {
+        return 0.0;
+    }
+    let (text, retry, gone) = match &live.status {
+        Status::Failed { reason } => {
+            (trf("Not connected: {reason}. Your work is still in this tab.", &[("reason", &failure_text(reason))]), Some(tr("Try again")), true)
+        }
+        Status::Reconnecting { .. } => {
+            (tr("Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…").to_string(), Some(tr("Retry now")), false)
+        }
+        _ => (tr("Disconnected. Reconnecting…").to_string(), None, false),
+    };
+    let t = Tokens::get(ctx);
+    let ink = text_on(t.danger);
+    let (mut try_now, mut save, mut dismiss) = (false, false, false);
+    let strip = Rect::from_min_size(canvas.min, vec2(canvas.width(), H));
+    egui::Area::new(egui::Id::unique("live_connection_banner")).order(egui::Order::Foreground).fixed_pos(strip.min).show(ctx, |ui| {
+        ui.set_min_size(strip.size());
+        ui.set_max_size(strip.size());
+        ui.painter().rect_filled(strip, egui::CornerRadius::ZERO, t.danger);
+        let button = |ui: &mut Ui, label: &str| {
+            ui.add(
+                egui::Button::new(egui::RichText::new(label).font(regular(11.0)).color(ink))
+                    .fill(Color32::TRANSPARENT)
+                    .stroke(Stroke::new(1.0, ink))
+                    .corner_radius(egui::CornerRadius::same(4)),
+            )
+            .clicked()
+        };
+        let inner = strip.shrink2(vec2(12.0, 0.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if gone {
+                dismiss = button(ui, tr("Dismiss"));
+                save = button(ui, tr("Save a copy…"));
+            }
+            if let Some(label) = retry {
+                try_now = button(ui, label);
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(text).font(regular(11.0)).color(ink)).truncate());
+            });
+        });
+    });
+    if try_now {
+        app.run("collab.reconnect", json!({}));
+    }
+    if save {
+        app.save_as_dialog();
+    }
+    if dismiss {
+        app.run("collab.leave", json!({}));
+    }
+    H
+}
+
 /// While you spotlight, or someone does and you stopped following them: a banner on the canvas to
 /// stop, or to follow again.
 pub fn spotlight_banner(app: &mut FigApp, ctx: &egui::Context, canvas: Rect) {
