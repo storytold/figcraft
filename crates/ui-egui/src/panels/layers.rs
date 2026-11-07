@@ -330,6 +330,13 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                     }
                     ui.close();
                 }
+                // The page the file opens on, for everyone (#1817); a divider can't be one.
+                if !divider && ui.button(tr("Set as opening page")).clicked() {
+                    if !crate::menus::dev_mode_refuses(app, "page.setOpening") {
+                        app.run("page.setOpening", json!({"id": id}));
+                    }
+                    ui.close();
+                }
                 if ui.button(tr("Delete page")).clicked() {
                     if !crate::menus::dev_mode_refuses(app, "page.delete") {
                         delete_page(app, id);
