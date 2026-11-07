@@ -862,6 +862,19 @@ fn the_colour_walker_visits_calculation_literals() {
 }
 
 #[test]
+fn frame_relative_ends_on_a_looping_parent_chain() {
+    let mut d = Document::new("x");
+    let p = page(&d);
+    let f = d.create(p, NodeKind::Group, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let g = d.create(f, NodeKind::Group, "G", 0.0, 0.0, 10.0, 10.0).unwrap();
+    let mut v = serde_json::to_value(&d).unwrap();
+    // F's parent is its own child G (as a restored snapshot can leave things).
+    v["nodes"][f.to_string()]["parent"] = serde_json::json!(g);
+    let bad: Document = serde_json::from_value(v).unwrap();
+    let _ = bad.frame_relative(g);
+}
+
+#[test]
 fn remove_children_removes_every_subtree_and_keeps_the_parent() {
     let mut doc = Document::new("T");
     let page = doc.first_page().unwrap();
