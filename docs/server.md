@@ -43,7 +43,7 @@ Releases also ship it ready-built for Linux (`figcraft-server-<version>-linux-x8
   tells everyone it is restarting. Every change it accepted is on disk before anyone is told about
   it, so even a hard kill loses nothing confirmed (a file's log is then folded into a new snapshot
   the next time everyone leaves it). Apps that were in a file keep editing and reconnect once the
-  server is back (for about a minute and a half), as the same participants.
+  server is back, as the same participants.
 
 ## Publishing a file
 
