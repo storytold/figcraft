@@ -98,3 +98,20 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.aleksei-suholita]
+real_name = "Oleksii Sukholita"
+
+[people.helenkwok]
+real_name = "Helen Kwok"
+
+[people.denisg0mes]
+real_name = "Denis Gomes"
+display_name = "Denis Gomes"
+
+[people.Hamza0101]
+real_name = "Hamza Naveed"
+display_name = "Hamza0101"
+
+[people.ashokram-si]
+real_name = "Ashok Ram"

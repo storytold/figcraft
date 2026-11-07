@@ -223,6 +223,19 @@ pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
     let color = color.unwrap_or(s.tool.board.sticky);
     let (to_at, from_side, to_side) = connected_place((at.x, at.y), (n.width, n.height), next, &side)
         .ok_or_else(|| bad(cmd, format!("`side` is right, below, left or above, not `{side}`")))?;
+    // Dropped somewhere by hand ("drag the preview to any location on your board", #1919): the
+    // next one is centred on that point of the page (placed in the parent's coordinates), and the
+    // connector leaves by the handle's side and arrives by the side facing it.
+    let (to_at, from_side, to_side) = match drop_point(cmd, p)? {
+        Some((x, y)) => {
+            let local = doc.world_transform(parent).inverse() * figcraft_geom::Point::new(x, y);
+            if !(local.x.is_finite() && local.y.is_finite()) {
+                return Err(bad(cmd, "`at` can't be placed in that parent"));
+            }
+            ((local.x - next.0 / 2.0, local.y - next.1 / 2.0), from_side, Side::Auto)
+        }
+        None => (to_at, from_side, to_side),
+    };
     let (routing, author, page) = (s.tool.board.routing, author(s), s.page()?);
     if editing.is_some() {
         textedit::end(s)?;
@@ -244,6 +257,16 @@ pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
         s.request_ui("board.editText", json!({"id": id}));
     }
     Ok(json!({"id": id, "text": text, "connector": line}))
+}
+
+/// `at?` of `board.addConnected`: a point on the page, `[x, y]`, or none.
+fn drop_point(cmd: &str, p: &Value) -> Result<Option<(f64, f64)>> {
+    let Some(v) = get(p, "at") else { return Ok(None) };
+    let pair = v.as_array().filter(|a| a.len() == 2).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
+    match pair {
+        Some((x, y)) if x.is_finite() && y.is_finite() => Ok(Some((x, y))),
+        _ => Err(bad(cmd, "`at` is [x, y] on the page, two finite numbers")),
+    }
 }
 
 /// A shape with text's layers: the frame, its outline and its text.

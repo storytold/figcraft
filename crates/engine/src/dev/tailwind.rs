@@ -310,6 +310,8 @@ fn decl(key: &str, value: &str) -> Vec<(String, String)> {
         ("text-transform", "uppercase") => kw("uppercase"),
         ("text-transform", "lowercase") => kw("lowercase"),
         ("text-transform", "capitalize") => kw("capitalize"),
+        ("text-wrap", "balance") => kw("text-balance"),
+        ("text-wrap", "pretty") => kw("text-pretty"),
         ("text-decoration", "underline") => kw("underline"),
         ("text-decoration", "line-through") => kw("line-through"),
         _ => one(format!("[{key}:{}]", arb(value).trim_matches(['[', ']']))),
