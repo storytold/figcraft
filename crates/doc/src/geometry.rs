@@ -28,8 +28,9 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
             p
         }
         NodeKind::Vector { network } => {
-            let f = network.fill_path();
-            if f.elements().is_empty() { network.stroke_path() } else { f }
+            let net = drawn_network(network, c.smoothing);
+            let f = net.fill_path();
+            if f.elements().is_empty() { net.stroke_path() } else { f }
         }
         NodeKind::Text(_) => figcraft_geom::rounded_rect(w, h, [0.0; 4], 0.0),
         NodeKind::Page { .. } | NodeKind::Group | NodeKind::BooleanOp { .. } => return None,
@@ -39,8 +40,18 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
 /// The open/closed path strokes follow (vector networks stroke every segment, filled or not).
 pub fn stroke_geometry(n: &Node) -> Option<BezPath> {
     match &n.kind {
-        NodeKind::Vector { network } => Some(network.stroke_path()),
+        NodeKind::Vector { network } => Some(drawn_network(network, n.corners.smoothing).stroke_path()),
         _ => shape_path(n),
+    }
+}
+
+/// A vector's `network` as the layer draws it: rounded points drawn in with the layer's corner
+/// `smoothing` (see [`VectorNetwork::rounded_smoothed`](crate::VectorNetwork::rounded_smoothed)),
+/// or the network itself when no point is rounded.
+pub fn drawn_network(network: &crate::VectorNetwork, smoothing: f64) -> std::borrow::Cow<'_, crate::VectorNetwork> {
+    match network.rounded_smoothed(smoothing) {
+        Some(r) => std::borrow::Cow::Owned(r),
+        None => std::borrow::Cow::Borrowed(network),
     }
 }
 
@@ -75,8 +86,8 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
             n.local_rect().inflate(tol_l, tol_l).contains(lp)
         }
         NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) => {
-            let rounded = network.rounded();
-            let net = rounded.as_ref().unwrap_or(network);
+            let drawn = drawn_network(network, n.corners.smoothing);
+            let net = drawn.as_ref();
             if !outline {
                 for (i, region) in net.regions.iter().enumerate().rev() {
                     let paints = region.fills.as_deref().unwrap_or(&n.fills);
@@ -96,10 +107,11 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
 }
 
 /// Whether the fill of `n`, drawn as `path`, covers `lp` (vectors follow the rule of
-/// [`VectorNetwork::fill_contains`](crate::VectorNetwork::fill_contains): even-odd when any region asks for it).
+/// [`VectorNetwork::fill_contains`](crate::VectorNetwork::fill_contains) on the network as drawn: even-odd when any
+/// region asks for it).
 fn fills_point(n: &Node, path: &BezPath, lp: Point) -> bool {
     match &n.kind {
-        NodeKind::Vector { network } => network.fill_contains(lp),
+        NodeKind::Vector { network } => drawn_network(network, n.corners.smoothing).fill_contains(lp),
         _ => path.winding(lp) != 0,
     }
 }

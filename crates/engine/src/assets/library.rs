@@ -277,8 +277,16 @@ pub fn default_selection(doc: &Document, prev: Option<&LibraryManifest>) -> Sele
 fn alias_closure(vars: &Variables, seeds: impl IntoIterator<Item = VariableId>) -> BTreeSet<VariableId> {
     let mut out = BTreeSet::new();
     let mut stack: Vec<VariableId> = seeds.into_iter().collect();
+    if stack.is_empty() {
+        return out;
+    }
+    // Indexed once (the first of equal ids, as `get_by_id` finds it): a scan per step is quadratic on a long alias chain.
+    let mut by_id = std::collections::HashMap::new();
+    for v in &vars.variables {
+        by_id.entry(v.id.as_str()).or_insert(v);
+    }
     while let Some(cur) = stack.pop() {
-        let Some(v) = vars.get_by_id(&cur) else { continue };
+        let Some(v) = by_id.get(cur.as_str()).copied() else { continue };
         if out.len() >= MAX_ASSETS || !out.insert(v.id.clone()) {
             continue;
         }
@@ -1342,6 +1350,15 @@ pub fn library_of(doc: &Document, id: NodeId) -> Option<&str> {
     }
     let root = asset_root(doc, id)?;
     doc.libraries.import_of(root).map(|r| r.library.as_str())
+}
+
+pub fn library_source(doc: &Document, id: NodeId) -> Option<(&str, NodeId)> {
+    if !doc.is_remote(id) {
+        return None;
+    }
+    let record = doc.libraries.import_of(asset_root(doc, id)?)?;
+    let key = record.ids.iter().find(|(_, local)| **local == id).map_or(record.key, |(key, _)| *key);
+    Some((record.library.as_str(), key))
 }
 
 /// The display name of library `id` in `doc` (its link's name, else the id).

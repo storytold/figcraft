@@ -44,6 +44,11 @@ fn inflate(data: &[u8], limit: usize) -> Result<Vec<u8>, String> {
     if out.len() > limit {
         return Err(format!("compressed SVG expands past {} MiB", limit >> 20));
     }
+    // usvg gunzips what it is handed, with no limit: one layer is unpacked here, within the
+    // budget, and what comes out must be the document itself.
+    if gzipped(&out) {
+        return Err("compressed SVG holds another compressed file, not a document".into());
+    }
     Ok(out)
 }
 
@@ -72,7 +77,15 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], opts: &Options) -> Option
         return None;
     }
     let left = limits.embedded.saturating_sub(used.bytes.load(Ordering::Relaxed));
-    let plain = inflate(data, left).ok()?;
+    let plain = match inflate(data, left) {
+        Ok(plain) => plain,
+        // What a refused document unpacked before it was refused was work too: it uses up what is
+        // left, so the next image can't repeat it.
+        Err(_) => {
+            used.bytes.fetch_add(left, Ordering::Relaxed);
+            return None;
+        }
+    };
     used.bytes.fetch_add(plain.len(), Ordering::Relaxed);
     if super::too_deep(&plain) {
         return None;

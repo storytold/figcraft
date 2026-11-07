@@ -29,20 +29,23 @@ impl Session {
         let tool = self.tool.tool;
         let mut p = ev.p();
         let mut guides = Vec::new();
+        let pixel = self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
+        // The pixel grid first: snapping to layers comes after, so it wins on the axes it snaps.
+        if pixel {
+            p = Point::new(p.x.round(), p.y.round());
+        }
         if self.ds().map(|d| d.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl {
             let (dx, dy, g) = targets.snap_point(p.x, p.y, SNAP_PX / ev.zoom.max(1e-6));
             p.x += dx;
             p.y += dy;
             guides = g;
         }
-        let pixel = self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
         let mut created = id;
         let page = self.page()?;
         self.preview(|doc, sel| {
-            let (mut a, mut b) = (start, p);
+            let (mut a, b) = (start, p);
             if pixel {
                 a = Point::new(a.x.round(), a.y.round());
-                b = Point::new(b.x.round(), b.y.round());
             }
             let pw = doc.world_transform(parent);
             let (kind, base) = match tool {
@@ -209,6 +212,8 @@ impl Session {
                     crate::normalize(ds.doc_mut(), &before);
                 }
                 self.commit_interaction()?;
+                // A placement by the pointer takes the placement crosshair with it, as Enter does.
+                self.tool.place_at = None;
                 if !self.prefs.keep_tool {
                     self.set_tool(ToolId::Move);
                 }

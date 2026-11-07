@@ -2,7 +2,7 @@
 //! command and a drag of the selected connector's end), curved connectors, and elbows that go
 //! around the objects they join.
 
-use figcraft_doc::{BoardItem, End, NodeKind, Routing, Side};
+use figcraft_doc::{BoardItem, END_GAP, End, NodeKind, Routing, Side};
 use figcraft_geom::{Point, Rect};
 use serde_json::json;
 
@@ -27,7 +27,7 @@ fn reattach_moves_one_end_and_undoes() {
     s.execute("board.reattach", &json!({"id": k, "end": "to", "target": c, "side": "top"})).unwrap();
     assert_eq!(connector(&s, k).to, End::Node { node: c, side: Side::Top, at: None });
     assert_eq!(connector(&s, k).from.node(), Some(a));
-    assert!(near(*drawn(&s, k).last().unwrap(), Point::new(650.0, 0.0)), "arrives on c's top: {:?}", drawn(&s, k));
+    assert!(near(*drawn(&s, k).last().unwrap(), Point::new(650.0, -END_GAP)), "arrives END_GAP above c's top: {:?}", drawn(&s, k));
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(connector(&s, k).to.node(), Some(b), "one undo step");
     // Off into the canvas: the end stays there, free. The selection is the default connector.
@@ -107,9 +107,9 @@ fn curved_connectors_leave_and_arrive_along_the_sides() {
     let NodeKind::Vector { network } = &n.kind else { panic!("a vector") };
     assert_eq!((network.vertices.len(), network.segments.len()), (2, 1));
     assert!(!network.segments[0].is_straight(), "one curve");
-    assert_eq!(drawn(&s, k), vec![Point::new(100.0, 50.0), Point::new(300.0, 50.0)]);
+    assert_eq!(drawn(&s, k), vec![Point::new(104.0, 50.0), Point::new(296.0, 50.0)]);
     // Side to side in a line: the curve's control points lie on that line, so its box is flat.
-    assert!(n.height.abs() < 1e-9 && (n.width - 200.0).abs() < 1e-9, "{} × {}", n.width, n.height);
+    assert!(n.height.abs() < 1e-9 && (n.width - 192.0).abs() < 1e-9, "{} × {}", n.width, n.height);
     // From a's bottom to c's top: out downwards and in from above; the box holds the whole curve.
     let k2 = id(
         &s.execute("board.connector", &json!({"from": a, "to": c, "fromSide": "bottom", "toSide": "top", "style": "curved", "label": "x"})).unwrap(),
@@ -146,18 +146,18 @@ fn elbows_go_around_the_objects_they_join() {
     let pts = drawn(&s, k2);
     let (ra, rb) = (Rect::new(0.0, 0.0, 100.0, 100.0), Rect::new(300.0, 0.0, 400.0, 100.0));
     assert!(!through(&pts, ra) && !through(&pts, rb), "{pts:?}");
-    assert_eq!(pts.first().copied(), Some(Point::new(0.0, 50.0)));
-    assert_eq!(pts.last().copied(), Some(Point::new(400.0, 50.0)));
+    assert_eq!(pts.first().copied(), Some(Point::new(-END_GAP, 50.0)));
+    assert_eq!(pts.last().copied(), Some(Point::new(400.0 + END_GAP, 50.0)));
     assert_eq!(pts.len(), 6, "out, over, down and in: {pts:?}");
     assert!(pts.iter().all(|p| p.y <= 50.0), "over the top, the nearer way round: {pts:?}");
     assert!(pts.windows(2).all(|w| w[0].x == w[1].x || w[0].y == w[1].y), "right angles only");
     // Facing each other, the short way stays.
-    assert_eq!(drawn(&s, k), vec![Point::new(100.0, 50.0), Point::new(300.0, 50.0)]);
+    assert_eq!(drawn(&s, k), vec![Point::new(104.0, 50.0), Point::new(296.0, 50.0)]);
     // An end at the bottom of b leaving towards a above it: around b's side and up.
     s.execute("board.reattach", &json!({"id": k2, "end": "to", "target": b, "side": "bottom"})).unwrap();
     let pts = drawn(&s, k2);
     assert!(!through(&pts, ra) && !through(&pts, rb), "{pts:?}");
-    assert_eq!(pts.last().copied(), Some(Point::new(350.0, 100.0)));
+    assert_eq!(pts.last().copied(), Some(Point::new(350.0, 100.0 + END_GAP)));
 }
 
 #[test]
@@ -202,8 +202,12 @@ fn the_connector_being_drawn_is_the_one_made() {
                 // Over b: its four attach points, the one the end is at lit, and b outlined.
                 assert_eq!(ov.drop_target, Some(b));
                 let lit: Vec<[f64; 2]> = ov.attach.iter().filter(|a| a.1).map(|a| a.0).collect();
+                // The lit attach point is the side's middle, on the border; the route's end sits
+                // END_GAP outside it along the side's normal (#1916).
                 let end = *drawn(&s, drawing.id).last().unwrap();
-                assert_eq!((ov.attach.len(), lit), (4, vec![[end.x, end.y]]), "{style}");
+                assert_eq!(ov.attach.len(), 4, "{style}");
+                let [lit] = lit.as_slice() else { panic!("{style}: one lit attach point, got {lit:?}") };
+                assert!(((lit[0] - end.x).abs() + (lit[1] - end.y).abs() - END_GAP).abs() < 1e-9, "{style}: {lit:?} is END_GAP inside {end:?}");
             } else {
                 assert!(ov.attach.is_empty() && ov.drop_target.is_none(), "a free end");
             }
@@ -259,7 +263,7 @@ fn an_end_dropped_along_a_side_attaches_to_that_side() {
         s.pointer(&ev(PointerKind::Up, drop)).unwrap();
         assert_eq!(connector(&s, k).from, End::Node { node: a, side, at: None }, "{drop:?}");
         if side != Side::Auto {
-            assert_eq!(drawn(&s, k)[0], side.point(bounds), "the route leaves from that side");
+            assert_eq!(drawn(&s, k)[0], side.point(bounds) + side.normal() * END_GAP, "the route leaves from that side, END_GAP out");
         }
     }
 }
@@ -307,5 +311,5 @@ fn a_connector_end_snaps_to_the_attach_point_under_the_pointer() {
         (connector(&s, k).from, connector(&s, k).to),
         (End::Node { node: a, side: Side::Right, at: None }, End::Node { node: b, side: Side::Top, at: None })
     );
-    assert_eq!(drawn(&s, k), vec![Point::new(100.0, 50.0), Point::new(350.0, 200.0)]);
+    assert_eq!(drawn(&s, k), vec![Point::new(104.0, 50.0), Point::new(350.0, 196.0)]);
 }

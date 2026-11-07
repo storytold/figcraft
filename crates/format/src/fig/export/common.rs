@@ -34,10 +34,10 @@ pub(super) fn outlined(n: &Node) -> Option<(Node, String)> {
     }
     let path = figcraft_doc::geometry::stroke_geometry(n)?;
     let net = match &n.kind {
-        NodeKind::Vector { network } => Some(network),
+        NodeKind::Vector { network } => Some(figcraft_doc::geometry::drawn_network(network, n.corners.smoothing)),
         _ => None,
     };
-    let area = figcraft_pathops::stroke_outline_of(&path, sp, figcraft_doc::geometry::is_closed(n), net);
+    let area = figcraft_pathops::stroke_outline_of(&path, sp, figcraft_doc::geometry::is_closed(n), net.as_deref());
     if area.elements().is_empty() || area.elements().len() > MAX_NETWORK / 4 {
         return None;
     }
