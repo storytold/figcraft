@@ -215,6 +215,30 @@ mod tests {
         assert_eq!(x(&s, small).0, x(&s, big).0);
     }
 
+    /// "for baseline alignment, the bottoms of the icon and the word home are aligned on the red
+    /// line" (Use the horizontal and vertical flows in auto layout, the figure's caption; #1825): a
+    /// layer without text sits on the text's baseline with its bottom edge, not at the top.
+    #[test]
+    fn baseline_alignment_puts_an_icons_bottom_on_the_text_baseline() {
+        let mut s = Session::new();
+        let f = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 400, "height": 100, "props": {"layout": "horizontal", "gap": 8}})));
+        let icon = id(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 16, "height": 16, "parent": f})));
+        let home = id(&ex(&mut s, "text.create", json!({"text": "Home", "x": 0, "y": 0, "parent": f, "props": {"fontSize": 48}})));
+        ex(&mut s, "node.set", json!({"id": f, "props": {"crossAlign": "baseline"}}));
+        let base = figcraft_text::layout_node(&node(&s, home)).and_then(|(l, dy)| l.lines.first().map(|line| line.baseline + dy));
+        // Only meaningful when the text was measured (fonts available) and its baseline is below
+        // the icon's height.
+        if let Some(b) = base
+            && b > 16.0
+        {
+            let bottom = x(&s, icon).1 + 16.0;
+            assert!((bottom - (x(&s, home).1 + b)).abs() < 1e-6, "icon bottom {bottom}, text baseline {}", x(&s, home).1 + b);
+        }
+        // Top alignment puts it back at the top.
+        ex(&mut s, "node.set", json!({"id": f, "props": {"crossAlign": "min"}}));
+        assert_eq!(x(&s, icon).1, x(&s, home).1);
+    }
+
     #[test]
     fn grid_tracks_cells_and_undo() {
         let mut s = Session::new();
