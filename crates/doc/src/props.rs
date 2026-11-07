@@ -675,6 +675,13 @@ impl Default for Glass {
     }
 }
 
+/// `deg` (finite) as the same direction within -180 (exclusive) to 180 degrees.
+fn wrap_degrees(deg: f64) -> f64 {
+    // `+ 0.0`: -0 reads as 0, so a saved file says 0.
+    let a = deg.rem_euclid(360.0) + 0.0;
+    if a > 180.0 { a - 360.0 } else { a }
+}
+
 impl Glass {
     /// The most frost a glass takes, as the reference tool's Frost field (0–100).
     pub const MAX_FROST: f64 = 100.0;
@@ -684,15 +691,16 @@ impl Glass {
 
     /// Sets `field` (one of [`Self::BOUND_FIELDS`]) from a bound number variable, read as the
     /// Design panel's field shows it: intensity, refraction, dispersion and splay in percent, the
-    /// frost as `radius`, each clamped to the field's range. False for a field glass doesn't have
-    /// or a value that isn't finite (nothing changes).
+    /// frost as `radius`, each clamped to the field's range, and the light angle turned into
+    /// -180–180 (270 is -90, the same way). False for a field glass doesn't have or a value that
+    /// isn't finite (nothing changes).
     pub fn set_bound(&mut self, field: &str, x: f64) -> bool {
         if !x.is_finite() {
             return false;
         }
         let pct = (x / 100.0).clamp(0.0, 1.0);
         match field {
-            "lightAngle" => self.light_angle = x.clamp(-180.0, 180.0),
+            "lightAngle" => self.light_angle = wrap_degrees(x),
             "lightIntensity" => self.light_intensity = pct,
             "refraction" => self.refraction = pct,
             "depth" => self.depth = x.clamp(1.0, 1000.0),
@@ -1520,6 +1528,9 @@ pub struct ExportSetting {
     /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
     #[serde(skip_serializing_if = "VdCompat::is_default")]
     pub vd_compat: VdCompat,
+    /// JPG: the encoder's quality, 1 (smallest file) to 100 (see [`ExportSetting::quality`]).
+    #[serde(skip_serializing_if = "is_default_quality")]
+    pub quality: u8,
 }
 
 /// How an Android Vector Drawable export handles what the format can't draw exactly (layer
@@ -1570,6 +1581,7 @@ impl Default for ExportSetting {
             svg_id_attribute: false,
             svg_simplify_stroke: true,
             vd_compat: VdCompat::BestEffort,
+            quality: ExportSetting::DEFAULT_QUALITY,
         }
     }
 }
@@ -1582,7 +1594,19 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn is_default_quality(q: &u8) -> bool {
+    *q == ExportSetting::DEFAULT_QUALITY
+}
+
 impl ExportSetting {
+    /// The JPG quality a setting has unless it sets one.
+    pub const DEFAULT_QUALITY: u8 = 90;
+
+    /// The JPG quality made safe: within `1..=100`.
+    pub fn quality(&self) -> u8 {
+        self.quality.clamp(1, 100)
+    }
+
     /// The row adding a setting after `last` creates: 1x first, then one scale step up with a
     /// matching "@2x"-style suffix.
     pub fn next_after(last: Option<&ExportSetting>) -> ExportSetting {
