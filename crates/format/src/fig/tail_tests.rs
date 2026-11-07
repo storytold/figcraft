@@ -892,7 +892,8 @@ fn an_elbow_connector_saved_with_its_path_keeps_it() {
     let world = doc.world_transform(named(&doc, "Saved").id);
     let line: Vec<_> =
         network_of(&doc, "Saved").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
-    assert_eq!(line, [(50.0, 700.0), (50.0, 740.0), (200.0, 740.0), (200.0, 850.0), (300.0, 850.0)]);
+    // Each end starts `END_GAP` (4) outside its side's border.
+    assert_eq!(line, [(50.0, 704.0), (50.0, 740.0), (200.0, 740.0), (200.0, 850.0), (296.0, 850.0)]);
     // The fixture's own Link, saved without a path, is routed here: the note counts it alone.
     let routed: Vec<_> = warnings.iter().filter(|w| w.contains("FigCraft's own routing")).collect();
     assert_eq!(routed.len(), 1, "{warnings:?}");
