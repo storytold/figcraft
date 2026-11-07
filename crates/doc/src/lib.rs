@@ -27,7 +27,7 @@ pub mod vector_faces;
 pub mod vector_regions;
 
 pub use board::*;
-pub use board_route::{RouteEnd, attached_sides, path_handles, reshaped, route_along, route_points};
+pub use board_route::{END_GAP, MAX_RUNS, RouteEnd, attach_points, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
 pub use facilitation::*;
@@ -574,6 +574,19 @@ impl Document {
         Ok(())
     }
 
+    /// Remove every child of `id` with its subtree, in one pass over `id`'s child list (removing
+    /// them one by one would search that list once per child).
+    pub fn remove_children(&mut self, id: NodeId) -> DocResult<()> {
+        let kids = std::mem::take(&mut self.get_mut(id)?.children);
+        for c in kids {
+            for d in self.subtree(c) {
+                self.nodes.remove(&d);
+                self.dirty.touch(d);
+            }
+        }
+        Ok(())
+    }
+
     /// Whether sections may go in `parent`: a page or another section (never a frame or a group).
     pub fn takes_sections(&self, parent: NodeId) -> bool {
         self.node(parent).is_some_and(|p| p.is_page() || matches!(p.kind, NodeKind::Section { .. }))
@@ -585,7 +598,14 @@ impl Document {
         let Some(n) = self.node(id) else { return Affine::IDENTITY };
         let mut t = n.transform;
         let mut parent = n.parent;
+        // More hops than nodes means the parent chain loops (a restored snapshot can leave one):
+        // stop rather than spin.
+        let mut hops = 0;
         while let Some(p) = parent.and_then(|p| self.node(p)).filter(|p| p.kind.bounds_follow_children()) {
+            hops += 1;
+            if hops > self.nodes.len() {
+                break;
+            }
             t = p.transform * t;
             parent = p.parent;
         }
@@ -747,16 +767,20 @@ impl Document {
     /// children only within their mask). A group, or an unclipped frame past its box, is what its
     /// children show grown by its effects, which apply to all of it.
     pub fn world_render_bounds(&self, id: NodeId) -> Option<Rect> {
-        self.render_bounds_at(id, 0)
+        // A tree visits each node once; a child list deserialized with repeats (a graph) is cut off
+        // after twice the document's node count rather than walked in full.
+        self.render_bounds_at(id, 0, &std::cell::Cell::new(self.nodes.len().saturating_mul(2).saturating_add(8)))
     }
 
-    fn render_bounds_at(&self, id: NodeId, depth: usize) -> Option<Rect> {
+    fn render_bounds_at(&self, id: NodeId, depth: usize, left: &std::cell::Cell<usize>) -> Option<Rect> {
         let n = self.node(id)?;
         let own = n.own_paint_bounds(self.world_transform(id));
-        if (n.clip && n.kind.is_frame_like() && !n.kind.bounds_follow_children()) || depth >= MAX_RENDER_DEPTH {
+        let visit = left.get();
+        left.set(visit.saturating_sub(1));
+        if (n.clip && n.kind.is_frame_like() && !n.kind.bounds_follow_children()) || depth >= MAX_RENDER_DEPTH || visit == 0 {
             return Some(own);
         }
-        Some(match (self.children_render_bounds(n, depth + 1), &n.kind) {
+        Some(match (self.children_render_bounds(n, depth + 1, left), &n.kind) {
             (Some(kids), NodeKind::Group) => n.grow_by_effects(kids),
             // An unclipped frame's effects apply to its children too, past its box included.
             (Some(kids), _) => own.union(n.grow_by_effects(kids)),
@@ -765,15 +789,15 @@ impl Document {
     }
 
     /// What `n`'s visible children show, together: each mask's run within the mask's bounds.
-    fn children_render_bounds(&self, n: &Node, depth: usize) -> Option<Rect> {
+    fn children_render_bounds(&self, n: &Node, depth: usize, left: &std::cell::Cell<usize>) -> Option<Rect> {
         let shown = |i: &NodeId| self.node(*i).is_some_and(|c| c.visible && !c.is_mask);
         let mut out: Option<Rect> = None;
         for run in self.paint_runs(n) {
             let ids = n.children.get(run).unwrap_or(&[]);
             let mask = ids.first().copied().filter(|m| self.node(*m).is_some_and(|c| c.is_mask && c.visible));
-            let r = ids.iter().filter(|i| shown(i)).filter_map(|i| self.render_bounds_at(*i, depth)).reduce(|a, b| a.union(b));
+            let r = ids.iter().filter(|i| shown(i)).filter_map(|i| self.render_bounds_at(*i, depth, left)).reduce(|a, b| a.union(b));
             let r = match mask {
-                Some(m) => r.zip(self.render_bounds_at(m, depth)).map(|(a, b)| a.intersect(b)).filter(|x| x.width() > 0.0 && x.height() > 0.0),
+                Some(m) => r.zip(self.render_bounds_at(m, depth, left)).map(|(a, b)| a.intersect(b)).filter(|x| x.width() > 0.0 && x.height() > 0.0),
                 None => r,
             };
             out = match (out, r) {
@@ -1085,6 +1109,9 @@ impl Document {
         // lookups: a wide parent or a long page list doesn't make validation quadratic.
         let edges: std::collections::BTreeSet<(NodeId, NodeId)> = self.nodes.iter().flat_map(|(p, n)| n.children.iter().map(|c| (*p, *c))).collect();
         let page_ids: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
+        if page_ids.len() != self.pages.len() {
+            note(&mut issues, || "a page is listed twice".to_string());
+        }
         for (id, n) in self.nodes.iter() {
             if n.id != *id {
                 note(&mut issues, || format!("node key {id} has id {}", n.id));
@@ -1178,9 +1205,10 @@ impl Document {
         if store != self.libraries.store {
             Arc::make_mut(&mut self.libraries).store = store;
         }
-        self.pages.retain(|p| self.nodes.get(p).is_some_and(|n| n.is_page()) && Some(*p) != store);
+        // A page listed twice would be imported, exported and walked once per listing.
+        let mut listed = std::collections::BTreeSet::new();
+        self.pages.retain(|p| self.nodes.get(p).is_some_and(|n| n.is_page()) && Some(*p) != store && listed.insert(*p));
         // Unlisted pages join the list; a set keeps many pages from making this quadratic (#1078).
-        let mut listed: std::collections::BTreeSet<NodeId> = self.pages.iter().copied().collect();
         for (k, n) in self.nodes.iter() {
             if n.is_page() && Some(*k) != store && listed.insert(*k) {
                 self.pages.push(*k);
@@ -1206,7 +1234,7 @@ impl Document {
             .styles
             .iter()
             .filter_map(|s| match &s.kind {
-                StyleKind::Text { style } => Some((s.id.clone(), style.clone())),
+                StyleKind::Text { style, .. } => Some((s.id.clone(), style.clone())),
                 _ => None,
             })
             .collect();
@@ -1285,6 +1313,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 
 #[cfg(test)]
 mod blur_tests;
+#[cfg(test)]
+mod board_route_tests;
 #[cfg(test)]
 mod board_shape_tests;
 #[cfg(test)]

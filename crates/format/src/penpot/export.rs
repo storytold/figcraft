@@ -713,7 +713,9 @@ impl<'a> Exporter<'a> {
                     }
                 }
             }
-            NodeKind::Vector { network } if node.fills.is_empty() || !node.strokes.is_empty() => self.doc.world_transform(id) * network.stroke_path(),
+            NodeKind::Vector { network } if node.fills.is_empty() || !node.strokes.is_empty() => {
+                self.doc.world_transform(id) * figcraft_doc::geometry::drawn_network(network, node.corners.smoothing).stroke_path()
+            }
             _ => match figcraft_doc::geometry::shape_path(node) {
                 Some(p) => self.doc.world_transform(id) * p,
                 None => BezPath::new(),

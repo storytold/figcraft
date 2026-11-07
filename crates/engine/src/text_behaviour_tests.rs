@@ -372,6 +372,130 @@ fn max_lines_on_auto_height_text_hugs_that_many_lines() {
 }
 
 #[test]
+fn text_direction_is_forced_per_paragraph() {
+    // Add right-to-left text: "By default, Figma automatically handles text direction based on
+    // language detection. However, controls are available to override text direction per
+    // paragraph" ("Go to Text > Text direction. Select Left to right or Right to left.").
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "abc def\nghi\njkl", json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24}));
+    let rtl = |s: &Session| -> Vec<bool> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.lines.iter().map(|l| l.rtl).collect()
+    };
+    let inspect = |s: &Session| crate::inspect::node_json(s.doc().unwrap(), t, 0);
+    assert_eq!(rtl(&s), [false, false, false], "Latin letters read left to right");
+    assert!(inspect(&s).get("textDirection").is_none() && inspect(&s).get("lineDirections").is_none());
+    // The layer's paragraphs at once, by the command or `node.set`; inspect reports the one
+    // direction they share, and Dev Mode's CSS has it.
+    s.execute("text.direction", &json!({"ids": [t], "direction": "rtl"})).unwrap();
+    assert_eq!(rtl(&s), [true, true, true], "forced right to left whatever the letters");
+    assert_eq!(inspect(&s)["textDirection"], json!("rtl"));
+    let css = |s: &mut Session| s.execute("inspect.code", &json!({"id": t})).unwrap()["code"].as_str().unwrap().to_string();
+    assert!(css(&mut s).contains("direction: rtl;"), "{}", css(&mut s));
+    assert!(css(&mut s).contains("text-align: left;"), "Left stays the left edge, which `start` would not be: {}", css(&mut s));
+    s.execute("node.set", &json!({"id": t, "props": {"textDirection": "ltr"}})).unwrap();
+    assert_eq!(rtl(&s), [false, false, false]);
+    assert_eq!(inspect(&s)["textDirection"], json!("ltr"));
+    assert!(css(&mut s).contains("direction: ltr;"));
+    s.execute("text.directionAuto", &json!({"ids": [t]})).unwrap();
+    assert!(inspect(&s).get("textDirection").is_none(), "auto throughout says nothing");
+    assert!(!css(&mut s).contains("direction:"));
+    // While editing, the caret's paragraph alone (the menu's Right to left); inspect lists each
+    // paragraph's direction when they differ, and the CSS stays quiet.
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 9})).unwrap();
+    s.execute("text.directionRtl", &json!({})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(rtl(&s), [false, true, false], "the second paragraph only");
+    assert_eq!(inspect(&s)["lineDirections"], json!(["auto", "rtl", "auto"]));
+    assert!(!css(&mut s).contains("direction:"));
+    // Enter inside a forced paragraph keeps the direction for the new one, as list settings carry.
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 10})).unwrap();
+    s.execute("text.edit.insert", &json!({"text": "\n"})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(rtl(&s), [false, true, true, false]);
+    // An empty last paragraph (after a final newline) keeps the direction forced on it.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abc\n", "textDirection": "auto"}})).unwrap();
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 4})).unwrap();
+    s.execute("text.directionRtl", &json!({})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(rtl(&s), [false, true], "the empty last line runs right to left");
+    // A direction the document has words for; junk is refused.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc", "textDirection": "auto"}})).unwrap();
+    assert_eq!(rtl(&s), [true], "Hebrew first: right to left by detection");
+    s.execute("node.set", &json!({"id": t, "props": {"textDirection": "ltr"}})).unwrap();
+    assert_eq!(rtl(&s), [false], "forced left to right");
+    assert!(s.execute("node.set", &json!({"id": t, "props": {"textDirection": "sideways"}})).is_err());
+    assert!(s.execute("text.direction", &json!({"ids": [t], "direction": "up"})).is_err());
+}
+
+#[test]
+fn balance_and_pretty_wrap_styles_break_lines_as_documented() {
+    // Explore text properties: "Auto: Figma fits as many words as possible on each line before
+    // wrapping to the next." "Balance: Figma distributes text as evenly as possible across every
+    // line, so each line is close to the same length." "Pretty: Figma keeps each line full, but
+    // adjusts the last four lines to avoid an orphan -- a single word stranded alone on the last
+    // line." The synthetic font: 8 px per character at 16 px.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "aaa bbb ccc ddd eee", json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24}));
+    s.execute("node.set", &json!({"id": t, "props": {"textAutoResize": "height", "width": 136}})).unwrap();
+    let lines = |s: &Session| -> Vec<(usize, usize)> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.lines.iter().map(|l| (l.char_start, l.char_end)).collect()
+    };
+    // 136 px holds 17 characters: Auto fills the first line with four words and strands the fifth.
+    assert_eq!(lines(&s), [(0, 16), (16, 19)]);
+    // Balance: as even as the words allow, three and two.
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 12), (12, 19)]);
+    assert_eq!(crate::inspect::node_json(s.doc().unwrap(), t, 0)["wrapStyle"], json!("balance"));
+    // Pretty: the stranded word gets company from the line before.
+    s.execute("text.wrapStyle", &json!({"ids": [t], "style": "pretty"})).unwrap();
+    assert_eq!(lines(&s), [(0, 12), (12, 19)]);
+    // Three lines of two-letter words in a 72 px box (nine characters): Auto strands "gg"; Pretty
+    // narrows the line before it alone ("aa bb cc" / "dd ee" / "ff gg"); Balance's narrowest
+    // width that still gives three lines (64 px) fills the first two lines as Auto does.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "aa bb cc dd ee ff gg", "width": 72, "wrapStyle": "auto"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 18), (18, 20)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 15), (15, 20)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 18), (18, 20)]);
+    // A last line of two words is no orphan: Pretty leaves Auto's lines; a text on one line is
+    // left alone whatever the style.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "aa bb cc dd ee ff gg hh", "wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 18), (18, 23)]);
+    s.execute("node.set", &json!({"id": t, "props": {"width": 400, "wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 23)]);
+    // Dev Mode's CSS says `text-wrap` for Balance and Pretty and nothing for Auto; junk is refused.
+    let css = |s: &mut Session| s.execute("inspect.code", &json!({"id": t})).unwrap()["code"].as_str().unwrap().to_string();
+    assert!(css(&mut s).contains("text-wrap: balance;"), "{}", css(&mut s));
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert!(css(&mut s).contains("text-wrap: pretty;"));
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "auto"}})).unwrap();
+    assert!(!css(&mut s).contains("text-wrap"));
+    assert!(s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "zigzag"}})).is_err());
+    assert!(s.execute("text.wrapStyle", &json!({"ids": [t], "style": "even"})).is_err());
+    // A word as wide as the box is never broken in two by Balance or Pretty: 80 px holds the ten
+    // letters, and every narrower width Balance could try would have to split them.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abcdefghij klm", "width": 80, "wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 11), (11, 14)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 11), (11, 14)]);
+    // Hanging punctuation: a line starting with an opening mark has that much more room, and
+    // Pretty narrows it by as much, so the line before the orphan still gives a word away.
+    s.execute(
+        "node.set",
+        &json!({"id": t, "props": {"characters": "aa bb cc (dd ee ff gg", "width": 72, "hangingPunctuation": true, "wrapStyle": "auto"}}),
+    )
+    .unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 19), (19, 21)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 16), (16, 21)]);
+}
+
+#[test]
 fn max_lines_on_auto_width_text_keeps_auto_width_and_hugs_that_many_lines() {
     // "Max lines is available only if truncate text is enabled, and: Text resizing is set to
     // auto height or auto width" (Explore text properties): an auto-width text with max lines
@@ -681,4 +805,72 @@ fn a_link_is_underlined_by_default_and_underline_takes_it_off() {
     assert_eq!((inner_style(&s).link.as_deref(), inner_style(&s).decoration), (Some("https://example.com"), TextDecoration::Underline));
     s.execute("text.underline", &json!({"ids": [f]})).unwrap();
     assert_eq!(inner_style(&s).decoration, TextDecoration::None, "Underline on the frame reads the text inside it");
+}
+
+fn layer_name(s: &Session, t: NodeId) -> String {
+    s.doc().unwrap().node(t).unwrap().name.clone()
+}
+
+/// Select everything in the layer being edited and delete it.
+fn clear_edited_text(s: &mut Session, t: NodeId) {
+    let len = s.doc().unwrap().node(t).unwrap().kind.text().unwrap().char_count();
+    crate::textedit::set_caret(s, 0, false).unwrap();
+    crate::textedit::set_caret(s, len, true).unwrap();
+    crate::textedit::key(s, "Backspace", false, false, false).unwrap();
+}
+
+#[test]
+fn typing_renames_a_text_layer_that_still_carries_the_name_its_characters_gave_it() {
+    // The Layers panel shows a layer's name, so a layer still carrying the name its characters
+    // gave it has to follow them while they are typed or the panel and the canvas disagree
+    // (#1747). The target app's plugin API calls this `autoRename`: "Whether updating the
+    // characters in the text node should update the name of the node… This is automatically reset
+    // to false if `name` is modified in order to allow the node to keep the new name."
+    let mut s = Session::new();
+
+    // Nobody renamed this layer, so typing in it keeps its name up to date.
+    let t = text(&mut s, "hello", json!({}));
+    assert_eq!(layer_name(&s, t), "hello", "a new layer is named after its first line");
+    crate::textedit::begin(&mut s, t, Some(5), false).unwrap();
+    crate::textedit::insert(&mut s, " there").unwrap();
+    assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("hello there", "hello there"), "the name follows what is typed");
+
+    // A name the author typed is theirs: later typing leaves it alone.
+    s.execute("node.set", &json!({"id": t, "props": {"name": "Greeting"}})).unwrap();
+    crate::textedit::begin(&mut s, t, Some(11), false).unwrap();
+    crate::textedit::insert(&mut s, "!").unwrap();
+    assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("hello there!", "Greeting"), "a chosen name is kept");
+
+    // Only the first line names the layer.
+    let v = text(&mut s, "first", json!({}));
+    crate::textedit::begin(&mut s, v, Some(5), false).unwrap();
+    crate::textedit::insert(&mut s, "\nsecond").unwrap();
+    assert_eq!((chars(&s, v).as_str(), layer_name(&s, v).as_str()), ("first\nsecond", "first"), "the first line alone names it");
+
+    // Emptied text reads as a new empty text layer does, not as the word that was deleted.
+    clear_edited_text(&mut s, v);
+    assert_eq!((chars(&s, v).as_str(), layer_name(&s, v).as_str()), ("", ""), "emptied text has no name of its own, so the panel shows its kind");
+
+    // The usual way a layer is made: the Text tool, a click, then typing into the empty layer.
+    use crate::tools::{PointerEvent, PointerKind, ToolId};
+    s.set_tool(ToolId::Text);
+    s.pointer(&PointerEvent::at(PointerKind::Down, 300.0, 300.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 300.0, 300.0, 1.0)).unwrap();
+    let drawn = s.ds().unwrap().text_edit.as_ref().unwrap().id;
+    assert_eq!(layer_name(&s, drawn), "", "a layer the tool drew has no name of its own yet");
+    crate::textedit::insert(&mut s, "Pricing").unwrap();
+    assert_eq!((chars(&s, drawn).as_str(), layer_name(&s, drawn).as_str()), ("Pricing", "Pricing"), "the first word typed names it");
+}
+
+#[test]
+fn setting_characters_as_a_command_never_renames_the_layer() {
+    // Only the editor follows the characters. Layer names are field keys for `data.fill`,
+    // component property bindings and templates, which write `characters` into a layer named for
+    // its role ("Title") and look it up by that name again, so a command must leave the name as it
+    // is even when it reads like the text it replaces.
+    let mut s = Session::new();
+    let t = text(&mut s, "Title", json!({}));
+    assert_eq!(layer_name(&s, t), "Title");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "Site em 7 dias"}})).unwrap();
+    assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("Site em 7 dias", "Title"), "the field keeps its name");
 }

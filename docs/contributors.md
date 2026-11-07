@@ -8,7 +8,8 @@ the AI models named in `Co-Authored-By` trailers.
 - Two files, both **compiled into the binary** by the UI crate's `build.rs` (nothing is read from
   disk or the network at run time; the web build has them too):
   - [`contributors/contributors.json`](../contributors/contributors.json): commit stats per GitHub
-    username; never hand-edit.
+    username; never hand-edit. Release builds regenerate it for the release commit
+    (`.github/workflows/release.yml`, `credits` job); the copy in the repository is not updated.
   - [`contributors/people.toml`](../contributors/people.toml): the names people chose for
     themselves. **Each contributor adds only their own entry**, in their own PR.
 - Each contributor gets one line: GitHub username (always), display name (opt-in, or their synced

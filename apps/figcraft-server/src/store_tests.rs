@@ -156,6 +156,24 @@ fn read_only_sessions_keep_client_ids_without_rewriting_the_snapshot() {
 }
 
 #[test]
+fn a_viewers_refused_batches_do_not_rewrite_the_snapshot() {
+    let dir = TempDir::new("refusals");
+    let c = StoreConfig { compact_after: 3, ..cfg(dir.path()) };
+    let mut store = Store::open(dir.path(), c).unwrap();
+    let (id, _, _) = publish(&mut store, "Busy");
+    let mut server = store.open(&id).unwrap();
+    let mut v = join(&mut server, Access::View);
+    store.changed(&id, &mut server);
+    let generation = || disk::check_snapshot(&fs::read(dir.path().join(FILES).join(&id).join(SNAPSHOT)).unwrap()).unwrap();
+    assert_eq!(generation(), 1);
+    for i in 0..10 {
+        rename(&mut server, &mut v, &format!("P{i}"));
+        store.changed(&id, &mut server);
+    }
+    assert_eq!(generation(), 1, "refusals are logged, not compacted");
+}
+
+#[test]
 fn a_long_log_is_compacted_while_open() {
     let dir = TempDir::new("compact");
     let c = StoreConfig { compact_after: 3, ..cfg(dir.path()) };

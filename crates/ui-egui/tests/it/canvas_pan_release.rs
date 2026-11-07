@@ -1,5 +1,6 @@
-//! A canvas pan (middle button or Space + primary) ends when its button is released, even when the
-//! release happens over a panel: returning to the canvas with no button held must not move the view.
+//! A canvas pan (middle button, a side button, or Space + primary) ends when its button is
+//! released, even when the release happens over a panel: returning to the canvas with no button held
+//! must not move the view.
 
 use egui::{Event, Key, PointerButton, Pos2, RawInput, Rect, vec2};
 use figcraft_engine::Session;
@@ -45,6 +46,12 @@ fn space(pressed: bool) -> Event {
 }
 
 fn check(space_pan: bool, outside: bool) {
+    check_button(if space_pan { PointerButton::Primary } else { PointerButton::Middle }, space_pan, outside);
+}
+
+/// A pan with button `b` (with Space held when `space_pan`) moves the view, ends when `b` is
+/// released (`outside` the canvas or over it), and a new one moves it again.
+fn check_button(b: PointerButton, space_pan: bool, outside: bool) {
     let mut u = Frames::new();
     let rect = u.app.canvas.rect;
     let start = Pos2::new(rect.min.x + 200.0, rect.center().y);
@@ -55,7 +62,6 @@ fn check(space_pan: bool, outside: bool) {
     if space_pan {
         u.frame(vec![space(true)]);
     }
-    let b = if space_pan { PointerButton::Primary } else { PointerButton::Middle };
     let before = u.cx();
     u.frame(vec![button(start, b, true)]);
     u.frame(vec![Event::PointerMoved(dragged)]);
@@ -92,4 +98,36 @@ fn space_pan_released_over_panel_does_not_move_view_on_return() {
 #[test]
 fn middle_pan_released_inside_canvas_keeps_view() {
     check(false, false);
+}
+
+/// #1758: a mouse's side buttons (4 and 5) pan the canvas as the middle button does, and the pan
+/// ends on release, over the canvas or off it.
+#[test]
+fn side_buttons_pan_like_the_middle_button() {
+    for b in [PointerButton::Extra1, PointerButton::Extra2] {
+        check_button(b, false, false);
+        check_button(b, false, true);
+    }
+}
+
+/// A primary drag under way when a pan starts (a side or the middle button pressed mid-drag) ends
+/// when the primary button is let go during the pan: the engine gets the release, so its gesture
+/// isn't left open once the pan is over.
+#[test]
+fn a_primary_drag_released_during_a_pan_ends() {
+    for pan in [PointerButton::Middle, PointerButton::Extra1] {
+        let mut u = Frames::new();
+        let rect = u.app.canvas.rect;
+        let start = Pos2::new(rect.min.x + 200.0, rect.center().y);
+        let moved = Pos2::new(rect.min.x + 400.0, rect.center().y);
+        u.frame(vec![Event::PointerMoved(start)]);
+        u.frame(vec![button(start, PointerButton::Primary, true)]);
+        u.frame(vec![Event::PointerMoved(moved)]);
+        assert!(u.app.session.tool.busy(), "{pan:?}: a primary drag is under way");
+        u.frame(vec![button(moved, pan, true)]);
+        u.frame(vec![button(moved, PointerButton::Primary, false)]);
+        u.frame(vec![button(moved, pan, false)]);
+        u.frame(vec![]);
+        assert!(!u.app.session.tool.busy(), "{pan:?}: the primary release reached the engine");
+    }
 }

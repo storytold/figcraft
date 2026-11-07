@@ -162,9 +162,10 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 None => {}
             }
             if several {
-                resp.context_menu(|ui| {
-                    ui.set_width(200.0);
-                    if crate::menus::item(ui, tr("Open in new window"), "", true, false, &t) {
+                // The tab strip's own menu takes the theme like its overflow menus (the in-app
+                // menus stay dark, #843): its rows read on the white popup of the light theme.
+                crate::right::context_popup(&resp).show(|ui| {
+                    if crate::right::menu_item(ui, tr("Open in new window"), "") {
                         detach = Some((i, None));
                         ui.close();
                     }
@@ -302,18 +303,15 @@ fn drag_free_space(ui: &mut Ui, rect: Rect, from_x: f32, to_x: f32) {
     }
 }
 
-/// Closes tab `i`; unsaved changes need a second close with Alt held.
+/// Closes tab `i`: with unsaved changes it asks first (Don't Save / Cancel / Save), and Alt held
+/// drops them without asking.
 fn close_tab(app: &mut FigApp, ui: &Ui, i: usize) {
     // A branch tab's edits live on in its main file: closing it loses nothing.
     let dirty = app.session.docs.get(i).is_some_and(|d| d.is_dirty() && d.branch_of.is_none());
-    if dirty {
-        app.ui.find = None;
-        app.toast(trf("Unsaved changes: save first, or close again with {key} to discard", &[("key", &crate::toolbar::pretty_shortcut("Alt"))]));
-        if ui.input(|inp| inp.modifiers.alt) {
-            app.run("file.close", json!({"index": i, "force": true}));
-        }
+    if dirty && ui.input(|inp| inp.modifiers.alt) {
+        app.run("file.close", json!({"index": i, "force": true}));
     } else {
-        app.run("file.close", json!({"index": i}));
+        crate::windows::ask_close_tab(app, i);
     }
 }
 
