@@ -86,7 +86,7 @@ fn editing_text_applies_to_the_selected_chars() {
     s.execute("text.style", &json!({"id": t, "start": 6, "end": 11, "fontSize": 20})).unwrap();
     let c = s.execute("style.create", &json!({"type": "text", "name": "Type/Caption"})).unwrap()["id"].as_str().unwrap().to_string();
     let style = s.doc().unwrap().style(&c).cloned().unwrap();
-    let StyleKind::Text { style: def } = style.kind else { panic!("not a text style") };
+    let StyleKind::Text { style: def, .. } = style.kind else { panic!("not a text style") };
     assert_eq!(def.font_size, 20.0);
     assert_eq!(def.style_id, None, "definitions link to nothing");
     assert_eq!(links(&s, t)[8].as_deref(), Some(c.as_str()));
@@ -117,7 +117,7 @@ fn edits_unlink_and_style_edits_follow() {
     assert_eq!(layer_link(&s, a).as_deref(), Some(h.as_str()));
     // Redefining the style moves linked chars only.
     let mut def = match &s.doc().unwrap().style(&h).unwrap().kind {
-        StyleKind::Text { style } => style.clone(),
+        StyleKind::Text { style, .. } => style.clone(),
         _ => panic!("not a text style"),
     };
     def.font_size = 40.0;
