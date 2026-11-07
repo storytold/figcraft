@@ -4,7 +4,7 @@
 //! guide lines (with spacing labels) for the canvas to draw in red. Vector points also snap to
 //! other points (see `vectoredit::snap`); landing on one shows a marker (a zero-length guide).
 
-use figcraft_doc::{Document, NodeId};
+use figcraft_doc::{BoardItem, Document, NodeId};
 use figcraft_geom::{Affine, Point, Rect, Vec2, transform_rect_bbox};
 use serde::Serialize;
 
@@ -94,10 +94,23 @@ impl Targets {
                 t.ys.push((y, b.x0, b.x1));
             }
         }
-        // Siblings and, at the top level, all top-level layers.
+        // Siblings and, at the top level, all top-level layers. A board connector joined to a
+        // moving layer, or to one inside it (a section carries its stickies), re-routes with it, as
+        // does its label: no snapping to where its own route starts (#1916).
+        let carried = |e: NodeId| moving.contains(&e) || doc.ancestors(e).iter().any(|a| moving.contains(a));
+        let follows = |id: NodeId| match doc.node(id).and_then(|n| n.board.as_ref()) {
+            Some(BoardItem::Connector(k)) => [k.from.node(), k.to.node()].into_iter().flatten().any(carried),
+            _ => false,
+        };
         if let Some(p) = doc.node(parent) {
             for c in &p.children {
-                if moving.contains(c) || !doc.node(*c).is_some_and(|n| n.visible) {
+                let Some(n) = doc.node(*c).filter(|n| n.visible) else { continue };
+                let joined = match n.board.as_ref() {
+                    Some(BoardItem::Connector(_)) => follows(*c),
+                    Some(BoardItem::Label { connector }) => follows(*connector),
+                    _ => false,
+                };
+                if moving.contains(c) || joined {
                     continue;
                 }
                 if let Some(b) = bbox(*c) {

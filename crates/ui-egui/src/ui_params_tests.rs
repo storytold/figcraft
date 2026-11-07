@@ -30,6 +30,7 @@ fn export_settings_with_every_option_are_taken() {
             svg_id_attribute: true,
             svg_simplify_stroke: false,
             vd_compat: VdCompat::Exact,
+            quality: 70,
             ..ExportSetting::default()
         };
         let mut p = crate::export_panel::setting_params(&setting);
