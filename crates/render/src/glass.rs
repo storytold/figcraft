@@ -3,13 +3,15 @@
 //! Within `depth` of the outline the surface curves like a thick lens: the backdrop there is bent
 //! towards the inside, most a [`BEVEL`] in from the edge (`refraction` × `depth` far), falling off
 //! as the 3.5th power of the way out of the curve and gone `depth` further in, with a fifth as
-//! much on the bevel itself ([`bend_at`]). `splay` turns which way it bends, from along the edge's
-//! normal (0) to away from the layer's centre (1). Each colour channel bends by a different amount
-//! (`dispersion`, a rainbow fringe: red furthest, blue least, each smeared along the bend). The
-//! bevel catches the light as a thin line added to the backdrop ([`rim_light_at`]): fully where the
-//! edge faces `light_angle`, none below 0.35 of facing it, 0.6 as much on the opposite side; and a
-//! faint gradient runs across the curve, 5% darker where it faces the light and lighter opposite.
-//! `frost` blurs the backdrop first. Distances to the outline come from an exact Euclidean
+//! much on the bevel itself ([`bend_at`]). `splay` turns which way it bends, from towards the
+//! shape's core (0; along the edge's normal for a shape too big to keep, see [`MAX_SHAPE_PX`]) to
+//! away from the centre of the layer's bounds (1), as the reference tool's: on a ring or an L,
+//! whose centre lies outside the shape, an inner edge bends towards the hole. Each colour channel
+//! bends by a different amount (`dispersion`, a rainbow fringe: red furthest, blue least, each
+//! smeared along the bend). The bevel catches the light as a thin line added to the backdrop
+//! ([`rim_light_at`]): fully where the edge faces `light_angle`, none below 0.35 of facing it, 0.6
+//! as much on the opposite side; and a faint gradient runs across the curve, 5% darker where it
+//! faces the light and lighter opposite. `frost` blurs the backdrop first. Distances to the outline come from an exact Euclidean
 //! distance transform of the shape's coverage.
 //!
 //! The shape's coverage, distances and normals depend only on the shape and the zoom. Once a
@@ -575,8 +577,11 @@ struct ShapeKey {
     r: usize,
 }
 
-/// The cached fields of a shape whose window holds at most this many pixels; bigger shapes (a
-/// pane far larger than the view) are worked out for the part a render shows each time.
+/// The cached fields of a shape whose window holds at most this many pixels: 4M on the desktop, 1M
+/// on the web. Bigger shapes (a pane far larger than the view) are worked out for the part a render
+/// shows each time, with no core: they bend along their edge normals. So a large glass text or
+/// vector can bend differently once zoomed into, in a 2× export than on the canvas, and on the web
+/// than on the desktop. A rounded rectangle works out its core in closed form at any size.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_SHAPE_PX: u64 = 4 << 20;
 #[cfg(target_arch = "wasm32")]
@@ -919,8 +924,8 @@ pub fn glass(g: &Glass, frame: EffectFrame<'_>, rect: Option<RoundedRect>) -> Op
     fx::blur(&mut frosted, g.frost / 2.0 * scale);
     let ang = g.light_angle.to_radians();
     let light = (ang.sin() as f32, -ang.cos() as f32);
-    // The layer's centre in its own frame (see `own_frame`), which `splay` bends away from: the
-    // direction to it is the same wherever a render puts or cuts the layer.
+    // The centre of the layer's bounds in its own frame (see `own_frame`), which `splay` bends away
+    // from: the direction to it is the same wherever a render puts or cuts the layer.
     let local_centre = shape.0.bounding_box().center();
     let ((sx, sy), centre) = match own_frame(xf) {
         Some(own) => (own.shift, own.xf * local_centre),
