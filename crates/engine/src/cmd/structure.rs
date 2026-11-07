@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 
 use super::edit::{roots, z_sorted};
 use super::{CommandSpec, ok};
+
+mod suggest;
 use crate::params::{f64_of, get, id_of, num_or, req_id, req_index, req_num, req_targets, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
@@ -109,7 +111,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"removed": removed}))
             }
         ),
-        spec!("layout.suggest", "Suggest auto layout", "{ids?, direction? (horizontal|vertical|grid)}", true, layout_add),
+        spec!(
+            "layout.suggest",
+            "Suggest auto layout",
+            "{ids?, direction? (horizontal|vertical|grid)}  splits each frame's layers into rows or columns by the gaps between them, wraps every band of several layers in a frame without fill that hugs it and does the same inside, so the layers keep their place where the gaps are even and the bands start at the same offset across the flow; the frame keeps its size, and the result carries `warnings` for gaps that differ, bands that start at different offsets (they line up at the smallest and some move) and layers that overlap. Instances and the layers inside them are refused. `direction` sets the top level's direction (nested frames follow the gaps); grid lays the layers out in one grid. A group is converted to a frame and several layers are wrapped in one, as Add auto layout does",
+            true,
+            suggest::layout_suggest
+        ),
         spec!("object.moveToPage", "Move to page", "{ids?, page}", true, move_to_page),
         spec!("object.setThumbnail", "Set as thumbnail", "{id?}", true, |s, p| {
             let id = targets(s, p).first().copied().ok_or_else(|| bad("object.setThumbnail", "select a frame"))?;

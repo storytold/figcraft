@@ -223,6 +223,7 @@ fn text_case() {
     assert_eq!(style_weight("Semi Bold Italic"), 600);
     assert_eq!(style_weight("Black"), 900);
     assert_eq!(style_weight("Regular"), 400);
+    assert_eq!(style_weight("Hairline"), 100);
 }
 
 #[test]
@@ -594,6 +595,22 @@ fn is_ancestor_holds_for_very_deep_chains() {
     }
     assert!(d.is_ancestor(root, leaf));
     assert!(matches!(d.reparent(root, leaf, None), Err(DocError::Cycle(..))));
+}
+
+#[test]
+fn render_bounds_of_a_doubled_child_list_end_at_once() {
+    // A file can list a child twice at every level: 2^40 visits if each is walked.
+    let mut d = Document::new("x");
+    let mut parent = page(&d);
+    let mut groups = Vec::new();
+    for _ in 0..40 {
+        parent = d.create(parent, NodeKind::Group, "G", 0.0, 0.0, 10.0, 10.0).unwrap();
+        groups.push(parent);
+    }
+    for w in groups.windows(2) {
+        d.node_mut(w[0]).unwrap().children.push(w[1]);
+    }
+    assert!(d.world_render_bounds(groups[0]).is_some());
 }
 
 #[test]

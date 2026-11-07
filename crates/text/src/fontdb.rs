@@ -544,10 +544,13 @@ fn names(f: &skrifa::FontRef) -> (Option<String>, Option<String>) {
     (family, style)
 }
 
-/// Families tried, in order, for characters a text's own font lacks. The symbol fonts come last:
-/// Apple Symbols (macOS), Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for
-/// signs such as ⌖ and ⤒ that no text face has.
-const FALLBACK_FAMILIES: [&str; 29] = [
+/// Families tried, in order, for characters a text's own font lacks. Every script face craft-fonts
+/// can embed (Noto Sans Arabic, Thai, Hebrew, Devanagari, Georgian) is here after the Latin faces,
+/// so a web build that embeds one (`FIGCRAFT_EMBED_SCRIPTS`, #1902) draws that script in an Inter
+/// document: the browser has no other fonts. The symbol fonts come last: Apple Symbols (macOS),
+/// Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for signs such as ⌖ and ⤒
+/// that no text face has.
+const FALLBACK_FAMILIES: [&str; 32] = [
     "Inter",
     "Helvetica Neue",
     "Arial",
@@ -571,6 +574,9 @@ const FALLBACK_FAMILIES: [&str; 29] = [
     "Leelawadee UI",
     "Thonburi",
     "Tahoma",
+    "Noto Sans Hebrew",
+    "Noto Sans Devanagari",
+    "Noto Sans Georgian",
     "Apple Symbols",
     "Segoe UI Symbol",
     "Noto Sans Symbols",
@@ -640,6 +646,9 @@ struct FallbackLists {
 
 /// The most styles whose fallback faces are kept (a file naming more starts the list again).
 const MAX_FALLBACK_STYLES: usize = 64;
+/// Most faces loaded from one font collection given as bytes (the largest real collections,
+/// the CJK ones, hold a few dozen).
+const MAX_COLLECTION_FACES: u32 = 64;
 
 /// [`FontDb::key`]'s and [`FontDb::resolve`]'s answers for the families known in one generation.
 #[derive(Default)]
@@ -711,7 +720,10 @@ impl FontDb {
     pub fn add_bytes(&mut self, bytes: Vec<u8>) -> Vec<Arc<Face>> {
         let shared = Arc::new(bytes);
         let count = match FileRef::new(shared.as_slice()) {
-            Ok(FileRef::Collection(c)) => c.len(),
+            // A collection's header may name any number of faces, each a few bytes pointing at
+            // the same tables, and every face keeps its own character map: at most
+            // [`MAX_COLLECTION_FACES`] of them are loaded.
+            Ok(FileRef::Collection(c)) => c.len().min(MAX_COLLECTION_FACES),
             Ok(FileRef::Font(_)) => 1,
             Err(_) => 0,
         };
@@ -743,6 +755,12 @@ impl FontDb {
 
     /// Style names of a family, by weight then italic.
     pub fn styles(&mut self, family: &str) -> Vec<String> {
+        self.style_weights(family).into_iter().map(|(name, _)| name).collect()
+    }
+
+    /// [`styles`](Self::styles) with the weight each is listed by: the face's own (Segoe UI
+    /// Semilight is 350), a named instance's `wght`, or for a face not read yet its name's.
+    pub fn style_weights(&mut self, family: &str) -> Vec<(String, u16)> {
         self.load_family(family, None);
         let key = self.key(family);
         // (weight, italic, order in the font, name): named instances keep the font's order.
@@ -761,14 +779,29 @@ impl FontDb {
                 v.push((w, f.italic || italic_name(&inst.name), k, inst.name.clone()));
             }
         }
-        // A family installed as one family per weight offers those weights too.
-        for (_, style) in self.split_families(&key) {
-            v.push((pending_weight(&style).clamp(1, 1000) as u16, italic_name(&style), 0, style));
+        // A family installed as one family per weight offers those weights too, upright and italic
+        // as that family's faces are ("Foo Bold" with Regular and Italic faces: Bold and Bold
+        // Italic, the names `resolve` finds them by). A face read gives its own weight, one not
+        // read the name's; the families aren't read for this.
+        for (k, style) in self.split_families(&key) {
+            let named = pending_weight(&style).clamp(1, 1000) as u16;
+            let italic = italic_name(&style);
+            let read = self.families.get(&k).map(|(_, idx)| idx.as_slice()).unwrap_or_default().iter().filter_map(|i| self.faces.get(*i));
+            let unread = self.pending.get(&k).into_iter().flat_map(|(_, entries)| entries).map(|e| (named, italic_name(&e.style)));
+            let faces: Vec<(u16, bool)> = read.map(|f| (f.weight, f.italic)).chain(unread).collect();
+            if faces.is_empty() {
+                v.push((named, italic, 0, style));
+                continue;
+            }
+            for (w, slanted) in faces {
+                let name = if slanted && !italic { format!("{style} Italic") } else { style.clone() };
+                v.push((w, slanted || italic, 0, name));
+            }
         }
         v.sort();
         let mut seen = std::collections::HashSet::new();
         v.retain(|x| seen.insert(norm_style(&x.3)));
-        v.into_iter().map(|x| x.3).collect()
+        v.into_iter().map(|x| (x.3, x.0)).collect()
     }
 
     /// The key `family` is known under: itself in any case; for a name designs use for Apple's
@@ -1322,7 +1355,7 @@ fn index_font_file(path: &std::path::Path, meta: &std::fs::Metadata, out: &mut B
         return;
     }
     let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).unwrap_or_default();
-    if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") && !(path.extension().is_none() && starts_like_a_font(path)) {
+    if !(matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") || (path.extension().is_none() && starts_like_a_font(path))) {
         return;
     }
     // Very large files are indexed all the same (Apple Color Emoji is ~180 MB and is where the
@@ -1500,6 +1533,11 @@ pub fn has_family(family: &str) -> bool {
 /// Style names of a family in the global db.
 pub fn family_styles(family: &str) -> Vec<String> {
     db().write().unwrap_or_else(std::sync::PoisonError::into_inner).styles(family)
+}
+
+/// [`family_styles`] with the weight each is listed by (see [`FontDb::style_weights`]).
+pub fn family_style_weights(family: &str) -> Vec<(String, u16)> {
+    db().write().unwrap_or_else(std::sync::PoisonError::into_inner).style_weights(family)
 }
 
 /// Scan system fonts into the global db (desktop; a no-op on the web, or with

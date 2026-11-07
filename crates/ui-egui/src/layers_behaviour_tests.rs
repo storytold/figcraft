@@ -52,6 +52,115 @@ fn sorted(mut v: Vec<NodeId>) -> Vec<NodeId> {
 }
 
 #[test]
+fn selected_hierarchies_have_continuous_rounded_backgrounds() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Selected frame"})).unwrap());
+    let child = rect(&mut s, "child", 0.0, Some(frame));
+    let group = id(s.execute("object.group", &json!({"ids": [child]})).unwrap());
+    rect(&mut s, "sibling", 30.0, Some(frame));
+    let other = id(s.execute("frame.create", &json!({"name": "Other frame"})).unwrap());
+    rect(&mut s, "other child", 0.0, Some(other));
+    s.execute("select.set", &json!({"ids": [frame, group, other]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame, group, other]);
+    let selected_rows = [frame, group, other].map(|id| u.row_at(id));
+    let out = u.frame_output(vec![Event::PointerGone]);
+    let t = crate::theme::Tokens::get(&u.ctx);
+    for pos in selected_rows {
+        let rect_at = |fill| {
+            out.shapes.iter().enumerate().find_map(|(i, s)| match &s.shape {
+                egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(pos) => Some(i),
+                _ => None,
+            })
+        };
+        let background = rect_at(t.selected_row_child).expect("the selected row belongs to the hierarchy background");
+        let highlight = rect_at(t.selected_row).expect("each selected frame or group has its own highlight");
+        assert!(highlight > background, "the selected highlight is painted above the hierarchy background");
+    }
+    let backgrounds: Vec<_> = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.fill == t.selected_row_child => Some(r),
+            _ => None,
+        })
+        .collect();
+    // Other frame + child, then selected frame + sibling + selected group + child.
+    assert_eq!(backgrounds.len(), 6);
+    for band in [&backgrounds[..2], &backgrounds[2..]] {
+        assert_eq!(band.first().unwrap().corner_radius.nw, 5);
+        assert_eq!(band.last().unwrap().corner_radius.sw, 5);
+        for pair in band.windows(2) {
+            assert_eq!(pair[0].rect.bottom(), pair[1].rect.top(), "the highlight fills the inter-row spacing");
+            assert_eq!(pair[0].corner_radius.sw, 0, "no rounded seams inside the hierarchy");
+            assert_eq!(pair[1].corner_radius.nw, 0, "a selected nested group stays in the same block");
+        }
+    }
+    assert!(backgrounds[1].rect.bottom() < backgrounds[2].rect.top(), "separate selected hierarchies stay separate");
+    // A collapsed frame and a filtered leaf each have all four corners rounded.
+    u.app.ui.expanded.clear();
+    let out = u.frame_output(vec![]);
+    let collapsed: Vec<_> = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.fill == t.selected_row_child => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(collapsed.len(), 2);
+    assert!(collapsed.iter().all(|r| r.corner_radius == egui::CornerRadius::same(5)));
+    u.app.ui.layer_filter = "child".into();
+    let out = u.frame_output(vec![]);
+    assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+        egui::Shape::Rect(r) if r.fill == t.selected_row_child && r.corner_radius.sw == 5
+    )));
+}
+
+#[test]
+fn selected_hierarchy_keeps_square_seams_when_scrolled() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Long hierarchy"})).unwrap());
+    for i in 0..70 {
+        rect(&mut s, &format!("Child {i}"), 0.0, Some(frame));
+    }
+    s.execute("select.set", &json!({"ids": [frame]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.insert(frame);
+    let fill = crate::theme::Tokens::get(&u.ctx).selected_row_child;
+    let corners = |out: &egui::FullOutput| {
+        out.shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.fill == fill && r.rect.intersects(s.clip_rect) => Some(r.corner_radius),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let wheel = |y| Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, y),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    u.frame(vec![Event::PointerMoved(egui::pos2(150.0, 500.0)), wheel(-700.0)]);
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    let middle = corners(&u.frame_output(vec![]));
+    assert!(!middle.is_empty());
+    assert!(middle.iter().all(|c| *c == egui::CornerRadius::ZERO), "viewport edges inside a subtree are square seams");
+    u.frame(vec![wheel(-10000.0)]);
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    let end = corners(&u.frame_output(vec![]));
+    assert_eq!(end.first().unwrap().nw, 0, "the hierarchy starts above the viewport");
+    assert_eq!(end.last().unwrap().sw, 5, "the hierarchy's real end stays rounded");
+}
+
+#[test]
 fn clicking_rows_selects_by_the_documented_rules() {
     let (mut u, [a, b, c, d]) = four();
     let rows = [a, b, c, d].map(|i| u.row_at(i));

@@ -357,21 +357,27 @@ pub(super) fn copy_props(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(v)
 }
 
+/// Give layer `id` the properties [`copy_props_of`] copied (`props`), those it can take: the text
+/// properties only to text, the corners only to a layer with corners.
+pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, props: &Value) -> Result<()> {
+    let mut m = props.as_object().cloned().unwrap_or_default();
+    let is_text = matches!(doc.get(id)?.kind, NodeKind::Text(_));
+    if !is_text {
+        m.retain(|k, _| !k.starts_with("font") && k != "lineHeight" && k != "letterSpacing");
+    }
+    if !doc.get(id)?.kind.has_corner_radius() {
+        m.remove("cornerRadius");
+        m.remove("cornerSmoothing");
+    }
+    crate::cmd::props::apply(cmd, doc, id, &m)
+}
+
 pub(super) fn paste_props(s: &mut Session, p: &Value) -> Result<Value> {
     let props = s.clipboard.props.clone().ok_or_else(|| EngineError::Disabled("edit.pasteProperties".into(), "no copied properties".into()))?;
     let ids = req_targets("edit.pasteProperties", s, p)?;
     let doc = s.doc_mut()?;
     for i in ids {
-        let mut m = props.as_object().cloned().unwrap_or_default();
-        let is_text = matches!(doc.get(i)?.kind, NodeKind::Text(_));
-        if !is_text {
-            m.retain(|k, _| !k.starts_with("font") && k != "lineHeight" && k != "letterSpacing");
-        }
-        if !doc.get(i)?.kind.has_corner_radius() {
-            m.remove("cornerRadius");
-            m.remove("cornerSmoothing");
-        }
-        crate::cmd::props::apply("edit.pasteProperties", doc, i, &m)?;
+        apply_copied_props("edit.pasteProperties", doc, i, &props)?;
     }
     ok()
 }
