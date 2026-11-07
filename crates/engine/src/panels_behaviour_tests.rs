@@ -277,6 +277,11 @@ fn renaming_several_layers_by_the_documented_codes() {
     assert_eq!(r(None, "$n", Some(1e30), "a"), "1000000000000");
     assert_eq!(r(None, "$n", Some(f64::NAN), "a"), "1");
     assert_eq!(r(Some("é"), "e", None, "café é"), "cafe e");
+    // A template is expanded once per match, so its length is capped (1,000 characters).
+    let long = "$nn".repeat(400);
+    assert!(crate::rename::BatchRename::new(Some("a"), false, &long, None, None).is_err());
+    assert!(crate::rename::BatchRename::new(None, false, "x", Some(&long), None).is_err_and(|e| e.contains("pattern")));
+    assert!(crate::rename::BatchRename::new(Some("a"), false, &"$nn".repeat(300), None, None).is_ok());
 }
 
 #[test]
@@ -391,6 +396,20 @@ fn page_select_and_doc_switch_refuse_negative_or_fractional_indexes() {
         assert!(s.execute("doc.switch", &json!({"index": bad_index})).is_err(), "doc.switch index {bad_index} must fail");
         assert_eq!(s.active, active, "doc.switch index {bad_index} leaves the active tab alone");
     }
+}
+
+#[test]
+fn page_move_refuses_negative_or_fractional_indexes() {
+    let mut s = Session::new();
+    ex(&mut s, "page.add", json!({}));
+    let p3 = id(&ex(&mut s, "page.add", json!({})));
+    let before = pages(&mut s);
+    for bad_index in [json!(-1), json!(1.5)] {
+        assert!(s.execute("page.move", &json!({"id": p3, "index": bad_index})).is_err(), "page.move index {bad_index} must fail");
+        assert_eq!(pages(&mut s), before, "page.move index {bad_index} leaves the order alone");
+    }
+    ex(&mut s, "page.move", json!({"id": p3, "index": 0}));
+    assert_eq!(pages(&mut s)[0]["id"], json!(p3), "a valid index still moves the page");
 }
 
 #[test]

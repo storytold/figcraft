@@ -48,6 +48,7 @@ type Shared = Arc<Mutex<Script>>;
 
 struct Link(Shared);
 
+/// A session you are in as `role` under `name`.
 fn info(role: Role, name: &str) -> SessionInfo {
     SessionInfo {
         role,
@@ -61,6 +62,7 @@ fn info(role: Role, name: &str) -> SessionInfo {
         address: "192.168.1.20:47900".into(),
         network: true,
         access: Access::Edit,
+        view: None,
     }
 }
 
