@@ -506,6 +506,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plain_escapes_controls_and_leaves_quotes_and_paths() {
+        assert_eq!(plain("a\u{1b}[31m\nb"), r"a\u{1b}[31m\nb");
+        assert_eq!(plain(r"Bob's C:\files"), r"Bob's C:\files");
+    }
+
+    #[test]
     fn script_formats() {
         assert_eq!(parse_script(r#"[{"command":"a"},{"command":"b","params":{"x":1}}]"#).unwrap().len(), 2);
         assert_eq!(parse_script(r#"{"commands":[{"command":"a"}]}"#).unwrap().len(), 1);
