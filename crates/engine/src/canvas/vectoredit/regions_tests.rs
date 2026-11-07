@@ -542,8 +542,7 @@ fn hovered_and_selected_is_hatched_once_and_regions_share_one_pattern() {
     assert!(part.iter().all(|x| all.iter().any(|y| (x - y).abs() < 1e-6)));
 }
 
-/// "If there are multiple closed regions within a vector network, you can adjust the fill for each
-/// region individually" (Edit vector layers, #1875): with regions selected in edit mode, the fill
+/// Each closed region of a vector network has its own fill (#1875): with regions selected in edit mode, the fill
 /// commands edit those regions' own fills and leave the layer's; `regions` names them outright.
 #[test]
 fn the_fill_commands_edit_the_selected_regions() {

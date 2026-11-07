@@ -262,8 +262,8 @@ pub(super) fn reparent(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The regions of a vector whose own fill stacks a fill command edits instead of the layer's: the
 /// `regions` named (with one target, a vector; indices into its network's regions), else the
-/// regions selected in vector edit mode when the one target is the layer being edited ("you can
-/// adjust the fill for each region individually", Edit vector layers, #1875). None: the layer's.
+/// regions selected in vector edit mode when the one target is the layer being edited (#1875).
+/// None: the layer's.
 pub(crate) fn fill_regions(s: &Session, cmd: &str, p: &Value, ids: &[NodeId]) -> Result<Option<(NodeId, Vec<usize>)>> {
     let doc = s.doc()?;
     let region_count = |id: NodeId| match doc.node(id).map(|n| &n.kind) {

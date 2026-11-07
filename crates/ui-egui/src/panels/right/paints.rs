@@ -293,8 +293,7 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
     }
     let t = Tokens::get(ui.ctx());
     let ids = sel.to_vec();
-    // Regions selected in vector edit mode: their own fills ("you can adjust the fill for each
-    // region individually", Edit vector layers, #1875); the fill commands edit those too.
+    // Regions selected in vector edit mode: their own fills (#1875); the fill commands edit those too.
     let region_list = match sel {
         [id] if fills => figcraft_engine::vectoredit::selected_region_fills(&app.session, *id),
         _ => None,
