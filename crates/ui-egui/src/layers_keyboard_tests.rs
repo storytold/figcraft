@@ -223,12 +223,9 @@ impl crate::FigApp {
     }
 }
 
-/// Pick select (#1836): "Press Tab or ⌥Option Space / Control Space again to switch to pick
-/// select." "Once activated, a pink outline is placed on a selected objects on the canvas, or any
-/// node if nothing is selected." "Use Tab to move between parent objects on the canvas,
-/// Return/Enter and ⇧Shift Return / Enter to move between parent and child layers. Press Space to
-/// make you selection. Press Esc or click anywhere on the canvas to exit selection mode."
-/// (Accessibility at Figma).
+/// Pick select (#1836): Tab turns the selection box into a pink outline on the selected layer (or
+/// the page's top layer); Tab walks siblings, Enter and Shift+Enter go down and up the tree, Space
+/// selects, and Esc or a click on the canvas leaves it.
 #[test]
 fn tab_switches_the_selection_box_to_pick_select() {
     let (mut u, a, b) = setup();

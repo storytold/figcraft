@@ -523,8 +523,7 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
 /// marquee (Shift toggles, Cmd/Ctrl takes nested layers), Escape drops it.
 pub(crate) fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
     let Some(mut b) = app.ui.key_box else { return false };
-    // "Press Tab ... to switch to pick select" (Accessibility at Figma): the box becomes the
-    // pick cursor.
+    // Tab: the box becomes the pick cursor.
     if key == Key::Tab && m.is_none() {
         app.ui.key_box = None;
         app.start_pick_select();
