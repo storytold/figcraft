@@ -110,7 +110,7 @@ mod view_state;
 pub use derived::{changed_nodes, normalize};
 pub use doc_state::{DocState, History, HistoryEntry, Interaction, PREVIEW_READ_ONLY, Preedit, TextEdit, VersionPreview};
 pub use error::{EngineError, Result, bad};
-pub use prefs::{Clipboard, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UI_SCALE_SIZES, UiRequest, clamp_ui_scale};
+pub use prefs::{Clipboard, DefaultProps, MAX_RECENT_ACTIONS, Prefs, UI_SCALE_MAX, UI_SCALE_MIN, UI_SCALE_SIZES, UiRequest, clamp_ui_scale};
 pub use session::Forward;
 pub use view_state::ViewState;
 
@@ -119,6 +119,8 @@ pub struct Session {
     pub docs: Vec<DocState>,
     pub active: usize,
     pub clipboard: Clipboard,
+    /// Edit ▸ Set default properties: what new shapes and text drawn with the tools take.
+    pub default_props: DefaultProps,
     pub prefs: Prefs,
     /// A command changed a preference that is kept at once (not only when the app quits): the app
     /// saves the preferences and clears this.
@@ -274,6 +276,8 @@ mod dark_page_text_tests;
 mod dash_cap_tests;
 #[cfg(test)]
 mod datafill_tests;
+#[cfg(test)]
+mod default_props_tests;
 #[cfg(test)]
 mod design_paste_tests;
 #[cfg(test)]
@@ -584,6 +588,8 @@ mod text_motion_tests;
 mod text_style_picker_tests;
 #[cfg(test)]
 mod text_tail_tests;
+#[cfg(test)]
+mod text_weight_step_tests;
 #[cfg(test)]
 mod textfit_tests;
 #[cfg(test)]
