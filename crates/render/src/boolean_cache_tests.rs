@@ -108,12 +108,12 @@ fn caches_drop_the_least_recently_used_half() {
     assert!(c.get(0).is_some() && c.get(1).is_some() && c.get(9).is_some());
     assert!(c.get(2).is_none() && c.get(3).is_none());
     // Junk and degenerate folds.
-    assert!(fold_cached(&[]).elements().is_empty());
+    assert!(fold_cached(&[]).unwrap().elements().is_empty());
     let mut bad = BezPath::new();
     bad.move_to((f64::NAN, 0.0));
     bad.line_to((1.0, 1.0));
     let sq = figcraft_geom::Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
-    assert!(fold_cached(&[(sq, BoolOp::Union), (bad, BoolOp::Union)]).elements().is_empty());
+    assert!(fold_cached(&[(sq, BoolOp::Union), (bad, BoolOp::Union)]).unwrap().elements().is_empty());
 }
 
 #[test]
@@ -152,4 +152,124 @@ fn deep_boolean_nesting_stops_at_the_outline_depth_limit() {
     let inner = d.create(b, NodeKind::BooleanOp { op: BoolOp::Union }, "B", 0.0, 0.0, 0.0, 0.0).unwrap();
     d.create(inner, NodeKind::Rectangle, "R", 40.0, 10.0, 20.0, 20.0).unwrap();
     assert!((outline(&d, b).area().abs() - 2.0 * 20.0 * 20.0).abs() < 0.5);
+}
+
+#[test]
+fn stroke_only_boolean_operands_keep_their_holes() {
+    use figcraft_doc::StrokeAlign;
+    use figcraft_geom::Point;
+
+    for kind in [NodeKind::Polygon { count: 6 }, NodeKind::Rectangle, NodeKind::Line] {
+        for align in [StrokeAlign::Inside, StrokeAlign::Center, StrokeAlign::Outside] {
+            let mut d = Document::new("stroke operands");
+            let page = d.first_page().unwrap();
+            let b = d.create(page, NodeKind::BooleanOp { op: BoolOp::Subtract }, "B", 0.0, 0.0, 100.0, 100.0).unwrap();
+            d.get_mut(b).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+            // A nested group exercises the same path as a direct operand.
+            let g = d.create(b, NodeKind::Group, "G", 0.0, 0.0, 100.0, 100.0).unwrap();
+            let id = d.create(g, kind.clone(), "stroke", 10.0, 10.0, 80.0, 80.0).unwrap();
+            let n = d.get_mut(id).unwrap();
+            let mut hidden_fill = Paint::solid(Color::BLACK);
+            hidden_fill.visible = false;
+            n.fills = vec![hidden_fill];
+            n.strokes = vec![Paint::solid(Color::BLACK)];
+            n.stroke.weight = 6.0;
+            n.stroke.align = align;
+            let path = outline(&d, b);
+            assert_eq!(path.winding(Point::new(50.0, 45.0)), 0, "{kind:?} {align:?}: empty interior");
+            assert!(path.area().abs() > 100.0, "{kind:?} {align:?}: stroke survives");
+            assert!(!dark(&render(&d, page), 50, 45));
+            if !matches!(kind, NodeKind::Line) {
+                // Changing only stroke weight invalidates the boolean result.
+                let area = path.area().abs();
+                d.get_mut(id).unwrap().stroke.weight = 3.0;
+                assert!(outline(&d, b).area().abs() < area);
+                d.get_mut(id).unwrap().fills[0].visible = true;
+                assert_ne!(outline(&d, b).winding(Point::new(50.0, 45.0)), 0, "visible fills keep the interior");
+            }
+        }
+    }
+}
+
+#[test]
+fn boolean_operands_preserve_side_borders_and_container_children() {
+    use figcraft_doc::StrokeAlign;
+    use figcraft_geom::Point;
+    for kind in [NodeKind::Rectangle, NodeKind::Frame] {
+        let mut d = Document::new("borders");
+        let page = d.first_page().unwrap();
+        let b = d.create(page, NodeKind::BooleanOp { op: BoolOp::Union }, "B", 0.0, 0.0, 100.0, 100.0).unwrap();
+        let id = d.create(b, kind.clone(), "operand", 0.0, 0.0, 100.0, 100.0).unwrap();
+        let n = d.get_mut(id).unwrap();
+        n.fills.clear();
+        n.strokes = vec![Paint::solid(Color::BLACK)];
+        n.stroke.weight = 8.0;
+        n.stroke.align = StrokeAlign::Inside;
+        n.stroke.sides = Some([8.0, 0.0, 0.0, 0.0]);
+        if matches!(kind, NodeKind::Frame) {
+            d.create(id, NodeKind::Rectangle, "child", 40.0, 40.0, 20.0, 20.0).unwrap();
+        }
+        let p = outline(&d, b);
+        assert_ne!(p.winding(Point::new(50.0, 4.0)), 0, "top border");
+        assert_eq!(p.winding(Point::new(98.0, 50.0)), 0, "no right border");
+        assert_eq!(p.winding(Point::new(50.0, 98.0)), 0, "no bottom border");
+        if matches!(kind, NodeKind::Frame) {
+            assert_ne!(p.winding(Point::new(50.0, 50.0)), 0, "child retained");
+        }
+        d.get_mut(id).unwrap().stroke.sides = Some([0.0, 8.0, 0.0, 0.0]);
+        let p = outline(&d, b);
+        assert_eq!(p.winding(Point::new(50.0, 4.0)), 0, "side edit removes top");
+        assert_ne!(p.winding(Point::new(98.0, 50.0)), 0, "side edit adds right");
+        d.get_mut(id).unwrap().stroke.sides = None;
+        assert_ne!(outline(&d, b).winding(Point::new(50.0, 4.0)), 0, "uniform container border");
+    }
+}
+
+#[test]
+fn stroke_only_text_operands_use_glyphs_instead_of_the_text_box() {
+    use figcraft_doc::{StrokeAlign, TextData};
+    let mut d = Document::new("text strokes");
+    let page = d.first_page().unwrap();
+    let b = d.create(page, NodeKind::BooleanOp { op: BoolOp::Union }, "B", 0.0, 0.0, 400.0, 100.0).unwrap();
+    let mut text = TextData::new("Hi");
+    text.style.font_size = 32.0;
+    let id = d.create(b, NodeKind::Text(text), "text", 0.0, 0.0, 400.0, 100.0).unwrap();
+    let n = d.get_mut(id).unwrap();
+    n.fills.clear();
+    n.strokes = vec![Paint::solid(Color::BLACK)];
+    n.stroke.weight = 2.0;
+    n.stroke.align = StrokeAlign::Center;
+    let glyphs = outline(&d, id);
+    let result = outline(&d, b);
+    assert_eq!(result.elements().is_empty(), glyphs.elements().is_empty());
+    if !glyphs.elements().is_empty() {
+        let expected = glyphs.bounding_box().inflate(3.0, 3.0);
+        let actual = result.bounding_box();
+        assert!(actual.x0 >= expected.x0 && actual.x1 <= expected.x1);
+        assert!(actual.y0 >= expected.y0 && actual.y1 <= expected.y1);
+        assert!(actual.x1 < 200.0, "the unused text box must not contribute a border");
+    }
+    let NodeKind::Text(text) = &mut d.get_mut(id).unwrap().kind else { panic!() };
+    text.characters = "   ".into();
+    assert!(outline(&d, b).elements().is_empty(), "spaces have no stroked glyphs");
+}
+
+#[test]
+fn rounded_side_borders_follow_their_corners_in_booleans() {
+    use figcraft_doc::StrokeAlign;
+    use figcraft_geom::Point;
+    let mut d = Document::new("rounded borders");
+    let page = d.first_page().unwrap();
+    let b = d.create(page, NodeKind::BooleanOp { op: BoolOp::Union }, "B", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let id = d.create(b, NodeKind::Rectangle, "operand", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let n = d.get_mut(id).unwrap();
+    n.fills.clear();
+    n.strokes = vec![Paint::solid(Color::BLACK)];
+    n.stroke.align = StrokeAlign::Inside;
+    n.stroke.sides = Some([8.0; 4]);
+    n.corners.radii = [30.0; 4];
+    let p = outline(&d, b);
+    assert_ne!(p.winding(Point::new(50.0, 4.0)), 0, "top border");
+    assert_eq!(p.winding(Point::new(3.0, 3.0)), 0, "the rounded corner leaves the square's tip out");
+    assert_eq!(p.winding(Point::new(50.0, 50.0)), 0, "hollow inside");
 }

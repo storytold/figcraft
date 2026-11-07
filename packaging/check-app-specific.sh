@@ -6,7 +6,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 bash packaging/server/install-test.sh
 if grep -rniE 'photoshop|psd|photocraft|vectorcraft|illustrator|adobe|figma' packaging/ .github/ \
     --exclude=packaging-lint.yml --exclude=check-app-specific.sh; then
-  echo "::error::package metadata mentions another product (see above)"
+  echo "::error::package metadata mentions another product (see above)" >&2
   exit 1
 fi
 

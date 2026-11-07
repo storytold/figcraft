@@ -94,6 +94,66 @@ fn open_reads_variables_from_param_or_next_to_the_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Every document, the active tab and the recent files, compared before and after a refused command.
+fn state(s: &Session) -> (String, usize, Vec<String>) {
+    (format!("{:?}", s.docs), s.active, s.prefs.recent_files.clone())
+}
+
+#[test]
+fn an_explicit_variables_path_is_capped_like_the_sibling_file() {
+    let dir = temp_dir("restvars-cap");
+    let path = dir.join("proto.json");
+    std::fs::write(&path, serde_json::to_vec(&file()).unwrap()).unwrap();
+    let path = path.to_string_lossy().to_string();
+    let vars = dir.join("theme.json");
+    std::fs::write(&vars, serde_json::to_vec(&variables()).unwrap()).unwrap();
+    let vars = vars.to_string_lossy().to_string();
+
+    // A small file opens and imports as before.
+    let mut s = Session::new();
+    s.execute("file.open", &json!({"path": path, "variables": vars})).unwrap();
+    assert_eq!(named(&s, "Button").bound.get("fill").map(String::as_str), Some(BRAND));
+
+    // One byte over the limit (sparse, so nothing is written), a folder, and a device are refused
+    // before the document changes, by the same check the sibling file goes through.
+    let big = dir.join("big.json");
+    std::fs::File::create(&big).unwrap().set_len(256 * 1024 * 1024 + 1).unwrap();
+    let mut refused = vec![big.to_string_lossy().to_string(), dir.to_string_lossy().to_string()];
+    if cfg!(unix) {
+        refused.push("/dev/null".to_string());
+    }
+    s.prefs.recent_files = vec![path.clone()];
+    s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 20, "height": 10})).unwrap();
+    for bad in &refused {
+        for cmd in ["file.open", "file.import"] {
+            let before = state(&s);
+            let e = s.execute(cmd, &json!({"path": path, "variables": bad})).unwrap_err().to_string();
+            assert!(
+                ["more than the 256 MB allowed here", "is a folder, not a file", "isn't a regular file"].iter().any(|w| e.contains(w)),
+                "{cmd} {bad}: {e}"
+            );
+            assert_eq!(state(&s), before, "{cmd} {bad}");
+        }
+    }
+
+    // Access roots still apply: inside them the file reads, outside it is rejected.
+    let inside = temp_dir("restvars-cap-root");
+    std::fs::copy(&vars, inside.join("theme.json")).unwrap();
+    std::fs::copy(&path, inside.join("proto.json")).unwrap();
+    let roots = std::sync::Arc::new(crate::file_access::Roots::new(&[inside.to_string_lossy().to_string()], &[]).unwrap());
+    let inside_vars = inside.join("theme.json").to_string_lossy().to_string();
+    let inside_path = inside.join("proto.json").to_string_lossy().to_string();
+    crate::file_access::confined(Some(&roots), || {
+        s.execute("file.import", &json!({"path": inside_path, "variables": inside_vars})).unwrap();
+        let before = state(&s);
+        let e = s.execute("file.import", &json!({"path": inside_path, "variables": vars})).unwrap_err().to_string();
+        assert!(e.contains("automation path rejected"), "{e}");
+        assert_eq!(state(&s), before);
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&inside);
+}
+
 #[test]
 fn import_appends_flows_interactions_and_variables() {
     let mut s = Session::new();
@@ -231,4 +291,22 @@ fn export_sizes_parse_and_label() {
     assert_eq!(e(ExportSize::Scale { value: 2.0 }, "", ExportFormat::Svg).file_suffix(), "");
     assert_eq!(e(ExportSize::Scale { value: 2.0 }, "-big", ExportFormat::Png).file_suffix(), "-big");
     assert_eq!(e(ExportSize::Width { value: 64.0 }, "", ExportFormat::Png).file_suffix(), "");
+}
+
+#[test]
+fn export_size_label_parses_back_exactly() {
+    for want in [
+        ExportSize::Scale { value: 0.125 },
+        ExportSize::Scale { value: 0.004 },
+        ExportSize::Scale { value: 0.001 },
+        ExportSize::Scale { value: 63.99 },
+        ExportSize::Scale { value: 1.0 / 3.0 },
+        ExportSize::Width { value: 512.125 },
+        ExportSize::Height { value: 0.005 },
+    ] {
+        assert_eq!(ExportSize::parse(&want.label()), Some(want), "{}", want.label());
+    }
+    assert_eq!(ExportSize::Scale { value: 0.125 }.label(), "0.125x");
+    assert_eq!(ExportSize::Scale { value: 2.0 }.label(), "2x");
+    assert_eq!(ExportSize::Width { value: 512.0 }.label(), "512w");
 }

@@ -97,3 +97,22 @@ fn preview_keeps_the_unsaved_state_and_saving_saves_the_document() {
     assert_eq!(count(&s), three);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_refused_cut_leaves_the_clipboard_as_it_was() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0);
+    s.execute("file.saveVersion", &json!({"name": "One"})).unwrap();
+    let b = rect(&mut s, 20.0);
+    s.execute("edit.copy", &json!({"ids": [b]})).unwrap();
+    let roots = |s: &Session| s.clipboard.nodes.iter().map(|(r, _)| *r).collect::<Vec<_>>();
+    assert_eq!(roots(&s), vec![b]);
+    let source = s.clipboard.source.clone().unwrap();
+    let depth = s.undo_depth();
+    s.execute("version.preview", &json!({"index": 0})).unwrap();
+    let err = s.execute("edit.cut", &json!({"ids": [a]})).unwrap_err();
+    assert!(matches!(err, EngineError::Disabled(..)), "{err:?}");
+    assert_eq!(roots(&s), vec![b], "failed edit.cut changed the clipboard");
+    assert!(std::sync::Arc::ptr_eq(s.clipboard.source.as_ref().unwrap(), &source));
+    assert_eq!(s.undo_depth(), depth, "history untouched");
+}

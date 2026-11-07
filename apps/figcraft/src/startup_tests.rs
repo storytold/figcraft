@@ -2,34 +2,50 @@
 //! report it, instead of the app quitting silently (#261).
 
 use figcraft_ui_egui::dialogs::window_failed as message;
+use figcraft_ui_egui::i18n::tr;
 
 const ERROR: &str = "WGPU error: Failed to create surface for any enabled backend: {}";
+const BACKEND_HINT: &str = "WGPU_BACKEND is set and names the graphics API to use; unsetting it lets FigCraft choose.";
+const DRIVER_HINT: &str = if cfg!(windows) {
+    "Updating the graphics driver often helps. To use OpenGL only, start FigCraft from a Command Prompt with:"
+} else {
+    "Updating the graphics driver often helps. WGPU_BACKEND (vulkan, gl, metal) names another graphics API to try."
+};
 
 #[test]
 fn the_message_carries_the_error_and_where_to_report_it() {
-    let text = message(ERROR, false);
+    let text = message(ERROR, false, None);
     assert!(text.contains(ERROR), "the error itself: {text}");
     assert!(text.contains("https://github.com/storytold/figcraft/issues"), "where to report it: {text}");
 }
 
 #[test]
 fn without_wgpu_backend_it_suggests_the_driver_and_another_graphics_api() {
-    let text = message(ERROR, false);
-    assert!(text.contains("graphics driver"), "{text}");
+    let text = message(ERROR, false, None);
+    assert!(text.contains(tr(DRIVER_HINT)), "{text}");
     assert!(text.contains("WGPU_BACKEND"), "another graphics API to try: {text}");
-    assert!(!text.contains("unsetting"), "{text}");
+    assert!(!text.contains(tr(BACKEND_HINT)), "{text}");
 }
 
 #[cfg(windows)]
 #[test]
 fn on_windows_it_shows_how_to_start_with_opengl() {
-    let text = message(ERROR, false);
+    let text = message(ERROR, false, None);
     assert!(text.contains("set WGPU_BACKEND=gl"), "a release build has no console to look this up from: {text}");
 }
 
 #[test]
 fn with_wgpu_backend_set_it_suggests_unsetting_it() {
-    let text = message(ERROR, true);
-    assert!(text.contains("unsetting"), "{text}");
-    assert!(!text.contains("graphics driver"), "the chosen backend is the likelier cause: {text}");
+    let text = message(ERROR, true, None);
+    assert!(text.contains(tr(BACKEND_HINT)), "{text}");
+    assert!(!text.contains(tr(DRIVER_HINT)), "the chosen backend is the likelier cause: {text}");
+}
+
+#[test]
+fn after_every_attempt_failed_it_names_what_was_tried_and_no_other_api() {
+    let text = message(ERROR, false, Some("Direct3D 12, Vulkan, OpenGL"));
+    assert!(text.contains(ERROR), "the last error: {text}");
+    assert!(text.contains("Direct3D 12, Vulkan, OpenGL"), "what was tried: {text}");
+    assert!(!text.contains(tr(DRIVER_HINT)), "every API was tried already: {text}");
+    assert!(text.contains("https://github.com/storytold/figcraft/issues"), "where to report it: {text}");
 }

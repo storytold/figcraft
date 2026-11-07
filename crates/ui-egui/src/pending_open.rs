@@ -32,6 +32,16 @@ pub struct ImportTarget {
     pub name: String,
 }
 
+/// Queues dropped file `f` to open as a document of its own: by path, or by its contents when there
+/// is no file on disk to read. Callers checked its extension, so there is a name to tell the format by.
+pub(crate) fn open_dropped(app: &mut FigApp, f: &egui::DroppedFileHandle) {
+    let path = f.path();
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let (params, read) =
+        if path.exists() { (json!({"path": path.to_string_lossy()}), None) } else { (json!({"name": name}), Some(crate::dropped_bytes(f, &name))) };
+    app.ui.pending_opens.push(PendingOpen { label: name, params, command: "file.open", target: None, read });
+}
+
 fn run_pending(app: &mut FigApp, pending: PendingOpen) -> Option<Value> {
     let target = match pending.target {
         Some(target) => target,
@@ -150,7 +160,7 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
     }
     app.ui.pending_open_frames = app.ui.pending_open_frames.saturating_add(1);
     let title = match app.ui.pending_opens.first().map(|p| p.command) {
-        Some("file.import") => {
+        Some("file.import" | "image.replace") => {
             let name = app
                 .ui
                 .pending_opens
@@ -165,7 +175,7 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let pending = &app.ui.pending_opens;
     // Shown at once: the frame after this one may block the window while the file opens.
-    crate::dialogs::window("", ctx).id(egui::Id::new("pending_open")).title_bar(false).movable(false).interactable(false).fade_in(false).show(
+    crate::dialogs::window("", ctx).id(egui::Id::unique("pending_open")).title_bar(false).movable(false).interactable(false).fade_in(false).show(
         ctx,
         |ui| {
             ui.set_width(480.0);

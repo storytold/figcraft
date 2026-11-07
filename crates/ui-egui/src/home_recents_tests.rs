@@ -74,7 +74,7 @@ fn columns_follow_the_width() {
 
 fn shown(path: &str, modified: Option<u64>, created: Option<u64>) -> Shown {
     let stat = Some(Stat { exists: modified.is_some(), modified, created });
-    Shown { path: path.into(), name: Path::new(path).file_stem().unwrap().to_string_lossy().into(), stat }
+    Shown { path: path.into(), name: Path::new(path).file_stem().unwrap().to_string_lossy().into(), stat, kind: Default::default() }
 }
 
 #[test]

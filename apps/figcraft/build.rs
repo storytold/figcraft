@@ -1,6 +1,7 @@
 //! Windows: embed the icon and version info in figcraft.exe and size its main thread's stack
 //! (no-op elsewhere).
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(windows_slim_errors)");
     println!("cargo::rerun-if-changed=../../assets/app-icon/figcraft.ico");
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "windows" {

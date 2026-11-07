@@ -9,12 +9,12 @@ use serde_json::{Value, json};
 use crate::variables_panel::export_dialog;
 use crate::{FigApp, NoServices, Services};
 
-type Downloads = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+pub(crate) type Downloads = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 
 /// Services that save by downloads and keep them (`deliver` false: the browser refused).
-struct Browser {
-    got: Downloads,
-    deliver: bool,
+pub(crate) struct Browser {
+    pub(crate) got: Downloads,
+    pub(crate) deliver: bool,
 }
 
 impl Services for Browser {

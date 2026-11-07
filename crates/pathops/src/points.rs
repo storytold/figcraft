@@ -86,8 +86,8 @@ impl Styled {
     /// and last end (as without point styles).
     pub(crate) fn arrowheads(&self, weight: f64, props: &StrokeProps) -> BezPath {
         let mut out = BezPath::new();
-        let last = self.runs.len().saturating_sub(1);
-        for (k, run) in self.runs.iter().enumerate().filter(|(_, r)| !r.closed) {
+        let last = self.runs.iter().filter(|r| !r.closed).count().saturating_sub(1);
+        for (k, run) in self.runs.iter().filter(|r| !r.closed).enumerate() {
             let start = self.cap_at(run.start, if k == 0 { props.cap_start } else { StrokeCap::None });
             let end = self.cap_at(run.end, if k == last { props.cap_end } else { StrokeCap::None });
             for (at_end, cap) in [(false, start), (true, end)] {

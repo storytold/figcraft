@@ -41,6 +41,8 @@ pub struct Client {
     /// The session joined (see [`ServerMsg::Welcome`]).
     session: u64,
     id: u32,
+    /// What this client resumes its id with (see [`Resume::secret`]).
+    secret: u64,
     /// The server's state as of `seq`.
     confirmed: Replica,
     seq: u64,
@@ -84,7 +86,7 @@ impl Client {
 
     /// Start from the server's `Welcome` (which must carry a snapshot).
     pub fn join(welcome: ServerMsg) -> Result<Client, Error> {
-        let ServerMsg::Welcome { session, client_id, seq, catch_up: CatchUp::Snapshot(snapshot), processed, peers, access } = welcome else {
+        let ServerMsg::Welcome { session, client_id, seq, catch_up: CatchUp::Snapshot(snapshot), processed, peers, access, secret } = welcome else {
             return Err(Error::Protocol("expected a welcome with the document".into()));
         };
         let mut confirmed = Replica::from_snapshot(&snapshot)?;
@@ -93,6 +95,7 @@ impl Client {
         Ok(Client {
             session,
             id: client_id,
+            secret,
             view: confirmed.clone(),
             confirmed,
             seq,
@@ -224,6 +227,12 @@ impl Client {
         // Everything queued before this batch is waiting (or it would have gone already), so at
         // most this edit goes now, and no undo becomes ready to go.
         Ok(self.flush(&NoRecompute).pop())
+    }
+
+    /// Whether `doc` differs from what this client shows only in comment threads (what a comment
+    /// link may send; nothing differing counts too).
+    pub fn changes_only_comments(&self, doc: &Document) -> bool {
+        diff(&self.view, doc).is_ok_and(|d| d.changes.iter().all(Change::is_comment))
     }
 
     /// Undo the user's last step that still changes something: write back the values it replaced
@@ -415,9 +424,10 @@ impl Client {
         ClientMsg::Hello(Hello { resume: Some(self.resume()), ..hello })
     }
 
-    /// What a reconnect resumes with: this client's session, id and last sequence number.
+    /// What a reconnect resumes with: this client's session, id, last sequence number and the
+    /// secret its id was given with.
     pub fn resume(&self) -> Resume {
-        Resume { session: self.session, client_id: self.id, seq: self.seq }
+        Resume { session: self.session, client_id: self.id, seq: self.seq, secret: self.secret }
     }
 
     /// Handle a message from the server. Returns messages to send: batches that were waiting for
@@ -458,10 +468,11 @@ impl Client {
                 Ok(Vec::new())
             }
             ServerMsg::Welcome { .. } if self.online => Err(Error::Protocol("already joined".into())),
-            ServerMsg::Welcome { session, client_id, seq, catch_up, processed, peers, access } => {
+            ServerMsg::Welcome { session, client_id, seq, catch_up, processed, peers, access, secret } => {
                 if session != self.session || client_id != self.id {
-                    return self.restart(ServerMsg::Welcome { session, client_id, seq, catch_up, processed, peers, access });
+                    return self.restart(ServerMsg::Welcome { session, client_id, seq, catch_up, processed, peers, access, secret });
                 }
+                self.secret = secret;
                 self.access = access;
                 self.rejoin(seq, catch_up, &processed, peers, recompute)
             }
@@ -549,6 +560,10 @@ impl Client {
         peers: Vec<Peer>,
         recompute: &dyn Recompute,
     ) -> Result<Vec<ClientMsg>, Error> {
+        // The transport unpacks a packed document first (`message::unpack`).
+        if matches!(catch_up, CatchUp::Packed(_)) {
+            return Err(Error::Protocol("expected the document unpacked".into()));
+        }
         let last_batch = processed.last_batch;
         // An undo or redo lost in flight is made again before it goes out, knowing what others did
         // meanwhile: its step conflicts with what they wrote while it was in flight, and with what
@@ -562,6 +577,7 @@ impl Client {
         self.presence.clear();
         let offline = || "it no longer applied when the connection came back".to_string();
         match catch_up {
+            CatchUp::Packed(_) => {}
             CatchUp::Delta(batches) => {
                 for acc in batches {
                     if acc.author == self.id {

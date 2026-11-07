@@ -388,3 +388,21 @@ fn a_background_copy_that_failed_is_tried_again_without_another_edit() {
     r.finish();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_copy_made_while_a_version_is_previewed_is_of_the_file_not_the_version() {
+    let root = root("preview");
+    let mut s = edited();
+    s.execute("file.saveVersion", &json!({"name": "v1"})).unwrap();
+    s.execute("shape.rectangle", &json!({"x": 20, "y": 0, "width": 10, "height": 10})).unwrap();
+    // The one-rectangle version shows in place of the two-rectangle file.
+    s.execute("version.preview", &json!({"index": 0})).unwrap();
+    assert_eq!(rectangles(s.doc().unwrap()), 1, "the preview shows");
+    assert!(s.ds().unwrap().is_dirty(), "the file itself still has unsaved changes");
+    let mut r = Recovery::start(&root).unwrap();
+    r.write(&s, true);
+    let next = crash_and_recover(r, &root);
+    assert_eq!(rectangles(next.doc().unwrap()), 2, "the file comes back, not the version shown");
+    assert_eq!(next.docs[0].versions.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["v1"]);
+    let _ = std::fs::remove_dir_all(&root);
+}

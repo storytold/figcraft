@@ -183,6 +183,46 @@ fn what_a_style_cannot_bind_is_refused() {
 }
 
 #[test]
+fn style_fields_offer_their_properties_scopes() {
+    let mut s = Session::new();
+    let (_, _, a, _, sid) = two_modes(&mut s);
+    run(&mut s, "effect.add", json!({"ids": [a], "type": "dropShadow"}));
+    let fx = run(&mut s, "style.create", json!({"type": "effect", "name": "Drop", "from": a}))["id"].as_str().unwrap().to_string();
+    let light = node(&s, a).parent.unwrap();
+    run(&mut s, "grid.add", json!({"ids": [light]}));
+    let grid = run(&mut s, "style.create", json!({"type": "grid", "name": "Base", "from": light}))["id"].as_str().unwrap().to_string();
+    let body = run(&mut s, "style.create", json!({"type": "text", "name": "Body", "value": {"fontFamily": "Inter", "fontSize": 14}}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let doc = s.doc().unwrap();
+    let scopes = |st: &str, key: &str| crate::style_vars::field_scopes(&doc.style(st).unwrap().kind, key);
+    let fills: &[&str] = &["FRAME_FILL", "SHAPE_FILL", "TEXT_FILL", "STROKE_COLOR"];
+    for (st, key, want) in [
+        (&sid, "fill", Some(fills)),
+        (&sid, "fills/0/color", Some(fills)),
+        (&fx, "effects/0/color", Some(&["EFFECT_COLOR"][..])),
+        (&fx, "effects/0/radius", Some(&["EFFECT_FLOAT"][..])),
+        (&fx, "effects/0/offsetX", Some(&["EFFECT_FLOAT"][..])),
+        (&body, "fontSize", Some(&["FONT_SIZE"][..])),
+        (&body, "lineHeight", Some(&["LINE_HEIGHT"][..])),
+        (&body, "letterSpacing", Some(&["LETTER_SPACING"][..])),
+        (&body, "fontFamily", Some(&["FONT_FAMILY"][..])),
+        (&body, "fontStyle", Some(&["FONT_STYLE"][..])),
+        // Grid fields take any number variable, as on layers; fields a style lacks take none.
+        (&grid, "layoutGrids/0/size", None),
+        (&sid, "fills/3/color", None),
+        (&body, "opacity", None),
+    ] {
+        assert_eq!(scopes(st, key), want, "{st} {key}");
+    }
+    // As on layers, scopes limit pickers only: an out-of-scope variable still binds.
+    run(&mut s, "variable.update", json!({"variable": "size", "scopes": ["CORNER_RADIUS"]}));
+    run(&mut s, "style.bind", json!({"style": body, "field": "fontSize", "variable": "size"}));
+    assert!(s.doc().unwrap().style(&body).unwrap().bound.contains_key("fontSize"));
+}
+
+#[test]
 fn rest_and_fig_carry_style_bindings() {
     let mut s = Session::new();
     let (_, _, a, b, sid) = two_modes(&mut s);

@@ -28,8 +28,9 @@ fn reply(reader: &mut BufReader<TcpStream>) -> Value {
     serde_json::from_str(&line).unwrap()
 }
 
+/// Build a `ui.inspect` control request with a throwaway reply channel.
 fn request() -> ControlRequest {
-    ControlRequest { id: json!(0), method: "ui.inspect".into(), params: json!({}), reply: mpsc::channel().0, cancelled: Default::default() }
+    ControlRequest { id: json!(0), method: "ui.inspect".into(), params: json!({}), reply: mpsc::channel().0, state: Default::default() }
 }
 
 #[test]
@@ -115,6 +116,139 @@ fn full_queue_rejects_before_dispatch_and_ui_queue_stays_bounded() {
     worker.join().unwrap().unwrap();
 }
 
+/// Asserts a commit that writes the file and queues its reply wins the gate: the transport's
+/// timeout branch consumes that reply and leaves the state `Replied`.
+#[test]
+fn a_committed_reply_wins_over_the_transport_timeout() {
+    let dir = std::env::temp_dir().join(format!("figcraft-control-commit-{}", std::process::id()));
+    let path = dir.join("shot.png");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let gate = RequestGate::new();
+    let (tx, rx) = mpsc::channel();
+    // The UI's final commit gets the gate first: the file and reply are both committed before the
+    // transport's timeout branch can look at the gate.
+    let committed = gate.commit(|| {
+        std::fs::write(&path, b"png").unwrap();
+        tx.send(ControlReply { id: json!(7), result: Ok(json!({"path": path.to_string_lossy()})) }).unwrap();
+    });
+    assert!(committed.is_some());
+    assert!(path.is_file());
+    let reply = after_timeout(&rx, &gate).expect("the queued commit is consumed");
+    assert_eq!(reply.id, json!(7));
+    assert!(reply.result.is_ok());
+    assert_eq!(gate.state(), RequestState::Replied, "the timeout must not overwrite a commit");
+    assert!(path.is_file(), "a winning commit keeps its file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Asserts a zero-duration wait reports `Timeout` and cancels the open gate.
+#[test]
+fn a_timeout_cancels_an_open_request() {
+    let gate = RequestGate::new();
+    let (_tx, rx) = mpsc::channel::<ControlReply>();
+    assert!(matches!(wait_for_reply(&rx, &gate, Duration::ZERO), Err(WaitFailure::Timeout)));
+    assert_eq!(gate.state(), RequestState::Cancelled, "nothing may write after the timeout");
+}
+
+/// Asserts a closed reply channel reports `Disconnected` and leaves the gate `Open`, not
+/// cancelled.
+#[test]
+fn a_disconnected_reply_channel_is_not_reported_as_a_timeout() {
+    let gate = RequestGate::new();
+    let (tx, rx) = mpsc::channel::<ControlReply>();
+    drop(tx);
+    assert!(matches!(wait_for_reply(&rx, &gate, Duration::from_secs(1)), Err(WaitFailure::Disconnected)));
+    assert_eq!(gate.state(), RequestState::Open, "a closed app is not a cancel decision");
+}
+
+/// #1673: a request the UI already started can't be cancelled any more. Its timeout says it is
+/// still running and will take effect, not that the window is hidden; one that finished just as
+/// the timeout fired gets its real reply.
+#[test]
+fn a_started_request_times_out_as_still_running() {
+    let gate = RequestGate::new();
+    assert!(gate.start(), "an open request starts");
+    let (tx, rx) = mpsc::channel::<ControlReply>();
+    let Err(failure) = wait_for_reply(&rx, &gate, Duration::ZERO) else { panic!("no reply was sent") };
+    assert_eq!(failure, WaitFailure::StillRunning);
+    assert_eq!(gate.state(), RequestState::Running, "the timeout doesn't cancel a running request");
+    let message = timeout_message(&failure, false, Duration::from_secs(60));
+    assert!(message.contains("will take effect") && !message.contains("window"), "{message}");
+    tx.send(ControlReply { id: json!(3), result: Ok(json!({"done": true})) }).unwrap();
+    assert_eq!(wait_for_reply(&rx, &gate, Duration::ZERO).unwrap().id, json!(3), "a reply that made it is the truth");
+}
+
+/// #1673: a request the transport gave up on before the UI started it never starts, and its
+/// timeout says it wasn't applied; only requests that need a drawn frame blame the window.
+#[test]
+fn a_request_cancelled_before_it_started_never_runs() {
+    let gate = RequestGate::new();
+    let (_tx, rx) = mpsc::channel::<ControlReply>();
+    let Err(failure) = wait_for_reply(&rx, &gate, Duration::ZERO) else { panic!("no reply was sent") };
+    assert_eq!(failure, WaitFailure::Timeout);
+    assert!(!gate.start(), "the UI must not run a cancelled request");
+    assert_eq!(gate.state(), RequestState::Cancelled);
+    let message = |needs_frame| timeout_message(&failure, needs_frame, Duration::from_secs(60));
+    assert!(message(false).contains("not applied"));
+    assert!(!message(false).contains("window on screen"));
+    assert!(message(true).contains("window on screen"), "screenshots and input still need the window");
+}
+
+/// #1696: a request's `timeoutMs` sets its wait, capped; anything but a whole number leaves the
+/// default.
+#[test]
+fn a_request_sets_its_own_timeout_within_the_cap() {
+    let default = Duration::from_secs(60);
+    let wait = |v: Value| request_timeout(&v, default);
+    assert_eq!(wait(json!({"id": 1, "method": "engine.execute"})), default, "older clients keep the default");
+    assert_eq!(wait(json!({"timeoutMs": 300_000})), Duration::from_secs(300));
+    assert_eq!(wait(json!({"timeoutMs": 500})), Duration::from_millis(500), "a shorter wait too");
+    assert_eq!(wait(json!({"timeoutMs": u64::MAX})), MAX_TIMEOUT, "never unbounded");
+    for junk in [json!({"timeoutMs": "600000"}), json!({"timeoutMs": -1}), json!({"timeoutMs": 1.5}), json!({"timeoutMs": null})] {
+        assert_eq!(wait(junk), default);
+    }
+}
+
+/// #1696: over a connection, a raised `timeoutMs` outlasts the connection's default.
+#[test]
+fn a_raised_timeout_outlasts_the_default() {
+    let (mut client, server) = pair();
+    let pending = queue();
+    let q = pending.clone();
+    // Written first: the connection's 50 ms is also how long it waits for a line.
+    client.write_all(b"{\"id\":1,\"method\":\"ui.inspect\",\"timeoutMs\":5000}\n").unwrap();
+    let worker = std::thread::spawn(move || serve(server, q, context(), Duration::from_millis(50)));
+    let mut reader = BufReader::new(client);
+    let start = Instant::now();
+    let r = loop {
+        if let Some(r) = pending.lock().unwrap().pop() {
+            break r;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    // Well past the connection's 50 ms: the request's own wait still holds.
+    std::thread::sleep(Duration::from_millis(200));
+    r.reply.send(ControlReply { id: r.id, result: Ok(json!("late")) }).unwrap();
+    assert_eq!(reply(&mut reader), json!({"id": 1, "ok": true, "result": "late"}));
+    drop(reader);
+    worker.join().unwrap().ok();
+}
+
+/// #1696: the timeout's message says how long the request waited, not always 60 s.
+#[test]
+fn a_timeout_names_the_wait_the_request_asked_for() {
+    let (mut client, server) = pair();
+    let worker = std::thread::spawn(move || serve(server, queue(), context(), Duration::from_secs(5)));
+    client.write_all(b"{\"id\":2,\"method\":\"ui.inspect\",\"timeoutMs\":100}\n").unwrap();
+    let mut reader = BufReader::new(client);
+    let error = reply(&mut reader)["error"].as_str().unwrap().to_string();
+    assert!(error.contains("after 1 s") && error.contains("not applied"), "{error}");
+    reader.get_ref().shutdown(Shutdown::Write).unwrap();
+    worker.join().unwrap().unwrap();
+}
+
 #[test]
 fn idle_and_partial_frame_connections_expire() {
     for bytes in [b"".as_slice(), b"{\"id\":"] {
@@ -131,6 +265,18 @@ fn idle_and_partial_frame_connections_expire() {
     }
 }
 
+/// A failed accept is followed by a wait before the next one, so a listener that keeps failing
+/// does not spin, and the connections around the failures still come through.
+#[test]
+fn a_failed_accept_waits_before_the_next() {
+    let failed = || Err(std::io::Error::other("no file descriptors left"));
+    let incoming = vec![failed(), Ok(1), failed(), failed(), Ok(2)];
+    let mut waits = 0;
+    let connections: Vec<i32> = accepted(incoming.into_iter(), || waits += 1).collect();
+    assert_eq!(connections, [1, 2]);
+    assert_eq!(waits, 3, "one wait per failed accept");
+}
+
 #[test]
 fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
     let pending = queue();
@@ -139,12 +285,26 @@ fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
     let mut clients = Vec::new();
     for _ in 0..MAX_CONNECTIONS {
         let (client, server) = pair();
-        spawn_connection(server, pending.clone(), ctx.clone(), &mut workers, Duration::from_secs(5));
+        spawn_connection(
+            server,
+            pending.clone(),
+            ctx.clone(),
+            Arc::new(figcraft_engine::events::EventLog::default()),
+            &mut workers,
+            Duration::from_secs(5),
+        );
         clients.push(client);
     }
     assert_eq!(workers.len(), MAX_CONNECTIONS);
     let (mut extra, server) = pair();
-    spawn_connection(server, pending.clone(), ctx.clone(), &mut workers, Duration::from_secs(5));
+    spawn_connection(
+        server,
+        pending.clone(),
+        ctx.clone(),
+        Arc::new(figcraft_engine::events::EventLog::default()),
+        &mut workers,
+        Duration::from_secs(5),
+    );
     assert_eq!(extra.read(&mut [0]).unwrap(), 0);
     assert_eq!(workers.len(), MAX_CONNECTIONS);
     for client in clients {
@@ -156,7 +316,7 @@ fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let (mut client, server) = pair();
-    spawn_connection(server, pending, ctx, &mut workers, Duration::from_secs(5));
+    spawn_connection(server, pending, ctx, Arc::new(figcraft_engine::events::EventLog::default()), &mut workers, Duration::from_secs(5));
     assert_eq!(workers.len(), 1);
     client.write_all(b"invalid\n").unwrap();
     assert_eq!(reply(&mut BufReader::new(client.try_clone().unwrap()))["ok"], false);
@@ -191,6 +351,39 @@ fn a_client_that_stops_reading_cannot_hold_a_worker() {
 }
 
 #[test]
+fn events_poll_is_answered_without_the_ui_queue() {
+    let (mut client, server) = pair();
+    let pending = queue();
+    let q = pending.clone();
+    let log = Arc::new(figcraft_engine::events::EventLog::default());
+    log.push("comment.added", "Doc", None, json!({"commentId": 7}));
+    let l = log.clone();
+    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5)));
+    client.write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"after\":0,\"timeoutMs\":0}}\n").unwrap();
+    let mut reader = BufReader::new(client);
+    let r = reply(&mut reader);
+    assert_eq!(r["id"], 1);
+    assert_eq!(r["result"]["events"].as_array().unwrap().len(), 1);
+    assert_eq!(r["result"]["events"][0]["kind"], "comment.added");
+    assert_eq!(r["result"]["events"][0]["data"]["commentId"], 7);
+    assert_eq!(r["result"]["cursor"], 1);
+    assert!(pending.lock().unwrap().is_empty());
+    reader.get_ref().shutdown(Shutdown::Write).unwrap();
+    worker.join().unwrap().unwrap();
+}
+
+#[test]
+fn a_comment_added_in_the_session_is_pollable() {
+    let mut session = figcraft_engine::Session::new();
+    let log = session.events.clone();
+    let id = session.execute("comment.add", &json!({"x": 10, "y": 20, "text": "Fix the padding"})).unwrap()["id"].clone();
+    let r = event_poll(&log, &json!({"after": 0, "timeoutMs": 0})).unwrap();
+    assert_eq!(r["events"].as_array().unwrap().len(), 1);
+    assert_eq!(r["events"][0]["kind"], "comment.added");
+    assert_eq!(r["events"][0]["data"]["commentId"], id);
+}
+
+#[test]
 fn a_limit_sized_frame_is_accepted_at_eof() {
     let (mut client, server) = pair();
     let pending = queue();
@@ -215,6 +408,9 @@ fn a_limit_sized_frame_is_accepted_at_eof() {
     worker.join().unwrap().unwrap();
 }
 
+/// Asserts expired requests stop occupying the UI queue cap, a later request is admitted
+/// and answered, and a window that finally draws discards its expired command before
+/// dispatch.
 #[test]
 fn timed_out_requests_release_a_full_deferred_ui_queue() {
     use figcraft_ui_egui::{FigApp, NoServices, control, windows};
@@ -250,7 +446,7 @@ fn timed_out_requests_release_a_full_deferred_ui_queue() {
     // Include expired requests in the socket queue, too: admission must reclaim their slots.
     pending.lock().unwrap().extend((0..MAX_QUEUED_REQUESTS).map(|_| {
         let r = request();
-        r.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        r.state.cancel_if_open();
         r
     }));
     let (mut client, server) = pair();
@@ -279,4 +475,41 @@ fn timed_out_requests_release_a_full_deferred_ui_queue() {
     for worker in workers {
         worker.join().unwrap().unwrap();
     }
+}
+
+#[test]
+fn events_poll_rejects_an_unknown_topic_without_the_ui_queue() {
+    let (client, server) = pair();
+    let pending = queue();
+    let q = pending.clone();
+    let log = Arc::new(figcraft_engine::events::EventLog::default());
+    let l = log.clone();
+    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5)));
+    let mut reader = BufReader::new(client);
+    reader.get_mut().write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"topics\":[\"nope\"],\"timeoutMs\":0}}\n").unwrap();
+    let r = reply(&mut reader);
+    assert_eq!(r["id"], 1);
+    assert_eq!(r["ok"], false);
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("unknown topic")), "{r}");
+    assert!(pending.lock().unwrap().is_empty());
+    reader.get_ref().shutdown(Shutdown::Write).unwrap();
+    worker.join().unwrap().unwrap();
+}
+
+#[test]
+fn events_poll_reports_reset_for_a_cursor_ahead_of_the_log() {
+    let (client, server) = pair();
+    let log = Arc::new(figcraft_engine::events::EventLog::default());
+    log.push("comment.added", "Doc", None, json!({"commentId": 1}));
+    let q = queue();
+    let l = log.clone();
+    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5)));
+    let mut reader = BufReader::new(client);
+    reader.get_mut().write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"after\":2,\"timeoutMs\":0}}\n").unwrap();
+    let r = reply(&mut reader);
+    assert_eq!(r["result"]["reset"], true, "{r}");
+    assert!(r["result"]["events"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["result"]["cursor"], 1);
+    reader.get_ref().shutdown(Shutdown::Write).unwrap();
+    worker.join().unwrap().unwrap();
 }

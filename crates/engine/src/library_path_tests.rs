@@ -28,3 +28,12 @@ fn a_local_library_path_is_still_followed() {
     let e = s.fetch_library(&missing.to_string_lossy(), false).expect_err("the file does not exist");
     assert!(!e.to_string().contains("only from this computer"), "a local path must not be refused as remote: {e}");
 }
+
+#[test]
+fn the_library_cache_refuses_a_path_off_this_computer() {
+    let mut cache = crate::library::Cache::default();
+    for path in [r"\\attacker.example\share\lib.figcraft", "//attacker.example/share/lib.figcraft"] {
+        let e = cache.load(path).expect_err(&format!("{path} must be refused"));
+        assert!(e.to_string().contains("only from this computer"), "{path}: {e}");
+    }
+}

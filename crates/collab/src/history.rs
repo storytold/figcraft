@@ -311,17 +311,7 @@ impl Step {
         apply_all(&mut work, &mut out, deletes);
         // Changes that apply one by one can still fail the batch's checks together (rare): keep
         // only those that pass them in order.
-        if view.clone().apply(&out, Mode::Strict).is_err() {
-            let mut w = view.clone();
-            out.retain(|c| {
-                let mut t = w.clone();
-                let ok = t.apply(std::slice::from_ref(c), Mode::Strict).is_ok();
-                if ok {
-                    w = t;
-                }
-                ok
-            });
-        }
+        view.clone().apply_kept(&mut out, |_| true)?;
         Ok(out)
     }
 }

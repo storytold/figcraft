@@ -11,10 +11,12 @@ pub mod widget;
 
 pub use manifest::{API_VERSION, Access, MANIFEST_FILE, Manifest, Panel, Param, ParamKind, Permissions, PluginCommand};
 pub use sandbox::{ENTRY, Host, IMPORT_MODULE, Instance, Limits, PluginError, RunOutput, UiChange, check_module, run};
-pub use widget::{WidgetKind, WidgetNode, WidgetRender};
+pub use widget::{MenuItem, MenuKind, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
 
 #[cfg(test)]
 mod bundle_tests;
+#[cfg(test)]
+mod save_file_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

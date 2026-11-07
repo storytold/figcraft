@@ -44,8 +44,9 @@ fn setup() -> (Ui, NodeId) {
     (u, btn)
 }
 
+/// Stable id for a prototype node's open action path in the reorder tests.
 fn open_id(btn: NodeId) -> egui::Id {
-    egui::Id::new(("proto_open_action", btn, 0usize))
+    egui::Id::unique(("proto_open_action", btn, 0usize))
 }
 
 /// The kinds of the actions at `prefix` (the interaction's, or a block's).

@@ -498,7 +498,8 @@ fn measure_components(table: &mut Table, col: usize, instances: usize) -> CliRes
     static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("figcraft-perf-{}-{run}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(failed)?;
+    // `create_dir`, not `create_dir_all`: a directory or link already at this predictable name is refused.
+    std::fs::create_dir(&dir).map_err(failed)?;
     let path = dir.join("design-system.figcraft").to_string_lossy().into_owned();
     let (lib_doc, lib_ds) = design_system_document(&spec).map_err(failed)?;
     let mut lib_s = Session::with_document(lib_doc);
@@ -535,17 +536,6 @@ fn measure_components(table: &mut Table, col: usize, instances: usize) -> CliRes
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn layer_sizes_parse_as_a_list() {
-        use crate::args::Args;
-        let argv = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        let a = Args::parse(&argv(&["--layers", "1000,10_000, 50000"]), &["layers"], &[]).unwrap();
-        assert_eq!(a.usizes("layers", &[1]).unwrap(), vec![1000, 10_000, 50_000]);
-        assert_eq!(Args::parse(&[], &["layers"], &[]).unwrap().usizes("layers", &[7]).unwrap(), vec![7]);
-        let bad = Args::parse(&argv(&["--layers", "10,x"]), &["layers"], &[]).unwrap();
-        assert!(bad.usizes("layers", &[1]).is_err());
-    }
-
     #[test]
     fn measures_components_at_a_small_scale() {
         let mut t = super::Table { rows: Vec::new() };

@@ -1,17 +1,19 @@
 //! View menu, preferences and tools. View state is per document and drivable like everything else.
 
-use figcraft_doc::*;
+use figcraft_doc::NodeId;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{boolean, get, num, num_or, req_index, req_num, req_string, string};
 use crate::tools::ToolId;
 use crate::{EngineError, Result, Session, ViewState, bad, spec};
 
+/// The active document's view state, for changing it.
 fn view(s: &mut Session) -> Result<&mut ViewState> {
     Ok(&mut s.ds_mut()?.view)
 }
 
+/// Set one of a view's on/off settings from `on`, or toggle it when `on` is absent.
 fn flag(s: &mut Session, p: &Value, f: fn(&mut ViewState) -> &mut bool) -> Result<Value> {
     let v = view(s)?;
     let slot = f(v);
@@ -90,6 +92,7 @@ fn pixel_preview(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"on": v.pixel_preview, "scale": v.pixel_scale}))
 }
 
+/// Zoom the active document to `z` about the view's centre, keeping that point in place.
 fn zoom_to(s: &mut Session, z: f64) -> Result<Value> {
     let v = view(s)?;
     let c = (v.cx, v.cy);
@@ -114,6 +117,7 @@ fn pan(s: &mut Session, p: &Value) -> Result<Value> {
 /// Figma's zoom steps.
 const STEPS: &[f64] = &[0.02, 0.03, 0.06, 0.13, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0];
 
+/// The next zoom step above (`up`) or below `z` in Figma's fixed steps.
 fn step(z: f64, up: bool) -> f64 {
     if up {
         STEPS.iter().copied().find(|s| *s > z * 1.001).unwrap_or(256.0)
@@ -141,6 +145,7 @@ fn zoom_at(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"zoom": v.zoom, "cx": v.cx, "cy": v.cy}))
 }
 
+/// Select and fit the next (`dir` 1) or previous (-1) top-level frame on the page.
 fn zoom_frame(s: &mut Session, dir: i64) -> Result<Value> {
     let ds = s.ds()?;
     let frames = ds.doc.top_frames(ds.page);
@@ -161,6 +166,7 @@ fn zoom_frame(s: &mut Session, dir: i64) -> Result<Value> {
     Ok(json!({"frame": f}))
 }
 
+/// Move to the next (`dir` 1) or previous (-1) page, skipping dividers, and fit it.
 fn page_step(s: &mut Session, dir: i64) -> Result<Value> {
     let ds = s.ds()?;
     let pages = &ds.doc.pages;
@@ -183,6 +189,7 @@ fn page_step(s: &mut Session, dir: i64) -> Result<Value> {
     Ok(json!({"page": pg}))
 }
 
+/// Ask the UI to open or toggle the panel or dialog named `kind`.
 fn ui(s: &mut Session, kind: &str) -> Result<Value> {
     s.request_ui(kind, json!({}));
     ok()
@@ -194,21 +201,41 @@ fn region(s: &mut Session, step: i64) -> Result<Value> {
     ok()
 }
 
+/// Step the interface size through the Preferences sizes: `dir` 1 up, -1 down, 0 back to the
+/// system's size (1). At an end it stays. Kept at once, as a size picked in Preferences is.
+fn ui_scale_step(s: &mut Session, dir: i32) -> Result<Value> {
+    let now = s.prefs.ui_scale;
+    let next = match dir {
+        0 => 1.0,
+        1 => crate::UI_SCALE_SIZES.iter().copied().find(|v| *v > now + 1e-9).unwrap_or(now),
+        _ => crate::UI_SCALE_SIZES.iter().rev().copied().find(|v| *v < now - 1e-9).unwrap_or(now),
+    };
+    if (next - now).abs() > 1e-9 {
+        s.prefs.ui_scale = next;
+        s.prefs_unsaved = true;
+    }
+    Ok(json!({"scale": s.prefs.ui_scale}))
+}
+
+/// Set one of the preferences' on/off settings from `on`, or toggle it when `on` is absent.
 fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Result<Value> {
     let slot = f(&mut s.prefs);
     *slot = boolean(p, "on").unwrap_or(!*slot);
     Ok(json!({"on": *slot}))
 }
 
-fn tool(s: &mut Session, t: ToolId) -> Result<Value> {
-    // A file you can't edit now (view only, or on its way to a server): moving around only.
-    if let Some(why) = s.active_read_only().filter(|_| !matches!(t, ToolId::Move | ToolId::Hand)) {
+/// Switch the tool, unless the file is read-only and this tool needs editing.
+pub(crate) fn tool(s: &mut Session, t: ToolId) -> Result<Value> {
+    // A file you can't edit now (view only, or on its way to a server): moving around only, and
+    // commenting with a comment link.
+    if let Some(why) = s.active_read_only().filter(|why| !crate::live::tool_left(why, t)) {
         return Err(EngineError::Disabled(format!("tool.{}", t.id()), why.into()));
     }
     s.set_tool(t);
     Ok(json!({"tool": t.id()}))
 }
 
+/// The View menu's commands and their parameters.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("view.zoomIn", "Zoom in", "{}", false, |s, _| {
@@ -304,6 +331,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.snapObjects", "Snap to objects", "{on?}", false, |s, p| toggle(s, p, "view.snapObjects")),
         spec!("view.snapPixel", "Snap to pixel grid", "{on?}", false, |s, p| toggle(s, p, "view.snapPixel")),
         spec!("view.toggleUi", "Show/Hide UI", "{on?}", false, |s, p| flag(s, p, |v| &mut v.ui_hidden)),
+        spec!(
+            "view.minimize",
+            "Minimize the interface",
+            "{on?}  collapses the navigation bar and both sidebars and keeps the toolbar (Shift+Cmd/Ctrl+\\, the Minimize button by the file name); the right sidebar shows while something is selected",
+            false,
+            |s, p| flag(s, p, |v| &mut v.ui_minimized)
+        ),
         spec!("view.fullscreen", "Full screen", "{on?}  the window fills the screen (the desktop app; a no-op headless)", false, |s, p| {
             s.request_ui("window.fullscreen", json!({"on": boolean(p, "on")}));
             ok()
@@ -369,11 +403,18 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("pref.renameDuplicates", "Rename duplicated layers", "{on?}", false, |s, p| pref(s, p, |x| &mut x.rename_duplicates)),
         spec!("pref.showDimensions", "Show dimensions on objects", "{on?}", false, |s, p| pref(s, p, |x| &mut x.show_dimensions)),
         spec!("pref.numberKeysOpacity", "Use number keys for opacity", "{on?}", false, |s, p| pref(s, p, |x| &mut x.number_keys_opacity)),
+        spec!(
+            "pref.scrollWheelZoom",
+            "Scroll wheel zoom",
+            "{on?}  a mouse wheel zooms the canvas about the pointer and Cmd/Ctrl+wheel scrolls it (Shift+wheel still scrolls sideways; trackpads are unchanged) → {on}",
+            false,
+            |s, p| pref(s, p, |x| &mut x.scroll_wheel_zoom)
+        ),
         spec!("pref.reduceMotion", "Reduce motion", "{on?}", false, |s, p| pref(s, p, |x| &mut x.reduce_motion)),
         spec!(
             "pref.uiScale",
             "Interface size",
-            "{scale?: a size from 0.75 to 3 relative to the system's display scale, 1 being the system's own size, so 1.25 is 125 %, not 125 (outside the range it stops at the nearest end; \"auto\" is 1; omit: just read it)} → {scale}: how large the whole interface is drawn; the canvas zoom is separate",
+            "{scale? (a size from 0.75 to 3 relative to the system's display scale: 1 is the system's own size, so 1.25 is 125 %, not 125; outside the range it stops at the nearest end; \"auto\" is 1; omit: just read it)} → {scale}: how large the whole interface is drawn; the canvas zoom is separate",
             false,
             |s, p| {
                 match get(p, "scale") {
@@ -387,6 +428,21 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"scale": s.prefs.ui_scale}))
             }
         ),
+        spec!(
+            "pref.uiScaleUp",
+            "Larger interface",
+            "{}  the next of the Preferences sizes above the current one (the interface size keys of Accessibility at Figma); at the largest it stays → {scale}",
+            false,
+            |s, _| ui_scale_step(s, 1)
+        ),
+        spec!(
+            "pref.uiScaleDown",
+            "Smaller interface",
+            "{}  the next of the Preferences sizes below the current one; at the smallest it stays → {scale}",
+            false,
+            |s, _| ui_scale_step(s, -1)
+        ),
+        spec!("pref.uiScaleReset", "Default interface size", "{}  back to the system's own size (1) → {scale}", false, |s, _| ui_scale_step(s, 0)),
         spec!("pref.autoSave", "Save files automatically", "{on?}", false, |s, p| pref(s, p, |x| &mut x.auto_save)),
         spec!("pref.startOnHome", "Start on the Home screen", "{on?}", false, |s, p| pref(s, p, |x| &mut x.start_on_home)),
         spec!("pref.nudge", "Nudge amount", "{small?, big?}", false, |s, p| {
@@ -394,12 +450,19 @@ pub fn specs() -> Vec<CommandSpec> {
             s.prefs.nudge_big = num(p, "big").unwrap_or(s.prefs.nudge_big).clamp(0.01, 10000.0);
             Ok(json!({"small": s.prefs.nudge_small, "big": s.prefs.nudge_big}))
         }),
-        spec!("pref.userName", "Your name in comments", "{name (blank: the default, \"You\")}", false, |s, p| {
-            let name = req_string("pref.userName", p, "name")?;
-            let name: String = name.trim().chars().filter(|c| !c.is_control()).take(64).collect();
-            s.prefs.user_name = if name.is_empty() { super::comment::DEFAULT_AUTHOR.into() } else { name };
-            Ok(json!({"name": s.prefs.user_name}))
-        }),
+        spec!(
+            "pref.userName",
+            "Your name",
+            "{name (blank: the default: \"You\" on comments, \"Guest N\" in live sessions)} → {name}: what your comments are signed with and others see you as in live sessions; the live sessions you're in show the new name at once (blank keeps the name they gave you until you join again)",
+            false,
+            |s, p| {
+                let name = req_string("pref.userName", p, "name")?;
+                let name: String = name.trim().chars().filter(|c| !c.is_control()).take(crate::live::MAX_NAME).collect();
+                s.prefs.user_name = if name.is_empty() { super::comment::DEFAULT_AUTHOR.into() } else { name };
+                s.live_rename();
+                Ok(json!({"name": s.prefs.user_name}))
+            }
+        ),
         spec!(
             "pref.publishServer",
             "Server for online sharing",
@@ -427,7 +490,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "pref.language",
             "Interface language",
-            "{language: system|en|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|zh-Hans|…; else English}",
+            "{language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|vi|zh-Hans|zh-Hant|…; else English}",
             false,
             |s, p| {
                 let lang = req_string("pref.language", p, "language")?;
@@ -465,12 +528,51 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.set",
             "Choose tool",
-            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder}",
+            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder | on boards: sticky|shape|connector|marker|highlighter|eraser|stamp}",
             false,
             |s, p| {
                 let t = req_string("tool.set", p, "tool")?;
                 let t = ToolId::from_id(&t).ok_or_else(|| bad("tool.set", format!("unknown tool `{t}`")))?;
+                if t.on_boards() {
+                    crate::board::require(s, &format!("tool.{}", t.id()))?;
+                }
                 tool(s, t)
+            }
+        ),
+        spec!(
+            "tool.crosshair",
+            "Move the placement crosshair",
+            "{dx?, dy? (arrow-key steps, e.g. 1 or -1), big? (the large nudge, like Shift)} — the arrows with a shape or frame tool chosen and nothing selected: the first shows the crosshair in the middle of the view, the next move it by the nudge amount; Enter (`tool.place`) puts the object there",
+            false,
+            |s, p| {
+                if !s.tool.tool.draws_shape() {
+                    return Err(EngineError::Disabled("tool.crosshair".into(), "choose a shape or frame tool first".into()));
+                }
+                let step = if boolean(p, "big").unwrap_or(false) { s.prefs.nudge_big } else { s.prefs.nudge_small };
+                let dir = |k| num(p, k).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100.0, 100.0) * step;
+                let (dx, dy) = (dir("dx"), dir("dy"));
+                let (uid, page, centre, half) = {
+                    let ds = s.ds()?;
+                    let z = ds.view.zoom.max(1e-6);
+                    (ds.uid, ds.page, figcraft_geom::Point::new(ds.view.cx, ds.view.cy), (ds.view.vw / z / 2.0, ds.view.vh / z / 2.0))
+                };
+                // "It will appear in the middle of the viewport": the first arrow shows it there (a
+                // crosshair left on another page or document starts over).
+                let at = match s.crosshair() {
+                    Some(c) => figcraft_geom::Point::new(c.x + dx, c.y + dy),
+                    None => centre,
+                };
+                s.tool.place_at = Some(at);
+                s.tool.place_on = Some((uid, page));
+                if let Ok(ds) = s.ds_mut() {
+                    // "Move the crosshair around the canvas": nudged past an edge of the view, the
+                    // view pans by the overshoot to keep it in sight.
+                    let v = &mut ds.view;
+                    v.cx += (at.x - (v.cx + half.0)).max(0.0) + (at.x - (v.cx - half.0)).min(0.0);
+                    v.cy += (at.y - (v.cy + half.1)).max(0.0) + (at.y - (v.cy - half.1)).min(0.0);
+                    ds.revision += 1;
+                }
+                Ok(json!({"x": at.x, "y": at.y}))
             }
         ),
         spec!(
@@ -532,9 +634,19 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("tool.pen", "Pen", "{}", false, |s, _| tool(s, ToolId::Pen)),
         spec!("tool.pencil", "Pencil", "{}", false, |s, _| tool(s, ToolId::Pencil)),
         spec!("tool.text", "Text", "{}", false, |s, _| tool(s, ToolId::Text)),
+        spec!("tool.textOnPath", "Text on a path", "{}  a click on a shape's or vector's path puts new text on it", false, |s, _| {
+            tool(s, ToolId::TextOnPath)
+        }),
         spec!("tool.comment", "Comment", "{}", false, |s, _| tool(s, ToolId::Comment)),
         spec!("tool.shapeBuilder", "Shape builder", "{}", false, |s, _| tool(s, ToolId::ShapeBuilder)),
-        spec!("edit.pickColor", "Pick color", "{}", false, |s, _| tool(s, ToolId::Eyedropper)),
+        // `apply: false` is for the UI colour picker: the eyedropper only samples (into
+        // `ToolState::picked`) and the picker writes the colour to the paint it edits.
+        spec!("edit.pickColor", "Pick color", "{apply?}", false, |s, p| {
+            let r = tool(s, ToolId::Eyedropper)?;
+            s.tool.pick_only = !boolean(p, "apply").unwrap_or(true);
+            s.tool.picked = None;
+            Ok(r)
+        }),
     ]
 }
 

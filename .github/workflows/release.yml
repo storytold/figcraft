@@ -12,27 +12,35 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # Regenerates contributors/contributors.json for the release commit; every build bundles it.
+  credits:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@main
   release:
+    needs: credits
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
       app-name: figcraft
       app-title: FigCraft
-      # Needs fonts/latin-manifest.txt (Inter): crates/text/build.rs fails a release without it. Only
-      # craft-fonts' pr/latin-presentation-fonts has it; its main has Noto Sans Georgian but no Inter.
-      # Re-pin once one commit has both (storytold/craft-fonts#42).
-      craft-fonts-ref: 43913056ce82a3fdad0ef69f6b88d1dc922a8104
+      # Combined Latin presentation and core UI catalog. Required web builds enforce
+      # Inter Regular/SemiBold and Noto Sans Georgian Regular after asset-policy filtering.
+      craft-fonts-ref: 37827adc41fd165f9a9234ac40f94dbad353aa69
       has-server: true
       # The browser has no system fonts: without craft-fonts the web build can't draw text (#885).
-      # crates/text/build.rs keeps the web build to Inter.
+      # crates/text/build.rs keeps the web allowlist small (Inter and Georgian).
       web-craft-fonts: true
       version: ${{ inputs.version }}
+      contributors-artifact: ${{ needs.credits.outputs.artifact-name }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -48,3 +56,4 @@ jobs:
       AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
       AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
       AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}

@@ -17,4 +17,25 @@ harfrust = { workspace = true }
 png = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-segmentation = { workspace = true }
+icu_segmenter = { workspace = true }
 log = { workspace = true }
+
+# Fonts that font managers (RightFont, FontBase, Typeface) activate without copying them into a font
+# folder are known only to Core Text. Its safe wrappers list every available font's file (Core Text
+# needs unsafe FFI, which the workspace forbids). 22.0 is the first release whose
+# `get_descriptors` takes ownership of the array correctly (20.x and 21.x leak it on every scan);
+# it brings core-foundation 0.10, core-graphics 0.25 and core-graphics-types 0.2 beside the older
+# versions other crates use. Pinned exactly: review the diff before bumping.
+# The suite's font store folder (fonts installed by any Craft app) is scanned with the system's.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-font-catalog = { workspace = true }
+
+# The browser build finds Thai, Lao, Khmer and Burmese words with ICU4X's LSTM models (~0.3 MB of
+# wasm) instead of its dictionaries (~1.8 MB, which would take the .wasm past the 24 MiB gate in
+# packaging/web/package.sh).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+icu_segmenter = { workspace = true, features = ["lstm"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-text = { version = "=22.0.0", default-features = false, features = ["link"] }
+objc2 = "0.6"

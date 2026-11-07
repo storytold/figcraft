@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 serde_json = { workspace = true }
 figcraft-engine = { workspace = true }

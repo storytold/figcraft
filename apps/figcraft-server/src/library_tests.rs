@@ -41,6 +41,36 @@ fn answer(raw: &mut Raw) -> LibraryReply {
     }
 }
 
+/// Junk from an edit link is refused and the library unharmed; a wrong token isn't let in.
+fn junk_is_refused(addr: std::net::SocketAddr, edit: &Invite) {
+    let mut raw = Raw::connect(addr);
+    raw.send(&open(edit));
+    assert_eq!(answer(&mut raw), LibraryReply::Ready { access: Access::Edit });
+    raw.send(&ClientMsg::Library(LibraryReq::Fetch { have: None, usage: None }));
+    let LibraryReply::Library { version: 2, archive } = answer(&mut raw) else { panic!("no library") };
+    let mut rng = Rng::new(5);
+    for round in 0..12 {
+        let mut junk = if round % 3 == 0 { vec![0x5A; 1 + rng.below(4096)] } else { archive.clone() };
+        for _ in 0..1 + rng.below(8) {
+            let i = rng.below(junk.len());
+            junk[i] = rng.next_u64() as u8;
+        }
+        raw.send(&ClientMsg::Library(LibraryReq::Publish { archive: junk }));
+        assert!(matches!(answer(&mut raw), LibraryReply::Failed { .. }), "round {round}");
+    }
+    let flood = Usage { file: "\u{7}Spam\n".repeat(100), components: (0..5_000).map(|i| (NodeId(i), 1)).collect() };
+    raw.send(&ClientMsg::Library(LibraryReq::Fetch { have: Some(2), usage: Some(flood) }));
+    assert_eq!(answer(&mut raw), LibraryReply::Unchanged { version: 2 });
+    raw.send(&ClientMsg::Library(LibraryReq::Usage));
+    let LibraryReply::Usage(files) = answer(&mut raw) else { panic!("no usage") };
+    let spam = files.iter().find(|f| f.usage.file.starts_with("Spam")).unwrap();
+    assert!(spam.usage.file.chars().count() <= 256 && !spam.usage.file.contains('\n'), "names are cleaned and capped");
+    assert_eq!(spam.usage.components.len(), 1_000, "reports are capped");
+    let mut raw = Raw::connect(addr);
+    raw.send(&open(&Invite { token: "nope".into(), ..edit.clone() }));
+    assert!(matches!(raw.next(), ServerMsg::Refused { .. }));
+}
+
 #[test]
 fn publish_enable_update_and_usage() {
     let dir = TempDir::new("library");
@@ -106,34 +136,8 @@ fn publish_enable_update_and_usage() {
     raw.send(&ClientMsg::Library(LibraryReq::Publish { archive: vec![1, 2, 3] }));
     assert!(matches!(answer(&mut raw), LibraryReply::Failed { reason } if reason.contains("only view")));
 
-    // Junk from an edit link: refused, the library unharmed. A wrong token isn't let in.
     let edit = Invite::parse(&p.edit).unwrap();
-    let mut raw = Raw::connect(addr);
-    raw.send(&open(&edit));
-    assert_eq!(answer(&mut raw), LibraryReply::Ready { access: Access::Edit });
-    raw.send(&ClientMsg::Library(LibraryReq::Fetch { have: None, usage: None }));
-    let LibraryReply::Library { version: 2, archive } = answer(&mut raw) else { panic!("no library") };
-    let mut rng = Rng::new(5);
-    for round in 0..12 {
-        let mut junk = if round % 3 == 0 { vec![0x5A; 1 + rng.below(4096)] } else { archive.clone() };
-        for _ in 0..1 + rng.below(8) {
-            let i = rng.below(junk.len());
-            junk[i] = rng.next_u64() as u8;
-        }
-        raw.send(&ClientMsg::Library(LibraryReq::Publish { archive: junk }));
-        assert!(matches!(answer(&mut raw), LibraryReply::Failed { .. }), "round {round}");
-    }
-    let flood = Usage { file: "\u{7}Spam\n".repeat(100), components: (0..5_000).map(|i| (NodeId(i), 1)).collect() };
-    raw.send(&ClientMsg::Library(LibraryReq::Fetch { have: Some(2), usage: Some(flood) }));
-    assert_eq!(answer(&mut raw), LibraryReply::Unchanged { version: 2 });
-    raw.send(&ClientMsg::Library(LibraryReq::Usage));
-    let LibraryReply::Usage(files) = answer(&mut raw) else { panic!("no usage") };
-    let spam = files.iter().find(|f| f.usage.file.starts_with("Spam")).unwrap();
-    assert!(spam.usage.file.chars().count() <= 256 && !spam.usage.file.contains('\n'), "names are cleaned and capped");
-    assert_eq!(spam.usage.components.len(), 1_000, "reports are capped");
-    let mut raw = Raw::connect(addr);
-    raw.send(&open(&Invite { token: "nope".into(), ..edit.clone() }));
-    assert!(matches!(raw.next(), ServerMsg::Refused { .. }));
+    junk_is_refused(addr, &edit);
     assert_eq!(ex(&mut b, "library.list", json!({}))["libraries"][0]["version"], 2);
 
     // Kept on disk: the library is there after the server stops.

@@ -33,20 +33,28 @@ pub struct Duplex {
     tls: Option<Tls>,
     /// What the bytes read count against (a server's reader), if anything.
     meter: Option<Meter>,
+    /// When reading must be over, however slowly the bytes come ([`Duplex::read_until`]).
+    deadline: Option<Instant>,
 }
 
 impl Duplex {
     /// Two handles on `stream` (for the reader and the writer) and one to shut it down with.
     pub fn split(stream: TcpStream, tls: Option<Tls>) -> io::Result<(Duplex, Duplex, TcpStream)> {
         let write = Arc::new(Mutex::new(stream.try_clone()?));
-        let a = Duplex { read: stream.try_clone()?, write: write.clone(), tls: tls.clone(), meter: None };
-        let b = Duplex { read: stream.try_clone()?, write, tls, meter: None };
+        let a = Duplex { read: stream.try_clone()?, write: write.clone(), tls: tls.clone(), meter: None, deadline: None };
+        let b = Duplex { read: stream.try_clone()?, write, tls, meter: None, deadline: None };
         Ok((a, b, stream))
     }
 
     /// Count what this handle reads against `meter`.
     pub fn meter(&mut self, meter: Meter) {
         self.meter = Some(meter);
+    }
+
+    /// Reads on this handle fail once `deadline` passes, even when each one gets a few bytes in
+    /// time (a message trickled in can't outlast it). `None`: only the read timeout applies.
+    pub fn read_until(&mut self, deadline: Option<Instant>) {
+        self.deadline = deadline;
     }
 
     /// What was read so far became a message (handed on): it no longer counts as being read.
@@ -187,10 +195,25 @@ impl Duplex {
 
 impl Read for Duplex {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = match &self.tls {
-            Some(t) => tls::read(t, &mut self.read, &self.write, buf),
-            None => self.read.read(buf),
-        }?;
+        let n = loop {
+            if let Some(d) = self.deadline {
+                let left = d.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(io::ErrorKind::TimedOut.into());
+                }
+                self.read.set_read_timeout(Some(left))?;
+            }
+            let read = match &self.tls {
+                Some(t) => tls::read(t, &mut self.read, &self.write, buf),
+                None => self.read.read(buf),
+            };
+            match read {
+                // The socket's timeout can run out a moment before the deadline (it counts whole
+                // milliseconds): wait out the rest, so a read times out only once it has passed.
+                Err(e) if self.deadline.is_some() && matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
+                read => break read?,
+            }
+        };
         if let Some(m) = self.meter.as_mut() {
             m.add(n)?;
         }
@@ -272,6 +295,21 @@ impl Bucket {
             return false;
         }
         self.tokens -= n;
+        true
+    }
+
+    /// Like [`take_n`](Self::take_n), but more than the burst may be taken from a full bucket,
+    /// which it leaves in debt: nothing more until the rate has paid it back. Something larger
+    /// than the burst (a big download) is then never refused for good, and the average stays at
+    /// `rate`.
+    pub fn take_spread(&mut self, now: Instant, n: f64) -> bool {
+        if n <= self.burst {
+            return self.take_n(now, n);
+        }
+        if !self.take_n(now, self.burst) {
+            return false;
+        }
+        self.tokens -= n - self.burst;
         true
     }
 

@@ -60,6 +60,30 @@ fn enter_edits_a_selected_text_with_all_of_it_selected_and_escape_keeps_the_laye
 }
 
 #[test]
+fn copying_and_cutting_selected_text_use_clipboard_service() {
+    use std::{cell::RefCell, rc::Rc};
+
+    struct Clipboard(Rc<RefCell<Vec<String>>>);
+    impl crate::Services for Clipboard {
+        fn clipboard_set_text(&mut self, text: &str) {
+            self.0.borrow_mut().push(text.to_string());
+        }
+    }
+
+    let mut s = Session::new();
+    let t = NodeId(s.execute("text.create", &json!({"text": "Hello world", "x": 20, "y": 20})).unwrap()["id"].as_u64().unwrap());
+    s.execute("select.set", &json!({"ids": [t]})).unwrap();
+    let mut u = Ui::new(s);
+    let copied = Rc::new(RefCell::new(Vec::new()));
+    u.app.services = Box::new(Clipboard(copied.clone()));
+    press(&mut u, Key::Enter);
+    u.frame_output(vec![Event::Copy]);
+    u.frame_output(vec![Event::Cut]);
+    assert_eq!(&*copied.borrow(), &["Hello world", "Hello world"]);
+    assert_eq!(u.app.session.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, "");
+}
+
+#[test]
 fn a_new_file_takes_the_page_colour_of_the_theme_and_keeps_it() {
     let mut s = Session::new();
     s.prefs.theme = "dark".into();

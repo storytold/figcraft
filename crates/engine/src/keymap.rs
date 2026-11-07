@@ -193,6 +193,15 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.text", &["T"]),
     k(Tools, "tool.comment", &["C"]),
     k(Tools, "tool.shapeBuilder", &["Shift+M"]),
+    // Board tools (on boards only), on keys nothing else uses.
+    k(Tools, "tool.sticky", &["Q"]),
+    k(Tools, "tool.shape", &["B"]),
+    k(Tools, "tool.connector", &["X"]),
+    k(Tools, "tool.marker", &["M"]),
+    k(Tools, "tool.highlighter", &["U"]),
+    k(Tools, "tool.eraser", &["E"]),
+    k(Tools, "tool.stamp", &["W"]),
+    k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"]).label("Board: a new sticky beside the selected one, or the next shape joined to it").both(),
     // View
     // The documentation gives both keys for the pixel grid in different places.
     k(View, "view.pixelGrid", &["Shift+'", "Cmd+'"]),
@@ -203,25 +212,33 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.comments", &["Shift+C"]),
     k(View, "view.multiplayerCursors", &["Alt+Cmd+\\"]),
     k(View, "view.snapPixel", &["Shift+Cmd+'"]),
-    k(View, "view.layers", &["Alt+1"]).label("Layers panel"),
+    // Windows: one help-center article writes Ctrl+1, another Alt+1; both open it there.
+    k(View, "view.layers", &["Alt+1"]).win(&["Alt+1", "Ctrl+1"]).label("Layers panel"),
+    // The interface size (Accessibility at Figma): Cmd/Ctrl+Shift+Alt with =, - and 0, while
+    // editing text too.
+    k(View, "pref.uiScaleUp", &["Alt+Shift+Cmd+="]).both(),
+    k(View, "pref.uiScaleDown", &["Alt+Shift+Cmd+-"]).both(),
+    k(View, "pref.uiScaleReset", &["Alt+Shift+Cmd+0"]).both(),
     k(View, "view.assets", &["Alt+2"]).label("Assets panel"),
     k(View, "libraries.open", &["Alt+3"]),
     k(View, "view.design", &["Alt+8"]).label("Design panel"),
     k(View, "view.prototype", &["Alt+9"]).label("Prototype panel"),
     k(View, "view.designPrototype", &["Shift+E"]),
     k(View, "view.devMode", &["Shift+D"]).label("Dev Mode on/off"),
-    k(View, "view.leftSidebar", &["Shift+Cmd+\\"]),
+    k(View, "view.minimize", &["Shift+Cmd+\\"]),
     k(View, "view.nextRegion", &["F6"]).win(&["F6", "Ctrl+F6"]).label("Focus the next region (toolbar, layers, canvas, properties)").both(),
     k(View, "view.previousRegion", &["Shift+F6"]).label("Focus the previous region").both(),
-    k(View, "view.contextMenu", &["Shift+F10"]).label("Context menu of the selection (the focused layer row or the canvas)"),
+    k(View, "view.contextMenu", &["Shift+F10", "Menu"]).label("Context menu of the selection (the focused layer row or the canvas)"),
     k(View, "layers.collapseAll", &["Alt+L"]),
     k(View, "doc.nextTab", &["Ctrl+Tab"]),
     k(View, "doc.previousTab", &["Ctrl+Shift+Tab"]),
     k(View, "view.prevPage", &["PageUp"]),
     k(View, "view.nextPage", &["PageDown"]),
     // Zoom
-    k(Zoom, "view.zoomIn", &["Cmd+=", "Shift+=", "Shift+Cmd+="]),
-    k(Zoom, "view.zoomOut", &["Cmd+-", "-", "Shift+-"]),
+    // Each zoom-in key has its zoom-out twin on the key beside it: `-` alone zooms out, so `=`
+    // alone (the `+` key without Shift) zooms in (#973).
+    k(Zoom, "view.zoomIn", &["Cmd+=", "Shift+=", "Shift+Cmd+=", "="]),
+    k(Zoom, "view.zoomOut", &["Cmd+-", "-", "Shift+-", "Shift+Cmd+-"]),
     k(Zoom, "view.zoom100", &["Shift+0", "Cmd+0"]),
     k(Zoom, "view.zoomFit", &["Shift+1"]),
     k(Zoom, "view.zoomSelection", &["Shift+2"]),
@@ -230,6 +247,7 @@ pub static KEYS: &[Binding] = &[
     // Text (on selected text layers, and on the selected characters while editing)
     k(Text, "text.bold", &["Cmd+B"]).both(),
     k(Text, "text.italic", &["Cmd+I"]).both(),
+    k(Text, "text.openLink", &["Alt+Enter"]).both(),
     k(Text, "text.underline", &["Cmd+U"]).both(),
     k(Text, "text.strikethrough", &["Shift+Cmd+X"]).both(),
     k(Text, "text.link", &["Shift+Cmd+U", "Cmd+K"]).text(),
@@ -334,7 +352,9 @@ pub static KEYS: &[Binding] = &[
 pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Tools, "Pan the canvas", "Space drag", "Space+drag"),
     (Tools, "Pan with nothing selected (Shift: farther)", "← ↑ → ↓", "← ↑ → ↓"),
+    (Transform, "Rotate a degree (Shift: 15)", "⌥⌘ ← ↑ → ↓", "Ctrl+Alt+← ↑ → ↓"),
     (Tools, "Place a shape or frame (its tool chosen)", "↵", "Enter"),
+    (Tools, "Show and move the placement crosshair (its tool chosen, nothing selected)", "← ↑ → ↓", "← ↑ → ↓"),
     (Zoom, "Zoom tool: click to zoom in, drag an area", "Hold Z", "Hold Z"),
     (Zoom, "Zoom tool: zoom out", "Hold ⌥Z", "Hold Alt+Z"),
     (Zoom, "Zoom around the pointer", "⌘ scroll", "Ctrl+scroll"),
@@ -346,6 +366,9 @@ pub static GESTURES: &[(Group, &str, &str, &str)] = &[
     (Transform, "Opacity 10%…90%, 0: 100%", "1…9, 0", "1…9, 0"),
     (Transform, "Exact opacity (4 then 5: 45%)", "Two digits", "Two digits"),
     (Transform, "Suspend snapping while dragging", "Hold ⌃ or ⌘", "Hold Ctrl"),
+    (Arrange, "Edit padding on all sides", "⌘ click a padding field", "Ctrl+click a padding field"),
+    (Arrange, "Set hug contents", "Double-click an edge of an auto layout frame", "Double-click an edge of an auto layout frame"),
+    (Arrange, "Set fill container", "⌥ double-click an edge of an auto layout child", "Alt+double-click an edge of an auto layout child"),
     (Prototype, "Presenting: next frame", "→, Space or N", "→, Space or N"),
     (Prototype, "Presenting: previous frame", "←", "←"),
     (Prototype, "Presenting: restart", "R", "R"),
@@ -426,7 +449,7 @@ pub fn normalize(name: &str) -> Option<(&str, bool)> {
 }
 
 const NAMED: &[&str] =
-    &["Tab", "Space", "PageUp", "PageDown", "Home", "End", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"];
+    &["Tab", "Space", "PageUp", "PageDown", "Home", "End", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Menu"];
 
 /// Parse a binding (`Shift+Cmd+K`) into its modifiers and canonical key.
 pub fn parse(spec: &str) -> Option<(Mods, &str)> {

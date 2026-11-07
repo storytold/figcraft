@@ -188,6 +188,23 @@ fn contents_only_leaves_out_overlapping_layers() {
 }
 
 #[test]
+fn penpot_v20_export_limits_shadows_in_all_directions() {
+    let mut session = Session::new();
+    for (index, offset, size) in
+        [((0.0, 0.0), (-12.0, -7.0), (112, 107)), ((200.0, 0.0), (13.0, -9.0), (113, 109)), ((400.0, 0.0), (-3.0, 14.0), (103, 114))]
+    {
+        let r = rect(&mut session, index.0, index.1, 100.0, 100.0, "#FF0000", None);
+        shadow(&mut session, r, offset, 0.0, 0.0);
+        assert_eq!(png_size(&export(&mut session, json!({"ids":[r]}))), size, "a sharp offset shadow must extend only the touched export edges");
+        assert_eq!(
+            png_size(&export(&mut session, json!({"ids":[r], "includeBoundingBox": true}))),
+            (100, 100),
+            "explicit bounding-box exports must not grow due to a shadow"
+        );
+    }
+}
+
+#[test]
 fn what_an_export_covers() {
     let mut s = Session::new();
     let size = |s: &mut Session, id: NodeId| png_size(&export(s, json!({"ids": [id]})));
@@ -254,6 +271,43 @@ fn masks_and_slices_export_what_shows() {
     assert_eq!(png_size(&png), (50, 50), "a slice exports its own area");
     assert_eq!(pixels(&png).get_pixel(25, 25).0, [0, 255, 0, 255], "a slice exports the layers under it");
     let _ = under;
+}
+
+/// Ignore overlapping layers (contents only) on a slice: inside a frame or group the slice exports
+/// only what is in that container; off, or on the page, everything in its area.
+#[test]
+fn a_slice_in_a_frame_or_group_exports_only_that_container() {
+    let mut s = Session::new();
+    let slice_in = |s: &mut Session, parent: Option<NodeId>, x: f64| {
+        let mut p = json!({"type": "slice", "x": x, "y": 25, "width": 50, "height": 50});
+        if let Some(parent) = parent {
+            p["parent"] = json!(parent);
+        }
+        id(&ex(s, "node.create", p))
+    };
+    let at = |s: &mut Session, p: Value| pixels(&export(s, p)).get_pixel(40, 40).0;
+    // A frame holding a red square and a slice, with a blue square on the page above it.
+    let f = frame(&mut s, 0.0, 0.0, 100.0, 100.0, false);
+    rect(&mut s, 0.0, 0.0, 100.0, 100.0, "#FF0000", Some(f));
+    let in_frame = slice_in(&mut s, Some(f), 25.0);
+    rect(&mut s, 50.0, 50.0, 100.0, 100.0, "#0000FF", None);
+    assert_eq!(png_size(&export(&mut s, json!({"ids": [in_frame]}))), (50, 50), "the slice still exports its own area");
+    assert_eq!(at(&mut s, json!({"ids": [in_frame]})), [255, 0, 0, 255], "on by default: only the frame's content, the blue square left out");
+    assert_eq!(at(&mut s, json!({"ids": [in_frame], "contentsOnly": false})), [0, 0, 255, 255], "off: everything in the slice's area");
+    // The same in a group.
+    let red = rect(&mut s, 300.0, 0.0, 100.0, 100.0, "#FF0000", None);
+    let grouped = slice_in(&mut s, None, 325.0);
+    let g = id(&ex(&mut s, "object.group", json!({"ids": [red, grouped]})));
+    assert_eq!(s.doc().unwrap().node(grouped).unwrap().parent, Some(g));
+    rect(&mut s, 350.0, 50.0, 100.0, 100.0, "#0000FF", None);
+    assert_eq!(at(&mut s, json!({"ids": [grouped]})), [255, 0, 0, 255], "in a group: only the group's content");
+    assert_eq!(at(&mut s, json!({"ids": [grouped], "contentsOnly": false})), [0, 0, 255, 255], "off: everything in its area");
+    // On the page the option has no effect.
+    rect(&mut s, 600.0, 0.0, 100.0, 100.0, "#FF0000", None);
+    let top = slice_in(&mut s, None, 625.0);
+    rect(&mut s, 650.0, 50.0, 100.0, 100.0, "#0000FF", None);
+    assert_eq!(at(&mut s, json!({"ids": [top]})), [0, 0, 255, 255], "on the page: everything in its area, with the option on");
+    assert_eq!(at(&mut s, json!({"ids": [top], "contentsOnly": false})), [0, 0, 255, 255], "on the page: everything in its area, with it off");
 }
 
 #[test]

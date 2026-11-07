@@ -1,9 +1,9 @@
 //! Branches through commands: create, edit on both sides, review, resolve, merge as one undo step,
 //! update from main, archive, saving with the file, and a fuzz test over random real commands.
 
-use figcraft_collab::merge::{Side, plan};
+use figcraft_collab::merge::{Key, Side, plan};
 use figcraft_collab::sim::Rng;
-use figcraft_collab::{Change, DocProp, Mode, Replica, Target};
+use figcraft_collab::{Change, DocProp, Mode, Prop, Replica, Target};
 use figcraft_doc::{Document, NodeId, NodeKind};
 use serde_json::{Value, json};
 
@@ -193,6 +193,109 @@ fn branch_commands_refuse_what_makes_no_sense() {
     assert!(s.execute("branch.merge", &json!({"id": "nope"})).is_err());
 }
 
+/// Node id `v` of a command's answer (`{"id": …}` or a bare id).
+fn idv(v: &Value) -> NodeId {
+    NodeId(v.get("id").unwrap_or(v).as_u64().unwrap())
+}
+
+/// The issue #2026 file, with a branch of it made and shown: a component `Card` (horizontal auto
+/// layout hugging its contents, padding 12, one 40×20 rectangle) and an instance of it in a
+/// vertical auto layout frame hugging its contents. Returns (session, branch id, card, instance,
+/// frame, rectangle).
+fn card_file() -> (Session, String, NodeId, NodeId, NodeId, NodeId) {
+    let mut s = Session::with_document(Document::new("Cards"));
+    let props = json!({"layout": "horizontal", "padding": 12, "sizingH": "hug", "sizingV": "hug"});
+    let frame = idv(&ok(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 100, "height": 50, "name": "Card", "props": props})));
+    let rect = idv(&ok(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 20, "parent": frame})));
+    let card = idv(&ok(&mut s, "component.create", json!({"ids": [frame]})));
+    let props = json!({"layout": "vertical", "padding": 0, "sizingH": "hug", "sizingV": "hug"});
+    let stack = idv(&ok(&mut s, "frame.create", json!({"x": 0, "y": 200, "width": 100, "height": 100, "name": "Stack", "props": props})));
+    let inst = idv(&ok(&mut s, "instance.create", json!({"component": card, "parent": stack})));
+    let b = ok(&mut s, "branch.create", json!({"name": "padding 8"}));
+    (s, b["id"].as_str().unwrap().to_string(), card, inst, stack, rect)
+}
+
+/// Size and place of every layer of `doc` (what auto layout works out).
+fn geometry(doc: &Document) -> Vec<(NodeId, [f64; 8])> {
+    doc.nodes()
+        .map(|n| {
+            let c = n.transform.as_coeffs();
+            (n.id, [n.width, n.height, c[0], c[1], c[2], c[3], c[4], c[5]])
+        })
+        .collect()
+}
+
+/// Issue #2026: one auto layout edit on each side is one conflict (the field changed both ways),
+/// not one for every size and place auto layout works out from it; the merged file lays out
+/// from the padding picked.
+#[test]
+fn one_conflicting_auto_layout_edit_is_one_conflict() {
+    for (pick, padding) in [("branch", 8.0), ("main", 16.0)] {
+        let (mut s, id, card, inst, _, _) = card_file();
+        ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 8}}));
+        ok(&mut s, "doc.switch", json!({"index": 0}));
+        ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 16}}));
+        // What main looks like with the picked padding set directly.
+        let mut direct = Session::with_document(s.doc().unwrap().clone());
+        ok(&mut direct, "node.set", json!({"id": card, "props": {"padding": padding}}));
+        let review = ok(&mut s, "branch.review", json!({"id": id}));
+        let conflicts = review["conflicts"].as_array().unwrap();
+        assert_eq!(conflicts.len(), 1, "{review}");
+        let key = format!("{card}/layout.padding");
+        assert_eq!(conflicts[0]["key"], key.as_str());
+        assert_eq!(
+            (&conflicts[0]["property"], &conflicts[0]["branch"], &conflicts[0]["main"]),
+            (&json!("auto layout padding"), &json!("8, 8, 8, 8"), &json!("16, 16, 16, 16"))
+        );
+        let err = s.execute("branch.merge", &json!({"id": id})).unwrap_err().to_string();
+        assert!(err.contains(&key) && !err.contains("width"), "{err}");
+        ok(&mut s, "branch.merge", json!({"id": id, "resolutions": {&key: pick}}));
+        let doc = s.doc().unwrap();
+        for n in [card, inst] {
+            assert_eq!(doc.node(n).unwrap().layout.as_ref().unwrap().padding, [padding; 4], "{pick} wins");
+        }
+        assert_eq!(geometry(doc), geometry(direct.doc().unwrap()), "{pick} wins: laid out from the padding picked");
+    }
+}
+
+/// Auto layout merges field by field: a gap changed only on the branch is kept whichever side's
+/// padding wins, both when merging and when updating the branch from main.
+#[test]
+fn auto_layout_fields_changed_one_way_survive_a_conflict() {
+    for (cmd, pick, padding) in [("branch.merge", "main", 16.0), ("branch.merge", "branch", 8.0), ("branch.updateFromMain", "main", 16.0)] {
+        let (mut s, id, card, _, _, _) = card_file();
+        ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 8, "gap": 30}}));
+        ok(&mut s, "doc.switch", json!({"index": 0}));
+        ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 16, "mainAlign": "center"}}));
+        let key = format!("{card}/layout.padding");
+        let review = ok(&mut s, "branch.review", json!({"id": id}));
+        assert_eq!(review["conflicts"].as_array().unwrap().iter().map(|c| c["key"].clone()).collect::<Vec<_>>(), vec![json!(key)], "{review}");
+        ok(&mut s, cmd, json!({"id": id, "resolutions": {&key: pick}}));
+        if cmd == "branch.updateFromMain" {
+            ok(&mut s, "doc.switch", json!({"index": 1}));
+        }
+        let layout = s.doc().unwrap().node(card).unwrap().layout.clone().unwrap();
+        assert_eq!((layout.padding, layout.gap, layout.main_align), ([padding; 4], 30.0, figcraft_doc::MainAlign::Center), "{cmd}, {pick} wins");
+    }
+}
+
+/// Auto layout on one side and a hugging frame's size on both: the sizes auto layout works out
+/// on each side are no conflict, and merging leaves no stale size behind.
+#[test]
+fn sizes_auto_layout_works_out_never_conflict() {
+    let (mut s, id, card, _, stack, rect) = card_file();
+    ok(&mut s, "node.set", json!({"id": rect, "props": {"width": 60}}));
+    ok(&mut s, "doc.switch", json!({"index": 0}));
+    ok(&mut s, "node.set", json!({"id": card, "props": {"padding": 4}}));
+    let review = ok(&mut s, "branch.review", json!({"id": id}));
+    assert_eq!(review["conflicts"], json!([]), "{review}");
+    let mut direct = Session::with_document(s.doc().unwrap().clone());
+    ok(&mut direct, "node.set", json!({"id": rect, "props": {"width": 60}}));
+    ok(&mut s, "branch.merge", json!({"id": id}));
+    assert_eq!(s.doc().unwrap().node(stack).unwrap().width, 60.0 + 8.0);
+    assert_eq!(geometry(s.doc().unwrap()), geometry(direct.doc().unwrap()));
+}
+
 /// Every change a side made (that the other side didn't overwrite) shows in `doc`.
 fn shows(changes: &[Change], doc: &Document) -> Result<(), String> {
     let r = Replica::new(doc.clone());
@@ -215,41 +318,92 @@ fn shows(changes: &[Change], doc: &Document) -> Result<(), String> {
     Ok(())
 }
 
-/// The fuzz test: random real commands on a branch and on main. Without conflicts the merge (both
-/// ways) equals applying both change sets and shows every change of either side; with conflicts,
-/// resolving them all for either side gives a valid document.
+/// [`base`] with two export settings and two guides on its first frame (lists that merge item by
+/// item).
+pub(crate) fn base_with_lists() -> Document {
+    let mut doc = base();
+    let f = doc.node(doc.first_page().unwrap()).unwrap().children[0];
+    let n = doc.get_mut(f).unwrap();
+    n.exports = ["@1", "@2"].map(|suffix| figcraft_doc::ExportSetting { suffix: suffix.into(), ..Default::default() }).to_vec();
+    n.guides = vec![figcraft_doc::Guide { vertical: true, offset: 10.0 }, figcraft_doc::Guide { vertical: false, offset: 20.0 }];
+    doc
+}
+
+/// A random real command: often an edit of a frame's export settings or guides, else
+/// [`random_command`].
+pub(crate) fn random_edit(doc: &Document, rng: &mut Rng, with_undo: bool) -> (&'static str, Value) {
+    if rng.chance(0.6) {
+        return random_command(doc, rng, with_undo);
+    }
+    let frames: Vec<NodeId> = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Frame)).map(|n| n.id).collect();
+    let f = rng.pick(&frames).map_or(json!(0), |i| json!(i));
+    let i = rng.below(3);
+    match rng.below(6) {
+        0 => ("export.add", json!({"ids": [f]})),
+        1 => ("export.update", json!({"ids": [f], "index": i, "suffix": format!("@{}", rng.below(9))})),
+        2 => ("export.remove", json!({"ids": [f], "index": i})),
+        3 => ("guide.add", json!({"frame": f, "vertical": rng.chance(0.5), "offset": rng.below(300)})),
+        4 => ("guide.move", json!({"frame": f, "index": i, "offset": rng.below(300)})),
+        _ => ("guide.remove", json!({"frame": f, "index": i})),
+    }
+}
+
+/// The fuzz test: random real commands on a branch and on main (export settings and guides
+/// included). Without conflicts the merge (both ways) equals applying both change sets and shows
+/// every change of either side; with conflicts, resolving them all for either side gives a valid
+/// document.
 #[test]
 fn random_edits_on_both_sides_merge() {
-    let (mut disjoint, mut conflicted) = (0, 0);
+    let (mut disjoint, mut conflicted, mut lists) = (0, 0, 0);
     for seed in 0..60 {
         let mut rng = Rng::new(seed);
-        let start = base();
+        let start = base_with_lists();
         let mut on_branch = start.clone();
         on_branch.set_client_id(start.highest_id_space() + 1);
         let mut sides = [Session::with_document(on_branch), Session::with_document(start.clone())];
         for s in &mut sides {
             for _ in 0..1 + rng.below(5) {
-                let (cmd, params) = random_command(s.doc().unwrap(), &mut rng, false);
+                let (cmd, params) = random_edit(s.doc().unwrap(), &mut rng, false);
                 let _ = s.execute(cmd, &params);
             }
         }
         let [b, m] = sides.map(|s| s.doc().unwrap().clone());
         let p = plan(&start, &b, &m).unwrap();
+        // Export settings or guides of a layer changed on both sides that merged item by item.
+        let list_writes = |changes: &[Change]| -> std::collections::BTreeSet<Key> {
+            changes
+                .iter()
+                .filter_map(|c| match c {
+                    Change::Set { id, prop: prop @ (Prop::Exports | Prop::Guides), .. } => Some(Key::Node(*id, *prop)),
+                    _ => None,
+                })
+                .collect()
+        };
+        lists += list_writes(&p.branch).intersection(&list_writes(&p.main)).filter(|k| !p.conflicts.iter().any(|c| c.key == **k)).count();
         if p.conflicts.is_empty() {
             disjoint += 1;
             let none = |_: &figcraft_collab::merge::Key| None;
             let (into_main, _) = p.merge(&m, Side::Branch, &none).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
             let (into_branch, _) = p.merge(&b, Side::Main, &none).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+            // Values both sides work out for themselves (sizes and places auto layout gives) stay
+            // as the file merged into has them.
+            let chosen = |changes: &[Change]| -> Vec<Change> {
+                changes
+                    .iter()
+                    .filter(|c| !matches!(c, Change::Set { id, prop, .. } if p.derived().contains(&Key::Node(*id, *prop))))
+                    .cloned()
+                    .collect()
+            };
             let mut both = Replica::new(start.clone());
             both.apply(&p.main, Mode::Strict).unwrap();
-            both.apply(&p.branch, Mode::Strict).unwrap();
+            both.apply(&chosen(&p.branch), Mode::Strict).unwrap();
             let mut want = both.document().clone();
             (want.name, want.current_page) = (m.name.clone(), m.current_page);
             assert_eq!(into_main, want, "seed {seed}");
             for doc in [&into_main, &into_branch] {
                 assert!(doc.validate().is_empty(), "seed {seed}: {:?}", doc.validate());
                 for side in [&p.branch, &p.main] {
-                    shows(side, doc).unwrap_or_else(|c| panic!("seed {seed}: lost {c}"));
+                    shows(&chosen(side), doc).unwrap_or_else(|c| panic!("seed {seed}: lost {c}"));
                 }
             }
         } else {
@@ -260,5 +414,5 @@ fn random_edits_on_both_sides_merge() {
             }
         }
     }
-    assert!(disjoint >= 10 && conflicted >= 5, "{disjoint} disjoint, {conflicted} with conflicts");
+    assert!(disjoint >= 10 && conflicted >= 5 && lists >= 3, "{disjoint} disjoint, {conflicted} with conflicts, {lists} lists merged item by item");
 }

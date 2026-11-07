@@ -69,6 +69,8 @@ fn batch_rename_opens_its_existing_dialog() {
     assert!(ui.app.ui.last_error.is_none());
 }
 
+/// Asserts `file.rename` opens the left panel's inline file-name editor (not a dialog),
+/// focuses it, and commits the typed name on Enter.
 #[test]
 fn rename_file_edits_the_file_name_in_place() {
     let mut ui = Ui::new(Session::new());
@@ -79,7 +81,7 @@ fn rename_file_edits_the_file_name_in_place() {
     ui.frame(vec![]);
     ui.frame(vec![]);
     assert!(!ui.app.ui.rename_file, "the rename started");
-    assert!(ui.ctx.memory(|m| m.has_focus(egui::Id::new("filename").with("te"))), "the file name's editor has the keyboard");
+    assert!(ui.ctx.memory(|m| m.has_focus(egui::Id::unique("filename").with("te"))), "the file name's editor has the keyboard");
     ui.frame(vec![egui::Event::Text("Brand kit".into())]);
     ui.frame(vec![egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
     assert_eq!(ui.app.session.doc().unwrap().name, "Brand kit");

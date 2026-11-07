@@ -1,10 +1,11 @@
 //! The interaction editor's conditionals and the presenter's hotspot hints, driven headless
 //! through egui (the harness is `present_tests`').
 
-use egui::{Pos2, Rect, pos2};
+use egui::{Event, Key, Modifiers, Pos2, Rect, pos2};
 use figcraft_doc::proto::{Action, Expr, ExprOp};
 use figcraft_doc::{NodeId, VariableValue};
 use figcraft_engine::Session;
+use figcraft_engine::keymap::Platform;
 use serde_json::{Value, json};
 
 use crate::present_tests::{Ui, id};
@@ -40,6 +41,48 @@ fn rect_of(v: &Value) -> Rect {
 fn click(u: &mut Ui, p: Pos2) {
     u.button(p, true);
     u.button(p, false);
+}
+
+fn press(u: &mut Ui, key: Key, modifiers: Modifiers) {
+    let ev = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+    u.frame(vec![ev(true), ev(false)]);
+}
+
+/// Cmd on macOS, Ctrl elsewhere, as egui reports it.
+fn cmd() -> Modifiers {
+    if crate::shortcuts::platform() == Platform::Mac { Modifiers::MAC_CMD | Modifiers::COMMAND } else { Modifiers::CTRL | Modifiers::COMMAND }
+}
+
+/// Hide UI (the Options menu, or Cmd/Ctrl+\ as in the editor) hides the bar above the prototype and
+/// the navigation bar under it, so the prototype alone shows and takes the bar's room; the key shows
+/// them again; the option carries over like the others, and the prototype still reacts meanwhile.
+#[test]
+fn hide_ui_hides_the_bars_and_the_key_shows_them_again() {
+    let (s, a, b, _) = setup();
+    let mut u = Ui::new(s);
+    u.run("proto.present", json!({"start": a}));
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(false), "shown by default");
+    let top = |u: &Ui| rect_of(&presenter(u)["hotspots"][0]["rect"]).min.y;
+    let with_bars = top(&u);
+    u.run("proto.presentOptions", json!({"hideUi": true}));
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(true));
+    assert_eq!(u.app.inspect()["presentOptions"]["hideUi"], json!(true), "kept for the next presentation");
+    let without = top(&u);
+    assert!(without < with_bars, "the prototype moves up into the bar's room: {with_bars} then {without}");
+    press(&mut u, Key::Backslash, cmd());
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(false), "the key shows the bars again");
+    assert_eq!(top(&u), with_bars);
+    press(&mut u, Key::Backslash, cmd());
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(true), "and hides them once more");
+    assert!(u.app.ui.present_view.hide_ui, "kept for the next presentation");
+    // The prototype keeps reacting with the bars hidden.
+    let at = rect_of(&presenter(&u)["hotspots"][0]["rect"]).center();
+    click(&mut u, at);
+    assert_eq!(presenter(&u)["current"], json!(b));
 }
 
 #[test]
@@ -78,6 +121,9 @@ fn condition(u: &Ui, btn: NodeId, block: usize) -> String {
     blocks[block].condition.as_ref().map(|c| c.display(&doc.variables)).unwrap_or_default()
 }
 
+/// Asserts the interaction editor shows conditional blocks and nested actions, restarts a
+/// condition when a variable of another type is picked, ignores a right-hand-side variable pick
+/// for a complex condition, and one undo restores the previous condition.
 #[test]
 fn the_interaction_editor_shows_conditionals_and_picks_their_variables() {
     let (mut s, _, b, btn) = setup();
@@ -95,7 +141,7 @@ fn the_interaction_editor_shows_conditionals_and_picks_their_variables() {
     u.app.ui.right_tab = crate::RightTab::Prototype;
     crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
     // The conditional open, then its nested set variable, then the else-if as an expression.
-    let open = egui::Id::new(("proto_open_action", btn, 0usize));
+    let open = egui::Id::unique(("proto_open_action", btn, 0usize));
     for path in [vec![1usize], vec![1, 0, 1], vec![1, 2, 0]] {
         u.ctx.data_mut(|d| d.insert_temp(open, path));
         u.frames(3, Vec::new);
@@ -154,6 +200,8 @@ fn the_builder_takes_variable_operator_value_conditions() {
     }
 }
 
+/// Asserts invalid typed conditions keep their draft and show errors without saving, a valid
+/// one clears the error and saves, and Enter does not leak to shortcuts.
 #[test]
 fn typed_conditions_are_checked_and_errors_show_until_fixed() {
     let (mut s, _, b, btn) = setup();
@@ -169,7 +217,7 @@ fn typed_conditions_are_checked_and_errors_show_until_fixed() {
     let mut u = Ui::new(s);
     u.app.ui.right_tab = crate::RightTab::Prototype;
     crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
-    u.ctx.data_mut(|d| d.insert_temp(egui::Id::new(("proto_open_action", btn, 0usize)), vec![1usize]));
+    u.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("proto_open_action", btn, 0usize)), vec![1usize]));
     u.frames(3, Vec::new);
     // The else if is complex: it shows as an expression field.
     let field = Slot { node: btn, k: 0, path: vec![1] }.id("proto_cond_expr").with(1usize);

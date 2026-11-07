@@ -80,6 +80,18 @@ fn set_glass(d: &mut Document, pane: NodeId, g: Glass) {
     d.get_mut(pane).unwrap().effects = vec![Effect { kind: EffectKind::Glass(g), visible: true }];
 }
 
+/// Writes the bench scene's render (rendered twice, so a kept shape is read) to the PNG named by
+/// `FIGCRAFT_GLASS_PNG`, to compare builds by eye.
+#[test]
+#[ignore = "writes a PNG: FIGCRAFT_GLASS_PNG=<path>"]
+fn glass_bench_png() {
+    let Ok(path) = std::env::var("FIGCRAFT_GLASS_PNG") else { return };
+    let (d, p, _, _) = scene();
+    let _ = render_view(&d, p, &view((0.0, 0.0), 2.0), &Options::default());
+    let pix = render_view(&d, p, &view((0.0, 0.0), 2.0), &Options::default()).unwrap();
+    pix.save_png(path).unwrap();
+}
+
 #[test]
 #[ignore = "timing: run in release with --ignored --nocapture"]
 fn glass_render_timings() {
@@ -96,6 +108,10 @@ fn glass_render_timings() {
             }),
         ),
         ("export: zoom, a new scale every frame", time(&mut d, p, render_view, |_, i| view((0.0, 0.0), 2.0 + 0.013 * f64::from(i)))),
+        (
+            "export: zoomed in, a corner of the pane in view, a new scale every frame",
+            time(&mut d, p, render_view, |_, i| view((700.0, 400.0), 3.0 + 0.013 * f64::from(i))),
+        ),
         ("single: same view again", time(&mut d, p, render_view_single, |_, _| view((0.0, 0.0), 2.0))),
         ("canvas: drag the card under the glass", canvas(&d, p, 2.0, move_card)),
         (

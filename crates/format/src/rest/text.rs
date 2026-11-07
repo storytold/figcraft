@@ -5,12 +5,12 @@ use std::collections::BTreeMap;
 
 use figcraft_doc::{
     DecorationLength, DecorationStyle, LetterSpacing, LineHeight, ListStyle, ParaList, StyleRun, TextAlignH, TextAlignV, TextAutoResize, TextCase,
-    TextData, TextDecoration, TextPath, TextStyle,
+    TextData, TextDecoration, TextDirection, TextPath, TextStyle,
 };
 use serde_json::Value;
 
 use super::Ctx;
-use super::props::{flag, len, list, num, paints, text};
+use super::props::{flag, len, num, paints, text};
 
 /// Most characters read from one text node.
 const MAX_CHARS: usize = 1 << 20;
@@ -46,6 +46,17 @@ pub(super) fn text_data(cx: &mut Ctx, v: &Value) -> TextData {
             _ => cx.warn("invalid internal .fig text path data was ignored"),
         }
     }
+    // The line breaks the .fig file saved, for the box width the layer imports with.
+    let width = v.get("size").and_then(super::props::vec2).map(|(w, _)| w.clamp(0.0, super::props::MAX_SIZE));
+    if cx.fig_sources.is_some()
+        && td.path.is_none()
+        && td.auto_resize != TextAutoResize::WidthAndHeight
+        && let (Some(starts), Some(width)) = (v.get("_figLineStarts").and_then(Value::as_array), width)
+    {
+        let n = td.char_count();
+        let starts = starts.iter().filter_map(Value::as_u64).filter_map(|s| usize::try_from(s).ok()).filter(|s| *s < n).collect();
+        td.save_breaks(starts, width);
+    }
     td
 }
 
@@ -69,10 +80,13 @@ fn paragraph(s: &Value, td: &mut TextData) {
         // Missing means a fixed box.
         _ => TextAutoResize::None,
     };
-    if text(s, "textTruncation") == Some("ENDING") {
+    // A line limit applies only while truncation is on; a leftover `maxLines` is ignored.
+    let ending = text(s, "textTruncation") == Some("ENDING");
+    td.max_lines = num(s, "maxLines").filter(|n| ending && *n >= 1.0).map_or(0, |n| n.min(10_000.0) as u32);
+    // Auto height with a line limit keeps hugging its lines up to the limit.
+    if ending && !td.truncates() {
         td.auto_resize = TextAutoResize::Truncate;
     }
-    td.max_lines = num(s, "maxLines").filter(|n| *n >= 1.0).map_or(0, |n| n.min(10_000.0) as u32);
     td.paragraph_spacing = len(s, "paragraphSpacing").unwrap_or(0.0);
     td.paragraph_indent = len(s, "paragraphIndent").unwrap_or(0.0);
     td.list_spacing = len(s, "listSpacing").unwrap_or(0.0).min(10_000.0);
@@ -101,6 +115,15 @@ fn type_style(cx: &mut Ctx, s: &Value, base: &TextStyle) -> TextStyle {
     } else if s.get("fontWeight").is_some() || s.get("italic").is_some() {
         let weight = num(s, "fontWeight").map_or_else(|| t.weight(), |w| w.clamp(1.0, 1000.0) as u16);
         t.font_style = style_name(weight, flag(s, "italic").unwrap_or_else(|| t.italic()));
+    }
+    // Variable font axes, `{tag: value}` (FigCraft's own key; the Sketch importer writes it).
+    if let Some(axes) = s.get("fontVariations").and_then(Value::as_object) {
+        t.variations = axes
+            .iter()
+            .take(64)
+            .filter(|(k, _)| k.len() == 4 && k.is_ascii())
+            .filter_map(|(k, v)| Some((k.clone(), v.as_f64().filter(|x| x.is_finite())?.clamp(-1e5, 1e5))))
+            .collect();
     }
     if let Some(size) = num(s, "fontSize").filter(|x| *x > 0.0) {
         t.font_size = size.clamp(0.5, 10_000.0);
@@ -233,23 +256,28 @@ fn runs(cx: &mut Ctx, v: &Value, td: &TextData) -> Vec<StyleRun> {
     out
 }
 
-/// Each paragraph's list type, nesting level and start number from `lineTypes`,
-/// `lineIndentations` and (from `.fig` files) `listStartOffsets`.
+/// Each paragraph's list type, nesting level, start number and base direction from `lineTypes`,
+/// `lineIndentations` and (from `.fig` files) `listStartOffsets` and `lineDirections`.
 fn lists(v: &Value, td: &mut TextData) {
-    let types = list(v, "lineTypes");
-    let indents = list(v, "lineIndentations");
-    let starts = list(v, "listStartOffsets");
-    td.paragraphs = types
-        .iter()
-        .enumerate()
-        .map(|(i, t)| ParaList {
-            list: match t.as_str() {
+    // One entry per paragraph: read up to the paragraph count (bounded by the text's size), not the
+    // general list limit, so a long text keeps every paragraph's settings.
+    let n = td.paragraph_count();
+    let column = |k: &str| v.get(k).and_then(Value::as_array).map(|a| a.get(..a.len().min(n)).unwrap_or_default()).unwrap_or_default();
+    let (types, indents, starts, dirs) = (column("lineTypes"), column("lineIndentations"), column("listStartOffsets"), column("lineDirections"));
+    td.paragraphs = (0..types.len().max(dirs.len()))
+        .map(|i| ParaList {
+            list: match types.get(i).and_then(Value::as_str) {
                 Some("UNORDERED") => ListStyle::Bulleted,
                 Some("ORDERED") => ListStyle::Numbered,
                 _ => ListStyle::None,
             },
             indent: indents.get(i).and_then(Value::as_f64).filter(|d| d.is_finite()).map_or(0, |d| d.clamp(0.0, 255.0) as u8),
             start_offset: starts.get(i).and_then(Value::as_f64).filter(|n| n.is_finite()).map_or(0, |n| n.clamp(0.0, f64::from(u32::MAX)) as u32),
+            direction: match dirs.get(i).and_then(Value::as_str) {
+                Some("LTR") => TextDirection::Ltr,
+                Some("RTL") => TextDirection::Rtl,
+                _ => TextDirection::Auto,
+            },
         })
         .collect();
     // Clamp the levels and fold one style for all back into the layer's list style.

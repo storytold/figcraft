@@ -62,7 +62,6 @@ fn each_document_has_its_own_session() {
     let ua = uid(&s);
     // A new document isn't in the first one's session.
     run(&mut s, "file.new", json!({}));
-    let ub = uid(&s);
     let off = run(&mut s, "collab.peers", json!({}));
     for key in ["session", "role", "link", "url", "address", "fileName", "document", "me"] {
         assert_eq!(off[key], Value::Null, "{key}: {off}");
@@ -78,8 +77,12 @@ fn each_document_has_its_own_session() {
     assert!(s.live_mut().is_none() && s.active_read_only().is_none());
     assert_eq!(run(&mut s, "collab.stop", json!({}))["ended"], false, "nothing to stop here");
     assert_eq!(s.live_of(ua).status, Status::Live, "and the other file's session isn't stopped");
+    hosting_a_second_session(&mut s, &script, &a, ua);
+}
+
+fn hosting_a_second_session(s: &mut Session, script: &Arc<Mutex<Script>>, a: &Value, ua: u64) {
     // Hosting it too starts a second session; the first goes on.
-    let b = run(&mut s, "collab.host", json!({}));
+    let b = run(s, "collab.host", json!({}));
     assert_ne!(a["session"], b["session"]);
     assert_ne!(a["link"], b["link"]);
     assert_eq!((b["document"].clone(), b["sessions"].as_array().unwrap().len()), (json!(1), 2));
@@ -87,33 +90,38 @@ fn each_document_has_its_own_session() {
         let sc = script.lock().unwrap();
         assert_eq!((sc.hosted.len(), sc.left), (2, 0));
     }
+    people_come_and_go(s, script, a, &b, ua);
+}
+
+fn people_come_and_go(s: &mut Session, script: &Arc<Mutex<Script>>, a: &Value, b: &Value, ua: u64) {
+    let ub = uid(s);
     // People come and go in their own session.
-    let (a_id, b_id) = (id_of(&a), id_of(&b));
-    feed(&mut s, &script, a_id, vec![Event::PeerJoined(peer(5, "Ada"))]);
-    feed(&mut s, &script, b_id, vec![Event::PeerJoined(peer(6, "Bo")), Event::PeerJoined(peer(7, "Cy"))]);
+    let (a_id, b_id) = (id_of(a), id_of(b));
+    feed(s, script, a_id, vec![Event::PeerJoined(peer(5, "Ada"))]);
+    feed(s, script, b_id, vec![Event::PeerJoined(peer(6, "Bo")), Event::PeerJoined(peer(7, "Cy"))]);
     assert_eq!((s.live_of(ua).peers.len(), s.live_of(ub).peers.len()), (1, 2));
     let names = |v: &Value| v["peers"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
     let p = s.live_summary();
     assert_eq!((names(&p), &p["link"]), (vec!["Bo".to_string(), "Cy".to_string()], &b["link"]));
     assert_eq!((&p["sessions"][0]["peers"], &p["sessions"][1]["peers"]), (&json!(1), &json!(2)));
     // The file in front decides what `collab.peers` and the commands are about.
-    run(&mut s, "doc.switch", json!({"index": 0}));
-    let p = run(&mut s, "collab.peers", json!({}));
+    run(s, "doc.switch", json!({"index": 0}));
+    let p = run(s, "collab.peers", json!({}));
     assert_eq!((names(&p), &p["link"], &p["document"], &p["session"]), (vec!["Ada".to_string()], &a["link"], &json!(0), &a["session"]));
-    assert_eq!(run(&mut s, "collab.follow", json!({"client": 5}))["follow"], 5);
+    assert_eq!(run(s, "collab.follow", json!({"client": 5}))["follow"], 5);
     assert!(s.execute("collab.follow", &json!({"client": 6})).is_err(), "Bo is in the other file's session");
-    run(&mut s, "doc.switch", json!({"index": 1}));
+    run(s, "doc.switch", json!({"index": 1}));
     assert!(s.execute("collab.follow", &json!({"client": 5})).is_err());
     assert_eq!((s.live().follow, s.live_of(ua).follow), (None, Some(5)));
     // Stopping ends this file's session only.
-    assert_eq!(run(&mut s, "collab.stop", json!({}))["ended"], true);
+    assert_eq!(run(s, "collab.stop", json!({}))["ended"], true);
     assert_eq!(script.lock().unwrap().ended, [b_id]);
     assert_eq!((s.live().status.clone(), s.live_of(ua).status.clone()), (Status::Off, Status::Live));
     // Someone ending or leaving the other one doesn't bring this one back.
-    feed(&mut s, &script, b_id, vec![Event::PeerJoined(peer(8, "Late"))]);
+    feed(s, script, b_id, vec![Event::PeerJoined(peer(8, "Late"))]);
     assert_eq!((s.live.iter().count(), s.live_of(ua).peers.len()), (1, 1), "what a session still sent after it ended is dropped");
     // Closing a file ends its session.
-    run(&mut s, "file.close", json!({"index": 0, "force": true}));
+    run(s, "file.close", json!({"index": 0, "force": true}));
     s.live_sync();
     assert_eq!(script.lock().unwrap().ended, [b_id, a_id]);
     assert_eq!(s.live.iter().count(), 0);

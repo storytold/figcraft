@@ -3,7 +3,7 @@ name = "figcraft-color"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "FigCraft colour and paint: RGBA colours, HSB/HSL, hex/CSS parsing, solid/gradient/image paints, blend modes"
+description = "FigCraft colour and paint: RGBA colours, HSB/HSL/LCH/OKLCH, hex/CSS parsing, solid/gradient/image paints, blend modes"
 
 [lints]
 workspace = true

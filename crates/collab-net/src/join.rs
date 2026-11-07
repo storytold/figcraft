@@ -6,11 +6,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use figcraft_collab::Client;
-use figcraft_collab::message::{ClientMsg, Peer, Resume, ServerMsg};
-use figcraft_engine::live::{Event, Role, SessionInfo, Status, TOO_LARGE_TO_JOIN};
+use figcraft_collab::message::{self, ClientMsg, PROTOCOL, Peer, Resolve, ResolveTeam, Resume, ServerMsg};
+use figcraft_engine::live::{Event, MAX_PEERS, Role, SessionInfo, Status, TOO_LARGE_TO_JOIN};
 
 use crate::inbox::Inbox;
-use crate::invite::Invite;
+use crate::invite::{Invite, Lookup};
 use crate::limits::NetLimits;
 
 /// What the host tells everyone when it stops (the WebSocket close reason).
@@ -29,9 +29,9 @@ pub(crate) const CLOSE_RESTART: u16 = 1012;
 #[derive(Clone, Debug)]
 pub struct GuestConfig {
     pub invite: Invite,
-    /// A join code to ask `invite.server` about first: its answer fills in the invite's file and
-    /// token ([`resolved`]).
-    pub code: Option<String>,
+    /// What to ask `invite.server` first (a join code, or the team link of `invite.file`): its
+    /// answer fills in the invite's file and token ([`resolved`]).
+    pub lookup: Option<Lookup>,
     /// Your name (empty: the host picks one).
     pub name: String,
     pub limits: NetLimits,
@@ -39,8 +39,10 @@ pub struct GuestConfig {
     /// The pause before the first reconnect; it doubles each time up to `max_backoff`.
     pub backoff: Duration,
     pub max_backoff: Duration,
-    /// Reconnect attempts before giving up.
+    /// Reconnect attempts in a row before the longer pause (`round_pause`), after which it tries
+    /// as many again: a connection that was live is never given up on by itself.
     pub attempts: u32,
+    pub round_pause: Duration,
     /// Join as the client you were (an app that starts over after a crash): the first hello
     /// carries it, and a server that still knows the id gives it back.
     pub resume: Option<Resume>,
@@ -50,13 +52,14 @@ impl GuestConfig {
     pub fn new(invite: Invite, name: String) -> Self {
         Self {
             invite,
-            code: None,
+            lookup: None,
             name,
             limits: NetLimits::default(),
             connect_timeout: Duration::from_secs(5),
             backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(10),
             attempts: 12,
+            round_pause: Duration::from_secs(60),
             resume: None,
         }
     }
@@ -64,6 +67,14 @@ impl GuestConfig {
     /// The pause before reconnect `attempt` (from 1).
     pub(crate) fn backoff(&self, attempt: u32) -> Duration {
         self.backoff.saturating_mul(1u32 << attempt.saturating_sub(1).min(16)).min(self.max_backoff)
+    }
+
+    /// The pause before reconnect attempt `attempt` (from 1): growing within a round of
+    /// [`attempts`](Self::attempts), and [`round_pause`](Self::round_pause) between rounds.
+    pub(crate) fn pause(&self, attempt: u32) -> Duration {
+        let round = self.attempts.max(1);
+        let into_round = attempt.saturating_sub(1) % round;
+        if into_round == 0 && attempt > round { self.round_pause } else { self.backoff(into_round + 1) }
     }
 }
 
@@ -85,7 +96,10 @@ pub(crate) enum Outcome {
 /// typed it (the server's own for a code it doesn't know).
 pub(crate) fn unresolved(cfg: &GuestConfig, outcome: Outcome) -> Outcome {
     Outcome::Failed(match outcome {
-        // A server from before join codes can't read the question.
+        // A server from before join codes (or team lists) can't read the question.
+        Outcome::Refused(why) if why.contains("couldn't be read") && cfg.lookup == Some(Lookup::Team) => {
+            format!("{} has no team list (it runs an older version): ask for the invite link instead", cfg.invite.server.display())
+        }
         Outcome::Refused(why) if why.contains("couldn't be read") => {
             format!("{} doesn't know join codes yet (it runs an older version): ask for the invite link instead", cfg.invite.server.display())
         }
@@ -101,12 +115,23 @@ pub(crate) fn too_large(limits: &NetLimits) -> Outcome {
     Outcome::Failed(TOO_LARGE_TO_JOIN.replace("{mb}", &(limits.max_server_message >> 20).to_string()))
 }
 
-/// The server's answer to the join code: the invite is whole now.
+/// The first message that asks `invite`'s server what `lookup` stands for (answered with
+/// [`ServerMsg::Resolved`]).
+pub(crate) fn ask(invite: &Invite, lookup: &Lookup) -> ClientMsg {
+    let client_version = message::client_version();
+    match lookup {
+        Lookup::Code(code) => ClientMsg::Resolve(Resolve { protocol: PROTOCOL, client_version, code: code.clone() }),
+        Lookup::Team => ClientMsg::ResolveTeam(ResolveTeam { protocol: PROTOCOL, client_version, file: invite.file.clone() }),
+    }
+}
+
+/// The server's answer to the join code (or about the team list's file): the invite is whole now.
 pub(crate) fn resolved(cfg: &mut GuestConfig, file: String, token: String) -> Result<(), Outcome> {
-    if !crate::invite::valid_id(&file, 1, 64) || !crate::invite::valid_id(&token, 16, 128) {
+    let asked_file = cfg.lookup != Some(Lookup::Team) || file == cfg.invite.file;
+    if !crate::invite::valid_id(&file, 1, 64) || !crate::invite::valid_id(&token, 16, 128) || !asked_file {
         return Err(Outcome::Failed("the server answered the join code with something that isn't a file".into()));
     }
-    cfg.code = None;
+    cfg.lookup = None;
     (cfg.invite.file, cfg.invite.token) = (file, token);
     Ok(())
 }
@@ -123,31 +148,57 @@ pub(crate) fn closed(code: u16, reason: &str) -> Outcome {
 
 /// What a guest does after a connection ended.
 pub(crate) enum Next {
-    /// Done: tell the UI this (nothing when you left).
-    Stop(Option<Event>),
+    /// Done: tell the UI this (nothing when you left). Boxed: an event can be large (a welcome),
+    /// and this one is only ever a status or the end of the session.
+    Stop(Option<Box<Event>>),
     /// Connect again after this pause (the UI has been told: `Reconnecting`).
     Reconnect(Duration),
 }
 
-/// After `outcome`: a refusal or the end of the session is final, and so is a first join that
-/// can't reach the host; a live connection that dropped tries again with growing pauses until the
-/// attempts run out.
+/// What a server refuses for good, whenever you ask: the link, the file or your place in it is
+/// gone, or the two versions can't talk. Anything else a server refuses a session with (it is
+/// busy, a limit was hit, the file couldn't be read just now) may pass, and servers of any version
+/// say so in these words, so a reason not listed here means try again.
+const FINAL_REFUSALS: [&str; 12] = [
+    "isn't valid",
+    "isn't on the server",
+    "was removed from the server",
+    "were removed from this session",
+    "no longer accepts connections",
+    "doesn't accept connections",
+    "wrong session token",
+    "isn't supported",
+    "couldn't be read",
+    "message too large",
+    "this version can't read",
+    "sent a text message",
+];
+
+/// Whether `reason`, from a server refusing a session that was live, is for good.
+pub(crate) fn final_refusal(reason: &str) -> bool {
+    FINAL_REFUSALS.iter().any(|f| reason.contains(f))
+}
+
+/// After `outcome`: the end of the session is final, and so are a refusal for good and a first
+/// join that can't reach the host. A live connection that dropped or was turned away for now tries
+/// again until you leave: with growing pauses, and a longer one between rounds.
 pub(crate) fn after(outcome: Outcome, cfg: &GuestConfig, was_live: bool, attempt: &mut u32, inbox: &Inbox) -> Next {
-    let failed = |reason: String| Next::Stop(Some(Event::Status(Status::Failed { reason })));
+    let failed = |reason: String| Next::Stop(Some(Box::new(Event::Status(Status::Failed { reason }))));
+    let outcome = match outcome {
+        Outcome::Refused(why) if was_live && !final_refusal(&why) => Outcome::Retry(why),
+        o => o,
+    };
     match outcome {
         Outcome::Left => Next::Stop(None),
         Outcome::Refused(why) => failed(format!("The host refused: {why}")),
         Outcome::Failed(why) => failed(why),
-        Outcome::Ended(reason) => Next::Stop(Some(Event::Ended { reason })),
+        Outcome::Ended(reason) => Next::Stop(Some(Box::new(Event::Ended { reason }))),
         Outcome::Retry(why) if !was_live => failed(format!("Couldn't join the live session: {why}")),
         Outcome::Retry(why) => {
-            *attempt += 1;
-            if *attempt > cfg.attempts {
-                return failed(format!("Lost the connection to the host ({why})"));
-            }
+            *attempt = attempt.saturating_add(1);
             log::info!("live session: connection lost ({why}); reconnecting, attempt {attempt}");
             inbox.push(Event::Status(Status::Reconnecting { attempt: *attempt }));
-            Next::Reconnect(cfg.backoff(*attempt))
+            Next::Reconnect(cfg.pause(*attempt))
         }
     }
 }
@@ -187,14 +238,20 @@ pub(crate) enum Taken {
 /// Take in one message from the host: events for the UI go to `inbox`, and `resume` follows the
 /// session. On the welcome, `welcomed` runs before the UI hears of it: what the sync client sends
 /// in answer must go out on this connection.
-pub(crate) fn take(m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Seen, resume: &Resuming, welcomed: &dyn Fn()) -> Taken {
+pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Seen, resume: &Resuming, welcomed: &dyn Fn()) -> Taken {
+    // A compressed document is read here, within the size the welcome could have had unpacked.
+    match message::unpack(&mut m, cfg.limits.max_server_message) {
+        Ok(()) => {}
+        Err(figcraft_collab::Error::TooLarge(_)) => return Taken::End(too_large(&cfg.limits)),
+        Err(e) => return Taken::End(Outcome::Refused(format!("the host sent a document this version can't read ({e})"))),
+    }
     match m {
-        ServerMsg::Welcome { session, client_id, seq, ref peers, access, .. } => {
+        ServerMsg::Welcome { session, client_id, seq, ref peers, access, secret, .. } => {
             if let Ok(mut r) = resume.lock() {
-                *r = Some(Resume { session, client_id, seq });
+                *r = Some(Resume { session, client_id, seq, secret });
             }
             // The sync client opens the document (and fills in its name and pages).
-            let peers = peers.clone();
+            let peers: Vec<Peer> = peers.iter().take(MAX_PEERS).cloned().collect();
             let inv = &cfg.invite;
             let info = SessionInfo {
                 role: Role::Guest,
@@ -208,6 +265,7 @@ pub(crate) fn take(m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Se
                 address: inv.server.display(),
                 network: !inv.loopback(),
                 access,
+                view: None,
             };
             seen.peers = peers.clone();
             seen.info = Some(info.clone());
@@ -224,7 +282,16 @@ pub(crate) fn take(m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Se
                 inbox.push(Event::Welcome { info: info.clone(), peers: seen.peers.clone() });
             }
             _ => {
-                seen.peers.retain(|q| q.client_id != p.client_id);
+                match seen.peers.iter().position(|q| q.client_id == p.client_id) {
+                    Some(i) => {
+                        seen.peers.remove(i);
+                    }
+                    None if seen.peers.len() >= MAX_PEERS => {
+                        log::warn!("live session: {MAX_PEERS} people already here; leaving out another");
+                        return Taken::Continue;
+                    }
+                    None => {}
+                }
                 seen.peers.push(p.clone());
                 inbox.push(Event::PeerJoined(p));
             }

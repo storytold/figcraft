@@ -4,8 +4,10 @@
 //! it, shadows cut into it, or blurred, maps exactly onto drop shadows, inner shadows and a layer
 //! blur: `feDropShadow`; `feOffset` + `feGaussianBlur` + `feFlood` + `feComposite` + `feMerge`;
 //! the colour-matrix form (alpha → offset → blur → matrix tint → blend), with `feMorphology` as
-//! spread and arithmetic or `out` composites for inner shadows. Anything else is reported back as
-//! unsupported and the layer is drawn without it.
+//! spread and arithmetic or `out` composites for inner shadows. A shadow made from the blurred
+//! layer's tinted alpha, and cut out by that layer (what our exports write, as the canvas casts
+//! drop shadows from what the layer blurs leave), is a drop shadow of that blurred layer. Anything
+//! else is reported back as unsupported and the layer is drawn without it.
 
 use std::collections::HashMap;
 
@@ -32,11 +34,14 @@ struct Sh {
     /// Everything but the shadow (a flood with the shadow cut out): becomes an inner shadow once
     /// it's cut to the layer.
     inverted: bool,
+    /// Cast from the layer blurred by this sigma rather than from its alpha (our exports: a drop
+    /// shadow is cast from the layer its layer blurs leave).
+    cast: f64,
 }
 
 impl Sh {
     fn alpha() -> Self {
-        Sh { dx: 0.0, dy: 0.0, sigma: 0.0, spread: 0.0, color: Color::BLACK, knockout: false, inner: false, inverted: false }
+        Sh { dx: 0.0, dy: 0.0, sigma: 0.0, spread: 0.0, color: Color::BLACK, knockout: false, inner: false, inverted: false, cast: 0.0 }
     }
     /// Still exactly the layer's alpha.
     fn is_plain(&self) -> bool {
@@ -132,6 +137,8 @@ fn primitive(k: &Kind, get: &dyn Fn(&Input) -> Option<Img>) -> Option<Img> {
             let s = match get(cm.input())? {
                 Img::Shadow(s) => s,
                 Img::Layer(0.0) => Sh::alpha(),
+                // A tint of the blurred layer: a shadow cast from it.
+                Img::Layer(b) => Sh { cast: b, ..Sh::alpha() },
                 _ => return None,
             };
             tint(v, s)?
@@ -193,6 +200,10 @@ fn composite(a: Img, b: Img, op: CompositeOperator) -> Option<Img> {
         (CompositeOperator::Out, Img::Shadow(s), Img::Shadow(l)) if l.is_plain() && !s.inner && !s.inverted => {
             Img::Shadow(Sh { knockout: true, ..s })
         }
+        // Cut out where the blurred layer it was cast from is.
+        (CompositeOperator::Out, Img::Shadow(s), Img::Layer(b)) if b > 0.0 && b == s.cast && !s.inner && !s.inverted => {
+            Img::Shadow(Sh { knockout: true, ..s })
+        }
         // layer − shadow: inside the layer where the offset copy isn't.
         (CompositeOperator::Arithmetic { k1, k2, k3, k4 }, Img::Shadow(s), Img::Shadow(l))
             if k1 == 0.0 && k4 == 0.0 && k2 == -1.0 && k3 == 1.0 && l.is_plain() && !s.inner =>
@@ -211,6 +222,14 @@ fn to_effects(img: Img, world: Affine) -> Option<Vec<Effect>> {
         return None;
     }
     let k = length_scale(world);
+    // A shadow cast from a blurred layer is one of its drop shadows only when that is the layer drawn.
+    let drawn = match layers.get(at) {
+        Some(Img::Layer(b)) => *b,
+        _ => 0.0,
+    };
+    if layers.iter().any(|l| matches!(l, Img::Shadow(s) if s.cast > 0.0 && (s.cast != drawn || s.inner || s.inverted))) {
+        return None;
+    }
     let mut out = Vec::new();
     for (i, l) in layers.iter().enumerate() {
         match l {

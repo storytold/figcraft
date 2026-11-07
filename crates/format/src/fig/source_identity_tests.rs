@@ -983,6 +983,11 @@ fn assert_external_namespace(doc: &Document) {
     let copied_frame = child(doc, copied_body, 0);
     assert_eq!(doc.node(frame).unwrap().source, None, "materialized ordinary layers are owned by the frame");
     assert_eq!(doc.node(copied_frame).unwrap().source, Some(frame));
+    assert_external_slots(doc, frame, copied_frame, main);
+    assert_external_copy_state(doc, frame, copied_frame);
+}
+
+fn assert_external_slots(doc: &Document, frame: NodeId, copied_frame: NodeId, main: NodeId) {
     for index in 0..2 {
         let slot = child(doc, frame, index);
         let copied_slot = child(doc, copied_frame, index);
@@ -999,6 +1004,9 @@ fn assert_external_namespace(doc: &Document) {
         assert_eq!(doc.node(child(doc, current, 0)).unwrap().source, Some(child(doc, inherited, 0)));
         assert_eq!(doc.node(child(doc, current, 0)).unwrap().transform.translation().x, 4.0);
     }
+}
+
+fn assert_external_copy_state(doc: &Document, frame: NodeId, copied_frame: NodeId) {
     let old = doc.node(child(doc, frame, 0)).unwrap();
     let current = doc.node(child(doc, copied_frame, 0)).unwrap();
     assert!(!old.visible && old.is_mask && old.opacity < 1.0);

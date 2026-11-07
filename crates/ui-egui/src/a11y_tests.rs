@@ -403,3 +403,31 @@ fn the_align_buttons_are_off_for_a_layer_alone_on_the_page() {
     u.app.run("select.set", json!({"ids": [inner]}));
     assert!(!align_left(&tree(&mut u)), "one in a frame aligns to it");
 }
+
+/// Asserts side-panel and Pages edges are not focusable, and Tab never stops on the
+/// side-panel edges.
+#[test]
+fn the_custom_panel_edges_never_enter_the_keyboard_or_focus_order() {
+    // FigCraft's panels are fixed, so egui makes no `panel.__resize` widgets; the draggable edges
+    // are `Id::unique(("panel_edge", ...))`. They sense the pointer but must not be focusable, or
+    // Tab/F6 would stop on an unnamed control.
+    let (mut u, _, _) = setup();
+    let (left, right) = (egui::Id::unique(("panel_edge", "left")), egui::Id::unique(("panel_edge", "right")));
+    // The Pages list's edge has the same contract as the side panels' edges.
+    let pages = egui::Id::unique("pages_edge");
+    for f in [left, right, pages] {
+        let focusable = u.ctx.viewport(|v| v.prev_pass.widgets.get(f).map(|w| w.sense.is_focusable()));
+        assert_eq!(focusable, Some(false), "the panel/pages edge still senses clicks/drags but is not focusable");
+    }
+    let mut seen = Vec::new();
+    for back in [false, true] {
+        f6(&mut u, back);
+        for _ in 0..30 {
+            press(&mut u, Key::Tab, Modifiers::NONE);
+            if let Some(id) = u.ctx.memory(|m| m.focused()) {
+                seen.push(id);
+            }
+        }
+    }
+    assert!(!seen.contains(&left) && !seen.contains(&right), "Tab never stops on a panel edge: {seen:?}");
+}

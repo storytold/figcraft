@@ -11,7 +11,7 @@ use crate::store::Store;
 use crate::test_util::{TempDir, config};
 
 fn args(s: &[&str]) -> Vec<String> {
-    s.iter().map(|a| a.to_string()).collect()
+    s.iter().map(ToString::to_string).collect()
 }
 
 fn run(dir: &std::path::Path, command: Command) -> Result<String, String> {

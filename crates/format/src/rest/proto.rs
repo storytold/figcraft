@@ -4,7 +4,7 @@
 
 use figcraft_doc::proto::{
     Action, ConditionalBlock, DeviceRotation, Direction, Easing, Expr, ExprOp, Interaction, KeyMods, MAX_ACTION_DEPTH, MAX_EXPR_DEPTH, Overflow,
-    OverlayPosition, PrototypeSettings, ScrollPosition, Transition, Trigger, gamepad_button,
+    OverlayAnchor, OverlayPosition, PrototypeSettings, ScrollPosition, Transition, Trigger, gamepad_button,
 };
 use figcraft_doc::{Node, NodeId, VariableType, VariableValue};
 use serde_json::{Value, json};
@@ -228,7 +228,11 @@ impl Ctx<'_> {
         let mapped = match text(a, "type") {
             Some("BACK") => Some(Action::Back),
             Some("CLOSE") => Some(Action::CloseOverlay),
-            Some("URL") => text(a, "url").filter(|u| !u.trim().is_empty()).map(|u| Action::OpenUrl { url: u.chars().take(MAX_URL).collect() }),
+            Some("URL") => text(a, "url").filter(|u| !u.trim().is_empty()).map(|u| Action::OpenUrl {
+                url: u.chars().take(MAX_URL).collect(),
+                // A new tab unless the action says otherwise.
+                new_tab: a.get("openInNewTab").and_then(Value::as_bool).unwrap_or(true),
+            }),
             Some("NODE") => {
                 let mapped = self.node_action(a);
                 if mapped.is_some() && transition.is_none() {
@@ -322,7 +326,7 @@ impl Ctx<'_> {
                     .and_then(|v| Some([num(v, "x")?, num(v, "y")?]))
                     .filter(|o| o.iter().all(|c| c.is_finite()))
                     .map(|o| o.map(|c| c.clamp(-MAX_OFFSET, MAX_OFFSET)));
-                Action::OpenOverlay { dest, position, close_on_outside, background, offset }
+                Action::OpenOverlay { dest, position, close_on_outside, background, offset, anchor: OverlayAnchor::Screen }
             }
             Some(_) => {
                 self.warn("prototype navigations of unknown types were skipped");
@@ -355,7 +359,7 @@ impl Ctx<'_> {
             Some(VariableValue::Number(n)) => json!(n),
             Some(VariableValue::String(s)) => json!(s),
             Some(VariableValue::Boolean(b)) => json!(b),
-            Some(VariableValue::Alias(_)) | None => {
+            Some(VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. }) | None => {
                 self.warn("set-variable actions with values that don't fit the variable were skipped");
                 return None;
             }
@@ -442,8 +446,8 @@ impl Ctx<'_> {
         };
         let vars = &self.doc.variables;
         let found = parts.filter(|(id, _)| self.var_kinds.contains_key(*id)).and_then(|(id, mode)| {
-            let v = vars.get(id)?;
-            let m = vars.collection(&v.collection)?.modes.iter().find(|m| m.id == mode)?;
+            let v = vars.get_by_id(id)?;
+            let m = vars.collection_by_id(&v.collection)?.mode_by_id(mode)?;
             Some(Expr::InMode { variable: v.id.clone(), mode: m.id.clone() })
         });
         if found.is_none() {

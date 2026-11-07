@@ -3,11 +3,15 @@
 use std::collections::BTreeMap;
 
 use figcraft_color::{Color, Paint, PaintKind};
-use figcraft_doc::*;
+use figcraft_doc::ParagraphStyle;
+use figcraft_doc::{
+    Collection, CollectionId, Document, Effect, EffectKind, Mode, ModeId, Node, NodeId, NodeKind, Style, StyleId, StyleKind, TextData, TextStyle,
+    Variable, VariableId, VariableType, VariableValue, Variables, trim_num,
+};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{color_of, f64_of, get, id, num, paints_of, req_string, req_targets, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -50,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "style.bind",
             "Bind variable in style",
-            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>`, a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing` (numbers, px) and `fontFamily|fontStyle` (strings). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
+            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` (glass: `lightAngle|lightIntensity|refraction|depth|dispersion|radius|splay`), a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing` (numbers, px) and `fontFamily|fontStyle` (strings). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
             true,
             bind_style
         ),
@@ -161,21 +165,21 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "variable.create",
             "Create variable",
-            "{collection, name, type: color|number|string|boolean, value (default mode) | values {modeName: value}}",
+            "{collection, name, type: color|number|string|boolean, value (default mode) | values {modeName: value}, description?}  a value may also be {alias: variable} (same type); a colour value may also be {alpha: {variable, opacity 0..1}} (that variable's colour with its alpha replaced by the opacity) or {mix: {from, to, t}} (operands {variable: variable} or {literal: colour}; t is 0..1, 0 gives from and 1 to; blended per channel over the stored values, in the document's colour profile, including alpha; converting the profile keeps a mix's ends exact and moves its colours in between slightly), each alone in its object",
             true,
             var_create
         ),
         spec!(
             "variable.set",
             "Set variable value",
-            "{variable, mode? (name or id; default first), value | {alias: variable} (same type, no loops)}",
+            "{variable, mode? (name or id; default first), value | {alias: variable} (same type, no loops) | {alpha} | {mix} (colour variables; shapes as in variable.create; no loops)}",
             true,
             var_set
         ),
         spec!(
             "variable.delete",
             "Delete variable",
-            "{variable} (bound layers keep their values; variables aliasing it take its values)",
+            "{variable} (bound layers keep their values; variables aliasing it take its values; colour calculations reading it keep the colour they show)",
             true,
             |s, p| {
                 let v = req_string("variable.delete", p, "variable")?;
@@ -193,7 +197,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "variable.bind",
             "Bind variable",
-            "{ids?, field (fill|stroke (first paint)|fills/<i>/color|strokes/<i>/color|fills/<i>/stops/<j>/color (gradient stops)|effects/<i>/<offsetX|offsetY|radius|startRadius|spread|color>|layoutGrids/<i>/<size|count|gutter|offset>|componentProperties/<name> (instances: boolean/text properties; variant properties take string variables naming a value)|width|height|opacity (percent)|cornerRadius|gap|paddingHorizontal|characters|visible|fontSize…; list indices bottom first), variable (null unbinds)}",
+            "{ids?, field (fill|stroke (first paint)|fills/<i>/color|strokes/<i>/color|fills/<i>/stops/<j>/color (gradient stops)|effects/<i>/<offsetX|offsetY|radius|startRadius|spread|color|lightAngle|lightIntensity|refraction|depth|dispersion|splay> (glass: `radius` is its frost; intensity, refraction, dispersion and splay in percent)|layoutGrids/<i>/<size|count|gutter|offset>|componentProperties/<name> (instances: boolean/text properties; variant properties take string variables naming a value)|width|height|opacity (percent)|cornerRadius|gap|paddingHorizontal|characters|visible|fontSize…; list indices bottom first), variable (null unbinds)}",
             true,
             bind
         ),
@@ -258,6 +262,41 @@ fn text_style_of(n: &Node, at: Option<usize>) -> Option<TextStyle> {
     Some(at.map_or(&t.style, |a| t.style_at(a)).as_text_style())
 }
 
+/// What a text style definition from JSON sets at the paragraph level, in the `node.set`
+/// spellings (`paragraphSpacing`, `paragraphIndent`, `listStyle`: none|bulleted|numbered,
+/// `features` or `openTypeFeatures`: `{tag: bool}`); keys left out are the defaults.
+fn paragraph_style_json(cmd: &str, v: &Value) -> Result<ParagraphStyle> {
+    let Value::Object(m) = v else { return Ok(ParagraphStyle::default()) };
+    let mut ps = ParagraphStyle::default();
+    let length =
+        |k: &str, x: &Value| f64_of(x).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 10_000.0)).ok_or_else(|| bad(cmd, format!("{k}: a number")));
+    for (k, x) in m {
+        match k.as_str() {
+            "paragraphSpacing" | "paragraph_spacing" => ps.paragraph_spacing = length(k, x)?,
+            "paragraphIndent" | "paragraph_indent" => ps.paragraph_indent = length(k, x)?,
+            "listStyle" | "list" => ps.list = super::props::enum_of(x).ok_or_else(|| bad(cmd, "listStyle: none|bulleted|numbered"))?,
+            "features" | "openTypeFeatures" | "fontFeatures" | "textFeatures" => {
+                ps.features = super::props::features_of(cmd, x)?.into_iter().filter_map(|(tag, on)| Some((tag, on?))).collect();
+            }
+            _ => {}
+        }
+    }
+    Ok(ps)
+}
+
+/// What a layer's text sets at the paragraph level, the list style being that of the paragraphs
+/// chars `range` touch when given (the layer's when they differ).
+fn paragraph_style_of(n: &Node, range: Option<(usize, usize)>) -> Option<ParagraphStyle> {
+    let t = n.kind.text()?;
+    let mut ps = t.paragraph_style();
+    if let Some((a, b)) = range
+        && let Some(pl) = t.common_para_list(a, b)
+    {
+        ps.list = pl.list;
+    }
+    Some(ps)
+}
+
 fn detach(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "style.detach";
     let which = req_string(cmd, p, "which")?;
@@ -292,7 +331,7 @@ fn kind_from_node(t: &str, n: &Node) -> Option<StyleKind> {
     Some(match t {
         "paint" | "color" | "fill" => StyleKind::Paint { paints: n.fills.clone() },
         "stroke" => StyleKind::Paint { paints: n.strokes.clone() },
-        "text" => StyleKind::Text { style: text_style_of(n, None)? },
+        "text" => StyleKind::Text { style: text_style_of(n, None)?, paragraph: Box::new(paragraph_style_of(n, None)?) },
         "effect" => StyleKind::Effect { effects: n.effects.clone() },
         "grid" => StyleKind::Grid { grids: n.grids.clone() },
         _ => return None,
@@ -314,13 +353,17 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = if let Some(v) = get(p, "value") {
         match t.as_str() {
             "paint" | "color" | "fill" => StyleKind::Paint { paints: paints_of(v).ok_or_else(|| bad(cmd, "value: paints"))? },
-            "text" => StyleKind::Text { style: text_style_json(cmd, v)? },
+            "text" => StyleKind::Text { style: text_style_json(cmd, v)?, paragraph: Box::new(paragraph_style_json(cmd, v)?) },
             "effect" => StyleKind::Effect { effects: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
             "grid" => StyleKind::Grid { grids: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
             _ => return Err(bad(cmd, "type: paint|text|effect|grid")),
         }
-    } else if let Some((tid, a, _)) = range {
-        StyleKind::Text { style: doc.node(tid).and_then(|n| text_style_of(n, Some(a))).ok_or_else(|| bad(cmd, "not a text layer"))? }
+    } else if let Some((tid, a, b)) = range {
+        let n = doc.node(tid).ok_or_else(|| bad(cmd, "not a text layer"))?;
+        StyleKind::Text {
+            style: text_style_of(n, Some(a)).ok_or_else(|| bad(cmd, "not a text layer"))?,
+            paragraph: Box::new(paragraph_style_of(n, Some((a, b))).ok_or_else(|| bad(cmd, "not a text layer"))?),
+        }
     } else {
         let n = from.and_then(|f| doc.node(f)).ok_or_else(|| bad(cmd, "pass `value` or select a layer to take it from"))?;
         kind_from_node(&t, n).ok_or_else(|| bad(cmd, "that layer has no such property"))?
@@ -340,7 +383,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     };
     doc.styles.push(Style { id: sid.clone(), name, description: string(p, "description").unwrap_or_default(), kind: kind.clone(), bound });
     // The source layer (or the selected chars) becomes linked to the new style.
-    if let (Some((tid, a, b)), StyleKind::Text { style }) = (range, &kind) {
+    if let (Some((tid, a, b)), StyleKind::Text { style, .. }) = (range, &kind) {
         if let NodeKind::Text(td) = &mut doc.get_mut(tid)?.kind {
             td.link_text_style(a, b, style, &sid);
         }
@@ -384,11 +427,13 @@ pub fn apply_style_ref(doc: &mut Document, id: NodeId, field: &str, sid: Option<
             n.grids = grids.clone();
             n.styles.grid = Some(id.clone());
         }
-        ("textStyle", Some(Style { kind: StyleKind::Text { style }, id, .. })) => {
-            // Every char takes the style's typography (their fills and links stay).
+        ("textStyle", Some(Style { kind: StyleKind::Text { style, paragraph }, id, .. })) => {
+            // Every char takes the style's typography (their fills and links stay), and the layer
+            // what the style sets at the paragraph level (#1829).
             if let NodeKind::Text(t) = &mut n.kind {
                 let len = t.char_count();
                 t.link_text_style(0, len, style, id);
+                t.take_paragraph_style(paragraph);
             }
             n.styles.text = Some(id.clone());
         }
@@ -413,7 +458,7 @@ pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let st = req_string(cmd, p, "style")?;
     let style = s.doc()?.style(&st).cloned().ok_or_else(|| bad(cmd, format!("no style `{st}`")))?;
     // Text styles go on chars: a range, the selected chars of the edited text, or whole layers.
-    if let StyleKind::Text { style: def } = &style.kind {
+    if let StyleKind::Text { style: def, paragraph } = &style.kind {
         // A text style is no property of other layers: they're left alone.
         let doc = s.doc()?;
         let targets: Vec<TextTarget> =
@@ -427,6 +472,8 @@ pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
                 Some((a, b)) => {
                     if let NodeKind::Text(t) = &mut doc.get_mut(i)?.kind {
                         t.link_text_style(a, b, def, &style.id);
+                        // The list goes to the paragraphs touched; the rest is the layer's.
+                        t.take_paragraph_style_in(a, b, paragraph);
                     }
                 }
                 None => apply_style_ref(doc, i, "textStyle", Some(&style.id))?,
@@ -503,7 +550,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         let cur = doc.styles.get(idx).map(|x| x.kind.type_name()).unwrap_or("paint");
         Some(match cur {
             "paint" => StyleKind::Paint { paints: paints_of(v).ok_or_else(|| bad(cmd, "value: paints"))? },
-            "text" => StyleKind::Text { style: text_style_json(cmd, v)? },
+            "text" => StyleKind::Text { style: text_style_json(cmd, v)?, paragraph: Box::new(paragraph_style_json(cmd, v)?) },
             "effect" => StyleKind::Effect { effects: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
             _ => StyleKind::Grid { grids: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
         })
@@ -648,22 +695,23 @@ fn rename_folder(s: &mut Session, p: &Value) -> Result<Value> {
 /// Re-apply style `sid` to every node (and text chars) linked to it.
 pub fn propagate_style(doc: &mut Document, sid: &str) {
     let text_def = match doc.style(sid).map(|s| &s.kind) {
-        Some(StyleKind::Text { style }) => Some(style.clone()),
+        Some(StyleKind::Text { style, paragraph }) => Some((style.clone(), paragraph.clone())),
         _ => None,
     };
     let ids: Vec<NodeId> = doc.ids().collect();
     for i in ids {
         let Some(n) = doc.node(i) else { continue };
-        if let Some(def) = &text_def {
+        if let Some((def, paragraph)) = &text_def {
             if n.kind.text().is_some_and(|t| t.links_text_style(sid)) {
                 let def = match doc.style(sid).map(|st| crate::style_vars::kind_for(doc, st, i).into_owned()) {
-                    Some(StyleKind::Text { style }) => style,
+                    Some(StyleKind::Text { style, .. }) => style,
                     _ => def.clone(),
                 };
                 if let Ok(n) = doc.get_mut(i)
                     && let NodeKind::Text(t) = &mut n.kind
                 {
                     t.update_text_style(sid, &def);
+                    t.update_paragraph_style(sid, paragraph);
                 }
             }
             continue;
@@ -692,7 +740,16 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
         .styles
         .iter()
         .filter_map(|s| match &s.kind {
-            StyleKind::Text { style } => Some((s.id.clone(), style.clone())),
+            StyleKind::Text { style, .. } => Some((s.id.clone(), style.clone())),
+            _ => None,
+        })
+        .collect();
+    // What each text style sets at the paragraph level (#1829); no variable binds those.
+    let paras: BTreeMap<&str, &ParagraphStyle> = doc
+        .styles
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StyleKind::Text { paragraph, .. } => Some((s.id.as_str(), paragraph.as_ref())),
             _ => None,
         })
         .collect();
@@ -704,7 +761,7 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
         // Styles with bound fields read as this layer sees them.
         let mut defs = std::borrow::Cow::Borrowed(&defs);
         for st in &varying {
-            if let StyleKind::Text { style } = crate::style_vars::kind_for(doc, st, id).into_owned() {
+            if let StyleKind::Text { style, .. } = crate::style_vars::kind_for(doc, st, id).into_owned() {
                 defs.to_mut().insert(st.id.clone(), style);
             }
         }
@@ -714,11 +771,28 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
             && t2.text_style_link() == Some(None)
             && let Some(def) = defs.get(sid)
             && t2.spans().iter().all(|(_, _, s)| s.shows_text_style(def))
+            && paras.get(sid.as_str()).is_some_and(|ps| t2.shows_paragraph_style(ps))
         {
             let len = t2.char_count();
             t2.restyle(0, len, |s| s.style_id = Some(sid.clone()));
         }
         t2.check_text_styles(|sid| defs.get(sid));
+        // Chars whose paragraphs left their style's list, and every char of a layer whose
+        // paragraph spacing, indent or features were edited, unlink too (#1829).
+        let gone: Vec<(usize, usize)> = t2
+            .spans()
+            .iter()
+            .filter(|(a, b, s)| {
+                // A style with no paragraph values (every style in older files) asks nothing of them.
+                s.style_id
+                    .as_deref()
+                    .is_some_and(|sid| paras.get(sid).is_none_or(|ps| **ps != ParagraphStyle::default() && !t2.shows_paragraph_style_in(*a, *b, ps)))
+            })
+            .map(|(a, b, _)| (*a, *b))
+            .collect();
+        for (a, b) in gone {
+            t2.unlink_text_style(a, b);
+        }
         let link = t2.text_style_link().flatten().map(str::to_string);
         if t2 != *t || link != n.styles.text {
             updates.push((id, link, t2));
@@ -772,13 +846,23 @@ pub fn bind(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => Some(doc.variables.get(v).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such variable"))?),
         None => None,
     };
+    bind_variable(cmd, doc, &ids, &field, vid.as_deref())?;
+    ok()
+}
+
+/// Bind an already resolved variable id, or unbind, inside the caller's transaction. Props and
+/// `variable.bind` share type checks and paint alpha handling; normalisation applies the value.
+pub(crate) fn bind_variable(cmd: &str, doc: &mut Document, ids: &[NodeId], field: &str, vid: Option<&str>) -> Result<()> {
     // An instance's component property takes a variable of its type; other fields the types their
     // scopes belong to.
-    if let Some(v) = vid.as_ref().and_then(|v| doc.variables.get(v)) {
-        for i in &ids {
+    if let Some(v) = vid.and_then(|v| doc.variables.get_by_id(v)) {
+        for i in ids {
             match field.strip_prefix(crate::components::PROP_BINDING) {
                 Some(name) => super::component::check_prop_binding(doc, *i, name, v.kind).map_err(|e| bad(cmd, e))?,
-                None if !super::variables::field_takes(doc, *i, &field, v.kind) => {
+                None if !super::variables::has_field(doc, *i, field) => {
+                    return Err(bad(cmd, format!("the layer has no field `{field}` to bind")));
+                }
+                None if !super::variables::field_takes(doc, *i, field, v.kind) => {
                     return Err(bad(cmd, format!("`{field}` doesn't take a {} variable", v.kind.id())));
                 }
                 None => {}
@@ -786,28 +870,38 @@ pub fn bind(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     for i in ids {
-        let n = doc.get_mut(i)?;
-        match &vid {
+        let n = doc.get_mut(*i)?;
+        match vid {
             Some(v) => {
-                if n.bound.get(&field) != Some(v) {
-                    rebind_paint_alpha(&mut n.fills, &mut n.strokes, &field, true);
+                if n.bound.get(field).map(String::as_str) != Some(v) {
+                    rebind_paint_alpha(&mut n.fills, &mut n.strokes, field, true);
                 }
-                n.bound.insert(field.clone(), v.clone());
+                n.bound.insert(field.to_string(), v.to_string());
             }
             None => {
-                if n.bound.remove(&field).is_some() {
-                    rebind_paint_alpha(&mut n.fills, &mut n.strokes, &field, false);
+                if n.bound.remove(field).is_some() {
+                    rebind_paint_alpha(&mut n.fills, &mut n.strokes, field, false);
                 }
             }
         }
     }
-    ok()
+    Ok(())
 }
 
-/// A colour variable bound to a solid paint owns its whole colour, alpha included. Binding restarts
-/// the opacity (which holds the alpha a typed colour had, see `Paint::solid`) at 1, so the
-/// variable's alpha applies once; unbinding moves the colour's alpha back into the opacity, where a
-/// typed colour keeps it. An opacity set while bound multiplies on top and stays.
+/// Remove every binding key of the slot (`fill` and `fills/0/color` name the same one); true when
+/// one was there.
+pub(crate) fn unbind_slot(n: &mut figcraft_doc::Node, fills: bool, index: usize) -> bool {
+    use super::lists::{BoundList, list_binding};
+    let list = if fills { BoundList::Fills } else { BoundList::Strokes };
+    let before = n.bound.len();
+    n.bound.retain(|key, _| list_binding(key).is_none_or(|(l, i, field)| !(l == list && i == index && field == "color")));
+    n.bound.len() != before
+}
+
+/// A colour variable bound to a solid paint owns its whole colour, alpha included. Binding takes the
+/// alpha a typed colour had (see `Paint::solid`) out of the opacity, so the variable's alpha applies
+/// once; an opacity set on its own, before or while bound, multiplies on top and stays. Unbinding
+/// moves the colour's alpha back into the opacity, where a typed colour keeps it.
 pub(crate) fn rebind_paint_alpha(fills: &mut [Paint], strokes: &mut [Paint], field: &str, bind: bool) {
     use super::lists::{BoundList, list_binding};
     let Some((list, i, "color")) = list_binding(field) else { return };
@@ -819,7 +913,14 @@ pub(crate) fn rebind_paint_alpha(fills: &mut [Paint], strokes: &mut [Paint], fie
     if let Some(p) = paints.get_mut(i)
         && let PaintKind::Solid { color } = &mut p.kind
     {
-        p.opacity = if bind { 1.0 } else { p.opacity * color.a };
+        if bind {
+            // What's left is the opacity set on its own (unknown under a colour alpha of 0: 1).
+            p.opacity = if p.color_alpha > 0.0 { (p.opacity / p.color_alpha).clamp(0.0, 1.0) } else { 1.0 };
+            p.color_alpha = 1.0;
+        } else {
+            p.opacity *= color.a;
+            p.color_alpha *= color.a;
+        }
         color.a = 1.0;
     }
 }
@@ -854,18 +955,31 @@ pub fn set_mode(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
-fn var_value(kind: VariableType, v: &Value) -> Option<VariableValue> {
-    if let Some(a) = v.get("alias").and_then(Value::as_str) {
-        return Some(VariableValue::Alias(a.to_string()));
+/// A `value`/`values` entry of `kind`: a plain value of that type, `{alias: variable}`, or (colour
+/// variables) an `{alpha}`/`{mix}` calculation. An alias stays a name here — the caller binds it to
+/// an id; a calculation binds its own operands as they are checked. `for_id` is the variable being
+/// set when it already exists (a calculation may not lead back to it).
+fn var_value(cmd: &str, vars: &Variables, kind: VariableType, for_id: Option<&VariableId>, v: &Value) -> Result<VariableValue> {
+    // Calculations first: they refuse sibling keys, so `{alias, alpha}` is an error rather than
+    // quietly one of the two.
+    if v.get("alpha").is_some() || v.get("mix").is_some() {
+        return super::variables::colour_calc(cmd, vars, kind, for_id, v);
     }
-    Some(match kind {
-        VariableType::Color => VariableValue::Color(color_of(v)?),
-        VariableType::Number => VariableValue::Number(f64_of(v)?),
+    if let Some(a) = v.get("alias").and_then(Value::as_str) {
+        return Ok(VariableValue::Alias(a.to_string()));
+    }
+    Ok(match kind {
+        VariableType::Color => VariableValue::Color(color_of(v).ok_or_else(|| bad(cmd, "invalid value"))?),
+        VariableType::Number => VariableValue::Number(f64_of(v).ok_or_else(|| bad(cmd, "invalid value"))?),
         VariableType::String => VariableValue::String(v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())),
-        VariableType::Boolean => VariableValue::Boolean(v.as_bool()?),
+        VariableType::Boolean => VariableValue::Boolean(v.as_bool().ok_or_else(|| bad(cmd, "invalid value"))?),
     })
 }
 
+/// `variable.create`: a variable with a value for every mode of its collection (`values` by mode,
+/// then `value` for the modes left, then its type's default). Every value is checked before the
+/// variable exists (alias targets, calculation operands, the 32-variable limit), so a refused one
+/// leaves nothing behind.
 fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.create";
     let c = req_string(cmd, p, "collection")?;
@@ -888,11 +1002,11 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
                 .find(|x| x.id == *mode || x.name == *mode)
                 .map(|x| x.id.clone())
                 .ok_or_else(|| bad(cmd, format!("no mode `{mode}`")))?;
-            values.insert(mid, var_value(kind, v).ok_or_else(|| bad(cmd, "invalid value"))?);
+            values.insert(mid, var_value(cmd, &doc.variables, kind, None, v)?);
         }
     }
     if let Some(v) = get(p, "value") {
-        let val = var_value(kind, v).ok_or_else(|| bad(cmd, "invalid value"))?;
+        let val = var_value(cmd, &doc.variables, kind, None, v)?;
         for m in &coll.modes {
             values.entry(m.id.clone()).or_insert_with(|| val.clone());
         }
@@ -908,6 +1022,10 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
             let t = doc.variables.get(a).filter(|t| t.kind == kind).ok_or_else(|| bad(cmd, format!("no {} variable `{a}` to alias", kind.id())))?;
             *a = t.id.clone();
         }
+    }
+    // The new variable has no id yet and nothing reads it, so any stand-in id will do.
+    for (m, val) in &values {
+        super::variables::check_resolves(cmd, &doc.variables, "", &coll.id, m, val)?;
     }
     let id = doc.new_variable_id();
     doc.variables.variables.push(Variable {
@@ -926,20 +1044,26 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": id}))
 }
 
+/// `variable.set`: one mode's value (the default mode when none is named), checked against the
+/// variable as it stands before anything changes: an alias or calculation may not lead back to it,
+/// and a calculation must fit the 32-variable limit. On a variable an extended collection inherits,
+/// the value becomes that mode's override.
 pub fn var_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.set";
     let v = req_string(cmd, p, "variable")?;
     let doc = s.doc_mut()?;
     let var = doc.variables.get(&v).cloned().ok_or_else(|| bad(cmd, "no such variable"))?;
-    let coll = doc.variables.collection(&var.collection).cloned().ok_or_else(|| bad(cmd, "variable has no collection"))?;
+    let coll = doc.variables.collection_by_id(&var.collection).cloned().ok_or_else(|| bad(cmd, "variable has no collection"))?;
     let mode = match string(p, "mode") {
-        Some(m) => coll.modes.iter().find(|x| x.id == m || x.name == m).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such mode"))?,
+        Some(m) => coll.find_mode(&m).map(|x| x.id.clone()).ok_or_else(|| bad(cmd, "no such mode"))?,
         None => coll.default_mode().cloned().ok_or_else(|| bad(cmd, "collection has no modes"))?,
     };
-    let val = match get(p, "value").and_then(|x| var_value(var.kind, x)).ok_or_else(|| bad(cmd, "invalid value"))? {
+    let raw = get(p, "value").ok_or_else(|| bad(cmd, "invalid value"))?;
+    let val = match var_value(cmd, &doc.variables, var.kind, Some(&var.id), raw)? {
         VariableValue::Alias(a) => VariableValue::Alias(super::variables::alias_target(&doc.variables, &var, &a).map_err(|e| bad(cmd, e))?),
         v => v,
     };
+    super::variables::check_resolves(cmd, &doc.variables, &var.id, &var.collection, &mode, &val)?;
     if let Some(slot) = doc.variables.variables.iter_mut().find(|x| x.id == var.id) {
         // An inherited variable's value of its own overrides the inherited one in that mode.
         if slot.extends.is_some() {
@@ -1002,8 +1126,8 @@ fn bound_field(n: &Node, field: &str) -> Option<String> {
     let cl = &n.child_layout;
     let pad = |i: usize| layout.and_then(|l| l.padding.get(i).copied());
     Some(match field {
-        "width" => format!("{}", n.width),
-        "height" => format!("{}", n.height),
+        "width" | "w" => format!("{}", n.width),
+        "height" | "h" => format!("{}", n.height),
         "minWidth" => format!("{:?}", cl.min_w),
         "maxWidth" => format!("{:?}", cl.max_w),
         "minHeight" => format!("{:?}", cl.min_h),
@@ -1179,7 +1303,8 @@ fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::B
                 VariableValue::Number(x) => json!(x),
                 VariableValue::String(x) => json!(x),
                 VariableValue::Boolean(b) => json!(b),
-                VariableValue::Alias(_) => continue,
+                // Resolved values are plain, so these never occur here.
+                VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => continue,
             };
             sets.insert(field, jv);
         }
@@ -1226,7 +1351,14 @@ pub(crate) fn set_paint_color(list: &mut Vec<Paint>, i: usize, stop: Option<usiz
             }
         }
         (Some(p), None) => p.kind = PaintKind::Solid { color: c },
-        (None, None) if i == 0 => list.push(Paint::solid(c)),
+        (None, None) if i == 0 => {
+            // A bound colour owns its alpha, so the new paint keeps it out of the opacity.
+            let mut p = Paint::solid(c);
+            p.kind = PaintKind::Solid { color: c };
+            p.opacity = 1.0;
+            p.color_alpha = 1.0;
+            list.push(p);
+        }
         (None, _) => {}
     }
 }
@@ -1246,6 +1378,9 @@ pub(crate) fn set_effect_field(effects: &mut [Effect], i: usize, prop: &str, val
         (EffectKind::DropShadow(s) | EffectKind::InnerShadow(s), "color", _, VariableValue::Color(c)) => s.color = *c,
         (EffectKind::LayerBlur(b) | EffectKind::BackgroundBlur(b), "radius", Some(x), _) => b.radius = x.max(0.0),
         (EffectKind::LayerBlur(b) | EffectKind::BackgroundBlur(b), "startRadius", Some(x), _) => b.start_radius = x.max(0.0),
+        (EffectKind::Glass(g), field, Some(x), _) => {
+            g.set_bound(field, x);
+        }
         _ => {}
     }
 }

@@ -67,6 +67,19 @@ fn images_past_the_byte_budget_are_left_out_and_reported() {
 }
 
 #[test]
+fn images_past_the_budget_are_counted_and_stay_in_the_file() {
+    let (bytes, _, total) = file_with_images(3);
+    let loaded = load_within(&bytes, ImageBudget { images: 100, bytes: total - 1 }).unwrap();
+    assert_eq!(loaded.images_past_budget, 1);
+    assert!(loaded.issues.iter().any(|i| i.contains("stays in the file")), "{:?}", loaded.issues);
+    assert!(!loaded.issues.iter().any(|i| i.contains("drops it")), "{:?}", loaded.issues);
+    let counted = load_within(&bytes, ImageBudget { images: 2, bytes: u64::MAX }).unwrap();
+    assert_eq!(counted.images_past_budget, 1);
+    let within = load_within(&bytes, ImageBudget { images: 3, bytes: total }).unwrap();
+    assert_eq!(within.images_past_budget, 0);
+}
+
+#[test]
 fn images_past_the_count_budget_are_left_out_and_reported() {
     let (bytes, _, _) = file_with_images(4);
     let loaded = load_within(&bytes, ImageBudget { images: 3, bytes: u64::MAX }).unwrap();

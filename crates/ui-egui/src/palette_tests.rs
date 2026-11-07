@@ -113,7 +113,10 @@ fn rows(groups: &[(String, Vec<crate::menus::ActionRow>)]) -> Vec<&crate::menus:
 #[test]
 fn search_covers_every_command() {
     let menu = figcraft_engine::catalog::MENU;
-    let spec = figcraft_engine::all_commands().iter().find(|c| !menu.iter().any(|m| m.id == c.id)).expect("a command no menu lists");
+    let spec = figcraft_engine::all_commands()
+        .iter()
+        .find(|c| !menu.iter().any(|m| m.id == c.id) && !figcraft_engine::cmd::needs_params(c.id))
+        .expect("a command no menu lists that runs without parameters");
     let groups = crate::menus::command_sections(spec.id);
     let key = format!("command:{}", spec.id);
     let group = groups.iter().find(|(_, rows)| rows.iter().any(|r| r.key == key)).map(|(g, _)| g.as_str());
@@ -160,4 +163,56 @@ fn arrows_move_the_highlight_and_enter_runs_it() {
     key(&mut u, Key::Enter);
     assert!(u.app.ui.palette.is_none(), "Enter runs a row and closes the palette");
     assert_eq!(u.app.session.prefs.recent_actions.first(), Some(&want), "the highlighted row ran");
+}
+
+/// A trackpad tap sends the press and the release in one frame; the press must not close a
+/// context menu the release just opened, but a later outside press still does.
+#[test]
+fn context_menu_survives_a_same_frame_tap() {
+    let mut u = Ui::new(Session::new());
+    let p = Pos2::new(1000.0, 600.0);
+    let b = |pressed| Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+    u.frame(vec![Event::PointerMoved(p), b(true), b(false)]);
+    assert!(u.app.ui.context_menu.is_some(), "the opening tap's press is spared");
+    u.frame(vec![]);
+    assert!(u.app.ui.context_menu.is_some(), "the menu stays open");
+    // A second tap elsewhere while the menu is open replaces it and survives too.
+    let q = Pos2::new(600.0, 400.0);
+    let b2 = |pressed| Event::PointerButton { pos: q, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+    u.frame(vec![Event::PointerMoved(q), b2(true), b2(false)]);
+    u.frame(vec![]);
+    assert!(u.app.ui.context_menu.is_some(), "a repeat tap keeps the replaced menu open");
+    let far = Pos2::new(100.0, 100.0);
+    u.button(far, true);
+    u.button(far, false);
+    assert!(u.app.ui.context_menu.is_none(), "a later outside press closes the menu");
+}
+
+/// Every row a search for `q` offers: (key, label).
+fn offered(q: &str) -> Vec<(String, String)> {
+    crate::menus::command_sections(q).into_iter().flat_map(|(_, rows)| rows.into_iter().map(|r| (r.key, r.label))).collect()
+}
+
+#[test]
+fn a_search_offers_only_what_runs_and_one_row_per_label() {
+    // Place image runs what the menu item does (the file dialog); the command that needs the
+    // image's data or path isn't offered on its own (#1574).
+    let found = offered("place image");
+    assert!(found.iter().any(|(k, _)| k == "command:file.placeImage"), "{found:?}");
+    assert!(!found.iter().any(|(k, _)| k == "command:image.place"), "{found:?}");
+    // Generally: no row needs parameters a palette run can't give unless a menu item runs it, and
+    // a row no menu item gives doesn't read like another row.
+    for q in ["place", "image", "comment", "tool", "export", "page", "a"] {
+        let found = offered(q);
+        let same = |l: &str| l.trim().trim_end_matches(['…', '.']).trim_end().to_lowercase();
+        for (key, label) in &found {
+            let id = key.trim_start_matches("command:");
+            if figcraft_engine::catalog::MENU.iter().any(|m| m.id == id) {
+                continue;
+            }
+            assert!(!figcraft_engine::cmd::needs_params(id), "{q:?} offers {id}, which needs parameters");
+            let twins = found.iter().filter(|(_, l)| same(l) == same(label)).count();
+            assert_eq!(twins, 1, "{q:?} offers {label:?} twice: {found:?}");
+        }
+    }
 }

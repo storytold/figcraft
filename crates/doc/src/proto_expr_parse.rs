@@ -88,16 +88,16 @@ impl Expr {
             return Err("The expression is nested too deeply".into());
         }
         let (op, args) = match self {
-            Expr::Value(VariableValue::Alias(id)) => return vars.get(id).map(|v| v.kind).ok_or_else(|| format!("No variable `{id}`")),
+            Expr::Value(VariableValue::Alias(id)) => return vars.get_by_id(id).map(|v| v.kind).ok_or_else(|| format!("No variable `{id}`")),
             Expr::Value(VariableValue::Number(n)) if !n.is_finite() => return Err("Numbers must be finite".into()),
             Expr::Value(v) => return v.type_of().ok_or_else(|| "Not a value".to_string()),
             Expr::Mode { collection } => {
-                return vars.collection(collection).map(|_| T::String).ok_or_else(|| format!("No variable collection `{collection}`"));
+                return vars.collection_by_id(collection).map(|_| T::String).ok_or_else(|| format!("No variable collection `{collection}`"));
             }
             Expr::InMode { variable, mode } => {
-                let v = vars.get(variable).ok_or_else(|| format!("No variable `{variable}`"))?;
-                let c = vars.collection(&v.collection).ok_or_else(|| format!("No variable collection `{}`", v.collection))?;
-                return c.find_mode(mode).map(|_| v.kind).ok_or_else(|| format!("{} has no mode `{mode}`", c.name));
+                let v = vars.get_by_id(variable).ok_or_else(|| format!("No variable `{variable}`"))?;
+                let c = vars.collection_by_id(&v.collection).ok_or_else(|| format!("No variable collection `{}`", v.collection))?;
+                return c.mode_by_id(mode).map(|_| v.kind).ok_or_else(|| format!("{} has no mode `{mode}`", c.name));
             }
             Expr::Op { op, args } => (*op, args),
         };
@@ -459,15 +459,18 @@ impl Parser<'_> {
                 if self.at_keyword("mode") && self.next_after(4) == Some('(') {
                     return self.mode_of();
                 }
-                if let Some((id, n)) = self.variable_here() {
-                    self.i += n;
-                    return self.in_mode(id);
-                }
+                let var = self.variable_here();
+                // A bare `true`/`false` is the literal, also when a variable has that name (it reads
+                // as `{true}`); longer names that start with it ("true value") stay variables.
                 for (word, v) in [("true", true), ("false", false)] {
-                    if self.at_keyword(word) {
+                    if self.at_keyword(word) && var.as_ref().is_none_or(|(_, n)| *n <= word.len()) {
                         self.i += word.len();
                         return Ok(Expr::Value(VariableValue::Boolean(v)));
                     }
+                }
+                if let Some((id, n)) = var {
+                    self.i += n;
+                    return self.in_mode(id);
                 }
                 let word: String = self.s.iter().skip(self.i).take_while(|c| ident(**c)).collect();
                 if word.is_empty() { Err(self.err(format!("Unexpected {c}"))) } else { Err(self.err(format!("No variable `{word}`"))) }
@@ -498,7 +501,7 @@ impl Parser<'_> {
         self.i += 1;
         let start = self.i;
         let name = self.argument(']', "mode")?;
-        let coll = self.vars.get(&var).and_then(|v| self.vars.collection(&v.collection));
+        let coll = self.vars.get_by_id(&var).and_then(|v| self.vars.collection_by_id(&v.collection));
         match coll.and_then(|c| c.find_mode(&name)) {
             Some(m) => Ok(Expr::InMode { variable: var, mode: m.id.clone() }),
             None => {

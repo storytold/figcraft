@@ -60,10 +60,13 @@ fn arrows_and_deletes_step_over_whole_clusters() {
     key(&mut s, "Right", true, false, false).unwrap();
     assert_eq!(caret(&s), (1, 6));
     key(&mut s, "Left", false, false, false).unwrap();
-    // Delete and Backspace remove a whole cluster.
+    // Delete removes a whole cluster; Backspace takes a letter's marks one at a time (#1220) and
+    // an emoji cluster whole.
     key(&mut s, "Delete", false, false, false).unwrap();
     assert_eq!(chars(&s, t), "ab\u{1F1EF}\u{1F1F5}e\u{0301}");
     key(&mut s, "Right", false, false, true).unwrap(); // to the end
+    key(&mut s, "Backspace", false, false, false).unwrap();
+    assert_eq!(chars(&s, t), "ab\u{1F1EF}\u{1F1F5}e");
     key(&mut s, "Backspace", false, false, false).unwrap();
     assert_eq!(chars(&s, t), "ab\u{1F1EF}\u{1F1F5}");
     key(&mut s, "Backspace", false, false, false).unwrap();
@@ -134,6 +137,63 @@ fn ime_composition_with_cjk() {
     assert!(s.ds().unwrap().text_edit.as_ref().unwrap().preedit.is_none());
 }
 
+/// Asserts `delete_surrounding_bytes` removes an exact UTF-8 byte range across CJK and a
+/// supplementary emoji, leaves nothing past the start, and the whole edit is one undo step.
+#[test]
+fn ime_delete_surrounding_bytes_is_exact_and_one_undo_step() {
+    // 0.37's `DeleteSurroundingBytes` counts UTF-8 bytes around the selection, before the paired
+    // commit. Multibyte CJK and a supplementary emoji must be removed exactly, not as tofu or
+    // extended to grapheme clusters, and the whole edit remains one undo step.
+    let mut s = Session::new();
+    let t = text(&mut s, "ab\u{4F60}\u{597D}c\u{1F600}d", json!({"fontSize": 24}));
+    begin(&mut s, t, Some(4), false).unwrap();
+    assert!(crate::textedit::delete_surrounding_bytes(&mut s, 6, 1).unwrap(), "你好 before and c after");
+    assert_eq!(chars(&s, t), "ab\u{1F600}d");
+    assert_eq!(caret(&s), (2, 2));
+    crate::textedit::set_caret(&mut s, 3, false).unwrap();
+    assert!(crate::textedit::delete_surrounding_bytes(&mut s, 4, 0).unwrap(), "the emoji is four bytes");
+    assert_eq!(chars(&s, t), "abd");
+    assert_eq!(caret(&s), (2, 2));
+    // Past the start of the text: nothing more to delete, not an error.
+    assert!(!crate::textedit::delete_surrounding_bytes(&mut s, 0, 0).unwrap());
+    crate::textedit::end(&mut s).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(chars(&s, t), "ab\u{4F60}\u{597D}c\u{1F600}d", "one undo restores the whole session");
+}
+
+/// Asserts a byte range that only partly covers a character leaves it in place, while an
+/// exact range deletes it, and a selection survives for the paired commit with its
+/// direction preserved.
+#[test]
+fn ime_delete_surrounding_bytes_keeps_partial_characters_and_selection() {
+    // The fork deletes the byte range exactly and leaves a character the range only partly
+    // covers. FigCraft's editor counts characters with the same rule (mirroring egui's
+    // `surrounding_bytes_to_chars`), including around a selection.
+    let mut s = Session::new();
+    let t = text(&mut s, "\u{e9}x\u{1F600}", json!({"fontSize": 24}));
+    let del = |s: &mut Session, b: usize, a: usize| crate::textedit::delete_surrounding_bytes(s, b, a).unwrap();
+    begin(&mut s, t, Some(1), false).unwrap();
+    assert!(!del(&mut s, 1, 0), "one byte ends inside 'é' (two bytes): leave it");
+    assert_eq!(chars(&s, t), "\u{e9}x\u{1F600}");
+    crate::textedit::set_caret(&mut s, 2, false).unwrap();
+    assert!(!del(&mut s, 0, 2), "two bytes start inside the four-byte emoji: leave it");
+    assert_eq!(chars(&s, t), "\u{e9}x\u{1F600}");
+    assert!(del(&mut s, 0, 4), "its four bytes cover it exactly");
+    assert_eq!(chars(&s, t), "\u{e9}x");
+    assert_eq!(caret(&s), (2, 2));
+    // Complete bytes before the selection go; a character the range only partly covers stays,
+    // and the selection itself is kept for the paired commit.
+    crate::textedit::set_caret(&mut s, 1, false).unwrap();
+    crate::textedit::set_caret(&mut s, 1, true).unwrap();
+    crate::textedit::set_caret(&mut s, 2, true).unwrap();
+    assert!(del(&mut s, 2, 2), "é before (two bytes); two bytes start inside the four-byte emoji");
+    // The selected 'x' is kept for the paired commit, as in stock `TextEdit`; the caret moves left
+    // with the deleted prefix and the selection direction is preserved.
+    assert_eq!(chars(&s, t), "x");
+    assert_eq!(caret(&s), (0, 1));
+    crate::textedit::end(&mut s).unwrap();
+}
+
 #[test]
 fn vertical_trim_through_node_set() {
     let mut s = Session::new();
@@ -177,20 +237,19 @@ fn vertical_trim_through_node_set() {
 
 #[test]
 fn paragraph_indent_only_moves_left_aligned_text() {
+    figcraft_text::scan_system_fonts();
     let mut s = Session::new();
     let t = text(&mut s, "Indented paragraph", json!({"fontSize": 20, "paragraphIndent": 30}));
     let first_x = |s: &Session| {
         let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
-        (l.glyphs.first().map_or(0.0, |g| g.x), l.width)
+        (l.glyphs.first().map(|g| g.x), l.width)
     };
-    let (x, w) = first_x(&s);
-    if w <= 0.0 {
-        return;
-    }
+    // Without any font there are no glyphs, but the indent alone still gives the box a width.
+    let (Some(x), w) = first_x(&s) else { return };
     assert!((x - 30.0).abs() < 1e-6, "left: indented");
     s.execute("node.set", &json!({"id": t, "props": {"textAlign": "center"}})).unwrap();
     let (x, w2) = first_x(&s);
-    assert!((w2 - (w - 30.0)).abs() < 1e-6 && x.abs() < 1e-6, "centered auto-width text: no indent, the box shrinks by it");
+    assert!((w2 - (w - 30.0)).abs() < 1e-6 && x.is_some_and(|x| x.abs() < 1e-6), "centered auto-width text: no indent, the box shrinks by it");
 }
 
 /// A new text made with the Text tool by a press at `from`, a drag to `to` and a release, holding
@@ -228,4 +287,590 @@ fn a_drag_with_the_text_tool_makes_a_fixed_size_box() {
     // A flat drag still makes a box one line tall.
     let (b3, _) = text_tool((100.0, 100.0), (180.0, 101.0), "A");
     assert_eq!((b3.width(), b3.height()), (80.0, line.height()));
+}
+
+#[test]
+fn new_text_starts_in_the_builds_default_font() {
+    // `text.create` without a fontFamily and a click with the Text tool both start in
+    // `figcraft_doc::DEFAULT_FONT` (Inter, unless the build names another with
+    // `FIGCRAFT_DEFAULT_FONT`), and the family is written with the text.
+    use crate::tools::{PointerEvent, PointerKind, ToolId};
+    let mut s = Session::new();
+    let made = text(&mut s, "Text", json!({}));
+    s.set_tool(ToolId::Text);
+    s.pointer(&PointerEvent::at(PointerKind::Down, 300.0, 300.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 300.0, 300.0, 1.0)).unwrap();
+    crate::textedit::insert(&mut s, "Tool").unwrap();
+    let typed = s.ds().unwrap().text_edit.as_ref().unwrap().id;
+    assert_ne!(made, typed);
+    let doc = s.doc().unwrap();
+    for t in [made, typed] {
+        let td = doc.node(t).unwrap().kind.text().unwrap();
+        assert_eq!(td.style.font_family, figcraft_doc::DEFAULT_FONT);
+        assert_eq!(serde_json::to_value(td).unwrap()["style"]["font_family"], figcraft_doc::DEFAULT_FONT);
+    }
+}
+
+fn resize_mode(s: &Session, t: NodeId) -> figcraft_doc::TextAutoResize {
+    s.doc().unwrap().node(t).unwrap().kind.text().unwrap().auto_resize
+}
+
+#[test]
+fn a_truncated_text_keeps_truncating_when_its_box_is_resized() {
+    // #1376: a truncating text is already fixed both ways, so an explicit size changes its box only.
+    use figcraft_doc::TextAutoResize;
+    let mut s = Session::new();
+    let t = text(&mut s, "Lorem consectetur", json!({"textAutoResize": "truncate", "width": 100, "height": 24}));
+    assert_eq!(resize_mode(&s, t), TextAutoResize::Truncate);
+    for (cmd, p, why) in [
+        ("node.set", json!({"id": t, "props": {"height": 24}}), "node.set height (the value it has)"),
+        ("node.set", json!({"id": t, "props": {"width": 120, "height": 30}}), "node.set width and height"),
+        ("transform.resize", json!({"ids": [t], "height": 40}), "transform.resize height"),
+        ("transform.resize", json!({"ids": [t], "width": 90}), "transform.resize width"),
+        ("node.set", json!({"id": t, "props": {"sizingV": "fixed"}}), "fixed vertical sizing"),
+    ] {
+        s.execute(cmd, &p).unwrap();
+        assert_eq!(resize_mode(&s, t), TextAutoResize::Truncate, "{why}");
+    }
+    // Text that doesn't truncate still turns fixed size.
+    let plain = text(&mut s, "Lorem consectetur", json!({"textAutoResize": "height", "width": 100}));
+    s.execute("node.set", &json!({"id": plain, "props": {"height": 24}})).unwrap();
+    assert_eq!(resize_mode(&s, plain), TextAutoResize::None);
+}
+
+#[test]
+fn max_lines_on_auto_height_text_hugs_that_many_lines() {
+    // #1377: an auto-height text with max lines grows up to that many lines and ends in an
+    // ellipsis; the layer reports its max lines.
+    use figcraft_doc::TextAutoResize;
+    figcraft_text::scan_system_fonts();
+    let mut s = Session::new();
+    let t = text(&mut s, "Lorem ipsum dolor sit amet consectetur", json!({"fontSize": 16, "lineHeight": 24}));
+    s.execute("node.set", &json!({"id": t, "props": {"textAutoResize": "height", "width": 100}})).unwrap();
+    assert!(crate::inspect::node_json(s.doc().unwrap(), t, 0).get("maxLines").is_none(), "no limit: not reported");
+    // Wrapping needs a font (CI may have none).
+    if size(&s, t).1 < 48.0 {
+        return;
+    }
+    s.execute("text.maxLines", &json!({"ids": [t], "lines": 1})).unwrap();
+    assert_eq!(resize_mode(&s, t), TextAutoResize::Height, "max lines keep auto height");
+    assert_eq!(size(&s, t), (100.0, 24.0), "one line tall");
+    assert_eq!(crate::inspect::node_json(s.doc().unwrap(), t, 0)["maxLines"], json!(1));
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 2}})).unwrap();
+    assert_eq!(size(&s, t).1, 48.0, "two lines tall");
+    // No limit: it grows to all of its lines again.
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 0}})).unwrap();
+    assert!(size(&s, t).1 > 48.0);
+    // An explicit height on a text that truncates makes a truncating box.
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 1}})).unwrap();
+    s.execute("node.set", &json!({"id": t, "props": {"height": 30}})).unwrap();
+    assert_eq!((resize_mode(&s, t), size(&s, t).1), (TextAutoResize::Truncate, 30.0));
+    // Fixed-size text still becomes a truncating box with max lines.
+    let fixed = text(&mut s, "Lorem", json!({"textAutoResize": "none", "width": 100, "height": 100}));
+    s.execute("text.maxLines", &json!({"ids": [fixed], "lines": 2})).unwrap();
+    assert_eq!(resize_mode(&s, fixed), TextAutoResize::Truncate);
+}
+
+#[test]
+fn text_direction_is_forced_per_paragraph() {
+    // Add right-to-left text: "By default, Figma automatically handles text direction based on
+    // language detection. However, controls are available to override text direction per
+    // paragraph" ("Go to Text > Text direction. Select Left to right or Right to left.").
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "abc def\nghi\njkl", json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24}));
+    let rtl = |s: &Session| -> Vec<bool> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.lines.iter().map(|l| l.rtl).collect()
+    };
+    let inspect = |s: &Session| crate::inspect::node_json(s.doc().unwrap(), t, 0);
+    assert_eq!(rtl(&s), [false, false, false], "Latin letters read left to right");
+    assert!(inspect(&s).get("textDirection").is_none() && inspect(&s).get("lineDirections").is_none());
+    // The layer's paragraphs at once, by the command or `node.set`; inspect reports the one
+    // direction they share, and Dev Mode's CSS has it.
+    s.execute("text.direction", &json!({"ids": [t], "direction": "rtl"})).unwrap();
+    assert_eq!(rtl(&s), [true, true, true], "forced right to left whatever the letters");
+    assert_eq!(inspect(&s)["textDirection"], json!("rtl"));
+    let css = |s: &mut Session| s.execute("inspect.code", &json!({"id": t})).unwrap()["code"].as_str().unwrap().to_string();
+    assert!(css(&mut s).contains("direction: rtl;"), "{}", css(&mut s));
+    assert!(css(&mut s).contains("text-align: left;"), "Left stays the left edge, which `start` would not be: {}", css(&mut s));
+    s.execute("node.set", &json!({"id": t, "props": {"textDirection": "ltr"}})).unwrap();
+    assert_eq!(rtl(&s), [false, false, false]);
+    assert_eq!(inspect(&s)["textDirection"], json!("ltr"));
+    assert!(css(&mut s).contains("direction: ltr;"));
+    s.execute("text.directionAuto", &json!({"ids": [t]})).unwrap();
+    assert!(inspect(&s).get("textDirection").is_none(), "auto throughout says nothing");
+    assert!(!css(&mut s).contains("direction:"));
+    // While editing, the caret's paragraph alone (the menu's Right to left); inspect lists each
+    // paragraph's direction when they differ, and the CSS stays quiet.
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 9})).unwrap();
+    s.execute("text.directionRtl", &json!({})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(rtl(&s), [false, true, false], "the second paragraph only");
+    assert_eq!(inspect(&s)["lineDirections"], json!(["auto", "rtl", "auto"]));
+    assert!(!css(&mut s).contains("direction:"));
+    // Enter inside a forced paragraph keeps the direction for the new one, as list settings carry.
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 10})).unwrap();
+    s.execute("text.edit.insert", &json!({"text": "\n"})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(rtl(&s), [false, true, true, false]);
+    // An empty last paragraph (after a final newline) keeps the direction forced on it.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abc\n", "textDirection": "auto"}})).unwrap();
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 4})).unwrap();
+    s.execute("text.directionRtl", &json!({})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(rtl(&s), [false, true], "the empty last line runs right to left");
+    // A direction the document has words for; junk is refused.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc", "textDirection": "auto"}})).unwrap();
+    assert_eq!(rtl(&s), [true], "Hebrew first: right to left by detection");
+    s.execute("node.set", &json!({"id": t, "props": {"textDirection": "ltr"}})).unwrap();
+    assert_eq!(rtl(&s), [false], "forced left to right");
+    assert!(s.execute("node.set", &json!({"id": t, "props": {"textDirection": "sideways"}})).is_err());
+    assert!(s.execute("text.direction", &json!({"ids": [t], "direction": "up"})).is_err());
+}
+
+#[test]
+fn balance_and_pretty_wrap_styles_break_lines_as_documented() {
+    // Explore text properties: "Auto: Figma fits as many words as possible on each line before
+    // wrapping to the next." "Balance: Figma distributes text as evenly as possible across every
+    // line, so each line is close to the same length." "Pretty: Figma keeps each line full, but
+    // adjusts the last four lines to avoid an orphan -- a single word stranded alone on the last
+    // line." The synthetic font: 8 px per character at 16 px.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "aaa bbb ccc ddd eee", json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24}));
+    s.execute("node.set", &json!({"id": t, "props": {"textAutoResize": "height", "width": 136}})).unwrap();
+    let lines = |s: &Session| -> Vec<(usize, usize)> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.lines.iter().map(|l| (l.char_start, l.char_end)).collect()
+    };
+    // 136 px holds 17 characters: Auto fills the first line with four words and strands the fifth.
+    assert_eq!(lines(&s), [(0, 16), (16, 19)]);
+    // Balance: as even as the words allow, three and two.
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 12), (12, 19)]);
+    assert_eq!(crate::inspect::node_json(s.doc().unwrap(), t, 0)["wrapStyle"], json!("balance"));
+    // Pretty: the stranded word gets company from the line before.
+    s.execute("text.wrapStyle", &json!({"ids": [t], "style": "pretty"})).unwrap();
+    assert_eq!(lines(&s), [(0, 12), (12, 19)]);
+    // Three lines of two-letter words in a 72 px box (nine characters): Auto strands "gg"; Pretty
+    // narrows the line before it alone ("aa bb cc" / "dd ee" / "ff gg"); Balance's narrowest
+    // width that still gives three lines (64 px) fills the first two lines as Auto does.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "aa bb cc dd ee ff gg", "width": 72, "wrapStyle": "auto"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 18), (18, 20)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 15), (15, 20)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 18), (18, 20)]);
+    // A last line of two words is no orphan: Pretty leaves Auto's lines; a text on one line is
+    // left alone whatever the style.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "aa bb cc dd ee ff gg hh", "wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 18), (18, 23)]);
+    s.execute("node.set", &json!({"id": t, "props": {"width": 400, "wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 23)]);
+    // Dev Mode's CSS says `text-wrap` for Balance and Pretty and nothing for Auto; junk is refused.
+    let css = |s: &mut Session| s.execute("inspect.code", &json!({"id": t})).unwrap()["code"].as_str().unwrap().to_string();
+    assert!(css(&mut s).contains("text-wrap: balance;"), "{}", css(&mut s));
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert!(css(&mut s).contains("text-wrap: pretty;"));
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "auto"}})).unwrap();
+    assert!(!css(&mut s).contains("text-wrap"));
+    assert!(s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "zigzag"}})).is_err());
+    assert!(s.execute("text.wrapStyle", &json!({"ids": [t], "style": "even"})).is_err());
+    // A word as wide as the box is never broken in two by Balance or Pretty: 80 px holds the ten
+    // letters, and every narrower width Balance could try would have to split them.
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abcdefghij klm", "width": 80, "wrapStyle": "balance"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 11), (11, 14)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 11), (11, 14)]);
+    // Hanging punctuation: a line starting with an opening mark has that much more room, and
+    // Pretty narrows it by as much, so the line before the orphan still gives a word away.
+    s.execute(
+        "node.set",
+        &json!({"id": t, "props": {"characters": "aa bb cc (dd ee ff gg", "width": 72, "hangingPunctuation": true, "wrapStyle": "auto"}}),
+    )
+    .unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 19), (19, 21)]);
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty"}})).unwrap();
+    assert_eq!(lines(&s), [(0, 9), (9, 16), (16, 21)]);
+}
+
+#[test]
+fn max_lines_on_auto_width_text_keeps_auto_width_and_hugs_that_many_lines() {
+    // "Max lines is available only if truncate text is enabled, and: Text resizing is set to
+    // auto height or auto width" (Explore text properties): an auto-width text with max lines
+    // stays auto width, growing with its longest line and hugging up to that many lines.
+    use figcraft_doc::TextAutoResize;
+    // The synthetic font: every character 8 px wide at 16 px, so the widths are the same
+    // everywhere and never depend on what the system has installed.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "one\ntwo\nthree", json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24}));
+    assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight);
+    assert_eq!(size(&s, t), (40.0, 72.0), "three lines tall, as wide as 'three'");
+    s.execute("text.maxLines", &json!({"ids": [t], "lines": 2})).unwrap();
+    assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight, "max lines keep auto width");
+    assert_eq!(size(&s, t), (32.0, 48.0), "two lines tall, as wide as the widest line it shows with its ellipsis (two…), not the hidden third");
+    assert_eq!(crate::inspect::node_json(s.doc().unwrap(), t, 0)["maxLines"], json!(2));
+    // Still auto width: a longer line widens the box.
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 3})).unwrap();
+    s.execute("text.edit.insert", &json!({"text": " and a longer line"})).unwrap();
+    crate::textedit::end(&mut s).unwrap();
+    assert_eq!(size(&s, t), (168.0, 48.0), "the box grew with its longest line (21 characters)");
+    assert_eq!(resize_mode(&s, t), TextAutoResize::WidthAndHeight);
+    // No limit: all of its lines again.
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 0}})).unwrap();
+    assert_eq!(size(&s, t).1, 72.0);
+}
+
+#[test]
+fn superscript_and_subscript_are_synthesised_without_glyphs_for_them() {
+    // "If it isn't provided, Figma draws a synthesized version by using the font's standard
+    // version of the character, shrinking it, and positioning it accordingly" (Explore text
+    // properties). The synthetic font has no sups or subs feature and no OS/2 metrics, so the
+    // usual 0.65 em at 0.35 em up (superscript) or 0.14 em down (subscript) apply.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "x2", json!({"fontFamily": font, "fontSize": 40}));
+    let glyphs = |s: &Session| -> Vec<(f64, f64, f64)> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.glyphs.iter().map(|g| (g.size, g.y, g.advance)).collect()
+    };
+    let plain = glyphs(&s);
+    assert_eq!(plain.len(), 2);
+    assert_eq!((plain[0].0, plain[0].2), (40.0, 20.0));
+    assert_eq!(size(&s, t).0, 40.0);
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": true}})).unwrap();
+    let sup = glyphs(&s);
+    for (g, p) in sup.iter().zip(&plain) {
+        assert!((g.0 - 26.0).abs() < 1e-6 && (g.2 - 13.0).abs() < 1e-6, "shrunk to 0.65 em, the advance with it: {g:?}");
+        assert!((p.1 - g.1 - 14.0).abs() < 1e-6, "raised 0.35 em: {g:?} against {p:?}");
+    }
+    assert!((size(&s, t).0 - 26.0).abs() < 1e-6, "the auto-width box hugs the smaller glyphs: {:?}", size(&s, t));
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": null, "subs": true}})).unwrap();
+    let sub = glyphs(&s);
+    for (g, p) in sub.iter().zip(&plain) {
+        assert!((g.0 - 26.0).abs() < 1e-6 && (g.1 - p.1 - 5.6).abs() < 1e-6, "shrunk, and lowered 0.14 em: {g:?} against {p:?}");
+    }
+    // Capitalised, the same: the synthesis follows the characters shaping saw.
+    s.execute("node.set", &json!({"id": t, "props": {"textCase": "upper"}})).unwrap();
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"subs": null, "sups": true}})).unwrap();
+    for (g, p) in glyphs(&s).iter().zip(&plain) {
+        assert!((g.0 - 26.0).abs() < 1e-6 && (p.1 - g.1 - 14.0).abs() < 1e-6, "upper case, superscript: {g:?} against {p:?}");
+    }
+    s.execute("node.set", &json!({"id": t, "props": {"textCase": "original"}})).unwrap();
+    s.execute("text.setFeatures", &json!({"ids": [t], "features": {"sups": null, "subs": false}})).unwrap();
+    assert_eq!(glyphs(&s), plain, "off again");
+}
+
+/// A synthetic monospaced TrueType font (outline-less glyphs, every printable ASCII character 500 of
+/// 1000 units wide), loaded into the font database so text measures the same on every machine.
+fn test_mono_font() -> &'static str {
+    const FAMILY: &str = "FigCraft Test Mono";
+    static LOADED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    LOADED.get_or_init(|| {
+        let families = figcraft_text::load_font_bytes(synthetic_mono_font(FAMILY));
+        assert_eq!(families, [FAMILY], "the synthetic font loads");
+    });
+    FAMILY
+}
+
+fn synthetic_mono_font(family: &str) -> Vec<u8> {
+    let be16 = |v: &mut Vec<u8>, x: u16| v.extend_from_slice(&x.to_be_bytes());
+    let glyphs: u16 = 1 + (0x7E - 0x20 + 1);
+    let mut head = Vec::new();
+    for x in [0x0001_0000u32, 0x0001_0000, 0, 0x5F0F_3CF5] {
+        head.extend_from_slice(&x.to_be_bytes());
+    }
+    be16(&mut head, 0); // flags
+    be16(&mut head, 1000); // unitsPerEm
+    head.extend_from_slice(&[0; 16]); // created, modified
+    for x in [0u16, (-200i16) as u16, 500, 800, 0, 8, 2, 0, 0] {
+        be16(&mut head, x); // bbox, macStyle, lowestRecPPEM, direction hint, short loca, glyph format
+    }
+    let mut hhea = 0x0001_0000u32.to_be_bytes().to_vec();
+    for x in [800u16, (-200i16) as u16, 0, 500, 0, 0, 500, 1, 0, 0, 0, 0, 0, 0, 0, glyphs] {
+        be16(&mut hhea, x);
+    }
+    let mut maxp = 0x0001_0000u32.to_be_bytes().to_vec();
+    be16(&mut maxp, glyphs);
+    for x in [0u16, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0] {
+        be16(&mut maxp, x);
+    }
+    let mut hmtx = Vec::new();
+    for _ in 0..glyphs {
+        be16(&mut hmtx, 500);
+        be16(&mut hmtx, 0);
+    }
+    let loca = vec![0; 2 * (usize::from(glyphs) + 1)];
+    let glyf = vec![0; 4];
+    // cmap: one Windows Unicode BMP subtable, format 4, 0x20..=0x7E → glyphs 1.. plus the end segment.
+    let mut cmap = Vec::new();
+    for x in [0u16, 1, 3, 1, 0, 12] {
+        be16(&mut cmap, x);
+    }
+    for x in [4u16, 32, 0, 4, 4, 1, 0, 0x7E, 0xFFFF, 0, 0x20, 0xFFFF, (1i16 - 0x20) as u16, 1, 0, 0] {
+        be16(&mut cmap, x);
+    }
+    let strings = [(1u16, family.to_string()), (2, "Regular".into()), (6, family.replace(' ', "") + "-Regular")];
+    let mut name = Vec::new();
+    be16(&mut name, 0);
+    be16(&mut name, strings.len() as u16);
+    be16(&mut name, 6 + 12 * strings.len() as u16);
+    let mut storage = Vec::new();
+    for (id, s) in &strings {
+        let utf16: Vec<u8> = s.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for x in [3u16, 1, 0x409, *id, utf16.len() as u16, storage.len() as u16] {
+            be16(&mut name, x);
+        }
+        storage.extend(utf16);
+    }
+    name.extend(storage);
+    let mut post = 0x0003_0000u32.to_be_bytes().to_vec();
+    post.extend_from_slice(&[0; 28]);
+    let tables: [(&[u8; 4], Vec<u8>); 9] = [
+        (b"cmap", cmap),
+        (b"glyf", glyf),
+        (b"head", head),
+        (b"hhea", hhea),
+        (b"hmtx", hmtx),
+        (b"loca", loca),
+        (b"maxp", maxp),
+        (b"name", name),
+        (b"post", post),
+    ];
+    let mut font = 0x0001_0000u32.to_be_bytes().to_vec();
+    for x in [tables.len() as u16, 128, 3, 16] {
+        be16(&mut font, x);
+    }
+    let mut offset = 12 + 16 * tables.len();
+    for (tag, data) in &tables {
+        font.extend_from_slice(*tag);
+        font.extend_from_slice(&0u32.to_be_bytes());
+        font.extend_from_slice(&(offset as u32).to_be_bytes());
+        font.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in &tables {
+        font.extend_from_slice(data);
+        font.resize(font.len().next_multiple_of(4), 0);
+    }
+    font
+}
+
+/// The world position of a text's top-right corner (where right-aligned text is anchored).
+fn top_right(s: &Session, t: NodeId) -> (f64, f64) {
+    let doc = s.doc().unwrap();
+    let p = doc.world_transform(t) * figcraft_geom::kurbo::Point::new(doc.node(t).unwrap().width, 0.0);
+    (p.x, p.y)
+}
+
+fn assert_near(a: (f64, f64), b: (f64, f64), why: &str) {
+    assert!((a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6, "{why}: {a:?} != {b:?}");
+}
+
+#[test]
+fn right_aligned_auto_width_text_grows_and_shrinks_to_the_left() {
+    let font = test_mono_font();
+    for (src, rotation) in [("ANCHOR TEST\nabc", 0.0), ("abc", 0.0), ("ANCHOR TEST\nabc", 90.0)] {
+        let mut s = Session::new();
+        let t = text(&mut s, src, json!({"fontSize": 40, "fontFamily": font, "textAlign": "right", "textAutoResize": "widthAndHeight"}));
+        s.execute("node.set", &json!({"id": t, "props": {"x": 200, "y": 50, "rotation": rotation}})).unwrap();
+        let anchor = top_right(&s, t);
+        let w0 = size(&s, t).0;
+        let widest = src.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+        assert!((w0 - 20.0 * widest as f64).abs() < 1e-6, "{src:?}: the test font measures 20 px a character, not {w0}");
+        begin(&mut s, t, Some(src.chars().count()), false).unwrap();
+        for c in "defghijklmnopqrstuvwxyz".chars() {
+            crate::textedit::insert(&mut s, &c.to_string()).unwrap();
+            assert_near(top_right(&s, t), anchor, &format!("{src:?} at {rotation}°: typing {c}"));
+        }
+        assert!(size(&s, t).0 > w0 + 1e-6, "{src:?} at {rotation}°: typing grows the text");
+        for _ in 0..23 {
+            key(&mut s, "Backspace", false, false, false).unwrap();
+            assert_near(top_right(&s, t), anchor, &format!("{src:?} at {rotation}°: deleting"));
+        }
+        assert!((size(&s, t).0 - w0).abs() < 1e-6, "back to the starting width");
+    }
+}
+
+#[test]
+fn right_aligned_auto_width_growth_undoes_to_its_old_place() {
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "abc", json!({"fontSize": 40, "fontFamily": font, "textAlign": "right", "textAutoResize": "widthAndHeight"}));
+    let before = (s.doc().unwrap().node(t).unwrap().transform, size(&s, t));
+    let anchor = top_right(&s, t);
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abcdefghijklmnop"}})).unwrap();
+    assert_near(top_right(&s, t), anchor, "set characters");
+    let after = (s.doc().unwrap().node(t).unwrap().transform, size(&s, t));
+    assert!(after.1.0 > before.1.0 + 1e-6, "the text grew");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((s.doc().unwrap().node(t).unwrap().transform, size(&s, t)), before, "undo");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!((s.doc().unwrap().node(t).unwrap().transform, size(&s, t)), after, "redo");
+}
+
+#[test]
+fn auto_layout_places_right_aligned_auto_width_text() {
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap());
+    s.execute("node.set", &json!({"id": f, "props": {"layout": "horizontal", "padding": 10, "gap": 0}})).unwrap();
+    let t = id(s
+        .execute(
+            "text.create",
+            &json!({"text": "abc", "x": 0, "y": 0, "parent": f, "props": {"fontSize": 40, "fontFamily": font, "textAlign": "right", "textAutoResize": "widthAndHeight"}}),
+        )
+        .unwrap());
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "abcdefghijklmnop"}})).unwrap();
+    let c = s.doc().unwrap().node(t).unwrap().transform.as_coeffs();
+    assert_eq!((c[4], c[5]), (10.0, 10.0), "the auto layout keeps it at its padding");
+}
+
+#[test]
+fn css_font_family_escapes_backslash_and_newline() {
+    let mut s = Session::new();
+    let t = text(&mut s, "abc", json!({"fontFamily": "Foo\\"}));
+    let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
+    assert!(css.contains(r#"font-family: "Foo\\";"#), "{css}");
+    let t = text(&mut s, "abc", json!({"fontFamily": "Foo\nBar"}));
+    let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
+    assert!(css.contains(r#"font-family: "Foo\A Bar";"#), "{css}");
+    // A quote stays a quote, and a name can't close the page's <style> block.
+    let t = text(&mut s, "abc", json!({"fontFamily": "Foo\"</style>"}));
+    let css = crate::codegen::css_decls(s.doc().unwrap(), s.doc().unwrap().node(t).unwrap(), &mut Default::default(), (true, true));
+    assert!(css.contains(r#"font-family: "Foo\"\3C /style>";"#), "{css}");
+}
+
+/// "Text layers cannot have both a max height and a set number of max lines. Adding a max height
+/// will set max lines to Auto. Setting max lines to a number will remove the layer's max height
+/// setting." (Guide to auto layout)
+#[test]
+fn a_text_has_a_max_height_or_max_lines_not_both() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 100})).unwrap());
+    s.execute("node.set", &json!({"id": f, "props": {"layout": "vertical"}})).unwrap();
+    let t = id(s.execute("text.create", &json!({"text": "Hello there world", "x": 0, "y": 0, "parent": f, "width": 60})).unwrap());
+    let state = |s: &Session| {
+        let n = s.doc().unwrap().node(t).unwrap().clone();
+        (n.kind.text().unwrap().max_lines, n.child_layout.max_h)
+    };
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 2}})).unwrap();
+    assert_eq!(state(&s), (2, None));
+    s.execute("node.set", &json!({"id": t, "props": {"maxHeight": 40}})).unwrap();
+    assert_eq!(state(&s), (0, Some(40.0)), "a max height sets max lines to Auto");
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 3}})).unwrap();
+    assert_eq!(state(&s), (3, None), "max lines take the max height away");
+    s.execute("node.set", &json!({"id": t, "props": {"maxHeight": 50}})).unwrap();
+    s.execute("text.maxLines", &json!({"ids": [t], "lines": 1})).unwrap();
+    assert_eq!(state(&s), (1, None), "the Max lines command too");
+    // Auto (0) leaves a max height alone, and a frame's max height has no lines to clear.
+    s.execute("node.set", &json!({"id": t, "props": {"maxHeight": 50}})).unwrap();
+    s.execute("node.set", &json!({"id": t, "props": {"maxLines": 0}})).unwrap();
+    assert_eq!(state(&s), (0, Some(50.0)));
+    s.execute("node.set", &json!({"id": f, "props": {"maxHeight": 80}})).unwrap();
+    assert_eq!(s.doc().unwrap().node(f).unwrap().child_layout.max_h, Some(80.0));
+}
+
+/// "Links are styled with an underline by default. Use the keyboard shortcut to remove the
+/// underline: Mac: Command U, Windows: Control U" (Add links to text).
+#[test]
+fn a_link_is_underlined_by_default_and_underline_takes_it_off() {
+    use figcraft_doc::TextDecoration;
+    let mut s = Session::new();
+    let t = text(&mut s, "docs", json!({}));
+    let style = |s: &Session| s.doc().unwrap().node(t).unwrap().kind.text().unwrap().style.clone();
+    s.execute("text.link", &json!({"ids": [t], "url": "https://example.com"})).unwrap();
+    assert_eq!((style(&s).link.as_deref(), style(&s).decoration), (Some("https://example.com"), TextDecoration::Underline));
+    s.execute("text.underline", &json!({"ids": [t]})).unwrap();
+    assert_eq!(
+        (style(&s).link.as_deref(), style(&s).decoration),
+        (Some("https://example.com"), TextDecoration::None),
+        "the link stays, the underline goes"
+    );
+    // Changing the URL of a link whose underline was taken off keeps it off.
+    s.execute("text.link", &json!({"ids": [t], "url": "https://example.org"})).unwrap();
+    assert_eq!((style(&s).link.as_deref(), style(&s).decoration), (Some("https://example.org"), TextDecoration::None));
+    // A decoration of the text's own is kept.
+    let u = text(&mut s, "struck", json!({"textDecoration": "strikethrough"}));
+    s.execute("text.link", &json!({"ids": [u], "url": "https://example.com"})).unwrap();
+    assert_eq!(s.doc().unwrap().node(u).unwrap().kind.text().unwrap().style.decoration, TextDecoration::Strikethrough);
+    // On a frame, the link reaches the text inside, and Underline reads that text: it takes the
+    // underline off rather than putting it on again.
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 100, "width": 200, "height": 100})).unwrap());
+    let inner = id(s.execute("text.create", &json!({"text": "inside", "x": 0, "y": 100, "parent": f})).unwrap());
+    let inner_style = |s: &Session| s.doc().unwrap().node(inner).unwrap().kind.text().unwrap().style.clone();
+    s.execute("text.link", &json!({"ids": [f], "url": "https://example.com"})).unwrap();
+    assert_eq!((inner_style(&s).link.as_deref(), inner_style(&s).decoration), (Some("https://example.com"), TextDecoration::Underline));
+    s.execute("text.underline", &json!({"ids": [f]})).unwrap();
+    assert_eq!(inner_style(&s).decoration, TextDecoration::None, "Underline on the frame reads the text inside it");
+}
+
+fn layer_name(s: &Session, t: NodeId) -> String {
+    s.doc().unwrap().node(t).unwrap().name.clone()
+}
+
+/// Select everything in the layer being edited and delete it.
+fn clear_edited_text(s: &mut Session, t: NodeId) {
+    let len = s.doc().unwrap().node(t).unwrap().kind.text().unwrap().char_count();
+    crate::textedit::set_caret(s, 0, false).unwrap();
+    crate::textedit::set_caret(s, len, true).unwrap();
+    crate::textedit::key(s, "Backspace", false, false, false).unwrap();
+}
+
+#[test]
+fn typing_renames_a_text_layer_that_still_carries_the_name_its_characters_gave_it() {
+    // The Layers panel shows a layer's name, so a layer still carrying the name its characters
+    // gave it has to follow them while they are typed or the panel and the canvas disagree
+    // (#1747). The target app's plugin API calls this `autoRename`: "Whether updating the
+    // characters in the text node should update the name of the node… This is automatically reset
+    // to false if `name` is modified in order to allow the node to keep the new name."
+    let mut s = Session::new();
+
+    // Nobody renamed this layer, so typing in it keeps its name up to date.
+    let t = text(&mut s, "hello", json!({}));
+    assert_eq!(layer_name(&s, t), "hello", "a new layer is named after its first line");
+    crate::textedit::begin(&mut s, t, Some(5), false).unwrap();
+    crate::textedit::insert(&mut s, " there").unwrap();
+    assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("hello there", "hello there"), "the name follows what is typed");
+
+    // A name the author typed is theirs: later typing leaves it alone.
+    s.execute("node.set", &json!({"id": t, "props": {"name": "Greeting"}})).unwrap();
+    crate::textedit::begin(&mut s, t, Some(11), false).unwrap();
+    crate::textedit::insert(&mut s, "!").unwrap();
+    assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("hello there!", "Greeting"), "a chosen name is kept");
+
+    // Only the first line names the layer.
+    let v = text(&mut s, "first", json!({}));
+    crate::textedit::begin(&mut s, v, Some(5), false).unwrap();
+    crate::textedit::insert(&mut s, "\nsecond").unwrap();
+    assert_eq!((chars(&s, v).as_str(), layer_name(&s, v).as_str()), ("first\nsecond", "first"), "the first line alone names it");
+
+    // Emptied text reads as a new empty text layer does, not as the word that was deleted.
+    clear_edited_text(&mut s, v);
+    assert_eq!((chars(&s, v).as_str(), layer_name(&s, v).as_str()), ("", ""), "emptied text has no name of its own, so the panel shows its kind");
+
+    // The usual way a layer is made: the Text tool, a click, then typing into the empty layer.
+    use crate::tools::{PointerEvent, PointerKind, ToolId};
+    s.set_tool(ToolId::Text);
+    s.pointer(&PointerEvent::at(PointerKind::Down, 300.0, 300.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 300.0, 300.0, 1.0)).unwrap();
+    let drawn = s.ds().unwrap().text_edit.as_ref().unwrap().id;
+    assert_eq!(layer_name(&s, drawn), "", "a layer the tool drew has no name of its own yet");
+    crate::textedit::insert(&mut s, "Pricing").unwrap();
+    assert_eq!((chars(&s, drawn).as_str(), layer_name(&s, drawn).as_str()), ("Pricing", "Pricing"), "the first word typed names it");
+}
+
+#[test]
+fn setting_characters_as_a_command_never_renames_the_layer() {
+    // Only the editor follows the characters. Layer names are field keys for `data.fill`,
+    // component property bindings and templates, which write `characters` into a layer named for
+    // its role ("Title") and look it up by that name again, so a command must leave the name as it
+    // is even when it reads like the text it replaces.
+    let mut s = Session::new();
+    let t = text(&mut s, "Title", json!({}));
+    assert_eq!(layer_name(&s, t), "Title");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": "Site em 7 dias"}})).unwrap();
+    assert_eq!((chars(&s, t).as_str(), layer_name(&s, t).as_str()), ("Site em 7 dias", "Title"), "the field keeps its name");
 }

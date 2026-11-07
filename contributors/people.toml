@@ -1,13 +1,10 @@
-# Contributor names for the About window (craftrules standards/contributors.md).
+# Contributor names for the About window.
 #
 # Everyone who contributes is credited by GitHub username automatically. Anything more is up to
 # you: add YOUR OWN entry below, in your own PR (commit it yourself). Never add someone else; a
 # maintainer may add a person only when that person asked, recording where in consent_source.
 #
-# Easiest: python3 ../../craftrules/scripts/contributors.py --add-me . \
-#            [--real-name "Ada Lovelace"] [--display-name "Ada"] [--sync-github-name]
-#
-# Or copy this block, replacing your-github-username (every field is optional):
+# Copy this block, replacing your-github-username (every field is optional):
 #
 #   [people.your-github-username]
 #   real_name = "Your Name"        # shown when the viewer picks "Real name"
@@ -23,6 +20,10 @@ display_name = "VanTan"
 [people.tylerjenningsw]
 real_name = "Tyler Jennings"
 display_name = "tylerjenningsw"
+
+[people.SiadeLucas]
+real_name = "Siade Lucas"
+sync_github_name = true
 
 [people.Silvertree2010]
 display_name = "Netter"
@@ -67,3 +68,50 @@ sync_github_name = true
 
 [people.AganzeFelicite]
 sync_github_name = true
+
+[people.mojtabajafarzadeh]
+real_name = "Mojtaba Jafarzadeh"
+
+[people.switch87]
+real_name = "Gert Pellin"
+display_name = "Gert Pellin"
+sync_github_name = false
+
+[people.dotCooCoo]
+real_name = "Robert Lee"
+sync_github_name = true
+
+[people.leandrodslv]
+sync_github_name = true
+
+[people.mateusvillain]
+sync_github_name = true
+
+[people.culiulemon]
+sync_github_name = true
+
+[people.StrajnarFilip]
+display_name = "Filip Strajnar"
+
+[people.Carbocode]
+sync_github_name = true
+
+[people.dylanmtaylor]
+sync_github_name = true
+
+[people.aleksei-suholita]
+real_name = "Oleksii Sukholita"
+
+[people.helenkwok]
+real_name = "Helen Kwok"
+
+[people.denisg0mes]
+real_name = "Denis Gomes"
+display_name = "Denis Gomes"
+
+[people.Hamza0101]
+real_name = "Hamza Naveed"
+display_name = "Hamza0101"
+
+[people.ashokram-si]
+real_name = "Ashok Ram"

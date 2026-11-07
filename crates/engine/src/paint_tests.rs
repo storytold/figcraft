@@ -13,7 +13,7 @@ fn red_rect(s: &mut Session) -> figcraft_doc::NodeId {
     r
 }
 
-fn fill(s: &Session, id: figcraft_doc::NodeId) -> Color {
+pub(crate) fn fill(s: &Session, id: figcraft_doc::NodeId) -> Color {
     s.doc().unwrap().node(id).unwrap().fills[0].solid_color().unwrap()
 }
 

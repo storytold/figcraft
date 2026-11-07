@@ -17,13 +17,13 @@ const REPLY: usize = 200_000;
 
 /// Lays out a test plugin's strings and builds its module.
 #[derive(Default)]
-struct W {
+pub(crate) struct W {
     data: String,
     at: usize,
 }
 
 impl W {
-    fn s(&mut self, text: &str) -> (usize, usize) {
+    pub(crate) fn s(&mut self, text: &str) -> (usize, usize) {
         let a = 1000 + self.at;
         self.data += &format!("(data (i32.const {a}) \"{}\")\n", lit(text));
         self.at += text.len();
@@ -32,21 +32,27 @@ impl W {
     }
 
     /// Draw `v`; when it's refused, output why and fail.
-    fn render(&mut self, v: &Value) -> String {
+    pub(crate) fn render(&mut self, v: &Value) -> String {
         let (a, l) = self.s(&v.to_string());
         format!(
             "(if (call $render (i32.const {a}) (i32.const {l})) (then (call $set_output (i32.const {REPLY}) (call $reply_read (i32.const {REPLY}) (i32.const 50000))) (return (i32.const 1))))"
         )
     }
 
+    /// Show the panel `spec` (API 2 panels; from a widget, API 5).
+    pub(crate) fn show(&mut self, spec: &Value) -> String {
+        let (a, l) = self.s(&spec.to_string());
+        format!("(drop (call $ui_show (i32.const {a}) (i32.const {l})))")
+    }
+
     /// Whether the input contains `needle`.
-    fn has(&mut self, needle: &str) -> String {
+    pub(crate) fn has(&mut self, needle: &str) -> String {
         let (a, l) = self.s(needle);
         format!("(call $has (i32.const {a}) (i32.const {l}) (local.get $n))")
     }
 
     /// Call `cmd`; a refusal becomes the output and the run stops (successfully).
-    fn call(&mut self, cmd: &str, params: &Value) -> String {
+    pub(crate) fn call(&mut self, cmd: &str, params: &Value) -> String {
         let ((a, l), (b, m)) = (self.s(cmd), self.s(&params.to_string()));
         format!(
             "(if (call $call (i32.const {a}) (i32.const {l}) (i32.const {b}) (i32.const {m}))
@@ -55,13 +61,15 @@ impl W {
     }
 
     /// The module: it reads and outputs its input, then runs `body`.
-    fn build(self, body: &str) -> Vec<u8> {
+    pub(crate) fn build(self, body: &str) -> Vec<u8> {
         let wat = format!(
             r#"(module
               (import "figcraft" "call" (func $call (param i32 i32 i32 i32) (result i32)))
               (import "figcraft" "reply_read" (func $reply_read (param i32 i32) (result i32)))
               (import "figcraft" "set_output" (func $set_output (param i32 i32)))
               (import "figcraft" "widget_render" (func $render (param i32 i32) (result i32)))
+              (import "figcraft" "ui_show" (func $ui_show (param i32 i32) (result i32)))
+              (import "figcraft" "ui_close" (func $ui_close))
               (memory (export "memory") 4)
               {}
               (func $has (param $p i32) (param $l i32) (param $n i32) (result i32) (local $i i32) (local $j i32)
@@ -108,7 +116,7 @@ fn tally(extra: impl FnOnce(&mut W) -> String) -> Vec<u8> {
     w.build(&format!("{pre} (if {inc} (then {two} (return (i32.const 0)))) (if {dec} (then {zero} (return (i32.const 0)))) {one}"))
 }
 
-fn widget_manifest(id: &str, access: &str) -> Value {
+pub(crate) fn widget_manifest(id: &str, access: &str) -> Value {
     json!({"id": id, "name": "Tally", "version": "1.0.0", "main": "w.wasm", "api": 3, "widget": true, "permissions": {"access": access}})
 }
 
@@ -128,7 +136,7 @@ fn click(s: &mut Session, w: NodeId, target: &str) -> Value {
     ex(s, "widget.click", json!({"id": w, "target": target}))
 }
 
-fn state(s: &mut Session, w: NodeId) -> Value {
+pub(crate) fn state(s: &mut Session, w: NodeId) -> Value {
     let list = ex(s, "widget.list", json!({}));
     list["widgets"].as_array().unwrap().iter().find(|x| x["id"] == json!(w)).map(|x| x["state"].clone()).unwrap_or(Value::Null)
 }
@@ -139,7 +147,7 @@ fn label(s: &Session, w: NodeId) -> String {
     node(s, first).kind.text().unwrap().characters.clone()
 }
 
-fn err(s: &mut Session, cmd: &str, p: Value) -> String {
+pub(crate) fn err(s: &mut Session, cmd: &str, p: Value) -> String {
     match s.execute(cmd, &p) {
         Ok(v) => panic!("{cmd} accepted {p}: {v}"),
         Err(e) => {

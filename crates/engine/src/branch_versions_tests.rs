@@ -35,12 +35,12 @@ fn branched() -> (Session, String, NodeId) {
 fn versions_saved_on_a_branch_are_the_branchs_own() {
     let (mut s, _, r) = branched();
     let original = layer_name(&s, r);
-    // A new branch's history starts empty: the main file's versions stay with it.
-    assert!(names(&mut s).is_empty());
+    // A new branch's history starts with its creation: the main file's versions stay with it.
+    assert_eq!(names(&mut s), ["Branch created"]);
     ok(&mut s, "node.set", json!({"id": r, "props": {"name": "Before"}}));
     let v = ok(&mut s, "file.saveVersion", json!({"name": "Branch v1"}))["id"].clone();
     ok(&mut s, "node.set", json!({"id": r, "props": {"name": "After"}}));
-    assert_eq!(names(&mut s), ["Branch v1"]);
+    assert_eq!(names(&mut s), ["Branch created", "Branch v1"]);
     // Viewing a branch version shows it read-only; going back shows the branch as it is.
     ok(&mut s, "version.preview", json!({"id": v}));
     assert_eq!(layer_name(&s, r), "Before");
@@ -77,13 +77,13 @@ fn branch_versions_save_with_the_file_and_survive_merging() {
     ok(&mut t, "file.open", json!({"path": path}));
     assert_eq!(names(&mut t), ["Main v1"]);
     ok(&mut t, "branch.open", json!({"id": id}));
-    assert_eq!(names(&mut t), ["Branch v1", "Autosave"]);
+    assert_eq!(names(&mut t), ["Branch created", "Branch v1", "Autosave"]);
     // Merging adds a version to the main file's history; the branch keeps its own.
     ok(&mut t, "branch.merge", json!({}));
     assert_eq!(names(&mut t), ["Main v1", "Autosave", "Merged “Explore”"]);
     assert_eq!(layer_name(&t, r), "On the branch, later");
     ok(&mut t, "branch.open", json!({"id": id}));
-    assert_eq!(names(&mut t), ["Branch v1", "Autosave"]);
+    assert_eq!(names(&mut t), ["Branch created", "Branch v1", "Autosave"]);
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -94,7 +94,7 @@ fn archiving_keeps_the_branch_history() {
     ok(&mut s, "branch.archive", json!({}));
     assert_eq!(names(&mut s), ["Main v1"]);
     ok(&mut s, "branch.open", json!({"id": id}));
-    assert_eq!(names(&mut s), ["Branch v1"]);
+    assert_eq!(names(&mut s), ["Branch created", "Branch v1"]);
 }
 
 #[test]

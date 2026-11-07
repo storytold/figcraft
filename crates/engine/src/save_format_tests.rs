@@ -15,8 +15,12 @@ struct SaveFiles {
 
 impl SaveFiles {
     fn new() -> Self {
+        // Tests run in parallel and the clock can read the same for two of them (macOS counts
+        // microseconds), so a counter keeps their folders apart.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("figcraft-save-formats-{}-{stamp}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("figcraft-save-formats-{}-{stamp}-{n}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
         Self { dir, files: Vec::new() }
     }
@@ -87,6 +91,46 @@ fn assert_save_state_unchanged(s: &Session, before: &DocState, recent: &[String]
         }
     }
     assert_eq!(s.prefs.recent_files, recent);
+}
+
+#[test]
+fn first_native_save_uses_chosen_filename_for_an_untitled_document() {
+    let mut files = SaveFiles::new();
+    let path = files.path("Redis.figcraft");
+    let copy = files.path("Redis copy.figcraft");
+    let manual_copy = files.path("Other.figcraft");
+    let mut s = Session::new();
+    s.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(s.ds().unwrap().doc.name, "Redis");
+    assert!(!s.ds().unwrap().is_dirty());
+    assert_eq!(figcraft_format::load_bytes(&std::fs::read(&path).unwrap()).unwrap().0.name, "Redis");
+
+    let mut reopened = Session::empty();
+    reopened.execute("file.open", &json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(reopened.ds().unwrap().doc.name, "Redis");
+
+    s.execute("file.saveAs", &json!({"path": copy.to_string_lossy()})).unwrap();
+    assert_eq!(s.ds().unwrap().doc.name, "Redis copy");
+    s.execute("file.rename", &json!({"name": "Chosen title"})).unwrap();
+    s.execute("file.saveAs", &json!({"path": manual_copy.to_string_lossy()})).unwrap();
+    assert_eq!(s.ds().unwrap().doc.name, "Chosen title");
+}
+
+#[test]
+fn opening_an_older_file_uses_its_filename_only_for_the_default_title() {
+    let mut files = SaveFiles::new();
+    let old_path = files.path("Redis.figcraft");
+    let named_path = files.path("Other.figcraft");
+    let mut original = Session::new();
+    std::fs::write(&old_path, crate::cmd::file::file_bytes(original.ds().unwrap()).unwrap()).unwrap();
+    original.execute("file.rename", &json!({"name": "Chosen title"})).unwrap();
+    std::fs::write(&named_path, crate::cmd::file::file_bytes(original.ds().unwrap()).unwrap()).unwrap();
+
+    let mut reopened = Session::empty();
+    reopened.execute("file.open", &json!({"path": old_path.to_string_lossy()})).unwrap();
+    assert_eq!(reopened.ds().unwrap().doc.name, "Redis");
+    reopened.execute("file.open", &json!({"path": named_path.to_string_lossy()})).unwrap();
+    assert_eq!(reopened.ds().unwrap().doc.name, "Chosen title");
 }
 
 fn read_fig(path: &std::path::Path, result: &Value) -> figcraft_doc::Document {
@@ -208,7 +252,7 @@ fn fig_copy_from_branch_exports_active_document_without_saving_main() {
     let persisted = figcraft_format::load_bytes_with_versions(&std::fs::read(&native).unwrap()).unwrap();
     assert!(!persisted.doc.nodes().any(|n| n.name == "Branch rectangle"));
     assert!(persisted.branches[0].head.nodes().any(|n| n.name == "Branch rectangle"));
-    assert_eq!(persisted.branches[0].versions[0].name, "Branch version");
+    assert_eq!(persisted.branches[0].versions.last().unwrap().name, "Branch version");
     assert!(!s.ds().unwrap().is_dirty());
     assert!(!s.docs[0].is_dirty());
 }

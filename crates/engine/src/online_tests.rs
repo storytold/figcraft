@@ -108,7 +108,7 @@ fn links(file: &str, n: usize) -> Shared {
         link: format!("figcraft://join?server={SERVER}&file={file}&token=Shared{what}Shared{what}0{n}"),
         code: Some(code),
     };
-    Shared { edit: link("edit", format!("NEWED1T0{n}")), view: Some(link("view", format!("NEWV1EW0{n}"))) }
+    Shared { edit: link("edit", format!("NEWED1T0{n}")), view: Some(link("view", format!("NEWV1EW0{n}"))), comment: None }
 }
 
 fn session() -> (Session, Arc<Mutex<Script>>) {
@@ -136,6 +136,7 @@ fn edit_link(server: &str, file: &str) -> String {
     format!("figcraft://join?server={server}&file={file}&token={EDIT_TOKEN}")
 }
 
+/// A session you are in as `role` under `name`, invited with `link`.
 fn info(role: Role, name: &str, link: &str) -> SessionInfo {
     SessionInfo {
         role,
@@ -149,6 +150,7 @@ fn info(role: Role, name: &str, link: &str) -> SessionInfo {
         address: SERVER.into(),
         network: true,
         access: Access::Edit,
+        view: None,
     }
 }
 
@@ -582,4 +584,15 @@ fn debug_output_of_a_record_leaves_the_secrets_out() {
     let text = format!("{f:?} {:#?}", vec![f.clone()]);
     no_secrets("debug", &text);
     assert!(text.contains("share.example") && text.contains(".."), "{text}");
+}
+
+#[test]
+fn same_server_ignores_the_default_port_before_a_path() {
+    use crate::online::same_server;
+    assert!(same_server("wss://share.example:443/figcraft/", "wss://share.example/figcraft/"));
+    assert!(same_server("ws://host:80/x", "ws://host/x"));
+    assert!(!same_server("wss://share.example:8443/figcraft/", "wss://share.example/figcraft/"));
+    // The path is a route: owner tokens for /Team/ must never be sent to /team/.
+    assert!(same_server("WSS://Share.Example/team/", "wss://share.example/team"));
+    assert!(!same_server("wss://share.example/Team/", "wss://share.example/team/"));
 }

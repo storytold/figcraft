@@ -23,7 +23,14 @@ impl OnPath {
     /// Text on `tp` whose layout x = 0 sits `shift` before the start point and whose layout y
     /// `baseline` sits on the path. `None` for an empty or unmeasurable path.
     pub fn new(tp: &TextPath, shift: f64, baseline: f64) -> Option<Self> {
-        let mut line = polylines(&tp.path())?.into_iter().next()?;
+        let p = tp.path();
+        if p.elements().len() > 20_000 {
+            return None;
+        }
+        let mut line = polylines(&p)?.into_iter().next()?;
+        if line.points.len() > 40_000 {
+            return None;
+        }
         // A subpath ending where it starts (an ellipse) goes round like a closed one.
         line.closed |= matches!((line.points.first(), line.points.last()), (Some(a), Some(b)) if (*a - *b).hypot() < 1e-6);
         Some(Self { origin: tp.start() * line.length() - shift, line, flip: tp.flip, baseline })

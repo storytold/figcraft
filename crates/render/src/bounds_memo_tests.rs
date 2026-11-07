@@ -24,8 +24,9 @@ fn kept_paint_bounds_are_the_bounds_worked_out_afresh() {
         for id in &order {
             let n = d.node(*id).unwrap();
             for depth in [0, 20] {
-                let kept = draw::bounds_within(&d, n, depth, None, Some(&memo)).0;
-                assert_eq!(kept, draw::local_paint_bounds(&d, n, depth, None), "{} at depth {depth}", n.name);
+                let world = d.world_transform(*id);
+                let kept = draw::bounds_within(&d, n, world, depth, None, Some(&memo)).0;
+                assert_eq!(kept, draw::local_paint_bounds(&d, n, world, depth, None), "{} at depth {depth}", n.name);
             }
         }
     }

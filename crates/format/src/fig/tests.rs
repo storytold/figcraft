@@ -13,7 +13,8 @@ use super::*;
 /// Message field ids count from 1; enum values from 0.
 const SCHEMA: &str = "
 enum NodeType NONE DOCUMENT CANVAS GROUP FRAME BOOLEAN_OPERATION VECTOR STAR LINE ELLIPSE RECTANGLE REGULAR_POLYGON ROUNDED_RECTANGLE TEXT SLICE SYMBOL INSTANCE STICKY VARIABLE VARIABLE_SET SHAPE_WITH_TEXT CONNECTOR TABLE
-enum PaintType SOLID GRADIENT_LINEAR IMAGE
+enum PaintType SOLID GRADIENT_LINEAR IMAGE EMOJI
+enum ImageScaleMode STRETCH FIT FILL TILE
 enum WindingRule NONZERO ODD
 enum StyleType NONE FILL TEXT
 enum StackMode NONE HORIZONTAL VERTICAL
@@ -27,7 +28,9 @@ enum StrokeCap NONE ROUND SQUARE ARROW_LINES ARROW_EQUILATERAL
 enum StrokeJoin MITER BEVEL ROUND
 enum VectorMirror NONE ANGLE ANGLE_AND_LENGTH
 enum ShapeWithTextType SQUARE ELLIPSE
+enum NodePhase CREATED REMOVED
 enum ConnectorLineStyle ELBOWED STRAIGHT CURVED
+enum ConnectorMagnet NONE AUTO TOP LEFT BOTTOM RIGHT CENTER
 enum ExpressionFunction ADDITION SUBTRACTION RESOLVE_VARIANT MULTIPLY DIVIDE EQUALS
 enum NavigationType NAVIGATE OVERLAY
 enum TransitionType INSTANT_TRANSITION DISSOLVE SMART_ANIMATE
@@ -49,16 +52,17 @@ message VariableTarget VariableID id
 message VariableSetID GUID guid, AssetRef assetRef
 message ConditionalActions Action[] actions, VariableData condition
 message VectorData uint vectorNetworkBlob, Vector normalizedSize, NodeChange[] styleOverrideTable
-message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition
+message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition, ConnectorMagnet magnet
+message ConnectorControlPoint Vector position, Vector axis
 message VariableData AnyValue value, DataType dataType
-message Paint PaintType type, Color color, float opacity, bool visible, Image image, Matrix transform, ColorStop[] stops, VariableData colorVar
+message Paint PaintType type, Color color, float opacity, bool visible, Image image, Matrix transform, ColorStop[] stops, VariableData colorVar, ImageScaleMode imageScaleMode
 message ParentIndex GUID guid, string position
 message FontName string family, string style, string postscript
 message TextData string characters, uint[] characterStyleIDs, NodeChange[] styleOverrideTable
 message Path WindingRule windingRule, uint commandsBlob
 message GUIDPath GUID[] guids
 message SymbolData GUID symbolID, NodeChange[] symbolOverrides
-message StyleId GUID guid
+message StyleId GUID guid, AssetRef assetRef
 message PropValue bool boolValue, TextData textValue
 message PropDef GUID id, string name, PropValue initialValue, PropType type
 message PropAssignment GUID defID, PropValue value
@@ -73,46 +77,46 @@ message Event InteractionType interactionType
 message Action GUID transitionNodeID, TransitionType transitionType, float transitionDuration, EasingType easingType, ConnectionType connectionType, NavigationType navigationType, VariableTarget targetVariable, VariableData targetVariableData, VariableSetID targetVariableSetID, GUID targetVariableModeID, ConditionalActions[] conditionalActions
 message Interaction Event event, Action[] actions
 message StartingPoint string name, string position
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern, ConnectorControlPoint[] connectorControlPoints, NodePhase phase
 message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
 
-fn schema() -> Schema {
+pub(super) fn schema() -> Schema {
     Schema::parse(SCHEMA).unwrap()
 }
 
-fn o(fields: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
+pub(super) fn o(fields: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
     Kv::Object(fields)
 }
-fn f(x: f64) -> Kv<'static> {
+pub(super) fn f(x: f64) -> Kv<'static> {
     Kv::Float(x as f32)
 }
-fn u(x: u64) -> Kv<'static> {
+pub(super) fn u(x: u64) -> Kv<'static> {
     Kv::Uint(x)
 }
-fn e(n: &'static str) -> Kv<'static> {
+pub(super) fn e(n: &'static str) -> Kv<'static> {
     Kv::Enum(n)
 }
-fn s(x: &str) -> Kv<'static> {
+pub(super) fn s(x: impl Into<String>) -> Kv<'static> {
     Kv::Str(x.into())
 }
-fn g(l: u64) -> Kv<'static> {
+pub(super) fn g(l: u64) -> Kv<'static> {
     o(vec![("sessionID", u(1)), ("localID", u(l))])
 }
-fn arr(v: Vec<Kv<'static>>) -> Kv<'static> {
+pub(super) fn arr(v: Vec<Kv<'static>>) -> Kv<'static> {
     Kv::Array(v)
 }
-fn xy(x: f64, y: f64) -> Kv<'static> {
+pub(super) fn xy(x: f64, y: f64) -> Kv<'static> {
     o(vec![("x", f(x)), ("y", f(y))])
 }
-fn at(x: f64, y: f64) -> Kv<'static> {
+pub(super) fn at(x: f64, y: f64) -> Kv<'static> {
     o(vec![("m00", f(1.0)), ("m01", f(0.0)), ("m02", f(x)), ("m10", f(0.0)), ("m11", f(1.0)), ("m12", f(y))])
 }
 fn rgb(r: f64, gr: f64, b: f64) -> Kv<'static> {
     o(vec![("r", f(r)), ("g", f(gr)), ("b", f(b)), ("a", f(1.0))])
 }
-fn solid(r: f64, gr: f64, b: f64) -> Kv<'static> {
+pub(super) fn solid(r: f64, gr: f64, b: f64) -> Kv<'static> {
     o(vec![("type", e("SOLID")), ("color", rgb(r, gr, b)), ("opacity", f(1.0)), ("visible", Kv::Bool(true))])
 }
 fn root_guid() -> Kv<'static> {
@@ -127,7 +131,7 @@ fn prop_ref(def: u64, field: &'static str) -> Kv<'static> {
 }
 
 /// A node: id (0: the document), parent (id, position), type, name and further fields.
-fn node(id: u64, par: Option<(u64, &str)>, ty: &'static str, name: &str, mut more: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
+pub(super) fn node(id: u64, par: Option<(u64, &str)>, ty: &'static str, name: &str, mut more: Vec<(&'static str, Kv<'static>)>) -> Kv<'static> {
     let mut v = vec![("guid", if id == 0 { root_guid() } else { g(id) })];
     if let Some((p, pos)) = par {
         v.push(("parentIndex", o(vec![("guid", if p == 0 { root_guid() } else { g(p) }), ("position", s(pos))])));
@@ -562,6 +566,11 @@ fn oversized_grid_track_lists_warn_and_use_default_tracks() {
 }
 
 #[test]
+fn duplicate_explicit_field_ids_are_ambiguous() {
+    assert!(Schema::parse("message M uint a=1, uint b=1").is_err());
+}
+
+#[test]
 fn kiwi_round_trip() {
     let sc = schema();
     let back = Schema::decode(&encode::schema(&sc)).unwrap();
@@ -630,63 +639,82 @@ fn imports_the_fixture() {
     assert!(is_fig(&bytes));
     let (doc, warnings) = import(&bytes, "fallback").unwrap();
     assert_eq!(doc.name, "Fixture");
+    assert_fixture_layers(&doc);
+    assert_fixture_styles(&doc);
+    assert_fixture_variables(&doc);
+    assert_fixture_components(&doc);
+    assert_fixture_prototype(&doc, &warnings);
+}
+
+fn assert_fixture_layers(doc: &Document) {
     // The internal page is skipped.
     assert_eq!(doc.pages.len(), 1);
     let page = doc.node(doc.pages[0]).unwrap();
     assert_eq!(page.name, "Page A");
     // Siblings by position: the frame comes first even though it's listed after the component.
     assert_eq!(doc.node(page.children[0]).unwrap().name, "Screen");
-    let screen = named(&doc, "Screen");
+    let screen = named(doc, "Screen");
     let names: Vec<&str> = screen.children.iter().map(|c| doc.node(*c).unwrap().name.as_str()).collect();
     assert_eq!(names, ["Photo", "Title", "Group", "Styled", "Card", "Button copy", "Note"]);
     // Image fill from the archive.
-    let photo = named(&doc, "Photo");
+    let photo = named(doc, "Photo");
     let figcraft_doc::color::PaintKind::Image(img) = &photo.fills[0].kind else { panic!("not an image fill") };
     assert_eq!(doc.images.get(&img.image).map(|i| (i.width, i.height)), Some((2, 1)));
     assert_eq!((photo.corners.radii[0], photo.stroke.weight), (6.0, 2.0));
     // Text with a bold run over "the".
-    let NodeKind::Text(t) = &named(&doc, "Title").kind else { panic!("not text") };
+    let NodeKind::Text(t) = &named(doc, "Title").kind else { panic!("not text") };
     assert_eq!(t.characters, "Hi there");
     assert_eq!(t.style.font_size, 16.0);
     assert_eq!(t.leading_trim, figcraft_doc::LeadingTrim::CapHeight, "vertical trim (#466)");
     assert_eq!(t.runs.len(), 1);
     assert_eq!((t.runs[0].start, t.runs[0].end, t.runs[0].style.font_style.as_str()), (3, 6, "Bold"));
     // The group's children keep their place on the page (group at 100, 100).
-    assert!(matches!(named(&doc, "Group").kind, NodeKind::Group));
-    let tri = named(&doc, "Tri");
+    assert!(matches!(named(doc, "Group").kind, NodeKind::Group));
+    let tri = named(doc, "Tri");
     assert!(matches!(&tri.kind, NodeKind::Vector { network } if !network.regions.is_empty()));
     let abs = doc.world_transform(tri.id).translation();
     assert!((abs.x - 105.0).abs() < 1e-6 && (abs.y - 106.0).abs() < 1e-6, "{abs:?}");
-    assert!(matches!(named(&doc, "Star").kind, NodeKind::Star { count: 6, .. }));
-    // The linked style supplies the paint.
-    let styled = named(&doc, "Styled");
+    assert!(matches!(named(doc, "Star").kind, NodeKind::Star { count: 6, .. }));
+}
+
+fn assert_fixture_styles(doc: &Document) {
+    let styled = named(doc, "Styled");
     assert_eq!(styled.styles.fill.as_deref(), Some("1:3"));
     assert!(doc.styles.iter().any(|s| s.name == "Brand"));
     let figcraft_doc::color::PaintKind::Solid { color } = styled.fills[0].kind else { panic!("not solid") };
     assert_eq!((color.r, color.g, color.b), (0.0, 0.0, 1.0));
-    // Variables, the fill binding and the explicit mode.
+}
+
+fn assert_fixture_variables(doc: &Document) {
+    let screen = named(doc, "Screen");
     assert_eq!(doc.variables.collections.len(), 1);
     assert_eq!(doc.variables.variables[0].kind, VariableType::Color);
-    assert_eq!(named(&doc, "Card").bound.get("fill").map(String::as_str), Some("1:5"));
+    assert_eq!(named(doc, "Card").bound.get("fill").map(String::as_str), Some("1:5"));
     assert_eq!(screen.var_modes.get("1:4").map(String::as_str), Some("1:91"));
-    // The component keeps its property; the instance is expanded with the value applied.
-    let button = named(&doc, "Button");
+}
+
+fn assert_fixture_components(doc: &Document) {
+    let button = named(doc, "Button");
     assert!(matches!(&button.kind, NodeKind::Component { props, .. } if props.contains_key("Show icon")));
-    let inst = named(&doc, "Button copy");
+    let inst = named(doc, "Button copy");
     assert!(
         matches!(&inst.kind, NodeKind::Instance { component, props } if *component == button.id && props.get("Show icon") == Some(&Value::Bool(false)))
     );
     let icon = doc.node(inst.children[0]).unwrap();
     assert_eq!(icon.name, "Renamed icon");
     assert!(!icon.visible);
-    // Prototype: the click navigates to the component; the flow starts at the screen.
-    let it = &photo.interactions[0];
+}
+
+fn assert_fixture_prototype(doc: &Document, warnings: &[String]) {
+    let button = named(doc, "Button");
+    let screen = named(doc, "Screen");
+    let it = &named(doc, "Photo").interactions[0];
     assert!(matches!(it.actions[0], figcraft_doc::proto::Action::Navigate { dest, .. } if dest == button.id));
     assert_eq!(it.duration_ms, 250);
     let Some(NodeKind::Page { flows, .. }) = doc.node(doc.pages[0]).map(|p| &p.kind) else { panic!("no page") };
     assert_eq!((flows[0].name.as_str(), flows[0].start), ("Main flow", screen.id));
     // The sticky note comes in as a frame, with a warning.
-    assert!(matches!(named(&doc, "Note").kind, NodeKind::Frame));
+    assert!(matches!(named(doc, "Note").kind, NodeKind::Frame));
     assert!(warnings.iter().any(|w| w.contains("sticky layers import as frames")), "{warnings:?}");
 }
 
@@ -758,6 +786,288 @@ fn a_data_blob_past_the_blobs_stays_a_placeholder() {
     assert!(warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
 }
 
+/// A file can point any number of image hashes at one large blob; each used to get its own copy
+/// of it (#1059).
+#[test]
+fn hashes_naming_one_blob_share_one_copy_of_it() {
+    let image = |hash: u8, blob: u64| o(vec![("image", o(vec![("hash", Kv::Bytes(vec![hash; 20])), ("dataBlob", u(blob))]))]);
+    let msg = o(vec![
+        ("blobs", Kv::Array(vec![o(vec![("bytes", Kv::Bytes(png()))]), o(vec![("bytes", Kv::Bytes(vec![7; 16]))])])),
+        ("nodeChanges", Kv::Array((1..=50).map(|h| image(h, 0)).chain([image(99, 1), image(98, 2)]).collect())),
+    ]);
+    let copies = embedded_copies(&msg);
+    assert_eq!(copies.len(), 51, "the hash naming no blob is left out");
+    let first = &copies[&"01".repeat(20)];
+    assert_eq!(**first, *png());
+    assert_eq!(copies.values().filter(|c| Arc::ptr_eq(c, first)).count(), 50);
+    assert_eq!(*copies[&"63".repeat(20)], [7; 16]);
+}
+
+/// Hashes naming one blob are imported as one image: every alias is renamed to the first hash
+/// before layers are built, so the blob is copied and hashed once, not once per hash.
+#[test]
+fn hashes_naming_one_blob_are_imported_once() {
+    let rect = |i: u64, hash: u8, blob: u64| {
+        let paint = o(vec![("type", e("IMAGE")), ("image", o(vec![("hash", Kv::Bytes(vec![hash; 20])), ("dataBlob", u(blob))]))]);
+        node(i, Some((1, &format!("{i:04}"))), "RECTANGLE", &format!("R{i}"), vec![("size", xy(10.0, 10.0)), ("fillPaints", arr(vec![paint]))])
+    };
+    let mut nodes = vec![node(0, None, "DOCUMENT", "D", vec![]), node(1, Some((0, "!")), "CANVAS", "P", vec![])];
+    nodes.extend((2..42).map(|i| rect(i, i as u8, 0)));
+    let msg = o(vec![("nodeChanges", arr(nodes)), ("blobs", arr(vec![o(vec![("bytes", Kv::Bytes(png()))])]))]);
+    let copies = embedded_copies(&msg);
+    let aliases = embedded_aliases(&copies, |_| false);
+    assert_eq!(aliases.len(), 39);
+    assert!(aliases.values().all(|c| *c == "02".repeat(20)));
+    // A hash `images/` also holds keeps its own name.
+    assert!(!embedded_aliases(&copies, |h| h == "05".repeat(20)).contains_key(&"05".repeat(20)));
+    let (doc, warnings) = import(&canvas(&schema(), &msg), "x").unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+    assert_eq!(doc.images.len(), 1);
+    let key = doc.images.keys().next().unwrap();
+    for i in 2..42 {
+        let figcraft_doc::color::PaintKind::Image(img) = &named(&doc, &format!("R{i}")).fills[0].kind else { panic!("not an image fill") };
+        assert_eq!(&img.image, key);
+    }
+}
+
+#[test]
+fn image_refs_are_renamed_wherever_they_sit() {
+    let aliases: BTreeMap<String, String> = [("b".to_string(), "a".to_string())].into();
+    let mut json = serde_json::json!({"fills": [{"imageRef": "b"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "b"}]}}, "name": "b"});
+    canonical_image_refs(&mut json, &aliases);
+    assert_eq!(
+        json,
+        serde_json::json!({"fills": [{"imageRef": "a"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "a"}]}}, "name": "b"})
+    );
+}
+
+mod image_budget {
+    use super::*;
+
+    fn image(hash: u8) -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(2, 1, image::Rgba([hash, 0, 0, 255]));
+        let mut out = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    }
+
+    fn file(references: &[u8], members: &[(u8, Vec<u8>)]) -> Vec<u8> {
+        let mut nodes = vec![node(0, None, "DOCUMENT", "Document", vec![]), node(1, Some((0, "!")), "CANVAS", "Page", vec![])];
+        for (i, hash) in references.iter().enumerate() {
+            nodes.push(node(
+                i as u64 + 2,
+                Some((1, &format!("{i:04}"))),
+                "RECTANGLE",
+                &format!("Image {i}"),
+                vec![
+                    ("size", xy(10.0, 10.0)),
+                    ("fillPaints", arr(vec![o(vec![("type", e("IMAGE")), ("image", o(vec![("hash", Kv::Bytes(vec![*hash; 20]))]))])])),
+                ],
+            ));
+        }
+        let canvas = canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))]));
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        z.start_file("canvas.fig", deflated).unwrap();
+        z.write_all(&canvas).unwrap();
+        for (hash, bytes) in members {
+            z.start_file(format!("images/{}", format!("{hash:02x}").repeat(20)), deflated).unwrap();
+            z.write_all(bytes).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    fn bytes(doc: &Document, index: usize) -> &[u8] {
+        let node = named(doc, &format!("Image {index}"));
+        let figcraft_doc::color::PaintKind::Image(fill) = &node.fills[0].kind else { panic!("not an image fill") };
+        &doc.images[&fill.image].bytes
+    }
+
+    fn budget_warnings(warnings: &[String]) -> Vec<&str> {
+        warnings.iter().filter(|w| w.contains("total ZIP image byte budget")).map(String::as_str).collect()
+    }
+
+    fn change_member_field(zip: &mut [u8], hash: u8, offset: usize, value: u32) {
+        let start = {
+            let mut z = zip::ZipArchive::new(std::io::Cursor::new(&*zip)).unwrap();
+            z.by_name(&format!("images/{}", format!("{hash:02x}").repeat(20))).unwrap().central_header_start() as usize
+        };
+        zip[start + offset..start + offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    #[test]
+    fn exact_total_limit_keeps_all_images_and_each_import_gets_its_own_budget() {
+        let members = [(1, image(1)), (2, image(2))];
+        let limit = members.iter().map(|(_, b)| b.len() as u64).sum();
+        let zip = file(&[1, 2], &members);
+        for _ in 0..2 {
+            let (doc, warnings) = import_with_image_limit(&zip, "Images", limit).unwrap();
+            assert_eq!(bytes(&doc, 0), members[0].1);
+            assert_eq!(bytes(&doc, 1), members[1].1);
+            assert!(warnings.is_empty(), "{warnings:?}");
+        }
+    }
+
+    #[test]
+    fn individually_acceptable_images_overflow_the_total_and_leave_placeholders() {
+        let members = [(1, image(1)), (2, image(2))];
+        let limit = members.iter().map(|(_, b)| b.len() as u64).sum::<u64>() - 1;
+        assert!(members.iter().all(|(_, b)| b.len() as u64 <= limit));
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 2], &members), "Images", limit).unwrap();
+        assert_eq!(bytes(&doc, 0), members[0].1);
+        assert_ne!(bytes(&doc, 1), members[1].1);
+        assert!(!doc.images.contains_key(&crate::image_hash(&members[1].1)));
+        let notes = budget_warnings(&warnings);
+        assert_eq!(notes.len(), 1, "{warnings:?}");
+        assert!(notes[0].contains("1 ZIP image") && notes[0].contains(&limit.to_string()), "{warnings:?}");
+    }
+
+    #[test]
+    fn repeated_references_do_not_charge_or_count_a_rejection_twice() {
+        let members = [(1, image(1)), (2, image(2))];
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 1, 2, 2, 1], &members), "Images", members[0].1.len() as u64).unwrap();
+        for i in [0, 1, 4] {
+            assert_eq!(bytes(&doc, i), members[0].1);
+        }
+        assert_eq!(bytes(&doc, 2), bytes(&doc, 3));
+        assert_ne!(bytes(&doc, 2), members[1].1);
+        let notes = budget_warnings(&warnings);
+        assert_eq!(notes.len(), 1, "{warnings:?}");
+        assert!(notes[0].contains("1 ZIP image"), "{warnings:?}");
+    }
+
+    #[test]
+    fn distinct_members_with_identical_contents_still_use_the_read_budget() {
+        let png = image(1);
+        let members = [(1, png.clone()), (2, png.clone())];
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 2], &members), "Images", png.len() as u64).unwrap();
+        assert_eq!(bytes(&doc, 0), png);
+        assert_ne!(bytes(&doc, 1), png);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn rejecting_a_member_before_reading_leaves_room_for_a_smaller_one() {
+        let png = image(1);
+        let members = [(1, vec![0; png.len() + 1]), (2, png.clone())];
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 2], &members), "Images", png.len() as u64).unwrap();
+        assert_ne!(bytes(&doc, 0), members[0].1);
+        assert_eq!(bytes(&doc, 1), png);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn failed_crc_reads_still_consume_the_bytes_read() {
+        let members = [(1, image(1)), (2, image(2))];
+        let mut zip = file(&[1, 2], &members);
+        change_member_field(&mut zip, 1, 16, 0);
+        let (doc, warnings) = import_with_image_limit(&zip, "Images", members[0].1.len() as u64 + 1).unwrap();
+        assert_ne!(bytes(&doc, 0), members[0].1);
+        assert_ne!(bytes(&doc, 1), members[1].1);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn a_truncated_deflate_read_keeps_its_partial_charge() {
+        let members = [(1, image(1)), (2, image(2))];
+        let mut zip = file(&[1, 2], &members);
+        // Shorten the first member's compressed size, cutting its deflate stream mid-image.
+        change_member_field(&mut zip, 1, 20, 15);
+        let limit = members[0].1.len() as u64;
+        let archive = Archive::open(&zip).unwrap();
+        archive.image_budget.remaining.set(limit);
+        assert!(archive.image(&"01".repeat(20)).is_none());
+        let remaining = archive.image_budget.remaining.get();
+        assert!(remaining > 0 && remaining < limit, "partial read left {remaining} of {limit} bytes");
+        assert!(archive.image(&"02".repeat(20)).is_none());
+        assert_eq!(archive.image_budget.remaining.get(), remaining);
+        let (doc, warnings) = import_with_image_limit(&zip, "Images", limit).unwrap();
+        assert_ne!(bytes(&doc, 1), members[1].1);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn the_individual_image_cap_is_preserved_without_reading_a_large_member() {
+        let members = [(1, image(1)), (2, image(2))];
+        let mut zip = file(&[1, 2], &members);
+        change_member_field(&mut zip, 1, 24, (MAX_IMAGE + 1) as u32);
+        let (doc, warnings) = import_with_image_limit(&zip, "Images", members[1].1.len() as u64).unwrap();
+        assert_ne!(bytes(&doc, 0), members[0].1);
+        assert_eq!(bytes(&doc, 1), members[1].1);
+        assert!(budget_warnings(&warnings).is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn crc_is_checked_even_when_the_read_ends_exactly_at_the_budget() {
+        let members = [(1, image(1))];
+        let mut zip = file(&[1], &members);
+        change_member_field(&mut zip, 1, 16, 0);
+        let (doc, warnings) = import_with_image_limit(&zip, "Images", members[0].1.len() as u64).unwrap();
+        assert_ne!(bytes(&doc, 0), members[0].1);
+        assert!(warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+        assert!(budget_warnings(&warnings).is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn an_understated_size_cannot_read_past_the_remaining_budget() {
+        let members = [(1, image(1)), (2, image(2))];
+        let mut zip = file(&[1, 2], &members);
+        change_member_field(&mut zip, 1, 24, 1);
+        let archive = Archive::open(&zip).unwrap();
+        archive.image_budget.remaining.set(members[0].1.len() as u64 - 1);
+        assert!(archive.image(&"01".repeat(20)).is_none());
+        assert_eq!(archive.image_budget.remaining.get(), 0);
+        assert_eq!(archive.image_budget.skipped.get(), 1);
+        assert!(archive.image(&"02".repeat(20)).is_none());
+        assert_eq!(archive.image_budget.remaining.get(), 0);
+        assert_eq!(archive.image_budget.skipped.get(), 2);
+    }
+
+    #[test]
+    fn invalid_image_contents_are_charged_before_image_validation() {
+        let members = [(1, vec![0; 8]), (2, image(2))];
+        let limit = members[1].1.len() as u64 + 7;
+        let (doc, warnings) = import_with_image_limit(&file(&[1, 2], &members), "Images", limit).unwrap();
+        assert_ne!(bytes(&doc, 1), members[1].1);
+        assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
+    }
+
+    #[test]
+    fn missing_and_unreferenced_members_do_not_consume_the_budget() {
+        let members = [(1, image(1)), (2, vec![0; 128])];
+        let (doc, warnings) = import_with_image_limit(&file(&[9, 1], &members), "Images", members[0].1.len() as u64).unwrap();
+        assert_eq!(bytes(&doc, 1), members[0].1);
+        assert!(warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+        assert!(budget_warnings(&warnings).is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn embedded_image_fallback_is_independent_of_the_zip_budget() {
+        let canvas = canvas(&schema(), &message_with_image_in_blobs(0));
+        for bytes in [&canvas, &zip_file(&canvas)] {
+            let (doc, warnings) = import_with_image_limit(bytes, "Images", 0).unwrap();
+            let photo = named(&doc, "Photo");
+            let figcraft_doc::color::PaintKind::Image(fill) = &photo.fills[0].kind else { panic!("not an image fill") };
+            assert_eq!(*doc.images[&fill.image].bytes, png());
+            assert!(!warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+            assert_eq!(budget_warnings(&warnings).len(), usize::from(bytes.starts_with(b"PK")), "{warnings:?}");
+        }
+    }
+
+    #[test]
+    fn default_import_preserves_image_bytes_dimensions_and_existing_warnings() {
+        let members = [(1, image(1)), (2, image(2))];
+        let (doc, warnings) = import(&file(&[1, 2], &members), "Images").unwrap();
+        assert_eq!(bytes(&doc, 0), members[0].1);
+        assert_eq!(bytes(&doc, 1), members[1].1);
+        assert!(doc.images.values().all(|img| (img.width, img.height) == (2, 1)));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let (doc, warnings) = import(&fixture(), "Fixture").unwrap();
+        assert!(doc.images.values().any(|img| *img.bytes == png() && (img.width, img.height) == (2, 1)));
+        assert!(budget_warnings(&warnings).is_empty(), "{warnings:?}");
+    }
+}
+
 #[test]
 fn other_files_are_not_fig() {
     assert!(try_import(b"{\"document\": {}}", "x").is_none());
@@ -766,10 +1076,10 @@ fn other_files_are_not_fig() {
     assert!(try_import(&native, "x").is_none());
 }
 
-/// A cheap deterministic generator for the mangle tests.
-struct Lcg(u64);
+/// A cheap deterministic generator (mangled inputs, generated fixtures).
+pub(super) struct Lcg(pub(super) u64);
 impl Lcg {
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         self.0 >> 33
     }
@@ -852,6 +1162,14 @@ fn large_files_get_a_larger_value_budget() {
     assert!(kiwi::value_budget(39_528_420) > 29_703_730);
     // Still bounded by the largest canvas read.
     assert!(kiwi::value_budget(MAX_CANVAS as usize) <= 128 << 20);
+    // Counting every scalar field, a dense file may reach about 2.4 values per compressed byte (the
+    // 15 MB text-heavy fixture in `value_budget_tests` measures 1.8): below the ceiling the budget must
+    // cover that, the floor still holds up to 5 MB of canvas, and 32 MiB is enough for the ceiling.
+    assert!(kiwi::value_budget(8 << 20) >= (8 << 20) * 12 / 5);
+    #[cfg(not(target_pointer_width = "32"))]
+    assert!(kiwi::value_budget(30_000_000) >= 30_000_000 * 12 / 5);
+    assert_eq!(kiwi::value_budget(5_000_000), 20_000_000);
+    assert_eq!(kiwi::value_budget(32 << 20), kiwi::value_budget(MAX_CANVAS as usize));
 }
 
 #[test]
@@ -893,6 +1211,72 @@ fn the_mapper_stops_at_the_layer_cap_it_is_given() {
     assert!(warnings.iter().any(|w| w.contains("more than 5 layers")), "{warnings:?}");
     let (_, warnings, _) = map::to_rest(&msg, "x", crate::rest::MAX_NODES);
     assert!(!warnings.iter().any(|w| w.contains("more than")), "{warnings:?}");
+}
+
+#[test]
+fn scalar_fields_count_against_the_value_budget() {
+    // A message of 1000 scalar fields (id 1, `true`) is 1001 values: a budget of 10 refuses it.
+    let fields = vec![Field { name: "b".into(), ty: Some(Type::Bool), array: false, value: 1 }];
+    let sc = Schema { defs: vec![Def { name: "Message".into(), kind: Kind::Message, fields }] };
+    let mut data = [1u8, 1].repeat(1000);
+    data.push(0);
+    let e = sc.decode_message_within(0, &data, 10).unwrap_err();
+    assert_eq!(e.0, "message: too many values");
+    assert!(sc.decode_message_within(0, &data, 1001).is_ok());
+}
+
+#[test]
+fn empty_arrays_count_against_the_value_budget() {
+    // 1000 empty `uint[]` fields: each field is a value even with no elements, so a small budget
+    // can't be outgrown by piling up empty containers.
+    let fields = vec![Field { name: "a".into(), ty: Some(Type::Uint), array: true, value: 1 }];
+    let sc = Schema { defs: vec![Def { name: "Message".into(), kind: Kind::Message, fields }] };
+    let mut data = [1u8, 0].repeat(1000);
+    data.push(0);
+    let e = sc.decode_message_within(0, &data, 10).unwrap_err();
+    assert_eq!(e.0, "message: too many values");
+    assert!(sc.decode_message_within(0, &data, 1001).is_ok());
+}
+
+#[test]
+fn message_tags_find_their_field_by_id_in_a_wide_definition() {
+    // A wide definition: every tag is looked up by id, and the first field with an id wins, as
+    // before the lookup was indexed.
+    let mut fields: Vec<Field> = (1..=5000).map(|i| Field { name: format!("f{i}"), ty: Some(Type::Bool), array: false, value: i }).collect();
+    fields.push(Field { name: "shadow".into(), ty: Some(Type::Bool), array: false, value: 7 });
+    let sc = Schema { defs: vec![Def { name: "Message".into(), kind: Kind::Message, fields }] };
+    let mut w = encode::Writer::default();
+    for _ in 0..20_000 {
+        w.var_uint(5000);
+        w.byte(1);
+    }
+    w.var_uint(7);
+    w.byte(0);
+    w.var_uint(0);
+    let Kv::Object(out) = sc.decode_message(0, &w.0).unwrap() else { panic!() };
+    assert_eq!(out.len(), 20_001);
+    assert!(out.iter().take(20_000).all(|(n, v)| *n == "f5000" && *v == Kv::Bool(true)));
+    assert_eq!(out.last().map(|(n, _)| *n), Some("f7"));
+}
+
+#[test]
+fn a_schema_is_refused_past_its_total_field_count() {
+    // 25 definitions of 10 000 fields each: every one is within the per-definition cap, but
+    // together they pass the schema's total.
+    let mut w = encode::Writer::default();
+    w.var_uint(25);
+    for d in 0..25 {
+        w.string(&format!("D{d}"));
+        w.byte(0);
+        w.var_uint(10_000);
+        for i in 0..10_000u32 {
+            w.string("");
+            w.var_int(0);
+            w.byte(0);
+            w.var_uint(i);
+        }
+    }
+    assert_eq!(Schema::decode(&w.0).unwrap_err().0, "schema: too many fields");
 }
 
 #[test]
@@ -1153,6 +1537,9 @@ mod image_filters;
 #[path = "text_list_tests.rs"]
 mod text_list;
 
+#[path = "text_direction_tests.rs"]
+mod text_direction;
+
 /// `.fig` files in the folder `FIGCRAFT_FIG_SAMPLES` names (none when it's unset).
 pub(super) fn samples() -> Vec<std::path::PathBuf> {
     let Some(dir) = std::env::var_os("FIGCRAFT_FIG_SAMPLES") else { return Vec::new() };
@@ -1199,4 +1586,242 @@ fn dump_samples() {
         let (rest, ..) = map::to_rest(&msg, &stem, super::layer_budget(message.len()));
         std::fs::write(format!("{out}/{stem}.rest.json"), serde_json::to_string_pretty(&rest).unwrap()).unwrap();
     }
+}
+
+#[path = "board_import_tests.rs"]
+mod board;
+
+/// A file that took several updates of a library holds a copy of its collection and of each of
+/// its variables per version it met (same asset key, another version). Layers and modes name any
+/// of them by asset, never by guid: they all become the newest copy, which has every mode — a page
+/// set to a mode only the newer copies have keeps it, and fills bound to an older copy of a
+/// variable follow its newest values.
+#[test]
+fn library_copies_of_several_versions_become_the_newest() {
+    let mode = |id, name: &'static str, pos: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s(pos))]);
+    let by_asset = |key: &'static str, version: &'static str| o(vec![("assetRef", o(vec![("key", s(key)), ("version", s(version))]))]);
+    let color_value = |c| o(vec![("value", o(vec![("colorValue", c)])), ("dataType", e("COLOR"))]);
+    let values = |pairs: Vec<(u64, Kv<'static>)>| {
+        o(vec![("entries", arr(pairs.into_iter().map(|(m, c)| o(vec![("modeID", g(m)), ("variableData", color_value(c))])).collect()))])
+    };
+    let asset_alias =
+        |key: &'static str, version: &'static str| o(vec![("value", o(vec![("alias", by_asset(key, version))])), ("dataType", e("ALIAS"))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "Document", vec![]),
+        // The page is set to "Purple", a mode the oldest copy of the collection didn't have yet.
+        node(
+            1,
+            Some((0, "!")),
+            "CANVAS",
+            "Page",
+            vec![(
+                "variableModeBySetMap",
+                o(vec![("entries", arr(vec![o(vec![("variableSetID", by_asset("products", "10:1")), ("variableModeID", g(92))])]))]),
+            )],
+        ),
+        node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        node(
+            4,
+            Some((2, "!")),
+            "VARIABLE_SET",
+            "Products",
+            // "Legacy" was removed from the library since: only this older copy has it.
+            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!"), mode(93, "Legacy", "\"")])), ("key", s("products")), ("version", s("10:1"))],
+        ),
+        node(
+            6,
+            Some((2, "#")),
+            "VARIABLE_SET",
+            "Products",
+            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")])), ("key", s("products")), ("version", s("20:1"))],
+        ),
+        node(
+            5,
+            Some((2, "\"")),
+            "VARIABLE",
+            "button-bg",
+            vec![
+                ("variableSetID", by_asset("products", "10:1")),
+                ("variableResolvedType", e("COLOR")),
+                ("variableDataValues", values(vec![(90, rgb(0.0, 0.0, 1.0))])),
+                ("key", s("button-bg")),
+                ("version", s("10:1")),
+            ],
+        ),
+        node(
+            7,
+            Some((2, "$")),
+            "VARIABLE",
+            "button-bg",
+            vec![
+                ("variableSetID", by_asset("products", "20:1")),
+                ("variableResolvedType", e("COLOR")),
+                ("variableDataValues", values(vec![(90, rgb(0.0, 0.0, 1.0)), (92, rgb(0.5, 0.0, 0.5))])),
+                ("key", s("button-bg")),
+                ("version", s("20:1")),
+            ],
+        ),
+        // A pasted layer names the variable by the library's own guid (not a node of this file)
+        // and by its asset: the asset wins.
+        node(
+            11,
+            Some((1, "\"")),
+            "FRAME",
+            "Pasted button",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "fillPaints",
+                    arr(vec![o(vec![
+                        ("type", e("SOLID")),
+                        ("color", rgb(0.0, 0.0, 1.0)),
+                        (
+                            "colorVar",
+                            o(vec![
+                                (
+                                    "value",
+                                    o(vec![(
+                                        "alias",
+                                        o(vec![("guid", g(777)), ("assetRef", o(vec![("key", s("button-bg")), ("version", s("20:1"))]))]),
+                                    )]),
+                                ),
+                                ("dataType", e("ALIAS")),
+                            ]),
+                        ),
+                    ])]),
+                ),
+            ],
+        ),
+        // A page section set by a versionless reference, while the file holds several copies.
+        node(
+            12,
+            Some((1, "#")),
+            "FRAME",
+            "Versionless",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "variableModeBySetMap",
+                    o(vec![(
+                        "entries",
+                        arr(vec![o(vec![("variableSetID", o(vec![("assetRef", o(vec![("key", s("products"))]))])), ("variableModeID", g(92))])]),
+                    )]),
+                ),
+            ],
+        ),
+        // The button names the older copy of the variable.
+        node(
+            10,
+            Some((1, "!")),
+            "FRAME",
+            "Button",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "fillPaints",
+                    arr(vec![o(vec![("type", e("SOLID")), ("color", rgb(0.0, 0.0, 1.0)), ("colorVar", asset_alias("button-bg", "10:1"))])]),
+                ),
+            ],
+        ),
+    ];
+    let (doc, warnings) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+    let products = &doc.variables.collections[0];
+    assert_eq!(products.modes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Blue", "Purple", "Legacy"]);
+    assert_eq!(doc.variables.variables.len(), 1);
+    let var = &doc.variables.variables[0];
+    assert_eq!(var.collection, products.id);
+    // The newest copy's values: Purple included (a mode only it has), Legacy filled from the default.
+    assert_eq!(var.values.len(), 3, "{:?}", var.values);
+    assert!(matches!(var.values.get("1:92"), Some(figcraft_doc::VariableValue::Color(c)) if (c.r - 0.5).abs() < 1e-6), "{:?}", var.values);
+    let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+    assert_eq!(page.var_modes.get(&products.id).map(String::as_str), Some("1:92"));
+    let button = named(&doc, "Button");
+    assert_eq!(button.bound.values().next(), Some(&var.id), "{:?}", button.bound);
+    assert_eq!(named(&doc, "Versionless").var_modes.get(&products.id).map(String::as_str), Some("1:92"));
+    let pasted = named(&doc, "Pasted button");
+    assert_eq!(pasted.bound.values().next(), Some(&var.id), "{:?}", pasted.bound);
+    assert!(!warnings.iter().any(|w| w.contains("variable modes of collections")), "{warnings:?}");
+}
+
+/// A copy of a library collection that a later change removed, followed by a live node for the
+/// same asset key and version: the live one is the collection, not the removed one the asset
+/// index met first.
+#[test]
+fn removed_library_collection_copies_give_way_to_live_ones() {
+    let mode = |id, name: &'static str, pos: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s(pos))]);
+    let by_asset = |version: &'static str| o(vec![("assetRef", o(vec![("key", s("products")), ("version", s(version))]))]);
+    let set = |id, version: &'static str, modes: Vec<Kv<'static>>| {
+        node(id, Some((2, "!")), "VARIABLE_SET", "Products", vec![("variableSetModes", arr(modes)), ("key", s("products")), ("version", s(version))])
+    };
+    let removed = o(vec![("guid", g(8)), ("phase", e("REMOVED"))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "Document", vec![]),
+        node(
+            1,
+            Some((0, "!")),
+            "CANVAS",
+            "Page",
+            vec![("variableModeBySetMap", o(vec![("entries", arr(vec![o(vec![("variableSetID", by_asset("30:1")), ("variableModeID", g(92))])]))]))],
+        ),
+        node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        set(4, "10:1", vec![mode(90, "Blue", "!")]),
+        set(8, "30:1", vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")]),
+        removed,
+        set(9, "30:1", vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")]),
+    ];
+    let (doc, warnings) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+    let products = &doc.variables.collections[0];
+    assert_eq!(products.id, "1:9");
+    let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+    assert_eq!(page.var_modes.get("1:9").map(String::as_str), Some("1:92"), "{warnings:?}");
+}
+
+/// Two copies of a library collection with the same version: the choice doesn't depend on the order
+/// of the node changes (the higher guid wins), and the thread's lookup table is gone after the import.
+#[test]
+fn same_version_library_copies_resolve_deterministically_and_leave_no_table() {
+    let mode = |id, name: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s("!"))]);
+    let set = |id, modes: Vec<Kv<'static>>| {
+        node(id, Some((2, "!")), "VARIABLE_SET", "Products", vec![("variableSetModes", arr(modes)), ("key", s("products")), ("version", s("20:1"))])
+    };
+    let page = node(
+        1,
+        Some((0, "!")),
+        "CANVAS",
+        "Page",
+        vec![(
+            "variableModeBySetMap",
+            o(vec![(
+                "entries",
+                arr(vec![o(vec![("variableSetID", o(vec![("assetRef", o(vec![("key", s("products"))]))])), ("variableModeID", g(90))])]),
+            )]),
+        )],
+    );
+    let base = || {
+        vec![
+            node(0, None, "DOCUMENT", "Document", vec![]),
+            page.clone(),
+            node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        ]
+    };
+    let mut picked = Vec::new();
+    for swap in [false, true] {
+        let (a, b) = (set(4, vec![mode(90, "Blue")]), set(6, vec![mode(90, "Blue")]));
+        let mut nodes = base();
+        if swap {
+            nodes.extend([b, a]);
+        } else {
+            nodes.extend([a, b]);
+        }
+        let (doc, _) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+        assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+        let id = doc.variables.collections[0].id.clone();
+        let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+        assert_eq!(page.var_modes.get(&id).map(String::as_str), Some("1:90"));
+        picked.push(id);
+        assert!(!super::map::VarCanon::installed());
+    }
+    assert_eq!(picked, ["1:6", "1:6"]);
 }

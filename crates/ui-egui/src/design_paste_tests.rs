@@ -45,6 +45,34 @@ fn paste_takes_layers_copied_in_another_design_app() {
     assert_eq!(selected_names(&app), ["Copied layer"]);
 }
 
+struct HtmlAndImage(String);
+
+impl Services for HtmlAndImage {
+    fn clipboard_get_html(&mut self) -> Option<String> {
+        Some(self.0.clone())
+    }
+    fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
+        Some((2, 2, vec![255; 16]))
+    }
+}
+
+#[test]
+fn editable_design_layers_take_priority_over_a_png_representation() {
+    let mut session = Session::new();
+    let selected = session.execute("shape.ellipse", &json!({"x": 100, "y": 100, "width": 80, "height": 80})).unwrap()["id"].as_u64().unwrap();
+    let mut app = FigApp::new(session, Box::new(HtmlAndImage(copied_html())));
+    let before = app.session.doc().unwrap().node_count();
+
+    crate::menus::paste(&mut app, None, None);
+
+    assert_eq!(selected_names(&app), ["Copied layer"]);
+    assert_eq!(app.session.doc().unwrap().node_count(), before + 1);
+    assert!(matches!(
+        app.session.doc().unwrap().node(figcraft_doc::NodeId(selected)).unwrap().fills[0].kind,
+        figcraft_color::PaintKind::Solid { .. }
+    ));
+}
+
 #[test]
 fn paste_here_puts_copied_design_layers_at_the_point() {
     let html = copied_html();

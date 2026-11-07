@@ -165,8 +165,25 @@ impl Raw {
     pub fn next(&mut self) -> ServerMsg {
         loop {
             if let Message::Binary(b) = self.0.read().unwrap() {
-                return message::decode(&b, usize::MAX).unwrap();
+                // As the app's clients do: a packed welcome is read before anything sees it.
+                let mut m = message::decode(&b, usize::MAX).unwrap();
+                message::unpack(&mut m, usize::MAX).unwrap();
+                return m;
             }
         }
     }
+}
+
+/// A one-page file with one rectangle, named `name`, as a snapshot to publish.
+pub fn snapshot(name: &str) -> Vec<figcraft_collab::Change> {
+    let mut d = figcraft_doc::Document::new(name);
+    let page = d.first_page().unwrap();
+    d.create(page, figcraft_doc::NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 60.0).unwrap();
+    d.repair();
+    figcraft_collab::Replica::new(d).snapshot().unwrap()
+}
+
+/// An address from text.
+pub fn ip(s: &str) -> std::net::IpAddr {
+    s.parse().unwrap()
 }

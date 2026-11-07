@@ -264,6 +264,256 @@ fn tail_canvas() -> Vec<u8> {
     canvas(&schema(), &tail_message())
 }
 
+fn region_canvas(fill_paints: Option<Vec<Kv<'static>>>, style_id: u32) -> Vec<u8> {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+    let vector_data = field_mut(wave, "vectorData").unwrap();
+    let Kv::Array(styles) = field_mut(vector_data, "styleOverrideTable").unwrap() else { panic!() };
+    let Kv::Object(fields) = styles.first_mut().unwrap() else { panic!() };
+    if let Some(fill_paints) = fill_paints {
+        fields.push(("fillPaints", arr(fill_paints)));
+    }
+    let mut network = network::decode(&square_blob()).unwrap();
+    network.regions[0].style = style_id;
+    let Kv::Array(blobs) = field_mut(&mut message, "blobs").unwrap() else { panic!() };
+    let bytes = field_mut(blobs.get_mut(1).unwrap(), "bytes").unwrap();
+    *bytes = Kv::Bytes(network::encode(&network));
+    canvas(&schema(), &message)
+}
+
+fn region_canvas_with_link(own: Option<Kv<'static>>, link_target: Option<u64>, linked_fill: Kv<'static>) -> Vec<u8> {
+    region_canvas_with_typed_link(own, link_target, "FILL", linked_fill)
+}
+
+fn region_canvas_with_typed_link(own: Option<Kv<'static>>, link_target: Option<u64>, style_type: &'static str, linked_fill: Kv<'static>) -> Vec<u8> {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+    let vector_data = field_mut(wave, "vectorData").unwrap();
+    let Kv::Array(styles) = field_mut(vector_data, "styleOverrideTable").unwrap() else { panic!() };
+    let Kv::Object(fields) = styles.first_mut().unwrap() else { panic!() };
+    if let Some(own) = own {
+        fields.push(("fillPaints", arr(vec![own])));
+    }
+    if let Some(target) = link_target {
+        fields.push(("styleIdForFill", o(vec![("guid", g(target))])));
+    }
+    nodes.push(node(50, None, "RECTANGLE", "Linked Fill", vec![("styleType", e(style_type)), ("fillPaints", arr(vec![linked_fill]))]));
+    let mut network = network::decode(&square_blob()).unwrap();
+    network.regions[0].style = 1;
+    let Kv::Array(blobs) = field_mut(&mut message, "blobs").unwrap() else { panic!() };
+    *field_mut(blobs.get_mut(1).unwrap(), "bytes").unwrap() = Kv::Bytes(network::encode(&network));
+    canvas(&schema(), &message)
+}
+
+fn field_mut<'a, 's>(value: &'a mut Kv<'s>, name: &str) -> Option<&'a mut Kv<'s>> {
+    if let Kv::Object(fields) = value {
+        return fields.iter_mut().find(|(key, _)| *key == name).map(|(_, field)| field);
+    }
+    None
+}
+
+#[test]
+fn vector_region_fills_import_from_style_table() {
+    let solid = o(vec![
+        ("type", e("SOLID")),
+        ("color", o(vec![("r", f(0.2)), ("g", f(0.4)), ("b", f(0.8)), ("a", f(0.5))])),
+        ("opacity", f(0.5)),
+        ("visible", Kv::Bool(false)),
+    ]);
+    let gradient = o(vec![
+        ("type", e("GRADIENT_LINEAR")),
+        (
+            "stops",
+            arr(vec![
+                o(vec![("position", f(0.0)), ("color", o(vec![("r", f(1.0)), ("g", f(0.0)), ("b", f(0.0)), ("a", f(1.0))]))]),
+                o(vec![("position", f(1.0)), ("color", o(vec![("r", f(0.0)), ("g", f(0.0)), ("b", f(1.0)), ("a", f(0.25))]))]),
+            ]),
+        ),
+    ]);
+    let image_hash = vec![0x12, 0x34, 0x56];
+    let image = o(vec![("type", e("IMAGE")), ("image", o(vec![("hash", Kv::Bytes(image_hash.clone()))])), ("imageScaleMode", e("FILL"))]);
+    let wire = region_canvas(Some(vec![solid, gradient, image]), 1);
+    let (doc, warnings) = import(&wire, "Region fills").unwrap();
+    let fills = network_of(&doc, "Wave").regions[0].fills.as_ref().unwrap();
+    let figcraft_doc::color::PaintKind::Solid { color } = &fills[0].kind else { panic!("{fills:?}") };
+    assert_eq!((color.r, color.g, color.b, fills[0].opacity, fills[0].visible), (0.2, 0.4, 0.8, 0.25, false));
+    assert!(matches!(&fills[1].kind, figcraft_doc::color::PaintKind::Gradient(g) if g.stops.len() == 2 && g.stops[1].color.a == 0.25));
+    let figcraft_doc::color::PaintKind::Image(imported_image) = &fills[2].kind else { panic!("{fills:?}") };
+    let image_key = imported_image.image.clone();
+    assert!(doc.images.contains_key(&image_key), "image reference must retain its image placeholder");
+    assert!(!warnings.iter().any(|warning| warning.contains("their own fill use the layer's fill")), "{warnings:?}");
+
+    let saved = crate::save_bytes(&doc, None).unwrap();
+    let (reopened, _) = crate::load_bytes(&saved).unwrap();
+    assert_eq!(network_of(&reopened, "Wave").regions[0].fills, Some(fills.clone()));
+    assert!(reopened.images.contains_key(&image_key), "image reference must survive native save/reopen");
+}
+
+#[test]
+fn vector_region_missing_and_empty_paints_remain_distinct() {
+    let (inherited, _) = import(&region_canvas(None, 1), "Inherited region").unwrap();
+    assert_eq!(network_of(&inherited, "Wave").regions[0].fills, None);
+    let (empty, _) = import(&region_canvas(Some(Vec::new()), 1), "Empty region").unwrap();
+    assert_eq!(network_of(&empty, "Wave").regions[0].fills, Some(Vec::new()));
+}
+
+#[test]
+fn vector_region_linked_fill_uses_style_paints_without_recording_definition() {
+    let linked = solid(0.9, 0.1, 0.2);
+    let own = solid(0.1, 0.2, 0.9);
+    let wire = region_canvas_with_link(Some(own), Some(50), linked);
+    let (doc, _) = import(&wire, "Linked region style").unwrap();
+    let fills = network_of(&doc, "Wave").regions[0].fills.as_ref().unwrap();
+    let figcraft_doc::color::PaintKind::Solid { color } = &fills[0].kind else { panic!("{fills:?}") };
+    assert_eq!((color.r, color.g, color.b), (0.9, 0.1, 0.2));
+    assert!(doc.nodes().all(|node| node.name != "Linked Fill"), "style lookup must not add a style as a layer");
+    let archive = Archive::open(&wire).unwrap();
+    let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+    let message = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+    let (rest, _, _) = map::to_rest(&message, "Linked region style", crate::rest::MAX_NODES);
+    assert!(rest.get("styles").is_none(), "regional link must not populate the layer styles map");
+}
+
+#[test]
+fn vector_region_variable_bound_own_fill_wins_over_linked_style() {
+    let own =
+        o(vec![("type", e("SOLID")), ("color", o(vec![("r", f(0.1)), ("g", f(0.2)), ("b", f(0.9)), ("a", f(1.0))])), ("colorVar", alias_data(41))]);
+    let (doc, _) = import(&region_canvas_with_link(Some(own), Some(50), solid(0.9, 0.1, 0.2)), "Bound region style").unwrap();
+    let fills = network_of(&doc, "Wave").regions[0].fills.as_ref().unwrap();
+    let figcraft_doc::color::PaintKind::Solid { color } = &fills[0].kind else { panic!("{fills:?}") };
+    assert_eq!((color.r, color.g, color.b), (0.1, 0.2, 0.9));
+}
+
+#[test]
+fn vector_region_missing_fills_inherit_and_unresolved_link_keeps_own_fill() {
+    let (inherited, _) = import(&region_canvas_with_link(None, Some(50), solid(0.9, 0.1, 0.2)), "Inherited linked region").unwrap();
+    assert_eq!(network_of(&inherited, "Wave").regions[0].fills, None);
+
+    let own = solid(0.1, 0.2, 0.9);
+    let (fallback, _) = import(&region_canvas_with_link(Some(own), Some(999), solid(0.9, 0.1, 0.2)), "Unresolved linked region").unwrap();
+    let fills = network_of(&fallback, "Wave").regions[0].fills.as_ref().unwrap();
+    let figcraft_doc::color::PaintKind::Solid { color } = &fills[0].kind else { panic!("{fills:?}") };
+    assert_eq!((color.r, color.g, color.b), (0.1, 0.2, 0.9));
+}
+
+#[test]
+fn vector_region_link_to_non_fill_style_keeps_own_fill() {
+    let own = solid(0.1, 0.2, 0.9);
+    let (doc, _) = import(&region_canvas_with_typed_link(Some(own), Some(50), "TEXT", solid(0.9, 0.1, 0.2)), "Text-linked region").unwrap();
+    let fills = network_of(&doc, "Wave").regions[0].fills.as_ref().unwrap();
+    let figcraft_doc::color::PaintKind::Solid { color } = &fills[0].kind else { panic!("{fills:?}") };
+    assert_eq!((color.r, color.g, color.b), (0.1, 0.2, 0.9));
+}
+
+#[test]
+fn vector_region_paint_budget_covers_the_whole_file() {
+    // 190 gradients of 255 stops: 48,640 elements per layer, so four layers fit and a fifth doesn't.
+    let stop = o(vec![("position", f(0.0)), ("color", o(vec![("r", f(1.0)), ("g", f(0.0)), ("b", f(0.0)), ("a", f(1.0))]))]);
+    let gradient = o(vec![("type", e("GRADIENT_LINEAR")), ("stops", arr(vec![stop; 255]))]);
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+    let vector_data = field_mut(wave, "vectorData").unwrap();
+    let Kv::Array(styles) = field_mut(vector_data, "styleOverrideTable").unwrap() else { panic!() };
+    let Kv::Object(style_fields) = styles.first_mut().unwrap() else { panic!() };
+    style_fields.push(("fillPaints", arr(vec![gradient; 190])));
+    let wave = wave.clone();
+    for (index, position) in ["w", "x", "y", "z"].into_iter().enumerate() {
+        let mut copy = wave.clone();
+        let Kv::Object(fields) = &mut copy else { panic!() };
+        for (key, value) in fields.iter_mut() {
+            match *key {
+                "guid" => *value = g(60 + index as u64),
+                "name" => *value = Kv::Str(format!("Wave {index}")),
+                "parentIndex" => *value = o(vec![("guid", g(1)), ("position", s(position))]),
+                _ => {}
+            }
+        }
+        nodes.push(copy);
+    }
+    let mut network = network::decode(&square_blob()).unwrap();
+    network.regions[0].style = 1;
+    let Kv::Array(blobs) = field_mut(&mut message, "blobs").unwrap() else { panic!() };
+    *field_mut(blobs.get_mut(1).unwrap(), "bytes").unwrap() = Kv::Bytes(network::encode(&network));
+
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Region paint budget").unwrap();
+    let painted = ["Wave", "Wave 0", "Wave 1", "Wave 2", "Wave 3"].iter().filter(|name| network_of(&doc, name).regions[0].fills.is_some()).count();
+    assert_eq!(painted, 4);
+    assert!(warnings.iter().any(|warning| warning.contains("region paint data exceeded import limits")), "{warnings:?}");
+}
+
+#[test]
+fn vector_regions_keep_distinct_solid_paints() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+    let vector_data = field_mut(wave, "vectorData").unwrap();
+    let Kv::Array(styles) = field_mut(vector_data, "styleOverrideTable").unwrap() else { panic!() };
+    let Kv::Object(first_style) = styles.first_mut().unwrap() else { panic!() };
+    first_style.push(("fillPaints", arr(vec![solid(0.1, 0.2, 0.9)])));
+    let Kv::Object(second_style) = o(vec![("styleID", u(2)), ("fillPaints", arr(vec![solid(0.9, 0.1, 0.2)]))]) else { panic!() };
+    styles.push(Kv::Object(second_style));
+    let mut network = network::decode(&square_blob()).unwrap();
+    network.regions[0].style = 1;
+    network.regions.push(network::Region { style: 2, non_zero: network.regions[0].non_zero, loops: network.regions[0].loops.clone() });
+    let Kv::Array(blobs) = field_mut(&mut message, "blobs").unwrap() else { panic!() };
+    let bytes = field_mut(blobs.get_mut(1).unwrap(), "bytes").unwrap();
+    *bytes = Kv::Bytes(network::encode(&network));
+
+    let (doc, _) = import(&canvas(&schema(), &message), "Two region fills").unwrap();
+    let regions = &network_of(&doc, "Wave").regions;
+    assert_eq!(regions.len(), 2);
+    let color = |index: usize| match &regions[index].fills.as_ref().unwrap()[0].kind {
+        figcraft_doc::color::PaintKind::Solid { color } => (color.r, color.g, color.b),
+        paint => panic!("{paint:?}"),
+    };
+    assert_eq!(color(0), (0.1, 0.2, 0.9));
+    assert_eq!(color(1), (0.9, 0.1, 0.2));
+}
+
+#[test]
+fn vector_region_gradient_limit_warns_instead_of_silently_truncating() {
+    for count in [256, 257] {
+        let stops = (0..count)
+            .map(|i| {
+                let value = if i + 1 == count { 1.0 } else { 0.0 };
+                o(vec![
+                    ("position", f(i as f64 / (count - 1) as f64)),
+                    ("color", o(vec![("r", f(value)), ("g", f(value)), ("b", f(value)), ("a", f(1.0))])),
+                ])
+            })
+            .collect();
+        let gradient = o(vec![("type", e("GRADIENT_LINEAR")), ("stops", arr(stops))]);
+        let (doc, warnings) = import(&region_canvas(Some(vec![gradient]), 1), "Bounded region gradient").unwrap();
+        let fills = &network_of(&doc, "Wave").regions[0].fills;
+        if count == 256 {
+            let figcraft_doc::color::PaintKind::Gradient(g) = &fills.as_ref().unwrap()[0].kind else { panic!() };
+            assert_eq!(g.stops.len(), 256);
+            assert_eq!(g.stops.last().unwrap().color.r, 1.0);
+            assert!(!warnings.iter().any(|w| w.contains("vector region paint data exceeded")));
+        } else {
+            assert!(fills.is_none());
+            assert!(warnings.iter().any(|w| w.contains("vector region paint data exceeded import limits")), "{warnings:?}");
+        }
+    }
+}
+
+#[test]
+fn vector_region_invalid_paints_and_style_refs_warn() {
+    let malformed = o(vec![("opacity", f(0.5))]);
+    let unsupported = o(vec![("type", e("EMOJI"))]);
+    let (doc, warnings) = import(&region_canvas(Some(vec![malformed, unsupported]), 1), "Invalid region paints").unwrap();
+    assert_eq!(network_of(&doc, "Wave").regions[0].fills, Some(Vec::new()));
+    assert!(warnings.iter().any(|warning| warning.contains("invalid vector region paints were skipped")), "{warnings:?}");
+    assert!(warnings.iter().any(|warning| warning.contains("EMOJI paints are not supported")), "{warnings:?}");
+
+    let (doc, warnings) = import(&region_canvas(None, 9), "Missing region style").unwrap();
+    assert_eq!(network_of(&doc, "Wave").regions[0].fills, None);
+    assert!(warnings.iter().any(|warning| warning.contains("vector region references a missing fill style")), "{warnings:?}");
+}
+
 fn network_of<'d>(doc: &'d figcraft_doc::Document, name: &str) -> &'d figcraft_doc::VectorNetwork {
     match &named(doc, name).kind {
         NodeKind::Vector { network } => network,
@@ -363,18 +613,144 @@ fn other_layer_kinds_import_as_the_closest_layers() {
     let kids: Vec<&figcraft_doc::Node> = bubble.children.iter().map(|c| doc.node(*c).unwrap()).collect();
     assert!(matches!(kids[0].kind, NodeKind::Vector { .. }) && kids[0].fills.len() == 1);
     assert_eq!(text_of(bubble.children[1]), "Hi");
-    // A connector from a free point to the centre of a sibling, with its end cap.
+    // An elbowed connector from a free point to a sibling: in right angles, into the side of the
+    // box facing the point, with its end cap.
     let link = named(&doc, "Link");
     let world = doc.world_transform(link.id);
     let ends: Vec<(f64, f64)> =
         network_of(&doc, "Link").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
-    assert_eq!(ends, [(0.0, 300.0), (450.0, 50.0)]);
+    assert_eq!(ends, [(0.0, 300.0), (198.0, 300.0), (198.0, 50.0), (396.0, 50.0)]);
     assert_eq!(link.stroke.cap_end, StrokeCap::TriangleArrow);
     // A table: a frame.
     assert!(matches!(named(&doc, "Grid").kind, NodeKind::Frame));
     for w in ["sticky layers import as frames", "shape with text layers", "connector layers import as vectors", "table layers", "elbowed"] {
         assert!(warnings.iter().any(|x| x.contains(w)), "{w}: {warnings:?}");
     }
+}
+
+/// Connectors saved without their path: straight to the point on the layer, elbowed and curved
+/// from the side the end's point lies on, as a board connector would run.
+#[test]
+fn connectors_without_a_saved_path_follow_their_line_style() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, 600.0))]);
+    let joined = |id, name: &str, style: &'static str| {
+        let side = |node, x| o(vec![("endpointNodeID", g(node)), ("relativePosition", xy(x, 0.5))]);
+        node(
+            id,
+            Some((1, "+")),
+            "CONNECTOR",
+            name,
+            vec![
+                ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+                ("connectorStart", side(60, 1.0)),
+                ("connectorEnd", side(61, 0.0)),
+                ("connectorLineStyle", e(style)),
+            ],
+        )
+    };
+    nodes.extend([box_at(60, "A", 0.0), box_at(61, "B", 300.0), joined(62, "Curve", "CURVED"), joined(63, "Line", "STRAIGHT")]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Routes").unwrap();
+    let world = |name: &str| doc.world_transform(named(&doc, name).id);
+    // Curved: one curve from A's right side to B's left, leaving and arriving level.
+    let curve = network_of(&doc, "Curve");
+    let ends: Vec<_> = curve.vertices.iter().map(|v| world("Curve") * figcraft_doc::geom::Point::new(v.x, v.y)).collect();
+    assert_eq!(ends.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), [(104.0, 650.0), (296.0, 650.0)], "END_GAP outside the sides");
+    assert_eq!(curve.segments.len(), 1);
+    assert_eq!((curve.segments[0].ta, curve.segments[0].tb), ((96.0, 0.0), (-96.0, 0.0)), "the curve leaves and arrives along the sides");
+    // Straight: unchanged, to the points the file gives on the layers.
+    let line: Vec<_> =
+        network_of(&doc, "Line").vertices.iter().map(|v| world("Line") * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
+    assert_eq!(line, [(100.0, 650.0), (300.0, 650.0)]);
+    assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
+}
+
+/// #1909: a connector end whose magnet is `AUTO` (FigJam picks the side when it draws) or `CENTER`
+/// (the end aims at the layer's middle) leaves the side facing the other end, as a board connector
+/// drawn here does, whatever `relativePosition` the file kept for it; a named magnet still wins.
+#[test]
+fn connectors_with_an_automatic_side_leave_the_side_facing_the_target() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, 600.0))]);
+    // The ends keep a stale point on the left of A and the right of B, as the reporter's file did.
+    let end = |node, magnet: &'static str, x| o(vec![("endpointNodeID", g(node)), ("magnet", e(magnet)), ("relativePosition", xy(x, 0.5))]);
+    let joined = |id, name: &str, style: &'static str, start: &'static str, finish: &'static str| {
+        node(
+            id,
+            Some((1, "+")),
+            "CONNECTOR",
+            name,
+            vec![
+                ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+                ("connectorStart", end(60, start, 0.0)),
+                ("connectorEnd", end(61, finish, 1.0)),
+                ("connectorLineStyle", e(style)),
+            ],
+        )
+    };
+    nodes.extend([
+        box_at(60, "A", 0.0),
+        box_at(61, "B", 300.0),
+        joined(62, "Elbow", "ELBOWED", "AUTO", "AUTO"),
+        joined(63, "Line", "STRAIGHT", "CENTER", "CENTER"),
+        joined(64, "Curve", "CURVED", "AUTO", "AUTO"),
+        joined(65, "Named", "ELBOWED", "BOTTOM", "AUTO"),
+    ]);
+    let (doc, _) = import(&canvas(&schema(), &message), "Sides").unwrap();
+    let ends = |name: &str| -> ((f64, f64), (f64, f64)) {
+        let world = doc.world_transform(named(&doc, name).id);
+        let pts: Vec<(f64, f64)> =
+            network_of(&doc, name).vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
+        (pts[0], pts[pts.len() - 1])
+    };
+    // From A's right side (facing B) to B's left side (facing A), not from the stale left point; each
+    // end starts `END_GAP` (4) outside its side.
+    for name in ["Elbow", "Line", "Curve"] {
+        assert_eq!(ends(name), ((104.0, 650.0), (296.0, 650.0)), "{name}");
+    }
+    // A named magnet keeps its side: the bottom of A; the automatic end still faces A.
+    assert_eq!(ends("Named"), ((50.0, 704.0), (296.0, 650.0)));
+}
+
+/// A connector with a label but no saved snapshot: a frame holding its line and its label,
+/// centred on the line's middle, in black when the connector gives no paint.
+#[test]
+fn a_labelled_connector_without_a_snapshot_keeps_its_label() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, 600.0))]);
+    let side = |node, x| o(vec![("endpointNodeID", g(node)), ("relativePosition", xy(x, 0.5))]);
+    let labelled = node(
+        62,
+        Some((1, "+")),
+        "CONNECTOR",
+        "Says",
+        vec![
+            ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+            ("connectorStart", side(60, 1.0)),
+            ("connectorEnd", side(61, 0.0)),
+            ("connectorLineStyle", e("STRAIGHT")),
+            ("textData", text_data("yes")),
+            ("fontSize", f(20.0)),
+        ],
+    );
+    nodes.extend([box_at(60, "A", 0.0), box_at(61, "B", 300.0), labelled]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Labels").unwrap();
+    let says = named(&doc, "Says");
+    assert!(matches!(says.kind, NodeKind::Frame), "{:?}", says.kind);
+    assert!(says.fills.is_empty() && says.strokes.is_empty(), "the frame only holds the line and the label");
+    let kids: Vec<&figcraft_doc::Node> = says.children.iter().map(|c| doc.node(*c).unwrap()).collect();
+    assert_eq!(kids.len(), 2);
+    assert!(matches!(kids[0].kind, NodeKind::Vector { .. }) && kids[0].strokes.len() == 1, "the line keeps its stroke");
+    assert!(matches!(&kids[1].kind, NodeKind::Text(t) if t.characters == "yes"), "{:?}", kids[1].kind);
+    assert_eq!(kids[1].fills.len(), 1, "black when the connector gives no paint");
+    // Centred on the line's middle, (200, 650) on the page.
+    let label = doc.world_transform(kids[1].id) * figcraft_doc::geom::Point::new(kids[1].width / 2.0, kids[1].height / 2.0);
+    assert!((label.x - 200.0).abs() < 1e-6 && (label.y - 650.0).abs() < 1e-6, "{label:?}");
+    assert!(warnings.iter().any(|w| w.contains("centred on the line")), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("connector labels were skipped")), "{warnings:?}");
 }
 
 #[test]
@@ -534,4 +910,86 @@ fn write_fixture() {
     if let Ok(out) = std::env::var("FIG_FIXTURE_OUT") {
         std::fs::write(out, zip_file(&tail_canvas())).unwrap();
     }
+}
+
+/// An elbow connector saved with its path (#1910): FigJam's control points, one per run between
+/// the first and the last, each on its run with the run's axis, give the path the connector keeps;
+/// the first run leaves the start's side and the last arrives at the end's.
+#[test]
+fn an_elbow_connector_saved_with_its_path_keeps_it() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x, y| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, y))]);
+    let point = |x, y, ax, ay| o(vec![("position", xy(x, y)), ("axis", xy(ax, ay))]);
+    // From A's bottom, across at y 740, down at x 200, into B's left: four runs.
+    let saved = node(
+        66,
+        Some((1, "+")),
+        "CONNECTOR",
+        "Saved",
+        vec![
+            ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+            ("connectorStart", o(vec![("endpointNodeID", g(64)), ("relativePosition", xy(0.5, 1.0))])),
+            ("connectorEnd", o(vec![("endpointNodeID", g(65)), ("relativePosition", xy(0.0, 0.5))])),
+            ("connectorLineStyle", e("ELBOWED")),
+            ("connectorControlPoints", arr(vec![point(150.0, 740.0, 1.0, 0.0), point(200.0, 800.0, 0.0, 1.0)])),
+        ],
+    );
+    nodes.extend([box_at(64, "A", 0.0, 600.0), box_at(65, "B", 300.0, 800.0), saved]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Saved path").unwrap();
+    let world = doc.world_transform(named(&doc, "Saved").id);
+    let line: Vec<_> =
+        network_of(&doc, "Saved").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
+    // Each end starts `END_GAP` (4) outside its side's border.
+    assert_eq!(line, [(50.0, 704.0), (50.0, 740.0), (200.0, 740.0), (200.0, 850.0), (296.0, 850.0)]);
+    // The fixture's own Link, saved without a path, is routed here: the note counts it alone.
+    let routed: Vec<_> = warnings.iter().filter(|w| w.contains("FigCraft's own routing")).collect();
+    assert_eq!(routed.len(), 1, "{warnings:?}");
+    assert!(!routed[0].contains('×'), "a connector with its path isn't counted among those routed here: {routed:?}");
+}
+
+/// Saved control points that don't make a path from the connector's sides (#1910): a first run
+/// that would leave the bottom sideways, a point off both axes, or two runs in a row the same way
+/// leave the connector to FigCraft's routing, as one saved without a path is.
+#[test]
+fn an_elbow_whose_saved_path_doesnt_fit_its_sides_is_routed_here() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x, y| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, y))]);
+    let point = |x, y, ax, ay| o(vec![("position", xy(x, y)), ("axis", xy(ax, ay))]);
+    let elbow = |id, name: &str, points: Vec<Kv<'static>>| {
+        let mut fields = vec![
+            ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+            ("connectorStart", o(vec![("endpointNodeID", g(64)), ("relativePosition", xy(0.5, 1.0))])),
+            ("connectorEnd", o(vec![("endpointNodeID", g(65)), ("relativePosition", xy(0.0, 0.5))])),
+            ("connectorLineStyle", e("ELBOWED")),
+        ];
+        if !points.is_empty() {
+            fields.push(("connectorControlPoints", arr(points)));
+        }
+        node(id, Some((1, "+")), "CONNECTOR", name, fields)
+    };
+    nodes.extend([
+        box_at(64, "A", 0.0, 600.0),
+        box_at(65, "B", 300.0, 800.0),
+        elbow(66, "Plain", vec![]),
+        elbow(67, "Sideways", vec![point(100.0, 650.0, 0.0, 1.0)]),
+        elbow(68, "Askew", vec![point(150.0, 740.0, 1.0, 1.0)]),
+        elbow(69, "Repeated", vec![point(150.0, 740.0, 1.0, 0.0), point(150.0, 760.0, 1.0, 0.0)]),
+        // The first run would go up from A's bottom, through A; the last would arrive at B's left
+        // from inside B. Each run is at right angles to its side, so only the way it goes is wrong.
+        elbow(70, "Backwards", vec![point(100.0, 650.0, 1.0, 0.0), point(200.0, 740.0, 0.0, 1.0)]),
+        elbow(71, "Inside", vec![point(150.0, 740.0, 1.0, 0.0), point(350.0, 800.0, 0.0, 1.0)]),
+    ]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Unfit paths").unwrap();
+    let line = |name: &str| -> Vec<(f64, f64)> {
+        let world = doc.world_transform(named(&doc, name).id);
+        network_of(&doc, name).vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect()
+    };
+    let plain = line("Plain");
+    assert!(plain.len() >= 3, "routed in right angles: {plain:?}");
+    for name in ["Sideways", "Askew", "Repeated", "Backwards", "Inside"] {
+        assert_eq!(line(name), plain, "{name} is routed as one without a path");
+    }
+    assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
 }
