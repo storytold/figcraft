@@ -126,16 +126,12 @@ pub fn scrub_amount(dx: f64, step: f64, shift: bool, alt: bool) -> f64 {
 }
 
 /// How far above where a scrub began the pointer has to be for the fast speed (points); the same
-/// below for the slow one and twice that for the slowest. The help center gives the speeds, not
-/// the distances.
+/// below for the slow one and twice that for the slowest.
 pub const SCRUB_BAND: f64 = 100.0;
 
 /// The scrubbing speed by the pointer's height, `rise` points above where the scrub began (below
-/// when negative): a factor on the scrub and the notice for it ("Change the speed that you scrub
-/// the field by moving the cursor towards the top of the screen to increase the scrubbing speed,
-/// or towards the bottom of the screen to reduce it. You'll see a notification at the bottom of
-/// the screen for the current speed [...] There are four scrubbing speeds: 2x, 1x, 1/2, and 1/4",
-/// Adjust alignment, rotation, position and dimensions).
+/// when negative): a factor on the scrub and the notice for it. Higher on the screen is faster,
+/// lower is slower, in four speeds (2x, 1x, 1/2 and 1/4).
 pub fn scrub_speed(rise: f64) -> (f64, &'static str) {
     if rise > SCRUB_BAND {
         (2.0, tr_noop("Scrubbing at 2x"))
