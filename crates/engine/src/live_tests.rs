@@ -90,6 +90,7 @@ impl LiveLink for Mock {
     }
 }
 
+/// A session you are in as `role`, as client `me`, everyone in it editing.
 pub(crate) fn info(role: Role, me: u32) -> SessionInfo {
     SessionInfo {
         role,
@@ -103,6 +104,7 @@ pub(crate) fn info(role: Role, me: u32) -> SessionInfo {
         address: "127.0.0.1:47900".into(),
         network: false,
         access: crate::live::Access::Edit,
+        view: None,
     }
 }
 

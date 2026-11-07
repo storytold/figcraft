@@ -194,6 +194,68 @@ fn a_click_in_the_colour_picker_keeps_the_style_editor_open() {
     );
 }
 
+/// #2043: the list follows its rows while the picker is open. A search that narrows it shrinks
+/// the popover, and clearing the search grows it back to the full list (egui offers an area the
+/// size it had last frame, so the list used to stay a few rows high).
+#[test]
+fn the_style_list_grows_back_after_a_search_narrows_it() {
+    use crate::layers_drag_tests::Ui;
+    let mut s = Session::new();
+    let r = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    for i in 0..30 {
+        let name = format!("Blue/{}", 100 + 10 * i);
+        s.execute("style.create", &json!({"type": "paint", "name": name, "value": [{"type": "solid", "color": "#0D99FF"}]})).unwrap();
+    }
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    open_for_selection(&mut u.app, StyleSlot::Fill, None);
+    let height = |u: &mut Ui| {
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        u.app.ui.style_picker_popover.as_ref().expect("the style picker shows").rect.height()
+    };
+    let open = height(&mut u);
+    assert!(open > 300.0, "the picker lists the styles: {open}");
+    u.app.ui.style_picker.as_mut().expect("open").query = "Blue/100".into();
+    let narrowed = height(&mut u);
+    assert!(narrowed < open - 100.0, "a search for one style shrinks it: {open} → {narrowed}");
+    u.app.ui.style_picker.as_mut().expect("open").query.clear();
+    let again = height(&mut u);
+    assert!((again - open).abs() < 1.0, "clearing the search grows it back: {open} → {again}");
+}
+
+/// #2043: egui keeps an area's size after it closes, so a picker opened once on a short list (the
+/// effect styles, none yet) opened again on the colour styles a few rows high.
+#[test]
+fn the_style_list_opened_after_a_short_one_shows_every_style_it_fits() {
+    use crate::layers_drag_tests::Ui;
+    let mut s = Session::new();
+    let r = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].clone();
+    for i in 0..30 {
+        let name = format!("Blue/{}", 100 + 10 * i);
+        s.execute("style.create", &json!({"type": "paint", "name": name, "value": [{"type": "solid", "color": "#0D99FF"}]})).unwrap();
+    }
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    let height = |u: &mut Ui, slot: StyleSlot| {
+        open_for_selection(&mut u.app, slot, None);
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        let h = u.app.ui.style_picker_popover.as_ref().expect("the style picker shows").rect.height();
+        u.app.ui.style_picker = None;
+        u.app.ui.style_picker_popover = None;
+        u.frame(vec![]);
+        h
+    };
+    let first = height(&mut u, StyleSlot::Fill);
+    let short = height(&mut u, StyleSlot::Effect);
+    assert!(short < first - 100.0, "no effect styles: {short}");
+    let again = height(&mut u, StyleSlot::Fill);
+    assert!((again - first).abs() < 1.0, "the colour styles as tall as the first time: {first} → {again}");
+}
+
 #[test]
 fn local_style_drops_move_into_the_folder_above() {
     let st = |id: &str, name: &str| Style {

@@ -160,7 +160,7 @@ pub fn effects(n: &Node, frame: EffectFrame<'_>) -> Option<Pixmap> {
                 fx::mask_by(&mut l, cov.as_ref()?, false);
                 l
             }
-            EffectKind::Glass(g) => glass::glass(g, frame)?,
+            EffectKind::Glass(g) => glass::glass(g, frame, glass::RoundedRect::of(n))?,
             _ => continue,
         };
         match out.as_mut() {

@@ -131,6 +131,7 @@ impl Harness {
             address: "127.0.0.1:47900".into(),
             network: false,
             access: figcraft_engine::live::Access::Edit,
+            view: None,
         };
         self.send(vec![LiveEvent::Welcome { info, peers: vec![Peer { client_id: 1, name: "Hana".into(), color: "#9747FF".into() }] }]);
     }
