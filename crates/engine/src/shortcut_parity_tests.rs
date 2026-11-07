@@ -281,6 +281,7 @@ static ROWS: &[Row] = &[
     doc(Arrange, "Add auto layout", &["Shift+A"], &[], Bound("layout.add"), ""),
     doc(Arrange, "Remove auto layout", &["Alt+Shift+A"], &[], Bound("layout.remove"), ""),
     doc(Arrange, "Suggest auto layout", &["Ctrl+Shift+A"], &["Ctrl+Alt+Shift+A"], Bound("layout.suggest"), "was unbound"),
+    doc(Arrange, "Edit padding on all sides (from right panel)", &["Cmd"], &["Ctrl"], Gesture("Edit padding on all sides"), "held while clicking a padding field: the value typed goes to every side"),
     pin(Arrange, "distribute.horizontal", &["Ctrl+Alt+H"], &["Alt+Shift+H"]),
     pin(Arrange, "distribute.vertical", &["Ctrl+Alt+V"], &["Alt+Shift+V"]),
     pin(Arrange, "arrange.tidy", &["Ctrl+Alt+T"], &["Ctrl+Alt+Shift+T"]),

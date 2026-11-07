@@ -101,6 +101,7 @@ native speakers' reviews of the nine language drafts need people.
 |---|---|---|---|
 | English | en | 100% | full |
 | Simplified Chinese | zh-Hans | 95% | draft (needs native review) |
+| Traditional Chinese (Taiwan) | zh-Hant | 2,647 / 2,647 entries (100%, counted 2026-11-03) | draft (needs native review) |
 | Spanish | es, es-419 | 100% (es-419: an overlay of 101 entries) | draft (needs native review) |
 | Hindi | hi | 0% | none |
 | Arabic | ar | 2,508 / 2,508 entries (100%, counted 2026-10-28) | draft; native review and panel mirroring pending |
@@ -114,9 +115,9 @@ native speakers' reviews of the nine language drafts need people.
 
 Percentages measured 2026-10-17 over 2,272 entries (strings added since a draft show English). Also shipped: Russian (`ru`, 99%, reviewed by VanTan), Swedish (`sv`, 99.6%, command labels since 2026-10-17; native review welcome), Turkish (`tr`, 99%), Czech (`cs`, 99%, draft) and Bosnian (`bs`, 100% on 2026-10-30, draft). Figma ships English, Japanese, Korean, French, German, Spanish and Portuguese
 (Brazil); FigCraft has the localization layer, English and Spanish (Spain and Latin America),
-French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian, Vietnamese and Arabic drafts (Preferences ▸
-Language; Traditional Chinese has no catalog; CJK UI
-text uses an installed CJK font, loaded only when needed; adding a language:
+French, German, Brazilian Portuguese, Japanese, Korean, Simplified and Traditional Chinese, Indonesian, Vietnamese and Arabic drafts (Preferences ▸
+Language; Traditional Chinese reads zh-TW, zh-HK, zh-MO and zh-Hant, while an explicit Hans stays
+Simplified; CJK UI text uses an installed CJK font, loaded only when needed; adding a language:
 [`docs/translating.md`](docs/translating.md)). Document text in any script (bidi, Arabic shaping,
 IME) already works (macOS IME composition fixed for #747, not yet checked on a Mac). Detail: [`docs/localization-parity.md`](docs/localization-parity.md).
 
@@ -127,7 +128,7 @@ Ranked; detail and milestones in [`docs/roadmap.md`](docs/roadmap.md).
 1. `.fig` import's tail: fixes from real files, connector labels, table cells, filled areas with their own fills (the best-effort import, editable vector networks, the other layer kinds and variable prototype actions landed 2026-10-11): 5–10 h; then checking the rest of the experimental `.fig` export (landed 2026-10-12; written files open and draw in other software) on effects, images, prototypes and real files: 5–15 h.
 2. Real-file corpus and measured fidelity: 15–30 h.
 3. Tool-by-tool interaction pass against Figma: 40–60 h.
-4. Languages: native reviews of the es (with es-419), fr, de, pt-BR, ja, ko, zh-Hans, id and cs drafts (people), the entries added since each catalog was written, then Hindi and Vietnamese; Arabic native review and panel mirroring ([localization-parity](docs/localization-parity.md)).
+4. Languages: native reviews of the es (with es-419), fr, de, pt-BR, ja, ko, zh-Hans, zh-Hant, id and cs drafts (people), the entries added since each catalog was written, then Hindi and Vietnamese; Arabic native review and panel mirroring ([localization-parity](docs/localization-parity.md)).
 5. Multiplayer (M9): accounts and teams on top of the live sessions and the standalone server (transport, hosting, invite links that open the app, document sync, presence with remote text carets, cursor chat and spotlight, per-user undo, reconnect with offline edits, collision-free ids for styles, variables and comments, the browser client, `figcraft-server` with persistence and share links to edit or view, team libraries on the server landed): 42–84 h.
 
 ## Progress log
@@ -363,6 +364,7 @@ Ranked; detail and milestones in [`docs/roadmap.md`](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`, 繁體中文（台灣）) draft catalog: every UI string (1,975), command label (641) and menu wording (31), translated clean-room from the English source; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant` read it while an explicit Hans stays Simplified; the desktop UI prefers an installed Noto Sans CJK TC, then Microsoft JhengHei, PingFang TC and Heiti TC; no font is bundled; native review pending. Numbers unchanged |
 | 2026-11-06 | patch | M1, #2028: Edit ▸ Set default properties gives new rectangles, ellipses, polygons and stars drawn with the tools (and, set from a text layer, new text) the selected layer's properties; it only copied them for Paste properties. Tests: `default_props_tests` (3). Numbers unchanged |
 | 2026-11-06 | patch | M5, #2027: `proto.settings` refuses an unknown device name with the list of devices (it saved any string, and the presenter showed no device), takes known names in any case, and answers the page's prototype settings, so `proto.settings {}` reads them back over MCP. Test: `proto_present_tests::unknown_devices_are_refused_and_settings_read_back`. Numbers unchanged |
 | 2026-11-06 | patch | M7, #2032: closing a tab whose file has unsaved changes asks Don't Save / Cancel / Save, as closing the window does, instead of a toast that left the tab open; Alt+close still discards at once. Tests: `titlebar_tests::closing_a_tab_with_unsaved_changes_asks`, `titlebar_tests::save_in_the_tab_question_saves_then_closes`. Numbers unchanged |

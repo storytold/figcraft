@@ -175,6 +175,9 @@ pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value)
     if let Some(c) = vd_compat_param(cmd, p)? {
         e.vd_compat = c;
     }
+    if let Some(c) = color_profile_param(cmd, p)? {
+        e.color_profile = c;
+    }
     if let Some(q) = quality_param(cmd, p)? {
         e.quality = q;
     }
@@ -342,10 +345,16 @@ pub(super) fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let print = has_print_param(p).then(|| print_param(cmd, p, PrintSettings::default())).transpose()?;
     // And a compatibility mode for every Android Vector Drawable.
     let compat = vd_compat_param(cmd, p)?;
+    // And a color profile for every PNG, JPG and WebP.
+    let profile = color_profile_param(cmd, p)?;
     let mut files = Vec::with_capacity(jobs.len());
     for job in &jobs {
-        let setting =
-            ExportSetting { print: print.unwrap_or(job.setting.print), vd_compat: compat.unwrap_or(job.setting.vd_compat), ..job.setting.clone() };
+        let setting = ExportSetting {
+            print: print.unwrap_or(job.setting.print),
+            vd_compat: compat.unwrap_or(job.setting.vd_compat),
+            color_profile: profile.unwrap_or(job.setting.color_profile),
+            ..job.setting.clone()
+        };
         let scale = export_scale(doc, &[job.id], &setting);
         let (bytes, warnings) = export_file(doc, &[job.id], &setting, scale)?;
         let mut f = json!({"name": job.file, "id": job.id, "bytes": bytes.len()});
