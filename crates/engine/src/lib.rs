@@ -459,6 +459,8 @@ mod pen_end_tests;
 #[cfg(test)]
 mod pen_overlay_tests;
 #[cfg(test)]
+mod pen_undo_tests;
+#[cfg(test)]
 mod pen_vector_edit_tests;
 #[cfg(test)]
 mod penpot_export_tests;
