@@ -215,3 +215,160 @@ fn a_press_in_the_gradient_variable_picker_keeps_the_colour_picker_open() {
     assert!(u.app.ui.picker.is_some(), "the child variable picker is part of the interaction");
     u.button(at, false);
 }
+
+#[test]
+fn dragging_a_gradient_handle_on_the_canvas_keeps_the_picker_open() {
+    // #1852: the handles belong to the picker, so the press that starts a drag is not a press
+    // outside it: the picker and the handles stay, the drag is one undo step, and a press elsewhere
+    // on the layer still closes it.
+    let mut s = Session::new();
+    let a = NodeId(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+    s.execute("fill.set", &json!({"id": a, "paint": {"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}})).unwrap();
+    s.execute("select.set", &json!({"ids": [a]})).unwrap();
+    let mut u = Ui::new(s);
+    let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![a] };
+    u.app.open_picker(target.clone(), None);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.ui.picker, Some(target.clone()));
+    let depth = u.app.session.undo_depth().0;
+    let from_handle = |u: &Ui| match &u.app.session.doc().unwrap().node(a).unwrap().fills[0].kind {
+        figcraft_color::PaintKind::Gradient(g) => g.from,
+        _ => panic!("the fill is a gradient"),
+    };
+    assert_eq!(from_handle(&u), (0.5, 0.0), "a linear gradient starts at the top middle");
+    // Drag the start handle from the top middle of the layer to its left middle.
+    let from = u.app.to_screen(200.0, 100.0);
+    let to = u.app.to_screen(100.0, 200.0);
+    u.button(from, true);
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "the press on the handle keeps the picker open");
+    for _ in 0..2 {
+        u.frame(vec![egui::Event::PointerMoved(to)]);
+    }
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "and so does the drag");
+    let (x, y) = from_handle(&u);
+    assert!(x.abs() < 0.02 && (y - 0.5).abs() < 0.02, "the handle followed the pointer: ({x}, {y})");
+    u.button(to, false);
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "released, the picker is still open");
+    assert_eq!(u.app.session.undo_depth().0, depth + 1, "the drag is one undo step");
+    // A press on the layer away from its handles is still a press outside the picker.
+    let body = u.app.to_screen(250.0, 250.0);
+    u.button(body, true);
+    u.button(body, false);
+    u.frame(vec![]);
+    assert!(u.app.ui.picker.is_none(), "a plain canvas press closes it");
+}
+
+#[test]
+fn a_gradient_drag_released_off_the_canvas_ends_there() {
+    // A handle drag whose button goes up over the sidebar or over the picker itself ends there:
+    // the edit commits, the picker stays, and the next press on the canvas is a plain press (it
+    // closes the picker) rather than a move of the handle to wherever it landed.
+    for over in ["sidebar", "picker"] {
+        let mut s = Session::new();
+        let a = NodeId(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+        s.execute("fill.set", &json!({"id": a, "paint": {"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}})).unwrap();
+        s.execute("select.set", &json!({"ids": [a]})).unwrap();
+        let mut u = Ui::new(s);
+        let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![a] };
+        u.app.open_picker(target.clone(), None);
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        let depth = u.app.session.undo_depth().0;
+        let from_handle = |u: &Ui| match &u.app.session.doc().unwrap().node(a).unwrap().fills[0].kind {
+            figcraft_color::PaintKind::Gradient(g) => g.from,
+            _ => panic!("the fill is a gradient"),
+        };
+        u.button(u.app.to_screen(200.0, 100.0), true);
+        u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0, 200.0))]);
+        assert!(crate::handles::gradient_dragging(&u.ctx), "{over}: the handle is being dragged");
+        let spot = match over {
+            "sidebar" => u.app.ui.right_panel_rect.unwrap().center(),
+            _ => u.app.ui.picker_popover.as_ref().unwrap().rect.center(),
+        };
+        if over == "picker" {
+            assert!(u.app.canvas.rect.contains(spot), "the picker lies over the canvas");
+        } else {
+            assert!(!u.app.canvas.rect.contains(spot), "the sidebar is off the canvas");
+        }
+        u.button(spot, false);
+        u.frame(vec![]);
+        assert!(!crate::handles::gradient_dragging(&u.ctx), "{over}: the release ended the drag");
+        assert_eq!(u.app.ui.picker, Some(target.clone()), "{over}: the picker is still open");
+        assert_eq!(u.app.session.undo_depth().0, depth + 1, "{over}: the drag is one undo step");
+        let moved = from_handle(&u);
+        assert!(moved.0.abs() < 0.02 && (moved.1 - 0.5).abs() < 0.02, "{over}: the handle stayed where it was dragged: {moved:?}");
+        // The next press on the layer is a plain one: the handle stays put and the picker closes.
+        let body = u.app.to_screen(250.0, 250.0);
+        u.button(body, true);
+        u.frame(vec![]);
+        assert_eq!(from_handle(&u), moved, "{over}: a later press doesn't move the handle");
+        assert!(u.app.ui.picker.is_none(), "{over}: a later press closes the picker as any outside press does");
+        u.button(body, false);
+    }
+}
+
+/// A rectangle with a linear gradient fill, selected, its picker open and the canvas settled; a
+/// second layer drawn after it leaves an undo step that isn't the gradient's. Rulers on or off.
+fn gradient_ui(rulers: bool) -> Ui {
+    let mut s = Session::new();
+    if rulers {
+        s.execute("view.rulers", &json!({"on": true})).unwrap();
+    }
+    let a = NodeId(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+    s.execute("fill.set", &json!({"id": a, "paint": {"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}})).unwrap();
+    s.execute("shape.rectangle", &json!({"x": 400, "y": 100, "width": 20, "height": 20})).unwrap();
+    s.execute("select.set", &json!({"ids": [a]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.open_picker(PickerTarget::Paint { fills: true, index: 0, ids: vec![a] }, None);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    u
+}
+
+#[test]
+fn a_gradient_drag_released_over_a_ruler_ends_there() {
+    // The rulers take the pointer on the canvas before the handles do: the release still ends the
+    // drag, as one undo step, instead of leaving it waiting for the next press.
+    let mut u = gradient_ui(true);
+    let depth = u.app.session.undo_depth().0;
+    u.button(u.app.to_screen(200.0, 100.0), true);
+    u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0, 200.0))]);
+    assert!(crate::handles::gradient_dragging(&u.ctx), "the handle is being dragged");
+    let r = u.app.canvas.rect;
+    let ruler = egui::Pos2::new(r.min.x + 5.0, r.center().y);
+    assert!(!u.app.ui.picker_popover.as_ref().unwrap().rect.contains(ruler), "the ruler is not under the picker");
+    u.button(ruler, false);
+    assert!(!crate::handles::gradient_dragging(&u.ctx), "the release over the ruler ended the drag");
+    assert_eq!(u.app.session.undo_depth().0, depth + 1, "the drag is one undo step");
+}
+
+#[test]
+fn a_gradient_drag_whose_gesture_closes_under_the_held_button_stops_editing() {
+    // Escape (the picker closes and commits) or Undo ends the gesture while the button is still
+    // down: moving on edits nothing more, rather than adding an undo step every frame.
+    for close in ["escape", "undo"] {
+        let mut u = gradient_ui(false);
+        u.button(u.app.to_screen(200.0, 100.0), true);
+        u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0, 200.0))]);
+        assert!(crate::handles::gradient_dragging(&u.ctx), "{close}: the handle is being dragged");
+        if close == "escape" {
+            crate::colorpicker::close(&mut u.app);
+        } else {
+            assert!(u.app.session.undo().unwrap(), "{close}: there is a step to undo");
+        }
+        let depth = u.app.session.undo_depth().0;
+        let doc = u.app.session.doc().unwrap().clone();
+        for k in 1..=4 {
+            u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0 + 20.0 * f64::from(k), 200.0))]);
+        }
+        assert!(!crate::handles::gradient_dragging(&u.ctx), "{close}: the drag is over");
+        assert_eq!(u.app.session.undo_depth().0, depth, "{close}: no undo step a frame");
+        assert!(*u.app.session.doc().unwrap() == doc, "{close}: the gradient stays where the gesture left it");
+        u.button(u.app.to_screen(180.0, 200.0), false);
+    }
+}

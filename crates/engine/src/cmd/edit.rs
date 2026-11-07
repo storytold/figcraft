@@ -326,7 +326,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("node.reorder", "Reorder layer", "{id, index}", true, |s, p| {
             let i = req_id("node.reorder", p, "id")?;
-            let idx = req_num("node.reorder", p, "index")?.max(0.0) as usize;
+            let idx = req_index("node.reorder", p, "index")?;
             s.doc_mut()?.reorder(i, idx)?;
             ok()
         }),

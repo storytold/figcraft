@@ -1698,11 +1698,22 @@ fn shape_segment(chars: &[char], seg: &Segment, face: &Arc<Face>, features: &[Fe
     }
     let (script_scale, script_shift) = synth.map_or((1.0, 0.0), |(_, up)| if up { face.superscript } else { face.subscript });
     let n = raw.len();
+    // Cluster end: the next larger cluster value, else the segment end. A glyph in the same
+    // cluster as the next one shares its end, so many glyphs of one cluster aren't rescanned.
+    let mut cends = vec![0usize; n];
+    for gi in (0..n).rev() {
+        let Some(&(_, cl, ..)) = raw.get(gi) else { continue };
+        let cl = cl as usize;
+        let shared = raw.get(gi + 1).filter(|r| r.1 as usize == cl).and_then(|_| cends.get(gi + 1).copied());
+        let cend = shared.unwrap_or_else(|| raw.iter().skip(gi + 1).map(|r| r.1 as usize).find(|c| *c > cl).unwrap_or(end).max(cl + 1));
+        if let Some(slot) = cends.get_mut(gi) {
+            *slot = cend;
+        }
+    }
     for gi in 0..n {
         let Some(&(gid, cl, xa, xo, yo)) = raw.get(gi) else { continue };
         let cl = cl as usize;
-        // Cluster end: the next larger cluster value, else the segment end.
-        let cend = raw.iter().skip(gi + 1).map(|r| r.1 as usize).find(|c| *c > cl).unwrap_or(end).max(cl + 1);
+        let cend = cends.get(gi).copied().unwrap_or(cl + 1);
         let last_in_cluster = raw.get(gi + 1).is_none_or(|r| r.1 as usize != cl);
         let ch = chars.get(cl).copied().unwrap_or(' ');
         let scale = if small_at(cl) { SMALL_CAP_SCALE } else { 1.0 } * script_scale;
