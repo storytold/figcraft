@@ -18,6 +18,7 @@ mod props;
 pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;
 
+pub(crate) use clipboard::apply_copied_props;
 pub use clipboard::{CLIP_CLOSE, CLIP_OPEN, copy_to_clipboard, design_clipboard_buffer, paste_into};
 use clipboard::{copy, copy_props, copy_props_of, cut, paste, paste_design_layers, paste_over, paste_props, paste_replace};
 use props::{
@@ -143,12 +144,26 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             find_replace
         ),
-        spec!("edit.setDefaultProperties", "Set default properties", "{id?}", false, |s, p| {
-            let id = targets(s, p).first().copied().ok_or_else(|| bad("edit.setDefaultProperties", "select a layer"))?;
-            let v = copy_props_of(s.doc()?, id);
-            s.clipboard.props = Some(v);
-            ok()
-        }),
+        spec!(
+            "edit.setDefaultProperties",
+            "Set default properties",
+            "{id?}  the layer's fills, strokes, effects, opacity and corners (a text layer's: also its font) become what new rectangles, ellipses, polygons and stars (or, from a text layer, new text) drawn with the tools take → {for: shapes|text, properties}",
+            false,
+            |s, p| {
+                let id = targets(s, p).first().copied().ok_or_else(|| bad("edit.setDefaultProperties", "select a layer"))?;
+                let doc = s.doc()?;
+                let text = matches!(doc.get(id)?.kind, NodeKind::Text(_));
+                let v = copy_props_of(doc, id);
+                let kind = if text {
+                    s.default_props.text = Some(v.clone());
+                    "text"
+                } else {
+                    s.default_props.shape = Some(v.clone());
+                    "shapes"
+                };
+                Ok(json!({"for": kind, "properties": v}))
+            }
+        ),
         spec!("select.set", "Select", "{ids: [..]}  (replace the selection)", false, |s, p| {
             let ids = match get(p, "ids") {
                 Some(Value::Array(a)) => a.iter().filter_map(id_of).collect(),

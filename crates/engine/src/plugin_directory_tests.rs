@@ -252,3 +252,29 @@ fn publishing_sends_a_checked_folder() {
     assert_eq!(r["id"], ID);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_bundle_asking_for_more_than_the_directory_showed_is_not_installed() {
+    let (mut s, d) = session();
+    // Shown as read-only with one command; the bundle's manifest asks to write, any command.
+    let text =
+        json!({"id": ID, "name": "Tiny", "version": "1.0.0", "author": "Ada", "main": "tiny.wasm", "permissions": {"access": "write"}}).to_string();
+    let b = Bundle { manifest: text, wasm: wasm(), assets: vec![] }.encode();
+    let mut e = entry(ID, "1.0.0", &b);
+    e.commands = vec!["node.get".into()];
+    d.lock().unwrap().plugins.push((e, b));
+    s.execute("plugin.directory.list", &json!({"server": "ws://127.0.0.1:9/"})).unwrap();
+    let err = s.execute("plugin.directory.install", &json!({"id": ID, "confirm": true})).unwrap_err().to_string();
+    assert!(err.contains("write"), "{err}");
+    assert!(s.prefs.plugins.is_empty(), "nothing was installed");
+    // Read-only as shown, but more commands than shown.
+    let text = json!({"id": ID, "name": "Tiny", "version": "1.0.1", "author": "Ada", "main": "tiny.wasm", "permissions": {"access": "read", "commands": ["node.get", "node.set"]}}).to_string();
+    let b = Bundle { manifest: text, wasm: wasm(), assets: vec![] }.encode();
+    let mut e = entry(ID, "1.0.1", &b);
+    e.commands = vec!["node.get".into()];
+    d.lock().unwrap().plugins.clear();
+    d.lock().unwrap().plugins.push((e, b));
+    s.execute("plugin.directory.list", &json!({"server": "ws://127.0.0.1:9/"})).unwrap();
+    let err = s.execute("plugin.directory.install", &json!({"id": ID, "confirm": true})).unwrap_err().to_string();
+    assert!(err.contains("commands"), "{err}");
+}
