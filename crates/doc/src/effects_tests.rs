@@ -75,10 +75,10 @@ fn glass_fields_take_bound_numbers_as_the_panel_shows_them() {
     }
     assert_eq!((g.light_angle, g.light_intensity, g.refraction, g.depth, g.dispersion, g.frost, g.splay), (30.0, 0.25, 0.4, 12.0, 0.1, 8.0, 0.5));
     // Out of range: clamped to the field's range.
-    for (field, x) in [("lightAngle", 270.0), ("lightIntensity", 250.0), ("depth", 0.0), ("radius", 150.0), ("splay", -5.0)] {
+    for (field, x) in [("lightIntensity", 250.0), ("depth", 0.0), ("radius", 150.0), ("splay", -5.0)] {
         assert!(g.set_bound(field, x), "{field}");
     }
-    assert_eq!((g.light_angle, g.light_intensity, g.depth, g.frost, g.splay), (180.0, 1.0, 1.0, Glass::MAX_FROST, 0.0));
+    assert_eq!((g.light_intensity, g.depth, g.frost, g.splay), (1.0, 1.0, Glass::MAX_FROST, 0.0));
     // A field glass doesn't have, or a value that isn't a number, changes nothing.
     let before = g.clone();
     assert!(!g.set_bound("spread", 3.0));
@@ -88,6 +88,24 @@ fn glass_fields_take_bound_numbers_as_the_panel_shows_them() {
     for field in Glass::BOUND_FIELDS {
         assert!(Glass::default().set_bound(field, 1.0), "{field}");
     }
+}
+
+#[test]
+fn a_bound_light_angle_turns_round_instead_of_stopping() {
+    // An angle past ±180 is the same direction a turn away (270 is -90), not the end of the range.
+    for (x, want) in [(270.0, -90.0), (-270.0, 90.0), (540.0, 180.0), (-180.0, 180.0), (180.0, 180.0), (720.5, 0.5), (-360.0, 0.0), (-45.0, -45.0)] {
+        let mut g = Glass::default();
+        assert!(g.set_bound("lightAngle", x), "{x}");
+        assert_eq!(g.light_angle, want, "{x}");
+    }
+    // A whole turn back is 0, not -0, so a saved file says 0.
+    let mut g = Glass::default();
+    assert!(g.set_bound("lightAngle", -360.0));
+    assert!(g.light_angle == 0.0 && g.light_angle.is_sign_positive());
+    // A huge angle still lands in range.
+    let mut g = Glass::default();
+    assert!(g.set_bound("lightAngle", 1e300));
+    assert!((-180.0..=180.0).contains(&g.light_angle) && g.light_angle != -180.0);
 }
 
 #[test]

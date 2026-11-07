@@ -1631,6 +1631,22 @@ fn a_whole_ellipse_starting_anywhere_comes_back_whole() {
     }
 }
 
+#[test]
+fn text_with_thousands_of_distinct_styles_exports_in_linear_time() {
+    // The style table used to be searched end to end for every span (quadratic in distinct styles).
+    let mut doc = Document::new("styles");
+    let p = doc.first_page().unwrap();
+    let mut td = TextData::new("x".repeat(20_000));
+    td.runs = (0..20_000)
+        .map(|i| StyleRun { start: i, end: i + 1, style: TextStyle { font_size: 8.0 + i as f64 / 100.0, ..TextStyle::default() } })
+        .collect();
+    doc.create(p, NodeKind::Text(td), "T", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let start = std::time::Instant::now();
+    let (bytes, _) = export(&doc, None).unwrap();
+    assert!(!bytes.is_empty());
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+}
+
 /// An ellipse whose start has gone round many times (a start typed in degrees past a few hundred
 /// turns) comes back drawn the same: the same sweep, and a start the same way round.
 #[test]
