@@ -922,7 +922,7 @@ impl<'a> Ctx<'a> {
     fn style_definitions(&mut self, v: &'a Value) {
         for d in list(v, "styleDefinitions").iter().take(MAX_STYLES) {
             let (Some(id), Some(node)) = (text(d, "id").filter(|i| !i.is_empty()).map(clip_str), d.get("node")) else { continue };
-            if self.doc.styles.iter().any(|s| s.id == id) {
+            if self.style_ids.contains(id) {
                 continue;
             }
             let kind = match text(d, "styleType") {
