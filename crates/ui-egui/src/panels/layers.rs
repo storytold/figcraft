@@ -159,13 +159,15 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
         ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 46.0), Align2::LEFT_CENTER, tr("Drafts"), regular(11.0), t.text_secondary);
     }
     let hr = Rect::from_center_size(pos2(head.max.x - 24.0, head.min.y + 24.0), vec2(24.0, 24.0));
-    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Collapse panel"));
+    // Minimize, by the file name: "click Minimize next to the file name to collapse the
+    // navigation bar, left sidebar, and right sidebar" (Explore the navigation bar and left sidebar).
+    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Minimize"));
     if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::same(5), t.hover);
     }
     icons::paint(ui.painter(), hr.shrink(5.0), Icon::Panels, t.icon);
     if hresp.clicked() {
-        app.ui.close_left_panel();
+        app.run("view.minimize", json!({}));
     }
     ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, t.border));
     match app.ui.left_tab {
@@ -291,8 +293,13 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 let tr = Rect::from_min_max(pos2(r.min.x + 8.0, r.min.y + 4.0), pos2(r.max.x - 4.0, r.max.y - 4.0));
                 let start = ui.data_mut(|d| d.remove_temp::<bool>(page_rename_start_id())).unwrap_or(false);
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
-                if let (Some(new), _) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start) {
+                let (out, open) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start);
+                if let Some(new) = out {
                     rename_done = Some((id, new));
+                } else if !open {
+                    // Cancelled, or committed unchanged: the row goes back to its name, or the idle
+                    // field would catch the next click and a click wouldn't open this page.
+                    app.ui.rename_page = None;
                 }
             } else if !divider {
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
@@ -313,6 +320,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 if ui.button(tr("Rename page")).clicked() {
                     if !crate::menus::dev_mode_refuses(app, "page.rename") {
                         app.ui.rename_page = Some((id, name.clone()));
+                        ui.data_mut(|d| d.insert_temp(page_rename_start_id(), true));
                     }
                     ui.close();
                 }

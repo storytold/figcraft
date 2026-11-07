@@ -36,6 +36,13 @@ fn pages_become_pages_in_document_order() {
 }
 
 #[test]
+fn a_page_listed_twice_is_imported_once() {
+    let z = sketch_zip("50.2", 103, document(&["A", "A", "A"]), &[page("A", "Alpha", vec![])], &[]);
+    let (doc, _) = import(&z, "f").unwrap();
+    assert_eq!(page_names(&doc), ["Alpha"]);
+}
+
+#[test]
 fn older_than_48_is_refused() {
     let z = sketch_zip("47.1", 95, document(&["P"]), &[page("P", "P", vec![])], &[]);
     let e = import(&z, "f").unwrap_err().to_string();

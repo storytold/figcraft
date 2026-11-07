@@ -72,3 +72,14 @@ fn a_width_profile_scales_the_brush() {
     let (first, last) = (parts.first().unwrap().bounding_box(), parts.last().unwrap().bounding_box());
     assert!(last.width() > first.width() * 3.0, "{first:?} {last:?}");
 }
+
+#[test]
+fn an_unsanitized_profile_is_bounded_before_sampling() {
+    // 100k points, all past the 64-point cap and out of range: the brush reads the clamped profile.
+    let raw = WidthProfile { points: (0..100_000).map(|i| figcraft_doc::WidthPoint::new(f64::from(i), 1e300)).collect() };
+    let b = brush("taper");
+    let mut p = props(1.0, &b);
+    p.width_profile = Some(raw);
+    let out = outline(&line(50.0), 1.0, &p, &b).unwrap();
+    assert!(out.bounding_box().height() <= 2.0 * WidthProfile::MAX_SCALE);
+}

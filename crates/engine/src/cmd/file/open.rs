@@ -1,3 +1,4 @@
+use super::import_ids::Renames;
 use super::load::{ext, file_stem, import_summary, load_path, load_with, read, rest_images, sibling_variables, variables_param};
 use super::*;
 
@@ -54,7 +55,7 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
-pub(super) fn open(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let variables = variables_param("file.open", p)?;
     if string(p, "path").is_none()
         && let Some(d) = string(p, "data")
@@ -218,8 +219,18 @@ pub(super) fn import(s: &mut Session, p: &Value) -> Result<Value> {
 /// Append `other`'s pages (with their settings and flows, its images, styles and variables) to
 /// `doc`. Ids are remapped across all pages at once, so instances keep their main, instance layers
 /// their source and interactions and flows their targets wherever those are. Styles, variables and
-/// collections whose id the document already has are kept as they are.
+/// collections the document already has (the same under the same id, as when a file comes in
+/// again) and library copies are shared; others whose id the document uses for something else get
+/// new ids, and what comes in names them by those ([`Renames`]).
 pub(super) fn append_pages(doc: &mut Document, other: &Document) -> Result<Vec<NodeId>> {
+    let renames = Renames::new(doc, other);
+    let renamed;
+    let other = if renames.is_empty() {
+        other
+    } else {
+        renamed = renames.applied(other);
+        &renamed
+    };
     for (k, v) in &other.images {
         doc.images.entry(k.clone()).or_insert_with(|| v.clone());
     }
