@@ -549,3 +549,18 @@ fn a_clipboard_png_past_the_byte_limit_falls_back_to_the_decoded_image() {
     let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted from the decoded image");
     assert_eq!((pasted.width, pasted.height), (2.0, 2.0));
 }
+
+#[test]
+fn a_clipboard_png_with_a_cut_off_body_falls_back_to_the_decoded_image() {
+    let mut w = Win::new();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::new(4, 4).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let png = png.into_inner();
+    let cut_off = png[..png.len() - 20].to_vec();
+    assert_eq!(image::ImageReader::new(std::io::Cursor::new(&cut_off)).with_guessed_format().unwrap().into_dimensions().unwrap(), (4, 4));
+    *w.clip.borrow_mut() = Clip { png: Some(cut_off), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    let doc = w.app.session.doc().unwrap();
+    let pasted = doc.nodes().find(|n| n.name == "Pasted image").expect("pasted from the decoded image");
+    assert_eq!((pasted.width, pasted.height), (2.0, 2.0));
+}

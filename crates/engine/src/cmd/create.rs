@@ -302,7 +302,14 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
             }
             (w, h, offset) = (shape.width, shape.height, shape.offset);
         } else if let Some(Value::Array(pts)) = get(p, "points") {
-            let pts: Vec<Point> = pts.iter().filter_map(|v| Some(Point::new(f64_of(v.get(0)?)?, f64_of(v.get(1)?)?))).collect();
+            let pts: Vec<Point> = pts
+                .iter()
+                .map(|v| {
+                    let xy = v.as_array().filter(|a| a.len() == 2)?;
+                    Some(Point::new(f64_of(&xy[0])?, f64_of(&xy[1])?))
+                })
+                .collect::<Option<_>>()
+                .ok_or_else(|| bad(cmd, "`points` entries must be numeric [x, y] pairs"))?;
             if pts.len() < 2 {
                 return Err(bad(cmd, "`points` needs at least two [x, y] pairs"));
             }
