@@ -259,10 +259,24 @@ pub enum ListStyle {
     Numbered,
 }
 
+/// A paragraph's base direction: by its letters, or forced ("controls are available to override
+/// text direction per paragraph", Add right-to-left text).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextDirection {
+    /// The first letter with a direction decides (Unicode rules P2 and P3).
+    #[default]
+    Auto,
+    /// Left to right, whatever the letters.
+    Ltr,
+    /// Right to left, whatever the letters.
+    Rtl,
+}
+
 /// Deepest list nesting (levels 0..=MAX_LIST_INDENT).
 pub const MAX_LIST_INDENT: u8 = 8;
 
-/// One paragraph's list settings.
+/// One paragraph's list settings and base direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ParaList {
@@ -276,6 +290,9 @@ pub struct ParaList {
     /// (items that go on counting ignore it; other paragraphs are always 0).
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub start_offset: u32,
+    /// The paragraph's base direction (Text ▸ Text direction); `Auto` follows its letters.
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub direction: TextDirection,
 }
 
 /// Character style. In runs, every field is an override; `None` means "inherit the base".
@@ -1068,20 +1085,20 @@ mod case_tests {
         // Files written before start numbers load with none, and write the same bytes.
         let old = r#"{"list":"numbered","indent":1}"#;
         let pl: ParaList = serde_json::from_str(old).unwrap();
-        assert_eq!(pl, ParaList { list: N, indent: 1, start_offset: 0 });
+        assert_eq!(pl, ParaList { list: N, indent: 1, start_offset: 0, ..ParaList::default() });
         assert_eq!(serde_json::to_string(&pl).unwrap(), old);
         // One numbered paragraph with a start keeps it (it doesn't fold into `list`).
         let mut t = TextData { characters: "Next".into(), ..Default::default() };
-        t.set_para_lists(0, 0, |p| *p = ParaList { list: N, indent: 0, start_offset: 1 });
-        assert_eq!(t.para_list(0), ParaList { list: N, indent: 0, start_offset: 1 });
+        t.set_para_lists(0, 0, |p| *p = ParaList { list: N, indent: 0, start_offset: 1, ..ParaList::default() });
+        assert_eq!(t.para_list(0), ParaList { list: N, indent: 0, start_offset: 1, ..ParaList::default() });
         // Enter copies it to the new item; different starts don't make the list mixed.
         t.replace_range(4, 4, "\nMore");
         assert_eq!(t.para_list(1).start_offset, 1);
         t.set_para_lists(5, 5, |p| p.start_offset = 0);
         assert!(t.common_para_list(0, t.char_count()).is_some_and(|p| p.list == N));
         // Bullets have no number, so no start.
-        t.set_para_lists(0, 0, |p| *p = ParaList { list: B, indent: 1, start_offset: 4 });
-        assert_eq!(t.para_list(0), ParaList { list: B, indent: 1, start_offset: 0 });
+        t.set_para_lists(0, 0, |p| *p = ParaList { list: B, indent: 1, start_offset: 4, ..ParaList::default() });
+        assert_eq!(t.para_list(0), ParaList { list: B, indent: 1, start_offset: 0, ..ParaList::default() });
         // A plain paragraph has none.
         t.set_para_lists(0, 0, |p| p.list = P);
         assert_eq!(t.para_list(0), ParaList::default());
