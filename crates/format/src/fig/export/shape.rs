@@ -1,8 +1,8 @@
 use super::common::{style_fields, unsupported_decoration_look};
 use super::{
     Affine, BezPath, Bound, Exporter, Fields, Kv, ListStyle, MAX_CANVAS, MAX_CHARS, MAX_NETWORK, Node, NodeKind, Paint, StrokeAlign, StrokeCap,
-    StrokeJoin, TextAlignH, TextAlignV, TextAutoResize, TextData, TextStyle, VectorNetwork, WindingRule, arr, b, cap_name, e, finite, fl, int,
-    join_name, network, o, path_blob, s, u, xy,
+    StrokeJoin, TextAlignH, TextAlignV, TextAutoResize, TextData, TextDirection, TextStyle, VectorNetwork, WindingRule, arr, b, cap_name, e, finite,
+    fl, int, join_name, network, o, path_blob, s, u, xy,
 };
 
 impl<'d> Exporter<'d> {
@@ -136,11 +136,16 @@ impl<'d> Exporter<'d> {
             let listed = *l != ListStyle::None;
             let begins = first(i, l);
             let start = starts.get(i).copied().unwrap_or(0);
+            let direction = match td.para_list(i).direction {
+                TextDirection::Auto => "AUTO",
+                TextDirection::Ltr => "LTR",
+                TextDirection::Rtl => "RTL",
+            };
             o(vec![
                 ("lineType", e(ty)),
                 ("styleId", int(0)),
                 ("indentationLevel", int(i64::from(listed))),
-                ("sourceDirectionality", e("AUTO")),
+                ("sourceDirectionality", e(direction)),
                 ("listStartOffset", int(i64::from(start))),
                 ("isFirstLineOfList", b(begins)),
             ])
