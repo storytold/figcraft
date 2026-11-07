@@ -203,7 +203,10 @@ pub fn export(doc: &Document, thumbnail: Option<&[u8]>) -> Result<(Vec<u8>, Vec<
     let root = schema.find("Message").ok_or_else(|| FormatError::Io(".fig export: the schema has no Message".into()))?;
     let body = encode::message(&schema, root, &message).map_err(fail)?;
     let canvas = canvas(&encode::schema(&schema), &body)?;
-    let background = doc.pages.first().and_then(|p| doc.node(*p)).and_then(|p| match &p.kind {
+    let active_page = doc.current_page.and_then(|p| doc.node(p)).or_else(|| {
+        doc.pages.first().and_then(|p| doc.node(*p))
+    });
+    let background = active_page.and_then(|p| match &p.kind {
         NodeKind::Page { background, .. } => Some(*background),
         _ => None,
     });
@@ -590,7 +593,19 @@ impl<'d> Exporter<'d> {
         root.extend(root_fields());
         root.push(("documentColorProfile", e(profile)));
         self.nodes.push(o(root));
-        for (i, p) in doc.pages.iter().enumerate() {
+        // Reorder pages so that current_page (the active page the user is currently editing)
+        // is exported at index 0. Since Figma always opens the first page in the .fig file,
+        // this ensures that the user's active design is immediately visible upon opening in Figma.
+        let mut ordered_pages = doc.pages.clone();
+        if let Some(cur) = doc.current_page {
+            if let Some(pos) = ordered_pages.iter().position(|&p| p == cur) {
+                if pos > 0 {
+                    let page = ordered_pages.remove(pos);
+                    ordered_pages.insert(0, page);
+                }
+            }
+        }
+        for (i, p) in ordered_pages.iter().enumerate() {
             self.emit(*p, guid(0, 0), i, None, 0);
         }
         self.assets(doc.pages.len());
