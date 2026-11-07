@@ -15,7 +15,7 @@ fn id(v: serde_json::Value) -> NodeId {
 }
 
 /// A rectangle named `name` on the page, or inside `parent`.
-fn named(s: &mut Session, name: &str, parent: Option<NodeId>) -> NodeId {
+pub(crate) fn named(s: &mut Session, name: &str, parent: Option<NodeId>) -> NodeId {
     let mut p = json!({"x": 0, "y": 0, "width": 20, "height": 20, "props": {"name": name}});
     if let Some(parent) = parent {
         p["parent"] = json!(parent);
@@ -24,7 +24,7 @@ fn named(s: &mut Session, name: &str, parent: Option<NodeId>) -> NodeId {
 }
 
 /// The painted text starting with `prefix`: (whether it was elided, its position, its size).
-fn painted(u: &mut Ui, prefix: &str) -> (bool, Pos2, Vec2) {
+pub(crate) fn painted(u: &mut Ui, prefix: &str) -> (bool, Pos2, Vec2) {
     let shapes = crate::live_tests::flat(&u.frame_output(vec![]).shapes);
     shapes
         .iter()
