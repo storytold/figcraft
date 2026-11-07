@@ -8,10 +8,12 @@ use crate::params::{boolean, get, num, num_or, req_index, req_num, req_string, s
 use crate::tools::ToolId;
 use crate::{EngineError, Result, Session, ViewState, bad, spec};
 
+/// The active document's view state, for changing it.
 fn view(s: &mut Session) -> Result<&mut ViewState> {
     Ok(&mut s.ds_mut()?.view)
 }
 
+/// Set one of a view's on/off settings from `on`, or toggle it when `on` is absent.
 fn flag(s: &mut Session, p: &Value, f: fn(&mut ViewState) -> &mut bool) -> Result<Value> {
     let v = view(s)?;
     let slot = f(v);
@@ -90,6 +92,7 @@ fn pixel_preview(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"on": v.pixel_preview, "scale": v.pixel_scale}))
 }
 
+/// Zoom the active document to `z` about the view's centre, keeping that point in place.
 fn zoom_to(s: &mut Session, z: f64) -> Result<Value> {
     let v = view(s)?;
     let c = (v.cx, v.cy);
@@ -114,6 +117,7 @@ fn pan(s: &mut Session, p: &Value) -> Result<Value> {
 /// Figma's zoom steps.
 const STEPS: &[f64] = &[0.02, 0.03, 0.06, 0.13, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0];
 
+/// The next zoom step above (`up`) or below `z` in Figma's fixed steps.
 fn step(z: f64, up: bool) -> f64 {
     if up {
         STEPS.iter().copied().find(|s| *s > z * 1.001).unwrap_or(256.0)
@@ -141,6 +145,7 @@ fn zoom_at(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"zoom": v.zoom, "cx": v.cx, "cy": v.cy}))
 }
 
+/// Select and fit the next (`dir` 1) or previous (-1) top-level frame on the page.
 fn zoom_frame(s: &mut Session, dir: i64) -> Result<Value> {
     let ds = s.ds()?;
     let frames = ds.doc.top_frames(ds.page);
@@ -161,6 +166,7 @@ fn zoom_frame(s: &mut Session, dir: i64) -> Result<Value> {
     Ok(json!({"frame": f}))
 }
 
+/// Move to the next (`dir` 1) or previous (-1) page, skipping dividers, and fit it.
 fn page_step(s: &mut Session, dir: i64) -> Result<Value> {
     let ds = s.ds()?;
     let pages = &ds.doc.pages;
@@ -183,6 +189,7 @@ fn page_step(s: &mut Session, dir: i64) -> Result<Value> {
     Ok(json!({"page": pg}))
 }
 
+/// Ask the UI to open or toggle the panel or dialog named `kind`.
 fn ui(s: &mut Session, kind: &str) -> Result<Value> {
     s.request_ui(kind, json!({}));
     ok()
@@ -210,12 +217,14 @@ fn ui_scale_step(s: &mut Session, dir: i32) -> Result<Value> {
     Ok(json!({"scale": s.prefs.ui_scale}))
 }
 
+/// Set one of the preferences' on/off settings from `on`, or toggle it when `on` is absent.
 fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Result<Value> {
     let slot = f(&mut s.prefs);
     *slot = boolean(p, "on").unwrap_or(!*slot);
     Ok(json!({"on": *slot}))
 }
 
+/// Switch the tool, unless the file is read-only and this tool needs editing.
 pub(crate) fn tool(s: &mut Session, t: ToolId) -> Result<Value> {
     // A file you can't edit now (view only, or on its way to a server): moving around only, and
     // commenting with a comment link.
@@ -226,6 +235,7 @@ pub(crate) fn tool(s: &mut Session, t: ToolId) -> Result<Value> {
     Ok(json!({"tool": t.id()}))
 }
 
+/// The View menu's commands and their parameters.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("view.zoomIn", "Zoom in", "{}", false, |s, _| {
@@ -480,7 +490,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "pref.language",
             "Interface language",
-            "{language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|vi|zh-Hans|…; else English}",
+            "{language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|vi|zh-Hans|zh-Hant|…; else English}",
             false,
             |s, p| {
                 let lang = req_string("pref.language", p, "language")?;
