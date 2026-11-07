@@ -98,6 +98,41 @@ fn effect_moves_and_removals_reject_junk() {
     assert_eq!(s.doc().unwrap().node(r).unwrap().effects.len(), 1);
 }
 
+fn glass(s: &Session, r: NodeId) -> figcraft_doc::Glass {
+    match s.doc().unwrap().node(r).unwrap().effects.first().map(|e| &e.kind) {
+        Some(EffectKind::Glass(g)) => g.clone(),
+        k => panic!("{k:?}"),
+    }
+}
+
+#[test]
+fn glass_fields_take_number_variables() {
+    let (mut s, r) = setup();
+    ex(&mut s, "effect.add", json!({"ids": [r], "type": "glass"}));
+    // Percent fields read the variable as the Design panel shows them; `radius` is the frost.
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/splay", "variable": "large"}));
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/radius", "variable": "small"}));
+    ex(&mut s, "variable.bind", json!({"ids": [r], "field": "effects/0/depth", "variable": "large"}));
+    let g = glass(&s, r);
+    assert_eq!((g.splay, g.frost, g.depth), (0.3, 2.0, 30.0));
+    // A new value follows, clamped to the field's range (frost stops at 100).
+    ex(&mut s, "variable.set", json!({"variable": "small", "value": 150}));
+    ex(&mut s, "variable.set", json!({"variable": "large", "value": 75}));
+    let g = glass(&s, r);
+    assert_eq!((g.splay, g.frost, g.depth), (0.75, figcraft_doc::Glass::MAX_FROST, 75.0));
+    // A colour variable doesn't fit a glass field.
+    assert!(s.execute("variable.bind", &json!({"ids": [r], "field": "effects/0/refraction", "variable": "brand"})).is_err());
+    // An effect style binds them too, and every layer using it follows.
+    let fx = ex_value(&mut s, "style.create", json!({"type": "effect", "name": "Pane", "from": r}))["id"].as_str().unwrap().to_string();
+    ex(&mut s, "style.bind", json!({"style": fx, "field": "effects/0/refraction", "variable": "large"}));
+    assert_eq!(glass(&s, r).refraction, 0.75);
+    assert!(s.execute("style.bind", &json!({"style": fx, "field": "effects/0/spread", "variable": "large"})).is_err(), "glass has no spread");
+}
+
+fn ex_value(s: &mut Session, cmd: &str, p: serde_json::Value) -> serde_json::Value {
+    s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"))
+}
+
 fn fill_hex(s: &Session, r: NodeId) -> Vec<String> {
     s.doc().unwrap().node(r).unwrap().fills.iter().filter_map(|p| p.solid_color()).map(|c| c.to_hex()).collect()
 }
