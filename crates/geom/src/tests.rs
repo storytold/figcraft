@@ -52,6 +52,53 @@ fn degenerate_inputs_dont_panic() {
     let _ = smoothed_polygon(&polygon_points(10.0, 10.0, 5), f64::INFINITY, f64::NAN);
     let _ = smoothed_polygon(&polygon_points(10.0, 10.0, 5), 3.0, f64::INFINITY);
     let _ = ellipse(f64::NAN, 10.0, f64::NAN, 100.0, 2.0);
+    // (corner, first edge, second edge, room, radius, smoothing): none of these is a corner to round.
+    let x = Vec2::new(1.0, 0.0);
+    let rows = [
+        (Point::ZERO, x, Vec2::new(0.0, 1.0), 10.0, 0.0, 0.6),
+        (Point::ZERO, x, Vec2::new(0.0, 1.0), 0.0, 5.0, 0.6),
+        (Point::ZERO, x, x, 10.0, 5.0, 0.6),
+        (Point::ZERO, x, -x, 10.0, 5.0, 0.6),
+        (Point::ZERO, Vec2::ZERO, x, 10.0, 5.0, 0.6),
+        (Point::ZERO, Vec2::new(f64::NAN, 0.0), x, 10.0, 5.0, 0.6),
+        (Point::new(f64::INFINITY, 0.0), x, Vec2::new(0.0, 1.0), 10.0, 5.0, 0.6),
+    ];
+    for (corner, u1, u2, room, r, s) in rows {
+        assert!(smoothed_corner(corner, u1, u2, room, r, s).is_none(), "{corner:?} {u1:?} {u2:?} {room} {r} {s}");
+    }
+}
+
+#[test]
+fn smoothed_corner_draws_the_polygon_corner() {
+    use kurbo::ParamCurve;
+    // The corner of a square drawn by itself follows the smoothed polygon's corner and joins its
+    // edges and its own pieces without a kink.
+    for s in [0.0, 0.6, 1.0] {
+        let curves = smoothed_corner(Point::ZERO, Vec2::new(0.0, 1.0), Vec2::new(1.0, 0.0), 50.0, 20.0, s).unwrap();
+        let mut path = BezPath::new();
+        path.move_to(curves[0].p0);
+        for q in &curves {
+            path.curve_to(q.p1, q.p2, q.p3);
+        }
+        path.line_to((100.0, 0.0));
+        path.line_to((100.0, 100.0));
+        path.line_to((0.0, 100.0));
+        path.close_path();
+        let want = area(&rounded_rect(100.0, 100.0, [20.0, 0.0, 0.0, 0.0], s));
+        assert!((area(&path) - want).abs() < 0.05, "s={s}: {} vs {want}", area(&path));
+        assert!((curves[0].p0 - Point::new(0.0, 20.0 * (1.0 + s))).hypot() < 1e-9, "s={s}: it starts 1 + smoothing radii along the edge");
+        let last = curves[curves.len() - 1];
+        assert!((last.p3 - Point::new(20.0 * (1.0 + s), 0.0)).hypot() < 1e-9, "s={s}: and ends as far along the other");
+        let dir = |c: &kurbo::CubicBez, t: f64| {
+            let d = if t < 0.5 { c.eval(1e-6) - c.eval(0.0) } else { c.eval(1.0) - c.eval(1.0 - 1e-6) };
+            d.normalize()
+        };
+        assert!(dir(&curves[0], 0.0).dot(Vec2::new(0.0, -1.0)) > 0.999, "s={s}: it leaves along the first edge");
+        assert!(dir(&last, 1.0).dot(Vec2::new(1.0, 0.0)) > 0.999, "s={s}: it arrives along the second edge");
+        for pair in curves.windows(2) {
+            assert!(dir(&pair[0], 1.0).dot(dir(&pair[1], 0.0)) > 0.999, "s={s}: its pieces join smoothly");
+        }
+    }
 }
 
 /// The measurement's sanity bound is the builders' cap, inclusive: a path built at `MAX_COORD`
@@ -253,6 +300,13 @@ fn set_rotation_keeps_center() {
 }
 
 #[test]
+fn round_to_handles_large_precision_without_changing_finite_values() {
+    assert_eq!(round_to(1.25, 400), 1.25);
+    assert_eq!(round_to(-1.25, 400), -1.25);
+    assert_eq!(round_to(1.23456, 2), 1.23);
+}
+
+#[test]
 fn reverse_subpaths_preserves_open_and_closed() {
     let mut open = BezPath::new();
     open.move_to((0.0, 0.0));
@@ -265,4 +319,50 @@ fn reverse_subpaths_preserves_open_and_closed() {
     closed.close_path();
     let r = <BezPath as ReverseSubpaths>::reverse_subpaths(&closed);
     assert!(matches!(r.elements().last(), Some(kurbo::PathEl::ClosePath)), "{:?}", r.elements());
+}
+
+#[test]
+fn a_huge_ellipse_arc_is_a_few_cubics() {
+    let big = ellipse(1e300, 1e300, 0.3, 2.0, 0.5);
+    assert!(big.elements().len() < 200, "{}", big.elements().len());
+}
+
+#[test]
+fn a_huge_ring_is_a_few_cubics() {
+    let ring = ellipse(1e300, 1e300, 0.0, TAU, 0.5);
+    assert!(ring.elements().len() < 200, "{}", ring.elements().len());
+}
+
+#[test]
+fn a_huge_smoothed_star_is_a_few_cubics() {
+    let star = smoothed_polygon(&star_points(1e300, 1e300, 5, 0.5), 1e299, 0.5);
+    assert!(star.elements().len() < 400, "{}", star.elements().len());
+}
+
+#[test]
+fn a_huge_rounded_rect_is_a_few_cubics() {
+    let rect = rounded_rect(1e300, 1e300, [1e299; 4], 0.0);
+    assert!(rect.elements().len() < 100, "{}", rect.elements().len());
+}
+
+#[test]
+fn an_infinite_radius_is_a_few_cubics() {
+    let mut n = 0;
+    kurbo::Arc::new((0.0, 0.0), (f64::INFINITY, 1.0), 0.0, 1.0, 0.0).to_cubic_beziers(arc_tolerance(f64::INFINITY), |_, _, _| n += 1);
+    assert!(n < 16, "{n}");
+}
+
+#[test]
+fn svg_path_refuses_numbers_past_the_limit_before_parsing() {
+    let start = std::time::Instant::now();
+    for d in ["M0 0 A1e300 1e300 0 0 1 1 1", "M0 0A1e300-1e300 0 0 1 1 1", "M 0 0 L 1e10 5", "M0 0L-2e9.5 0", "M0 0 L 1e999 0"] {
+        assert!(svg_path(d).is_err(), "{d}");
+    }
+    assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+    for d in ["M0 0 L 1e9 5 A 5 5 0 0 1 10 10 Z", "M0 0 L-2.5 0.5 L1e-3 -4e2 Z", "M10,20 l1,-2.5e+1"] {
+        assert!(svg_path(d).is_ok(), "{d}");
+    }
+    assert!(!number_past("M0 0L-2.5.5 1e-3-4e2z", 1e3));
+    assert!(number_past("M0 0L-2.5.5 1e-3-4e3z", 1e3));
+    assert!(number_past("M.5.5e10", 1e3));
 }

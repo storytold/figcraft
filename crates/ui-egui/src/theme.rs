@@ -271,7 +271,8 @@ pub fn on_dark<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) -> R) -> R {
 
 /// UI fonts: Inter and the Archivo wordmark (from the craft-fonts build input) when present;
 /// otherwise egui's defaults. With
-/// `system`, also system faces for scripts those lack (Hebrew, joined Arabic) so names in them show,
+/// `system`, also system faces for scripts those lack (Hebrew, joined Arabic, Ethiopic, the Indic
+/// scripts and the others [`crate::bidi::script_fallbacks`] names) so names in them show,
 /// and faces for the CJK scripts in `cjk` ([`crate::cjk`]).
 ///
 /// The craft-fonts set embeds Noto Sans Arabic and Noto Sans Hebrew; with `system` off those
@@ -493,7 +494,7 @@ mod tests {
             let theme = if t.dark { "dark" } else { "light" };
             // Disabled text (a disabled button's label, placeholders) on panels, fields and
             // selected rows, still dimmer than secondary text.
-            for bg in [t.panel, t.field, t.hover, t.selected_row] {
+            for bg in [t.panel, t.field, t.hover, t.selected_row, t.selected_row_child] {
                 let ratio = c(t.text_tertiary).contrast(c(bg));
                 assert!(ratio >= 3.0, "{theme}: dim text {:?} on {bg:?} is {ratio:.2}:1", t.text_tertiary);
                 assert!(ratio < c(t.text_secondary).contrast(c(bg)), "{theme}: dim text reads dimmer than secondary text");

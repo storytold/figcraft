@@ -159,13 +159,15 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
         ui.painter().text(pos2(head.min.x + 16.0, head.min.y + 46.0), Align2::LEFT_CENTER, tr("Drafts"), regular(11.0), t.text_secondary);
     }
     let hr = Rect::from_center_size(pos2(head.max.x - 24.0, head.min.y + 24.0), vec2(24.0, 24.0));
-    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Collapse panel"));
+    // Minimize, by the file name: "click Minimize next to the file name to collapse the
+    // navigation bar, left sidebar, and right sidebar" (Explore the navigation bar and left sidebar).
+    let hresp = ui.interact(hr, ui.scope_id().with("hideui"), Sense::click()).tip(tr("Minimize"));
     if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::same(5), t.hover);
     }
     icons::paint(ui.painter(), hr.shrink(5.0), Icon::Panels, t.icon);
     if hresp.clicked() {
-        app.ui.close_left_panel();
+        app.run("view.minimize", json!({}));
     }
     ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, t.border));
     match app.ui.left_tab {
@@ -291,8 +293,13 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 let tr = Rect::from_min_max(pos2(r.min.x + 8.0, r.min.y + 4.0), pos2(r.max.x - 4.0, r.max.y - 4.0));
                 let start = ui.data_mut(|d| d.remove_temp::<bool>(page_rename_start_id())).unwrap_or(false);
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
-                if let (Some(new), _) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start) {
+                let (out, open) = crate::widgets::rename_field(ui, Id::unique(("pagename", id)), &name, tr, font, start);
+                if let Some(new) = out {
                     rename_done = Some((id, new));
+                } else if !open {
+                    // Cancelled, or committed unchanged: the row goes back to its name, or the idle
+                    // field would catch the next click and a click wouldn't open this page.
+                    app.ui.rename_page = None;
                 }
             } else if !divider {
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
@@ -313,6 +320,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 if ui.button(tr("Rename page")).clicked() {
                     if !crate::menus::dev_mode_refuses(app, "page.rename") {
                         app.ui.rename_page = Some((id, name.clone()));
+                        ui.data_mut(|d| d.insert_temp(page_rename_start_id(), true));
                     }
                     ui.close();
                 }
@@ -954,15 +962,34 @@ fn reveal_selection(app: &mut FigApp, doc: &Document, page: NodeId, sel: &[NodeI
     reveal
 }
 
+/// The outermost selected layer owning a row's continuous hierarchy highlight.
+fn selection_root(doc: &Document, sel: &BTreeSet<NodeId>, id: NodeId) -> Option<NodeId> {
+    if sel.is_empty() {
+        return None;
+    }
+    doc.ancestors(id).into_iter().rev().find(|a| sel.contains(a)).or_else(|| sel.contains(&id).then_some(id))
+}
+
+fn hierarchy_bg(roots: &[Option<NodeId>], i: usize, mut rr: Rect, gap: f32) -> Option<(Rect, CornerRadius)> {
+    let root = roots.get(i).copied().flatten()?;
+    let joins = |neighbor: &Option<NodeId>| *neighbor == Some(root);
+    let above = i.checked_sub(1).and_then(|j| roots.get(j)).is_some_and(joins);
+    let below = roots.get(i + 1).is_some_and(joins);
+    if below {
+        rr.max.y += gap;
+    }
+    let top = if above { 0 } else { 5 };
+    let bottom = if below { 0 } else { 5 };
+    Some((rr, CornerRadius { nw: top, ne: top, sw: bottom, se: bottom }))
+}
+
 /// A row's background: selected, inside a selected layer, or outlined when hovered.
 /// `state` is [selected, in_selected, component].
 fn paint_row_bg(ui: &Ui, t: &Tokens, rr: Rect, state: [bool; 3], hovered: bool) {
     let [selected, in_selected, is_comp] = state;
     if selected {
         ui.painter().rect_filled(rr, CornerRadius::same(5), if is_comp { t.component_row } else { t.selected_row });
-    } else if in_selected {
-        ui.painter().rect_filled(rr, CornerRadius::ZERO, t.selected_row_child);
-    } else if hovered {
+    } else if !in_selected && hovered {
         ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(1.0, if is_comp { COMPONENT } else { ACCENT }), egui::StrokeKind::Inside);
     }
 }
@@ -1063,15 +1090,20 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         drag_autoscroll(ui, dragging.is_some());
         let first = ((viewport.min.y / pitch).floor().max(0.0) as usize).min(rows.len());
         let last = ((viewport.max.y / pitch).ceil().max(0.0) as usize).saturating_add(1).min(rows.len());
+        // Compute each visible row's root once, plus one neighbor outside each end
+        // so scrolling never rounds a seam in the middle of a selected subtree.
+        let selected_ids: BTreeSet<_> = sel.iter().copied().collect();
+        let roots_start = first.saturating_sub(1);
+        let roots: Vec<_> = rows.iter().take(last.saturating_add(1)).skip(roots_start).map(|r| selection_root(&doc, &selected_ids, r.id)).collect();
         let band = Rect::from_x_y_ranges(ui.max_rect().x_range(), (top + first as f32 * pitch)..=(top + last as f32 * pitch));
         let mut band_ui = ui.new_child(egui::UiBuilder::new().max_rect(band));
         // Stable widget ids for a row wherever the list is scrolled.
         band_ui.skip_ahead_auto_ids(first);
         let ui = &mut band_ui;
-        for row in rows.iter().take(last).skip(first) {
+        for (i, row) in rows.iter().enumerate().take(last).skip(first) {
             let Some(n) = doc.node(row.id) else { continue };
             let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), Sense::click_and_drag());
-            let selected = sel.contains(&row.id);
+            let selected = selected_ids.contains(&row.id);
             a11y::layer_row(&mut app.ui.nav, &resp);
             if sel.last() == Some(&row.id) {
                 a11y::prefer(&mut app.ui.nav, Region::Layers, resp.id);
@@ -1085,9 +1117,13 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 locked: n.locked,
             };
             a11y::tree_item(&resp, if n.name.is_empty() { tr(n.kind.label()) } else { &n.name }, &info);
-            let in_selected = !selected && doc.ancestors(row.id).iter().any(|a| sel.contains(a));
             let is_comp = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
             let rr = r.shrink2(vec2(8.0, 0.0));
+            let bg = hierarchy_bg(&roots, i - roots_start, rr, pitch - ROW);
+            let in_selected = !selected && bg.is_some();
+            if let Some((rect, corners)) = bg {
+                ui.painter().rect_filled(rect, corners, t.selected_row_child);
+            }
             a11y::ring_around(ui, rr, &resp);
             // Over the row, its eye and padlock included (they sit on top of it).
             let over = resp.contains_pointer();

@@ -54,6 +54,28 @@ fn arrows_pan_the_view_when_nothing_is_selected() {
     assert_eq!(u.app.session.doc().unwrap().world_bounds(r).unwrap().x0, 1.0);
 }
 
+/// With a shape or frame tool chosen and nothing selected, the arrows show the placement crosshair
+/// in the middle of the view and move it (Shift: the large nudge) instead of panning, and Enter
+/// places the object there (Accessibility at Figma, #1839).
+#[test]
+fn arrows_show_and_move_the_placement_crosshair_with_a_shape_tool() {
+    let mut u = Ui::new(Session::new());
+    u.app.run("select.set", json!({"ids": []}));
+    u.app.run("view.set", json!({"zoom": 2.0, "cx": 100, "cy": 50}));
+    u.app.run("tool.rectangle", json!({}));
+    press(&mut u, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(view(&u), (100.0, 50.0, 2.0), "no pan: the crosshair shows instead");
+    assert_eq!(u.app.session.tool.place_at.map(|p| (p.x, p.y)), Some((100.0, 50.0)), "in the middle of the view");
+    press(&mut u, Key::ArrowDown, Modifiers::SHIFT);
+    assert_eq!(u.app.session.tool.place_at.map(|p| (p.x, p.y)), Some((100.0, 60.0)), "moved by the large nudge");
+    press(&mut u, Key::Enter, Modifiers::NONE);
+    let sel = u.app.session.selection();
+    let b = u.app.session.doc().unwrap().world_bounds(sel[0]).unwrap();
+    assert_eq!((b.center().x, b.center().y), (100.0, 60.0), "placed at the crosshair");
+    assert!(u.app.session.tool.place_at.is_none(), "which goes with the placement");
+    assert_eq!(view(&u), (100.0, 50.0, 2.0));
+}
+
 #[test]
 fn keyboard_box_selection_key_and_cmd_arrows() {
     let mut s = Session::new();

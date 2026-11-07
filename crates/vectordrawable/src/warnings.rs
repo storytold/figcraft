@@ -63,27 +63,53 @@ const NAMED: usize = 3;
 
 #[derive(Default)]
 pub(crate) struct Warnings {
-    seen: std::collections::BTreeMap<Warn, Vec<String>>,
+    /// Per warning: the distinct names so far (a set, so a document with many distinct names
+    /// doesn't make each check a scan of all before it), and the first few in order.
+    seen: std::collections::BTreeMap<Warn, (std::collections::BTreeSet<String>, Vec<String>)>,
 }
 
 impl Warnings {
     pub fn add(&mut self, w: Warn, layer: &str) {
-        let names = self.seen.entry(w).or_default();
-        if !names.iter().any(|n| n == layer) {
-            names.push(layer.to_string());
+        let (distinct, first) = self.seen.entry(w).or_default();
+        if distinct.insert(layer.to_string()) && first.len() < NAMED {
+            first.push(layer.to_string());
         }
     }
 
     pub fn finish(self) -> Vec<String> {
         self.seen
             .into_iter()
-            .map(|(w, names)| {
+            .map(|(w, (distinct, names))| {
                 let shown: Vec<String> =
                     names.iter().take(NAMED).map(|n| if n.is_empty() { "unnamed layer".to_string() } else { n.clone() }).collect();
-                let more = names.len().saturating_sub(NAMED);
+                let more = distinct.len().saturating_sub(NAMED);
                 let more = if more > 0 { format!(", {more} more") } else { String::new() };
                 format!("{} ({}{more})", w.message(), shown.join(", "))
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_are_counted_once_each_and_the_first_three_shown() {
+        let mut w = Warnings::default();
+        for name in ["a", "b", "a", "c", "d", "b", "e"] {
+            w.add(Warn::NothingDrawn, name);
+        }
+        let lines = w.finish();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].ends_with("(a, b, c, 2 more)"), "{}", lines[0]);
+        // Many distinct names: each is one set insertion, not a scan of all before it.
+        let mut w = Warnings::default();
+        let start = std::time::Instant::now();
+        for i in 0..200_000 {
+            w.add(Warn::TooLarge, &format!("layer {i}"));
+        }
+        assert!(w.finish()[0].ends_with("199997 more)"));
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
     }
 }
