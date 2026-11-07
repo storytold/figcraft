@@ -158,8 +158,8 @@ fn two_files_are_hosted_and_joined_independently() {
     assert!(host.live_of(hb).presence.get(&ada(&host, hb)).is_none_or(|p| p.cursor.is_none()), "no cursor in the file that isn't in front");
     // The host closes B: its session ends for everyone, A's goes on.
     host.execute("file.close", &json!({"index": 1, "force": true})).unwrap();
-    pump(&mut [&mut host, &mut guest], "B's session ending", |s| s[0].live.iter().count() == 1 && s[1].live.iter().count() == 1);
-    assert_eq!(guest.live_of(gb).status, Status::Off);
+    pump(&mut [&mut host, &mut guest], "B's session ending", |s| s[0].live.iter().count() == 1 && s[1].live_of(gb).rejoinable());
+    assert!(guest.live_of(gb).disconnected(), "the guest's tab says so");
     assert_eq!(guest.docs.len(), 3, "the guest keeps its copy of B");
     assert_eq!((host.live_of(ha).status.clone(), host.live_of(ha).peers.len()), (Status::Live, 1));
     assert_eq!(guest.live_of(ga).status, Status::Live);
