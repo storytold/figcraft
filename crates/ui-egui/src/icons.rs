@@ -29,6 +29,8 @@ pub use draw::{paint, paint_outlines};
 
 icons! {
     Move,
+    /// Select layers using a colour: selection corners around a colour swatch.
+    SelectColor,
     Scale,
     FitContents,
     Hand,
