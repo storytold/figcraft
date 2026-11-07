@@ -212,7 +212,7 @@ fn split(s: &mut Session, frame: NodeId, depth: usize, direction: Option<&str>, 
     n.layout = Some(al);
     for fid in made {
         if split(s, fid, depth + 1, None, warnings)? {
-            // A band frame is as big as what is in it.
+            // A band frame that got auto layout is as big as what is in it (one that did not stays Fixed).
             let f = s.doc_mut()?.get_mut(fid)?;
             f.child_layout.sizing_h = Sizing::Hug;
             f.child_layout.sizing_v = Sizing::Hug;
