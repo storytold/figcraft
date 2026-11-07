@@ -705,12 +705,13 @@ fn connectors_with_an_automatic_side_leave_the_side_facing_the_target() {
             network_of(&doc, name).vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
         (pts[0], pts[pts.len() - 1])
     };
-    // From A's right side (facing B) to B's left side (facing A), not from the stale left point.
+    // From A's right side (facing B) to B's left side (facing A), not from the stale left point; each
+    // end starts `END_GAP` (4) outside its side.
     for name in ["Elbow", "Line", "Curve"] {
-        assert_eq!(ends(name), ((100.0, 650.0), (300.0, 650.0)), "{name}");
+        assert_eq!(ends(name), ((104.0, 650.0), (296.0, 650.0)), "{name}");
     }
     // A named magnet keeps its side: the bottom of A; the automatic end still faces A.
-    assert_eq!(ends("Named"), ((50.0, 700.0), (300.0, 650.0)));
+    assert_eq!(ends("Named"), ((50.0, 704.0), (296.0, 650.0)));
 }
 
 /// A connector with a label but no saved snapshot: a frame holding its line and its label,
