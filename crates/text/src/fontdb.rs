@@ -640,6 +640,9 @@ struct FallbackLists {
 
 /// The most styles whose fallback faces are kept (a file naming more starts the list again).
 const MAX_FALLBACK_STYLES: usize = 64;
+/// Most faces loaded from one font collection given as bytes (the largest real collections,
+/// the CJK ones, hold a few dozen).
+const MAX_COLLECTION_FACES: u32 = 64;
 
 /// [`FontDb::key`]'s and [`FontDb::resolve`]'s answers for the families known in one generation.
 #[derive(Default)]
@@ -711,7 +714,10 @@ impl FontDb {
     pub fn add_bytes(&mut self, bytes: Vec<u8>) -> Vec<Arc<Face>> {
         let shared = Arc::new(bytes);
         let count = match FileRef::new(shared.as_slice()) {
-            Ok(FileRef::Collection(c)) => c.len(),
+            // A collection's header may name any number of faces, each a few bytes pointing at
+            // the same tables, and every face keeps its own character map: at most
+            // [`MAX_COLLECTION_FACES`] of them are loaded.
+            Ok(FileRef::Collection(c)) => c.len().min(MAX_COLLECTION_FACES),
             Ok(FileRef::Font(_)) => 1,
             Err(_) => 0,
         };

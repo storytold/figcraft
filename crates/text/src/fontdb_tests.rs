@@ -598,3 +598,15 @@ fn system_font_dirs_are_walked_once_each() {
     let unique: std::collections::HashSet<_> = dirs.iter().collect();
     assert_eq!(unique.len(), dirs.len(), "{dirs:?}");
 }
+
+#[test]
+fn a_collection_header_naming_billions_of_faces_loads_a_bounded_few() {
+    // Four bytes per face offset: a header can name far more faces than the data holds, and each
+    // one would be parsed (and keep a character map) in turn.
+    let mut bytes = synthetic_font_collection(32);
+    bytes[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
+    let start = std::time::Instant::now();
+    let faces = FontDb::default().add_bytes(bytes);
+    assert!(faces.len() <= 64, "{}", faces.len());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+}
