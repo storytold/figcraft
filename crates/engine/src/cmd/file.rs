@@ -426,7 +426,7 @@ pub fn export_file(doc: &Document, ids: &[NodeId], setting: &ExportSetting, scal
                 }
             }
             conversion.apply_pixels(pix.data_mut());
-                        let bytes = figcraft_render::encode_export_with(&pix, setting.format, profile, setting.quality());
+            let bytes = figcraft_render::encode_export_with(&pix, setting.format, profile, setting.quality());
             Ok((bytes.map_err(EngineError::Other)?, Vec::new()))
         }
     }
