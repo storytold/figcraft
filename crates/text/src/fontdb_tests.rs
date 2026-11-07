@@ -541,6 +541,31 @@ fn every_platform_has_a_thai_font_in_the_fallbacks() {
     }
 }
 
+/// #1902: a web build has no system fonts, so a document's missing characters can only come from
+/// the embedded faces. Every script face craft-fonts can embed (`FIGCRAFT_EMBED_SCRIPTS`) is a
+/// document fallback after the Latin faces; else Hebrew or Devanagari typed into an Inter layer
+/// would stay missing glyphs with its face embedded.
+#[test]
+fn every_embeddable_script_face_is_a_document_fallback() {
+    let at = |family: &str| FALLBACK_FAMILIES.iter().position(|f| *f == family);
+    let latin = at("Segoe UI").unwrap();
+    for face in [
+        "Noto Sans Arabic",
+        "Noto Sans Thai",
+        "Noto Sans Hebrew",
+        "Noto Sans Devanagari",
+        "Noto Sans Georgian",
+        "Noto Sans Symbols",
+        "Noto Sans Symbols 2",
+    ] {
+        assert!(at(face).is_some_and(|i| i > latin), "{face} is a fallback after the Latin faces");
+    }
+    // And whatever script face this build embeds (CI builds have craft-fonts; CJK by request).
+    for f in CRAFT_FONTS.iter().filter(|f| f.family.starts_with("Noto Sans") && !f.family.contains("CJK")) {
+        assert!(FALLBACK_FAMILIES.contains(&f.family), "embedded {} is a document fallback", f.family);
+    }
+}
+
 // The paths are Unix absolute paths (font managers are a macOS thing): on Windows they aren't absolute.
 #[cfg(unix)]
 #[test]

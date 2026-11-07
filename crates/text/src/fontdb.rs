@@ -544,10 +544,13 @@ fn names(f: &skrifa::FontRef) -> (Option<String>, Option<String>) {
     (family, style)
 }
 
-/// Families tried, in order, for characters a text's own font lacks. The symbol fonts come last:
-/// Apple Symbols (macOS), Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for
-/// signs such as ⌖ and ⤒ that no text face has.
-const FALLBACK_FAMILIES: [&str; 29] = [
+/// Families tried, in order, for characters a text's own font lacks. Every script face craft-fonts
+/// can embed (Noto Sans Arabic, Thai, Hebrew, Devanagari, Georgian) is here after the Latin faces,
+/// so a web build that embeds one (`FIGCRAFT_EMBED_SCRIPTS`, #1902) draws that script in an Inter
+/// document: the browser has no other fonts. The symbol fonts come last: Apple Symbols (macOS),
+/// Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for signs such as ⌖ and ⤒
+/// that no text face has.
+const FALLBACK_FAMILIES: [&str; 32] = [
     "Inter",
     "Helvetica Neue",
     "Arial",
@@ -571,6 +574,9 @@ const FALLBACK_FAMILIES: [&str; 29] = [
     "Leelawadee UI",
     "Thonburi",
     "Tahoma",
+    "Noto Sans Hebrew",
+    "Noto Sans Devanagari",
+    "Noto Sans Georgian",
     "Apple Symbols",
     "Segoe UI Symbol",
     "Noto Sans Symbols",
