@@ -345,3 +345,16 @@ fn remove_all_auto_layout_strips_the_frame_and_every_frame_nested_in_it() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(laid_out(&s), [true, true, true]);
 }
+
+#[test]
+fn reorder_rejects_negative_and_fractional_indexes() {
+    let mut s = Session::new();
+    let f = frame(&mut s, None, 0.0, 0.0, 200.0, 200.0);
+    let a = rect(&mut s, Some(f), 0.0, 0.0, 10.0, 10.0);
+    let b = rect(&mut s, Some(f), 0.0, 0.0, 10.0, 10.0);
+    let c = rect(&mut s, Some(f), 0.0, 0.0, 10.0, 10.0);
+    for bad in [json!(-1), json!(0.5), json!("x")] {
+        assert!(s.execute("node.reorder", &json!({"id": c, "index": bad})).is_err(), "{bad} accepted");
+        assert_eq!(kids(&s, f), vec![a, b, c]);
+    }
+}

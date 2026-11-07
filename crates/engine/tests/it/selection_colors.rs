@@ -2,7 +2,7 @@ use figcraft_color::Paint;
 use figcraft_doc::NodeId;
 use figcraft_engine::{
     Session,
-    selection_colors::{SelectionColor, collect},
+    selection_colors::{self, SelectionColor, collect},
 };
 use serde_json::{Value, json};
 
@@ -156,9 +156,14 @@ fn invalid_or_stale_targets_roll_back_atomically() {
     assert!(s.execute("selection.setPaint", &json!({"targets":red.targets,"paint":"#0000ff"})).is_err());
     assert_eq!(fill(&s, a), "FF0000");
     assert_eq!(s.undo_depth(), before);
-    for command in
-        ["selection.setPaint", "selection.selectColor", "selection.applyColorStyle", "selection.bindColorVariable", "selection.detachColor"]
-    {
+    for command in [
+        "selection.setPaint",
+        "selection.selectColor",
+        "selection.applyColorStyle",
+        "selection.bindColorVariable",
+        "selection.detachColor",
+        "selection.createColorStyle",
+    ] {
         for params in [json!({}), json!({"targets":[]}), json!({"targets":[{"id":a,"fills":true,"index":0,"range":[0,1]}]})] {
             assert!(s.execute(command, &params).is_err());
         }
@@ -420,4 +425,270 @@ fn scopes_filter_the_menu_but_the_command_binds_anyway() {
     // As with `variable.bind`, the command itself binds outside the scopes.
     run(&mut s, "selection.bindColorVariable", json!({"targets":fill_slot,"variable":"Line"}));
     assert_eq!(fill(&s, a), "00FF00");
+}
+
+#[test]
+fn a_style_created_from_a_row_links_its_fills_and_strokes_in_one_undo_step() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#0000ff");
+    run(&mut s, "stroke.add", json!({"id":b,"color":"#ff0000"}));
+    let red = group(&s, &[a, b], "FF0000");
+    let before = s.undo_depth();
+    let id = run(&mut s, "selection.createColorStyle", json!({"targets":red.targets,"name":"Brand/Red"}))["id"].clone();
+    let doc = s.doc().unwrap();
+    let style = doc.style(id.as_str().unwrap()).unwrap();
+    assert_eq!(style.name, "Brand/Red");
+    assert!(matches!(&style.kind, figcraft_doc::StyleKind::Paint { paints } if paints.len() == 1 && paints[0] == red.paint));
+    assert_eq!(doc.node(a).unwrap().styles.fill.as_deref(), id.as_str());
+    assert_eq!(doc.node(b).unwrap().styles.stroke.as_deref(), id.as_str());
+    assert_eq!(doc.node(b).unwrap().styles.fill, None);
+    assert_eq!(fill(&s, b), "0000FF");
+    assert_eq!(s.undo_depth().0, before.0 + 1);
+    run(&mut s, "style.update", json!({"style":id,"value":"#00ff00"}));
+    assert_eq!(fill(&s, a), "00FF00");
+    assert_eq!(s.doc().unwrap().node(b).unwrap().strokes[0].solid_color().unwrap().to_hex(), "00FF00");
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert!(s.doc().unwrap().style("Brand/Red").is_none());
+    assert_eq!(s.doc().unwrap().node(a).unwrap().styles.fill, None);
+    assert_eq!(fill(&s, a), "FF0000");
+    s.redo().unwrap();
+    assert_eq!(s.doc().unwrap().node(a).unwrap().styles.fill.as_deref(), id.as_str());
+}
+
+#[test]
+fn a_created_style_keeps_the_rows_gradient_opacity_and_blend_mode() {
+    use figcraft_color::{BlendMode, Color, Gradient, GradientKind};
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#0000ff");
+    let mut paint = Paint::gradient(Gradient::default_for(GradientKind::Radial, Color::BLACK));
+    paint.opacity = 0.5;
+    paint.blend = BlendMode::Multiply;
+    for id in [a, b] {
+        run(&mut s, "fill.set", json!({"id":id,"paint":paint}));
+    }
+    let row = collect(s.doc().unwrap(), &[a, b]).into_iter().find(|g| g.paint == paint).unwrap();
+    assert_eq!(row.targets.len(), 2);
+    let id = run(&mut s, "selection.createColorStyle", json!({"targets":row.targets,"name":"Shade"}))["id"].clone();
+    let doc = s.doc().unwrap();
+    assert!(matches!(&doc.style("Shade").unwrap().kind, figcraft_doc::StyleKind::Paint { paints } if paints == &vec![paint.clone()]));
+    for n in [a, b] {
+        assert_eq!(doc.node(n).unwrap().fills, vec![paint.clone()]);
+        assert_eq!(doc.node(n).unwrap().styles.fill.as_deref(), id.as_str());
+    }
+}
+
+#[test]
+fn creating_a_style_refuses_taken_or_empty_names_and_stale_rows_and_changes_nothing() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#ff0000");
+    run(&mut s, "style.create", json!({"type":"paint","name":"Brand","value":"#00ff00"}));
+    let red = group(&s, &[a, b], "FF0000");
+    let before = s.undo_depth();
+    let styles = s.doc().unwrap().styles.len();
+    for name in ["Brand", " Brand ", "", "   "] {
+        assert!(s.execute("selection.createColorStyle", &json!({"targets":red.targets,"name":name})).is_err(), "{name:?}");
+    }
+    assert!(s.execute("selection.createColorStyle", &json!({"targets":red.targets})).is_err());
+    // One slot of the row changed since it was listed: the row no longer stands for one paint.
+    run(&mut s, "fill.set", json!({"id":b,"color":"#0000ff"}));
+    let before_stale = s.undo_depth();
+    assert!(s.execute("selection.createColorStyle", &json!({"targets":red.targets,"name":"Red"})).is_err());
+    assert_eq!(s.undo_depth(), before_stale);
+    assert_eq!(s.undo_depth().0, before.0 + 1);
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.styles.len(), styles);
+    assert_eq!(doc.node(a).unwrap().styles.fill, None);
+    assert_eq!(fill(&s, a), "FF0000");
+}
+
+#[test]
+fn creating_a_style_refuses_a_row_whose_list_holds_other_paints() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#ff0000");
+    run(&mut s, "fill.add", json!({"id":a,"paint":"#0000ff"}));
+    let red = group(&s, &[a, b], "FF0000");
+    let before = s.undo_depth();
+    let styles = s.doc().unwrap().styles.len();
+    let err = s.execute("selection.createColorStyle", &json!({"targets":red.targets,"name":"Red"})).unwrap_err();
+    assert!(err.to_string().contains("holds this one paint"), "{err}");
+    assert!(selection_colors::create_refusal(s.doc().unwrap(), &red.targets).is_some());
+    assert_eq!(s.undo_depth(), before);
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.styles.len(), styles);
+    assert_eq!(doc.node(a).unwrap().fills.len(), 2, "the layer keeps its other fill");
+    assert!(doc.node(b).unwrap().styles.fill.is_none());
+    // The single-paint layer alone still makes a style.
+    let b_only: Vec<_> = red.targets.iter().filter(|t| t.id == b).cloned().collect();
+    assert!(selection_colors::create_refusal(s.doc().unwrap(), &b_only).is_none());
+    run(&mut s, "selection.createColorStyle", json!({"targets":b_only,"name":"Red"}));
+    assert!(s.doc().unwrap().node(b).unwrap().styles.fill.is_some());
+}
+
+#[test]
+fn a_style_created_from_a_variable_bound_row_keeps_following_the_variable() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#ff0000");
+    let v = theme_variable(&mut s, "Brand", "#ff0000");
+    for id in [a, b] {
+        run(&mut s, "variable.bind", json!({"id":id,"field":"fill","variable":v}));
+    }
+    let red = group(&s, &[a, b], "FF0000");
+    assert_eq!(red.targets.len(), 2);
+    run(&mut s, "selection.createColorStyle", json!({"targets":red.targets,"name":"Brand"}));
+    let style = s.doc().unwrap().style("Brand").unwrap();
+    assert_eq!(style.bound.get("fills/0/color").map(String::as_str), v.as_str());
+    run(&mut s, "variable.set", json!({"variable":v,"value":"#00ff00"}));
+    assert_eq!(fill(&s, a), "00FF00");
+    assert_eq!(fill(&s, b), "00FF00");
+}
+
+#[test]
+fn a_style_created_from_a_gradient_keeps_its_stop_variables() {
+    use figcraft_color::{Color, Gradient, GradientKind, PaintKind};
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let paint = Paint::gradient(Gradient::default_for(GradientKind::Linear, Color::BLACK));
+    run(&mut s, "fill.set", json!({"id":a,"paint":paint}));
+    let v = theme_variable(&mut s, "Brand", "#ff0000");
+    run(&mut s, "variable.bind", json!({"id":a,"field":"fills/0/stops/0/color","variable":v}));
+    let row = collect(s.doc().unwrap(), &[a]).into_iter().next().unwrap();
+    run(&mut s, "selection.createColorStyle", json!({"targets":row.targets,"name":"Shade"}));
+    assert!(s.doc().unwrap().style("Shade").unwrap().bound.contains_key("fills/0/stops/0/color"));
+    run(&mut s, "variable.set", json!({"variable":v,"value":"#00ff00"}));
+    let PaintKind::Gradient(g) = &s.doc().unwrap().node(a).unwrap().fills[0].kind else { panic!("not a gradient") };
+    assert_eq!(g.stops[0].color.to_hex(), "00FF00");
+}
+
+#[test]
+fn creating_a_style_refuses_targets_bound_to_different_variables() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#ff0000");
+    let v = theme_variable(&mut s, "Brand", "#ff0000");
+    run(&mut s, "variable.bind", json!({"id":a,"field":"fill","variable":v}));
+    let targets: Vec<_> = collect(s.doc().unwrap(), &[a, b]).into_iter().flat_map(|g| g.targets).collect();
+    assert_eq!(targets.len(), 2);
+    assert!(selection_colors::create_refusal(s.doc().unwrap(), &targets).is_some());
+    let before = s.undo_depth();
+    let styles = s.doc().unwrap().styles.len();
+    let err = s.execute("selection.createColorStyle", &json!({"targets":targets,"name":"Red"})).unwrap_err();
+    assert!(err.to_string().contains("different variables"), "{err}");
+    assert_eq!(s.undo_depth(), before);
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.styles.len(), styles);
+    assert!(!doc.node(a).unwrap().bound.is_empty());
+    assert!(doc.node(b).unwrap().styles.fill.is_none());
+}
+
+#[test]
+fn a_linked_row_switches_to_another_style() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#0000ff");
+    run(&mut s, "style.create", json!({"type":"paint","name":"Brand","value":"#ff0000"}));
+    let accent = run(&mut s, "style.create", json!({"type":"paint","name":"Accent","value":"#00ff00"}))["id"].clone();
+    run(&mut s, "style.apply", json!({"id":a,"style":"Brand","target":"fill"}));
+    let linked = collect(s.doc().unwrap(), &[a, b]).into_iter().find(|g| g.style.is_some()).unwrap();
+    run(&mut s, "selection.applyColorStyle", json!({"targets":linked.targets,"style":"Accent"}));
+    assert_eq!(s.doc().unwrap().node(a).unwrap().styles.fill.as_deref(), accent.as_str());
+    assert_eq!(fill(&s, a), "00FF00");
+    assert_eq!(fill(&s, b), "0000FF");
+}
+
+struct Fixture(std::path::PathBuf);
+
+impl Drop for Fixture {
+    #[allow(clippy::disallowed_methods)]
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A saved library file publishing the color style "Brand" (#0000ff) and the text style "Heading",
+/// with the color style "_Draft" left unpublished; the fixture, the file and the library's id.
+#[allow(clippy::disallowed_methods)]
+fn color_library(tag: &str) -> (Fixture, std::path::PathBuf, Value) {
+    let fixture = Fixture(std::env::temp_dir().join(format!("figcraft-selection-colors-{tag}-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&fixture.0);
+    std::fs::create_dir(&fixture.0).unwrap();
+    let path = fixture.0.join("library.figcraft");
+    let mut publisher = Session::new();
+    run(&mut publisher, "style.create", json!({"type":"paint","name":"Brand","value":"#0000ff"}));
+    run(&mut publisher, "style.create", json!({"type":"paint","name":"_Draft","value":"#00ff00"}));
+    let text = run(&mut publisher, "text.create", json!({"text":"Title"}))["id"].clone();
+    run(&mut publisher, "style.create", json!({"type":"text","name":"Heading","from":text}));
+    let published = run(&mut publisher, "library.publish", json!({}));
+    assert_eq!(published["styles"], 2);
+    run(&mut publisher, "file.saveAs", json!({"path":path}));
+    (fixture, path, published["id"].clone())
+}
+
+#[test]
+fn a_row_applies_a_published_library_style_as_a_linked_copy_in_one_undo_step() {
+    let (_fixture, path, library) = color_library("apply");
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    let b = rectangle(&mut s, "#00ff00");
+    run(&mut s, "stroke.add", json!({"id":b,"color":"#ff0000"}));
+    run(&mut s, "library.add", json!({"path":path}));
+    let red = group(&s, &[a, b], "FF0000");
+    let before = s.undo_depth();
+    run(&mut s, "selection.applyColorStyle", json!({"targets":red.targets,"style":"Brand","library":library}));
+    let doc = s.doc().unwrap();
+    let copy = doc.node(a).unwrap().styles.fill.clone().unwrap();
+    assert!(figcraft_engine::library::is_remote_style(doc, &copy));
+    assert_eq!(doc.node(b).unwrap().styles.stroke.as_deref(), Some(copy.as_str()));
+    assert_eq!(fill(&s, a), "0000FF");
+    assert_eq!(fill(&s, b), "00FF00");
+    assert_eq!(s.undo_depth().0, before.0 + 1);
+    s.undo().unwrap();
+    let doc = s.doc().unwrap();
+    assert!(doc.style(&copy).is_none());
+    assert_eq!(doc.node(a).unwrap().styles.fill, None);
+    assert_eq!(fill(&s, a), "FF0000");
+    // Choosing it again reuses the one copy.
+    s.redo().unwrap();
+    let blue = group(&s, &[a, b], "0000FF");
+    run(&mut s, "selection.applyColorStyle", json!({"targets":blue.targets,"style":"Brand","library":library}));
+    assert_eq!(s.doc().unwrap().styles.len(), 1);
+}
+
+#[test]
+fn library_styles_that_are_unpublished_not_colors_or_not_enabled_are_refused() {
+    let (_fixture, path, library) = color_library("refuse");
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    rectangle(&mut s, "#00ff00");
+    let red = group(&s, &[a], "FF0000");
+    assert!(s.execute("selection.applyColorStyle", &json!({"targets":red.targets,"style":"Brand","library":library})).is_err());
+    run(&mut s, "library.add", json!({"path":path}));
+    let before = s.undo_depth();
+    for (style, lib) in [("_Draft", library.clone()), ("Heading", library.clone()), ("Missing", library.clone()), ("Brand", json!("Elsewhere"))] {
+        assert!(s.execute("selection.applyColorStyle", &json!({"targets":red.targets,"style":style,"library":lib})).is_err(), "{style}");
+    }
+    assert_eq!(s.undo_depth(), before);
+    assert!(s.doc().unwrap().styles.is_empty());
+    assert_eq!(s.doc().unwrap().node(a).unwrap().styles.fill, None);
+}
+
+#[test]
+fn a_library_that_is_not_a_string_is_refused_rather_than_linking_a_local_style() {
+    let mut s = Session::new();
+    let a = rectangle(&mut s, "#ff0000");
+    run(&mut s, "style.create", json!({"type":"paint","name":"Brand","value":"#0000ff"}));
+    let red = group(&s, &[a], "FF0000");
+    let before = s.undo_depth();
+    for lib in [json!({}), json!([]), json!({"id":"Brand"})] {
+        let err = s.execute("selection.applyColorStyle", &json!({"targets":red.targets,"style":"Brand","library":lib})).unwrap_err();
+        assert!(err.to_string().contains("`library` must be a string"), "{lib}: {err}");
+    }
+    assert_eq!(s.undo_depth(), before);
+    assert_eq!(s.doc().unwrap().node(a).unwrap().styles.fill, None);
+    assert_eq!(fill(&s, a), "FF0000");
 }

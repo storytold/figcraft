@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::lists::BoundList;
 use super::{CommandSpec, ok};
-use crate::params::{boolean, get, num, req_string, string};
+use crate::params::{boolean, get, req_index, req_string, string};
 use crate::{Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -258,13 +258,13 @@ fn remove_mode(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn move_mode(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.moveMode";
-    let to = num(p, "to").filter(|x| x.is_finite()).ok_or_else(|| bad(cmd, "`to` must be a number"))?;
+    let to = req_index(cmd, p, "to")?;
     let doc = s.doc_mut()?;
     let (ci, mode) = mode_of(doc, cmd, p)?;
     let coll = doc.variables.collections.get_mut(ci).ok_or_else(|| bad(cmd, "no such collection"))?;
     let from = coll.modes.iter().position(|m| m.id == mode).ok_or_else(|| bad(cmd, "no such mode"))?;
     let m = coll.modes.remove(from);
-    let at = (to.max(0.0) as usize).min(coll.modes.len());
+    let at = to.min(coll.modes.len());
     coll.modes.insert(at, m);
     ok()
 }
@@ -654,10 +654,29 @@ pub fn field_scope(doc: &Document, node: NodeId, field: &str) -> Option<&'static
     })
 }
 
+/// The type of variable effect `i` of `node` takes on `field`, as an effect style's does: None when
+/// the layer has no effect `i` or that effect has no such field.
+fn effect_field(doc: &Document, node: NodeId, i: usize, field: &str) -> Option<VariableType> {
+    crate::style_vars::effect_field_type(&doc.node(node)?.effects.get(i)?.kind, field)
+}
+
+/// Whether `node` has the field a binding key names. Only effect fields are checked: a layer has
+/// `effects/<i>/<field>` when its effect `i` has that field (a drop shadow has no `refraction`),
+/// and an `effects…` key naming no effect's field (`effects/x/radius`, `effects/0`) has none.
+pub fn has_field(doc: &Document, node: NodeId, field: &str) -> bool {
+    match super::lists::list_binding(field) {
+        Some((BoundList::Effects, i, f)) => effect_field(doc, node, i, f).is_some(),
+        _ => field.split('/').next() != Some(BoundList::Effects.prefix()),
+    }
+}
+
 /// Whether property `field` of `node` takes a variable of type `kind`: the type its scope belongs
 /// to (number variables also fill text content), booleans for visibility, numbers for layout grid
-/// fields; fields without a known type take any.
+/// fields, an effect's field the type its effect takes there; fields without a known type take any.
 pub fn field_takes(doc: &Document, node: NodeId, field: &str, kind: VariableType) -> bool {
+    if let Some((BoundList::Effects, i, f)) = super::lists::list_binding(field) {
+        return effect_field(doc, node, i, f) == Some(kind);
+    }
     match (field, field_scope(doc, node, field)) {
         ("visible", _) => kind == VariableType::Boolean,
         (_, Some(scope)) => scope_known(kind, scope),

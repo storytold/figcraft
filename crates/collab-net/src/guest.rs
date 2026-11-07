@@ -69,7 +69,7 @@ impl Guest {
                     });
                 if let Err(o) = asked.and_then(|(file, token)| resolved(&mut cfg, file, token)) {
                     if let Next::Stop(Some(e)) = after(unresolved(&cfg, o), &cfg, false, &mut 0, &inbox) {
-                        inbox.push(e);
+                        inbox.push(*e);
                     }
                     return;
                 }
@@ -227,7 +227,7 @@ fn supervise(cfg: &GuestConfig, inbox: &Inbox, rx: &Receiver<Cmd>, me: &Sender<C
         match after(outcome, cfg, was_live, &mut attempt, inbox) {
             Next::Stop(e) => {
                 if let Some(e) = e {
-                    inbox.push(e);
+                    inbox.push(*e);
                 }
                 return;
             }

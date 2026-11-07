@@ -305,18 +305,15 @@ fn drag_free_space(ui: &mut Ui, rect: Rect, from_x: f32, to_x: f32) {
     }
 }
 
-/// Closes tab `i`; unsaved changes need a second close with Alt held.
+/// Closes tab `i`: with unsaved changes it asks first (Don't Save / Cancel / Save), and Alt held
+/// drops them without asking.
 fn close_tab(app: &mut FigApp, ui: &Ui, i: usize) {
     // A branch tab's edits live on in its main file: closing it loses nothing.
     let dirty = app.session.docs.get(i).is_some_and(|d| d.is_dirty() && d.branch_of.is_none());
-    if dirty {
-        app.ui.find = None;
-        app.toast(trf("Unsaved changes: save first, or close again with {key} to discard", &[("key", &crate::toolbar::pretty_shortcut("Alt"))]));
-        if ui.input(|inp| inp.modifiers.alt) {
-            app.run("file.close", json!({"index": i, "force": true}));
-        }
+    if dirty && ui.input(|inp| inp.modifiers.alt) {
+        app.run("file.close", json!({"index": i, "force": true}));
     } else {
-        app.run("file.close", json!({"index": i}));
+        crate::windows::ask_close_tab(app, i);
     }
 }
 

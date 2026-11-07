@@ -108,7 +108,22 @@ pub(crate) fn effect_open(ctx: &egui::Context, i: usize) -> bool {
 
 /// A number field of effect `i` that can be bound to a variable (`effects/<i>/<prop>`).
 fn fx_field(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, prop: &str, lead: Lead, value: f64, width: f32) -> Option<FieldEdit> {
-    crate::variable_ui::number_field(app, ui, ids, &format!("effects/{i}/{prop}"), Id::unique(("fx", prop, i)), lead, Some(value), "", width)
+    fx_field_in(app, ui, ids, i, prop, lead, Some(value), "", width)
+}
+
+/// [`fx_field`] showing `value` as given (a glass percentage) with `suffix` after it.
+fn fx_field_in(
+    app: &mut FigApp,
+    ui: &mut Ui,
+    ids: &[NodeId],
+    i: usize,
+    prop: &str,
+    lead: Lead,
+    value: Option<f64>,
+    suffix: &str,
+    width: f32,
+) -> Option<FieldEdit> {
+    crate::variable_ui::number_field(app, ui, ids, &format!("effects/{i}/{prop}"), Id::unique(("fx", prop, i)), lead, value, suffix, width)
 }
 
 /// Draw type-specific effect fields for shadows, blurs, noise, texture and glass, using live
@@ -290,29 +305,30 @@ fn effect_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &
                     }
                 })
             };
+            // Each field takes a variable (`effects/<i>/<field>`), read as the field shows it:
+            // percentages for the 0–1 values, and the frost as `radius` (see `Glass::set_bound`).
             let pct = |v: f64| Some((v * 100.0).round());
             let unit = |v: f64| (v / 100.0).clamp(0.0, 1.0);
             row(ui, 32.0, |ui| {
-                let ed =
-                    widgets::number_field(ui, Id::unique(("fx_gl", i)), Lead::Text(tr("Light|glass")), Some(g.light_angle.round()), "°", half, 1.0);
+                let ed = fx_field_in(app, ui, ids, i, "lightAngle", Lead::Text(tr("Light|glass")), Some(g.light_angle.round()), "°", half);
                 edit(app, ed, &|v| with(&|gl| gl.light_angle = v.clamp(-180.0, 180.0)));
-                let ed = widgets::number_field(ui, Id::unique(("fx_gi", i)), Lead::Text(tr("Intensity")), pct(g.light_intensity), "%", half, 1.0);
+                let ed = fx_field_in(app, ui, ids, i, "lightIntensity", Lead::Text(tr("Intensity")), pct(g.light_intensity), "%", half);
                 edit(app, ed, &|v| with(&|gl| gl.light_intensity = unit(v)));
             });
             row(ui, 32.0, |ui| {
-                let ed = widgets::number_field(ui, Id::unique(("fx_gr", i)), Lead::Text(tr("Refraction")), pct(g.refraction), "%", half, 1.0);
+                let ed = fx_field_in(app, ui, ids, i, "refraction", Lead::Text(tr("Refraction")), pct(g.refraction), "%", half);
                 edit(app, ed, &|v| with(&|gl| gl.refraction = unit(v)));
-                let ed = widgets::number_field(ui, Id::unique(("fx_gd", i)), Lead::Text(tr("Depth")), Some(g.depth), "", half, 1.0);
+                let ed = fx_field_in(app, ui, ids, i, "depth", Lead::Text(tr("Depth")), Some(g.depth), "", half);
                 edit(app, ed, &|v| with(&|gl| gl.depth = v.clamp(1.0, 1000.0)));
             });
             row(ui, 32.0, |ui| {
-                let ed = widgets::number_field(ui, Id::unique(("fx_gs", i)), Lead::Text(tr("Dispersion")), pct(g.dispersion), "%", half, 1.0);
+                let ed = fx_field_in(app, ui, ids, i, "dispersion", Lead::Text(tr("Dispersion")), pct(g.dispersion), "%", half);
                 edit(app, ed, &|v| with(&|gl| gl.dispersion = unit(v)));
-                let ed = widgets::number_field(ui, Id::unique(("fx_gf", i)), Lead::Text(tr("Frost")), Some(g.frost), "", half, 1.0);
-                edit(app, ed, &|v| with(&|gl| gl.frost = v.clamp(0.0, 1000.0)));
+                let ed = fx_field_in(app, ui, ids, i, "radius", Lead::Text(tr("Frost")), Some(g.sanitized().frost), "", half);
+                edit(app, ed, &|v| with(&|gl| gl.frost = v.clamp(0.0, Glass::MAX_FROST)));
             });
             row(ui, 32.0, |ui| {
-                let ed = widgets::number_field(ui, Id::unique(("fx_gp", i)), Lead::Text(tr("Splay")), pct(g.splay), "%", half, 1.0);
+                let ed = fx_field_in(app, ui, ids, i, "splay", Lead::Text(tr("Splay")), pct(g.splay), "%", half);
                 edit(app, ed, &|v| with(&|gl| gl.splay = unit(v)));
             });
         }

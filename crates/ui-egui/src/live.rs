@@ -108,6 +108,9 @@ pub struct LiveUi {
     focus_join: bool,
     /// Share on the local network (else online, through the server in Preferences).
     pub local: bool,
+    /// What the code a local network share starts with lets people do: edit, or only look (the
+    /// edit code then doesn't show until it is picked).
+    pub local_access: Access,
     /// The Share popover's Advanced part shows; what it sets for a local network share: only
     /// this computer can join, and the port (empty: the usual one).
     pub advanced: bool,
@@ -913,6 +916,7 @@ fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     }
     if local {
         widgets::label(ui, tr("People on your network join with a code. Nothing goes through a server."), t.text_secondary);
+        local_access_choice(app, ui);
     } else {
         online_note(app, ui, t, &server);
     }
@@ -922,10 +926,24 @@ fn start_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     join_and_advanced(app, ui, t, |app, ui, t| share_advanced(app, ui, t, local, &server));
 }
 
+/// What the code of a local network share lets people do, picked before it starts: edit the file
+/// or only look at it.
+fn local_access_choice(app: &mut FigApp, ui: &mut Ui) {
+    let levels: Vec<(Access, &str)> = LEVELS.into_iter().filter(|(a, _)| *a != Access::Comment).collect();
+    let labels: Vec<&str> = levels.iter().map(|(_, l)| tr(l)).collect();
+    let at = levels.iter().position(|(a, _)| *a == app.ui.live.local_access).unwrap_or_default();
+    if let Some((a, _)) = widgets::segmented_text(ui, &labels, at).and_then(|i| levels.get(i)) {
+        app.ui.live.local_access = *a;
+    }
+}
+
 /// Start sharing the open file on the local network, or online on `server` (the one in
 /// Preferences).
 fn start_sharing(app: &mut FigApp, local: bool, server: &str) {
     let mut params = json!({"via": if local { "local" } else { "online" }});
+    if local {
+        params["access"] = json!(app.ui.live.local_access.id());
+    }
     if local && app.ui.live.this_computer {
         params["bind"] = json!("local");
     }
@@ -1129,6 +1147,7 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
         (true, Access::View) => tr("Anyone with this code can look at the file, not change it."),
         (true, Access::Comment) => tr("Anyone with this code can look at the file and comment on it, not change it."),
         (true, Access::Edit) => tr("Anyone with this code can edit the file."),
+        (false, Access::View) => tr("Anyone on your network with this code can look at the file, not change it, while this app stays open."),
         (false, _) => tr("Anyone on your network with this code can edit the file, while this app stays open."),
     };
     widgets::label(ui, who, t.text_secondary);
@@ -1142,7 +1161,8 @@ fn share_ui(app: &mut FigApp, ui: &mut Ui, t: &Tokens, share: &Share) {
 }
 
 /// What the code shown lets people do, to pick from the levels the share has links for: a server
-/// has links (and codes) for looking only and for commenting; a session this app hosts doesn't.
+/// has links (and codes) for looking only and for commenting; a session this app hosts on the
+/// local network has one for looking only.
 fn access_choice(app: &mut FigApp, ui: &mut Ui, share: &Share) {
     let levels: Vec<(Access, &str)> = LEVELS.into_iter().filter(|(a, _)| share.links.as_ref().is_some_and(|l| l.of(*a).is_some())).collect();
     if levels.len() < 2 {
