@@ -109,7 +109,7 @@ fn a_plain_paragraph_at_a_list_level_starts_where_the_items_text_does() {
     if face().is_none() {
         return;
     }
-    let level = |list: ListStyle, indent: u8| ParaList { list, indent, start_offset: 0 };
+    let level = |list: ListStyle, indent: u8| ParaList { list, indent, start_offset: 0, ..ParaList::default() };
     let mut t = text("a\nb\nc", TextAutoResize::WidthAndHeight);
     t.paragraphs = vec![level(ListStyle::Bulleted, 1), level(ListStyle::None, 1), level(ListStyle::None, 0)];
     let l = layout(&t, None, None);
