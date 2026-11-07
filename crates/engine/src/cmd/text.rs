@@ -1,8 +1,8 @@
 //! Text menu and text editing commands.
 
 use figcraft_doc::{
-    LetterSpacing, LineHeight, ListStyle, NodeId, NodeKind, TextAlignH, TextAutoResize, TextCase, TextData, TextDecoration, TextPath, TextStyle,
-    VariableId,
+    LetterSpacing, LineHeight, ListStyle, NodeId, NodeKind, TextAlignH, TextAutoResize, TextCase, TextData, TextDecoration, TextDirection, TextPath,
+    TextStyle, VariableId,
 };
 use serde_json::{Map, Value, json};
 
@@ -89,6 +89,13 @@ fn set_list(s: &mut Session, p: &Value, l: ListStyle, toggle: bool) -> Result<Va
     });
     let l = if toggle && all { ListStyle::None } else { l };
     para_range(s, p, |t, a, b| t.set_para_lists(a, b, |pl| pl.list = l))
+}
+
+/// The base direction of the targeted paragraphs: the edited ones while editing, else every
+/// paragraph of the targeted texts ("controls are available to override text direction per
+/// paragraph", Add right-to-left text, #1830).
+fn set_direction(s: &mut Session, p: &Value, d: TextDirection) -> Result<Value> {
+    para_range(s, p, |t, a, b| t.set_para_lists(a, b, |pl| pl.direction = d))
 }
 
 /// Whether every targeted char has `pred` (to decide toggle direction).
@@ -319,6 +326,26 @@ pub fn specs() -> Vec<CommandSpec> {
                 para(s, p, |t| t.wrap_style = w)
             }
         ),
+        spec!(
+            "text.direction",
+            "Text direction",
+            "{direction: auto|ltr|rtl, ids?}  the base direction of the paragraphs (while editing: the selected ones): auto goes by the first letter with a direction, ltr runs them left to right and rtl right to left whatever their letters (Text ▸ Text direction)",
+            true,
+            |s, p| {
+                let d: TextDirection =
+                    get(p, "direction").and_then(super::props::enum_of).ok_or_else(|| bad("text.direction", "`direction`: auto|ltr|rtl"))?;
+                set_direction(s, p, d)
+            }
+        ),
+        spec!("text.directionAuto", "Text direction: auto", "{ids?}  while editing: the selected paragraphs", true, |s, p| {
+            set_direction(s, p, TextDirection::Auto)
+        }),
+        spec!("text.directionLtr", "Text direction: left to right", "{ids?}  while editing: the selected paragraphs", true, |s, p| {
+            set_direction(s, p, TextDirection::Ltr)
+        }),
+        spec!("text.directionRtl", "Text direction: right to left", "{ids?}  while editing: the selected paragraphs", true, |s, p| {
+            set_direction(s, p, TextDirection::Rtl)
+        }),
         spec!("text.paragraphIndent", "Paragraph indent", "{indent (px), ids?}", true, |s, p| {
             let v = finite(req_num("text.paragraphIndent", p, "indent")?).clamp(0.0, 10_000.0);
             para(s, p, |t| t.paragraph_indent = v)
