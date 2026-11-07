@@ -72,6 +72,9 @@ use kiwi::{Kv, Schema};
 /// Largest `canvas.fig` member read, and largest decompressed chunk.
 const MAX_CANVAS: u64 = 256 * 1024 * 1024;
 const MAX_CHUNK: u64 = 512 * 1024 * 1024;
+/// Largest decompressed schema chunk: Figma's schema unpacks to well under 1 MB, so a schema that
+/// inflates past this is refused before its definitions are decoded.
+const MAX_SCHEMA: u64 = 16 * 1024 * 1024;
 /// Longest image hash (bytes) an image is found by: `images/` names and embedded images both
 /// stop at 64 bytes (128 hex digits).
 pub(crate) const MAX_IMAGE_HASH: usize = 64;
@@ -380,7 +383,7 @@ fn decode_canvas(canvas: &[u8]) -> Result<(Schema, Vec<u8>), FormatError> {
     let (Some(schema), Some(message)) = (it.next(), it.next()) else {
         return Err(corrupt("canvas.fig needs a schema and a message chunk"));
     };
-    let schema = Schema::decode(&inflate(schema)?).map_err(|e| corrupt(e.to_string()))?;
+    let schema = Schema::decode(&inflate_within(schema, MAX_SCHEMA)?).map_err(|e| corrupt(e.to_string()))?;
     Ok((schema, inflate(message)?))
 }
 
@@ -403,18 +406,23 @@ fn chunks(canvas: &[u8]) -> Result<Vec<&[u8]>, FormatError> {
 
 /// Decompress a chunk: zstd (by its magic number), else raw deflate, else zlib.
 fn inflate(data: &[u8]) -> Result<Vec<u8>, FormatError> {
-    fn capped(r: impl Read) -> Option<Vec<u8>> {
+    inflate_within(data, MAX_CHUNK)
+}
+
+/// [`inflate`] refusing a chunk that unpacks to more than `max` bytes.
+fn inflate_within(data: &[u8], max: u64) -> Result<Vec<u8>, FormatError> {
+    let capped = |r: &mut dyn Read| -> Option<Vec<u8>> {
         let mut out = Vec::new();
-        r.take(MAX_CHUNK + 1).read_to_end(&mut out).ok()?;
-        (out.len() as u64 <= MAX_CHUNK).then_some(out)
-    }
+        r.take(max.saturating_add(1)).read_to_end(&mut out).ok()?;
+        (out.len() as u64 <= max).then_some(out)
+    };
     if data.starts_with(&[0x28, 0xB5, 0x2F, 0xFD]) {
         let mut src = data;
-        let dec = ruzstd::decoding::StreamingDecoder::new(&mut src).map_err(|e| corrupt(format!("zstd: {e}")))?;
-        return capped(dec).ok_or_else(|| corrupt("damaged or oversized zstd chunk"));
+        let mut dec = ruzstd::decoding::StreamingDecoder::new(&mut src).map_err(|e| corrupt(format!("zstd: {e}")))?;
+        return capped(&mut dec).ok_or_else(|| corrupt("damaged or oversized zstd chunk"));
     }
-    capped(flate2::read::DeflateDecoder::new(data))
-        .or_else(|| capped(flate2::read::ZlibDecoder::new(data)))
+    capped(&mut flate2::read::DeflateDecoder::new(data))
+        .or_else(|| capped(&mut flate2::read::ZlibDecoder::new(data)))
         .ok_or_else(|| corrupt("damaged or oversized deflate chunk"))
 }
 

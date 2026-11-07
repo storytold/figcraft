@@ -44,6 +44,7 @@ pub(crate) fn joined(h: &mut Harness, access: Access) {
         address: "127.0.0.1:47900".into(),
         network: false,
         access,
+        view: None,
     };
     h.send(vec![LiveEvent::Welcome { info, peers: vec![] }, LiveEvent::Sync(w)]);
     h.frames(2);
