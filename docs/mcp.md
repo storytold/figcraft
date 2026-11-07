@@ -1354,7 +1354,10 @@ branches). Driven with `run_command`:
   export settings, guides, prototype interactions, annotations and Dev Mode resources compare item
   by item, so changing different items of one list on each side, or adding items at its end on one
   side, merges without a conflict; other lists, such as code links, compare whole; a layer's parent
-  and position are one property, `parent`), a layer deleted on one side while the other edited it or what's inside it
+  and position are one property, `parent`; auto layout settings, `layout` and `childLayout`, compare
+  field by field, each field changed both ways its own conflict, `<layer id>/layout.padding`; sizes and
+  places auto layout works out, and values a layer in an instance takes from its main, are never
+  conflicts: the merged file works them out again), a layer deleted on one side while the other edited it or what's inside it
   (`<layer id>/layer`, with `deletedBy`), or a document-level entry or setting changed on both sides
   (`style/<id>`, `variable/<id>`, `comment/<id>`, `doc/<property>`…).
 - `branch.merge {id?, resolutions?}` merges the branch into the main file as one undo step,
