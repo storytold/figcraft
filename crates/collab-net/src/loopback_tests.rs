@@ -7,7 +7,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use figcraft_collab::message::{self, CatchUp, ClientMsg, Hello, Presence, ServerMsg, Signal};
+use figcraft_collab::message::{self, Access, CatchUp, ClientMsg, Hello, Presence, ServerMsg, Signal};
 use figcraft_collab::{Client, Limits};
 use figcraft_doc::{Document, NodeId};
 use figcraft_engine::live::{Event, PEOPLE, Status, TOO_LARGE_TO_JOIN};
@@ -78,6 +78,7 @@ pub(crate) fn fast_limits() -> NetLimits {
     NetLimits { hello_timeout: Duration::from_secs(5), ..NetLimits::default() }
 }
 
+/// A host on a free loopback port with these limits, a probe of what it is told, and its invite.
 fn start_with(limits: NetLimits, core: Limits) -> (Host, Probe, Invite) {
     let probe = Probe::new();
     let mut doc = Document::new("Shared file");
@@ -87,6 +88,7 @@ fn start_with(limits: NetLimits, core: Limits) -> (Host, Probe, Invite) {
         any_port_if_taken: false,
         file: FILE.into(),
         token: TOKEN.into(),
+        view_token: None,
         doc,
         name: "Hana".into(),
         limits,
@@ -214,6 +216,7 @@ fn guests_join_and_see_each_other() {
     assert_eq!(host.connections(), 0);
 }
 
+/// A guest with the wrong token or for another file is refused, and the secret never shows.
 #[test]
 fn a_wrong_token_or_file_is_refused() {
     let (mut host, mut hp, invite) = start();
@@ -233,6 +236,57 @@ fn a_wrong_token_or_file_is_refused() {
     }
     // The secret never shows in what the UI is told.
     assert!(gp.events.iter().all(|e| !format!("{e:?}").contains("WrongWrong")));
+    host.stop();
+}
+
+/// Join `addr` with `token` over a bare socket and make an edit: what the welcome allowed, and
+/// whether the host took the edit (`Changes`) or rejected it (`Reject`).
+fn join_and_edit(addr: SocketAddr, token: &str) -> (Access, ServerMsg) {
+    let mut raw = Raw::hello(addr, token);
+    let mut welcome = std::iter::from_fn(|| raw.next()).find(|m| matches!(m, ServerMsg::Welcome { .. })).expect("a welcome");
+    message::unpack(&mut welcome, 64 << 20).unwrap();
+    let ServerMsg::Welcome { access, .. } = welcome else { panic!("not a welcome: {welcome:?}") };
+    let mut client = Client::join(welcome).unwrap();
+    let mut doc = client.document().clone();
+    doc.add_page("Mine");
+    assert!(raw.send(&client.edit(&doc).unwrap().unwrap()));
+    let answer = std::iter::from_fn(|| raw.next()).find(|m| matches!(m, ServerMsg::Changes(_) | ServerMsg::Reject { .. })).expect("an answer");
+    (access, answer)
+}
+
+/// A session hosted with a view token as well (a local network share's view-only code): whoever
+/// joins with it is welcomed as a viewer and their edits are rejected, the edit token still edits,
+/// any other token is still refused, and a view token equal to the edit token isn't hosted.
+#[test]
+fn a_view_token_lets_people_look_and_not_edit() {
+    const VIEW: &str = "ViewOnlyViewOnlyView00";
+    let probe = Probe::new();
+    let cfg = |view: &str| {
+        let mut doc = Document::new("Shared file");
+        doc.repair();
+        HostConfig {
+            addr: SocketAddr::from(([127, 0, 0, 1], 0)),
+            any_port_if_taken: false,
+            file: FILE.into(),
+            token: TOKEN.into(),
+            view_token: Some(view.into()),
+            doc,
+            name: "Hana".into(),
+            limits: fast_limits(),
+            core: Limits::default(),
+        }
+    };
+    let same = Host::start(cfg(TOKEN), probe.inbox.clone()).err().expect("a view token equal to the edit token is refused");
+    assert!(same.to_string().contains("view-only"), "{same}");
+    let mut host = Host::start(cfg(VIEW), probe.inbox.clone()).unwrap();
+    let (access, answer) = join_and_edit(host.addr(), VIEW);
+    assert_eq!(access, Access::View);
+    assert!(matches!(&answer, ServerMsg::Reject { reason, .. } if reason.contains("view")), "{answer:?}");
+    let (access, answer) = join_and_edit(host.addr(), TOKEN);
+    assert_eq!(access, Access::Edit);
+    assert!(matches!(answer, ServerMsg::Changes(_)), "{answer:?}");
+    let refusal = Raw::hello(host.addr(), "WrongWrongWrongWrong00").refusal();
+    assert!(refusal.as_deref().is_some_and(|r| r.contains("token")), "{refusal:?}");
     host.stop();
 }
 
@@ -677,6 +731,7 @@ fn the_host_removes_someone_and_they_cant_come_back() {
     assert_eq!(host.connections(), 0);
 }
 
+/// A welcome larger than the guest takes says the file is too large to join.
 #[test]
 fn a_welcome_over_the_size_limit_says_the_file_is_too_large() {
     let mut doc = Document::new("B".repeat(1 << 20));
@@ -687,6 +742,7 @@ fn a_welcome_over_the_size_limit_says_the_file_is_too_large() {
         any_port_if_taken: false,
         file: FILE.into(),
         token: TOKEN.into(),
+        view_token: None,
         doc,
         name: "Hana".into(),
         limits: fast_limits(),
