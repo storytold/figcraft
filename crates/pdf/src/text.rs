@@ -121,7 +121,9 @@ fn record_links(ex: &mut Exporter, layout: &TextLayout, gxf: Affine) {
         let glyphs = layout.glyphs.get(line.glyph_start..line.glyph_end).unwrap_or(&[]);
         for g in glyphs.iter().map(Some).chain([None]) {
             let link = g.and_then(|g| {
-                let url = layout.styles.get(g.style)?.link.as_deref().filter(|u| !u.trim().is_empty())?;
+                // Checked here, not when the annotation is written: every linked line copies
+                // the destination, so one oversized link must not be copied at all.
+                let url = layout.styles.get(g.style)?.link.as_deref().map(str::trim).filter(|u| !u.is_empty() && u.len() <= crate::MAX_URL)?;
                 let (a, b) = (g.x, g.x + g.advance);
                 (a.is_finite() && b.is_finite()).then(|| (url, a.min(b), a.max(b)))
             });
