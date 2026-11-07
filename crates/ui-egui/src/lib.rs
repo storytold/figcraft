@@ -138,6 +138,8 @@ mod inspect_fields_tests;
 #[cfg(test)]
 mod layers_behaviour_tests;
 #[cfg(test)]
+mod layers_component_rows_tests;
+#[cfg(test)]
 mod layers_drag_tests;
 #[cfg(test)]
 mod layers_keyboard_tests;
@@ -177,6 +179,8 @@ mod menu_aim_tests;
 mod menu_contrast_tests;
 #[cfg(test)]
 mod menu_input_tests;
+#[cfg(test)]
+mod mirror_tests;
 #[cfg(test)]
 mod missing_fonts_tests;
 #[cfg(test)]
@@ -564,6 +568,9 @@ pub struct UiState {
     pub mobile_panel: Option<MobilePanel>,
     /// The window was narrow (one side panel at a time) at the last frame.
     pub narrow: bool,
+    /// The window is mirrored for a right-to-left UI language: the icon rail and the layers panel
+    /// on the right, the Design panel on the left, popovers beside it on its right.
+    pub mirrored: bool,
     pub comments: comments::CommentUi,
     pub versions: versions::VersionUi,
     /// The branch review dialog, while open.
@@ -715,6 +722,7 @@ impl Default for UiState {
             left_collapsed: false,
             mobile_panel: None,
             narrow: false,
+            mirrored: false,
             comments: comments::CommentUi::default(),
             versions: versions::VersionUi::default(),
             branch_review: None,

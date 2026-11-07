@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{Forms, LANGS, Lang, Plural, Text, chain, counted, fill, find, lookup, plural, plural_one, resolve};
+use super::{Forms, LANGS, Lang, Plural, Text, chain, counted, fill, find, lookup, plural, plural_one, resolve, writes_right_to_left};
 
 /// Keys looked up from data rather than written as `tr("…")` in the code: the main menu's
 /// submenu names (the engine's menu catalog) and labels of engine and document enums.
@@ -548,6 +548,19 @@ fn arabic_tags_and_count_neutral_forms() {
             }
         }
     }
+}
+
+#[test]
+fn right_to_left_languages_mirror_the_window() {
+    for code in ["ar", "ar-SA", "AR", "he", "he-IL", "fa", "ur", "ckb", "yi"] {
+        assert!(writes_right_to_left(code), "{code}");
+    }
+    for code in ["en", "", "es-419", "zh-Hans", "tr", "ru", "arn", "hey"] {
+        assert!(!writes_right_to_left(code), "{code}");
+    }
+    // Every catalog that mirrors is one of them, and the Arabic one does.
+    assert!(LANGS.iter().any(|l| l.code == "ar" && writes_right_to_left(l.code)));
+    assert!(!writes_right_to_left(LANGS[0].code), "English reads left to right");
 }
 
 #[test]
