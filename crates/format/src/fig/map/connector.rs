@@ -107,7 +107,7 @@ impl<'a> Mapper<'a> {
             return None;
         };
         if routing != Routing::Straight && path.is_none() {
-            self.warn("elbowed and curved connectors without a saved path follow FigCraft's own routing");
+            self.warn("elbowed and curved connectors without a saved path follow ClawDesign's own routing");
         }
         // A curved route is one curve: its ends and the two control points between them.
         let (path, vertices) = match (routing, pts.as_slice()) {

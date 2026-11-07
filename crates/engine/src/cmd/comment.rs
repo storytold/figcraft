@@ -604,7 +604,7 @@ fn prompt_text(doc: &Document, path: Option<&str>, comments: &[&Comment]) -> (St
     let name = single_line(&raw_name);
     let path_text = single_line(&raw_path);
     let mut out = String::new();
-    let _ = writeln!(out, "# FigCraft feedback\n");
+    let _ = writeln!(out, "# ClawDesign feedback\n");
     let _ = writeln!(out, "Document: {name}");
     let _ = writeln!(out, "Path: {path_text}");
     let _ = writeln!(out, "Threads: {}\n", comments.len());
@@ -615,7 +615,7 @@ fn prompt_text(doc: &Document, path: Option<&str>, comments: &[&Comment]) -> (St
         }
         return (out, header_truncated);
     }
-    let _ = writeln!(out, "Fix these comments in the FigCraft document. For each thread:");
+    let _ = writeln!(out, "Fix these comments in the ClawDesign document. For each thread:");
     let _ = writeln!(out, "1. Inspect the anchored layer with get_node and the frame with screenshot.");
     let _ = writeln!(out, "2. Make the smallest change that answers the comment; put one thread's edits in one batch.");
     let _ = writeln!(

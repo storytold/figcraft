@@ -57,7 +57,7 @@ fn key_triggers_fire_for_their_key_or_combination() {
         ("Shift+K", "K", none, false, "not without its modifier"),
         ("Ctrl+Shift+K", "K", ctrl_shift, true, "two modifiers"),
         ("Ctrl+Shift+K", "K", shift, false, "every modifier of the combination must be held"),
-        ("Command+Option+K", "K", alt_cmd, true, "other spellings of the modifiers (FigCraft accepts them)"),
+        ("Command+Option+K", "K", alt_cmd, true, "other spellings of the modifiers (ClawDesign accepts them)"),
         ("Space", "Space", none, true, "named keys"),
         ("space", "Space", none, true, "names in any case"),
         ("Return", "Enter", none, true, "common other names of keys"),

@@ -646,7 +646,7 @@ pub fn import(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> {
     if !structural_issues.is_empty() {
         warn(
             &mut warnings,
-            format!("FigCraft document has {} remaining structural issue(s) after Penpot import; review before editing", structural_issues.len()),
+            format!("ClawDesign document has {} remaining structural issue(s) after Penpot import; review before editing", structural_issues.len()),
         );
     }
     report_unsupported_layout(&doc, &mut warnings);
@@ -1375,13 +1375,13 @@ fn bind_applied_tokens(doc: &mut Document, active_modes: &BTreeMap<String, Strin
                         token_number_field(node, property, value).ok_or(if NUMBER_TOKEN_PROPERTIES.contains(&property) {
                             "layer value differs from the token"
                         } else {
-                            "property has no FigCraft binding"
+                            "property has no ClawDesign binding"
                         })?
                     }
                     ("fontFamily", VariableValue::String(family)) if matches!(&node.kind, NodeKind::Text(t) if t.style.font_family == family) => {
                         "fontFamily"
                     }
-                    _ => return Err("property has no FigCraft binding"),
+                    _ => return Err("property has no ClawDesign binding"),
                 };
                 Ok((field, id.clone()))
             })();
@@ -1420,7 +1420,7 @@ fn bind_applied_tokens(doc: &mut Document, active_modes: &BTreeMap<String, Strin
         warn(
             warnings,
             format!(
-                "Linked {linked} Penpot token reference(s) to native FigCraft properties (colors, sizes, gaps, padding, radii, stroke widths, font sizes and families)"
+                "Linked {linked} Penpot token reference(s) to native ClawDesign properties (colors, sizes, gaps, padding, radii, stroke widths, font sizes and families)"
             ),
         );
     }
@@ -2462,7 +2462,7 @@ fn import_token_variables(
         );
     }
     if value.get("themes").is_some_and(|v| !v.is_null()) {
-        warn(warnings, "Penpot themes and active set combinations are preserved as source metadata, not editable FigCraft modes".into());
+        warn(warnings, "Penpot themes and active set combinations are preserved as source metadata, not editable ClawDesign modes".into());
     }
     if count > 0 {
         warn(

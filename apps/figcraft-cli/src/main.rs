@@ -151,7 +151,7 @@ fn publish_plugin(folder: &str, server: &str) -> CliResult<ExitCode> {
 fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine::file_access::Roots>) -> CliResult<ExitCode> {
     let backend: Box<dyn figcraft_mcp::Backend> = match attach {
         Some(addr) => {
-            let no_app = |e: std::io::Error| format!("can't reach the FigCraft app at {addr}: {e} (start it with `figcraft --control PORT`)");
+            let no_app = |e: std::io::Error| format!("can't reach the ClawDesign app at {addr}: {e} (start it with `figcraft --control PORT`)");
             let b = figcraft_mcp::Attached::connect(addr).map_err(no_app)?;
             match timeout {
                 Some(secs) => Box::new(b.with_timeout(std::time::Duration::from_secs(secs)).map_err(no_app)?),

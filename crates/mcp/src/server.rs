@@ -257,7 +257,7 @@ impl Server {
                         "resources": {"subscribe": false, "listChanged": false},
                         "prompts": {"listChanged": false},
                     },
-                    "serverInfo": {"name": "figcraft", "title": "FigCraft", "version": env!("CARGO_PKG_VERSION")},
+                    "serverInfo": {"name": "figcraft", "title": "ClawDesign", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": format!("{INSTRUCTIONS} Backend: {}.{}", self.backend.describe(), self.roots_note()),
                 }))
             }

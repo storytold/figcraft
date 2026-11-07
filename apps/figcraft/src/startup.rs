@@ -21,7 +21,7 @@ pub fn failed(error: &eframe::Error, quiet: bool, tried: Option<&str>) {
     }
     let _ = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
-        .set_title("FigCraft")
+        .set_title("ClawDesign")
         .set_description(text)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();

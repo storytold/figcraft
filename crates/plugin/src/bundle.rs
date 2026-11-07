@@ -158,7 +158,7 @@ impl Bundle {
         }
         let mut r = Reader(bytes);
         if r.take(MAGIC.len()).ok() != Some(MAGIC.as_slice()) {
-            return Err("that isn't a FigCraft plugin bundle".into());
+            return Err("that isn't a ClawDesign plugin bundle".into());
         }
         let manifest = r.text("manifest")?;
         let wasm = r.part()?.to_vec();

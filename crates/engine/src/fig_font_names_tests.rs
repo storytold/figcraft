@@ -26,12 +26,12 @@ fn an_imported_file_finds_installed_families_by_their_other_names() {
     let mut s = Session::new();
     text(&mut s, &legacy);
     text(&mut s, &squashed);
-    text(&mut s, "FigCraft Surely Missing");
+    text(&mut s, "ClawDesign Surely Missing");
     let r = s.execute("file.export", &json!({"format": "FIG"})).unwrap();
     let bytes = base64::engine::general_purpose::STANDARD.decode(r["data"].as_str().unwrap()).unwrap();
     let (doc, _) = crate::cmd::file::load_bytes(&bytes, "names.fig").unwrap();
     let missing: Vec<String> = crate::fonts::missing(&doc).into_iter().map(|m| m.family).collect();
-    assert_eq!(missing, ["FigCraft Surely Missing"], "{family}");
+    assert_eq!(missing, ["ClawDesign Surely Missing"], "{family}");
     let bold = figcraft_text::find_face(&legacy, "Regular").unwrap();
     assert_eq!((bold.family.to_lowercase(), bold.weight), (family.to_lowercase(), 700));
     assert_eq!(figcraft_text::find_face(&squashed, "Bold").unwrap().family.to_lowercase(), family.to_lowercase());

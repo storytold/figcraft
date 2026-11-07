@@ -566,7 +566,7 @@ fn superscript_and_subscript_are_synthesised_without_glyphs_for_them() {
 /// A synthetic monospaced TrueType font (outline-less glyphs, every printable ASCII character 500 of
 /// 1000 units wide), loaded into the font database so text measures the same on every machine.
 fn test_mono_font() -> &'static str {
-    const FAMILY: &str = "FigCraft Test Mono";
+    const FAMILY: &str = "ClawDesign Test Mono";
     static LOADED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     LOADED.get_or_init(|| {
         let families = figcraft_text::load_font_bytes(synthetic_mono_font(FAMILY));

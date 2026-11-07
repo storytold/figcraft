@@ -163,7 +163,7 @@ fn rect_finite(r: Rect) -> bool {
 
 fn write(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
     let mut pdf = krilla::Document::new();
-    let mut meta = krilla::metadata::Metadata::new().creator("FigCraft".into()).producer("FigCraft".into());
+    let mut meta = krilla::metadata::Metadata::new().creator("ClawDesign".into()).producer("ClawDesign".into());
     if let Some(t) = opts.title.as_ref().filter(|t| !t.trim().is_empty()) {
         meta = meta.title(t.clone());
     }

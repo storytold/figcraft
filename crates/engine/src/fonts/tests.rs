@@ -26,10 +26,10 @@ fn installed() -> Option<String> {
 #[test]
 fn lists_families_of_layers_ranges_styles_and_variables_once_each() {
     let mut s = Session::new();
-    text(&mut s, "FigCraft Missing A");
+    text(&mut s, "ClawDesign Missing A");
     let b = text(&mut s, "figcraft missing a");
     if let NodeKind::Text(t) = &mut s.doc_mut().unwrap().get_mut(b).unwrap().kind {
-        let style = TextStyle { font_family: "FigCraft Missing B".into(), ..t.style.clone() };
+        let style = TextStyle { font_family: "ClawDesign Missing B".into(), ..t.style.clone() };
         t.runs.push(StyleRun { start: 0, end: 3, style });
     }
     let doc = s.doc_mut().unwrap();
@@ -38,25 +38,25 @@ fn lists_families_of_layers_ranges_styles_and_variables_once_each() {
         name: "Heading".into(),
         description: String::new(),
         kind: StyleKind::Text {
-            style: TextStyle { font_family: "FigCraft Missing C".into(), ..TextStyle::default() },
+            style: TextStyle { font_family: "ClawDesign Missing C".into(), ..TextStyle::default() },
             paragraph: Default::default(),
         },
         bound: Default::default(),
     });
     s.execute("variable.createCollection", &json!({"name": "Type", "modes": ["Light", "Dark"]})).unwrap();
-    s.execute("variable.create", &json!({"collection": "Type", "name": "Family", "type": "string", "value": "FigCraft Missing D"})).unwrap();
-    s.execute("variable.set", &json!({"variable": "Family", "mode": "Dark", "value": "FigCraft Missing H"})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Type", "name": "Family", "type": "string", "value": "ClawDesign Missing D"})).unwrap();
+    s.execute("variable.set", &json!({"variable": "Family", "mode": "Dark", "value": "ClawDesign Missing H"})).unwrap();
     let var = s.doc().unwrap().variables.get("Family").unwrap().id.clone();
     s.doc_mut().unwrap().get_mut(b).unwrap().bound.insert("fontFamily".into(), var);
 
     assert_eq!(
         families(&mut s),
         vec![
-            ("FigCraft Missing A".to_string(), 2),
-            ("FigCraft Missing B".to_string(), 1),
-            ("FigCraft Missing C".to_string(), 0),
-            ("FigCraft Missing D".to_string(), 0),
-            ("FigCraft Missing H".to_string(), 0),
+            ("ClawDesign Missing A".to_string(), 2),
+            ("ClawDesign Missing B".to_string(), 1),
+            ("ClawDesign Missing C".to_string(), 0),
+            ("ClawDesign Missing D".to_string(), 0),
+            ("ClawDesign Missing H".to_string(), 0),
         ]
     );
     assert!(s.ui_requests.iter().any(|r| r.kind == "dialog.missingFonts"));
@@ -71,8 +71,8 @@ fn installed_families_are_not_listed() {
     let mut s = Session::new();
     text(&mut s, &family);
     text(&mut s, &family.to_uppercase());
-    text(&mut s, "FigCraft Missing E");
-    assert_eq!(families(&mut s), vec![("FigCraft Missing E".to_string(), 1)]);
+    text(&mut s, "ClawDesign Missing E");
+    assert_eq!(families(&mut s), vec![("ClawDesign Missing E".to_string(), 1)]);
 }
 
 #[test]
@@ -93,9 +93,9 @@ fn blank_families_and_aliases_are_handled() {
     let mut s = Session::new();
     text(&mut s, "  ");
     s.execute("variable.createCollection", &json!({"name": "Type"})).unwrap();
-    s.execute("variable.create", &json!({"collection": "Type", "name": "Base", "type": "string", "value": "FigCraft Missing F"})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Type", "name": "Base", "type": "string", "value": "ClawDesign Missing F"})).unwrap();
     let base = s.doc().unwrap().variables.get("Base").unwrap().id.clone();
-    let t = text(&mut s, "FigCraft Missing G");
+    let t = text(&mut s, "ClawDesign Missing G");
     let doc = s.doc_mut().unwrap();
     // A variable that only aliases another, and one aliasing itself.
     let mut alias = doc.variables.get(&base).unwrap().clone();
@@ -113,13 +113,13 @@ fn blank_families_and_aliases_are_handled() {
     doc.variables.variables.push(alias);
     doc.variables.variables.push(cycle);
     doc.get_mut(t).unwrap().bound.insert("fontFamily".into(), "V:alias".into());
-    let other = text(&mut s, "FigCraft Missing G");
+    let other = text(&mut s, "ClawDesign Missing G");
     s.doc_mut().unwrap().get_mut(other).unwrap().bound.insert("fontFamily".into(), "V:cycle".into());
     // The bound layer takes the value its alias resolves to (bindings are applied after the next
     // command); the cycle resolves to nothing.
     let NodeKind::Text(bound) = &s.doc().unwrap().node(t).unwrap().kind else { panic!() };
-    assert_eq!(bound.style.font_family, "FigCraft Missing F");
-    assert_eq!(families(&mut s), vec![("FigCraft Missing F".to_string(), 1), ("FigCraft Missing G".to_string(), 1)]);
+    assert_eq!(bound.style.font_family, "ClawDesign Missing F");
+    assert_eq!(families(&mut s), vec![("ClawDesign Missing F".to_string(), 1), ("ClawDesign Missing G".to_string(), 1)]);
 }
 
 /// Aliases in several modes are followed once per variable: a chain that branches in every mode
@@ -134,11 +134,11 @@ fn branching_alias_chains_are_walked_once_per_variable() {
     let doc = s.doc_mut().unwrap();
     let ids: Vec<String> = doc.variables.variables.iter().map(|v| v.id.clone()).collect();
     for (i, var) in doc.variables.variables.iter_mut().enumerate() {
-        let next = ids.get(i + 1).cloned().unwrap_or_else(|| "FigCraft Missing H".into());
+        let next = ids.get(i + 1).cloned().unwrap_or_else(|| "ClawDesign Missing H".into());
         let leaf = |v: String| if i + 1 < ids.len() { VariableValue::Alias(v) } else { VariableValue::String(v) };
         var.values = [("m1".to_string(), leaf(next.clone())), ("m2".to_string(), leaf(next))].into();
     }
-    assert_eq!(string_values(&doc.variables, &ids[0]), vec!["FigCraft Missing H", "FigCraft Missing H"]);
+    assert_eq!(string_values(&doc.variables, &ids[0]), vec!["ClawDesign Missing H", "ClawDesign Missing H"]);
 }
 
 #[test]
@@ -171,9 +171,9 @@ fn refitted(r: &Value) -> Vec<u64> {
 #[test]
 fn refit_measures_stale_text_boxes_again() {
     let mut s = Session::new();
-    let a = text(&mut s, "FigCraft Refit A");
-    let b = text(&mut s, "FigCraft Refit B");
-    let fixed = text(&mut s, "FigCraft Refit A");
+    let a = text(&mut s, "ClawDesign Refit A");
+    let b = text(&mut s, "ClawDesign Refit B");
+    let fixed = text(&mut s, "ClawDesign Refit A");
     if let NodeKind::Text(t) = &mut s.doc_mut().unwrap().get_mut(fixed).unwrap().kind {
         t.auto_resize = figcraft_doc::TextAutoResize::None;
     }
@@ -208,7 +208,7 @@ fn refit_measures_stale_text_boxes_again() {
 #[test]
 fn refit_reaches_text_in_instances() {
     let mut s = Session::new();
-    let t = text(&mut s, "FigCraft Refit C");
+    let t = text(&mut s, "ClawDesign Refit C");
     let comp = id_of(&s.execute("component.create", &json!({"ids": [t]})).unwrap()["id"]).unwrap();
     let inst = id_of(&s.execute("instance.create", &json!({"component": comp, "x": 300, "y": 0})).unwrap()["id"]).unwrap();
     let copy = s.doc().unwrap().node(inst).unwrap().children[0];

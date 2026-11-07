@@ -334,7 +334,7 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
 fn refuse_dropping_images(input: &str, out: &str, images_left_out: usize) -> CliResult<()> {
     if images_left_out > 0 && figcraft_engine::file_access::same_file(input, out) {
         return Err(CliError::Failed(format!(
-            "{out} wasn't written: {images_left_out} of its images weren't loaded (together they pass what FigCraft reads from one file), and writing over it would delete them. Write to another path; {input} keeps them."
+            "{out} wasn't written: {images_left_out} of its images weren't loaded (together they pass what ClawDesign reads from one file), and writing over it would delete them. Write to another path; {input} keeps them."
         )));
     }
     Ok(())

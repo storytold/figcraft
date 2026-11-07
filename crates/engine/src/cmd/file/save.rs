@@ -106,7 +106,7 @@ impl FileSnapshot {
 fn refuse_dropping_images(ds: &DocState, path: &str) -> Result<()> {
     match ds.images_lost_saving_to(path) {
         Some(count) => Err(EngineError::Other(format!(
-            "{} wasn't saved: {count} of its images weren't loaded (together they pass what FigCraft reads from one file), and saving over it would delete them. Save it under another name; this file keeps them.",
+            "{} wasn't saved: {count} of its images weren't loaded (together they pass what ClawDesign reads from one file), and saving over it would delete them. Save it under another name; this file keeps them.",
             file_stem(path)
         ))),
         None => Ok(()),

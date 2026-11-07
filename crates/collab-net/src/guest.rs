@@ -205,7 +205,7 @@ fn upload(job: &Publish, mut cfg: GuestConfig) -> Result<(GuestConfig, Published
 fn connect(cfg: &GuestConfig) -> Result<Conn, String> {
     let (rd, wr, sock) = open(&cfg.invite.server, cfg.connect_timeout, &cfg.limits)?;
     let (reader, _) = tungstenite::client::client_with_config(cfg.invite.endpoint(), rd, Some(config(cfg.limits.max_server_message)))
-        .map_err(|e| format!("{} doesn't answer as a FigCraft session: {e}", cfg.invite.server.display()))?;
+        .map_err(|e| format!("{} doesn't answer as a ClawDesign session: {e}", cfg.invite.server.display()))?;
     let writer = WebSocket::from_raw_socket(wr, WsRole::Client, Some(config(cfg.limits.max_client_message)));
     reader.get_ref().set_read_timeout(Some(cfg.limits.idle_timeout)).map_err(|e| e.to_string())?;
     Ok(Conn { reader, writer, sock })

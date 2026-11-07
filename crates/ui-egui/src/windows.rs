@@ -191,8 +191,8 @@ pub(crate) fn fail_input_acks(app: &mut FigApp, viewport: ViewportId) {
 
 fn title_of(ds: Option<&DocState>) -> String {
     match ds {
-        Some(ds) => format!("{}{} – FigCraft", ds.doc.name, if ds.is_dirty() { " •" } else { "" }),
-        None => "FigCraft".into(),
+        Some(ds) => format!("{}{} – ClawDesign", ds.doc.name, if ds.is_dirty() { " •" } else { "" }),
+        None => "ClawDesign".into(),
     }
 }
 

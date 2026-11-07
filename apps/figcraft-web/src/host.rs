@@ -123,7 +123,7 @@ impl Bridge {
 fn deliver_open(opens: &OpenQueue, ctx: &egui::Context, host_file: &RefCell<Option<String>>, name: &str, data: &FileData) {
     let name = crate::hostmode::open_name(name);
     let FileData::Bytes(array) = data else {
-        log::warn!("host file {name} came as a File; FigCraft reads bytes only; not opened");
+        log::warn!("host file {name} came as a File; ClawDesign reads bytes only; not opened");
         return;
     };
     if figcraft_ui_egui::browser_can_read(&name, data.size()).is_err() {

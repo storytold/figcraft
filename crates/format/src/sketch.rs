@@ -170,7 +170,7 @@ fn embedded_fonts(document: &Value) -> Option<String> {
         return None;
     }
     let list: Vec<&str> = families.iter().map(String::as_str).collect();
-    Some(format!("the file has embedded fonts FigCraft doesn't use ({}); install them to see the text as designed", list.join(", ")))
+    Some(format!("the file has embedded fonts ClawDesign doesn't use ({}); install them to see the text as designed", list.join(", ")))
 }
 
 fn corrupt(msg: impl Into<String>) -> FormatError {
@@ -214,7 +214,7 @@ impl<'b> Archive<'b> {
                 let why = other.err().map_or_else(|| "not an object".to_string(), |e| e.to_string());
                 warnings.push(format!(
                     "the document's shared styles and library symbols were skipped: {}",
-                    why.trim_start_matches("not a valid FigCraft file: ")
+                    why.trim_start_matches("not a valid ClawDesign file: ")
                 ));
                 let pages: Vec<Value> = z
                     .file_names()
@@ -239,7 +239,7 @@ impl<'b> Archive<'b> {
             match json_member(&mut z, &format!("pages/{id}.json"), max_member, &mut total) {
                 Ok(page) if page.is_object() => pages.push((id.to_string(), page)),
                 Ok(_) => warnings.push("pages that aren't JSON objects were skipped".into()),
-                Err(e) => warnings.push(format!("a page was skipped: {}", e.to_string().trim_start_matches("not a valid FigCraft file: "))),
+                Err(e) => warnings.push(format!("a page was skipped: {}", e.to_string().trim_start_matches("not a valid ClawDesign file: "))),
             }
         }
         if refs.len() > MAX_PAGES {

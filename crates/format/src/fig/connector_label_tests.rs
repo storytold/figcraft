@@ -249,7 +249,7 @@ fn a_routed_connector_takes_its_line_style_from_the_generated_record() {
     assert_eq!(connector["strokeWeight"], 4.0);
     assert_eq!(connector["strokeDashes"], serde_json::json!([16.0, 10.0]));
     assert_eq!(connector["strokeCapEnd"], "ARROW");
-    assert!(warnings.iter().any(|warning| warning.contains("follow FigCraft's own routing")), "{warnings:?}");
+    assert!(warnings.iter().any(|warning| warning.contains("follow ClawDesign's own routing")), "{warnings:?}");
 
     let (native, _) = crate::rest::import_fig(&rest, &|_| None).unwrap();
     let node = find_node(&native, "synthetic connector");

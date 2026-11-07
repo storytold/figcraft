@@ -47,7 +47,7 @@ impl<R: Registry> UrlScheme<R> {
 
     fn values(&self) -> [(String, &'static str, String); 4] {
         [
-            (KEY.into(), "", "URL:FigCraft invite link".into()),
+            (KEY.into(), "", "URL:ClawDesign invite link".into()),
             (KEY.into(), "URL Protocol", String::new()),
             (format!(r"{KEY}\DefaultIcon"), "", format!("\"{}\",0", self.exe.display())),
             (format!(r"{KEY}\shell\open\command"), "", self.command()),

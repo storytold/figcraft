@@ -346,7 +346,7 @@ impl Manifest {
         self.author = clean("author", &self.author, MAX_NAME)?;
         check_main(&self.main)?;
         if self.api == 0 || self.api > API_VERSION {
-            return Err(format!("plugin API {} isn't supported (this FigCraft runs API {API_VERSION})", self.api));
+            return Err(format!("plugin API {} isn't supported (this ClawDesign runs API {API_VERSION})", self.api));
         }
         if self.permissions.commands.len() > MAX_ALLOW {
             return Err(format!("more than {MAX_ALLOW} entries in `permissions.commands`"));

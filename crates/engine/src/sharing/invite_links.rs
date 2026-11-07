@@ -72,7 +72,7 @@ fn register(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "collab.registerLinks",
-        "Open invite links in FigCraft",
+        "Open invite links in ClawDesign",
         "{on? (default: switch)} → {on, registered}: make this app the opener of figcraft:// invite links (or stop); also the Preferences checkbox",
         false,
         register

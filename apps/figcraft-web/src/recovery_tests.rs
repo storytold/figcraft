@@ -89,7 +89,7 @@ fn junk_in_the_storage_opens_nothing() {
 fn the_stopped_page_says_what_was_kept() {
     let says = |unsaved, kept, what: &str| {
         let text = browser_stopped(unsaved, kept);
-        assert!(text.starts_with("FigCraft stopped because of an internal error. ") && text.contains(what), "{text}");
+        assert!(text.starts_with("ClawDesign stopped because of an internal error. ") && text.contains(what), "{text}");
     };
     says(0, 0, "start again");
     says(2, 2, "get your unsaved files back");

@@ -53,7 +53,7 @@ pub(crate) fn export_settings(cx: &mut Cx, l: &Value, node: &mut JsonMap<String,
             "pdf" => "PDF",
             "webp" => "WEBP",
             _ => {
-                cx.warn("export settings in formats FigCraft doesn't export (TIFF, EPS, HEIC) were skipped");
+                cx.warn("export settings in formats ClawDesign doesn't export (TIFF, EPS, HEIC) were skipped");
                 continue;
             }
         };
@@ -114,6 +114,6 @@ pub(crate) fn notes(cx: &mut Cx, l: &Value) {
     }
     let locked = l.get("overrideProperties").and_then(Value::as_array).is_some_and(|p| p.iter().any(|o| bool_field(o, "canOverride") == Some(false)));
     if locked {
-        cx.warn("overrides Sketch symbols locked can be changed in FigCraft");
+        cx.warn("overrides Sketch symbols locked can be changed in ClawDesign");
     }
 }

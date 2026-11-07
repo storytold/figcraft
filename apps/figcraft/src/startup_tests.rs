@@ -5,9 +5,9 @@ use figcraft_ui_egui::dialogs::window_failed as message;
 use figcraft_ui_egui::i18n::tr;
 
 const ERROR: &str = "WGPU error: Failed to create surface for any enabled backend: {}";
-const BACKEND_HINT: &str = "WGPU_BACKEND is set and names the graphics API to use; unsetting it lets FigCraft choose.";
+const BACKEND_HINT: &str = "WGPU_BACKEND is set and names the graphics API to use; unsetting it lets ClawDesign choose.";
 const DRIVER_HINT: &str = if cfg!(windows) {
-    "Updating the graphics driver often helps. To use OpenGL only, start FigCraft from a Command Prompt with:"
+    "Updating the graphics driver often helps. To use OpenGL only, start ClawDesign from a Command Prompt with:"
 } else {
     "Updating the graphics driver often helps. WGPU_BACKEND (vulkan, gl, metal) names another graphics API to try."
 };
@@ -16,7 +16,7 @@ const DRIVER_HINT: &str = if cfg!(windows) {
 fn the_message_carries_the_error_and_where_to_report_it() {
     let text = message(ERROR, false, None);
     assert!(text.contains(ERROR), "the error itself: {text}");
-    assert!(text.contains("https://github.com/storytold/figcraft/issues"), "where to report it: {text}");
+    assert!(text.contains("https://github.com/avenpace/figcraft/issues"), "where to report it: {text}");
 }
 
 #[test]
@@ -47,5 +47,5 @@ fn after_every_attempt_failed_it_names_what_was_tried_and_no_other_api() {
     assert!(text.contains(ERROR), "the last error: {text}");
     assert!(text.contains("Direct3D 12, Vulkan, OpenGL"), "what was tried: {text}");
     assert!(!text.contains(tr(DRIVER_HINT)), "every API was tried already: {text}");
-    assert!(text.contains("https://github.com/storytold/figcraft/issues"), "where to report it: {text}");
+    assert!(text.contains("https://github.com/avenpace/figcraft/issues"), "where to report it: {text}");
 }

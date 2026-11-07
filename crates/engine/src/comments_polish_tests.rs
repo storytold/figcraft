@@ -308,7 +308,7 @@ fn prompt_briefs_a_thread_for_an_agent() {
     assert_eq!(r["count"], 1);
     assert_eq!(r["truncated"], false);
     let text = r["text"].as_str().unwrap();
-    assert!(text.contains("# FigCraft feedback"));
+    assert!(text.contains("# ClawDesign feedback"));
     assert!(text.contains("Make the padding 12"));
     assert!(text.contains("Button"));
     assert!(text.contains(&format!("node {f}")));

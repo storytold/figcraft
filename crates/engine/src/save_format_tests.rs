@@ -138,7 +138,7 @@ fn read_fig(path: &std::path::Path, result: &Value) -> figcraft_doc::Document {
     assert_eq!(result["format"], "fig");
     assert_eq!(result["bytes"], bytes.len());
     assert!(result["warnings"].is_array());
-    assert!(figcraft_format::load_bytes(&bytes).is_err(), "a .fig copy must not contain native FigCraft data");
+    assert!(figcraft_format::load_bytes(&bytes).is_err(), "a .fig copy must not contain native ClawDesign data");
     figcraft_format::fig::import(&bytes, "Copy").unwrap().0
 }
 

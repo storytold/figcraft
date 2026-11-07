@@ -135,7 +135,7 @@ impl Backend for Store {
         match same_secret(&hash(key), &hash(&self.key)) {
             true => Ok(()),
             false if self.cfg.hosting.open => {
-                Err("wrong server key (this server is open to the public: publish without a key, with an up-to-date FigCraft)".into())
+                Err("wrong server key (this server is open to the public: publish without a key, with an up-to-date ClawDesign)".into())
             }
             false => Err("wrong server key".into()),
         }

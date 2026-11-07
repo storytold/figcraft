@@ -161,5 +161,5 @@ fn a_small_canvas_that_unpacks_to_millions_of_values_is_refused() {
     let file = one_list_canvas(&Schema::parse("message Message uint[] xs").unwrap(), n, std::iter::repeat_n(0, n as usize));
     assert!(file.len() < 100_000, "{} bytes", file.len());
     let Err(e) = import(&file, "x") else { panic!("a {} byte canvas holding {n} values opened", file.len()) };
-    assert_eq!(e.to_string(), "not a valid FigCraft file: .fig file: message: too many values");
+    assert_eq!(e.to_string(), "not a valid ClawDesign file: .fig file: message: too many values");
 }

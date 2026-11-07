@@ -508,7 +508,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("app.preferences", "Preferences", "{}", false, |s, _| ui(s, "dialog.preferences")),
         spec!("app.actions", "Actions", "{}", false, |s, _| ui(s, "palette.actions")),
         spec!("help.shortcuts", "Keyboard shortcuts", "{}", false, |s, _| ui(s, "panel.shortcuts")),
-        spec!("help.about", "About FigCraft", "{}", false, |s, _| ui(s, "dialog.about")),
+        spec!("help.about", "About ClawDesign", "{}", false, |s, _| ui(s, "dialog.about")),
         spec!("help.page", "Help page", "{}", false, |s, _| ui(s, "open.help")),
         spec!(
             "help.gettingStarted",

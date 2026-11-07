@@ -182,14 +182,14 @@ impl Backend for Attached {
         let line = line.to_string();
         if self.conn.is_none() || self.stale() {
             self.reconnect().map_err(|e| {
-                format!("FigCraft app at {} is not reachable: {e} (request was not sent; start it with `figcraft --control PORT`)", self.addr)
+                format!("ClawDesign app at {} is not reachable: {e} (request was not sent; start it with `figcraft --control PORT`)", self.addr)
             })?;
         }
         // A lost reply does not mean the app failed to apply the request.
         let reply = self.roundtrip(&line).map_err(|e| {
             self.conn = None;
             format!(
-                "FigCraft control call `{method}` at {} failed: {e}; the operation may have completed. Inspect the document before retrying.",
+                "ClawDesign control call `{method}` at {} failed: {e}; the operation may have completed. Inspect the document before retrying.",
                 self.addr
             )
         })?;
@@ -206,7 +206,7 @@ impl Backend for Attached {
     }
 
     fn describe(&self) -> String {
-        format!("attached to the FigCraft app at {}", self.addr)
+        format!("attached to the ClawDesign app at {}", self.addr)
     }
 }
 

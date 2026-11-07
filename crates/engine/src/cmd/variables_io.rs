@@ -226,7 +226,7 @@ fn dart_comment(text: &str) -> String {
 /// per variable. Aliases are resolved to their value in that mode (a variable of another
 /// collection in that collection's default mode), so each class stands alone.
 fn dart(vars: &Variables, colls: &[&Collection]) -> String {
-    let mut out = String::from("// Variables exported from FigCraft.\n\nimport 'dart:ui';\n");
+    let mut out = String::from("// Variables exported from ClawDesign.\n\nimport 'dart:ui';\n");
     let mut classes = BTreeSet::new();
     for c in colls {
         let base = dart_ident(&c.name, true);

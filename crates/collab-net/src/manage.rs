@@ -180,7 +180,7 @@ pub fn plugins(server: &Endpoint, key: &str, req: PluginReq, limits: &NetLimits,
 fn connect(server: &Endpoint, limits: &NetLimits, timeout: Duration) -> Result<Ws, String> {
     let (stream, _, _) = open(server, timeout, limits)?;
     let (ws, _) = tungstenite::client::client_with_config(server.url(), stream, Some(config(limits.max_server_message)))
-        .map_err(|e| format!("{} doesn't answer as a FigCraft server: {e}", server.display()))?;
+        .map_err(|e| format!("{} doesn't answer as a ClawDesign server: {e}", server.display()))?;
     // A publish uploads a whole file; a large project on a slow link can take several minutes to
     // receive and answer. The wait uses `request_reply_timeout`, not the session `idle_timeout`.
     ws.get_ref().set_read_timeout(Some(limits.request_reply_timeout)).map_err(|e| e.to_string())?;

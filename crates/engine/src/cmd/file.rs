@@ -78,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.open",
             "Open",
-            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file), reload? (a file already open: read it again into its tab, which must have no unsaved changes)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .penpot, .sketch (Sketch 48 or newer, best effort), .svg, .png, .jpg …); REST, .fig, .penpot and .sketch imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open returns its `index`, with `stale: true` when the file changed on disk since the tab read or saved it, or `reloaded: true` after `reload`)",
+            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file), reload? (a file already open: read it again into its tab, which must have no unsaved changes)} (.figcraft, .json: ClawDesign or REST API file JSON, .fig (best effort), .penpot, .sketch (Sketch 48 or newer, best effort), .svg, .png, .jpg …); REST, .fig, .penpot and .sketch imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open returns its `index`, with `stale: true` when the file changed on disk since the tab read or saved it, or `reloaded: true` after `reload`)",
             false,
             open
         ),

@@ -239,7 +239,7 @@ fn compared(ui: &mut Ui, r: Rect, cache: &Cached, version_name: Option<&str>, mo
             tr("This version can't be read.")
         } else if cache.cmp.changed {
             tr(
-                "What this changed from isn't known: it changed before FigCraft kept a copy of ready-for-dev frames. Resolve the change (or mark it ready again) to compare from now on.",
+                "What this changed from isn't known: it changed before ClawDesign kept a copy of ready-for-dev frames. Resolve the change (or mark it ready again) to compare from now on.",
             )
         } else {
             tr("Nothing changed since this was marked ready for dev.")

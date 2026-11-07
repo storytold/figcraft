@@ -44,7 +44,7 @@ fn loaded_name(dir: PathBuf) -> Option<String> {
 #[test]
 fn without_a_marker_the_settings_stay_where_they_always_were() {
     let root = root("installed");
-    let old = root.join("appdata").join("FigCraft");
+    let old = root.join("appdata").join("ClawDesign");
     write_prefs(&old, &prefs("Ada"));
     let dir = settings_dir(&probe(&root, Some(root.join("appdata")), None));
     assert_eq!(dir, Some(old.clone()), "the folder every earlier version used");
@@ -56,7 +56,7 @@ fn without_a_marker_the_settings_stay_where_they_always_were() {
 #[test]
 fn a_portable_marker_keeps_the_settings_next_to_the_executable_and_takes_the_old_ones() {
     let root = root("portable");
-    let old = root.join("appdata").join("FigCraft");
+    let old = root.join("appdata").join("ClawDesign");
     write_prefs(&old, &prefs("Ada"));
     std::fs::write(root.join("app").join("portable"), "").unwrap();
     let portable = root.join("app").join("config");

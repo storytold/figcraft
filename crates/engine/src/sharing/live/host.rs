@@ -280,7 +280,7 @@ pub(super) fn report(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let live = s.live();
     if live.status != Status::Live || live.role() != Some(Role::Guest) {
-        return Err(bad(CMD, "join a file on a FigCraft server first: reports go to that server's operator"));
+        return Err(bad(CMD, "join a file on a ClawDesign server first: reports go to that server's operator"));
     }
     if live.hosting.is_none() {
         return Err(bad(CMD, "this server doesn't take reports (it is older than this app); contact its operator another way"));

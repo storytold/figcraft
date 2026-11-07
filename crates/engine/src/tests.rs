@@ -684,9 +684,9 @@ fn find_replace_changing_only_the_case_replaces_every_occurrence() {
     let mut s = sess();
     let t = id(&s.execute("text.create", &json!({"text": "figcraft and FIGCRAFT, figcraft", "x": 0, "y": 0})).unwrap());
     let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 80, "width": 50, "height": 50, "name": "figcraft / figcraft"})).unwrap());
-    s.execute("edit.findReplace", &json!({"find": "figcraft", "replace": "FigCraft", "layerNames": true})).unwrap();
-    assert_eq!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, "FigCraft and FigCraft, FigCraft");
-    assert_eq!(s.doc().unwrap().node(f).unwrap().name, "FigCraft / FigCraft");
+    s.execute("edit.findReplace", &json!({"find": "figcraft", "replace": "ClawDesign", "layerNames": true})).unwrap();
+    assert_eq!(s.doc().unwrap().node(t).unwrap().kind.text().unwrap().characters, "ClawDesign and ClawDesign, ClawDesign");
+    assert_eq!(s.doc().unwrap().node(f).unwrap().name, "ClawDesign / ClawDesign");
 }
 
 /// Damaged and too-old `.sketch` data sent to the file commands (which the junk sweep skips) fail

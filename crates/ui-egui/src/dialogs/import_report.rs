@@ -158,7 +158,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             ui.label(RichText::new(tr("Compatibility notes")).strong());
             ui.label(
                 RichText::new(tr(
-                    "FigCraft doesn't support every feature of these files yet. The notes list what was left out or changed in the imported copy; the original file is unchanged.",
+                    "ClawDesign doesn't support every feature of these files yet. The notes list what was left out or changed in the imported copy; the original file is unchanged.",
                 ))
                 .color(t.text_secondary)
                 .font(regular(11.0)),
