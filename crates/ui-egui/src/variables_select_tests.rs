@@ -192,3 +192,61 @@ fn a_row_outside_the_selection_keeps_the_single_variable_menu() {
     let menu = flat(&u.frame_output(vec![]).shapes);
     assert!(has_text(&menu, "Delete variable") && !has_text(&menu, "Delete 2 variables"));
 }
+
+/// The bounding rect of every popup layer (the menu's area).
+fn popup_rect(u: &Ui) -> egui::Rect {
+    u.ctx.memory(|m| {
+        let rects: Vec<egui::Rect> =
+            m.areas().visible_layer_ids().into_iter().filter(|l| l.order == egui::Order::Foreground).filter_map(|l| m.area_rect(l.id)).collect();
+        assert!(!rects.is_empty(), "no popup open");
+        rects.into_iter().reduce(|a, b| a.union(b)).unwrap()
+    })
+}
+
+#[test]
+fn the_bulk_menu_scrolls_when_forty_groups_make_it_taller_than_the_window() {
+    let mut u = window();
+    for g in 0..40 {
+        u.app
+            .session
+            .execute("variable.create", &json!({"collection": "Theme", "name": format!("g{g:02}/leaf"), "type": "number", "value": 0}))
+            .unwrap();
+    }
+    u.screen = egui::vec2(1000.0, 500.0);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    click_row(&mut u, "bravo", Modifiers::NONE);
+    click_row(&mut u, "charlie", SHIFT);
+    let p = row(&mut u, "charlie");
+    click(&mut u, p, PointerButton::Secondary, Modifiers::NONE);
+    let menu = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&menu, "Delete 2 variables"));
+    let screen = egui::Rect::from_min_size(Pos2::ZERO, u.screen);
+    let area = popup_rect(&u);
+    assert!(screen.contains_rect(area), "the menu area {area:?} runs past the screen {screen:?}");
+    let last = "Move to group g39";
+    let screen_h = u.screen.y;
+    let visible = |shapes: &[egui::Shape]| crate::live_tests::texts(shapes).iter().any(|(t, p, s)| t == last && p.y + s.y <= screen_h);
+    assert!(!visible(&menu), "the last group row should start out of view");
+    let at = Pos2::new(area.center().x, area.center().y);
+    let mut shapes = menu;
+    for _ in 0..30 {
+        u.frame(vec![
+            Event::PointerMoved(at),
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                source: egui::MouseWheelSource::Unknown,
+                phase: egui::TouchPhase::Move,
+                delta: egui::vec2(0.0, -400.0),
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        shapes = flat(&u.frame_output(vec![Event::PointerMoved(at)]).shapes);
+        if visible(&shapes) {
+            break;
+        }
+    }
+    assert!(visible(&shapes), "scrolling the menu never brought {last:?} into view");
+    assert!(screen.contains_rect(popup_rect(&u)));
+}

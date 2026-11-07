@@ -119,41 +119,47 @@ fn bulk_menu(app: &mut FigApp, ui: &mut Ui, coll_groups: &[String], vars: &[&Var
         bulk_run(app, "Delete variables", vars, |v| Some(("variable.delete", json!({"variable": v.id}))));
         ui.close();
     }
-    let moves = std::iter::once(None).chain(coll_groups.iter().map(|g| Some(g.as_str())));
-    for g in moves {
-        let label = g.map_or_else(|| tr("Move out of any group").to_string(), |g| trf("Move to group {group}", &[("group", &g)]));
-        if menu_item(ui, &label, "") {
-            bulk_run(app, "Move variables", vars, |v| {
-                let short = v.name.rsplit('/').next().unwrap_or(&v.name);
-                let name = g.map_or_else(|| short.to_string(), |g| format!("{g}/{short}"));
-                (name != v.name).then(|| ("variable.update", json!({"variable": v.id, "name": name})))
-            });
-            ui.close();
-        }
-    }
-    let mut scopes: Vec<(&'static str, &'static str)> = Vec::new();
-    for v in vars {
-        for s in scopes_for(v.kind) {
-            if !scopes.contains(s) {
-                scopes.push(*s);
+    // Many groups make the menu taller than the window: the rows after Delete scroll.
+    let max_h = ui.ctx().content_rect().height() * 0.6;
+    egui::ScrollArea::vertical().id_salt("variables_bulk_menu_scroll").max_height(max_h).show(ui, |ui| {
+        let moves = std::iter::once(None).chain(coll_groups.iter().map(|g| Some(g.as_str())));
+        for g in moves {
+            let label = g.map_or_else(|| tr("Move out of any group").to_string(), |g| trf("Move to group {group}", &[("group", &g)]));
+            if menu_item(ui, &label, "") {
+                bulk_run(app, "Move variables", vars, |v| {
+                    let short = v.name.rsplit('/').next().unwrap_or(&v.name);
+                    let name = g.map_or_else(|| short.to_string(), |g| format!("{g}/{short}"));
+                    (name != v.name).then(|| ("variable.update", json!({"variable": v.id, "name": name})))
+                });
+                ui.close();
             }
         }
-    }
-    let set = |app: &mut FigApp, label: &str, value: Option<&'static str>, ui: &mut Ui| {
-        if menu_item(ui, label, "") {
-            bulk_run(app, "Change scope", vars, |v| match value {
-                None => Some(("variable.update", json!({"variable": v.id, "scopes": Value::Null}))),
-                Some("") => Some(("variable.update", json!({"variable": v.id, "scopes": []}))),
-                Some(s) => scopes_for(v.kind).iter().any(|(id, _)| *id == s).then(|| ("variable.update", json!({"variable": v.id, "scopes": [s]}))),
-            });
-            ui.close();
+        let mut scopes: Vec<(&'static str, &'static str)> = Vec::new();
+        for v in vars {
+            for s in scopes_for(v.kind) {
+                if !scopes.contains(s) {
+                    scopes.push(*s);
+                }
+            }
         }
-    };
-    set(app, tr("Scope: all supported properties"), None, ui);
-    set(app, tr("Scope: hidden from pickers"), Some(""), ui);
-    for (id, label) in scopes {
-        set(app, &trf("Scope: only {scope}", &[("scope", &tr(label))]), Some(id), ui);
-    }
+        let set = |app: &mut FigApp, label: &str, value: Option<&'static str>, ui: &mut Ui| {
+            if menu_item(ui, label, "") {
+                bulk_run(app, "Change scope", vars, |v| match value {
+                    None => Some(("variable.update", json!({"variable": v.id, "scopes": Value::Null}))),
+                    Some("") => Some(("variable.update", json!({"variable": v.id, "scopes": []}))),
+                    Some(s) => {
+                        scopes_for(v.kind).iter().any(|(id, _)| *id == s).then(|| ("variable.update", json!({"variable": v.id, "scopes": [s]})))
+                    }
+                });
+                ui.close();
+            }
+        };
+        set(app, tr("Scope: all supported properties"), None, ui);
+        set(app, tr("Scope: hidden from pickers"), Some(""), ui);
+        for (id, label) in scopes {
+            set(app, &trf("Scope: only {scope}", &[("scope", &tr(label))]), Some(id), ui);
+        }
+    });
 }
 
 impl Editor {
