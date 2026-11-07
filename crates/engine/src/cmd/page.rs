@@ -159,6 +159,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 if s.doc()?.is_divider(id) {
                     return Err(bad("page.setOpening", "a divider isn't a page to open on"));
                 }
+                if s.doc()?.current_page == Some(id) {
+                    // Already the opening page: nothing changes, so no undo step.
+                    return ok();
+                }
                 s.doc_mut()?.current_page = Some(id);
                 settle(s, "page.setOpening")?;
                 ok()

@@ -574,4 +574,9 @@ fn the_opening_page_syncs_and_moves_no_ones_view() {
     room.settle();
     room.check();
     assert_ne!(room.server.document().current_page, Some(cover), "undone for everyone");
+    assert_eq!(
+        Session::with_document(room.server.document().clone()).page().unwrap(),
+        first,
+        "whoever joins after the undo lands on the restored page"
+    );
 }
