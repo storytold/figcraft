@@ -19,6 +19,12 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("align.bottom", "Align bottom", "{ids?}", true, |s, p| align(s, p, Al::Bottom)),
         spec!("distribute.horizontal", "Distribute horizontal spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, true)),
         spec!("distribute.vertical", "Distribute vertical spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, false)),
+        spec!("distribute.left", "Distribute left", "{ids?}", true, |s, p| distribute_edges(s, p, DE::Left)),
+        spec!("distribute.horizontalCenters", "Distribute horizontal centers", "{ids?}", true, |s, p| distribute_edges(s, p, DE::HCenter)),
+        spec!("distribute.right", "Distribute right", "{ids?}", true, |s, p| distribute_edges(s, p, DE::Right)),
+        spec!("distribute.top", "Distribute top", "{ids?}", true, |s, p| distribute_edges(s, p, DE::Top)),
+        spec!("distribute.verticalCenters", "Distribute vertical centers", "{ids?}", true, |s, p| distribute_edges(s, p, DE::VCenter)),
+        spec!("distribute.bottom", "Distribute bottom", "{ids?}", true, |s, p| distribute_edges(s, p, DE::Bottom)),
         spec!(
             "arrange.spacing",
             "Spacing",
@@ -219,6 +225,57 @@ fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
             move_world(doc, i, 0.0, pos - b.y0)?;
             pos += b.height() + gap;
         }
+    }
+    ok()
+}
+
+#[derive(Clone, Copy)]
+enum DE {
+    Left,
+    HCenter,
+    Right,
+    Top,
+    VCenter,
+    Bottom,
+}
+
+/// The coordinate edge distribution steps along: the chosen edge or centre.
+fn edge(b: Rect, d: DE) -> f64 {
+    match d {
+        DE::Left => b.x0,
+        DE::HCenter => b.center().x,
+        DE::Right => b.x1,
+        DE::Top => b.y0,
+        DE::VCenter => b.center().y,
+        DE::Bottom => b.y1,
+    }
+}
+
+/// Distribute the selection so a chosen edge or centre steps evenly from the first
+/// to the last of the sort order; the outer two stay where they are.
+fn distribute_edges(s: &mut Session, p: &Value, d: DE) -> Result<Value> {
+    let ids = req_targets("distribute.edges", s, p)?;
+    let doc = s.doc_mut()?;
+    let ids = roots(doc, &ids);
+    let mut items: Vec<(NodeId, Rect)> = ids.iter().filter_map(|i| doc.world_bounds(*i).map(|b| (*i, b))).collect();
+    items.retain(|(_, b)| edge(*b, d).is_finite());
+    items.sort_by(|a, b| edge(a.1, d).total_cmp(&edge(b.1, d)));
+    let (Some(first), Some(last)) = (items.first(), items.last()) else { return ok() };
+    let (from, to) = (edge(first.1, d), edge(last.1, d));
+    if items.len() < 3 || !from.is_finite() || !to.is_finite() {
+        return ok();
+    }
+    let n = items.len();
+    for (i, (id, b)) in items.iter().enumerate() {
+        if i == 0 || i == n - 1 {
+            continue;
+        }
+        let target = from + (to - from) * (i as f64 / (n - 1) as f64);
+        let (dx, dy) = match d {
+            DE::Left | DE::HCenter | DE::Right => (target - edge(*b, d), 0.0),
+            DE::Top | DE::VCenter | DE::Bottom => (0.0, target - edge(*b, d)),
+        };
+        move_world(doc, *id, dx, dy)?;
     }
     ok()
 }
