@@ -154,3 +154,44 @@ fn native_save_and_fig_export_embed_the_same_chosen_thumbnail() {
     }
     assert_eq!(s.doc().unwrap(), &before);
 }
+
+#[test]
+fn default_thumbnail_uses_active_page_when_no_cover_chosen() {
+    let mut doc = Document::new("MultiPage");
+    let page1 = doc.first_page().unwrap();
+    let f1 = doc.create(page1, NodeKind::Frame, "F1", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.get_mut(f1).unwrap().fills = vec![Paint::solid(RED)];
+
+    let page2 = doc.add_page("Page 2");
+    let f2 = doc.create(page2, NodeKind::Frame, "F2", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.get_mut(f2).unwrap().fills = vec![Paint::solid(GREEN)];
+
+    doc.current_page = Some(page2);
+    let png2 = picture(&doc);
+    assert_eq!(png2.dimensions(), (200, 200));
+    assert_eq!(png2.get_pixel(50, 50).0, [0, 255, 0, 255], "active page 2 is green");
+
+    doc.current_page = Some(page1);
+    let png1 = picture(&doc);
+    assert_eq!(png1.dimensions(), (200, 200));
+    assert_eq!(png1.get_pixel(50, 50).0, [255, 0, 0, 255], "active page 1 is red");
+}
+
+#[test]
+fn chosen_cover_overrides_active_page_thumbnail() {
+    let mut doc = Document::new("MultiPage");
+    let page1 = doc.first_page().unwrap();
+    let cover = doc.create(page1, NodeKind::Frame, "Cover", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.get_mut(cover).unwrap().fills = vec![Paint::solid(RED)];
+    doc.get_mut(cover).unwrap().plugin_data.insert("figcraft.thumbnail".into(), "true".into());
+
+    let page2 = doc.add_page("Page 2");
+    let f2 = doc.create(page2, NodeKind::Frame, "F2", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.get_mut(f2).unwrap().fills = vec![Paint::solid(GREEN)];
+
+    doc.current_page = Some(page2);
+    let png = picture(&doc);
+    assert_eq!(png.dimensions(), (200, 200));
+    assert_eq!(png.get_pixel(50, 50).0, [255, 0, 0, 255], "explicit cover overrides active page");
+}
+

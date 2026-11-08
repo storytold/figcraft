@@ -3,7 +3,7 @@ use super::load::{ext, file_stem, write};
 use super::open::remember;
 use super::*;
 
-/// Thumbnail PNG of the chosen frame, or the first page's content (file browsers / home screen).
+/// Thumbnail PNG of the chosen frame, or the active page's content (file browsers / home screen).
 pub fn thumbnail(doc: &Document) -> Option<Vec<u8>> {
     let render = |page, b: figcraft_geom::Rect, solo| {
         let scale = (400.0 / b.width().max(b.height()).max(1.0)).min(2.0);
@@ -32,8 +32,16 @@ pub fn thumbnail(doc: &Document) -> Option<Vec<u8>> {
             render(page, b, Some(id))
         })
         .or_else(|| {
-            let page = doc.first_page()?;
-            render(page, doc.page_content_bounds(page)?, None)
+            let active = doc.current_page.filter(|p| doc.pages.contains(p));
+            let page = active.or_else(|| doc.first_page())?;
+            render(page, doc.page_content_bounds(page)?, None).or_else(|| {
+                let first = doc.first_page()?;
+                if Some(first) != active {
+                    render(first, doc.page_content_bounds(first)?, None)
+                } else {
+                    None
+                }
+            })
         })
 }
 
