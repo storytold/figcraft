@@ -564,6 +564,10 @@ fn group_rows(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
                 start_rename(st, target.clone());
                 ui.close();
             }
+            if menu_item(ui, tr("Duplicate group"), "") {
+                duplicate_group(app, &members, &list, g);
+                ui.close();
+            }
             if menu_item(ui, tr("Delete group"), "") {
                 let steps: Vec<serde_json::Value> = members
                     .iter()
@@ -602,6 +606,28 @@ fn rename_group(app: &mut FigApp, members: &[&Variable], g: &str, new: &str, st:
     {
         st.group = st.group.as_ref().map(|s| format!("{renamed}{}", &s[g.len()..]));
     }
+}
+
+/// Copy group `g` (its variables `members`, every mode, scope and setting) as the group named
+/// after it plus " 2" (the next free number among the collection's groups `list`), in one undo
+/// step. Each copy is `variable.duplicate` then a rename; an alias keeps pointing at its target.
+fn duplicate_group(app: &mut FigApp, members: &[&Variable], list: &[String], g: &str) {
+    let (parent, leaf) = g.rsplit_once('/').map_or(("", g), |(p, l)| (p, l));
+    let leaf = unique(leaf, |n| {
+        let full = if parent.is_empty() { n.to_string() } else { format!("{parent}/{n}") };
+        full == g || list.contains(&full) || members.iter().any(|v| v.name.starts_with(&format!("{full}/")))
+    });
+    let copy = if parent.is_empty() { leaf } else { format!("{parent}/{leaf}") };
+    let prefix = format!("{g}/");
+    let mut steps: Vec<serde_json::Value> = Vec::new();
+    for (k, v) in members.iter().filter(|v| v.name.starts_with(&prefix)).enumerate() {
+        let tag = format!("copy{k}");
+        steps.push(json!({"command": "variable.duplicate", "params": {"variable": v.id}, "as": tag}));
+        steps.push(
+            json!({"command": "variable.update", "params": {"variable": {"$ref": tag}, "name": format!("{copy}/{}", &v.name[prefix.len()..])}}),
+        );
+    }
+    app.run("command.batch", json!({"label": "Duplicate group", "commands": steps}));
 }
 
 fn create_collection(app: &mut FigApp, vars: &Variables, st: &mut Editor) {
