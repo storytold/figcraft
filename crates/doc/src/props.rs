@@ -1125,7 +1125,8 @@ pub struct AutoLayout {
     pub cross_align: CrossAlign,
     /// Wrapping layouts: how the lines are spread across the flow.
     pub content_align: ContentAlign,
-    /// Grid mode: column and row counts (rows grow to fit the children).
+    /// Grid mode: column and row counts (rows grow to fit the children). Rows 0 is "auto", the
+    /// default: as many as the children take, so a row emptied of its cells goes away.
     pub grid_columns: u32,
     pub grid_rows: u32,
     /// Grid mode: column track sizes (missing tracks are `1fr`).
@@ -1150,7 +1151,7 @@ impl Default for AutoLayout {
             cross_align: CrossAlign::Min,
             content_align: ContentAlign::Auto,
             grid_columns: 2,
-            grid_rows: 2,
+            grid_rows: 0,
             column_tracks: Vec::new(),
             row_tracks: Vec::new(),
             // New auto layout includes inside strokes.

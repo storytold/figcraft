@@ -806,6 +806,17 @@ pub fn grid_place(doc: &Document, al: &AutoLayout, kids: &[NodeId]) -> (Vec<Grid
     (cells, rows)
 }
 
+/// How many rows grid frame `frame` has: the set number, or with rows on auto (0) as many as its
+/// children take (at least one).
+pub fn grid_row_count(doc: &Document, frame: NodeId) -> u32 {
+    let Some(al) = doc.node(frame).and_then(|n| n.layout.as_ref()) else { return 1 };
+    if al.grid_rows > 0 {
+        return al.grid_rows.min(MAX_TRACKS as u32);
+    }
+    let kids = flow_children(doc, frame);
+    u32::try_from(grid_place(doc, al, &kids).1).unwrap_or(1).max(1)
+}
+
 /// Track `i`'s sizing and sanitised value (missing tracks are `1fr`).
 fn track_spec(specs: &[figcraft_doc::GridTrack], i: usize) -> (Sizing, f64) {
     let t = specs.get(i).copied().unwrap_or_default();

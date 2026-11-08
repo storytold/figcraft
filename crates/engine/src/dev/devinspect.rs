@@ -564,7 +564,8 @@ fn auto_layout(doc: &Document, n: &Node, l: &AutoLayout) -> Section {
     };
     let mut rows = vec![prop("Direction", dir)];
     if l.mode == LayoutMode::Grid {
-        rows.push(prop("Grid", format!("{} × {}", l.grid_columns, l.grid_rows)));
+        let r = if l.grid_rows == 0 { "auto".to_string() } else { l.grid_rows.to_string() };
+        rows.push(prop("Grid", format!("{} × {r}", l.grid_columns)));
         rows.push(prop("Gap", format!("{} {}", num(l.gap), num(l.cross_gap))));
     } else {
         let gap = match l.main_align {

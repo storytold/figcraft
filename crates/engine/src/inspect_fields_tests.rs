@@ -198,7 +198,7 @@ fn empty_options_keep_the_main_tree_and_document_output() {
                             "crossGap": 10.0,
                             "gap": 4.0,
                             "gridColumns": 2,
-                            "gridRows": 2,
+                            "gridRows": 0,
                             "mainAlign": "min",
                             "mode": "horizontal",
                             "padding": [

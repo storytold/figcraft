@@ -21,7 +21,7 @@ fills (paints or colours; gradients as {type: linearGradient|radialGradient|angu
 strokeCap / startCap / endCap, strokeJoin, miterAngle (degrees: sharper joins bevel; or miterLimit as a ratio), dashes [..], dashCap (none|round|square; null: dashes take startCap and endCap), widthProfile (preset uniform|wedge|taper|eye|rounded|pinch, [[t, scale], ...] or null), brush (preset id, {preset, spacing, sizeJitter, rotationJitter, scatter, seed} or null), cornerRadius (n or [tl,tr,br,bl]), cornerSmoothing (0-1), effects, \
 clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
 mainAlign (min|center|max, or the auto gaps spaceBetween|spaceAround|spaceEvenly), crossAlign (min|center|max|baseline: first text baselines, horizontal layouts), contentAlign (wrapped lines: auto = packed where crossAlign says | spaceBetween), wrap (rows of a horizontal layout, columns of a vertical one), strokesIncluded (the frame's inside stroke takes up space), reverseZ (canvas stacking: true = first on top), \
-columnGap / rowGap (aliases of gap / crossGap), gridColumns, gridRows, columnTracks / rowTracks ([120 | \"1fr\" | \"auto\" | {sizing, value}]), \
+columnGap / rowGap (aliases of gap / crossGap), gridColumns, gridRows (\"auto\" or 0: as many as the children take), columnTracks / rowTracks ([120 | \"1fr\" | \"auto\" | {sizing, value}]), \
 gridColumn / gridRow (0-based cell anchor, null = auto), gridColumnSpan, gridRowSpan, gridAlignH / gridAlignV (a grid child's alignment in its cell: min|center|max, auto/null = the frame's), sizingH / sizingV (fixed|hug|fill), \
 absolute (ignore auto layout; follows constraints), minWidth, maxWidth, minHeight, maxHeight (null removes), constraints {horizontal, vertical}, grids, exports, characters, fontFamily, fontStyle, \
 fontSize, lineHeight (auto|px|\"150%\"), letterSpacing (px|\"2%\"), textAlign (left|center|right|justified), textAlignVertical, textAutoResize \
@@ -806,7 +806,9 @@ fn apply_layout(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -
         }
         "wrap" => layout_mut(cmd, k, doc.get_mut(id)?)?.wrap = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be a boolean")))?,
         "gridColumns" | "gridRows" => {
-            let count = f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?.clamp(1.0, 1000.0) as u32;
+            // Rows take "auto" (or 0): as many as the children take.
+            let auto = k == "gridRows" && (v.as_str().is_some_and(|t| t.eq_ignore_ascii_case("auto")) || f64_of(v).is_some_and(|n| n < 1.0));
+            let count = if auto { 0 } else { f64_of(v).ok_or_else(|| bad(cmd, format!("`{k}` must be a number")))?.clamp(1.0, 1000.0) as u32 };
             let l = layout_mut(cmd, k, doc.get_mut(id)?)?;
             // Tracks past the new count go away (new tracks are 1fr).
             let (n, tracks) = if k == "gridColumns" { (&mut l.grid_columns, &mut l.column_tracks) } else { (&mut l.grid_rows, &mut l.row_tracks) };

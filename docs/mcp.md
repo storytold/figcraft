@@ -214,7 +214,7 @@ Or in a project's `.mcp.json`:
   - `contentAlign` (wrapping layouts): `auto` (default) packs the lines `crossGap` apart at the
     start, centre or end `crossAlign` names (lines of nothing but fill children stretch instead);
     `spaceBetween` puts the free space between the lines (one line, or no free space: like `auto`).
-  - Grid (`layout: "grid"`): `gridColumns`, `gridRows` (minimum; rows grow), `columnGap` /
+  - Grid (`layout: "grid"`): `gridColumns`, `gridRows` (a minimum, rows grow; `"auto"` or 0, the default: as many as the children take), `columnGap` /
     `rowGap`, track sizes `columnTracks` / `rowTracks` as `[120, "1fr", "auto"]` (px fixed, `fr`
     fill share, `auto` hug) or the `layout.setTrack {axis, index, sizing, value?}` command; on a
     child, `gridColumn` / `gridRow` (0-based anchor cell, `null` = placed automatically) and

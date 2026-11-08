@@ -736,7 +736,8 @@ fn infer_layout(doc: &Document, frame: NodeId, mode: Option<LayoutMode>) -> Auto
             al.gap = average_gap(&boxes, &rows, true).unwrap_or(10.0);
             al.cross_gap = band_gap(&boxes, &rows, true).unwrap_or(10.0);
             al.grid_columns = u32::try_from(widest.max(1)).unwrap_or(1);
-            al.grid_rows = u32::try_from(n_rows.max(1)).unwrap_or(1);
+            // Rows on auto: as many as the layers take.
+            al.grid_rows = 0;
         }
         LayoutMode::Vertical => al.gap = average_gap(&boxes, &one, false).map_or(10.0, |g| g.max(0.0)),
         _ => al.gap = average_gap(&boxes, &one, true).map_or(10.0, |g| g.max(0.0)),

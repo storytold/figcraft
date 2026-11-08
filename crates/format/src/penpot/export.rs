@@ -1181,7 +1181,7 @@ impl<'a> Exporter<'a> {
                 let mut columns: Vec<Value> = al.column_tracks.iter().map(track).collect();
                 let mut rows: Vec<Value> = al.row_tracks.iter().map(track).collect();
                 columns.resize(al.grid_columns.max(1) as usize, json!({"type": "flex", "value": 1}));
-                rows.resize(al.grid_rows.max(1) as usize, json!({"type": "flex", "value": 1}));
+                rows.resize(figcraft_layout::grid_row_count(self.doc, id).max(1) as usize, json!({"type": "flex", "value": 1}));
                 fields.insert("layout".into(), json!("grid"));
                 fields.insert("layoutGridDir".into(), json!("row"));
                 fields.insert(

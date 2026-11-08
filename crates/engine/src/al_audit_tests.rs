@@ -106,3 +106,29 @@ fn a_rotated_layer_fills_with_its_rotated_box() {
     assert!((bb.width() - 190.0).abs() < 1e-6 && (bb.height() - 60.0).abs() < 1e-6, "{bb:?}");
     assert!((cb.x0 - bb.x1 - 10.0).abs() < 1e-6, "the neighbour follows: {cb:?} after {bb:?}");
 }
+
+/// Grid rows are "auto" by default ("deleting all cell objects from a row will also remove that
+/// row"): rows are as many as the children take, so a lone Fill child fills the frame's height and a
+/// hugging grid hugs one row. A set number still holds, and "auto" brings it back.
+#[test]
+fn grid_rows_are_auto_by_default() {
+    let mut s = Session::new();
+    let f = id(ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 200})));
+    let k = id(ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 40, "parent": f})));
+    ex(&mut s, "node.set", json!({"id": f, "props": {"layout": "grid", "padding": 0, "gap": 10, "crossGap": 10}}));
+    ex(&mut s, "node.set", json!({"id": f, "props": {"sizingH": "fixed", "sizingV": "fixed", "width": 200, "height": 200}}));
+    ex(&mut s, "node.set", json!({"id": k, "props": {"sizingH": "fill", "sizingV": "fill"}}));
+    let size = |s: &Session, n: NodeId| {
+        let n = s.doc().unwrap().node(n).unwrap();
+        (n.width, n.height)
+    };
+    assert_eq!(s.doc().unwrap().node(f).unwrap().layout.as_ref().unwrap().grid_rows, 0, "auto");
+    assert_eq!(size(&s, k), (95.0, 200.0), "one row: the child fills the height");
+    ex(&mut s, "node.set", json!({"id": f, "props": {"gridRows": 2}}));
+    assert_eq!(size(&s, k), (95.0, 95.0), "two rows set: the second takes its share");
+    ex(&mut s, "node.set", json!({"id": f, "props": {"gridRows": "auto"}}));
+    assert_eq!(size(&s, k), (95.0, 200.0));
+    ex(&mut s, "node.set", json!({"id": k, "props": {"sizingH": "fixed", "sizingV": "fixed", "width": 40, "height": 40}}));
+    ex(&mut s, "node.set", json!({"id": f, "props": {"sizingV": "hug"}}));
+    assert_eq!(size(&s, f).1, 40.0, "a hugging grid hugs its one row");
+}

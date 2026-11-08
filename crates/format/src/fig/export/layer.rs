@@ -386,7 +386,7 @@ impl<'d> Exporter<'d> {
         // Instance layers share their main layer's track ids, so unchanged tracks and the cells
         // their layers sit in still match.
         let key = self.main_layer(n.id);
-        let (want_c, want_r) = (l.grid_columns.min(1000) as usize, l.grid_rows.min(1000) as usize);
+        let (want_c, want_r) = (l.grid_columns.min(1000) as usize, figcraft_layout::grid_row_count(self.doc, n.id).min(1000) as usize);
         let (cols, rows) = match self.tracks.get(&key) {
             Some((c, r)) if (c.len(), r.len()) == (want_c, want_r) => (c.clone(), r.clone()),
             _ => ((0..want_c).map(|_| self.next_aux()).collect(), (0..want_r).map(|_| self.next_aux()).collect()),

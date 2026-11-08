@@ -527,8 +527,9 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
         row(ui, 32.0, |ui| {
             let e = widgets::number_field(ui, Id::unique("al_cols"), Lead::None, Some(f64::from(l.grid_columns)), "", col, 1.0);
             app.field(ids, "gridColumns", e, |v| json!(v.max(1.0)));
-            let e = widgets::number_field(ui, Id::unique("al_rows"), Lead::None, Some(f64::from(l.grid_rows)), "", col, 1.0);
-            app.field(ids, "gridRows", e, |v| json!(v.max(1.0)));
+            // Rows on auto (0) show "Auto"; clearing the field or typing 0 sets it back.
+            let e = widgets::number_field_or(ui, Id::unique("al_rows"), (l.grid_rows > 0).then(|| f64::from(l.grid_rows)), tr("Auto"), col, 1.0);
+            app.field(ids, "gridRows", e, |v| if v < 1.0 { json!("auto") } else { json!(v) });
         });
     }
 }
