@@ -128,12 +128,13 @@ fn layout_for(bands: &[Band], vertical: bool, frame_w: f64, frame_h: f64, name: 
 /// `direction` forces it.
 fn flat_layout(s: &mut Session, frame: NodeId, direction: Option<&str>) -> Result<()> {
     let doc = s.doc_mut()?;
-    let mut al = infer_layout(doc, frame);
-    if let Some(d) = direction {
-        al.mode = mode_from(d);
+    let mut al = infer_layout(doc, frame, direction.map(mode_from));
+    if al.mode == LayoutMode::Grid && direction.is_none() {
+        // One list: rows and columns are the nested layouts `suggest` builds.
+        al = infer_layout(doc, frame, Some(LayoutMode::Horizontal));
     }
     let mut kids = doc.get(frame)?.children.clone();
-    sort_layout_children(doc, &mut kids, al.mode == LayoutMode::Vertical);
+    sort_layout_children(doc, &mut kids, al.mode);
     let n = doc.get_mut(frame)?;
     n.children = kids;
     n.layout = Some(al);
@@ -206,7 +207,7 @@ fn split(s: &mut Session, frame: NodeId, depth: usize, direction: Option<&str>, 
     }
     let doc = s.doc_mut()?;
     let mut kids = doc.get(frame)?.children.clone();
-    sort_layout_children(doc, &mut kids, vertical);
+    sort_layout_children(doc, &mut kids, if vertical { LayoutMode::Vertical } else { LayoutMode::Horizontal });
     let n = doc.get_mut(frame)?;
     n.children = kids;
     n.layout = Some(al);

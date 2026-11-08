@@ -636,7 +636,71 @@ fn outline_stroke(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Infer direction, gap and padding from visible, non-absolute children, matching the layout flow.
-fn infer_layout(doc: &Document, frame: NodeId) -> AutoLayout {
+/// Which band each box falls in along y (`by_y`, rows) or x (columns): boxes whose spans overlap
+/// share a band, numbered in order along the axis.
+fn bands(boxes: &[Rect], by_y: bool) -> Vec<usize> {
+    let span = |b: &Rect| if by_y { (b.y0, b.y1) } else { (b.x0, b.x1) };
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_by(|a, b| span(&boxes[*a]).0.total_cmp(&span(&boxes[*b]).0));
+    let mut out = vec![0; boxes.len()];
+    let (mut band, mut end) = (0usize, f64::NEG_INFINITY);
+    for (k, i) in order.into_iter().enumerate() {
+        let (lo, hi) = span(&boxes[i]);
+        if k > 0 && lo >= end - 0.5 {
+            band += 1;
+        }
+        end = if k == 0 || lo >= end - 0.5 { hi } else { end.max(hi) };
+        out[i] = band;
+    }
+    out
+}
+
+/// The average of the positive gaps between consecutive boxes along x (`along_x`) or y, each pair
+/// taken from the same band; overlapping neighbours don't count. `None` without any.
+fn average_gap(boxes: &[Rect], band: &[usize], along_x: bool) -> Option<f64> {
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    let lo = |b: &Rect| if along_x { b.x0 } else { b.y0 };
+    order.sort_by(|a, b| band[*a].cmp(&band[*b]).then(lo(&boxes[*a]).total_cmp(&lo(&boxes[*b]))));
+    let gaps: Vec<f64> = order
+        .windows(2)
+        .filter_map(|w| {
+            let (a, b) = (*w.first()?, *w.get(1)?);
+            (band[a] == band[b]).then(|| if along_x { boxes[b].x0 - boxes[a].x1 } else { boxes[b].y0 - boxes[a].y1 })
+        })
+        .filter(|g| *g >= 0.0)
+        .collect();
+    (!gaps.is_empty()).then(|| (gaps.iter().sum::<f64>() / gaps.len() as f64).round())
+}
+
+/// The gap between consecutive bands (rows or columns): the average space between one band's far
+/// edge and the next band's near edge.
+fn band_gap(boxes: &[Rect], band: &[usize], by_y: bool) -> Option<f64> {
+    let n = band.iter().copied().max()? + 1;
+    let edge = |k: usize, far: bool| {
+        boxes.iter().zip(band).filter(move |(_, b)| **b == k).map(move |(r, _)| match (by_y, far) {
+            (true, true) => r.y1,
+            (true, false) => r.y0,
+            (false, true) => r.x1,
+            (false, false) => r.x0,
+        })
+    };
+    let gaps: Vec<f64> = (1..n)
+        .filter_map(|k| {
+            let far = edge(k - 1, true).fold(f64::NEG_INFINITY, f64::max);
+            let near = edge(k, false).fold(f64::INFINITY, f64::min);
+            (far.is_finite() && near.is_finite()).then_some(near - far)
+        })
+        .filter(|g| *g >= 0.0)
+        .collect();
+    (!gaps.is_empty()).then(|| (gaps.iter().sum::<f64>() / gaps.len() as f64).round())
+}
+
+/// The auto layout Shift+A gives `frame` from where its children are ("Figma will try to determine
+/// which auto layout flow—vertical, horizontal, or grid—you want to use"): one row is horizontal,
+/// one column vertical, two or more rows of two or more a grid, read from the top row left to
+/// right; otherwise the longer extent wins. Gaps are the space between neighbours that don't
+/// overlap, on the axis of the flow (`mode` when it is asked for).
+fn infer_layout(doc: &Document, frame: NodeId, mode: Option<LayoutMode>) -> AutoLayout {
     let Some(f) = doc.node(frame) else { return AutoLayout::default() };
     let boxes: Vec<Rect> = figcraft_layout::flow_children(doc, frame)
         .iter()
@@ -644,24 +708,48 @@ fn infer_layout(doc: &Document, frame: NodeId) -> AutoLayout {
         .map(|c| figcraft_geom::transform_rect_bbox(c.transform, c.local_rect()))
         .collect();
     if boxes.is_empty() {
-        return AutoLayout { padding: [10.0; 4], gap: 10.0, ..Default::default() };
+        return AutoLayout { mode: mode.unwrap_or_default(), padding: [10.0; 4], gap: 10.0, ..Default::default() };
     }
-    let span_x = boxes.iter().map(|b| b.x1).fold(f64::MIN, f64::max) - boxes.iter().map(|b| b.x0).fold(f64::MAX, f64::min);
-    let span_y = boxes.iter().map(|b| b.y1).fold(f64::MIN, f64::max) - boxes.iter().map(|b| b.y0).fold(f64::MAX, f64::min);
-    let vertical = span_y > span_x;
-    let mut sorted = boxes.clone();
-    sorted.sort_by(|a, b| if vertical { a.y0.total_cmp(&b.y0) } else { a.x0.total_cmp(&b.x0) });
-    let gaps: Vec<f64> =
-        sorted.windows(2).filter_map(|w| Some(if vertical { w.get(1)?.y0 - w.first()?.y1 } else { w.get(1)?.x0 - w.first()?.x1 })).collect();
-    let gap = if gaps.is_empty() { 10.0 } else { (gaps.iter().sum::<f64>() / gaps.len() as f64).max(0.0).round() };
+    let (rows, cols) = (bands(&boxes, true), bands(&boxes, false));
+    let (n_rows, n_cols) = (rows.iter().max().map_or(1, |m| m + 1), cols.iter().max().map_or(1, |m| m + 1));
+    let per_row = |r: usize| rows.iter().filter(|x| **x == r).count();
+    let widest = (0..n_rows).map(per_row).max().unwrap_or(1);
+    let gridlike = n_rows >= 2 && (0..n_rows).filter(|r| per_row(*r) >= 2).count() >= 2;
+    let mode = mode.unwrap_or(if n_rows == 1 {
+        LayoutMode::Horizontal
+    } else if n_cols == 1 {
+        LayoutMode::Vertical
+    } else if gridlike {
+        LayoutMode::Grid
+    } else {
+        let span = |lo: fn(&Rect) -> f64, hi: fn(&Rect) -> f64| {
+            boxes.iter().map(hi).fold(f64::MIN, f64::max) - boxes.iter().map(lo).fold(f64::MAX, f64::min)
+        };
+        if span(|b| b.y0, |b| b.y1) > span(|b| b.x0, |b| b.x1) { LayoutMode::Vertical } else { LayoutMode::Horizontal }
+    });
     let all = boxes.iter().copied().reduce(|a, b| a.union(b)).unwrap_or_default();
-    let pad = [all.y0.max(0.0), (f.width - all.x1).max(0.0), (f.height - all.y1).max(0.0), all.x0.max(0.0)].map(f64::round);
-    AutoLayout { mode: if vertical { LayoutMode::Vertical } else { LayoutMode::Horizontal }, gap, padding: pad, ..Default::default() }
+    let padding = [all.y0.max(0.0), (f.width - all.x1).max(0.0), (f.height - all.y1).max(0.0), all.x0.max(0.0)].map(f64::round);
+    let one = vec![0; boxes.len()];
+    let mut al = AutoLayout { mode, padding, ..Default::default() };
+    match mode {
+        LayoutMode::Grid => {
+            al.gap = average_gap(&boxes, &rows, true).unwrap_or(10.0);
+            al.cross_gap = band_gap(&boxes, &rows, true).unwrap_or(10.0);
+            al.grid_columns = u32::try_from(widest.max(1)).unwrap_or(1);
+            al.grid_rows = u32::try_from(n_rows.max(1)).unwrap_or(1);
+        }
+        LayoutMode::Vertical => al.gap = average_gap(&boxes, &one, false).map_or(10.0, |g| g.max(0.0)),
+        _ => al.gap = average_gap(&boxes, &one, true).map_or(10.0, |g| g.max(0.0)),
+    }
+    al
 }
 
-/// Sort unmasked spans by position along the layout axis. Masks stay at their original indices;
-/// each visible mask's following content keeps its paint order until the next mask, hidden or not.
-fn sort_layout_children(doc: &Document, kids: &mut [NodeId], vertical: bool) {
+/// Sort unmasked spans into the order the flow takes them: rows top to bottom and left to right
+/// within a row (horizontal and grid), or columns left to right and top to bottom (vertical).
+/// Masks stay at their original indices; each visible mask's following content keeps its paint
+/// order until the next mask, hidden or not.
+fn sort_layout_children(doc: &Document, kids: &mut [NodeId], mode: LayoutMode) {
+    let vertical = mode == LayoutMode::Vertical;
     let mut start = 0;
     let mut masked = false;
     for end in 0..=kids.len() {
@@ -670,11 +758,17 @@ fn sort_layout_children(doc: &Document, kids: &mut [NodeId], vertical: bool) {
             continue;
         }
         if !masked && let Some(span) = kids.get_mut(start..end) {
-            span.sort_by(|a, b| {
-                let pa = doc.node(*a).map(|n| figcraft_geom::transform_rect_bbox(n.transform, n.local_rect())).unwrap_or_default();
-                let pb = doc.node(*b).map(|n| figcraft_geom::transform_rect_bbox(n.transform, n.local_rect())).unwrap_or_default();
-                if vertical { pa.y0.total_cmp(&pb.y0) } else { pa.x0.total_cmp(&pb.x0) }
-            });
+            let boxes: Vec<Rect> = span
+                .iter()
+                .map(|id| doc.node(*id).map(|n| figcraft_geom::transform_rect_bbox(n.transform, n.local_rect())).unwrap_or_default())
+                .collect();
+            let band = bands(&boxes, !vertical);
+            let mut keyed: Vec<(usize, f64, f64, NodeId)> =
+                span.iter().zip(&boxes).zip(&band).map(|((id, b), k)| if vertical { (*k, b.y0, b.x0, *id) } else { (*k, b.x0, b.y0, *id) }).collect();
+            keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.total_cmp(&b.2)));
+            for (slot, k) in span.iter_mut().zip(keyed) {
+                *slot = k.3;
+            }
         }
         start = end + 1;
         masked = mask.is_some_and(|n| n.visible);
@@ -707,17 +801,15 @@ fn layout_add(s: &mut Session, p: &Value) -> Result<Value> {
         vec![fid]
     };
     let doc = s.doc_mut()?;
+    let asked = dir.map(|d| match d.to_ascii_lowercase().as_str() {
+        "vertical" | "column" => LayoutMode::Vertical,
+        "grid" => LayoutMode::Grid,
+        _ => LayoutMode::Horizontal,
+    });
     for f in &targets {
-        let mut al = infer_layout(doc, *f);
-        if let Some(d) = &dir {
-            al.mode = match d.to_ascii_lowercase().as_str() {
-                "vertical" | "column" => LayoutMode::Vertical,
-                "grid" => LayoutMode::Grid,
-                _ => LayoutMode::Horizontal,
-            };
-        }
+        let al = infer_layout(doc, *f, asked);
         let mut kids = doc.get(*f)?.children.clone();
-        sort_layout_children(doc, &mut kids, al.mode == LayoutMode::Vertical);
+        sort_layout_children(doc, &mut kids, al.mode);
         let empty = doc.node(*f).is_some_and(|n| n.children.iter().filter_map(|c| doc.node(*c)).all(|c| !c.visible || c.child_layout.absolute));
         let n = doc.get_mut(*f)?;
         n.children = kids;
