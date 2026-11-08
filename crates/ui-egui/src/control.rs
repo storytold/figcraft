@@ -989,6 +989,16 @@ fn pad_name(v: &Value) -> Option<&'static str> {
     GAMEPAD_BUTTONS.iter().copied().find(|b| b.eq_ignore_ascii_case(s) || b.get(8..).is_some_and(|short| short.eq_ignore_ascii_case(s)))
 }
 
+/// The modifiers an input event names, as the keyboard of the platform whose keys apply sends
+/// them: `cmd` is Cmd on macOS and Ctrl elsewhere; on macOS `ctrl` is the separate Control key.
+fn input_modifiers(e: &Value) -> egui::Modifiers {
+    let (cmd, ctrl, alt, shift) = (b(e, "cmd"), b(e, "ctrl"), b(e, "alt"), b(e, "shift"));
+    match crate::shortcuts::platform() {
+        figcraft_engine::keymap::Platform::Mac => egui::Modifiers { alt, ctrl, shift, mac_cmd: cmd, command: cmd },
+        figcraft_engine::keymap::Platform::Other => egui::Modifiers { alt, ctrl: cmd || ctrl, shift, mac_cmd: false, command: cmd || ctrl },
+    }
+}
+
 fn b(p: &Value, k: &str) -> bool {
     p.get(k).and_then(Value::as_bool).unwrap_or(false)
 }
@@ -1086,8 +1096,7 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
     for e in list.iter().take(256) {
         let button =
             if e.get("button").and_then(Value::as_str) == Some("secondary") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
-        let command = b(e, "cmd") || b(e, "ctrl");
-        let mods = egui::Modifiers { alt: b(e, "alt"), ctrl: command, shift: b(e, "shift"), mac_cmd: false, command };
+        let mods = input_modifiers(e);
         if let Some(p) = e.get("move").and_then(pos) {
             events.push(egui::Event::PointerMoved(p));
         } else if let Some((p, pressed)) = e.get("down").and_then(pos).map(|p| (p, true)).or_else(|| e.get("up").and_then(pos).map(|p| (p, false))) {
@@ -1115,14 +1124,7 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
         } else if b(e, "leave") {
             events.push(egui::Event::PointerGone);
         } else if let Some(h) = e.get("hold") {
-            let held = egui::Modifiers {
-                alt: b(h, "alt"),
-                ctrl: b(h, "cmd") || b(h, "ctrl"),
-                shift: b(h, "shift"),
-                mac_cmd: false,
-                command: b(h, "cmd") || b(h, "ctrl"),
-            };
-            events.push(egui::Event::ModifiersChanged(held));
+            events.push(egui::Event::ModifiersChanged(input_modifiers(h)));
         } else {
             return Err(format!("unknown input event {e}"));
         }

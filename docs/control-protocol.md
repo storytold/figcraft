@@ -329,7 +329,8 @@ keys down for the frames that follow, e.g. Alt while dragging a component from t
 an instance to swap it; all false releases them) and `{gamepad: "A" | "Gamepad A" | 0}` (a
 controller button pressed in the prototype playing, the presenter's or else the preview pane's: a
 short name, a key/gamepad trigger's name or a standard layout index 0–16; an error when no prototype
-plays); positions are window points. Events of one call
+plays); positions are window points; `cmd` is Cmd on macOS and Ctrl elsewhere, and on macOS `ctrl`
+is the separate Control key, as for `ui.key`. Events of one call
 arrive in the same frame, so send a press and its release (or a double-click's two clicks) as
 separate calls. Returns `{queued}`.
 
