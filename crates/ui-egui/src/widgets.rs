@@ -119,7 +119,7 @@ fn key_steps(ctx: &egui::Context, suffix: &str, step: f64) -> (f64, f64) {
 pub const SCRUB_STEPS_PER_POINT: f64 = 0.5;
 
 /// How far a scrub of `dx` points moves a value whose field steps by `step`: half a step a point
-/// ([`SCRUB_STEPS_PER_POINT`]), ten times that with Shift, a tenth with Alt (fine).
+/// ([`SCRUB_STEPS_PER_POINT`]), ten times that with Shift (5 steps a point), a tenth of that with Alt (0.05 steps a point, fine).
 pub fn scrub_amount(dx: f64, step: f64, shift: bool, alt: bool) -> f64 {
     dx * step
         * SCRUB_STEPS_PER_POINT
