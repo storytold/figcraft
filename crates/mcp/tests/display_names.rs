@@ -116,21 +116,21 @@ fn literals(source: &str) -> Vec<String> {
     out
 }
 
-fn check_tree(path: &Path, failures: &mut Vec<String>) {
+fn check_tree(path: &Path, failures: &mut Vec<String>) -> std::io::Result<()> {
     if path.is_dir() {
-        for entry in std::fs::read_dir(path).expect("source directory") {
-            let path = entry.expect("source entry").path();
+        for entry in std::fs::read_dir(path)? {
+            let path = entry?.path();
             if path.file_name().is_some_and(|name| name == "tests") {
                 continue;
             }
-            check_tree(&path, failures);
+            check_tree(&path, failures)?;
         }
     } else if path.extension().is_some_and(|ext| ext == "rs") {
-        let name = path.file_name().expect("source filename").to_string_lossy();
+        let name = path.file_name().ok_or_else(|| std::io::Error::other("source filename missing"))?.to_string_lossy();
         if name == "tests.rs" || name.ends_with("_tests.rs") {
-            return;
+            return Ok(());
         }
-        let source = std::fs::read_to_string(path).expect("UTF-8 Rust source");
+        let source = std::fs::read_to_string(path)?;
         // Skip only inline test modules, not later production following test-only imports.
         for text in literals(&source) {
             if banned_display(&text) {
@@ -138,18 +138,20 @@ fn check_tree(path: &Path, failures: &mut Vec<String>) {
             }
         }
     }
+    Ok(())
 }
 
 #[test]
-fn production_display_names_stay_neutral() {
+fn production_display_names_stay_neutral() -> std::io::Result<()> {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut failures = Vec::new();
     for root in ROOTS {
         let root = base.join(root);
         assert!(root.exists(), "missing display source: {}", root.display());
-        check_tree(&root, &mut failures);
+        check_tree(&root, &mut failures)?;
     }
     assert!(failures.is_empty(), "Banned display names:\n{}", failures.join("\n"));
+    Ok(())
 }
 
 #[test]
@@ -175,4 +177,11 @@ fn guard_scans_production_after_test_only_items() {
     "###;
     assert_eq!(literals(source), ["live label"]);
     assert_eq!(literals("#[cfg(test)] mod tests; fn live() { let _ = \"live label\"; }"), ["live label"]);
+}
+
+#[test]
+fn source_read_failures_are_reported() {
+    // A file cannot be traversed as a directory. A failed scan must fail, not silently pass.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/display_names.rs/not-a-directory.rs");
+    assert!(check_tree(&path, &mut Vec::new()).is_err());
 }
