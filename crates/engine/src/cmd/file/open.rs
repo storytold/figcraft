@@ -31,7 +31,10 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
             Some(path)
         }
         (None, Some(i)) => {
-            Some(s.prefs.recent_files.iter().filter(|r| listed(r)).nth(i.max(0.0) as usize).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?)
+            if !(i >= 0.0 && i.fract() == 0.0) {
+                return Err(bad(CMD, "no such recent file"));
+            }
+            Some(s.prefs.recent_files.iter().filter(|r| listed(r)).nth(i as usize).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?)
         }
         _ => None,
     };
