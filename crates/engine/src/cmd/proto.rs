@@ -433,13 +433,40 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     it.delay_ms = delay(cmd, p)?.unwrap_or(0);
     settle(&mut it);
     check_dests(cmd, s, &it)?;
+    let targets = req_targets(cmd, s, p)?;
+    let first_start = first_flow_start(s, &targets, &it)?;
     let mut index = 0;
-    for i in req_targets(cmd, s, p)? {
+    for i in targets {
         let n = s.doc_mut()?.get_mut(i)?;
         n.interactions.push(it.clone());
         index = n.interactions.len() - 1;
     }
+    if let Some(start) = first_start {
+        let page = s.page()?;
+        if let NodeKind::Page { flows, .. } = &mut s.doc_mut()?.get_mut(page)?.kind {
+            flows.push(Flow { name: "Flow 1".into(), start, description: String::new() });
+        }
+    }
     Ok(json!({"index": index}))
+}
+
+/// The frame a page's first connection starts a flow at: "When you add a connection between two
+/// frames with no existing connections, Figma will create a starting point on the top-level frame
+/// where the connection started." Only on a page with no flows and no connections yet, and only
+/// for a connection from one top-level frame to another.
+fn first_flow_start(s: &Session, targets: &[NodeId], it: &Interaction) -> Result<Option<NodeId>> {
+    let page = s.page()?;
+    let doc = s.doc()?;
+    let NodeKind::Page { flows, .. } = &doc.get(page)?.kind else { return Ok(None) };
+    if !flows.is_empty() || doc.subtree(page).iter().filter_map(|n| doc.node(*n)).any(|n| !n.interactions.is_empty()) {
+        return Ok(None);
+    }
+    let Some(from) = targets.first().and_then(|t| doc.top_level_frame(*t)) else { return Ok(None) };
+    let to = it.actions.iter().find_map(|a| match a {
+        Action::Navigate { dest, .. } => doc.top_level_frame(*dest),
+        _ => None,
+    });
+    Ok(to.filter(|to| *to != from).map(|_| from))
 }
 
 fn set(s: &mut Session, p: &Value) -> Result<Value> {

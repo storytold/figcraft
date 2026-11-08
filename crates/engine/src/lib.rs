@@ -504,6 +504,8 @@ mod prop_order_tests;
 #[cfg(test)]
 mod property_copy_tests;
 #[cfg(test)]
+mod proto_audit_tests;
+#[cfg(test)]
 mod proto_behaviour_tests;
 #[cfg(test)]
 mod proto_conditional_tests;
