@@ -1,6 +1,6 @@
 use super::layer::own_text;
 use super::text::char_styles;
-use super::{BTreeMap, BTreeSet, Kv, MAX_DEPTH, Mapper, Obj, Rc, Value, View, guid, json};
+use super::{BTreeMap, BTreeSet, Kv, MAX_DEPTH, MAX_SCALE_FACTOR, MIN_SCALE_FACTOR, Mapper, Obj, Rc, Value, View, guid, json};
 
 /// An override row names a layer of the main by its current GUID or by the `overrideKey` the
 /// layer had when the row was written: the key becomes the current GUID, unless the layer is
@@ -41,6 +41,10 @@ pub(super) struct OverrideRow<'a> {
     level: usize,
     /// Position among the rows of the instance that wrote it; later rows win.
     ordinal: usize,
+    /// The factor the row's lengths take: 1 for the rows of an instance in the document, the
+    /// factor of the layer of the enclosing main that holds the rows for a nested instance's own
+    /// (they are written in that main's space, #2091).
+    pub(super) scale: f64,
 }
 
 /// The nested level an override row restates: its `overrideLevel`, capped; 0 when it has none.
@@ -84,13 +88,19 @@ pub(super) struct Inst<'a> {
     pub(super) root: String,
     pub(super) path: Vec<String>,
     pub(super) overrides: Rc<Overrides<'a>>,
-    props: Rc<Chain<&'a Kv<'a>>>,
+    /// Property values with the factor their lengths take (the layer of the writing instance's
+    /// node that holds the assignment, as for override rows).
+    props: Rc<Chain<(&'a Kv<'a>, f64)>>,
     /// Slot property GUID → private slot-content node GUID.
     pub(super) slot_contents: Rc<Chain<String>>,
     /// Layers imported from a slot's independent content subtree.
     pub(super) slot_content: bool,
     /// Mains being expanded (an instance inside its own main stops there).
     symbols: Vec<String>,
+    /// The factor the lengths of the expanded layers take: the instance's `uniformScaleFactor`
+    /// times those of the instances around it (#2091). Override and derived rows are already at
+    /// the instance's scale and take none.
+    pub(super) scale: f64,
 }
 
 impl<'a> Mapper<'a> {
@@ -260,7 +270,7 @@ impl<'a> Mapper<'a> {
             {
                 refs.insert(field.into(), json!(name));
             }
-            let Some(val) = inst.and_then(|i| i.props.get(&self.prop_root(&def))) else { continue };
+            let Some(&(val, val_scale)) = inst.and_then(|i| i.props.get(&self.prop_root(&def))) else { continue };
             match field {
                 "visible" => {
                     if let Some(b) = val.get("boolValue").and_then(Kv::bool) {
@@ -278,7 +288,7 @@ impl<'a> Mapper<'a> {
                             o.remove("_figLineStarts");
                             if let Some(tv) = prop_text_data(val) {
                                 let size = o.get("style").and_then(|s| s.get("fontSize")).and_then(Value::as_f64);
-                                char_styles(o, tv, size, &mut |w| self.warn(w));
+                                char_styles(o, tv, val_scale, size, &mut |w| self.warn(w));
                             }
                         }
                     }
@@ -298,7 +308,7 @@ impl<'a> Mapper<'a> {
         // An instance swap property value picks the main.
         if let Some(i) = outer
             && let Some(def) = prop_ref(v, "OVERRIDDEN_SYMBOL_ID")
-            && let Some(g) = i.props.get(&self.prop_root(&def)).and_then(|p| prop_guid(p))
+            && let Some(g) = i.props.get(&self.prop_root(&def)).and_then(|(p, _)| prop_guid(p))
         {
             sym = Some(g);
         }
@@ -353,17 +363,25 @@ impl<'a> Mapper<'a> {
         }
         // A nested instance's derived layout is for the size it has in its main: resized here, the
         // sizes and places in it no longer hold and its layers follow their constraints instead.
-        let differs = |a: f64, b: f64| (a - b).abs() > 1e-6 * a.abs().max(b.abs()).max(1.0);
+        // A scaled size is the factor's product, rounded to a float: a looser match.
+        let tolerance = if outer.is_some_and(|i| i.scale != 1.0) { 1e-4 } else { 1e-6 };
+        let differs = |a: f64, b: f64| (a - b).abs() > tolerance * a.abs().max(b.abs()).max(1.0);
+        let outer_scale = outer.map_or(1.0, |i| i.scale);
         let resized = outer.is_some()
-            && match (self.nodes.get(id).and_then(|b| View::of(b).size()), v.size()) {
+            && match (self.nodes.get(id).and_then(|b| View::of_scaled(b, outer_scale).size()), v.size()) {
                 (Some(a), Some(b)) => differs(a.0, b.0) || differs(a.1, b.1),
                 (a, b) => a.is_some() != b.is_some(),
             };
         let mut local: Overrides<'a> = BTreeMap::new();
-        let lists = [sd.and_then(|s| s.get("symbolOverrides")).map(Kv::list).unwrap_or_default(), v.list("derivedSymbolData")];
+        // The lists are at the scale of the layer of this node that holds them.
+        let scale_of = |k: &str| v.find(k).map_or(1.0, |f| f.1);
+        let lists = [
+            (sd.and_then(|s| s.get("symbolOverrides")).map(Kv::list).unwrap_or_default(), scale_of("symbolData")),
+            (v.list("derivedSymbolData"), scale_of("derivedSymbolData")),
+        ];
         let source_depth = outer.map_or(0, |i| i.symbols.len());
         let mut ordinal = 0;
-        for (layer, list) in lists.into_iter().enumerate() {
+        for (layer, (list, row_scale)) in lists.into_iter().enumerate() {
             for ov in list {
                 let row_ordinal = ordinal;
                 ordinal += 1;
@@ -385,6 +403,7 @@ impl<'a> Mapper<'a> {
                     source_depth,
                     level: override_level(ov),
                     ordinal: row_ordinal,
+                    scale: row_scale,
                 });
             }
         }
@@ -398,11 +417,12 @@ impl<'a> Mapper<'a> {
             rows.sort_by_key(|row| (std::cmp::Reverse(row.source_depth + row.level), std::cmp::Reverse(row.source_depth), row.ordinal));
         }
         // This instance's own property values and slot contents; the outer instances' win.
-        let mut all_props: BTreeMap<String, &'a Kv<'a>> = BTreeMap::new();
+        let assignment_scale = v.find("componentPropAssignments").map_or(1.0, |f| f.1);
+        let mut all_props: BTreeMap<String, (&'a Kv<'a>, f64)> = BTreeMap::new();
         let mut slot_contents: BTreeMap<String, String> = BTreeMap::new();
         for a in assignments {
             if let (Some(d), Some(val)) = (a.get("defID").and_then(guid), assigned(a)) {
-                all_props.entry(self.prop_root(&d)).or_insert(val);
+                all_props.entry(self.prop_root(&d)).or_insert((val, assignment_scale));
             }
             let Some(def) = a.get("defID").and_then(guid) else { continue };
             if self.prop_def(&def).is_none_or(|(_, ty)| *ty != "SLOT") {
@@ -431,6 +451,13 @@ impl<'a> Mapper<'a> {
         let mut symbols = outer.map(|i| i.symbols.clone()).unwrap_or_default();
         symbols.push(sym.clone());
         let root = outer.map_or_else(|| rest_id.to_string(), |i| i.root.clone());
+        // The scale the Scale tool gave the instance; a junk factor changes nothing.
+        let factor = sd
+            .and_then(|s| s.get("uniformScaleFactor"))
+            .and_then(Kv::f64)
+            .filter(|k| (MIN_SCALE_FACTOR..=MAX_SCALE_FACTOR).contains(k))
+            .unwrap_or(1.0);
+        let scale = (outer_scale * factor).clamp(MIN_SCALE_FACTOR, MAX_SCALE_FACTOR);
         Some((
             Inst {
                 root,
@@ -440,6 +467,7 @@ impl<'a> Mapper<'a> {
                 slot_contents: Chain::over(outer.map(|i| &i.slot_contents), slot_contents),
                 slot_content: false,
                 symbols,
+                scale,
             },
             sym,
         ))
