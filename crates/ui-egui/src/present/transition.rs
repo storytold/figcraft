@@ -219,13 +219,15 @@ pub fn transition_frames(tr: Transition, t: f32) -> FramePlacement {
             let d = direction_vec(direction);
             FramePlacement { from_off: mul(d, t), to_off: mul(d, -(1.0 - t)), ..base }
         }
+        // "Slide will slowly offset the frame as it dissolves": the frame underneath fades as it
+        // shifts — the original going out under the new one, or the new one coming in under it.
         Transition::SlideIn { direction } => {
             let d = direction_vec(direction);
-            FramePlacement { from_off: mul(d, 0.3 * t), to_off: mul(d, -(1.0 - t)), ..base }
+            FramePlacement { from_off: mul(d, 0.3 * t), from_alpha: (1.0 - t).clamp(0.0, 1.0), to_off: mul(d, -(1.0 - t)), ..base }
         }
         Transition::SlideOut { direction } => {
             let d = direction_vec(direction);
-            FramePlacement { from_off: mul(d, t), to_off: mul(d, -0.3 * (1.0 - t)), from_on_top: true, ..base }
+            FramePlacement { from_off: mul(d, t), to_off: mul(d, -0.3 * (1.0 - t)), to_alpha: t.clamp(0.0, 1.0), from_on_top: true, ..base }
         }
     }
 }

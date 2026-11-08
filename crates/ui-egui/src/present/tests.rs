@@ -404,6 +404,11 @@ fn transitions_move_the_right_way() {
     assert_eq!(transition_frames(Transition::Instant, 0.0).from_alpha, 0.0);
     let r = Transition::SlideIn { direction: Direction::Bottom }.reversed();
     assert_eq!(r, Transition::SlideOut { direction: Direction::Top });
+    // "Slide will slowly offset the frame as it dissolves": the frame underneath fades.
+    let slide = transition_frames(Transition::SlideIn { direction: Direction::Left }, 0.25);
+    assert_eq!((slide.from_off, slide.from_alpha, slide.to_alpha), ((-0.075, 0.0), 0.75, 1.0));
+    let slide = transition_frames(Transition::SlideOut { direction: Direction::Left }, 0.25);
+    assert_eq!((slide.from_alpha, slide.to_alpha, slide.from_on_top), (1.0, 0.25, true));
 }
 
 #[test]
