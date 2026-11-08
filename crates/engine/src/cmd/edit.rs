@@ -17,6 +17,9 @@ mod clipboard;
 mod props;
 pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;
+mod vector_clipboard;
+#[cfg(test)]
+mod vector_clipboard_tests;
 
 pub(crate) use clipboard::apply_copied_props;
 pub use clipboard::{CLIP_CLOSE, CLIP_OPEN, copy_to_clipboard, design_clipboard_buffer, paste_into};
@@ -117,12 +120,24 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             duplicate
         ),
-        spec!("edit.copy", "Copy", "{ids?}", false, copy),
-        spec!("edit.cut", "Cut", "{ids?}", true, cut),
+        spec!(
+            "edit.copy",
+            "Copy",
+            "{ids?}  in vector edit mode with points or segments selected (and no ids): just those, the segments touching a selected point, as a new vector with the edited layer's look",
+            false,
+            copy
+        ),
+        spec!(
+            "edit.cut",
+            "Cut",
+            "{ids?}  in vector edit mode with points or segments selected (and no ids): copies them as Copy does, then removes them as Delete does; the path splits in the same layer and edit mode stays on",
+            true,
+            cut
+        ),
         spec!(
             "edit.paste",
             "Paste",
-            "{parent?, x?, y? (page coordinates of the pasted top-left)}  a copied main component pastes as an instance of it within its file (cut ones, and pastes into other files, keep the component)",
+            "{parent?, x?, y? (page coordinates of the pasted top-left)}  in vector edit mode (and no parent): the copied vectors' segments and shapes' outlines join the edited vector's network in place, selected, and the layers that have no outline (text, frames, groups) are skipped (`skipped`); a copied main component pastes as an instance of it within its file (cut ones, and pastes into other files, keep the component)",
             true,
             paste
         ),
