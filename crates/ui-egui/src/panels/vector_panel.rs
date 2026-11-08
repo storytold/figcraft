@@ -88,8 +88,9 @@ pub fn points(app: &mut FigApp, ui: &mut Ui, doc: &Document, ve: &VectorEdit) {
         return;
     }
     let col = widgets::col_width(ui.available_width());
-    // Figma puts alignment first; one point is a no-op there too.
-    let count: usize = ve.parts().iter().map(|p| p.vertices.len()).sum::<usize>().max(pts.len());
+    // Figma puts alignment first; one point is a no-op there too. The count is the engine's, so
+    // selected segments' ends in any edited layer count as the commands do.
+    let count = vectoredit::transform::edit_point_count(doc, ve);
     crate::right::align_row(app, ui, crate::right::AlignTarget::Points(count), true, col);
     let pos = vectoredit::selection_position(doc, ve);
     let round = |v: f64| (v * 100.0).round() / 100.0;

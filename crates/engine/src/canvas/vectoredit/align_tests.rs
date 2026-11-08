@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use super::tests::{ex, net, pt};
+use super::tests::{ex, net, pt, ve};
 use super::*;
 
 /// The measured path: points at (330, 480), (480, 430), (560, 560), (380, 620), in edit mode.
@@ -125,4 +125,20 @@ fn ids_in_edit_mode_still_align_layers() {
     ex(&mut s, "align.left", json!({"ids": [a, b]}));
     let x = |id| s.doc().unwrap().world_bounds(id).unwrap().x0;
     assert!((x(a) - x(b)).abs() < 1e-6, "layers aligned");
+}
+
+#[test]
+fn a_segment_selected_in_another_edited_layer_counts_both_its_ends() {
+    // `a`'s segment (two ends) and `b`'s first point: three points, so the panel offers
+    // Distribute and the command spaces all three.
+    let mut s = Session::new();
+    let mut line = |p: serde_json::Value| crate::params::id_of(&ex(&mut s, "vector.create", json!({"points": p, "closed": false}))["id"]).unwrap();
+    let (a, b) = (line(json!([[0, 0], [100, 50]])), line(json!([[300, 200], [400, 260]])));
+    ex(&mut s, "vector.edit.begin", json!({"ids": [a, b]}));
+    ex(&mut s, "vector.edit.select", json!({"id": a, "segments": [0]}));
+    ex(&mut s, "vector.edit.select", json!({"id": b, "vertices": [0], "add": true}));
+    assert_eq!(transform::edit_point_count(s.doc().unwrap(), &ve(&s)), 3);
+    ex(&mut s, "distribute.horizontal", json!({}));
+    let xs: Vec<f64> = page(&s, a).iter().chain(page(&s, b).first()).map(|p| p.x).collect();
+    assert!(xs.iter().zip([0.0, 150.0, 300.0]).all(|(x, w)| (x - w).abs() < 1e-6), "{xs:?}");
 }

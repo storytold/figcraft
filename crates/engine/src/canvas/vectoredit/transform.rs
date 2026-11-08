@@ -201,6 +201,12 @@ fn edit_box(doc: &Document, ve: &VectorEdit) -> Option<PointBox> {
     b.filter(|b| b.point_count() > 0)
 }
 
+/// How many points align and distribute act on: the selected points and selected segments' ends
+/// of every edited layer.
+pub fn edit_point_count(doc: &Document, ve: &VectorEdit) -> usize {
+    edit_box(doc, ve).map_or(0, |b| b.point_count())
+}
+
 /// Move each point by its own page delta, one vertex at a time (handles go with their vertex).
 fn move_each(doc: &mut Document, moves: &[(NodeId, usize, Point)]) -> Result<()> {
     for (l, v, d) in moves {
