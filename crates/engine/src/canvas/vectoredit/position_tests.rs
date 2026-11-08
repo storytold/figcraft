@@ -19,6 +19,10 @@ fn parent_xy(s: &Session) -> Vec<(f64, f64)> {
     selected_parent_points(s.doc().unwrap(), &ve).iter().map(|p| (p.x, p.y)).collect()
 }
 
+fn undo_steps(s: &Session) -> usize {
+    s.ds().unwrap().history.undo.len()
+}
+
 fn near(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-6
 }
@@ -132,6 +136,7 @@ fn junk_is_refused_and_changes_nothing() {
     let id = rect(&mut s);
     let before = xs(&s, id);
     ex(&mut s, "vector.edit.select", json!({"vertices": [0, 1]}));
+    let steps = undo_steps(&s);
     for junk in [
         json!({"x": {"div": 0}}),
         json!({"x": {"pow": 2}}),
@@ -140,9 +145,27 @@ fn junk_is_refused_and_changes_nothing() {
         json!({"y": {"add": "x"}}),
         json!({"x": {}}),
         json!({"x": [1]}),
+        json!({"x": true}),
+        json!({"x": {"add": true}}),
+        // A valid x with a refused y changes neither.
+        json!({"x": 5, "y": {"div": 0}}),
+        // Point 1's x of 100 overflows; point 0's 0 alone would not.
         json!({"x": {"mul": 1e308}}),
     ] {
         assert!(s.execute("vector.edit.position", &junk).is_err(), "{junk}");
     }
     assert_eq!(xs(&s, id), before);
+    assert_eq!(undo_steps(&s), steps, "a refused edit leaves no undo step");
+}
+
+#[test]
+fn nothing_selected_is_refused() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    ex(&mut s, "vector.edit.select", json!({"vertices": []}));
+    let (before, steps) = (xs(&s, id), undo_steps(&s));
+    assert!(parent_xy(&s).is_empty());
+    let err = s.execute("vector.edit.position", &json!({"x": 5})).unwrap_err();
+    assert!(err.to_string().contains("select points"), "{err}");
+    assert_eq!((xs(&s, id), undo_steps(&s)), (before, steps));
 }

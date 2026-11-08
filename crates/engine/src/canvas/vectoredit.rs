@@ -762,7 +762,7 @@ pub fn selected_parent_points(doc: &Document, ve: &VectorEdit) -> Vec<Point> {
     selected_points(net, ve).into_iter().filter_map(|v| net.vertices.get(v)).map(|v| t * v.point()).collect()
 }
 
-/// Selection bounds' top-left in the parent's coordinates (what the X/Y fields show).
+/// Selection bounds' top-left in the parent's coordinates (the `x` and `y` of `vector.edit.bounds`).
 pub fn selection_position(doc: &Document, ve: &VectorEdit) -> Option<Point> {
     let net = network(doc, ve.id)?;
     let t = doc.node(ve.id)?.transform;
@@ -1017,18 +1017,19 @@ pub fn specs() -> Vec<CommandSpec> {
                 if moves.is_empty() {
                     return Err(bad("vector.edit.position", "select points"));
                 }
-                // Points with the same offset move together, so moving every point by one offset
-                // still carries the regions' paint frames, as a drag of all of them does.
-                let mut groups: Vec<(Vec2, Vec<usize>)> = Vec::new();
-                for (i, d) in moves {
-                    match groups.iter_mut().find(|(g, _)| (*g - d).hypot() < 1e-9) {
-                        Some((_, v)) => v.push(i),
-                        None => groups.push((d, vec![i])),
-                    }
-                }
+                // Points that all share one offset move as one, so moving every point of a layer
+                // by one offset still carries the regions' paint frames, as a drag of all of them
+                // does. Otherwise no one move covers every point, so each point moves alone.
+                let d0 = moves[0].1;
+                let uniform = moves.iter().all(|(_, d)| (*d - d0).hypot() < 1e-9);
                 edit(s.doc_mut()?, ve.id, |net| {
-                    for (d, v) in &groups {
-                        ops::move_vertices(net, v, *d);
+                    if uniform {
+                        let all: Vec<usize> = moves.iter().map(|(i, _)| *i).collect();
+                        ops::move_vertices(net, &all, d0);
+                    } else {
+                        for (i, d) in &moves {
+                            ops::move_vertices(net, &[*i], *d);
+                        }
                     }
                 })?;
                 Ok(json!({"ok": true}))

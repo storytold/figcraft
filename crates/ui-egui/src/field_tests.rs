@@ -234,7 +234,7 @@ fn geom(u: &Ui, n: NodeId) -> (f64, f64, f64, f64) {
     (b.x0, b.y0, b.width(), b.height())
 }
 
-fn undo_steps(u: &Ui) -> usize {
+pub(crate) fn undo_steps(u: &Ui) -> usize {
     u.app.session.ds().unwrap().history.undo.len()
 }
 
@@ -261,7 +261,7 @@ pub(crate) fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
 }
 
 /// Scrub field `name` by its label: `dx` points with `modifiers` held, then let go.
-fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
+pub(crate) fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
     let from = label(u, name);
     drag(u, from, dx, modifiers);
 }
