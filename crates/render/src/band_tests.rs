@@ -61,9 +61,10 @@ fn view(scale: f64) -> View {
 /// it runs level, as at the top of an ellipse), not a band artifact.
 const NOISE: u8 = 24;
 
-/// One row of two renders: the mean channel difference over the pixels that are not noise (see
-/// `NOISE`), and how many pixels differ by more than 2 at all. A band artifact differs along a
-/// whole row, by more than noise.
+/// One row of two renders: the channel differences of the pixels above noise (see `NOISE`) summed
+/// and divided by the whole row's channel count, so noise pixels add nothing but still count in
+/// the denominator; and how many pixels differ by more than 2 at all. A band artifact differs along
+/// a whole row, by more than noise.
 fn row_stats(x: &[u8], y: &[u8]) -> (f64, usize) {
     let mut sum = 0.0;
     let mut off = 0;
@@ -84,8 +85,8 @@ fn row_diffs(a: &Pixmap, b: &Pixmap) -> Vec<(f64, usize)> {
     a.data().chunks(row).zip(b.data().chunks(row)).map(|(x, y)| row_stats(x, y)).collect()
 }
 
-/// Whether a row passes: the original mean limit over non-noise pixels, and at most a twentieth
-/// of the row differing at all.
+/// Whether a row passes: the original 0.25 limit on the mean from `row_stats`, and at most a
+/// twentieth of the row differing at all.
 fn row_ok(mean: f64, off: usize, width: usize) -> bool {
     mean < 0.25 && off * 20 <= width
 }
@@ -94,10 +95,13 @@ fn row_ok(mean: f64, off: usize, width: usize) -> bool {
 fn a_real_band_artifact_fails_but_edge_noise_passes() {
     let width = 880; // scale 2
     let flat = vec![100u8; width * 4];
-    // 44 pixels differing by 60 per channel: under the old mean allowance, but a real artifact.
+    // 44 pixels whose colour channels differ by 60 (alpha unchanged): the mean is
+    // 44 * 3 * 60 / (880 * 4) = 2.25, which the earlier `0.25 + 0.05 * off` allowance (2.45 here)
+    // let through; the count, 44, is within a twentieth of the row. A real artifact, so it fails
+    // on the mean now.
     let mut artifact = flat.clone();
     for px in artifact.chunks_mut(4).take(44) {
-        px.iter_mut().for_each(|c| *c += 60);
+        px.iter_mut().take(3).for_each(|c| *c += 60);
     }
     let (mean, off) = row_stats(&flat, &artifact);
     assert!(!row_ok(mean, off, width), "{mean} {off}");
