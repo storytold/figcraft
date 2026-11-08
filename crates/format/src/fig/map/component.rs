@@ -1,6 +1,6 @@
 use super::layer::own_text;
 use super::text::char_styles;
-use super::{BTreeMap, BTreeSet, Kv, MAX_DEPTH, Mapper, Obj, Rc, Value, View, guid, json};
+use super::{BTreeMap, BTreeSet, Kv, MAX_DEPTH, MAX_SCALE_FACTOR, MIN_SCALE_FACTOR, Mapper, Obj, Rc, Value, View, guid, json};
 
 /// An override row names a layer of the main by its current GUID or by the `overrideKey` the
 /// layer had when the row was written: the key becomes the current GUID, unless the layer is
@@ -91,6 +91,10 @@ pub(super) struct Inst<'a> {
     pub(super) slot_content: bool,
     /// Mains being expanded (an instance inside its own main stops there).
     symbols: Vec<String>,
+    /// The factor the lengths of the expanded layers take: the instance's `uniformScaleFactor`
+    /// times those of the instances around it (#2091). Override and derived rows are already at
+    /// the instance's scale and take none.
+    pub(super) scale: f64,
 }
 
 impl<'a> Mapper<'a> {
@@ -278,7 +282,7 @@ impl<'a> Mapper<'a> {
                             o.remove("_figLineStarts");
                             if let Some(tv) = prop_text_data(val) {
                                 let size = o.get("style").and_then(|s| s.get("fontSize")).and_then(Value::as_f64);
-                                char_styles(o, tv, size, &mut |w| self.warn(w));
+                                char_styles(o, tv, 1.0, size, &mut |w| self.warn(w));
                             }
                         }
                     }
@@ -353,9 +357,12 @@ impl<'a> Mapper<'a> {
         }
         // A nested instance's derived layout is for the size it has in its main: resized here, the
         // sizes and places in it no longer hold and its layers follow their constraints instead.
-        let differs = |a: f64, b: f64| (a - b).abs() > 1e-6 * a.abs().max(b.abs()).max(1.0);
+        // A scaled size is the factor's product, rounded to a float: a looser match.
+        let tolerance = if outer.is_some_and(|i| i.scale != 1.0) { 1e-4 } else { 1e-6 };
+        let differs = |a: f64, b: f64| (a - b).abs() > tolerance * a.abs().max(b.abs()).max(1.0);
+        let outer_scale = outer.map_or(1.0, |i| i.scale);
         let resized = outer.is_some()
-            && match (self.nodes.get(id).and_then(|b| View::of(b).size()), v.size()) {
+            && match (self.nodes.get(id).and_then(|b| View::of_scaled(b, outer_scale).size()), v.size()) {
                 (Some(a), Some(b)) => differs(a.0, b.0) || differs(a.1, b.1),
                 (a, b) => a.is_some() != b.is_some(),
             };
@@ -431,6 +438,13 @@ impl<'a> Mapper<'a> {
         let mut symbols = outer.map(|i| i.symbols.clone()).unwrap_or_default();
         symbols.push(sym.clone());
         let root = outer.map_or_else(|| rest_id.to_string(), |i| i.root.clone());
+        // The scale the Scale tool gave the instance; a junk factor changes nothing.
+        let factor = sd
+            .and_then(|s| s.get("uniformScaleFactor"))
+            .and_then(Kv::f64)
+            .filter(|k| (MIN_SCALE_FACTOR..=MAX_SCALE_FACTOR).contains(k))
+            .unwrap_or(1.0);
+        let scale = (outer_scale * factor).clamp(MIN_SCALE_FACTOR, MAX_SCALE_FACTOR);
         Some((
             Inst {
                 root,
@@ -440,6 +454,7 @@ impl<'a> Mapper<'a> {
                 slot_contents: Chain::over(outer.map(|i| &i.slot_contents), slot_contents),
                 slot_content: false,
                 symbols,
+                scale,
             },
             sym,
         ))

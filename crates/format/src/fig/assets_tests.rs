@@ -1035,3 +1035,19 @@ fn local_samples_keep_their_variables_and_styles() {
         assert_eq!(styles(&a), styles(&b), "{}", p.display());
     }
 }
+
+/// #2091 item 1, round trip: the Scale tool's result (radius 10 -> 15) must survive export and import.
+#[test]
+fn a_scaled_instance_keeps_its_radius_through_a_round_trip() {
+    let (mut doc, insts) = sized();
+    let main_box = doc.nodes().find(|n| n.name == "Box" && n.parent.is_some_and(|p| doc.node(p).unwrap().name == "Card")).unwrap().id;
+    doc.node_mut(main_box).unwrap().corners.radii = [10.0; 4];
+    let kid = doc.node(insts[2]).unwrap().children[0];
+    doc.node_mut(kid).unwrap().corners.radii = [15.0; 4];
+    let (bytes, _) = export(&doc, None).unwrap();
+    let (back, _) = import(&bytes, "x").unwrap();
+    let inst = back.nodes().find(|n| n.name == "Scaled").unwrap();
+    let b = inst.children.iter().map(|c| back.node(*c).unwrap()).find(|n| n.name == "Box").unwrap();
+    eprintln!("scaled box back: {}x{} radii {:?}", b.width, b.height, b.corners.radii);
+    assert_eq!(b.corners.radii, [15.0; 4]);
+}
