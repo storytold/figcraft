@@ -7,6 +7,7 @@
 use serde_json::{Value, json};
 
 use crate::Session;
+use crate::automation::params::id_of;
 use crate::components::tests::{chars, copy_of, ex, fill, healthy, idv, kids, node};
 use figcraft_doc::*;
 
@@ -999,4 +1000,36 @@ fn deleting_a_layer_inside_an_instance_hides_it_instead() {
     // The instance itself still goes away.
     s.execute("edit.delete", &json!({"ids": [k.inst]})).unwrap();
     assert!(s.doc().unwrap().node(k.inst).is_none());
+}
+
+/// Create multiple components (#2088): each selected layer becomes its own component in place,
+/// keeping its name and position; all stay selected and one undo reverts them all.
+#[test]
+fn create_multiple_components_keeps_names_and_places_and_is_one_undo_step() {
+    let mut s = Session::new();
+    let mut frames = Vec::new();
+    for (i, name) in ["Card", "Badge", "Tile"].into_iter().enumerate() {
+        let x = 150.0 * i as f64;
+        let v = s.execute("frame.create", &json!({"x": x, "y": 20, "width": 100, "height": 60})).unwrap();
+        let f = id_of(&v["id"]).unwrap();
+        s.execute("object.rename", &json!({"ids": [f], "name": name})).unwrap();
+        frames.push(f);
+    }
+    let before = undo_len(&s);
+    let out = s.execute("component.createMultiple", &json!({"ids": frames})).unwrap();
+    assert_eq!(undo_len(&s), before + 1, "one undo step");
+    let made: Vec<NodeId> = out["ids"].as_array().unwrap().iter().filter_map(id_of).collect();
+    assert_eq!(made.len(), 3);
+    assert_eq!(s.selection(), made, "all of them stay selected");
+    let doc = s.doc().unwrap();
+    for (i, (c, name)) in made.iter().zip(["Card", "Badge", "Tile"]).enumerate() {
+        let n = doc.node(*c).unwrap();
+        assert!(matches!(n.kind, NodeKind::Component { .. }), "{name} is a component");
+        assert_eq!(n.name, name);
+        let b = doc.world_bounds(*c).unwrap();
+        assert_eq!((b.x0, b.y0), (150.0 * i as f64, 20.0), "{name} stays in place");
+    }
+    s.undo().unwrap();
+    let doc = s.doc().unwrap();
+    assert!(frames.iter().all(|f| matches!(doc.node(*f).map(|n| &n.kind), Some(NodeKind::Frame))), "one undo restores the frames");
 }
