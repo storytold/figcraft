@@ -51,3 +51,19 @@ fn the_first_connection_starts_a_flow() {
     ex(&mut s, "proto.interaction.add", json!({"ids": [btn], "dest": a}));
     assert!(flows(&s).is_empty());
 }
+
+/// A connection whose destination was deleted stays editable: its trigger and animation can
+/// change (only a destination an edit brings in must exist).
+#[test]
+fn a_connection_to_a_deleted_frame_stays_editable() {
+    let mut s = Session::new();
+    let (_, b, btn) = screens(&mut s);
+    ex(&mut s, "proto.interaction.add", json!({"ids": [btn], "dest": b}));
+    ex(&mut s, "edit.delete", json!({"ids": [b]}));
+    ex(&mut s, "proto.interaction.set", json!({"ids": [btn], "index": 0, "durationMs": 500}));
+    assert_eq!(s.doc().unwrap().node(btn).unwrap().interactions[0].duration_ms, 500);
+    assert!(
+        s.execute("proto.interaction.set", &json!({"ids": [btn], "index": 0, "action": {"type": "navigate", "dest": 9999}})).is_err(),
+        "a new missing destination is still refused"
+    );
+}

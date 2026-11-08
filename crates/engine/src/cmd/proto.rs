@@ -488,6 +488,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let mut hit = false;
     for i in req_targets(cmd, s, p)? {
         let Some(cur) = s.doc()?.get(i)?.interactions.get(k).cloned() else { continue };
+        let had: Vec<NodeId> = figcraft_doc::proto::walk(&cur.actions).filter_map(|a| a.dest()).collect();
         let mut it = whole.clone().unwrap_or(cur);
         if let Some(t) = &trigger {
             it.trigger = t.clone();
@@ -517,7 +518,12 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         if it.actions.is_empty() {
             return Err(bad(cmd, "an interaction needs an action"));
         }
-        check_dests(cmd, s, &it)?;
+        // Only a destination this edit brings in must exist: one the connection already had may
+        // have been deleted since, and its trigger or animation stay editable.
+        let doc = s.doc()?;
+        if let Some(d) = figcraft_doc::proto::walk(&it.actions).filter_map(|a| a.dest()).find(|d| !doc.contains(*d) && !had.contains(d)) {
+            return Err(bad(cmd, format!("destination {d} doesn't exist")));
+        }
         if let Some(slot) = s.doc_mut()?.get_mut(i)?.interactions.get_mut(k) {
             *slot = it;
             hit = true;
