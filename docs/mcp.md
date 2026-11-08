@@ -255,8 +255,8 @@ Or in a project's `.mcp.json`:
   profile into the file's space: an embedded ICC profile (PNG, JPG, WebP, TIFF; RGB or grey), a PNG's
   `sRGB` / `gAMA` / `cHRM` chunks, else sRGB (also for CMYK or damaged profiles); `image.place` reports
   the profile's name as `imageProfile` (`null`: none usable, taken as sRGB). PNG exports are tagged (`sRGB` chunk, or a Display P3 ICC profile plus
-  `cICP`), JPG embeds the ICC profile for sRGB and for Display P3, WebP embeds it for Display P3 only (sRGB WebP is untagged), and SVG and PDF export Display P3 files
-  converted to sRGB (out-of-gamut colours clip). The app's canvas shows sRGB (P3 colours outside sRGB clip on screen):
+  `cICP`), JPG embeds the ICC profile for sRGB and for Display P3, WebP embeds it for Display P3 only (sRGB WebP is untagged), and SVG and RGB PDF export Display P3 files
+  converted to sRGB (out-of-gamut colours clip). PDF with `cmyk` converts them to sRGB the same way and then to DeviceCMYK. The app's canvas shows sRGB (P3 colours outside sRGB clip on screen):
   `view.proofSrgb {on?}` (View ▸ Soft-proof sRGB) stripes those pixels so `screenshot {window:
   true}` shows where they are (after the next canvas render), and the colour picker says Outside
   sRGB for such a colour.

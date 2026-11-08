@@ -372,7 +372,8 @@ pub fn export_file(doc: &Document, ids: &[NodeId], setting: &ExportSetting, scal
         && !setting.include_bounding_box
         && !ids.iter().any(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Slice)));
     match setting.format {
-        // SVG and PDF colours are sRGB: a Display P3 file exports converted (out-of-gamut colours clip).
+        // SVG and RGB PDF colors are sRGB: a Display P3 file exports converted (out-of-gamut colours clip).
+        // PDF with `cmyk` converts from those sRGB colors to DeviceCMYK.
         ExportFormat::Svg => {
             let opts = figcraft_svg::SvgOptions {
                 include_ids: setting.svg_id_attribute,
