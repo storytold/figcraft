@@ -24,7 +24,7 @@ use instance::{detach, make_slot, push_changes, remove_slot, reset_instance, res
 pub(crate) use instance::{swap_at, swap_instance};
 use props::{add_prop, bind_prop, delete_prop, edit_prop, set_props};
 pub(crate) use props::{apply_prop_bindings, check_prop_binding, describe_props};
-use variants::{add_variant, combine};
+use variants::{add_variant, combine, create_set};
 pub use variants::{can_add_variant, can_combine_variants};
 
 /// `component.hideWhenPublishing`: the leading `.` of the names of this file's components and
@@ -72,6 +72,13 @@ pub fn specs() -> Vec<CommandSpec> {
             s.set_selection(out.iter().filter_map(id_of).collect());
             Ok(json!({"ids": out}))
         }),
+        spec!(
+            "component.createSet",
+            "Create component set",
+            "{ids? (layers, not components, sets or instances)}  (each becomes a component, wrapped in place in a component set: variants \"Property 1=<name>\" left to right, 20 px around)",
+            true,
+            create_set
+        ),
         spec!(
             "component.combineVariants",
             "Combine as variants",

@@ -1,6 +1,6 @@
 use super::{
-    BTreeMap, BTreeSet, Document, EngineError, Node, NodeId, NodeKind, Result, Session, Value, bad, inside_instance, json, owning_instance,
-    req_targets, roots, set_name_from, string, targets, variant_name, variant_options, variant_props, variant_set, z_sorted,
+    BTreeMap, BTreeSet, Document, EngineError, Node, NodeId, NodeKind, Result, Session, Value, bad, create, id_of, inside_instance, json,
+    owning_instance, req_targets, roots, set_name_from, string, targets, variant_name, variant_options, variant_props, variant_set, z_sorted,
 };
 
 /// Wrap components in a new component set (named after the first) placed around them.
@@ -90,6 +90,57 @@ pub(super) fn combine(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let ids = z_sorted(doc, &ids);
     let set = make_variant_set(cmd, doc, &ids)?;
+    s.set_selection(vec![set]);
+    Ok(json!({"id": set}))
+}
+
+/// `component.createSet`: each target becomes a component (as `component.createMultiple` makes
+/// them) and all are wrapped in place in a component set, 20 px around, named as Figma names them:
+/// variants "Property 1=<layer name>" in left-to-right order (a name holding `=` is kept); layers
+/// that all share a name give a set of that name with "Property 1=Default" variants; otherwise the
+/// set is "Component N".
+pub(super) fn create_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "component.createSet";
+    let mut seen = BTreeSet::new();
+    let ids: Vec<NodeId> = req_targets(cmd, s, p)?.into_iter().filter(|i| seen.insert(*i)).collect();
+    let doc = s.doc()?;
+    if ids.iter().any(|i| inside_instance(doc, *i)) {
+        return Err(EngineError::Disabled(cmd.into(), "layers inside an instance can't become components".into()));
+    }
+    if ids.iter().any(|i| doc.is_remote(*i)) {
+        return Err(EngineError::Disabled(cmd.into(), crate::library::READ_ONLY.into()));
+    }
+    if ids.iter().any(|i| {
+        doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Instance { .. } | NodeKind::Component { .. } | NodeKind::ComponentSet { .. }))
+    }) {
+        return Err(EngineError::Disabled(cmd.into(), "select layers that aren't components, component sets or instances".into()));
+    }
+    let mut made = Vec::new();
+    for i in roots(doc, &ids) {
+        let r = create(s, &json!({"ids": [i]}))?;
+        made.push(id_of(&r["id"]).ok_or_else(|| bad(cmd, "component creation failed"))?);
+    }
+    let doc = s.doc_mut()?;
+    // Left to right by world x, ties by y: the variants' order, and the values' order.
+    let mut by_x: Vec<(NodeId, f64, f64)> = made.iter().map(|i| doc.world_bounds(*i).map_or((*i, 0.0, 0.0), |b| (*i, b.x0, b.y0))).collect();
+    by_x.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)));
+    let names: Vec<String> = by_x.iter().map(|(i, ..)| doc.node(*i).map(|n| n.name.clone()).unwrap_or_default()).collect();
+    let same = names.windows(2).all(|w| w.first() == w.get(1)) && names.first().is_some_and(|n| !n.is_empty() && !n.contains('='));
+    let set_name = match names.first() {
+        Some(n) if same => n.clone(),
+        _ => doc.next_name("Component"),
+    };
+    for ((i, ..), name) in by_x.iter().zip(&names) {
+        let node = doc.get_mut(*i)?;
+        if same {
+            node.name = "Property 1=Default".into();
+        } else if !name.contains('=') {
+            node.name = format!("Property 1={name}");
+        }
+    }
+    let ordered = z_sorted(doc, &made);
+    let set = wrap_in_set(cmd, doc, &ordered)?;
+    doc.get_mut(set)?.name = set_name;
     s.set_selection(vec![set]);
     Ok(json!({"id": set}))
 }

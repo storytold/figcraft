@@ -1033,3 +1033,109 @@ fn create_multiple_components_keeps_names_and_places_and_is_one_undo_step() {
     let doc = s.doc().unwrap();
     assert!(frames.iter().all(|f| matches!(doc.node(*f).map(|n| &n.kind), Some(NodeKind::Frame))), "one undo restores the frames");
 }
+
+/// Frames named `names` at x = 150 * i (mirrored when `reverse`), y 20, 100 x 60.
+fn named_frames(s: &mut Session, names: &[&str], reverse: bool) -> Vec<NodeId> {
+    let n = names.len();
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let x = 150.0 * if reverse { n - 1 - i } else { i } as f64;
+            let v = s.execute("frame.create", &json!({"x": x, "y": 20, "width": 100, "height": 60})).unwrap();
+            let f = id_of(&v["id"]).unwrap();
+            s.execute("object.rename", &json!({"ids": [f], "name": name})).unwrap();
+            f
+        })
+        .collect()
+}
+
+/// The set's name and its children's names in layer order.
+fn set_names(s: &Session, set: NodeId) -> (String, Vec<String>) {
+    let doc = s.doc().unwrap();
+    let n = doc.node(set).unwrap();
+    (n.name.clone(), n.children.iter().map(|c| doc.node(*c).unwrap().name.clone()).collect())
+}
+
+/// The set's variant names ordered by world x.
+fn names_by_x(s: &Session, set: NodeId) -> Vec<String> {
+    let doc = s.doc().unwrap();
+    let mut v: Vec<(f64, String)> =
+        doc.node(set).unwrap().children.iter().map(|c| (doc.world_bounds(*c).unwrap().x0, doc.node(*c).unwrap().name.clone())).collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v.into_iter().map(|(_, n)| n).collect()
+}
+
+/// Create component set (#2088, measured in Figma): variants "Property 1=<name>" in left-to-right
+/// order, the set "Component 1", wrapped in place 20 px around, selected, one undo step.
+#[test]
+fn create_set_names_variants_by_layer_name_and_wraps_in_place() {
+    let mut s = Session::new();
+    let frames = named_frames(&mut s, &["Primary", "Secondary", "Ghost"], false);
+    let before = undo_len(&s);
+    let out = s.execute("component.createSet", &json!({"ids": frames})).unwrap();
+    assert_eq!(undo_len(&s), before + 1, "one undo step");
+    let set = id_of(&out["id"]).unwrap();
+    assert_eq!(s.selection(), vec![set], "the set is selected");
+    assert_eq!(set_names(&s, set).0, "Component 1");
+    assert_eq!(names_by_x(&s, set), ["Property 1=Primary", "Property 1=Secondary", "Property 1=Ghost"]);
+    let doc = s.doc().unwrap();
+    for (i, c) in doc.node(set).unwrap().children.iter().enumerate() {
+        assert!(matches!(doc.node(*c).unwrap().kind, NodeKind::Component { .. }));
+        let b = doc.world_bounds(*c).unwrap();
+        assert_eq!((b.x0, b.y0), (150.0 * i as f64, 20.0), "frames stay put");
+    }
+    let sb = doc.world_bounds(set).unwrap();
+    assert_eq!((sb.x0, sb.y0, sb.x1, sb.y1), (-20.0, 0.0, 420.0, 100.0), "20 px on every side");
+    s.undo().unwrap();
+    let doc = s.doc().unwrap();
+    assert!(doc.node(set).is_none());
+    assert!(frames.iter().all(|f| matches!(doc.node(*f).map(|n| &n.kind), Some(NodeKind::Frame))), "one undo restores the frames");
+}
+
+#[test]
+fn create_set_orders_left_to_right_whatever_the_selection_order() {
+    let mut s = Session::new();
+    let frames = named_frames(&mut s, &["A", "B", "C"], true);
+    let out = s.execute("component.createSet", &json!({"ids": frames})).unwrap();
+    let set = id_of(&out["id"]).unwrap();
+    assert_eq!(names_by_x(&s, set), ["Property 1=C", "Property 1=B", "Property 1=A"]);
+    let (_, kids) = set_names(&s, set);
+    assert_eq!(kids.len(), 3);
+}
+
+#[test]
+fn create_set_keeps_names_already_in_prop_value_form() {
+    let mut s = Session::new();
+    let frames = named_frames(&mut s, &["Size=Small", "Size=Large", "Size=Medium"], false);
+    let out = s.execute("component.createSet", &json!({"ids": frames})).unwrap();
+    let set = id_of(&out["id"]).unwrap();
+    assert_eq!(set_names(&s, set).0, "Component 1");
+    assert_eq!(names_by_x(&s, set), ["Size=Small", "Size=Large", "Size=Medium"]);
+}
+
+#[test]
+fn create_set_with_one_shared_name_names_the_set_and_makes_default_variants() {
+    let mut s = Session::new();
+    let frames = named_frames(&mut s, &["Card", "Card", "Card"], false);
+    let out = s.execute("component.createSet", &json!({"ids": frames})).unwrap();
+    let set = id_of(&out["id"]).unwrap();
+    let (name, kids) = set_names(&s, set);
+    assert_eq!(name, "Card");
+    assert_eq!(kids, ["Property 1=Default", "Property 1=Default", "Property 1=Default"]);
+}
+
+#[test]
+fn create_set_refuses_instances_and_leaves_the_document_alone() {
+    let mut s = Session::new();
+    let frames = named_frames(&mut s, &["A", "B"], false);
+    let c = s.execute("component.create", &json!({"ids": [frames[0]]})).unwrap();
+    let comp = id_of(&c["id"]).unwrap();
+    let inst = s.execute("instance.create", &json!({"component": comp})).unwrap();
+    let inst = id_of(&inst["id"]).unwrap();
+    let before = undo_len(&s);
+    let e = s.execute("component.createSet", &json!({"ids": [inst, frames[1]]})).unwrap_err();
+    assert!(matches!(e, crate::EngineError::Disabled(..)), "{e:?}");
+    assert_eq!(undo_len(&s), before);
+    assert!(matches!(s.doc().unwrap().node(frames[1]).unwrap().kind, NodeKind::Frame));
+}

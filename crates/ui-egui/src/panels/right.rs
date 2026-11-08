@@ -532,10 +532,12 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             });
         } else if cmd == "component.create" && sel.len() > 1 {
             // Several layers: the button opens a menu, as Figma's does (#2088). One layer keeps the plain click.
-            // TODO: "Create component set" is the third entry, to add once its naming is measured.
             menu_popup(&bresp).width(220.0).show(|ui| {
                 let multiple = crate::i18n::command("component.createMultiple", "Create multiple components");
-                for (c, label) in [("component.create", tr("Create component")), ("component.createMultiple", &multiple)] {
+                let set = crate::i18n::command("component.createSet", "Create component set");
+                for (c, label) in
+                    [("component.create", tr("Create component")), ("component.createMultiple", &multiple), ("component.createSet", &set)]
+                {
                     let key = crate::shortcuts::shortcut(c).unwrap_or("");
                     if menu_icon_item(ui, None, None, label, key) {
                         app.run(c, json!({}));

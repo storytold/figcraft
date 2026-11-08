@@ -1,5 +1,5 @@
 //! With two or more layers selected the Design panel's component button opens a menu (Create
-//! component, Create multiple components); one layer keeps the plain click (#2088): drawn headless.
+//! component, Create multiple components, Create component set); one layer keeps the plain click (#2088): drawn headless.
 
 use egui::accesskit::Node;
 use egui::{Event, PointerButton, Pos2, Rect, pos2};
@@ -80,12 +80,12 @@ fn several_layers_open_a_menu_and_create_multiple_components_in_one_undo_step() 
     let mb = bounds(multiple);
     let mut rows: Vec<(f32, String)> = all
         .iter()
-        .filter(|n| n.label().is_some() && (bounds(n).min.x - mb.min.x).abs() < 1.0 && (bounds(n).min.y - mb.min.y).abs() < 60.0)
+        .filter(|n| n.label().is_some() && (bounds(n).min.x - mb.min.x).abs() < 1.0 && (bounds(n).min.y - mb.min.y).abs() < 90.0)
         .map(|n| (bounds(n).min.y, n.label().unwrap_or("").to_owned()))
         .collect();
     rows.sort_by(|a, b| a.0.total_cmp(&b.0));
     let labels: Vec<&str> = rows.iter().map(|(_, l)| l.as_str()).collect();
-    assert_eq!(labels, ["Create component", "Create multiple components"], "the menu's entries");
+    assert_eq!(labels, ["Create component", "Create multiple components", "Create component set"], "the menu's entries");
     click(&mut u, bounds(multiple).center());
     settle(&mut u);
     let sel = u.app.session.selection();
@@ -112,4 +112,25 @@ fn one_layer_keeps_the_plain_button() {
     assert!(matches!(doc.node(sel[0]).unwrap().kind, NodeKind::Component { .. }));
     assert_eq!(doc.node(sel[0]).unwrap().name, NAMES[0]);
     let _ = ids;
+}
+
+#[test]
+fn the_third_entry_creates_one_component_set() {
+    let (mut u, ids) = frames(3);
+    let before = undo_len(&u);
+    click_button(&mut u);
+    let all = nodes(&mut u);
+    let entry = all.iter().find(|n| n.label() == Some("Create component set")).expect("the menu's third entry");
+    click(&mut u, bounds(entry).center());
+    settle(&mut u);
+    let sel = u.app.session.selection();
+    assert_eq!(sel.len(), 1, "the set is selected");
+    let doc = u.app.session.doc().unwrap();
+    let set = doc.node(sel[0]).unwrap();
+    assert!(matches!(set.kind, NodeKind::ComponentSet { .. }));
+    assert_eq!(set.children.len(), 3);
+    assert_eq!(undo_len(&u), before + 1);
+    u.app.session.undo().unwrap();
+    let doc = u.app.session.doc().unwrap();
+    assert!(ids.iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Frame))), "one undo reverts it all");
 }
