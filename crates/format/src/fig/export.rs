@@ -597,12 +597,10 @@ impl<'d> Exporter<'d> {
         // is exported at index 0. Since Figma always opens the first page in the .fig file,
         // this ensures that the user's active design is immediately visible upon opening in Figma.
         let mut ordered_pages = doc.pages.clone();
-        if let Some(cur) = doc.current_page {
-            if let Some(pos) = ordered_pages.iter().position(|&p| p == cur) {
-                if pos > 0 {
-                    let page = ordered_pages.remove(pos);
-                    ordered_pages.insert(0, page);
-                }
+        if let Some(pos) = doc.current_page.and_then(|cur| ordered_pages.iter().position(|&p| p == cur)) {
+            if pos > 0 {
+                let page = ordered_pages.remove(pos);
+                ordered_pages.insert(0, page);
             }
         }
         for (i, p) in ordered_pages.iter().enumerate() {

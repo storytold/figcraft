@@ -119,8 +119,9 @@ pub(super) fn export(s: &mut Session, p: &Value) -> Result<Value> {
 /// The whole document as a `.fig` file (experimental: only round trips through our own importer
 /// are verified), with the warnings about what was left out.
 pub(super) fn export_fig(s: &mut Session, p: &Value) -> Result<Value> {
-    let doc = s.doc()?;
-    let (bytes, warnings) = fig_bytes(doc)?;
+    let mut doc = s.doc()?.clone();
+    doc.current_page = Some(s.page()?);
+    let (bytes, warnings) = fig_bytes(&doc)?;
     match string(p, "path") {
         Some(path) => {
             write(&path, &bytes)?;
