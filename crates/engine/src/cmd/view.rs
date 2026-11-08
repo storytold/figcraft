@@ -100,12 +100,16 @@ fn zoom_to(s: &mut Session, z: f64) -> Result<Value> {
     Ok(json!({"zoom": v.zoom}))
 }
 
-/// How far an arrow key pans the view with nothing selected (screen pixels; Shift: ten times).
-pub const PAN_STEP_PX: f64 = 20.0;
+/// How far an arrow key pans the view with nothing selected (screen pixels). Measured in Figma at
+/// 100% zoom: about 64 px (62-64 in two trials, +/-3 px).
+pub const PAN_STEP_PX: f64 = 64.0;
+
+/// Shift multiplies the arrow pan by this much (Figma: about 320 px, five steps).
+pub const PAN_BIG_STEPS: f64 = 5.0;
 
 /// `view.pan`: the arrow keys with nothing selected move the view by keyboard steps.
 fn pan(s: &mut Session, p: &Value) -> Result<Value> {
-    let step = if boolean(p, "big").unwrap_or(false) { PAN_STEP_PX * 10.0 } else { PAN_STEP_PX };
+    let step = if boolean(p, "big").unwrap_or(false) { PAN_STEP_PX * PAN_BIG_STEPS } else { PAN_STEP_PX };
     let dir = |k| num(p, k).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100.0, 100.0) * step;
     let (dx, dy) = (dir("dx"), dir("dy"));
     let v = view(s)?;
@@ -671,5 +675,17 @@ mod start_on_home_tests {
         assert_eq!(s.execute("pref.startOnHome", &json!({"on": false})).unwrap()["on"], false);
         let old: crate::Prefs = serde_json::from_value(json!({"theme": "dark"})).unwrap();
         assert!(!old.start_on_home);
+    }
+
+    #[test]
+    fn the_arrows_pan_64_px_and_320_with_shift_as_measured_in_figma() {
+        let mut s = crate::Session::new();
+        s.execute("view.set", &json!({"zoom": 1.0, "cx": 300, "cy": 200})).unwrap();
+        s.execute("view.pan", &json!({"dx": 1})).unwrap();
+        let v = &s.ds().unwrap().view;
+        assert_eq!((v.cx, v.cy), (364.0, 200.0), "one press pans 64 px");
+        s.execute("view.pan", &json!({"dy": -1, "big": true})).unwrap();
+        let v = &s.ds().unwrap().view;
+        assert_eq!((v.cx, v.cy), (364.0, -120.0), "Shift pans 320 px");
     }
 }
