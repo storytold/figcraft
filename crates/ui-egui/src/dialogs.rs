@@ -32,6 +32,7 @@ use menu_input::menu_input_dialog;
 pub mod branch_ui;
 pub mod credits;
 pub mod import_report;
+pub mod memory_ui;
 pub mod missing_fonts;
 pub mod plugins_ui;
 pub mod sampled_color;
@@ -406,6 +407,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     }
     color_profile_dialog(app, ctx);
     crate::plugins_ui::show(app, ctx);
+    memory_ui::show(app, ctx);
     crate::live::join_dialog(app, ctx);
     crate::live::publish_dialog(app, ctx);
     crate::online::dialogs(app, ctx);

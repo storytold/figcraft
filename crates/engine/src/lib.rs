@@ -427,6 +427,8 @@ mod masks_behaviour_tests;
 #[cfg(test)]
 mod measure_tests;
 #[cfg(test)]
+mod memory_usage_tests;
+#[cfg(test)]
 mod menu_gaps_tests;
 #[cfg(test)]
 mod move_shortcut_tests;

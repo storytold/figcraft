@@ -601,6 +601,8 @@ pub struct UiState {
     pub nav: a11y::Nav,
     /// The Manage plugins window is open.
     pub plugins_window: bool,
+    /// The Memory usage window (View ▸ Memory usage…) is open.
+    pub memory_window: bool,
     /// The Manage plugins window's tab, directory fields and pending install.
     pub plugins_manage: plugins_ui::PluginsWindow,
     /// A plugin command's parameters form, when open.
@@ -732,6 +734,7 @@ impl Default for UiState {
             libraries: false,
             nav: a11y::Nav::default(),
             plugins_window: false,
+            memory_window: false,
             plugins_manage: plugins_ui::PluginsWindow::default(),
             plugin_form: None,
             live: live::LiveUi::default(),
