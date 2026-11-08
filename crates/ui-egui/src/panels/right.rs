@@ -618,7 +618,7 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
 fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let pv = position_values(ui.ctx(), doc, sel);
     let col = widgets::col_width(ui.available_width());
-    align_row(app, ui, sel, pv.can_align, col);
+    align_row(app, ui, AlignTarget::Layers(sel), pv.can_align, col);
     position_row(app, ui, doc, sel, &pv, col);
     rotation_row(app, ui, sel, pv.rot, col);
     if pv.in_frame {
@@ -626,9 +626,24 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[No
     }
 }
 
-/// Alignment, and distribution and tidy up for three or more layers.
-fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col: f32) {
-    let ids = sel.to_vec();
+/// What the alignment row acts on.
+#[derive(Clone, Copy)]
+pub enum AlignTarget<'a> {
+    /// These layers (distribution and tidy up from three).
+    Layers(&'a [NodeId]),
+    /// The selected points in vector edit mode, this many of them (distribution from three, no
+    /// tidy up).
+    Points(usize),
+}
+
+/// Alignment, and distribution and tidy up for three or more layers (or the selected points).
+pub fn align_row(app: &mut FigApp, ui: &mut Ui, target: AlignTarget, can_align: bool, col: f32) {
+    let (ids, count, points) = match target {
+        AlignTarget::Layers(sel) => (sel.to_vec(), sel.len(), false),
+        AlignTarget::Points(n) => (vec![], n, true),
+    };
+    // Points take the commands with no ids: they act on the selected points.
+    let params = || if points { json!({}) } else { json!({"ids": ids}) };
     widgets::sublabels(ui, tr("Alignment"), None);
     row(ui, 32.0, |ui| {
         let cmds = ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"];
@@ -649,18 +664,17 @@ fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col
         });
         picked.response.on_disabled_hover_text(tr("A layer on its own aligns to its frame: select more layers, or one in a frame"));
         if let Some(i) = picked.inner {
-            app.run(cmds[i], json!({"ids": ids}));
+            app.run(cmds[i], params());
         }
-        if sel.len() > 2 {
+        if count > 2 {
             let more = icons::button(ui, Icon::DistributeH, 24.0, false, tr("Distribute and tidy"));
             menu_popup(&more).show(|ui| {
-                for (l, c) in [
-                    (tr("Distribute horizontal spacing"), "distribute.horizontal"),
-                    (tr("Distribute vertical spacing"), "distribute.vertical"),
-                    (tr("Tidy up"), "arrange.tidy"),
-                ] {
+                let tidy = (tr("Tidy up"), "arrange.tidy");
+                let entries =
+                    [(tr("Distribute horizontal spacing"), "distribute.horizontal"), (tr("Distribute vertical spacing"), "distribute.vertical")];
+                for (l, c) in entries.into_iter().chain((!points).then_some(tidy)) {
                     if menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")) {
-                        app.run(c, json!({"ids": ids}));
+                        app.run(c, params());
                         ui.close();
                     }
                 }

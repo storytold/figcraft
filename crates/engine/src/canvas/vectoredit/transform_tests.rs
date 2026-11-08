@@ -315,9 +315,23 @@ fn edit_mode_transform_commands_survive_junk() {
         json!({"width": -1e308, "height": "x", "center": "maybe", "angle": 1e308, "cx": "NaN", "matrix": [1, 2, 3, "a", 5, 6]}),
         json!({"matrix": [0, 0, 0, 0, 0, 0], "vertices": [1e12, -1], "width": 1e308, "height": 0}),
     ];
-    for c in
-        ["object.flipH", "object.flipV", "object.rotate180", "object.rotateLeft", "object.rotateRight", "vector.edit.resize", "vector.edit.rotate"]
-    {
+    for c in [
+        "object.flipH",
+        "object.flipV",
+        "object.rotate180",
+        "object.rotateLeft",
+        "object.rotateRight",
+        "vector.edit.resize",
+        "vector.edit.rotate",
+        "align.left",
+        "align.hcenter",
+        "align.right",
+        "align.top",
+        "align.vcenter",
+        "align.bottom",
+        "distribute.horizontal",
+        "distribute.vertical",
+    ] {
         for j in &junk {
             let mut s = Session::new();
             let id = rect(&mut s);
