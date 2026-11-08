@@ -1139,3 +1139,17 @@ fn create_set_refuses_instances_and_leaves_the_document_alone() {
     assert_eq!(undo_len(&s), before);
     assert!(matches!(s.doc().unwrap().node(frames[1]).unwrap().kind, NodeKind::Frame));
 }
+
+#[test]
+fn create_set_refuses_a_target_inside_another_target_and_leaves_the_document_alone() {
+    let mut s = Session::new();
+    let frames = named_frames(&mut s, &["Outer", "Inner"], false);
+    s.execute("node.reparent", &json!({"ids": [frames[1]], "parent": frames[0]})).unwrap();
+    let before = undo_len(&s);
+    let e = s.execute("component.createSet", &json!({"ids": [frames[0], frames[1]]})).unwrap_err();
+    assert!(matches!(e, crate::EngineError::Disabled(..)), "{e:?}");
+    assert_eq!(undo_len(&s), before);
+    let doc = s.doc().unwrap();
+    assert!(matches!(doc.node(frames[0]).unwrap().kind, NodeKind::Frame));
+    assert!(matches!(doc.node(frames[1]).unwrap().kind, NodeKind::Frame));
+}

@@ -2013,6 +2013,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "component.combineVariants" = "ვარიანტებად გაერთიანება"
 "component.create" = "კომპონენტის შექმნა"
 "component.createMultiple" = "რამდენიმე კომპონენტის შექმნა"
+"component.createSet" = "კომპონენტების ნაკრების შექმნა"
 "component.deleteProperty" = "კომპონენტის თვისების წაშლა"
 "component.detach" = "ინსტანსის გამოყოფა"
 "component.editProperty" = "კომპონენტის თვისების რედაქტირება"

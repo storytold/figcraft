@@ -115,6 +115,9 @@ pub(super) fn create_set(s: &mut Session, p: &Value) -> Result<Value> {
     }) {
         return Err(EngineError::Disabled(cmd.into(), "select layers that aren't components, component sets or instances".into()));
     }
+    if roots(doc, &ids).len() != ids.len() {
+        return Err(EngineError::Disabled(cmd.into(), "a layer can't be in a set with one inside it".into()));
+    }
     let mut made = Vec::new();
     for i in roots(doc, &ids) {
         let r = create(s, &json!({"ids": [i]}))?;
