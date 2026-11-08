@@ -4,8 +4,8 @@ use super::handles::{
 };
 use super::{
     Affine, ArcHandle, ArcHint, Cursor, Document, Gesture, Guide, Handle, ImageScaleMode, LayoutMode, NodeId, NodeKind, PaintKind, Point,
-    PointerEvent, Rect, ResizeStart, Result, ScaleHint, Session, Sizing, Targets, TextAutoResize, ToolId, Vec2, move_world, roots, select_target,
-    textedit, within_slop,
+    PointerEvent, Rect, ResizeStart, Result, ScaleHint, Session, Targets, TextAutoResize, ToolId, Vec2, move_world, roots, select_target, textedit,
+    within_slop,
 };
 
 impl Session {
@@ -578,13 +578,16 @@ impl Session {
                     figcraft_layout::set_size(doc, *id, nw.max(0.01), nh.max(0.01));
                     crate::cmd::props::restore_worlds(doc, &kept)?;
                 }
-                let n = doc.get_mut(*id)?;
+                // A size typed or dragged becomes Fixed, or Fill when it is the full space the auto
+                // layout parent has for it ("Child objects … will also be set to Fill container if
+                // they are manually resized to the full available space of the parent frame").
                 if matches!(handle, Handle::Corner(_) | Handle::Edge(1) | Handle::Edge(3)) {
-                    n.child_layout.sizing_h = Sizing::Fixed;
+                    crate::cmd::props::fix_axis(doc, *id, true)?;
                 }
                 if matches!(handle, Handle::Corner(_) | Handle::Edge(0) | Handle::Edge(2)) {
-                    n.child_layout.sizing_v = Sizing::Fixed;
+                    crate::cmd::props::fix_axis(doc, *id, false)?;
                 }
+                let n = doc.get_mut(*id)?;
                 if let NodeKind::Text(t) = &mut n.kind {
                     match handle {
                         Handle::Edge(1) | Handle::Edge(3) if t.auto_resize == TextAutoResize::Truncate => {}

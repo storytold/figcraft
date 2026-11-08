@@ -69,3 +69,33 @@ fn grid_drag_takes_the_cell_under_the_pointer() {
     let cl = s.doc().unwrap().node(kids[0]).unwrap().child_layout.clone();
     assert_eq!((cl.grid_column, cl.grid_row), (None, None), "one undo step");
 }
+
+/// A child dragged to the full space its auto layout frame has for it becomes Fill ("Child objects
+/// of an auto layout frame will also be set to Fill container if they are manually resized to the
+/// full available space of the parent frame"), as typing that size does; short of it, Fixed.
+#[test]
+fn resizing_a_child_to_the_full_space_makes_it_fill() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 200})).unwrap());
+    let k = id(s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 50, "height": 30, "parent": f})).unwrap());
+    s.execute("layout.add", &json!({"ids": [f]})).unwrap();
+    s.execute(
+        "node.set",
+        &json!({"id": f, "props": {"layoutMode": "vertical", "sizingH": "fixed", "sizingV": "fixed", "width": 200, "height": 200, "padding": 10}}),
+    )
+    .unwrap();
+    s.execute("view.snapPixel", &json!({"on": true})).unwrap();
+    let sizing = |s: &Session| s.doc().unwrap().node(k).unwrap().child_layout.sizing_h;
+    let edge = |s: &Session| {
+        let b = s.doc().unwrap().world_bounds(k).unwrap();
+        (b.x1, b.center().y)
+    };
+    s.execute("select.set", &json!({"ids": [k]})).unwrap();
+    let e = edge(&s);
+    drag(&mut s, e, (150.0, e.1));
+    assert_eq!(sizing(&s), figcraft_doc::Sizing::Fixed, "short of the padding: Fixed");
+    let e = edge(&s);
+    drag(&mut s, e, (190.0, e.1));
+    assert_eq!(s.doc().unwrap().node(k).unwrap().width, 180.0);
+    assert_eq!(sizing(&s), figcraft_doc::Sizing::Fill, "to the padding: Fill");
+}
