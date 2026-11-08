@@ -371,6 +371,30 @@ fn fill_across_a_hugging_axis_rules() {
             rects: &[(0.0, 0.0, 4.0, 20.0), (4.0, 0.0, 50.0, 40.0)],
         },
         Case {
+            rule: "a text stretched to the line's width reflows taller: the Fill-height sibling takes what is left, not what it got before",
+            // The stack is 100 tall and hugs its width: the wider sibling makes the line 100, the text
+            // (200 wide) is 2 lines (40) at that width, so the Fill-height bar gets 100 - 40 - 10 = 50.
+            frame: Frame { mode: V, size: (100.0, 100.0), sizing: (Hug, Fixed), ..FRAME },
+            kids: &[
+                Kid { text: Some((200.0, 20.0, 15.0)), sizing: (Fill, Hug), ..KID },
+                Kid { size: (30.0, 20.0), sizing: (Fixed, Fill), ..KID },
+                kid(100.0, 10.0),
+            ],
+            want: (100.0, 100.0),
+            rects: &[(0.0, 0.0, 100.0, 40.0), (0.0, 40.0, 30.0, 50.0), (0.0, 90.0, 100.0, 10.0)],
+        },
+        Case {
+            rule: "the same with a child that fills both axes: it takes the line's width and the left-over height",
+            frame: Frame { mode: V, size: (100.0, 100.0), sizing: (Hug, Fixed), ..FRAME },
+            kids: &[
+                Kid { text: Some((200.0, 20.0, 15.0)), sizing: (Fill, Hug), ..KID },
+                Kid { size: (30.0, 20.0), sizing: (Fill, Fill), ..KID },
+                kid(100.0, 10.0),
+            ],
+            want: (100.0, 100.0),
+            rects: &[(0.0, 0.0, 100.0, 40.0), (0.0, 40.0, 100.0, 50.0), (0.0, 90.0, 100.0, 10.0)],
+        },
+        Case {
             rule: "round 2 case 4: in a wrapping row hugging its height a Fill height still reads as fixed",
             frame: Frame { size: (120.0, 100.0), sizing: (Fixed, Hug), wrap: true, ..FRAME },
             kids: &[bar(40.0, 30.0), kid(40.0, 10.0)],

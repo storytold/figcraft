@@ -514,6 +514,56 @@ fn stretch_fill_across_hug_line(
     main_changed
 }
 
+/// Resize a child that fills the main axis to its distributed main size and the given cross size,
+/// and take the size it ends up with across (wrapped text, a hugging frame).
+fn resize_fill_main_item(doc: &mut Document, it: &mut Item, cross: f64, horizontal: bool, m: &dyn Measure) {
+    let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
+    resize_child(doc, it.id, w, h, m);
+    let (w, h) = outer_size(doc, it.id);
+    it.cross = if horizontal { h } else { w };
+}
+
+/// What `stretch_hug_line` needs to know about the frame: its limits and the padding across, the
+/// flow direction, and the main-axis inner size, gap and auto gap the lines are distributed with.
+struct HugStretch<'a> {
+    frame: (&'a figcraft_doc::ChildLayout, f64),
+    horizontal: bool,
+    flow: (f64, f64, bool),
+}
+
+/// Stretch the cross-Fill children to a hugging frame's line (`stretch_fill_across_hug_line`). When
+/// a main size changed (a text reflowed), the space the main-Fill children were given is stale:
+/// share it again, resize them (a child filling both axes keeps the line's size across), measure
+/// again, and follow the line if their cross sizes moved it. One extra pass.
+fn stretch_hug_line(
+    doc: &mut Document,
+    items: &mut [Item],
+    lines: &[Vec<usize>],
+    line_extents: &mut Vec<(f64, f64)>,
+    st: &HugStretch<'_>,
+    m: &dyn Measure,
+) {
+    let (frame, cross_pads) = st.frame;
+    let (inner_main, gap, auto_gap) = st.flow;
+    let line = line_extents.first().map_or(0.0, |l| l.1);
+    if !stretch_fill_across_hug_line(doc, items, line, (frame, cross_pads), st.horizontal, m) {
+        return;
+    }
+    *line_extents = flow_line_extents(items, lines, gap);
+    if !items.iter().any(|it| it.fill_main) {
+        return;
+    }
+    distribute_flow_lines(items, lines, inner_main, gap, auto_gap);
+    for it in items.iter_mut().filter(|it| it.fill_main) {
+        resize_fill_main_item(doc, it, it.cross, st.horizontal, m);
+    }
+    *line_extents = flow_line_extents(items, lines, gap);
+    let line = line_extents.first().map_or(0.0, |l| l.1);
+    if stretch_fill_across_hug_line(doc, items, line, (frame, cross_pads), st.horizontal, m) {
+        *line_extents = flow_line_extents(items, lines, gap);
+    }
+}
+
 /// Position one resolved flow line, resizing wrapped fill children across the line.
 fn place_flow_line(doc: &mut Document, items: &[Item], line: &[usize], al: &AutoLayout, m: &dyn Measure, geometry: FlowLineGeometry) {
     let FlowLineGeometry { horizontal, wraps, main_start, inner_main, cross_pos, line_cross, used, gap } = geometry;
@@ -622,10 +672,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     // is final before the lines and the frame are sized.
     for it in items.iter_mut().filter(|it| it.fill_main) {
         let cross = if it.fill_cross && !wraps && !hug_cross { clamp_size(inner_cross_fixed, it.min_cross, it.max_cross) } else { it.cross };
-        let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
-        resize_child(doc, it.id, w, h, m);
-        let (w, h) = outer_size(doc, it.id);
-        it.cross = if horizontal { h } else { w };
+        resize_fill_main_item(doc, it, cross, horizontal, m);
     }
     if baseline {
         // A layer without a text baseline (an icon, a shape, a frame holding no text) sits on the
@@ -642,9 +689,9 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     // largest child that doesn't fill, a fill child's min counted, the frame's own min/max
     // applied). A text that reflows at its new width changes the main sizes, so measure again.
     let cross_pads = if horizontal { pt + pb } else { pl + pr };
-    let line = line_extents.first().map_or(0.0, |l| l.1);
-    if hug_cross && !wraps && stretch_fill_across_hug_line(doc, &mut items, line, (&fcl, cross_pads), horizontal, m) {
-        line_extents = flow_line_extents(&mut items, &lines, gap);
+    if hug_cross && !wraps {
+        let stretch = HugStretch { frame: (&fcl, cross_pads), horizontal, flow: (inner_main_fixed, gap, auto_gap) };
+        stretch_hug_line(doc, &mut items, &lines, &mut line_extents, &stretch, m);
     }
 
     // Container size (on a hugging axis fill children can't fill: they count with their own size).
