@@ -92,6 +92,12 @@ fn only_the_focused_frame_is_hit_and_escape_leaves() {
     assert_eq!(focused(&s), None, "Escape with nothing selected leaves");
     click(&mut s, 350.0, 100.0);
     assert_eq!(s.selection(), vec![b], "everything is hit again");
+    // With the focused frame itself selected, one Escape leaves the focus view.
+    ex(&mut s, "dev.focus", json!({"id": a}));
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    assert_eq!(focused(&s), Some(a));
+    s.escape().unwrap();
+    assert_eq!(focused(&s), None, "Escape with the focused frame selected leaves at once");
 }
 
 #[test]
