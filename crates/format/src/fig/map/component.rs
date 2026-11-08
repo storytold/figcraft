@@ -41,6 +41,10 @@ pub(super) struct OverrideRow<'a> {
     level: usize,
     /// Position among the rows of the instance that wrote it; later rows win.
     ordinal: usize,
+    /// The factor the row's lengths take: 1 for the rows of an instance in the document, the
+    /// factor of the layer of the enclosing main that holds the rows for a nested instance's own
+    /// (they are written in that main's space, #2091).
+    pub(super) scale: f64,
 }
 
 /// The nested level an override row restates: its `overrideLevel`, capped; 0 when it has none.
@@ -84,7 +88,9 @@ pub(super) struct Inst<'a> {
     pub(super) root: String,
     pub(super) path: Vec<String>,
     pub(super) overrides: Rc<Overrides<'a>>,
-    props: Rc<Chain<&'a Kv<'a>>>,
+    /// Property values with the factor their lengths take (the layer of the writing instance's
+    /// node that holds the assignment, as for override rows).
+    props: Rc<Chain<(&'a Kv<'a>, f64)>>,
     /// Slot property GUID → private slot-content node GUID.
     pub(super) slot_contents: Rc<Chain<String>>,
     /// Layers imported from a slot's independent content subtree.
@@ -264,7 +270,7 @@ impl<'a> Mapper<'a> {
             {
                 refs.insert(field.into(), json!(name));
             }
-            let Some(val) = inst.and_then(|i| i.props.get(&self.prop_root(&def))) else { continue };
+            let Some(&(val, val_scale)) = inst.and_then(|i| i.props.get(&self.prop_root(&def))) else { continue };
             match field {
                 "visible" => {
                     if let Some(b) = val.get("boolValue").and_then(Kv::bool) {
@@ -282,7 +288,7 @@ impl<'a> Mapper<'a> {
                             o.remove("_figLineStarts");
                             if let Some(tv) = prop_text_data(val) {
                                 let size = o.get("style").and_then(|s| s.get("fontSize")).and_then(Value::as_f64);
-                                char_styles(o, tv, 1.0, size, &mut |w| self.warn(w));
+                                char_styles(o, tv, val_scale, size, &mut |w| self.warn(w));
                             }
                         }
                     }
@@ -302,7 +308,7 @@ impl<'a> Mapper<'a> {
         // An instance swap property value picks the main.
         if let Some(i) = outer
             && let Some(def) = prop_ref(v, "OVERRIDDEN_SYMBOL_ID")
-            && let Some(g) = i.props.get(&self.prop_root(&def)).and_then(|p| prop_guid(p))
+            && let Some(g) = i.props.get(&self.prop_root(&def)).and_then(|(p, _)| prop_guid(p))
         {
             sym = Some(g);
         }
@@ -367,10 +373,15 @@ impl<'a> Mapper<'a> {
                 (a, b) => a.is_some() != b.is_some(),
             };
         let mut local: Overrides<'a> = BTreeMap::new();
-        let lists = [sd.and_then(|s| s.get("symbolOverrides")).map(Kv::list).unwrap_or_default(), v.list("derivedSymbolData")];
+        // The lists are at the scale of the layer of this node that holds them.
+        let scale_of = |k: &str| v.find(k).map_or(1.0, |f| f.1);
+        let lists = [
+            (sd.and_then(|s| s.get("symbolOverrides")).map(Kv::list).unwrap_or_default(), scale_of("symbolData")),
+            (v.list("derivedSymbolData"), scale_of("derivedSymbolData")),
+        ];
         let source_depth = outer.map_or(0, |i| i.symbols.len());
         let mut ordinal = 0;
-        for (layer, list) in lists.into_iter().enumerate() {
+        for (layer, (list, row_scale)) in lists.into_iter().enumerate() {
             for ov in list {
                 let row_ordinal = ordinal;
                 ordinal += 1;
@@ -392,6 +403,7 @@ impl<'a> Mapper<'a> {
                     source_depth,
                     level: override_level(ov),
                     ordinal: row_ordinal,
+                    scale: row_scale,
                 });
             }
         }
@@ -405,11 +417,12 @@ impl<'a> Mapper<'a> {
             rows.sort_by_key(|row| (std::cmp::Reverse(row.source_depth + row.level), std::cmp::Reverse(row.source_depth), row.ordinal));
         }
         // This instance's own property values and slot contents; the outer instances' win.
-        let mut all_props: BTreeMap<String, &'a Kv<'a>> = BTreeMap::new();
+        let assignment_scale = v.find("componentPropAssignments").map_or(1.0, |f| f.1);
+        let mut all_props: BTreeMap<String, (&'a Kv<'a>, f64)> = BTreeMap::new();
         let mut slot_contents: BTreeMap<String, String> = BTreeMap::new();
         for a in assignments {
             if let (Some(d), Some(val)) = (a.get("defID").and_then(guid), assigned(a)) {
-                all_props.entry(self.prop_root(&d)).or_insert(val);
+                all_props.entry(self.prop_root(&d)).or_insert((val, assignment_scale));
             }
             let Some(def) = a.get("defID").and_then(guid) else { continue };
             if self.prop_def(&def).is_none_or(|(_, ty)| *ty != "SLOT") {

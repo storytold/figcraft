@@ -285,9 +285,15 @@ pub(super) fn effect(e: &Kv, k: f64) -> Option<Value> {
             o.insert(k.into(), color(c));
         }
     }
-    for (from, to) in [("offset", "offset"), ("startOffset", "startOffset"), ("endOffset", "endOffset"), ("noiseSize", "noiseSizeVector")] {
+    // `startOffset` and `endOffset` are positions in the layer's unit box, not lengths: they stay.
+    for (from, to) in [("offset", "offset"), ("noiseSize", "noiseSizeVector")] {
         if let Some(p) = e.get(from).and_then(vec2) {
             o.insert(to.into(), scale_vec2(p, k));
+        }
+    }
+    for key in ["startOffset", "endOffset"] {
+        if let Some(p) = e.get(key).and_then(vec2) {
+            o.insert(key.into(), p);
         }
     }
     if e.get("blurOpType").and_then(Kv::str) == Some("PROGRESSIVE") {

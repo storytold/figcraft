@@ -129,7 +129,7 @@ impl<'a> Mapper<'a> {
         // Inside a scaled instance the main's lengths are the factor times as long; the rows of
         // the instance are at its scale already (#2091).
         let scale = inst.map_or(1.0, |i| i.scale);
-        let mut view = View::of_scaled(base, scale).with(entries.iter().map(|e| e.row));
+        let mut view = View::of_scaled(base, scale).with(entries.iter().map(|e| (e.row, e.scale)));
         // A layer of a resized instance the file gives no derived layout for follows its
         // constraints from the main's geometry, then takes the size and place overridden on it
         // (auto layout places the others, as in the editor).
@@ -137,15 +137,28 @@ impl<'a> Mapper<'a> {
         let stacked = parent.and_then(|p| p.str("stackMode")).is_some_and(|m| matches!(m, "HORIZONTAL" | "VERTICAL" | "GRID"))
             && view.str("stackPositioning") != Some("ABSOLUTE");
         let main = View::of_scaled(base, scale);
-        let set = |k: &str| entries.iter().rev().filter(|e| e.entry != Entry::Stale).find_map(|e| e.row.get(k));
+        // The size and place a row gives, at the scale of the row (a nested instance's own rows
+        // are at its enclosing main's scale).
+        let set = |k: &str| entries.iter().rev().filter(|e| e.entry != Entry::Stale).find_map(|e| e.row.get(k).map(|r| (r, e.scale)));
+        let set_size = || {
+            let (r, k) = set("size")?;
+            let (x, y) = size(r)?;
+            Some((scaled(x, k)?, scaled(y, k)?))
+        };
+        let set_transform = || {
+            let (r, k) = set("transform")?;
+            let m = matrix(r)?;
+            let [a, b, c, d, e, f] = m.as_coeffs();
+            Some(Affine::new([a, b, c, d, scaled(e, k)?, scaled(f, k)?]))
+        };
         if let (Some(f), false, false, Some((w, h))) = (fit, derived, stacked, main.size()) {
             let t = main.transform().unwrap_or_default();
             let (fw, ft) = f.apply(w, h, t, view.str("horizontalConstraint"), view.str("verticalConstraint"));
-            view.fitted = Some((set("size").and_then(size).unwrap_or(fw), set("transform").and_then(matrix).unwrap_or(ft)));
+            view.fitted = Some((set_size().unwrap_or(fw), set_transform().unwrap_or(ft)));
         } else if entries.iter().any(|e| e.entry == Entry::Stale && (e.row.get("size").is_some() || e.row.get("transform").is_some()))
-            && let Some(s) = set("size").and_then(size).or_else(|| main.size())
+            && let Some(s) = set_size().or_else(|| main.size())
         {
-            view.fitted = Some((s, set("transform").and_then(matrix).or_else(|| main.transform()).unwrap_or_default()));
+            view.fitted = Some((s, set_transform().or_else(|| main.transform()).unwrap_or_default()));
         }
         let rest_id = match (inst, &path) {
             (Some(i), Some(p)) => format!("I{};{}", i.root, p.join(";")),
@@ -370,7 +383,7 @@ impl<'a> Mapper<'a> {
                 }
                 continue;
             };
-            let child = View::of(style).with([bounds]);
+            let child = View::of(style).with([(bounds, 1.0)]);
             let chars = own_text(&child);
             if local_id != 0 && chars.is_none() {
                 continue;
@@ -518,14 +531,18 @@ impl<'a> Mapper<'a> {
             .unwrap_or_else(|| stroke_style.map_or_else(|| v.list("strokePaints"), |s| s.get("fillPaints").map(Kv::list).unwrap_or_default()));
         o.insert("strokes".into(), Value::Array(strokes.iter().filter_map(|p| paint(p, &mut |w| self.warn(w))).collect()));
         let effect_style = self.style(v, "styleIdForEffect", "inheritEffectStyleID", "effect", &mut styles);
-        let (effects, effects_scale) =
-            effect_style.map_or_else(|| v.list_scaled("effects"), |s| (s.get("effects").map(Kv::list).unwrap_or_default(), v.base_scale()));
+        let (effects, effects_scale) = effect_style.map_or_else(
+            || v.list_scaled("effects"),
+            |s| (s.get("effects").map(Kv::list).unwrap_or_default(), v.link_scale("styleIdForEffect", "inheritEffectStyleID")),
+        );
         if !effects.is_empty() {
             o.insert("effects".into(), Value::Array(effects.iter().filter_map(|e| effect(e, effects_scale)).collect()));
         }
         let grid_style = self.style(v, "styleIdForGrid", "inheritGridStyleID", "grid", &mut styles);
-        let (grids, grids_scale) =
-            grid_style.map_or_else(|| v.list_scaled("layoutGrids"), |s| (s.get("layoutGrids").map(Kv::list).unwrap_or_default(), v.base_scale()));
+        let (grids, grids_scale) = grid_style.map_or_else(
+            || v.list_scaled("layoutGrids"),
+            |s| (s.get("layoutGrids").map(Kv::list).unwrap_or_default(), v.link_scale("styleIdForGrid", "inheritGridStyleID")),
+        );
         if !grids.is_empty() {
             o.insert("layoutGrids".into(), Value::Array(grids.iter().map(|g| layout_grid(g, grids_scale)).collect()));
         }

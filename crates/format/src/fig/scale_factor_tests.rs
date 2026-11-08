@@ -12,7 +12,9 @@ use super::*;
 const SCHEMA: &str = "
 enum NodeType NONE DOCUMENT CANVAS FRAME ROUNDED_RECTANGLE TEXT SYMBOL INSTANCE
 enum StackMode NONE HORIZONTAL VERTICAL
-enum EffectType DROP_SHADOW
+enum EffectType DROP_SHADOW FOREGROUND_BLUR
+enum BlurOpType NORMAL PROGRESSIVE
+enum StyleType NONE FILL TEXT EFFECT GRID
 enum NumberUnits RAW PIXELS PERCENT
 struct GUID uint sessionID, uint localID
 struct Vector float x, float y
@@ -21,10 +23,11 @@ message Number float value, NumberUnits units
 message ParentIndex GUID guid, string position
 message FontName string family, string style, string postscript
 message TextData string characters
-message Effect EffectType type, float radius, float spread, Vector offset
+message Effect EffectType type, float radius, float spread, Vector offset, float startRadius, Vector startOffset, Vector endOffset, BlurOpType blurOpType
+message StyleId GUID guid
 message GUIDPath GUID[] guids
 message SymbolData GUID symbolID, NodeChange[] symbolOverrides, float uniformScaleFactor
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, float cornerRadius, float strokeWeight, float[] dashPattern, float fontSize, FontName fontName, TextData textData, SymbolData symbolData, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, float stackCounterSpacing, Effect[] effects, Number lineHeight, Number letterSpacing, NodeChange[] derivedSymbolData, GUIDPath guidPath
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, float cornerRadius, float strokeWeight, float[] dashPattern, float fontSize, FontName fontName, TextData textData, SymbolData symbolData, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, float stackCounterSpacing, Effect[] effects, Number lineHeight, Number letterSpacing, NodeChange[] derivedSymbolData, GUIDPath guidPath, StyleType styleType, StyleId styleIdForEffect
 message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
@@ -253,4 +256,115 @@ fn a_junk_factor_is_ignored() {
         let (size, place, radii) = mark(&doc, "Junk");
         assert_eq!((size, place, radii), ([200.0, 200.0], [20.0, 40.0], [64.0; 4]), "factor {factor}");
     }
+}
+
+#[test]
+fn a_nested_instances_own_rows_are_at_its_enclosing_mains_scale() {
+    let mut nodes = page();
+    // Inner: 200 px with a 200 px rectangle "Dot" of radius 40.
+    nodes.push(node(5, Some((1, "!")), "SYMBOL", "Inner", vec![("size", xy(200.0, 200.0)), ("transform", at(0.0, 0.0))]));
+    nodes.push(node(
+        6,
+        Some((5, "!")),
+        "ROUNDED_RECTANGLE",
+        "Dot",
+        vec![("size", xy(200.0, 200.0)), ("transform", at(0.0, 0.0)), ("cornerRadius", f(40.0))],
+    ));
+    // Outer: 200 px, holding Kid, an instance of Inner at 100 px (factor 0.5). Kid has the derived
+    // row Figma writes for every nested instance and an override of its own.
+    nodes.push(node(7, Some((1, "\"")), "SYMBOL", "Outer", vec![("size", xy(200.0, 200.0)), ("transform", at(300.0, 0.0))]));
+    let dot = |more: Vec<(&'static str, Kv<'static>)>| {
+        let mut fields = vec![("guidPath", o(vec![("guids", arr(vec![g(6)]))]))];
+        fields.extend(more);
+        o(fields)
+    };
+    let symbol = o(vec![("symbolID", g(5)), ("uniformScaleFactor", f(0.5)), ("symbolOverrides", arr(vec![dot(vec![("cornerRadius", f(7.0))])]))]);
+    let kid = node(
+        8,
+        Some((7, "!")),
+        "INSTANCE",
+        "Kid",
+        vec![
+            ("size", xy(100.0, 100.0)),
+            ("transform", at(20.0, 20.0)),
+            ("symbolData", symbol),
+            ("derivedSymbolData", arr(vec![dot(vec![("size", xy(100.0, 100.0))])])),
+        ],
+    );
+    nodes.push(kid);
+    // Half: Outer at factor 0.5.
+    nodes.push(instance(9, (1, "#"), "Half", 7, (100.0, 100.0), Some(0.5), vec![]));
+    // Whole: Outer at its own size, for the unscaled reading.
+    nodes.push(instance(10, (1, "$"), "Whole", 7, (200.0, 200.0), None, vec![]));
+    let doc = import_nodes(nodes);
+    let dot_of = |name: &str| {
+        let kid = first_child(&doc, name);
+        doc.node(kid.children[0]).unwrap()
+    };
+    // Both rows are in Outer's space: Half draws them at half.
+    let half = dot_of("Half");
+    assert_eq!(([half.width, half.height], half.corners.radii), ([50.0, 50.0], [3.5; 4]));
+    let whole = dot_of("Whole");
+    assert_eq!(([whole.width, whole.height], whole.corners.radii), ([100.0, 100.0], [7.0; 4]));
+}
+
+#[test]
+fn a_progressive_blurs_positions_are_not_lengths() {
+    let mut nodes = page();
+    let blur = o(vec![
+        ("type", e("FOREGROUND_BLUR")),
+        ("radius", f(8.0)),
+        ("blurOpType", e("PROGRESSIVE")),
+        ("startRadius", f(2.0)),
+        ("startOffset", xy(0.5, 0.0)),
+        ("endOffset", xy(0.5, 1.0)),
+    ]);
+    nodes.push(node(5, Some((1, "!")), "SYMBOL", "Icon", vec![("size", xy(256.0, 256.0)), ("transform", at(0.0, 0.0))]));
+    nodes.push(node(
+        6,
+        Some((5, "!")),
+        "ROUNDED_RECTANGLE",
+        "Mark",
+        vec![("size", xy(200.0, 200.0)), ("transform", at(0.0, 0.0)), ("effects", arr(vec![blur]))],
+    ));
+    nodes.push(instance(9, (1, "\""), "Half", 5, (128.0, 128.0), Some(0.5), vec![]));
+    let doc = import_nodes(nodes);
+    let EffectKind::LayerBlur(b) = &first_child(&doc, "Half").effects[0].kind else { panic!("not a layer blur") };
+    // The radii are lengths and scale; the ramp's ends are fractions of the layer and do not.
+    assert_eq!((b.radius, b.start_radius, b.start, b.end), (4.0, 1.0, (0.5, 0.0), (0.5, 1.0)));
+}
+
+#[test]
+fn an_effect_style_takes_the_scale_of_the_layer_that_links_it() {
+    let mut nodes = page();
+    let shadow = |radius: f64| o(vec![("type", e("DROP_SHADOW")), ("radius", f(radius))]);
+    let link = |id: u64| o(vec![("guid", g(id))]);
+    nodes.push(node(30, Some((1, "~")), "ROUNDED_RECTANGLE", "Soft", vec![("styleType", e("EFFECT")), ("effects", arr(vec![shadow(10.0)]))]));
+    nodes.push(node(31, Some((1, "}")), "ROUNDED_RECTANGLE", "Hard", vec![("styleType", e("EFFECT")), ("effects", arr(vec![shadow(10.0)]))]));
+    nodes.push(node(5, Some((1, "!")), "SYMBOL", "Icon", vec![("size", xy(256.0, 256.0)), ("transform", at(0.0, 0.0))]));
+    nodes.push(node(
+        6,
+        Some((5, "!")),
+        "ROUNDED_RECTANGLE",
+        "Mark",
+        vec![("size", xy(200.0, 200.0)), ("transform", at(0.0, 0.0)), ("styleIdForEffect", link(30))],
+    ));
+    // Kept: the main's own layer links the style, so the instance's factor applies.
+    nodes.push(instance(9, (1, "\""), "Kept", 5, (128.0, 128.0), Some(0.5), vec![]));
+    // Swapped: a row of the instance links another style, which is at the instance's scale.
+    let row = o(vec![("guidPath", o(vec![("guids", arr(vec![g(6)]))])), ("styleIdForEffect", link(31))]);
+    let symbol = o(vec![("symbolID", g(5)), ("uniformScaleFactor", f(0.5)), ("symbolOverrides", arr(vec![row]))]);
+    nodes.push(node(
+        10,
+        Some((1, "#")),
+        "INSTANCE",
+        "Swapped",
+        vec![("size", xy(128.0, 128.0)), ("transform", at(600.0, 0.0)), ("symbolData", symbol)],
+    ));
+    let doc = import_nodes(nodes);
+    let radius = |name: &str| {
+        let EffectKind::DropShadow(sh) = &first_child(&doc, name).effects[0].kind else { panic!("not a drop shadow") };
+        sh.radius
+    };
+    assert_eq!((radius("Kept"), radius("Swapped")), (5.0, 10.0));
 }

@@ -230,13 +230,20 @@ impl<'a> View<'a> {
         })
     }
 
-    fn with(&self, top: impl IntoIterator<Item = &'a Kv<'a>>) -> Self {
+    /// This view with `top` over it, each layer with the factor its lengths take.
+    fn with(&self, top: impl IntoIterator<Item = (&'a Kv<'a>, f64)>) -> Self {
         let mut v = self.clone();
-        for layer in top {
+        for (layer, scale) in top {
             v.layers.push(layer);
-            v.scales.push(1.0);
+            v.scales.push(scale);
         }
         v
+    }
+
+    /// The factor of the layer that links a style in `key` (or `legacy`), the lowest layer's when
+    /// none does: what the linked style's lengths take.
+    fn link_scale(&self, key: &str, legacy: &str) -> f64 {
+        self.find(key).or_else(|| self.find(legacy)).map_or_else(|| self.base_scale(), |f| f.1)
     }
 
     /// This view with `style` just above the layer that links it in `key` (or `legacy`): the style
