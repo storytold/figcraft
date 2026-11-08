@@ -291,7 +291,7 @@ fn sizing_rules() {
     ]);
 }
 
-/// Measured in Figma web (`plan/loop/measurements/fill-hug.md`): along the flow a Fill child turns
+/// Measured in Figma web (2026-11-08): along the flow a Fill child turns
 /// a hugging parent Fixed, but across the flow the parent keeps hugging and the Fill child takes
 /// the line's cross size (the largest non-Fill sibling, its min counted, padding outside).
 #[test]

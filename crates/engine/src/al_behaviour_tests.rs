@@ -76,7 +76,7 @@ fn name_of(s: &Session, node: NodeId) -> String {
     s.doc().unwrap().node(node).unwrap().name.clone()
 }
 
-/// Measured in Figma web (`plan/loop/measurements/fill-hug.md`): across the flow a Fill child
+/// Measured in Figma web (2026-11-08): across the flow a Fill child
 /// leaves its hugging parent hugging and takes the line's cross size; the parent turns Fixed (with
 /// a notice) only when no non-Fill child is left on that axis.
 #[test]
