@@ -271,14 +271,12 @@ fn keyboard_selection() {
         ex(&mut s, cmd, json!({}));
         assert_eq!(sorted(s.selection()), sorted(after), "{why}");
     }
-    // Esc steps out to the parent, then deselects.
+    // Esc clears the selection at once, whatever the nesting (measured in Figma).
     ex(&mut s, "select.set", json!({"ids": [k.a]}));
     s.escape().unwrap();
-    assert_eq!(s.selection(), vec![k.g], "Esc selects the parent");
+    assert_eq!(s.selection(), Vec::<NodeId>::new(), "Esc from a nested layer selects nothing, not the parent");
     s.escape().unwrap();
-    assert_eq!(s.selection(), vec![k.f]);
-    s.escape().unwrap();
-    assert_eq!(s.selection(), Vec::<NodeId>::new(), "Esc on a top-level layer deselects");
+    assert_eq!(s.selection(), Vec::<NodeId>::new());
 }
 
 #[test]

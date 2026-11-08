@@ -59,6 +59,7 @@ interaction feel not yet compared.
 | Click, Shift-click, marquee, Shift-marquee toggle | done | Shift-drag on a selected layer moves the selection, kept to one axis (#498); a marquee selects what it touches; from a top-level frame's background, the layers inside it; locked and hidden layers are skipped (`selection_behaviour_tests`) |
 | Deep select (Cmd/Ctrl-click, Cmd/Ctrl-marquee) | done | |
 | Select layer menu (every layer under the click) | done | |
+| Escape with layers selected | done | clears the selection at once, whatever the nesting; it never selects the parent. Measured in the Figma web app (2026-11-08) with a rectangle in a group in a frame, selected from the canvas (a double-click into the group), from the Layers panel, and after Tab moved the selection to its sibling: one Escape selects nothing, a second leaves nothing selected. Escape still leaves text and vector editing, ends gestures and the pen first, and ends the focus view once nothing or the focused frame is selected (`selection_behaviour_tests`, `devfocus_tests`) |
 | Enter / Shift+Enter (children / parent), Tab / Shift+Tab (siblings) | done | Tab renames the next layer while renaming |
 | Resize handles: Shift keeps proportions, Alt from centre, constraints-aware | done | Alt shrinks too; past an edge flips (several layers mirror); groups and mixed rotations scale each layer along its own axes, keeping rotation and flip (no skew: children turned off a right angle are approximate); Cmd/Ctrl ignores a frame's constraints (`transform_behaviour_tests`) |
 | Rotate just outside a corner; Shift in 15° steps | done | rotated handle box when layers share a rotation |
@@ -186,6 +187,7 @@ in the table. `crates/ui-egui/src/shortcut_keys_tests.rs` drives the keys a look
 ## Revision history
 
 | Date | Change | Summary |
+| 2026-11-08 | patch | Selection: Escape with layers selected clears the selection instead of stepping out to the parent first. Measured in the Figma web app with a rectangle in a group in a frame, selected from the canvas, from the Layers panel and after Tab: one Escape selects nothing. Editing, gestures and the pen still end first |
 |---|---|---|
 | 2026-11-02 | patch | Shortcuts: a Cmd/Ctrl-click on a padding field (the horizontal or vertical pair, or a side with Individual padding open) makes the value typed go to all four sides, in one undo step (Guide to auto layout, Keyboard shortcut guide); a plain click still edits that axis or side alone. A documented gesture row: 134 documented, 133 bound. Test: `padding_individual_tests` |
 | 2026-11-01 | patch | Number fields: dragging the field itself with Alt held scrubs it ("You can also hover the input field itself and hold down the modifier key: Mac: ⌥ Option Windows: Alt", Adjust alignment, rotation, position, and dimensions), with the resize cursor and the label's rates (Alt is the enabler there, so it isn't the fine rate); a click with Alt doesn't open the editor. Found by a documentation audit of the ui-parity rows. Test: `field_tests::alt_held_over_a_field_scrubs_it`. Counts unchanged |

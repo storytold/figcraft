@@ -84,12 +84,12 @@ fn only_the_focused_frame_is_hit_and_escape_leaves() {
     click(&mut s, 75.0, 75.0);
     assert_eq!(s.selection(), vec![in_a], "the layer on top of it isn't hit either");
     assert_ne!(s.selection(), vec![over]);
-    // Escape: selection up to the frame, then out of the focus view.
+    // Escape: the selection goes, then out of the focus view.
     s.escape().unwrap();
-    assert_eq!(s.selection(), vec![a]);
+    assert!(s.selection().is_empty(), "Escape selects nothing, not the parent frame");
     assert_eq!(focused(&s), Some(a));
     s.escape().unwrap();
-    assert_eq!(focused(&s), None, "Escape with the frame selected leaves");
+    assert_eq!(focused(&s), None, "Escape with nothing selected leaves");
     click(&mut s, 350.0, 100.0);
     assert_eq!(s.selection(), vec![b], "everything is hit again");
 }
