@@ -369,6 +369,40 @@ fn resizing_and_flipping_one_layer() {
     assert!(near(rotation(&s, t).abs(), 30.0), "Shift: the nearest 15° step: {}", rotation(&s, t));
 }
 
+/// A rotate-handle drag on a layer at `start` degrees, turning it by `turn` degrees in the Design
+/// panel's convention (positive is counter-clockwise on screen); returns the rotation it ends at.
+fn rotate_drag_from(start: f64, turn: f64, m: Mods) -> f64 {
+    let mut s = session();
+    let r = rect(&mut s, 0.0, 200.0, 100.0, 100.0, None);
+    set(&mut s, &[r], json!({"rotation": start}));
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    // The handle sits just outside the top-left corner of the turned box; the pointer then circles
+    // the centre by `turn` (the page angle runs the other way round, y being down).
+    let world = s.doc().unwrap().world_transform(r);
+    let (c, corner) = (world * Point::new(50.0, 50.0), world * Point::ZERO);
+    let from = corner + (corner - c) * 0.15;
+    let a = (from - c).atan2() - turn.to_radians();
+    let to = c + figcraft_geom::Vec2::from_angle(a) * 80.0;
+    drag(&mut s, from, to, m);
+    rotation(&s, r)
+}
+
+#[test]
+fn shift_rotating_lands_on_multiples_of_15_not_steps_from_the_start() {
+    // Measured in Figma: a layer at 7° (or -4.27°) Shift-rotated by its corner ends at 15°, so the
+    // steps are absolute multiples of 15°, not 15° steps from where the drag began.
+    let got = rotate_drag_from(7.0, 37.0, SHIFT);
+    assert!(near(got, 45.0), "7° turned by 37° is 44°, nearest multiple of 15 is 45°: {got}");
+    // Without Shift the turn is free.
+    let got = rotate_drag_from(7.0, 37.0, NONE);
+    assert!(near(got, 44.0), "a free turn: {got}");
+    // A small turn: 7° + 3° = 10°, nearest multiple of 15 is 15° (not 7° or 10°).
+    let got = rotate_drag_from(7.0, 3.0, SHIFT);
+    assert!(near(got, 15.0), "10° rounds to 15°: {got}");
+    let got = rotate_drag_from(-4.27, 2.0, SHIFT);
+    assert!(near(got, 0.0), "-2.27° rounds to 0°: {got}");
+}
+
 #[test]
 fn groups_scale_children_keeping_their_rotation_and_flip() {
     let mut s = session();

@@ -32,7 +32,7 @@ use handles::DRAG_SLOP_PX;
 pub(crate) use handles::scale_factor;
 pub use handles::{
     PENCIL_STROKE, SMALL_BOX_PX, anchor_name, anchor_of, box_sides_px, handle_at, handle_at_corners, label_at, locked_in, scale_anchor_point,
-    selection_box, selection_frame,
+    selection_box, selection_frame, shared_rotation_degrees,
 };
 pub(crate) use handles::{SNAP_PX, handle_cursor, readable_text_fills, resized_box};
 #[cfg(test)]
@@ -445,6 +445,8 @@ pub(crate) enum Gesture {
     Rotate {
         center: Point,
         start_angle: f64,
+        /// The rotation (Design panel convention) the layers share when the drag began, else 0.
+        base: f64,
         ids: Vec<NodeId>,
     },
     Draw {

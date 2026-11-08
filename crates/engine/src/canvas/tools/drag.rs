@@ -1,6 +1,6 @@
 use super::handles::{
     SNAP_PX, handle_at, in_quad, label_at, locked_in, on_corner_square, paints_below, resized_box, scale_factor, selection_box, selection_frame,
-    shape_hint,
+    shape_hint, shared_rotation_degrees,
 };
 use super::{
     Affine, ArcHandle, ArcHint, Cursor, Document, Gesture, Guide, Handle, ImageScaleMode, LayoutMode, NodeId, NodeKind, PaintKind, Point,
@@ -58,7 +58,8 @@ impl Session {
                     .moved_origin()
                     .unwrap_or_else(|| Point::new(b.iter().map(|c| c.x).sum::<f64>() / 4.0, b.iter().map(|c| c.y).sum::<f64>() / 4.0));
                 self.begin_interaction("Rotate")?;
-                self.tool.gesture = Gesture::Rotate { center, start_angle: (ev.p() - center).atan2(), ids };
+                self.tool.gesture =
+                    Gesture::Rotate { center, start_angle: (ev.p() - center).atan2(), base: shared_rotation_degrees(&doc, &ids), ids };
                 return Ok(());
             }
             let nodes: Vec<(NodeId, Affine, f64, f64)> =
@@ -350,10 +351,11 @@ impl Session {
                 }
                 return res;
             }
-            Gesture::Rotate { center, start_angle, ids } => {
+            Gesture::Rotate { center, start_angle, base, ids } => {
                 let mut a = ((ev.p() - *center).atan2() - start_angle).to_degrees();
                 if ev.shift {
-                    a = (a / 15.0).round() * 15.0;
+                    // The panel rotation is base - a; Shift lands it on a multiple of 15 degrees.
+                    a = base - ((base - a) / 15.0).round() * 15.0;
                 }
                 let (c, ids) = (*center, ids.clone());
                 self.preview(|doc, _| {

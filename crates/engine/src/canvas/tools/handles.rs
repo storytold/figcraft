@@ -132,6 +132,13 @@ pub fn selection_frame(doc: &Document, sel: &[NodeId]) -> Option<(Affine, f64, f
     Some((rot * Affine::translate((b.x0, b.y0)), b.width(), b.height()))
 }
 
+/// The rotation the Design panel shows for `ids` (degrees, counter-clockwise positive) when they
+/// all share one, else 0 (the handle box is page-aligned then). Axis-aligned layers give 0, which
+/// is the same as 90, 180 and 270 for stepping in 15 degrees.
+pub fn shared_rotation_degrees(doc: &Document, ids: &[NodeId]) -> f64 {
+    shared_rotation(doc, ids).map_or(0.0, |a| -a.to_degrees())
+}
+
 /// The rotation (radians) every layer in `ids` shares, unless it's a multiple of 90 degrees (the
 /// page-aligned box is then the same box). Flipped layers count by their axis, not its direction.
 fn shared_rotation(doc: &Document, ids: &[NodeId]) -> Option<f64> {
