@@ -49,8 +49,8 @@ Measured earlier the same day; recorded here by pull request only.
 
 | Behaviour | Figma (measured) | FigCraft | Status |
 |---|---|---|---|
-| Snap threshold | measured against the app | differed | fixed in #2086 (open) |
-| Submenu delay | measured against the app | differed | fixed in #2093 (open) |
+| Snap threshold | a layer snaps about 4.5 screen px from a guide, at 100% and 200% | snapped at 5 screen px | fixed in #2086 (open) |
+| Submenu opening | a submenu opens about 11 ms after its row is hovered; no safe triangle seen | opened after 0.15 s | fixed in #2093 (open) |
 
 ## Auto layout: Fill and Hug
 
@@ -59,11 +59,11 @@ Values read from the zoomed Design panel's fields and dropdowns, in horizontal r
 | Behaviour | Figma (measured) | FigCraft | Status |
 |---|---|---|---|
 | Cross axis: a child set to Fill in a hugging parent | the child stretches to the tallest sibling; the parent stays Hug (child 40 Fill, parent 40 Hug; sibling typed to 60 gives 60 Fill and 60 Hug); no notice | turned the hugging parent Fixed | fixed in #2099 (open) |
-| Cross axis: every child set to Fill | when the last non-Fill child is set, toast "Height set to Fixed for Frame 1" and the parent turns Fixed at its current size; typing 80 on the parent gives 80 Fixed with both children 80 Fill | not matched | fixed in #2099 (open) |
-| Vertical stack hugging width | C (20 by 10) set to W Fill gives C 100 and the parent 100 Hug; D typed to 150 gives C 150, parent 150 Hug; no toast | not matched | fixed in #2099 (open) |
-| Padding with a stretched child | padding 10 top and bottom, parent H 60 Hug; child H Fill gives 40 (the content box), parent stays 60 Hug | not matched | fixed in #2099 (open) |
-| Min height on a stretched child | min height 50 gives child 50 Fill and parent 50 Hug (the stretched child's minimum counts toward the hug size) | not matched | fixed in #2099 (open) |
-| Text sibling | rect H Fill beside two lines of text (Inter 24, line height 32): text 64 Hug, rect 64 Fill, parent 64 Hug; a third line gives 96, 96, 96 Hug | not matched | fixed in #2099 (open) |
+| Cross axis: every child set to Fill | when the last non-Fill child is set, toast "Height set to Fixed for Frame 1" and the parent turns Fixed at its current size; typing 80 on the parent gives 80 Fixed with both children 80 Fill | the parent turned Fixed and the child kept its own size | fixed in #2099 (open) |
+| Vertical stack hugging width | C (20 by 10) set to W Fill gives C 100 and the parent 100 Hug; D typed to 150 gives C 150, parent 150 Hug; no toast | the parent turned Fixed and the child kept its own size | fixed in #2099 (open) |
+| Padding with a stretched child | padding 10 top and bottom, parent H 60 Hug; child H Fill gives 40 (the content box), parent stays 60 Hug | the parent turned Fixed and the child kept its own size | fixed in #2099 (open) |
+| Min height on a stretched child | min height 50 gives child 50 Fill and parent 50 Hug (the stretched child's minimum counts toward the hug size) | the parent turned Fixed and the child kept its own size | fixed in #2099 (open) |
+| Text sibling | rect H Fill beside two lines of text (Inter 24, line height 32): text 64 Hug, rect 64 Fill, parent 64 Hug; a third line gives 96, 96, 96 Hug | the parent turned Fixed and the child kept its own size | fixed in #2099 (open) |
 | Main axis: a Fill child in a hugging parent | the parent turns Fixed (toast "Width set to Fixed for Frame 1", parent 197 Fixed) | the parent becomes fixed | matches |
 | Wrap on, Fill height on a child | "Fill container" for height is greyed out on a child of a wrapping row (checked only with the parent hugging height) | not compared | not measured (only the hugging case was checked) |
 | Setting a parent to Hug while a child fills along it | toast "Width set to Fixed for <child>"; FigCraft demotes the child silently | no notice | not measured as a fix (possible small follow-up: the same notice) |
@@ -73,9 +73,9 @@ Values read from the zoomed Design panel's fields and dropdowns, in horizontal r
 | Behaviour | Figma (measured) | FigCraft | Status |
 |---|---|---|---|
 | Main component width and height follow its content | main: horizontal auto layout, W Hug, H Hug (135 by 49); a pasted instance reads the same | instance root sizing did not follow its main | fixed in #2099 (open) |
-| A child set to Fill along the main axis | toast "Width set to Fixed for Frame 1"; main W Fixed 135, H Hug; the plain instance turns W Fixed 135 too, H Hug | not matched | fixed in #2099 (open) |
-| Instance with its width overridden to 200 | stays W 200 Fixed through the main's change, H keeps following (Hug) | not matched | fixed in #2099 (open) |
-| Main set back to Hug contents | toast "Width set to Fixed for Rectangle 1"; main 135 Hug; the plain instance back to 135 Hug; the overridden one stays 200 Fixed | not matched | fixed in #2099 (open) |
+| A child set to Fill along the main axis | toast "Width set to Fixed for Frame 1"; main W Fixed 135, H Hug; the plain instance turns W Fixed 135 too, H Hug | the instance's own resizing never followed its main | fixed in #2099 (open) |
+| Instance with its width overridden to 200 | stays W 200 Fixed through the main's change, H keeps following (Hug) | the instance's own resizing never followed its main | fixed in #2099 (open) |
+| Main set back to Hug contents | toast "Width set to Fixed for Rectangle 1"; main 135 Hug; the plain instance back to 135 Hug; the overridden one stays 200 Fixed | the instance's own resizing never followed its main | fixed in #2099 (open) |
 | Undo after the Fill change | unreliable in the web app (reverted the child, left the main Fixed) | not compared | inconclusive (not used as evidence) |
 
 ## Components
@@ -84,12 +84,12 @@ Third entry of the sidebar header's component dropdown, several layers selected.
 
 | Behaviour | Figma (measured) | FigCraft | Status |
 |---|---|---|---|
-| Create multiple components on frames named "Primary", "Secondary", "Ghost" | one set named "Component 1"; variants show their bare names; one property "Property 1" with the names as values, in canvas order left to right | not matched | fixed in #2095 (open) |
-| Frames named "Size=Small", "Size=Large", "Size=Medium" | set "Component 1"; property "Size", values parsed from the names (Layers shows "Small", "Large", "Medium") | not matched | fixed in #2095 (open) |
-| Three frames all named "Card" | set named "Card"; property "Property 1", every variant "Default"; the panel warns that some variants share property values, with "Select conflicting variants" | not matched | fixed in #2095 (open) |
-| Layout of the new set | no auto layout; the frames stay where they were; the set (purple dashed frame, stroke #8A38F5 inside 1 px, corner radius 5) wraps them with 20 px on every side; the set is selected afterwards; one undo reverts everything | not matched | fixed in #2095 (open) |
-| Wrap style, caret in one paragraph | Balance re-wraps only that paragraph; with the layer selected the control shows "Mixed" | levels not matched | fixed in #2094 (open) |
-| Wrap style set on the whole layer | Pretty overwrites the paragraph's Balance; editing again, both paragraphs show Pretty | levels not matched | fixed in #2094 (open) |
+| Create component set on frames named "Primary", "Secondary", "Ghost" | one set named "Component 1"; variants show their bare names; one property "Property 1" with the names as values, in canvas order left to right | no Create component set | fixed in #2095 (open) |
+| Frames named "Size=Small", "Size=Large", "Size=Medium" | set "Component 1"; property "Size", values parsed from the names (Layers shows "Small", "Large", "Medium") | no Create component set | fixed in #2095 (open) |
+| Three frames all named "Card" | set named "Card"; property "Property 1", every variant "Default"; the panel warns that some variants share property values, with "Select conflicting variants" | no Create component set | fixed in #2095 (open) |
+| Layout of the new set | no auto layout; the frames stay where they were; the set (purple dashed frame, stroke #8A38F5 inside 1 px, corner radius 5) wraps them with 20 px on every side; the set is selected afterwards; one undo reverts everything | no Create component set | fixed in #2095 (open) |
+| Wrap style, caret in one paragraph | Balance re-wraps only that paragraph; with the layer selected the control shows "Mixed" | a wrap style per layer only | fixed in #2094 (open) |
+| Wrap style set on the whole layer | Pretty overwrites the paragraph's Balance; editing again, both paragraphs show Pretty | a wrap style per layer only | fixed in #2094 (open) |
 | Text style carrying the wrap style | not checked | not compared | not measured (not checked) |
 
 ## Number field scrubbing
@@ -132,11 +132,11 @@ Real keys and clicks, an open pen path A-B-C-D (three segments), vector edit mod
 
 | Behaviour | Figma (measured) | FigCraft | Status |
 |---|---|---|---|
-| Copy a segment, leave edit mode, paste | a new layer holding only that segment, in place, sized to it | not matched | fixed in #2105 (open) |
-| Copy one point, paste | a new layer holding the segments touching the point, in place | not matched | fixed in #2105 (open) |
-| Cut a segment | removed from the network; the path splits into two subpaths in the same layer; edit mode stays; pasting outside gives a new layer with the cut segment, in place | not matched | fixed in #2105 (open) |
-| Paste while editing the same vector | no new layer; a duplicate of the segment is added to the network in place; the pasted points are selected | not matched | fixed in #2105 (open) |
-| Paste a copied rectangle while editing a vector | the rectangle's outline joins the network in place (four corners selected); no new layer; the bounds grow to include it | not matched | fixed in #2105 (open) |
+| Copy a segment, leave edit mode, paste | a new layer holding only that segment, in place, sized to it | copied the whole layer | fixed in #2105 (open) |
+| Copy one point, paste | a new layer holding the segments touching the point, in place | copied the whole layer | fixed in #2105 (open) |
+| Cut a segment | removed from the network; the path splits into two subpaths in the same layer; edit mode stays; pasting outside gives a new layer with the cut segment, in place | deleted the segment without copying it | fixed in #2105 (open) |
+| Paste while editing the same vector | no new layer; a duplicate of the segment is added to the network in place; the pasted points are selected | did nothing | fixed in #2105 (open) |
+| Paste a copied rectangle while editing a vector | the rectangle's outline joins the network in place (four corners selected); no new layer; the bounds grow to include it | did nothing | fixed in #2105 (open) |
 
 A click on a segment's middle can add a point there in Figma's edit mode (seen once); it did not change the rules above.
 
@@ -157,7 +157,7 @@ A click on a segment's middle can add a point there in Figma's edit mode (seen o
 
 | Behaviour | Figma (measured) | FigCraft | Status |
 |---|---|---|---|
-| Escape with a selection | deselects | did not deselect in the case measured | fixed in #2107 (open) |
+| Escape with a nested layer selected | one Escape selects nothing, whether the layer was selected on the canvas, from the Layers panel or by Tab | selected the parent first | fixed in #2107 (open) |
 
 ## Text-editing keys
 
