@@ -400,14 +400,11 @@ impl Session {
                 ds.revision += 1;
                 Ok(())
             }
-            Gesture::Pencil { points, pressure } => {
+            Gesture::Pencil { points, pressure, straight } => {
                 let (mut pts, mut pressure) = (points.clone(), pressure.clone());
-                if pts.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
-                    pts.push(ev.p());
-                    pressure.push(ev.pressure);
-                }
+                let straight = super::pen::pencil_sample(&mut pts, &mut pressure, *straight, ev);
                 self.tool.overlay.pen = pts.iter().map(|p| [p.x, p.y]).collect();
-                self.tool.gesture = Gesture::Pencil { points: pts, pressure };
+                self.tool.gesture = Gesture::Pencil { points: pts, pressure, straight };
                 if let Ok(ds) = self.ds_mut() {
                     ds.revision += 1;
                 }

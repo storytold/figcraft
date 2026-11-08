@@ -352,6 +352,22 @@ impl Session {
     }
 }
 
+/// Add the pointer's sample to a Pencil stroke; returns where a straight run starts. With Shift
+/// held the stroke runs straight from the point it had when Shift went down: the samples after it
+/// give way to the pointer's position.
+pub(crate) fn pencil_sample(points: &mut Vec<Point>, pressure: &mut Vec<Option<f32>>, straight: Option<usize>, ev: &PointerEvent) -> Option<usize> {
+    let straight = if ev.shift { straight.or(points.len().checked_sub(1)) } else { None };
+    if let Some(from) = straight {
+        points.truncate(from + 1);
+        pressure.truncate(from + 1);
+    }
+    if points.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
+        points.push(ev.p());
+        pressure.push(ev.pressure);
+    }
+    straight
+}
+
 /// Samples closer than this to the last one kept are dropped before smoothing: pointer jitter.
 const PENCIL_MIN_STEP: f64 = 1.5;
 

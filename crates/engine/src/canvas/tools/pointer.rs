@@ -162,7 +162,7 @@ impl Session {
                 ToolId::Pencil => {
                     // The preview draws in the colour the stroke will have (#1741).
                     self.tool.overlay.pen_color = self.pencil_color_at(ev.p()).ok();
-                    self.tool.gesture = Gesture::Pencil { points: vec![ev.p()], pressure: vec![ev.pressure] };
+                    self.tool.gesture = Gesture::Pencil { points: vec![ev.p()], pressure: vec![ev.pressure], straight: None };
                     Ok(())
                 }
                 ToolId::Comment => {

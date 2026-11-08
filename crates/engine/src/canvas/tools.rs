@@ -463,6 +463,9 @@ pub(crate) enum Gesture {
         points: Vec<Point>,
         /// The pen pressure at each point, where the device reports it.
         pressure: Vec<Option<f32>>,
+        /// While Shift is held: the point the stroke runs straight from ("To draw a straight
+        /// line, hold Shift as you move your cursor").
+        straight: Option<usize>,
     },
     TextSelect {
         id: NodeId,

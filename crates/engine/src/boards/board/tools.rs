@@ -71,7 +71,7 @@ impl Session {
                 Ok(())
             }
             ToolId::Marker | ToolId::Highlighter => {
-                self.tool.gesture = Gesture::Pencil { points: vec![ev.p()], pressure: vec![ev.pressure] };
+                self.tool.gesture = Gesture::Pencil { points: vec![ev.p()], pressure: vec![ev.pressure], straight: None };
                 Ok(())
             }
             ToolId::Connector => {

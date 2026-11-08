@@ -178,3 +178,26 @@ fn the_pencil_smooths_its_samples_into_a_few_curves() {
         assert!(off < 1.5, "the curve passes by every sample: {p:?} is {off} away");
     }
 }
+
+/// Shift makes the Pencil draw a straight line ("To draw a straight line, hold Shift as you move
+/// your cursor"): a wobbly stroke drawn with it held is one straight segment end to end.
+#[test]
+fn the_pencil_draws_straight_with_shift() {
+    use figcraft_geom::kurbo::PathSeg;
+    let mut s = Session::new();
+    s.execute("tool.set", &json!({"tool": "pencil"})).unwrap();
+    let ev = |kind, x: f64, y: f64| PointerEvent { shift: true, ..PointerEvent::at(kind, x, y, 1.0) };
+    s.pointer(&ev(PointerKind::Down, 0.0, 0.0)).unwrap();
+    for i in 1..=40 {
+        let x = f64::from(i) * 5.0;
+        s.pointer(&ev(PointerKind::Move, x, (x / 15.0).sin() * 20.0)).unwrap();
+    }
+    s.pointer(&ev(PointerKind::Up, 200.0, 100.0)).unwrap();
+    let doc = s.doc().unwrap();
+    let n = doc.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).expect("a pencil stroke");
+    let NodeKind::Vector { network } = &n.kind else { panic!("not a vector") };
+    let path = doc.world_transform(n.id) * network.stroke_path();
+    let segs: Vec<PathSeg> = path.segments().collect();
+    let [PathSeg::Line(l)] = segs[..] else { panic!("one straight segment: {segs:?}") };
+    assert!((l.p0 - Point::new(0.0, 0.0)).hypot() < 1e-6 && (l.p1 - Point::new(200.0, 100.0)).hypot() < 1e-6, "{l:?}");
+}
