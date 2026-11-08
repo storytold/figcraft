@@ -35,7 +35,7 @@ pub(crate) use inspect::{inspect_section, prop_row};
 pub(crate) use menu::menu_row_width;
 #[cfg(test)]
 pub(crate) use menu::preview_blend;
-pub use menu::{blend_menu, context_popup, menu_check, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
+pub use menu::{blend_menu, context_popup, menu_check, menu_icon_item, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
 pub(crate) use menu::{block, menu_row_lit, menu_style, row, row_rect};
 use paints::{appearance, paints, variable_modes};
 pub(crate) use stroke::{CAP_ART_W, cap_art, join_label};
@@ -89,12 +89,18 @@ impl FigApp {
 
     /// Apply a field edit through any command: `params` builds the command's params from the value.
     pub fn field_run(&mut self, edit: Option<FieldEdit>, cmd: &str, params: impl Fn(f64) -> Value) {
+        self.field_run_named(edit, "Edit", cmd, params);
+    }
+
+    /// Apply a field edit with a specific undo label for scrubs; commit only on release.
+    /// Typed edits use `run`; scrub errors are discarded as in `field_run`.
+    pub(crate) fn field_run_named(&mut self, edit: Option<FieldEdit>, label: &str, cmd: &str, params: impl Fn(f64) -> Value) {
         match edit {
             Some(FieldEdit::Set(v)) => {
                 self.run(cmd, params(v));
             }
             Some(FieldEdit::Scrub(v, done)) => {
-                let _ = self.session.begin_interaction("Edit");
+                let _ = self.session.begin_interaction(label);
                 let _ = self.session.execute(cmd, &params(v));
                 if done {
                     let _ = self.session.commit_interaction();
@@ -113,7 +119,9 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     // take 1 pt off each side of the panel (240 pt by default)).
     let edge = ui.max_rect();
     app.ui.right_panel_rect = Some(edge);
-    ui.painter().line_segment([edge.left_top(), edge.left_bottom()], Stroke::new(1.0, t.border));
+    // On the side facing the canvas (its right in a mirrored window).
+    let x = if app.ui.mirrored { edge.max.x } else { edge.min.x };
+    ui.painter().vline(x, edge.y_range(), Stroke::new(1.0, t.border));
     let w = ui.available_width();
     // Top bar: people (you and the others in a live session), present, share.
     let (top, _) = ui.allocate_exact_size(vec2(w, 48.0), Sense::hover());
@@ -311,27 +319,50 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
 /// Draw the page section: background and colour profile, local variables/styles, and the
 /// page export section.
 fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
-    let t = Tokens::get(ui.ctx());
     let Ok(page) = app.session.page() else { return };
     let bg = match doc.node(page).map(|n| &n.kind) {
         Some(NodeKind::Page { background, .. }) => *background,
         _ => figcraft_color::Color::DEFAULT_PAGE,
     };
     widgets::section_header(ui, tr("Page"), &[], false);
-    let mut new_hex = None;
+    // The new colour and, from a scrub, whether the scrub is over (live edits stay one undo step).
+    let mut new_color: Option<(figcraft_color::Color, Option<bool>)> = None;
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
         let sw = widgets::swatch(ui, &p, 16.0);
         app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
-        if let Some(h) = widgets::text_field(ui, Id::unique("pagebg"), &bg.to_hex(), 96.0, "") {
-            new_hex = Some(h);
+        // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
+        // (`FF000080`; `FF0000FF` asks for opaque).
+        if let Some(h) = widgets::text_field(ui, Id::unique("pagebg"), &bg.to_hex(), 96.0, "")
+            && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+        {
+            let digits = h.trim().trim_start_matches('#');
+            let carries_alpha = matches!(digits.len(), 4 | 8) && digits.chars().all(|ch| ch.is_ascii_hexdigit());
+            new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
         }
-        widgets::label(ui, "100 %", t.text);
+        // The opacity: a field like every other opacity field, not a label (#1748).
+        let alpha = |v: f64| bg.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);
+        let shown = Some(f64::from((bg.a * 100.0).round()));
+        match widgets::number_field(ui, Id::unique("pagebg_a"), Lead::Named(tr("Opacity")), shown, "%", 56.0, 1.0) {
+            Some(FieldEdit::Set(v)) => new_color = Some((alpha(v), None)),
+            Some(FieldEdit::Scrub(v, done)) => new_color = Some((alpha(v), Some(done))),
+            None => {}
+        }
     });
-    if let Some(h) = new_hex
-        && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
-    {
-        app.run("page.setBackground", json!({"color": c.to_css_hex()}));
+    if let Some((c, scrub)) = new_color {
+        let p = json!({"color": c.to_css_hex()});
+        match scrub {
+            None => {
+                app.run("page.setBackground", p);
+            }
+            Some(done) => {
+                let _ = app.session.begin_interaction("Page background");
+                let _ = app.session.execute("page.setBackground", &p);
+                if done {
+                    let _ = app.session.commit_interaction();
+                }
+            }
+        }
     }
     widgets::separator(ui);
     widgets::section_header(ui, tr("Color profile"), &[], false);
@@ -483,18 +514,17 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     (BoolOp::Intersect, "bool.intersect"),
                     (BoolOp::Exclude, "bool.exclude"),
                 ] {
+                    // Each entry leads with its operation's icon (the result it previews).
                     let key = crate::shortcuts::shortcut(c).unwrap_or("");
-                    let picked = match current {
-                        Some(cur) => menu_check(ui, cur == op, tr(op.label()), key),
-                        None => menu_item(ui, tr(op.label()), key),
-                    };
+                    let icon = crate::layers::op_icon(op);
+                    let picked = menu_icon_item(ui, Some(icon), current.map(|cur| cur == op), tr(op.label()), key);
                     if picked {
                         app.run(c, json!({}));
                         ui.close();
                     }
                 }
                 let key = crate::shortcuts::shortcut("vector.flatten").unwrap_or("");
-                let flatten = if current.is_some() { menu_item_beside_checks(ui, tr("Flatten"), key) } else { menu_item(ui, tr("Flatten"), key) };
+                let flatten = menu_icon_item(ui, None, None, tr("Flatten"), key);
                 if flatten {
                     app.run("vector.flatten", json!({}));
                     ui.close();

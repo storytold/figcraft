@@ -619,7 +619,7 @@ fn other_layer_kinds_import_as_the_closest_layers() {
     let world = doc.world_transform(link.id);
     let ends: Vec<(f64, f64)> =
         network_of(&doc, "Link").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
-    assert_eq!(ends, [(0.0, 300.0), (200.0, 300.0), (200.0, 50.0), (400.0, 50.0)]);
+    assert_eq!(ends, [(0.0, 300.0), (198.0, 300.0), (198.0, 50.0), (396.0, 50.0)]);
     assert_eq!(link.stroke.cap_end, StrokeCap::TriangleArrow);
     // A table: a frame.
     assert!(matches!(named(&doc, "Grid").kind, NodeKind::Frame));
@@ -656,14 +656,62 @@ fn connectors_without_a_saved_path_follow_their_line_style() {
     // Curved: one curve from A's right side to B's left, leaving and arriving level.
     let curve = network_of(&doc, "Curve");
     let ends: Vec<_> = curve.vertices.iter().map(|v| world("Curve") * figcraft_doc::geom::Point::new(v.x, v.y)).collect();
-    assert_eq!(ends.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), [(100.0, 650.0), (300.0, 650.0)]);
+    assert_eq!(ends.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), [(104.0, 650.0), (296.0, 650.0)], "END_GAP outside the sides");
     assert_eq!(curve.segments.len(), 1);
-    assert_eq!((curve.segments[0].ta, curve.segments[0].tb), ((100.0, 0.0), (-100.0, 0.0)), "the curve leaves and arrives along the sides");
+    assert_eq!((curve.segments[0].ta, curve.segments[0].tb), ((96.0, 0.0), (-96.0, 0.0)), "the curve leaves and arrives along the sides");
     // Straight: unchanged, to the points the file gives on the layers.
     let line: Vec<_> =
         network_of(&doc, "Line").vertices.iter().map(|v| world("Line") * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
     assert_eq!(line, [(100.0, 650.0), (300.0, 650.0)]);
     assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
+}
+
+/// #1909: a connector end whose magnet is `AUTO` (FigJam picks the side when it draws) or `CENTER`
+/// (the end aims at the layer's middle) leaves the side facing the other end, as a board connector
+/// drawn here does, whatever `relativePosition` the file kept for it; a named magnet still wins.
+#[test]
+fn connectors_with_an_automatic_side_leave_the_side_facing_the_target() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, 600.0))]);
+    // The ends keep a stale point on the left of A and the right of B, as the reporter's file did.
+    let end = |node, magnet: &'static str, x| o(vec![("endpointNodeID", g(node)), ("magnet", e(magnet)), ("relativePosition", xy(x, 0.5))]);
+    let joined = |id, name: &str, style: &'static str, start: &'static str, finish: &'static str| {
+        node(
+            id,
+            Some((1, "+")),
+            "CONNECTOR",
+            name,
+            vec![
+                ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+                ("connectorStart", end(60, start, 0.0)),
+                ("connectorEnd", end(61, finish, 1.0)),
+                ("connectorLineStyle", e(style)),
+            ],
+        )
+    };
+    nodes.extend([
+        box_at(60, "A", 0.0),
+        box_at(61, "B", 300.0),
+        joined(62, "Elbow", "ELBOWED", "AUTO", "AUTO"),
+        joined(63, "Line", "STRAIGHT", "CENTER", "CENTER"),
+        joined(64, "Curve", "CURVED", "AUTO", "AUTO"),
+        joined(65, "Named", "ELBOWED", "BOTTOM", "AUTO"),
+    ]);
+    let (doc, _) = import(&canvas(&schema(), &message), "Sides").unwrap();
+    let ends = |name: &str| -> ((f64, f64), (f64, f64)) {
+        let world = doc.world_transform(named(&doc, name).id);
+        let pts: Vec<(f64, f64)> =
+            network_of(&doc, name).vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
+        (pts[0], pts[pts.len() - 1])
+    };
+    // From A's right side (facing B) to B's left side (facing A), not from the stale left point; each
+    // end starts `END_GAP` (4) outside its side.
+    for name in ["Elbow", "Line", "Curve"] {
+        assert_eq!(ends(name), ((104.0, 650.0), (296.0, 650.0)), "{name}");
+    }
+    // A named magnet keeps its side: the bottom of A; the automatic end still faces A.
+    assert_eq!(ends("Named"), ((50.0, 704.0), (296.0, 650.0)));
 }
 
 /// A connector with a label but no saved snapshot: a frame holding its line and its label,
@@ -862,4 +910,86 @@ fn write_fixture() {
     if let Ok(out) = std::env::var("FIG_FIXTURE_OUT") {
         std::fs::write(out, zip_file(&tail_canvas())).unwrap();
     }
+}
+
+/// An elbow connector saved with its path (#1910): FigJam's control points, one per run between
+/// the first and the last, each on its run with the run's axis, give the path the connector keeps;
+/// the first run leaves the start's side and the last arrives at the end's.
+#[test]
+fn an_elbow_connector_saved_with_its_path_keeps_it() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x, y| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, y))]);
+    let point = |x, y, ax, ay| o(vec![("position", xy(x, y)), ("axis", xy(ax, ay))]);
+    // From A's bottom, across at y 740, down at x 200, into B's left: four runs.
+    let saved = node(
+        66,
+        Some((1, "+")),
+        "CONNECTOR",
+        "Saved",
+        vec![
+            ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+            ("connectorStart", o(vec![("endpointNodeID", g(64)), ("relativePosition", xy(0.5, 1.0))])),
+            ("connectorEnd", o(vec![("endpointNodeID", g(65)), ("relativePosition", xy(0.0, 0.5))])),
+            ("connectorLineStyle", e("ELBOWED")),
+            ("connectorControlPoints", arr(vec![point(150.0, 740.0, 1.0, 0.0), point(200.0, 800.0, 0.0, 1.0)])),
+        ],
+    );
+    nodes.extend([box_at(64, "A", 0.0, 600.0), box_at(65, "B", 300.0, 800.0), saved]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Saved path").unwrap();
+    let world = doc.world_transform(named(&doc, "Saved").id);
+    let line: Vec<_> =
+        network_of(&doc, "Saved").vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
+    // Each end starts `END_GAP` (4) outside its side's border.
+    assert_eq!(line, [(50.0, 704.0), (50.0, 740.0), (200.0, 740.0), (200.0, 850.0), (296.0, 850.0)]);
+    // The fixture's own Link, saved without a path, is routed here: the note counts it alone.
+    let routed: Vec<_> = warnings.iter().filter(|w| w.contains("FigCraft's own routing")).collect();
+    assert_eq!(routed.len(), 1, "{warnings:?}");
+    assert!(!routed[0].contains('×'), "a connector with its path isn't counted among those routed here: {routed:?}");
+}
+
+/// Saved control points that don't make a path from the connector's sides (#1910): a first run
+/// that would leave the bottom sideways, a point off both axes, or two runs in a row the same way
+/// leave the connector to FigCraft's routing, as one saved without a path is.
+#[test]
+fn an_elbow_whose_saved_path_doesnt_fit_its_sides_is_routed_here() {
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let box_at = |id, name: &str, x, y| node(id, Some((1, "*")), "RECTANGLE", name, vec![("size", xy(100.0, 100.0)), ("transform", at(x, y))]);
+    let point = |x, y, ax, ay| o(vec![("position", xy(x, y)), ("axis", xy(ax, ay))]);
+    let elbow = |id, name: &str, points: Vec<Kv<'static>>| {
+        let mut fields = vec![
+            ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)])),
+            ("connectorStart", o(vec![("endpointNodeID", g(64)), ("relativePosition", xy(0.5, 1.0))])),
+            ("connectorEnd", o(vec![("endpointNodeID", g(65)), ("relativePosition", xy(0.0, 0.5))])),
+            ("connectorLineStyle", e("ELBOWED")),
+        ];
+        if !points.is_empty() {
+            fields.push(("connectorControlPoints", arr(points)));
+        }
+        node(id, Some((1, "+")), "CONNECTOR", name, fields)
+    };
+    nodes.extend([
+        box_at(64, "A", 0.0, 600.0),
+        box_at(65, "B", 300.0, 800.0),
+        elbow(66, "Plain", vec![]),
+        elbow(67, "Sideways", vec![point(100.0, 650.0, 0.0, 1.0)]),
+        elbow(68, "Askew", vec![point(150.0, 740.0, 1.0, 1.0)]),
+        elbow(69, "Repeated", vec![point(150.0, 740.0, 1.0, 0.0), point(150.0, 760.0, 1.0, 0.0)]),
+        // The first run would go up from A's bottom, through A; the last would arrive at B's left
+        // from inside B. Each run is at right angles to its side, so only the way it goes is wrong.
+        elbow(70, "Backwards", vec![point(100.0, 650.0, 1.0, 0.0), point(200.0, 740.0, 0.0, 1.0)]),
+        elbow(71, "Inside", vec![point(150.0, 740.0, 1.0, 0.0), point(350.0, 800.0, 0.0, 1.0)]),
+    ]);
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Unfit paths").unwrap();
+    let line = |name: &str| -> Vec<(f64, f64)> {
+        let world = doc.world_transform(named(&doc, name).id);
+        network_of(&doc, name).vertices.iter().map(|v| world * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect()
+    };
+    let plain = line("Plain");
+    assert!(plain.len() >= 3, "routed in right angles: {plain:?}");
+    for name in ["Sideways", "Askew", "Repeated", "Backwards", "Inside"] {
+        assert_eq!(line(name), plain, "{name} is routed as one without a path");
+    }
+    assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
 }

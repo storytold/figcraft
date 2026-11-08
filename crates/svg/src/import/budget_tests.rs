@@ -111,3 +111,31 @@ fn linked_files_and_other_mime_types_stay_unresolved() {
     );
     assert_eq!(layers(data.as_bytes(), Limits::default()).unwrap(), layers(svg("").as_bytes(), Limits::default()).unwrap());
 }
+
+#[test]
+fn a_document_compressed_twice_is_refused_not_unpacked_again() {
+    // One gzip layer is unpacked within the budget; usvg would unpack a second one without any.
+    let twice = gzip(&gzip(svg(&" ".repeat(1 << 20)).as_bytes()));
+    let e = layers(&twice, Limits { document: 4 << 20, ..Limits::default() }).unwrap_err();
+    assert!(e.contains("another compressed file"), "{e}");
+    // Embedded, the same is dropped.
+    let inner = svg(r##"<rect width="10" height="10"/>"##);
+    let data = svg(&format!(
+        r##"<image width="10" height="10" xlink:href="data:image/svg+xml;base64,{}"/>"##,
+        base64::engine::general_purpose::STANDARD.encode(gzip(&gzip(inner.as_bytes())))
+    ))
+    .into_bytes();
+    assert_eq!(layers(&data, Limits::default()).unwrap(), layers(svg("").as_bytes(), Limits::default()).unwrap());
+}
+
+#[test]
+fn a_refused_embedded_bomb_uses_up_the_budget_for_the_images_after_it() {
+    let bomb = gzip(svg(&" ".repeat(1 << 20)).as_bytes());
+    let inner = svg(r##"<rect width="10" height="10"/>"##);
+    let image = |href: String| format!(r##"<image width="10" height="10" xlink:href="{href}"/>"##);
+    let bomb_uri = format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(&bomb));
+    let data = svg(&format!("{}{}", image(bomb_uri).repeat(8), image(uri(inner.as_bytes())))).into_bytes();
+    let limits = Limits { embedded: 4096, ..Limits::default() };
+    let empty = layers(svg("").as_bytes(), limits).unwrap();
+    assert_eq!(layers(&data, limits).unwrap(), empty, "the first bomb spends the allowance; nothing after it unpacks");
+}

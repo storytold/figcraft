@@ -133,6 +133,7 @@ fn text_style_differs(x: &TextData, y: &TextData) -> bool {
         || x.max_lines != y.max_lines
         || x.features != y.features
         || x.word_break != y.word_break
+        || x.wrap_style != y.wrap_style
 }
 
 /// Whether a geometry change of `id` comes from layout rather than the user: an ancestor was

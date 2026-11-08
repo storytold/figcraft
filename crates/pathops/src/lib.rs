@@ -459,6 +459,8 @@ fn path_end(path: &BezPath, at_end: bool) -> Option<(Point, Vec2)> {
 
 /// The filled arrowhead shape for `cap` at one end of an open path.
 pub fn arrowhead(path: &BezPath, cap: StrokeCap, weight: f64, at_end: bool) -> Option<BezPath> {
+    // Capped like a stroke's width: the circle below is flattened at a fixed tolerance.
+    let weight = weight.min(MAX_STROKE_WIDTH);
     let (tip, dir) = path_end(path, at_end)?;
     let n = Vec2::new(-dir.y, dir.x);
     let s = (weight * 3.0).max(6.0);
@@ -617,7 +619,8 @@ fn elliptical_rect(r: figcraft_geom::Rect, [tl, tr, br, bl]: [(f64, f64); 4]) ->
         if rx > 0.0 && ry > 0.0 {
             let c = Point::new(corner.x + sx * rx, corner.y + sy * ry);
             p.line_to((c.x + rx * start.cos(), c.y + ry * start.sin()));
-            kurbo::Arc::new(c, (rx, ry), start, FRAC_PI_2, 0.0).to_cubic_beziers(0.01, |a, b, e| p.curve_to(a, b, e));
+            kurbo::Arc::new(c, (rx, ry), start, FRAC_PI_2, 0.0)
+                .to_cubic_beziers(figcraft_geom::arc_tolerance(rx.max(ry)), |a, b, e| p.curve_to(a, b, e));
         } else {
             p.line_to(corner);
         }
@@ -758,6 +761,15 @@ mod tests {
         let center = stroke_outline(&r, &StrokeProps { align: StrokeAlign::Center, ..props }, true);
         let b = center.bounding_box();
         assert!((b.x0 + 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn an_absurd_arrow_weight_is_capped() {
+        let mut line = BezPath::new();
+        line.move_to((0.0, 0.0));
+        line.line_to((100.0, 0.0));
+        let head = arrowhead(&line, StrokeCap::CircleFilled, 1e300, true).unwrap();
+        assert!(head.elements().len() < 10_000, "{}", head.elements().len());
     }
 
     #[test]

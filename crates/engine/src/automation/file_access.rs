@@ -277,6 +277,14 @@ pub fn read_capped(path: impl AsRef<Path>, max: u64) -> Result<Vec<u8>> {
         return Err(refuse(format!("is {}, more than the {} allowed here", size(meta.len()), size(max))));
     }
     let f = std::fs::File::open(p).map_err(io(path))?;
+    // What was opened, not what was looked at: the path could have been swapped in between.
+    let meta = f.metadata().map_err(io(path))?;
+    if !meta.is_file() {
+        return Err(refuse("isn't a regular file (a device or a pipe?), so it isn't read".into()));
+    }
+    if meta.len() > max {
+        return Err(refuse(format!("is {}, more than the {} allowed here", size(meta.len()), size(max))));
+    }
     let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
     f.take(max.saturating_add(1)).read_to_end(&mut bytes).map_err(io(path))?;
     // It grew after it was looked at.
@@ -290,6 +298,12 @@ pub fn read_capped(path: impl AsRef<Path>, max: u64) -> Result<Vec<u8>> {
 pub fn open(path: impl AsRef<Path>) -> Result<std::fs::File> {
     let path = path.as_ref();
     std::fs::File::open(allow(path, Access::Read)?).map_err(io(path))
+}
+
+/// What the file system says about `path` itself (a link is not followed).
+pub fn link_metadata(path: impl AsRef<Path>) -> Result<std::fs::Metadata> {
+    let path = path.as_ref();
+    std::fs::symlink_metadata(allow(path, Access::Read)?).map_err(io(path))
 }
 
 /// What the file system says about `path` (links followed).

@@ -284,3 +284,31 @@ fn cancelling_the_upload_changes_nothing() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A region of a vector selected in edit mode (#1875): Upload from computer puts the image in the
+/// region's own fill the picker shows, the layer's fills untouched; a file dropped on the picker
+/// isn't taken for a region's paint (it goes to the canvas, as without the picker).
+#[test]
+fn upload_from_computer_on_a_regions_fill_puts_the_image_in_the_region() {
+    let dir = temp_dir("region");
+    let mut s = Session::new();
+    let id = crate::region_fill_rows_tests::two_region_vector(&mut s);
+    s.execute("vector.edit.begin", &json!({"id": id.0})).unwrap();
+    s.execute("vector.edit.select", &json!({"regions": [1]})).unwrap();
+    s.execute("fill.set", &json!({"ids": [id.0], "color": "#FF0000"})).unwrap();
+    let layer_fills = s.doc().unwrap().node(id).unwrap().fills.clone();
+    let mut u = Ui::new(s);
+    open_picker(&mut u, id, 0);
+    let asked = fake_picker(&mut u, Some(png(5)), false, &dir);
+    click_image_tab(&mut u);
+    assert!(super::image_drop_target(&u.app, &u.ctx).is_none(), "a drop isn't taken for a region's paint");
+    click_upload(&mut u);
+    assert_eq!(asked.load(Ordering::SeqCst), 1);
+    let doc = u.app.session.doc().unwrap();
+    let n = doc.node(id).unwrap();
+    assert_eq!(n.fills, layer_fills, "the layer's fills are untouched");
+    let figcraft_doc::NodeKind::Vector { network } = &n.kind else { panic!("not a vector") };
+    let region = network.regions[1].fills.clone().unwrap();
+    assert!(matches!(region.last().map(|p| &p.kind), Some(PaintKind::Image(_))), "{region:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

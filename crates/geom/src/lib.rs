@@ -18,6 +18,74 @@ pub use transform::*;
 /// Corner radii in clockwise order from the top-left: `[tl, tr, br, bl]`.
 pub type Radii = [f64; 4];
 
+/// The largest magnitude a shape builder takes for a size, radius or angle. kurbo subdivides an
+/// arc in proportion to the sixth root of its radius, so an uncapped radius means an unbounded
+/// number of segments: 1e36 is about a million cubics and 1e60 never returns. Sizes come from
+/// files and commands, so they are capped here (the sanity bound `measure::finite_path` uses).
+pub const MAX_COORD: f64 = 1e9;
+
+/// `v` as a usable size, radius or angle: NaN and infinities are 0 and the magnitude is capped at
+/// [`MAX_COORD`].
+fn bounded(v: f64) -> f64 {
+    if v.is_finite() { v.clamp(-MAX_COORD, MAX_COORD) } else { 0.0 }
+}
+
+/// The tolerance an arc of radius `r` is turned into cubics with: a hundredth of a unit, or a
+/// millionth of the radius once that is more. kurbo's cubic count grows with radius ÷ tolerance,
+/// so a fixed tolerance let a radius of 1e300 ask for more cubics than memory holds.
+pub fn arc_tolerance(r: f64) -> f64 {
+    // An infinite radius (finite inputs can overflow on the way, 1e300 squared) gets an infinite
+    // tolerance: kurbo's count is then NaN, which it floors to its minimum of a few cubics.
+    if r.is_finite() { (r.abs() * 1e-6).max(0.01) } else { f64::INFINITY }
+}
+
+/// Largest coordinate, radius or other number SVG path data may carry ([`svg_path`]).
+pub const MAX_SVG_COORD: f64 = 1e9;
+
+/// `d` (SVG path data) as a path. A number past [`MAX_SVG_COORD`] is refused before parsing: the
+/// parser turns an arc into cubics by its radius at a fixed tolerance, so a radius of 1e300 would
+/// be unbounded work and memory on the way to geometry that is refused anyway.
+pub fn svg_path(d: &str) -> Result<BezPath, String> {
+    if number_past(d, MAX_SVG_COORD) {
+        return Err(format!("path data holds a number too large (past {MAX_SVG_COORD:e})"));
+    }
+    BezPath::from_svg(d).map_err(|e| e.to_string())
+}
+
+/// Whether a number in SVG path data `d` lies past ±`max` (or isn't finite). Numbers are split as
+/// the SVG grammar does (`1-2` and `.5.5` are two each; `1e-3` is one).
+fn number_past(d: &str, max: f64) -> bool {
+    fn big(cur: &mut String, max: f64) -> bool {
+        let big = cur.parse::<f64>().is_ok_and(|v| v.is_nan() || v.abs() > max);
+        cur.clear();
+        big
+    }
+    let (mut cur, mut dot, mut exp) = (String::new(), false, false);
+    for c in d.chars() {
+        let continues = match c {
+            '0'..='9' => true,
+            '.' => !dot && !exp,
+            'e' | 'E' => !exp && cur.chars().any(|c| c.is_ascii_digit()),
+            '+' | '-' => cur.ends_with(['e', 'E']),
+            _ => false,
+        };
+        if continues {
+            dot |= c == '.';
+            exp |= matches!(c, 'e' | 'E');
+            cur.push(c);
+            continue;
+        }
+        if big(&mut cur, max) {
+            return true;
+        }
+        (dot, exp) = (c == '.', false);
+        if matches!(c, '+' | '-' | '.') {
+            cur.push(c);
+        }
+    }
+    big(&mut cur, max)
+}
+
 fn finite(v: f64) -> f64 {
     if v.is_finite() { v } else { 0.0 }
 }
@@ -28,15 +96,15 @@ fn finite(v: f64) -> f64 {
 /// Radii are clamped so adjacent corners never overlap; when smoothing doesn't fit, it is reduced
 /// first, then the radius.
 pub fn rounded_rect(width: f64, height: f64, radii: Radii, smoothing: f64) -> BezPath {
-    let w = finite(width).max(0.0);
-    let h = finite(height).max(0.0);
+    let w = bounded(width).max(0.0);
+    let h = bounded(height).max(0.0);
     let mut path = BezPath::new();
     if w <= 0.0 && h <= 0.0 {
         return path;
     }
-    let s = finite(smoothing).clamp(0.0, 1.0);
+    let s = bounded(smoothing).clamp(0.0, 1.0);
     let max_r = w.min(h) / 2.0;
-    let radii = radii.map(|r| finite(r).clamp(0.0, max_r));
+    let radii = radii.map(|r| bounded(r).clamp(0.0, max_r));
     if radii.iter().all(|r| *r <= 0.0) {
         path.move_to((0.0, 0.0));
         path.line_to((w, 0.0));
@@ -126,7 +194,7 @@ fn append_corner(path: &mut BezPath, corner: Point, din: Vec2, dout: Vec2, prof:
     }
     if sweep.abs() > 1e-9 {
         let arc = kurbo::Arc::new(center, (r, r), a0, sweep, 0.0);
-        arc.to_cubic_beziers(0.01, |p1, p2, p| path.curve_to(p1, p2, p));
+        arc.to_cubic_beziers(arc_tolerance(r), |p1, p2, p| path.curve_to(p1, p2, p));
     }
     let end = at(0.0, p);
     if a + b + c > 1e-9 {
@@ -140,7 +208,7 @@ fn append_corner(path: &mut BezPath, corner: Point, din: Vec2, dout: Vec2, prof:
 /// first vertex at the top centre (Figma's polygon).
 pub fn polygon_points(width: f64, height: f64, count: u32) -> Vec<Point> {
     let n = count.clamp(3, 120);
-    let (rx, ry) = (finite(width) / 2.0, finite(height) / 2.0);
+    let (rx, ry) = (bounded(width) / 2.0, bounded(height) / 2.0);
     (0..n)
         .map(|i| {
             let t = -FRAC_PI_2 + TAU * f64::from(i) / f64::from(n);
@@ -152,8 +220,8 @@ pub fn polygon_points(width: f64, height: f64, count: u32) -> Vec<Point> {
 /// The vertices of a star with `count` points and `inner_ratio` (0..1) inner radius.
 pub fn star_points(width: f64, height: f64, count: u32, inner_ratio: f64) -> Vec<Point> {
     let n = count.clamp(3, 120);
-    let k = finite(inner_ratio).clamp(0.001, 1.0);
-    let (rx, ry) = (finite(width) / 2.0, finite(height) / 2.0);
+    let k = bounded(inner_ratio).clamp(0.001, 1.0);
+    let (rx, ry) = (bounded(width) / 2.0, bounded(height) / 2.0);
     (0..n * 2)
         .map(|i| {
             let t = -FRAC_PI_2 + PI * f64::from(i) / f64::from(n);
@@ -170,7 +238,7 @@ pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
     if n < 2 {
         return path;
     }
-    let radius = finite(radius).max(0.0);
+    let radius = bounded(radius).max(0.0);
     if radius <= 0.0 || n < 3 {
         for (i, p) in points.iter().enumerate() {
             if i == 0 {
@@ -236,8 +304,8 @@ pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
 /// [`rounded_rect`], when a smoothed corner doesn't fit in half of its shorter edge, smoothing is
 /// reduced first, then the radius. Without smoothing this is [`rounded_polygon`].
 pub fn smoothed_polygon(points: &[Point], radius: f64, smoothing: f64) -> BezPath {
-    let s = finite(smoothing).clamp(0.0, 1.0);
-    let radius = finite(radius).max(0.0);
+    let s = bounded(smoothing).clamp(0.0, 1.0);
+    let radius = bounded(radius).max(0.0);
     let n = points.len();
     if s <= 0.0 || radius <= 0.0 || n < 3 {
         return rounded_polygon(points, radius);
@@ -249,65 +317,131 @@ pub fn smoothed_polygon(points: &[Point], radius: f64, smoothing: f64) -> BezPat
         };
         let (v1, v2) = (*prev - *cur, *next - *cur);
         let (l1, l2) = (v1.hypot(), v2.hypot());
-        let angle = if l1 < 1e-9 || l2 < 1e-9 { 0.0 } else { (v1 / l1).dot(v2 / l2).clamp(-1.0, 1.0).acos() };
-        if angle < 1e-6 || (PI - angle) < 1e-6 {
+        let corner = if l1 < 1e-9 || l2 < 1e-9 { None } else { smooth_corner(*cur, v1 / l1, v2 / l2, l1.min(l2) / 2.0, radius, s) };
+        let Some(k) = corner else {
             line_or_move(&mut path, *cur);
             continue;
+        };
+        line_or_move(&mut path, k.start);
+        match k.ease_in {
+            Some((h1, h2)) => path.curve_to(h1, h2, k.p3),
+            None => path.line_to(k.p3),
         }
-        let (u1, u2) = (v1 / l1, v2 / l2);
-        // The plain corner's length along each edge, then the fit: smoothing first, then the radius.
-        let max_p = l1.min(l2) / 2.0;
-        let mut r = radius;
-        let mut t = r / (angle / 2.0).tan();
-        let mut sm = s;
-        if (1.0 + sm) * t > max_p {
-            sm = (max_p / t - 1.0).clamp(0.0, sm);
+        if k.sweep.abs() > 1e-9 {
+            kurbo::Arc::new(k.center, (k.r, k.r), k.a0, k.sweep, 0.0).to_cubic_beziers(arc_tolerance(k.r), |p1, p2, q| path.curve_to(p1, p2, q));
         }
-        if t > max_p {
-            r *= max_p / t;
-            t = max_p;
-        }
-        let p = ((1.0 + sm) * t).min(max_p);
-        // Each easing curve covers `beta` of the turn and ends on the arc at `back` along the edge
-        // and `side` across it; its last handle points along the arc there.
-        let beta = (PI - angle) * sm / 2.0;
-        let back = t - r * beta.sin();
-        let side = r * (1.0 - beta.cos());
-        let c = r * (beta / 2.0).tan() * beta.cos();
-        let b = ((p - back - c) / 3.0).max(0.0);
-        let a = 2.0 * b;
-        let bisector = (u1 + u2).normalize();
-        let center = *cur + bisector * (r / (angle / 2.0).sin());
-        // A point `along` an edge from the vertex and `across` it toward the arc's center.
-        let at = |u: Vec2, along: f64, across: f64| *cur + u * along + (bisector - u * bisector.dot(u)).normalize() * across;
-        line_or_move(&mut path, at(u1, p, 0.0));
-        let p3 = at(u1, back, side);
-        let p4 = at(u2, back, side);
-        if a + b + c > 1e-9 {
-            path.curve_to(at(u1, p - a, 0.0), at(u1, p - a - b, 0.0), p3);
-        } else {
-            path.line_to(p3);
-        }
-        let a0 = (p3 - center).atan2();
-        let mut sweep = (p4 - center).atan2() - a0;
-        while sweep <= -PI {
-            sweep += TAU;
-        }
-        while sweep > PI {
-            sweep -= TAU;
-        }
-        if sweep.abs() > 1e-9 {
-            kurbo::Arc::new(center, (r, r), a0, sweep, 0.0).to_cubic_beziers(0.01, |p1, p2, q| path.curve_to(p1, p2, q));
-        }
-        let end = at(u2, p, 0.0);
-        if a + b + c > 1e-9 {
-            path.curve_to(at(u2, p - a - b, 0.0), at(u2, p - a, 0.0), end);
-        } else {
-            path.line_to(end);
+        match k.ease_out {
+            Some((h1, h2)) => path.curve_to(h1, h2, k.end),
+            None => path.line_to(k.end),
         }
     }
     path.close_path();
     path
+}
+
+/// One smoothed corner as [`smoothed_polygon`] draws it: it starts at `start` on the first edge,
+/// eases into a circular arc at `p3` (through handles `ease_in`, or straight when `None`), follows
+/// the arc of radius `r` about `center` from angle `a0` through `sweep` to `p4`, and eases out to
+/// `end` on the second edge.
+struct SmoothCorner {
+    start: Point,
+    ease_in: Option<(Point, Point)>,
+    p3: Point,
+    center: Point,
+    r: f64,
+    a0: f64,
+    sweep: f64,
+    p4: Point,
+    ease_out: Option<(Point, Point)>,
+    end: Point,
+}
+
+/// The smoothed corner at `cur` between edges that leave it along unit directions `u1` and `u2`,
+/// with `max_p` of room along each: `None` where the edges run straight on or fold back.
+fn smooth_corner(cur: Point, u1: Vec2, u2: Vec2, max_p: f64, radius: f64, s: f64) -> Option<SmoothCorner> {
+    let angle = u1.dot(u2).clamp(-1.0, 1.0).acos();
+    if angle < 1e-6 || (PI - angle) < 1e-6 {
+        return None;
+    }
+    // The plain corner's length along each edge, then the fit: smoothing first, then the radius.
+    let mut r = radius;
+    let mut t = r / (angle / 2.0).tan();
+    let mut sm = s;
+    if (1.0 + sm) * t > max_p {
+        sm = (max_p / t - 1.0).clamp(0.0, sm);
+    }
+    if t > max_p {
+        r *= max_p / t;
+        t = max_p;
+    }
+    let p = ((1.0 + sm) * t).min(max_p);
+    // Each easing curve covers `beta` of the turn and ends on the arc at `back` along the edge
+    // and `side` across it; its last handle points along the arc there.
+    let beta = (PI - angle) * sm / 2.0;
+    let back = t - r * beta.sin();
+    let side = r * (1.0 - beta.cos());
+    let c = r * (beta / 2.0).tan() * beta.cos();
+    let b = ((p - back - c) / 3.0).max(0.0);
+    let a = 2.0 * b;
+    let bisector = (u1 + u2).normalize();
+    let center = cur + bisector * (r / (angle / 2.0).sin());
+    // A point `along` an edge from the vertex and `across` it toward the arc's center.
+    let at = |u: Vec2, along: f64, across: f64| cur + u * along + (bisector - u * bisector.dot(u)).normalize() * across;
+    let p3 = at(u1, back, side);
+    let p4 = at(u2, back, side);
+    let eased = a + b + c > 1e-9;
+    let a0 = (p3 - center).atan2();
+    let mut sweep = (p4 - center).atan2() - a0;
+    while sweep <= -PI {
+        sweep += TAU;
+    }
+    while sweep > PI {
+        sweep -= TAU;
+    }
+    Some(SmoothCorner {
+        start: at(u1, p, 0.0),
+        ease_in: eased.then(|| (at(u1, p - a, 0.0), at(u1, p - a - b, 0.0))),
+        p3,
+        center,
+        r,
+        a0,
+        sweep,
+        p4,
+        ease_out: eased.then(|| (at(u2, p - a - b, 0.0), at(u2, p - a, 0.0))),
+        end: at(u2, p, 0.0),
+    })
+}
+
+/// The curves of one corner rounded by `radius` with corner smoothing (0..=1) at `corner`, between
+/// two straight edges that leave it along unit directions `u1` and `u2` with `max_p` of room along
+/// each. The curves follow the profile of [`smoothed_polygon`], with the circular part as one
+/// cubic, and run from the point on the `u1` edge to the point on the `u2` edge; a straight piece
+/// has its handles on its ends. As in the polygon, smoothing is reduced first when the corner does
+/// not fit, then the radius. `None` for a corner that is not rounded, or where the edges run
+/// straight on or fold back.
+pub fn smoothed_corner(corner: Point, u1: Vec2, u2: Vec2, max_p: f64, radius: f64, smoothing: f64) -> Option<Vec<kurbo::CubicBez>> {
+    let (s, radius, max_p) = (finite(smoothing).clamp(0.0, 1.0), finite(radius).max(0.0), finite(max_p).max(0.0));
+    let usable = |u: Vec2| u.x.is_finite() && u.y.is_finite() && u.hypot() > 1e-9;
+    if radius <= 0.0 || max_p <= 0.0 || !usable(u1) || !usable(u2) || !(corner.x.is_finite() && corner.y.is_finite()) {
+        return None;
+    }
+    let k = smooth_corner(corner, u1 / u1.hypot(), u2 / u2.hypot(), max_p, radius, s)?;
+    let piece = |p0: Point, handles: Option<(Point, Point)>, p3: Point| {
+        let (h1, h2) = handles.unwrap_or((p0, p3));
+        kurbo::CubicBez::new(p0, h1, h2, p3)
+    };
+    let mut out = vec![piece(k.start, k.ease_in, k.p3)];
+    if k.sweep.abs() > 1e-9 {
+        // The arc as one cubic: handles of 4/3·tan(θ/4)·r along the circle's tangents at its ends.
+        let h = 4.0 / 3.0 * (k.sweep.abs() / 4.0).tan() * k.r * k.sweep.signum();
+        let tangent = |a: f64| Vec2::new(-a.sin(), a.cos());
+        out.push(kurbo::CubicBez::new(k.p3, k.p3 + tangent(k.a0) * h, k.p4 - tangent(k.a0 + k.sweep) * h, k.p4));
+    }
+    out.push(piece(k.p4, k.ease_out, k.end));
+    out.retain(|q| (q.p3 - q.p0).hypot() > 1e-9 || (q.p1 - q.p0).hypot() > 1e-9 || (q.p2 - q.p3).hypot() > 1e-9);
+    let finite_point = |p: &Point| p.x.is_finite() && p.y.is_finite();
+    let ok = out.iter().all(|q| [q.p0, q.p1, q.p2, q.p3].iter().all(finite_point));
+    (ok && !out.is_empty()).then_some(out)
 }
 
 /// Starts `path` at `p`, or continues it there with a straight segment.
@@ -319,34 +453,44 @@ fn line_or_move(path: &mut BezPath, p: Point) {
     }
 }
 
+/// Whether an ellipse of this `sweep` (radians) goes all the way round: a whole ellipse or ring,
+/// without the sharp corners where an arc's ends meet its sides.
+pub fn full_sweep(sweep: f64) -> bool {
+    bounded(sweep).abs() >= TAU - 1e-9
+}
+
 /// An ellipse in the `width`×`height` box; with arc data, a pie/arc/ring: `start` and `sweep` in
 /// radians (clockwise from 3 o'clock, y-down) and `inner` radius ratio 0..1.
 pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> BezPath {
-    let (rx, ry) = (finite(width).max(0.0) / 2.0, finite(height).max(0.0) / 2.0);
+    let (rx, ry) = (bounded(width).max(0.0) / 2.0, bounded(height).max(0.0) / 2.0);
     let c = Point::new(rx, ry);
-    let sweep = finite(sweep).clamp(-TAU, TAU);
-    let start = finite(start);
-    let inner = finite(inner).clamp(0.0, 1.0);
-    let full = sweep.abs() >= TAU - 1e-9;
+    let sweep = bounded(sweep).clamp(-TAU, TAU);
+    let start = bounded(start);
+    let inner = bounded(inner).clamp(0.0, 1.0);
+    let full = full_sweep(sweep);
+    let tol = arc_tolerance(rx.max(ry));
     let mut path = BezPath::new();
+    // A whole turn as an arc with these radii: kurbo's `Ellipse` recovers its radii from an
+    // affine map, which overflows to infinity for radii near f64's limit (and infinite cubics).
+    let whole = |rx: f64, ry: f64| kurbo::Arc::new(c, (rx, ry), 0.0, TAU, 0.0);
     if full && inner <= 0.0 {
-        return kurbo::Ellipse::new(c, (rx, ry), 0.0).to_path(0.01);
+        return whole(rx, ry).to_path(tol);
     }
     if full {
         // A ring: outer clockwise, inner counter-clockwise.
-        path.extend(kurbo::Ellipse::new(c, (rx, ry), 0.0).path_elements(0.01));
-        let inner_path = kurbo::Ellipse::new(c, (rx * inner, ry * inner), 0.0).to_path(0.01);
+        path.extend(whole(rx, ry).path_elements(tol));
+        let inner_path = whole(rx * inner, ry * inner).to_path(tol);
         path.extend(inner_path.reverse_subpaths());
         return path;
     }
     let outer = kurbo::Arc::new(c, (rx, ry), start, sweep, 0.0);
     path.move_to(c + Vec2::new(rx * start.cos(), ry * start.sin()));
-    outer.to_cubic_beziers(0.01, |p1, p2, p| path.curve_to(p1, p2, p));
+    outer.to_cubic_beziers(tol, |p1, p2, p| path.curve_to(p1, p2, p));
     if inner > 0.0 {
         let end = start + sweep;
         path.line_to(c + Vec2::new(rx * inner * end.cos(), ry * inner * end.sin()));
         let back = kurbo::Arc::new(c, (rx * inner, ry * inner), end, -sweep, 0.0);
-        back.to_cubic_beziers(0.01, |p1, p2, p| path.curve_to(p1, p2, p));
+        back.to_cubic_beziers(tol, |p1, p2, p| path.curve_to(p1, p2, p));
     } else {
         path.line_to(c);
     }

@@ -161,6 +161,7 @@ pub(crate) fn copy_group(from: &Node, to: &mut Node, g: &str) {
                 b.max_lines = a.max_lines;
                 b.features = a.features.clone();
                 b.word_break = a.word_break;
+                b.wrap_style = a.wrap_style;
             }
             to.styles.text = from.styles.text.clone();
         }

@@ -234,7 +234,7 @@ impl<'d> Exporter<'d> {
             }
             EffectKind::Glass(g) => {
                 self.warn("glass effects keep only their frost");
-                f.extend([("type", e("GLASS")), ("radius", fl(g.frost))]);
+                f.extend([("type", e("GLASS")), ("radius", fl(g.sanitized().frost))]);
             }
         }
         o(f)

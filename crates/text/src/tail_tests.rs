@@ -43,11 +43,11 @@ fn starts(l: &TextLayout) -> Vec<(f64, Option<f64>)> {
 }
 
 fn pl(list: ListStyle, indent: u8) -> ParaList {
-    ParaList { list, indent, start_offset: 0 }
+    ParaList { list, indent, start_offset: 0, ..ParaList::default() }
 }
 
 fn from(list: ListStyle, indent: u8, start_offset: u32) -> ParaList {
-    ParaList { list, indent, start_offset }
+    ParaList { list, indent, start_offset, ..ParaList::default() }
 }
 
 #[test]
@@ -90,8 +90,8 @@ fn list_numbering_by_level() {
         ),
         (
             vec![pl(B, 0), pl(B, 1), pl(B, 2), pl(B, 3)],
-            vec!["\u{2022}", "\u{25E6}", "\u{25AA}", "\u{2022}"],
-            "silent: bullets change shape per level, round again",
+            vec!["\u{2022}", "\u{2022}", "\u{2022}", "\u{2022}"],
+            "bullets keep the same styling at all levels of indentation",
         ),
         (vec![pl(N, 0), pl(N, 0), pl(P, 0), pl(N, 0)], vec!["1.", "2.", "", "1."], "silent: a plain paragraph ends a list, the next starts at 1"),
         (vec![pl(N, 0), pl(B, 0), pl(N, 0)], vec!["1.", "\u{2022}", "1."], "silent: the other kind of list at the same level starts the count again"),

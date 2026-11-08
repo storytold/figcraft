@@ -707,9 +707,16 @@ impl Unpacked {
         if self.exceeded(z, name) && z.by_name(name).is_ok_and(|f| f.size() <= limit) {
             return Err(FormatError::Corrupt(format!("{name}: {}", self.passed())));
         }
-        let data = read_member(z, name, limit.min(self.left))?;
-        self.left = self.left.saturating_sub(data.len() as u64);
-        Ok(data)
+        let cap = limit.min(self.left);
+        let size = z.by_name(name).map_or(0, |f| f.size());
+        let data = read_member(z, name, cap);
+        // A read that failed part way (a bad checksum at the end, say) did its unpacking all the
+        // same: it is charged in full, so an index naming that member again can't repeat it. One
+        // refused for its recorded size before any unpacking costs nothing.
+        if size <= cap {
+            self.left = self.left.saturating_sub(data.as_ref().map_or(size, |d| d.len() as u64));
+        }
+        data
     }
 }
 
@@ -1028,6 +1035,11 @@ pub fn write_file_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Resul
         let tmp = std::path::PathBuf::from(name);
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(mut file) => {
+                // The replacement keeps the destination's permissions from the start, so a private
+                // file's content is never readable under default ones (the open handle still writes).
+                if let Ok(old) = std::fs::metadata(path) {
+                    let _ = file.set_permissions(old.permissions());
+                }
                 if let Err(e) = file.write_all(bytes) {
                     let _ = std::fs::remove_file(&tmp);
                     return Err(e);

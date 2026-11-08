@@ -29,7 +29,7 @@ fn props_set_and_read_the_word_break() {
     let v = s.execute("node.create", &json!({"type": "text", "x": 0, "y": 0, "text": "Hi"})).unwrap();
     let t3 = id(v);
     let got = s.execute("node.get", &json!({"id": t3})).unwrap();
-    assert!(got.get("wordBreak").is_none(), "normal is the default");
+    assert_eq!(got["wordBreak"], "normal", "always reported, even at the default");
 }
 
 #[test]
@@ -41,10 +41,10 @@ fn the_command_sets_one_layer_or_all_and_undoes() {
     let got = s.execute("node.get", &json!({"id": a})).unwrap();
     assert_eq!(got["wordBreak"], "keepAll");
     let got = s.execute("node.get", &json!({"id": b})).unwrap();
-    assert!(got.get("wordBreak").is_none(), "only the asked layer");
+    assert_eq!(got["wordBreak"], "normal", "only the asked layer");
     s.execute("edit.undo", &json!({})).unwrap();
     let got = s.execute("node.get", &json!({"id": a})).unwrap();
-    assert!(got.get("wordBreak").is_none(), "one undo step back to normal");
+    assert_eq!(got["wordBreak"], "normal", "one undo step back to normal");
     // `all` reaches every text layer without naming them.
     s.execute("text.wordBreak", &json!({"mode": "keepAll", "all": true})).unwrap();
     for t in [a, b] {
@@ -53,7 +53,7 @@ fn the_command_sets_one_layer_or_all_and_undoes() {
     }
     s.execute("edit.undo", &json!({})).unwrap();
     let got = s.execute("node.get", &json!({"id": b})).unwrap();
-    assert!(got.get("wordBreak").is_none(), "all is one undo step too");
+    assert_eq!(got["wordBreak"], "normal", "all is one undo step too");
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn instances_follow_the_main_and_keep_their_own_choice() {
     // so while the main stays keep-all, the instance's normal holds.
     s.execute("node.set", &json!({"id": c, "props": {"wordBreak": "normal"}})).unwrap();
     let got = s.execute("node.get", &json!({"id": c})).unwrap();
-    assert!(got.get("wordBreak").is_none(), "the override keeps the instance at normal while the main is keep-all");
+    assert_eq!(got["wordBreak"], "normal", "the override keeps the instance at normal while the main is keep-all");
 }
 
 #[test]
@@ -117,13 +117,26 @@ fn an_instances_word_break_override_survives_the_main_changing_it() {
     // An unrelated change of the main leaves it alone…
     s.execute("node.set", &json!({"id": text, "props": {"fontSize": 20.0}})).unwrap();
     let got = s.execute("node.get", &json!({"id": c})).unwrap();
-    assert!(got.get("wordBreak").is_none(), "an unrelated main edit keeps the override");
+    assert_eq!(got["wordBreak"], "normal", "an unrelated main edit keeps the override");
     // …and so does the main changing wordBreak past it (#1233: the override group must compare
     // word_break, or the rebuild takes the main's value back).
     s.execute("node.set", &json!({"id": text, "props": {"wordBreak": "normal"}})).unwrap();
     s.execute("node.set", &json!({"id": text, "props": {"wordBreak": "keepAll"}})).unwrap();
     let got = s.execute("node.get", &json!({"id": c})).unwrap();
-    assert!(got.get("wordBreak").is_none(), "the override holds while the main flips wordBreak");
+    assert_eq!(got["wordBreak"], "normal", "the override holds while the main flips wordBreak");
+}
+
+#[test]
+fn ids_and_all_are_exclusive() {
+    let mut s = Session::new();
+    let text = text_layer(&mut s, "normal");
+    // Naming layers and asking for every layer at once is a mistake, not a precedence choice.
+    let e = s.execute("text.wordBreak", &json!({"mode": "keepAll", "ids": [text], "all": true})).unwrap_err();
+    assert!(e.to_string().contains("exclusive"), "{e}");
+    let e = s.execute("text.wordBreak", &json!({"mode": "keepAll", "id": text, "all": true})).unwrap_err();
+    assert!(e.to_string().contains("exclusive"), "the singular `id` too: {e}");
+    // `all` on its own still works.
+    s.execute("text.wordBreak", &json!({"mode": "keepAll", "all": true})).unwrap();
 }
 
 #[test]

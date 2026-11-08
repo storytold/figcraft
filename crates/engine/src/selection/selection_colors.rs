@@ -5,14 +5,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_color::{Paint, PaintKind};
-use figcraft_doc::{Document, NodeId, NodeKind, StyleKind, VariableType, VariableValue};
+use figcraft_doc::{Document, NodeId, NodeKind, Style, StyleKind, VariableId, VariableType, VariableValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::cmd::lists::{BoundList, list_binding, rebind_edited_paint};
 use crate::cmd::styles::{rebind_paint_alpha, unbind_slot};
-use crate::params::{get, paint_of, parse, req_string, targets};
-use crate::{CommandSpec, Result, Session, bad, spec};
+use crate::params::{get, paint_of, parse, req_string, string, targets};
+use crate::{CommandSpec, EngineError, Result, Session, bad, spec};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -127,9 +127,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "selection.applyColorStyle",
             "Apply selection color style",
-            "{targets, style}; applies the color style to matching fill/stroke lists (text ranges keep typography)",
+            "{targets, style (id or name), library? (an enabled library: id, name or path; the style is then one it publishes, copied in linked and read-only)}; applies the color style to matching fill/stroke lists (text ranges keep typography)",
             true,
             apply_style
+        ),
+        spec!(
+            "selection.createColorStyle",
+            "Create selection color style",
+            "{targets, name, description?} → {id}; makes a color style of the paint the targets share and applies it to them as selection.applyColorStyle does, keeping the variables bound to the paint; a name another style has, a target whose list holds other paints, or targets bound to different variables are refused",
+            true,
+            create_style
         ),
         spec!(
             "selection.bindColorVariable",
@@ -205,15 +212,96 @@ fn apply_style(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "selection.applyColorStyle";
     let targets = checked_targets(s, p, CMD)?;
     let name = req_string(CMD, p, "style")?;
+    let name = if get(p, "library").is_some() { import_library_style(s, CMD, p, &name)? } else { name };
     let style = s.doc()?.style(&name).cloned().ok_or_else(|| bad(CMD, "no such color style"))?;
     if !matches!(style.kind, StyleKind::Paint { .. }) {
         return Err(bad(CMD, "a color style is required"));
     }
-    for target in &targets {
+    link_style(s, &targets, &style)?;
+    Ok(json!({"ok": true}))
+}
+
+/// Copy the color style `key` (id, else name) that the enabled library `library` publishes into the
+/// document, linked and read-only, and return the copy's id.
+fn import_library_style(s: &mut Session, cmd: &str, p: &Value, key: &str) -> Result<String> {
+    let (link, lib) = crate::cmd::library::library(s, cmd, p)?;
+    let published = |st: &&Style| lib.manifest.style(&st.id).is_some_and(|x| x.published);
+    let styles = || lib.doc.styles.iter().filter(published);
+    let style = styles()
+        .find(|st| st.id == key)
+        .or_else(|| styles().find(|st| st.name == key))
+        .ok_or_else(|| bad(cmd, format!("\"{}\" publishes no style `{key}`", link.name)))?;
+    if !matches!(style.kind, StyleKind::Paint { .. }) {
+        return Err(bad(cmd, "a color style is required"));
+    }
+    let keys = BTreeSet::from([style.id.clone()]);
+    crate::library::import_styles(s.doc_mut()?, &lib, &keys, false)
+        .into_values()
+        .next()
+        .ok_or_else(|| EngineError::Other("the style didn't import".into()))
+}
+
+fn create_style(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "selection.createColorStyle";
+    let targets = checked_targets(s, p, CMD)?;
+    let doc = s.doc()?;
+    let paint = targets.first().and_then(|t| t.paint(doc)).ok_or_else(|| bad(CMD, "a selection color target no longer exists"))?;
+    if !matches!(paint.kind, PaintKind::Solid { .. } | PaintKind::Gradient(_)) {
+        return Err(bad(CMD, "a solid or gradient paint is required"));
+    }
+    if targets.iter().any(|t| t.paint(doc).as_ref() != Some(&paint)) {
+        return Err(bad(CMD, "the targets no longer share one paint"));
+    }
+    if let Some(why) = create_refusal(doc, &targets) {
+        return Err(bad(CMD, why));
+    }
+    let name = crate::cmd::variables::clean_name(&req_string(CMD, p, "name")?).ok_or_else(|| bad(CMD, "name can't be empty"))?;
+    if doc.styles.iter().any(|st| st.name == name) {
+        return Err(bad(CMD, format!("a style named `{name}` already exists")));
+    }
+    let kind = StyleKind::Paint { paints: vec![paint] };
+    let bound = targets.first().map(|t| target_bindings(doc, t, &kind)).unwrap_or_default();
+    let doc = s.doc_mut()?;
+    let id = doc.new_style_id();
+    let style = Style { id: id.clone(), name, description: string(p, "description").unwrap_or_default(), kind, bound };
+    doc.styles.push(style.clone());
+    link_style(s, &targets, &style)?;
+    Ok(json!({"id": id}))
+}
+
+/// Why a color style can't be made from `targets` (`selection.createColorStyle`), if it can't: a
+/// linked style replaces the whole fill or stroke list, so a target whose list holds other paints
+/// would lose them. The new style takes over the variables bound to the paint, so targets bound to
+/// different variables are refused too. The Selection colors menu leaves Create style out for such rows.
+pub fn create_refusal(doc: &Document, targets: &[PaintTarget]) -> Option<&'static str> {
+    if targets.iter().any(|t| t.paints(doc).is_none_or(|paints| paints.len() != 1)) {
+        return Some("a style can only be made from a fill or stroke list that holds this one paint");
+    }
+    let paint = targets.first().and_then(|t| t.paint(doc))?;
+    let kind = StyleKind::Paint { paints: vec![paint] };
+    let mut bindings = targets.iter().map(|t| target_bindings(doc, t, &kind));
+    let first = bindings.next()?;
+    bindings.any(|b| b != first).then_some("the targets are bound to different variables")
+}
+
+/// The variable bindings a paint style of `kind` made from `target` takes over: those on the fill or
+/// stroke list the target stands for. A text range with fills of its own holds none.
+fn target_bindings(doc: &Document, target: &PaintTarget, kind: &StyleKind) -> BTreeMap<String, VariableId> {
+    if list_field(doc, target).is_none() {
+        return BTreeMap::new();
+    }
+    let field = if target.fills { "fillStyle" } else { "strokeStyle" };
+    doc.node(target.id).map(|n| crate::style_vars::from_layer(n, field, kind)).unwrap_or_default()
+}
+
+/// Apply paint style `style` to every target: a fill or stroke list is linked to it; a text range
+/// takes its resolved paints and keeps its typography.
+fn link_style(s: &mut Session, targets: &[PaintTarget], style: &Style) -> Result<()> {
+    for target in targets {
         if let Some((start, end)) = target.range {
             // Text ranges have typography-style links, not paint-style links. Copy resolved paint
             // values just as an explicit range fill does; never replace its font or size.
-            let StyleKind::Paint { paints } = crate::style_vars::kind_for(s.doc()?, &style, target.id).into_owned() else { continue };
+            let StyleKind::Paint { paints } = crate::style_vars::kind_for(s.doc()?, style, target.id).into_owned() else { continue };
             let n = s.doc_mut()?.get_mut(target.id)?;
             if let NodeKind::Text(t) = &mut n.kind {
                 t.restyle(start, end, |st| st.fills = Some(paints.clone()));
@@ -222,7 +310,7 @@ fn apply_style(s: &mut Session, p: &Value) -> Result<Value> {
             crate::cmd::styles::apply_style_ref(s.doc_mut()?, target.id, if target.fills { "fillStyle" } else { "strokeStyle" }, Some(&style.id))?;
         }
     }
-    Ok(json!({"ok": true}))
+    Ok(())
 }
 
 /// The binding key (`fills/<i>/color` or `strokes/<i>/color`) of the slot a target stands for, when the
