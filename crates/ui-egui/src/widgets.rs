@@ -114,10 +114,15 @@ fn key_steps(ctx: &egui::Context, suffix: &str, step: f64) -> (f64, f64) {
     }
 }
 
-/// How far a scrub of `dx` points moves a value whose field steps by `step`: 1 step a point, ten
-/// with Shift, a tenth with Alt (fine).
+/// The steps a point of scrubbing moves a field by: half, as measured in Figma (12.2 px moved X
+/// by 6, 61.2 px by 31).
+pub const SCRUB_STEPS_PER_POINT: f64 = 0.5;
+
+/// How far a scrub of `dx` points moves a value whose field steps by `step`: half a step a point
+/// ([`SCRUB_STEPS_PER_POINT`]), ten times that with Shift, a tenth with Alt (fine).
 pub fn scrub_amount(dx: f64, step: f64, shift: bool, alt: bool) -> f64 {
     dx * step
+        * SCRUB_STEPS_PER_POINT
         * match (shift, alt) {
             (true, false) => 10.0,
             (false, true) => 0.1,
