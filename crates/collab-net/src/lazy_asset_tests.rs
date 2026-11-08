@@ -46,6 +46,7 @@ fn host(doc: Document) -> std::io::Result<(Host, Invite)> {
             any_port_if_taken: false,
             file: file.clone(),
             token: token.into(),
+            view_token: None,
             doc,
             name: "Host".into(),
             limits: NetLimits::default(),
@@ -261,6 +262,10 @@ fn corrupt_and_unsolicited_asset_responses_are_refused() {
             assert!(cache::request(asset));
         }
         probe.wait("bad asset refused", |events| events.iter().any(|e| matches!(e, Event::Status(Status::Failed { .. }))));
+        assert!(
+            !probe.events.iter().any(|e| matches!(e, Event::Status(Status::Reconnecting { .. }))),
+            "protocol violations must not reconnect to the same host"
+        );
         assert!(cache::load(asset).is_err());
         assert!(!probe.events.iter().any(|e| matches!(e, Event::AssetsChanged)));
         server.join().unwrap();

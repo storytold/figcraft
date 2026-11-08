@@ -93,3 +93,26 @@ fn the_total_leaves_room_for_the_largest_real_files() {
     // Below what the per-area caps added up to (about 10 GB).
     const { assert!(MAX_UNPACKED < 10 * 1024 * 1024 * 1024) };
 }
+
+#[test]
+fn a_read_that_fails_part_way_still_spends_the_total() {
+    // A member whose compressed bytes are damaged near the end unpacks almost all of itself
+    // before failing: that work is charged, so an index naming it again can't repeat it for free.
+    let body: Vec<u8> = (0..200_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+    // Stored, so a byte flipped in the middle is read through and fails only on the checksum.
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut w = zip::ZipWriter::new(&mut buf);
+    w.start_file("snapshots/v1.json", zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
+    w.write_all(&body).unwrap();
+    w.finish().unwrap();
+    let mut bytes = buf.into_inner();
+    let at = 30 + "snapshots/v1.json".len() + body.len() / 2;
+    bytes[at] ^= 0xff;
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let size = z.by_name("snapshots/v1.json").unwrap().size();
+    assert_eq!(size, body.len() as u64);
+    let mut total = crate::Unpacked::new(size + size / 2);
+    assert!(total.read(&mut z, "snapshots/v1.json", 1 << 20).is_err(), "the damaged member fails");
+    let again = total.read(&mut z, "snapshots/v1.json", 1 << 20).unwrap_err().to_string();
+    assert!(again.contains("together pass"), "the second read is refused for the total, not read again: {again}");
+}

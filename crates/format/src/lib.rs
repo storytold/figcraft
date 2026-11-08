@@ -800,9 +800,16 @@ impl Unpacked {
         if self.exceeded(z, name) && z.by_name(name).is_ok_and(|f| f.size() <= limit) {
             return Err(FormatError::Corrupt(format!("{name}: {}", self.passed())));
         }
-        let data = read_member(z, name, limit.min(self.left))?;
-        self.left = self.left.saturating_sub(data.len() as u64);
-        Ok(data)
+        let cap = limit.min(self.left);
+        let size = z.by_name(name).map_or(0, |f| f.size());
+        let data = read_member(z, name, cap);
+        // A read that failed part way (a bad checksum at the end, say) did its unpacking all the
+        // same: it is charged in full, so an index naming that member again can't repeat it. One
+        // refused for its recorded size before any unpacking costs nothing.
+        if size <= cap {
+            self.left = self.left.saturating_sub(data.as_ref().map_or(size, |d| d.len() as u64));
+        }
+        data
     }
 }
 

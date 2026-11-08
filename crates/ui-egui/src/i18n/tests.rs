@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{Forms, LANGS, Lang, Plural, Text, chain, counted, fill, find, lookup, plural, plural_one, resolve};
+use super::{Forms, LANGS, Lang, Plural, Text, chain, counted, fill, find, lookup, plural, plural_one, resolve, writes_right_to_left};
 
 /// Keys looked up from data rather than written as `tr("…")` in the code: the main menu's
 /// submenu names (the engine's menu catalog) and labels of engine and document enums.
@@ -514,7 +514,7 @@ fn japanese_korean_chinese_and_vietnamese_have_no_plural_forms() {
     assert_eq!(code("system", Some("ja,en-US")), "ja");
     assert_eq!(LANGS[resolve("vi", None)].name, "Tiếng Việt");
     assert!(LANGS[resolve("vi", None)].draft);
-    for code in ["ja", "ko", "th", "zh-Hans", "vi"] {
+    for code in ["ja", "ko", "th", "zh-Hans", "zh-Hant", "vi"] {
         let lang = LANGS.iter().position(|l| l.code == code).unwrap();
         assert!(!plural_one(lang, 0) && !plural_one(lang, 1) && !plural_one(lang, 2), "{code}");
         let ones: Vec<_> = LANGS[lang].ui.iter().filter(|(_, t)| matches!(t, Text::Plural(Forms { one: Some(_), .. }))).map(|(k, _)| k).collect();
@@ -548,6 +548,19 @@ fn arabic_tags_and_count_neutral_forms() {
             }
         }
     }
+}
+
+#[test]
+fn right_to_left_languages_mirror_the_window() {
+    for code in ["ar", "ar-SA", "AR", "he", "he-IL", "fa", "ur", "ckb", "yi"] {
+        assert!(writes_right_to_left(code), "{code}");
+    }
+    for code in ["en", "", "es-419", "zh-Hans", "tr", "ru", "arn", "hey"] {
+        assert!(!writes_right_to_left(code), "{code}");
+    }
+    // Every catalog that mirrors is one of them, and the Arabic one does.
+    assert!(LANGS.iter().any(|l| l.code == "ar" && writes_right_to_left(l.code)));
+    assert!(!writes_right_to_left(LANGS[0].code), "English reads left to right");
 }
 
 #[test]
@@ -594,17 +607,56 @@ fn the_built_in_georgian_face_draws_the_georgian_catalog() {
 }
 
 #[test]
-fn chinese_reads_simplified_and_traditional_has_no_catalog() {
+fn chinese_tags_pick_simplified_or_traditional() {
     let code = |pref: &str, system: Option<&str>| LANGS[resolve(pref, system)].code;
     for tag in ["zh-CN", "zh_CN.UTF-8", "zh-SG", "zh-Hans", "zh-Hans-CN", "zh-Hans-HK", "zh"] {
         assert_eq!(code("system", Some(tag)), "zh-Hans", "{tag}");
     }
-    // No Traditional Chinese catalog: English, never Simplified; else the next OS language.
-    for tag in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-TW", "zh_TW.UTF-8"] {
-        assert_eq!(code("system", Some(tag)), "en", "{tag}");
-        assert_eq!(code(tag, None), "en", "{tag}");
+    // Taiwan, Hong Kong, Macau and Hant read Traditional Chinese, never Simplified.
+    for tag in ["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-TW", "zh_TW.UTF-8", "zh-Hant-HK"] {
+        assert_eq!(code("system", Some(tag)), "zh-Hant", "{tag}");
+        assert_eq!(code(tag, None), "zh-Hant", "{tag}");
     }
-    assert_eq!(code("system", Some("zh-TW,ja-JP")), "ja");
+    // An explicit Hans still reads Simplified, whatever the region.
+    assert_eq!(code("system", Some("zh-Hans-TW")), "zh-Hans");
+    assert_eq!(code("system", Some("zh-TW,ja-JP")), "zh-Hant");
+    assert_eq!(code("system", Some("ja-JP,zh-TW")), "ja");
+}
+
+#[test]
+fn traditional_chinese_is_a_draft_in_the_taiwan_design_terms() {
+    let zh = LANGS.iter().position(|l| l.code == "zh-Hant").expect("locales/zh-Hant.toml is baked in");
+    assert_eq!(LANGS[zh].name, "繁體中文（台灣）");
+    assert!(LANGS[zh].draft, "a machine-drafted catalog stays a draft until a native speaker reviews it");
+    // Spot checks for the Taiwan design terms the catalog is written in.
+    assert!(matches!(lookup(zh, "Canvas"), Some(Text::Plain("畫布"))));
+    assert!(matches!(lookup(zh, "Layers"), Some(Text::Plain("圖層"))));
+    assert!(matches!(lookup(zh, "Frame"), Some(Text::Plain("框架"))));
+    assert!(matches!(lookup(zh, "Component"), Some(Text::Plain("元件"))));
+    assert!(matches!(lookup(zh, "Constraints"), Some(Text::Plain("約束"))));
+    assert!(matches!(lookup(zh, "Fill"), Some(Text::Plain("填色"))));
+    assert!(matches!(lookup(zh, "Stroke"), Some(Text::Plain("邊框"))));
+    assert!(matches!(lookup(zh, "Export"), Some(Text::Plain("匯出"))));
+    assert!(matches!(lookup(zh, "Version"), Some(Text::Plain("版本"))));
+    assert!(matches!(lookup(zh, "Prototype"), Some(Text::Plain("原型"))));
+}
+
+/// Changing the preference and reading it back keeps the Chinese tag; the tag still resolves to
+/// the same catalog after the preferences are saved and loaded (a restart).
+#[test]
+fn traditional_chinese_switches_and_the_preference_persists() {
+    let mut s = figcraft_engine::Session::new();
+    s.execute("pref.language", &serde_json::json!({"language": "zh-TW"})).unwrap();
+    assert_eq!(s.prefs.language, "zh-TW");
+    assert_eq!(LANGS[resolve(&s.prefs.language, None)].code, "zh-Hant");
+    let saved = serde_json::to_string(&s.prefs).unwrap();
+    let loaded: figcraft_engine::Prefs = serde_json::from_str(&saved).unwrap();
+    assert_eq!(loaded.language, "zh-TW");
+    assert_eq!(LANGS[resolve(&loaded.language, None)].code, "zh-Hant");
+    s.execute("pref.language", &serde_json::json!({"language": "zh-Hans"})).unwrap();
+    assert_eq!(LANGS[resolve(&s.prefs.language, None)].code, "zh-Hans");
+    s.execute("pref.language", &serde_json::json!({"language": "zh-Hant"})).unwrap();
+    assert_eq!(LANGS[resolve(&s.prefs.language, None)].code, "zh-Hant");
 }
 
 #[test]

@@ -82,6 +82,27 @@ fn pdf_vector_region_paints_emit_independent_colors() {
     assert!(content.contains("1 0 0 rg") && content.contains("0 0 1 rg"), "{content}");
 }
 
+#[test]
+fn pdf_vector_region_paints_draw_smoothed_corners() {
+    // A closed vector with rounded points and paints on its region: corner smoothing changes the
+    // exported outline, as on the canvas.
+    let corners = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| figcraft_geom::Point::new(x, y));
+    let mut network = VectorNetwork::from_points(&corners, true);
+    for v in &mut network.vertices {
+        v.radius = 20.0;
+    }
+    network.regions[0].fills = Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]);
+    let mut d = Document::new("smoothing");
+    let p = d.first_page().unwrap();
+    let id = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let content = |d: &Document| inflated(&export_pdf(d, &[id], &PdfOptions::default()).unwrap());
+    let plain = content(&d);
+    d.get_mut(id).unwrap().corners.smoothing = 0.6;
+    let smoothed = content(&d);
+    assert!(smoothed.contains("1 0 0 rg"), "{smoothed}");
+    assert_ne!(smoothed, plain, "the region's outline takes the smoothing");
+}
+
 /// A page with two frames: shapes, gradients, an image, strokes, a mask, a boolean, effects, text.
 pub(crate) fn sample_doc() -> (Document, Vec<NodeId>) {
     let mut d = Document::new("sample");

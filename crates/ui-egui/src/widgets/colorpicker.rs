@@ -92,7 +92,15 @@ fn current_paint(app: &FigApp, target: &PickerTarget) -> Option<Paint> {
         },
         PickerTarget::Paint { fills, index, ids } => {
             let n = doc.node(*ids.first()?)?;
-            let list = if *fills { &n.fills } else { &n.strokes };
+            // Regions selected in vector edit mode: the picker edits their own fills (#1875).
+            if *fills
+                && ids.len() == 1
+                && let Some(Some(list)) = figcraft_engine::vectoredit::selected_region_fills(&app.session, n.id)
+            {
+                return list.get(*index).cloned();
+            }
+            // A text's fills are its characters' (none to pick while they differ, #1856).
+            let list = if *fills { figcraft_engine::cmd::lists::character_fills(n)? } else { n.strokes.clone() };
             list.get(*index).cloned()
         }
         PickerTarget::Effect { ids, index, secondary } => doc.node(*ids.first()?)?.effects.get(*index)?.color(*secondary).map(Paint::solid),
@@ -574,6 +582,18 @@ fn set_image_pending(ctx: &egui::Context, target: Option<&PickerTarget>) {
 }
 
 /// `image.replace`'s parameters for layers' paint `index`.
+/// Whether `target` is a paint of the regions selected in vector edit mode (#1875): the picker
+/// shows the regions' own fills, which the image commands (layer paints only) don't reach, so
+/// their image edits are written as paints like any other.
+fn region_backed(app: &FigApp, target: &PickerTarget) -> bool {
+    match target {
+        PickerTarget::Paint { fills: true, ids, .. } => {
+            matches!(ids.as_slice(), [id] if figcraft_engine::vectoredit::selected_region_fills(&app.session, *id).is_some())
+        }
+        _ => false,
+    }
+}
+
 fn image_params(fills: bool, index: usize, ids: &[NodeId]) -> serde_json::Value {
     json!({"ids": ids, "target": if fills { "fill" } else { "stroke" }, "index": index})
 }
@@ -584,6 +604,11 @@ fn image_params(fills: bool, index: usize, ids: &[NodeId]) -> serde_json::Value 
 pub(crate) fn image_drop_target(app: &FigApp, ctx: &egui::Context) -> Option<(Rect, serde_json::Value)> {
     let target = app.ui.picker.as_ref()?;
     let PickerTarget::Paint { fills, index, ids } = target else { return None };
+    // A region's own paint takes no drop (`image.replace` edits layer paints); the file goes to
+    // the canvas as it would without the picker.
+    if region_backed(app, target) {
+        return None;
+    }
     if !image_pending(ctx, target) && !matches!(current_paint(app, target)?.kind, PaintKind::Image(_)) {
         return None;
     }
@@ -604,7 +629,9 @@ fn picked_bytes(file: &serde_json::Value) -> Option<Vec<u8>> {
 fn upload_image(app: &mut FigApp, target: &PickerTarget) {
     let target = target.clone();
     app.pick_file(tr("Choose image"), &IMAGE_FILES, true, move |app, file| {
-        if let PickerTarget::Paint { fills, index, ids } = &target {
+        if let PickerTarget::Paint { fills, index, ids } = &target
+            && !region_backed(app, &target)
+        {
             let mut params = image_params(*fills, *index, ids);
             for key in ["path", "data"] {
                 if let Some(v) = file.get(key) {
@@ -967,8 +994,18 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     };
     let open = beside.map(Open::At).unwrap_or_else(|| {
         let top = app.ui.picker_button.map_or(140.0, |r| r.min.y);
-        let edge = app.ui.right_panel_rect.map_or(screen.max.x - app.ui.right_width, |r| r.min.x);
-        Open::Anchor(pos2(edge - 8.0, top))
+        // Beside the Design panel, on its canvas side (its right in a mirrored window).
+        let panel = app.ui.right_panel_rect.map_or_else(
+            || {
+                if app.ui.mirrored {
+                    egui::Rangef::new(screen.min.x, screen.min.x + app.ui.right_width)
+                } else {
+                    egui::Rangef::new(screen.max.x - app.ui.right_width, screen.max.x)
+                }
+            },
+            |r| r.x_range(),
+        );
+        if app.ui.mirrored { Open::AnchorMirrored(pos2(panel.max + 8.0, top)) } else { Open::Anchor(pos2(panel.min - 8.0, top)) }
     });
     // The colour picker's own header — title 16 in, the X 8 in from the right — is the shared
     // popover's chrome now; the picker keeps its body. Its area id is [`window_id`], the one the
@@ -977,7 +1014,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     // Sampling a colour from the canvas — the eyedropper this picker's own button started, or the
     // colour it just sampled — is the press, not a press outside: neither may close the picker.
     let picking = app.session.tool.pick_only || app.session.tool.picked.is_some();
-    pop = pop.close_on_outside(!picking);
+    // Nor may a press on the open gradient's handles or stops on the canvas: they are this picker's
+    // controls, and the canvas took the press before the picker drew (#1852).
+    let own = picking || crate::handles::gradient_dragging(ctx);
+    pop = pop.close_on_outside(!own);
     // Only the opening control is held out: any other sidebar or canvas press dismisses it.
     let mut held: Vec<Rect> = app.ui.picker_button.into_iter().collect();
     held.extend(crate::variable_ui::picker_rect(ctx));
@@ -1397,9 +1437,9 @@ fn image_presets(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &m
             app.run("image.deletePreset", json!({"name": name}));
         }
         Some(PresetAction::Apply(name)) => match target {
-            // Layer paints go through the command; other targets (a text range, a style) get the
-            // preset's values written like any edit.
-            PickerTarget::Paint { fills, index, ids } => {
+            // Layer paints go through the command; other targets (a text range, a style, a
+            // region's own paint) get the preset's values written like any edit.
+            PickerTarget::Paint { fills, index, ids } if !region_backed(app, target) => {
                 app.run("image.adjust", json!({"ids": ids, "target": if *fills { "fill" } else { "stroke" }, "index": index, "preset": name}));
             }
             _ => {

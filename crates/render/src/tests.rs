@@ -496,9 +496,16 @@ fn exports_carry_the_colour_profile() {
         let icc = dec.icc_profile().unwrap();
         assert_eq!(icc.is_some(), !profile.is_srgb(), "{profile:?}");
         assert_eq!(image::load_from_memory(&png).unwrap().to_rgba8().get_pixel(5, 5).0, [0, 255, 0, 255]);
-        for f in [ExportFormat::Jpg, ExportFormat::Webp] {
-            assert!(!encode_export(&pix, f, profile).unwrap().is_empty());
-        }
+        // A JPEG always embeds the profile (it has no small sRGB marker); an sRGB WebP is untagged.
+        let jpg = encode_export(&pix, ExportFormat::Jpg, profile).unwrap();
+        let icc = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&jpg)).unwrap().icc_profile().unwrap();
+        assert_eq!(icc, Some(profile.icc()), "{profile:?}");
+        assert_eq!(jpg, encode_export_with(&pix, ExportFormat::Jpg, profile, 90).unwrap(), "quality 90 by default");
+        assert_ne!(jpg, encode_export_with(&pix, ExportFormat::Jpg, profile, 30).unwrap());
+        let webp = encode_export(&pix, ExportFormat::Webp, profile).unwrap();
+        let icc = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&webp)).unwrap().icc_profile().unwrap();
+        assert_eq!(icc.is_some(), !profile.is_srgb(), "{profile:?}");
+        assert_eq!(webp, encode_export_with(&pix, ExportFormat::Webp, profile, 30).unwrap(), "WebP takes no quality");
         assert!(encode_export(&pix, ExportFormat::Svg, profile).is_err());
     }
     assert_eq!(png_insert_chunk(b"not a png".to_vec(), b"sRGB", &[0]), b"not a png");
@@ -642,4 +649,27 @@ fn review_final_vector_preflight_uses_effective_region_fills() {
     net.regions[0].fills = Some(Vec::new());
     doc.get_mut(vector).unwrap().kind = NodeKind::Vector { network: net };
     assert!(crate::images::require_for_nodes(&doc, &[vector]).is_ok(), "explicit empty fills also replace the fallback");
+}
+
+#[test]
+fn review_boolean_preflight_ignores_operand_paints_but_requires_result_paints() {
+    let mut doc = figcraft_doc::Document::new("Synthetic boolean resource preflight");
+    let page = doc.first_page().unwrap();
+    let asset = figcraft_assets::AssetRef::of(b"synthetic missing boolean operand image");
+    doc.images
+        .insert("unavailable".into(), figcraft_doc::ImageData { asset: Some(asset), bytes: std::sync::Arc::new(Vec::new()), width: 1, height: 1 });
+    let boolean = doc.create(page, NodeKind::BooleanOp { op: figcraft_doc::BoolOp::Union }, "Result", 0.0, 0.0, 20.0, 20.0).unwrap();
+    doc.get_mut(boolean).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let operand = doc.create(boolean, NodeKind::Rectangle, "Operand", 0.0, 0.0, 20.0, 20.0).unwrap();
+    let missing = Paint::image("unavailable", figcraft_color::ImageScaleMode::Fill);
+    doc.get_mut(operand).unwrap().fills = vec![missing.clone()];
+    assert!(crate::images::require_for_nodes(&doc, &[boolean]).is_ok());
+    let pix = render_node(&doc, boolean, 1.0).unwrap();
+    assert_eq!(px(&pix, 10, 10), [0, 0, 0, 255]);
+    assert!(crate::images::require_for_nodes(&doc, &[operand]).is_err());
+    doc.get_mut(boolean).unwrap().fills = vec![missing];
+    assert!(crate::images::require_for_nodes(&doc, &[boolean]).is_err());
+    doc.get_mut(boolean).unwrap().fills.clear();
+    doc.get_mut(boolean).unwrap().kind = NodeKind::Group;
+    assert!(crate::images::require_for_nodes(&doc, &[boolean]).is_err(), "ordinary groups still paint their children");
 }

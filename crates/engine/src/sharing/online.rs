@@ -117,14 +117,17 @@ pub(crate) fn plain_server(server: &str) -> String {
 /// Two addresses name the same server (case, a closing slash and the scheme's own port aside).
 pub fn same_server(a: &str, b: &str) -> bool {
     let norm = |s: &str| {
-        let s = plain_server(s).to_ascii_lowercase();
+        let s = plain_server(s);
         let s = s.trim_end_matches('/');
-        let port = if s.starts_with("wss://") { ":443" } else { ":80" };
         let start = s.find("://").map_or(0, |i| i + 3);
         let end = s[start..].find('/').map_or(s.len(), |i| start + i);
-        match s[start..end].strip_suffix(port) {
-            Some(host) => format!("{}{}{}", &s[..start], host, &s[end..]),
-            None => s.to_string(),
+        // The scheme and host compare without case; the path routes (a proxy may send
+        // `/Team/` and `/team/` to different servers), so it keeps its case.
+        let head = s[..end].to_ascii_lowercase();
+        let port = if head.starts_with("wss://") { ":443" } else { ":80" };
+        match head[start..].strip_suffix(port) {
+            Some(host) => format!("{}{}{}", &head[..start], host, &s[end..]),
+            None => format!("{head}{}", &s[end..]),
         }
     };
     norm(a) == norm(b)

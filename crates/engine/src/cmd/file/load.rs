@@ -273,7 +273,7 @@ fn match_font_families(doc: &mut Document) {
     }
     // Shared text styles too, so they stay like the layers linked to them.
     for st in &mut doc.styles {
-        if let StyleKind::Text { style } = &mut st.kind {
+        if let StyleKind::Text { style, .. } = &mut st.kind {
             fix(style);
         }
     }
@@ -317,7 +317,7 @@ fn platform_tracking(doc: &mut Document) {
         }
     }
     for st in &mut doc.styles {
-        if let StyleKind::Text { style } = &mut st.kind {
+        if let StyleKind::Text { style, .. } = &mut st.kind {
             track(style);
         }
     }
@@ -388,7 +388,7 @@ fn sketch_line_heights(doc: &mut Document) {
         }
     }
     for st in &mut doc.styles {
-        if let StyleKind::Text { style } = &mut st.kind {
+        if let StyleKind::Text { style, .. } = &mut st.kind {
             set(style);
         }
     }

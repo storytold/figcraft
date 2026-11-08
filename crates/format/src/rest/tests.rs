@@ -530,7 +530,7 @@ fn shared_styles_link_with_metadata_names() {
     let fill = doc.style("S:1").unwrap();
     assert_eq!((fill.name.as_str(), fill.description.as_str()), ("Brand/Primary", "Main"));
     assert!(matches!(&fill.kind, StyleKind::Paint { paints } if paints.len() == 1));
-    assert!(matches!(&doc.style("S:2").unwrap().kind, StyleKind::Text { style } if style.font_size == 32.0));
+    assert!(matches!(&doc.style("S:2").unwrap().kind, StyleKind::Text { style, .. } if style.font_size == 32.0));
     assert!(matches!(&doc.style("Soft").unwrap().kind, StyleKind::Effect { effects } if effects.len() == 1));
     let r = named(&doc, "R");
     assert_eq!((r.styles.fill.as_deref(), r.styles.effect.as_deref()), (Some("S:1"), Some("S:4")));

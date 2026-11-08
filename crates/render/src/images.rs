@@ -51,7 +51,10 @@ pub fn require_for_nodes(doc: &Document, ids: &[NodeId]) -> Result<figcraft_asse
         if !node.visible || node.opacity <= 0.0 {
             continue;
         }
-        stack.extend(node.children.iter().copied());
+        // Boolean children supply geometry only; their own paints are not rendered.
+        if !matches!(node.kind, figcraft_doc::NodeKind::BooleanOp { .. }) {
+            stack.extend(node.children.iter().copied());
+        }
         let mut paints: Vec<_> = node.strokes.iter().collect();
         match &node.kind {
             figcraft_doc::NodeKind::Vector { network }

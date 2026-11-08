@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use figcraft_doc::{Document, ExportFormat, ExportSetting, ExportSize, NodeId, NodeKind, PrintSettings, VdCompat};
+use figcraft_doc::color::ColorProfile;
+use figcraft_doc::{Document, ExportColorProfile, ExportFormat, ExportSetting, ExportSize, NodeId, NodeKind, PrintSettings, VdCompat};
 use figcraft_engine::cmd::file::export_jobs;
 use serde_json::{Value, json};
 
@@ -69,7 +70,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId
         widgets::note(ui, tr("Click + to replace mixed content"), t.text_secondary);
     }
     for (i, e) in list.iter().enumerate() {
-        setting_row(app, ui, &ids, i, e, text);
+        setting_row(app, ui, &ids, i, e, text, doc.color_profile);
     }
     let Some(first) = first else { return };
     preview(app, ui, doc, first);
@@ -84,8 +85,8 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId
 
 /// One export setting: size (typed or picked; images only, SVG and PDF are vector), suffix,
 /// format, advanced options and remove; a PDF's print settings under it. `text`: every layer in
-/// `ids` is a text layer.
-fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &ExportSetting, text: bool) {
+/// `ids` is a text layer; `file`: the document's color profile.
+fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &ExportSetting, text: bool, file: ColorProfile) {
     row(ui, 32.0, |ui| {
         // Tighter spacing so the advanced options and remove buttons fit beside the fields.
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -129,7 +130,7 @@ fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Expo
             .width(216.0)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                if let Some(mut params) = advanced_options(ui, e, text) {
+                if let Some(mut params) = advanced_options(ui, e, text, file) {
                     params["ids"] = json!(ids);
                     params["index"] = json!(i);
                     app.run("export.update", params);
@@ -161,8 +162,9 @@ const VD_COMPAT: [(VdCompat, &str); 3] =
 /// A setting's advanced options: ignore overlapping layers (`contentsOnly`), include bounding box
 /// for text layers (and for any setting that has it on, so it can be turned off); for SVG outline
 /// text, the id attribute and simplified strokes; for XML (Android Vector Drawable) the id attribute
-/// (as `android:name`) and the compatibility mode. Returns the changed option as command params.
-fn advanced_options(ui: &mut Ui, e: &ExportSetting, text: bool) -> Option<Value> {
+/// (as `android:name`) and the compatibility mode; for PNG, JPG and WebP the color profile (`file`
+/// is the document's). Returns the changed option as command params.
+fn advanced_options(ui: &mut Ui, e: &ExportSetting, text: bool, file: ColorProfile) -> Option<Value> {
     let mut out = None;
     let mut option = |ui: &mut Ui, key: &str, on: bool, label: &str| {
         if widgets::checkbox(ui, on, label) {
@@ -189,7 +191,26 @@ fn advanced_options(ui: &mut Ui, e: &ExportSetting, text: bool) -> Option<Value>
             }
         }
     }
+    if e.format.is_raster() {
+        ui.add_space(4.0);
+        widgets::label(ui, tr("Color profile"), Tokens::get(ui.ctx()).text_secondary);
+        for p in ExportColorProfile::ALL {
+            let on = e.color_profile == p;
+            if widgets::radio(ui, on, &color_profile_label(p, file)) && !on {
+                out = Some(json!({"colorProfile": p.key()}));
+            }
+        }
+    }
     out
+}
+
+/// How the advanced options name an export color profile: "Same as file (Display P3)" names the
+/// profile of `file`, the document's.
+fn color_profile_label(p: ExportColorProfile, file: ColorProfile) -> String {
+    match p {
+        ExportColorProfile::SameAsFile => trf("Same as file ({profile})", &[("profile", &file.label())]),
+        p => p.resolve(file).label().to_string(),
+    }
 }
 
 /// A PDF setting's print settings: a summary row that opens them.

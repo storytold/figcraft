@@ -53,6 +53,113 @@ pub struct Editor {
     details: Option<String>,
     /// The group the table shows ("space" or "color/brand"); None = every variable.
     group: Option<String>,
+    /// The selected variables' ids (this file's), kept to the rows the table shows.
+    pub(crate) selected: Vec<String>,
+    /// The row a Shift+click extends from.
+    pub(crate) anchor: Option<String>,
+    /// The variable ids the table shows now, in row order (the range a Shift+click covers).
+    pub(crate) order: Vec<String>,
+}
+
+/// A click on row `id`: plain selects only it, Shift extends from the anchor to it through the
+/// rows shown (added to the selection with Cmd/Ctrl), Cmd/Ctrl (or Shift without an anchor) toggles it.
+pub(crate) fn select_clicked(st: &mut Editor, id: &str, m: egui::Modifiers) {
+    let pos = |x: &str| st.order.iter().position(|o| o == x);
+    let anchor = st.anchor.as_deref().filter(|a| st.selected.iter().any(|s| s == a)).and_then(pos);
+    if m.shift
+        && let (Some(ai), Some(bi)) = (anchor, pos(id))
+    {
+        let (lo, hi) = (ai.min(bi), ai.max(bi));
+        let mut s: Vec<String> = if m.command { st.selected.clone() } else { vec![] };
+        for x in st.order.get(lo..=hi).unwrap_or_default() {
+            if !s.contains(x) {
+                s.push(x.clone());
+            }
+        }
+        st.selected = s;
+    } else if m.shift || m.command {
+        match st.selected.iter().position(|x| x == id) {
+            Some(i) => {
+                st.selected.remove(i);
+            }
+            None => st.selected.push(id.to_string()),
+        }
+        st.anchor = Some(id.to_string());
+    } else {
+        st.selected = vec![id.to_string()];
+        st.anchor = Some(id.to_string());
+    }
+}
+
+/// The variables a row's menu acts on: the whole selection when the row is part of a selection of
+/// several (in table order, leaving out inherited ones, which are changed in their own collection),
+/// else None.
+fn bulk_ids<'a>(view: &View<'a>, st: &Editor, v: &Variable) -> Option<Vec<&'a Variable>> {
+    if !view.editable() || st.selected.len() < 2 || !st.selected.contains(&v.id) {
+        return None;
+    }
+    let list: Vec<&Variable> =
+        st.order.iter().filter(|id| st.selected.contains(id)).filter_map(|id| view.vars.get_by_id(id)).filter(|x| x.extends.is_none()).collect();
+    (list.len() > 1).then_some(list)
+}
+
+/// Run one `variable.*` command per variable as a single undo step.
+fn bulk_run(app: &mut FigApp, label: &str, vars: &[&Variable], step: impl Fn(&Variable) -> Option<(&'static str, Value)>) {
+    let steps: Vec<Value> = vars.iter().filter_map(|v| step(v)).map(|(command, params)| json!({"command": command, "params": params})).collect();
+    if !steps.is_empty() {
+        app.run("command.batch", json!({"label": label, "commands": steps}));
+    }
+}
+
+/// The context menu of a row that is part of a selection of several: delete, move to a group and
+/// scope act on all of them.
+fn bulk_menu(app: &mut FigApp, ui: &mut Ui, coll_groups: &[String], vars: &[&Variable]) {
+    let n = vars.len();
+    if menu_item(ui, &trn("Delete {n} variables", n, &[]), "") {
+        bulk_run(app, "Delete variables", vars, |v| Some(("variable.delete", json!({"variable": v.id}))));
+        ui.close();
+    }
+    // Many groups make the menu taller than the window: the rows after Delete scroll.
+    let max_h = ui.ctx().content_rect().height() * 0.6;
+    egui::ScrollArea::vertical().id_salt("variables_bulk_menu_scroll").max_height(max_h).show(ui, |ui| {
+        let moves = std::iter::once(None).chain(coll_groups.iter().map(|g| Some(g.as_str())));
+        for g in moves {
+            let label = g.map_or_else(|| tr("Move out of any group").to_string(), |g| trf("Move to group {group}", &[("group", &g)]));
+            if menu_item(ui, &label, "") {
+                bulk_run(app, "Move variables", vars, |v| {
+                    let short = v.name.rsplit('/').next().unwrap_or(&v.name);
+                    let name = g.map_or_else(|| short.to_string(), |g| format!("{g}/{short}"));
+                    (name != v.name).then(|| ("variable.update", json!({"variable": v.id, "name": name})))
+                });
+                ui.close();
+            }
+        }
+        let mut scopes: Vec<(&'static str, &'static str)> = Vec::new();
+        for v in vars {
+            for s in scopes_for(v.kind) {
+                if !scopes.contains(s) {
+                    scopes.push(*s);
+                }
+            }
+        }
+        let set = |app: &mut FigApp, label: &str, value: Option<&'static str>, ui: &mut Ui| {
+            if menu_item(ui, label, "") {
+                bulk_run(app, "Change scope", vars, |v| match value {
+                    None => Some(("variable.update", json!({"variable": v.id, "scopes": Value::Null}))),
+                    Some("") => Some(("variable.update", json!({"variable": v.id, "scopes": []}))),
+                    Some(s) => {
+                        scopes_for(v.kind).iter().any(|(id, _)| *id == s).then(|| ("variable.update", json!({"variable": v.id, "scopes": [s]})))
+                    }
+                });
+                ui.close();
+            }
+        };
+        set(app, tr("Scope: all supported properties"), None, ui);
+        set(app, tr("Scope: hidden from pickers"), Some(""), ui);
+        for (id, label) in scopes {
+            set(app, &trf("Scope: only {scope}", &[("scope", &tr(label))]), Some(id), ui);
+        }
+    });
 }
 
 impl Editor {
@@ -181,6 +288,9 @@ fn header(app: &mut FigApp, ui: &mut Ui, open: &mut bool) {
     // Import and export, left of Close.
     let bar = Rect::from_min_max(pos2(r.max.x - 280.0, r.min.y + 10.0), pos2(r.max.x - 40.0, r.max.y - 10.0));
     let mut bar = ui.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    // The window lays itself out without item spacing (set by the caller); the buttons in this bar
+    // keep the same gap between them as the one between Export and the Close button (#1754).
+    bar.spacing_mut().item_spacing.x = 16.0;
     let export = widgets::button(&mut bar, tr("Export…"), false, true);
     crate::right::menu_popup(&export).show(|ui| {
         for (label, format) in [(tr("Variables JSON…"), "json"), (tr("CSS custom properties…"), "css"), (tr("Dart constants for Flutter…"), "dart")]
@@ -575,6 +685,17 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
     let mut list: Vec<&Variable> =
         view.in_collection(&coll.id).filter(|v| in_group(v) && (q.is_empty() || v.name.to_lowercase().contains(&q))).collect();
     list.sort_by(|a, b| group_of(&a.name).cmp(group_of(&b.name)));
+    st.order = list.iter().map(|v| v.id.clone()).collect();
+    let order = st.order.clone();
+    st.selected.retain(|id| order.contains(id));
+    // Escape clears the selection (unless a field has the keyboard).
+    if !st.selected.is_empty()
+        && st.rename.is_none()
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        st.selected.clear();
+    }
     let width = (NAME_W + coll.modes.len() as f32 * MODE_W + 40.0).max(ui.available_width());
     egui::ScrollArea::both().id_salt("vars_table").auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -597,6 +718,11 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
         }
         if view.editable() {
             create_row(app, ui, view, coll, st);
+            // A click on the empty space below the rows clears the selection.
+            let (_, empty) = ui.allocate_exact_size(vec2(width, ui.available_height().max(24.0)), Sense::click());
+            if empty.clicked() {
+                st.selected.clear();
+            }
         }
     });
 }
@@ -686,7 +812,10 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
     let t = Tokens::get(ui.ctx());
     let editable = view.editable();
     let (r, resp) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::click());
-    if resp.hovered() || (editable && st.details.as_deref() == Some(v.id.as_str())) {
+    let selected = editable && st.selected.contains(&v.id);
+    if selected {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.selected_row);
+    } else if resp.hovered() || (editable && st.details.as_deref() == Some(v.id.as_str())) {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
     kind_glyph(ui, view.vars, v, coll, Rect::from_center_size(pos2(r.min.x + 24.0, r.center().y), vec2(14.0, 14.0)));
@@ -709,10 +838,19 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
         value_cell(app, ui, view, v, coll, &m.id, cell);
     }
     if editable {
+        if resp.clicked() {
+            let m = ui.input(|i| i.modifiers);
+            select_clicked(st, &v.id, m);
+        }
         if !inherited && resp.double_clicked() && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| p.x < name_r.max.x) {
             start_rename(st, target.clone());
         }
         crate::right::context_popup(&resp).show(|ui| {
+            if let Some(vars) = bulk_ids(view, st, v) {
+                let coll_groups = groups(view.in_collection(&coll.id).map(|x| x.name.as_str()));
+                bulk_menu(app, ui, &coll_groups, &vars);
+                return;
+            }
             if menu_item(ui, tr("Edit variable"), "") {
                 st.details = Some(v.id.clone());
                 ui.close();
