@@ -251,7 +251,7 @@ fn sweeping_across_rows_shows_only_the_row_under_the_pointer() {
         u.hover(pos2(r.min.x + 20.0, r.center().y));
         // (A panel drawn above the row the pointer is on goes the next frame.)
         u.frame(vec![]);
-        assert_eq!(u.tops_shown().len(), 1, "{:?} open on row {i}", u.tops_shown());
+        assert_eq!(u.tops_shown(), [TOPS[i]], "wrong submenu open on row {i}");
     }
     assert_eq!(u.tops_shown(), ["Arrange"]);
 }
