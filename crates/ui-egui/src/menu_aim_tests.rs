@@ -1,7 +1,7 @@
 //! Which submenu the main and context menus show, driven through egui headless: a closed menu
 //! reopens with no submenu open (also one level down), hovering another row closes the open
-//! submenu at once while a submenu opens only once the pointer stays on its row a moment
-//! (sweeping across rows doesn't flash each one), and on the way from a
+//! submenu at once and a submenu opens on the first frame its row is hovered (as Figma's does),
+//! and on the way from a
 //! submenu's row to its submenu the rows the pointer crosses don't take over (the safe triangle),
 //! unless it rests on one or turns away.
 
@@ -214,7 +214,7 @@ fn resting_on_a_crossed_row_hands_over_to_it() {
 }
 
 #[test]
-fn moving_straight_down_switches_after_a_short_hover() {
+fn moving_straight_down_switches_at_once() {
     let mut u = Ui::new();
     u.open_main_menu();
     let file = u.top_row(0);
@@ -227,24 +227,21 @@ fn moving_straight_down_switches_after_a_short_hover() {
         p.y = (p.y + 4.0).min(edit.y);
         u.hover(p);
     }
-    assert!(u.tops_shown().is_empty(), "File closes at once, Edit waits: {:?}", u.tops_shown());
-    u.wait(HOVER_DELAY + 0.05);
-    assert_eq!(u.tops_shown(), ["Edit"]);
+    u.frame(vec![]);
+    assert_eq!(u.tops_shown(), ["Edit"], "File closes at once, Edit opens on its first frame");
 }
 
 #[test]
-fn the_first_submenu_opens_after_a_short_hover() {
+fn the_first_submenu_opens_on_the_next_frame() {
     let mut u = Ui::new();
     u.open_main_menu();
     u.hover(u.top_row(0).center());
     u.frame(vec![]);
-    assert!(u.tops_shown().is_empty(), "opened at once");
-    u.wait(HOVER_DELAY + 0.05);
-    assert_eq!(u.tops_shown(), ["File"]);
+    assert_eq!(u.tops_shown(), ["File"], "Figma opens it on the first frame (median 11 ms)");
 }
 
 #[test]
-fn sweeping_across_rows_opens_only_where_the_pointer_stops() {
+fn sweeping_across_rows_shows_only_the_row_under_the_pointer() {
     let mut u = Ui::new();
     u.open_main_menu();
     u.settle(u.top_row(0).center());
@@ -254,9 +251,8 @@ fn sweeping_across_rows_opens_only_where_the_pointer_stops() {
         u.hover(pos2(r.min.x + 20.0, r.center().y));
         // (A panel drawn above the row the pointer is on goes the next frame.)
         u.frame(vec![]);
-        assert!(u.tops_shown().is_empty(), "{:?} open on row {i}", u.tops_shown());
+        assert_eq!(u.tops_shown().len(), 1, "{:?} open on row {i}", u.tops_shown());
     }
-    u.wait(HOVER_DELAY + 0.05);
     assert_eq!(u.tops_shown(), ["Arrange"]);
 }
 

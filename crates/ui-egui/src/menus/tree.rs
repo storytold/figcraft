@@ -11,8 +11,8 @@ pub(crate) fn submenu<R>(ui: &mut Ui, key: &str, label: &str, t: &Tokens, add: i
 // Which submenu is open: hover intent with a safe triangle.
 //
 // Every menu tree (the main menu, the context menu) keeps, per level, which of its submenus is
-// open. Hovering another row closes the open submenu at once; resting on a submenu row for
-// `HOVER_DELAY` opens it (sweeping across rows doesn't flash every submenu on the way). Except while the
+// open. Hovering a row closes the open submenu at once and opens the row's own submenu on the
+// same frame (as Figma's main menu does, measured; `HOVER_DELAY` is zero). Except while the
 // pointer is on its way from the open submenu's row to the submenu: while each move lands inside
 // the triangle between where it was and the submenu's near edge (it keeps getting nearer), rows
 // it crosses don't take over and the submenu's row stays highlighted. Resting (`AIM_REST`) or
@@ -20,8 +20,10 @@ pub(crate) fn submenu<R>(ui: &mut Ui, key: &str, label: &str, t: &Tokens, add: i
 // last submenu open.
 // Closing a menu tree forgets all of it, so it reopens with no submenu open.
 
-/// How long the pointer stays on a submenu row before its submenu opens.
-pub(crate) const HOVER_DELAY: f64 = 0.15;
+/// How long the pointer stays on a submenu row before its submenu opens. None: Figma's main menu
+/// opens it on the first frame (median 11 ms measured), so the delay is zero; kept as a constant so
+/// the pending-row bookkeeping the aim relies on stays as it was.
+pub(crate) const HOVER_DELAY: f64 = 0.0;
 
 /// How long the pointer may rest inside the safe triangle before the row under it takes over.
 pub(crate) const AIM_REST: f64 = 0.3;
