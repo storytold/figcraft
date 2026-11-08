@@ -322,3 +322,28 @@ fn copy_cut_and_paste_survive_junk_in_vector_edit_mode() {
         }
     }
 }
+
+#[test]
+fn cutting_a_selected_region_deletes_exactly_the_segments_it_copies_and_keeps_a_tail() {
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[100, 100], [200, 100], [150, 200]], "closed": true}));
+    let id = id_of(&r);
+    // A tail: one open segment from the first corner to a new point.
+    crate::vectoredit::edit(s.doc_mut().unwrap(), id, |n| {
+        n.vertices.push(figcraft_doc::Vertex::new(20.0, 20.0));
+        let tail = n.vertices.len() - 1;
+        crate::vectoredit::ops::connect(n, 0, tail, (0.0, 0.0), (0.0, 0.0));
+    })
+    .unwrap();
+    assert_eq!((net(&s, id).segments.len(), net(&s, id).regions.len()), (4, 1));
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.select", json!({"regions": [0]}));
+    ex(&mut s, "edit.cut", json!({}));
+    let n = net(&s, id);
+    assert_eq!(n.segments.len(), 1, "only the tail is left");
+    assert!(n.regions.is_empty());
+    leave(&mut s);
+    ex(&mut s, "edit.paste", json!({}));
+    let new = *layers(&s).last().unwrap();
+    assert_eq!(net(&s, new).segments.len(), 3, "the copy holds the region's three segments, not the tail");
+}

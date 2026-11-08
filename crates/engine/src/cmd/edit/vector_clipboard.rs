@@ -22,6 +22,8 @@ pub(super) struct EditSelection {
     pub any: bool,
     /// Each edited layer with something to copy, and the sub-network that is.
     pub parts: Vec<(NodeId, VectorNetwork)>,
+    /// What Cut removes, per edited layer: the same points and segments the copy was built from.
+    pub delete: Vec<EditPart>,
 }
 
 /// The selection of the vector being edited (and the other layers edited with it), or `None` when
@@ -29,7 +31,7 @@ pub(super) struct EditSelection {
 pub(super) fn edit_selection(s: &Session) -> Option<EditSelection> {
     let ds = s.ds().ok()?;
     let ve = ds.vector_edit.as_ref()?;
-    let mut sel = EditSelection { any: false, parts: Vec::new() };
+    let mut sel = EditSelection { any: false, parts: Vec::new(), delete: Vec::new() };
     for part in ve.parts() {
         if part.vertices.is_empty() && part.segments.is_empty() {
             continue;
@@ -44,6 +46,7 @@ pub(super) fn edit_selection(s: &Session) -> Option<EditSelection> {
         if active {
             segments.extend(ve.regions.iter().filter_map(|r| net.regions.get(*r)).flat_map(|r| r.loops.iter().flatten().copied()));
         }
+        sel.delete.push(EditPart { id: part.id, vertices: vertices.clone(), segments: segments.clone() });
         if let Some(sub) = sub_network(net, &vertices, &segments) {
             sel.parts.push((part.id, sub));
         }
@@ -144,10 +147,10 @@ pub(super) fn copy_selection(s: &mut Session, cmd: &str, sel: EditSelection) -> 
 /// the same layer and edit mode stays on). A selection that has no segment to copy (lone points
 /// with nothing attached) is removed and the clipboard is left as it was.
 pub(super) fn cut_selection(s: &mut Session, sel: EditSelection) -> Result<Value> {
+    let cut = sel.parts.len();
     let segments = if sel.parts.is_empty() { 0 } else { copy_parts(s, "edit.cut", &sel)? };
-    let parts: Vec<EditPart> = vectoredit::editing(s)?.parts();
-    vectoredit::delete_selection(s, parts, false)?;
-    Ok(json!({"cut": sel.parts.len(), "segments": segments}))
+    vectoredit::delete_selection(s, sel.delete, false)?;
+    Ok(json!({"cut": cut, "segments": segments}))
 }
 
 /// The network of the outline of copied layer `n` in its own coordinates: a vector's segments, a
