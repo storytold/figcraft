@@ -59,6 +59,8 @@ pub(crate) enum VGesture {
     BendSegment {
         seg: usize,
         t: f64,
+        /// How far the press was from the curve: the pointer drags the point it grabbed.
+        grab: Vec2,
     },
     /// Bend tool on a point: drag pulls out handles, a click on a smooth point sharpens it.
     BendVertex {
@@ -751,8 +753,11 @@ impl Session {
                     self.vgesture(VGesture::BendVertex { v: index, origin, moved: false, smooth });
                 }
                 Some(VHit::Segment { seg, t }) => {
+                    use figcraft_geom::kurbo::ParamCurve;
+                    let on = network(&doc, id).and_then(|n| n.cubic(seg)).map(|c| c.eval(t.clamp(0.05, 0.95)));
+                    let grab = on.map(|on| w.inverse() * ev.p() - on).filter(|g| g.x.is_finite() && g.y.is_finite()).unwrap_or(Vec2::ZERO);
                     self.begin_interaction("Bend")?;
-                    self.vgesture(VGesture::BendSegment { seg, t });
+                    self.vgesture(VGesture::BendSegment { seg, t, grab });
                 }
                 None => self.vgesture(VGesture::Marquee { start: ev.p(), base: Self::select_base(ve, ev.shift), leave: None }),
             },
@@ -956,8 +961,8 @@ impl Session {
                 self.tool.overlay.cursor = Cursor::Rotate((ev.p() - c).atan2().to_degrees());
                 self.vgesture(VGesture::BoxRotate { b, start_angle, angle });
             }
-            VGesture::BendSegment { seg, t } => {
-                self.preview(|doc, _| edit(doc, id, |net| ops::bend(net, seg, t, lp)))?;
+            VGesture::BendSegment { seg, t, grab } => {
+                self.preview(|doc, _| edit(doc, id, |net| ops::bend(net, seg, t, lp - grab)))?;
             }
             VGesture::BendVertex { v, origin, moved, smooth } => {
                 let d = lp - origin;

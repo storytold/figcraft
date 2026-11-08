@@ -227,22 +227,27 @@ pub fn make_sharp(net: &mut VectorNetwork, vi: usize) {
     }
 }
 
-/// Bend a segment so its curve passes through `p` at parameter `t` (the Bend tool).
+/// Bend a segment so its curve passes through `p` at parameter `t` (the Bend tool): its two handles
+/// move by the least that takes the point at `t` to `p`, so the curve keeps its shape elsewhere (an
+/// S stays an S) and a grab without movement changes nothing. The handles move as handles do, so a
+/// mirrored point's other handle follows and the joins stay smooth.
 pub fn bend(net: &mut VectorNetwork, seg: usize, t: f64, p: Point) {
     let Some(s) = net.segments.get(seg).copied() else { return };
-    let (Some(a), Some(b)) = (net.vertices.get(s.a).copied(), net.vertices.get(s.b).copied()) else { return };
     if !(t.is_finite() && p.x.is_finite() && p.y.is_finite()) {
         return;
     }
+    let (Some(c), Some(h1), Some(h2)) = (net.cubic(seg), net.handle(seg, true), net.handle(seg, false)) else { return };
     let t = t.clamp(0.05, 0.95);
-    // Controls at the chord's thirds plus a shared offset: B(t) = L(t) + 3t(1-t)·off.
-    let (a, b) = (a.point(), b.point());
-    let k = 3.0 * t * (1.0 - t);
-    let off = (p - a.lerp(b, t)) / k;
-    let c1 = a + (b - a) / 3.0 + off;
-    let c2 = b + (a - b) / 3.0 + off;
-    net.set_handle(seg, true, (c1.x - a.x, c1.y - a.y));
-    net.set_handle(seg, false, (c2.x - b.x, c2.y - b.y));
+    let d = p - c.eval(t);
+    // B(t) moves by b1·Δc1 + b2·Δc2; the least-norm handle moves with b1·w1 + b2·w2 = 1.
+    let (b1, b2) = (3.0 * (1.0 - t) * (1.0 - t) * t, 3.0 * (1.0 - t) * t * t);
+    let norm = b1 * b1 + b2 * b2;
+    if norm <= 1e-12 || s.a == s.b {
+        return;
+    }
+    let (w1, w2) = (b1 / norm, b2 / norm);
+    set_handle(net, seg, true, (h1.0 + d.x * w1, h1.1 + d.y * w1), false);
+    set_handle(net, seg, false, (h2.0 + d.x * w2, h2.1 + d.y * w2), false);
 }
 
 /// Split segment `seg` at `t`, inserting a vertex; returns its index.
@@ -1174,5 +1179,56 @@ mod tests {
         let ends: Vec<f64> = n.vertices.iter().map(|v| v.x).collect();
         assert!(ends.iter().any(|x| (x - (centre.x - 0.5)).abs() < 0.01), "{ends:?}");
         assert!(ends.iter().any(|x| (x - (centre.x + 0.5)).abs() < 0.01), "{ends:?}");
+    }
+
+    /// An S-shaped segment between two curved neighbours, its joins mirrored (smooth).
+    fn s_curve() -> VectorNetwork {
+        let mut path = figcraft_geom::BezPath::new();
+        path.move_to((-100.0, 0.0));
+        path.curve_to((-70.0, -40.0), (-30.0, -40.0), (0.0, 0.0));
+        path.curve_to((30.0, 40.0), (70.0, -40.0), (100.0, 0.0));
+        path.curve_to((130.0, 40.0), (170.0, 40.0), (200.0, 0.0));
+        let mut n = VectorNetwork::from_path(&path);
+        for v in &mut n.vertices {
+            v.mirror = Some(HandleMirroring::Angle);
+        }
+        n
+    }
+
+    fn seg_at(n: &VectorNetwork, x: f64) -> usize {
+        (0..n.segments.len()).find(|s| n.cubic(*s).is_some_and(|c| (c.p0.x - x).abs() < 1e-9)).unwrap()
+    }
+
+    /// The Bend tool keeps the segment's shape: a grab without movement changes nothing, a drag
+    /// takes the grabbed point to the pointer, and the neighbours' handles stay in line (a user
+    /// report: "the vector tools aren't as smooth as Figma's").
+    #[test]
+    fn bend_moves_the_grabbed_point_and_keeps_the_curve() {
+        let n = s_curve();
+        let seg = seg_at(&n, 0.0);
+        let before = n.cubic(seg).unwrap();
+        for t in [0.25, 0.5, 0.75] {
+            let mut still = n.clone();
+            bend(&mut still, seg, t, before.eval(t));
+            let after = still.cubic(seg).unwrap();
+            for k in 0..=10 {
+                let u = f64::from(k) / 10.0;
+                assert!((after.eval(u) - before.eval(u)).hypot() < 1e-9, "a grab at {t} without movement moved {u}");
+            }
+        }
+        let mut bent = n.clone();
+        let to = before.eval(0.25) + Vec2::new(0.0, 12.0);
+        bend(&mut bent, seg, 0.25, to);
+        let after = bent.cubic(seg).unwrap();
+        assert!((after.eval(0.25) - to).hypot() < 1e-9, "the grabbed point follows the pointer");
+        assert!((after.eval(0.9) - before.eval(0.9)).hypot() < 12.0, "the far end moves less than the grab");
+        // Smooth joins stay smooth: each point's two handles stay opposite.
+        for v in [n.segments[seg].a, n.segments[seg].b] {
+            let hs: Vec<(f64, f64)> = bent.incident(v).iter().filter_map(|(s, st)| bent.handle(*s, *st)).collect();
+            let [a, b] = hs[..] else { panic!("two handles at {v}: {hs:?}") };
+            let cross = a.0 * b.1 - a.1 * b.0;
+            let dot = a.0 * b.0 + a.1 * b.1;
+            assert!(cross.abs() < 1e-6 && dot < 0.0, "the join at {v} kinked: {a:?} {b:?}");
+        }
     }
 }
