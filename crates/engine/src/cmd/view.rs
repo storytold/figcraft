@@ -73,6 +73,10 @@ pub fn checked(s: &Session, id: &str) -> Option<bool> {
     if id == "view.pixelPreview" {
         return Some(v.pixel_preview);
     }
+    // Spell check is a preference, not a view state, and the Text menu marks it the same way.
+    if id == "text.spellCheck" {
+        return Some(s.prefs.spell_check);
+    }
     TOGGLES.iter().find(|(k, ..)| *k == id).map(|(_, f, _)| *f(&mut v))
 }
 
@@ -219,7 +223,7 @@ fn ui_scale_step(s: &mut Session, dir: i32) -> Result<Value> {
 }
 
 /// Set one of the preferences' on/off settings from `on`, or toggle it when `on` is absent.
-fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Result<Value> {
+pub(crate) fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Result<Value> {
     let slot = f(&mut s.prefs);
     *slot = boolean(p, "on").unwrap_or(!*slot);
     Ok(json!({"on": *slot}))

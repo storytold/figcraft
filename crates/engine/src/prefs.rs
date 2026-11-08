@@ -52,6 +52,9 @@ pub struct Prefs {
     /// Reduce motion: the interface's own animations are off (the system's setting turns them off
     /// too). Prototype transitions still play.
     pub reduce_motion: bool,
+    /// Underline misspelled words while editing text (Text ▸ Spell check). Off by default: the
+    /// word list may be absent, and then the switch changes nothing.
+    pub spell_check: bool,
     /// How large the whole interface is drawn, relative to the system's display scale: 1.0 is the
     /// system's own size, 1.25 a quarter larger (kept between [`UI_SCALE_MIN`] and
     /// [`UI_SCALE_MAX`]). The canvas zoom is separate.
@@ -142,6 +145,7 @@ impl Default for Prefs {
             language: "system".into(),
             user_name: cmd::comment::DEFAULT_AUTHOR.into(),
             reduce_motion: false,
+            spell_check: false,
             ui_scale: 1.0,
             auto_save: false,
             start_on_home: false,

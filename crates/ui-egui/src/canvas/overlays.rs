@@ -217,10 +217,17 @@ fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Do
         quad(painter, q, stroke(accent(painter), 1.0));
     }
     let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
-    if a != b && preedit.is_none() {
-        for q in text.selection(app, a, b) {
+    if a != b && preedit.is_none() {        for q in text.selection(app, a, b) {
             painter.add(Shape::convex_polygon(q.to_vec(), accent(painter).gamma_multiply(0.3), Stroke::NONE));
         }
+    }
+    // Text ▸ Spell check: squiggles under the words the system's word list doesn't know,
+    // while the box is being edited. The checker never blocks typing.
+    if app.session.prefs.spell_check
+        && let Some(n) = edoc.node(te.id)
+        && let figcraft_doc::NodeKind::Text(data) = &n.kind
+    {
+        spell_squiggles(app, painter, &text, &data.characters);
     }
     if let Some(p) = preedit {
         for r in layout.selection_rects(p.range.0, p.range.1) {
@@ -244,6 +251,67 @@ fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Do
         painter.line_segment(text.caret(app, caret, zoom), stroke(t.text, 1.0));
     }
     painter.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+}
+
+/// Red squiggles under the edited text's misspelled words: the system word list judges each
+/// script run of the text, capped so a huge box can't stall the frame. Without a word list
+/// (`spell::dictionary()` is `None`) nothing draws.
+fn spell_squiggles(app: &FigApp, painter: &egui::Painter, text: &TextOnScreen, characters: &str) {
+    let Some(_) = figcraft_engine::spell::dictionary() else { return };
+    let chars: Vec<char> = characters.chars().collect();
+    let mut flagged = vec![false; chars.len()];
+    let mut judged = 0usize;
+    for (start, end) in figcraft_engine::textedit::word_ranges(&chars) {
+        if judged >= 2000 {
+            break;
+        }
+        judged += 1;
+        let word: String = chars[start..end].iter().collect();
+        if figcraft_engine::spell::misspelled(app.session.prefs.spell_check, &word) {
+            for f in flagged.get_mut(start..end).unwrap_or(&mut []) {
+                *f = true;
+            }
+        }
+    }
+    let col = stroke(egui::Color32::from_rgb(0xD6, 0x33, 0x33), 1.0);
+    for line in &text.layout.lines {
+        // A little below where the composed-input underline sits.
+        let y = line.baseline + (line.top + line.height - line.baseline) * 0.35 + 2.0;
+        let mut run: Option<(f64, f64)> = None;
+        for g in text.layout.glyphs.get(line.glyph_start..line.glyph_end).unwrap_or(&[]) {
+            let miss = (g.char_start..g.char_end).any(|c| flagged.get(c).copied().unwrap_or(false));
+            if miss {
+                let x1 = g.x + g.advance;
+                run = Some(match run {
+                    Some((x0, _)) => (x0, x1),
+                    None => (g.x, x1),
+                });
+            } else if let Some((x0, x1)) = run.take() {
+                zig(painter, text, app, x0, x1, y, col);
+            }
+        }
+        if let Some((x0, x1)) = run.take() {
+            zig(painter, text, app, x0, x1, y, col);
+        }
+    }
+}
+
+/// One squiggle: small strokes stepping down and up across the run, in page units mapped to screen.
+fn zig(painter: &egui::Painter, text: &TextOnScreen, app: &FigApp, x0: f64, x1: f64, y: f64, col: egui::Stroke) {
+    if !(x1 > x0) {
+        return;
+    }
+    let seg = ((x1 - x0) / 6.0).max(1.0);
+    let mut x = x0;
+    let mut down = true;
+    let mut prev = text.at(app, x, y);
+    while x < x1 {
+        x = (x + seg).min(x1);
+        let next = text.at(app, x, y + if down { 1.0 } else { -1.0 });
+        painter.line_segment([prev, next], col);
+        prev = next;
+        down = !down;
+    }
 }
 
 /// What the selection's overlay draws that only the document, the selection, the view and the

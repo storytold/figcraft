@@ -26,6 +26,7 @@ pub mod measure;
 pub mod proto_run;
 mod selection;
 mod sharing;
+pub mod spell;
 pub use assets::components;
 pub use assets::library;
 pub use assets::library_server;
@@ -548,6 +549,8 @@ mod section_tests;
 mod select_area_tests;
 #[cfg(test)]
 mod selection_behaviour_tests;
+#[cfg(test)]
+mod spell_check_tests;
 #[cfg(test)]
 mod selection_depth_tests;
 #[cfg(test)]

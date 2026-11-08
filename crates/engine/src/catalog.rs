@@ -228,6 +228,7 @@ pub static MENU: &[MenuItem] = &[
     m!("Text/Text direction", "Left to right", "text.directionLtr"),
     m!("Text/Text direction", "Right to left", "text.directionRtl"),
     m!("Text", SEP, ""),
+    m!("Text", "Spell check", "text.spellCheck"),
     m!("Text", "Missing fonts…", "text.missingFonts"),
     // Arrange
     m!("Arrange", "Align left", "align.left"),

@@ -401,6 +401,27 @@ fn is_word(chars: &[char], i: usize) -> bool {
     word_class(chars, i) != 0
 }
 
+/// The char ranges of the text's words (the spell checker judges each on its own): each is a
+/// run of one script's word chars, ending where the script changes or punctuation steps in.
+pub fn word_ranges(chars: &[char]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let n = chars.len();
+    while i < n {
+        let class = word_class(chars, i);
+        if class == 0 {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < n && word_class(chars, i) == class {
+            i += 1;
+        }
+        out.push((start, i));
+    }
+    out
+}
+
 /// The start of the word before `i` (skipping spaces and punctuation first).
 fn word_left(chars: &[char], mut i: usize) -> usize {
     while i > 0 && !is_word(chars, i - 1) {

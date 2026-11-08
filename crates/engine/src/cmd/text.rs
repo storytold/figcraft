@@ -774,5 +774,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"families": families, "refitted": refitted}))
             }
         ),
+        spec!(
+            "text.spellCheck",
+            "Spell check",
+            "{on?} underline misspelled words while text is being edited; needs the system's word list, and without one the switch changes nothing",
+            false,
+            |s, p| super::view::pref(s, p, |x| &mut x.spell_check)
+        ),
     ]
 }
