@@ -186,11 +186,7 @@ impl<'a> Mapper<'a> {
             fail(self, "has invalid normalized size");
             return;
         };
-        let Some(size) = v.get("size") else {
-            fail(self, "has invalid dimensions");
-            return;
-        };
-        let (Some(nx), Some(ny), Some(w), Some(h)) = (num(norm, "x"), num(norm, "y"), num(size, "x"), num(size, "y")) else {
+        let (Some(nx), Some(ny), Some((w, h))) = (num(norm, "x"), num(norm, "y"), v.size()) else {
             fail(self, "has invalid dimensions");
             return;
         };

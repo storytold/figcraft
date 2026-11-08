@@ -1048,6 +1048,9 @@ fn a_scaled_instance_keeps_its_radius_through_a_round_trip() {
     let (back, _) = import(&bytes, "x").unwrap();
     let inst = back.nodes().find(|n| n.name == "Scaled").unwrap();
     let b = inst.children.iter().map(|c| back.node(*c).unwrap()).find(|n| n.name == "Box").unwrap();
-    eprintln!("scaled box back: {}x{} radii {:?}", b.width, b.height, b.corners.radii);
+    // The 40 px box at the instance's 1.5 scale. The exporter writes every scaled value of a layer
+    // in a derived row, so there is no main-layer value left unwritten here to round-trip; the
+    // scaling of values with no row stays covered by `scale_factor_tests`.
+    assert_eq!((b.width, b.height), (60.0, 60.0));
     assert_eq!(b.corners.radii, [15.0; 4]);
 }
