@@ -243,3 +243,59 @@ fn a_hand_drag_does_not_pan_on_its_own_at_the_edge() {
     assert_eq!(centre(&u), c);
     release(&mut u, at);
 }
+
+#[test]
+fn a_long_frame_pans_for_a_tenth_of_a_second_at_most() {
+    let mut u = setup();
+    let (_, p) = centred_rect(&mut u);
+    let from = pick_up(&mut u, p);
+    let at = pos2(u.app.canvas.rect.max.x - 2.0, from.y);
+    hold(&mut u, at, 3);
+    let before = centre(&u).0;
+    // One frame half a second after the last: it counts as 0.1 s, 52 px at 520 px/s.
+    let now = u.ctx.input(|i| i.time);
+    u.advance_clock(now + 0.5);
+    u.frame(vec![]);
+    let pan = centre(&u).0 - before;
+    assert!((pan - 52.0).abs() < 0.5, "a 0.5 s frame panned {pan} px, wanted 52");
+    release(&mut u, at);
+}
+
+#[test]
+fn past_the_edge_pans_at_the_top_speed_and_the_layer_stays_under_the_pointer() {
+    let mut u = setup();
+    let (r, p) = centred_rect(&mut u);
+    let from = pick_up(&mut u, p);
+    let rect = u.app.canvas.rect;
+    // 30 px past the right edge, over the panel beside the canvas.
+    let at = pos2(rect.max.x + 30.0, from.y);
+    hold(&mut u, at, 2);
+    let (cx0, grab) = (centre(&u).0, bounds_x0(&u, r) - u.app.to_page(at).x);
+    hold(&mut u, at, 30);
+    let pan = centre(&u).0 - cx0;
+    assert!((pan - 600.0 * 30.0 * DT).abs() < 0.5, "panned {pan} px past the edge, wanted {}", 600.0 * 30.0 * DT);
+    let now = bounds_x0(&u, r) - u.app.to_page(at).x;
+    assert!((now - grab).abs() < 1.5, "the layer stays under the pointer: {grab} then {now}");
+    release(&mut u, at);
+}
+
+#[test]
+fn at_200_percent_the_pan_is_the_same_on_screen_and_the_layer_stays_under_the_pointer() {
+    let mut u = setup();
+    u.app.session.ds_mut().unwrap().view.zoom = 2.0;
+    u.frame(vec![]);
+    let (r, p) = centred_rect(&mut u);
+    let from = pick_up(&mut u, p);
+    let at = pos2(u.app.canvas.rect.max.x - 2.0, from.y);
+    hold(&mut u, at, 2);
+    let (cx0, grab) = (centre(&u).0, bounds_x0(&u, r) - u.app.to_page(at).x);
+    let n = 30;
+    hold(&mut u, at, n);
+    // 520 screen px per second is 260 page units at 200 %.
+    let pan = centre(&u).0 - cx0;
+    let want = 520.0 * n as f64 * DT / 2.0;
+    assert!((pan - want).abs() < 0.5, "panned {pan} page units, wanted {want}");
+    let now = bounds_x0(&u, r) - u.app.to_page(at).x;
+    assert!((now - grab).abs() < 1.0, "the layer stays under the pointer: {grab} then {now}");
+    release(&mut u, at);
+}

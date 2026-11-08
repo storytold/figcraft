@@ -41,3 +41,37 @@ pub(super) fn wanted(app: &FigApp, ctx: &Context) -> bool {
         && ctx.input(|i| i.pointer.primary_down())
         && app.session.tool.autopans(ds.view.zoom)
 }
+
+#[cfg(test)]
+mod tests {
+    use egui::{Context, Pos2, RawInput, pos2};
+    use figcraft_engine::Session;
+
+    use crate::layers_drag_tests::Ui;
+
+    /// Whether [`super::pan`] alone, with the pointer at `pos`, asks for the next frame. Run in a
+    /// context of its own, after a few settling passes, so nothing else in the app asks for one.
+    fn asks(u: &mut Ui, pos: Pos2) -> bool {
+        let ctx = Context::default();
+        for _ in 0..3 {
+            ctx.run_ui(RawInput::default(), |_| {}).textures_delta.clear();
+        }
+        let mut out = ctx.run_ui(RawInput::default(), |ui| {
+            super::pan(&mut u.app, ui.ctx(), pos);
+        });
+        out.textures_delta.clear();
+        out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.repaint_delay.is_zero())
+    }
+
+    #[test]
+    fn in_the_zone_it_asks_for_the_next_frame_and_outside_it_does_not() {
+        let mut u = Ui::new(Session::new());
+        u.frame(vec![]);
+        u.frame(vec![]);
+        let r = u.app.canvas.rect;
+        assert!(asks(&mut u, pos2(r.max.x - 2.0, r.center().y)), "2 px inside the right edge");
+        assert!(asks(&mut u, pos2(r.min.x - 20.0, r.max.y + 20.0)), "past the bottom-left corner");
+        assert!(!asks(&mut u, r.center()), "the middle of the canvas");
+        assert!(!asks(&mut u, pos2(r.max.x - 40.0, r.center().y)), "40 px inside the edge");
+    }
+}
