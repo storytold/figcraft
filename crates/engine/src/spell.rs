@@ -5,13 +5,14 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// The word list the checker knows: the system's `/usr/share/dict/words`, lowercased, ASCII
-/// only, bounded in entries and word length. Absent (as on macOS and in the browser by default)
-/// the checker is off and nothing is underlined.
+/// only, bounded in size, entries and word length. Absent (as on some Linux installs and in the
+/// browser) the checker is off and nothing is underlined.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn dictionary() -> Option<&'static HashSet<String>> {
     static DICT: OnceLock<Option<HashSet<String>>> = OnceLock::new();
     DICT.get_or_init(|| {
-        let raw = std::fs::read_to_string("/usr/share/dict/words").ok()?;
+        let bytes = crate::file_access::read_capped("/usr/share/dict/words", 16 << 20).ok()?;
+        let raw = String::from_utf8_lossy(&bytes);
         let mut words = HashSet::new();
         for line in raw.lines().take(2_000_000) {
             if line.is_empty() || line.len() > 64 || !line.is_ascii() {

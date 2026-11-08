@@ -37,8 +37,8 @@ pub mod missing_fonts;
 pub mod plugins_ui;
 pub mod sampled_color;
 pub mod updates_ui;
-pub mod widgets_ui;
 pub mod variables_panel;
+pub mod widgets_ui;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -161,7 +161,9 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
     ui.hyperlink_to(tr("Join the Clawku community"), "https://clawku.id/");
     ui.add_space(8.0);
     ui.label(
-        RichText::new(tr("Dual-licensed MIT OR Apache-2.0. Based on work by the ArtCraft team and community (MIT OR Apache-2.0).")).color(t.text_secondary).font(regular(11.0)),
+        RichText::new(tr("Dual-licensed MIT OR Apache-2.0. Based on work by the ArtCraft team and community (MIT OR Apache-2.0)."))
+            .color(t.text_secondary)
+            .font(regular(11.0)),
     );
 }
 

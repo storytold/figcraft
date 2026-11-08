@@ -5,10 +5,10 @@ use egui::Context;
 use figcraft_engine::widgets;
 use serde_json::json;
 
+use crate::FigApp;
 use crate::dialogs::window;
 use crate::i18n::tr;
 use crate::theme::Tokens;
-use crate::FigApp;
 
 /// Draw the window while `app.ui.widgets_window` is set.
 pub fn show(app: &mut FigApp, ctx: &Context) {

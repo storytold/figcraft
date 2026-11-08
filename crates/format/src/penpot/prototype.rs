@@ -198,7 +198,8 @@ pub(super) fn shape_interactions(items: &[Value], warnings: &mut Vec<String>) ->
     for item in items.iter().take(MAX_INTERACTIONS) {
         let event = item.get("eventType").and_then(Value::as_str);
         let Some(trigger) = penpot_trigger(event, item.get("delay").and_then(Value::as_u64).map(|d| d.min(u64::from(MAX_DELAY_MS)) as u32)) else {
-            warnings.push(format!("Penpot interaction with event type '{}' has no ClawDesign equivalent and was skipped", event.unwrap_or("unknown")));
+            warnings
+                .push(format!("Penpot interaction with event type '{}' has no ClawDesign equivalent and was skipped", event.unwrap_or("unknown")));
             continue;
         };
         let Some(kind) = penpot_action_kind(item.get("actionType").and_then(Value::as_str)) else {

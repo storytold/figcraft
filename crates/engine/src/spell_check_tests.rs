@@ -3,9 +3,9 @@
 
 use serde_json::json;
 
+use crate::Session;
 use crate::canvas::textedit::word_ranges;
 use crate::spell;
-use crate::Session;
 
 fn ranges(text: &str) -> Vec<(usize, usize)> {
     word_ranges(&text.chars().collect::<Vec<_>>())

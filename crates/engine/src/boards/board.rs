@@ -45,10 +45,10 @@ pub fn sticky_or_shape_at(doc: &Document, page: NodeId, p: Point, except: Option
                 continue;
             }
             match k.board {
-                Some(BoardItem::Sticky { .. } | BoardItem::Shape { .. }) => {
-                    if Some(*c) != except && doc.world_bounds(*c).is_some_and(|b| b.contains(p)) {
-                        return Some(*c);
-                    }
+                Some(BoardItem::Sticky { .. } | BoardItem::Shape { .. })
+                    if Some(*c) != except && doc.world_bounds(*c).is_some_and(|b| b.contains(p)) =>
+                {
+                    return Some(*c);
                 }
                 // Not a board object of its own (a section, a frame): what is inside it may be.
                 None if depth < 32 => {

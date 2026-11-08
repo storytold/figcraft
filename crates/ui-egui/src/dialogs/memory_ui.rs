@@ -4,10 +4,10 @@
 use egui::Context;
 use figcraft_engine::widgets;
 
+use crate::FigApp;
 use crate::dialogs::window;
 use crate::i18n::tr;
 use crate::theme::Tokens;
-use crate::FigApp;
 
 /// Draw the window while `app.ui.memory_window` is set.
 pub fn show(app: &mut FigApp, ctx: &Context) {
@@ -84,11 +84,7 @@ fn bytes_label(bytes: usize) -> String {
         v /= 1024.0;
         unit += 1;
     }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{v:.1} {}", UNITS[unit])
-    }
+    if unit == 0 { format!("{bytes} B") } else { format!("{v:.1} {}", UNITS[unit]) }
 }
 
 #[cfg(test)]

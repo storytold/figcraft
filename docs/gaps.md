@@ -26,7 +26,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 8 | Platform QA: Linux and the browser left (Windows pass done 2026-10-11) | Stability/platforms | 10–20 | [hardware-parity](hardware-parity.md) |
 | 9 | Figma Draw: pen pressure on macOS/Linux tablets (multi-edit, brushes, pressure, text on a path and pattern fills landed) | Feature | 1–3 | [target-app-parity](target-app-parity.md) |
 | 10 | Team libraries: no team-wide lists or accounts; analytics count insertions for components only | Feature | 4–8 | [components-parity](components-parity.md) |
-| 11 | Spell check | Feature | 4–8 | [target-app-parity](target-app-parity.md) |
+| 11 | Spell check: the squiggle landed (2026-11-08, system word list; silently off without one); right-click suggestions and the user dictionary follow | Feature | 6–10 | [gaps](gaps.md#11-spell-check) |
 | 12 | Video fills; HEIC images | File format | 5–10 | [file-format-parity](file-format-parity.md) |
 | 13 | Vector tail: none left (boolean hit testing on the result landed 2026-10-11) | Feature | — | [target-app-parity](target-app-parity.md) |
 | 14 | Variables: extended collections checked on real libraries (the tail landed 2026-10-12) | Feature | 0–1 | [components-parity](components-parity.md) |
@@ -40,9 +40,10 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 22 | Screen readers never run; browser has no accessibility tree | UI/UX | 4–8 | [ui-parity](ui-parity.md) |
 | 23 | CMYK output intent for print PDFs | File format | 2–4 | [file-format-parity](file-format-parity.md) |
 | 24 | Boards: the whiteboard tail (widgets, mind maps…) | Feature | 20–44 | [boards-parity](boards-parity.md) |
-| 25 | Desktop shell tail: tabbed windows (recently closed, reload all, select next/previous tab), Save local copy…, Open file URL from clipboard, import from CSV, interface scale, haptic trackpad feedback, spellcheck dictionary, Help extras (release notes, video tutorials, support forum, legal summary), developer tools, menu-bar and tray presence with an unread indicator, an update channel, troubleshooting log capture (debug info, network log, performance log, reset and restart), a proxy allowlist — static inspection 2026-11-08, black-box confirmation pending | Feature | 12–20 | [gaps](gaps.md#25-desktop-shell-tail) |
+| 25 | Desktop shell tail: tabbed windows (recently closed, reload all, select next/previous tab), Save local copy…, Open file URL from clipboard, import from CSV, the interface scale percent presets (larger/smaller/default landed 2026-11-08), haptic trackpad feedback, spellcheck dictionary (the squiggle landed 2026-11-08), Help extras (release notes, video tutorials, support forum, legal summary), developer tools, menu-bar and tray presence with an unread indicator, an update channel, troubleshooting log capture (debug info, network log, performance log, reset and restart), a proxy allowlist — static inspection 2026-11-08, black-box confirmation pending | Feature | 12–20 | [gaps](gaps.md#25-desktop-shell-tail) |
 | 26 | Make Local and the code sandbox: a Figma Make project or a shared Git branch checked out to a local folder, its project commands run in a sandboxed, network-blocked runtime, per-directory and per-repository trust, merge progress — static inspection 2026-11-08, black-box confirmation pending | Feature | 15–30 | [gaps](gaps.md#26-make-local-and-the-code-sandbox) |
 | 27 | Voice calls in comments — static inspection 2026-11-08, black-box confirmation pending | Feature | 2–5 | [gaps](gaps.md#27-voice-calls-in-comments) |
+| 28 | Build This with Code: code layers on the canvas, shaders (GA 2026-11-02, export to 4096px, the `{}` canvas tool), Object ▸ Build This with Code — recorded black-box 2026-11-08 (menus and the editor UI); product-sized with gap 19's models | Feature | 30–60 | [gaps](gaps.md#28-build-this-with-code) |
 
 ## Entries
 
@@ -380,12 +381,17 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Estimate:** 4–8 h, the accounts part after gap 2.
 
 ### 11. Spell check
-- **Missing:** spelling underline and suggestions while editing text.
-- **Recorded (2026-11-08, static):** Figma's desktop also manages the user dictionary
-  (Edit ▸ Add to dictionary); that lands here.
-- **Evidence:** no spell-check code in the repo.
-- **Estimate:** 4–8 h with a permissively licensed dictionary and checker (provenance per
-  `ATTRIBUTION.md`).
+- **Landed (2026-11-08):** Text ▸ Spell check (a kept preference, off by default) underlines
+  misspelled words with a red squiggle in the text-edit overlay while a text box is being edited,
+  judged against the system's `/usr/share/dict/words` (lowercased, ASCII, bounded); without a word
+  list (some Linux installs, and the browser) the checker is silently off. CJK and other non-Latin
+  runs are never flagged; at most 2,000 words are judged a frame.
+- **Missing:** right-click suggestions that replace a word (Figma's checker offers them while
+  typing); Edit ▸ Add to dictionary.
+- **Evidence:** `crates/engine/src/spell.rs`, `word_ranges` in
+  `crates/engine/src/canvas/textedit.rs`, `spell_squiggles` in
+  `crates/ui-egui/src/canvas/overlays.rs`, `spell_check_tests.rs`.
+- **Estimate:** 6–10 h for suggestions and the user dictionary.
 
 ### 12. Video fills; HEIC images
 - **Landed (2026-10-11):** animated GIF fills (the file kept as is, the first frame on the canvas
@@ -561,7 +567,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   live feedback. Any MCP client can drive a headless file or an attached app; no in-app model and no
   network dependency.
 - **Missing:** Figma AI (first draft, rename layers, remove background, image generation and
-  editing, visual search, Make).
+  editing, visual search, Make), and Edit ▸ AutoFill (fills selected text and image placeholders
+  with generated content; recorded black-box 2026-11-08 from the menu).
 - **Estimate:** 30–60 h with openly licensed local models. **Owner decision needed.**
 
 ### 20. Mobile apps
@@ -607,6 +614,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Estimate:** 20–44 h.
 
 ### 25. Desktop shell tail
+- **Landed (2026-11-08, from the black-box 126.11.8 capture):** View ▸ Interface scale (larger,
+  smaller, default — the percent presets remain) and the spell-check underline (gap 11).
 - **Recorded (2026-11-08, static):** the incumbent's desktop shell 126.11.8 offers, with labels
   read from its own localization files: tabbed windows beyond FigCraft's two (new tab, select
   next/previous tab, reload all tabs, recently closed tab/window/group, reopen closed item,
@@ -642,10 +651,27 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Provenance:** static bundle inspection, owner-authorized; confirm black-box before
   implementation work.
 
+### 28. Build This with Code
+- **Recorded (2026-11-08, black-box, Figma desktop 126.11.8):** Object ▸ Build This with Code, a
+  `{}` code-to-design tool on the floating bottom toolbar, a "Code, now on canvas" onboarding pass,
+  shaders (general availability 2026-11-02: export up to 4096 px, version history, work inside
+  "build this with code" layers), the agent reading prototype interactions when making code layers,
+  and a Widgets top-level menu beside Plugins. FigCraft has none of the code-layer surface; the
+  Widgets menu landed (2026-11-08).
+- **Missing:** code layers (a design surface whose layers are live code), shader layers and their
+  export, the code sandbox work of gap 26 they share a runtime with, and the agent integration.
+- **User impact:** the fastest-growing surface of the incumbent since the 2026-10-10 re-measure;
+  every release note of the week landed here.
+- **Estimate:** 30–60 h with gap 19's openly licensed local models (code generation is a model
+  feature); the shader runtime and export are the separable first slice.
+- **Provenance:** public release notes and a black-box pass over the running desktop 126.11.8
+  (menus, toolbar and onboarding captures under `plan/figma/`).
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | From the black-box 126.11.8 capture (menu catalog and editor UI, `plan/figma/`): landed the six distribute-by-edge commands, `vector.split`, View ▸ Annotations, View ▸ Interface scale (larger/smaller/default), View ▸ Memory usage…, the Widgets menu (Manage widgets…, Select all widgets) and Text ▸ Spell check (system word list); row 28 added for Build This with Code (code layers + shaders); gap 19 names Edit ▸ AutoFill; entries 11 and 25 updated. Menu breadth 229/229 with every new row commanded (`cargo xtask parity`). Measured breadth numbers unchanged; gap 11's estimate 4–8 h → 6–10 h for the suggestion tail |
 | 2026-11-08 | minor | Rows 25–27 added (desktop shell tail; Make Local and the code sandbox; voice calls) and entries 2, 7, 11, 16 and 18 extended, from an owner-authorized static inspection of the incumbent desktop shell 126.11.8 (bundle analysis, not the sanctioned black-box pass; black-box confirmation pending before implementation work). No measured numbers moved |
 | 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`) draft catalog: 1,975 UI strings, 641 command labels and 31 menu wordings, clean-room from the English source; zh-TW, zh-HK, zh-MO and zh-Hant read it, explicit Hans stays Simplified; Noto Sans CJK TC then Taiwan system faces; no bundled font; native review pending. Numbers unchanged |
 | 2026-10-31 | minor | Gap 10: library analytics list the layers and files using each style and variable; their insertions, detachments and modes stay on the missing list. |

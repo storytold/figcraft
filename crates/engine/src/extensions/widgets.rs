@@ -620,7 +620,13 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         spec!("widget.list", "List widgets", "{} → {widgets: [{id, plugin, name, page, state, targets, fields, menu}]}", false, list),
-        spec!("widgets.selectAll", "Select all widgets", "{}  the widgets on the current page; none: says so → {selection, count}", false, select_all),
+        spec!(
+            "widgets.selectAll",
+            "Select all widgets",
+            "{}  the widgets on the current page; none: says so → {selection, count}",
+            false,
+            select_all
+        ),
         spec!("widgets.manage", "Manage widgets…", "{} opens the widgets window", false, manage),
     ]
 }

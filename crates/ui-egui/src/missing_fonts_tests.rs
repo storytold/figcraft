@@ -46,7 +46,10 @@ fn opening_a_file_lists_its_missing_fonts_and_not_the_installed_ones() {
     u.app.run_user("file.open", json!({"path": path}));
     std::fs::remove_file(&path).unwrap();
     u.frame(vec![]);
-    assert_eq!(listed(&u), json!({"families": [{"family": "ClawDesign Missing UI", "layers": 2, "source": null}], "indexing": false, "consent": null}));
+    assert_eq!(
+        listed(&u),
+        json!({"families": [{"family": "ClawDesign Missing UI", "layers": 2, "source": null}], "indexing": false, "consent": null})
+    );
     u.frame(vec![]);
     let shown = u.frame_output(vec![]).shapes;
     assert!(crate::import_report_tests::shown_texts(shown).iter().any(|t| t == "2 text layers"));

@@ -282,8 +282,6 @@ mod default_props_tests;
 #[cfg(test)]
 mod design_paste_tests;
 #[cfg(test)]
-mod distribute_edges_tests;
-#[cfg(test)]
 mod dev_measurements_tests;
 #[cfg(test)]
 mod dev_resources_tests;
@@ -297,6 +295,8 @@ mod devinspect_tests;
 mod devmode_behaviour_tests;
 #[cfg(test)]
 mod devmode_tail_tests;
+#[cfg(test)]
+mod distribute_edges_tests;
 #[cfg(test)]
 mod doc_list_paths_tests;
 #[cfg(test)]
@@ -434,8 +434,6 @@ mod menu_gaps_tests;
 #[cfg(test)]
 mod move_shortcut_tests;
 #[cfg(test)]
-mod widgets_select_all_tests;
-#[cfg(test)]
 mod moved_by_tests;
 #[cfg(test)]
 mod nested_override_tests;
@@ -550,8 +548,6 @@ mod select_area_tests;
 #[cfg(test)]
 mod selection_behaviour_tests;
 #[cfg(test)]
-mod spell_check_tests;
-#[cfg(test)]
 mod selection_depth_tests;
 #[cfg(test)]
 mod shape_handles_tests;
@@ -567,6 +563,8 @@ mod shortcut_parity_tests;
 mod sketch_import_tests;
 #[cfg(test)]
 mod slot_tests;
+#[cfg(test)]
+mod spell_check_tests;
 #[cfg(test)]
 mod stored_ids_tests;
 #[cfg(test)]
@@ -661,6 +659,8 @@ mod widget_input_tests;
 mod widget_panel_tests;
 #[cfg(test)]
 mod widget_shapes_tests;
+#[cfg(test)]
+mod widgets_select_all_tests;
 #[cfg(test)]
 mod widgets_tests;
 

@@ -217,7 +217,8 @@ fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Do
         quad(painter, q, stroke(accent(painter), 1.0));
     }
     let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
-    if a != b && preedit.is_none() {        for q in text.selection(app, a, b) {
+    if a != b && preedit.is_none() {
+        for q in text.selection(app, a, b) {
             painter.add(Shape::convex_polygon(q.to_vec(), accent(painter).gamma_multiply(0.3), Stroke::NONE));
         }
     }
@@ -260,13 +261,9 @@ fn spell_squiggles(app: &FigApp, painter: &egui::Painter, text: &TextOnScreen, c
     let Some(_) = figcraft_engine::spell::dictionary() else { return };
     let chars: Vec<char> = characters.chars().collect();
     let mut flagged = vec![false; chars.len()];
-    let mut judged = 0usize;
-    for (start, end) in figcraft_engine::textedit::word_ranges(&chars) {
-        if judged >= 2000 {
-            break;
-        }
-        judged += 1;
-        let word: String = chars[start..end].iter().collect();
+    for (start, end) in figcraft_engine::textedit::word_ranges(&chars).into_iter().take(2000) {
+        let Some(word) = chars.get(start..end) else { continue };
+        let word: String = word.iter().collect();
         if figcraft_engine::spell::misspelled(app.session.prefs.spell_check, &word) {
             for f in flagged.get_mut(start..end).unwrap_or(&mut []) {
                 *f = true;
@@ -298,7 +295,8 @@ fn spell_squiggles(app: &FigApp, painter: &egui::Painter, text: &TextOnScreen, c
 
 /// One squiggle: small strokes stepping down and up across the run, in page units mapped to screen.
 fn zig(painter: &egui::Painter, text: &TextOnScreen, app: &FigApp, x0: f64, x1: f64, y: f64, col: egui::Stroke) {
-    if !(x1 > x0) {
+    // Also refuses NaN, which a plain `x1 <= x0` would let through.
+    if x1.partial_cmp(&x0) != Some(std::cmp::Ordering::Greater) {
         return;
     }
     let seg = ((x1 - x0) / 6.0).max(1.0);
