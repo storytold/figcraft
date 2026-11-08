@@ -354,6 +354,15 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     }
     if let Some(k) = kind {
         let at = if matches!(k, PointerKind::Down) { press_pos.unwrap_or(pos) } else { pos };
+        if matches!(k, PointerKind::Move) && app.session.tool.freehand() {
+            // A freehand stroke takes every sample of the frame, so a fast stroke stays a curve
+            // rather than one point a frame; the frame's last position follows as usual.
+            let moved: Vec<egui::Pos2> =
+                ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).take(256).collect());
+            for p in moved.iter().take(moved.len().saturating_sub(1)) {
+                send(app, k, *p, &mods);
+            }
+        }
         send(app, k, at, &mods);
         // The pointer also let go within this frame (a quick click, or a slow frame): the tools get
         // the release too, so the press's gesture ends — a quick click with a shape tool still

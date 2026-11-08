@@ -149,3 +149,32 @@ fn the_pencil_draws_white_on_a_dark_background() {
         assert_eq!(stroke(&mut s, 0.0, 600.0).0, want, "on {bg}");
     }
 }
+
+/// The Pencil smooths what it draws ("Figma will apply some basic smoothing to any paths you
+/// create with the Pencil tool"): a circle sampled every 6° becomes a few curves through the
+/// samples, not one straight segment per sample.
+#[test]
+fn the_pencil_smooths_its_samples_into_a_few_curves() {
+    use figcraft_geom::kurbo::{ParamCurveNearest, PathSeg};
+    let mut s = Session::new();
+    s.execute("tool.set", &json!({"tool": "pencil"})).unwrap();
+    let at = |deg: f64| Point::new(300.0 + 100.0 * deg.to_radians().cos(), 300.0 + 100.0 * deg.to_radians().sin());
+    let samples: Vec<Point> = (0..=55).map(|k| at(f64::from(k) * 6.0)).collect();
+    let ev = |kind, p: Point| PointerEvent::at(kind, p.x, p.y, 1.0);
+    s.pointer(&ev(PointerKind::Down, samples[0])).unwrap();
+    for p in &samples[1..] {
+        s.pointer(&ev(PointerKind::Move, *p)).unwrap();
+    }
+    s.pointer(&ev(PointerKind::Up, *samples.last().unwrap())).unwrap();
+    let doc = s.doc().unwrap();
+    let n = doc.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).expect("a pencil stroke");
+    let NodeKind::Vector { network } = &n.kind else { panic!("not a vector") };
+    let path = doc.world_transform(n.id) * network.stroke_path();
+    let segs: Vec<PathSeg> = path.segments().collect();
+    assert!(segs.len() < 10, "a few curves, not a segment per sample: {}", segs.len());
+    assert!(!segs.iter().any(|s| matches!(s, PathSeg::Line(_))), "no straight facets: {segs:?}");
+    for p in &samples {
+        let off = segs.iter().map(|s| s.nearest(*p, 1e-6).distance_sq.sqrt()).fold(f64::INFINITY, f64::min);
+        assert!(off < 1.5, "the curve passes by every sample: {p:?} is {off} away");
+    }
+}

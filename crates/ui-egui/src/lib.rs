@@ -45,6 +45,8 @@ mod board_picker_tests;
 #[cfg(test)]
 mod board_ui_tests;
 #[cfg(test)]
+mod pencil_samples_tests;
+#[cfg(test)]
 mod theme_startup_tests;
 
 #[cfg(test)]

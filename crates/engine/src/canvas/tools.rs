@@ -605,6 +605,12 @@ pub struct ToolState {
 }
 
 impl ToolState {
+    /// Whether a freehand stroke (the Pencil, Marker or Highlighter) is being drawn: every pointer
+    /// sample counts, not just one a frame.
+    pub fn freehand(&self) -> bool {
+        matches!(self.gesture, Gesture::Pencil { .. })
+    }
+
     pub fn busy(&self) -> bool {
         !matches!(self.gesture, Gesture::None)
     }

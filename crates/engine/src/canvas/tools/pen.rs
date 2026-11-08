@@ -313,16 +313,7 @@ impl Session {
         if points.len() < 2 {
             return Ok(());
         }
-        // Smooth: fit a curve through the samples.
-        let mut poly = figcraft_geom::BezPath::new();
-        for (k, p) in points.iter().enumerate() {
-            if k == 0 {
-                poly.move_to(*p);
-            } else {
-                poly.line_to(*p);
-            }
-        }
-        let fitted = figcraft_geom::kurbo::simplify::simplify_bezpath(poly.iter(), 0.75, &Default::default());
+        let fitted = smooth_stroke(points);
         let d = fitted.to_svg();
         if matches!(self.tool.tool, ToolId::Marker | ToolId::Highlighter) {
             return self.ink_finish(&d);
@@ -359,4 +350,46 @@ impl Session {
         let parent = frame_at(doc, page, p, &[]).unwrap_or(page);
         Ok(super::handles::pencil_color(doc, parent))
     }
+}
+
+/// Samples closer than this to the last one kept are dropped before smoothing: pointer jitter.
+const PENCIL_MIN_STEP: f64 = 1.5;
+
+/// The Pencil's "basic smoothing": a smooth curve through the samples (Catmull-Rom, so every join
+/// is tangent-continuous), then merged into as few cubics as stay within 0.75 units of it. Fitting
+/// the raw polyline kept one straight segment per sample, since each sample was a corner.
+pub(crate) fn smooth_stroke(points: &[Point]) -> figcraft_geom::BezPath {
+    let mut kept: Vec<Point> = Vec::with_capacity(points.len());
+    for p in points.iter().filter(|p| p.x.is_finite() && p.y.is_finite()) {
+        if kept.last().is_none_or(|l| l.distance(*p) >= PENCIL_MIN_STEP) {
+            kept.push(*p);
+        }
+    }
+    if let (Some(last), Some(end)) = (kept.last().copied(), points.last().copied())
+        && kept.len() > 1
+        && last != end
+        && end.x.is_finite()
+        && end.y.is_finite()
+    {
+        // The stroke ends where the pointer was released.
+        if let Some(l) = kept.last_mut() {
+            *l = end;
+        }
+    }
+    let mut curve = figcraft_geom::BezPath::new();
+    let Some(first) = kept.first().copied() else { return curve };
+    curve.move_to(first);
+    if kept.len() < 3 {
+        if let Some(end) = kept.get(1) {
+            curve.line_to(*end);
+        }
+        return curve;
+    }
+    let at = |i: usize| kept.get(i).copied().unwrap_or(first);
+    for i in 0..kept.len() - 1 {
+        let (p0, p1, p2) = (at(i.saturating_sub(1)), at(i), at(i + 1));
+        let p3 = at((i + 2).min(kept.len() - 1));
+        curve.curve_to(p1 + (p2 - p0) / 6.0, p2 - (p3 - p1) / 6.0, p2);
+    }
+    figcraft_geom::kurbo::simplify::simplify_bezpath(curve.iter(), 0.75, &Default::default())
 }
