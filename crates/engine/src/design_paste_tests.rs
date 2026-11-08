@@ -107,10 +107,11 @@ fn other_content_is_refused_without_changes() {
     assert!(s.clipboard.nodes.is_empty());
 }
 
-// The next four pin the paste-placement rules measured in Figma's web app on 2026-11-08 (a
+// The next three pin the paste-placement rules measured in Figma's web app on 2026-11-08 (a
 // synthetic file): in place when the original is in view, at the view's centre when it is off
-// screen, in a selected frame's centre when the frame is elsewhere, and in place inside a selected
-// frame that contains the original.
+// screen, and in a selected frame's centre when the frame is elsewhere. The fourth pins
+// FigCraft's own branch for a selected frame that contains the original (in place inside it),
+// which was not measured.
 
 fn copied_rect(s: &mut Session) -> NodeId {
     let r = id(&s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 50, "height": 50})).unwrap());
