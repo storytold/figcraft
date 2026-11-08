@@ -251,6 +251,7 @@ pub static MENU: &[MenuItem] = &[
     m!("Vector", "Join selection", "vector.join"),
     m!("Vector", "Smooth join selection", "vector.smoothJoin"),
     m!("Vector", "Delete and heal selection", "vector.deleteHeal"),
+    m!("Vector", "Split vector", "vector.split"),
     m!("Vector", "Simplify vector", "vector.simplify"),
     m!("Vector", "Reverse path direction", "vector.reverse"),
     m!("Vector", "Offset path", "vector.offset"),

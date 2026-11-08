@@ -166,6 +166,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("vector.smoothJoin", "Smooth join selection", "{ids?} (in vector edit mode: joins the selected points smoothly)", true, |s, p| {
             crate::vectoredit::join_in_edit_mode(s, true).unwrap_or_else(|| join(s, p))
         }),
+        spec!("vector.split", "Split vector", "{ids?}", true, split),
     ]
 }
 
@@ -775,6 +776,48 @@ fn rasterize(s: &mut Session, p: &Value) -> Result<Value> {
         docm.insert(r, parent, idx.map(|x| x + 1))?;
         docm.remove(i)?;
         out.push(rid);
+    }
+    s.set_selection(out.clone());
+    Ok(json!({"ids": out}))
+}
+
+/// Split each selected vector into its connected parts: one sibling layer per part, the
+/// original replaced, z-order kept, one undo step. The parts keep how their source is drawn.
+fn split(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = req_targets("vector.split", s, p)?;
+    let mut out = Vec::new();
+    for i in ids {
+        let doc = s.doc_mut()?;
+        let n = doc.get(i)?.clone();
+        let NodeKind::Vector { network } = &n.kind else { continue };
+        let parts = crate::vectoredit::ops::parts(network);
+        if parts.len() <= 1 {
+            continue;
+        }
+        let parent = n.parent.ok_or_else(|| bad("vector.split", "a page has no parts to split into"))?;
+        let idx = doc.index_in_parent(i);
+        for (k, verts) in parts.iter().enumerate() {
+            let mut sub = crate::vectoredit::ops::part(network, verts);
+            let Some(bb) = sub.bounds() else { continue };
+            sub.translate(-bb.x0, -bb.y0);
+            let vid = doc.alloc_id();
+            let mut v = Node::new(vid, NodeKind::Vector { network: sub }, n.name.clone(), bb.width(), bb.height());
+            v.transform = n.transform * Affine::translate((bb.x0, bb.y0));
+            v.fills = n.fills.clone();
+            v.strokes = n.strokes.clone();
+            v.stroke = n.stroke.clone();
+            v.effects = n.effects.clone();
+            v.opacity = n.opacity;
+            v.blend = if matches!(n.blend, figcraft_color::BlendMode::PassThrough) { figcraft_color::BlendMode::Normal } else { n.blend };
+            v.styles = n.styles.clone();
+            (v.constraints, v.child_layout, v.visible, v.locked) = (n.constraints, n.child_layout.clone(), n.visible, n.locked);
+            doc.insert(v, parent, idx.map(|x| x + 1 + k))?;
+            out.push(vid);
+        }
+        doc.remove(i)?;
+    }
+    if out.is_empty() {
+        return Err(bad("vector.split", "the vector's pieces are all connected, so there is nothing to split"));
     }
     s.set_selection(out.clone());
     Ok(json!({"ids": out}))
