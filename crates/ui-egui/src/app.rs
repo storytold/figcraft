@@ -22,7 +22,10 @@ impl FigApp {
     /// state.
     pub fn new(session: Session, services: Box<dyn Services>) -> Self {
         // The main window's panels open as wide as they were left.
+        // Widths saved under other limits are clamped to the current ones, not rejected.
         let (left_width, right_width) = session.prefs.panel_widths;
+        let within = |w: f32, range: std::ops::RangeInclusive<f32>| if w.is_finite() { w.clamp(*range.start(), *range.end()) } else { PANEL_DEFAULT };
+        let (left_width, right_width) = (within(left_width, LEFT_PANEL), within(right_width, RIGHT_PANEL));
         let pages_height = session.prefs.pages_height;
         Self {
             ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
