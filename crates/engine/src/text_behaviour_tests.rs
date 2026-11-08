@@ -542,6 +542,46 @@ fn wrap_style_per_paragraph_overrides_the_layers() {
 }
 
 #[test]
+fn text_wrap_style_without_editing_sets_the_layer_and_folds_paragraph_overrides() {
+    let mut s = Session::new();
+    let t = text(&mut s, "one\ntwo\nthree", json!({}));
+    let inspect = |s: &Session| crate::inspect::node_json(s.doc().unwrap(), t, 0);
+    let td = |s: &Session| s.doc().unwrap().node(t).unwrap().kind.text().unwrap().clone();
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance", "start": 5, "end": 5}})).unwrap();
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "pretty", "start": 9, "end": 9}})).unwrap();
+    assert_eq!(inspect(&s)["lineWrapStyles"], json!(["auto", "balance", "pretty"]));
+    assert!(s.ds().unwrap().text_edit.is_none(), "no edit session");
+    s.execute("text.wrapStyle", &json!({"ids": [t], "style": "balance"})).unwrap();
+    let after = td(&s);
+    assert!(after.paragraphs.iter().all(|p| p.wrap.is_none()), "{:?}", after.paragraphs);
+    assert_eq!(after.wrap_style, figcraft_doc::WrapStyle::Balance);
+    assert!((0..3).all(|p| after.para_wrap_style(p) == figcraft_doc::WrapStyle::Balance));
+    assert_eq!(inspect(&s)["wrapStyle"], json!("balance"));
+    assert!(inspect(&s).get("lineWrapStyles").is_none());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(inspect(&s)["lineWrapStyles"], json!(["auto", "balance", "pretty"]), "undo restores the overrides");
+}
+
+#[test]
+fn inspect_reports_wrap_style_only_when_not_auto_and_counts_a_trailing_empty_paragraph() {
+    let mut s = Session::new();
+    let t = text(&mut s, "one\ntwo\n", json!({}));
+    let inspect = |s: &Session| crate::inspect::node_json(s.doc().unwrap(), t, 0);
+    let quiet = |s: &Session| inspect(s).get("wrapStyle").is_none() && inspect(s).get("lineWrapStyles").is_none();
+    assert!(quiet(&s), "uniform Auto says nothing");
+    // An override on the empty last paragraph (a caret after the final newline) is listed with the others.
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance", "start": 8, "end": 8}})).unwrap();
+    assert_eq!(inspect(&s)["lineWrapStyles"], json!(["auto", "auto", "balance"]));
+    assert!(inspect(&s).get("wrapStyle").is_none());
+    // Every paragraph the same non-Auto style: the one key; back to Auto: neither.
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance"}})).unwrap();
+    assert_eq!(inspect(&s)["wrapStyle"], json!("balance"));
+    assert!(inspect(&s).get("lineWrapStyles").is_none());
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "auto"}})).unwrap();
+    assert!(quiet(&s));
+}
+
+#[test]
 fn max_lines_on_auto_width_text_keeps_auto_width_and_hugs_that_many_lines() {
     // "Max lines is available only if truncate text is enabled, and: Text resizing is set to
     // auto height or auto width" (Explore text properties): an auto-width text with max lines

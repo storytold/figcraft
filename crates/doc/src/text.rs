@@ -1168,6 +1168,49 @@ mod case_tests {
         assert!(t.paragraphs.is_empty());
         assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1)), (Pretty, Pretty));
     }
+
+    #[test]
+    fn wrap_style_loads_from_old_paragraph_styles_and_texts() {
+        use WrapStyle::Auto;
+        // A paragraph style saved before it carried a wrap style.
+        let old = r#"{"paragraph_spacing":4.0,"list":"bulleted"}"#;
+        let ps: ParagraphStyle = serde_json::from_str(old).unwrap();
+        assert_eq!((ps.wrap_style, ps.paragraph_spacing, ps.list), (Auto, 4.0, ListStyle::Bulleted));
+        assert!(!serde_json::to_string(&ParagraphStyle::default()).unwrap().contains("wrap_style"), "Auto is not saved");
+        // A text saved before its paragraphs carried a wrap style.
+        let mut t = TextData::new("a\nb");
+        t.set_para_lists(0, 0, |p| p.list = ListStyle::Bulleted);
+        let mut v = serde_json::to_value(&t).unwrap();
+        for p in v["paragraphs"].as_array_mut().unwrap() {
+            assert!(p.as_object_mut().unwrap().remove("wrap").is_none(), "Auto is not saved");
+        }
+        v.as_object_mut().unwrap().remove("wrap_style");
+        let old: TextData = serde_json::from_value(v).unwrap();
+        assert_eq!(old.wrap_style, Auto);
+        assert_eq!(old.paragraphs.len(), 2);
+        assert!(old.paragraphs.iter().all(|p| p.wrap.is_none()));
+        assert_eq!((old.para_wrap_style(0), old.para_wrap_style(1)), (Auto, Auto));
+        assert_eq!(old, t);
+    }
+
+    #[test]
+    fn set_wrap_style_clears_an_override_on_the_empty_last_paragraph() {
+        use WrapStyle::{Auto, Balance, Pretty};
+        let mut t = TextData::new("ab\n");
+        assert_eq!(t.paragraph_count(), 2);
+        // The empty paragraph after the final newline: a caret there reaches it.
+        t.set_para_wrap_styles(3, 3, Balance);
+        assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1)), (Auto, Balance));
+        t.set_wrap_style(Pretty);
+        assert!(t.paragraphs.is_empty(), "{:?}", t.paragraphs);
+        assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1)), (Pretty, Pretty));
+        // Back to the layer's own style: no override is left on either paragraph.
+        t.set_para_wrap_styles(3, 3, Auto);
+        assert_eq!(t.para_wrap_style(1), Auto);
+        t.set_wrap_style(Auto);
+        assert!(t.paragraphs.is_empty());
+        assert_eq!(t.common_wrap_style(0, t.char_count()), Some(Auto));
+    }
 }
 
 #[cfg(test)]
