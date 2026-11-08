@@ -8,18 +8,20 @@ use serde_json::{Value, json};
 use super::kiwi::{Kv, Schema};
 
 const SCHEMA: &str = "
-enum NodeType NONE DOCUMENT CANVAS FRAME TEXT SYMBOL INSTANCE
+enum NodeType NONE DOCUMENT CANVAS FRAME TEXT SYMBOL INSTANCE ROUNDED_RECTANGLE
 enum StackMode NONE HORIZONTAL VERTICAL
 enum StackSize FIXED RESIZE_TO_FIT RESIZE_TO_FIT_WITH_IMPLICIT_SIZE
 enum StackJustify MIN CENTER MAX SPACE_EVENLY SPACE_BETWEEN SPACE_AROUND SPACE_EVENLY_CSS
+enum StackCounterAlign MIN CENTER MAX STRETCH AUTO BASELINE
 enum TextAutoResize NONE WIDTH_AND_HEIGHT HEIGHT
 struct GUID uint sessionID, uint localID
 struct Vector float x, float y
 struct Matrix float m00, float m01, float m02, float m10, float m11, float m12
 message ParentIndex GUID guid, string position
+message GUIDPath GUID[] guids
 message TextData string characters
 message SymbolData GUID symbolID
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, StackMode stackMode, StackSize stackPrimarySizing, StackSize stackCounterSizing, StackJustify stackPrimaryAlignItems, TextAutoResize textAutoResize, float fontSize, TextData textData, SymbolData symbolData
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, StackMode stackMode, StackSize stackPrimarySizing, StackSize stackCounterSizing, StackJustify stackPrimaryAlignItems, TextAutoResize textAutoResize, float fontSize, TextData textData, SymbolData symbolData, StackCounterAlign stackChildAlignSelf, NodeChange[] derivedSymbolData, GUIDPath guidPath
 message Message NodeChange[] nodeChanges
 ";
 
@@ -215,4 +217,121 @@ fn distributed_alignment_reads_the_older_evenly_name_as_space_between() {
         let n = doc.nodes().find(|n| n.name == name).unwrap_or_else(|| panic!("no layer {name}"));
         assert_eq!(n.layout.as_ref().map(|l| l.main_align), Some(want), "{name}");
     }
+}
+
+/// Issue 2091 item 3: a child with `stackChildAlignSelf: STRETCH` fills the cross axis.
+#[test]
+fn stretch_children_import_as_fill_on_the_cross_axis() {
+    use Sizing::Fill;
+    let stretch = || vec![("stackChildAlignSelf", Kv::Enum("STRETCH"))];
+    let mut nodes = Vec::new();
+    // (a) plain frame / (b) component, fixed and hug cross axis (d)
+    for (k, (ty, counter)) in
+        [("FRAME", "FIXED"), ("SYMBOL", "FIXED"), ("FRAME", "RESIZE_TO_FIT"), ("SYMBOL", "RESIZE_TO_FIT")].into_iter().enumerate()
+    {
+        let id = 100 * (k as u64 + 1);
+        let mut f = vec![("size", xy(100.0, 40.0)), ("transform", at(0.0, 60.0 * k as f64))];
+        f.extend(stack("HORIZONTAL", Some("FIXED"), Some(counter)));
+        nodes.push(node(id, 1, &format!("{id}"), ty, &format!("Row{k}"), f));
+        // (e) a rectangle and a text
+        nodes.push(node(
+            id + 1,
+            id,
+            "!",
+            "ROUNDED_RECTANGLE",
+            &format!("Bar{k}"),
+            [vec![("size", xy(3.0, 20.0)), ("transform", at(0.0, 0.0))], stretch()].concat(),
+        ));
+        let mut t = label(id + 2, id, &format!("Msg{k}"), Some("WIDTH_AND_HEIGHT"));
+        if let Kv::Object(fields) = &mut t {
+            fields.extend(stretch());
+        }
+        nodes.push(t);
+    }
+    // (c) an instance of Row1 (a component) and its copy of the bar
+    nodes.push(node(
+        900,
+        1,
+        "~",
+        "INSTANCE",
+        "Inst",
+        vec![("size", xy(100.0, 40.0)), ("transform", at(200.0, 0.0)), ("symbolData", o(vec![("symbolID", g(200))]))],
+    ));
+    // (c2) same-size instance whose derived data gives the bar Figma's stretched 40 px; (c3) a taller
+    // instance (60) whose derived data gives 60.
+    for (id, name, h, bar_h) in [(901, "InstDerived", 40.0, 40.0), (902, "InstTall", 60.0, 60.0)] {
+        let row = o(vec![("guidPath", o(vec![("guids", Kv::Array(vec![g(201)]))])), ("size", xy(3.0, bar_h))]);
+        nodes.push(node(
+            id,
+            1,
+            &format!("~{id}"),
+            "INSTANCE",
+            name,
+            vec![
+                ("size", xy(100.0, h)),
+                ("transform", at(300.0, 0.0)),
+                ("symbolData", o(vec![("symbolID", g(200))])),
+                ("derivedSymbolData", Kv::Array(vec![row])),
+            ],
+        ));
+    }
+    let doc = import(nodes);
+    let get = |n: &str| doc.nodes().find(|x| x.name == n).unwrap_or_else(|| panic!("no layer {n}"));
+    let mut bad = Vec::new();
+    for k in 0..4 {
+        for what in ["Bar", "Msg text"] {
+            let n = get(&if what == "Bar" { format!("Bar{k}") } else { format!("Msg{k} text") });
+            if n.child_layout.sizing_v != Fill {
+                bad.push(format!("{what}{k} (row {k}): sizing_v {:?}, h {}", n.child_layout.sizing_v, n.size().1));
+            }
+        }
+    }
+    let inst = get("Inst");
+    let copy = inst.children.first().and_then(|c| doc.node(*c)).unwrap();
+    if copy.child_layout.sizing_v != Fill {
+        bad.push(format!("instance copy of the bar: sizing_v {:?}, h {}", copy.child_layout.sizing_v, copy.size().1));
+    }
+    for (name, want_h) in [("InstDerived", 40.0), ("InstTall", 60.0)] {
+        let inst = get(name);
+        let bar = inst.children.first().and_then(|c| doc.node(*c)).unwrap();
+        if bar.child_layout.sizing_v != Fill || (bar.size().1 - want_h).abs() > 1e-6 {
+            bad.push(format!("{name} copy of the bar: sizing_v {:?}, h {} (want Fill, {want_h})", bar.child_layout.sizing_v, bar.size().1));
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
+/// Issue 2091 item 3, after a layout pass: the stretched bar takes the row's cross size, also
+/// when the row hugs (the bar next to a two-line text, whose height makes the row's).
+#[test]
+fn stretch_children_take_the_row_height_after_a_layout_pass() {
+    let mut nodes = Vec::new();
+    // (name, counter sizing, row height, expected bar height after layout)
+    let rows = [("Fixed row", "FIXED", 40.0, 40.0), ("Hug row", "RESIZE_TO_FIT", 16.0, 16.0)];
+    for (k, (name, counter, h, _)) in rows.iter().enumerate() {
+        let id = 100 * (k as u64 + 1);
+        let mut f = vec![("size", xy(100.0, *h)), ("transform", at(0.0, 60.0 * k as f64))];
+        f.extend(stack("HORIZONTAL", Some("FIXED"), Some(counter)));
+        nodes.push(node(id, 1, &format!("{id}"), "FRAME", name, f));
+        let bar = vec![("size", xy(3.0, 10.0)), ("transform", at(0.0, 0.0)), ("stackChildAlignSelf", Kv::Enum("STRETCH"))];
+        nodes.push(node(id + 1, id, "!", "ROUNDED_RECTANGLE", &format!("Bar {name}"), bar));
+        // The text sets the row's height: 16 px tall, fixed box.
+        let mut t = label(id + 2, id, name, Some("NONE"));
+        if let Kv::Object(fields) = &mut t {
+            fields.push(("transform", at(10.0, 0.0)));
+        }
+        nodes.push(t);
+    }
+    let mut doc = import(nodes);
+    let page = doc.first_page().unwrap();
+    figcraft_layout::layout_page(&mut doc, page, &figcraft_layout::NoMeasure);
+    let mut bad = Vec::new();
+    for (name, _, _, want) in rows {
+        let bar = doc.nodes().find(|n| n.name == format!("Bar {name}")).unwrap();
+        let got = bar.size().1;
+        if (got - want).abs() > 1e-6 {
+            bad.push(format!("{name}: bar sizing_v {:?}, height {got}, want {want}", bar.child_layout.sizing_v));
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
 }

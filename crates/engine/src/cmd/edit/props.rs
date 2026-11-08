@@ -159,6 +159,7 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
             names.join(", ")
         ));
     }
+    let hugging = crate::cmd::props::hugging_parents(&s.ds()?.doc, &ids, &props);
     let doc = s.doc_mut()?;
     let before = crate::cmd::styles::bound_before(doc, &ids);
     for i in ids {
@@ -172,6 +173,10 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
                 crate::cmd::arrange::move_world(doc, i, d.x, d.y)?;
             }
         }
+    }
+    // A child that filled a hugging parent along its flow turned the parent Fixed: say so.
+    if let Some(notice) = crate::cmd::props::fixed_notice(&s.ds()?.doc, &hugging) {
+        s.message = Some(notice);
     }
     if warnings.is_empty() { ok() } else { Ok(json!({"ok": true, "warnings": warnings})) }
 }

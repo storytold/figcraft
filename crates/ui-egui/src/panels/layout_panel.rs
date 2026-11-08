@@ -219,7 +219,10 @@ fn dimensions(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], has
                 if has_al || is_text {
                     opts.push((tr("Hug contents"), "hug"));
                 }
-                if can_fill {
+                // Across a wrapping row that hugs this axis Fill is not offered, as Hug is not
+                // offered on a layer that can't hug.
+                let wrapped = sel.iter().any(|i| parent_of(doc, *i).is_some_and(|p| figcraft_layout::wrapping_row_hugs_across(p, horizontal)));
+                if can_fill && !wrapped {
                     opts.push((tr("Fill container"), "fill"));
                 }
                 for (l, v) in opts {

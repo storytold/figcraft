@@ -72,6 +72,100 @@ fn fill_on_a_child_turns_the_hugging_parent_fixed() {
     assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug));
 }
 
+fn name_of(s: &Session, node: NodeId) -> String {
+    s.doc().unwrap().node(node).unwrap().name.clone()
+}
+
+/// Measured in Figma web (`plan/loop/measurements/fill-hug.md`): across the flow a Fill child
+/// leaves its hugging parent hugging and takes the line's cross size; the parent turns Fixed (with
+/// a notice) only when no non-Fill child is left on that axis.
+#[test]
+fn fill_across_a_hugging_parent_keeps_it_hugging_and_takes_the_line() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));
+    let a = rect(&mut s, f, 4.0, 20.0, "#FF0000");
+    let b = rect(&mut s, f, 50.0, 40.0, "#0000FF");
+    assert_eq!(size(&s, f), (54.0, 40.0));
+    s.message = None;
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug), "a non-Fill sibling is left: the parent keeps hugging");
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fill));
+    assert_eq!((size(&s, a), size(&s, f)), ((4.0, 40.0), (54.0, 40.0)));
+    assert_eq!(s.message, None, "no notice");
+    // The sibling grows: the bar and the parent follow.
+    set(&mut s, b, json!({"height": 60}));
+    assert_eq!((size(&s, a), size(&s, f)), ((4.0, 60.0), (54.0, 60.0)));
+    // The last non-Fill child fills too: the parent turns Fixed at its current height, with a notice.
+    set(&mut s, b, json!({"sizingV": "fill"}));
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Fixed));
+    assert_eq!(s.message, Some(format!("Height set to Fixed for {}", name_of(&s, f))));
+    assert_eq!((size(&s, a), size(&s, b), size(&s, f)), ((4.0, 60.0), (50.0, 60.0), (54.0, 60.0)));
+    set(&mut s, f, json!({"height": 80}));
+    assert_eq!((size(&s, a), size(&s, b)), ((4.0, 80.0), (50.0, 80.0)));
+    // One undo step puts the sizing back.
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug));
+    assert_eq!(sizing(&s, b), (Sizing::Fixed, Sizing::Fixed));
+}
+
+#[test]
+fn fill_along_a_hugging_parent_notes_that_the_width_is_fixed() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));
+    let a = rect(&mut s, f, 50.0, 20.0, "#FF0000");
+    rect(&mut s, f, 30.0, 40.0, "#0000FF");
+    s.message = None;
+    set(&mut s, a, json!({"sizingH": "fill"}));
+    assert_eq!(sizing(&s, f), (Sizing::Fixed, Sizing::Hug));
+    assert_eq!(s.message, Some(format!("Width set to Fixed for {}", name_of(&s, f))));
+    // A Fill that changes nothing about the parent has no notice.
+    s.message = None;
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    assert_eq!(s.message, None);
+}
+
+#[test]
+fn a_fill_childs_min_counts_toward_the_hugging_size() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));
+    let a = rect(&mut s, f, 4.0, 20.0, "#FF0000");
+    let b = rect(&mut s, f, 50.0, 40.0, "#0000FF");
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    set(&mut s, a, json!({"minHeight": 50}));
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug));
+    assert_eq!((size(&s, a), size(&s, b), size(&s, f)), ((4.0, 50.0), (50.0, 40.0), (54.0, 50.0)));
+}
+
+#[test]
+fn a_parent_set_back_to_hug_keeps_the_child_that_fills_across_it() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "fixed", "height": 100}));
+    let a = rect(&mut s, f, 4.0, 20.0, "#FF0000");
+    rect(&mut s, f, 50.0, 40.0, "#0000FF");
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    assert_eq!(size(&s, a), (4.0, 100.0));
+    set(&mut s, f, json!({"sizingV": "hug"}));
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fill), "a non-Fill sibling is left on that axis");
+    assert_eq!((size(&s, a), size(&s, f)), ((4.0, 40.0), (54.0, 40.0)));
+}
+
+#[test]
+fn fill_across_a_wrapping_row_that_hugs_that_axis_is_not_offered() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"wrap": true, "sizingH": "fixed", "sizingV": "hug", "width": 120}));
+    let a = rect(&mut s, f, 40.0, 20.0, "#FF0000");
+    let r = s.execute("node.set", &json!({"id": a, "props": {"sizingV": "fill"}}));
+    assert!(r.is_err(), "Fill height in a wrapping row that hugs its height");
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fixed));
+    assert_eq!(sizing(&s, f), (Sizing::Fixed, Sizing::Hug));
+    // Along the flow a wrapping row still takes Fill width, and with a fixed height Fill height.
+    set(&mut s, a, json!({"sizingH": "fill"}));
+    set(&mut s, f, json!({"sizingV": "fixed"}));
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    assert_eq!(sizing(&s, a), (Sizing::Fill, Sizing::Fill));
+}
+
 #[test]
 fn a_child_resized_to_the_full_available_space_becomes_fill() {
     // Documented: "Child objects of an auto layout frame will also be set to Fill container if

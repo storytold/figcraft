@@ -6,8 +6,9 @@
 //!   gap, padding and alignment; each child is Fixed, Hug (its own content) or Fill (shares the
 //!   free space), within its min/max size. A Hug container sizes to its children. Absolute
 //!   children (ignoring auto layout) are not placed; they follow their constraints instead.
-//! - [`coherent_sizing`]: Fill and Hug only where they can apply (Fill in an auto layout flow on an
-//!   axis the parent doesn't hug; Hug on auto layout frames and text), else Fixed.
+//! - [`coherent_sizing`]: Fill and Hug only where they can apply (Fill in an auto layout flow, except
+//!   along an axis the parent hugs and across a wrapping row that hugs that axis; Hug on auto layout
+//!   frames and text), else Fixed.
 //! - [`apply_constraints`]: children of a regular frame follow their constraints when it resizes.
 //! - [`grid_lines`]: the column/row rectangles of a layout grid, for drawing and snapping.
 //!
@@ -167,9 +168,29 @@ pub fn flow_children(doc: &Document, frame: NodeId) -> Vec<NodeId> {
     f.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|n| n.visible && !n.child_layout.absolute)).collect()
 }
 
+/// Whether the parent frame `p` wraps and hugs `horizontal`'s axis, which is the cross axis of its
+/// flow: Fill container is not offered there (Figma greys it out; a grid has no flow to wrap).
+pub fn wrapping_row_hugs_across(p: &figcraft_doc::Node, horizontal: bool) -> bool {
+    let Some(al) = &p.layout else { return false };
+    let hugs = if horizontal { p.child_layout.sizing_h } else { p.child_layout.sizing_v } == Sizing::Hug;
+    al.wrap && hugs && axis_is_main(al.mode, horizontal) == Some(false)
+}
+
+/// Whether the horizontal (or vertical) axis is the main axis of a flow; `None` for a grid.
+fn axis_is_main(mode: LayoutMode, horizontal: bool) -> Option<bool> {
+    match mode {
+        LayoutMode::Horizontal => Some(horizontal),
+        LayoutMode::Vertical => Some(!horizontal),
+        LayoutMode::Grid => None,
+    }
+}
+
 /// Make a layer's sizing coherent with where it sits (after an edit). Fill needs room to fill: a
 /// layer that isn't in an auto layout flow (no auto layout parent, or ignoring auto layout), or
-/// whose parent hugs that axis, gets Fixed at its current size instead. Hug needs auto layout or
+/// whose parent hugs the axis it is laid out along (a grid: either axis), gets Fixed at its
+/// current size instead. Across the flow of a hugging parent Fill stays: the child takes the
+/// line's cross size (the largest sibling that doesn't fill), except in a wrapping row, where
+/// Fill across a hugging axis is not offered and reads as Fixed. Hug needs auto layout or
 /// text; otherwise it is Fixed too. A text hugs what its resize mode grows. The same applies to the
 /// layer's own children, so a frame that starts to hug (or loses auto layout) fixes the children
 /// that filled it. Returns whether anything changed.
@@ -188,8 +209,18 @@ fn coherent_own_sizing(doc: &mut Document, id: NodeId) -> bool {
     let parent_hugs =
         |horizontal: bool| flow_parent.map(|p| if horizontal { p.child_layout.sizing_h } else { p.child_layout.sizing_v } == Sizing::Hug);
     let can_hug = (n.layout.is_some() && n.kind.is_frame_like()) || matches!(n.kind, NodeKind::Text(_));
+    // Fill has nothing to fill without a flow parent, along an axis the parent hugs (it hugs the
+    // children), or across a wrapping row that hugs that axis. Across a hugging flow it stays.
+    let no_fill = |horizontal: bool| match (flow_parent, parent_hugs(horizontal)) {
+        (None, _) => true,
+        (Some(p), Some(true)) => {
+            let main = p.layout.as_ref().and_then(|al| axis_is_main(al.mode, horizontal));
+            main != Some(false) || wrapping_row_hugs_across(p, horizontal)
+        }
+        _ => false,
+    };
     let coherent = |s: Sizing, horizontal: bool| match s {
-        Sizing::Fill if parent_hugs(horizontal) != Some(false) => Sizing::Fixed,
+        Sizing::Fill if no_fill(horizontal) => Sizing::Fixed,
         Sizing::Hug if !can_hug => Sizing::Fixed,
         s => s,
     };
@@ -378,7 +409,11 @@ fn flow_line_extents(items: &mut [Item], lines: &[Vec<usize>], gap: f64) -> Vec<
         let in_line = || line.iter().filter_map(|i| items.get(*i));
         let main_used = in_line().map(|item| item.main).sum::<f64>() + gaps;
         let all_fill = in_line().all(|item| item.fill_cross);
-        let cross = in_line().filter(|item| all_fill || !item.fill_cross).map(|item| item.base_off + item.cross).fold(0.0, f64::max);
+        // A child filling the cross axis takes the line's size, so it only counts with its min
+        // (nothing but fill children keep their own sizes).
+        let cross = in_line()
+            .map(|item| if !item.fill_cross || all_fill { item.base_off + item.cross } else { item.min_cross.unwrap_or(0.0) })
+            .fold(0.0, f64::max);
         extents.push((main_used, cross));
     }
     extents
@@ -411,7 +446,7 @@ fn align_flow_lines(items: &[Item], extents: &mut [(f64, f64)], al: &AutoLayout,
 }
 
 /// Collect the size and sizing constraints of the children in flow order.
-fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool, hug_cross: bool) -> Vec<Item> {
+fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool, cross_fill_off: bool) -> Vec<Item> {
     let mut items = Vec::with_capacity(kids.len());
     for child in kids {
         let Some(node) = doc.node(*child) else { continue };
@@ -428,9 +463,12 @@ fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool,
             id: *child,
             main: if horizontal { w } else { h },
             cross: if horizontal { h } else { w },
-            // Fill needs room to fill: on an axis the frame hugs it reads as fixed.
+            // Along an axis the frame hugs, Fill has nothing to fill and reads as fixed. Across the
+            // flow of a hugging frame the child takes the line's size (the largest sibling that
+            // doesn't fill: `stretch_fill_across_hug_line`), except in a wrapping row, where Fill
+            // across a hugging axis is not offered and reads as fixed too.
             fill_main: sm == Sizing::Fill && !hug_main,
-            fill_cross: sc == Sizing::Fill && !hug_cross,
+            fill_cross: sc == Sizing::Fill && !cross_fill_off,
             min_main,
             max_main,
             min_cross,
@@ -441,6 +479,39 @@ fn flow_items(doc: &Document, kids: &[NodeId], horizontal: bool, hug_main: bool,
         });
     }
     items
+}
+
+/// Size the children that fill the cross axis of a hugging frame's single line, whose children
+/// that don't fill make it `line` across, to that size (the frame's own min/max, its `cross_pads`
+/// outside the line, applied; the children's own min/max too), laying out a nested auto layout at
+/// its new size. Nothing happens unless some children fill and some don't (a line of nothing but
+/// fill children keeps their own sizes). Returns whether a child's main size changed (a text
+/// filling the width of a vertical stack reflows to a new height), so the caller measures the line
+/// again.
+fn stretch_fill_across_hug_line(
+    doc: &mut Document,
+    items: &mut [Item],
+    line: f64,
+    (frame, cross_pads): (&figcraft_doc::ChildLayout, f64),
+    horizontal: bool,
+    m: &dyn Measure,
+) -> bool {
+    if !items.iter().any(|it| it.fill_cross) || items.iter().all(|it| it.fill_cross) {
+        return false;
+    }
+    let (lo, hi) = if horizontal { (frame.min_h, frame.max_h) } else { (frame.min_w, frame.max_w) };
+    let line_cross = clamp_size(line + cross_pads, lo, hi).max(cross_pads) - cross_pads;
+    let mut main_changed = false;
+    for it in items.iter_mut().filter(|it| it.fill_cross) {
+        let cross = clamp_size(line_cross, it.min_cross, it.max_cross);
+        let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
+        resize_child(doc, it.id, w, h, m);
+        let (w, h) = outer_size(doc, it.id);
+        let (main, cross) = if horizontal { (w, h) } else { (h, w) };
+        main_changed |= (main - it.main).abs() > 1e-9;
+        (it.main, it.cross) = (main, cross);
+    }
+    main_changed
 }
 
 /// Position one resolved flow line, resizing wrapped fill children across the line.
@@ -523,15 +594,16 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let hug_cross = if horizontal { hug_h } else { hug_w };
     let baseline = horizontal && al.cross_align == CrossAlign::Baseline;
 
-    let mut items = flow_items(doc, &kids, horizontal, hug_main, hug_cross);
-
     let gap = finite_or_zero(al.gap);
     let auto_gap = al.main_align.is_auto_gap();
     let wraps = al.wrap && !hug_main;
+    let mut items = flow_items(doc, &kids, horizontal, hug_main, hug_cross && wraps);
 
-    // Fill across a single line: the size is the frame's inner cross size, known up front. Resize
-    // those children first, so text that wraps (or a frame hugging it) reports its final main size.
-    if !wraps {
+    // Fill across a single line of a frame that doesn't hug that axis: the size is the frame's
+    // inner cross size, known up front. Resize those children first, so text that wraps (or a
+    // frame hugging it) reports its final main size. A hugging frame's line is only known once
+    // the other children are measured (`stretch_fill_across_hug_line`).
+    if !wraps && !hug_cross {
         for it in items.iter_mut().filter(|it| it.fill_cross && !it.fill_main) {
             let cross = clamp_size(inner_cross_fixed, it.min_cross, it.max_cross);
             let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
@@ -549,7 +621,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     // Fill children take their main size now, so their cross size (wrapped text, a hugging frame)
     // is final before the lines and the frame are sized.
     for it in items.iter_mut().filter(|it| it.fill_main) {
-        let cross = if it.fill_cross && !wraps { clamp_size(inner_cross_fixed, it.min_cross, it.max_cross) } else { it.cross };
+        let cross = if it.fill_cross && !wraps && !hug_cross { clamp_size(inner_cross_fixed, it.min_cross, it.max_cross) } else { it.cross };
         let (w, h) = if horizontal { (it.main, cross) } else { (cross, it.main) };
         resize_child(doc, it.id, w, h, m);
         let (w, h) = outer_size(doc, it.id);
@@ -566,6 +638,14 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
 
     // Line extents: (main used, cross size).
     let mut line_extents = flow_line_extents(&mut items, &lines, gap);
+    // A hugging frame's single line: children filling the cross axis take its size now (the
+    // largest child that doesn't fill, a fill child's min counted, the frame's own min/max
+    // applied). A text that reflows at its new width changes the main sizes, so measure again.
+    let cross_pads = if horizontal { pt + pb } else { pl + pr };
+    let line = line_extents.first().map_or(0.0, |l| l.1);
+    if hug_cross && !wraps && stretch_fill_across_hug_line(doc, &mut items, line, (&fcl, cross_pads), horizontal, m) {
+        line_extents = flow_line_extents(&mut items, &lines, gap);
+    }
 
     // Container size (on a hugging axis fill children can't fill: they count with their own size).
     let content_main = line_extents.iter().map(|l| l.0).fold(0.0, f64::max);
@@ -581,7 +661,7 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
         }
     }
     if hug_cross {
-        let v = content_cross + if horizontal { pt + pb } else { pl + pr };
+        let v = content_cross + cross_pads;
         if horizontal {
             nh = v;
         } else {
