@@ -628,7 +628,7 @@ impl<'a> Mapper<'a> {
     /// scaled to the layer's size, with per-point corner radii, handle mirroring and end caps.
     /// False when there's none or it's damaged (the outlines stand in).
     fn network(&mut self, o: &mut Obj, v: &View<'a>) -> bool {
-        let Some(vd) = v.get("vectorData") else { return false };
+        let Some((vd, radius_scale)) = v.find("vectorData") else { return false };
         let Some(blob_id) = num(vd, "vectorNetworkBlob").map(|i| i as usize) else { return false };
         let Some(blob) = self.blobs.get(blob_id).copied() else { return false };
         let Some(net) = network::decode(blob) else {
@@ -674,7 +674,9 @@ impl<'a> Mapper<'a> {
             .map(|p| {
                 let mut out = json!({"x": p.x * sx, "y": p.y * sy});
                 let st = style(p.style);
-                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).filter(|r| *r > 0.0) {
+                // Point radii are lengths in this row's space, unlike the normalized positions.
+                // An override/derived row already carries the instance's scale.
+                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).and_then(|r| scaled(r, radius_scale)).filter(|r| *r > 0.0) {
                     out["radius"] = json!(r);
                 }
                 match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
@@ -790,7 +792,8 @@ impl<'a> Mapper<'a> {
             o.insert("vectorNetwork".into(), entry);
             return true;
         }
-        let key = (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize);
+        // A resized instance and a K-scaled one can have the same box but different radii.
+        let key = (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize, radius_scale.to_bits());
         let id = match self.network_ids.get(&key) {
             Some(id) => *id,
             None => {
