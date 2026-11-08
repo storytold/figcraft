@@ -223,15 +223,18 @@ fn along(frame: Affine, dx: f64, dy: f64) -> Point {
     Point::new(a * dx + c * dy, b * dx + d * dy)
 }
 
-/// Align the selected points to their box's edge or centre line (`None` when the command names
-/// layers or no points are selected). Each point moves along one axis of the box only; fewer than
+/// Align the selected points to their box's edge or centre line (`None` when edit mode is off or
+/// the command names layers; with no points selected in edit mode nothing moves, and the edited
+/// layer is not aligned to its parent). Each point moves along one axis of the box only; fewer than
 /// two points stay put.
 pub fn align_points_in_edit_mode(s: &mut Session, p: &Value, how: PointAlign) -> Option<Result<Value>> {
     if get(p, "ids").is_some() || get(p, "id").is_some() {
         return None;
     }
     let ve = editing(s).ok()?;
-    let b = edit_box(s.doc().ok()?, &ve)?;
+    let Some(b) = edit_box(s.doc().ok()?, &ve) else {
+        return Some(Ok(json!({"ok": true})));
+    };
     let pts = page_points(s.doc().ok()?, &b, ve.id);
     let inv = b.frame.inverse();
     let moves: Vec<(NodeId, usize, Point)> = if b.point_count() < 2 {
@@ -256,14 +259,16 @@ pub fn align_points_in_edit_mode(s: &mut Session, p: &Value, how: PointAlign) ->
 }
 
 /// Space the selected points evenly along the box's x (or y) axis between the outermost two, in
-/// order along it (`None` when the command names layers or no points are selected). Fewer than
-/// three points stay put.
+/// order along it (`None` when edit mode is off or the command names layers; with no points
+/// selected in edit mode nothing moves). Fewer than three points stay put.
 pub fn distribute_points_in_edit_mode(s: &mut Session, p: &Value, horizontal: bool) -> Option<Result<Value>> {
     if get(p, "ids").is_some() || get(p, "id").is_some() {
         return None;
     }
     let ve = editing(s).ok()?;
-    let b = edit_box(s.doc().ok()?, &ve)?;
+    let Some(b) = edit_box(s.doc().ok()?, &ve) else {
+        return Some(Ok(json!({"ok": true})));
+    };
     let pts = page_points(s.doc().ok()?, &b, ve.id);
     let inv = b.frame.inverse();
     let mut items: Vec<(NodeId, usize, Point)> = pts.iter().map(|(l, v, pg)| (*l, *v, inv * *pg)).collect();
