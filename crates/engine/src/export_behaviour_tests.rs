@@ -384,3 +384,31 @@ fn copy_as_png_svg_and_code() {
     let css = crate::codegen::code_for(doc, a, crate::codegen::CodeLang::Css);
     assert!(css.contains("background: #FF0000;"), "Copy as CSS is the layer's CSS from Inspect");
 }
+
+#[test]
+fn node_set_takes_back_the_export_settings_node_get_returns() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0, 40.0, 20.0, "#FF0000", None);
+    let given = json!({
+        "format": "jpg",
+        "suffix": "@3x",
+        "contentsOnly": false,
+        "includeBoundingBox": true,
+        "svgOutlineText": false,
+        "svgIdAttribute": true,
+        "svgSimplifyStroke": false,
+        "vdCompat": "exact",
+        "colorProfile": "displayP3",
+        "quality": 55,
+        "bleed": 9,
+        "cropMarks": true,
+        "bleedMarks": true,
+    });
+    ex(&mut s, "export.add", json!({"ids": [a], "setting": given}));
+    let stored = s.doc().unwrap().node(a).unwrap().exports.clone();
+    assert_eq!(stored.len(), 1);
+    let got = ex(&mut s, "node.get", json!({"id": a}))["exports"].clone();
+    set(&mut s, &[a], json!({"exports": []}));
+    set(&mut s, &[a], json!({"exports": got}));
+    assert_eq!(s.doc().unwrap().node(a).unwrap().exports, stored, "node.set stores what node.get returned, unchanged");
+}

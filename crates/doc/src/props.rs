@@ -1449,8 +1449,10 @@ pub struct PrintSettings {
     /// is printed this far out, to be trimmed off.
     pub bleed: f64,
     /// Crop marks outside the bleed, at the trim's corners.
+    #[serde(alias = "crop_marks")]
     pub crop_marks: bool,
     /// Bleed marks outside the bleed, at the bleed's corners.
+    #[serde(alias = "bleed_marks")]
     pub bleed_marks: bool,
     /// CMYK colour (converted from RGB) instead of RGB.
     pub cmyk: bool,
@@ -1519,25 +1521,32 @@ pub struct ExportSetting {
     pub print: PrintSettings,
     /// Only the layer itself (on), or every layer that shows in its area (off).
     #[serde(skip_serializing_if = "is_true")]
+    #[serde(alias = "contents_only")]
     pub contents_only: bool,
     /// The layer's own box, cutting off what it paints outside it (shadows, outside strokes).
     #[serde(skip_serializing_if = "is_false")]
+    #[serde(alias = "include_bounding_box")]
     pub include_bounding_box: bool,
     /// SVG: text as outlines (on) or as `<text>` elements (off).
     #[serde(skip_serializing_if = "is_true")]
+    #[serde(alias = "svg_outline_text")]
     pub svg_outline_text: bool,
     /// SVG: layer names as `id` attributes.
     #[serde(skip_serializing_if = "is_false")]
+    #[serde(alias = "svg_id_attribute")]
     pub svg_id_attribute: bool,
     /// SVG: strokes as `stroke` attributes where that's exact (on), else as outlines.
     #[serde(skip_serializing_if = "is_true")]
+    #[serde(alias = "svg_simplify_stroke")]
     pub svg_simplify_stroke: bool,
     /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
     #[serde(skip_serializing_if = "VdCompat::is_default")]
+    #[serde(alias = "vd_compat")]
     pub vd_compat: VdCompat,
     /// PNG, JPG and WebP: the color profile the file is written in. SVG, PDF and XML are always
     /// sRGB, whatever this says.
     #[serde(skip_serializing_if = "ExportColorProfile::is_default")]
+    #[serde(alias = "color_profile")]
     pub color_profile: ExportColorProfile,
     /// JPG: the encoder's quality, 1 (smallest file) to 100 (see [`ExportSetting::quality`]).
     #[serde(skip_serializing_if = "is_default_quality")]
