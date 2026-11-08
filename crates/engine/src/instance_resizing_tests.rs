@@ -123,8 +123,10 @@ fn layers_in_instances_resize_but_keep_their_place() {
     for props in [json!({"x": 50}), json!({"rotation": 15}), json!({"constraints": {"horizontal": "right"}})] {
         assert!(s.execute("node.set", &json!({"id": it, "props": props})).is_err(), "{props} is refused");
     }
-    // The instance's own resizing is its own, not an override.
+    // The instance's own resizing is recorded as an override (inferred), which Reset instance clears.
     ex(&mut s, "node.set", json!({"id": i, "props": {"minWidth": 100}}));
+    assert!(node(&s, i).overrides.contains("resizing"));
+    ex(&mut s, "component.resetInstance", json!({"ids": [i]}));
     assert!(!node(&s, i).overrides.contains("resizing"));
     healthy(&s);
 }

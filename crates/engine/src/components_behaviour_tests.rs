@@ -1144,3 +1144,32 @@ fn an_instance_filling_its_auto_layout_parent_keeps_fill_when_the_main_changes()
     ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "hug"}}));
     assert_eq!(sizing_h(&s, inst), Sizing::Fill);
 }
+
+/// Inferred (Figma was measured only with a typed width): a Fixed set directly on an instance's
+/// root, with no width typed, is an override the sync keeps when the main's root turns Hug, Fixed
+/// and Hug again.
+#[test]
+fn an_instance_root_set_to_fixed_keeps_it_through_the_mains_resizing_changes() {
+    let mut s = Session::new();
+    let (comp, inst, _) = hugging_note(&mut s);
+    ex(&mut s, "node.set", json!({"id": inst, "props": {"sizingH": "fixed"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed);
+    assert!(node(&s, inst).overrides.contains("resizing"), "{:?}", node(&s, inst).overrides);
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "fixed"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed);
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "hug"}}));
+    assert_eq!(sizing_h(&s, comp), Sizing::Hug);
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed, "its own Fixed stays after the main hugs again");
+}
+
+/// Resetting that instance brings its resizing back to the main's.
+#[test]
+fn resetting_an_instance_brings_its_own_resizing_back_to_the_mains() {
+    let mut s = Session::new();
+    let (_, inst, _) = hugging_note(&mut s);
+    ex(&mut s, "node.set", json!({"id": inst, "props": {"sizingH": "fixed"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed);
+    ex(&mut s, "component.resetInstance", json!({"ids": [inst]}));
+    assert!(!node(&s, inst).overrides.contains("resizing"));
+    assert_eq!(sizing_h(&s, inst), Sizing::Hug, "the main hugs");
+}

@@ -1200,14 +1200,16 @@ pub fn apply(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Valu
     if !unknown.is_empty() {
         return Err(bad(cmd, format!("unknown properties: {} (known: {KEYS})", unknown.join(", "))));
     }
-    // Inside an instance, record which property groups were overridden (an instance's own
-    // resizing, export settings and interactions are its own, not overrides).
+    // Inside an instance, record which property groups were overridden (an instance's own export
+    // settings and interactions are its own, not overrides). Its resizing is recorded like any
+    // layer's: the sync takes the main's Hug / Fixed unless it is overridden, and Reset instance
+    // clears it. Inferred: Figma was measured only with a typed width (kept); a resizing chosen
+    // from the dropdown is taken as an override the same way, as every property set on an
+    // instance in Figma is one.
     let own_root = matches!(doc.get(id)?.kind, NodeKind::Instance { .. }) && !crate::components::inside_instance(doc, id);
     let n = doc.get_mut(id)?;
     if n.source.is_some() {
-        for g in
-            props.keys().map(|k| override_group(k)).filter(|g| *g != "other" && !(own_root && matches!(*g, "resizing" | "exports" | "interactions")))
-        {
+        for g in props.keys().map(|k| override_group(k)).filter(|g| *g != "other" && !(own_root && matches!(*g, "exports" | "interactions"))) {
             n.overrides.insert(g.to_string());
         }
     }
