@@ -88,3 +88,21 @@ fn add_auto_layout_reads_rows_and_an_asked_for_grid() {
     let f = id_of(&ex(&mut s, "layout.add", json!({"ids": k, "direction": "grid"}))["ids"][0]).unwrap();
     assert_eq!(s.doc().unwrap().node(f).unwrap().children, vec![k[3], k[2], k[1], k[0]], "top row first, left to right");
 }
+
+/// A layer turned 90° and set to Fill fills the flow with its rotated box: its own height takes
+/// the room, so it stays inside the frame and its neighbour follows it.
+#[test]
+fn a_rotated_layer_fills_with_its_rotated_box() {
+    let mut s = Session::new();
+    let f = row(&mut s);
+    ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 20, "parent": f}));
+    let b = id(ex(&mut s, "shape.rectangle", json!({"x": 50, "y": 0, "width": 60, "height": 30, "parent": f})));
+    let c = id(ex(&mut s, "shape.rectangle", json!({"x": 120, "y": 0, "width": 50, "height": 40, "parent": f})));
+    ex(&mut s, "node.set", json!({"id": b, "props": {"rotation": 90}}));
+    ex(&mut s, "node.set", json!({"id": b, "props": {"sizingH": "fill"}}));
+    let doc = s.doc().unwrap();
+    let (bb, cb) = (doc.world_bounds(b).unwrap(), doc.world_bounds(c).unwrap());
+    // 300 less 40 and 50 and two gaps of 10.
+    assert!((bb.width() - 190.0).abs() < 1e-6 && (bb.height() - 60.0).abs() < 1e-6, "{bb:?}");
+    assert!((cb.x0 - bb.x1 - 10.0).abs() < 1e-6, "the neighbour follows: {cb:?} after {bb:?}");
+}

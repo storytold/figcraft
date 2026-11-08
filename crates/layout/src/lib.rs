@@ -673,6 +673,22 @@ fn resize_child(doc: &mut Document, id: NodeId, w: f64, h: f64, m: &dyn Measure)
         set_size(doc, id, w, th);
     } else {
         let old = doc.node(id).map(|n| (n.width, n.height));
+        // Layout sizes a layer's rotated bounding box; a rotated layer's own width and height
+        // scale along its axes to give that box (swapped at 90°), as when a group scales it.
+        let (w, h) = match doc.node(id) {
+            Some(n)
+                if {
+                    let [_, b, c, ..] = n.transform.as_coeffs();
+                    b.abs() > 1e-9 || c.abs() > 1e-9
+                } =>
+            {
+                let (bw, bh) = outer_size(doc, id);
+                let k = |want: f64, is: f64| if is > 1e-9 && want.is_finite() { want / is } else { 1.0 };
+                let (kw, kh) = axis_factors(n.transform, k(w, bw), k(h, bh));
+                (n.width * kw, n.height * kh)
+            }
+            _ => (w, h),
+        };
         set_size(doc, id, w, h);
         if let Some((ow, oh)) = old {
             if doc.node(id).is_some_and(|n| n.kind.bounds_follow_children()) {
