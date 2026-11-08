@@ -50,7 +50,7 @@ Measured earlier the same day; recorded here by pull request only.
 | Behaviour | Figma (measured) | FigCraft | Status |
 |---|---|---|---|
 | Snap threshold | a layer snaps about 4.5 screen px from a guide, at 100% and 200% | snapped at 5 screen px | fixed in #2086 (open) |
-| Submenu opening | a submenu opens about 11 ms after its row is hovered; no safe triangle seen | opened after 0.15 s | fixed in #2093 (open) |
+| Submenu opening | a submenu opens about 11 ms after its row is hovered; no safe triangle seen | opened after 0.15 s, with a safe triangle | delay fixed in #2093 (open); the safe triangle FigCraft keeps is unresolved (none seen in Figma; asked in #2093) |
 
 ## Auto layout: Fill and Hug
 
@@ -66,7 +66,7 @@ Values read from the zoomed Design panel's fields and dropdowns, in horizontal r
 | Text sibling | rect H Fill beside two lines of text (Inter 24, line height 32): text 64 Hug, rect 64 Fill, parent 64 Hug; a third line gives 96, 96, 96 Hug | the parent turned Fixed and the child kept its own size | fixed in #2099 (open) |
 | Main axis: a Fill child in a hugging parent | the parent turns Fixed (toast "Width set to Fixed for Frame 1", parent 197 Fixed) | the parent becomes fixed | matches |
 | Wrap on, Fill height on a child | "Fill container" for height is greyed out on a child of a wrapping row (checked only with the parent hugging height) | not compared | not measured (only the hugging case was checked) |
-| Setting a parent to Hug while a child fills along it | toast "Width set to Fixed for <child>"; FigCraft demotes the child silently | no notice | not measured as a fix (possible small follow-up: the same notice) |
+| Setting a parent to Hug while a child fills along it | the child turns Fixed with the toast `Width set to Fixed for Rectangle 1` (the child's name) | demoted the child silently | fixed in #2099 (open) |
 
 ## Instances
 
@@ -86,7 +86,7 @@ Third entry of the sidebar header's component dropdown, several layers selected.
 |---|---|---|---|
 | Create component set on frames named "Primary", "Secondary", "Ghost" | one set named "Component 1"; variants show their bare names; one property "Property 1" with the names as values, in canvas order left to right | no Create component set | fixed in #2095 (open) |
 | Frames named "Size=Small", "Size=Large", "Size=Medium" | set "Component 1"; property "Size", values parsed from the names (Layers shows "Small", "Large", "Medium") | no Create component set | fixed in #2095 (open) |
-| Three frames all named "Card" | set named "Card"; property "Property 1", every variant "Default"; the panel warns that some variants share property values, with "Select conflicting variants" | no Create component set | fixed in #2095 (open) |
+| Three frames all named "Card" | set named "Card"; property "Property 1", every variant "Default"; the panel warns that some variants share property values, with "Select conflicting variants" | no Create component set | partly fixed in #2095 (open): the set and its names; the duplicate-value warning and Select conflicting variants are not added |
 | Layout of the new set | no auto layout; the frames stay where they were; the set (purple dashed frame, stroke #8A38F5 inside 1 px, corner radius 5) wraps them with 20 px on every side; the set is selected afterwards; one undo reverts everything | no Create component set | fixed in #2095 (open) |
 | Wrap style, caret in one paragraph | Balance re-wraps only that paragraph; with the layer selected the control shows "Mixed" | a wrap style per layer only | fixed in #2094 (open) |
 | Wrap style set on the whole layer | Pretty overwrites the paragraph's Balance; editing again, both paragraphs show Pretty | a wrap style per layer only | fixed in #2094 (open) |
