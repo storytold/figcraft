@@ -7,6 +7,7 @@
 //! while editing adds the clipboard's layers to the edited vector's network, in place: a vector
 //! with its segments, a shape or boolean with its outline.
 
+use crate::bad;
 use figcraft_doc::{NodeKind, Region, VectorNetwork};
 
 use super::clipboard::{collect_images, store_clipboard};
@@ -144,13 +145,35 @@ pub(super) fn copy_selection(s: &mut Session, cmd: &str, sel: EditSelection) -> 
 }
 
 /// Cut: copy the selected segments, then remove the selection as Delete does (the path splits in
-/// the same layer and edit mode stays on). A selection that has no segment to copy (lone points
-/// with nothing attached) is removed and the clipboard is left as it was.
+/// the same layer and edit mode stays on). Cut is Copy plus Delete, so it is refused exactly where
+/// Copy is: a selection with nothing to copy (only lone points that touch no segment) is
+/// `Disabled` and changes nothing, clipboard included. Delete removes such points.
 pub(super) fn cut_selection(s: &mut Session, sel: EditSelection) -> Result<Value> {
+    if sel.parts.is_empty() {
+        return Err(EngineError::Disabled("edit.cut".into(), "the selection has nothing to copy (Delete removes lone points)".into()));
+    }
     let cut = sel.parts.len();
-    let segments = if sel.parts.is_empty() { 0 } else { copy_parts(s, "edit.cut", &sel)? };
+    let segments = copy_parts(s, "edit.cut", &sel)?;
     vectoredit::delete_selection(s, sel.delete, false)?;
     Ok(json!({"cut": cut, "segments": segments}))
+}
+
+/// The SVG of the layers a partial vector-edit copy or cut put on the clipboard, for the system
+/// clipboard: they are temporary layers that live only in the clipboard, so they are placed in a
+/// scratch document to export. `None` when the clipboard holds none or the export fails.
+pub fn clipboard_svg(s: &Session) -> Option<String> {
+    let mut scratch = Document::new("Clipboard");
+    let page = scratch.current_page?;
+    for (k, v) in &s.clipboard.images {
+        scratch.images.insert(k.clone(), v.clone());
+    }
+    let mut ids = Vec::new();
+    for (root, nodes) in &s.clipboard.nodes {
+        let map: BTreeMap<NodeId, NodeId> = nodes.iter().map(|n| (n.id, scratch.alloc_id())).collect();
+        ids.push(scratch.paste_nodes(nodes, &map, *root, page, None).ok()?);
+    }
+    let bytes = crate::cmd::file::export_bytes(&scratch, &ids, figcraft_doc::ExportFormat::Svg, 1.0).ok()?;
+    String::from_utf8(bytes).ok()
 }
 
 /// The network of the outline of copied layer `n` in its own coordinates: a vector's segments, a
@@ -210,16 +233,18 @@ fn placed(mut net: VectorNetwork, m: Affine) -> Option<VectorNetwork> {
 /// (named in `skipped`); when none has one, nothing is pasted.
 pub(super) fn paste_into_vector(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "edit.paste";
-    let clip = s.clipboard.clone();
-    if clip.nodes.is_empty() {
+    if s.clipboard.nodes.is_empty() {
         return Err(EngineError::Disabled(CMD.into(), "the clipboard is empty".into()));
     }
     let target = vectoredit::editing(s)?.id;
-    let shift = match (num(p, "x"), num(p, "y"), clip.bounds) {
+    let shift = match (num(p, "x"), num(p, "y"), s.clipboard.bounds) {
         (Some(x), Some(y), Some(b)) => Affine::translate((x - b.x0, y - b.y0)),
-        _ => Affine::IDENTITY,
+        (None, None, _) | (Some(_), Some(_), None) => Affine::IDENTITY,
+        _ => return Err(bad(CMD, "give both x and y, or neither")),
     };
     let live = s.doc()?;
+    // Borrow the clipboard (it holds the source document and the images) to build the pieces.
+    let clip = &s.clipboard;
     let source: &Document = clip.source.as_deref().unwrap_or(live);
     let to_local = live.world_transform(target).inverse() * shift;
     let mut pieces = Vec::new();
@@ -269,6 +294,7 @@ pub(super) fn paste_into_vector(s: &mut Session, p: &Value) -> Result<Value> {
         ve.pen_out = None;
         ve.width_point = None;
     })?;
+    // `ids` stays empty: no layer is created, the pasted outlines joined layer `edited`.
     let mut out = json!({"ids": [], "edited": target, "vertices": pasted.len()});
     if !skipped.is_empty() {
         out["skipped"] = json!(skipped);

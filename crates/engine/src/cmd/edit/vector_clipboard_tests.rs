@@ -291,6 +291,19 @@ fn a_selected_face_copies_its_own_outline_with_the_fill() {
     assert!(matches!(s.doc().unwrap().node(new).unwrap().kind, NodeKind::Vector { .. }));
 }
 
+/// Everything junk must not change when a command is refused: the vector, the layers, the edit
+/// selection and what the clipboard holds.
+fn state(s: &Session, id: NodeId) -> String {
+    let ve = s.ds().unwrap().vector_edit.clone();
+    let clip: Vec<String> = s.clipboard.nodes.iter().flat_map(|(_, n)| n).map(|n| format!("{:?}", n.kind)).collect();
+    format!("{:?}|{:?}|{:?}|{:?}|{}", net(s, id), layers(s), ve.map(|v| (v.vertices, v.segments)), clip, s.clipboard.layers_generation)
+}
+
+fn finite(n: &VectorNetwork) -> bool {
+    n.vertices.iter().all(|v| v.x.is_finite() && v.y.is_finite())
+        && n.segments.iter().all(|sg| [sg.ta.0, sg.ta.1, sg.tb.0, sg.tb.1].iter().all(|x| x.is_finite()))
+}
+
 #[test]
 fn copy_cut_and_paste_survive_junk_in_vector_edit_mode() {
     let junk = [
@@ -301,26 +314,106 @@ fn copy_cut_and_paste_survive_junk_in_vector_edit_mode() {
         json!({"id": "nope", "x": "NaN", "y": 1e308}),
         json!({"parent": "nope", "x": -1e308, "y": "x"}),
         json!({"x": 1e308, "y": 1e308}),
+        json!({"x": 1e308}),
     ];
     for cmd in ["edit.copy", "edit.cut", "edit.paste", "edit.pasteOver", "edit.pasteReplace"] {
         for j in &junk {
-            let mut s = Session::new();
-            path(&mut s);
-            select(&mut s, &[1], &[0]);
-            ex(&mut s, "text.create", json!({"text": "t"}));
-            if let Err(EngineError::Internal { cmd, msg }) = s.execute(cmd, j) {
-                panic!("{cmd} panicked on {j}: {msg}");
-            }
-            // And after something was copied from the edit selection.
-            let mut s = Session::new();
-            path(&mut s);
-            select(&mut s, &[2], &[]);
-            let _ = s.execute("edit.copy", &json!({}));
-            if let Err(EngineError::Internal { cmd, msg }) = s.execute(cmd, j) {
-                panic!("{cmd} panicked on {j}: {msg}");
+            // Both a selection with a text layer next to it, and after a copy from the selection.
+            for copied in [false, true] {
+                let mut s = Session::new();
+                let id = path(&mut s);
+                if copied {
+                    select(&mut s, &[2], &[]);
+                    let _ = s.execute("edit.copy", &json!({}));
+                } else {
+                    select(&mut s, &[1], &[0]);
+                    ex(&mut s, "text.create", json!({"text": "t"}));
+                    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+                    select(&mut s, &[1], &[0]);
+                }
+                let before = state(&s, id);
+                match s.execute(cmd, j) {
+                    Err(EngineError::Internal { cmd, msg }) => panic!("{cmd} panicked on {j}: {msg}"),
+                    Err(_) => {
+                        if cmd != "edit.pasteOver" && cmd != "edit.pasteReplace" {
+                            assert_eq!(state(&s, id), before, "{cmd} {j} was refused but changed something");
+                        }
+                    }
+                    // Accepted: whatever it made has finite coordinates.
+                    Ok(_) => {
+                        if let Some(n) = crate::vectoredit::network(s.doc().unwrap(), id) {
+                            assert!(finite(n), "{cmd} {j} left non-finite coordinates");
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+#[test]
+fn a_huge_paste_position_is_refused_or_stays_finite() {
+    let mut s = Session::new();
+    let id = path(&mut s);
+    select(&mut s, &[], &[0]);
+    ex(&mut s, "edit.copy", json!({}));
+    let before = state(&s, id);
+    match s.execute("edit.paste", &json!({"x": 1e308, "y": 1e308})) {
+        Err(e) => {
+            assert!(!matches!(e, EngineError::Internal { .. }), "{e}");
+            assert_eq!(state(&s, id), before, "a refused paste changed something");
+        }
+        // It is accepted here: 1e308 plus a few hundred is still finite, so the points are too.
+        Ok(_) => assert!(finite(&net(&s, id)), "the points are finite"),
+    }
+}
+
+#[test]
+fn cut_with_only_lone_points_is_refused_like_copy_and_changes_nothing() {
+    let mut s = Session::new();
+    let id = path(&mut s);
+    // A point no segment touches.
+    crate::vectoredit::edit(s.doc_mut().unwrap(), id, |n| n.vertices.push(figcraft_doc::Vertex::new(50.0, 50.0))).unwrap();
+    // Something on the clipboard first, then only the lone point selected.
+    select(&mut s, &[0], &[]);
+    ex(&mut s, "edit.copy", json!({}));
+    select(&mut s, &[4], &[]);
+    let before = state(&s, id);
+    for cmd in ["edit.copy", "edit.cut"] {
+        let err = s.execute(cmd, &json!({})).expect_err(cmd);
+        assert!(matches!(err, EngineError::Disabled(..)), "{cmd}: {err}");
+        assert_eq!(state(&s, id), before, "{cmd} changed something");
+    }
+    // Delete is the way to remove it.
+    ex(&mut s, "vector.edit.delete", json!({}));
+    assert_eq!(net(&s, id).vertices.len(), 4);
+}
+
+#[test]
+fn only_one_of_x_and_y_is_refused_and_pastes_nothing() {
+    let mut s = Session::new();
+    let id = path(&mut s);
+    select(&mut s, &[], &[0]);
+    ex(&mut s, "edit.copy", json!({}));
+    let before = state(&s, id);
+    for p in [json!({"x": 10}), json!({"y": 10})] {
+        let err = s.execute("edit.paste", &p).expect_err("one coordinate");
+        assert!(err.to_string().contains("give both x and y, or neither"), "{err}");
+        assert_eq!(state(&s, id), before);
+    }
+    ex(&mut s, "edit.paste", json!({"x": 10, "y": 10}));
+}
+
+#[test]
+fn a_partial_copy_has_an_svg_for_the_system_clipboard() {
+    let mut s = Session::new();
+    let r = ex(&mut s, "shape.rectangle", json!({"x": 100, "y": 100, "width": 80, "height": 60}));
+    assert!(crate::cmd::edit::clipboard_svg(&s).is_none(), "nothing copied yet");
+    ex(&mut s, "vector.edit.begin", json!({"id": id_of(&r)}));
+    select(&mut s, &[], &[0, 1, 2, 3]);
+    ex(&mut s, "edit.copy", json!({}));
+    let svg = crate::cmd::edit::clipboard_svg(&s).expect("svg");
+    assert!(svg.contains("<svg") && svg.contains("<path"), "{svg}");
 }
 
 #[test]

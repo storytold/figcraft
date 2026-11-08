@@ -18,6 +18,7 @@ mod props;
 pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;
 mod vector_clipboard;
+pub use vector_clipboard::clipboard_svg;
 #[cfg(test)]
 mod vector_clipboard_tests;
 
@@ -123,21 +124,21 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.copy",
             "Copy",
-            "{ids?}  in vector edit mode with points or segments selected (and no ids): just those, the segments touching a selected point, as a new vector with the edited layer's look",
+            "{ids?}  in vector edit mode with points or segments selected (and no ids): just those, the segments touching a selected point, as a temporary vector on the clipboard (one per edited layer) with the edited layer's look, kept at its place on the page; points that touch no segment have nothing to copy, so Copy with only those is refused (Disabled). Returns {copied, segments}",
             false,
             copy
         ),
         spec!(
             "edit.cut",
             "Cut",
-            "{ids?}  in vector edit mode with points or segments selected (and no ids): copies them as Copy does, then removes them as Delete does; the path splits in the same layer and edit mode stays on",
+            "{ids?}  in vector edit mode with points or segments selected (and no ids): copies them as Copy does, then removes them as Delete does; the path splits in the same layer and edit mode stays on. Returns {cut (layers), segments}. With only lone points (nothing to copy) it is refused (Disabled) and changes nothing, as Copy is; Delete removes lone points",
             true,
             cut
         ),
         spec!(
             "edit.paste",
             "Paste",
-            "{parent?, x?, y? (page coordinates of the pasted top-left)}  in vector edit mode (and no parent): the copied vectors' segments and shapes' outlines join the edited vector's network in place, selected, and the layers that have no outline (text, frames, groups) are skipped (`skipped`); a copied main component pastes as an instance of it within its file (cut ones, and pastes into other files, keep the component)",
+            "{parent?, x?, y? (page coordinates of the pasted top-left; give both or neither, one alone is refused)}  in vector edit mode (and no parent): the copied vectors' segments and the outlines of shapes, booleans and lines join the edited vector's network (at x/y when given, else in place), their points selected, as one undo step; layers with no outline (text, images, instances, frames, groups) are skipped and named in `skipped` (present only when some were), and when none has an outline the paste is refused (Disabled), as it is past 500,000 segments in one vector. Returns {ids: [] (always empty: no layer is created), edited (the vector's id), vertices (points added), skipped?}, unlike a paste outside edit mode, which returns the new layers' `ids`; a copied main component pastes as an instance of it within its file (cut ones, and pastes into other files, keep the component)",
             true,
             paste
         ),

@@ -193,8 +193,9 @@ pub(super) fn copy(s: &mut Session, p: &Value) -> Result<Value> {
     // In vector edit mode with points or segments selected, Copy takes just those (#1875).
     if !names_layers(p)
         && let Some(sel) = vector_clipboard::edit_selection(s)
-        && !sel.parts.is_empty()
+        && sel.any
     {
+        // Only lone points selected: nothing to copy, and not the whole layer either.
         return vector_clipboard::copy_selection(s, "edit.copy", sel);
     }
     let ids = req_targets("edit.copy", s, p)?;
@@ -208,6 +209,7 @@ pub(super) fn cut(s: &mut Session, p: &Value) -> Result<Value> {
         && let Some(sel) = vector_clipboard::edit_selection(s)
         && sel.any
     {
+        // Lone points with nothing to copy: `cut_selection` refuses, as Copy does.
         return vector_clipboard::cut_selection(s, sel);
     }
     let ids = req_targets("edit.cut", s, p)?;
