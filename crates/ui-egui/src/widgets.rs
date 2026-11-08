@@ -1282,7 +1282,7 @@ pub fn checkbox(ui: &mut Ui, on: bool, label: &str) -> bool {
 pub fn checkbox_tri(ui: &mut Ui, state: Option<bool>, label: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(200.0), FIELD_H), Sense::click());
-    a11y::checkbox(&resp, label, state == Some(true));
+    a11y::checkbox_tri(&resp, label, state);
     let b = Rect::from_min_size(pos2(rect.min.x, rect.center().y - 7.0), vec2(14.0, 14.0));
     if state != Some(false) {
         ui.painter().rect_filled(b, CornerRadius::same(3), t.accent);

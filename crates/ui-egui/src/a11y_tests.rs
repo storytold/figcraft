@@ -431,3 +431,19 @@ fn the_custom_panel_edges_never_enter_the_keyboard_or_focus_order() {
     }
     assert!(!seen.contains(&left) && !seen.contains(&right), "Tab never stops on a panel edge: {seen:?}");
 }
+
+#[test]
+fn a_mixed_checkbox_is_announced_as_mixed_and_a_checked_one_as_true() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::widgets::checkbox_tri(ui, None, "Mixed one");
+        crate::widgets::checkbox_tri(ui, Some(true), "Checked one");
+        crate::widgets::checkbox_tri(ui, Some(false), "Plain one");
+    });
+    out.textures_delta.clear();
+    let nodes: Vec<Node> = out.platform_output.accesskit_update.expect("an AccessKit update").nodes.into_iter().map(|(_, n)| n).collect();
+    assert_eq!(find(&nodes, Role::CheckBox, "Mixed one").toggled(), Some(Toggled::Mixed));
+    assert_eq!(find(&nodes, Role::CheckBox, "Checked one").toggled(), Some(Toggled::True));
+    assert_eq!(find(&nodes, Role::CheckBox, "Plain one").toggled(), Some(Toggled::False));
+}
