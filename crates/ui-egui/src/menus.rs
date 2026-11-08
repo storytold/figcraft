@@ -354,6 +354,7 @@ const TOP_MENUS: &[&str] = &[
     tr_noop("Arrange"),
     tr_noop("Vector"),
     tr_noop("Plugins"),
+    tr_noop("Widgets"),
     tr_noop("Preferences"),
     tr_noop("Libraries"),
     tr_noop("Help"),

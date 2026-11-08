@@ -37,6 +37,7 @@ pub mod missing_fonts;
 pub mod plugins_ui;
 pub mod sampled_color;
 pub mod updates_ui;
+pub mod widgets_ui;
 pub mod variables_panel;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -408,6 +409,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     color_profile_dialog(app, ctx);
     crate::plugins_ui::show(app, ctx);
     memory_ui::show(app, ctx);
+    widgets_ui::show(app, ctx);
     crate::live::join_dialog(app, ctx);
     crate::live::publish_dialog(app, ctx);
     crate::online::dialogs(app, ctx);

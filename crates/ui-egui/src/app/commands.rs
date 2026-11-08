@@ -280,6 +280,7 @@ impl FigApp {
                 }
                 "dialog.plugins" => self.ui.plugins_window = true,
                 "dialog.memoryUsage" => self.ui.memory_window = true,
+                "dialog.widgets" => self.ui.widgets_window = true,
                 "dialog.pluginSave" => plugins_ui::save_file(self, &r.data),
                 "dialog.cursorChat" => live::open_chat(self),
                 "window.new" | "window.focus" | "window.fullscreen" => self.window_requests.push(r),

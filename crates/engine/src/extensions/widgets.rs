@@ -24,12 +24,12 @@ use serde_json::{Map, Value, json};
 use crate::cmd::CommandSpec;
 use crate::params::{id, num, string};
 use crate::plugins::{InstalledPlugin, call_plugin, close_panel, installed, limits, module_of, open_panel, plugin_error};
-use crate::{Result, Session, bad, spec};
+use crate::{Result, Session, bad, cmd::ok, spec};
 
 /// Layer data FigCraft keeps for widgets starts with this; plugins can't write it.
 pub const DATA_PREFIX: &str = "figcraft.widget";
 /// On a widget's own layer: its plugin's id, and its state (JSON).
-const PLUGIN: &str = "figcraft.widget";
+pub const PLUGIN: &str = "figcraft.widget";
 const STATE: &str = "figcraft.widget.state";
 /// On a widget's own layer: its property menu (JSON).
 const MENU: &str = "figcraft.widget.menu";
@@ -560,6 +560,24 @@ fn list(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({"widgets": widgets}))
 }
 
+/// Select every widget on the current page.
+fn select_all(s: &mut Session, _p: &Value) -> Result<Value> {
+    let doc = s.doc()?;
+    let page = s.page()?;
+    let ids: Vec<NodeId> = doc.ids().filter(|i| doc.page_of(*i) == Some(page) && doc.node(*i).is_some_and(is_widget)).collect();
+    s.set_selection(ids.clone());
+    if ids.is_empty() {
+        s.message = Some("No widgets on this page".into());
+    }
+    Ok(json!({"selection": ids, "count": ids.len()}))
+}
+
+/// Ask the UI to open the widgets window.
+fn manage(s: &mut Session, _p: &Value) -> Result<Value> {
+    s.request_ui("dialog.widgets", json!({}));
+    ok()
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!(
@@ -602,5 +620,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         spec!("widget.list", "List widgets", "{} → {widgets: [{id, plugin, name, page, state, targets, fields, menu}]}", false, list),
+        spec!("widgets.selectAll", "Select all widgets", "{}  the widgets on the current page; none: says so → {selection, count}", false, select_all),
+        spec!("widgets.manage", "Manage widgets…", "{} opens the widgets window", false, manage),
     ]
 }
