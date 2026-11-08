@@ -95,10 +95,12 @@ fn add_vector(doc: &Document, id: NodeId, skip: &BTreeSet<usize>, t: &mut Target
     }
 }
 
-/// The snapping that applies to a pointer event: (objects and points, the pixel grid).
+/// The snapping that applies to a pointer event: (objects and points, the pixel grid). Control
+/// held lets go of the pixel grid for the drag ("hold Control while adjusting the handle to
+/// temporarily ignore the pixel grid"); off macOS Ctrl is also ⌘, so it lets go of both.
 pub(crate) fn modes(s: &Session, ev: &PointerEvent) -> (bool, bool) {
     let (objects, pixel) = s.ds().map(|d| (d.view.snap_objects, d.view.snap_pixel)).unwrap_or((true, true));
-    (objects && !ev.cmd, pixel)
+    (objects && !ev.cmd, pixel && !ev.ctrl)
 }
 
 /// The correction that snaps page points `pts` (already moved by the pointer) together, and the

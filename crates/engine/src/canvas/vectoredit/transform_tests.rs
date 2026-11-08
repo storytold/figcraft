@@ -256,6 +256,30 @@ fn ctrl_suppresses_snapping_and_the_pixel_grid_rounds() {
     assert!(near(page_pt(&s, id, v), pt(318.4, 62.3)), "{:?}", page_pt(&s, id, v));
 }
 
+/// Control lets go of the pixel grid while a point or handle is dragged, for that drag only.
+#[test]
+fn control_lets_go_of_the_pixel_grid() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    let v = vertex_at(&net(&s, id), 100.0, 100.0);
+    ex(&mut s, "view.snapObjects", json!({"on": false}));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [v]}));
+    let ctrl = |kind, x, y| {
+        let mut e = ev(kind, x, y);
+        e.ctrl = true;
+        e
+    };
+    s.pointer(&ev(PointerKind::Down, 100.0, 100.0)).unwrap();
+    s.pointer(&ctrl(PointerKind::Move, 318.4, 62.3)).unwrap();
+    s.pointer(&ctrl(PointerKind::Up, 318.4, 62.3)).unwrap();
+    assert!(near(page_pt(&s, id, v), pt(318.4, 62.3)), "off the grid: {:?}", page_pt(&s, id, v));
+    // Without it the grid rounds again.
+    s.undo().unwrap();
+    ex(&mut s, "vector.edit.select", json!({"vertices": [v]}));
+    drag(&mut s, (100.0, 100.0), (318.4, 62.3));
+    assert!(near(page_pt(&s, id, v), pt(318.0, 62.0)), "whole pixels: {:?}", page_pt(&s, id, v));
+}
+
 #[test]
 fn handles_follow_the_pointer_while_the_vector_refits() {
     // The preview re-fits the vector (its origin moves as the curve grows up and left); the handle
