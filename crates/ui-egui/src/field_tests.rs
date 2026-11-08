@@ -189,7 +189,7 @@ fn setup() -> (Ui, NodeId, NodeId) {
 
 /// The topmost field named `name` in the Design panel: its value centre and displayed text.
 /// Layer opacity precedes the equally named opacity fields in paint rows.
-fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
+pub(crate) fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
@@ -252,7 +252,7 @@ fn click(u: &mut Ui, p: Pos2) {
 }
 
 /// Click into field `name`, type `text` over what it shows and press `end`.
-fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
+pub(crate) fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
     let (p, _) = field(u, name);
     click(u, p);
     u.frame(vec![Event::Text(text.into())]);

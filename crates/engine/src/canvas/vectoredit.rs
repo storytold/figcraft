@@ -10,6 +10,8 @@
 pub mod ops;
 pub(crate) mod point_snap;
 mod pointer;
+#[cfg(test)]
+mod position_tests;
 pub mod regions;
 #[cfg(test)]
 mod regions_tests;
@@ -706,6 +708,60 @@ fn handle_list(p: &Value, key: &str) -> Option<Vec<(usize, bool)>> {
     }
 }
 
+/// One axis of `vector.edit.position`: left alone, set, or relative to each point's own value.
+#[derive(Clone, Copy)]
+enum AxisEdit {
+    Keep,
+    Set(f64),
+    Add(f64),
+    Mul(f64),
+    Div(f64),
+}
+
+impl AxisEdit {
+    fn apply(self, cur: f64) -> Result<f64> {
+        let v = match self {
+            AxisEdit::Keep => cur,
+            AxisEdit::Set(v) => v,
+            AxisEdit::Add(n) => cur + n,
+            AxisEdit::Mul(n) => cur * n,
+            AxisEdit::Div(n) if n != 0.0 => cur / n,
+            AxisEdit::Div(_) => return Err(bad("vector.edit.position", "cannot divide by zero")),
+        };
+        if v.is_finite() { Ok(v) } else { Err(bad("vector.edit.position", "the result is not a number")) }
+    }
+}
+
+/// Parse `p[key]`: absent is `Keep`, a number is `Set`, `{add|mul|div: n}` is relative; anything else is refused.
+fn axis_edit(p: &Value, key: &str) -> Result<AxisEdit> {
+    let junk = || bad("vector.edit.position", format!("`{key}` must be a number or {{add|mul|div: number}}"));
+    match get(p, key) {
+        None => Ok(AxisEdit::Keep),
+        Some(Value::Object(o)) => {
+            let (Some((k, v)), 1) = (o.iter().next(), o.len()) else { return Err(junk()) };
+            let n = match v {
+                Value::Number(n) => n.as_f64().filter(|n| n.is_finite()),
+                _ => None,
+            }
+            .ok_or_else(junk)?;
+            match k.as_str() {
+                "add" => Ok(AxisEdit::Add(n)),
+                "mul" => Ok(AxisEdit::Mul(n)),
+                "div" if n != 0.0 => Ok(AxisEdit::Div(n)),
+                _ => Err(junk()),
+            }
+        }
+        Some(v) => f64_of(v).filter(|_| !v.is_boolean()).map(AxisEdit::Set).ok_or_else(junk),
+    }
+}
+
+/// The selected points in the parent's coordinates (what the X/Y fields show).
+pub fn selected_parent_points(doc: &Document, ve: &VectorEdit) -> Vec<Point> {
+    let Some(net) = network(doc, ve.id) else { return Vec::new() };
+    let t = doc.node(ve.id).map(|n| n.transform).unwrap_or_default();
+    selected_points(net, ve).into_iter().filter_map(|v| net.vertices.get(v)).map(|v| t * v.point()).collect()
+}
+
 /// Selection bounds' top-left in the parent's coordinates (what the X/Y fields show).
 pub fn selection_position(doc: &Document, ve: &VectorEdit) -> Option<Point> {
     let net = network(doc, ve.id)?;
@@ -935,18 +991,40 @@ pub fn specs() -> Vec<CommandSpec> {
             edit_sets(s, sets, |net, v, w| ops::move_vertices(net, v, local_offset(w, d)))?;
             Ok(json!({"ok": true}))
         }),
-        spec!("vector.edit.position", "Point position", "{x?, y?} (the selected points' top-left, in the parent's coordinates)", true, |s, p| {
-            let ve = editing(s)?;
-            let doc = s.doc()?;
-            let cur = selection_position(doc, &ve).ok_or_else(|| bad("vector.edit.position", "select points"))?;
-            let target = Point::new(num_or(p, "x", cur.x), num_or(p, "y", cur.y));
-            let t = doc.node(ve.id).map(|n| n.transform).unwrap_or_default();
-            let inv = t.inverse();
-            let d = inv * target - inv * cur;
-            let v = network(doc, ve.id).map(|n| selected_points(n, &ve)).unwrap_or_default();
-            edit(s.doc_mut()?, ve.id, |net| ops::move_vertices(net, &v, d))?;
-            Ok(json!({"ok": true}))
-        }),
+        spec!(
+            "vector.edit.position",
+            "Point position",
+            "{x?, y?}: each a number (every selected point's own coordinate becomes it) or {add: n}, {mul: n} or {div: n} (applied to each selected point's own coordinate); in the parent's coordinates",
+            true,
+            |s, p| {
+                let ve = editing(s)?;
+                let doc = s.doc()?;
+                let (ax, ay) = (axis_edit(p, "x")?, axis_edit(p, "y")?);
+                let t = doc.node(ve.id).map(|n| n.transform).unwrap_or_default();
+                let inv = t.inverse();
+                let net = network(doc, ve.id).ok_or_else(|| bad("vector.edit.position", "select points"))?;
+                let mut moves: Vec<(usize, Vec2)> = Vec::new();
+                for i in selected_points(net, &ve) {
+                    let Some(v) = net.vertices.get(i) else { continue };
+                    let cur = t * v.point();
+                    let target = Point::new(ax.apply(cur.x)?, ay.apply(cur.y)?);
+                    let d = inv * target - v.point();
+                    if !(d.x.is_finite() && d.y.is_finite()) {
+                        return Err(bad("vector.edit.position", "the result is not a number"));
+                    }
+                    moves.push((i, d));
+                }
+                if moves.is_empty() {
+                    return Err(bad("vector.edit.position", "select points"));
+                }
+                edit(s.doc_mut()?, ve.id, |net| {
+                    for (i, d) in &moves {
+                        ops::move_vertices(net, &[*i], *d);
+                    }
+                })?;
+                Ok(json!({"ok": true}))
+            }
+        ),
         spec!("vector.edit.setHandle", "Set handle", "{segment, start (bool), x, y (local), independent?}", true, |s, p| {
             let ve = editing(s)?;
             let seg = index("vector.edit.setHandle", p, "segment")?;
