@@ -29,6 +29,8 @@ pub struct ViewState {
     pub pixel_scale: u8,
     pub show_slices: bool,
     pub comments: bool,
+    /// The Dev Mode annotation callouts beside their layers (View ▸ Annotations).
+    pub annotations_visible: bool,
     /// Others' cursors in a live session (View ▸ Multiplayer cursors).
     pub multiplayer_cursors: bool,
     pub frame_outlines: bool,
@@ -63,6 +65,7 @@ impl Default for ViewState {
             pixel_scale: 1,
             show_slices: false,
             comments: true,
+            annotations_visible: true,
             multiplayer_cursors: true,
             frame_outlines: false,
             proof_srgb: false,

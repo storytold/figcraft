@@ -139,6 +139,11 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         return;
     }
     let Ok(ds) = app.session.ds() else { return };
+    // View ▸ Annotations: hidden means the callouts don't draw; the Inspect panel's
+    // per-layer editor stays.
+    if !ds.view.annotations_visible {
+        return;
+    }
     let key = (ds.uid, ds.revision, ds.page);
     if app.ui.dev.annotated_key != Some(key) {
         app.ui.dev.annotated = annotations::on_page(&ds.doc, ds.page);

@@ -752,6 +752,7 @@ fn view_toggles_are_kept_for_the_next_launch() {
         ("view.pixelGrid", false, |v| v.pixel_grid, "a hidden pixel grid stays hidden"),
         ("view.layoutGrids", false, |v| v.layout_grids, "hidden layout grids stay hidden"),
         ("view.snapPixel", false, |v| v.snap_pixel, "snapping to the pixel grid off stays off"),
+        ("view.annotations", false, |v| v.annotations_visible, "hidden annotation callouts stay hidden"),
     ];
     for (cmd, on, _, _) in &rows {
         ex(&mut s, cmd, json!({"on": on}));
@@ -770,4 +771,19 @@ fn view_toggles_are_kept_for_the_next_launch() {
         assert_eq!(get(view), on, "{cmd}: {why}");
     }
     assert!(!view.outlines && !view.outlines_selection && !view.proof_srgb, "{view:?}");
+}
+
+#[test]
+fn annotations_toggle_defaults_on_and_reports() {
+    let mut s = Session::new();
+    assert_eq!(crate::cmd::view::checked(&s, "view.annotations"), Some(true), "callouts show by default");
+    let r = ex(&mut s, "view.annotations", json!({"on": false}));
+    assert_eq!(r["on"], false);
+    assert_eq!(crate::cmd::view::checked(&s, "view.annotations"), Some(false));
+    // Toggling without `on` flips.
+    let r = ex(&mut s, "view.annotations", json!({}));
+    assert_eq!(r["on"], true);
+    assert_eq!(crate::cmd::view::checked(&s, "view.annotations"), Some(true));
+    // The Inspect tab's own visibility is not a View-menu command.
+    assert_eq!(crate::cmd::view::checked(&s, "file.save"), None);
 }

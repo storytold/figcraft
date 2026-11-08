@@ -33,6 +33,7 @@ const TOGGLES: &[(&str, Slot, bool)] = &[
     ("view.rulers", |v| &mut v.rulers, true),
     ("view.slices", |v| &mut v.show_slices, true),
     ("view.comments", |v| &mut v.comments, true),
+    ("view.annotations", |v| &mut v.annotations_visible, true),
     ("view.multiplayerCursors", |v| &mut v.multiplayer_cursors, true),
     ("view.outlines", |v| &mut v.outlines, false),
     ("view.outlinesSelection", |v| &mut v.outlines_selection, false),
@@ -295,6 +296,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.rulers", "Rulers", "{on?}", false, |s, p| toggle(s, p, "view.rulers")),
         spec!("view.slices", "Slices", "{on?}", false, |s, p| toggle(s, p, "view.slices")),
         spec!("view.comments", "Comments", "{on?}", false, |s, p| toggle(s, p, "view.comments")),
+        spec!("view.annotations", "Annotations", "{on?}", false, |s, p| toggle(s, p, "view.annotations")),
         spec!("view.multiplayerCursors", "Multiplayer cursors", "{on?}  others' cursors in a live session", false, |s, p| {
             toggle(s, p, "view.multiplayerCursors")
         }),
