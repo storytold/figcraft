@@ -746,7 +746,8 @@ impl FontDb {
             Ok(FileRef::Font(_)) => 1,
             Err(_) => 0,
         };
-        (0..count).filter_map(|i| Face::from_bytes(FontBytes::Shared(shared.clone()), i, None, None))
+        (0..count)
+            .filter_map(|i| Face::from_bytes(FontBytes::Shared(shared.clone()), i, None, None))
             .map(|f| if loaded { self.add_loaded(f) } else { self.add(f) })
             .collect()
     }
