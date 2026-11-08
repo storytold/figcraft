@@ -1000,3 +1000,38 @@ fn deleting_a_layer_inside_an_instance_hides_it_instead() {
     s.execute("edit.delete", &json!({"ids": [k.inst]})).unwrap();
     assert!(s.doc().unwrap().node(k.inst).is_none());
 }
+
+/// Issue 2090 item 2: after a main's child is set to fill, the instance's copy must match the main's
+/// child (sizing, size) and the copy's parent must match the main's parent sizing. Relative, not
+/// absolute, so it holds whatever the cross-axis rule is.
+fn fill_matches_main(horizontal: bool, axis: &str) {
+    let mut s = Session::new();
+    let (mode, hug_axis) = if horizontal { ("horizontal", "sizingV") } else { ("vertical", "sizingH") };
+    let comp = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 60, "name": "Note"})));
+    let bar = idv(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 3, "height": 20, "parent": comp, "props": {"name": "Bar"}})));
+    ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 40, "parent": comp, "props": {"name": "Body"}}));
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"layout": mode, "gap": 12, "padding": 10, hug_axis: "hug"}}));
+    let comp = idv(&ex(&mut s, "component.create", json!({"ids": [comp]})));
+    let inst = idv(&ex(&mut s, "instance.create", json!({"component": comp, "x": 400, "y": 0})));
+    let bar = if node(&s, bar).parent.is_some() { bar } else { kids(&s, comp)[0] };
+    ex(&mut s, "node.set", json!({"id": bar, "props": {axis: "fill"}}));
+    let ibar = copy_of(&s, inst, bar);
+    let (m, c) = (node(&s, bar), node(&s, ibar));
+    let (mp, cp) = (node(&s, comp), node(&s, inst));
+    eprintln!("{axis}: main bar {}x{} sizing {:?}/{:?}; copy {}x{} sizing {:?}/{:?}; main parent {}x{} {:?}/{:?}; inst {}x{} {:?}/{:?}",
+        m.width, m.height, m.child_layout.sizing_h, m.child_layout.sizing_v, c.width, c.height, c.child_layout.sizing_h, c.child_layout.sizing_v,
+        mp.width, mp.height, mp.child_layout.sizing_h, mp.child_layout.sizing_v, cp.width, cp.height, cp.child_layout.sizing_h, cp.child_layout.sizing_v);
+    assert_eq!((c.child_layout.sizing_h, c.child_layout.sizing_v), (m.child_layout.sizing_h, m.child_layout.sizing_v), "copy sizing");
+    assert_eq!((c.width, c.height), (m.width, m.height), "copy size matches main child");
+    assert_eq!((cp.child_layout.sizing_h, cp.child_layout.sizing_v), (mp.child_layout.sizing_h, mp.child_layout.sizing_v), "parent sizing matches main parent");
+}
+
+#[test]
+fn instance_follows_main_child_fill_on_the_cross_axis() {
+    fill_matches_main(true, "sizingV");
+}
+
+#[test]
+fn instance_follows_main_child_fill_on_the_main_axis() {
+    fill_matches_main(true, "sizingH");
+}
