@@ -27,7 +27,7 @@ fn installed() -> Option<String> {
 fn lists_families_of_layers_ranges_styles_and_variables_once_each() {
     let mut s = Session::new();
     text(&mut s, "ClawDesign Missing A");
-    let b = text(&mut s, "figcraft missing a");
+    let b = text(&mut s, "clawdesign missing a");
     if let NodeKind::Text(t) = &mut s.doc_mut().unwrap().get_mut(b).unwrap().kind {
         let style = TextStyle { font_family: "ClawDesign Missing B".into(), ..t.style.clone() };
         t.runs.push(StyleRun { start: 0, end: 3, style });
@@ -183,7 +183,7 @@ fn refit_measures_stale_text_boxes_again() {
     s.doc_mut().unwrap().get_mut(fixed).unwrap().width = 7.0;
     s.doc_mut().unwrap().take_dirty();
     // Only the families asked for.
-    let only_a = super::refit(s.doc_mut().unwrap(), None, Some(&["figcraft refit a".to_string()]));
+    let only_a = super::refit(s.doc_mut().unwrap(), None, Some(&["clawdesign refit a".to_string()]));
     assert_eq!(only_a, vec![a]);
     assert_eq!(width(&s, a), want_a);
     assert_eq!(width(&s, b), want_b + 25.0);

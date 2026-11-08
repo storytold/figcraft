@@ -27,9 +27,18 @@ pub struct Desktop {
     last_folder: Arc<Mutex<Option<PathBuf>>>,
 }
 
-/// The settings folder's name in the platform folder, as it always was (the suite keeps existing
-/// folder names), and craft-settings' app id: `FIGCRAFT_CONFIG_DIR` names another folder.
+/// The settings folder's name in the platform folder, and craft-settings' app id:
+/// `CLAWDESIGN_CONFIG_DIR` names another folder.
 const APP_ID: &str = "ClawDesign";
+
+/// The settings folder's name before the ClawDesign rename (2026-11-07). A first start under the
+/// new name copies it ([`carry_over`]), so the preferences, recovery copies and installed plugins
+/// aren't lost; the old folder is left as it was.
+const OLD_APP_ID: &str = "FigCraft";
+
+/// At most this many files and folders are copied from the old folder, this many levels down.
+const CARRY_OVER_ENTRIES: usize = 20_000;
+const CARRY_OVER_DEPTH: usize = 16;
 
 /// Where the preferences, recovery copies and installed plugins live ([`settings_dir`]).
 pub fn config_dir() -> Option<PathBuf> {
@@ -49,16 +58,22 @@ fn platform_dir() -> Option<PathBuf> {
 }
 
 /// The settings folder by the suite's rules (craft-settings), from what `probe` sees:
-/// `FIGCRAFT_CONFIG_DIR` (set but empty: none, nothing read or written); a `portable` file next
+/// `CLAWDESIGN_CONFIG_DIR` (set but empty: none, nothing read or written); a `portable` file next
 /// to the executable (next to the `.app` on macOS), which puts them in `config/` beside it; else
-/// `FigCraft` in the platform folder, where they always were. A portable folder without
-/// preferences yet starts with a copy of the platform folder's, so an existing copy that becomes
-/// portable keeps its settings; the original stays for an installed app. No platform folder: none.
+/// `ClawDesign` in the platform folder, which starts as a copy of the `FigCraft` folder earlier
+/// versions used. A portable folder without preferences yet starts with a copy of the platform
+/// folder's (either name), so an existing copy that becomes portable keeps its settings; the
+/// original stays for an installed app. No platform folder: none.
 pub(crate) fn settings_dir(probe: &craft_settings::Probe) -> Option<PathBuf> {
     use craft_settings::{Location, Portable, Rule};
     let resolved = craft_settings::paths::resolve(APP_ID, &Portable::DEFAULT, &Location::Auto, probe);
     match (&resolved.rule, &resolved.dir, &probe.platform_config_dir) {
-        (Rule::Portable, Some(dir), Some(platform)) => seed(dir, &platform.join(APP_ID)),
+        (Rule::Portable, Some(dir), Some(platform)) => {
+            let current = platform.join(APP_ID);
+            let from = if current.join(STATE).is_file() { current } else { platform.join(OLD_APP_ID) };
+            seed(dir, &from);
+        }
+        (Rule::Platform, Some(dir), Some(platform)) => carry_over(&platform.join(OLD_APP_ID), dir),
         // The current directory instead: settings would follow wherever the app was started.
         (Rule::Fallback, ..) => return None,
         _ => {}
@@ -77,6 +92,39 @@ fn seed(to: &Path, from: &Path) {
         Ok(()) => log::info!("preferences: copied {} into the portable folder {}", source.display(), to.display()),
         Err(e) => log::warn!("preferences: couldn't copy them into the portable folder {}: {e}", to.display()),
     }
+}
+
+/// Copy the settings folder `from` (the old name's) to `to` when `to` doesn't exist yet: files
+/// keep their permissions, links are skipped, and the copy stops at [`CARRY_OVER_ENTRIES`] and
+/// [`CARRY_OVER_DEPTH`] so a strange folder can't stall the start. `from` is never changed.
+fn carry_over(from: &Path, to: &Path) {
+    if to.exists() || !from.is_dir() {
+        return;
+    }
+    let mut budget = CARRY_OVER_ENTRIES;
+    match copy_tree(from, to, CARRY_OVER_DEPTH, &mut budget) {
+        Ok(()) => log::info!("settings: copied {} to {}", from.display(), to.display()),
+        Err(e) => log::warn!("settings: couldn't copy {} to {}: {e}", from.display(), to.display()),
+    }
+}
+
+fn copy_tree(from: &Path, to: &Path, depth: usize, budget: &mut usize) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        if *budget == 0 {
+            return Err(std::io::Error::other("too many files; the rest were left behind"));
+        }
+        *budget -= 1;
+        let kind = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if kind.is_dir() && depth > 0 {
+            copy_tree(&entry.path(), &target, depth - 1, budget)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }
 
 impl Desktop {
