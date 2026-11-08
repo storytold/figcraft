@@ -58,7 +58,9 @@ multiplicative discounts.
   [`gaps.md`](gaps.md#28-build-this-with-code): the incumbent's growth since the measure is in
   AI/code layers (gap 19/28), not the core editor; the menu catalog rows 126.11.8 added
   (distribute by edges, split vector, annotations toggle, interface scale, memory usage, widgets,
-  spell check) all have commands (229/229, `cargo xtask parity`).
+  spell check) all have commands (229/229, `cargo xtask parity`). The 2026-11-09 cross-compare
+  found 13 more 126.11.8 menu items with no command and 3 partial, not yet catalog rows
+  ([gaps 25](gaps.md#25-desktop-shell-tail)).
 - **The installed app, names and public listings only.** FigCraft is clean-room
   ([`AGENTS.md`](../AGENTS.md)): nothing inside the bundle's code or web assets was read. From
   `Info.plist`: one document type, `com.figma.document`, extensions `fig`, `jam`, `deck`

@@ -569,6 +569,13 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Missing:** Figma AI (first draft, rename layers, remove background, image generation and
   editing, visual search, Make), and Edit ▸ AutoFill (fills selected text and image placeholders
   with generated content; recorded black-box 2026-11-08 from the menu).
+- **Recorded (2026-11-09, public release notes since 2026-10-10):** the agent connects to Google
+  Drive (2026-10-30), draws editable, grouped vector illustrations and icons (2026-11-05), and
+  publishes custom Weave tools inside an organisation (2026-10-30); generative plugins and shaders
+  keep a version history with agent-written descriptions (2026-10-27); the Select area tool picks
+  image objects by itself (2026-11-06, macOS desktop). The 126.11.8 editor opens on an Agents
+  chat panel in the left rail (Explore examples, Generate designs, Build with code, Create plugins
+  and shaders).
 - **Estimate:** 30–60 h with openly licensed local models. **Owner decision needed.**
 
 ### 20. Mobile apps
@@ -614,6 +621,18 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Estimate:** 20–44 h.
 
 ### 25. Desktop shell tail
+- **Cross-compared (2026-11-09, the black-box 126.11.8 menu capture against `catalog.rs` and the
+  registered commands):** menu items with no FigCraft command — File ▸ Open file URL from
+  clipboard, Reopen closed tab or window, Recently closed; View ▸ Minimize left navigation bar
+  (View ▸ Minimize UI collapses it with the sidebars), Always show tabs when presenting; Object ▸
+  Delete contents (behaviour not yet observed); Figma ▸ Check for updates…; Help ▸ Release notes,
+  Video tutorials, Support forum, Legal summary, Troubleshooting, Account settings, Log out. Partly:
+  File ▸ Save local copy… (Save as writes a `.fig` copy), View ▸ Interface scale (no percent
+  presets), Widgets ▸ Development. Edit ▸ AutoFill is gap 19, Object ▸ Build This with Code gap 28.
+  Present under other ids: new tab (`file.new`), next/previous tab (`doc.nextTab`), open file
+  browser (`doc.home`), Minimize UI (`view.minimize`), Switch to Dev Mode (`view.devMode`), Slots
+  (`component.makeSlot`), Offset vector (`vector.offset`). These rows aren't in `catalog.rs` yet,
+  so `cargo xtask parity`'s 229/229 doesn't count them (see the ROADMAP's menu breadth).
 - **Landed (2026-11-08, from the black-box 126.11.8 capture):** View ▸ Interface scale (larger,
   smaller, default — the percent presets remain) and the spell-check underline (gap 11).
 - **Recorded (2026-11-08, static):** the incumbent's desktop shell 126.11.8 offers, with labels
@@ -664,6 +683,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   every release note of the week landed here.
 - **Estimate:** 30–60 h with gap 19's openly licensed local models (code generation is a model
   feature); the shader runtime and export are the separable first slice.
+- **Recorded (2026-11-03, release notes):** a new GitHub connection clones its repositories into
+  Figma by default, the source a code layer builds from (with a prompt or a local folder).
 - **Provenance:** public release notes and a black-box pass over the running desktop 126.11.8
   (menus, toolbar and onboarding captures under `plan/figma/`).
 
@@ -671,6 +692,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Cross-compare against the 126.11.8 menu capture and the release notes since 2026-10-10: entry 25 lists the 13 menu items with no command and 3 partial ones (not yet catalog rows, so outside parity's 229/229); entry 19 gains the agent's Drive connector, vector generation, Weave tools, generative-plugin versions and image Select area; entry 28 the GitHub clone default. No measured numbers moved |
 | 2026-11-08 | minor | From the black-box 126.11.8 capture (menu catalog and editor UI, `plan/figma/`): landed the six distribute-by-edge commands, `vector.split`, View ▸ Annotations, View ▸ Interface scale (larger/smaller/default), View ▸ Memory usage…, the Widgets menu (Manage widgets…, Select all widgets) and Text ▸ Spell check (system word list); row 28 added for Build This with Code (code layers + shaders); gap 19 names Edit ▸ AutoFill; entries 11 and 25 updated. Menu breadth 229/229 with every new row commanded (`cargo xtask parity`). Measured breadth numbers unchanged; gap 11's estimate 4–8 h → 6–10 h for the suggestion tail |
 | 2026-11-08 | minor | Rows 25–27 added (desktop shell tail; Make Local and the code sandbox; voice calls) and entries 2, 7, 11, 16 and 18 extended, from an owner-authorized static inspection of the incumbent desktop shell 126.11.8 (bundle analysis, not the sanctioned black-box pass; black-box confirmation pending before implementation work). No measured numbers moved |
 | 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`) draft catalog: 1,975 UI strings, 641 command labels and 31 menu wordings, clean-room from the English source; zh-TW, zh-HK, zh-MO and zh-Hant read it, explicit Hans stays Simplified; Noto Sans CJK TC then Taiwan system faces; no bundled font; native review pending. Numbers unchanged |
