@@ -51,6 +51,11 @@ pub static MENU: &[MenuItem] = &[
     m!("File", "Revert to saved", "file.revert"),
     m!("File", "Close tab", "file.close"),
     m!("File", "Open recent", "file.openRecent"),
+    // In the 126.11.8 menus (black-box capture, 2026-11-08), no command yet (gap 25).
+    m!("File", "Open file URL from clipboard", "file.openUrlFromClipboard"),
+    m!("File", "Reopen closed tab or window", "file.reopenClosed"),
+    m!("File", "Recently closed", "file.recentlyClosed"),
+    m!("File", "Save local copy…", "file.saveLocalCopy"),
     // Edit
     m!("Edit", "Undo", "edit.undo"),
     m!("Edit", "Redo", "edit.redo"),
@@ -106,6 +111,9 @@ pub static MENU: &[MenuItem] = &[
     m!("View", "Soft-proof sRGB", "view.proofSrgb"),
     m!("View", SEP, ""),
     m!("View/Panels", "Show/Hide UI", "view.toggleUi"),
+    m!("View/Panels", "Minimize UI", "view.minimize"),
+    m!("View/Panels", "Minimize left navigation bar", "view.minimizeLeftNav"),
+    m!("View", "Always show tabs when presenting", "view.alwaysShowTabs"),
     // FigCraft's own: the window fills the screen (F11), for setups that hide the taskbar then.
     m!("View", "Full screen", "view.fullscreen"),
     m!("View/Panels", "Reset panel widths", "view.panelWidths"),
@@ -188,6 +196,7 @@ pub static MENU: &[MenuItem] = &[
     m!("Object", "Remove fill", "object.removeFill"),
     m!("Object", "Remove stroke", "object.removeStroke"),
     m!("Object", "Swap fill and stroke", "object.swapFillStroke"),
+    m!("Object", "Delete contents", "object.deleteContents"),
     m!("Object", SEP, ""),
     m!("Object", "Rename", "object.rename"),
     m!("Object", "Batch rename…", "object.batchRename"),
@@ -288,6 +297,15 @@ pub static MENU: &[MenuItem] = &[
     m!("Help", "Keyboard shortcuts", "help.shortcuts"),
     m!("Help", "Help page", "help.page"),
     m!("Help", "About ClawDesign", "help.about"),
+    // In the 126.11.8 menus, no command yet (gap 25).
+    m!("Help", "Release notes", "help.releaseNotes"),
+    m!("Help", "Video tutorials", "help.videoTutorials"),
+    m!("Help", "Support forum", "help.supportForum"),
+    m!("Help", "Legal summary", "help.legalSummary"),
+    m!("Help", "Troubleshooting", "help.troubleshooting"),
+    m!("Help", "Account settings", "account.settings"),
+    m!("Help", "Log out", "account.logout"),
+    m!("Help", "Check for updates…", "app.checkUpdates"),
     // Toolbar
     m!("Tools", "Move", "tool.move"),
     m!("Tools", "Scale", "tool.scale"),

@@ -631,8 +631,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   presets), Widgets ▸ Development. Edit ▸ AutoFill is gap 19, Object ▸ Build This with Code gap 28.
   Present under other ids: new tab (`file.new`), next/previous tab (`doc.nextTab`), open file
   browser (`doc.home`), Minimize UI (`view.minimize`), Switch to Dev Mode (`view.devMode`), Slots
-  (`component.makeSlot`), Offset vector (`vector.offset`). These rows aren't in `catalog.rs` yet,
-  so `cargo xtask parity`'s 229/229 doesn't count them (see the ROADMAP's menu breadth).
+  (`component.makeSlot`), Offset vector (`vector.offset`). Catalogued 2026-11-09: menu breadth
+  230/245 (`cargo xtask parity`); Minimize UI counts now, the 15 others are missing.
 - **Landed (2026-11-08, from the black-box 126.11.8 capture):** View ▸ Interface scale (larger,
   smaller, default — the percent presets remain) and the spell-check underline (gap 11).
 - **Recorded (2026-11-08, static):** the incumbent's desktop shell 126.11.8 offers, with labels
@@ -692,6 +692,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | The 126.11.8 rows added to `catalog.rs` (greyed in the menus until commanded): menu breadth measured 230/245 (93.9%), down from 229/229 |
 | 2026-11-09 | minor | Cross-compare against the 126.11.8 menu capture and the release notes since 2026-10-10: entry 25 lists the 13 menu items with no command and 3 partial ones (not yet catalog rows, so outside parity's 229/229); entry 19 gains the agent's Drive connector, vector generation, Weave tools, generative-plugin versions and image Select area; entry 28 the GitHub clone default. No measured numbers moved |
 | 2026-11-08 | minor | From the black-box 126.11.8 capture (menu catalog and editor UI, `plan/figma/`): landed the six distribute-by-edge commands, `vector.split`, View ▸ Annotations, View ▸ Interface scale (larger/smaller/default), View ▸ Memory usage…, the Widgets menu (Manage widgets…, Select all widgets) and Text ▸ Spell check (system word list); row 28 added for Build This with Code (code layers + shaders); gap 19 names Edit ▸ AutoFill; entries 11 and 25 updated. Menu breadth 229/229 with every new row commanded (`cargo xtask parity`). Measured breadth numbers unchanged; gap 11's estimate 4–8 h → 6–10 h for the suggestion tail |
 | 2026-11-08 | minor | Rows 25–27 added (desktop shell tail; Make Local and the code sandbox; voice calls) and entries 2, 7, 11, 16 and 18 extended, from an owner-authorized static inspection of the incumbent desktop shell 126.11.8 (bundle analysis, not the sanctioned black-box pass; black-box confirmation pending before implementation work). No measured numbers moved |

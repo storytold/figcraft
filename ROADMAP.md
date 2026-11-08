@@ -13,7 +13,7 @@ start with [`docs/gaps.md`](docs/gaps.md).
 
 | | Value | Kind |
 |---|---|---|
-| Menu/command breadth | **100%** (229 / 229) of the catalog; ~93% of the 126.11.8 menus (13 items without a command, 3 partial, [gap 25](docs/gaps.md#25-desktop-shell-tail)) | measured, [`docs/parity-checklist.md`](docs/parity-checklist.md) (`cargo xtask parity`); the 126.11.8 rows aren't catalogued yet |
+| Menu/command breadth | **94%** (230 / 245, the 126.11.8 menus) | measured, [`docs/parity-checklist.md`](docs/parity-checklist.md) (`cargo xtask parity`); the 15 missing are [gap 25](docs/gaps.md#25-desktop-shell-tail) |
 | Feature breadth | **~85%** (core editor ~94%) | estimated, [`docs/target-app-parity.md`](docs/target-app-parity.md) |
 | Ready for real work | **~53%** | estimated, same doc (written dimension weights and scores) |
 | Essentials user | **~59%** | estimated: core features 77.8% × 0.92 launch/stability × 0.94 discoverability × 0.88 opening files people send ([method](docs/target-app-parity.md#essentials-user)) |
