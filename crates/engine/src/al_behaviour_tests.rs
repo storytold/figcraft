@@ -126,6 +126,33 @@ fn fill_along_a_hugging_parent_notes_that_the_width_is_fixed() {
 }
 
 #[test]
+fn hugging_a_row_notes_the_child_that_filled_its_width_turned_fixed() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "fixed", "sizingV": "fixed"}));
+    let a = rect(&mut s, f, 50.0, 20.0, "#FF0000");
+    rect(&mut s, f, 30.0, 40.0, "#0000FF");
+    set(&mut s, a, json!({"sizingH": "fill"}));
+    assert_eq!(sizing(&s, a).0, Sizing::Fill);
+    s.message = None;
+    set(&mut s, f, json!({"sizingH": "hug"}));
+    assert_eq!(sizing(&s, a).0, Sizing::Fixed);
+    assert_eq!(s.message, Some(format!("Width set to Fixed for {}", name_of(&s, a))));
+}
+
+#[test]
+fn hugging_a_row_keeps_and_does_not_note_the_child_that_fills_across_it() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "fixed", "sizingV": "fixed"}));
+    let a = rect(&mut s, f, 50.0, 20.0, "#FF0000");
+    rect(&mut s, f, 30.0, 40.0, "#0000FF");
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    s.message = None;
+    set(&mut s, f, json!({"sizingV": "hug"}));
+    assert_eq!(sizing(&s, a).1, Sizing::Fill);
+    assert_eq!(s.message, None);
+}
+
+#[test]
 fn a_fill_childs_min_counts_toward_the_hugging_size() {
     let mut s = Session::new();
     let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));

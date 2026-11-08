@@ -1522,8 +1522,28 @@ pub(crate) fn hugging_parents(doc: &Document, ids: &[NodeId], props: &Map<String
     out
 }
 
-/// The notice for the parents of [`hugging_parents`] that the edit turned Fixed ("Height set to
-/// Fixed for Frame 1"), `None` when every one kept hugging.
+/// The children, as (child, horizontal), that fill an axis of a frame in `ids` which `props` sets
+/// to Hug: taken before the edit, for [`fixed_notice`] (the coherence pass turns them Fixed).
+pub(crate) fn filling_children(doc: &Document, ids: &[NodeId], props: &Map<String, Value>) -> Vec<(NodeId, bool)> {
+    let mut out = Vec::new();
+    for (horizontal, keys) in [(true, ["sizingH", "layoutSizingHorizontal"]), (false, ["sizingV", "layoutSizingVertical"])] {
+        if !keys.iter().any(|k| props.get(*k).and_then(sizing) == Some(Sizing::Hug)) {
+            continue;
+        }
+        for f in ids.iter().filter_map(|i| doc.node(*i)).filter(|n| n.layout.is_some() && n.kind.is_frame_like()) {
+            for c in f.children.iter().filter_map(|c| doc.node(*c)) {
+                let fills = (if horizontal { c.child_layout.sizing_h } else { c.child_layout.sizing_v }) == Sizing::Fill;
+                if fills && !out.contains(&(c.id, horizontal)) {
+                    out.push((c.id, horizontal));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The notice for the layers of [`hugging_parents`] or [`filling_children`] that the edit turned
+/// Fixed ("Height set to Fixed for Frame 1"), `None` when every one kept its sizing.
 pub(crate) fn fixed_notice(doc: &Document, before: &[(NodeId, bool)]) -> Option<String> {
     let notes: Vec<String> = before
         .iter()
