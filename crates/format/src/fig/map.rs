@@ -41,8 +41,8 @@ const MAX_GRID_TRACKS: usize = 1_000;
 pub(super) const MAX_GRID_TRACK_VALUE: f64 = 1e6;
 /// Smallest and largest scale factor of a scaled instance (`symbolData.uniformScaleFactor`, times
 /// those of the instances around it) that is followed: a junk factor changes nothing.
-const MIN_SCALE_FACTOR: f64 = 1e-3;
-const MAX_SCALE_FACTOR: f64 = 1e3;
+pub(super) const MIN_SCALE_FACTOR: f64 = 1e-3;
+pub(super) const MAX_SCALE_FACTOR: f64 = 1e3;
 /// Id of "no style".
 const NO_STYLE: &str = "4294967295:4294967295";
 /// Longest asset `key` or `version` kept for resolving references given as assets.

@@ -1,3 +1,4 @@
+use super::super::map::{MAX_SCALE_FACTOR, MIN_SCALE_FACTOR};
 use super::common::{
     bool_data, changed, layout_grid, prop_type, resolved_alike, scaled, sort_position, symbol_data, text_data, text_value, var_data, variant_pairs,
 };
@@ -169,7 +170,7 @@ impl<'d> Exporter<'d> {
         let named = set.is_none_or(|s| s.name != n.name);
         let root_mine: Fields = f.iter().filter(|(k, _)| !OWN.contains(k) && (named || *k != "name")).cloned().collect();
         let scale_candidate = Some(n.width / m.width)
-            .filter(|k| k.is_finite() && *k > 0.0 && (k - 1.0).abs() > 1e-6)
+            .filter(|k| (MIN_SCALE_FACTOR..=MAX_SCALE_FACTOR).contains(k) && (k - 1.0).abs() > 1e-6)
             .filter(|k| (n.height / m.height - k).abs() <= 1e-6 * k.max(1.0));
         // Each layer below: its id path, the fields that differ from the main's layer, that layer's
         // fields, whether its size is its own (a nested instance, a size override) and the

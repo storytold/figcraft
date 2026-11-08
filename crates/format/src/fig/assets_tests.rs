@@ -1055,6 +1055,42 @@ fn a_scaled_instance_keeps_its_radius_through_a_round_trip() {
     assert_eq!(b.corners.radii, [15.0; 4]);
 }
 
+/// Factors outside the importer's range use explicit values, not an ignored scale factor.
+#[test]
+fn exported_instance_scale_factors_stay_within_the_importers_range() {
+    for (factor, written_factor) in [(0.0005, 1.0), (0.001, 0.001), (1.0, 1.0), (1000.0, 1000.0), (2000.0, 1.0)] {
+        let (mut doc, insts) = sized();
+        let ids: Vec<_> = std::iter::once(insts[2]).chain(doc.node(insts[2]).unwrap().children.clone()).collect();
+        for id in ids {
+            let n = doc.node(id).unwrap();
+            let source = match n.kind {
+                NodeKind::Instance { component, .. } => component,
+                _ => n.source.unwrap(),
+            };
+            let src = doc.node(source).unwrap().clone();
+            let n = doc.node_mut(id).unwrap();
+            (n.width, n.height) = (src.width * factor, src.height * factor);
+            n.stroke.weight = src.stroke.weight * factor;
+            n.corners.radii = [10.0 * factor; 4];
+            if id != insts[2] {
+                let t = src.transform.translation();
+                n.transform = Affine::translate((t.x * factor, t.y * factor));
+            }
+            if let NodeKind::Text(td) = &mut n.kind {
+                td.style.font_size = src.kind.text().unwrap().style.font_size * factor;
+            }
+        }
+        let nodes = written(&doc);
+        assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], f64::from(written_factor as f32), "factor {factor}");
+        let (bytes, _) = export(&doc, None).unwrap();
+        let (back, _) = import(&bytes, "scale range").unwrap();
+        let instance = back.nodes().find(|n| n.name == "Scaled").unwrap();
+        let child = back.node(instance.children[0]).unwrap();
+        assert!((child.width - 40.0 * factor).abs() < 1e-6 * factor.max(1.0), "factor {factor}: {}", child.width);
+        assert!((child.corners.radii[0] - 10.0 * factor).abs() < 1e-6 * factor.max(1.0), "factor {factor}: {:?}", child.corners.radii);
+    }
+}
+
 /// A scaled child may override its radius back to the unscaled main's value.
 #[test]
 fn a_scaled_instance_keeps_a_radius_reset_to_its_main_through_a_round_trip() {
