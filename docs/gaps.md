@@ -1,6 +1,8 @@
 # Where FigCraft falls short of Figma
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (gap 10: library analytics list how many layers and files use each style and variable; the Controller menu names each button as PlayStation and Switch controllers do; gap 6: widgets draw lines and SVG pictures (plugin API 6); gap 7: text reads only the fallback fonts it draws with; a board connector's path can be reshaped by dragging its path handles (#1710); gap 10: library analytics count insertions and show insertions and detachments over time; gap 6: a widget opens its plugin's panel (plugin API 5), whose callbacks redraw it; the keyboard's Menu key opens the context menu, as Shift+F10 does; gap 14: a collection of this file extends, following its edits at once; colour picker review fixes for text undo, fitted sidebars, moving controls and gradient variables; gap 6: plugin widgets have hover styles; gap 7: the browser draws a zoom's full render a band at a time; `.fig` import keeps the file's saved line breaks while the text and its box are unedited (#1236); FigJam outer shape outlines and sticky body fallback beside author text (#1341, #1397); Arabic draft catalog; gap 7: the browser refines a zoom's preview once the zoom has paused; gap 17: branches in live sessions, branch history entries, the list-merge rows brought up to date; gap 6: plugin widgets take text input and a property menu (plugin API 4); gap 24: board templates and tables; gap 24: a shared timer and voting sessions; gap 24: the board dot grid, connector ends dragged to re-attach, curved connectors; egui/eframe 0.37 verified for gap 18; known gaps from the #1311 review in gaps 4, 14, 15 and 16; gap 16: measurements kept on the canvas, a read-only layers panel in Dev Mode; gap 24: boards and their tail; Dev Mode tail: import lines in layer trees, compare with versions, an inspect-only canvas; gap 5: reviewed Turkish, Czech and Indonesian drafts, the Japanese draft completed; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail; the 2026-10-17 landings: `.fig` import fidelity, budgets for large files, the import report, a `.fig` copy from Save as and paste from another design app (gap 1); menus, the Actions palette, editor fixes, Selection colors and smart-selection spacing (gap 4); catalog counts re-measured (gap 5); bounded canvas pan overscan) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (gap 10: library analytics list how many layers and files use each style and variable; the Controller menu names each button as PlayStation and Switch controllers do; gap 6: widgets draw lines and SVG pictures (plugin API 6); gap 7: text reads only the fallback fonts it draws with; a board connector's path can be reshaped by dragging its path handles (#1710); gap 10: library analytics count insertions and show insertions and detachments over time; gap 6: a widget opens its plugin's panel (plugin API 5), whose callbacks redraw it; the keyboard's Menu key opens the context menu, as Shift+F10 does; gap 14: a collection of this file extends, following its edits at once; colour picker review fixes for text undo, fitted sidebars, moving controls and gradient variables; gap 6: plugin widgets have hover styles; gap 7: the browser draws a zoom's full render a band at a time; `.fig` import keeps the file's saved line breaks while the text and its box are unedited (#1236); FigJam outer shape outlines and sticky body fallback beside author text (#1341, #1397); Arabic draft catalog; gap 7: the browser refines a zoom's preview once the zoom has paused; gap 17: branches in live sessions, branch history entries, the list-merge rows brought up to date; gap 6: plugin widgets take text input and a property menu (plugin API 4); gap 24: board templates and tables; gap 24: a shared timer and voting sessions; gap 24: the board dot grid, connector ends dragged to re-attach, curved connectors; egui/eframe 0.37 verified for gap 18; known gaps from the #1311 review in gaps 4, 14, 15 and 16; gap 16: measurements kept on the canvas, a read-only layers panel in Dev Mode; gap 24: boards and their tail; Dev Mode tail: import lines in layer trees, compare with versions, an inspect-only canvas; gap 5: reviewed Turkish, Czech and Indonesian drafts, the Japanese draft completed; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail; the 2026-10-17 landings: `.fig` import fidelity, budgets for large files, the import report, a `.fig` copy from Save as and paste from another design app (gap 1); menus, the Actions palette, editor fixes, Selection colors and smart-selection spacing (gap 4); catalog counts re-measured (gap 5); bounded canvas pan overscan) · **Target:** Figma Design (desktop app 126.10.7; rows 25–27 recorded 2026-11-08 from an
+owner-authorized static inspection of the desktop shell 126.11.8 — bundle analysis, not the
+sanctioned black-box pass, black-box confirmation pending)
 
 Every known shortfall against Figma, one entry each, ranked by how much it stops a Figma user from
 doing real work in FigCraft. Agents: pick work from the top unless the owner says otherwise. The
@@ -38,6 +40,9 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 22 | Screen readers never run; browser has no accessibility tree | UI/UX | 4–8 | [ui-parity](ui-parity.md) |
 | 23 | CMYK output intent for print PDFs | File format | 2–4 | [file-format-parity](file-format-parity.md) |
 | 24 | Boards: the whiteboard tail (widgets, mind maps…) | Feature | 20–44 | [boards-parity](boards-parity.md) |
+| 25 | Desktop shell tail: tabbed windows (recently closed, reload all, select next/previous tab), Save local copy…, Open file URL from clipboard, import from CSV, interface scale, haptic trackpad feedback, spellcheck dictionary, Help extras (release notes, video tutorials, support forum, legal summary), developer tools, menu-bar and tray presence with an unread indicator, an update channel, troubleshooting log capture (debug info, network log, performance log, reset and restart), a proxy allowlist — static inspection 2026-11-08, black-box confirmation pending | Feature | 12–20 | [gaps](gaps.md#25-desktop-shell-tail) |
+| 26 | Make Local and the code sandbox: a Figma Make project or a shared Git branch checked out to a local folder, its project commands run in a sandboxed, network-blocked runtime, per-directory and per-repository trust, merge progress — static inspection 2026-11-08, black-box confirmation pending | Feature | 15–30 | [gaps](gaps.md#26-make-local-and-the-code-sandbox) |
+| 27 | Voice calls in comments — static inspection 2026-11-08, black-box confirmation pending | Feature | 2–5 | [gaps](gaps.md#27-voice-calls-in-comments) |
 
 ## Entries
 
@@ -147,6 +152,9 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   (`docs/collab-protocol.md`).
 - **Impact:** Figma's defining feature; most teams use it every day. Solo designers can work
   without it.
+- **Recorded (2026-11-08, static):** the incumbent's desktop shell carries its multiplayer sync
+  schema as a native module and push notifications for comments and mentions while the app is
+  closed; both land under this gap's accounts work.
 - **Estimate:** 42–84 h: accounts, teams and per-person permissions, shared comments and versions
   (numbers from before the server landed; re-measured next).
 
@@ -282,6 +290,9 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   needs a JS engine and an API shim: **owner decision needed**.
 
 ### 7. CPU canvas where Figma uses the GPU
+- **Recorded (2026-11-08, static):** Figma's desktop also offers a graphics backend picker, a
+  hardware-acceleration toggle and a high-performance GPU preference; FigCraft has none of them.
+  They land with the GPU work here.
 - **Missing:** GPU rendering of the canvas. FigCraft renders with tiny-skia on the CPU (banded,
   parallel, retained) and shows the image through wgpu. A new zoom can't reuse the retained
   image; when renders from scratch take a frame or more, the whole view is previewed with a
@@ -370,6 +381,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 ### 11. Spell check
 - **Missing:** spelling underline and suggestions while editing text.
+- **Recorded (2026-11-08, static):** Figma's desktop also manages the user dictionary
+  (Edit ▸ Add to dictionary); that lands here.
 - **Evidence:** no spell-check code in the repo.
 - **Estimate:** 4–8 h with a permissively licensed dictionary and checker (provenance per
   `ATTRIBUTION.md`).
@@ -439,6 +452,9 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Estimate:** 2–5 h, the media part after video fills (gap 12).
 
 ### 16. Dev Mode: the tail after dev resources
+- **Recorded (2026-11-08, static):** the incumbent's desktop app ships its Dev Mode MCP server
+  inside the shell; FigCraft's MCP server serves the editor from the CLI, not Dev Mode codegen
+  from the app.
 - **Landed (2026-10-11):** code connect: a component or set links to its code component per
   language (React, Leptos, Vue, SwiftUI, Compose, ArkUI, Flutter): an import path, the name and a template whose `{property}`
   and `{property ? "a" : "b"}` placeholders take the instance's values, escaped per language and
@@ -532,7 +548,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   needs to; closing one asks about unsaved changes; `window.new`, `window.list`, `window.focus` and
   `window` on any control request.
 - **Missing:** wide-gamut colour on the canvas (egui draws sRGB, so P3 colours outside sRGB clip on
-  screen; exports keep them); a screen-reader tree in windows other than the main one (eframe 0.37
+  screen; exports keep them); display colour-space management as the incumbent's desktop offers it
+  (a Color space menu with sRGB, managed and unmanaged; recorded 2026-11-08, static); a screen-reader tree in windows other than the main one (eframe 0.37
   gives only the main window one; verified in the fork's viewport setup); window positions restored at
   the next start.
 - **Estimate:** 4–8 h.
@@ -589,10 +606,47 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   workshop round.
 - **Estimate:** 20–44 h.
 
+### 25. Desktop shell tail
+- **Recorded (2026-11-08, static):** the incumbent's desktop shell 126.11.8 offers, with labels
+  read from its own localization files: tabbed windows beyond FigCraft's two (new tab, select
+  next/previous tab, reload all tabs, recently closed tab/window/group, reopen closed item,
+  always show tabs when presenting), File ▸ Save local copy…, File ▸ Open file URL from
+  clipboard, File ▸ Import from CSV…, an interface scale menu (larger, smaller, a percent, reset),
+  haptic trackpad feedback, Edit ▸ Add to dictionary, Help ▸ Release notes / Video tutorials /
+  Support forum / Legal summary, developer tools (normal, internal, preview), Show Figma in the
+  menu bar and the system tray (tray icons with an unread indicator), Check for updates… with an
+  auto-update channel, a Troubleshooting submenu (save debug information, network log and
+  performance log; restart and save a performance log; reset Figma and restart; open the test
+  websocket page), a proxy allowlist dialog for corporate networks, and install guards (multiple
+  installations, ARM translation warnings).
+- **Not covered elsewhere:** the shell-only items; account log-out and the update channel belong
+  with gap 2's accounts; the proxy allowlist is its own small piece.
+- **Estimate:** 12–20 h (tabs and recently closed are most of it).
+- **Provenance:** static bundle inspection, owner-authorized; confirm black-box (menu presence
+  and labels) before implementation work.
+
+### 26. Make Local and the code sandbox
+- **Recorded (2026-11-08, static):** the incumbent checks a Figma Make project or a shared Git
+  branch out to a local folder (clone, fetch and checkout), asks trust per directory and
+  repository (the project configuration there can run commands), runs the project's commands in a
+  sandboxed runtime (a separate process kind, network-blocked), shows merge progress, and opens a
+  local browser preview. FigCraft has nothing here and nothing planned.
+- **Estimate:** 15–30 h (trust model and sandbox are most of it).
+- **Provenance:** static bundle inspection, owner-authorized; confirm black-box before
+  implementation work.
+
+### 27. Voice calls in comments
+- **Recorded (2026-11-08, static):** the incumbent's desktop asks microphone permission for voice
+  calls. FigCraft's comments are text only.
+- **Estimate:** 2–5 h for capture and playback beside gap 2's accounts work.
+- **Provenance:** static bundle inspection, owner-authorized; confirm black-box before
+  implementation work.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | Rows 25–27 added (desktop shell tail; Make Local and the code sandbox; voice calls) and entries 2, 7, 11, 16 and 18 extended, from an owner-authorized static inspection of the incumbent desktop shell 126.11.8 (bundle analysis, not the sanctioned black-box pass; black-box confirmation pending before implementation work). No measured numbers moved |
 | 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`) draft catalog: 1,975 UI strings, 641 command labels and 31 menu wordings, clean-room from the English source; zh-TW, zh-HK, zh-MO and zh-Hant read it, explicit Hans stays Simplified; Noto Sans CJK TC then Taiwan system faces; no bundled font; native review pending. Numbers unchanged |
 | 2026-10-31 | minor | Gap 10: library analytics list the layers and files using each style and variable; their insertions, detachments and modes stay on the missing list. |
 | 2026-10-31 | minor | Gap 15: the Controller menu names buttons as PlayStation and Switch controllers do; that item leaves the missing list. Estimate unchanged. Test: `present::tail_tests`. |
