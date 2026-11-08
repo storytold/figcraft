@@ -1479,6 +1479,12 @@ fn set_sizing(cmd: &str, doc: &mut Document, id: NodeId, s: Sizing, horizontal: 
             let ps = if horizontal { &mut cl.sizing_h } else { &mut cl.sizing_v };
             if *ps == Sizing::Hug {
                 *ps = Sizing::Fixed;
+                // An instance's own root, or a layer inside one, turned Fixed by this edit: that
+                // is its resizing now, an override, or the next rebuild from the main would take
+                // the main's Hug back and the child would stop filling.
+                if doc.get(p)?.source.is_some() {
+                    doc.get_mut(p)?.overrides.insert("resizing".to_string());
+                }
             }
         }
     }
