@@ -626,6 +626,27 @@ fn smart_guides_snap_to_edges_centres_and_equal_spacing() {
 }
 
 #[test]
+fn a_layer_edge_snaps_within_4_5_screen_pixels_at_any_zoom() {
+    // Measured in Figma (2026-11-08): a dragged edge snaps at a gap of 4.4 screen px and not at 4.6,
+    // at 100% and at 200% zoom.
+    for (zoom, gap_px, snaps) in [(1.0, 4.4, true), (1.0, 4.8, false), (2.0, 4.4, true), (2.0, 4.8, false)] {
+        let mut s = Session::new();
+        ex(&mut s, "view.snapPixel", json!({"on": false}));
+        rect(&mut s, 0.0, 0.0, 100.0, 100.0, None);
+        let b = rect(&mut s, 300.0, 300.0, 100.0, 100.0, None);
+        ex(&mut s, "select.set", json!({"ids": [b]}));
+        let gap = gap_px / zoom;
+        let to = Point::new(350.0 - (200.0 - gap), 350.0);
+        for (kind, p) in [(PointerKind::Down, Point::new(350.0, 350.0)), (PointerKind::Move, to), (PointerKind::Up, to)] {
+            s.pointer(&PointerEvent::at(kind, p.x, p.y, zoom)).unwrap();
+        }
+        let want = if snaps { 100.0 } else { 100.0 + gap };
+        let got = bounds(&s, b).x0;
+        assert!(near(got, want), "zoom {zoom}, gap {gap_px} screen px: left edge at {got}, wanted {want}");
+    }
+}
+
+#[test]
 fn snapping_to_layers_wins_over_the_pixel_grid() {
     // Both on (the defaults): a layer's centre at x = 5.5 is still a target.
     let mut s = Session::new();
