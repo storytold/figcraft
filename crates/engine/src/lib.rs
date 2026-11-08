@@ -545,6 +545,8 @@ mod selection_behaviour_tests;
 #[cfg(test)]
 mod selection_depth_tests;
 #[cfg(test)]
+mod server_kept_tests;
+#[cfg(test)]
 mod shape_handles_tests;
 #[cfg(test)]
 mod shapebuilder_strokes_tests;

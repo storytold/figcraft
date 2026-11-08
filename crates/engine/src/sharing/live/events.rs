@@ -153,6 +153,7 @@ impl Session {
         for id in self.live.sessions.keys().copied().collect::<Vec<_>>() {
             self.live_deferred(id);
             self.live_follow_apply(id);
+            self.live_kept(id);
         }
         self.online_recoveries();
         true
