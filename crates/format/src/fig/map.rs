@@ -263,6 +263,21 @@ impl<'a> View<'a> {
         v
     }
 
+    /// An effect/grid list follows the same precedence as text styles: an override above the
+    /// style link wins, while the style beats stale copies on and below its linking row. A style
+    /// without the list is empty; it must not expose a stale list from a lower row.
+    fn styled_list(&self, style: &'a Kv<'a>, list: &str, key: &str, legacy: &str) -> (&'a [Kv<'a>], f64) {
+        let linked_in = |k: &str| self.layers.iter().rposition(|l| l.get(k).is_some());
+        let above = linked_in(key).or_else(|| linked_in(legacy)).map_or(1, |i| i + 1);
+        self.layers
+            .iter()
+            .zip(&self.scales)
+            .skip(above)
+            .rev()
+            .find_map(|(row, scale)| row.get(list).map(|v| (v.list(), *scale)))
+            .unwrap_or_else(|| (style.get(list).map(Kv::list).unwrap_or_default(), self.link_scale(key, legacy)))
+    }
+
     fn get(&self, k: &str) -> Option<&'a Kv<'a>> {
         self.layers.iter().rev().find_map(|l| l.get(k))
     }

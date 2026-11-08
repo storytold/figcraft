@@ -25,9 +25,10 @@ message FontName string family, string style, string postscript
 message TextData string characters
 message Effect EffectType type, float radius, float spread, Vector offset, float startRadius, Vector startOffset, Vector endOffset, BlurOpType blurOpType
 message StyleId GUID guid
+message LayoutGrid float sectionSize, float gutterSize, float offset, float numSections
 message GUIDPath GUID[] guids
 message SymbolData GUID symbolID, NodeChange[] symbolOverrides, float uniformScaleFactor
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, float cornerRadius, float strokeWeight, float[] dashPattern, float fontSize, FontName fontName, TextData textData, SymbolData symbolData, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, float stackCounterSpacing, Effect[] effects, Number lineHeight, Number letterSpacing, NodeChange[] derivedSymbolData, GUIDPath guidPath, StyleType styleType, StyleId styleIdForEffect
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, float cornerRadius, float strokeWeight, float[] dashPattern, float fontSize, FontName fontName, TextData textData, SymbolData symbolData, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, float stackCounterSpacing, Effect[] effects, Number lineHeight, Number letterSpacing, NodeChange[] derivedSymbolData, GUIDPath guidPath, StyleType styleType, StyleId styleIdForEffect, StyleId styleIdForGrid, LayoutGrid[] layoutGrids
 message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
@@ -367,4 +368,91 @@ fn an_effect_style_takes_the_scale_of_the_layer_that_links_it() {
         sh.radius
     };
     assert_eq!((radius("Kept"), radius("Swapped")), (5.0, 10.0));
+}
+
+#[test]
+fn nested_scaled_style_overrides_keep_their_values_and_links_through_export() {
+    let mut nodes = page();
+    let shadow = |radius| o(vec![("type", e("DROP_SHADOW")), ("radius", f(radius))]);
+    let grid = |size| o(vec![("sectionSize", f(size)), ("gutterSize", f(size)), ("numSections", f(4.0))]);
+    let link = |id| o(vec![("guid", g(id))]);
+    nodes.push(node(30, Some((1, "~")), "ROUNDED_RECTANGLE", "Soft", vec![("styleType", e("EFFECT")), ("effects", arr(vec![shadow(10.0)]))]));
+    nodes.push(node(31, Some((1, "}")), "FRAME", "Grid", vec![("styleType", e("GRID")), ("layoutGrids", arr(vec![grid(20.0)]))]));
+    nodes.push(node(5, Some((1, "!")), "SYMBOL", "Inner", vec![("size", xy(200.0, 200.0)), ("transform", at(0.0, 0.0))]));
+    nodes.push(node(
+        6,
+        Some((5, "!")),
+        "FRAME",
+        "Mark",
+        vec![("size", xy(200.0, 200.0)), ("transform", at(0.0, 0.0)), ("styleIdForEffect", link(30)), ("styleIdForGrid", link(31))],
+    ));
+    nodes.push(node(7, Some((1, "\"")), "SYMBOL", "Outer", vec![("size", xy(200.0, 200.0)), ("transform", at(300.0, 0.0))]));
+    nodes.push(set(instance(8, (7, "!"), "Kid", 5, (100.0, 100.0), Some(0.5), vec![]), "transform", at(0.0, 0.0)));
+    let row =
+        o(vec![("guidPath", o(vec![("guids", arr(vec![g(8), g(6)]))])), ("effects", arr(vec![shadow(5.0)])), ("layoutGrids", arr(vec![grid(10.0)]))]);
+    let symbol = o(vec![("symbolID", g(7)), ("uniformScaleFactor", f(0.5)), ("symbolOverrides", arr(vec![row]))]);
+    nodes.push(node(9, Some((1, "#")), "INSTANCE", "Reset", vec![("size", xy(100.0, 100.0)), ("transform", at(600.0, 0.0)), ("symbolData", symbol)]));
+    nodes.push(instance(10, (1, "$"), "Scaled", 7, (100.0, 100.0), Some(0.5), vec![]));
+    let check = |doc: &Document| {
+        for (name, radius, gap) in [("Reset", 5.0, 10.0), ("Scaled", 2.5, 5.0)] {
+            let kid = first_child(doc, name);
+            let mark = doc.node(kid.children[0]).unwrap();
+            let EffectKind::DropShadow(sh) = &mark.effects[0].kind else { panic!("shadow fixture") };
+            assert_eq!(sh.radius, radius, "{name}");
+            assert_eq!(mark.grids[0].gutter, gap, "{name}");
+            assert_eq!(mark.grids[0].count, 4, "dimensionless grid count");
+            let effect = doc.styles.iter().find(|s| s.name == "Soft").unwrap();
+            let grid = doc.styles.iter().find(|s| s.name == "Grid").unwrap();
+            assert_eq!(mark.styles.effect.as_ref(), Some(&effect.id));
+            assert_eq!(mark.styles.grid.as_ref(), Some(&grid.id));
+        }
+    };
+    let doc = import_nodes(nodes);
+    check(&doc);
+    let (bytes, _) = export(&doc, None).unwrap();
+    check(&import(&bytes, "round trip").unwrap().0);
+}
+
+#[test]
+fn an_empty_effect_or_grid_style_and_explicit_clears_stay_empty() {
+    for empty in [false, true] {
+        let mut nodes = page();
+        let effects = arr(vec![o(vec![("type", e("DROP_SHADOW")), ("radius", f(10.0))])]);
+        let grids = arr(vec![o(vec![("gutterSize", f(20.0)), ("numSections", f(4.0))])]);
+        let link = |id| o(vec![("guid", g(id))]);
+        let mut effect_style = vec![("styleType", e("EFFECT"))];
+        let mut grid_style = vec![("styleType", e("GRID"))];
+        if !empty {
+            effect_style.push(("effects", effects.clone()));
+            grid_style.push(("layoutGrids", grids.clone()));
+        }
+        nodes.push(node(30, Some((1, "~")), "ROUNDED_RECTANGLE", "Soft", effect_style));
+        nodes.push(node(31, Some((1, "}")), "FRAME", "Grid", grid_style));
+        nodes.push(node(5, Some((1, "!")), "SYMBOL", "Main", vec![("size", xy(100.0, 100.0))]));
+        nodes.push(node(
+            6,
+            Some((5, "!")),
+            "FRAME",
+            "Mark",
+            vec![
+                ("size", xy(100.0, 100.0)),
+                ("styleIdForEffect", link(30)),
+                ("styleIdForGrid", link(31)),
+                ("effects", effects),
+                ("layoutGrids", grids),
+            ],
+        ));
+        nodes.push(instance(9, (1, "\""), "Kept", 5, (50.0, 50.0), Some(0.5), vec![]));
+        let row = o(vec![("guidPath", o(vec![("guids", arr(vec![g(6)]))])), ("effects", arr(vec![])), ("layoutGrids", arr(vec![]))]);
+        let symbol = o(vec![("symbolID", g(5)), ("uniformScaleFactor", f(0.5)), ("symbolOverrides", arr(vec![row]))]);
+        nodes.push(node(10, Some((1, "#")), "INSTANCE", "Cleared", vec![("size", xy(50.0, 50.0)), ("symbolData", symbol)]));
+        let doc = import_nodes(nodes);
+        let kept = first_child(&doc, "Kept");
+        assert_eq!(kept.effects.is_empty(), empty);
+        assert_eq!(kept.grids.is_empty(), empty);
+        let cleared = first_child(&doc, "Cleared");
+        assert!(cleared.effects.is_empty() && cleared.grids.is_empty());
+        assert_eq!(cleared.styles.effect, kept.styles.effect);
+        assert_eq!(cleared.styles.grid, kept.styles.grid);
+    }
 }

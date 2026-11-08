@@ -1054,3 +1054,158 @@ fn a_scaled_instance_keeps_its_radius_through_a_round_trip() {
     assert_eq!((b.width, b.height), (60.0, 60.0));
     assert_eq!(b.corners.radii, [15.0; 4]);
 }
+
+/// A scaled child may override its radius back to the unscaled main's value.
+#[test]
+fn a_scaled_instance_keeps_a_radius_reset_to_its_main_through_a_round_trip() {
+    let (mut doc, insts) = sized();
+    let main_box = doc.nodes().find(|n| n.name == "Box" && n.parent.is_some_and(|p| doc.node(p).unwrap().name == "Card")).unwrap().id;
+    doc.node_mut(main_box).unwrap().corners.radii = [10.0; 4];
+    let kid = doc.node(insts[2]).unwrap().children[0];
+    doc.node_mut(kid).unwrap().corners.radii = [10.0; 4];
+    let (bytes, _) = export(&doc, None).unwrap();
+    let (back, _) = import(&bytes, "x").unwrap();
+    let inst = back.nodes().find(|n| n.name == "Scaled").unwrap();
+    let b = inst.children.iter().map(|c| back.node(*c).unwrap()).find(|n| n.name == "Box").unwrap();
+    // Its geometry is still scaled; only the authored corner radius was reset.
+    assert_eq!((b.width, b.height), (60.0, 60.0));
+    assert_eq!(b.corners.radii, [10.0; 4]);
+}
+
+#[test]
+fn a_scaled_instance_keeps_main_equal_layout_and_grid_lengths() {
+    let (mut doc, insts) = sized();
+    let main = doc.nodes().find(|n| n.name == "Card").unwrap().id;
+    let boxes: Vec<_> = doc.nodes().filter(|n| n.name == "Box").map(|n| n.id).collect();
+    for id in [main, insts[0], insts[1], insts[2]].into_iter().chain(boxes) {
+        let n = doc.node_mut(id).unwrap();
+        if n.name == "Box" {
+            n.kind = NodeKind::Frame;
+        }
+        n.corners.radii = [4.0, 8.0, 12.0, 16.0];
+        n.layout = Some(AutoLayout { gap: 8.0, cross_gap: 6.0, padding: [2.0, 4.0, 6.0, 8.0], ..AutoLayout::default() });
+        n.grids = vec![LayoutGrid { kind: GridKind::Columns, count: 4, gutter: 8.0, ..LayoutGrid::default() }];
+        n.child_layout.min_w = Some(20.0);
+        n.child_layout.max_h = Some(200.0);
+    }
+    let nodes = written(&doc);
+    assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], 1.5);
+    same_after_round_trip(&doc, "scaled main-equal layout and grid lengths");
+}
+
+#[test]
+fn a_scaled_instance_keeps_main_equal_stroke_and_effect_lengths() {
+    let (mut doc, insts) = sized();
+    let child = doc.node(insts[2]).unwrap().children[0];
+    let source = doc.node(child).unwrap().source.unwrap();
+    for id in [source, child] {
+        let n = doc.node_mut(id).unwrap();
+        n.corners.radii = [2.0, 4.0, 6.0, 8.0];
+        n.stroke.dashes = vec![4.0, 2.0];
+        n.effects = vec![Effect {
+            kind: EffectKind::DropShadow(Shadow {
+                color: Color::new(0.0, 0.0, 0.0, 0.25),
+                offset: (2.0, 4.0),
+                radius: 8.0,
+                spread: 2.0,
+                blend: BlendMode::Normal,
+                show_behind: false,
+            }),
+            visible: true,
+        }];
+    }
+    let nodes = written(&doc);
+    assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], 1.5);
+    same_after_round_trip(&doc, "scaled main-equal stroke and effect lengths");
+}
+
+#[test]
+fn a_scaled_instance_keeps_main_equal_text_lengths_and_runs() {
+    let (mut doc, insts) = sized();
+    let child = doc.node(insts[2]).unwrap().children[1];
+    let source = doc.node(child).unwrap().source.unwrap();
+    for id in [source, child] {
+        let NodeKind::Text(td) = &mut doc.node_mut(id).unwrap().kind else { panic!("text fixture") };
+        td.style.font_size = 16.0;
+        td.style.line_height = LineHeight::Pixels(24.0);
+        td.style.letter_spacing = LetterSpacing::Pixels(2.0);
+        td.paragraph_spacing = 6.0;
+        td.paragraph_indent = 4.0;
+        td.runs = vec![StyleRun { start: 0, end: 2, style: TextStyle { font_size: 20.0, ..td.style.clone() } }];
+    }
+    let nodes = written(&doc);
+    assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], 1.5);
+    same_after_round_trip(&doc, "scaled main-equal text lengths and runs");
+}
+
+#[test]
+fn a_scaled_instance_keeps_a_main_equal_text_length_above_its_shared_style() {
+    let (mut doc, insts) = sized();
+    let child = doc.node(insts[2]).unwrap().children[1];
+    let source = doc.node(child).unwrap().source.unwrap();
+    let base = TextStyle { font_size: 12.0, line_height: LineHeight::Pixels(24.0), ..TextStyle::default() };
+    doc.styles.push(Style {
+        id: "label-style".into(),
+        name: "Label style".into(),
+        description: String::new(),
+        kind: StyleKind::Text { style: base.clone(), paragraph: Default::default() },
+        bound: Default::default(),
+    });
+    for id in [source, child] {
+        let n = doc.node_mut(id).unwrap();
+        n.styles.text = Some("label-style".into());
+        let NodeKind::Text(td) = &mut n.kind else { panic!("text fixture") };
+        td.style = base.clone();
+        if id == child {
+            td.style.line_height = LineHeight::Pixels(36.0);
+        }
+    }
+    let nodes = written(&doc);
+    assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], 1.5);
+    same_after_round_trip(&doc, "one text length reset above an inherited shared style");
+}
+
+#[test]
+fn a_scaled_instance_keeps_reset_lists_above_a_changed_style_link() {
+    for (scaled, value) in [false, true].into_iter().flat_map(|scaled| [Some(10.0), Some(20.0), Some(15.0), None].map(|value| (scaled, value))) {
+        let (mut doc, insts) = sized();
+        let inst = insts[if scaled { 2 } else { 0 }];
+        let child = doc.node(inst).unwrap().children[0];
+        let source = doc.node(child).unwrap().source.unwrap();
+        let boxes: Vec<_> = doc.nodes().filter(|n| n.name == "Box").map(|n| n.id).collect();
+        for id in boxes {
+            doc.node_mut(id).unwrap().kind = NodeKind::Frame;
+        }
+        let effects = |radius| vec![Effect { kind: EffectKind::DropShadow(Shadow { radius, ..Shadow::default() }), visible: true }];
+        let grids = |gutter| vec![LayoutGrid { kind: GridKind::Columns, count: 4, gutter, ..LayoutGrid::default() }];
+        for (id, kind) in [
+            ("effect-a", StyleKind::Effect { effects: effects(10.0) }),
+            ("effect-b", StyleKind::Effect { effects: effects(20.0) }),
+            ("grid-a", StyleKind::Grid { grids: grids(10.0) }),
+            ("grid-b", StyleKind::Grid { grids: grids(20.0) }),
+        ] {
+            doc.styles.push(Style { id: id.into(), name: id.into(), description: String::new(), kind, bound: Default::default() });
+        }
+        for id in [source, child] {
+            let n = doc.node_mut(id).unwrap();
+            let value = if id == source { Some(10.0) } else { value };
+            n.effects = value.map_or_else(Vec::new, effects);
+            n.grids = value.map_or_else(Vec::new, grids);
+            n.styles.effect = Some(if id == source { "effect-a" } else { "effect-b" }.into());
+            n.styles.grid = Some(if id == source { "grid-a" } else { "grid-b" }.into());
+        }
+        let nodes = written(&doc);
+        let name = if scaled { "Scaled" } else { "Same" };
+        assert_eq!(named(&nodes, name)["symbolData"]["uniformScaleFactor"], if scaled { 1.5 } else { 1.0 });
+        if value == Some(20.0) {
+            let inst = named(&nodes, name);
+            for rows in [&inst["symbolData"]["symbolOverrides"], &inst["derivedSymbolData"]] {
+                assert!(
+                    rows.as_array().into_iter().flatten().all(|row| row.get("effects").is_none() && row.get("layoutGrids").is_none()),
+                    "values supplied by the new style remain linked, not overridden"
+                );
+            }
+        }
+        same_after_round_trip(&doc, "explicit list values above a changed style link");
+    }
+}

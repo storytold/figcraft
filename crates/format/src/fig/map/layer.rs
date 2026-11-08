@@ -531,18 +531,14 @@ impl<'a> Mapper<'a> {
             .unwrap_or_else(|| stroke_style.map_or_else(|| v.list("strokePaints"), |s| s.get("fillPaints").map(Kv::list).unwrap_or_default()));
         o.insert("strokes".into(), Value::Array(strokes.iter().filter_map(|p| paint(p, &mut |w| self.warn(w))).collect()));
         let effect_style = self.style(v, "styleIdForEffect", "inheritEffectStyleID", "effect", &mut styles);
-        let (effects, effects_scale) = effect_style.map_or_else(
-            || v.list_scaled("effects"),
-            |s| (s.get("effects").map(Kv::list).unwrap_or_default(), v.link_scale("styleIdForEffect", "inheritEffectStyleID")),
-        );
+        let (effects, effects_scale) =
+            effect_style.map_or_else(|| v.list_scaled("effects"), |s| v.styled_list(s, "effects", "styleIdForEffect", "inheritEffectStyleID"));
         if !effects.is_empty() {
             o.insert("effects".into(), Value::Array(effects.iter().filter_map(|e| effect(e, effects_scale)).collect()));
         }
         let grid_style = self.style(v, "styleIdForGrid", "inheritGridStyleID", "grid", &mut styles);
-        let (grids, grids_scale) = grid_style.map_or_else(
-            || v.list_scaled("layoutGrids"),
-            |s| (s.get("layoutGrids").map(Kv::list).unwrap_or_default(), v.link_scale("styleIdForGrid", "inheritGridStyleID")),
-        );
+        let (grids, grids_scale) =
+            grid_style.map_or_else(|| v.list_scaled("layoutGrids"), |s| v.styled_list(s, "layoutGrids", "styleIdForGrid", "inheritGridStyleID"));
         if !grids.is_empty() {
             o.insert("layoutGrids".into(), Value::Array(grids.iter().map(|g| layout_grid(g, grids_scale)).collect()));
         }
