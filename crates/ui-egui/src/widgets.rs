@@ -1274,13 +1274,19 @@ pub fn paint_swatch(painter: &egui::Painter, rect: Rect, paint: &figcraft_color:
 
 /// A small checkbox with label.
 pub fn checkbox(ui: &mut Ui, on: bool, label: &str) -> bool {
+    checkbox_tri(ui, Some(on), label)
+}
+
+/// A checkbox that can show a mixed state (`None`: a dash, for a setting that differs across a
+/// selection); returns whether it was clicked.
+pub fn checkbox_tri(ui: &mut Ui, state: Option<bool>, label: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(200.0), FIELD_H), Sense::click());
-    a11y::checkbox(&resp, label, on);
+    a11y::checkbox(&resp, label, state == Some(true));
     let b = Rect::from_min_size(pos2(rect.min.x, rect.center().y - 7.0), vec2(14.0, 14.0));
-    if on {
+    if state != Some(false) {
         ui.painter().rect_filled(b, CornerRadius::same(3), t.accent);
-        icons::paint(ui.painter(), b.shrink(1.5), Icon::Check, t.accent_on);
+        icons::paint(ui.painter(), b.shrink(1.5), if state.is_some() { Icon::Check } else { Icon::Minus }, t.accent_on);
     } else {
         ui.painter().rect_stroke(b, CornerRadius::same(3), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
     }

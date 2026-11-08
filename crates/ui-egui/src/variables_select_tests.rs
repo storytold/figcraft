@@ -250,3 +250,70 @@ fn the_bulk_menu_scrolls_when_forty_groups_make_it_taller_than_the_window() {
     assert!(visible(&shapes), "scrolling the menu never brought {last:?} into view");
     assert!(screen.contains_rect(popup_rect(&u)));
 }
+
+/// Three colour variables: bravo and charlie also have Stroke in their scopes, delta does not.
+fn colour_window() -> Ui {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    for (n, scopes) in
+        [("bravo", json!(["FRAME_FILL", "STROKE_COLOR"])), ("charlie", json!(["FRAME_FILL", "STROKE_COLOR"])), ("delta", json!(["FRAME_FILL"]))]
+    {
+        s.execute("variable.create", &json!({"collection": "Theme", "name": n, "type": "color", "value": "#ff0000"})).unwrap();
+        s.execute("variable.update", &json!({"variable": n, "scopes": scopes})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    u
+}
+
+fn open_edit_variables(u: &mut Ui) -> Vec<egui::Shape> {
+    let menu = select_three_and_open_menu(u);
+    assert!(has_text(&menu, "Edit variables"), "the bulk menu offers Edit variables");
+    click(u, text_center(&menu, "Edit variables"), PointerButton::Primary, Modifiers::NONE);
+    flat(&u.frame_output(vec![]).shapes)
+}
+
+fn flags(u: &Ui) -> Vec<(bool, bool)> {
+    let doc = u.app.session.doc().unwrap();
+    ["bravo", "charlie", "delta"]
+        .iter()
+        .map(|n| {
+            let v = doc.variables.variables.iter().find(|v| v.name == *n).unwrap();
+            (v.hidden_from_publishing, v.in_scope("STROKE_COLOR"))
+        })
+        .collect()
+}
+
+#[test]
+fn edit_variables_sets_stroke_on_all_selected_in_one_undo_step() {
+    let mut u = colour_window();
+    let shapes = open_edit_variables(&mut u);
+    assert!(has_text(&shapes, "Hide from publishing") && has_text(&shapes, "Scope"));
+    click(&mut u, text_center(&shapes, "Scope"), PointerButton::Primary, Modifiers::NONE);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "Stroke"));
+    assert_eq!(flags(&u), [(false, true), (false, true), (false, false)]);
+    let before = u.app.session.undo_labels(100).len();
+    click(&mut u, text_center(&shapes, "Stroke"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert_eq!(flags(&u), [(false, true), (false, true), (false, true)]);
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    u.app.session.undo().unwrap();
+    assert_eq!(flags(&u), [(false, true), (false, true), (false, false)]);
+}
+
+#[test]
+fn edit_variables_hides_all_selected_from_publishing_in_one_undo_step() {
+    let mut u = colour_window();
+    let shapes = open_edit_variables(&mut u);
+    let before = u.app.session.undo_labels(100).len();
+    click(&mut u, text_center(&shapes, "Hide from publishing"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert!(flags(&u).iter().all(|f| f.0), "all hidden");
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    u.app.session.undo().unwrap();
+    assert!(flags(&u).iter().all(|f| !f.0));
+}

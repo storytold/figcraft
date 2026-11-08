@@ -59,6 +59,10 @@ pub struct Editor {
     pub(crate) anchor: Option<String>,
     /// The variable ids the table shows now, in row order (the range a Shift+click covers).
     pub(crate) order: Vec<String>,
+    /// The variables the compact "Edit variables" editor is open on (empty = closed).
+    bulk_edit: Vec<String>,
+    /// That editor's tab: 0 Details, 1 Scope.
+    bulk_tab: usize,
 }
 
 /// A click on row `id`: plain selects only it, Shift extends from the anchor to it through the
@@ -113,8 +117,13 @@ fn bulk_run(app: &mut FigApp, label: &str, vars: &[&Variable], step: impl Fn(&Va
 
 /// The context menu of a row that is part of a selection of several: delete, move to a group and
 /// scope act on all of them.
-fn bulk_menu(app: &mut FigApp, ui: &mut Ui, coll_groups: &[String], vars: &[&Variable]) {
+fn bulk_menu(app: &mut FigApp, ui: &mut Ui, st: &mut Editor, coll_groups: &[String], vars: &[&Variable]) {
     let n = vars.len();
+    if menu_item(ui, tr("Edit variables"), "") {
+        st.bulk_edit = vars.iter().map(|v| v.id.clone()).collect();
+        st.bulk_tab = 0;
+        ui.close();
+    }
     if menu_item(ui, &trn("Delete {n} variables", n, &[]), "") {
         bulk_run(app, "Delete variables", vars, |v| Some(("variable.delete", json!({"variable": v.id}))));
         ui.close();
@@ -277,6 +286,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             });
         });
     details(app, ctx, &doc.variables, &mut st);
+    bulk_details(app, ctx, &doc.variables, &mut st);
     app.ui.variables = open.then_some(st);
 }
 
@@ -848,7 +858,7 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
         crate::right::context_popup(&resp).show(|ui| {
             if let Some(vars) = bulk_ids(view, st, v) {
                 let coll_groups = groups(view.in_collection(&coll.id).map(|x| x.name.as_str()));
-                bulk_menu(app, ui, &coll_groups, &vars);
+                bulk_menu(app, ui, st, &coll_groups, &vars);
                 return;
             }
             if menu_item(ui, tr("Edit variable"), "") {
@@ -1178,9 +1188,102 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
     }
 }
 
+/// Whether `f` holds for every variable (Some(true)), for none (Some(false)) or only some (None).
+fn tri<T>(vars: &[&T], f: impl Fn(&T) -> bool) -> Option<bool> {
+    let on = vars.iter().filter(|v| f(v)).count();
+    if on == vars.len() {
+        Some(true)
+    } else if on == 0 {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The compact editor of several selected variables: Details (only Hide from publishing) and Scope
+/// (the scopes every selected variable's type has), each box mixed where the selection differs; a
+/// click sets or clears it on all of them in one undo step.
+fn bulk_details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
+    if st.bulk_edit.is_empty() {
+        return;
+    }
+    let list: Vec<&Variable> = st.bulk_edit.iter().filter_map(|id| vars.get_by_id(id)).filter(|v| v.extends.is_none()).collect();
+    if list.is_empty() || st.library.is_some() {
+        st.bulk_edit.clear();
+        return;
+    }
+    let t = Tokens::get(ctx);
+    let mut open = true;
+    egui::Window::new(tr("Edit variables"))
+        .id(Id::unique("variables_bulk_details"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(280.0)
+        .frame(egui::Frame::window(&ctx.global_style()).fill(t.panel).inner_margin(egui::Margin::same(16)))
+        .show(ctx, |ui| {
+            ui.set_width(260.0);
+            if let Some(i) = widgets::segmented_text(ui, &[tr("Details"), tr("Scope")], st.bulk_tab) {
+                st.bulk_tab = i;
+            }
+            ui.add_space(8.0);
+            if st.bulk_tab == 0 {
+                let hidden = tri(&list, |v| v.hidden_from_publishing);
+                if widgets::checkbox_tri(ui, hidden, tr("Hide from publishing")) {
+                    let to = hidden != Some(true);
+                    bulk_run(app, "Edit variables", &list, |v| Some(("variable.update", json!({"variable": v.id, "hiddenFromPublishing": to}))));
+                }
+                return;
+            }
+            // The scopes every selected variable's type has.
+            let first = list.first().map_or(&[][..], |v| scopes_for(v.kind));
+            let common: Vec<(&'static str, &'static str)> =
+                first.iter().filter(|(id, _)| list.iter().all(|v| scopes_for(v.kind).iter().any(|(k, _)| k == id))).copied().collect();
+            if common.is_empty() {
+                widgets::label(ui, tr("No scope is shared by all the selected variables"), t.text_secondary);
+                return;
+            }
+            let all = tri(&list, |v| v.scopes.is_none());
+            if widgets::checkbox_tri(ui, all, tr("All supported properties")) {
+                let to_all = all != Some(true);
+                bulk_run(app, "Edit variables", &list, |v| {
+                    Some(("variable.update", json!({"variable": v.id, "scopes": if to_all { Value::Null } else { json!([]) }})))
+                });
+            }
+            for (sid, label) in common {
+                let state = tri(&list, |v| v.in_scope(sid));
+                let clicked = ui
+                    .horizontal(|ui| {
+                        ui.add_space(16.0);
+                        widgets::checkbox_tri(ui, state, tr(label))
+                    })
+                    .inner;
+                if clicked {
+                    let to = state != Some(true);
+                    bulk_run(app, "Edit variables", &list, |v| {
+                        let next: Vec<&str> =
+                            scopes_for(v.kind).iter().map(|(id, _)| *id).filter(|id| if *id == sid { to } else { v.in_scope(id) }).collect();
+                        Some(("variable.update", json!({"variable": v.id, "scopes": next})))
+                    });
+                }
+            }
+        });
+    if !open {
+        st.bulk_edit.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::groups;
+    use super::{groups, tri};
+
+    #[test]
+    fn tri_is_checked_empty_or_mixed() {
+        let (a, b) = (true, false);
+        assert_eq!(tri(&[&a, &a], |v| *v), Some(true));
+        assert_eq!(tri(&[&b, &b], |v| *v), Some(false));
+        assert_eq!(tri(&[&a, &b], |v| *v), None);
+    }
 
     #[test]
     fn groups_include_parents_once_and_sorted() {
