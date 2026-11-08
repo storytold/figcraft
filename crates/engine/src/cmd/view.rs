@@ -688,4 +688,33 @@ mod start_on_home_tests {
         let v = &s.ds().unwrap().view;
         assert_eq!((v.cx, v.cy), (364.0, -120.0), "Shift pans 320 px");
     }
+
+    #[test]
+    fn the_arrow_pan_is_the_same_screen_distance_at_any_zoom_on_both_axes() {
+        // (zoom, dx, dy, big, expected centre change in document px)
+        let cases = [
+            (2.0, 1.0, 0.0, false, 32.0, 0.0),
+            (0.5, 1.0, 0.0, false, 128.0, 0.0),
+            (2.0, 0.0, 1.0, true, 0.0, 160.0),
+            (0.5, 0.0, 1.0, true, 0.0, 640.0),
+            (1.0, -1.0, 0.0, false, -64.0, 0.0),
+            (1.0, 1.0, 0.0, true, 320.0, 0.0),
+            (1.0, -1.0, 0.0, true, -320.0, 0.0),
+            (1.0, 0.0, -1.0, false, 0.0, -64.0),
+            (1.0, 0.0, 1.0, false, 0.0, 64.0),
+            (1.0, 0.0, -1.0, true, 0.0, -320.0),
+        ];
+        for (zoom, dx, dy, big, ex, ey) in cases {
+            let mut s = crate::Session::new();
+            s.execute("view.set", &json!({"zoom": zoom, "cx": 300, "cy": 200})).unwrap();
+            s.execute("view.pan", &json!({"dx": dx, "dy": dy, "big": big})).unwrap();
+            let v = &s.ds().unwrap().view;
+            let got = (v.cx - 300.0, v.cy - 200.0);
+            assert!(
+                (got.0 - ex).abs() < 1e-6 && (got.1 - ey).abs() < 1e-6,
+                "zoom {zoom} dx {dx} dy {dy} big {big}: moved {got:?}, expected {:?}",
+                (ex, ey)
+            );
+        }
+    }
 }
