@@ -674,10 +674,14 @@ fn resize_child(doc: &mut Document, id: NodeId, w: f64, h: f64, m: &dyn Measure)
     } else {
         let old = doc.node(id).map(|n| (n.width, n.height));
         set_size(doc, id, w, h);
-        if let Some((ow, oh)) = old
-            && doc.node(id).is_some_and(|n| n.kind.is_frame_like())
-        {
-            apply_constraints(doc, id, ow, oh);
+        if let Some((ow, oh)) = old {
+            if doc.node(id).is_some_and(|n| n.kind.bounds_follow_children()) {
+                // A group set to Fill scales what it holds, as any resize of a group does.
+                let k = |new: f64, was: f64| if was > 1e-9 && new.is_finite() { new / was } else { 1.0 };
+                scale_group_children(doc, id, k(w, ow), k(h, oh));
+            } else if doc.node(id).is_some_and(|n| n.kind.is_frame_like()) {
+                apply_constraints(doc, id, ow, oh);
+            }
         }
         if doc.node(id).is_some_and(|n| n.layout.is_some()) {
             layout_frame(doc, id, m);
