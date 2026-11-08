@@ -280,7 +280,8 @@ fn mode_switcher(app: &mut FigApp, ui: &mut Ui, x: f32, cy: f32, t: &Tokens) {
     let modes = [(Icon::Pencil, tr("Draw")), (Icon::Frame, tr("Design")), (Icon::Prototype, tr("Prototype")), (Icon::Code, tr("Inspect"))];
     let active = match app.ui.right_tab {
         crate::RightTab::Design if app.session.tool.tool == ToolId::Pencil => 0,
-        crate::RightTab::Design => 1,
+        // The agent works on the design: the canvas stays in Design mode beside its chat.
+        crate::RightTab::Design | crate::RightTab::Agent => 1,
         crate::RightTab::Prototype => 2,
         crate::RightTab::Inspect => 3,
     };
@@ -341,6 +342,7 @@ fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Toke
         for (l, c) in [
             (tr("Getting started"), "help.gettingStarted"),
             (tr("Keyboard shortcuts"), "help.shortcuts"),
+            (tr("Agent"), "agent.prompt"),
             (tr("Help page"), "help.page"),
             (tr("Check for updates…"), "help.checkForUpdates"),
             (tr("About FigCraft"), "help.about"),

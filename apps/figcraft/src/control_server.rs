@@ -231,6 +231,37 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
     Ok(())
 }
 
+/// One request from inside the app (the Agent tab), through the queue a socket's requests
+/// take: it runs on the UI thread and its reply comes back here. A full queue is waited out, not an
+/// error: a model's next call just has to wait for the last.
+pub fn call_ui(queue: &Queue, ctx: &CtxSlot, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let gate = RequestGate::new();
+    let since = std::time::Instant::now();
+    let mut request = Some(ControlRequest { id: Value::Null, method: method.to_string(), params, reply: tx, state: gate.clone() });
+    while let Some(waiting) = request.take() {
+        let mut pending = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.retain(|request| !request.is_cancelled());
+        if pending.len() < MAX_QUEUED_REQUESTS {
+            pending.push(waiting);
+            break;
+        }
+        drop(pending);
+        if since.elapsed() >= timeout {
+            return Err(timeout_message(&WaitFailure::Timeout, false, timeout));
+        }
+        request = Some(waiting);
+        std::thread::sleep(ACCEPT_RETRY);
+    }
+    if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+        c.request_repaint();
+    }
+    match wait_for_reply(&rx, &gate, timeout) {
+        Ok(reply) => reply.result,
+        Err(failure) => Err(timeout_message(&failure, false, timeout)),
+    }
+}
+
 /// `events.poll {after?, timeoutMs?, topics?, limit?}`: read the shared log, waiting up to 25 s.
 fn event_poll(log: &EventLog, params: &Value) -> Result<Value, String> {
     let after = params.get("after").and_then(Value::as_u64).unwrap_or(0);

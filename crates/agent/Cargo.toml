@@ -1,0 +1,17 @@
+[package]
+name = "figcraft-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "FigCraft's Agent tab backends: the Claude Code CLI and OpenAI-compatible endpoints, both limited to a sandboxed set of FigCraft tools"
+
+[lints]
+workspace = true
+
+[dependencies]
+figcraft-engine = { workspace = true }
+figcraft-mcp = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+# Already in the app through craft-update and craft-font-store.
+ureq = { version = "3.5", default-features = false, features = ["rustls"] }

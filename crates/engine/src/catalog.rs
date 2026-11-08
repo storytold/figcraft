@@ -268,6 +268,7 @@ pub static MENU: &[MenuItem] = &[
     // Help
     m!("Help", "Getting started", "help.gettingStarted"),
     m!("Help", "Keyboard shortcuts", "help.shortcuts"),
+    m!("Help", "Agent", "agent.prompt"),
     m!("Help", "Help page", "help.page"),
     m!("Help", "About FigCraft", "help.about"),
     // Toolbar
@@ -297,7 +298,8 @@ pub fn items() -> impl Iterator<Item = &'static MenuItem> {
 }
 
 /// Items of FigCraft's own that the parity count leaves out (as it does the `collab.` ones).
-const OWN: [&str; 6] = ["file.newFromTemplate", "file.newBoard", "help.gettingStarted", "text.missingFonts", "image.crop", "text.directionAuto"];
+const OWN: [&str; 7] =
+    ["file.newFromTemplate", "file.newBoard", "help.gettingStarted", "text.missingFonts", "image.crop", "text.directionAuto", "agent.prompt"];
 
 /// Coverage: (implemented, total, missing ids). `extra` lists ids implemented by the UI layer.
 pub fn parity(extra: &[&str]) -> (usize, usize, Vec<&'static str>) {

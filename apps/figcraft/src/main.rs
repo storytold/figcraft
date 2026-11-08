@@ -20,6 +20,7 @@
 #[cfg(all(target_os = "windows", target_env = "gnu", not(windows_slim_errors)))]
 compile_error!("Windows GNU builds must set windows_slim_errors to keep UI Automation responsive");
 
+mod agent_host;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod args;
@@ -142,6 +143,10 @@ fn main() -> eframe::Result {
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Started by Claude Code for a run of the Agent tab: no window, only its tools.
+    if args.first().is_some_and(|a| a == agent_host::MCP_FLAG) {
+        std::process::exit(agent_host::serve_mcp());
+    }
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!(
             "FigCraft {}{}",
@@ -203,7 +208,9 @@ fn main() -> eframe::Result {
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
     // The preferences first: they hold the online files a recovered document may be one of.
     let recovery = recovery::Shared::default();
-    let svc = services::Desktop::load(recovery.clone());
+    let mut svc = services::Desktop::load(recovery.clone());
+    let queue: Arc<Mutex<Vec<ControlRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    svc.install_agent(queue.clone(), ctx_slot.clone());
     svc.follow_system_dark(wake(&ctx_slot));
     if let Some(prefs) = svc.prefs.clone() {
         session.prefs = prefs;
@@ -241,7 +248,6 @@ fn main() -> eframe::Result {
     if let Some(link) = &args.join {
         figcraft_ui_egui::live::open_invite(&mut fig, link);
     }
-    let queue: Arc<Mutex<Vec<ControlRequest>>> = Arc::new(Mutex::new(Vec::new()));
     if let Some(p) = port {
         control_server::start(p, graphics::port_wait(), queue.clone(), ctx_slot.clone(), fig.session.events.clone());
     }

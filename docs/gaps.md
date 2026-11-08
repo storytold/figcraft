@@ -543,6 +543,10 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   `figcraft://comments`), a bounded in-memory event log, `events.poll` and `wait_for_changes` for
   live feedback. Any MCP client can drive a headless file or an attached app; no in-app model and no
   network dependency.
+- **Landed (2026-11-07, fork):** the Agent tab (right sidebar, desktop): a chat that works on the file
+  through Claude Code or an OpenAI-compatible endpoint, with the MCP tools, sandboxed, a model list
+  from the CLI or endpoint, and the chat's token counts ([mcp](mcp.md#agent-tab)). Each batch is its
+  own undo step; there is no undo for a whole message.
 - **Missing:** Figma AI (first draft, rename layers, remove background, image generation and
   editing, visual search, Make).
 - **Estimate:** 30–60 h with openly licensed local models. **Owner decision needed.**
@@ -593,6 +597,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Gap 19: the Agent tab chats with Claude Code or an OpenAI-compatible endpoint that works on the file, confined to the document. Estimate unchanged: it is for Figma AI's own features. Tests: `figcraft-agent`, `agent_panel_tests`, `agent_host`. |
 | 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`) draft catalog: 1,975 UI strings, 641 command labels and 31 menu wordings, clean-room from the English source; zh-TW, zh-HK, zh-MO and zh-Hant read it, explicit Hans stays Simplified; Noto Sans CJK TC then Taiwan system faces; no bundled font; native review pending. Numbers unchanged |
 | 2026-10-31 | minor | Gap 10: library analytics list the layers and files using each style and variable; their insertions, detachments and modes stay on the missing list. |
 | 2026-10-31 | minor | Gap 15: the Controller menu names buttons as PlayStation and Switch controllers do; that item leaves the missing list. Estimate unchanged. Test: `present::tail_tests`. |

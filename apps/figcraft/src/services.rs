@@ -25,6 +25,8 @@ pub struct Desktop {
     recovery: crate::recovery::Shared,
     /// The folder of the last file or folder a dialog picked, where the next one starts.
     last_folder: Arc<Mutex<Option<PathBuf>>>,
+    /// What runs the Agent tab's models ([`Desktop::install_agent`]).
+    agent: Option<crate::agent_host::Host>,
 }
 
 /// The settings folder's name in the platform folder, as it always was (the suite keeps existing
@@ -112,7 +114,13 @@ impl Desktop {
             language: system_language(),
             recovery,
             last_folder: Arc::default(),
+            agent: None,
         }
+    }
+
+    /// Give the Agent tab its way to the UI thread: the queue control requests take.
+    pub fn install_agent(&mut self, queue: Arc<Mutex<Vec<figcraft_ui_egui::ControlRequest>>>, ctx: Arc<Mutex<Option<egui::Context>>>) {
+        self.agent = Some(crate::agent_host::Host::new(self.dir.clone(), queue, ctx));
     }
 
     /// winit reports no system theme on Linux and the BSDs: there the freedesktop colour scheme
@@ -351,6 +359,14 @@ const STATE: &str = "state.json";
 /// preferences in `dir`, this run's recovery copies ([`Recovery::quit`](crate::recovery::Recovery::quit))
 /// and the live sessions' ends (one this app hosts tells everyone and stops; a joined one leaves).
 pub fn shutdown(app: &mut FigApp, dir: Option<&Path>, recovery: Option<crate::recovery::Recovery>) {
+    // A run's process must not outlive the app: its thread kills it within moments.
+    if let Some(agent) = app.services.agent() {
+        agent.stop();
+        let since = std::time::Instant::now();
+        while agent.running() && since.elapsed() < AGENT_STOP_WAIT {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
     if let Some(dir) = dir {
         write_prefs(dir, &app.session.prefs);
     }
@@ -373,9 +389,12 @@ pub(crate) fn write_prefs(dir: &Path, prefs: &Prefs) {
     }
 }
 
+/// How long quitting waits for a run of the Agent tab to end.
+const AGENT_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Write `bytes` to `path`, owner read/write only on Unix from before the first byte (a leftover
 /// file from a crash is narrowed too: the mode given at open only applies to new files).
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut o = std::fs::OpenOptions::new();
     o.write(true).create(true).truncate(true);
@@ -481,6 +500,9 @@ pub(crate) fn remembering(last: Arc<Mutex<Option<PathBuf>>>, pick: DialogFuture,
 }
 
 impl Services for Desktop {
+    fn agent(&mut self) -> Option<&mut dyn figcraft_ui_egui::agent_panel::AgentHost> {
+        self.agent.as_mut().map(|host| host as &mut dyn figcraft_ui_egui::agent_panel::AgentHost)
+    }
     fn pick_open(&mut self, title: &str, exts: &[&str]) -> DialogFuture {
         let pick = picked(self.dialog_in_last_folder(title).add_filter("Supported files", exts).pick_file());
         remembering(self.last_folder.clone(), pick, false)

@@ -284,6 +284,9 @@ pub fn on_dark<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) -> R) -> R {
     r
 }
 
+const AGENT_FAMILY: &str = "agent";
+const AGENT_MEDIUM_FAMILY: &str = "agent-medium";
+
 /// UI fonts: Inter and the Archivo wordmark (from the craft-fonts build input) when present;
 /// otherwise egui's defaults. With
 /// `system`, also system faces for scripts those lack (Hebrew, joined Arabic, Ethiopic, the Indic
@@ -363,6 +366,29 @@ pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
             }
         }
     }
+    // The Agent tab reads in Roboto, from craft-fonts or the system. Without it, the UI's own faces.
+    let system_roboto = |style: &str| {
+        system.then(|| figcraft_text::find_face("Roboto", style)).flatten().filter(|face| face.family == "Roboto").map(|face| font_data(&face))
+    };
+    let embedded = find("Roboto", "Variable").or_else(|| find("Roboto", "Regular")).map(FontData::from_static);
+    let roboto = embedded.clone().or_else(|| system_roboto("Regular"));
+    // A variable face takes the weight from the coordinates; a static one ignores them.
+    let roboto_medium = embedded.or_else(|| system_roboto("Medium")).or_else(|| roboto.clone()).map(|mut data| {
+        data.tweak.coords = egui::epaint::text::VariationCoords::new([("wght", 500.0)]);
+        data
+    });
+    for (key, data, family, rest) in [
+        ("roboto", roboto, AGENT_FAMILY, FontFamily::Proportional),
+        ("roboto-medium", roboto_medium, AGENT_MEDIUM_FAMILY, FontFamily::Name("semibold".into())),
+    ] {
+        let mut list = Vec::new();
+        if let Some(data) = data {
+            fonts.font_data.insert(key.into(), Arc::new(data));
+            list.push(key.to_string());
+        }
+        list.extend(fonts.families.get(&rest).cloned().unwrap_or_default());
+        fonts.families.insert(FontFamily::Name(family.into()), list);
+    }
     ctx.set_fonts(fonts);
 }
 
@@ -413,6 +439,16 @@ pub fn font_data(face: &figcraft_text::Face) -> FontData {
 
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
+}
+
+/// The Agent tab's text ([`install_fonts`]).
+pub fn agent_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(AGENT_FAMILY.into()))
+}
+
+/// The Agent tab's names and labels.
+pub fn agent_medium(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(AGENT_MEDIUM_FAMILY.into()))
 }
 
 pub fn brand(size: f32) -> FontId {

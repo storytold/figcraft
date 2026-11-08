@@ -30,6 +30,7 @@ figcraft-collab = { path = "crates/collab" }
 figcraft-engine = { path = "crates/engine" }
 figcraft-ui-egui = { path = "crates/ui-egui" }
 figcraft-mcp = { path = "crates/mcp" }
+figcraft-agent = { path = "crates/agent" }
 figcraft-collab-net = { path = "crates/collab-net" }
 figcraft-plugin = { path = "crates/plugin" }
 

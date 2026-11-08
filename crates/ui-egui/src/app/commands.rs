@@ -140,6 +140,7 @@ impl FigApp {
                     }
                 }
                 "panel.prototype" => self.ui.right_tab = RightTab::Prototype,
+                "panel.agent" => self.ui.right_tab = RightTab::Agent,
                 "panel.designPrototype" => {
                     self.ui.right_tab = if self.ui.right_tab == RightTab::Prototype { RightTab::Design } else { RightTab::Prototype };
                 }

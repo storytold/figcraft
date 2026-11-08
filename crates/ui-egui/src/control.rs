@@ -1145,6 +1145,7 @@ fn ui_set_view(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String>
         app.ui.right_tab = match t {
             "prototype" => crate::RightTab::Prototype,
             "inspect" => crate::RightTab::Inspect,
+            "agent" => crate::RightTab::Agent,
             _ => crate::RightTab::Design,
         };
     }
@@ -1451,8 +1452,24 @@ fn front_only(session: &Session, front: Option<u64>, method: &str, p: &Value) ->
     Err(format!("`{method}` acts on the tab in front: `document` can name another open file only for {}", DOCUMENT_METHODS.join(", ")))
 }
 
+/// The key that runs a request as the Agent tab's model does (`figcraft_agent::Guarded`): it may
+/// not read or write any file, and reaches no server.
+const AGENT_SCOPE: &str = "agentScope";
+
 /// Handle one control method (also used by tests and the headless snapshot tool).
 pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
+    if p.get(AGENT_SCOPE).and_then(Value::as_bool) != Some(true) {
+        return handle_method(app, ctx, method, p);
+    }
+    let mut params = p.clone();
+    if let Some(o) = params.as_object_mut() {
+        o.remove(AGENT_SCOPE);
+    }
+    let none = Arc::new(figcraft_engine::file_access::Roots::new(&[], &[])?);
+    figcraft_engine::file_access::confined(Some(&none), || handle_method(app, ctx, method, &params))
+}
+
+fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
     if !DOCUMENT_METHODS.contains(&method) {
         front_only(&app.session, app.session.ds().ok().map(|d| d.uid), method, p)?;
     }

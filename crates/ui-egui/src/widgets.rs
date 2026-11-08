@@ -1284,7 +1284,7 @@ pub fn checkbox(ui: &mut Ui, on: bool, label: &str) -> bool {
     } else {
         ui.painter().rect_stroke(b, CornerRadius::same(3), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
     }
-    ui.painter().text(pos2(b.max.x + 8.0, rect.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.text);
+    ui.painter().text(pos2(b.max.x + 8.0, rect.center().y), Align2::LEFT_CENTER, label, control_font(ui), t.text);
     resp.clicked()
 }
 
@@ -1304,11 +1304,16 @@ pub fn radio(ui: &mut Ui, on: bool, label: &str) -> bool {
     resp.clicked()
 }
 
+/// A control's text: the family the panel asks for (the Agent tab's Roboto), else the UI's.
+fn control_font(ui: &Ui) -> egui::FontId {
+    ui.style().override_font_id.as_ref().map_or_else(|| regular(11.0), |font| egui::FontId::new(11.0, font.family.clone()))
+}
+
 /// A text button: `primary` is filled with the accent colour, otherwise outlined. A disabled
 /// button is grey with dim text (still readable) and never reports clicks.
 pub fn button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(label.to_string(), regular(11.0), t.text);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), control_font(ui), t.text);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 24.0, FIELD_H), sense);
     a11y::button(&resp, label);
@@ -1324,7 +1329,7 @@ pub fn button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> Respons
     if !primary {
         ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
     }
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, regular(11.0), text);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, control_font(ui), text);
     resp
 }
 

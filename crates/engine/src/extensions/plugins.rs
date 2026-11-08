@@ -144,18 +144,19 @@ const DENIED: &[&str] = &[
 /// Read-only exceptions to [`DENIED`].
 const ALLOWED: &[&str] = &["doc.list", "version.list"];
 
-/// Why a plugin may not call `command` with `params` (before running it), if it may not.
-fn refusal(m: &Manifest, command: &str, params: &Value) -> Option<String> {
+/// Why untrusted code may not call `command` with `params`, whatever it was granted, if it may not:
+/// plugins, and the models of the Agent tab (`figcraft-agent`).
+pub fn denied(command: &str, params: &Value) -> Option<String> {
     if DENIED.iter().any(|p| command.starts_with(p)) && !ALLOWED.contains(&command) {
         return Some(format!("`{command}` isn't available to plugins"));
     }
-    // A preview runs its inner command, which the plugin's permissions and the denied list must cover too.
-    // An inner command that can't be previewed (a nested preview) is refused by the preview itself,
-    // before it runs: descending into its parameters first would only rescan them.
+    // A preview runs its inner command, which the denied list must cover too. An inner command that
+    // can't be previewed (a nested preview) is refused by the preview itself, before it runs:
+    // descending into its parameters first would only rescan them.
     if command == "text.preview"
         && let Some(inner) = get(params, "command").and_then(Value::as_str)
         && crate::textpreview::PREVIEWABLE.contains(&inner)
-        && let Some(why) = refusal(m, inner, get(params, "params").unwrap_or(&Value::Null))
+        && let Some(why) = denied(inner, get(params, "params").unwrap_or(&Value::Null))
     {
         return Some(why);
     }
@@ -183,6 +184,22 @@ fn refusal(m: &Manifest, command: &str, params: &Value) -> Option<String> {
     // A saved version is the file's history, which plugins can't read (`version.` is denied).
     if command == "dev.compare" && get(params, "version").is_some_and(|v| !v.is_null()) {
         return Some("plugins can't read saved versions: leave out `version`".into());
+    }
+    None
+}
+
+/// Why a plugin may not call `command` with `params` (before running it), if it may not.
+fn refusal(m: &Manifest, command: &str, params: &Value) -> Option<String> {
+    if let Some(why) = denied(command, params) {
+        return Some(why);
+    }
+    // A preview's inner command must be within the plugin's permissions too.
+    if command == "text.preview"
+        && let Some(inner) = get(params, "command").and_then(Value::as_str)
+        && crate::textpreview::PREVIEWABLE.contains(&inner)
+        && let Some(why) = refusal(m, inner, get(params, "params").unwrap_or(&Value::Null))
+    {
+        return Some(why);
     }
     if !m.permissions.allows(command) {
         return Some(format!("`{command}` isn't in the commands {} asked permission for", m.name));

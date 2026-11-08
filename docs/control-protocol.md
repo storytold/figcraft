@@ -124,6 +124,9 @@ JSON or the gradient shorthand `{"type":"linearGradient","stops":["#hex","#hex"]
 (as in `docs/mcp.md`). A parameter the command's doc (`engine.commands`) doesn't list is an error
 naming it and the ones it takes, never ignored; `ids` and `id` are always taken.
 
+`agentScope: true` beside any method's params confines that call to no folder and no server, as the
+Agent tab's calls are ([mcp](mcp.md#agent-tab)).
+
 `agent` (a string, next to `command`) runs the command for an AI agent of that name, as the MCP
 server does with its client's name: comments it makes are signed "<agent> (agent)" ("AI agent" for
 an empty name), marked `"agent": true`, and keep their own read state. Without it the command acts

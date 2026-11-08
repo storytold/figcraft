@@ -14,6 +14,8 @@ workspace = true
 figcraft-engine = { workspace = true }
 figcraft-ui-egui = { workspace = true }
 figcraft-collab-net = { workspace = true }
+figcraft-agent = { workspace = true }
+figcraft-mcp = { workspace = true }
 figcraft-format = { workspace = true }
 figcraft-text = { workspace = true }
 # Shared decision of who draws the window frame on Linux (compositor vs. app), replacing the
@@ -31,6 +33,10 @@ arboard = { workspace = true, features = ["image-data", "wayland-data-control"] 
 webbrowser = { workspace = true }
 image = { workspace = true }
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+
+# The AI prompt panel's API keys, in the system's keychain.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
 
 # The system's reduce-motion setting (UISettings.AnimationsEnabled), interface language
 # (GlobalizationPreferences.Languages) and controllers for prototypes (Gaming.Input.Gamepad).

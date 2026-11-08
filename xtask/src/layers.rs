@@ -22,6 +22,8 @@ const TABLE: &[(&str, u8)] = &[
     ("engine", 5),
     ("ui-egui", 6),
     ("mcp", 6),
+    // The Agent tab's model backends, on top of the MCP tools.
+    ("agent", 6),
     // Live sessions over the network (WebSockets): above the engine, beside the UI.
     ("collab-net", 6),
 ];
@@ -71,6 +73,13 @@ pub fn check(root: &std::path::Path) -> bool {
 
 fn same_layer_ok(from: &str, to: &str) -> bool {
     // Within L0: color uses geom types; within L2: text/layout/pathops/collab are independent;
-    // within L6 the MCP server joins live sessions through collab-net.
-    matches!((from, to), ("figcraft-color", "figcraft-geom") | ("figcraft-render", "figcraft-format") | ("figcraft-mcp", "figcraft-collab-net"))
+    // within L6 the MCP server joins live sessions through collab-net and the Agent tab's
+    // backends call the MCP tools.
+    matches!(
+        (from, to),
+        ("figcraft-color", "figcraft-geom")
+            | ("figcraft-render", "figcraft-format")
+            | ("figcraft-mcp", "figcraft-collab-net")
+            | ("figcraft-agent", "figcraft-mcp")
+    )
 }

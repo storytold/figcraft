@@ -2088,6 +2088,34 @@ A name a tool or command doesn't take (`run_command {args}` for `params`, a step
 | `figcraft://node/{id}` (template) | One layer with children to depth 2. |
 | `figcraft://command/{id}` (template) | One command's docs, e.g. `figcraft://command/layout.add`. |
 
+## Agent tab
+
+The right sidebar's Agent tab (`agent.prompt`, desktop only) is a chat that works on the file, with these
+tools, from inside the app. The control channel stays off. Each message goes after a system prompt that
+says the model is in a Figma-class design app and names its tools (`figcraft_agent::system_prompt`), and
+ends with a `<selection>` block: the layers selected when it was sent, up to 20 of them and 16 KB, each with
+its id, name, type, position, size, paints, text and direct children, then only names and ids. The tab says
+what is selected, above the message field. It shows the chat's input and output tokens, as each backend reports them;
+Claude Code's input includes its prompt cache. **New chat** forgets the chat and the counts.
+
+- **Claude Code:** starts `claude -p` with your own login, one process per message, resuming the chat's
+  session, which stays in Claude Code's own history. The system prompt replaces its own. Your Claude Code
+  settings, hooks and `CLAUDE.md` don't apply. Its own tools are off and its only MCP server is the app
+  itself (`figcraft --agent-mcp`), which reaches the run over a private loopback socket with a key made for
+  that run. The key goes by environment, never on a command line. The model list comes from the CLI's
+  startup handshake (an `initialize` control request), which calls no model.
+- **OpenAI-compatible endpoint:** any URL with `/chat/completions` and function calling (`/models` fills
+  the model list). It must be `https`, or `http` on this computer. Keys stay in the system keychain on
+  macOS and Windows; elsewhere in `agent-keys.json` in the settings folder, readable only by its owner.
+  Turn on **The model can see images** for a vision model: only then it gets `screenshot`.
+
+For both, a run needs your consent for that destination, and text in a file is treated as hostile
+(`crates/agent/src/guard.rs`): only `list_commands`, `run_command`, `batch`, `create_node`,
+`set_properties`, `inspect_document`, `get_node`, `select`, `screenshot`, `undo` and `redo` are offered;
+the commands refused to plugins are refused here too, except undo, redo and batches of allowed commands;
+and each call is confined as with automation roots naming no folder, so it reads and writes no file and
+reaches no server. A run stays on the file it started on when you change tabs.
+
 ## Prompts
 
 | Prompt | Arguments |

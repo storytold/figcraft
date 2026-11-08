@@ -91,6 +91,10 @@ pub trait Services {
     /// Ask for them (the browser asks the person): they join the font list by name, each read when
     /// text uses it.
     fn ask_for_local_fonts(&mut self) {}
+    /// What runs the Agent tab's models, where the platform can (the desktop app).
+    fn agent(&mut self) -> Option<&mut dyn crate::agent_panel::AgentHost> {
+        None
+    }
 }
 
 pub type DialogFuture = Pin<Box<dyn Future<Output = Option<PathBuf>>>>;

@@ -50,6 +50,8 @@ mod theme_startup_tests;
 #[cfg(test)]
 mod a11y_tests;
 #[cfg(test)]
+mod agent_panel_tests;
+#[cfg(test)]
 mod async_dialog_tests;
 #[cfg(test)]
 mod blend_preview_tests;
@@ -317,6 +319,7 @@ pub use dialogs::updates_ui;
 pub use dialogs::variables_panel;
 pub use home::home_recents;
 pub use home::online;
+pub use panels::agent_panel;
 pub use panels::assets_panel;
 pub use panels::component_panel;
 pub use panels::dev_compare;
@@ -457,6 +460,8 @@ pub struct UiState {
     /// [`FigApp::logic`] for the main window.
     pub ui_scale: ui_scale::Plan,
     pub shortcuts_panel: bool,
+    /// What the Agent tab holds between frames.
+    pub agent: agent_panel::AgentUi,
     /// The Keyboard shortcuts panel's tab and search text.
     pub shortcuts_tab: figcraft_engine::keymap::Group,
     pub shortcuts_query: String,
@@ -657,6 +662,7 @@ impl Default for UiState {
             rename_file: false,
             ui_scale: ui_scale::plan(1.0, None, None),
             shortcuts_panel: false,
+            agent: Default::default(),
             shortcuts_tab: figcraft_engine::keymap::Group::Essential,
             shortcuts_query: String::new(),
             opacity_digit: None,
