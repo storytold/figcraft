@@ -387,6 +387,7 @@ impl Session {
         ov.width_hover = None;
         ov.face.clear();
         ov.rubber = None;
+        ov.rubber_handle = None;
         ov.guides.clear();
         ov.brush = (ve.tool == VTool::Eraser).then(|| [ev.x, ev.y, ERASER_PX / ev.zoom.max(1e-6)]);
         // What a press here would do (see `vector_down`).
@@ -427,10 +428,22 @@ impl Session {
                 }
             }
             VTool::Pen => {
-                let (to, guides) = pen_at.unwrap_or((ev.p(), Vec::new()));
+                let (mut to, guides) = pen_at.unwrap_or((ev.p(), Vec::new()));
                 if let Some(a) = ve.anchor.and_then(|a| network(&doc, ve.id)?.vertices.get(a).copied()) {
                     let ap = w * a.point();
+                    // With Shift the band ends where a click puts the point: 45° steps from the
+                    // open end in the layer's own space, as `pen_plan` places it.
+                    if ev.shift && h.is_none() {
+                        let v = w.inverse() * ev.p() - a.point();
+                        let step = std::f64::consts::FRAC_PI_4;
+                        to = w * (a.point() + Vec2::from_angle((v.atan2() / step).round() * step) * v.hypot());
+                    }
                     self.tool.overlay.rubber = Some([ap.x, ap.y, to.x, to.y]);
+                    // The handle the last drag pulled out bends the next segment: the band shows it.
+                    if let Some((ox, oy)) = ve.pen_out.filter(|o| o.0.hypot(o.1) > 0.0) {
+                        let hp = w * (a.point() + Vec2::new(ox, oy));
+                        self.tool.overlay.rubber_handle = Some([hp.x, hp.y]);
+                    }
                 }
                 self.tool.overlay.guides = guides;
             }

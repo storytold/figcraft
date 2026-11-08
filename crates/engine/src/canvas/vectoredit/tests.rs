@@ -81,6 +81,28 @@ fn pen_extends_branches_and_closes_paths() {
     assert!(s.ds().unwrap().vector_edit.is_none());
 }
 
+/// The pen's band in edit mode shows the segment a click will draw: bent by the handle the last
+/// drag pulled out, and with Shift ending on the 45° step the click will take (as in draw mode).
+#[test]
+fn the_pen_band_shows_the_next_segment() {
+    let mut s = Session::new();
+    rect(&mut s);
+    ex(&mut s, "view.snapPixel", json!({"on": false}));
+    ex(&mut s, "view.snapObjects", json!({"on": false}));
+    ex(&mut s, "vector.edit.tool", json!({"tool": "pen"}));
+    click(&mut s, 100.0, 0.0);
+    drag(&mut s, (150.0, 50.0), (150.0, 80.0));
+    s.pointer(&ev(PointerKind::Hover, 250.0, 60.0)).unwrap();
+    let ov = &s.tool.overlay;
+    assert_eq!(ov.rubber, Some([150.0, 50.0, 250.0, 60.0]));
+    assert_eq!(ov.rubber_handle, Some([150.0, 80.0]), "the dragged-out handle bends the band");
+    let mut shifted = ev(PointerKind::Hover, 250.0, 60.0);
+    shifted.shift = true;
+    s.pointer(&shifted).unwrap();
+    let [x0, y0, x1, y1] = s.tool.overlay.rubber.unwrap();
+    assert!((y1 - y0).abs() < 1e-9 && (x1 - x0 - (100.0f64.hypot(10.0))).abs() < 1e-9, "a 45° step: {x1}, {y1}");
+}
+
 #[test]
 fn pen_drag_makes_a_smooth_point() {
     let mut s = Session::new();
