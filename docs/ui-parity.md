@@ -9,7 +9,7 @@ Nothing here has been compared tool by tool against the running Figma yet; that 
 remaining work (40–60 h, [gaps](gaps.md) #4).
 
 **Summary (estimated):** UI/UX fidelity ~58%. Layout and look of UI3 compared side by side (~65%);
-interaction feel not yet compared. The interactions measured so far, case by case, are in [interaction-measurements.md](interaction-measurements.md).
+interaction feel only partly compared: the interactions measured so far, case by case, are in [interaction-measurements.md](interaction-measurements.md).
 
 ## Window and panels
 

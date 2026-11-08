@@ -4,7 +4,7 @@
 
 On 2026-11-08 a set of interactions was measured in Figma's web app and compared with FigCraft's: modifier keys on move, resize and rotate, arrow keys, zoom steps, auto layout Fill and Hug, instances, components, number field scrubbing, sidebar widths, auto-pan at the viewport edge, copy and paste in vector edit mode, duplicate and paste placement, and text-editing keys. Every measurement used synthetic files, driving the UI and reading the Design and Layers panels (field values, dropdown labels, bounding boxes), or counting pixels on screen where a panel could not show the number. No incumbent screenshots are committed. This complements [ui-parity.md](ui-parity.md) and works on gap 4 in [gaps.md](gaps.md), "Interaction fidelity not compared tool by tool". It is not a full pass: each section lists what was covered, and the open questions at the end list what could not be measured.
 
-Status values: **matches** (FigCraft already behaved as measured), **fixed in #NNNN (open)** (a mismatch found, with the pull request that fixes it, not merged yet), **not measured** (with the reason), **inconclusive**. Error margins are given where the measurement had one. Trust the shapes of the rules more than the last digit of a number.
+Status values: **matches** (FigCraft already behaved as measured), **fixed in #NNNN (open)** (a mismatch found, with the pull request that fixes it, open when this was written; the pull request carries its tests and CI), **partly fixed in #NNNN (open)** (the same, with what is still missing named), **not measured** (with the reason), **inconclusive**. Error margins are given where the measurement had one. Trust the shapes of the rules more than the last digit of a number.
 
 ## Move, resize and rotate modifiers
 
@@ -150,7 +150,7 @@ A click on a segment's middle can add a point there in Figma's edit mode (seen o
 | Paste with the original in view | in place on it, selected, just above | same | matches |
 | Paste with the original off screen | at the view's centre | same | matches |
 | Paste with a frame selected (far away) | inside the frame, at its centre | same | matches |
-| Tests for the three paste placement rules | n/a | pinned by tests | fixed in #2108 (open) |
+| Tests for the three paste placement rules | the three rules above | already as measured; no test pinned them | matches (pinned by tests in #2108, open) |
 | Ctrl+Shift+V (paste over) | not measured (chord blocked or slow) | paste over at the selection's top-left | not measured (chord blocked or slow) |
 
 ## Selection keys
@@ -179,10 +179,8 @@ Defaults for a new text: Inter Regular 12, line height Auto, letter spacing 0%.
 | Behaviour | Figma (measured) | FigCraft | Status |
 |---|---|---|---|
 | Add auto layout (Shift+A) defaults | two 40 by 40 layers side by side: horizontal, gap "Auto", padding 0, W Fixed (140), H Hug (40); the same with a Y offset of 30 drops the offset; stacked: vertical, gap 60 (numeric), W Fixed (40), H Hug (140); a single 40 by 40 layer: new frame, W and H Hug (60), padding 10, gap 10; an existing 300 by 200 frame with two layers: W stays Fixed (300), H becomes Hug (149), gap "Auto", padding 49 | Hug on both axes for a wrapped selection and an inferred gap | inconclusive (inconsistent between cases in Figma itself: the gap is "Auto" in one case and numeric in another, the cross axis Fixed in the vertical case; the inference has more inputs than measured) |
-| Zoom to fit margins | see the zoom section | not changed | inconclusive (the toolbar overlay) |
-| Space while drawing or marquee | not measurable | not compared | not measured (the browser does not deliver it) |
-| Ctrl while moving | not measurable | Ctrl or Cmd turns snapping off | not measured (synthetic Ctrl is not delivered as a modifier) |
-| Shift and Alt scrub rates | not measurable | ten times and a tenth | not measured (events did not reach the label) |
+
+Also open, as listed in their sections: the zoom-to-fit margins (zoom section, inconclusive because of the toolbar overlay), Space while drawing or dragging a selection box and Ctrl while moving (modifiers section, not measurable from the browser), and the Shift and Alt scrub rates (number field section, not measurable).
 
 ## Revision history
 
