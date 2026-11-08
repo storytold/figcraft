@@ -101,6 +101,32 @@ fn the_values_are_in_the_parents_coordinates() {
 }
 
 #[test]
+fn moving_every_point_by_one_offset_carries_the_regions_paint_frame() {
+    // `{add}` on every point is a plain translation: the region's paint frame goes with the
+    // points, as when they are dragged together.
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    {
+        let node = s.doc_mut().unwrap().get_mut(id).unwrap();
+        let NodeKind::Vector { network } = &mut node.kind else { panic!("expected a vector") };
+        assert!(!network.regions.is_empty(), "the rectangle has a region");
+        for region in &mut network.regions {
+            region.paint_space = Some(figcraft_doc::RegionPaintSpace { width: 100.0, height: 100.0, transform: Affine::IDENTITY });
+        }
+    }
+    let frame = |s: &Session| {
+        let world = s.doc().unwrap().world_transform(id);
+        world * net(s, id).regions[0].paint_space.as_ref().unwrap().transform
+    };
+    let before = frame(&s);
+    let all: Vec<usize> = (0..net(&s, id).vertices.len()).collect();
+    ex(&mut s, "vector.edit.select", json!({"vertices": all}));
+    ex(&mut s, "vector.edit.position", json!({"x": {"add": 10}}));
+    let (want, got) = ((Affine::translate((10.0, 0.0)) * before).as_coeffs(), frame(&s).as_coeffs());
+    assert!(want.iter().zip(got).all(|(a, b)| near(*a, b)), "{got:?} vs {want:?}");
+}
+
+#[test]
 fn junk_is_refused_and_changes_nothing() {
     let mut s = Session::new();
     let id = rect(&mut s);

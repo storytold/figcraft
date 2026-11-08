@@ -1017,9 +1017,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 if moves.is_empty() {
                     return Err(bad("vector.edit.position", "select points"));
                 }
+                // Points with the same offset move together, so moving every point by one offset
+                // still carries the regions' paint frames, as a drag of all of them does.
+                let mut groups: Vec<(Vec2, Vec<usize>)> = Vec::new();
+                for (i, d) in moves {
+                    match groups.iter_mut().find(|(g, _)| (*g - d).hypot() < 1e-9) {
+                        Some((_, v)) => v.push(i),
+                        None => groups.push((d, vec![i])),
+                    }
+                }
                 edit(s.doc_mut()?, ve.id, |net| {
-                    for (i, d) in &moves {
-                        ops::move_vertices(net, &[*i], *d);
+                    for (d, v) in &groups {
+                        ops::move_vertices(net, v, *d);
                     }
                 })?;
                 Ok(json!({"ok": true}))
