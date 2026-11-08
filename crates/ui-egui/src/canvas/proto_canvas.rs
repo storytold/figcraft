@@ -135,6 +135,21 @@ fn frame_at(app: &FigApp, doc: &Document, page: NodeId, p: Pos2) -> Option<NodeI
     doc.top_frames(page).into_iter().rev().find(under).or_else(|| doc.sections_in(page).into_iter().rev().find(under))
 }
 
+/// Another variant of the component set `source` is a variant of (or inside one), under a screen
+/// point: where a drag from it makes a Change to.
+fn sibling_variant_at(app: &FigApp, doc: &Document, source: NodeId, p: Pos2) -> Option<NodeId> {
+    let mut variant = source;
+    for _ in 0..64 {
+        let parent = doc.node(variant)?.parent?;
+        if matches!(doc.node(parent)?.kind, figcraft_doc::NodeKind::ComponentSet { .. }) {
+            let pt = app.to_page(p);
+            return doc.node(parent)?.children.iter().rev().copied().find(|v| *v != variant && doc.world_bounds(*v).is_some_and(|b| b.contains(pt)));
+        }
+        variant = parent;
+    }
+    None
+}
+
 fn arrow(painter: &egui::Painter, pts: &[Pos2; 4], col: Color32) {
     let tip = pts[3];
     let dir = (pts[3] - bezier(pts, 0.9)).normalized();
@@ -259,10 +274,21 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
         ctx.request_repaint();
         if released || !down {
             ctx.data_mut(|m| m.remove::<Drag>(drag_id()));
-            if let Some(dest) = frame_at(app, &doc, page, d.pos)
+            let added = if let Some(variant) = sibling_variant_at(app, &doc, d.source, d.pos) {
+                // Onto another variant of the source's own set: Change to (interactive components).
+                app.run("proto.interaction.add", json!({"ids": [d.source], "action": {"type": "changeTo", "dest": variant}}))
+            } else if let Some(dest) = frame_at(app, &doc, page, d.pos)
                 && doc.top_level_frame(d.source) != Some(dest)
-                && let Some(r) = app.run("proto.interaction.add", json!({"ids": [d.source], "dest": dest}))
             {
+                // From a selection of hotspots, every one connects ("select multiple starting
+                // hotspots on your canvas, then click and drag the icon to the destination").
+                let from: Vec<NodeId> = if sel.contains(&d.source) { sel.clone() } else { vec![d.source] };
+                let from: Vec<NodeId> = from.into_iter().filter(|i| *i == d.source || doc.top_level_frame(*i) != Some(dest)).collect();
+                app.run("proto.interaction.add", json!({"ids": from, "dest": dest}))
+            } else {
+                None
+            };
+            if let Some(r) = added {
                 let k = r.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                 crate::proto_panel::open_editor(&ctx, Some((d.source, k)));
             }
@@ -323,6 +349,79 @@ mod tests {
         u.button(at, true);
         assert!(u.app.ui.pages_focus.is_none());
         u.button(at, false);
+    }
+
+    /// Drag a connection from `source`'s handle to page point `to`.
+    fn drag_connection(u: &mut crate::present_tests::Ui, source: NodeId, to: (f64, f64)) {
+        let doc = u.app.session.doc().unwrap().clone();
+        let sel = u.app.session.selection();
+        let (_, at) = *handles(&u.app, &doc, &sel).iter().find(|(i, _)| *i == source).unwrap();
+        u.button(at, true);
+        let end = u.app.to_screen(to.0, to.1);
+        u.frame(vec![egui::Event::PointerMoved(at + (end - at) * 0.5)]);
+        u.frame(vec![egui::Event::PointerMoved(end)]);
+        u.button(end, false);
+        u.frames(2, Vec::new);
+    }
+
+    fn connections(u: &crate::present_tests::Ui, id: NodeId) -> Vec<figcraft_doc::proto::Action> {
+        u.app.session.doc().unwrap().node(id).unwrap().interactions.iter().flat_map(|i| i.actions.clone()).collect()
+    }
+
+    /// "To create multiple connections at once, select multiple starting hotspots on your canvas,
+    /// then click and drag the icon to the destination": every selected layer connects.
+    #[test]
+    fn a_drag_from_a_selection_connects_every_layer() {
+        let mut s = figcraft_engine::Session::new();
+        let a = crate::present_tests::id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 300})).unwrap());
+        let b = crate::present_tests::id(&s.execute("frame.create", &json!({"x": 300, "y": 0, "width": 200, "height": 300})).unwrap());
+        let btns: Vec<NodeId> = (0..3)
+            .map(|k| {
+                let r = s.execute("shape.rectangle", &json!({"x": 20, "y": 20 + k * 60, "width": 80, "height": 30, "parent": a})).unwrap();
+                crate::present_tests::id(&r)
+            })
+            .collect();
+        s.execute("select.set", &json!({"ids": btns})).unwrap();
+        let mut u = crate::present_tests::Ui::new(s);
+        u.app.ui.right_tab = RightTab::Prototype;
+        u.run("view.zoomFit", json!({}));
+        u.frames(2, Vec::new);
+        drag_connection(&mut u, btns[1], (400.0, 150.0));
+        for k in &btns {
+            assert!(
+                matches!(connections(&u, *k)[..], [figcraft_doc::proto::Action::Navigate { dest, .. }] if dest == b),
+                "{k} connects to B: {:?}",
+                connections(&u, *k)
+            );
+        }
+    }
+
+    /// A drag from a variant onto another variant of its set makes a Change to ("drag it to the
+    /// destination variant"): the set was taken for the variant's own frame and the drop refused.
+    #[test]
+    fn a_drag_onto_a_sibling_variant_makes_a_change_to() {
+        let mut s = figcraft_engine::Session::new();
+        let mut variants = Vec::new();
+        for (k, state) in ["Off", "On"].iter().enumerate() {
+            let f = s
+                .execute("frame.create", &json!({"x": k as f64 * 150.0, "y": 0, "width": 100, "height": 40, "name": format!("State={state}")}))
+                .unwrap();
+            let f = crate::present_tests::id(&f);
+            variants.push(crate::present_tests::id(&s.execute("component.create", &json!({"ids": [f]})).unwrap()));
+        }
+        s.execute("component.combineVariants", &json!({"ids": variants.clone()})).unwrap();
+        s.execute("select.set", &json!({"ids": [variants[0]]})).unwrap();
+        let mut u = crate::present_tests::Ui::new(s);
+        u.app.ui.right_tab = RightTab::Prototype;
+        u.run("view.zoomFit", json!({}));
+        u.frames(2, Vec::new);
+        let on = u.app.session.doc().unwrap().world_bounds(variants[1]).unwrap().center();
+        drag_connection(&mut u, variants[0], (on.x, on.y));
+        assert!(
+            matches!(connections(&u, variants[0])[..], [figcraft_doc::proto::Action::ChangeTo { dest }] if dest == variants[1]),
+            "{:?}",
+            connections(&u, variants[0])
+        );
     }
 
     #[test]
