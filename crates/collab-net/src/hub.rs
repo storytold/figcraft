@@ -814,3 +814,6 @@ mod barred_tests;
 
 #[cfg(test)]
 mod preauth_tests;
+
+#[cfg(test)]
+mod stop_tests;

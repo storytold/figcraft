@@ -173,7 +173,14 @@ impl Hosting {
         let wake = if self.addr.ip().is_unspecified() { SocketAddr::new(loopback(self.addr), self.addr.port()) } else { self.addr };
         let woke = TcpStream::connect_timeout(&wake, Duration::from_secs(1)).is_ok();
         if let Some(t) = self.accept_thread.take() {
-            if woke {
+            // Waited on for a while only: another socket bound to the wake address's exact port
+            // (allowed beside an every-interface listener on macOS and the BSDs) takes the
+            // connection, and joining would then wait for good.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while woke && !t.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if t.is_finished() {
                 let _ = t.join();
             } else {
                 log::warn!("live session: couldn't wake the accept loop; it ends with the next connection");
