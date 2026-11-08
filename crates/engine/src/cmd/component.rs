@@ -25,7 +25,7 @@ pub(crate) use instance::{swap_at, swap_instance};
 use props::{add_prop, bind_prop, delete_prop, edit_prop, set_props};
 pub(crate) use props::{apply_prop_bindings, check_prop_binding, describe_props};
 use variants::{add_variant, combine, create_set};
-pub use variants::{can_add_variant, can_combine_variants};
+pub use variants::{can_add_variant, can_combine_variants, can_create_set};
 
 /// `component.hideWhenPublishing`: the leading `.` of the names of this file's components and
 /// sets (those `ids` are or are in), put on or taken off.

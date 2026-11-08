@@ -94,6 +94,32 @@ pub(super) fn combine(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": set}))
 }
 
+/// Why `ids` (distinct) can't each become a component of a new set (`component.createSet`), or
+/// `None` when they can: layers inside an instance, library copies, instances, components and
+/// component sets, and a layer inside another one of `ids`.
+fn create_set_refusal(doc: &Document, ids: &[NodeId]) -> Option<&'static str> {
+    if ids.iter().any(|i| inside_instance(doc, *i)) {
+        Some("layers inside an instance can't become components")
+    } else if ids.iter().any(|i| doc.is_remote(*i)) {
+        Some(crate::library::READ_ONLY)
+    } else if ids.iter().any(|i| {
+        doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Instance { .. } | NodeKind::Component { .. } | NodeKind::ComponentSet { .. }))
+    }) {
+        Some("select layers that aren't components, component sets or instances")
+    } else if roots(doc, ids).len() != ids.len() {
+        Some("a layer can't be in a set with one inside it")
+    } else {
+        None
+    }
+}
+
+/// Whether "Create component set" is on offer for `ids`: at least one layer that
+/// [`create_set_refusal`] lets through.
+pub fn can_create_set(doc: &Document, ids: &[NodeId]) -> bool {
+    let distinct: Vec<NodeId> = ids.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
+    !distinct.is_empty() && distinct.iter().all(|i| doc.contains(*i)) && create_set_refusal(doc, &distinct).is_none()
+}
+
 /// `component.createSet`: each target becomes a component (as `component.createMultiple` makes
 /// them) and all are wrapped in place in a component set, 20 px around, named as Figma names them:
 /// variants "Property 1=<layer name>" in left-to-right order (a name holding `=` is kept); layers
@@ -104,19 +130,8 @@ pub(super) fn create_set(s: &mut Session, p: &Value) -> Result<Value> {
     let mut seen = BTreeSet::new();
     let ids: Vec<NodeId> = req_targets(cmd, s, p)?.into_iter().filter(|i| seen.insert(*i)).collect();
     let doc = s.doc()?;
-    if ids.iter().any(|i| inside_instance(doc, *i)) {
-        return Err(EngineError::Disabled(cmd.into(), "layers inside an instance can't become components".into()));
-    }
-    if ids.iter().any(|i| doc.is_remote(*i)) {
-        return Err(EngineError::Disabled(cmd.into(), crate::library::READ_ONLY.into()));
-    }
-    if ids.iter().any(|i| {
-        doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Instance { .. } | NodeKind::Component { .. } | NodeKind::ComponentSet { .. }))
-    }) {
-        return Err(EngineError::Disabled(cmd.into(), "select layers that aren't components, component sets or instances".into()));
-    }
-    if roots(doc, &ids).len() != ids.len() {
-        return Err(EngineError::Disabled(cmd.into(), "a layer can't be in a set with one inside it".into()));
+    if let Some(why) = create_set_refusal(doc, &ids) {
+        return Err(EngineError::Disabled(cmd.into(), why.into()));
     }
     let mut made = Vec::new();
     for i in roots(doc, &ids) {

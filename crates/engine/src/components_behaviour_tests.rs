@@ -1153,3 +1153,93 @@ fn create_set_refuses_a_target_inside_another_target_and_leaves_the_document_alo
     assert!(matches!(doc.node(frames[0]).unwrap().kind, NodeKind::Frame));
     assert!(matches!(doc.node(frames[1]).unwrap().kind, NodeKind::Frame));
 }
+
+/// Every node's id, parent, name and kind, to compare a document before and after a refused command.
+fn snapshot(s: &Session) -> Vec<String> {
+    s.doc().unwrap().nodes().map(|n| format!("{:?}|{:?}|{}|{:?}", n.id, n.parent, n.name, n.kind)).collect()
+}
+
+/// A refused `component.createSet`: `Disabled`, no undo step, the document and the selection as they were.
+fn assert_create_set_refused(s: &mut Session, ids: &[NodeId]) {
+    let (before, undo, selection) = (snapshot(s), undo_len(s), s.selection());
+    let e = s.execute("component.createSet", &json!({"ids": ids})).unwrap_err();
+    assert!(matches!(e, crate::EngineError::Disabled(..)), "{e:?}");
+    assert_eq!(undo_len(s), undo, "no undo step");
+    assert_eq!(snapshot(s), before, "the document is unchanged");
+    assert_eq!(s.selection(), selection, "the selection is unchanged");
+}
+
+/// Nothing to wrap is refused before anything is created.
+#[test]
+fn create_set_refuses_no_layers_and_leaves_the_document_alone() {
+    let mut s = Session::new();
+    named_frames(&mut s, &["A"], false);
+    s.execute("select.set", &json!({"ids": []})).unwrap();
+    assert_create_set_refused(&mut s, &[]);
+}
+
+/// One layer is allowed: a set of one variant, as many layers would make.
+#[test]
+fn create_set_with_one_layer_makes_a_one_variant_set() {
+    let mut s = Session::new();
+    let frames = named_frames(&mut s, &["Solo"], false);
+    let before = undo_len(&s);
+    let out = s.execute("component.createSet", &json!({"ids": frames})).unwrap();
+    assert_eq!(undo_len(&s), before + 1, "one undo step");
+    let set = id_of(&out["id"]).unwrap();
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.node(set).unwrap().children.len(), 1);
+    assert_eq!(names_by_x(&s, set), ["Property 1=Default"], "a lone layer shares its name with itself");
+    assert!(matches!(doc.node(doc.node(set).unwrap().children[0]).unwrap().kind, NodeKind::Component { .. }));
+    s.undo().unwrap();
+    assert!(matches!(s.doc().unwrap().node(frames[0]).unwrap().kind, NodeKind::Frame));
+}
+
+/// Each refusal branch of `create_set`, with `can_create_set` agreeing with it.
+#[test]
+fn create_set_refuses_every_ineligible_selection_and_leaves_the_document_alone() {
+    use crate::cmd::component::can_create_set;
+    let mut s = Session::new();
+    let frames = named_frames(&mut s, &["A", "B", "C"], false);
+    let comp = id_of(&s.execute("component.create", &json!({"ids": [frames[0]]})).unwrap()["id"]).unwrap();
+    let inst = id_of(&s.execute("instance.create", &json!({"component": comp})).unwrap()["id"]).unwrap();
+    let set_frames = named_frames(&mut s, &["V1", "V2"], false);
+    let set = id_of(&s.execute("component.createSet", &json!({"ids": set_frames})).unwrap()["id"]).unwrap();
+    // A layer inside the instance (its copy of the card's content).
+    let in_inst = s.doc().unwrap().node(inst).unwrap().children.first().copied();
+    // A library copy.
+    let remote = {
+        let doc = s.doc_mut().unwrap();
+        let store = doc.ensure_library_store();
+        let remote = doc.alloc_id();
+        doc.insert(Node::new(remote, NodeKind::Frame, "Remote", 10.0, 10.0), store, None).unwrap();
+        remote
+    };
+    let ok = frames[1];
+    assert!(can_create_set(s.doc().unwrap(), &[ok, frames[2]]));
+    assert!(!can_create_set(s.doc().unwrap(), &[]));
+    let mut cases = vec![("instance", inst), ("library copy", remote), ("component", comp), ("component set", set)];
+    if let Some(i) = in_inst {
+        cases.push(("inside an instance", i));
+    }
+    for (what, bad) in cases {
+        assert!(!can_create_set(s.doc().unwrap(), &[ok, bad]), "{what}: not offered");
+        assert_create_set_refused(&mut s, &[ok, bad]);
+        assert_create_set_refused(&mut s, &[bad]);
+    }
+}
+
+/// A command that fails leaves no trace: the checks before the creation loop catch every
+/// refusal the loop's own commands could hit, and `Session::execute` restores the document, the
+/// selection and the undo stack on any error, so no half-made components can survive.
+#[test]
+fn a_failing_create_set_leaves_no_components_behind() {
+    let mut s = Session::new();
+    let frames = named_frames(&mut s, &["A", "B"], false);
+    let (before, undo, selection) = (snapshot(&s), undo_len(&s), s.selection());
+    let e = s.execute("component.createSet", &json!({"ids": [frames[0], NodeId(u64::MAX)]}));
+    assert!(e.is_err());
+    assert_eq!(undo_len(&s), undo);
+    assert_eq!(snapshot(&s), before);
+    assert_eq!(s.selection(), selection);
+}

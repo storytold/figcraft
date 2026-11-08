@@ -134,3 +134,32 @@ fn the_third_entry_creates_one_component_set() {
     let doc = u.app.session.doc().unwrap();
     assert!(ids.iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Frame))), "one undo reverts it all");
 }
+
+/// The component button's width in the Design panel: wider with a dropdown chevron beside the icon.
+fn button_width(u: &mut Ui) -> f32 {
+    let all = nodes(u);
+    let button = all.iter().find(|n| n.label().is_some_and(|l| l.starts_with("Create component"))).expect("the Design panel's component button");
+    bounds(button).width()
+}
+
+#[test]
+fn the_dropdown_chevron_is_there_only_for_several_layers() {
+    let (mut one, _) = frames(1);
+    let (mut two, _) = frames(2);
+    let (single, several) = (button_width(&mut one), button_width(&mut two));
+    assert_eq!(single, 24.0, "one layer: the plain icon button");
+    assert_eq!(several, 34.0, "several layers: room for the chevron");
+}
+
+#[test]
+fn create_component_set_is_offered_only_where_it_works() {
+    let (mut u, ids) = frames(3);
+    // Make the first a component: the set can't take it, so the entry is left out.
+    u.app.session.execute("component.create", &json!({"ids": [ids[0]]})).unwrap();
+    u.app.session.execute("select.set", &json!({"ids": ids})).unwrap();
+    u.frame(vec![]);
+    click_button(&mut u);
+    let all = nodes(&mut u);
+    assert!(all.iter().any(|n| n.label() == Some("Create multiple components")), "the menu is open");
+    assert!(all.iter().all(|n| n.label() != Some("Create component set")), "left out for a selection with a component");
+}
