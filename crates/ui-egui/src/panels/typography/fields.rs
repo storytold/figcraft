@@ -4,8 +4,9 @@ use super::picker::{font_picker, remember_family};
 use super::spacing::{SpacingField, commit_spacing, parse_letter_spacing, parse_line_height, spacing_field, spacing_input};
 use super::{
     Arc, DecorationLength, Document, FEATURES, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, LeadingTrim, ListStyle, MIXED, NodeId, SIZES, Sense, TABS,
-    TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, Tokens, Ui, Value, VariableType, common, field_row, icons,
-    json, live, menu_item, menu_popup, regular, row, semibold, text_style_params, tr, tr_noop, trf, trim_num, uniform, vec2, widgets,
+    TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextDirection, TextStyle, Tokens, Ui, Value, VariableType, common,
+    field_row, icons, json, live, menu_item, menu_popup, regular, row, semibold, text_style_params, tr, tr_noop, trf, trim_num, uniform, vec2,
+    widgets,
 };
 
 /// The font rows: family, style and size, line height and letter spacing.
@@ -384,6 +385,43 @@ fn type_settings(
         let items = [(tr("Standard"), tr_noop("Standard")), ("Ag", tr_noop("Cap height to baseline"))];
         if let Some(i) = text_seg(ui, "trim", &items, trim, w) {
             app.set_props(ids, json!({"leadingTrim": if i == 1 { "capHeight" } else { "none" }}));
+        }
+        // Where lines break when the text wraps (Explore text properties).
+        caption(ui, tr("Wrap style"));
+        let wrap = common(doc, ids, |n| n.kind.text().map(|t| t.wrap_style as usize)).flatten();
+        let items = [
+            (tr("Auto"), tr_noop("Auto: as many words as fit on each line")),
+            (tr("Balance"), tr_noop("Balance: every line close to the same length")),
+            (tr("Pretty"), tr_noop("Pretty: full lines, no one word alone on the last")),
+        ];
+        if let Some(i) = text_seg(ui, "wrap", &items, wrap, w) {
+            let style = ["auto", "balance", "pretty"].get(i).copied().unwrap_or("auto");
+            app.set_props(ids, json!({"wrapStyle": style}));
+        }
+        // The paragraphs' base direction, once a right-to-left script is in the text or a direction
+        // is forced ("controls are available to override text direction per paragraph", Add
+        // right-to-left text). While editing: the selected paragraphs.
+        let has_direction =
+            |t: &TextData| figcraft_text::display::has_rtl(&t.characters) || t.paragraphs.iter().any(|p| p.direction != TextDirection::Auto);
+        if ids.iter().any(|i| doc.node(*i).and_then(|n| n.kind.text()).is_some_and(has_direction)) {
+            caption(ui, tr("Text direction"));
+            let dir = common(doc, ids, |n| {
+                n.kind.text().and_then(|t| {
+                    let (a, b) = range.filter(|r| r.0 == n.id).map_or((0, t.char_count()), |(_, a, b)| (a, b));
+                    let (p0, p1) = t.para_span(a, b);
+                    let first = t.para_list(p0).direction;
+                    (p0..=p1).all(|p| t.para_list(p).direction == first).then_some(first as usize)
+                })
+            })
+            .flatten();
+            let items = [
+                (tr("Auto"), tr_noop("Auto: by the first letter with a direction")),
+                ("→", tr_noop("Left to right")),
+                ("←", tr_noop("Right to left")),
+            ];
+            if let Some(i) = text_seg(ui, "direction", &items, dir, w) {
+                app.run("text.direction", json!({"ids": ids, "direction": (["auto", "ltr", "rtl"].get(i).copied().unwrap_or("auto"))}));
+            }
         }
         let resize = common(doc, ids, |n| n.kind.text().map(|t| t.auto_resize)).flatten();
         // Auto-height text with a line limit truncates too.

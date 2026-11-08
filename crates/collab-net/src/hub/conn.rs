@@ -51,6 +51,12 @@ fn health_check(stream: &mut TcpStream, until: Instant) -> bool {
     let mut req = Vec::new();
     let mut chunk = [0u8; 1024];
     while !req.windows(4).any(|w| w == b"\r\n\r\n") && req.len() < 16 << 10 {
+        // The same deadline as the request line: a peer dripping header bytes would otherwise
+        // hold this thread and its connection slot for as long as it liked.
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            break;
+        }
         match stream.read(&mut chunk) {
             Ok(0) | Err(_) => break,
             Ok(n) => req.extend_from_slice(chunk.get(..n).unwrap_or_default()),
@@ -235,6 +241,8 @@ fn serve(mut stream: TcpStream, conn: u64, hub: &Sender<HubIn>, limits: NetLimit
     let out = Line {
         tx,
         queued: Arc::default(),
+        waiting: Arc::default(),
+        max_presence: limits.queue.max(4) / 2,
         block: block.queued.clone(),
         all: shared.queued.clone(),
         max: limits.max_queued_bytes,
@@ -405,5 +413,33 @@ fn linger(ws: &mut WebSocket<Duplex>) {
             Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted) => {}
             Err(_) => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod health_check_tests {
+    use super::*;
+
+    #[test]
+    fn a_health_check_dripping_headers_ends_at_the_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::thread::spawn(move || {
+            let mut c = TcpStream::connect(addr).unwrap();
+            c.write_all(b"GET /healthz HTTP/1.1\r\n").unwrap();
+            // One header byte every 20 ms, far past the deadline, until the server hangs up.
+            for _ in 0..200 {
+                if c.write_all(b"X").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let (mut stream, _) = listener.accept().unwrap();
+        let start = Instant::now();
+        assert!(health_check(&mut stream, start + Duration::from_millis(300)));
+        assert!(start.elapsed() < Duration::from_secs(2), "{:?}", start.elapsed());
+        drop(stream);
+        client.join().unwrap();
     }
 }

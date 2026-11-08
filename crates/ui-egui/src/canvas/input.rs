@@ -25,6 +25,14 @@ impl HoverKey {
     }
 }
 
+/// Whether a button that pans the canvas is held: the middle button, or a mouse's side buttons
+/// (4 and 5), which the incumbent treats the same way (#1758). Space + primary pans too, handled
+/// with the Space key.
+fn pan_button_down(i: &egui::InputState) -> bool {
+    use egui::PointerButton::{Extra1, Extra2, Middle};
+    [Middle, Extra1, Extra2].into_iter().any(|b| i.pointer.button_down(b))
+}
+
 /// The pointer left the canvas (or something over it took the pointer): nothing is hovered there.
 fn left(app: &mut FigApp) {
     app.canvas.last_hover = None;
@@ -140,6 +148,39 @@ fn import_dropped(app: &mut FigApp, ctx: &egui::Context, hover_pos: Option<egui:
     }
 }
 
+/// A press ends the keyboard selection box and pick select.
+fn end_keyboard_box(app: &mut FigApp, ctx: &egui::Context) {
+    if ctx.input(|i| i.pointer.any_pressed()) {
+        app.ui.key_box = None;
+        app.ui.pick = None;
+    }
+}
+
+/// One frame of a pan (the middle or a side button held, or Space + drag): the view follows the
+/// pointer from where the pan began, and the pan ends once no button that pans is held.
+fn pan_view(app: &mut FigApp, ctx: &egui::Context, pos: Pos2, mods: &egui::Modifiers, middle_down: bool) {
+    if let Ok(ds) = app.session.ds_mut() {
+        match app.canvas.middle_pan {
+            None => app.canvas.middle_pan = Some((pos, ds.view.cx, ds.view.cy)),
+            Some((p0, cx, cy)) => {
+                let z = ds.view.zoom.max(1e-6);
+                ds.view.cx = cx - f64::from(pos.x - p0.x) / z;
+                ds.view.cy = cy - f64::from(pos.y - p0.y) / z;
+                ds.revision += 1;
+            }
+        }
+    }
+    // A primary drag under way when the pan began ends when its button is let go, pan or
+    // not: the engine gets its release here, as it does over the canvas or off it.
+    if app.canvas.dragging && !ctx.input(|i| i.pointer.primary_down()) {
+        app.canvas.dragging = false;
+        send(app, PointerKind::Up, pos, mods);
+    }
+    if !middle_down && !ctx.input(|i| i.pointer.primary_down()) {
+        app.canvas.middle_pan = None;
+    }
+}
+
 /// The pointer and keys on the canvas. False when something on it with a cursor of its own has
 /// the pointer (a comment pin, a ruler guide, a gradient or padding handle): the tool's cursor
 /// then doesn't show.
@@ -147,6 +188,8 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     if crate::proto_canvas::input(app, ui, resp) {
         // A prototype gesture is a press on the canvas too: the Pages list gives up the keyboard.
         app.ui.pages_focus = None;
+        // And it ends the keyboard selection box and pick select, as any canvas press does.
+        end_keyboard_box(app, ui.ctx());
         return true;
     }
     let ctx = ui.ctx().clone();
@@ -180,9 +223,11 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
             left(app);
         }
         // A pan whose button was released off the canvas is over.
-        if !ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle) || i.pointer.primary_down()) {
+        if !ctx.input(|i| pan_button_down(i) || i.pointer.primary_down()) {
             app.canvas.middle_pan = None;
         }
+        // So is a handle drag.
+        crate::handles::end_released_drag(app, &ctx);
         return true;
     };
     // A press on the canvas gives the keyboard back to it (arrows nudge again).
@@ -190,6 +235,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         app.ui.layers_focus = false;
         app.ui.pages_focus = None;
         app.ui.key_box = None;
+        app.ui.pick = None;
     }
     // Zoom (pinch, Cmd/Ctrl+scroll; a plain mouse wheel with Scroll wheel zoom) about the pointer;
     // other scrolls pan.
@@ -211,24 +257,17 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     if zoom_tool(app, ui, resp, pos, mods, editing_text || typing_elsewhere) {
         return true;
     }
-    // Middle-button / space panning.
-    let middle_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+    // Middle-button (or side-button) / space panning.
+    let middle_down = ctx.input(pan_button_down);
     if (middle_down || (app.canvas.space_pan && ctx.input(|i| i.pointer.primary_down()))) && resp.hovered() || app.canvas.middle_pan.is_some() {
-        if let Ok(ds) = app.session.ds_mut() {
-            match app.canvas.middle_pan {
-                None => app.canvas.middle_pan = Some((pos, ds.view.cx, ds.view.cy)),
-                Some((p0, cx, cy)) => {
-                    let z = ds.view.zoom.max(1e-6);
-                    ds.view.cx = cx - f64::from(pos.x - p0.x) / z;
-                    ds.view.cy = cy - f64::from(pos.y - p0.y) / z;
-                    ds.revision += 1;
-                }
-            }
-        }
-        if !middle_down && !ctx.input(|i| i.pointer.primary_down()) {
-            app.canvas.middle_pan = None;
-        }
+        pan_view(app, &ctx, pos, &mods, middle_down);
         return true;
+    }
+    // A handle drag whose button went up ends first, wherever on the canvas the pointer is: over a
+    // ruler or a comment pin, which take the pointer below, or over something drawn above the
+    // canvas (the colour picker, a card). The handle had the press, so it has the release too.
+    if crate::handles::end_released_drag(app, &ctx) {
+        return false;
     }
     if !app.canvas.dragging && (resp.hovered() || app.ui.comments.dragging()) && crate::comments::input(app, &ctx, pos) {
         return false;

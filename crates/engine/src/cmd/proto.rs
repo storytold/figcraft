@@ -31,8 +31,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("proto.interaction.remove", "Remove interaction", "{id?, index}", true, |s, p| {
             let cmd = "proto.interaction.remove";
             let k = req_num(cmd, p, "index")?;
-            if k < 0.0 {
-                return Err(bad(cmd, "`index` must be ≥ 0"));
+            if !(0.0..1e9).contains(&k) || k.fract() != 0.0 {
+                return Err(bad(cmd, "`index` must be a whole number in 0..1e9"));
             }
             let k = k as usize;
             let mut hit = false;
@@ -112,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.settings",
             "Prototype settings",
-            "{device? (a device name, \"Custom size\" or \"None\"), background?, rotation? portrait|landscape (or 0|90; phones and tablets turn), color? (one of the device's colours by name), width?, height? (the custom size's screen, 1–10000 points; picks \"Custom size\"), responsive? bool (frames resize to the screen and their constraints and auto layout respond)}",
+            "{device? (a device name, \"Custom size\" or \"None\"; any case; another name is refused with the list), background?, rotation? portrait|landscape (or 0|90; phones and tablets turn), color? (one of the device's colours by name), width?, height? (the custom size's screen, 1–10000 points; picks \"Custom size\"), responsive? bool (frames resize to the screen and their constraints and auto layout respond)} → the page's settings after the call (none given: reads them)",
             true,
             settings
         ),
@@ -173,12 +173,51 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// `proto.settings`: everything is checked before anything changes.
+/// The device setting `name` stands for, as the device picker names it: "None", "Custom size" or a
+/// model of [`PrototypeSettings::DEVICES`], whatever its case and the spaces around it.
+fn known_device(name: &str) -> Option<&'static str> {
+    let name = name.trim();
+    ["None", PrototypeSettings::CUSTOM_DEVICE]
+        .into_iter()
+        .chain(PrototypeSettings::DEVICES.iter().map(|d| d.name))
+        .find(|d| d.eq_ignore_ascii_case(name))
+}
+
+/// What `proto.settings` answers: the page's prototype settings (the device as the picker names it,
+/// the colour shown, the screen as presented, `null` without a device).
+fn settings_json(ps: &PrototypeSettings) -> Value {
+    let screen = ps.device().map(|d| json!({"width": d.width, "height": d.height}));
+    json!({
+        "ok": true,
+        "device": ps.device,
+        "background": format!("#{}", ps.background.to_hex()),
+        "rotation": ps.rotation,
+        "color": ps.device_color().map(|c| c.name),
+        "screen": screen,
+        "customSize": {"width": ps.custom_size[0], "height": ps.custom_size[1]},
+        "responsive": ps.responsive,
+    })
+}
+
+/// `proto.settings`: everything is checked before anything changes; an unknown device is refused
+/// with the devices to pick from, as an unknown colour is. Answers the settings as they are after
+/// the call, so a call without parameters reads them.
 fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "proto.settings";
     let page = s.page()?;
     let bg = color(p, "background");
-    let dev = string(p, "device");
+    let dev = match p.get("device") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let name = v.as_str().unwrap_or_default();
+            let found = known_device(name).ok_or_else(|| {
+                let names: Vec<&str> =
+                    ["None", PrototypeSettings::CUSTOM_DEVICE].into_iter().chain(PrototypeSettings::DEVICES.iter().map(|d| d.name)).collect();
+                bad(cmd, format!("unknown device {}: device is one of {}", figcraft_format::clip(&v.to_string(), 60), names.join("|")))
+            })?;
+            Some(found.to_string())
+        }
+    };
     let rot = match p.get("rotation") {
         None | Some(Value::Null) => None,
         Some(v) => Some(rotation_of(v).ok_or_else(|| bad(cmd, "rotation: portrait|landscape"))?),
@@ -231,12 +270,13 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
         None if !colors.iter().any(|x| x.name == next.color) => next.color.clear(),
         None => {}
     }
+    let answer = settings_json(&next);
     if next != *prototype
         && let NodeKind::Page { prototype, .. } = &mut s.doc_mut()?.get_mut(page)?.kind
     {
         *prototype = next;
     }
-    ok()
+    Ok(answer)
 }
 
 /// Resize top-level `frame` to a screen of `(w, h)` as a responsive prototype does: its children
@@ -406,8 +446,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "proto.interaction.set";
     let p = &super::proto_actions::with_expressions(cmd, &s.doc()?.variables, p)?;
     let k = req_num(cmd, p, "index")?;
-    if k < 0.0 {
-        return Err(bad(cmd, "`index` must be ≥ 0"));
+    if !(0.0..1e9).contains(&k) || k.fract() != 0.0 {
+        return Err(bad(cmd, "`index` must be a whole number in 0..1e9"));
     }
     let k = k as usize;
     let whole: Option<Interaction> = parse(cmd, p, "interaction")?;
@@ -534,6 +574,20 @@ mod tests {
         assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 1);
         assert!(s.undo().unwrap());
         assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 2);
+    }
+
+    #[test]
+    fn fractional_index_is_rejected() {
+        let mut s = Session::new();
+        let a = frame(&mut s, 0.0);
+        let b = frame(&mut s, 200.0);
+        s.execute("proto.interaction.add", &json!({"id": a, "dest": b})).unwrap();
+        s.execute("proto.interaction.add", &json!({"id": a, "dest": b})).unwrap();
+        assert!(s.execute("proto.interaction.remove", &json!({"id": a, "index": 0.5})).is_err());
+        assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 2);
+        let before = s.doc().unwrap().node(a).unwrap().interactions[0].clone();
+        assert!(s.execute("proto.interaction.set", &json!({"id": a, "index": 0.5, "easing": "linear"})).is_err());
+        assert_eq!(s.doc().unwrap().node(a).unwrap().interactions[0], before);
     }
 
     #[test]

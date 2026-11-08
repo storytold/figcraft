@@ -16,13 +16,15 @@ struct Ui {
     time: f64,
     /// What the system reports about the window.
     maximized: bool,
+    /// Modifier keys held during the next frames.
+    modifiers: egui::Modifiers,
 }
 
 impl Ui {
     fn new(title_bar: TitleBar) -> Self {
         let mut app = FigApp::new(Session::new(), Box::new(NoServices));
         app.ui.title_bar = title_bar;
-        let mut u = Self { ctx: egui::Context::default(), app, time: 0.0, maximized: false };
+        let mut u = Self { ctx: egui::Context::default(), app, time: 0.0, maximized: false, modifiers: egui::Modifiers::NONE };
         for _ in 0..3 {
             u.frame(vec![]);
         }
@@ -30,8 +32,9 @@ impl Ui {
     }
 
     /// Run one frame; returns the window commands it sent.
-    fn frame(&mut self, events: Vec<Event>) -> Vec<ViewportCommand> {
+    fn frame(&mut self, mut events: Vec<Event>) -> Vec<ViewportCommand> {
         self.time += 1.0 / 60.0;
+        events.insert(0, Event::ModifiersChanged(self.modifiers));
         let mut input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)), time: Some(self.time), events, ..Default::default() };
         input.viewports.entry(ViewportId::ROOT).or_default().maximized = Some(self.maximized);
         let app = &mut self.app;
@@ -241,4 +244,108 @@ fn a_system_title_bar_leaves_the_window_alone() {
     assert!(!u.click(window_button(2)).contains(&ViewportCommand::Close));
     assert!(u.drag(EMPTY, vec2(40.0, 10.0)).is_empty());
     assert!(u.drag(pos2(SIZE.x - 2.0, SIZE.y - 2.0), vec2(-30.0, -30.0)).iter().all(|c| !matches!(c, ViewportCommand::BeginResize(_))));
+}
+
+/// The main window's first tab closing: (its file's uid, the close button of the first tab).
+fn first_tab(u: &Ui) -> (u64, Pos2) {
+    (u.app.session.docs[0].uid, pos2(156.0, 20.0))
+}
+
+/// Whether file `uid` is still open in a tab.
+fn open(u: &Ui, uid: u64) -> bool {
+    u.app.session.docs.iter().any(|d| d.uid == uid)
+}
+
+/// Whether the unsaved-changes question is on screen.
+fn asking(u: &Ui) -> bool {
+    u.ctx.memory(|memory| memory.area_rect(egui::Id::unique(Some(crate::i18n::tr("Unsaved changes")))).is_some())
+}
+
+/// #2032: closing a tab whose file has unsaved changes asks Don't Save / Cancel / Save, as
+/// closing the window does, instead of a toast that left the tab open. Escape (or Cancel) keeps the
+/// tab, Don't Save closes it, Alt+click closes it without asking, and File ▸ Close tab asks too.
+#[test]
+fn closing_a_tab_with_unsaved_changes_asks() {
+    use crate::windows::{CloseAnswer, TabClose, answer_close_tab};
+    let mut u = Ui::new(TitleBar::Custom);
+    u.app.session.execute("file.new", &json!({})).unwrap();
+    u.app.session.execute("doc.switch", &json!({"index": 0})).unwrap();
+    u.app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    let (uid, close) = first_tab(&u);
+    u.frame(vec![Event::PointerMoved(close)]);
+    u.click(close);
+    u.frame(vec![]);
+    assert!(open(&u, uid), "the tab waits for an answer");
+    assert_eq!(u.app.ui.close_tab, Some(TabClose::Ask(uid)));
+    assert!(asking(&u), "the question is on screen");
+    // Escape is Cancel: the tab stays, with its changes.
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+    u.frame(vec![]);
+    assert!(open(&u, uid), "Escape keeps the tab");
+    assert!(u.app.ui.close_tab.is_none(), "and ends the question");
+    // Don't Save closes it.
+    u.click(close);
+    assert_eq!(u.app.ui.close_tab, Some(TabClose::Ask(uid)));
+    let ctx = u.ctx.clone();
+    answer_close_tab(&mut u.app, &ctx, CloseAnswer::DontSave);
+    assert!(!open(&u, uid), "Don't Save closes the tab");
+    // Alt+click drops the changes without asking.
+    u.app.session.execute("doc.switch", &json!({"index": 0})).unwrap();
+    u.app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    u.app.session.execute("file.new", &json!({})).unwrap();
+    let (uid, close) = first_tab(&u);
+    u.frame(vec![Event::PointerMoved(close)]);
+    u.modifiers = egui::Modifiers::ALT;
+    u.click(close);
+    u.modifiers = egui::Modifiers::NONE;
+    assert!(!open(&u, uid), "Alt+click closes without asking");
+    assert!(u.app.ui.close_tab.is_none());
+    // File ▸ Close tab (and its shortcut) asks about the file shown.
+    u.app.session.execute("doc.switch", &json!({"index": 0})).unwrap();
+    u.app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    let uid = u.app.session.docs[0].uid;
+    crate::menus::invoke(&mut u.app, "file.close");
+    assert_eq!(u.app.ui.close_tab, Some(TabClose::Ask(uid)));
+    assert!(open(&u, uid));
+}
+
+/// #2032: Save in the question saves the file, then closes its tab; a file without a path asks
+/// where with Save as first and the tab stays open until it is saved.
+#[test]
+fn save_in_the_tab_question_saves_then_closes() {
+    let dir = std::env::temp_dir().join(format!("figcraft-tab-close-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("kept.figcraft");
+    let mut u = Ui::new(TitleBar::Custom);
+    u.app.session.execute("file.new", &json!({})).unwrap();
+    u.app.session.execute("doc.switch", &json!({"index": 0})).unwrap();
+    u.app.session.execute("file.save", &json!({"path": path.to_string_lossy()})).unwrap();
+    let saved = std::fs::metadata(&path).unwrap().len();
+    u.app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap();
+    let (uid, close) = first_tab(&u);
+    u.frame(vec![Event::PointerMoved(close)]);
+    u.click(close);
+    u.frame(vec![]);
+    assert!(asking(&u));
+    // Enter answers Save.
+    u.frame(vec![Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert!(!open(&u, uid), "saved, then closed");
+    assert!(std::fs::metadata(&path).unwrap().len() > saved, "the rectangle was saved");
+    // No path: Save as starts (headless: no dialog can open), and the tab stays open.
+    u.app.session.execute("doc.switch", &json!({"index": 0})).unwrap();
+    u.app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap();
+    let (uid, close) = first_tab(&u);
+    u.frame(vec![Event::PointerMoved(close)]);
+    u.click(close);
+    let ctx = u.ctx.clone();
+    crate::windows::answer_close_tab(&mut u.app, &ctx, crate::windows::CloseAnswer::Save);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert!(open(&u, uid), "nothing saved it: the tab stays");
+    assert!(u.app.ui.close_tab.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
 }

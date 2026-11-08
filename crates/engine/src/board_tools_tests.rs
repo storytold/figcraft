@@ -100,18 +100,18 @@ fn routes_take_named_sides_and_free_points() {
     let side = |n, side| End::Node { node: n, side, at: None };
     let p = |x, y| End::Point { x, y };
     let pt = Point::new;
-    // Side to side: out, across halfway, in.
-    assert_eq!(elbow(side(a, Side::Right), side(b, Side::Left)), vec![pt(100.0, 50.0), pt(200.0, 50.0), pt(200.0, 350.0), pt(300.0, 350.0)]);
+    // Side to side: out (from END_GAP outside each side), across halfway, in.
+    assert_eq!(elbow(side(a, Side::Right), side(b, Side::Left)), vec![pt(104.0, 50.0), pt(200.0, 50.0), pt(200.0, 350.0), pt(296.0, 350.0)]);
     // A side and a top or bottom: one turn.
-    assert_eq!(elbow(side(a, Side::Right), side(b, Side::Top)), vec![pt(100.0, 50.0), pt(350.0, 50.0), pt(350.0, 300.0)]);
-    assert_eq!(elbow(side(a, Side::Bottom), side(b, Side::Left)), vec![pt(50.0, 100.0), pt(50.0, 350.0), pt(300.0, 350.0)]);
+    assert_eq!(elbow(side(a, Side::Right), side(b, Side::Top)), vec![pt(104.0, 50.0), pt(350.0, 50.0), pt(350.0, 296.0)]);
+    assert_eq!(elbow(side(a, Side::Bottom), side(b, Side::Left)), vec![pt(50.0, 104.0), pt(50.0, 350.0), pt(296.0, 350.0)]);
     // Two free points: the longer way first; in a line, no turns.
     assert_eq!(elbow(p(0.0, 0.0), p(100.0, 40.0)), vec![pt(0.0, 0.0), pt(50.0, 0.0), pt(50.0, 40.0), pt(100.0, 40.0)]);
     assert_eq!(elbow(p(0.0, 0.0), p(100.0, 0.0)), vec![pt(0.0, 0.0), pt(100.0, 0.0)]);
     // An automatic side faces the other end.
     let straight =
         route(doc, &figcraft_doc::Connector { from: side(a, Side::Auto), to: p(50.0, 500.0), routing: figcraft_doc::Routing::Straight, path: None });
-    assert_eq!(straight.unwrap(), vec![pt(50.0, 100.0), pt(50.0, 500.0)]);
+    assert_eq!(straight.unwrap(), vec![pt(50.0, 104.0), pt(50.0, 500.0)]);
     assert_eq!(Side::from_id("TOP"), Some(Side::Top));
     assert_eq!(Side::from_id("inside"), None);
     // The same place twice is refused, as are a side that doesn't exist and a point without numbers.
@@ -128,10 +128,10 @@ fn a_connector_follows_a_layer_whose_section_moves_and_ignores_unrelated_edits()
     let a = id(&s.execute("board.sticky", &json!({"x": 50, "y": 50, "parent": sec})).unwrap(), "id");
     let b = id(&s.execute("board.stamp", &json!({"x": 800, "y": 150})).unwrap(), "id");
     let c = id(&s.execute("board.connector", &json!({"from": a, "to": b, "style": "straight"})).unwrap(), "id");
-    assert!(near(drawn(&s, c)[0], Point::new(250.0, 150.0)));
+    assert!(near(drawn(&s, c)[0], Point::new(254.0, 150.0)));
     // Only the section is edited; the sticky inside it moves with it, and so does the connector.
     s.execute("transform.move", &json!({"ids": [sec], "dx": 0, "dy": 100})).unwrap();
-    assert!(near(drawn(&s, c)[0], Point::new(250.0, 250.0)), "{:?}", drawn(&s, c));
+    assert!(near(drawn(&s, c)[0], Point::new(254.0, 250.0)), "{:?}", drawn(&s, c));
     // An edit that touches neither end leaves the connector as it was.
     let before = s.doc().unwrap().node_arc(c).cloned().unwrap();
     s.execute("board.sticky", &json!({"x": 0, "y": 900})).unwrap();
@@ -275,4 +275,30 @@ fn a_board_tool_left_on_presses_as_move_in_a_design_file() {
     s.pointer(&PointerEvent::at(PointerKind::Up, 50.0, 50.0, 1.0)).unwrap();
     assert_eq!(s.tool.tool, ToolId::Move);
     assert_eq!(s.selection(), vec![r], "the press selected as Move does");
+}
+
+/// #1916: a connector's start, END_GAP outside the layer it leaves, is a snap line for other layers
+/// but not for that layer, nor for a section holding it (both carry the connector along), and nor
+/// is the connector's label.
+#[test]
+fn a_connector_joined_to_a_moving_layer_or_its_section_is_no_snap_target() {
+    let mut s = board();
+    let sec = id(&s.execute("node.create", &json!({"type": "section", "x": 0, "y": 0, "width": 300, "height": 300})).unwrap(), "id");
+    let a = id(&s.execute("board.sticky", &json!({"x": 50, "y": 50, "parent": sec})).unwrap(), "id");
+    let b = id(&s.execute("board.stamp", &json!({"x": 800, "y": 150})).unwrap(), "id");
+    let c = id(&s.execute("board.connector", &json!({"from": a, "to": b, "style": "straight", "label": "to"})).unwrap(), "id");
+    // A layer the connector has nothing to do with.
+    let d = id(&s.execute("board.sticky", &json!({"x": 0, "y": 900})).unwrap(), "id");
+    let page = s.page().unwrap();
+    let start = drawn(&s, c)[0].x;
+    let label = crate::board::label_of(s.doc().unwrap(), c).unwrap();
+    let lx = s.doc().unwrap().world_bounds(label).unwrap().x0;
+    // A box whose left edge is 1 past a line snaps back by 1 when the line is a target.
+    let pull = |s: &Session, moving: &[NodeId], x: f64| {
+        let t = crate::snap::Targets::gather(s.doc().unwrap(), page, moving);
+        t.snap_rect(figcraft_geom::Rect::new(x + 1.0, 600.0, x + 9.0, 610.0), 4.0).0
+    };
+    assert_eq!((pull(&s, &[d], start), pull(&s, &[d], lx)), (-1.0, -1.0), "for an unrelated layer, the connector and its label snap");
+    assert_eq!(pull(&s, &[b], start), 0.0, "not for the layer it arrives at");
+    assert_eq!((pull(&s, &[sec], start), pull(&s, &[sec], lx)), (0.0, 0.0), "not for the section the connector leaves from");
 }

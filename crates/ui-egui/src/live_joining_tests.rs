@@ -97,3 +97,52 @@ fn leave_takes_a_session_id() {
     assert_eq!(h.app.session.execute("collab.leave", &json!({"session": id})).unwrap()["ended"], true);
     assert!(h.app.session.live.get(id).is_none());
 }
+
+/// Joined, with the file in its tab.
+fn joined(h: &mut Harness) -> u64 {
+    join(h);
+    h.welcome();
+    h.sync();
+    h.app.session.docs[h.app.session.active].uid
+}
+
+const STRIP: &str = "Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…";
+
+#[test]
+fn a_dropped_connection_shows_on_the_tab_and_across_the_canvas_with_retry() {
+    let (mut h, _) = Harness::new();
+    let uid = joined(&mut h);
+    assert!(!crate::tabs::live_lost(&h.app, uid));
+    assert!(!has_text(&h.frames(2), STRIP), "not while connected");
+    h.send(vec![LiveEvent::Status(Status::Reconnecting { attempt: 3 })]);
+    let shapes = h.frames(2);
+    assert!(crate::tabs::live_lost(&h.app, uid));
+    assert!(has_text(&shapes, STRIP));
+    h.click(text_center(&shapes, "Retry now"));
+    assert!(h.app.ui.last_error.is_none(), "{:?}", h.app.ui.last_error);
+    assert_eq!(h.app.session.live().status, Status::Reconnecting { attempt: 3 });
+    // Back: the strip goes.
+    h.welcome();
+    assert!(!has_text(&h.frames(2), STRIP));
+    assert!(!crate::tabs::live_lost(&h.app, uid));
+}
+
+#[test]
+fn a_session_that_ended_stays_on_its_tab_until_dismissed() {
+    let (mut h, _) = Harness::new();
+    let uid = joined(&mut h);
+    h.send(vec![LiveEvent::Status(Status::Failed { reason: "The host refused: this link isn't valid".into() })]);
+    let shapes = h.frames(2);
+    assert!(crate::tabs::live_lost(&h.app, uid));
+    assert!(has_text(&shapes, "Not connected: The host refused: this link isn't valid. Your work is still in this tab."));
+    assert!(has_text(&shapes, "Save a copy…"));
+    h.click(text_center(&shapes, "Try again"));
+    assert_eq!(h.app.session.live().status, Status::Connecting);
+    assert!(crate::tabs::live_lost(&h.app, uid), "still disconnected while it tries");
+    h.send(vec![LiveEvent::Status(Status::Failed { reason: "no".into() })]);
+    let shapes = h.frames(2);
+    h.click(text_center(&shapes, "Dismiss"));
+    assert!(!has_text(&h.frames(2), "Try again"));
+    assert!(!crate::tabs::live_lost(&h.app, uid));
+    assert_eq!(h.app.session.live().status, Status::Off);
+}

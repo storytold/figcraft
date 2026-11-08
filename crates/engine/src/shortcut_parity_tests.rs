@@ -145,7 +145,7 @@ static ROWS: &[Row] = &[
     doc(View, "Outline mode", &["Shift+Cmd+O"], &[], Bound("view.outlines"), ""),
     doc(View, "Pixel preview", &["Ctrl+P"], &["Ctrl+Alt+P"], Bound("view.pixelPreview"), ""),
     doc(View, "Others' cursors in a live session", &["Alt+Cmd+\\"], &["Ctrl+Alt+\\"], Bound("view.multiplayerCursors"), "new command"),
-    doc(View, "Hide the side panels (minimize the interface)", &["Shift+Cmd+\\"], &[], Bound("view.leftSidebar"), ""),
+    doc(View, "Minimize the interface: the navigation bar and both sidebars", &["Shift+Cmd+\\"], &[], Bound("view.minimize"), "the toolbar stays; the right sidebar shows while something is selected"),
     doc(View, "Layers panel", &["Alt+1"], &["Alt+1", "Ctrl+1"], Bound("view.layers"), "one article writes Ctrl+1 for Windows, another Alt+1; both bound there"),
     doc(View, "Interface scale: make larger", &["Alt+Shift+Cmd+="], &[], Bound("pref.uiScaleUp"), "Accessibility at Figma, Adjust the scale of the Figma UI"),
     doc(View, "Interface scale: make smaller", &["Alt+Shift+Cmd+-"], &[], Bound("pref.uiScaleDown"), "Accessibility at Figma"),
@@ -181,6 +181,7 @@ static ROWS: &[Row] = &[
     pin(Zoom, "view.nextFrame", &["N", "End"], &[]),
     // Text
     doc(Text, "Bold", &["Cmd+B"], &[], Bound("text.bold"), ""),
+    doc(Text, "Activate a focused link", &["Alt+Enter"], &[], Bound("text.openLink"), "while editing: the link at the caret; web and mail links only"),
     doc(Text, "Italic", &["Cmd+I"], &[], Bound("text.italic"), ""),
     doc(Text, "Underline", &["Cmd+U"], &[], Bound("text.underline"), ""),
     doc(Text, "Strikethrough", &["Shift+Cmd+X"], &[], Bound("text.strikethrough"), ""),
@@ -234,6 +235,8 @@ static ROWS: &[Row] = &[
         "then the arrows move it, Cmd/Ctrl+arrows draw it out (Shift: farther), Enter selects, Escape closes; F8 kept")
         .reserved("Ctrl+Space switches the input method with some Chinese, Japanese and Korean input methods on Windows and Linux"),
     doc(Selection, "Select nested layers", &["Cmd"], &[], Gesture("Deep select"), "held while clicking or dragging"),
+    doc(Selection, "Pick select (while the keyboard box selection shows)", &["Tab"], &[], Gesture("Selection box: switch to pick select"),
+        "or the chord again; then Tab and Shift+Tab move the pick cursor between layers, Enter and Shift+Enter into and out of a layer, Space selects, Escape ends"),
     pin(Selection, "object.rename", &["F2"], &[]),
     pin(Selection, "select.area", &["F8"], &[]),
     // Edit
@@ -278,6 +281,7 @@ static ROWS: &[Row] = &[
     doc(Arrange, "Add auto layout", &["Shift+A"], &[], Bound("layout.add"), ""),
     doc(Arrange, "Remove auto layout", &["Alt+Shift+A"], &[], Bound("layout.remove"), ""),
     doc(Arrange, "Suggest auto layout", &["Ctrl+Shift+A"], &["Ctrl+Alt+Shift+A"], Bound("layout.suggest"), "was unbound"),
+    doc(Arrange, "Edit padding on all sides (from right panel)", &["Cmd"], &["Ctrl"], Gesture("Edit padding on all sides"), "held while clicking a padding field: the value typed goes to every side"),
     pin(Arrange, "distribute.horizontal", &["Ctrl+Alt+H"], &["Alt+Shift+H"]),
     pin(Arrange, "distribute.vertical", &["Ctrl+Alt+V"], &["Alt+Shift+V"]),
     pin(Arrange, "arrange.tidy", &["Ctrl+Alt+T"], &["Ctrl+Alt+Shift+T"]),
@@ -412,7 +416,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (133, 132, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (136, 135, 1, 0, 2, 57));
 }
 
 #[test]

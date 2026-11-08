@@ -428,7 +428,7 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if key == Key::Escape && !egui::Popup::is_any_open(ctx) && crate::colorpicker::close_if_open(app) {
         return true;
     }
-    if key_box(app, key, m) {
+    if key_pick(app, key, m) || key_box(app, key, m) {
         return true;
     }
     // Enter or Escape finishes crop mode (the crop is already applied).
@@ -480,7 +480,11 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
         _ => (0.0, 0.0),
     };
     if (dx, dy) != (0.0, 0.0) {
-        if app.session.selection().is_empty() {
+        if app.session.selection().is_empty() && app.session.tool.tool.draws_shape() && !app.session.tool.dev_mode && !m.command && !m.alt {
+            // A shape or frame tool chosen: the arrows show the placement crosshair in the middle
+            // of the view and move it; Enter places there (Accessibility at Figma).
+            app.run("tool.crosshair", json!({"dx": dx, "dy": dy, "big": m.shift}));
+        } else if app.session.selection().is_empty() {
             app.run("view.pan", json!({"dx": dx, "dy": dy, "big": m.shift}));
         } else if crate::menus::dev_mode_refuses(app, "transform.nudge") {
             // Dev Mode: said so, nothing moves.
@@ -517,8 +521,14 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
 /// F8): the arrows move it, Cmd/Ctrl+arrows or Shift+arrows move its far corner, sizing it (Shift
 /// with Cmd/Ctrl: five times as far), by 10 screen pixels; Enter selects what it covers like a
 /// marquee (Shift toggles, Cmd/Ctrl takes nested layers), Escape drops it.
-fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
+pub(crate) fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
     let Some(mut b) = app.ui.key_box else { return false };
+    // Tab: the box becomes the pick cursor.
+    if key == Key::Tab && m.is_none() {
+        app.ui.key_box = None;
+        app.start_pick_select();
+        return true;
+    }
     let size = m.shift || m.command;
     let step = if m.shift && m.command { 50.0 } else { 10.0 } / app.session.ds().map_or(1.0, |d| d.view.zoom.max(1e-6));
     let (dx, dy) = match key {
@@ -553,9 +563,86 @@ fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
     }
 }
 
+/// The sibling `dir` rows away from layer `id` in the Layers panel (down for 1, up for -1,
+/// wrapping), as `select.next` and `select.previous` walk: the list shows the last child on top.
+fn pick_sibling(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, dir: i64) -> Option<figcraft_doc::NodeId> {
+    let siblings = &doc.node(doc.node(id)?.parent?)?.children;
+    let n = i64::try_from(siblings.len()).ok()?;
+    let idx = i64::try_from(siblings.iter().position(|c| *c == id)?).ok()?;
+    siblings.get(usize::try_from((idx - dir).rem_euclid(n)).ok()?).copied()
+}
+
+/// Keys while the pick cursor shows ([`FigApp::start_pick_select`]): Tab and Shift+Tab move it between
+/// sibling layers in Layers-panel order, Enter into the top child of a frame or group, Shift+Enter
+/// out to the parent (never the page), Space selects the layer under it, Escape or a click on the canvas drops it (#1836).
+pub(crate) fn key_pick(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
+    if app.ui.pick.is_none() {
+        return false;
+    }
+    // Picked in another document (one switched away from or closed since) or deleted: gone.
+    let Some(at) = app.picked() else {
+        app.ui.pick = None;
+        return false;
+    };
+    let Ok(uid) = app.session.ds().map(|d| d.uid) else { return false };
+    let Ok(doc) = app.session.doc() else { return false };
+    let Some(node) = doc.node(at) else { return false };
+    let plain = !m.command && !m.alt && !m.ctrl;
+    let next = match key {
+        Key::Tab if plain => pick_sibling(doc, at, if m.shift { -1 } else { 1 }),
+        Key::Enter if plain && m.shift => node.parent.filter(|p| doc.node(*p).is_some_and(|n| !n.is_page())),
+        Key::Enter if plain => node.children.last().copied(),
+        Key::Space if m.is_none() => {
+            app.ui.pick = None;
+            app.run("select.set", json!({"ids": [at]}));
+            return true;
+        }
+        Key::Escape => {
+            app.ui.pick = None;
+            return true;
+        }
+        _ => return false,
+    };
+    if let Some(n) = next {
+        app.ui.pick = Some((uid, n));
+    }
+    true
+}
+
 impl FigApp {
+    /// The layer the pick cursor is on, while its document is the one in front and the layer is
+    /// still there, on the page shown (#1836).
+    pub(crate) fn picked(&self) -> Option<figcraft_doc::NodeId> {
+        let (uid, id) = self.ui.pick?;
+        let ds = self.session.ds().ok()?;
+        (ds.uid == uid && ds.doc.page_of(id) == Some(ds.page)).then_some(id)
+    }
+
+    /// Pick select: the pink outline on the first selected layer, or on the page's top layer when
+    /// nothing is selected; the keys walk the
+    /// layer tree from there ([`key_pick`]).
+    pub(crate) fn start_pick_select(&mut self) {
+        let Ok(ds) = self.session.ds() else { return };
+        let top = self.session.page().ok().and_then(|p| ds.doc.node(p)).and_then(|n| n.children.last().copied());
+        let Some(at) = ds.selection.first().copied().or(top) else {
+            self.toast(crate::i18n::tr("Nothing to pick: the page is empty"));
+            return;
+        };
+        self.ui.pick = Some((ds.uid, at));
+        self.toast(crate::i18n::tr(
+            "Pick select: Tab and Shift+Tab move between layers, Enter goes into one, Shift+Enter out, Space selects, Escape cancels",
+        ));
+    }
+
     /// Show a selection box for the keyboard: around the selection, else in the middle of the view.
+    /// The chord again while the box shows switches to pick select, and while the pick cursor
+    /// shows brings the box back.
     pub(crate) fn start_key_box(&mut self) {
+        if self.ui.key_box.take().is_some() {
+            self.start_pick_select();
+            return;
+        }
+        self.ui.pick = None;
         let Ok(ds) = self.session.ds() else { return };
         let zoom = ds.view.zoom.max(1e-6);
         let around = ds.selection.iter().filter_map(|i| ds.doc.world_bounds(*i)).reduce(|a, b| a.union(b));

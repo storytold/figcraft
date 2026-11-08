@@ -59,6 +59,21 @@ const CHINESE: &[&str] = &[
     "WenQuanYi Zen Hei",
     "Droid Sans Fallback",
 ];
+/// Traditional Chinese (Taiwan) faces, an installed Noto Sans CJK TC first, then Windows, macOS
+/// and Linux names. Nothing is bundled: the desktop finds one of these among the installed fonts.
+const TRADITIONAL_CHINESE: &[&str] = &[
+    "Noto Sans CJK TC",
+    "Microsoft JhengHei UI",
+    "Microsoft JhengHei",
+    "PingFang TC",
+    "Heiti TC",
+    "Noto Sans TC",
+    "Source Han Sans TC",
+    "LiHei Pro",
+    "Apple LiGothic",
+    "MingLiU",
+    "PMingLiU",
+];
 
 /// The CJK, Bengali and Thai scripts in `s`.
 pub fn scripts(s: &str) -> u8 {
@@ -86,6 +101,16 @@ pub fn language(code: &str) -> u8 {
     }
 }
 
+/// Whether `code` is Traditional Chinese: `zh-Hant`, or `zh` with a Taiwan, Hong Kong or Macau
+/// region and no explicit `Hans` (`zh-TW`, `zh-HK`, `zh-MO`, `zh-Hant-TW`). `zh-Hans-TW` is
+/// Simplified.
+pub fn traditional(code: &str) -> bool {
+    let tag = code.trim().split(['.', '@']).next().unwrap_or("").replace('_', "-");
+    let base = tag.split('-').next().unwrap_or("");
+    let has = |subtags: &[&str]| tag.split('-').skip(1).any(|t| subtags.iter().any(|s| s.eq_ignore_ascii_case(t)));
+    base.eq_ignore_ascii_case("zh") && (has(&["Hant"]) || (!has(&["Hans"]) && has(&["TW", "HK", "MO"])))
+}
+
 /// Whether the UI can draw language `code`: always on desktop (a system face is found when it's
 /// needed; tofu at worst), on the web only with built-in faces for its scripts (Georgian: craft-fonts'
 /// Noto Sans Georgian). The language picker and the system language skip a language it can't.
@@ -107,19 +132,20 @@ fn shows(code: &str, web: bool) -> bool {
         return figcraft_text::face_with_char('ع', &["Noto Sans Arabic"]).is_some();
     }
     let need = language(code);
-    need == 0 || samples(need, 0).iter().all(|(c, _)| figcraft_text::face_with_char(*c, &["BIZ UDPGothic", "Noto Sans CJK SC"]).is_some())
+    need == 0 || samples(need, 0, traditional(code)).iter().all(|(c, families)| figcraft_text::face_with_char(*c, families).is_some())
 }
 
 /// A character standing for each script in `need`, with the families to look for it in, the UI
 /// language's script (`ui`, see [`language`]) first. Han reads as Chinese (a simplified character,
-/// Chinese faces first) in a Chinese UI, and without kana in a UI that isn't Japanese or Korean;
-/// else a Japanese or Korean face draws it.
-fn samples(need: u8, ui: u8) -> Vec<(char, Vec<&'static str>)> {
+/// Simplified or Traditional Chinese faces first as the UI language says) in a Chinese UI, and
+/// without kana in a UI that isn't Japanese or Korean; else a Japanese or Korean face draws it.
+fn samples(need: u8, ui: u8, hant: bool) -> Vec<(char, Vec<&'static str>)> {
     let chinese = need & HAN != 0 && (ui == HAN || (ui == 0 && need & KANA == 0));
-    let han: (char, Vec<&str>) = match (chinese, ui) {
-        (true, _) => ('们', [CHINESE, JAPANESE, KOREAN].concat()),
-        (false, HANGUL) => ('漢', [KOREAN, JAPANESE, CHINESE].concat()),
-        (false, _) => ('漢', [JAPANESE, KOREAN, CHINESE].concat()),
+    let han: (char, Vec<&str>) = match (chinese, hant, ui) {
+        (true, true, _) => ('們', [TRADITIONAL_CHINESE, JAPANESE, KOREAN].concat()),
+        (true, false, _) => ('们', [CHINESE, JAPANESE, KOREAN].concat()),
+        (false, _, HANGUL) => ('漢', [KOREAN, JAPANESE, CHINESE].concat()),
+        (false, _, _) => ('漢', [JAPANESE, KOREAN, CHINESE].concat()),
     };
     let mut v = vec![
         (KANA, ('あ', JAPANESE.to_vec())),
@@ -147,7 +173,7 @@ fn samples(need: u8, ui: u8) -> Vec<(char, Vec<&'static str>)> {
 /// tried are read from disk.
 pub fn faces(need: u8, lang: &str, have: &dyn Fn(char) -> bool) -> Vec<Arc<Face>> {
     let mut out: Vec<Arc<Face>> = Vec::new();
-    for (c, families) in samples(need, language(lang)) {
+    for (c, families) in samples(need, language(lang), traditional(lang)) {
         if have(c) || out.iter().any(|f| f.has_char(c)) {
             continue;
         }
@@ -177,6 +203,9 @@ mod tests {
         assert_eq!(language("ko"), HANGUL);
         assert_eq!(language("zh-Hant"), HAN);
         assert_eq!(language("zh-Hans"), HAN);
+        assert!(traditional("zh-Hant") && traditional("zh-TW") && traditional("zh-HK") && traditional("zh-MO"));
+        assert!(traditional("zh-Hant-HK") && traditional("zh_TW.UTF-8"));
+        assert!(!traditional("zh-Hans") && !traditional("zh-CN") && !traditional("zh-Hans-TW") && !traditional("zh") && !traditional("ja"));
         assert_eq!(language("bn"), BENGALI);
         assert_eq!(language("fr"), 0);
         assert!(["en", "es", "es-419", "fr", "de", "pt-BR", "tr", "id", "vi", "bs"].iter().all(|c| can_show(c)));
@@ -202,8 +231,8 @@ mod tests {
     /// The UI language's script leads the fallback order; the others follow.
     #[test]
     fn the_ui_language_script_comes_first() {
-        let order = |need, ui| samples(need, ui).into_iter().map(|(c, _)| c).collect::<String>();
-        let first_face = |need, ui| samples(need, ui).first().and_then(|(_, f)| f.first()).copied();
+        let order = |need, ui| samples(need, ui, false).into_iter().map(|(c, _)| c).collect::<String>();
+        let first_face = |need, ui| samples(need, ui, false).first().and_then(|(_, f)| f.first()).copied();
         assert_eq!(order(KANA | HAN | HANGUL, 0), "あ漢한");
         assert_eq!(order(KANA | HAN | HANGUL | BENGALI, language("bn")), "অあ漢한");
         assert_eq!(order(KANA | HAN | HANGUL, KANA | HAN), "あ漢한");
@@ -220,7 +249,15 @@ mod tests {
         // A Chinese UI draws Han in a Chinese face first, Japanese names in it too.
         assert_eq!(order(KANA | HAN | HANGUL, HAN), "们あ한");
         assert_eq!(order(KANA | HAN, language("zh-Hans")), "们あ");
-        assert!(["Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC"].iter().all(|f| samples(HAN, HAN)[0].1[..4].contains(f)));
+        assert!(["Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC"].iter().all(|f| samples(HAN, HAN, false)[0].1[..4].contains(f)));
+        // Traditional Chinese puts an installed Noto Sans CJK TC, then Taiwan's faces, first.
+        let order_hant = |need, ui| samples(need, ui, true).into_iter().map(|(c, _)| c).collect::<String>();
+        assert_eq!(order_hant(KANA | HAN, language("zh-Hant")), "們あ");
+        assert_eq!(first_face(HAN, HAN), Some("Noto Sans CJK SC"));
+        let hant = samples(HAN, language("zh-Hant"), true);
+        assert_eq!(hant[0].0, '們');
+        assert_eq!(hant[0].1[0], "Noto Sans CJK TC");
+        assert!(["Microsoft JhengHei UI", "PingFang TC", "Noto Sans CJK TC"].iter().all(|f| hant[0].1.contains(f)));
         assert!(faces(0, "en", &|_| false).is_empty());
         assert!(faces(KANA | HANGUL | HAN | BENGALI, "ja", &|_| true).is_empty(), "nothing is looked up for scripts the UI draws");
     }

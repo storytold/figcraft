@@ -16,9 +16,9 @@ are one Opus 5.5 agent; most milestones split across 4–6 agents on disjoint cr
 3. **Tool-by-tool interaction pass** against the running Figma ([`ui-parity.md`](ui-parity.md)):
    40–60 h, parallel by tool.
 4. **Languages** on the landed localization layer: native reviews of the es, fr, de, pt-BR, ja,
-   ko, zh-Hans, id and cs drafts and the es-419 overlay (people; Russian and Turkish are reviewed),
+   ko, zh-Hans, zh-Hant, id and cs drafts and the es-419 overlay (people; Russian and Turkish are reviewed),
    the entries added since each catalog was written, then the other key languages (Hindi,
-   Vietnamese): 3–7 h per language plus native review. Arabic now has a complete draft; native review and panel mirroring remain.
+   Vietnamese): 3–7 h per language plus native review. Arabic now has a complete draft; native review and panel mirroring remain. Traditional Chinese (Taiwan) has a complete draft too.
 5. **Multiplayer M9**: accounts and teams on top of the live sessions and the standalone server (the WebSocket transport, hosting from the app, invite links that open the app, document sync, live cursors, selections, text carets, avatars and follow, per-user undo, reconnect with offline edits, collision-free ids for styles, variables, collections and comments, joining from the browser, and `figcraft-server` with persistence, publishing from the app and share links to edit or view landed), per [`collab-protocol.md`](collab-protocol.md) and [`server.md`](server.md): 45–90 h.
 
 ## Alpha gate
@@ -75,6 +75,8 @@ blockers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`) draft catalog: 1,975 UI strings, 641 command labels and 31 menu wordings, clean-room from the English source; zh-TW, zh-HK, zh-MO and zh-Hant read it, explicit Hans stays Simplified; Noto Sans CJK TC then Taiwan system faces; no bundled font; native review pending. Numbers unchanged |
+| 2026-11-03 | patch | M4, #1747: a text layer still carrying the name its characters gave it is renamed as they are typed, so the Layers panel no longer shows the word a layer started with while the canvas shows another (`hello` typed into `hello there` read as `hello` in the panel). A name the author typed is kept, and only the editor follows the characters: commands leave the name alone, so the layer names `data.fill`, component property bindings and templates use as field keys stay put. Tests: `text_behaviour_tests::typing_renames_a_text_layer_that_still_carries_the_name_its_characters_gave_it`, `setting_characters_as_a_command_never_renames_the_layer`. Grade unchanged |
 | 2026-10-31 | minor | M12: as the help describes, holding Cmd/Ctrl while moving a connector's end places it on any part of an object instead of snapping to a side. It keeps that spot as a fraction of the object's box, so it follows the object when it moves or resizes, and without the key an end snaps as before. `board.connector {fromAt, toAt}` and `board.reattach {at}` take it; saved only when set. Numbers unchanged |
 | 2026-10-31 | patch | M11: a trackpad or touch tap sends its press and release in one frame, so a plugin panel's field committed in the frame its button was clicked and the value was lost: the Counter's Set count… kept the old count. The plugin now gets both, the field's value first. The `window.figcraft` docs name `screenshot`'s `data`. Numbers unchanged |
 | 2026-10-31 | patch | M4: Dash and Custom strokes have a Dash cap (None, Round, Square) in the advanced stroke settings and `node.set {dashCap}`, on both ends of every dash on the canvas and in PNG, PDF and SVG. Unset, dashes keep taking the end point caps, so older files look the same; the saved file writes it only when set. Numbers unchanged |

@@ -7,10 +7,14 @@
 
 use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex, PoisonError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
+// The browser build has no `std` clock: `std::time::SystemTime::now()` panics on
+// wasm32-unknown-unknown ("time not implemented on this platform"), and every `comment.*` command
+// stamps an event. `web_time` is `std::time` on native targets and the JavaScript clock on wasm.
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Most events kept; the oldest are dropped.
 pub const MAX_EVENTS: usize = 1024;
@@ -127,12 +131,15 @@ pub fn topics(v: Option<&Value>) -> Result<Vec<String>, String> {
     for t in list {
         let Some(s) = t.as_str() else { return Err("`topics` must be an array of strings".into()) };
         match s {
+            // Each once: the list is scanned for every retained event under the log's lock, so
+            // a long list of repeats would multiply that work.
+            "comments" | "document" | "all" if out.iter().any(|t| t == s) => {}
             "comments" | "document" | "all" => out.push(s.to_string()),
             other => return Err(format!("unknown topic `{other}` (comments, document, all)")),
         }
     }
-    if out.is_empty() {
-        out.push("all".into());
+    if out.is_empty() || out.iter().any(|t| t == "all") {
+        out = vec!["all".into()];
     }
     Ok(out)
 }

@@ -10,6 +10,12 @@ use serde_json::{Value, json};
 
 use crate::{CliError, CliResult};
 
+/// A document's or plugin's text as a terminal should show it: control characters escaped, and
+/// everything else (quotes, backslashes in paths) left as it is.
+fn plain(text: &str) -> String {
+    text.chars().map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() }).collect()
+}
+
 pub fn load(path: &str) -> CliResult<Document> {
     let (doc, notes) = load_noted(path)?;
     if ext(path) == "penpot" {
@@ -199,26 +205,33 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     for n in &notes {
-        eprintln!("note: {n}");
+        eprintln!("note: {}", plain(&n.to_string()));
     }
     println!(
         "{} — {} ({} nodes, {} styles, {} variables, {} images)",
-        path,
-        doc.name,
+        plain(path),
+        plain(&doc.name),
         doc.node_count(),
         doc.styles.len(),
         doc.variables.variables.len(),
         doc.images.len()
     );
     for p in &pages {
-        println!("page {} \"{}\": {} nodes, {} top-level", p["id"], p["name"].as_str().unwrap_or(""), p["nodes"], p["topLevel"]);
+        println!("page {} \"{}\": {} nodes, {} top-level", p["id"], plain(p["name"].as_str().unwrap_or("")), p["nodes"], p["topLevel"]);
         for f in p["frames"].as_array().into_iter().flatten() {
-            println!("  {} {} \"{}\" {}×{}", f["id"], f["type"].as_str().unwrap_or(""), f["name"].as_str().unwrap_or(""), f["width"], f["height"]);
+            println!(
+                "  {} {} \"{}\" {}×{}",
+                f["id"],
+                f["type"].as_str().unwrap_or(""),
+                plain(f["name"].as_str().unwrap_or("")),
+                f["width"],
+                f["height"]
+            );
         }
     }
     for m in &missing {
         let layers = if m.layers == 1 { "text layer" } else { "text layers" };
-        println!("missing font \"{}\": {} {layers} (drawn in a fallback font)", m.family, m.layers);
+        println!("missing font \"{}\": {} {layers} (drawn in a fallback font)", plain(&m.family), m.layers);
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -438,7 +451,8 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
         let cmd = steps.get(failed_at).map_or("", |step| step.command.as_str());
         let i = failed_at;
         println!("{}", json!({"step": i, "command": cmd, "ok": false, "error": e.to_string(), "rolledBack": true}));
-        eprintln!("error: step {i} ({cmd}) failed: {e}");
+        // Plugin-supplied text: escape terminal controls and line breaks.
+        eprintln!("error: step {i} ({}) failed: {}", plain(cmd), plain(&e.to_string()));
         eprintln!("the script's document changes were rolled back");
         return Ok(ExitCode::from(1));
     }
@@ -490,6 +504,25 @@ pub fn connect_publish(file: &str, mappings: &str, dry_run: bool) -> CliResult<E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `info` and a script's failure print what a file and its steps name, controls escaped.
+    #[test]
+    fn info_and_a_failed_script_print_what_they_were_given() {
+        let dir = std::env::temp_dir().join(format!("figcraft-cli-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (svg, script) = (dir.join("a.svg"), dir.join("s.json"));
+        std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>"#).unwrap();
+        std::fs::write(&script, r#"[{"command":"no.such\u001b"}]"#).unwrap();
+        assert_eq!(info(svg.to_str().unwrap(), false).unwrap(), ExitCode::SUCCESS);
+        assert_eq!(run_script(script.to_str().unwrap(), None, None).unwrap(), ExitCode::from(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plain_escapes_controls_and_leaves_quotes_and_paths() {
+        assert_eq!(plain("a\u{1b}[31m\nb"), r"a\u{1b}[31m\nb");
+        assert_eq!(plain(r"Bob's C:\files"), r"Bob's C:\files");
+    }
 
     #[test]
     fn script_formats() {
