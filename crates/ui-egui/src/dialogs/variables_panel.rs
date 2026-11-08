@@ -1189,7 +1189,11 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
 }
 
 /// Whether `f` holds for every variable (Some(true)), for none (Some(false)) or only some (None).
+/// With no variables nothing is on: Some(false), never a checked box for an empty list.
 fn tri<T>(vars: &[&T], f: impl Fn(&T) -> bool) -> Option<bool> {
+    if vars.is_empty() {
+        return Some(false);
+    }
     let on = vars.iter().filter(|v| f(v)).count();
     if on == vars.len() {
         Some(true)
@@ -1208,6 +1212,9 @@ fn bulk_details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Edit
         return;
     }
     let list: Vec<&Variable> = st.bulk_edit.iter().filter_map(|id| vars.get_by_id(id)).filter(|v| v.extends.is_none()).collect();
+    // The menu offers Edit variables only for two or more editable, non-inherited variables of a
+    // file collection (`bulk_ids`), so this closes only when they have since gone (deleted,
+    // undone) or a library was opened: there is nothing left to edit.
     if list.is_empty() || st.library.is_some() {
         st.bulk_edit.clear();
         return;
@@ -1283,6 +1290,12 @@ mod tests {
         assert_eq!(tri(&[&a, &a], |v| *v), Some(true));
         assert_eq!(tri(&[&b, &b], |v| *v), Some(false));
         assert_eq!(tri(&[&a, &b], |v| *v), None);
+    }
+
+    #[test]
+    fn tri_of_no_variables_is_not_checked() {
+        let none: [&bool; 0] = [];
+        assert_eq!(tri(&none, |v| *v), Some(false));
     }
 
     #[test]
