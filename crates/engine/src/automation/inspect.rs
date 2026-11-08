@@ -57,6 +57,7 @@ pub const NODE_KEYS: &[&str] = &[
     "lineHeight",
     "lineIndentations",
     "lineTypes",
+    "lineWrapStyles",
     "listSpacing",
     "listStartOffsets",
     "listStyle",
@@ -455,8 +456,14 @@ fn text_props(t: &TextData, o: &mut serde_json::Map<String, Value>, options: &In
     if t.leading_trim != figcraft_doc::LeadingTrim::None {
         insert_prop(o, options, "leadingTrim", || json!(t.leading_trim));
     }
-    if t.wrap_style != figcraft_doc::WrapStyle::Auto {
-        insert_prop(o, options, "wrapStyle", || json!(t.wrap_style));
+    // The paragraphs' effective wrap styles: one for the layer when they agree, else each one's.
+    let wraps: Vec<figcraft_doc::WrapStyle> = (0..t.paragraph_count()).map(|p| t.para_wrap_style(p)).collect();
+    if let Some(first) = wraps.first().copied().filter(|w| *w != figcraft_doc::WrapStyle::Auto)
+        && wraps.iter().all(|w| *w == first)
+    {
+        insert_prop(o, options, "wrapStyle", || json!(first));
+    } else if wraps.iter().any(|w| *w != figcraft_doc::WrapStyle::Auto) {
+        insert_prop(o, options, "lineWrapStyles", || wraps.iter().map(|w| json!(w)).collect());
     }
     if !t.runs.is_empty() {
         insert_prop(o, options, "styledRuns", || serde_json::to_value(&t.runs).unwrap_or(Value::Null));

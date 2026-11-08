@@ -496,6 +496,52 @@ fn balance_and_pretty_wrap_styles_break_lines_as_documented() {
 }
 
 #[test]
+fn wrap_style_per_paragraph_overrides_the_layers() {
+    // Explore text properties: "You can apply a wrap style at three levels: Text layer,
+    // Paragraph, Text style." A paragraph's own wrap style beats the layer's; setting the layer
+    // sets every paragraph again.
+    let font = test_mono_font();
+    let mut s = Session::new();
+    let t = text(&mut s, "aaa bbb ccc ddd eee\naaa bbb ccc ddd eee", json!({"fontFamily": font, "fontSize": 16, "lineHeight": 24}));
+    s.execute("node.set", &json!({"id": t, "props": {"textAutoResize": "height", "width": 136}})).unwrap();
+    let lines = |s: &Session| -> Vec<(usize, usize)> {
+        let (l, _) = figcraft_text::layout_node(s.doc().unwrap().node(t).unwrap()).unwrap();
+        l.lines.iter().map(|l| (l.char_start, l.char_end)).collect()
+    };
+    let inspect = |s: &Session| crate::inspect::node_json(s.doc().unwrap(), t, 0);
+    let css = |s: &mut Session| s.execute("inspect.code", &json!({"id": t})).unwrap()["code"].as_str().unwrap().to_string();
+    let paragraphs = |s: &Session| s.doc().unwrap().node(t).unwrap().kind.text().unwrap().paragraphs.clone();
+    assert_eq!(lines(&s), [(0, 16), (16, 20), (20, 36), (36, 39)], "Auto: four words and one in each paragraph");
+    // The second paragraph alone, by a range on node.set.
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance", "start": 20, "end": 20}})).unwrap();
+    assert_eq!(lines(&s), [(0, 16), (16, 20), (20, 32), (32, 39)]);
+    assert_eq!(inspect(&s)["lineWrapStyles"], json!(["auto", "balance"]));
+    assert!(inspect(&s).get("wrapStyle").is_none());
+    assert!(!css(&mut s).contains("text-wrap"), "{}", css(&mut s));
+    // While editing, the caret's paragraph (the Wrap style control).
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 0})).unwrap();
+    s.execute("text.wrapStyle", &json!({"style": "pretty"})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(lines(&s), [(0, 12), (12, 20), (20, 32), (32, 39)]);
+    assert_eq!(inspect(&s)["lineWrapStyles"], json!(["pretty", "balance"]));
+    // Undo restores the paragraph's override.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(lines(&s), [(0, 16), (16, 20), (20, 32), (32, 39)]);
+    assert_eq!(inspect(&s)["lineWrapStyles"], json!(["auto", "balance"]));
+    // Enter inside the balanced paragraph carries the style to the new paragraph.
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 22})).unwrap();
+    s.execute("text.edit.insert", &json!({"text": "\n"})).unwrap();
+    s.execute("text.edit.end", &json!({})).unwrap();
+    assert_eq!(inspect(&s)["lineWrapStyles"], json!(["auto", "balance", "balance"]));
+    // The layer level sets every paragraph and folds the overrides away.
+    s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "balance"}})).unwrap();
+    assert!(paragraphs(&s).iter().all(|p| p.wrap.is_none()), "{:?}", paragraphs(&s));
+    assert_eq!(inspect(&s)["wrapStyle"], json!("balance"));
+    assert!(css(&mut s).contains("text-wrap: balance;"), "{}", css(&mut s));
+    assert!(s.execute("node.set", &json!({"id": t, "props": {"wrapStyle": "zigzag", "start": 0, "end": 0}})).is_err());
+}
+
+#[test]
 fn max_lines_on_auto_width_text_keeps_auto_width_and_hugs_that_many_lines() {
     // "Max lines is available only if truncate text is enabled, and: Text resizing is set to
     // auto height or auto width" (Explore text properties): an auto-width text with max lines
