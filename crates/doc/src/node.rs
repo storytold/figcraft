@@ -511,6 +511,10 @@ pub struct Node {
     /// Explicit variable modes (collection → mode) set on this container.
     #[serde(default, skip_serializing_if = "is_default")]
     pub var_modes: BTreeMap<CollectionId, ModeId>,
+    /// An instance's scale factor (the Scale tool): the variables bound on its layers draw at their
+    /// value times this, and times the factors of the instances around it. 1 on everything else.
+    #[serde(default = "one64", skip_serializing_if = "is_one64")]
+    pub scale_factor: f64,
     /// In a boolean group: how this operand combines with the operands below it (`None`: the
     /// group's operation). Ignored for the bottom operand and outside boolean groups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -571,6 +575,9 @@ pub(crate) fn yes() -> bool {
 fn one() -> f32 {
     1.0
 }
+fn one64() -> f64 {
+    1.0
+}
 fn pass() -> BlendMode {
     BlendMode::PassThrough
 }
@@ -587,6 +594,9 @@ pub(crate) fn is_default<T: Default + PartialEq>(v: &T) -> bool {
 }
 fn is_yes(v: &bool) -> bool {
     *v == yes()
+}
+fn is_one64(v: &f64) -> bool {
+    *v == 1.0
 }
 fn is_one(v: &f32) -> bool {
     *v == one()
@@ -730,6 +740,7 @@ impl Node {
             styles: StyleRefs::default(),
             bound: BTreeMap::new(),
             var_modes: BTreeMap::new(),
+            scale_factor: 1.0,
             bool_op: None,
             constrain_proportions: false,
             source: None,

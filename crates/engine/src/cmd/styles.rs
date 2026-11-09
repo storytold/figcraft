@@ -1096,6 +1096,10 @@ pub(crate) fn bound_before(doc: &Document, ids: &[NodeId]) -> Vec<std::sync::Arc
 pub(crate) fn detach_edited(doc: &mut Document, before: &[std::sync::Arc<Node>]) {
     for old in before {
         let Some(n) = doc.node(old.id) else { continue };
+        // An instance the Scale tool scaled keeps its bindings: they draw at its new scale (#2090).
+        if n.scale_factor != old.scale_factor {
+            continue;
+        }
         let edited: Vec<String> = n
             .bound
             .keys()
@@ -1239,6 +1243,55 @@ pub(crate) fn apply_paint_bindings_on_load(doc: &mut Document) {
     doc.mark_dirty(pending);
 }
 
+/// The bound fields holding a length: what the Scale tool scales, so what an instance's scale
+/// factor multiplies a number variable by (#2090).
+pub(crate) const LENGTH_FIELDS: &[&str] = &[
+    "width",
+    "height",
+    "w",
+    "h",
+    "gap",
+    "itemSpacing",
+    "columnGap",
+    "crossGap",
+    "counterAxisSpacing",
+    "rowGap",
+    "padding",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "paddingHorizontal",
+    "paddingVertical",
+    "cornerRadius",
+    "topLeftRadius",
+    "topRightRadius",
+    "bottomRightRadius",
+    "bottomLeftRadius",
+    "strokeWeight",
+    "strokeTopWeight",
+    "strokeRightWeight",
+    "strokeBottomWeight",
+    "strokeLeftWeight",
+    "minWidth",
+    "maxWidth",
+    "minHeight",
+    "maxHeight",
+    "fontSize",
+    "lineHeight",
+    "letterSpacing",
+    "paragraphSpacing",
+    "paragraphIndent",
+];
+
+/// The scale a layer's lengths are drawn at: the product of the scale factors of the instances it
+/// is or sits in.
+fn scale_of(doc: &Document, id: NodeId) -> f64 {
+    let factor = |i: NodeId| doc.node(i).filter(|n| matches!(n.kind, NodeKind::Instance { .. })).map_or(1.0, |n| n.scale_factor);
+    let k = std::iter::once(id).chain(doc.ancestors(id)).map(factor).product::<f64>();
+    if k.is_finite() && k > 0.0 { k } else { 1.0 }
+}
+
 /// Re-apply the variable bindings whose field passes `include`, on the `only` nodes (every bound
 /// node when `None`). Auto layout fields wait while their node has no auto layout.
 fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::BTreeSet<NodeId>>, include: impl Fn(&str) -> bool) {
@@ -1253,6 +1306,7 @@ fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::B
     };
     for id in bound {
         let modes = doc.modes_for(id);
+        let scale = scale_of(doc, id);
         let Some(n) = doc.node(id) else { continue };
         let binds = n.bound.clone();
         let has_layout = n.layout.is_some();
@@ -1300,6 +1354,8 @@ fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::B
                 VariableValue::Number(x) if field == "arcSweep" => json!(x * 3.6),
                 VariableValue::Number(x) if field == "arcInner" => json!(x / 100.0),
                 VariableValue::Number(x) if field == "characters" => json!(trim_num(*x)),
+                // An instance's scale factor scales the lengths its variables give.
+                VariableValue::Number(x) if scale != 1.0 && LENGTH_FIELDS.contains(&field.as_str()) => json!(x * scale),
                 VariableValue::Number(x) => json!(x),
                 VariableValue::String(x) => json!(x),
                 VariableValue::Boolean(b) => json!(b),

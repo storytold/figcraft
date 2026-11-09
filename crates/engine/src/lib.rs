@@ -531,6 +531,8 @@ mod save_disk_changes_tests;
 #[cfg(test)]
 mod save_format_tests;
 #[cfg(test)]
+mod scale_bound_values_tests;
+#[cfg(test)]
 mod scale_tool_tests;
 #[cfg(test)]
 mod scaled_instance_tests;
