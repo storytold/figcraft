@@ -331,6 +331,18 @@ struct Zones {
     tracks: Vec<[Pos2; 2]>,
 }
 
+/// A small screen-space target at the padding band's centre. Keep it independent of the band's
+/// size and zoom: the rest of the band belongs to ordinary canvas selection and movement.
+fn padding_handle(side: usize, band: Rect) -> Rect {
+    Rect::from_center_size(band.center(), if side.is_multiple_of(2) { vec2(20.0, 12.0) } else { vec2(12.0, 20.0) })
+}
+
+/// Alt links opposing sides, Alt+Shift all four. Shift alone retains the existing axis gesture.
+/// Painting and editing share this rule so the highlighted sides are exactly those that change.
+fn padding_affects(side: usize, candidate: usize, modifiers: egui::Modifiers) -> bool {
+    candidate == side || (modifiers.alt && modifiers.shift) || ((modifiers.alt || modifiers.shift) && candidate == (side + 2) % 4)
+}
+
 fn al_zones(app: &FigApp) -> Option<Zones> {
     let ds = app.session.ds().ok()?;
     if ds.selection.len() != 1 || ds.text_edit.is_some() || ds.vector_edit.is_some() {
@@ -511,7 +523,7 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         draw_crop(app, painter, id, &img, r);
         return;
     }
-    let hover = painter.ctx().input(|i| i.pointer.hover_pos());
+    let (hover, modifiers) = painter.ctx().input(|i| (i.pointer.hover_pos(), i.modifiers));
     let tool_move = app.session.tool.tool == figcraft_engine::ToolId::Move && !app.session.tool.busy();
     let dragging: Option<Drag> = painter.ctx().data(|d| d.get_temp(drag_id()));
     if !tool_move && dragging.is_none() {
@@ -520,17 +532,23 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
     let Some(z) = al_zones(app) else { return };
     let active_side = match &dragging {
         Some(Drag::Padding { side, .. }) => Some(*side),
-        _ => None,
+        _ => hover.and_then(|pos| z.bands.iter().find(|(side, r, _)| padding_handle(*side, *r).contains(pos)).map(|(side, _, _)| *side)),
     };
     for seg in &z.tracks {
         painter.add(Shape::dashed_line(seg, Stroke::new(1.0, PINK.gamma_multiply(0.6)), 3.0, 3.0));
     }
     for (side, r, v) in &z.bands {
-        let hot = hover.is_some_and(|h| r.contains(h)) || active_side == Some(*side);
+        let handle = padding_handle(*side, *r);
+        let linked = active_side.is_some_and(|active| padding_affects(active, *side, modifiers));
+        let hot = hover.is_some_and(|h| r.contains(h) || handle.contains(h)) || linked;
         if hot {
             painter.rect_filled(*r, CornerRadius::ZERO, PINK.gamma_multiply(0.25));
-            pink_label(painter, crate::canvas::fmt(*v), r.center());
+            let offset = if side.is_multiple_of(2) { vec2(28.0, 0.0) } else { vec2(0.0, -20.0) };
+            pink_label(painter, crate::canvas::fmt(*v), r.center() + offset);
         }
+        let grip = Rect::from_center_size(handle.center(), if side.is_multiple_of(2) { vec2(16.0, 4.0) } else { vec2(4.0, 16.0) });
+        painter.rect_filled(grip, CornerRadius::same(2), if linked { PINK } else { PINK.gamma_multiply(0.6) });
+        painter.rect_stroke(grip, CornerRadius::same(2), Stroke::new(if linked { 1.5 } else { 1.0 }, Color32::WHITE), StrokeKind::Outside);
     }
     let drag_key = match &dragging {
         Some(Drag::Gap { key, .. }) => Some(*key),
@@ -551,12 +569,12 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
 
 /// Pointer handling; returns true when a handle owns the pointer this frame.
 pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
-    let (pressed, down, released, shift) = ctx.input(|i| {
+    let (pressed, down, released, modifiers) = ctx.input(|i| {
         (
             i.pointer.button_pressed(egui::PointerButton::Primary),
             i.pointer.primary_down(),
             i.pointer.button_released(egui::PointerButton::Primary),
-            i.modifiers.shift,
+            i.modifiers,
         )
     });
     let dragging: Option<Drag> = ctx.data(|d| d.get_temp(drag_id()));
@@ -567,7 +585,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             return true;
         }
         if down {
-            apply(app, &drag, pos, shift);
+            apply(app, &drag, pos, modifiers);
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         if released || !down {
@@ -672,14 +690,14 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
     }
     let Some(Zones { id, bands, gaps, .. }) = al_zones(app) else { return false };
     for (side, r, v) in bands {
-        if r.contains(pos) {
+        if padding_handle(side, r).contains(pos) {
             ctx.set_cursor_icon(if side % 2 == 0 { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
             if pressed {
                 let _ = app.session.begin_interaction("Padding");
                 ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side, start: pos, value: v }));
-                return true;
             }
-            return false;
+            // Hover owns the cursor too; otherwise the canvas tool replaces the resize arrows.
+            return true;
         }
     }
     for g in gaps {
@@ -696,7 +714,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
     false
 }
 
-fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
+fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, modifiers: egui::Modifiers) {
     let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0).max(1e-6);
     match drag {
         Drag::Gradient { id, fills, index, which } => {
@@ -745,10 +763,12 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
                 _ => pos.x - start.x,
             }) / zoom;
             let v = (value + d).round().max(0.0);
-            let key = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].get(*side).copied().unwrap_or("paddingTop");
-            // Shift drags both sides of the axis together.
-            let props =
-                if shift { if side % 2 == 0 { json!({"paddingVertical": v}) } else { json!({"paddingHorizontal": v}) } } else { json!({ key: v }) };
+            let props: serde_json::Map<String, serde_json::Value> = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]
+                .iter()
+                .enumerate()
+                .filter(|(candidate, _)| padding_affects(*side, *candidate, modifiers))
+                .map(|(_, key)| ((*key).to_owned(), json!(v)))
+                .collect();
             let _ = app.session.execute("node.set", &json!({"ids": [id], "props": props}));
         }
         Drag::Crop { id, fills, index, which, start, rect } => {
@@ -764,7 +784,7 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
                 let (cx, cy) = corners.get(*which).copied().unwrap_or((x1, y1));
                 let (ow, oh) = (cx - ax, cy - ay);
                 let (mut nw, mut nh) = (u.0 - ax, u.1 - ay);
-                if !shift {
+                if !modifiers.shift {
                     // Node aspect matters: the unit box is not square in pixels.
                     let Some(n) = app.session.doc().ok().and_then(|d| d.node(*id)).cloned() else { return };
                     let k = ((nw * n.width).abs() / (ow * n.width).abs().max(1e-9)).max((nh * n.height).abs() / (oh * n.height).abs().max(1e-9));
