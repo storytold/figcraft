@@ -358,11 +358,7 @@ impl FigApp {
                 // each side of the panel (240 pt by default). The edge is drawn in `right_panel`.
                 .frame(egui::Frame::NONE.fill(t.panel))
                 .show(ui, |ui| {
-                    let label = match self.ui.right_tab {
-                        RightTab::Design => i18n::tr("Design"),
-                        RightTab::Prototype => i18n::tr("Prototype"),
-                        RightTab::Inspect => i18n::tr("Dev Mode"),
-                    };
+                    let label = right_tab_label(self.ui.right_tab);
                     a11y::region(&mut self.ui.nav, ui, a11y::Region::Properties, egui::accesskit::Role::Pane, label);
                     right::right_panel(self, ui)
                 });
@@ -441,5 +437,14 @@ impl FigApp {
         // field or an open palette owns the platform IME instead; the early `home`/present paths
         // above make the same single idle observation.
         self.observe_ime(&ctx, !typing && !self.field_focus && self.ui.palette.is_none());
+    }
+}
+
+/// The right panel's tab name, which its accessibility region reads.
+pub(crate) fn right_tab_label(tab: RightTab) -> &'static str {
+    match tab {
+        RightTab::Design => i18n::tr("Design"),
+        RightTab::Prototype => i18n::tr("Prototype"),
+        RightTab::Inspect => i18n::tr("Developer Mode"),
     }
 }

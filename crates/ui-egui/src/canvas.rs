@@ -235,7 +235,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let label = if documents {
         tr("Drop to open")
     } else if app.ui.right_tab == crate::RightTab::Inspect {
-        tr("Dev Mode only inspects: switch to Design (Shift+D) to edit")
+        tr("Developer Mode only inspects: switch to Design (Shift+D) to edit")
     } else {
         tr("Drop to import")
     };
