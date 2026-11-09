@@ -342,7 +342,6 @@ fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Toke
             (tr("Getting started"), "help.gettingStarted"),
             (tr("Keyboard shortcuts"), "help.shortcuts"),
             (tr("Help page"), "help.page"),
-            (tr("Check for updates…"), "help.checkForUpdates"),
             (tr("About ClawDesign"), "help.about"),
         ] {
             if crate::right::menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")) {

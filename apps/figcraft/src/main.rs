@@ -229,7 +229,9 @@ fn main() -> eframe::Result {
     // open (no frame then).
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
-    fig.set_startup_update_check(true);
+    // ClawDesign ships its web build and CLI, not desktop releases: the updater would find upstream
+    // FigCraft's releases and offer to replace this app with them, so the desktop app doesn't check.
+    fig.set_startup_update_check(false);
     fig.automation_roots = roots;
     fig.ui.home = false;
     // Files named on the command line are the user's too: their missing fonts are listed.
