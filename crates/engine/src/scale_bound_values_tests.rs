@@ -128,3 +128,23 @@ fn scaling_a_plain_frame_bakes_its_bound_gap_and_drops_the_binding() {
     assert!(near(factor(&s, f), 1.0));
     healthy(&s);
 }
+
+#[test]
+fn detaching_a_scaled_instance_keeps_its_lengths_and_drops_their_variables() {
+    // Measured: detaching a 0.5x instance whose gap is bound leaves a plain frame with the gap
+    // at the scaled value and no variable.
+    let mut s = Session::new();
+    let (_c, a, i) = row_instance(&mut s);
+    ex(&mut s, "transform.scale", json!({"ids": [i], "factor": 0.5}));
+    let ia = copy_of(&s, i, a);
+    ex(&mut s, "component.detach", json!({"ids": [i]}));
+    assert!(near(gap(&s, i), 4.0), "gap {}", gap(&s, i));
+    assert_eq!(node(&s, ia).corners.radii, [2.0; 4]);
+    assert!(!node(&s, i).bound.contains_key("gap"), "the gap's variable goes");
+    assert!(!node(&s, ia).bound.contains_key("cornerRadius"), "the radius's variable goes");
+    assert!(near(factor(&s, i), 1.0), "a frame has no scale factor: {}", factor(&s, i));
+    // The variables no longer reach it.
+    ex(&mut s, "variable.set", json!({"variable": "Gap", "mode": "Light", "value": 20}));
+    assert!(near(gap(&s, i), 4.0), "gap after the variable changed {}", gap(&s, i));
+    healthy(&s);
+}

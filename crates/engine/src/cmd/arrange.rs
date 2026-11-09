@@ -400,8 +400,8 @@ fn turn_pivot(s: &Session, ids: &[NodeId]) -> Result<Option<Point>> {
 }
 
 /// The range an instance's scale factor stays in (the same range `.fig` files allow).
-const MIN_SCALE_FACTOR: f64 = 1e-3;
-const MAX_SCALE_FACTOR: f64 = 1e3;
+pub(crate) const MIN_SCALE_FACTOR: f64 = 1e-3;
+pub(crate) const MAX_SCALE_FACTOR: f64 = 1e3;
 
 /// Scale a node and everything in it uniformly (the Scale tool): sizes and positions (whatever
 /// the children's constraints), strokes, effects, radii, auto layout spacing, min/max sizes,
