@@ -266,15 +266,17 @@ impl Presenter {
         (t, clock)
     }
 
-    /// The part of the frame `id` in view (`visible`, page units) at the full pixel scale `px`, for
-    /// a frame whose whole texture is capped below it (see [`detail_plan`]). While the view moves
-    /// (`moving`) it only returns a detail already rendered, the capped texture showing under it.
+    /// The part of the frame `id` (its whole texture covering `whole`, page units) in view
+    /// (`visible`) at the full pixel scale `px`, for a frame whose whole texture is capped below it
+    /// (see [`detail_plan`]). While the view moves (`moving`) it only returns a detail already
+    /// rendered, the capped texture showing under it.
     pub(super) fn detail_texture(
         &mut self,
         ctx: &egui::Context,
         doc: &Document,
         id: NodeId,
         px: f64,
+        whole: figcraft_geom::Rect,
         visible: figcraft_geom::Rect,
         moving: bool,
         now: f64,
@@ -293,8 +295,7 @@ impl Presenter {
             return None;
         }
         let side = ctx.input(|i| i.max_texture_side) as f64 - 2.0;
-        let bounds = figcraft_render::export_bounds(doc, id)?;
-        let rect = detail_plan(bounds, visible, px, side)?;
+        let rect = detail_plan(whole, visible, px, side)?;
         let pix = figcraft_render::render_area_at(doc, &[id], rect, texture_scale_for(rect, px, side), t)?;
         let img = crate::render_worker::screen_image(&pix, doc.color_profile);
         let tex = ctx.load_texture(format!("present-detail-{}", id.0), img, egui::TextureOptions::LINEAR);

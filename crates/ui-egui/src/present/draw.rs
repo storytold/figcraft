@@ -83,7 +83,7 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
             let (a, b) = (l.place.page(shown.min), l.place.page(shown.max));
             let visible = figcraft_geom::Rect::new(a.x, a.y, b.x, b.y);
             let moving = p.fling.is_some() || p.drag_scroll.is_some() || p.wheel.is_some();
-            if let Some(d) = p.detail_texture(ctx, &l.disp, p.current, px, visible, moving, now) {
+            if let Some(d) = p.detail_texture(ctx, &l.disp, p.current, px, to.bounds, visible, moving, now) {
                 on_clip.image(d.tex.id(), l.place.rect(d.bounds), uv, Color32::WHITE);
             }
         }
