@@ -1004,6 +1004,8 @@ impl Effect {
 pub struct Corners {
     pub radii: [f64; 4],
     pub smoothing: f64,
+    #[serde(skip_serializing_if = "figcraft_geom::CornerStyle::is_round")]
+    pub style: figcraft_geom::CornerStyle,
 }
 
 impl Corners {

@@ -26,6 +26,7 @@ pub const NODE_KEYS: &[&str] = &[
     "componentPropertyDefinitions",
     "constraints",
     "cornerRadius",
+    "cornerStyle",
     "cornerSmoothing",
     "dashes",
     "description",
@@ -274,6 +275,9 @@ fn paint_props(n: &Node, o: &mut serde_json::Map<String, Value>, options: &Inspe
     }
     if !n.effects.is_empty() {
         insert_prop(o, options, "effects", || camel(serde_json::to_value(&n.effects).unwrap_or(Value::Null)));
+    }
+    if n.kind.has_independent_corners() {
+        insert_prop(o, options, "cornerStyle", || json!(n.corners.style));
     }
     if n.corners.radii.iter().any(|r| *r > 0.0) {
         insert_prop(o, options, "cornerRadius", || match n.corners.uniform() {

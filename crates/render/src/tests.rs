@@ -301,6 +301,30 @@ fn strokes_align() {
 }
 
 #[test]
+fn cut_corners_clip_children_and_follow_individual_stroke_weights() {
+    use figcraft_geom::CornerStyle;
+    let mut d = figcraft_doc::Document::new("cut corners");
+    let p = d.first_page().unwrap();
+    let f = d.create(p, NodeKind::Frame, "Frame", 0.0, 0.0, 80.0, 80.0).unwrap();
+    let child = d.create(f, NodeKind::Rectangle, "Child", 0.0, 0.0, 80.0, 80.0).unwrap();
+    d.get_mut(child).unwrap().fills = vec![Paint::solid(Color::WHITE)];
+    for (style, inside) in [(CornerStyle::Chamfer, true), (CornerStyle::Concave, false)] {
+        let n = d.get_mut(f).unwrap();
+        n.clip = true;
+        n.corners.style = style;
+        n.corners.radii = [24.0; 4];
+        n.strokes = vec![Paint::solid(Color::BLACK)];
+        n.stroke.align = StrokeAlign::Inside;
+        n.stroke.sides = Some([4.0, 0.0, 0.0, 2.0]);
+        let pix = render_view(&d, p, &view(80, 80), &Options::default()).unwrap();
+        assert_eq!(px(&pix, 14, 14)[0] != 0xF5, inside);
+        assert_eq!(px(&pix, 40, 2), [0, 0, 0, 255]);
+        assert_eq!(px(&pix, 1, 40), [0, 0, 0, 255]);
+        assert_eq!(px(&pix, 40, 78), [255, 255, 255, 255]);
+    }
+}
+
+#[test]
 fn side_strokes_follow_rounded_corners() {
     // border-l-4 rounded-r-lg: a straight 4 px bar on the left, nothing on the other edges.
     let mut d = figcraft_doc::Document::new("t");

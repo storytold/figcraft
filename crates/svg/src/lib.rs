@@ -805,7 +805,9 @@ impl W<'_> {
                     NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && figcraft_geom::full_sweep(sweep) => {
                         figcraft_geom::kurbo::Shape::to_path(&figcraft_geom::kurbo::Ellipse::from_rect(r), 0.1)
                     }
-                    NodeKind::Rectangle | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. } if n.corners.smoothing == 0.0 => {
+                    NodeKind::Rectangle | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. }
+                        if n.corners.style.is_round() && n.corners.smoothing == 0.0 =>
+                    {
                         // A rounded corner keeps a radius only while the shifted radius stays positive.
                         let radii = n.corners.radii.map(|c| if c > 0.0 { c + d } else { 0.0 });
                         if n.corners.radii.iter().zip(radii).any(|(c, r)| *c > 0.0 && r <= 0.0) {

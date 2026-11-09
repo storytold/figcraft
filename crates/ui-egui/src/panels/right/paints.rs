@@ -1,3 +1,5 @@
+use figcraft_doc::geom::CornerStyle;
+
 use super::menu::{blend_menu, context_popup, menu_check, menu_item, menu_popup, preview_blend, row, row_context_menu, row_rect};
 use super::stroke::stroke_settings;
 use super::{
@@ -85,6 +87,26 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
         }
     });
     if smooth_ok && ui.data(|d| d.get_temp::<bool>(Id::unique("indep_corners"))).unwrap_or(false) {
+        if indep_ok {
+            let style = common(doc, sel, |n| n.corners.style);
+            let label = |style| match style {
+                CornerStyle::Round => tr("Round|corner"),
+                CornerStyle::Chamfer => tr("Chamfered|corner"),
+                CornerStyle::Concave => tr("Concave|corner"),
+            };
+            widgets::sublabels(ui, tr("Corner style"), None);
+            row(ui, 32.0, |ui| {
+                let resp = widgets::dropdown(ui, style.map(label).unwrap_or(tr("Mixed")), col * 2.0 + 8.0, Some(Icon::CornerRadius));
+                menu_popup(&resp).show(|ui| {
+                    for choice in [CornerStyle::Round, CornerStyle::Chamfer, CornerStyle::Concave] {
+                        if menu_check(ui, style == Some(choice), label(choice), "") {
+                            app.set_props(&ids, json!({"cornerStyle": choice}));
+                            ui.close();
+                        }
+                    }
+                });
+            });
+        }
         let radii = common(doc, sel, |n| n.corners.radii);
         // `k` indexes `radii` ([top left, top right, bottom right, bottom left]); the fields sit
         // where their corners are: top left, top right / bottom left, bottom right.
@@ -113,15 +135,18 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
                 }
             });
         }
-        let sm = common(doc, sel, |n| n.corners.smoothing * 100.0);
-        widgets::sublabels(ui, tr("Corner smoothing"), None);
-        row(ui, 32.0, |ui| {
-            let e = widgets::number_field(ui, Id::unique("smoothing"), Lead::Icon(Icon::CornerSmoothing, tr("Corner smoothing")), sm, "%", col, 1.0);
-            app.field(&ids, "cornerSmoothing", e, |v| json!((v / 100.0).clamp(0.0, 1.0)));
-            if widgets::button(ui, tr("iOS"), false, true).on_hover_text(tr("Set corner smoothing to 60%")).clicked() {
-                app.set_props(&ids, json!({"cornerSmoothing": 0.6}));
-            }
-        });
+        if crate::selection_cache::every(doc, sel, |n| n.corners.style.is_round()) {
+            let sm = common(doc, sel, |n| n.corners.smoothing * 100.0);
+            widgets::sublabels(ui, tr("Corner smoothing"), None);
+            row(ui, 32.0, |ui| {
+                let e =
+                    widgets::number_field(ui, Id::unique("smoothing"), Lead::Icon(Icon::CornerSmoothing, tr("Corner smoothing")), sm, "%", col, 1.0);
+                app.field(&ids, "cornerSmoothing", e, |v| json!((v / 100.0).clamp(0.0, 1.0)));
+                if widgets::button(ui, tr("iOS"), false, true).on_hover_text(tr("Set corner smoothing to 60%")).clicked() {
+                    app.set_props(&ids, json!({"cornerSmoothing": 0.6}));
+                }
+            });
+        }
     }
     let blend = common(doc, sel, |n| n.blend);
     let show_blend = ui.data(|d| d.get_temp::<bool>(Id::unique("blend_open"))).unwrap_or(false)
