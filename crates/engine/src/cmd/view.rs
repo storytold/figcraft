@@ -431,7 +431,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "pref.uiScaleUp",
             "Larger interface",
-            "{}  the next of the Preferences sizes above the current one (the interface size keys of Accessibility at Figma); at the largest it stays → {scale}",
+            "{}  the next of the Preferences sizes above the current one; at the largest it stays → {scale}",
             false,
             |s, _| ui_scale_step(s, 1)
         ),
