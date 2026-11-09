@@ -199,7 +199,7 @@ fn arrow(painter: &egui::Painter, pts: &[Pos2; 4], col: Color32) {
 }
 
 /// The page's flow starting points as their canvas tags: the start frame, the tag's box above the
-/// frame's top-left corner and the play button at its left end.
+/// frame's name label (clear of it) and the play button at its left end.
 fn flow_tags(app: &FigApp, ctx: &egui::Context, doc: &Document, page: NodeId) -> Vec<(NodeId, String, Rect, Rect)> {
     let figcraft_doc::NodeKind::Page { flows, .. } = &doc.node(page).map(|p| p.kind.clone()).unwrap_or(figcraft_doc::NodeKind::Group) else {
         return Vec::new();
@@ -210,7 +210,7 @@ fn flow_tags(app: &FigApp, ctx: &egui::Context, doc: &Document, page: NodeId) ->
         .filter_map(|f| {
             let frame = screen_rect(app, doc, f.start)?;
             let text = ctx.fonts_mut(|fonts| fonts.layout_no_wrap(f.name.clone(), crate::theme::semibold(11.0), Color32::WHITE)).size().x;
-            let tag = Rect::from_min_size(pos2(frame.min.x, frame.min.y - 26.0), vec2(20.0 + 6.0 + text.min(240.0) + 8.0, 20.0));
+            let tag = Rect::from_min_size(pos2(frame.min.x, frame.min.y - 44.0), vec2(20.0 + 6.0 + text.min(240.0) + 8.0, 20.0));
             let play = Rect::from_min_size(tag.min, vec2(20.0, 20.0));
             Some((f.start, f.name.clone(), tag, play))
         })
