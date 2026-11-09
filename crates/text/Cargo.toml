@@ -8,6 +8,12 @@ description = "FigCraft text: font database (embedded craft-fonts + system fonts
 [lints]
 workspace = true
 
+[build-dependencies]
+flate2 = { workspace = true }
+
+[dev-dependencies]
+flate2 = { workspace = true }
+
 [dependencies]
 figcraft-geom = { workspace = true }
 figcraft-doc = { workspace = true }
@@ -34,6 +40,7 @@ craft-font-catalog = { workspace = true }
 # wasm) instead of its dictionaries (~1.8 MB, which would take the .wasm past the 24 MiB gate in
 # packaging/web/package.sh).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+flate2 = { workspace = true }
 icu_segmenter = { workspace = true, features = ["lstm"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
