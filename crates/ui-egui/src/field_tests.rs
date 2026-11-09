@@ -1309,6 +1309,30 @@ fn page_background_shows_fractional_opacity_like_fill_and_keeps_it_when_opening_
     assert!(u.app.ui.picker.is_none(), "the swatch toggles the picker closed");
 }
 
+/// The shared page colour row uses the sidebar's width without hiding either field.
+#[test]
+fn page_background_colour_and_opacity_fit_a_resized_sidebar() {
+    let mut u = Ui::new(Session::new());
+    let mut previous_widths: Option<(f32, f32)> = None;
+    for width in [240.0, 500.0] {
+        u.app.ui.right_width = width;
+        for _ in 0..3 {
+            u.frame(vec![]);
+        }
+        let hex = u.ctx.read_response(Id::unique("pagebg").with("click")).unwrap().rect;
+        let alpha = u.ctx.read_response(Id::unique("pagebg_a").with("field")).unwrap().rect;
+        let panel = u.app.ui.right_panel_rect.unwrap();
+        assert!(hex.left() >= u.app.canvas.rect.right(), "the colour stays in the sidebar");
+        assert!(hex.right() < alpha.left(), "the colour and opacity never overlap");
+        assert!(alpha.right() <= u.screen.x, "the opacity stays visible");
+        // The colour uses the extra room while opacity keeps its place at the right edge.
+        if let Some((previous_hex, previous_panel)) = previous_widths {
+            assert!((hex.width() - previous_hex - (panel.width() - previous_panel)).abs() < 1.0, "the shared control grows with the panel");
+        }
+        previous_widths = Some((hex.width(), panel.width()));
+    }
+}
+
 /// The Page section's opacity field edits the page background's alpha (#1748; it was a label),
 /// one undo step per commit, and the hex field keeps that opacity unless the typed colour
 /// carries its own.
