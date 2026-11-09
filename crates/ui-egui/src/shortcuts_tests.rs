@@ -91,7 +91,11 @@ fn shift_digits_zoom() {
     assert!(zoom(&u) > fit, "Shift+2 fits the smaller selection");
     let v = &u.app.session.ds().unwrap().view;
     // Centred in the canvas above the bottom toolbar: the page centre sits half the toolbar's strip lower.
-    let expect_cy = 40.0 + v.bottom_inset / 2.0 / v.zoom;
+    // The strip is the canvas's bottom edge less the pill's top, worked out here, not read back.
+    let strip = f64::from(u.app.canvas.rect.max.y - crate::toolbar::pill_rect(u.app.canvas.rect, 0.0).min.y);
+    assert!(strip > 20.0 && strip < 200.0, "the pill is a toolbar's height: {strip}");
+    assert!((v.bottom_inset - strip).abs() < 1e-3, "the app gives the engine the pill's strip: {} vs {strip}", v.bottom_inset);
+    let expect_cy = 40.0 + strip / 2.0 / v.zoom;
     assert_eq!(v.cx, 110.0, "centred on it");
     assert!((v.cy - expect_cy).abs() < 1e-9, "centred above the toolbar: {} vs {expect_cy}", v.cy);
     // `+` and `-` step the zoom.
@@ -203,4 +207,17 @@ fn shortcuts_panel_does_not_show_on_the_home_screen() {
     u.app.ui.shortcuts_panel = true;
     u.frame(vec![]);
     assert!(!u.app.ui.shortcuts_panel, "the panel closes on the home screen");
+}
+
+/// The strip the bottom toolbar covers is given to the engine while the toolbar shows and is zero
+/// when the interface is hidden.
+#[test]
+fn the_toolbar_strip_is_zero_when_the_interface_is_hidden() {
+    let (mut u, _, _) = setup();
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(u.app.session.ds().unwrap().view.bottom_inset > 0.0, "shown");
+    u.app.session.ds_mut().unwrap().view.ui_hidden = true;
+    u.frame(vec![]);
+    assert_eq!(u.app.session.ds().unwrap().view.bottom_inset, 0.0, "hidden");
 }

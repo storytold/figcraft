@@ -113,13 +113,18 @@ impl ViewState {
     /// Fit a page rectangle for Zoom to selection: a 40 point margin on all four sides of the area
     /// above the bottom toolbar (`vw` by `vh - bottom_inset`), centred in that area.
     pub fn fit_selection(&mut self, r: figcraft_geom::Rect, max_zoom: f64) {
-        if !(r.width() > 0.0 || r.height() > 0.0) || !r.x0.is_finite() {
-            self.cx = r.center().x;
-            self.cy = r.center().y;
+        // A rectangle that isn't all finite numbers leaves the view as it is.
+        if ![r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite()) {
             return;
         }
         let inset = if self.bottom_inset.is_finite() { self.bottom_inset.clamp(0.0, (self.vh - 1.0).max(0.0)) } else { 0.0 };
         let area_h = (self.vh - inset).max(1.0);
+        // A point (nothing to fit) is centred in the area above the toolbar at the zoom it has.
+        if !(r.width() > 0.0 || r.height() > 0.0) {
+            self.cx = r.center().x;
+            self.cy = r.center().y + (self.vh - area_h) / 2.0 / self.zoom.max(1e-6);
+            return;
+        }
         // 40 points as measured; a canvas too small for that keeps a quarter of its size on each
         // side instead, so the selection still ends above the toolbar.
         let mx = (self.vw / 4.0).clamp(0.0, 40.0);
