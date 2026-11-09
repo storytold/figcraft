@@ -212,7 +212,7 @@ fn layout_grids(app: &FigApp, painter: &egui::Painter, doc: &Document, c: NodeId
 /// The solid colour of the fill the next typed character gets (the character before the caret,
 /// the first one's at 0, the base style for an empty text): the style's own fills when it has
 /// them, else the layer's. `None` when the topmost visible paint isn't a solid (gradient, image,
-/// no visible fill), so the caller keeps the interface colour. Opaque on purpose: Figma's caret
+/// no visible fill), so the caller uses [`caret_fallback`]. Opaque on purpose: Figma's caret
 /// is one colour, and the fill's and paint's opacity weren't measured, so it must stay visible.
 fn caret_fill(n: &figcraft_doc::Node, caret: usize) -> Option<figcraft_color::Color> {
     let t = n.kind.text()?;
@@ -227,6 +227,14 @@ fn caret_fill(n: &figcraft_doc::Node, caret: usize) -> Option<figcraft_color::Co
 /// [`caret_fill`] as a screen colour.
 fn caret_color(ctx: &egui::Context, n: &figcraft_doc::Node, caret: usize) -> Option<Color32> {
     caret_fill(n, caret).map(|c| doc_c32(ctx, c))
+}
+
+/// The caret of a text without a solid fill (a gradient, an image, no visible fill): black on a
+/// light page, white on a dark one. Not the interface's text colour, which is white in the dark
+/// theme and vanishes on the default light page (#2190).
+fn caret_fallback(doc: &Document, id: NodeId) -> Color32 {
+    let dark = doc.page_of(id).and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::Page { background, .. } if background.is_dark()));
+    if dark { Color32::WHITE } else { Color32::BLACK }
 }
 
 fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Document, te: &figcraft_engine::TextEdit, zoom: f64) {
@@ -262,7 +270,7 @@ fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Do
     let caret = preedit.map(|p| p.cursor).unwrap_or(te.caret);
     let blink = (painter.ctx().input(|i| i.time) * 2.0) as i64 % 2 == 0;
     if blink || a != b {
-        let col = edoc.node(te.id).and_then(|n| caret_color(painter.ctx(), n, caret)).unwrap_or(t.text);
+        let col = edoc.node(te.id).and_then(|n| caret_color(painter.ctx(), n, caret)).unwrap_or_else(|| caret_fallback(edoc, te.id));
         painter.line_segment(text.caret(app, caret, zoom), stroke(col, 1.0));
     }
     painter.ctx().request_repaint_after(std::time::Duration::from_millis(500));
@@ -855,8 +863,20 @@ mod caret_tests {
         assert_eq!(caret_fill(&text("x", vec![p]), 1).map(|c| c.a), Some(1.0));
     }
 
+    /// #2190: a caret without a solid fill reads on the page: black on the default light page,
+    /// white on a dark one (the interface's text colour was white in the dark theme).
     #[test]
-    fn gradient_or_missing_fills_keep_the_interface_colour() {
+    fn without_a_solid_fill_the_caret_contrasts_with_the_page() {
+        let mut s = figcraft_engine::Session::new();
+        let r = s.execute("text.create", &serde_json::json!({"text": "Caret", "x": 0, "y": 0})).unwrap();
+        let id = figcraft_engine::params::id_of(&r["id"]).unwrap();
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "the default light page");
+        s.execute("page.setBackground", &serde_json::json!({"color": "#1E1E1E"})).unwrap();
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::WHITE, "a dark page");
+    }
+
+    #[test]
+    fn gradient_or_missing_fills_have_no_fill_colour() {
         let mut g = Paint::solid(hex("#FF0000"));
         g.kind = figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, hex("#FF0000")));
         assert_eq!(caret_fill(&text("Caret", vec![g]), 2), None);
