@@ -45,7 +45,7 @@ lines, a typical feature PR 1–2.5 h). Details and what needs a human:
 ## Stage
 
 **Alpha.** Core workflows exist end to end (frames, shapes, vectors, text, auto layout, components
-with variants and overrides, styles, variables, prototyping, Dev Mode, SVG/PNG/JPG/PDF), but
+with variants and overrides, styles, variables, prototyping, Developer Mode, SVG/PNG/JPG/PDF), but
 FigCraft opens `.fig` files only best effort, has only a preview of multiplayer, and nothing has been checked
 against real Figma documents. Ready-for-real-work is ~53%, inside alpha's ~40–75% band, and the alpha gate passes: every daily core workflow (design screens, build a design system, prototype, hand off to developers) works end to end on FigCraft's own files, which save and reopen; review works only asynchronously and `.fig` import is unproven on real files, both beta gaps ([alpha gate](docs/roadmap.md#alpha-gate)). Beta needs
 ~75% **and** reliable `.fig` import: the `.fig` import's tail (5–10 h), a real-file corpus with measured
