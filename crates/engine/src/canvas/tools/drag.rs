@@ -261,8 +261,33 @@ impl Session {
                     // rest may change parent.
                     let flow = moving.iter().all(|i| doc.node(*i).is_some_and(|n| !n.child_layout.absolute))
                         && !home.is_some_and(|h| crate::drop::keeps_layers(doc, h));
-                    let target = if flow { crate::drop::drag_parent(doc, page, p, &moving) } else { home.unwrap_or(page) };
+                    let mut target = if flow { crate::drop::drag_parent(doc, page, p, &moving) } else { home.unwrap_or(page) };
+                    // "If any of the object's dimensions are larger than the parent frame, you won't
+                    // see the option to add it to the auto layout" — unless Cmd/Ctrl is held. It
+                    // drops beside the frame instead, in the frame's own parent.
+                    if flow
+                        && !ev.cmd
+                        && Some(target) != home
+                        && doc.node(target).is_some_and(|n| n.layout.is_some())
+                        && let (Some(b), Some(f)) = (doc.bounds_of(&moving), doc.world_bounds(target))
+                        && (b.width() > f.width() + 1e-6 || b.height() > f.height() + 1e-6)
+                    {
+                        target = doc.node(target).and_then(|n| n.parent).unwrap_or(page);
+                    }
                     let mode = doc.node(target).and_then(|n| n.layout.as_ref()).map(|l| l.mode);
+                    // Control (macOS) drops the layers into the frame ignoring its auto layout:
+                    // they stay where they are dropped. (Off macOS Ctrl is also Cmd.)
+                    if flow && mode.is_some() && ev.ctrl && !ev.cmd {
+                        for m in &moving {
+                            if doc.get(*m)?.parent != Some(target) {
+                                doc.reparent(*m, target, None)?;
+                            }
+                            doc.get_mut(*m)?.child_layout.absolute = true;
+                            move_world(doc, *m, d.x, d.y)?;
+                        }
+                        drop_target = (Some(target) != home).then_some(target);
+                        return Ok(());
+                    }
                     if let (true, Some(mode)) = (flow, mode) {
                         // Into (or within) an auto layout frame: the layers take the slot (a grid: the
                         // cell) under the pointer, as the frame shows it now. A frame other than the

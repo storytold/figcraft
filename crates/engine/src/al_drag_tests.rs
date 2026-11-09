@@ -99,3 +99,47 @@ fn resizing_a_child_to_the_full_space_makes_it_fill() {
     assert_eq!(s.doc().unwrap().node(k).unwrap().width, 180.0);
     assert_eq!(sizing(&s), figcraft_doc::Sizing::Fill, "to the padding: Fill");
 }
+
+fn drag_with(s: &mut Session, from: (f64, f64), to: (f64, f64), set: impl Fn(&mut PointerEvent)) {
+    let ev = |kind, x, y| {
+        let mut e = PointerEvent::at(kind, x, y, 1.0);
+        set(&mut e);
+        e
+    };
+    s.pointer(&PointerEvent::at(PointerKind::Down, from.0, from.1, 1.0)).unwrap();
+    s.pointer(&ev(PointerKind::Move, (from.0 + to.0) / 2.0, (from.1 + to.1) / 2.0)).unwrap();
+    s.pointer(&ev(PointerKind::Move, to.0, to.1)).unwrap();
+    s.pointer(&ev(PointerKind::Up, to.0, to.1)).unwrap();
+}
+
+/// Dragging into an auto layout frame: a layer bigger than the frame stays out of it ("If any of
+/// the object's dimensions are larger than the parent frame, you won't see the option to add it to
+/// the auto layout") unless Cmd/Ctrl is held; with Control (macOS) a layer goes in ignoring the
+/// auto layout, where it was dropped.
+#[test]
+fn dragging_in_keeps_out_what_is_too_big_and_control_ignores_the_layout() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap());
+    id(s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 40, "height": 40, "parent": f})).unwrap());
+    s.execute("layout.add", &json!({"ids": [f]})).unwrap();
+    s.execute("node.set", &json!({"id": f, "props": {"sizingH": "fixed", "sizingV": "fixed", "width": 200, "height": 100}})).unwrap();
+    let big = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 300, "width": 300, "height": 50})).unwrap());
+    let parent = |s: &Session, n: NodeId| s.doc().unwrap().node(n).unwrap().parent;
+    let page = s.page().unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    drag(&mut s, (150.0, 325.0), (150.0, 50.0));
+    assert_eq!(parent(&s, big), Some(page), "too wide for the frame: it stays out");
+    s.undo().unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    drag_with(&mut s, (150.0, 325.0), (150.0, 50.0), |e| e.cmd = true);
+    assert_eq!(parent(&s, big), Some(f), "Cmd/Ctrl adds it anyway");
+    s.undo().unwrap();
+    let small = id(s.execute("shape.rectangle", &json!({"x": 400, "y": 300, "width": 20, "height": 20})).unwrap());
+    s.execute("select.none", &json!({})).unwrap();
+    drag_with(&mut s, (410.0, 310.0), (150.0, 70.0), |e| e.ctrl = true);
+    let doc = s.doc().unwrap();
+    assert_eq!(parent(&s, small), Some(f));
+    assert!(doc.node(small).unwrap().child_layout.absolute, "Control: it ignores the auto layout");
+    let b = doc.world_bounds(small).unwrap();
+    assert_eq!((b.x0, b.y0), (140.0, 60.0), "where it was dropped");
+}
