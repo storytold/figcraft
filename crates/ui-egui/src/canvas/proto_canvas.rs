@@ -147,7 +147,7 @@ fn frame_at(app: &FigApp, doc: &Document, page: NodeId, p: Pos2) -> Option<NodeI
 /// where it was, nothing changes.
 fn rewire(app: &mut FigApp, ctx: &egui::Context, doc: &Document, page: NodeId, d: &Drag, index: usize) {
     let Some(it) = doc.node(d.source).and_then(|n| n.interactions.get(index)) else { return };
-    match frame_at(app, doc, page, d.pos) {
+    match frame_near(app, doc, page, d.pos, None) {
         Some(dest) if doc.top_level_frame(d.source) == Some(dest) => {}
         Some(dest) => {
             let mut done = false;
@@ -188,6 +188,38 @@ fn sibling_variant_at(app: &FigApp, doc: &Document, source: NodeId, p: Pos2) -> 
         variant = parent;
     }
     None
+}
+
+/// How near (screen points) a connection dropped beside a frame still lands on it ("snaps to the
+/// frame when you get close enough").
+const SNAP_REACH: f32 = 24.0;
+
+/// The frame a connection dropped at `p` goes to: the one under it, else the nearest top-level
+/// frame within [`SNAP_REACH`], not counting `except` (the source's own frame).
+fn frame_near(app: &FigApp, doc: &Document, page: NodeId, p: Pos2, except: Option<NodeId>) -> Option<NodeId> {
+    if let Some(f) = frame_at(app, doc, page, p) {
+        return Some(f);
+    }
+    doc.top_frames(page)
+        .into_iter()
+        .filter(|f| Some(*f) != except)
+        .filter_map(|f| screen_rect(app, doc, f).map(|r| (f, r.distance_to_pos(p))))
+        .filter(|(_, d)| *d <= SNAP_REACH)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(f, _)| f)
+}
+
+/// The top-most visible layer inside `frame` under `p` that a connection from `source` can scroll
+/// to: not the source, nor what holds it.
+fn scroll_target(app: &FigApp, doc: &Document, frame: NodeId, source: NodeId, p: Pos2) -> Option<NodeId> {
+    let pt = app.to_page(p);
+    doc.subtree(frame)
+        .into_iter()
+        .skip(1)
+        .rev()
+        .filter(|i| *i != source && !doc.is_ancestor(*i, source))
+        .filter(|i| doc.node(*i).is_some_and(|n| n.visible))
+        .find(|i| doc.world_bounds(*i).is_some_and(|b| b.contains(pt)))
 }
 
 fn arrow(painter: &egui::Painter, pts: &[Pos2; 4], col: Color32) {
@@ -289,7 +321,7 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
     }
     match dragging {
         Some(d) => {
-            if let Some(f) = frame_at(app, doc, page, d.pos)
+            if let Some(f) = frame_near(app, doc, page, d.pos, doc.top_level_frame(d.source))
                 && doc.top_level_frame(d.source) != Some(f)
                 && let Some(r) = screen_rect(app, doc, f)
             {
@@ -363,7 +395,13 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
             let added = if let Some(variant) = sibling_variant_at(app, &doc, d.source, d.pos) {
                 // Onto another variant of the source's own set: Change to (interactive components).
                 app.run("proto.interaction.add", json!({"ids": [d.source], "action": {"type": "changeTo", "dest": variant}}))
-            } else if let Some(dest) = frame_at(app, &doc, page, d.pos)
+            } else if let Some(own) = doc.top_level_frame(d.source)
+                && frame_at(app, &doc, page, d.pos) == Some(own)
+                && let Some(layer) = scroll_target(app, &doc, own, d.source, d.pos)
+            {
+                // Onto a layer in its own frame: Scroll to it.
+                app.run("proto.interaction.add", json!({"ids": [d.source], "action": {"type": "scrollTo", "dest": layer}}))
+            } else if let Some(dest) = frame_near(app, &doc, page, d.pos, doc.top_level_frame(d.source))
                 && doc.top_level_frame(d.source) != Some(dest)
             {
                 // From a selection of hotspots, every one connects ("select multiple starting
@@ -596,6 +634,34 @@ mod tests {
         u.button(play.center(), false);
         u.frames(2, Vec::new);
         assert!(u.app.ui.present.is_some(), "the play button presents the flow");
+    }
+
+    /// A connection dropped just beside a frame still lands on it (it snaps when close enough),
+    /// and one dropped on a layer in its own frame scrolls to that layer.
+    #[test]
+    fn a_connection_snaps_to_a_near_frame_and_scrolls_to_a_layer_of_its_own() {
+        let (mut u, btn, b, _) = connected();
+        u.run("proto.interaction.clear", json!({"ids": [btn]}));
+        let a = u.app.session.doc().unwrap().top_level_frame(btn).unwrap();
+        let target = crate::present_tests::id(
+            &u.app.session.execute("shape.rectangle", &json!({"x": 20, "y": 250, "width": 80, "height": 30, "parent": a})).unwrap(),
+        );
+        u.app.session.execute("select.set", &json!({"ids": [btn]})).unwrap();
+        u.frames(2, Vec::new);
+        // B starts at x 300: a drop 8 screen points to its left.
+        let left = u.app.to_screen(300.0, 150.0) - vec2(8.0, 0.0);
+        let at = u.app.to_page(left);
+        drag_connection(&mut u, btn, (at.x, at.y));
+        assert!(matches!(connections(&u, btn)[..], [figcraft_doc::proto::Action::Navigate { dest, .. }] if dest == b), "{:?}", connections(&u, btn));
+        u.run("proto.interaction.clear", json!({"ids": [btn]}));
+        u.app.session.execute("select.set", &json!({"ids": [btn]})).unwrap();
+        u.frames(2, Vec::new);
+        drag_connection(&mut u, btn, (60.0, 265.0));
+        assert!(
+            matches!(connections(&u, btn)[..], [figcraft_doc::proto::Action::ScrollTo { dest, .. }] if dest == target),
+            "{:?}",
+            connections(&u, btn)
+        );
     }
 
     #[test]
