@@ -38,21 +38,7 @@ pub(super) fn detach(s: &mut Session, p: &Value) -> Result<Value> {
         n.bound.retain(|k, _| !k.starts_with(PROP_BINDING));
         // A scaled instance's lengths stay as drawn (#2090, measured): its own layers keep the
         // scaled values and drop their variables, and the instances in it take its scale on.
-        let k = std::mem::replace(&mut n.scale_factor, 1.0);
-        if k != 1.0 {
-            for d in doc.subtree(i) {
-                let own = !inside_instance(doc, d);
-                let Some(n) = doc.node_mut(d) else { continue };
-                if !own {
-                    continue;
-                }
-                if matches!(n.kind, NodeKind::Instance { .. }) {
-                    n.scale_factor = (n.scale_factor * k).clamp(crate::cmd::arrange::MIN_SCALE_FACTOR, crate::cmd::arrange::MAX_SCALE_FACTOR);
-                } else {
-                    n.bound.retain(|f, _| !crate::cmd::styles::LENGTH_FIELDS.contains(&f.as_str()));
-                }
-            }
-        }
+        crate::cmd::styles::bake_scale(doc, i);
         for nn in nested {
             rebase_instance(doc, nn);
         }
@@ -381,6 +367,8 @@ pub(super) fn restore_main(s: &mut Session, p: &Value) -> Result<Value> {
             rebase_instance(doc, m);
         }
     }
+    // The instance becomes the main: its lengths stay as drawn (by analogy with Detach, #2090).
+    crate::cmd::styles::bake_stale_scales(doc, component);
     s.set_selection(vec![component]);
     Ok(json!({"id": component}))
 }

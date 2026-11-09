@@ -169,6 +169,7 @@ fn detach_all(doc: &mut Document, top: NodeId) {
         n.overrides.clear();
         n.prop_refs.clear();
     }
+    crate::cmd::styles::bake_stale_scales(doc, top);
 }
 
 /// Break every loop of components containing each other's instances (a file from elsewhere, or

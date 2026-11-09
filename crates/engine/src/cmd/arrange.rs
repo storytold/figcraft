@@ -419,6 +419,25 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     // instance would put them back at their main's size (#922).
     let in_instance: Vec<bool> = sub.iter().enumerate().map(|(depth, i)| depth > 0 && crate::components::inside_instance(doc, *i)).collect();
     let nested: Vec<bool> = sub.iter().map(|i| crate::components::inside_instance(doc, *i)).collect();
+    // An instance inside another instance of the subtree is covered by the outer factor through
+    // `scale_of`'s product (#2090); only an instance with no instance above it, up to `id`, takes k.
+    let covered: Vec<bool> = sub
+        .iter()
+        .map(|i| {
+            if *i == id {
+                return false;
+            }
+            for a in doc.ancestors(*i) {
+                if doc.node(a).is_some_and(|n| matches!(n.kind, NodeKind::Instance { .. })) {
+                    return true;
+                }
+                if a == id {
+                    break;
+                }
+            }
+            false
+        })
+        .collect();
     let tiles = |paints: &mut Vec<figcraft_color::Paint>| {
         for p in paints {
             if let figcraft_color::PaintKind::Image(img) = &mut p.kind
@@ -432,7 +451,9 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
         let n = doc.get_mut(*i)?;
         let (w0, h0, t0) = (n.width, n.height, n.transform);
         if matches!(n.kind, NodeKind::Instance { .. }) {
-            n.scale_factor = (n.scale_factor * k).clamp(MIN_SCALE_FACTOR, MAX_SCALE_FACTOR);
+            if !covered.get(depth).copied().unwrap_or(false) {
+                n.scale_factor = (n.scale_factor * k).clamp(MIN_SCALE_FACTOR, MAX_SCALE_FACTOR);
+            }
         } else if !nested.get(depth).copied().unwrap_or(false) && !n.bound.is_empty() {
             n.bound.retain(|field, _| !super::styles::LENGTH_FIELDS.contains(&field.as_str()));
         }
