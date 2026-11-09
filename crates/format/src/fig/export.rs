@@ -209,8 +209,11 @@ pub fn export(doc: &Document, thumbnail: Option<&[u8]>) -> Result<(Vec<u8>, Vec<
 }
 
 /// A `canvas.fig` holding `message` (a `Message` of the kiwi schema `schema_source`, normally
-/// [`SCHEMA`]), as the design apps put it on the clipboard. Lets synthetic payloads be built
-/// outside this crate.
+/// [`SCHEMA`], optionally extended with fields), as the design apps put it on the clipboard.
+/// Returns the `canvas.fig` bytes (the schema, then the encoded message), or an error when the
+/// schema does not parse, has no `Message`, or the message does not fit it. Public so tests in
+/// other crates can build synthetic design-app payloads; the app itself only exports through
+/// [`export`].
 pub fn pack_canvas(schema_source: &str, message: &Kv) -> Result<Vec<u8>, FormatError> {
     let fail = |e: super::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
     let schema = Schema::parse(schema_source).map_err(fail)?;

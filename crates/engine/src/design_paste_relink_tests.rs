@@ -137,6 +137,9 @@ fn a_main_from_another_figma_file_is_not_matched_by_guid_alone() {
     let r = paste(&mut s, html(payload_instance(20, None, true), "F2"));
     let copy = ids(&r)[0];
     assert_ne!(instance_main(&s, copy), main, "the same guid in another file is another component");
+    assert_eq!(components(&s), [main], "no component came along with the instance");
+    assert!(!s.doc().unwrap().contains(instance_main(&s, copy)), "its main stayed behind");
+    assert!(r["warnings"].to_string().contains("stay unlinked"), "{r}");
 }
 
 #[test]
@@ -146,6 +149,7 @@ fn the_same_library_key_links_whatever_the_guids() {
     let r = paste(&mut s, html(payload_instance(77, Some("btn"), true), "F2"));
     let copy = ids(&r)[0];
     assert_eq!(instance_main(&s, copy), main);
+    assert_eq!(components(&s), [main], "the pasted main did not come along as a second component");
 }
 
 #[test]
@@ -336,5 +340,104 @@ fn a_main_from_an_opened_file_is_not_matched_to_a_pasted_one() {
 
 /// The export schema, with the library `key` field the payloads of a library's components carry.
 fn schema() -> String {
-    figcraft_format::fig::EXPORT_SCHEMA.replacen("message NodeChange ", "message NodeChange string key=9999, ", 1)
+    let schema = figcraft_format::fig::EXPORT_SCHEMA.replacen("message NodeChange ", "message NodeChange string key=9999, ", 1);
+    assert_ne!(schema, figcraft_format::fig::EXPORT_SCHEMA, "the key field was injected");
+    schema
+}
+
+fn data(nodes: Vec<Kv<'static>>) -> String {
+    B64.encode(figcraft_format::fig::pack_canvas(&schema(), &o(vec![("nodeChanges", Kv::Array(nodes))])).expect("packs"))
+}
+
+fn paste_data(s: &mut Session, data: String, file: Option<&str>) -> serde_json::Value {
+    s.execute("select.set", &json!({"ids": []})).expect("clears");
+    let mut p = json!({ "data": data });
+    if let Some(f) = file {
+        p["fileKey"] = json!(f);
+    }
+    s.execute("edit.pasteDesignLayers", &p).expect("pastes")
+}
+
+#[test]
+fn data_with_a_file_key_links_by_guid_and_without_one_only_by_library_key() {
+    let mut s = Session::new();
+    let main = ids(&paste(&mut s, html(payload_main(20, None), "F1")))[0];
+    let r = paste_data(&mut s, data(payload_instance(20, None, true)), Some("F1"));
+    assert_eq!(instance_main(&s, ids(&r)[0]), main, "data + fileKey links by guid");
+    // No file key: a guid alone never links, a library key does.
+    let mut s = Session::new();
+    let main = ids(&paste(&mut s, html(payload_main(20, Some("btn")), "F1"))).first().copied().unwrap();
+    let r = paste_data(&mut s, data(payload_instance(20, None, true)), None);
+    assert_ne!(instance_main(&s, ids(&r)[0]), main, "guid alone does not link");
+    assert_eq!(components(&s), [main], "no component came along with the instance");
+    assert!(r["warnings"].to_string().contains("stay unlinked"), "{r}");
+    let r = paste_data(&mut s, data(payload_instance(77, Some("btn"), true)), None);
+    assert_eq!(instance_main(&s, ids(&r)[0]), main, "the library key links without a file key");
+}
+
+#[test]
+fn the_first_main_with_a_library_key_takes_the_paste() {
+    let mut s = Session::new();
+    let first = ids(&paste(&mut s, html(payload_main(20, Some("btn")), "F1")))[0];
+    let second = ids(&paste(&mut s, html(payload_main(30, Some("btn")), "F2")))[0];
+    assert_ne!(first, second);
+    let r = paste(&mut s, html(payload_instance(77, Some("btn"), true), "F3"));
+    assert_eq!(instance_main(&s, ids(&r)[0]), first, "the older component wins, every time");
+    assert_eq!(components(&s).len(), 2, "no third component came along");
+}
+
+#[test]
+fn pasting_the_main_after_its_instance_does_not_relink_it() {
+    let mut s = Session::new();
+    let copy = ids(&paste(&mut s, html(payload_instance(20, None, true), "F1")))[0];
+    let gone = instance_main(&s, copy);
+    paste(&mut s, html(payload_main(20, None), "F1"));
+    assert_eq!(instance_main(&s, copy), gone, "the earlier instance keeps pointing at its missing main");
+    assert!(!s.doc().unwrap().contains(gone));
+}
+
+#[test]
+fn a_copy_of_a_pasted_instance_keeps_its_main_pointer_and_drops_the_guid() {
+    let mut s = Session::new();
+    let copy = ids(&paste(&mut s, html(payload_instance(20, None, true), "F1")))[0];
+    let data = |s: &Session, i: NodeId| s.doc().unwrap().node(i).unwrap().plugin_data.clone();
+    assert_eq!(data(&s, copy).get("fig.main").map(String::as_str), Some("1:20"));
+    let dup = ids(&s.execute("edit.duplicate", &json!({"ids": [copy]})).unwrap())[0];
+    let d = data(&s, dup);
+    assert_eq!(d.get("fig.main").map(String::as_str), Some("1:20"), "{d:?}");
+    assert!(!d.contains_key("fig.guid") && !d.contains_key("fig.key") && !d.contains_key("fig.file"), "{d:?}");
+}
+
+#[test]
+fn layers_an_instance_expands_carry_no_identity() {
+    let mut s = Session::new();
+    let mut first = page_nodes();
+    first.extend([
+        node(20, Some((1, "!")), "SYMBOL", "Outer", vec![("size", xy(80.0, 40.0))]),
+        instance_of(25, 40, 20, "!"),
+        node(40, Some((1, "\"")), "SYMBOL", "Inner", vec![("size", xy(40.0, 20.0))]),
+        node(41, Some((40, "!")), "RECTANGLE", "Face", vec![("size", xy(40.0, 20.0))]),
+    ]);
+    paste(&mut s, html(first, "F1"));
+    let doc = s.doc().unwrap();
+    let inside: Vec<_> =
+        doc.nodes().filter(|n| doc.ancestors(n.id).into_iter().any(|a| matches!(doc.node(a).unwrap().kind, NodeKind::Instance { .. }))).collect();
+    assert!(!inside.is_empty(), "the instance has layers of its own");
+    assert!(inside.iter().all(|n| !n.plugin_data.contains_key("fig.guid")), "{:?}", inside.iter().map(|n| &n.plugin_data).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_file_key_is_read_from_the_clipboard_metadata_only_when_it_is_sound() {
+    use crate::cmd::edit::design_clipboard_file;
+    let meta = |json: &str| format!("<span>(figmeta){}(/figmeta)</span>", B64.encode(json));
+    assert_eq!(design_clipboard_file(&meta(r#"{"fileKey":"F1"}"#)).as_deref(), Some("F1"));
+    assert_eq!(design_clipboard_file(&meta(r#"{"fileKey":""}"#)), None, "empty");
+    assert_eq!(design_clipboard_file(&meta(&format!(r#"{{"fileKey":"{}"}}"#, "k".repeat(129)))), None, "over 128 characters");
+    assert_eq!(design_clipboard_file(&meta(&format!(r#"{{"fileKey":"{}"}}"#, "k".repeat(128)))).map(|k| k.len()), Some(128));
+    assert_eq!(design_clipboard_file(&meta(r#"{"fileKey":7}"#)), None, "not a string");
+    assert_eq!(design_clipboard_file("(figmeta)!!not base64!!(/figmeta)"), None, "malformed");
+    assert_eq!(design_clipboard_file(&format!("(figmeta){}(/figmeta)", B64.encode("not json"))), None, "not json");
+    assert_eq!(design_clipboard_file("(figmeta)e30="), None, "unclosed");
+    assert_eq!(design_clipboard_file(&format!("(figmeta){}(/figmeta)", "A".repeat(64 * 1024 + 1))), None, "oversized");
+    assert_eq!(design_clipboard_file(""), None, "empty html");
 }

@@ -53,3 +53,31 @@ fn a_cached_main_in_the_internal_canvas_is_an_instance_main_in_the_store() {
     assert_eq!(main.plugin_data.get("fig.guid").map(String::as_str), Some("1:20"));
     assert_eq!(copy.plugin_data.get("fig.main").map(String::as_str), Some("1:20"));
 }
+
+fn exported_warnings(data: &[(&str, &str)]) -> Vec<String> {
+    let mut doc = Document::new("x");
+    let page = doc.first_page().expect("a page");
+    let id = doc.alloc_id();
+    let mut n = Node::new(id, NodeKind::Frame, "A", 10.0, 10.0);
+    for (k, v) in data {
+        n.plugin_data.insert((*k).into(), (*v).into());
+    }
+    doc.insert(n, page, None).expect("inserts");
+    super::export(&doc, None).expect("exports").1
+}
+
+#[test]
+fn identity_keys_alone_do_not_warn_on_export_but_other_plugin_data_does() {
+    let has = |w: &[String]| w.iter().any(|m| m.contains("plugin data"));
+    assert!(!has(&exported_warnings(&[("fig.guid", "1:2"), ("fig.key", "k"), ("fig.file", "F"), ("fig.main", "1:3")])));
+    assert!(has(&exported_warnings(&[("fig.guid", "1:2"), ("other", "x")])));
+    assert!(has(&exported_warnings(&[("other", "x")])));
+}
+
+#[test]
+fn pack_canvas_refuses_a_schema_that_does_not_parse_or_has_no_message() {
+    let msg = o(vec![("nodeChanges", arr(vec![]))]);
+    assert!(super::pack_canvas("not a schema", &msg).is_err());
+    assert!(super::pack_canvas("enum A X=0", &msg).is_err(), "no Message");
+    assert!(super::pack_canvas(super::EXPORT_SCHEMA, &msg).is_ok());
+}
