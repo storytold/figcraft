@@ -20,7 +20,13 @@ struct Drag {
     source: NodeId,
     from: Pos2,
     pos: Pos2,
+    /// Dragging the arrow end of the source's interaction at this index, from where it was
+    /// grabbed: dropped on a frame it goes there, on empty canvas the connection goes.
+    rewire: Option<(usize, Pos2)>,
 }
+
+/// How close (screen points) to a connection's arrow tip a press picks up its end.
+const END_GRAB: f32 = 8.0;
 
 /// Stable egui id for prototype connection dragging.
 fn drag_id() -> Id {
@@ -135,6 +141,40 @@ fn frame_at(app: &FigApp, doc: &Document, page: NodeId, p: Pos2) -> Option<NodeI
     doc.top_frames(page).into_iter().rev().find(under).or_else(|| doc.sections_in(page).into_iter().rev().find(under))
 }
 
+/// A dragged arrow end let go: over a frame other than the source's own the connection goes there
+/// ("drag the arrow end to another frame"); over empty canvas it goes away ("click and drag the
+/// connection to an empty space on the canvas, and release it"); over the source's own frame, or
+/// where it was, nothing changes.
+fn rewire(app: &mut FigApp, ctx: &egui::Context, doc: &Document, page: NodeId, d: &Drag, index: usize) {
+    let Some(it) = doc.node(d.source).and_then(|n| n.interactions.get(index)) else { return };
+    match frame_at(app, doc, page, d.pos) {
+        Some(dest) if doc.top_level_frame(d.source) == Some(dest) => {}
+        Some(dest) => {
+            let mut done = false;
+            let actions: Vec<Value> = it
+                .actions
+                .iter()
+                .map(|a| {
+                    let mut v = serde_json::to_value(a).unwrap_or(Value::Null);
+                    if !done && a.dest().is_some_and(|was| was != dest) {
+                        v["dest"] = json!(dest);
+                        done = true;
+                    }
+                    v
+                })
+                .collect();
+            if done && app.run("proto.interaction.set", json!({"ids": [d.source], "index": index, "actions": actions})).is_some() {
+                crate::proto_panel::open_editor(ctx, Some((d.source, index)));
+            }
+        }
+        None => {
+            if app.run("proto.interaction.remove", json!({"ids": [d.source], "index": index})).is_some() {
+                crate::proto_panel::open_editor(ctx, None);
+            }
+        }
+    }
+}
+
 /// Another variant of the component set `source` is a variant of (or inside one), under a screen
 /// point: where a drag from it makes a Change to.
 fn sibling_variant_at(app: &FigApp, doc: &Document, source: NodeId, p: Pos2) -> Option<NodeId> {
@@ -230,7 +270,9 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
                 Stroke::new(2.0, crate::theme::canvas_accent(painter.ctx())),
             ));
             arrow(painter, &pts, crate::theme::canvas_accent(painter.ctx()));
-            plus_handle(painter, d.from, true);
+            if d.rewire.is_none() {
+                plus_handle(painter, d.from, true);
+            }
         }
         None => {
             if ds.text_edit.is_none() {
@@ -274,6 +316,16 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
         ctx.request_repaint();
         if released || !down {
             ctx.data_mut(|m| m.remove::<Drag>(drag_id()));
+            if let Some((index, grabbed)) = d.rewire {
+                if d.pos.distance(grabbed) < 4.0 {
+                    // A click on the arrow end opens the connection, as a click on its line does.
+                    app.session.set_selection(vec![d.source]);
+                    crate::proto_panel::open_editor(&ctx, Some((d.source, index)));
+                } else {
+                    rewire(app, &ctx, &doc, page, &d, index);
+                }
+                return true;
+            }
             let added = if let Some(variant) = sibling_variant_at(app, &doc, d.source, d.pos) {
                 // Onto another variant of the source's own set: Change to (interactive components).
                 app.run("proto.interaction.add", json!({"ids": [d.source], "action": {"type": "changeTo", "dest": variant}}))
@@ -309,7 +361,16 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
         return false;
     }
     if let Some((source, from)) = over_handle {
-        ctx.data_mut(|m| m.insert_temp(drag_id(), Drag { source, from, pos }));
+        ctx.data_mut(|m| m.insert_temp(drag_id(), Drag { source, from, pos, rewire: None }));
+        return true;
+    }
+    // The arrow end of a connection: drag it to another frame or off onto the canvas.
+    let end = noodles(app, &ctx, &doc, page)
+        .into_iter()
+        .filter(|n| n.pts[3].distance(pos) <= END_GRAB)
+        .min_by(|a, b| a.pts[3].distance(pos).total_cmp(&b.pts[3].distance(pos)));
+    if let Some(n) = end {
+        ctx.data_mut(|m| m.insert_temp(drag_id(), Drag { source: n.source, from: n.pts[0], pos, rewire: Some((n.index, pos)) }));
         return true;
     }
     let hit = noodles(app, &ctx, &doc, page)
@@ -422,6 +483,52 @@ mod tests {
             "{:?}",
             connections(&u, variants[0])
         );
+    }
+
+    /// Frames A, B and C with a button in A connected to B, selected, on the Prototype tab.
+    fn connected() -> (crate::present_tests::Ui, NodeId, NodeId, NodeId) {
+        let mut s = figcraft_engine::Session::new();
+        let at = |s: &mut figcraft_engine::Session, x: f64| {
+            crate::present_tests::id(&s.execute("frame.create", &json!({"x": x, "y": 0, "width": 200, "height": 300})).unwrap())
+        };
+        let (a, b, c) = (at(&mut s, 0.0), at(&mut s, 300.0), at(&mut s, 600.0));
+        let btn =
+            crate::present_tests::id(&s.execute("shape.rectangle", &json!({"x": 20, "y": 20, "width": 80, "height": 30, "parent": a})).unwrap());
+        s.execute("proto.interaction.add", &json!({"ids": [btn], "dest": b})).unwrap();
+        s.execute("select.set", &json!({"ids": [btn]})).unwrap();
+        let mut u = crate::present_tests::Ui::new(s);
+        u.app.ui.right_tab = RightTab::Prototype;
+        u.run("view.zoomFit", json!({}));
+        u.frames(2, Vec::new);
+        (u, btn, b, c)
+    }
+
+    /// Press the connection's arrow end and let go at page point `to` (or where it was).
+    fn drag_end(u: &mut crate::present_tests::Ui, to: Option<(f64, f64)>) {
+        let ds = u.app.session.ds().unwrap();
+        let (doc, page) = (ds.doc.clone(), ds.page);
+        let tip = noodles(&u.app, &u.ctx, &doc, page).first().unwrap().pts[3];
+        u.button(tip, true);
+        let end = to.map_or(tip, |(x, y)| u.app.to_screen(x, y));
+        u.frame(vec![egui::Event::PointerMoved(tip + (end - tip) * 0.5)]);
+        u.frame(vec![egui::Event::PointerMoved(end)]);
+        u.button(end, false);
+        u.frames(2, Vec::new);
+    }
+
+    /// The arrow end of a connection drags to another frame ("the connection now goes there"), or
+    /// off onto empty canvas to remove it ("click and drag the connection to an empty space on the
+    /// canvas, and release it"); a click on it keeps it and opens it.
+    #[test]
+    fn a_connection_end_drags_to_another_frame_or_away() {
+        let (mut u, btn, b, c) = connected();
+        drag_end(&mut u, None);
+        assert!(matches!(connections(&u, btn)[..], [figcraft_doc::proto::Action::Navigate { dest, .. }] if dest == b), "a click keeps it");
+        assert_eq!(crate::proto_panel::editor(&u.ctx), Some((btn, 0)), "and opens it");
+        drag_end(&mut u, Some((700.0, 150.0)));
+        assert!(matches!(connections(&u, btn)[..], [figcraft_doc::proto::Action::Navigate { dest, .. }] if dest == c), "{:?}", connections(&u, btn));
+        drag_end(&mut u, Some((700.0, 600.0)));
+        assert!(connections(&u, btn).is_empty(), "dropped on empty canvas: gone");
     }
 
     #[test]
