@@ -754,8 +754,6 @@ fn canon(doc: &Document) -> Vec<Value> {
         .map(|id| {
             let mut n = doc.node(*id).unwrap().clone();
             normalize(&mut n, &ix);
-            // The identity the import keeps of a file's components (#2022) is not written back.
-            n.plugin_data.retain(|k, _| !k.starts_with("fig."));
             let mut v = serde_json::to_value(&n).unwrap();
             // Written even when it's the identity: near-identity read back must compare.
             v["transform"] = serde_json::json!(n.transform.as_coeffs());

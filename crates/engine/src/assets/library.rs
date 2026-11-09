@@ -1209,8 +1209,8 @@ fn merge_components(
 }
 
 /// Match the mains of `src` (a design app's paste) that nothing else covers with the components of
-/// `doc` that carry the same Figma identity: the same `fig.guid` from the same file (`fig.file`,
-/// both absent counts as the same), or the same library `fig.key` from anywhere. A hit links the
+/// `doc` that carry the same Figma identity: the same `fig.guid` from the same known file
+/// (`fig.file`, present on both), or the same library `fig.key` from anywhere. A hit links the
 /// main and each of its layers carrying a `fig.guid` to the layer of `doc`'s component with that
 /// guid, so instances and their per-layer sources point into the component already there.
 fn relink_by_identity(
@@ -1229,14 +1229,16 @@ fn relink_by_identity(
         return;
     }
     let pasted: BTreeSet<NodeId> = map.values().copied().collect();
-    let mut by_guid: BTreeMap<(Option<&str>, &str), NodeId> = BTreeMap::new();
+    let mut by_guid: BTreeMap<(&str, &str), NodeId> = BTreeMap::new();
     let mut by_key: BTreeMap<&str, NodeId> = BTreeMap::new();
     for n in doc.nodes() {
         if !matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) || pasted.contains(&n.id) || doc.is_remote(n.id) {
             continue;
         }
-        if let Some(g) = n.plugin_data.get("fig.guid") {
-            by_guid.entry((n.plugin_data.get("fig.file").map(String::as_str), g.as_str())).or_insert(n.id);
+        if let Some(g) = n.plugin_data.get("fig.guid")
+            && let Some(f) = n.plugin_data.get("fig.file")
+        {
+            by_guid.entry((f.as_str(), g.as_str())).or_insert(n.id);
         }
         if let Some(k) = n.plugin_data.get("fig.key") {
             by_key.entry(k.as_str()).or_insert(n.id);
@@ -1245,8 +1247,10 @@ fn relink_by_identity(
     for m in todo {
         let Some(theirs) = src.node(m) else { continue };
         let guid = theirs.plugin_data.get("fig.guid").map(String::as_str).unwrap_or_default();
-        let found = by_guid
-            .get(&(theirs.plugin_data.get("fig.file").map(String::as_str), guid))
+        let found = theirs
+            .plugin_data
+            .get("fig.file")
+            .and_then(|f| by_guid.get(&(f.as_str(), guid)))
             .or_else(|| theirs.plugin_data.get("fig.key").and_then(|k| by_key.get(k.as_str())));
         let Some(&mine) = found else { continue };
         let layers: BTreeMap<&str, NodeId> =

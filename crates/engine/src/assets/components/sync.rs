@@ -150,6 +150,8 @@ fn copy_layers(
         n.parent = Some(parent);
         n.children = orig.children.iter().filter_map(|c| map.get(c).copied()).collect();
         n.source = Some(*s);
+        // The main's Figma identity stays on the main.
+        n.drop_figma_identity();
         n.overrides.clear();
         n.prop_refs.clear();
         let prev = old.get(&nid);

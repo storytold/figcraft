@@ -100,10 +100,12 @@ pub fn design_clipboard_file(html: &str) -> Option<String> {
     use base64::Engine as _;
     let start = html.find(META_OPEN)? + META_OPEN.len();
     let len = html.get(start..)?.find(META_CLOSE)?;
-    let b64: String = html.get(start..start + len)?.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    if b64.len() > 64 * 1024 {
+    let span = html.get(start..start + len)?;
+    // Checked before the span is copied: the HTML may be hundreds of megabytes.
+    if span.len() > 64 * 1024 {
         return None;
     }
+    let b64: String = span.chars().filter(|c| !c.is_ascii_whitespace()).collect();
     let bytes =
         base64::engine::general_purpose::STANDARD.decode(&b64).or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&b64)).ok()?;
     let meta: Value = serde_json::from_slice(&bytes).ok()?;
@@ -123,13 +125,14 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let file_key =
         string(p, "html").as_deref().and_then(design_clipboard_file).or_else(|| string(p, "fileKey").filter(|k| !k.is_empty() && k.len() <= 128));
-    let mut other = crate::cmd::file::load_fig(&bytes, "Pasted layers").ok_or_else(|| bad(CMD, "the data is not copied design layers"))??;
+    let mut other =
+        crate::cmd::file::load_fig_with(&bytes, "Pasted layers", true).ok_or_else(|| bad(CMD, "the data is not copied design layers"))??;
     if let Some(key) = &file_key {
         // Layer ids are unique within one file only: mains keep the file they came from.
         let ids: Vec<NodeId> = other.doc.ids().collect();
         for id in ids {
             if let Ok(n) = other.doc.get_mut(id)
-                && n.plugin_data.contains_key("fig.guid")
+                && (n.plugin_data.contains_key("fig.guid") || n.plugin_data.contains_key("fig.main"))
             {
                 n.plugin_data.insert("fig.file".into(), key.clone());
             }
@@ -269,7 +272,12 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         if let Some(r) = nodes.first_mut() {
             r.transform = doc.world_transform(into).inverse() * shift * r.transform;
         }
-        out.push(doc.paste_nodes(&nodes, &map, *root, into, None)?);
+        let pasted = doc.paste_nodes(&nodes, &map, *root, into, None)?;
+        // Layers from a file of this app are copies, not the mains pasted from the design app.
+        if clip.source_doc != 0 {
+            doc.drop_figma_identity_in(pasted);
+        }
+        out.push(pasted);
         all.extend(map);
     }
     // Board connectors pasted with what they join join the pasted copies.

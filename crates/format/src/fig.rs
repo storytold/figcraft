@@ -134,7 +134,18 @@ pub fn import(bytes: &[u8], name: &str) -> Result<(Document, Vec<String>), Forma
     import_with_image_limit(bytes, name, MAX_IMAGE_BYTES)
 }
 
+/// [`try_import`] for layers pasted from the clipboard: each main also keeps the identity it had in
+/// the design app (`fig.guid`, `fig.key`; instances keep `fig.main`) in its plugin data, so
+/// instances pasted later can link to it (#2022). A file that is opened carries none.
+pub fn try_import_pasted(bytes: &[u8], name: &str) -> Option<Result<(Document, Vec<String>), FormatError>> {
+    is_fig(bytes).then(|| import_inner(bytes, name, MAX_IMAGE_BYTES, true))
+}
+
 fn import_with_image_limit(bytes: &[u8], name: &str, image_limit: u64) -> Result<(Document, Vec<String>), FormatError> {
+    import_inner(bytes, name, image_limit, false)
+}
+
+fn import_inner(bytes: &[u8], name: &str, image_limit: u64, identity: bool) -> Result<(Document, Vec<String>), FormatError> {
     let mut archive = Archive::open(bytes)?;
     archive.image_budget.remaining.set(image_limit);
     // The budgets follow the compressed canvas, which the file itself bounds (its zip member may
@@ -159,7 +170,11 @@ fn import_with_image_limit(bytes: &[u8], name: &str, image_limit: u64) -> Result
         canonical_image_refs(&mut json, &aliases);
     }
     let images = |r: &str| archive.image(r).or_else(|| embedded.get(r).map(|b| b.to_vec()));
-    let (mut doc, more) = crate::rest::import_with_networks(&json, &images, networks, max_nodes)?;
+    let (mut doc, more) = if identity {
+        crate::rest::import_with_identity(&json, &images, networks, max_nodes)?
+    } else {
+        crate::rest::import_with_networks(&json, &images, networks, max_nodes)?
+    };
     let skipped = archive.image_budget.skipped.get();
     if skipped > 0 {
         warnings.push(format!("{skipped} ZIP image(s) skipped by the total ZIP image byte budget ({image_limit} bytes)"));

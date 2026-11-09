@@ -6,11 +6,11 @@ use figcraft_doc::{Document, Node, NodeKind};
 
 use super::kiwi::Kv;
 use super::tests::{arr, canvas, g, node, o, s, schema, xy};
-use super::try_import;
+use super::try_import_pasted;
 
 fn import(nodes: Vec<Kv<'static>>) -> Document {
     let bytes = canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))]));
-    try_import(&bytes, "Pasted layers").expect("design data").expect("it imports").0
+    try_import_pasted(&bytes, "Pasted layers").expect("design data").expect("it imports").0
 }
 
 fn named<'a>(doc: &'a Document, name: &str) -> &'a Node {
