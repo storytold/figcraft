@@ -115,6 +115,11 @@ fn the_invert_zoom_preference_toggles_and_is_saved() {
     let loaded: crate::Prefs = serde_json::from_value(saved).unwrap();
     assert!(loaded.invert_zoom);
     assert_eq!(s.execute("pref.invertZoom", &json!({"on": false})).unwrap()["on"], false);
+    assert!(!s.prefs.invert_zoom);
+    let saved = serde_json::to_value(&s.prefs).unwrap();
+    assert_eq!(saved["invert_zoom"], false);
+    let loaded: crate::Prefs = serde_json::from_value(saved).unwrap();
+    assert!(!loaded.invert_zoom, "off persists after being on");
     // Preferences saved before the setting existed read it as off.
     let old: crate::Prefs = serde_json::from_value(json!({"theme": "dark"})).unwrap();
     assert!(!old.invert_zoom);

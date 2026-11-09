@@ -134,12 +134,14 @@ fn the_swap_keeps_egui_rates() {
 
 #[test]
 fn invert_zoom_reverses_cmd_or_ctrl_wheel_by_the_same_factor() {
-    let (mut off, mut on) = (Canvas::with_invert(false, false), Canvas::with_invert(false, true));
-    let (a, b, _) = off.gesture(wheel(MouseWheelUnit::Line, 3.0, Modifiers::COMMAND), Modifiers::COMMAND);
-    let (c, d, _) = on.gesture(wheel(MouseWheelUnit::Line, 3.0, Modifiers::COMMAND), Modifiers::COMMAND);
-    assert!(b.0 > a.0 * 1.05, "off zooms in: {a:?} -> {b:?}");
-    assert!(d.0 < c.0 / 1.05, "on zooms out: {c:?} -> {d:?}");
-    assert!(((b.0 / a.0) * (d.0 / c.0) - 1.0).abs() < 1e-3, "by the same factor");
+    for mods in [Modifiers::COMMAND, Modifiers::CTRL] {
+        let (mut off, mut on) = (Canvas::with_invert(false, false), Canvas::with_invert(false, true));
+        let (a, b, _) = off.gesture(wheel(MouseWheelUnit::Line, 3.0, mods), mods);
+        let (c, d, _) = on.gesture(wheel(MouseWheelUnit::Line, 3.0, mods), mods);
+        assert!(b.0 > a.0 * 1.05, "{mods:?} off zooms in: {a:?} -> {b:?}");
+        assert!(d.0 < c.0 / 1.05, "{mods:?} on zooms out: {c:?} -> {d:?}");
+        assert!(((b.0 / a.0) * (d.0 / c.0) - 1.0).abs() < 1e-3, "{mods:?} by the same factor");
+    }
 }
 
 #[test]
@@ -150,18 +152,33 @@ fn invert_zoom_reverses_a_plain_mouse_wheel_with_scroll_wheel_zoom_on() {
     assert!(b.0 > a.0 * 1.05, "off zooms in: {a:?} -> {b:?}");
     assert!(d.0 < c.0 / 1.05, "on zooms out: {c:?} -> {d:?}");
     assert!(((b.0 / a.0) * (d.0 / c.0) - 1.0).abs() < 1e-3, "by the same factor");
-    // Without Scroll wheel zoom a plain wheel still scrolls, inverted or not.
-    let mut plain = Canvas::with_invert(false, true);
-    let (a, b, _) = plain.gesture(wheel(MouseWheelUnit::Line, -3.0, Modifiers::NONE), Modifiers::NONE);
-    assert!((b.0 - a.0).abs() < 1e-9 && b.2 > a.2 + 1.0, "scrolls: {a:?} -> {b:?}");
+}
+
+/// Panning is never inverted: the scroll vector is the same with the preference on and off.
+#[test]
+fn invert_zoom_leaves_panning_unchanged() {
+    // (Scroll wheel zoom, modifiers): a plain wheel without it, Cmd/Ctrl+wheel with it, Shift+wheel.
+    for (swz, mods) in [(false, Modifiers::NONE), (true, Modifiers::COMMAND), (true, Modifiers::CTRL), (true, Modifiers::SHIFT)] {
+        let (mut off, mut on) = (Canvas::with_invert(swz, false), Canvas::with_invert(swz, true));
+        let (a, b, _) = off.gesture(wheel(MouseWheelUnit::Line, -3.0, mods), mods);
+        let (c, d, _) = on.gesture(wheel(MouseWheelUnit::Line, -3.0, mods), mods);
+        assert!((b.0 - a.0).abs() < 1e-9 && (d.0 - c.0).abs() < 1e-9, "{mods:?} no zoom");
+        assert!(b.1 != a.1 || b.2 != a.2, "{mods:?} off pans: {a:?} -> {b:?}");
+        assert!(
+            ((b.1 - a.1) - (d.1 - c.1)).abs() < 1e-9 && ((b.2 - a.2) - (d.2 - c.2)).abs() < 1e-9,
+            "{mods:?} same pan: {a:?} -> {b:?} vs {c:?} -> {d:?}"
+        );
+    }
 }
 
 #[test]
 fn a_pinch_zooms_the_same_with_invert_zoom_on_and_off() {
-    for invert in [false, true] {
-        let mut c = Canvas::with_invert(false, invert);
-        let (a, b, _) = c.gesture(Event::Zoom(1.5), Modifiers::NONE);
-        assert!((b.0 / a.0 - 1.5).abs() < 1e-3, "invert {invert}: {a:?} -> {b:?}");
+    for (swz, invert, factor) in
+        [(false, false, 1.5), (false, true, 1.5), (true, false, 1.5), (true, true, 1.5), (true, true, 0.5), (false, true, 0.5)]
+    {
+        let mut c = Canvas::with_invert(swz, invert);
+        let (a, b, _) = c.gesture(Event::Zoom(factor), Modifiers::NONE);
+        assert!((b.0 / a.0 - f64::from(factor)).abs() < 1e-3, "scroll wheel zoom {swz}, invert {invert}, x{factor}: {a:?} -> {b:?}");
     }
 }
 
