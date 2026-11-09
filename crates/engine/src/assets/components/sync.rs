@@ -328,7 +328,7 @@ fn index_old_layers(doc: &Document, inst: NodeId, spare: BTreeMap<NodeId, std::s
 /// stays), and Fill in an auto layout parent, which is the instance's own and is kept.
 fn instance_child_layout(doc: &Document, root: &Node, comp: &Node) -> figcraft_doc::ChildLayout {
     let mut cl = root.child_layout.clone();
-    // Only one "size" override exists, not one per axis: it keeps both axes.
+    // One "size" override covers both axes, as in Figma ("Reset size"): it keeps both.
     if root.overrides.contains("size") || root.overrides.contains("resizing") {
         return cl;
     }

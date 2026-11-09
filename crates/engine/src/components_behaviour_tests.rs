@@ -1111,8 +1111,9 @@ fn a_plain_instance_goes_fixed_and_back_to_hug_with_its_main() {
 }
 
 /// Measured in Figma: an instance whose width was typed keeps that Fixed width through both
-/// changes; its height, not overridden, kept following the main. FigCraft records a size override
-/// for both axes at once, so the whole instance keeps its size.
+/// changes, while its height kept hugging its content. Figma keeps one size override for both
+/// axes, as FigCraft does: with the width typed, a change to a fixed main's height does not reach
+/// the instance, and the only size reset is "Reset size" (measured 2026-11-09).
 #[test]
 fn an_instance_with_a_typed_width_keeps_it_when_the_main_turns_fixed_and_back() {
     let mut s = Session::new();
