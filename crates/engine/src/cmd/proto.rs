@@ -433,6 +433,19 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     it.delay_ms = delay(cmd, p)?.unwrap_or(0);
     settle(&mut it);
     check_dests(cmd, s, &it)?;
+    // A new connection to an overlay other connections open takes the overlay's settings.
+    {
+        let doc = s.doc()?;
+        let have: Vec<(NodeId, OverlaySettings)> =
+            overlay_settings(&it.actions).into_iter().filter_map(|(d, _)| current_overlay(doc, d).map(|c| (d, c))).collect();
+        figcraft_doc::proto::walk_mut(&mut it.actions, &mut |a| {
+            if let Action::OpenOverlay { dest, position, close_on_outside, background, .. } = a
+                && let Some((_, c)) = have.iter().find(|(d, _)| d == dest)
+            {
+                (*position, *close_on_outside, *background) = *c;
+            }
+        });
+    }
     let targets = req_targets(cmd, s, p)?;
     let first_start = first_flow_start(s, &targets, &it)?;
     let mut index = 0;
@@ -448,6 +461,44 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     Ok(json!({"index": index}))
+}
+
+/// An overlay's settings: where it opens, whether a click outside closes it, its background.
+pub(super) type OverlaySettings = (OverlayPosition, bool, Option<figcraft_color::Color>);
+
+/// The overlay settings of each Open overlay in `actions`, by overlay frame.
+pub(super) fn overlay_settings(actions: &[Action]) -> Vec<(NodeId, OverlaySettings)> {
+    figcraft_doc::proto::walk(actions)
+        .filter_map(|a| match a {
+            Action::OpenOverlay { dest, position, close_on_outside, background, .. } => Some((*dest, (*position, *close_on_outside, *background))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Give every Open overlay of frame `dest` in the document `settings`. The settings belong to the
+/// overlay, not the connection ("These settings apply to the overlay itself"): each connection
+/// that opens it opens it the same way. A manual offset stays the connection's own (it is from the
+/// layer that opens it).
+pub(super) fn share_overlay(doc: &mut Document, dest: NodeId, settings: OverlaySettings) {
+    let ids: Vec<NodeId> = doc.nodes().filter(|n| !n.interactions.is_empty()).map(|n| n.id).take(100_000).collect();
+    for id in ids {
+        let Some(n) = doc.node_mut(id) else { continue };
+        for it in &mut n.interactions {
+            figcraft_doc::proto::walk_mut(&mut it.actions, &mut |a| {
+                if let Action::OpenOverlay { dest: d, position, close_on_outside, background, .. } = a
+                    && *d == dest
+                {
+                    (*position, *close_on_outside, *background) = settings;
+                }
+            });
+        }
+    }
+}
+
+/// The settings overlay frame `dest` opens with now, from any connection that opens it.
+pub(super) fn current_overlay(doc: &Document, dest: NodeId) -> Option<OverlaySettings> {
+    doc.nodes().flat_map(|n| n.interactions.iter()).flat_map(|it| overlay_settings(&it.actions)).find(|(d, _)| *d == dest).map(|(_, s)| s)
 }
 
 /// The frame a page's first connection starts a flow at: "When you add a connection between two
@@ -489,6 +540,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     for i in req_targets(cmd, s, p)? {
         let Some(cur) = s.doc()?.get(i)?.interactions.get(k).cloned() else { continue };
         let had: Vec<NodeId> = figcraft_doc::proto::walk(&cur.actions).filter_map(|a| a.dest()).collect();
+        let overlays_before = overlay_settings(&cur.actions);
         let mut it = whole.clone().unwrap_or(cur);
         if let Some(t) = &trigger {
             it.trigger = t.clone();
@@ -524,9 +576,13 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(d) = figcraft_doc::proto::walk(&it.actions).filter_map(|a| a.dest()).find(|d| !doc.contains(*d) && !had.contains(d)) {
             return Err(bad(cmd, format!("destination {d} doesn't exist")));
         }
+        let changed: Vec<(NodeId, OverlaySettings)> = overlay_settings(&it.actions).into_iter().filter(|o| !overlays_before.contains(o)).collect();
         if let Some(slot) = s.doc_mut()?.get_mut(i)?.interactions.get_mut(k) {
             *slot = it;
             hit = true;
+        }
+        for (dest, settings) in changed {
+            share_overlay(s.doc_mut()?, dest, settings);
         }
     }
     if !hit {

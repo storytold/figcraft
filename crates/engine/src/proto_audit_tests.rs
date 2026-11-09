@@ -67,3 +67,47 @@ fn a_connection_to_a_deleted_frame_stays_editable() {
         "a new missing destination is still refused"
     );
 }
+
+fn overlay_of(s: &Session, n: NodeId) -> (String, bool) {
+    match &s.doc().unwrap().node(n).unwrap().interactions[0].actions[0] {
+        figcraft_doc::proto::Action::OpenOverlay { position, background, .. } => (format!("{position:?}"), background.is_some()),
+        a => panic!("not an overlay: {a:?}"),
+    }
+}
+
+/// An overlay's settings belong to the overlay ("These settings apply to the overlay itself, not
+/// the connection"): changed through one connection, every connection that opens it opens it the
+/// same way, and a new connection to it takes them.
+#[test]
+fn overlay_settings_are_the_overlays() {
+    let mut s = Session::new();
+    let (a, b, one) = screens(&mut s);
+    let two = idv(&ex(&mut s, "shape.rectangle", json!({"x": 20, "y": 80, "width": 80, "height": 30, "parent": a})));
+    for btn in [one, two] {
+        ex(&mut s, "proto.interaction.add", json!({"ids": [btn], "action": {"type": "openOverlay", "dest": b}}));
+    }
+    ex(
+        &mut s,
+        "proto.action.set",
+        json!({"ids": [one], "index": 0, "path": [0], "action": {"type": "openOverlay", "dest": b, "position": "bottomCenter", "background": "#00000080"}}),
+    );
+    assert_eq!(overlay_of(&s, two), ("BottomCenter".to_string(), true), "the other connection opens it the same way");
+    let three = idv(&ex(&mut s, "shape.rectangle", json!({"x": 20, "y": 140, "width": 80, "height": 30, "parent": a})));
+    ex(&mut s, "proto.interaction.add", json!({"ids": [three], "action": {"type": "openOverlay", "dest": b}}));
+    assert_eq!(overlay_of(&s, three), ("BottomCenter".to_string(), true), "a new connection takes them");
+}
+
+/// The action editor keeps a connection to a deleted frame editable too.
+#[test]
+fn the_action_editor_keeps_a_connection_to_a_deleted_frame_editable() {
+    let mut s = Session::new();
+    let (_, b, btn) = screens(&mut s);
+    ex(&mut s, "proto.interaction.add", json!({"ids": [btn], "action": {"type": "openOverlay", "dest": b}}));
+    ex(&mut s, "edit.delete", json!({"ids": [b]}));
+    ex(
+        &mut s,
+        "proto.action.set",
+        json!({"ids": [btn], "index": 0, "path": [0], "action": {"type": "openOverlay", "dest": b, "position": "topLeft"}}),
+    );
+    assert_eq!(overlay_of(&s, btn).0, "TopLeft");
+}

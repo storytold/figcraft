@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use figcraft_doc::proto::{Action, ConditionalBlock, Expr, ExprOp, MAX_ACTION_DEPTH, walk};
-use figcraft_doc::{Variable, VariableType, VariableValue, Variables};
+use figcraft_doc::{NodeId, Variable, VariableType, VariableValue, Variables};
 use serde_json::{Value, json};
 
 use super::CommandSpec;
@@ -287,11 +287,19 @@ fn check_action(cmd: &str, vars: &Variables, a: &Action) -> Result<()> {
 
 /// The `action` param: expressions read, names stored as ids, checked.
 fn action_param(cmd: &str, s: &Session, p: &Value) -> Result<Action> {
+    action_param_keeping(cmd, s, p, &[])
+}
+
+/// [`action_param`], where a destination in `kept` (one the edited actions already had) may be
+/// missing: a connection to a deleted frame stays editable.
+fn action_param_keeping(cmd: &str, s: &Session, p: &Value, kept: &[NodeId]) -> Result<Action> {
     let doc = s.doc()?;
     let p = with_expressions(cmd, &doc.variables, p)?;
     let a: Action = parse(cmd, &p, "action")?.ok_or_else(|| bad(cmd, "`action` required"))?;
     check_action(cmd, &doc.variables, &a)?;
-    super::proto::check_action_dests(cmd, doc, std::slice::from_ref(&a))?;
+    if let Some(d) = figcraft_doc::proto::walk(std::slice::from_ref(&a)).filter_map(|x| x.dest()).find(|d| !doc.contains(*d) && !kept.contains(d)) {
+        return Err(bad(cmd, format!("destination {d} doesn't exist")));
+    }
     Ok(a)
 }
 
@@ -372,12 +380,36 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "proto.action.set";
     let path = req_path(cmd, p)?;
-    let action = action_param(cmd, s, p)?;
-    edit(cmd, s, p, |actions| {
+    let k = req_index(cmd, p, "index")?;
+    let targets = req_targets(cmd, s, p)?;
+    let doc = s.doc()?;
+    let had: Vec<Action> = targets
+        .iter()
+        .filter_map(|i| doc.node(*i)?.interactions.get(k))
+        .flat_map(|it| figcraft_doc::proto::walk(&it.actions).cloned().collect::<Vec<_>>())
+        .collect();
+    let kept: Vec<NodeId> = had.iter().filter_map(Action::dest).collect();
+    let mut action = action_param_keeping(cmd, s, p, &kept)?;
+    // An overlay's settings are the overlay's: the same overlay shares an edit with every
+    // connection that opens it; another overlay brings its own.
+    let mut share = None;
+    if let Action::OpenOverlay { dest, position, close_on_outside, background, .. } = &mut action {
+        let same = had.iter().any(|a| matches!(a, Action::OpenOverlay { dest: d, .. } if d == dest));
+        if same {
+            share = Some((*dest, (*position, *close_on_outside, *background)));
+        } else if let Some(c) = super::proto::current_overlay(s.doc()?, *dest) {
+            (*position, *close_on_outside, *background) = c;
+        }
+    }
+    let r = edit(cmd, s, p, |actions| {
         let (list, at) = list_mut(actions, &path).ok_or_else(|| no_list(cmd))?;
         *list.get_mut(at).ok_or_else(|| no_list(cmd))? = action.clone();
         Ok(json!({"path": path}))
-    })
+    })?;
+    if let Some((dest, settings)) = share {
+        super::proto::share_overlay(s.doc_mut()?, dest, settings);
+    }
+    Ok(r)
 }
 
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {
