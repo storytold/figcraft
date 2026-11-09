@@ -180,4 +180,16 @@ fn crop_chosen_in_the_colour_picker_enters_crop_mode() {
     let (_, Some(after)) = mode(&u, layer) else { panic!("a crop") };
     assert!((after[0] - before[0] * 0.75).abs() < 1e-9 && (after[3] - before[3] * 0.75).abs() < 1e-9, "{before:?} -> {after:?}");
     assert!((after[4] - before[4]).abs() < 1e-9 && (after[5] - before[5]).abs() < 1e-9, "the top left stays: {before:?} -> {after:?}");
+    // The picture's own corner, now outside the layer at (200, 100), scales the picture inside the
+    // layer, which keeps its size and its selection.
+    let (from, to) = (u.app.to_screen(200.0, 100.0), u.app.to_screen(240.0, 120.0));
+    u.drag_to(from, to);
+    u.button(to, false);
+    assert_eq!(u.app.session.selection(), vec![layer], "the layer stays selected");
+    assert_eq!(u.app.ui.crop, Some((layer, 0)), "still cropping");
+    let n = u.app.session.doc().unwrap().node(layer).unwrap().clone();
+    assert!((n.width - 150.0).abs() < 1e-6 && (n.height - 75.0).abs() < 1e-6, "the layer keeps its size: {} x {}", n.width, n.height);
+    let (_, Some(scaled)) = mode(&u, layer) else { panic!("a crop") };
+    // The picture grew from 200 x 100 to 240 x 120: the layer shows 5/6 of what it showed.
+    assert!((scaled[0] - after[0] * 5.0 / 6.0).abs() < 1e-6 && (scaled[3] - after[3] * 5.0 / 6.0).abs() < 1e-6, "{after:?} -> {scaled:?}");
 }
