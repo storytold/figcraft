@@ -764,7 +764,7 @@ fn blend_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &mut P
 /// one layer's image fill as the Fill section shows it (a text's characters' shared fills
 /// included). Strokes, several layers at once and the regions selected in vector edit mode have
 /// no crop mode, so for them Crop only sets the paint's mode.
-fn crop_on_canvas(app: &FigApp, target: &PickerTarget) -> Option<(NodeId, usize)> {
+pub(crate) fn crop_on_canvas(app: &FigApp, target: &PickerTarget) -> Option<(NodeId, usize)> {
     let PickerTarget::Paint { fills: true, index, ids } = target else { return None };
     let [id] = ids[..] else { return None };
     if figcraft_engine::vectoredit::selected_region_fills(&app.session, id).is_some() {
