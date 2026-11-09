@@ -47,7 +47,7 @@ fn a_frame_moved_inside_auto_layout_still_moves_its_siblings() {
     // A stack and a rectangle side by side in an outer auto layout frame: the outer layout still
     // follows when the stack grows.
     let (mut s, inner, [first, _]) = stack();
-    let other = id_of(&s.execute("shape.rectangle", &json!({"x": 300, "y": 0, "width": 100, "height": 40})).unwrap()["id"]).unwrap();
+    let other = id_of(&s.execute("shape.rectangle", &json!({"x": 150, "y": 0, "width": 100, "height": 40})).unwrap()["id"]).unwrap();
     s.execute("select.set", &json!({"ids": [inner.0, other.0]})).unwrap();
     s.execute("layout.add", &json!({})).unwrap();
     let outer = s.doc().unwrap().node(inner).and_then(|n| n.parent).unwrap();

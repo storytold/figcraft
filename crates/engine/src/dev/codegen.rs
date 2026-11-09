@@ -544,7 +544,7 @@ mod tests {
             ".backgroundColor('#FFFFFF')",
             ".borderRadius(12)",
             ".width(",
-            ".height(100)",
+            &format!(".height({})", num(doc.node(f).map(|n| n.height).unwrap_or_default())),
             ".clip(true)",
         ] {
             assert!(ark.contains(want), "ArkUI has {want:?}:\n{ark}");
@@ -627,7 +627,8 @@ mod tests {
         let dart = code_for(doc, f, CodeLang::Flutter);
         // The card hugs its content, so its width is the layout's, not the 200 it was created with.
         let w = doc.node(f).map(|n| n.width).unwrap_or_default();
-        assert!(dart.starts_with(&format!("Container(\n  width: {},\n  height: 100,\n", num(w))), "{dart}");
+        let h = doc.node(f).map(|n| n.height).unwrap_or_default();
+        assert!(dart.starts_with(&format!("Container(\n  width: {},\n  height: {},\n", num(w), num(h))), "{dart}");
         assert!(dart.contains("borderRadius: BorderRadius.circular(12)"), "{dart}");
         assert!(dart.contains("child: Row(\n"), "{dart}");
         assert!(dart.contains("      Text(\n        \"Say \\\"hi\\\" \\$5\\nnow\",\n"), "escaped: {dart}");

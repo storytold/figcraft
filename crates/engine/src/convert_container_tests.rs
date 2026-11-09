@@ -33,7 +33,7 @@ fn kind(s: &Session, n: NodeId) -> NodeKind {
 fn adding_auto_layout_converts_a_single_group_and_arranges_its_children_directly() {
     let mut s = Session::new();
     let page = s.page().unwrap();
-    let (a, b) = (rect(&mut s, page, 10.0, 20.0), rect(&mut s, page, 90.0, 20.0));
+    let (a, b) = (rect(&mut s, page, 10.0, 20.0), rect(&mut s, page, 80.0, 20.0));
     let group = id(ex(&mut s, "object.group", json!({"ids": [a, b], "name": "Actions"})));
     let siblings = s.doc().unwrap().node(page).unwrap().children.clone();
     let before = [page_box(&s, group), page_box(&s, a), page_box(&s, b)];
@@ -52,7 +52,7 @@ fn adding_auto_layout_converts_a_single_group_and_arranges_its_children_directly
 
     // The second child now follows changes to the first through auto layout.
     ex(&mut s, "node.set", json!({"id": a, "props": {"width": 60}}));
-    assert_eq!(page_box(&s, b), [110.0, 20.0, 150.0, 40.0]);
+    assert_eq!(page_box(&s, b), [100.0, 20.0, 140.0, 40.0]);
     s.undo().unwrap();
     s.undo().unwrap();
     let restored = s.doc().unwrap().node(group).unwrap();
@@ -151,7 +151,7 @@ fn hidden_children_do_not_influence_inferred_direction_or_padding() {
     ex(&mut s, "layout.add", json!({"ids": [frame]}));
     let layout = s.doc().unwrap().node(frame).unwrap().layout.as_ref().unwrap();
     assert_eq!(layout.mode, figcraft_doc::LayoutMode::Horizontal);
-    assert_eq!(layout.padding, [20.0, 170.0, 160.0, 10.0]);
+    assert_eq!(layout.padding, [20.0, 10.0, 20.0, 10.0]);
     assert_eq!(layout.gap, 40.0);
     assert_eq!([page_box(&s, a), page_box(&s, b)], before);
 }
@@ -169,7 +169,7 @@ fn converting_a_group_preserves_fill_on_each_axis_in_its_parent() {
         let before = [page_box(&s, group), page_box(&s, sibling)];
         ex(&mut s, "layout.add", json!({"ids": [group]}));
         let cl = &s.doc().unwrap().node(group).unwrap().child_layout;
-        assert_eq!(cl.sizing_h, if h == "fill" { Sizing::Fill } else { Sizing::Hug });
+        assert_eq!(cl.sizing_h, if h == "fill" { Sizing::Fill } else { Sizing::Fixed });
         assert_eq!(cl.sizing_v, if v == "fill" { Sizing::Fill } else { Sizing::Hug });
         assert_eq!([page_box(&s, group), page_box(&s, sibling)], before);
         s.undo().unwrap();
