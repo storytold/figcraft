@@ -464,7 +464,7 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
         refuse_dropping_images_from_script(input.map(|input| (input, input_images_left_out)), ds, out)?;
         if ext(out) == "figcraft" {
             // Through the engine, so the version history is kept.
-            write(out, &figcraft_engine::cmd::file::file_bytes(ds).map_err(|e| CliError::Failed(e.to_string()))?)?;
+            write(out, &figcraft_engine::cmd::file::file_bytes_at(ds, out).map_err(|e| CliError::Failed(e.to_string()))?)?;
         } else {
             write_doc(&ds.doc, ds.page, out)?;
         }
