@@ -53,7 +53,7 @@ pub const UI_COMMANDS: &[&str] = &[
 pub fn dev_mode_refuses(app: &mut FigApp, id: &str) -> bool {
     let refused = app.ui.right_tab == crate::RightTab::Inspect && !figcraft_engine::devinspect::dev_mode_allows(id);
     if refused {
-        app.toast(tr("Dev Mode only inspects: switch to Design (Shift+D) to edit"));
+        app.toast(tr("Developer Mode only inspects: switch to Design (Shift+D) to edit"));
     }
     refused
 }
