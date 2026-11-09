@@ -768,7 +768,7 @@ fn pressing_k_focuses_the_scale_field_with_its_text_selected() {
 
 /// K, 2, Enter: 100 x 100 becomes 200 x 200 about the centre, the tool is Move, one undo step.
 #[test]
-fn k_two_enter_scales_the_selection_by_two_about_its_centre() {
+fn k_two_enter_scales_the_selection_by_two() {
     let (mut u, r) = scale_setup();
     let steps = undo_steps(&u);
     key(&mut u, Key::K, Modifiers::NONE);
@@ -776,7 +776,8 @@ fn k_two_enter_scales_the_selection_by_two_about_its_centre() {
     u.frame(vec![Event::Text("2".to_string())]);
     key(&mut u, Key::Enter, Modifiers::NONE);
     u.frame(vec![]);
-    assert_eq!(geom(&u, r), (-50.0, -50.0, 200.0, 200.0));
+    // About the panel's origin, FigCraft's top-left default (Figma's grid starts at the centre).
+    assert_eq!(geom(&u, r), (0.0, 0.0, 200.0, 200.0));
     assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
     assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
     assert_eq!(undo_steps(&u), steps + 1);

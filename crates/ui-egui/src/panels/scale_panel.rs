@@ -17,13 +17,6 @@ use crate::widgets::{self, FieldEdit, Lead};
 pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let Some(b) = doc.bounds_of(sel) else { return };
     widgets::section_header(ui, tr("Scale"), &[], false);
-    // The origin starts at the centre, as Figma's grid does: set once per app, so a point the
-    // user picked later stays.
-    let anchor_init = Id::unique("scale_anchor_init");
-    if !ui.data(|d| d.get_temp::<bool>(anchor_init)).unwrap_or(false) {
-        ui.data_mut(|d| d.insert_temp(anchor_init, true));
-        app.run("tool.scaleAnchor", json!({"anchor": "c"}));
-    }
     // The factor field takes the keyboard once, with its text selected, when the tool opens.
     let k_id = Id::unique("scale_k");
     let opened = Id::unique("scale_opened");
