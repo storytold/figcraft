@@ -350,13 +350,17 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
         app.to_screen(p.x, p.y)
     };
     let band = |x0: f64, y0: f64, x1: f64, y1: f64| Rect::from_two_pos(to(x0, y0), to(x1, y1));
-    let [pt, pr, pb, pl] = al.padding;
+    let [pt, pr, pb, pl] = al.padding.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    let (it, ir, ib, il) = figcraft_layout::insets(n, al);
     let (fw, fh) = (n.width, n.height);
+    // Padding starts at the inside edge of an included stroke, as the layout's content does.
+    // The bands exclude the stroke itself so their labels and drags still edit only padding.
+    let (left, top, right, bottom) = (il - pl, it - pt, fw - ir + pr, fh - ib + pb);
     let bands = vec![
-        (0, band(0.0, 0.0, fw, pt.max(4.0)), pt),
-        (1, band(fw - pr.max(4.0), 0.0, fw, fh), pr),
-        (2, band(0.0, fh - pb.max(4.0), fw, fh), pb),
-        (3, band(0.0, 0.0, pl.max(4.0), fh), pl),
+        (0, band(left, top, right, top + pt.max(4.0)), pt),
+        (1, band(right - pr.max(4.0), top, right, bottom), pr),
+        (2, band(left, bottom - pb.max(4.0), right, bottom), pb),
+        (3, band(left, top, left + pl.max(4.0), bottom), pl),
     ];
     // An auto gap shows (and is dragged from) the distance the layout gives it; the drag makes it a
     // fixed gap again, as typing one does.
@@ -369,8 +373,8 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
     let mut tracks = Vec::new();
     if let Some(g) = figcraft_layout::grid_geometry(doc, id) {
         // Grid: bands between columns (column gap) and between rows (row gap), and the tracks.
-        let (top, bottom) = (g.rows.first().map(|r| r.0).unwrap_or(pt), g.rows.last().map(|r| r.1).unwrap_or(fh - pb));
-        let (left, right) = (g.columns.first().map(|c| c.0).unwrap_or(pl), g.columns.last().map(|c| c.1).unwrap_or(fw - pr));
+        let (top, bottom) = (g.rows.first().map(|r| r.0).unwrap_or(it), g.rows.last().map(|r| r.1).unwrap_or(fh - ib));
+        let (left, right) = (g.columns.first().map(|c| c.0).unwrap_or(il), g.columns.last().map(|c| c.1).unwrap_or(fw - ir));
         for pair in g.columns.windows(2) {
             if let [a, b] = pair {
                 gaps.push(main(band(a.1, top, b.0, bottom), false, al.gap));
@@ -396,7 +400,7 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
         let flip = |r: figcraft_geom::Rect| if vertical { figcraft_geom::Rect::new(r.y0, r.x0, r.y1, r.x1) } else { r };
         let fband = |x0: f64, y0: f64, x1: f64, y1: f64| if vertical { band(y0, x0, y1, x1) } else { band(x0, y0, x1, y1) };
         // Main-axis length and padding, cross-axis length and padding.
-        let (mw, mp0, mp1, cw, cp0, cp1) = if vertical { (fh, pt, pb, fw, pl, pr) } else { (fw, pl, pr, fh, pt, pb) };
+        let (mw, mp0, mp1, cw, cp0, cp1) = if vertical { (fh, it, ib, fw, il, ir) } else { (fw, il, ir, fh, it, ib) };
         let boxes: Vec<figcraft_geom::Rect> = figcraft_layout::flow_children(doc, id)
             .into_iter()
             .filter_map(|c| doc.node(c))
@@ -798,5 +802,7 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
 
 #[cfg(test)]
 mod character_fill_tests;
+#[cfg(test)]
+mod padding_tests;
 #[cfg(test)]
 mod region_tests;
