@@ -116,6 +116,9 @@ fn a_new_sticky_starts_at_18() {
 
 #[test]
 fn a_sticky_keeps_its_text_size_as_text_is_added() {
+    // The note's growth needs text measured: without craft-fonts that is with a system font,
+    // scanned here rather than by whichever test happens to run first (#333).
+    figcraft_text::scan_system_fonts();
     let mut s = board();
     let r = s.execute("board.sticky", &json!({"x": 0, "y": 0, "text": "one"})).unwrap();
     let (st, note) = (id(&r, "id"), id(&r, "text"));
@@ -129,10 +132,8 @@ fn a_sticky_keeps_its_text_size_as_text_is_added() {
     let ten = node(&s, note).kind.text().unwrap().clone();
     assert_eq!(ten.characters.matches('\n').count(), 9, "ten lines");
     assert_eq!(ten.style.font_size, 18.0);
-    // Growth needs text measured: a build without the craft-fonts input measures nothing (the same
-    // reason `a_double_click_types_in_the_cell...` fails there), so it is only checked where it is.
-    let measured = node(&s, note).height > text_height;
-    assert!(!measured || node(&s, st).height > height, "ten lines make the note taller");
+    assert!(node(&s, note).height > text_height, "ten lines make the text taller");
+    assert!(node(&s, st).height > height, "and the note");
     assert_eq!(node(&s, st).child_layout.sizing_v, figcraft_doc::Sizing::Hug, "the note hugs its text");
     let (w, h10) = (node(&s, st).width, node(&s, st).height);
     crate::textedit::insert(&mut s, &"a long paragraph ".repeat(15)).unwrap();
@@ -142,7 +143,7 @@ fn a_sticky_keeps_its_text_size_as_text_is_added() {
     assert_eq!(t.style.font_size, 18.0);
     assert!(t.runs.iter().all(|r| r.style.font_size == 18.0));
     assert_eq!(node(&s, st).width, w, "the note keeps its width");
-    assert!(!measured || node(&s, st).height > h10, "and grows taller");
+    assert!(node(&s, st).height > h10, "and grows taller");
 }
 
 #[test]

@@ -17,8 +17,8 @@ design product). The work item is gap 24 in [`gaps.md`](gaps.md).
 Board objects are ordinary layers with a small `board` field on the node (`figcraft_doc::BoardItem`),
 so rendering, hit testing, undo, saving, SVG/PNG/PDF export, copy and paste and live sessions work
 on them unchanged. The file kind (`Document.kind`) is saved in `.figcraft` and reaches people who
-join a live session in their snapshot. What follows from the metadata (a sticky's text size, a
-shape's text room, connector routes and their labels) is recomputed in the engine's normalize pass,
+join a live session in their snapshot. What follows from the metadata (a shape's text
+room, connector routes and their labels) is recomputed in the engine's normalize pass,
 deterministically from the document, so local edits, undo and edits from others in a live session
 all end with the same geometry.
 
