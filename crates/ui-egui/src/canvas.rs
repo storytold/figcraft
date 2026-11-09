@@ -60,9 +60,9 @@ pub struct CanvasState {
     tex_seq: u64,
     submitted: Option<JobKey>,
     /// The dragged layers drawn from a texture of their own while the base render stays put
-    /// ([`drag_sprite`]), and the gesture (its start document's address) that can't have one.
+    /// ([`drag_sprite`]), and the gesture (its start document, held weakly) that can't have one.
     sprite: Option<drag_sprite::Sprite>,
-    sprite_declined: usize,
+    sprite_declined: Option<std::sync::Weak<figcraft_doc::Document>>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
     /// What the last canvas render had to do (shown by `ui.inspect`).
@@ -118,7 +118,7 @@ impl Default for CanvasState {
             tex_seq: 0,
             submitted: None,
             sprite: None,
-            sprite_declined: 0,
+            sprite_declined: None,
             want_view: None,
             render_work: None,
             preview_latency_ms: None,
