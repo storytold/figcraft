@@ -410,6 +410,13 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             |s, p| pref(s, p, |x| &mut x.scroll_wheel_zoom)
         ),
+        spec!(
+            "pref.invertZoom",
+            "Invert zoom direction",
+            "{on?}  reverses wheel zoom: Cmd/Ctrl+wheel, and a plain mouse wheel with Scroll wheel zoom on, zoom out where they would zoom in (a trackpad pinch and panning are unchanged) → {on}",
+            false,
+            |s, p| pref(s, p, |x| &mut x.invert_zoom)
+        ),
         spec!("pref.reduceMotion", "Reduce motion", "{on?}", false, |s, p| pref(s, p, |x| &mut x.reduce_motion)),
         spec!(
             "pref.uiScale",
