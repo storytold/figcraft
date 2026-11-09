@@ -86,13 +86,44 @@ pub fn lerp_transform(a: Affine, sa: (f64, f64), b: Affine, sb: (f64, f64), size
     }
 }
 
-fn lerp_paints(from: &[Paint], to: &mut [Paint], t: f64) {
-    for (f, p) in from.iter().zip(to.iter_mut()) {
-        if let (PaintKind::Solid { color: fc }, PaintKind::Solid { color: tc }) = (&f.kind, &mut p.kind) {
-            *tc = fc.lerp(*tc, t.clamp(0.0, 1.0) as f32);
-            p.opacity = lerp(f64::from(f.opacity), f64::from(p.opacity), t.clamp(0.0, 1.0)) as f32;
+/// Smart animate's fills ("Fill – color, gradient, and image fill transitions"): solid colours
+/// blend; gradients of one kind with as many stops tween their stops and handles; any other change
+/// (a gradient for a colour, another image) cross-fades, the source paint under the destination's
+/// fading in.
+pub(crate) fn lerp_paints(from: &[Paint], to: &mut Vec<Paint>, t: f64) {
+    let k = t.clamp(0.0, 1.0);
+    let mut out = Vec::with_capacity(to.len() + from.len());
+    for (i, p) in to.iter().enumerate() {
+        let mut p = p.clone();
+        let Some(f) = from.get(i) else {
+            out.push(p);
+            continue;
+        };
+        let changed = f.kind != p.kind;
+        let same_gradient =
+            matches!((&f.kind, &p.kind), (PaintKind::Gradient(a), PaintKind::Gradient(b)) if a.kind == b.kind && a.stops.len() == b.stops.len());
+        match (&f.kind, &mut p.kind) {
+            (PaintKind::Solid { color: fc }, PaintKind::Solid { color: tc }) => *tc = fc.lerp(*tc, k as f32),
+            (PaintKind::Gradient(fg), PaintKind::Gradient(tg)) if same_gradient => {
+                for (fs, ts) in fg.stops.iter().zip(tg.stops.iter_mut()) {
+                    ts.color = fs.color.lerp(ts.color, k as f32);
+                    ts.position = lerp(f64::from(fs.position), f64::from(ts.position), k) as f32;
+                }
+                let pt = |a: (f64, f64), b: (f64, f64)| (lerp(a.0, b.0, k), lerp(a.1, b.1, k));
+                (tg.from, tg.to, tg.width) = (pt(fg.from, tg.from), pt(fg.to, tg.to), pt(fg.width, tg.width));
+            }
+            _ if changed && k < 1.0 => {
+                out.push(f.clone());
+                p.opacity *= k as f32;
+                out.push(p);
+                continue;
+            }
+            _ => {}
         }
+        p.opacity = lerp(f64::from(f.opacity), f64::from(p.opacity), k) as f32;
+        out.push(p);
     }
+    *to = out;
 }
 
 /// The document as it looks at eased progress `t` of a smart-animate transition from

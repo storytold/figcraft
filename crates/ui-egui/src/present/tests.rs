@@ -441,3 +441,28 @@ fn smart_animate_frame_cost() {
     let per = t0.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
     eprintln!("smart animate: {per:.2} ms per frame (80 layers, 400x800 px)");
 }
+
+/// Smart animate tweens fills ("Fill – color, gradient, and image fill transitions"): gradients of
+/// one kind tween stop by stop; a change of paint (a colour for a gradient, another image)
+/// cross-fades, the destination fading in over the source; at the end it is the destination's.
+#[test]
+fn smart_animate_tweens_gradients_and_cross_fades_other_fills() {
+    use figcraft_color::{Color, ColorStop, Gradient, GradientKind};
+    let grad = |a: Color, b: Color| {
+        let mut g = Gradient::default_for(GradientKind::Linear, a);
+        g.stops = vec![ColorStop { position: 0.0, color: a }, ColorStop { position: 1.0, color: b }];
+        Paint::gradient(g)
+    };
+    let (red, blue, white) = (Color::new(1.0, 0.0, 0.0, 1.0), Color::new(0.0, 0.0, 1.0, 1.0), Color::new(1.0, 1.0, 1.0, 1.0));
+    let mut to = vec![grad(blue, white)];
+    transition::lerp_paints(&[grad(red, white)], &mut to, 0.5);
+    let PaintKind::Gradient(g) = &to[0].kind else { panic!("{to:?}") };
+    assert_eq!(g.stops[0].color, red.lerp(blue, 0.5), "a gradient's stops tween");
+    let mut to = vec![grad(blue, white)];
+    transition::lerp_paints(&[Paint::solid(red)], &mut to, 0.25);
+    assert_eq!(to.len(), 2, "the colour stays under the gradient fading in: {to:?}");
+    assert_eq!((to[0].kind.clone(), to[1].opacity), (PaintKind::Solid { color: red }, 0.25));
+    let mut to = vec![grad(blue, white)];
+    transition::lerp_paints(&[Paint::solid(red)], &mut to, 1.0);
+    assert_eq!(to, vec![grad(blue, white)], "at the end, the destination's fill");
+}
