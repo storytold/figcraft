@@ -12,6 +12,10 @@ pub struct ViewState {
     /// Viewport size in logical pixels (set by the UI; used by zoom-to-fit).
     pub vw: f64,
     pub vh: f64,
+    /// Height in screen points of the strip the floating bottom toolbar covers (from its top edge to
+    /// the canvas's bottom edge); set by the UI every frame, 0 when it's hidden. Never saved.
+    #[serde(skip)]
+    pub bottom_inset: f64,
     pub pixel_grid: bool,
     pub layout_grids: bool,
     pub rulers: bool,
@@ -51,6 +55,7 @@ impl Default for ViewState {
             zoom: 1.0,
             vw: 1200.0,
             vh: 800.0,
+            bottom_inset: 0.0,
             pixel_grid: true,
             layout_grids: true,
             rulers: false,
@@ -104,6 +109,24 @@ impl ViewState {
         self.zoom = zx.min(zy).clamp(Self::MIN_ZOOM, max_zoom);
         self.cx = r.center().x;
         self.cy = r.center().y;
+    }
+    /// Fit a page rectangle for Zoom to selection: a 40 point margin on all four sides of the area
+    /// above the bottom toolbar (`vw` by `vh - bottom_inset`), centred in that area.
+    pub fn fit_selection(&mut self, r: figcraft_geom::Rect, max_zoom: f64) {
+        if !(r.width() > 0.0 || r.height() > 0.0) || !r.x0.is_finite() {
+            self.cx = r.center().x;
+            self.cy = r.center().y;
+            return;
+        }
+        let margin = 40.0;
+        let inset = if self.bottom_inset.is_finite() { self.bottom_inset.clamp(0.0, (self.vh - 100.0).max(0.0)) } else { 0.0 };
+        let area_h = self.vh - inset;
+        let zx = (self.vw - margin * 2.0).max(50.0) / r.width().max(1e-6);
+        let zy = (area_h - margin * 2.0).max(50.0) / r.height().max(1e-6);
+        self.zoom = zx.min(zy).clamp(Self::MIN_ZOOM, max_zoom);
+        // The rect's centre lands at screen y = area_h / 2, the page centre `(vh - area_h) / 2` below it.
+        self.cx = r.center().x;
+        self.cy = r.center().y + (self.vh - area_h) / 2.0 / self.zoom;
     }
     /// The zoom from which the pixel grid shows (400%).
     pub const PIXEL_GRID_ZOOM: f64 = 4.0;

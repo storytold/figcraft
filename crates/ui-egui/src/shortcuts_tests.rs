@@ -90,7 +90,10 @@ fn shift_digits_zoom() {
     press(&mut u, Key::Num2, Modifiers::SHIFT);
     assert!(zoom(&u) > fit, "Shift+2 fits the smaller selection");
     let v = &u.app.session.ds().unwrap().view;
-    assert_eq!((v.cx, v.cy), (110.0, 40.0), "centred on it");
+    // Centred in the canvas above the bottom toolbar: the page centre sits half the toolbar's strip lower.
+    let expect_cy = 40.0 + v.bottom_inset / 2.0 / v.zoom;
+    assert_eq!(v.cx, 110.0, "centred on it");
+    assert!((v.cy - expect_cy).abs() < 1e-9, "centred above the toolbar: {} vs {expect_cy}", v.cy);
     // `+` and `-` step the zoom.
     let z = zoom(&u);
     press(&mut u, Key::Minus, Modifiers::NONE);
