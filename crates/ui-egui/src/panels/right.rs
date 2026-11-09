@@ -264,6 +264,9 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
     let sel = ds.selection.clone();
     let vector_edit = ds.vector_edit.clone();
     if sel.is_empty() {
+        if app.session.tool.tool == figcraft_engine::ToolId::Scale {
+            crate::scale_panel::note_no_selection(ui);
+        }
         page_section(app, ui, &doc);
         return;
     }

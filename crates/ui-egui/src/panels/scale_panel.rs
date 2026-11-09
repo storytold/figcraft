@@ -15,7 +15,10 @@ use crate::widgets::{self, FieldEdit, Lead};
 
 /// The Scale section, shown in place of Position while the Scale tool is active.
 pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
-    let Some(b) = doc.bounds_of(sel) else { return };
+    let Some(b) = doc.bounds_of(sel) else {
+        note_no_selection(ui);
+        return;
+    };
     widgets::section_header(ui, tr("Scale"), &[], false);
     // The factor field takes the keyboard, with its text selected, whenever the section shows
     // after a frame without it: the tool was chosen, or the panel came back from another tab or a
@@ -25,7 +28,8 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let frame = ui.ctx().cumulative_frame_nr();
     let last = ui.data(|d| d.get_temp::<u64>(shown_id));
     ui.data_mut(|d| d.insert_temp(shown_id, frame));
-    if last.is_none_or(|l| l.saturating_add(1) < frame) {
+    let reappeared = last.is_none_or(|l| l.saturating_add(1) < frame);
+    if reappeared {
         widgets::request_edit(ui, k_id);
     }
     // Enter or Escape in the factor field ends the tool (back to Move, the selection kept). Whether
@@ -33,8 +37,14 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     // shortcut layer may let go of it before this frame's panel runs, and a click or Tab that moved
     // it to another field during the last frame counts.
     let in_k_id = Id::unique("scale_in_k");
-    let in_k = ui.data(|d| d.get_temp::<bool>(in_k_id)).unwrap_or(false);
-    let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+    // A flag left from before a gap (another tab, a hidden panel) is stale: the field didn't have
+    // the keyboard on the frame before this one.
+    let in_k = !reappeared && ui.data(|d| d.get_temp::<bool>(in_k_id)).unwrap_or(false);
+    // Plain Enter or Escape only: Ctrl+Enter and Alt+Enter are not the tool's exit.
+    let (enter, esc) = ui.input(|i| {
+        let plain = !(i.modifiers.ctrl || i.modifiers.alt || i.modifiers.command);
+        (plain && i.key_pressed(egui::Key::Enter), plain && i.key_pressed(egui::Key::Escape))
+    });
     let col = widgets::col_width(ui.available_width());
     // Anchor: column and row (0 start, 1 middle, 2 end) of the point that stays put.
     let anchor = app.session.tool.scale_anchor;
@@ -91,6 +101,17 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     if in_k && (enter || esc) {
         app.run("tool.set", json!({"tool": "move"}));
     }
+}
+
+/// The Scale tool is on but nothing is selected, so the section isn't shown: the frame still
+/// counts as shown (a selection that appears later is not the tool being chosen, and the field must
+/// not take the keyboard from the canvas), and the field is not the one with the keyboard.
+pub fn note_no_selection(ui: &Ui) {
+    let frame = ui.ctx().cumulative_frame_nr();
+    ui.data_mut(|d| {
+        d.insert_temp(Id::unique("scale_shown_frame"), frame);
+        d.insert_temp(Id::unique("scale_in_k"), false);
+    });
 }
 
 /// The factor (clamped to 0.01–100) and pivot for scaling `b` by `k` around `anchor`; None when
