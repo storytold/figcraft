@@ -58,6 +58,7 @@ pub enum ToolId {
     Text,
     TextOnPath,
     Comment,
+    Annotation,
     Eyedropper,
     ShapeBuilder,
     // Board tools.
@@ -71,7 +72,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 26] = [
+    pub const ALL: [ToolId; 27] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -89,6 +90,7 @@ impl ToolId {
         ToolId::Text,
         ToolId::TextOnPath,
         ToolId::Comment,
+        ToolId::Annotation,
         ToolId::Eyedropper,
         ToolId::ShapeBuilder,
         ToolId::Sticky,
@@ -118,6 +120,7 @@ impl ToolId {
             ToolId::Text => "text",
             ToolId::TextOnPath => "textOnPath",
             ToolId::Comment => "comment",
+            ToolId::Annotation => "annotation",
             ToolId::Eyedropper => "eyedropper",
             ToolId::ShapeBuilder => "shapeBuilder",
             ToolId::Sticky => "sticky",
@@ -151,6 +154,7 @@ impl ToolId {
             ToolId::Text => "Text",
             ToolId::TextOnPath => "Text on a path",
             ToolId::Comment => "Comment",
+            ToolId::Annotation => "Annotation",
             ToolId::Eyedropper => "Pick color",
             ToolId::ShapeBuilder => "Shape builder",
             ToolId::Sticky => "Sticky note",

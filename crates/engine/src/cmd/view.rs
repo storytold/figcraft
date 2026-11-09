@@ -528,7 +528,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.set",
             "Choose tool",
-            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder | on boards: sticky|shape|connector|marker|highlighter|eraser|stamp}",
+            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|annotation|shapeBuilder | on boards: sticky|shape|connector|marker|highlighter|eraser|stamp}",
             false,
             |s, p| {
                 let t = req_string("tool.set", p, "tool")?;
@@ -638,6 +638,19 @@ pub fn specs() -> Vec<CommandSpec> {
             tool(s, ToolId::TextOnPath)
         }),
         spec!("tool.comment", "Comment", "{}", false, |s, _| tool(s, ToolId::Comment)),
+        // Shift+T: with a layer selected (or an `id`) the UI is asked for its note at once; in the
+        // tool, a press on a layer selects it and asks (the engine never writes the note).
+        spec!("tool.annotation", "Annotation", "{id?}", false, |s, p| {
+            let r = tool(s, ToolId::Annotation)?;
+            let first = crate::params::targets(s, p).into_iter().find(|i| s.doc().is_ok_and(|d| d.node(*i).is_some_and(|n| !n.is_page())));
+            if let Some(id) = first {
+                if p.get("id").is_some() {
+                    crate::cmd::edit::select_and_page(s, vec![id])?;
+                }
+                s.request_ui("annotation.new", json!({"id": id}));
+            }
+            Ok(r)
+        }),
         spec!("tool.shapeBuilder", "Shape builder", "{}", false, |s, _| tool(s, ToolId::ShapeBuilder)),
         // `apply: false` is for the UI colour picker: the eyedropper only samples (into
         // `ToolState::picked`) and the picker writes the colour to the paint it edits.

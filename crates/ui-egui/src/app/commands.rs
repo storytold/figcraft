@@ -266,6 +266,14 @@ impl FigApp {
                         self.ui.comments.show(id);
                     }
                 }
+                "annotation.new" => {
+                    // The Annotation tool: show the Inspect tab (never toggle it away) and put the
+                    // caret in the layer's new-note field.
+                    if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
+                        self.ui.right_tab = RightTab::Inspect;
+                        self.ui.dev.focus_new_note = Some(id);
+                    }
+                }
                 "comment.new" => {
                     let x = r.data.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     let y = r.data.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);

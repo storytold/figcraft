@@ -196,3 +196,19 @@ fn the_playground_swaps_an_instance_in_the_preview_only() {
     let props = u.app.session.execute("component.properties", &json!({"id": inst})).unwrap();
     assert_eq!(props["properties"][0]["value"], json!(heart.0), "{star:?}");
 }
+
+#[test]
+fn the_annotation_tool_opens_the_inspect_tab_with_the_note_field_focused() {
+    let (mut u, _, r) = setup();
+    u.app.ui.right_tab = crate::RightTab::Design;
+    u.frames(2, Vec::new);
+    u.run("tool.annotation", json!({"id": r}));
+    u.frames(2, Vec::new);
+    assert_eq!(u.app.ui.right_tab, crate::RightTab::Inspect, "the request shows the Inspect tab");
+    let field = egui::Id::unique(("annot_new", r)).with("te");
+    assert!(u.ctx.memory(|m| m.has_focus(field)), "the layer's new-note field has the caret");
+    assert_eq!(u.app.ui.dev.focus_new_note, None, "the focus request is spent");
+    // Asking again while already on the Inspect tab does not toggle it away.
+    u.run("tool.annotation", json!({"id": r}));
+    assert_eq!(u.app.ui.right_tab, crate::RightTab::Inspect);
+}

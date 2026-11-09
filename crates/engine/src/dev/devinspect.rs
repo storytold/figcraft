@@ -230,7 +230,7 @@ pub fn dev_mode_allows(id: &str) -> bool {
     // Edits recorded as one grouped undo step, so their spec says no history of its own.
     const GROUPED: [&str; 1] = ["data.fill"];
     match id.strip_prefix("tool.") {
-        Some(t) => matches!(t, "move" | "hand" | "comment"),
+        Some(t) => matches!(t, "move" | "hand" | "comment" | "annotation"),
         None if id == "file.revert" || GROUPED.contains(&id) => false,
         None => OWN.iter().any(|p| id.starts_with(p)) || crate::cmd::find_command(id).is_none_or(|c| !c.history),
     }

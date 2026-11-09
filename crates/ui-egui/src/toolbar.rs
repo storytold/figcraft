@@ -627,7 +627,7 @@ fn flyout(app: &mut FigApp, ui: &mut Ui, g: &Group, bottom_left: egui::Pos2) {
 /// Choose `tool` from the toolbar. Dev Mode only inspects: a tool that edits leaves it for the
 /// design.
 fn choose(app: &mut FigApp, tool: ToolId) {
-    if app.ui.right_tab == crate::RightTab::Inspect && !matches!(tool, ToolId::Move | ToolId::Hand | ToolId::Comment) {
+    if app.ui.right_tab == crate::RightTab::Inspect && !matches!(tool, ToolId::Move | ToolId::Hand | ToolId::Comment | ToolId::Annotation) {
         app.ui.right_tab = crate::RightTab::Design;
     }
     app.run("tool.set", json!({"tool": tool.id()}));
