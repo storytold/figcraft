@@ -159,6 +159,9 @@ fn view_allows(ds: &figcraft_engine::DocState) -> bool {
         && !(ds.view.proof_srgb && !ds.doc.color_profile.is_srgb())
 }
 
+/// The largest scale `figcraft_render::render_area` renders at (it clamps to this).
+const RENDER_AREA_MAX_SCALE: f64 = 64.0;
+
 /// Normal, or the pass-through of groups and frames (which draws like it unless the layers in them blend).
 fn ordinary(b: BlendMode) -> bool {
     matches!(b, BlendMode::Normal | BlendMode::PassThrough)
@@ -170,12 +173,16 @@ fn plain(doc: &Document, id: NodeId, clip: &mut Option<figcraft_geom::Rect>) -> 
     if !n.effects.is_empty() || !ordinary(n.blend) || n.is_mask {
         return false;
     }
-    let Some(parent) = n.parent.and_then(|p| doc.node(p)) else { return false };
-    if matches!(parent.kind, NodeKind::BooleanOp { .. }) || parent.children.iter().any(|c| doc.node(*c).is_some_and(|c| c.is_mask)) {
+    if n.parent.and_then(|p| doc.node(p)).is_none() {
         return false;
     }
-    let mut at = Some(parent.id);
+    let mut at = n.parent;
     while let Some(a) = at.and_then(|a| doc.node(a)) {
+        // At every level, the page included: inside a boolean result, or beside a mask, the layer
+        // doesn't draw on its own.
+        if matches!(a.kind, NodeKind::BooleanOp { .. }) || a.children.iter().any(|c| doc.node(*c).is_some_and(|c| c.is_mask)) {
+            return false;
+        }
         if matches!(a.kind, NodeKind::Page { .. }) {
             break;
         }
@@ -212,6 +219,10 @@ fn plan(ctx: &egui::Context, base: &Arc<Document>, sel: &[NodeId], zoom: f64, pp
     }
     let bounds = roots.iter().filter_map(|i| base.world_render_bounds(*i)).reduce(|a, b| a.union(b))?;
     let scale = zoom * f64::from(ppp);
+    // `render_area` renders at most at this scale; past it the sprite would draw smaller than the layers.
+    if scale > RENDER_AREA_MAX_SCALE {
+        return None;
+    }
     let (w, h) = ((bounds.width() * scale).ceil(), (bounds.height() * scale).ceil());
     let side = f64::from(max_side);
     if !(w >= 1.0 && h >= 1.0 && w <= side && h <= side && w * h <= canvas_px * MAX_AREA_FACTOR) {
@@ -234,4 +245,43 @@ fn plan(ctx: &egui::Context, base: &Arc<Document>, sel: &[NodeId], zoom: f64, pp
         ending: false,
         release: None,
     })
+}
+
+#[cfg(test)]
+mod plain_tests {
+    use super::plain;
+    use figcraft_engine::Session;
+    use serde_json::{Value, json};
+
+    fn id(v: &Value) -> figcraft_doc::NodeId {
+        figcraft_engine::params::id_of(&v["id"]).or_else(|| figcraft_engine::params::id_of(&v["ids"][0])).unwrap()
+    }
+
+    fn rect(s: &mut Session, x: f64) -> figcraft_doc::NodeId {
+        id(&s.execute("shape.rectangle", &json!({"x": x, "y": 0, "width": 40, "height": 40})).unwrap())
+    }
+
+    #[test]
+    fn a_layer_in_a_group_inside_a_boolean_is_not_plain() {
+        let mut s = Session::new();
+        let (a, b, c) = (rect(&mut s, 0.0), rect(&mut s, 20.0), rect(&mut s, 60.0));
+        let g = id(&s.execute("object.group", &json!({"ids": [a, b]})).unwrap());
+        assert!(plain(s.doc().unwrap(), a, &mut None), "in a plain group it is plain");
+        s.execute("bool.union", &json!({"ids": [g, c]})).unwrap();
+        let doc = s.doc().unwrap();
+        assert!(doc.ancestors(a).iter().any(|p| matches!(doc.node(*p).map(|n| &n.kind), Some(figcraft_doc::NodeKind::BooleanOp { .. }))));
+        assert!(!plain(doc, a, &mut None), "its group sits in a boolean result");
+    }
+
+    #[test]
+    fn a_layer_in_a_group_beside_a_mask_is_not_plain() {
+        let mut s = Session::new();
+        let m = rect(&mut s, 0.0);
+        let (a, b) = (rect(&mut s, 10.0), rect(&mut s, 30.0));
+        let g = id(&s.execute("object.group", &json!({"ids": [a, b]})).unwrap());
+        s.execute("object.mask", &json!({"ids": [m, g]})).unwrap();
+        let doc = s.doc().unwrap();
+        assert!(doc.node(m).is_some_and(|n| n.is_mask), "the bottom layer masks");
+        assert!(!plain(doc, a, &mut None), "its group is masked");
+    }
 }

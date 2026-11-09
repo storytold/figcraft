@@ -188,6 +188,29 @@ fn a_frame_with_effects_on_itself_keeps_the_old_path() {
 }
 
 #[test]
+fn past_the_largest_render_scale_the_drag_keeps_the_old_path() {
+    // At 8000% a small frame still fits a texture, but `render_area` renders at most at 64x:
+    // the sprite would draw smaller than the layers, so there is none.
+    let mut s = Session::new();
+    let id = |v: serde_json::Value| figcraft_engine::params::id_of(&v["id"]).unwrap();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap());
+    s.execute("shape.rectangle", &json!({"x": 1, "y": 1, "width": 2, "height": 2, "parent": f, "props": {"fill": "#e03030"}})).unwrap();
+    s.execute("select.set", &json!({"ids": [f]})).unwrap();
+    let mut u = Ui::new(s);
+    settle(&mut u);
+    let v = &mut u.app.session.ds_mut().unwrap().view;
+    (v.zoom, v.cx, v.cy) = (80.0, 2.0, 2.0);
+    settle(&mut u);
+    let p = u.app.to_screen(2.0, 2.0);
+    u.button(p, true);
+    drag_frames(&mut u, p, 4);
+    assert_eq!(u.app.session.ds().unwrap().view.zoom, 80.0);
+    assert!(u.app.canvas.sprite_rect(&u.app).is_none());
+    assert_eq!(u.app.canvas.submitted_skip(), Some(&[][..]));
+    u.button(p + vec2(30.0, 10.0), false);
+}
+
+#[test]
 fn zooming_during_a_drag_ends_the_fast_path() {
     let (mut u, _f, p) = frame_with_child(false);
     u.button(p, true);
