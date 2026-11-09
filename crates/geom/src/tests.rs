@@ -393,7 +393,6 @@ fn deviation(out: &BezPath, input: &BezPath) -> f64 {
 /// about 390 and 160 units off; at whole-pixel coordinates the same shapes happened to fit well.
 #[test]
 fn simplifying_keeps_to_strokes_kurbo_shot_past() {
-    use kurbo::ParamCurve;
     let cases: [(&str, &[(f64, f64)]); 5] = [
         (
             "out and back to the same point",
@@ -422,23 +421,127 @@ fn simplifying_keeps_to_strokes_kurbo_shot_past() {
         ),
     ];
     for (what, pts) in cases {
-        let input = polyline(pts);
-        let out = simplify_path(&input, 0.75);
-        let d = deviation(&out, &input);
-        assert!(d <= 1.5, "{what}: strays {d} from the samples: {}", out.to_svg());
+        keeps_to_one_stroke(what, &polyline(pts));
+    }
+}
+
+/// Accuracies the simplification is checked at: fine, the Pencil's, and coarse.
+const ACCURACIES: [f64; 3] = [0.1, 0.75, 8.0];
+
+/// Check that `input` (one open subpath), simplified at each of [`ACCURACIES`], strays no more
+/// than twice the accuracy from it and leaves no part of it further off than that, stays in its
+/// box grown by as much, and is still one subpath from its start to its end.
+fn keeps_to_one_stroke(what: &str, input: &BezPath) {
+    for accuracy in ACCURACIES {
+        let out = simplify_path(input, accuracy);
+        let (svg, limit) = (out.to_svg(), 2.0 * accuracy);
+        let d = deviation(&out, input);
+        assert!(d <= limit, "{what} at {accuracy}: strays {d} from the input: {svg}");
+        let left = deviation(input, &out);
+        assert!(left <= limit, "{what} at {accuracy}: leaves the input {left} off: {svg}");
         let (inb, outb) = (input.bounding_box(), out.bounding_box());
-        assert!(inb.inflate(1.5, 1.5).contains_rect(outb), "{what}: {outb:?} past {inb:?}");
-        // One subpath, starting and ending where the stroke does.
+        assert!(inb.inflate(limit, limit).contains_rect(outb), "{what} at {accuracy}: {outb:?} past {inb:?}");
         let moves = out.elements().iter().filter(|e| matches!(e, kurbo::PathEl::MoveTo(_))).count();
-        assert_eq!(moves, 1, "{what}: {}", out.to_svg());
-        let (first, last) = (pts[0], pts[pts.len() - 1]);
-        assert_eq!(out.segments().next().map(|s| s.start()), Some(Point::new(first.0, first.1)), "{what}");
-        assert_eq!(out.segments().last().map(|s| s.end()), Some(Point::new(last.0, last.1)), "{what}");
+        assert_eq!(moves, 1, "{what} at {accuracy}: {svg}");
+        // From its start to its end: kurbo evaluates a fitted end on the input, so it is off by
+        // rounding at most.
+        let ends = |p: &BezPath| p.segments().next().map(|s| s.start()).zip(p.segments().last().map(|s| s.end()));
+        let ((start, end), (start_in, end_in)) = (ends(&out).unwrap(), ends(input).unwrap());
+        assert!((start - start_in).hypot() < 1e-9 && (end - end_in).hypot() < 1e-9, "{what} at {accuracy}: {svg}");
+    }
+}
+
+/// Strokes made of curves keep to them as polylines do (#1741): a quadratic or a cubic that goes
+/// out and comes straight back, one whose control points sit on its ends (so its direction is
+/// read from the control point after them), and nearly collinear curves.
+#[test]
+fn simplifying_keeps_to_curves_that_turn_back_or_run_straight() {
+    let (p, q, r) = (
+        (209.598_690_794_015_5, -204.909_328_119_739_88),
+        (211.277_914_263_870_97, -207.190_974_020_753_4),
+        (214.246_506_828_720_84, -211.228_827_590_623_24),
+    );
+    // The nearly collinear samples, each line as a cubic with its handles a third of the way along.
+    let third = |a: (f64, f64), b: (f64, f64), t: f64| (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+    let mut straight_cubics = BezPath::new();
+    straight_cubics.move_to(p);
+    for (a, b) in [(p, q), (q, r)] {
+        straight_cubics.curve_to(third(a, b, 1.0 / 3.0), third(a, b, 2.0 / 3.0), b);
+    }
+    let mut straight_quads = BezPath::new();
+    straight_quads.move_to(p);
+    straight_quads.quad_to(third(p, q, 0.5), q);
+    straight_quads.quad_to(third(q, r, 0.5), r);
+    let cases = [
+        ("a quadratic out and back", BezPath::from_svg("M0 0 Q15 10 30 0 Q15 10 0 0 Q-15 10 -30 0").unwrap()),
+        ("a cubic out and back", BezPath::from_svg("M0 0 C10 8 20 8 30 0 C20 8 10 8 0 0 C-10 8 -20 8 -30 0").unwrap()),
+        ("handles on the ends", BezPath::from_svg("M0 0 C0 0 30 4 30 4 C30 4 0 0 0 0 L-30 -4").unwrap()),
+        ("a cubic dip down and back up", BezPath::from_svg("M0 0 L10 0 C15 0 20 5 20 12 C20 5 25 0 30 0 L40 0").unwrap()),
+        ("nearly collinear cubics", straight_cubics),
+        ("nearly collinear quadratics", straight_quads),
+    ];
+    for (what, input) in cases {
+        keeps_to_one_stroke(what, &input);
+    }
+}
+
+/// `sides` simplified by kurbo one at a time and joined into one subpath.
+fn fitted_apart(sides: &[&BezPath], accuracy: f64) -> BezPath {
+    let mut out = BezPath::new();
+    for side in sides {
+        let fit = kurbo::simplify::simplify_bezpath(side.iter(), accuracy, &Default::default());
+        let skip = usize::from(!out.elements().is_empty());
+        out.extend(fit.elements().iter().copied().skip(skip));
+    }
+    out
+}
+
+/// `curve` cut into `n` cubics, drawn on from where `path` is: forwards, or back from its end.
+fn in_pieces(path: &mut BezPath, curve: kurbo::CubicBez, n: u32, back: bool) {
+    use kurbo::ParamCurve;
+    for i in 0..n {
+        let i = if back { n - 1 - i } else { i };
+        let c = curve.subsegment(f64::from(i) / f64::from(n)..f64::from(i + 1) / f64::from(n));
+        if back { path.curve_to(c.p2, c.p1, c.p0) } else { path.curve_to(c.p1, c.p2, c.p3) }
+    }
+}
+
+/// Where a path turns straight back it is cut, so the result is kurbo's fit of each side on its
+/// own, with a point of the path at the turn. Fitted as one, kurbo rounds the turn off: its curve
+/// passes the stray check, but falls short of the turn or takes more segments. A cubic whose
+/// control points sit on its ends turns back as a line does.
+#[test]
+fn simplifying_fits_each_side_of_a_turn_back_on_its_own() {
+    use kurbo::ParamCurve;
+    let svg = |d: &str| BezPath::from_svg(d).unwrap();
+    let s = kurbo::CubicBez::new((0.0, 0.0), (40.0, -60.0), (80.0, 60.0), (120.0, 0.0));
+    let (mut s_out, mut s_back) = (BezPath::new(), BezPath::new());
+    s_out.move_to(s.p0);
+    in_pieces(&mut s_out, s, 8, false);
+    s_back.move_to(s.p3);
+    in_pieces(&mut s_back, s, 8, true);
+    let cases = [
+        ("lines", svg("M0 0 L10 0 L20 0 L30 0"), svg("M30 0 L20 0 L10 0")),
+        ("handles on the ends", svg("M0 0 L10 0 L20 0 C20 0 30 0 30 0"), svg("M30 0 C30 0 20 0 20 0 L10 0")),
+        ("a curve in pieces", s_out, s_back),
+    ];
+    for (what, out_side, back_side) in cases {
+        let turn = out_side.segments().last().map(|seg| seg.end()).unwrap();
+        let mut input = out_side.clone();
+        input.extend(back_side.elements().iter().copied().skip(1));
+        for accuracy in ACCURACIES {
+            let ours = simplify_path(&input, accuracy);
+            let apart = fitted_apart(&[&out_side, &back_side], accuracy);
+            assert_eq!(ours.elements(), apart.elements(), "{what} at {accuracy}");
+            assert!(ours.segments().any(|seg| (seg.end() - turn).hypot() < 1e-9), "{what} at {accuracy}: {}", ours.to_svg());
+        }
     }
 }
 
 /// Where a path never turns back and kurbo's fit holds, the result is kurbo's own, element for
 /// element: smooth runs, corners sharper than a right angle, closed subpaths and several subpaths.
+/// A fit counts as holding up to twice the accuracy asked for, whatever that is: the large wave's
+/// is further off at the coarse accuracy than the Pencil's limit of 1.5.
 #[test]
 fn simplifying_is_kurbos_where_its_fit_holds() {
     let wave: Vec<(f64, f64)> = (0..=60).map(|i| (f64::from(i) * 4.0, (f64::from(i) / 6.0).sin() * 30.0)).collect();
@@ -452,12 +555,30 @@ fn simplifying_is_kurbos_where_its_fit_holds() {
         e => e,
     }));
     let curves = BezPath::from_svg("M0 0 C10 -20 30 -20 40 0 C50 20 70 20 80 0 Q100 -30 120 0 L140 10 Z M200 0 L240 0").unwrap();
-    for (what, input) in
-        [("a wave", polyline(&wave)), ("a zigzag", polyline(&zigzag)), ("closed", closed), ("two subpaths", several), ("curves", curves)]
-    {
-        let ours = simplify_path(&input, 0.75);
-        let theirs = kurbo::simplify::simplify_bezpath(input.iter(), 0.75, &Default::default());
-        assert_eq!(ours.elements(), theirs.elements(), "{what}");
+    // A sine 300 high in 40 smooth cubics.
+    let sine = |x: f64| ((x / 120.0).sin() * 300.0, (x / 120.0).cos() * 2.5);
+    let mut large = BezPath::new();
+    large.move_to((0.0, 0.0));
+    for i in 0..40 {
+        let (x0, x1) = (f64::from(i) * 40.0, f64::from(i + 1) * 40.0);
+        let ((y0, d0), (y1, d1)) = (sine(x0), sine(x1));
+        large.curve_to((x0 + 40.0 / 3.0, y0 + d0 * 40.0 / 3.0), (x1 - 40.0 / 3.0, y1 - d1 * 40.0 / 3.0), (x1, y1));
+    }
+    let coarse = simplify_path(&large, 8.0);
+    assert!(coarse.elements().len() < 10 && (1.5..=8.0).contains(&deviation(&coarse, &large)), "{}", deviation(&coarse, &large));
+    for (what, input) in [
+        ("a wave", polyline(&wave)),
+        ("a zigzag", polyline(&zigzag)),
+        ("closed", closed),
+        ("two subpaths", several),
+        ("curves", curves),
+        ("a large wave", large),
+    ] {
+        for accuracy in ACCURACIES {
+            let ours = simplify_path(&input, accuracy);
+            let theirs = kurbo::simplify::simplify_bezpath(input.iter(), accuracy, &Default::default());
+            assert_eq!(ours.elements(), theirs.elements(), "{what} at {accuracy}");
+        }
     }
 }
 
@@ -482,4 +603,40 @@ fn simplifying_keeps_closes_and_subpaths_across_a_reversal() {
     empty.line_to((5.0, 5.0));
     empty.close_path();
     assert!(simplify_path(&empty, 0.75).elements().is_empty());
+    for d in ["", "M5 5", "M5 5 M6 6", "M5 5 Z"] {
+        let input = if d.is_empty() { BezPath::new() } else { BezPath::from_svg(d).unwrap() };
+        assert!(simplify_path(&input, 0.75).elements().is_empty(), "{d:?}");
+    }
+}
+
+/// The subpaths simplified keep their starts: a move with nothing drawn from it between two
+/// subpaths leaves no trace, and a segment drawn on from a close starts a subpath where the closed
+/// one started, as it does in the path given.
+#[test]
+fn simplifying_keeps_where_each_subpath_starts() {
+    let starts =
+        |p: &BezPath| -> Vec<Point> { p.elements().iter().filter_map(|e| if let kurbo::PathEl::MoveTo(p) = e { Some(*p) } else { None }).collect() };
+    let between = BezPath::from_svg("M0 0 L10 0 L20 5 M50 50 M100 0 L110 0 L120 5").unwrap();
+    let out = simplify_path(&between, 0.75);
+    assert_eq!(starts(&out), [Point::new(0.0, 0.0), Point::new(100.0, 0.0)], "{}", out.to_svg());
+    assert!(deviation(&out, &between) <= 1.5, "{}", out.to_svg());
+    // After the close, the pen is back at (0, 0): the next segments start there, also across a
+    // reversal.
+    use kurbo::PathEl::{ClosePath, LineTo, MoveTo};
+    let on = BezPath::from_vec(vec![
+        MoveTo(Point::new(0.0, 0.0)),
+        LineTo(Point::new(10.0, 0.0)),
+        LineTo(Point::new(10.0, 10.0)),
+        ClosePath,
+        LineTo(Point::new(20.0, 20.0)),
+        LineTo(Point::new(30.0, 20.0)),
+        LineTo(Point::new(20.0, 20.0)),
+    ]);
+    let out = simplify_path(&on, 0.75);
+    let els = out.elements();
+    let close = els.iter().position(|e| matches!(e, kurbo::PathEl::ClosePath)).unwrap();
+    assert_eq!(els.get(close + 1), Some(&kurbo::PathEl::MoveTo(Point::new(0.0, 0.0))), "{}", out.to_svg());
+    assert_eq!(starts(&out), [Point::new(0.0, 0.0), Point::new(0.0, 0.0)], "{}", out.to_svg());
+    assert_eq!(out.segments().last().map(|s| kurbo::ParamCurve::end(&s)), Some(Point::new(20.0, 20.0)));
+    assert!(deviation(&out, &on) <= 1.5, "{}", out.to_svg());
 }
