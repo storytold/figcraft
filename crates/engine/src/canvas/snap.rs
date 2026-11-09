@@ -367,13 +367,30 @@ impl Targets {
         let ys: Vec<Span> = pts.iter().map(|p| (p.y, p.x, p.x)).collect();
         let (dx, dy, mut guides) = self.snap_spans(&xs, &ys, threshold);
         let d = Vec2::new(dx.unwrap_or(0.0), dy.unwrap_or(0.0));
+        let sorted = self.points.is_sorted_by(|a, b| a.x.total_cmp(&b.x).is_le());
         for p in pts.iter().map(|p| *p + d) {
             let marker = Guide::new(p, p);
-            if self.points.iter().any(|t| (*t - p).hypot() < 1e-6) && !guides.contains(&marker) {
+            let on = |t: &Point| (*t - p).hypot() < 1e-6;
+            let hit = if sorted {
+                let from = self.points.partition_point(|t| t.x < p.x - 1e-6);
+                self.points.get(from..).unwrap_or(&[]).iter().take_while(|t| t.x <= p.x + 1e-6).any(on)
+            } else {
+                self.points.iter().any(on)
+            };
+            if hit && !guides.contains(&marker) {
                 guides.push(marker);
             }
         }
         (dx, dy, guides)
+    }
+
+    /// Sort the targets by position so snapping looks them up rather than scanning them all: a drag
+    /// of many points against a page of vectors costs a search per point, not a pass over every
+    /// target. Snapping finds the same lines either way (it checks the order before relying on it).
+    pub fn sort(&mut self) {
+        self.xs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        self.ys.sort_by(|a, b| a.0.total_cmp(&b.0));
+        self.points.sort_by(|a, b| a.x.total_cmp(&b.x));
     }
 
     /// Snap moving lines: `xs` are vertical ones (x with the y-span they cover), `ys` horizontal
@@ -382,11 +399,23 @@ impl Targets {
     pub fn snap_spans(&self, xs: &[Span], ys: &[Span], threshold: f64) -> (Option<f64>, Option<f64>, Vec<Guide>) {
         let best = |cands: &[Span], vals: &[Span]| -> Option<f64> {
             let mut best: Option<f64> = None;
-            for (line, _, _) in cands {
+            let mut take = |d: f64| {
+                if d.abs() <= threshold && best.is_none_or(|b| d.abs() < b.abs()) {
+                    best = Some(d);
+                }
+            };
+            if sorted(cands) {
+                // Only the lines within reach of each moving one.
                 for (v, _, _) in vals {
-                    let d = line - v;
-                    if d.abs() <= threshold && best.is_none_or(|b| d.abs() < b.abs()) {
-                        best = Some(d);
+                    let from = cands.partition_point(|(l, _, _)| *l < v - threshold);
+                    for (line, _, _) in cands.get(from..).unwrap_or(&[]).iter().take_while(|(l, _, _)| *l <= v + threshold) {
+                        take(line - v);
+                    }
+                }
+            } else {
+                for (line, _, _) in cands {
+                    for (v, _, _) in vals {
+                        take(line - v);
                     }
                 }
             }
@@ -418,23 +447,35 @@ impl Targets {
     /// Guides for moving lines (as in [`Self::snap_spans`]) that coincide with targets, each
     /// spanning the line and the targets on it.
     fn guides_spans(&self, xs: &[Span], ys: &[Span]) -> Vec<Guide> {
-        let span = |cands: &[Span], (v, a, b): Span| -> Option<(f64, f64)> {
-            let hits: Vec<&Span> = cands.iter().filter(|(l, _, _)| (l - v).abs() < 1e-6).collect();
+        // Checked once a call, not once a moving line.
+        let (xs_sorted, ys_sorted) = (sorted(&self.xs), sorted(&self.ys));
+        let span = |cands: &[Span], ordered: bool, (v, a, b): Span| -> Option<(f64, f64)> {
+            let hits: Vec<&Span> = if ordered {
+                let from = cands.partition_point(|(l, _, _)| *l < v - 1e-6);
+                cands.get(from..).unwrap_or(&[]).iter().take_while(|(l, _, _)| *l <= v + 1e-6).filter(|(l, _, _)| (l - v).abs() < 1e-6).collect()
+            } else {
+                cands.iter().filter(|(l, _, _)| (l - v).abs() < 1e-6).collect()
+            };
             (!hits.is_empty()).then(|| (hits.iter().map(|h| h.1).fold(a, f64::min).max(-1e6), hits.iter().map(|h| h.2).fold(b, f64::max).min(1e6)))
         };
         let mut out = Vec::new();
         for x in xs {
-            if let Some((y0, y1)) = span(&self.xs, *x) {
+            if let Some((y0, y1)) = span(&self.xs, xs_sorted, *x) {
                 out.push(Guide::new(Point::new(x.0, y0), Point::new(x.0, y1)));
             }
         }
         for y in ys {
-            if let Some((x0, x1)) = span(&self.ys, *y) {
+            if let Some((x0, x1)) = span(&self.ys, ys_sorted, *y) {
                 out.push(Guide::new(Point::new(x0, y.0), Point::new(x1, y.0)));
             }
         }
         out
     }
+}
+
+/// Whether target lines are in order of position (see [`Targets::sort`]).
+fn sorted(lines: &[Span]) -> bool {
+    lines.len() > 64 && lines.is_sorted_by(|a, b| a.0.total_cmp(&b.0).is_le())
 }
 
 /// Snap a guide on `owner` (a page or a top-level frame) to the nearest layer edge or centre along

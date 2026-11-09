@@ -133,3 +133,41 @@ fn a_guide_with_nothing_near_stays_where_it_is() {
     // Non-finite input is refused rather than spread.
     assert_eq!(snap_guide(doc, page, page, true, f64::NAN, 1.0), None);
 }
+
+/// Point snapping looks sorted targets up instead of scanning them all, and finds the same
+/// correction, guides and markers: 20,000 targets against 256 moving points, both ways.
+#[test]
+fn sorted_targets_snap_the_same_and_faster() {
+    use crate::snap::Targets;
+    use figcraft_geom::Point;
+    // A deterministic scatter (no RNG dependency).
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % 100_000) as f64 / 10.0
+    };
+    let mut t = Targets::default();
+    for _ in 0..20_000 {
+        let p = Point::new(next(), next());
+        t.add_point(p);
+    }
+    let moving: Vec<Point> = (0..256).map(|_| Point::new(next() + 0.3, next() - 0.2)).collect();
+    let started = std::time::Instant::now();
+    let plain = t.snap_points(&moving, 4.0);
+    let scan = started.elapsed();
+    let mut fast = t.clone();
+    fast.sort();
+    let started = std::time::Instant::now();
+    let sorted = fast.snap_points(&moving, 4.0);
+    let search = started.elapsed();
+    assert_eq!((plain.0, plain.1), (sorted.0, sorted.1), "the same correction");
+    let key = |g: &crate::snap::Guide| (g.x0.to_bits(), g.y0.to_bits(), g.x1.to_bits(), g.y1.to_bits());
+    let (mut a, mut b): (Vec<_>, Vec<_>) = (plain.2.iter().map(key).collect(), sorted.2.iter().map(key).collect());
+    a.sort();
+    b.sort();
+    assert_eq!(a, b, "the same guides and markers");
+    eprintln!("snap 20k×256: scan {scan:?}, sorted {search:?}");
+    assert!(search < scan, "a search is quicker than a scan: {search:?} vs {scan:?}");
+}

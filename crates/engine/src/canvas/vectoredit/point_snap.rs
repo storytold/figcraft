@@ -53,6 +53,8 @@ pub fn targets_moving(
         let skip: BTreeSet<usize> = others.iter().find(|(o, _)| *o == id).map(|(_, v)| v.iter().copied().collect()).unwrap_or_default();
         add_vector(doc, id, &skip, &mut t, &mut budget);
     }
+    // Up to MAX_POINTS points and their lines are looked up on every pointer move: sorted once.
+    t.sort();
     t
 }
 
