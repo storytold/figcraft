@@ -276,7 +276,7 @@ fn paint_props(n: &Node, o: &mut serde_json::Map<String, Value>, options: &Inspe
     if !n.effects.is_empty() {
         insert_prop(o, options, "effects", || camel(serde_json::to_value(&n.effects).unwrap_or(Value::Null)));
     }
-    if n.kind.has_independent_corners() {
+    if n.kind.has_independent_corners() && (!n.corners.style.is_round() || options.explicit("cornerStyle")) {
         insert_prop(o, options, "cornerStyle", || json!(n.corners.style));
     }
     if n.corners.radii.iter().any(|r| *r > 0.0) {
