@@ -184,6 +184,8 @@ impl<'a> Mapper<'a> {
         if own == "SYMBOL" && inst.is_none() {
             self.mapped_mains.insert(id.to_string());
         }
+        let is_main = inst.is_none() && (own == "SYMBOL" || (own == "FRAME" && view.flag("isStateGroup") == Some(true)));
+        let lib_key = view.str("key").filter(|k| is_main && !k.is_empty() && k.len() <= 256);
         let mut o = Obj::new();
         o.insert("id".into(), json!(rest_id));
         // Private provenance for the .fig importer; ordinary REST import ignores it.
@@ -197,6 +199,8 @@ impl<'a> Mapper<'a> {
                 "slotContent": inst.is_some_and(|i| i.slot_content),
                 // A size the instance gives this layer itself (kept when the instance relays out).
                 "sizeOverride": entries.iter().any(|e| e.entry == Entry::Override && e.row.get("size").is_some()),
+                // The library key of a published main (components pasted later match by it).
+                "key": lib_key,
             }),
         );
         o.insert("type".into(), json!(ty));

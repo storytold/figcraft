@@ -69,7 +69,7 @@ const AUX: u32 = 2;
 /// The schema written into every file: `enum Name A=value …`, `struct Name type field, …` (every
 /// field, in order) and `message Name type field=id, …`, with the names, kinds and numbers the
 /// format gives them. Only what the export writes.
-pub(super) const SCHEMA: &str = "
+pub const SCHEMA: &str = "
 enum MessageType JOIN_START=0 NODE_CHANGES=1
 enum NodePhase CREATED=0 REMOVED=1
 enum NodeType NONE=0 DOCUMENT=1 CANVAS=2 GROUP=3 FRAME=4 BOOLEAN_OPERATION=5 VECTOR=6 STAR=7 LINE=8 ELLIPSE=9 RECTANGLE=10 REGULAR_POLYGON=11 ROUNDED_RECTANGLE=12 TEXT=13 SLICE=14 SYMBOL=15 INSTANCE=16 SECTION=25 VARIABLE=28 VARIABLE_SET=31
@@ -199,17 +199,24 @@ message Message MessageType type=1, uint sessionID=2, NodeChange[] nodeChanges=4
 pub fn export(doc: &Document, thumbnail: Option<&[u8]>) -> Result<(Vec<u8>, Vec<String>), FormatError> {
     let mut x = Exporter::new(doc);
     let message = x.message();
-    let fail = |e: super::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
-    let schema = Schema::parse(SCHEMA).map_err(fail)?;
-    let root = schema.find("Message").ok_or_else(|| FormatError::Io(".fig export: the schema has no Message".into()))?;
-    let body = encode::message(&schema, root, &message).map_err(fail)?;
-    let canvas = canvas(&encode::schema(&schema), &body)?;
+    let canvas = pack_canvas(SCHEMA, &message)?;
     let background = doc.pages.first().and_then(|p| doc.node(*p)).and_then(|p| match &p.kind {
         NodeKind::Page { background, .. } => Some(*background),
         _ => None,
     });
     let bytes = archive(&doc.name, background.unwrap_or(Color::WHITE), &canvas, &x.files, thumbnail)?;
     Ok((bytes, x.warnings))
+}
+
+/// A `canvas.fig` holding `message` (a `Message` of the kiwi schema `schema_source`, normally
+/// [`SCHEMA`]), as the design apps put it on the clipboard. Lets synthetic payloads be built
+/// outside this crate.
+pub fn pack_canvas(schema_source: &str, message: &Kv) -> Result<Vec<u8>, FormatError> {
+    let fail = |e: super::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
+    let schema = Schema::parse(schema_source).map_err(fail)?;
+    let root = schema.find("Message").ok_or_else(|| FormatError::Io(".fig export: the schema has no Message".into()))?;
+    let body = encode::message(&schema, root, message).map_err(fail)?;
+    canvas(&encode::schema(&schema), &body)
 }
 
 fn too_large() -> FormatError {

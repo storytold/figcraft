@@ -593,6 +593,9 @@ impl<'a> Ctx<'a> {
             if let Some(sources) = &mut self.fig_sources {
                 sources.record(id, j, primary);
             }
+            if primary && self.fig_sources.is_some() {
+                self.record_identity(id, rid, ty, j);
+            }
         }
         match ty {
             "INSTANCE" => self.instances.push((id, j)),
@@ -1128,6 +1131,40 @@ impl<'a> Ctx<'a> {
         if unused > 0 {
             let (s, verb) = if unused == 1 { ("", "was") } else { ("s", "were") };
             self.warn(format!("{unused} style{s} that no layer uses {verb} skipped (the file JSON carries style values only on layers)"));
+        }
+    }
+
+    /// Keep the file's own identity of a main (and of every layer in it) in the layer's plugin data,
+    /// so instances pasted later can find mains pasted earlier: `fig.guid` (unique within one
+    /// file), `fig.key` (a library component's key, unique everywhere). Instances keep their
+    /// main's guid as `fig.main`. Only layers the file really holds (not the copies an instance
+    /// expands) are recorded.
+    fn record_identity(&mut self, id: NodeId, rest_id: &str, ty: &str, j: &Value) {
+        let meta = j.get(FIG_SOURCE_FIELD);
+        if meta.and_then(|m| m.get("expanded")).and_then(Value::as_bool) != Some(false) || rest_id.starts_with('I') || rest_id.len() > 41 {
+            return;
+        }
+        let is_main = matches!(ty, "COMPONENT" | "COMPONENT_SET");
+        let in_main = is_main
+            || self
+                .doc
+                .ancestors(id)
+                .into_iter()
+                .any(|a| self.doc.node(a).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. })));
+        let main = (ty == "INSTANCE").then(|| text(j, "componentId")).flatten().filter(|m| m.len() <= 41);
+        if !in_main && main.is_none() {
+            return;
+        }
+        let key = meta.and_then(|m| m.get("key")).and_then(Value::as_str).filter(|k| is_main && !k.is_empty());
+        let Some(n) = self.doc.node_mut(id) else { return };
+        if in_main {
+            n.plugin_data.insert("fig.guid".into(), rest_id.into());
+        }
+        if let Some(k) = key {
+            n.plugin_data.insert("fig.key".into(), k.into());
+        }
+        if let Some(m) = main {
+            n.plugin_data.insert("fig.main".into(), m.into());
         }
     }
 

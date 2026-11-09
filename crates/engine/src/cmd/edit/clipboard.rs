@@ -89,6 +89,27 @@ pub fn design_clipboard_buffer(html: &str) -> Option<Vec<u8>> {
     figcraft_format::fig::is_fig(&bytes).then_some(bytes)
 }
 
+/// The markers around the copy's metadata (base64 of a JSON object) in the clipboard's HTML.
+const META_OPEN: &str = "(figmeta)";
+
+const META_CLOSE: &str = "(/figmeta)";
+
+/// The key of the file the layers were copied from, from the metadata span of the clipboard's
+/// HTML; a copy's layer ids are only unique within that file. `None` when the HTML has none.
+pub fn design_clipboard_file(html: &str) -> Option<String> {
+    use base64::Engine as _;
+    let start = html.find(META_OPEN)? + META_OPEN.len();
+    let len = html.get(start..)?.find(META_CLOSE)?;
+    let b64: String = html.get(start..start + len)?.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    if b64.len() > 64 * 1024 {
+        return None;
+    }
+    let bytes =
+        base64::engine::general_purpose::STANDARD.decode(&b64).or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(&b64)).ok()?;
+    let meta: Value = serde_json::from_slice(&bytes).ok()?;
+    meta.get("fileKey").and_then(Value::as_str).filter(|k| !k.is_empty() && k.len() <= 128).map(str::to_string)
+}
+
 /// Paste design layers from clipboard HTML or base64 `data`: decode and reject missing,
 /// invalid or oversized data, load a temporary `.fig`, take its top-level page layers,
 /// store them as a foreign-file clipboard source with a bumped layers generation, then
@@ -100,7 +121,20 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
         (None, Some(d)) => clip_base64(&d).ok_or_else(|| bad(CMD, "`data` is not base64 of at most 256 MB"))?,
         (None, None) => return Err(bad(CMD, "pass `html` or `data`")),
     };
-    let other = crate::cmd::file::load_fig(&bytes, "Pasted layers").ok_or_else(|| bad(CMD, "the data is not copied design layers"))??;
+    let file_key =
+        string(p, "html").as_deref().and_then(design_clipboard_file).or_else(|| string(p, "fileKey").filter(|k| !k.is_empty() && k.len() <= 128));
+    let mut other = crate::cmd::file::load_fig(&bytes, "Pasted layers").ok_or_else(|| bad(CMD, "the data is not copied design layers"))??;
+    if let Some(key) = &file_key {
+        // Layer ids are unique within one file only: mains keep the file they came from.
+        let ids: Vec<NodeId> = other.doc.ids().collect();
+        for id in ids {
+            if let Ok(n) = other.doc.get_mut(id)
+                && n.plugin_data.contains_key("fig.guid")
+            {
+                n.plugin_data.insert("fig.file".into(), key.clone());
+            }
+        }
+    }
     let doc = std::sync::Arc::new(other.doc);
     let tops: Vec<NodeId> = doc.pages.iter().filter_map(|pg| doc.node(*pg)).flat_map(|pg| pg.children.iter().copied()).collect();
     if tops.is_empty() {
@@ -139,8 +173,20 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
     if !missing.is_empty() {
         out["missingImages"] = json!(missing);
     }
-    if !other.issues.is_empty() {
-        out["warnings"] = json!(other.issues);
+    let mut warnings: Vec<String> = other.issues.clone();
+    {
+        let d = s.doc()?;
+        let unlinked = pasted
+            .iter()
+            .flat_map(|r| d.subtree(*r))
+            .filter_map(|i| d.node(i))
+            .any(|n| matches!(&n.kind, NodeKind::Instance { component, .. } if !d.contains(*component)));
+        if unlinked {
+            warnings.push("instances of components not in this file stay unlinked (paste their main components first)".into());
+        }
+    }
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
     }
     Ok(out)
 }

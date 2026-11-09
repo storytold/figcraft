@@ -306,7 +306,7 @@ impl<'d> Exporter<'d> {
         {
             self.warn("Dev Mode annotations, statuses, resources, measurements and code links were left out");
         }
-        if !n.plugin_data.is_empty() {
+        if n.plugin_data.keys().any(|k| !k.starts_with("fig.")) {
             self.warn("plugin data was left out");
         }
     }

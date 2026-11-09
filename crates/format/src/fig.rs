@@ -34,6 +34,8 @@ mod map;
 mod missing_image_tests;
 mod network;
 #[cfg(test)]
+mod paste_relink_tests;
+#[cfg(test)]
 mod paste_style_tests;
 #[cfg(test)]
 mod prop_value_tests;
@@ -68,7 +70,7 @@ use std::sync::Arc;
 
 use figcraft_doc::{Document, FileKind};
 
-pub use export::export;
+pub use export::{SCHEMA as EXPORT_SCHEMA, export, pack_canvas};
 
 use crate::FormatError;
 use kiwi::{Kv, Schema};

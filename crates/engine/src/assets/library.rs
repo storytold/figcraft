@@ -1208,6 +1208,58 @@ fn merge_components(
     Ok(remote)
 }
 
+/// Match the mains of `src` (a design app's paste) that nothing else covers with the components of
+/// `doc` that carry the same Figma identity: the same `fig.guid` from the same file (`fig.file`,
+/// both absent counts as the same), or the same library `fig.key` from anywhere. A hit links the
+/// main and each of its layers carrying a `fig.guid` to the layer of `doc`'s component with that
+/// guid, so instances and their per-layer sources point into the component already there.
+fn relink_by_identity(
+    doc: &Document,
+    src: &Document,
+    mains: &BTreeSet<NodeId>,
+    map: &BTreeMap<NodeId, NodeId>,
+    remote: &mut BTreeMap<NodeId, NodeId>,
+) {
+    let todo: Vec<NodeId> = mains
+        .iter()
+        .copied()
+        .filter(|m| !map.contains_key(m) && !remote.contains_key(m) && src.node(*m).is_some_and(|n| n.plugin_data.contains_key("fig.guid")))
+        .collect();
+    if todo.is_empty() {
+        return;
+    }
+    let pasted: BTreeSet<NodeId> = map.values().copied().collect();
+    let mut by_guid: BTreeMap<(Option<&str>, &str), NodeId> = BTreeMap::new();
+    let mut by_key: BTreeMap<&str, NodeId> = BTreeMap::new();
+    for n in doc.nodes() {
+        if !matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) || pasted.contains(&n.id) || doc.is_remote(n.id) {
+            continue;
+        }
+        if let Some(g) = n.plugin_data.get("fig.guid") {
+            by_guid.entry((n.plugin_data.get("fig.file").map(String::as_str), g.as_str())).or_insert(n.id);
+        }
+        if let Some(k) = n.plugin_data.get("fig.key") {
+            by_key.entry(k.as_str()).or_insert(n.id);
+        }
+    }
+    for m in todo {
+        let Some(theirs) = src.node(m) else { continue };
+        let guid = theirs.plugin_data.get("fig.guid").map(String::as_str).unwrap_or_default();
+        let found = by_guid
+            .get(&(theirs.plugin_data.get("fig.file").map(String::as_str), guid))
+            .or_else(|| theirs.plugin_data.get("fig.key").and_then(|k| by_key.get(k.as_str())));
+        let Some(&mine) = found else { continue };
+        let layers: BTreeMap<&str, NodeId> =
+            doc.subtree(mine).into_iter().filter_map(|i| Some((doc.node(i)?.plugin_data.get("fig.guid")?.as_str(), i))).collect();
+        remote.insert(m, mine);
+        for l in src.subtree(m) {
+            if let Some(&target) = src.node(l).and_then(|n| n.plugin_data.get("fig.guid")).and_then(|g| layers.get(g.as_str())) {
+                remote.entry(l).or_insert(target);
+            }
+        }
+    }
+}
+
 /// When layers copied from another document `src` are pasted into `doc` (`map`: their ids → the
 /// pasted ids), point the instances among them at mains of `doc`: library copies are shared with
 /// (or brought along as) `doc`'s copies of the same library assets; components `src` publishes as
@@ -1261,6 +1313,9 @@ pub fn adopt_pasted(doc: &mut Document, src: &Document, src_path: Option<&str>, 
             }
         }
     }
+    // Mains copied from a design app that this file already holds (pasted earlier): found by the
+    // identity recorded on them, layer by layer.
+    relink_by_identity(doc, src, &mains, map, &mut remote);
     // Point the pasted layers at those mains; what stays behind gets ids of its own.
     let mut behind: BTreeMap<NodeId, NodeId> = BTreeMap::new();
     let mut follow = |doc: &mut Document, id: NodeId| -> NodeId {

@@ -19,7 +19,7 @@ pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;
 
 pub(crate) use clipboard::apply_copied_props;
-pub use clipboard::{CLIP_CLOSE, CLIP_OPEN, copy_to_clipboard, design_clipboard_buffer, paste_into};
+pub use clipboard::{CLIP_CLOSE, CLIP_OPEN, copy_to_clipboard, design_clipboard_buffer, design_clipboard_file, paste_into};
 use clipboard::{copy, copy_props, copy_props_of, cut, paste, paste_design_layers, paste_over, paste_props, paste_replace};
 use props::{
     batch_rename, effect_add, effect_copy, effect_paste, find_replace, paint_copy, paint_list, paint_paste, paint_set, pattern_fill, reparent, set,
