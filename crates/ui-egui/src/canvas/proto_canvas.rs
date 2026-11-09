@@ -171,6 +171,11 @@ fn target_at(app: &FigApp, doc: &Document, page: NodeId, source: NodeId, p: Pos2
         if let Some(w) = siblings.into_iter().rev().find(|w| doc.world_bounds(*w).is_some_and(|b| b.contains(pt))) {
             return (w != v).then_some(Target::ChangeTo(w));
         }
+        // The set's own background: nothing, as in Figma, whatever holds the set. (A set in a
+        // group has no top-level frame, so the fallback below would offer a section around it.)
+        if doc.world_bounds(set).is_some_and(|b| b.contains(pt)) {
+            return None;
+        }
     }
     frame_at(app, doc, page, p).filter(|f| doc.top_level_frame(source) != Some(*f)).map(Target::Navigate)
 }

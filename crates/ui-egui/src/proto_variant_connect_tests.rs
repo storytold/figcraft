@@ -28,6 +28,11 @@ struct Setup {
 }
 
 fn setup() -> Setup {
+    setup_in(false)
+}
+
+/// `grouped`: the set is put in a group, inside a section around everything.
+fn setup_in(grouped: bool) -> Setup {
     let mut s = Session::new();
     let mut variant = |name: &str, x: f64| {
         let f = id(&s.execute("frame.create", &json!({"x": x, "y": 0, "width": 100, "height": 80, "name": name})).unwrap());
@@ -38,6 +43,12 @@ fn setup() -> Setup {
     let layer = id(&s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 30, "height": 20, "parent": default})).unwrap());
     let outside = id(&s.execute("frame.create", &json!({"x": 0, "y": 500, "width": 200, "height": 150, "name": "Outside"})).unwrap());
     let set = id(&s.execute("component.combineVariants", &json!({"ids": [default, hover]})).unwrap());
+    if grouped {
+        let group = id(&s.execute("object.group", &json!({"ids": [set]})).unwrap());
+        let section = id(&s.execute("node.create", &json!({"type": "section", "x": -200, "y": -200, "width": 1000, "height": 1000})).unwrap());
+        s.execute("node.reparent", &json!({"ids": [group], "parent": section})).unwrap();
+        assert_eq!(s.doc().unwrap().top_level_frame(default), None, "a set in a group has no top-level frame");
+    }
     let mut u = Ui::new(s);
     u.app.ui.right_tab = RightTab::Prototype;
     Setup { u, set, default, hover, layer, outside }
@@ -112,6 +123,21 @@ fn dropped_on_the_sets_background_or_its_own_variant_it_adds_nothing() {
     drag(&mut t, src, own);
     assert!(interactions(&t, t.default).is_empty());
     let _ = t.set;
+}
+
+/// A set in a group in a section (CodeRabbit, #2161): its background still gives nothing, not a
+/// Navigate to the section, and a sibling still gives Change to.
+#[test]
+fn in_a_grouped_set_the_background_adds_nothing_and_a_sibling_changes_to() {
+    let mut t = setup_in(true);
+    let (a, b) = (screen_centre(&t.u.app, t.default), screen_centre(&t.u.app, t.hover));
+    let gap = pos2((a.x + b.x) / 2.0, a.y);
+    let src = t.default;
+    drag(&mut t, src, gap);
+    assert!(interactions(&t, t.default).is_empty(), "{:?}", interactions(&t, t.default));
+    let to = screen_centre(&t.u.app, t.hover);
+    drag(&mut t, src, to);
+    assert_change_to(&t, t.default, t.hover);
 }
 
 #[test]
