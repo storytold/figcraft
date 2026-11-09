@@ -24,9 +24,10 @@ pub fn auto_layout_slot(doc: &Document, parent: NodeId, p: Point, exclude: &[Nod
 }
 
 /// [`auto_layout_slot`] for layers dragged within their own frame (measured in Figma's web app,
-/// 2026-11-09): the slot follows the leading edge of `moved`, the box the layers would fill under
-/// the pointer, in the direction of `delta` (the drag along the page). Wrapping layouts keep the
-/// pointer rule.
+/// 2026-11-09): the slot follows the leading edge of `moved` in the direction of `delta`. The caller
+/// passes `moved` as the layers' combined start bounds plus the raw (unsnapped) drag, and `delta`
+/// as that same drag on the page; only its sign along the flow axis matters, and a zero delta uses
+/// the low edge. Wrapping layouts keep the pointer rule.
 pub fn auto_layout_slot_within(
     doc: &Document,
     parent: NodeId,
@@ -62,8 +63,9 @@ fn slot_in(
     let mid = |c: &NodeId| doc.world_bounds(*c).map(|b| if vertical { b.center().y } else { b.center().x });
     let k = if let Some((r, d)) = dragged {
         let (lo, hi, dd) = if vertical { (r.y0, r.y1, d.y) } else { (r.x0, r.x1, d.x) };
-        // Forward: past every sibling whose middle the trailing edge has reached; backward: past
-        // every one whose middle lies before the leading (low) edge.
+        // Forward: past every sibling whose middle the leading (high) edge has reached; backward: past
+        // every one whose middle lies before the leading (low) edge. A zero delta (no move along the
+        // flow) takes the backward rule, which leaves the layers where they were.
         flow_ids.iter().position(|c| mid(c).is_some_and(|m| if dd > 0.0 { m > hi } else { m >= lo })).unwrap_or(flow_ids.len())
     } else {
         let pos = if vertical { p.y } else { p.x };

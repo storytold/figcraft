@@ -122,3 +122,47 @@ fn a_column_reorders_by_the_bottom_edge() {
     assert_eq!(dragged_order("vertical", 0, 30.0, 50.0), vec![1, 0, 2]);
     assert_eq!(dragged_order("vertical", 0, 30.0, 130.0), vec![1, 2, 0]);
 }
+
+#[test]
+fn a_child_dragged_left_passes_the_second_sibling_one_pixel_later() {
+    assert_eq!(dragged_order("horizontal", 2, 30.0, -129.0), vec![0, 2, 1]);
+}
+
+#[test]
+fn a_column_reorders_at_the_boundaries_both_ways() {
+    assert_eq!(dragged_order("vertical", 0, 30.0, 49.0), vec![0, 1, 2]);
+    assert_eq!(dragged_order("vertical", 0, 30.0, 129.0), vec![1, 0, 2]);
+    assert_eq!(dragged_order("vertical", 2, 30.0, -49.0), vec![0, 1, 2]);
+    assert_eq!(dragged_order("vertical", 2, 30.0, -50.0), vec![0, 2, 1]);
+    assert_eq!(dragged_order("vertical", 2, 30.0, -129.0), vec![0, 2, 1]);
+    assert_eq!(dragged_order("vertical", 2, 30.0, -130.0), vec![2, 0, 1]);
+}
+
+#[test]
+fn a_drag_with_no_move_along_the_flow_keeps_the_slot() {
+    // Back at the start, and a drag across the flow only, with snapping on (the default).
+    assert_eq!(dragged_order("horizontal", 1, 30.0, 0.0), vec![0, 1, 2]);
+    assert_eq!(dragged_order("vertical", 1, 30.0, 0.0), vec![0, 1, 2]);
+    let mut s = Session::new();
+    let (f, kids) = three(&mut s, "horizontal");
+    let b = s.doc().unwrap().world_bounds(kids[1]).unwrap();
+    let from = (b.center().x, b.center().y);
+    drag(&mut s, from, (from.0, from.1 + 40.0));
+    let order = s.doc().unwrap().node(f).unwrap().children.clone();
+    assert_eq!(order, kids.to_vec());
+}
+
+#[test]
+fn several_dragged_children_use_their_combined_box() {
+    // Kids 0 and 1 together span 0..140; moved right by 49 the leading edge is at 189, just short of the middle of kid 2 (190).
+    for (by, expected) in [(49.0, vec![0, 1, 2]), (50.0, vec![2, 0, 1])] {
+        let mut s = Session::new();
+        let (f, kids) = three(&mut s, "horizontal");
+        s.execute("select.set", &json!({"ids": [kids[0], kids[1]]})).unwrap();
+        let b = s.doc().unwrap().world_bounds(kids[0]).unwrap();
+        let from = (b.center().x, b.center().y);
+        drag(&mut s, from, (from.0 + by, from.1));
+        let order: Vec<usize> = s.doc().unwrap().node(f).unwrap().children.iter().map(|c| kids.iter().position(|k| k == c).unwrap()).collect();
+        assert_eq!(order, expected, "by {by}");
+    }
+}
