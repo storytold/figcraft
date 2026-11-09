@@ -103,7 +103,7 @@ impl Session {
     /// The tool pointer events go to: in Dev Mode every tool but the hand and comments selects.
     fn acting_tool(&self) -> ToolId {
         match self.tool.tool {
-            t if self.tool.dev_mode && !matches!(t, ToolId::Hand | ToolId::Comment | ToolId::Annotation) => ToolId::Move,
+            t if self.tool.dev_mode && !t.works_in_dev_mode() => ToolId::Move,
             t => t,
         }
     }
@@ -206,7 +206,8 @@ impl Session {
     fn annotation_down(&mut self, ev: &PointerEvent) -> Result<()> {
         let ds = self.ds()?;
         let (doc, page) = (ds.doc.clone(), ds.page);
-        let Some(id) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0) else { return Ok(()) };
+        // The same reach as the Move tool's pick (`ev.tol() * 2.0`); never the page itself.
+        let Some(id) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0).filter(|i| doc.node(*i).is_some_and(|n| !n.is_page())) else { return Ok(()) };
         self.set_selection(vec![id]);
         self.request_ui("annotation.new", json!({"id": id}));
         Ok(())

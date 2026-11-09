@@ -235,6 +235,26 @@ pub(crate) fn tool(s: &mut Session, t: ToolId) -> Result<Value> {
     Ok(json!({"tool": t.id()}))
 }
 
+/// Shift+T and choosing the Annotation tool: with a layer selected (or named by `id`/`ids`) the UI
+/// is asked for its note at once; in the tool, a press on a layer selects it and asks (the engine
+/// never writes the note). A named target is checked first: one that isn't a layer in the document
+/// is an error and the tool stays as it was.
+fn annotation(s: &mut Session, p: &Value) -> Result<Value> {
+    let named = p.get("id").is_some_and(|v| !v.is_null()) || p.get("ids").is_some_and(|v| !v.is_null());
+    let first = crate::params::targets(s, p).into_iter().find(|i| s.doc().is_ok_and(|d| d.node(*i).is_some_and(|n| !n.is_page())));
+    if named && first.is_none() {
+        return Err(bad("tool.annotation", "`id` must name a layer in this document (not a page)".to_string()));
+    }
+    let r = tool(s, ToolId::Annotation)?;
+    if let Some(id) = first {
+        if named {
+            crate::cmd::edit::select_and_page(s, vec![id])?;
+        }
+        s.request_ui("annotation.new", json!({"id": id}));
+    }
+    Ok(r)
+}
+
 /// The View menu's commands and their parameters.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -536,6 +556,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 if t.on_boards() {
                     crate::board::require(s, &format!("tool.{}", t.id()))?;
                 }
+                if t == ToolId::Annotation {
+                    return annotation(s, &json!({}));
+                }
                 tool(s, t)
             }
         ),
@@ -640,17 +663,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("tool.comment", "Comment", "{}", false, |s, _| tool(s, ToolId::Comment)),
         // Shift+T: with a layer selected (or an `id`) the UI is asked for its note at once; in the
         // tool, a press on a layer selects it and asks (the engine never writes the note).
-        spec!("tool.annotation", "Annotation", "{id?}", false, |s, p| {
-            let r = tool(s, ToolId::Annotation)?;
-            let first = crate::params::targets(s, p).into_iter().find(|i| s.doc().is_ok_and(|d| d.node(*i).is_some_and(|n| !n.is_page())));
-            if let Some(id) = first {
-                if p.get("id").is_some() {
-                    crate::cmd::edit::select_and_page(s, vec![id])?;
-                }
-                s.request_ui("annotation.new", json!({"id": id}));
-            }
-            Ok(r)
-        }),
+        spec!("tool.annotation", "Annotation", "{id?|ids?}", false, annotation),
         spec!("tool.shapeBuilder", "Shape builder", "{}", false, |s, _| tool(s, ToolId::ShapeBuilder)),
         // `apply: false` is for the UI colour picker: the eyedropper only samples (into
         // `ToolState::picked`) and the picker writes the colour to the paint it edits.

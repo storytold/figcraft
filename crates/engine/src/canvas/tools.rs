@@ -132,6 +132,11 @@ impl ToolId {
             ToolId::Stamp => "stamp",
         }
     }
+    /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
+    /// The one list behind the engine's pointer routing and command allowlist and the toolbar.
+    pub fn works_in_dev_mode(self) -> bool {
+        matches!(self, ToolId::Move | ToolId::Hand | ToolId::Comment | ToolId::Annotation)
+    }
     pub fn from_id(s: &str) -> Option<ToolId> {
         ToolId::ALL.into_iter().find(|t| t.id().eq_ignore_ascii_case(s))
     }

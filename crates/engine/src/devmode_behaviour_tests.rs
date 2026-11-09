@@ -149,6 +149,52 @@ fn the_annotation_tool_picks_a_layer_and_asks_for_its_note() {
     assert_eq!(s.selection(), vec![r]);
 }
 
+/// A named target that isn't a layer (a page, an unknown id) is an error, and the tool is left as it
+/// was; several targets pick the first layer among them and select it.
+#[test]
+fn the_annotation_tool_checks_the_layer_it_is_named_for_before_changing_anything() {
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, "Screen");
+    let r = rect(&mut s, f, 20.0);
+    let page = s.page().unwrap();
+    assert!(s.execute("tool.annotation", &json!({"id": page})).is_err(), "a page is not a layer");
+    assert!(s.execute("tool.annotation", &json!({"id": "9999:9999"})).is_err(), "no such layer");
+    assert!(s.execute("tool.annotation", &json!({"ids": []})).is_err(), "nothing named");
+    assert_eq!(s.tool.tool, ToolId::Move, "the tool did not change");
+    assert!(note_requests(&s).is_empty());
+    // The page first, then the rectangle: the rectangle is the target, and selected.
+    ex(&mut s, "tool.annotation", json!({"ids": [page, r]}));
+    assert_eq!((s.tool.tool, s.selection(), note_requests(&s)), (ToolId::Annotation, vec![r], vec![r]));
+}
+
+/// Choosing the tool with `tool.set` (the toolbar) asks for the selected layer's note like Shift+T.
+#[test]
+fn choosing_the_annotation_tool_from_the_toolbar_asks_for_the_selected_layers_note() {
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, "Screen");
+    let r = rect(&mut s, f, 20.0);
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    ex(&mut s, "tool.set", json!({"tool": "annotation"}));
+    assert_eq!((s.tool.tool, note_requests(&s)), (ToolId::Annotation, vec![r]));
+}
+
+/// A drag with the tool never moves the layer it starts on, in Developer Mode or out of it.
+#[test]
+fn dragging_with_the_annotation_tool_moves_nothing() {
+    for dev_mode in [true, false] {
+        let mut s = Session::new();
+        let f = frame(&mut s, 0.0, "Screen");
+        rect(&mut s, f, 20.0);
+        s.tool.dev_mode = dev_mode;
+        ex(&mut s, "select.set", json!({"ids": []}));
+        ex(&mut s, "tool.annotation", json!({}));
+        let (doc_before, undo_before) = (s.doc().unwrap().clone(), s.undo_labels(1000).len());
+        drag(&mut s, (40.0, 40.0), (140.0, 90.0));
+        assert_eq!(*s.doc().unwrap(), doc_before, "dev_mode {dev_mode}");
+        assert_eq!(s.undo_labels(1000).len(), undo_before, "dev_mode {dev_mode}");
+    }
+}
+
 #[test]
 fn dev_mode_runs_its_own_edits_and_refuses_design_edits_from_menus_and_shortcuts() {
     for id in [
