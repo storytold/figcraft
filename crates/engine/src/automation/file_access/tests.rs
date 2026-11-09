@@ -191,6 +191,183 @@ fn windows_case_devices_and_streams() {
     assert!(!e.contains(r"\\?\"), "{e}");
 }
 
+/// How each spelling of a path on another computer or of a device is told apart from a local path
+/// (#1094), on every system: only Windows checks them, but they are spelled the same everywhere.
+#[test]
+fn spellings_of_other_computers_and_devices_are_refused() {
+    use super::refused_spelling;
+    use craft_docpath::Refused::{Device, Network};
+    let local = [PathBuf::from(r"C:\work")];
+    let network = [
+        r"\\192.0.2.1\share\x.png",
+        "//192.0.2.1/share/x.png",
+        r"\/192.0.2.1/share\x.png",
+        r"\\?\UNC\192.0.2.1\share\x.png",
+        r"\\?\unc\192.0.2.1\share\x.png",
+        "//?/UNC/192.0.2.1/share/x.png",
+        r"\\.\UNC\192.0.2.1\share\x.png",
+        // A server without a share is contacted too.
+        r"\\192.0.2.1",
+        r"\\192.0.2.1\",
+        r"\\SERVER.\share \x.png",
+    ];
+    let device = [
+        r"\\.\pipe\figcraft",
+        r"\\?\GLOBALROOT\Device\Mup\192.0.2.1\share\x.png",
+        r"\\.\C:\work\x.png",
+        r"\\.\COM1",
+        r"\??\UNC\192.0.2.1\share\x.png",
+        // A device name anywhere: each folder on the way is opened as the path is resolved.
+        r"C:\work\COM1",
+        r"C:\work\nul.txt",
+        r"C:\work\Com1 .png",
+        r"C:\work\lpt1.\x.png",
+        r"C:\work\LPT³\x.png",
+        r"C:\work\conout$",
+        r"C:\work\aux:stream",
+        // After a name `craft_docpath` refuses for another reason.
+        r"C:\work\a:b\prn.png",
+    ];
+    let fine = [
+        r"C:\work\x.png",
+        r"\\?\C:\work\x.png",
+        r"C:\work\console.png",
+        r"C:\work\com10.png",
+        r"C:\work\lpt.png",
+        r"C:\work\nul-ish.txt",
+        r"\\?\Volume{0b3b1c63-0000-0000-0000-100000000000}\x.png",
+        "/home/u/work/x.png",
+        "x.png",
+        r"..\x.png",
+    ];
+    for (paths, want) in [(&network[..], Some(Network)), (&device[..], Some(Device)), (&fine[..], None)] {
+        for p in paths {
+            assert_eq!(refused_spelling(p, &[]), want, "{p}");
+            assert_eq!(refused_spelling(p, &local), want, "{p} with a local root");
+        }
+    }
+    // A root on a share lets the paths on that share through, in any case and spelling, and only them.
+    let shared = [PathBuf::from(r"\\?\UNC\Server\Share\work")];
+    for p in [r"\\server\SHARE\work\x.png", r"\\?\UNC\SERVER\share\elsewhere\x.png", "//Server/Share/work/x.png"] {
+        assert_eq!(refused_spelling(p, &shared), None, "{p}");
+    }
+    for p in [r"\\server\other\x.png", r"\\other\share\x.png", r"\\server", r"\\server.\share\x.png"] {
+        assert_eq!(refused_spelling(p, &shared), Some(Network), "{p}");
+    }
+    assert_eq!(refused_spelling(r"\\server\share\work\COM1", &shared), Some(Device));
+}
+
+/// The links on the way to a path are followed by their spelling before anything they lead to is
+/// opened (#1094). The links are made up here, so this runs where tests may not make links.
+#[test]
+fn links_on_the_way_are_followed_by_their_spelling_first() {
+    use super::{Entry, MAX_LINKS, link_refused};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    let base = std::env::temp_dir().join("figcraft-links");
+    let at = |rel: &str| base.join(rel);
+    let mut links: HashMap<PathBuf, Option<PathBuf>> = HashMap::from([
+        // Relative to the link's folder, to a device name.
+        (at("root/dev"), Some(PathBuf::from("../outside/nul"))),
+        // To another link.
+        (at("root/hop"), Some(at("root/dev"))),
+        // Within the root.
+        (at("root/alias"), Some(PathBuf::from("sub"))),
+        (at("root/loop"), Some(at("root/loop"))),
+        (at("root/unreadable"), None),
+        // Below a name that isn't there: never looked at.
+        (at("missing/dev"), Some(PathBuf::from("nul"))),
+    ]);
+    if cfg!(windows) {
+        links.insert(at("root/remote"), Some(PathBuf::from(r"\\192.0.2.1\share")));
+        links.insert(at("root/far"), Some(at("root/remote/work")));
+    }
+    let plain = [at("root"), at("root/sub"), at("outside")];
+    let looked = RefCell::new(Vec::new());
+    let look = |p: &Path| {
+        looked.borrow_mut().push(p.to_path_buf());
+        match links.get(p) {
+            Some(target) => Entry::Link(target.clone()),
+            None if base.starts_with(p) || plain.iter().any(|q| q == p) => Entry::Plain,
+            None => Entry::Missing,
+        }
+    };
+    let refused = |rel: &str, roots: &[PathBuf]| link_refused(&at(rel), roots, MAX_LINKS, &look);
+    for rel in ["root/dev/x.png", "root/hop/x.png", "root/loop/x.png", "root/unreadable/x.png"] {
+        assert!(refused(rel, &[]), "{rel}");
+    }
+    for rel in ["root/alias/x.png", "root/sub/x.png", "root/x.png", "missing/dev/x.png"] {
+        assert!(!refused(rel, &[]), "{rel}");
+    }
+    // A refused target isn't looked at, nor is anything below what isn't there.
+    let looked = looked.take();
+    assert!(!looked.contains(&at("outside/nul")) && !looked.contains(&at("missing/dev")), "{looked:?}");
+    if cfg!(windows) {
+        for rel in ["root/remote/x.png", "root/far/x.png"] {
+            assert!(refused(rel, &[]), "{rel}");
+            // Unless a root is on that share.
+            assert!(!refused(rel, &[PathBuf::from(r"\\?\UNC\192.0.2.1\share")]), "{rel}");
+        }
+    }
+}
+
+/// A path on another computer, a device path, and a link to them are refused before anything is
+/// opened: resolving them made Windows contact the server, which may send it the signed-in user's
+/// credentials (#1094). Nothing answers on 192.0.2.1 (an address for documentation), so a path
+/// there that is opened takes Windows seconds to give up on; one refused first, none.
+#[cfg(windows)]
+#[test]
+fn other_computers_and_devices_are_refused_before_anything_is_opened() {
+    use std::time::{Duration, Instant};
+    let f = Fixture::new("network");
+    let r = f.rw();
+    let read_only = Roots::new(&[f.p("root")], &[]).unwrap();
+    let refused = |roots: &Roots, p: &str, access: Access| {
+        let t = Instant::now();
+        let e = roots.check(Path::new(p), access).expect_err(p);
+        assert!(t.elapsed() < Duration::from_secs(3), "{p}: took {:?}, so it was opened", t.elapsed());
+        e
+    };
+    for p in
+        [r"\\192.0.2.1\share\x.png", "//192.0.2.1/share/x.png", r"\\?\UNC\192.0.2.1\share\x.png", r"\\.\UNC\192.0.2.1\share\x.png", r"\\192.0.2.1"]
+    {
+        for access in [Access::Read, Access::Write] {
+            let e = refused(&r, p, access);
+            assert!(e.contains("is on another computer, and no folder that may be"), "{p}: {e}");
+        }
+        let e = refused(&read_only, p, Access::Write);
+        assert!(e.ends_with("is on another computer, and no folder that may be written is on its share"), "{p}: {e}");
+    }
+    for p in [r"\\.\pipe\figcraft-roots", r"\\?\GLOBALROOT\Device\Mup\192.0.2.1\share\x.png", &f.p(r"root\COM1\x.png"), "nul"] {
+        let e = refused(&r, p, Access::Read);
+        assert!(e.ends_with("names a device, not a file"), "{p}: {e}");
+    }
+    // Local paths, in either spelling, are checked as before.
+    let inside = std::fs::canonicalize(f.p("root")).unwrap().join("in.txt");
+    assert!(r.check(&inside, Access::Read).is_ok());
+    assert!(r.check(Path::new(&f.p(r"root\in.txt")), Access::Read).is_ok());
+
+    // A link in a root to another computer is refused before it is followed, also through another
+    // link, and with the message any path outside gets: it doesn't tell where the link leads.
+    if !symlink_dir(Path::new(r"\\192.0.2.1\share"), &f.0.join("root/remote")) || !symlink_dir(&f.0.join("root/remote/work"), &f.0.join("root/hop")) {
+        eprintln!("skipped links: this system doesn't let tests make symbolic links");
+        return;
+    }
+    // Relative to the link's folder.
+    assert!(symlink_dir(Path::new(r"..\remote"), &f.0.join("root/sub/up")));
+    assert!(symlink_file(Path::new(r"\\.\pipe\figcraft-roots"), &f.0.join("root/pipe")));
+    let standard = |p: &str| format!("automation path rejected: {p} is outside the folders that may be");
+    for p in [f.p("root/remote/x.png"), f.p("root/hop/x.png"), f.p("root/sub/up/x.png"), f.p("root/pipe")] {
+        for access in [Access::Read, Access::Write] {
+            let e = refused(&r, &p, access);
+            assert!(e.starts_with(&standard(&p)), "{p}: {e}");
+        }
+    }
+    // A link to a folder in the root still leads there.
+    assert!(symlink_dir(&f.0.join("root/sub"), &f.0.join("root/alias")));
+    assert!(r.check(Path::new(&f.p("root/alias/x.png")), Access::Write).is_ok());
+}
+
 #[test]
 fn a_scope_confines_the_thread_and_ends_with_it() {
     let f = Fixture::new("scope");
