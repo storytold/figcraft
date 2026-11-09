@@ -128,3 +128,56 @@ fn in_crop_mode_the_layers_edges_crop_without_moving_the_picture() {
     key(&mut u, Key::Escape);
     assert!(ghost(&mut u).is_none(), "gone with crop mode");
 }
+
+/// Choose `item` from the image mode dropdown of the open colour picker, which reads `shown`.
+fn choose_mode(u: &mut Ui, shown: &str, item: &str) {
+    for text in [shown, item] {
+        // The picker is drawn over the Design panel, so its text comes last.
+        let shapes = flat(&u.frame_output(vec![]).shapes);
+        let (_, p, size) = crate::live_tests::texts(&shapes).into_iter().rfind(|(t, _, _)| t == text).unwrap_or_else(|| panic!("no {text:?}"));
+        u.button(p + size / 2.0, true);
+        u.button(p + size / 2.0, false);
+    }
+    u.frame(vec![]);
+}
+
+/// Crop chosen as the image fill's mode in the colour picker enters crop mode, as Crop image does
+/// (#2150): the picker closes, the picture keeps its place, and a corner handle then crops it
+/// with the layer still selected. The other modes only set the mode.
+#[test]
+fn crop_chosen_in_the_colour_picker_enters_crop_mode() {
+    let (mut u, layer, _) = setup();
+    u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![layer] });
+    for _ in 0..4 {
+        u.frame(vec![]);
+    }
+    choose_mode(&mut u, "Fill", "Fit");
+    assert_eq!(mode(&u, layer), (ImageScaleMode::Fit, None));
+    assert!(u.app.ui.picker.is_some() && u.app.ui.crop.is_none(), "Fit is only a mode");
+    choose_mode(&mut u, "Fit", "Crop");
+    assert_eq!(u.app.ui.crop, Some((layer, 0)), "crop mode on the image fill");
+    assert!(u.app.ui.picker.is_none(), "crop mode takes the canvas from the picker");
+    // The picture keeps its place: the crop is the one Crop image makes of the fitted image.
+    let (m, Some(before)) = mode(&u, layer) else { panic!("a crop where the picture was") };
+    assert_eq!(m, ImageScaleMode::Crop);
+    let (mut menu, other, _) = setup();
+    let mut fit = menu.app.session.doc().unwrap().node(other).unwrap().fills[0].clone();
+    if let PaintKind::Image(img) = &mut fit.kind {
+        img.scale_mode = ImageScaleMode::Fit;
+    }
+    menu.app.run("fill.set", json!({"ids": [other], "index": 0, "paint": fit}));
+    assert_eq!(mode(&menu, other), (ImageScaleMode::Fit, None));
+    menu.app.run("image.crop", json!({}));
+    assert_eq!(mode(&menu, other), (ImageScaleMode::Crop, Some(before)));
+    // The bottom right corner, dragged in, crops the picture to the top left 3/4 of the layer.
+    let (from, to) = (u.app.to_screen(200.0, 100.0), u.app.to_screen(150.0, 75.0));
+    u.drag_to(from, to);
+    u.button(to, false);
+    assert_eq!(u.app.session.selection(), vec![layer], "the layer stays selected");
+    assert_eq!(u.app.ui.crop, Some((layer, 0)), "still cropping");
+    let n = u.app.session.doc().unwrap().node(layer).unwrap().clone();
+    assert!((n.width - 150.0).abs() < 1e-6 && (n.height - 75.0).abs() < 1e-6, "{} x {}", n.width, n.height);
+    let (_, Some(after)) = mode(&u, layer) else { panic!("a crop") };
+    assert!((after[0] - before[0] * 0.75).abs() < 1e-9 && (after[3] - before[3] * 0.75).abs() < 1e-9, "{before:?} -> {after:?}");
+    assert!((after[4] - before[4]).abs() < 1e-9 && (after[5] - before[5]).abs() < 1e-9, "the top left stays: {before:?} -> {after:?}");
+}
