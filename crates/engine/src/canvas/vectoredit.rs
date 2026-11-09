@@ -1228,6 +1228,66 @@ pub(crate) fn cut_across(s: &mut Session, a: Point, b: Point) -> Result<Vec<Node
     Ok(layers)
 }
 
+/// A paint-bucket drag in progress: the network as painted so far (in the layer's coordinates at
+/// the start), whether the drag fills or clears, and the regions it touched. Each pointer move
+/// paints only its new points; [`PaintStroke::apply`] puts the result on the layer. Replaying every
+/// point of the drag on each move cost a face rebuild per point per move.
+#[derive(Clone, Debug)]
+pub(crate) struct PaintStroke {
+    net: VectorNetwork,
+    inherited: Vec<figcraft_color::Paint>,
+    want: Option<bool>,
+    /// The regions touched, by their loops: painting adds and reorders regions, never their edges.
+    regions: std::collections::BTreeSet<Vec<Vec<usize>>>,
+}
+
+impl PaintStroke {
+    pub(crate) fn start(doc: &Document, id: NodeId) -> Option<Self> {
+        Some(Self { net: network(doc, id)?.clone(), inherited: doc.node(id)?.fills.clone(), want: None, regions: Default::default() })
+    }
+
+    /// Paint at more local points, the way the first one went.
+    pub(crate) fn add(&mut self, pts: &[Point]) {
+        for p in pts {
+            self.want = self.net.paint_to_with(*p, self.want, Some(&self.inherited)).or(self.want);
+            if let Some(r) = self.net.region_at(*p).and_then(|r| self.net.regions.get(r)) {
+                self.regions.insert(r.loops.clone());
+            }
+        }
+    }
+
+    /// The painted network on layer `id` (of the document the drag started from), with the default
+    /// fill [`paint_all`] gives a vector without one.
+    pub(crate) fn apply(&self, doc: &mut Document, id: NodeId) -> Result<bool> {
+        let filled = self.want.ok_or_else(|| bad("vector.edit.paint", "click inside a closed area"))?;
+        let net = self.net.clone();
+        let touched: std::collections::BTreeSet<usize> =
+            net.regions.iter().enumerate().filter(|(_, r)| self.regions.contains(&r.loops)).map(|(i, _)| i).collect();
+        edit(doc, id, move |n| *n = net)?;
+        default_fill(doc, id, filled, &touched)?;
+        Ok(filled)
+    }
+}
+
+/// After painting: a vector whose own fills don't show gets the default fill, and the regions the
+/// paint didn't reach keep showing nothing.
+fn default_fill(doc: &mut Document, id: NodeId, filled: bool, targets: &std::collections::BTreeSet<usize>) -> Result<()> {
+    let n = doc.get_mut(id)?;
+    if filled && n.fills.iter().all(|f| !f.visible) {
+        let default = figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE);
+        if let NodeKind::Vector { network } = &mut n.kind {
+            for (index, region) in network.regions.iter_mut().enumerate() {
+                if region.fills.is_none() && !targets.contains(&index) {
+                    // Freeze an untouched inherited region before adding a node-wide default.
+                    region.fills = Some(Vec::new());
+                }
+            }
+        }
+        n.fills = vec![default];
+    }
+    Ok(())
+}
+
 /// The paint bucket on node `id` at local points `pts`: the first fills or unfills the closed area
 /// under it, the others get the same (points outside closed areas are skipped). A vector without
 /// fills gets the default fill so the painted area shows.
@@ -1241,23 +1301,11 @@ pub fn paint_all(doc: &mut Document, id: NodeId, pts: &[Point]) -> Result<bool> 
         want
     })?
     .ok_or_else(|| bad("vector.edit.paint", "click inside a closed area"))?;
-    let n = doc.get_mut(id)?;
-    if filled && n.fills.iter().all(|f| !f.visible) {
-        let default = figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE);
-        let targets: std::collections::BTreeSet<usize> = match &n.kind {
-            NodeKind::Vector { network } => pts.iter().filter_map(|point| network.region_at(*point)).collect(),
-            _ => std::collections::BTreeSet::new(),
-        };
-        if let NodeKind::Vector { network } = &mut n.kind {
-            for (index, region) in network.regions.iter_mut().enumerate() {
-                if region.fills.is_none() && !targets.contains(&index) {
-                    // Freeze an untouched inherited region before adding a node-wide default.
-                    region.fills = Some(Vec::new());
-                }
-            }
-        }
-        n.fills = vec![default];
-    }
+    let targets: std::collections::BTreeSet<usize> = match &doc.get(id)?.kind {
+        NodeKind::Vector { network } => pts.iter().filter_map(|point| network.region_at(*point)).collect(),
+        _ => std::collections::BTreeSet::new(),
+    };
+    default_fill(doc, id, filled, &targets)?;
     Ok(filled)
 }
 

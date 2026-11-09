@@ -701,3 +701,31 @@ fn fill_traces_stroke(s: &Session, id: NodeId, why: &str) {
     }
     assert!((length(&fill) - length(&stroke)).abs() < 1e-3, "{why}: fill {} and stroke {} trace the same outline", length(&fill), length(&stroke));
 }
+
+/// A paint-bucket drag paints each new point on what the earlier ones left, and ends the same as
+/// painting every point of it at once: across both halves of a split square without fills, both
+/// fill and the layer gets the default fill.
+#[test]
+fn a_paint_drag_paints_as_it_goes_and_ends_as_painting_every_point() {
+    let setup = |s: &mut Session| {
+        let id = rect(s);
+        ex(s, "vector.edit.connect", json!({"a": 0, "b": 2}));
+        ex(s, "node.set", json!({"id": id, "props": {"fills": []}}));
+        id
+    };
+    let pts: Vec<Point> = (0..=30).map(|k| pt(80.0 - 2.0 * f64::from(k), 20.0 + 2.0 * f64::from(k))).collect();
+    let mut s = Session::new();
+    let id = setup(&mut s);
+    ex(&mut s, "vector.edit.tool", json!({"tool": "paint"}));
+    s.pointer(&ev(PointerKind::Down, pts[0].x, pts[0].y)).unwrap();
+    for p in &pts[1..] {
+        s.pointer(&ev(PointerKind::Move, p.x, p.y)).unwrap();
+    }
+    s.pointer(&ev(PointerKind::Up, pts[30].x, pts[30].y)).unwrap();
+    let mut once = Session::new();
+    let other = setup(&mut once);
+    assert!(paint_all(once.doc_mut().unwrap(), other, &pts).unwrap());
+    let (a, b) = (s.doc().unwrap().node(id).unwrap(), once.doc().unwrap().node(other).unwrap());
+    assert_eq!((&net(&s, id).regions, &a.fills), (&net(&once, other).regions, &b.fills));
+    assert!(net(&s, id).fill_contains(pt(75.0, 25.0)) && net(&s, id).fill_contains(pt(25.0, 75.0)), "both halves painted");
+}

@@ -91,14 +91,17 @@ pub(crate) enum VGesture {
         start: Point,
         hit: Option<VHit>,
     },
-    /// Paint bucket: the points dragged over so far (local).
+    /// Paint bucket: the points dragged over so far (local) and the painting they made.
     Paint {
         stamps: Vec<Point>,
+        stroke: Option<Box<super::PaintStroke>>,
     },
     /// Eraser strokes so far (local points) and the brush radius (local units).
     Erase {
         stamps: Vec<Point>,
         radius: f64,
+        /// The network with every stamp so far erased: a move erases only its new stamps.
+        erased: Option<Box<VectorNetwork>>,
     },
     /// Variable width tool.
     Width(super::width::WidthGesture),
@@ -557,6 +560,41 @@ impl Session {
     }
 
     /// Returns false when the click left edit mode (the caller then runs the normal tool).
+    /// The paint bucket pressed: a drag paints every area it crosses the way the first one went
+    /// (one undo step), each move painting only its new point.
+    fn paint_down(&mut self, doc: &Document, id: NodeId, w: Affine, ev: &PointerEvent) -> Result<()> {
+        self.begin_interaction("Paint bucket")?;
+        let stamps = vec![w.inverse() * ev.p()];
+        let mut stroke = super::PaintStroke::start(doc, id).map(Box::new);
+        if let Some(st) = stroke.as_mut() {
+            st.add(&stamps);
+            let st = st.clone();
+            self.preview(|doc, _| st.apply(doc, id).map(|_| ())).ok();
+        }
+        self.vgesture(VGesture::Paint { stamps, stroke });
+        Ok(())
+    }
+
+    /// The eraser pressed: a stroke erases under the brush, each move erasing only its new stamps.
+    fn erase_down(&mut self, doc: &Document, id: NodeId, w: Affine, ev: &PointerEvent) -> Result<()> {
+        let scale = w.determinant().abs().sqrt().max(1e-9);
+        let radius = ERASER_PX / ev.zoom.max(1e-6) / scale;
+        let stamps = vec![w.inverse() * ev.p()];
+        self.begin_interaction("Eraser")?;
+        let mut erased = network(doc, id).cloned().map(Box::new);
+        if let Some(net) = erased.as_mut() {
+            erase_all(net, &stamps, radius);
+            let net = (**net).clone();
+            self.preview(|doc, _| edit(doc, id, move |n| *n = net).map(|_| ()))?;
+        }
+        set_state(self, |e| {
+            e.vertices.clear();
+            e.segments.clear();
+        })?;
+        self.vgesture(VGesture::Erase { stamps, radius, erased });
+        Ok(())
+    }
+
     fn vector_down(&mut self, ve: &VectorEdit, ev: &PointerEvent) -> Result<bool> {
         let doc = self.doc()?.clone();
         let tol = 6.0 / ev.zoom.max(1e-6);
@@ -788,27 +826,8 @@ impl Session {
                 self.pen_state(plan, v, None)?;
                 self.vgesture(VGesture::Pen { plan, origin: ev.p(), out });
             }
-            VTool::Paint => {
-                // A drag paints every area it crosses the way the first one went (one undo step).
-                self.begin_interaction("Paint bucket")?;
-                let stamps = vec![w.inverse() * ev.p()];
-                let st = stamps.clone();
-                self.preview(|doc, _| super::paint_all(doc, id, &st).map(|_| ())).ok();
-                self.vgesture(VGesture::Paint { stamps });
-            }
-            VTool::Eraser => {
-                let scale = w.determinant().abs().sqrt().max(1e-9);
-                let radius = ERASER_PX / ev.zoom.max(1e-6) / scale;
-                let stamps = vec![w.inverse() * ev.p()];
-                self.begin_interaction("Eraser")?;
-                let st = stamps.clone();
-                self.preview(|doc, _| edit(doc, id, |net| erase_all(net, &st, radius)).map(|_| ()))?;
-                set_state(self, |e| {
-                    e.vertices.clear();
-                    e.segments.clear();
-                })?;
-                self.vgesture(VGesture::Erase { stamps, radius });
-            }
+            VTool::Paint => self.paint_down(&doc, id, w, ev)?,
+            VTool::Eraser => self.erase_down(&doc, id, w, ev)?,
             VTool::Width => self.width_down(ve, ev)?,
             VTool::Lasso => {
                 self.tool.overlay.lasso = vec![[ev.x, ev.y]];
@@ -999,30 +1018,37 @@ impl Session {
                 self.select_parts(&base, |doc, id| super::vertices_in_polygon(doc, id, &points), true)?;
                 self.vgesture(VGesture::Lasso { points, base });
             }
-            VGesture::Erase { mut stamps, radius } => {
+            VGesture::Erase { mut stamps, radius, mut erased } => {
                 self.tool.overlay.brush = Some([ev.x, ev.y, ERASER_PX / ev.zoom.max(1e-6)]);
                 // Stamps a third of the brush apart, filling gaps on fast strokes.
                 let to = lp;
                 let from = stamps.last().copied().unwrap_or(to);
                 let step = (radius / 3.0).max(1e-6);
                 let n = ((to - from).hypot() / step).floor().min(500.0) as usize;
-                for k in 1..=n {
-                    stamps.push(from.lerp(to, k as f64 / n as f64));
-                }
+                let new: Vec<Point> = (1..=n).map(|k| from.lerp(to, k as f64 / n as f64)).collect();
                 if n > 0 && stamps.len() < 20_000 {
-                    let st = stamps.clone();
-                    self.preview(|doc, _| edit(doc, id, |net| erase_all(net, &st, radius)).map(|_| ()))?;
+                    stamps.extend(&new);
+                    // Only the new stamps erase, on the network the earlier ones left.
+                    if let Some(net) = erased.as_mut() {
+                        erase_all(net, &new, radius);
+                        let net = (**net).clone();
+                        self.preview(|doc, _| edit(doc, id, move |n| *n = net).map(|_| ()))?;
+                    }
                 }
-                self.vgesture(VGesture::Erase { stamps, radius });
+                self.vgesture(VGesture::Erase { stamps, radius, erased });
             }
             VGesture::Cut { start, .. } => self.tool.overlay.rubber = Some([start.x, start.y, ev.x, ev.y]),
-            VGesture::Paint { mut stamps } => {
+            VGesture::Paint { mut stamps, mut stroke } => {
                 if stamps.last().is_none_or(|l| (w * *l - ev.p()).hypot() * ev.zoom >= 2.0) && stamps.len() < 10_000 {
                     stamps.push(lp);
-                    let st = stamps.clone();
-                    self.preview(|doc, _| super::paint_all(doc, id, &st).map(|_| ())).ok();
+                    // Only the new point paints, on the network the earlier ones left.
+                    if let Some(st) = stroke.as_mut() {
+                        st.add(&[lp]);
+                        let st = st.clone();
+                        self.preview(|doc, _| st.apply(doc, id).map(|_| ())).ok();
+                    }
                 }
-                self.vgesture(VGesture::Paint { stamps });
+                self.vgesture(VGesture::Paint { stamps, stroke });
             }
             VGesture::Pen { plan, origin, out, .. } => {
                 let d = to_local(ev.p() - origin);
