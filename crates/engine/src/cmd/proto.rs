@@ -109,6 +109,22 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
+        spec!("proto.flow.move", "Move flow starting point", "{start (the flow's frame), to (another top-level frame)}", true, |s, p| {
+            let cmd = "proto.flow.move";
+            let (start, to) = (req_id(cmd, p, "start")?, req_id(cmd, p, "to")?);
+            let page = s.page()?;
+            let doc = s.doc_mut()?;
+            if doc.top_level_frame(to) != Some(to) || doc.page_of(to) != Some(page) {
+                return Err(bad(cmd, "a flow starts at a top-level frame on this page"));
+            }
+            let NodeKind::Page { flows, .. } = &mut doc.get_mut(page)?.kind else { return Err(bad(cmd, "not a page")) };
+            if start != to && flows.iter().any(|f| f.start == to) {
+                return Err(bad(cmd, "another flow already starts at that frame"));
+            }
+            let f = flows.iter_mut().find(|f| f.start == start).ok_or_else(|| bad(cmd, "no flow starts at that frame"))?;
+            f.start = to;
+            Ok(json!({"name": f.name, "start": to}))
+        }),
         spec!(
             "proto.settings",
             "Prototype settings",

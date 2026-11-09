@@ -25,6 +25,20 @@ struct Drag {
     rewire: Option<(usize, Pos2)>,
 }
 
+/// A flow's tag being pressed or dragged: the flow's frame, where the press was, where the pointer
+/// is, and whether the press was on its play button.
+#[derive(Clone, Copy)]
+struct FlowDrag {
+    start: NodeId,
+    grabbed: Pos2,
+    pos: Pos2,
+    play: bool,
+}
+
+fn flow_drag_id() -> Id {
+    Id::unique("proto_canvas_flow_drag")
+}
+
 /// How close (screen points) to a connection's arrow tip a press picks up its end.
 const END_GRAB: f32 = 8.0;
 
@@ -279,9 +293,22 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
     let hover = ctx.input(|i| i.pointer.hover_pos());
     let dragging: Option<Drag> = ctx.data(|d| d.get_temp(drag_id()));
     overlay_ghost::draw(app, painter, doc, page);
-    // "A small blue label… Flow 1" over each flow's starting frame, with its play button.
-    for (_, name, tag, play) in flow_tags(app, ctx, doc, page) {
-        flow_tag(painter, &name, tag, play, hover.is_some_and(|q| tag.contains(q)));
+    // "A small blue label… Flow 1" over each flow's starting frame, with its play button; one
+    // being dragged follows the pointer, over the frame it would move to.
+    let moving: Option<FlowDrag> = ctx.data(|m| m.get_temp(flow_drag_id())).filter(|f: &FlowDrag| f.pos.distance(f.grabbed) >= 4.0);
+    for (start, name, tag, play) in flow_tags(app, ctx, doc, page) {
+        match moving.filter(|f| f.start == start) {
+            Some(f) => {
+                if let Some(to) = frame_near(app, doc, page, f.pos, Some(start))
+                    && let Some(r) = screen_rect(app, doc, to)
+                {
+                    painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(2.0, crate::theme::canvas_accent(painter.ctx())), StrokeKind::Outside);
+                }
+                let d = f.pos - f.grabbed;
+                flow_tag(painter, &name, tag.translate(d), play.translate(d), true);
+            }
+            None => flow_tag(painter, &name, tag, play, hover.is_some_and(|q| tag.contains(q))),
+        }
     }
     for nd in noodles(app, ctx, doc, page) {
         let selected = sel.contains(&nd.source);
@@ -375,6 +402,29 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
     }
     let Ok(ds) = app.session.ds() else { return false };
     let (doc, page, sel) = (ds.doc.clone(), ds.page, ds.selection.clone());
+    if let Some(mut f) = ctx.data(|m| m.get_temp::<FlowDrag>(flow_drag_id())) {
+        if let Some(p) = pos {
+            f.pos = p;
+        }
+        ctx.request_repaint();
+        if released || !down {
+            ctx.data_mut(|m| m.remove::<FlowDrag>(flow_drag_id()));
+            if f.pos.distance(f.grabbed) < 4.0 {
+                // A click: the play button presents the flow, the rest of the tag selects its frame.
+                if f.play {
+                    app.run("proto.present", json!({"start": f.start}));
+                } else {
+                    app.session.set_selection(vec![f.start]);
+                }
+            } else if let Some(to) = frame_near(app, &doc, page, f.pos, Some(f.start)) {
+                // Dragged onto another frame: the flow starts there now.
+                app.run("proto.flow.move", json!({"start": f.start, "to": to}));
+            }
+        } else {
+            ctx.data_mut(|m| m.insert_temp(flow_drag_id(), f));
+        }
+        return true;
+    }
     if let Some(mut d) = drag {
         if let Some(p) = pos {
             d.pos = p;
@@ -437,12 +487,9 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
         return true;
     }
     // A flow's tag: its play button presents the flow, the rest selects its starting frame.
+    // Its tag drags to another frame to move the starting point there.
     if let Some((start, _, _, play)) = flow_tags(app, &ctx, &doc, page).into_iter().find(|(_, _, tag, _)| tag.contains(pos)) {
-        if play.contains(pos) {
-            app.run("proto.present", json!({"start": start}));
-        } else {
-            app.session.set_selection(vec![start]);
-        }
+        ctx.data_mut(|m| m.insert_temp(flow_drag_id(), FlowDrag { start, grabbed: pos, pos, play: play.contains(pos) }));
         return true;
     }
     // The arrow end of a connection: drag it to another frame or off onto the canvas.
@@ -662,6 +709,29 @@ mod tests {
             "{:?}",
             connections(&u, btn)
         );
+    }
+
+    /// A flow's tag drags onto another frame and the flow starts there.
+    #[test]
+    fn a_flow_tag_drags_to_another_frame() {
+        let (mut u, _, b, c) = connected();
+        u.run("proto.flow.add", json!({"start": b, "name": "Checkout"}));
+        u.frames(2, Vec::new);
+        let ds = u.app.session.ds().unwrap();
+        let (doc, page) = (ds.doc.clone(), ds.page);
+        let (_, _, tag, _) = flow_tags(&u.app, &u.ctx, &doc, page).into_iter().find(|t| t.0 == b).unwrap();
+        let from = pos2(tag.max.x - 4.0, tag.center().y);
+        let to = u.app.to_screen(700.0, 150.0);
+        u.button(from, true);
+        u.frame(vec![egui::Event::PointerMoved(from + (to - from) * 0.5)]);
+        u.frame(vec![egui::Event::PointerMoved(to)]);
+        u.button(to, false);
+        u.frames(2, Vec::new);
+        let flows = match &u.app.session.doc().unwrap().node(page).unwrap().kind {
+            figcraft_doc::NodeKind::Page { flows, .. } => flows.iter().map(|f| (f.name.clone(), f.start)).collect::<Vec<_>>(),
+            _ => vec![],
+        };
+        assert!(flows.contains(&("Checkout".to_string(), c)), "{flows:?}");
     }
 
     #[test]

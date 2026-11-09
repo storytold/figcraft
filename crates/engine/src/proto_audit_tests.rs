@@ -111,3 +111,17 @@ fn the_action_editor_keeps_a_connection_to_a_deleted_frame_editable() {
     );
     assert_eq!(overlay_of(&s, btn).0, "TopLeft");
 }
+
+/// A flow's starting point moves to another top-level frame (its tag dragged there), keeping its
+/// name; not onto a frame that starts another flow, nor onto a layer inside a frame.
+#[test]
+fn a_flow_moves_to_another_frame() {
+    let mut s = Session::new();
+    let (a, b, btn) = screens(&mut s);
+    ex(&mut s, "proto.interaction.add", json!({"ids": [btn], "dest": b}));
+    ex(&mut s, "proto.flow.move", json!({"start": a, "to": b}));
+    assert_eq!(flows(&s), vec![("Flow 1".to_string(), b)]);
+    assert!(s.execute("proto.flow.move", &json!({"start": b, "to": btn})).is_err(), "not inside a frame");
+    ex(&mut s, "proto.flow.add", json!({"start": a, "name": "Other"}));
+    assert!(s.execute("proto.flow.move", &json!({"start": a, "to": b})).is_err(), "B starts a flow already");
+}
