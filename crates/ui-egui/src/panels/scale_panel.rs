@@ -17,19 +17,23 @@ use crate::widgets::{self, FieldEdit, Lead};
 pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let Some(b) = doc.bounds_of(sel) else { return };
     widgets::section_header(ui, tr("Scale"), &[], false);
-    // The factor field takes the keyboard once, with its text selected, when the tool opens.
+    // The factor field takes the keyboard, with its text selected, whenever the section shows
+    // after a frame without it: the tool was chosen, or the panel came back from another tab or a
+    // hidden UI.
     let k_id = Id::unique("scale_k");
-    let opened = Id::unique("scale_opened");
-    if !ui.data(|d| d.get_temp::<bool>(opened)).unwrap_or(false) {
-        ui.data_mut(|d| d.insert_temp(opened, true));
+    let shown_id = Id::unique("scale_shown_frame");
+    let frame = ui.ctx().cumulative_frame_nr();
+    let last = ui.data(|d| d.get_temp::<u64>(shown_id));
+    ui.data_mut(|d| d.insert_temp(shown_id, frame));
+    if last.is_none_or(|l| l.saturating_add(1) < frame) {
         widgets::request_edit(ui, k_id);
     }
-    // Enter or Escape in the factor field ends the tool (back to Move, the selection kept).
-    // (Focus as it was last frame: the shortcut layer may already have let go of it this frame.)
+    // Enter or Escape in the factor field ends the tool (back to Move, the selection kept). Whether
+    // the field had the keyboard is read as it was when the last frame's widgets were done: the
+    // shortcut layer may let go of it before this frame's panel runs, and a click or Tab that moved
+    // it to another field during the last frame counts.
     let in_k_id = Id::unique("scale_in_k");
     let in_k = ui.data(|d| d.get_temp::<bool>(in_k_id)).unwrap_or(false);
-    let focused_now = ui.memory(|m| m.has_focus(k_id.with("te")));
-    ui.data_mut(|d| d.insert_temp(in_k_id, focused_now));
     let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
     let col = widgets::col_width(ui.available_width());
     // Anchor: column and row (0 start, 1 middle, 2 end) of the point that stays put.
@@ -82,14 +86,11 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             }
         }
     }
+    let focused_now = ui.memory(|m| m.has_focus(k_id.with("te")));
+    ui.data_mut(|d| d.insert_temp(in_k_id, focused_now));
     if in_k && (enter || esc) {
         app.run("tool.set", json!({"tool": "move"}));
     }
-}
-
-/// Forget that the section opened, so the next time the Scale tool opens it takes the keyboard.
-pub fn closed(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<bool>(Id::unique("scale_opened")));
 }
 
 /// The factor (clamped to 0.01–100) and pivot for scaling `b` by `k` around `anchor`; None when

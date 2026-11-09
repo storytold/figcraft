@@ -281,8 +281,6 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
             if app.session.tool.tool == figcraft_engine::ToolId::Scale {
                 crate::scale_panel::section(app, ui, &shown, &sel);
                 widgets::separator(ui);
-            } else {
-                crate::scale_panel::closed(ui.ctx());
             }
             position(app, ui, &doc, &shown, &sel);
         }

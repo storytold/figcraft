@@ -766,7 +766,44 @@ fn pressing_k_focuses_the_scale_field_with_its_text_selected() {
     assert_ne!(range.primary.index, range.secondary.index, "its text is selected");
 }
 
-/// K, 2, Enter: 100 x 100 becomes 200 x 200 about the centre, the tool is Move, one undo step.
+/// The Scale tool chosen again while the Design tab was away (Prototype tab, Move, then K): the
+/// field takes the keyboard again when the Design tab comes back.
+#[test]
+fn the_scale_field_takes_the_keyboard_again_after_another_tab() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.app.run("tool.set", json!({"tool": "move"}));
+    u.frame(vec![]);
+    u.app.run("tool.set", json!({"tool": "scale"}));
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u), "the field has the keyboard again");
+}
+
+/// Tab moves the keyboard from the factor field to the next one; an Enter there leaves the
+/// Scale tool on.
+#[test]
+fn enter_in_another_field_after_tab_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    // Tab, then Enter on the very next frame (as a quick Tab, Enter or a click and Enter would).
+    let ev = |key, pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    u.frame(vec![ev(Key::Tab, true), ev(Key::Tab, false)]);
+    assert!(!scale_field_focused(&u), "Tab moved the keyboard on");
+    u.frame(vec![ev(Key::Enter, true), ev(Key::Enter, false)]);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// K, 2, Enter: 100 x 100 becomes 200 x 200 about the panel's origin, the tool is Move, one undo step.
 #[test]
 fn k_two_enter_scales_the_selection_by_two() {
     let (mut u, r) = scale_setup();

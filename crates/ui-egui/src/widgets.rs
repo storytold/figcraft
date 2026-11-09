@@ -224,9 +224,13 @@ pub fn number_field(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, suffix:
 }
 
 /// Ask number field `id` to open for typing on its next frame, its text selected (a tool that
-/// opens with its field focused, such as Scale).
+/// opens with its field focused, such as Scale). An edit left over from when the field was last
+/// shown (it went away with the keyboard on it) is dropped first, or the request would be ignored.
 pub fn request_edit(ui: &Ui, id: Id) {
-    ui.data_mut(|d| d.insert_temp(id.with("beginedit"), true));
+    ui.data_mut(|d| {
+        d.remove::<String>(id.with("editing"));
+        d.insert_temp(id.with("beginedit"), true);
+    });
 }
 
 /// Whether the edit of number field `id` began with a Cmd/Ctrl-click. A padding field edited
