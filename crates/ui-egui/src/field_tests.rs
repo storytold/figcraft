@@ -1292,6 +1292,23 @@ fn sidebar_field_text_stays_in_place_on_focus() {
     }
 }
 
+/// The shared paint control shows the same precision as Fill and keeps the picker toggle.
+#[test]
+fn page_background_shows_fractional_opacity_like_fill_and_keeps_it_when_opening_the_picker() {
+    let mut u = Ui::new(Session::new());
+    u.ctx.enable_accesskit();
+    u.app.run("page.setBackground", json!({"color": "#FF000080"}));
+    u.frame(vec![]);
+    assert_eq!(field(&mut u, "Opacity").1, "50.2%");
+    let steps = undo_steps(&u);
+    let swatch = u.ctx.read_response(Id::unique("pagebg_swatch")).expect("shared page swatch").rect.center();
+    click(&mut u, swatch);
+    assert!(matches!(u.app.ui.picker, Some(crate::colorpicker::PickerTarget::PageBackground)));
+    assert_eq!(undo_steps(&u), steps, "opening the picker does not edit the colour");
+    click(&mut u, swatch);
+    assert!(u.app.ui.picker.is_none(), "the swatch toggles the picker closed");
+}
+
 /// The Page section's opacity field edits the page background's alpha (#1748; it was a label),
 /// one undo step per commit, and the hex field keeps that opacity unless the typed colour
 /// carries its own.

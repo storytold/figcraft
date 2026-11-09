@@ -1130,7 +1130,7 @@ pub fn checker(painter: &egui::Painter, rect: Rect, cell: f32) {
     }
 }
 
-/// Shared Fill/Stroke/Selection colors control: one background, a 16 pt swatch,
+/// Shared sidebar paint control: one background, a 16 pt swatch,
 /// caller-provided colour content, and a separated, scrubbable opacity field.
 /// The caller owns picker routing and commands; this widget only draws and reports edits.
 pub fn paint_field(
