@@ -198,6 +198,36 @@ fn arrow(painter: &egui::Painter, pts: &[Pos2; 4], col: Color32) {
     painter.add(Shape::convex_polygon(vec![tip, tip - dir * 8.0 + n * 4.5, tip - dir * 8.0 - n * 4.5], col, Stroke::NONE));
 }
 
+/// The page's flow starting points as their canvas tags: the start frame, the tag's box above the
+/// frame's top-left corner and the play button at its left end.
+fn flow_tags(app: &FigApp, ctx: &egui::Context, doc: &Document, page: NodeId) -> Vec<(NodeId, String, Rect, Rect)> {
+    let figcraft_doc::NodeKind::Page { flows, .. } = &doc.node(page).map(|p| p.kind.clone()).unwrap_or(figcraft_doc::NodeKind::Group) else {
+        return Vec::new();
+    };
+    flows
+        .iter()
+        .take(64)
+        .filter_map(|f| {
+            let frame = screen_rect(app, doc, f.start)?;
+            let text = ctx.fonts_mut(|fonts| fonts.layout_no_wrap(f.name.clone(), crate::theme::semibold(11.0), Color32::WHITE)).size().x;
+            let tag = Rect::from_min_size(pos2(frame.min.x, frame.min.y - 26.0), vec2(20.0 + 6.0 + text.min(240.0) + 8.0, 20.0));
+            let play = Rect::from_min_size(tag.min, vec2(20.0, 20.0));
+            Some((f.start, f.name.clone(), tag, play))
+        })
+        .collect()
+}
+
+/// A flow's tag: a play button and its name, in the accent colour.
+fn flow_tag(painter: &egui::Painter, name: &str, tag: Rect, play: Rect, hot: bool) {
+    let col = crate::theme::canvas_accent(painter.ctx());
+    painter.rect_filled(tag, CornerRadius::same(4), if hot { col } else { col.gamma_multiply(0.9) });
+    let c = play.center();
+    painter.add(Shape::convex_polygon(vec![c + vec2(-3.0, -5.0), c + vec2(5.0, 0.0), c + vec2(-3.0, 5.0)], Color32::WHITE, Stroke::NONE));
+    let galley = painter.layout_no_wrap(name.to_string(), crate::theme::semibold(11.0), Color32::WHITE);
+    let at = pos2(play.max.x + 6.0, tag.center().y - galley.size().y / 2.0);
+    painter.with_clip_rect(tag).galley(at, galley, Color32::WHITE);
+}
+
 fn plus_handle(painter: &egui::Painter, c: Pos2, hot: bool) {
     painter.circle_filled(c, HANDLE_R + if hot { 1.0 } else { 0.0 }, crate::theme::canvas_accent(painter.ctx()));
     painter.circle_stroke(c, HANDLE_R + if hot { 1.0 } else { 0.0 }, Stroke::new(1.5, Color32::WHITE));
@@ -217,6 +247,10 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
     let hover = ctx.input(|i| i.pointer.hover_pos());
     let dragging: Option<Drag> = ctx.data(|d| d.get_temp(drag_id()));
     overlay_ghost::draw(app, painter, doc, page);
+    // "A small blue label… Flow 1" over each flow's starting frame, with its play button.
+    for (_, name, tag, play) in flow_tags(app, ctx, doc, page) {
+        flow_tag(painter, &name, tag, play, hover.is_some_and(|q| tag.contains(q)));
+    }
     for nd in noodles(app, ctx, doc, page) {
         let selected = sel.contains(&nd.source);
         let is_open = open == Some((nd.source, nd.index));
@@ -362,6 +396,15 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
     }
     if let Some((source, from)) = over_handle {
         ctx.data_mut(|m| m.insert_temp(drag_id(), Drag { source, from, pos, rewire: None }));
+        return true;
+    }
+    // A flow's tag: its play button presents the flow, the rest selects its starting frame.
+    if let Some((start, _, _, play)) = flow_tags(app, &ctx, &doc, page).into_iter().find(|(_, _, tag, _)| tag.contains(pos)) {
+        if play.contains(pos) {
+            app.run("proto.present", json!({"start": start}));
+        } else {
+            app.session.set_selection(vec![start]);
+        }
         return true;
     }
     // The arrow end of a connection: drag it to another frame or off onto the canvas.
@@ -529,6 +572,30 @@ mod tests {
         assert!(matches!(connections(&u, btn)[..], [figcraft_doc::proto::Action::Navigate { dest, .. }] if dest == c), "{:?}", connections(&u, btn));
         drag_end(&mut u, Some((700.0, 600.0)));
         assert!(connections(&u, btn).is_empty(), "dropped on empty canvas: gone");
+    }
+
+    /// Each flow shows its tag over its starting frame: a click selects the frame, its play button
+    /// presents the flow from there.
+    #[test]
+    fn a_flow_tag_selects_its_frame_and_plays_the_flow() {
+        let (mut u, btn, b, _) = connected();
+        u.run("proto.flow.add", json!({"start": b, "name": "Checkout"}));
+        u.frames(2, Vec::new);
+        let ds = u.app.session.ds().unwrap();
+        let (doc, page) = (ds.doc.clone(), ds.page);
+        let tags = flow_tags(&u.app, &u.ctx, &doc, page);
+        let (_, name, tag, play) = tags.iter().find(|t| t.0 == b).cloned().expect("a tag over B");
+        assert_eq!(name, "Checkout");
+        let frame = u.app.session.doc().unwrap().world_bounds(b).unwrap();
+        assert!(tag.max.y <= u.app.to_screen(frame.x0, frame.y0).y, "above the frame");
+        assert!(u.app.session.selection().contains(&btn));
+        u.button(pos2(tag.max.x - 4.0, tag.center().y), true);
+        u.button(pos2(tag.max.x - 4.0, tag.center().y), false);
+        assert_eq!(u.app.session.selection(), vec![b], "the tag selects its frame");
+        u.button(play.center(), true);
+        u.button(play.center(), false);
+        u.frames(2, Vec::new);
+        assert!(u.app.ui.present.is_some(), "the play button presents the flow");
     }
 
     #[test]
