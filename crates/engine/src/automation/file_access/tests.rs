@@ -380,6 +380,28 @@ fn paths_are_classified_as_windows_opens_them() {
     assert_eq!(refused_unresolved(Path::new("C:\\work\\a\0b.png"), &[]), Some(Unresolved::Linked));
 }
 
+/// `..` after a link is taken by name, by the check and by Windows when it opens the path, so
+/// `root\j\..\in.txt` is `root\in.txt` and the link `j` is never gone through (#1094). Shown with
+/// a junction, a link any account can make: `j` leads out of the root to `outside`, and beside
+/// `outside` is another `in.txt`, which is what `..` would reach through the link.
+#[cfg(windows)]
+#[test]
+fn a_parent_after_a_link_is_taken_by_name() {
+    use super::{Entry, on_disk};
+    let f = Fixture::new("parent");
+    let r = f.rw();
+    std::fs::write(f.0.join("in.txt"), b"beside").unwrap();
+    let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(f.0.join(r"root\j")).arg(f.0.join("outside")).output();
+    assert!(made.is_ok_and(|o| o.status.success()), "a junction can be made");
+    // The junction is a link to the check, and what is through it is outside.
+    assert!(matches!(on_disk(&f.0.join(r"root\j")), Entry::Link(Some(_))));
+    assert!(r.check(Path::new(&f.p(r"root\j\secret.txt")), Access::Read).is_err());
+    let through = f.p(r"root\j\..\in.txt");
+    assert_eq!(r.check(Path::new(&through), Access::Read), r.check(Path::new(&f.p(r"root\in.txt")), Access::Read));
+    assert!(r.check(Path::new(&through), Access::Read).is_ok());
+    assert_eq!(std::fs::read(&through).unwrap(), b"in", "Windows opens the file in the root");
+}
+
 /// A path on another computer and a device path are refused before anything is opened: resolving
 /// them made Windows contact the server, which may send it the signed-in user's credentials
 /// (#1094). Each is refused with a message that only the check before resolving gives: had the
