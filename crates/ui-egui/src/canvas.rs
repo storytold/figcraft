@@ -15,6 +15,7 @@ use crate::render_worker::{Done, Job, Worker};
 use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 
 mod builder;
+mod drag_sprite;
 mod input;
 mod outline;
 mod overlays;
@@ -58,6 +59,10 @@ pub struct CanvasState {
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
     submitted: Option<JobKey>,
+    /// The dragged layers drawn from a texture of their own while the base render stays put
+    /// ([`drag_sprite`]), and the gesture (its start document's address) that can't have one.
+    sprite: Option<drag_sprite::Sprite>,
+    sprite_declined: usize,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
     /// What the last canvas render had to do (shown by `ui.inspect`).
@@ -89,6 +94,19 @@ pub struct CanvasState {
     wheel_is_mouse: bool,
 }
 
+#[cfg(test)]
+impl CanvasState {
+    /// The layers the last submitted canvas job leaves out.
+    pub(crate) fn submitted_skip(&self) -> Option<&[NodeId]> {
+        self.submitted.as_ref().map(|k| k.skip.as_slice())
+    }
+
+    /// Where the drag sprite shows on screen (at one pixel per point), if there is one.
+    pub(crate) fn sprite_rect(&self, app: &FigApp) -> Option<Rect> {
+        drag_sprite::screen_rect(app, 1.0)
+    }
+}
+
 impl Default for CanvasState {
     fn default() -> Self {
         Self {
@@ -99,6 +117,8 @@ impl Default for CanvasState {
             tex_coarse: false,
             tex_seq: 0,
             submitted: None,
+            sprite: None,
+            sprite_declined: 0,
             want_view: None,
             render_work: None,
             preview_latency_ms: None,
@@ -260,7 +280,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         })
         .unwrap_or(t.canvas);
     let dots = crate::board_bar::dots(app, bg, &t);
-    request_render(app, worker, ppp, max_texture_side, dots);
+    request_render(app, worker, &ctx, ppp, max_texture_side, dots);
+    drag_sprite::drop_orphan(&mut app.canvas);
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
@@ -281,6 +302,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
             Some(t) => t.set(done.image, filter),
             None => app.canvas.texture = Some(ctx.load_texture("figcraft-canvas", done.image, filter)),
         }
+        let done_at = done.at;
         let latency = Some(done.at.elapsed().as_secs_f64() * 1000.0);
         if done.coarse {
             app.canvas.preview_latency_ms = latency;
@@ -291,6 +313,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_of = Some((done.uid, done.page));
         app.canvas.tex_coarse = done.coarse;
         app.canvas.tex_seq = done.seq;
+        drag_sprite::arrived(&mut app.canvas, done_at, done.coarse);
     }
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::ZERO, bg);
@@ -303,6 +326,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         let image_rect = presented_image_rect(tl, v, zoom, ppp, pixel_preview);
         painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
+    drag_sprite::draw(app, &painter, ppp);
     crate::dev_mode::refresh_measurements(app);
     app.session.tool.labels = overlays(app, &painter, &t);
     crate::frame_labels::rename_field(app, ui);
