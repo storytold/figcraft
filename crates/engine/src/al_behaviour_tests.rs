@@ -391,7 +391,7 @@ fn shift_a_gap_auto_needs_a_gap_at_least_the_narrower_child() {
         if auto {
             assert_eq!((l.main_align, n.child_layout.sizing_h, n.width), (MainAlign::SpaceBetween, Sizing::Fixed, x2 + w2), "{w} {x2}");
         } else {
-            assert_ne!(l.main_align, MainAlign::SpaceBetween, "{w} {x2}");
+            assert_eq!(l.main_align, MainAlign::Min, "{w} {x2}");
             assert_eq!(n.child_layout.sizing_h, Sizing::Hug, "{w} {x2}");
         }
     }
@@ -406,7 +406,7 @@ fn shift_a_on_three_rects_in_a_row_uses_the_mean_gap_and_hugs() {
         let n = s.doc().unwrap().node(f).unwrap();
         let l = n.layout.clone().unwrap();
         assert_eq!(l.gap, gap);
-        assert_ne!(l.main_align, MainAlign::SpaceBetween);
+        assert_eq!(l.main_align, MainAlign::Min);
         assert_eq!((n.child_layout.sizing_h, n.child_layout.sizing_v, n.width), (Sizing::Hug, Sizing::Hug, width));
     }
 }
@@ -429,7 +429,7 @@ fn shift_a_on_stacked_rects_fixes_the_width_and_hugs_the_height() {
     let n = s.doc().unwrap().node(f).unwrap();
     let l = n.layout.clone().unwrap();
     assert_eq!((l.mode, l.gap), (LayoutMode::Vertical, 200.0));
-    assert_ne!(l.main_align, MainAlign::SpaceBetween);
+    assert_eq!(l.main_align, MainAlign::Min);
     assert_eq!((n.child_layout.sizing_h, n.width), (Sizing::Fixed, 40.0));
 }
 
@@ -464,7 +464,7 @@ fn shift_a_on_a_frame_mirrors_its_left_and_top_offsets() {
     let n = s.doc().unwrap().node(f).unwrap();
     let l = n.layout.clone().unwrap();
     assert_eq!((l.mode, l.gap, l.padding), (LayoutMode::Horizontal, 60.0, [30.0, 20.0, 30.0, 20.0]));
-    assert_ne!(l.main_align, MainAlign::SpaceBetween);
+    assert_eq!(l.main_align, MainAlign::Min);
     assert_eq!((n.child_layout.sizing_h, n.child_layout.sizing_v), (Sizing::Hug, Sizing::Hug));
     assert_eq!((n.width, n.height), (180.0, 100.0));
     assert_eq!((n.fills.len(), n.clip), (fills, clip));
@@ -512,4 +512,82 @@ fn shift_a_on_a_group_follows_the_wrap_rule() {
     assert_eq!((n.child_layout.sizing_h, n.child_layout.sizing_v), (Sizing::Fixed, Sizing::Hug));
     assert_eq!((n.width, n.height), (140.0, 40.0));
     assert!(n.fills.is_empty() && !n.clip);
+    assert_eq!((canvas(&s, a).0, canvas(&s, b).0), (0.0, 100.0));
+}
+
+fn add_layout_dir(s: &mut Session, ids: &[NodeId], direction: &str) -> NodeId {
+    let r = s.execute("layout.add", &json!({"ids": ids, "direction": direction})).unwrap();
+    id_of(&r["ids"][0]).unwrap()
+}
+
+#[test]
+fn shift_a_gap_auto_compares_the_narrower_width_not_the_mean() {
+    // Widths 40 and 100, gap 60: at least the narrower (40), below the mean (70).
+    let mut s = Session::new();
+    let a = rect_at(&mut s, None, 0.0, 0.0, 40.0, 40.0);
+    let b = rect_at(&mut s, None, 100.0, 0.0, 100.0, 40.0);
+    let f = add_layout(&mut s, &[a, b]);
+    let n = s.doc().unwrap().node(f).unwrap();
+    let l = n.layout.clone().unwrap();
+    assert_eq!((l.gap, l.main_align, n.child_layout.sizing_h, n.width), (60.0, MainAlign::SpaceBetween, Sizing::Fixed, 200.0));
+}
+
+#[test]
+fn shift_a_direction_vertical_on_a_horizontal_pair_stacks_with_a_fixed_width_and_no_space_between() {
+    let mut s = Session::new();
+    let a = rect_at(&mut s, None, 0.0, 0.0, 40.0, 40.0);
+    let b = rect_at(&mut s, None, 100.0, 0.0, 40.0, 40.0);
+    let f = add_layout_dir(&mut s, &[a, b], "vertical");
+    let n = s.doc().unwrap().node(f).unwrap();
+    let l = n.layout.clone().unwrap();
+    // Measured along y the two overlap, so the gap clamps to 0.
+    assert_eq!((l.mode, l.gap, l.main_align), (LayoutMode::Vertical, 0.0, MainAlign::Min));
+    assert_eq!((n.child_layout.sizing_h, n.child_layout.sizing_v, n.width), (Sizing::Fixed, Sizing::Hug, 140.0));
+}
+
+#[test]
+fn shift_a_direction_horizontal_on_a_stacked_pair_hugs_the_width() {
+    let mut s = Session::new();
+    let a = rect_at(&mut s, None, 0.0, 0.0, 40.0, 40.0);
+    let b = rect_at(&mut s, None, 0.0, 100.0, 80.0, 60.0);
+    let f = add_layout_dir(&mut s, &[a, b], "horizontal");
+    let n = s.doc().unwrap().node(f).unwrap();
+    let l = n.layout.clone().unwrap();
+    assert_eq!((l.mode, l.gap, l.main_align), (LayoutMode::Horizontal, 0.0, MainAlign::Min));
+    assert_eq!((n.child_layout.sizing_h, n.child_layout.sizing_v), (Sizing::Hug, Sizing::Hug));
+}
+
+#[test]
+fn shift_a_overlapping_children_clamp_the_gap_to_zero_and_fractions_round() {
+    let mut s = Session::new();
+    let a = rect_at(&mut s, None, 0.0, 0.0, 40.0, 40.0);
+    let b = rect_at(&mut s, None, 30.0, 0.0, 40.0, 40.0);
+    let f = add_layout(&mut s, &[a, b]);
+    let l = s.doc().unwrap().node(f).unwrap().layout.clone().unwrap();
+    assert_eq!((l.gap, l.main_align), (0.0, MainAlign::Min));
+    // Gaps 5 and 6 average 5.5, which rounds to 6.
+    let mut s = Session::new();
+    let ids: Vec<NodeId> = [0.0, 45.0, 91.0].iter().map(|x| rect_at(&mut s, None, *x, 0.0, 40.0, 40.0)).collect();
+    let f = add_layout(&mut s, &ids);
+    assert_eq!(s.doc().unwrap().node(f).unwrap().layout.clone().unwrap().gap, 6.0);
+    // Fractional left and top offsets round to whole padding.
+    let mut s = Session::new();
+    let f = filled_frame(&mut s);
+    rect_at(&mut s, Some(f), 20.4, 30.6, 40.0, 40.0);
+    rect_at(&mut s, Some(f), 120.0, 30.6, 40.0, 40.0);
+    add_layout(&mut s, &[f]);
+    assert_eq!(s.doc().unwrap().node(f).unwrap().layout.clone().unwrap().padding, [31.0, 20.0, 31.0, 20.0]);
+}
+
+#[test]
+fn shift_a_on_a_frame_with_one_child_keeps_the_inferred_layout() {
+    let mut s = Session::new();
+    let f = filled_frame(&mut s);
+    rect_at(&mut s, Some(f), 20.0, 30.0, 40.0, 40.0);
+    add_layout(&mut s, &[f]);
+    let n = s.doc().unwrap().node(f).unwrap();
+    let l = n.layout.clone().unwrap();
+    assert_eq!((l.mode, l.gap, l.padding, l.main_align), (LayoutMode::Horizontal, 10.0, [30.0, 240.0, 130.0, 20.0], MainAlign::Min));
+    assert_eq!((n.child_layout.sizing_h, n.child_layout.sizing_v), (Sizing::Hug, Sizing::Hug));
+    assert_eq!((n.width, n.height), (300.0, 200.0));
 }
