@@ -16,7 +16,7 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
     if app.control_synthetic {
         // Synthetic input is user-like: Dev Mode refuses the paste here too, and only the engine's
         // own copied layers are pasted (the system clipboard is never read).
-        if !dev_mode_refuses(app, "edit.paste") {
+        if !(at.is_none() && crate::property_rows::paste(app)) && !dev_mode_refuses(app, "edit.paste") {
             app.run("edit.paste", at.map_or(json!({}), |(x, y)| json!({"x": x, "y": y})));
         }
         return;
@@ -80,6 +80,11 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
         if let Some(text) = sys_text.filter(|t| !is_clipboard_marker(t)) {
             return paste_text(app, &text, (cx, cy), at.is_none());
         }
+    }
+    // Nothing newer from another app: a fill, stroke or effect copied from its row, when that was
+    // the last copy, else our copied layers.
+    if at.is_none() && crate::property_rows::paste(app) {
+        return;
     }
     if !dev_mode_refuses(app, "edit.paste") {
         app.run("edit.paste", at.map_or(json!({}), |(x, y)| json!({"x": x, "y": y})));

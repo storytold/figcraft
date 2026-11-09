@@ -33,7 +33,7 @@ pub(super) fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
     let selected_row = crate::theme::Tokens::get(ui.ctx()).selected_row;
     for (i, e) in list.iter().enumerate().rev() {
         let mut open = effect_open(ui.ctx(), i);
-        // A click on the row's background highlights it (`property_rows`).
+        // A click on the row's background highlights it for Cmd/Ctrl+C (`property_rows`).
         let highlight = crate::property_rows::fill(app, PropertyKind::Effect, i, selected_row);
         let header = row_target(ui, 32.0, highlight, |ui| {
             if icons::button(ui, Icon::Effects, 24.0, open, tr("Effect settings")).clicked() {
@@ -72,7 +72,7 @@ pub(super) fn effects(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[Node
         let can_paste = app.session.clipboard.effect.is_some();
         row_context_menu(ui, header, Id::unique(("effect_menu", i))).show(|ui| {
             if menu_item(ui, tr("Copy effect"), "") {
-                app.run("effect.copy", json!({"ids": ids, "index": i}));
+                crate::property_rows::copy(app, PropertyKind::Effect, i, &ids);
                 ui.close();
             }
             if can_paste && menu_item(ui, tr("Paste effect"), "") {

@@ -456,7 +456,7 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
 /// Paint `i`'s row (swatch, colour or kind, opacity, visibility, remove); returns its area.
 /// One paint's row; `region`: a row of the regions selected in vector edit mode (#1875), which
 /// leaves out what belongs to the layer (its variable binding, the image crop). A click on its
-/// background highlights it ([`crate::property_rows`]).
+/// background highlights it for Cmd/Ctrl+C ([`crate::property_rows`]).
 fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint, fills: bool, region: bool) -> Rect {
     let t = Tokens::get(ui.ctx());
     let ids = ids.to_vec();
@@ -565,7 +565,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
     let can_paste = app.session.clipboard.paint.as_ref().is_some_and(|(f, _)| *f == fills);
     row_context_menu(ui, r, Id::unique(("paint_menu", fills, i))).show(|ui| {
         if menu_item(ui, copy, "") {
-            app.run(if fills { "fill.copy" } else { "stroke.copy" }, json!({"ids": ids, "index": i}));
+            crate::property_rows::copy(app, kind, i, &ids);
             ui.close();
         }
         if can_paste && menu_item(ui, paste, "") {

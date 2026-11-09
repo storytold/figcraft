@@ -592,8 +592,10 @@ pub struct UiState {
     /// copy changes the engine clipboard without writing the OS clipboard; the generation then
     /// no longer matches, so the stale mirror is not mistaken for the user's own copy.
     pub last_copy_generation: u64,
-    /// The fill, stroke or effect row highlighted in the Design panel.
+    /// The fill, stroke or effect row highlighted in the Design panel: Cmd/Ctrl+C copies it.
     pub property_row: Option<property_rows::Highlight>,
+    /// A paint or effect copied from its row: Cmd/Ctrl+V pastes it while it's the last copy.
+    pub property_copy: Option<property_rows::Copied>,
     /// A save shortcut pressed while a panel field had the keyboard: the field lets go (which
     /// commits what was typed) and the command runs next frame for that document/window.
     pub after_field: Option<shortcuts::AfterFieldSave>,
@@ -738,6 +740,7 @@ impl Default for UiState {
             last_copy: None,
             last_copy_generation: 0,
             property_row: None,
+            property_copy: None,
             after_field: None,
             held: egui::Modifiers::NONE,
             next_autosave: 0.0,
