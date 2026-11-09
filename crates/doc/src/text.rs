@@ -945,7 +945,9 @@ impl TextData {
             Some(first) if self.paragraphs.iter().all(|p| p.list == first.list) => first.list,
             _ => self.list,
         };
-        let wrap_style = self.common_wrap_style(0, self.char_count()).unwrap_or(self.wrap_style);
+        // Every paragraph by index: `para_span` leaves out an empty one after a final newline.
+        let first = self.para_wrap_style(0);
+        let wrap_style = if (1..self.paragraph_count()).all(|p| self.para_wrap_style(p) == first) { first } else { self.wrap_style };
         ParagraphStyle {
             paragraph_spacing: self.paragraph_spacing,
             paragraph_indent: self.paragraph_indent,
@@ -1258,5 +1260,17 @@ mod whole_text_paragraph_style_tests {
         let mut plain = TextData::new("a\nb");
         plain.take_paragraph_style(&ps);
         assert_eq!((plain.list, plain.paragraphs.len()), (t.list, t.paragraphs.len()));
+    }
+
+    #[test]
+    fn a_style_made_from_the_whole_layer_counts_a_trailing_empty_paragraphs_wrap_style() {
+        // The first two paragraphs are Balance, the empty one after the final newline keeps the
+        // layer's Auto: they differ, so the style takes the layer's wrap style, not Balance.
+        let mut t = TextData::new("a\nb\n");
+        t.set_para_wrap_styles(0, 3, WrapStyle::Balance);
+        assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1), t.para_wrap_style(2)), (WrapStyle::Balance, WrapStyle::Balance, WrapStyle::Auto));
+        assert_eq!(t.paragraph_style().wrap_style, WrapStyle::Auto);
+        t.set_para_wrap_styles(4, 4, WrapStyle::Balance);
+        assert_eq!(t.paragraph_style().wrap_style, WrapStyle::Balance, "all three Balance");
     }
 }
