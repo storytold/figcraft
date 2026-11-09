@@ -54,7 +54,7 @@ fn setup_in(grouped: bool) -> Setup {
     Setup { u, set, default, hover, layer, outside }
 }
 
-/// Select `source`, then drag its connection handle to the centre of `to` (or `at`) and release.
+/// Select `source`, then drag its connection handle (found inside) to the screen point `to` and release.
 fn drag(t: &mut Setup, source: NodeId, to: Pos2) {
     t.u.run("select.set", json!({"ids": [source]}));
     t.u.run("view.zoomSelection", json!({}));

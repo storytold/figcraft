@@ -160,7 +160,8 @@ fn variant_of(doc: &Document, source: NodeId) -> Option<NodeId> {
 
 /// What a connection dragged from `source` and released at screen point `p` targets: a sibling
 /// variant of the source's own variant (Change to), else a frame other than the source's own
-/// (Navigate to).
+/// (Navigate to). `None` over the source's own variant, over the rest of its set (its background),
+/// and where no frame or section is under the pointer.
 fn target_at(app: &FigApp, doc: &Document, page: NodeId, source: NodeId, p: Pos2) -> Option<Target> {
     if let Some(v) = variant_of(doc, source)
         && let Some(set) = doc.node(v).and_then(|n| n.parent)
