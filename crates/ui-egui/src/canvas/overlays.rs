@@ -230,11 +230,21 @@ fn caret_color(ctx: &egui::Context, n: &figcraft_doc::Node, caret: usize) -> Opt
 }
 
 /// The caret of a text without a solid fill (a gradient, an image, no visible fill): black on a
-/// light page, white on a dark one. Not the interface's text colour, which is white in the dark
-/// theme and vanishes on the default light page (#2190).
+/// light surface, white on a dark one. The surface is the nearest layer around the text with a
+/// visible solid fill (a dark frame on a light page counts), else the page. Not the interface's
+/// text colour, which is white in the dark theme and vanishes on the default light page (#2190).
 fn caret_fallback(doc: &Document, id: NodeId) -> Color32 {
-    let dark = doc.page_of(id).and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::Page { background, .. } if background.is_dark()));
-    if dark { Color32::WHITE } else { Color32::BLACK }
+    let under = doc.ancestors(id).into_iter().find_map(|a| {
+        let n = doc.node(a)?;
+        match &n.kind {
+            NodeKind::Page { background, .. } => Some(*background),
+            _ => n.fills.iter().rev().find(|p| p.visible && p.opacity >= 0.5).and_then(|p| match &p.kind {
+                figcraft_color::PaintKind::Solid { color } => Some(*color),
+                _ => None,
+            }),
+        }
+    });
+    if under.is_some_and(|c| c.is_dark()) { Color32::WHITE } else { Color32::BLACK }
 }
 
 fn text_edit_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Document, te: &figcraft_engine::TextEdit, zoom: f64) {
@@ -873,6 +883,21 @@ mod caret_tests {
         assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "the default light page");
         s.execute("page.setBackground", &serde_json::json!({"color": "#1E1E1E"})).unwrap();
         assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::WHITE, "a dark page");
+    }
+
+    /// CodeRabbit on #2163: a dark frame on a light page is the surface under its text.
+    #[test]
+    fn without_a_solid_fill_the_caret_contrasts_with_the_frame_around_it() {
+        let mut s = figcraft_engine::Session::new();
+        let ex = |s: &mut figcraft_engine::Session, c: &str, p: serde_json::Value| s.execute(c, &p).unwrap();
+        let f = ex(&mut s, "frame.create", serde_json::json!({"x": 0, "y": 0, "width": 300, "height": 200}));
+        let f = figcraft_engine::params::id_of(&f["id"]).unwrap();
+        ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#222222"}}));
+        let r = ex(&mut s, "text.create", serde_json::json!({"text": "Caret", "x": 20, "y": 20, "parent": f}));
+        let id = figcraft_engine::params::id_of(&r["id"]).unwrap();
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::WHITE, "inside a dark frame on the light page");
+        ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#F0F0F0"}}));
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "inside a light frame");
     }
 
     #[test]
