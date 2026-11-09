@@ -255,3 +255,184 @@ fn template_and_table_commands_survive_junk() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Resizing a table (#2172): a height change goes into its rows, never into blank space.
+
+fn drag(s: &mut Session, from: (f64, f64), to: (f64, f64)) {
+    s.pointer(&PointerEvent::at(PointerKind::Down, from.0, from.1, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Move, (from.0 + to.0) / 2.0, (from.1 + to.1) / 2.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Move, to.0, to.1, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, to.0, to.1, 1.0)).unwrap();
+}
+
+/// A selected 3 x 3 table at 0,0 (480 x 122: a line under all but the last row adds 1 to each), with `texts` in the first row.
+fn table_3x3(texts: [&str; 3]) -> (Session, NodeId) {
+    let mut s = board();
+    let r = s.execute("board.table", &json!({"x": 0, "y": 0, "cells": [texts, ["", "", ""], ["", "", ""]]})).unwrap();
+    (s, id(&r, "id"))
+}
+
+fn rows_of(s: &Session, t: NodeId) -> Vec<NodeId> {
+    let doc = s.doc().unwrap();
+    doc.node(t).unwrap().children.iter().copied().filter(|c| !node(s, *c).child_layout.absolute).collect()
+}
+
+fn row_heights(s: &Session, t: NodeId) -> Vec<f64> {
+    rows_of(s, t).into_iter().map(|r| node(s, r).height).collect()
+}
+
+fn column_widths(s: &Session, t: NodeId) -> Vec<f64> {
+    let r = rows_of(s, t)[0];
+    node(s, r).children.iter().map(|c| node(s, *c).width).collect()
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() < 0.6
+}
+
+fn all_near(got: &[f64], want: &[f64]) -> bool {
+    got.len() == want.len() && got.iter().zip(want).all(|(a, b)| near(*a, *b))
+}
+
+fn is_hug(s: &Session, t: NodeId) -> bool {
+    node(s, t).child_layout.sizing_v == figcraft_doc::Sizing::Hug
+}
+
+#[test]
+fn a_bottom_drag_grows_only_the_last_row() {
+    // The programmatic route.
+    let (mut s, t) = table_3x3(["Alpha", "", ""]);
+    s.execute("node.set", &json!({"id": t, "props": {"height": 272}})).unwrap();
+    assert!(all_near(&row_heights(&s, t), &[41.0, 41.0, 190.0]), "{:?}", row_heights(&s, t));
+    let n = node(&s, t);
+    assert!(near(n.width, 480.0) && near(n.height, 272.0), "{}x{}", n.width, n.height);
+    assert!(is_hug(&s, t), "still hugging its rows");
+    assert!(all_near(&column_widths(&s, t), &[160.0; 3]));
+    assert!(lines(&s, t).iter().all(|(_, h)| near(*h, 272.0)), "{:?}", lines(&s, t));
+    // The pointer route: the bottom edge dragged down by 150.
+    let (mut s, t) = table_3x3(["Alpha", "", ""]);
+    drag(&mut s, (240.0, 122.0), (240.0, 272.0));
+    assert!(all_near(&row_heights(&s, t), &[41.0, 41.0, 190.0]), "{:?}", row_heights(&s, t));
+    assert!(near(node(&s, t).height, 272.0) && near(node(&s, t).width, 480.0));
+    assert!(is_hug(&s, t));
+    assert!(all_near(&column_widths(&s, t), &[160.0; 3]));
+    assert!(lines(&s, t).iter().all(|(_, h)| near(*h, 272.0)), "{:?}", lines(&s, t));
+    // The text keeps its size.
+    let row0 = rows_of(&s, t)[0];
+    let cell = node(&s, node(&s, row0).children[0]);
+    let NodeKind::Text(td) = &node(&s, cell.children[0]).kind else { panic!("text") };
+    assert_eq!(td.style.font_size, 14.0);
+}
+
+#[test]
+fn a_corner_drag_shares_the_change_over_every_row_and_column() {
+    let (mut s, t) = table_3x3(["", "", ""]);
+    drag(&mut s, (480.0, 122.0), (570.0, 182.0));
+    let n = node(&s, t);
+    assert!(near(n.width, 570.0) && near(n.height, 182.0), "{}x{}", n.width, n.height);
+    assert!(all_near(&row_heights(&s, t), &[61.0, 61.0, 60.0]), "{:?}", row_heights(&s, t));
+    assert!(all_near(&column_widths(&s, t), &[190.0; 3]), "{:?}", column_widths(&s, t));
+    let xs: Vec<f64> = lines(&s, t).iter().map(|l| l.0).collect();
+    assert!(all_near(&xs, &[189.5, 379.5]), "{xs:?}");
+    assert!(is_hug(&s, t));
+    // The same through `transform.resize`.
+    let (mut s, t) = table_3x3(["", "", ""]);
+    s.execute("transform.resize", &json!({"ids": [t], "width": 570, "height": 182})).unwrap();
+    assert!(all_near(&row_heights(&s, t), &[61.0, 61.0, 60.0]), "{:?}", row_heights(&s, t));
+    assert!(all_near(&column_widths(&s, t), &[190.0; 3]), "{:?}", column_widths(&s, t));
+}
+
+#[test]
+fn a_side_drag_changes_no_row() {
+    let (mut s, t) = table_3x3(["", "", ""]);
+    s.execute("node.set", &json!({"id": t, "props": {"width": 680}})).unwrap();
+    assert!(all_near(&row_heights(&s, t), &[41.0, 41.0, 40.0]), "{:?}", row_heights(&s, t));
+    assert!(near(node(&s, t).height, 122.0) && near(node(&s, t).width, 680.0));
+    assert!(is_hug(&s, t));
+    // A pointer drag of the right edge.
+    let (mut s, t) = table_3x3(["", "", ""]);
+    drag(&mut s, (480.0, 60.0), (680.0, 60.0));
+    assert!(all_near(&row_heights(&s, t), &[41.0, 41.0, 40.0]), "{:?}", row_heights(&s, t));
+    assert!(near(node(&s, t).height, 122.0) && near(node(&s, t).width, 680.0));
+    assert!(is_hug(&s, t));
+}
+
+#[test]
+fn a_table_never_shrinks_below_its_cells() {
+    let (mut s, t) = table_3x3(["Alpha", "Bravo longer text", "Charlie"]);
+    drag(&mut s, (480.0, 122.0), (50.0, 32.0));
+    let n = node(&s, t);
+    assert!(near(n.width, 120.0), "width {}", n.width);
+    assert!(all_near(&column_widths(&s, t), &[40.0; 3]), "{:?}", column_widths(&s, t));
+    let rows = row_heights(&s, t);
+    assert!(rows[0] > 40.0, "row 1 holds its wrapped text: {rows:?}");
+    assert!(near(rows[1], 41.0) && near(rows[2], 40.0), "{rows:?}");
+    assert!(near(n.height, rows.iter().sum::<f64>()), "{} vs {rows:?}", n.height);
+    assert!(is_hug(&s, t));
+}
+
+#[test]
+fn a_resized_table_still_grows_with_its_text_and_undoes_in_one_step() {
+    let (mut s, t) = table_3x3(["", "", ""]);
+    drag(&mut s, (240.0, 122.0), (240.0, 272.0));
+    assert!(near(node(&s, t).height, 272.0));
+    // Typing in a last-row cell: the table grows once the text needs more than 190.
+    s.execute("select.none", &json!({})).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::DoubleClick, 80.0, 200.0, 1.0)).unwrap();
+    assert!(s.ds().unwrap().text_edit.is_some(), "typing in the last row's cell");
+    let long = (0..12).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    crate::textedit::insert(&mut s, &long).unwrap();
+    crate::textedit::end(&mut s).unwrap();
+    assert!(node(&s, t).height > 272.0, "grew with its text: {}", node(&s, t).height);
+    assert!(is_hug(&s, t));
+    // Undo: the typing, then the resize, to the table as made.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(near(node(&s, t).height, 272.0), "{}", node(&s, t).height);
+    s.execute("edit.undo", &json!({})).unwrap();
+    let n = node(&s, t);
+    assert!(near(n.width, 480.0) && near(n.height, 122.0), "{}x{}", n.width, n.height);
+    assert!(all_near(&row_heights(&s, t), &[41.0, 41.0, 40.0]), "{:?}", row_heights(&s, t));
+}
+
+#[test]
+fn table_resizes_sync_in_live_sessions() {
+    let s = board();
+    let mut room = Room::new(s.doc().unwrap().clone(), 2, 12);
+    let t = id(&room.s(0).execute("board.table", &json!({"x": 0, "y": 0})).unwrap(), "id");
+    room.settle();
+    room.check();
+    room.s(0).execute("node.set", &json!({"id": t, "props": {"height": 272}})).unwrap();
+    room.settle();
+    room.check();
+    let doc = room.server.document();
+    let heights: Vec<f64> =
+        doc.node(t).unwrap().children.iter().map(|c| doc.node(*c).unwrap()).filter(|n| !n.child_layout.absolute).map(|n| n.height).collect();
+    assert!(all_near(&heights, &[41.0, 41.0, 190.0]), "{heights:?}");
+    assert!(near(doc.node(t).unwrap().height, 272.0));
+    assert_eq!(doc.node(t).unwrap().child_layout.sizing_v, figcraft_doc::Sizing::Hug);
+}
+
+#[test]
+fn resizing_a_table_survives_junk_and_saves_the_rows() {
+    for h in [json!(1e308), json!(-5), json!("NaN"), json!(null), json!(0)] {
+        let (mut s, t) = table_3x3(["", "", ""]);
+        if let Err(EngineError::Internal { cmd, msg }) = s.execute("node.set", &json!({"id": t, "props": {"height": h}})) {
+            panic!("{cmd} panicked on {h}: {msg}");
+        }
+        for p in [json!({"ids": [t], "width": h, "height": h}), json!({"ids": [t], "height": h}), json!({"ids": [t], "width": h})] {
+            if let Err(EngineError::Internal { cmd, msg }) = s.execute("transform.resize", &p) {
+                panic!("{cmd} panicked on {p}: {msg}");
+            }
+        }
+        let n = node(&s, t);
+        assert!(n.width.is_finite() && n.height.is_finite(), "{h}: {}x{}", n.width, n.height);
+    }
+    let (mut s, t) = table_3x3(["", "", ""]);
+    s.execute("node.set", &json!({"id": t, "props": {"height": 272}})).unwrap();
+    let doc = s.doc().unwrap();
+    let (back, _) = figcraft_format::from_json(&figcraft_format::to_json(doc).unwrap().to_string()).unwrap();
+    let heights: Vec<f64> =
+        back.node(t).unwrap().children.iter().map(|c| back.node(*c).unwrap()).filter(|n| !n.child_layout.absolute).map(|n| n.height).collect();
+    assert!(all_near(&heights, &[41.0, 41.0, 190.0]), "{heights:?}");
+}
