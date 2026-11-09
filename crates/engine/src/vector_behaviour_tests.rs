@@ -326,6 +326,27 @@ fn ex_to_vector(doc: &mut figcraft_doc::Document, id: NodeId) {
     doc.get_mut(id).unwrap().kind = NodeKind::Vector { network };
 }
 
+/// Simplify path keeps nearly collinear points near where they were: kurbo's fit, which Simplify
+/// path and the Pencil share, ran a handle hundreds of units on along the line (#1741).
+#[test]
+fn simplify_keeps_nearly_collinear_points_near_them() {
+    let mut s = Session::new();
+    let id = id_of(&ex(&mut s, "vector.create", json!({"path": "M0 0 L10 10"}))["id"]).unwrap();
+    // The points exactly as sampled, at the page origin (`vector.create` would move them).
+    let d = "M209.5986907940155 -204.90932811973988 L211.27791426387097 -207.1909740207534 L214.24650682872084 -211.22882759062324";
+    let before = BezPath::from_svg(d).unwrap();
+    {
+        let n = s.doc_mut().unwrap().get_mut(id).unwrap();
+        n.transform = figcraft_geom::Affine::IDENTITY;
+        n.kind = NodeKind::Vector { network: VectorNetwork::from_path(&before) };
+    }
+    assert_eq!(net(&s, id).stroke_path().elements(), before.elements(), "the samples as they were");
+    ex(&mut s, "vector.simplify", json!({"ids": [id], "tolerance": 0.75}));
+    let after = s.doc().unwrap().world_transform(id) * net(&s, id).stroke_path();
+    let (b0, b1) = (before.bounding_box(), after.bounding_box());
+    assert!(b0.inflate(1.5, 1.5).contains_rect(b1), "{b1:?} past {b0:?}: {}", after.to_svg());
+}
+
 fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
     s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"))
 }

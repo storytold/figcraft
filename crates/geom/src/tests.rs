@@ -366,3 +366,120 @@ fn svg_path_refuses_numbers_past_the_limit_before_parsing() {
     assert!(number_past("M0 0L-2.5.5 1e-3-4e3z", 1e3));
     assert!(number_past("M.5.5e10", 1e3));
 }
+
+/// A path through `pts` with straight lines (pencil samples).
+fn polyline(pts: &[(f64, f64)]) -> BezPath {
+    let mut p = BezPath::new();
+    for (k, (x, y)) in pts.iter().enumerate() {
+        if k == 0 { p.move_to((*x, *y)) } else { p.line_to((*x, *y)) }
+    }
+    p
+}
+
+/// How far `out` strays from `input`: the largest distance from a point sampled along `out` to the
+/// nearest segment of `input` (closing segments included).
+fn deviation(out: &BezPath, input: &BezPath) -> f64 {
+    use kurbo::{ParamCurve, ParamCurveNearest};
+    let segs: Vec<kurbo::PathSeg> = input.segments().collect();
+    out.segments()
+        .flat_map(|seg| (0..=32).map(move |i| seg.eval(f64::from(i) / 32.0)))
+        .map(|p| segs.iter().map(|s| s.nearest(p, 1e-6).distance_sq).fold(f64::INFINITY, f64::min).sqrt())
+        .fold(0.0, f64::max)
+}
+
+/// Pencil strokes kurbo's fit shot far past keep to their samples (#1741): a stroke that goes out
+/// and back to the very point it left, nearly collinear samples, and strokes that turn back along
+/// their own line. The first two are from fuzzing pencil-like strokes, where kurbo's curve went
+/// about 390 and 160 units off; at whole-pixel coordinates the same shapes happened to fit well.
+#[test]
+fn simplifying_keeps_to_strokes_kurbo_shot_past() {
+    use kurbo::ParamCurve;
+    let cases: [(&str, &[(f64, f64)]); 5] = [
+        (
+            "out and back to the same point",
+            &[
+                (86.043_565_719_086_97, -173.744_402_349_100_94),
+                (87.851_850_739_335_35, -179.202_846_445_954_52),
+                (86.043_565_719_086_97, -173.744_402_349_100_94),
+            ],
+        ),
+        (
+            "nearly collinear",
+            &[
+                (209.598_690_794_015_5, -204.909_328_119_739_88),
+                (211.277_914_263_870_97, -207.190_974_020_753_4),
+                (214.246_506_828_720_84, -211.228_827_590_623_24),
+            ],
+        ),
+        (
+            "a dip straight down and back up",
+            &[(0.0, 0.0), (10.0, 0.0), (20.0, 2.0), (30.0, 6.0), (30.0, 12.0), (30.0, 6.0), (40.0, 2.0), (50.0, 0.0)],
+        ),
+        ("a slip back at the end", &[(0.0, 0.0), (10.0, 3.0), (20.0, 8.0), (30.0, 15.0), (30.0, 25.0), (30.0, 22.0)]),
+        (
+            "a near reversal in a curve",
+            &[(0.0, 0.0), (8.0, 2.0), (16.0, 6.0), (24.0, 12.0), (32.0, 20.0), (24.0, 12.000_01), (16.0, 6.0), (8.0, 2.0)],
+        ),
+    ];
+    for (what, pts) in cases {
+        let input = polyline(pts);
+        let out = simplify_path(&input, 0.75);
+        let d = deviation(&out, &input);
+        assert!(d <= 1.5, "{what}: strays {d} from the samples: {}", out.to_svg());
+        let (inb, outb) = (input.bounding_box(), out.bounding_box());
+        assert!(inb.inflate(1.5, 1.5).contains_rect(outb), "{what}: {outb:?} past {inb:?}");
+        // One subpath, starting and ending where the stroke does.
+        let moves = out.elements().iter().filter(|e| matches!(e, kurbo::PathEl::MoveTo(_))).count();
+        assert_eq!(moves, 1, "{what}: {}", out.to_svg());
+        let (first, last) = (pts[0], pts[pts.len() - 1]);
+        assert_eq!(out.segments().next().map(|s| s.start()), Some(Point::new(first.0, first.1)), "{what}");
+        assert_eq!(out.segments().last().map(|s| s.end()), Some(Point::new(last.0, last.1)), "{what}");
+    }
+}
+
+/// Where a path never turns back and kurbo's fit holds, the result is kurbo's own, element for
+/// element: smooth runs, corners sharper than a right angle, closed subpaths and several subpaths.
+#[test]
+fn simplifying_is_kurbos_where_its_fit_holds() {
+    let wave: Vec<(f64, f64)> = (0..=60).map(|i| (f64::from(i) * 4.0, (f64::from(i) / 6.0).sin() * 30.0)).collect();
+    let zigzag: Vec<(f64, f64)> = (0..=8).map(|i| (f64::from(i) * 10.0, if i % 2 == 0 { 0.0 } else { 40.0 })).collect();
+    let mut closed = polyline(&wave[..20]);
+    closed.close_path();
+    let mut several = polyline(&wave);
+    several.extend(polyline(&zigzag).elements().iter().map(|e| match *e {
+        kurbo::PathEl::MoveTo(p) => kurbo::PathEl::MoveTo(p + Vec2::new(0.0, 100.0)),
+        kurbo::PathEl::LineTo(p) => kurbo::PathEl::LineTo(p + Vec2::new(0.0, 100.0)),
+        e => e,
+    }));
+    let curves = BezPath::from_svg("M0 0 C10 -20 30 -20 40 0 C50 20 70 20 80 0 Q100 -30 120 0 L140 10 Z M200 0 L240 0").unwrap();
+    for (what, input) in
+        [("a wave", polyline(&wave)), ("a zigzag", polyline(&zigzag)), ("closed", closed), ("two subpaths", several), ("curves", curves)]
+    {
+        let ours = simplify_path(&input, 0.75);
+        let theirs = kurbo::simplify::simplify_bezpath(input.iter(), 0.75, &Default::default());
+        assert_eq!(ours.elements(), theirs.elements(), "{what}");
+    }
+}
+
+/// A closed path with a reversal in it stays one closed subpath, and each subpath of several keeps
+/// its own start.
+#[test]
+fn simplifying_keeps_closes_and_subpaths_across_a_reversal() {
+    let mut input = polyline(&[(0.0, 0.0), (40.0, 0.0), (40.0, 30.0), (40.0, 20.0), (0.0, 30.0)]);
+    input.close_path();
+    input.extend(polyline(&[(100.0, 0.0), (100.0, 20.0), (100.0, 10.0)]).elements().iter().copied());
+    let out = simplify_path(&input, 0.75);
+    let els = out.elements();
+    let moves: Vec<Point> = els.iter().filter_map(|e| if let kurbo::PathEl::MoveTo(p) = e { Some(*p) } else { None }).collect();
+    assert_eq!(moves, [Point::new(0.0, 0.0), Point::new(100.0, 0.0)], "{}", out.to_svg());
+    assert_eq!(els.iter().filter(|e| matches!(e, kurbo::PathEl::ClosePath)).count(), 1, "{}", out.to_svg());
+    let close = els.iter().position(|e| matches!(e, kurbo::PathEl::ClosePath)).unwrap();
+    assert!(matches!(els[close + 1], kurbo::PathEl::MoveTo(_)), "the first subpath closes before the second starts");
+    assert!(deviation(&out, &input) <= 1.5, "{}", out.to_svg());
+    // Nothing to draw: nothing out, not a stray move or close.
+    let mut empty = BezPath::new();
+    empty.move_to((5.0, 5.0));
+    empty.line_to((5.0, 5.0));
+    empty.close_path();
+    assert!(simplify_path(&empty, 0.75).elements().is_empty());
+}

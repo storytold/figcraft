@@ -149,3 +149,49 @@ fn the_pencil_draws_white_on_a_dark_background() {
         assert_eq!(stroke(&mut s, 0.0, 600.0).0, want, "on {bg}");
     }
 }
+
+/// A Pencil stroke stays where it was drawn: the fitted curve shot far off the stroke, a spike
+/// (#1741, its second point), where the stroke went out and back to the very point it left and
+/// where samples ran on nearly straight. Pointer pixels become fractional page points, so going
+/// back to a pixel lands on exactly the same point. Both sample runs are ones kurbo's fit took
+/// hundreds of units off.
+#[test]
+fn the_pencil_keeps_its_stroke_where_it_was_drawn() {
+    let mut s = Session::new();
+    s.execute("tool.set", &json!({"tool": "pencil"})).unwrap();
+    let (p, q) = ((86.043_565_719_086_97, -173.744_402_349_100_94), (87.851_850_739_335_35, -179.202_846_445_954_52));
+    let back = [(80.0, -160.0), p, q, p, (95.0, -185.0)];
+    let straight = [
+        (204.0, -198.0),
+        (209.598_690_794_015_5, -204.909_328_119_739_88),
+        (211.277_914_263_870_97, -207.190_974_020_753_4),
+        (214.246_506_828_720_84, -211.228_827_590_623_24),
+        (218.0, -214.0),
+    ];
+    for (what, samples) in [("out and back", &back[..]), ("nearly straight", &straight[..])] {
+        let (first, last) = (samples[0], samples[samples.len() - 1]);
+        s.pointer(&PointerEvent::at(PointerKind::Down, first.0, first.1, 1.0)).unwrap();
+        for (x, y) in &samples[1..] {
+            s.pointer(&PointerEvent::at(PointerKind::Move, *x, *y, 1.0)).unwrap();
+        }
+        s.pointer(&PointerEvent::at(PointerKind::Up, last.0, last.1, 1.0)).unwrap();
+        let doc = s.doc().unwrap();
+        let n = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Vector { .. })).max_by_key(|n| n.id).unwrap();
+        let NodeKind::Vector { network } = &n.kind else { panic!("{what}: not a vector") };
+        let drawn = doc.world_transform(n.id) * network.stroke_path();
+        let samples_box = figcraft_geom::points_bounds(samples.iter().map(|(x, y)| Point::new(*x, *y))).unwrap();
+        let (path_box, node_box) = (figcraft_geom::Shape::bounding_box(&drawn), doc.world_bounds(n.id).unwrap());
+        assert!(
+            samples_box.inflate(1.5, 1.5).contains_rect(path_box),
+            "{what}: the stroke {path_box:?} goes past the samples {samples_box:?}: {}",
+            drawn.to_svg()
+        );
+        assert!(samples_box.inflate(1.5, 1.5).contains_rect(node_box), "{what}: the layer {node_box:?}, the samples {samples_box:?}");
+    }
+    // The turn is a point of the stroke, where it was drawn.
+    let doc = s.doc().unwrap();
+    let turned = doc.nodes().find(|n| n.name == "Vector" && doc.world_bounds(n.id).is_some_and(|b| b.y1 < -150.0 && b.x1 < 100.0)).unwrap();
+    let NodeKind::Vector { network } = &turned.kind else { panic!("not a vector") };
+    let xf = doc.world_transform(turned.id);
+    assert!(network.vertices.iter().any(|v| (xf * Point::new(v.x, v.y) - Point::new(q.0, q.1)).hypot() < 1e-6), "no point at the turn");
+}
