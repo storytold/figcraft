@@ -1546,6 +1546,7 @@ dependencies = [
  "raw-window-handle",
  "smithay-clipboard",
  "web-time",
+ "webbrowser",
  "windows-sys 0.61.2",
  "winit",
 ]
