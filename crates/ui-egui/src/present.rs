@@ -286,6 +286,9 @@ pub struct Presenter {
     anim_tex: Option<egui::TextureHandle>,
     temp: Option<Temp>,
     textures: HashMap<NodeId, FrameTex>,
+    /// The part of the presented frame in view, drawn at device scale over the (capped) whole-frame
+    /// texture; `bounds` is the page area it covers.
+    detail: Option<(NodeId, FrameTex)>,
     /// Small current-screen preview in the full-window bar, cached until its content changes.
     bar_thumb: Option<(NodeId, usize, egui::TextureHandle)>,
     arrived: f64,
@@ -367,6 +370,7 @@ impl Presenter {
             anim_tex: None,
             temp: None,
             textures: HashMap::new(),
+            detail: None,
             bar_thumb: None,
             arrived: -1.0,
             delays_fired: HashSet::new(),

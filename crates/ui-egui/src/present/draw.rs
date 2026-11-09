@@ -74,7 +74,19 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
         }
     }
     if !drawn && let Some(to) = &to_tex {
-        painter.with_clip_rect(l.clip).image(to.tex.id(), l.place.rect(to.bounds), uv, Color32::WHITE);
+        let on_clip = painter.with_clip_rect(l.clip);
+        on_clip.image(to.tex.id(), l.place.rect(to.bounds), uv, Color32::WHITE);
+        // A frame too big for one texture at device scale is drawn from a smaller one: the part in
+        // view is drawn again from a texture at device scale, over it (and the overlays over that).
+        let shown = l.clip.intersect(l.place.rect(to.bounds));
+        if shown.is_positive() {
+            let (a, b) = (l.place.page(shown.min), l.place.page(shown.max));
+            let visible = figcraft_geom::Rect::new(a.x, a.y, b.x, b.y);
+            let moving = p.fling.is_some() || p.drag_scroll.is_some() || p.wheel.is_some();
+            if let Some(d) = p.detail_texture(ctx, &l.disp, p.current, px, visible, moving, now) {
+                on_clip.image(d.tex.id(), l.place.rect(d.bounds), uv, Color32::WHITE);
+            }
+        }
     }
     // Overlays (each with its background and opening transition); closing ones run it backwards.
     let mut ovs: Vec<(f64, OverlayState)> =

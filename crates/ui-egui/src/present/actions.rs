@@ -252,7 +252,8 @@ impl Presenter {
         }
     }
 
-    pub(super) fn texture(&mut self, ctx: &egui::Context, doc: &Document, id: NodeId, px_scale: f64, now: f64) -> Option<FrameTex> {
+    /// Seconds into the frame's animated GIFs, and the frame of them showing (see [`Self::texture`]).
+    fn frame_clock(&self, ctx: &egui::Context, doc: &Document, id: NodeId, now: f64) -> (f64, Option<(u64, f64)>) {
         // Animated GIFs play from when the frame arrived: a new texture when one of them moves on,
         // and a wake-up for that moment (nothing else draws frames while it shows). egui wakes a
         // display frame before the time asked for, a little earlier still at times: ask that much
@@ -262,6 +263,48 @@ impl Presenter {
         if let Some((_, next)) = clock {
             crate::repaint_in(ctx, next + f64::from(ctx.input(|i| i.predicted_dt)));
         }
+        (t, clock)
+    }
+
+    /// The part of the frame `id` in view (`visible`, page units) at the full pixel scale `px`, for
+    /// a frame whose whole texture is capped below it (see [`detail_plan`]). While the view moves
+    /// (`moving`) it only returns a detail already rendered, the capped texture showing under it.
+    pub(super) fn detail_texture(
+        &mut self,
+        ctx: &egui::Context,
+        doc: &Document,
+        id: NodeId,
+        px: f64,
+        visible: figcraft_geom::Rect,
+        moving: bool,
+        now: f64,
+    ) -> Option<FrameTex> {
+        let (t, clock) = self.frame_clock(ctx, doc, id, now);
+        let key = (self.rev, px.to_bits(), clock.map_or(0, |c| c.0));
+        let covers = |b: &figcraft_geom::Rect| b.x0 <= visible.x0 && b.y0 <= visible.y0 && b.x1 >= visible.x1 && b.y1 >= visible.y1;
+        if let Some((did, d)) = &self.detail
+            && *did == id
+            && d.key == key
+            && (moving || covers(&d.bounds))
+        {
+            return Some(d.clone());
+        }
+        if moving {
+            return None;
+        }
+        let side = ctx.input(|i| i.max_texture_side) as f64 - 2.0;
+        let bounds = figcraft_render::export_bounds(doc, id)?;
+        let rect = detail_plan(bounds, visible, px, side)?;
+        let pix = figcraft_render::render_area_at(doc, &[id], rect, texture_scale_for(rect, px, side), t)?;
+        let img = crate::render_worker::screen_image(&pix, doc.color_profile);
+        let tex = ctx.load_texture(format!("present-detail-{}", id.0), img, egui::TextureOptions::LINEAR);
+        let ft = FrameTex { key, tex, bounds: rect };
+        self.detail = Some((id, ft.clone()));
+        Some(ft)
+    }
+
+    pub(super) fn texture(&mut self, ctx: &egui::Context, doc: &Document, id: NodeId, px_scale: f64, now: f64) -> Option<FrameTex> {
+        let (t, clock) = self.frame_clock(ctx, doc, id, now);
         let key = (self.rev, px_scale.to_bits(), clock.map_or(0, |c| c.0));
         if let Some(t) = self.textures.get(&id)
             && t.key == key
@@ -285,10 +328,39 @@ const MAX_TEXTURE_PIXELS: f64 = 16_777_216.0;
 /// The pixel scale, at most `px`, at which `bounds` makes a texture the GPU takes (no side past
 /// its limit) of at most [`MAX_TEXTURE_PIXELS`].
 pub(super) fn texture_scale(ctx: &egui::Context, bounds: figcraft_geom::Rect, px: f64) -> f64 {
-    let side = ctx.input(|i| i.max_texture_side) as f64 - 2.0;
+    texture_scale_for(bounds, px, ctx.input(|i| i.max_texture_side) as f64 - 2.0)
+}
+
+/// [`texture_scale`] for a GPU taking textures up to `side` pixels a side.
+pub(super) fn texture_scale_for(bounds: figcraft_geom::Rect, px: f64, side: f64) -> f64 {
     let (w, h) = (bounds.width().max(1.0), bounds.height().max(1.0));
     let s = px.min(side / w.max(h)).min((MAX_TEXTURE_PIXELS / (w * h)).sqrt());
     if s.is_finite() && s > 0.0 { s } else { 1e-3 }
+}
+
+/// The page area to draw at the full pixel scale `px` over the whole frame's capped texture, when
+/// that texture is below `px`: the part in `visible` with a margin (a quarter of its size each
+/// way, shrunk until the area makes a texture the GPU takes), inside `bounds`. `None` when the
+/// whole frame is already at `px`, or nothing of it is in view. When the view alone is past the
+/// caps it is returned all the same, and drawn at the scale [`texture_scale_for`] gives it.
+pub(super) fn detail_plan(bounds: figcraft_geom::Rect, visible: figcraft_geom::Rect, px: f64, side: f64) -> Option<figcraft_geom::Rect> {
+    if texture_scale_for(bounds, px, side) >= px || !(px.is_finite() && px > 0.0) {
+        return None;
+    }
+    let view = visible.intersect(bounds);
+    if !(view.width() > 0.0 && view.height() > 0.0 && view.width().is_finite() && view.height().is_finite()) {
+        return None;
+    }
+    let fits = |r: &figcraft_geom::Rect| r.width() * px <= side && r.height() * px <= side && r.area() * px * px <= MAX_TEXTURE_PIXELS;
+    let mut margin = 0.25;
+    for _ in 0..8 {
+        let r = view.inflate(view.width() * margin, view.height() * margin).intersect(bounds);
+        if fits(&r) {
+            return Some(r);
+        }
+        margin /= 2.0;
+    }
+    Some(view)
 }
 
 /// The first interaction index on `id` whose trigger satisfies `want`.

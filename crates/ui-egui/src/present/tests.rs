@@ -436,3 +436,41 @@ fn smart_animate_frame_cost() {
     let per = t0.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
     eprintln!("smart animate: {per:.2} ms per frame (80 layers, 400x800 px)");
 }
+
+#[test]
+fn tall_frame_detail_plan_renders_the_view_at_device_scale() {
+    use figcraft_geom::Rect as PageRect;
+    let bounds = PageRect::new(0.0, 0.0, 1440.0, 9701.0);
+    let visible = PageRect::new(0.0, 0.0, 1440.0, 860.0);
+    let side = 16382.0;
+    assert!(actions::texture_scale_for(bounds, 2.0, side) < 1.1, "the whole frame is capped below device scale");
+    let r = actions::detail_plan(bounds, visible, 2.0, side).expect("a capped frame gets a detail");
+    assert!(r.x0 <= visible.x0 && r.y0 <= visible.y0 && r.x1 >= visible.x1 && r.y1 >= visible.y1, "covers the view");
+    assert!(r.x0 >= bounds.x0 && r.y0 >= bounds.y0 && r.x1 <= bounds.x1 && r.y1 <= bounds.y1, "inside the frame");
+    assert!(r.width() * 2.0 <= side && r.height() * 2.0 <= side);
+    assert!(r.width() * r.height() * 4.0 <= 16_777_216.0);
+    let small = PageRect::new(0.0, 0.0, 1440.0, 900.0);
+    assert!(actions::detail_plan(small, PageRect::new(0.0, 0.0, 1440.0, 860.0), 2.0, side).is_none());
+}
+
+#[test]
+fn presenting_a_tall_frame_on_a_hidpi_display_draws_the_view_at_device_scale() {
+    let mut session = figcraft_engine::Session::new();
+    let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": 1440, "height": 9701})).unwrap());
+    session.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 100, "y": 100, "width": 300, "height": 200})).unwrap();
+    let mut ui = Ui::new(session);
+    ui.hidpi = Some((2.0, 16_384));
+    ui.run("proto.present", json!({"start": frame}));
+    ui.app.ui.present.as_mut().unwrap().view.scale = PresentScale::FitWidth;
+    ui.frames(2, Vec::new);
+
+    let textures = ui.ctx.tex_manager();
+    let textures = textures.read();
+    let present: Vec<_> = textures.allocated().filter(|(_, m)| m.name.starts_with("present-")).map(|(_, m)| m.size).collect();
+    assert!(!present.is_empty());
+    assert!(present.iter().any(|s| s[0] >= 2878), "some texture shows the view at 2 px a unit: {present:?}");
+    for s in &present {
+        // The scale caps the area; each side then rounds up to a whole pixel.
+        assert!(s[0] * s[1] <= 16_777_216 + s[0] + s[1] && s[0] <= 16_384 && s[1] <= 16_384, "{s:?}");
+    }
+}
