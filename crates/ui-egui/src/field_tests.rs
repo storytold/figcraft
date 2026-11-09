@@ -737,6 +737,69 @@ fn scrubbing_the_scale_panel_width_scales_live_in_one_undo_step() {
     assert_eq!((w, h, undo_steps(&u)), (60.0, 45.0, steps + 1), "40×30 scaled to a width of 60");
 }
 
+/// A 100 x 100 rectangle at the origin, selected, in a Ui with the Move tool.
+fn scale_setup() -> (Ui, NodeId) {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    u.frame(vec![]);
+    (u, r)
+}
+
+fn scale_field_focused(u: &Ui) -> bool {
+    u.ctx.memory(|m| m.has_focus(Id::unique("scale_k").with("te")))
+}
+
+/// Measured in Figma's web app (2026-11-09): K opens the Scale section with its input focused.
+#[test]
+fn pressing_k_focuses_the_scale_field_with_its_text_selected() {
+    let (mut u, _) = scale_setup();
+    assert!(!scale_field_focused(&u));
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+    assert!(scale_field_focused(&u), "the scale field has the keyboard");
+    let state = egui::TextEdit::load_state(&u.ctx, Id::unique("scale_k").with("te")).expect("the editor exists");
+    let range = state.cursor.char_range().expect("a selection");
+    assert_ne!(range.primary.index, range.secondary.index, "its text is selected");
+}
+
+/// K, 2, Enter: 100 x 100 becomes 200 x 200 about the centre, the tool is Move, one undo step.
+#[test]
+fn k_two_enter_scales_the_selection_by_two_about_its_centre() {
+    let (mut u, r) = scale_setup();
+    let steps = undo_steps(&u);
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("2".to_string())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, r), (-50.0, -50.0, 200.0, 200.0));
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
+    assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
+    assert_eq!(undo_steps(&u), steps + 1);
+    u.app.run("edit.undo", json!({}));
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+}
+
+/// Escape in the scale field closes it and changes nothing.
+#[test]
+fn escape_in_the_scale_field_closes_it_and_changes_nothing() {
+    let (mut u, r) = scale_setup();
+    let steps = undo_steps(&u);
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("3".to_string())]);
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
+    assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
+    assert_eq!(undo_steps(&u), steps);
+}
+
 /// The texts painted in the last frame: what they say, whether they end in an ellipsis, and where
 /// they show (within their clip).
 fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, bool, egui::Rect)> {
