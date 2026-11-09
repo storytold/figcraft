@@ -474,3 +474,65 @@ fn presenting_a_tall_frame_on_a_hidpi_display_draws_the_view_at_device_scale() {
         assert!(s[0] * s[1] <= 16_777_216 + s[0] + s[1] && s[0] <= 16_384 && s[1] <= 16_384, "{s:?}");
     }
 }
+
+/// A tall frame on a 2x display, presented, and the page area its detail texture shows.
+fn tall_hidpi(side: usize) -> Ui {
+    let mut session = figcraft_engine::Session::new();
+    let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": 1440, "height": 9701})).unwrap());
+    session.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 100, "y": 100, "width": 300, "height": 200})).unwrap();
+    let mut ui = Ui::new(session);
+    ui.hidpi = Some((2.0, side));
+    ui.run("proto.present", json!({"start": frame}));
+    ui.app.ui.present.as_mut().unwrap().view.scale = PresentScale::FitWidth;
+    ui.frames(2, Vec::new);
+    ui
+}
+
+fn detail_bounds(ui: &Ui) -> Option<figcraft_geom::Rect> {
+    ui.app.ui.present.as_ref().and_then(|p| p.detail.as_ref().map(|(_, d)| d.bounds))
+}
+
+#[test]
+fn the_detail_is_kept_while_nothing_changes_and_made_again_when_the_frame_does() {
+    let mut ui = tall_hidpi(16_384);
+    let tex_id = |ui: &Ui| ui.app.ui.present.as_ref().and_then(|p| p.detail.as_ref().map(|(_, d)| d.tex.id()));
+    let first = tex_id(&ui).expect("a detail is drawn");
+    let bounds = detail_bounds(&ui).unwrap();
+    assert!(
+        bounds.x0 == 0.0 && bounds.y0 == 0.0 && bounds.x1 == 1440.0 && bounds.y1 > 860.0 && bounds.y1 < 9701.0,
+        "the view and a margin: {bounds:?}"
+    );
+    ui.frames(5, Vec::new);
+    assert_eq!(tex_id(&ui), Some(first), "the same view makes no new render");
+    let rect = ui.app.session.doc().unwrap().node(ui.app.session.doc().unwrap().first_page().unwrap()).unwrap().children[0];
+    let child = ui.app.session.doc().unwrap().node(rect).unwrap().children[0];
+    ui.run("node.set", json!({"id": child, "props": {"x": 120}}));
+    ui.frames(3, Vec::new);
+    assert_ne!(tex_id(&ui), Some(first), "an edit renders the detail again");
+}
+
+#[test]
+fn detail_plan_edge_cases() {
+    use figcraft_geom::Rect as R;
+    let bounds = R::new(0.0, 0.0, 1440.0, 9701.0);
+    let side = 16382.0;
+    // Nothing in view, an empty or invalid view, a bad scale: no detail.
+    for v in [R::new(0.0, 10_000.0, 1440.0, 11_000.0), R::new(0.0, 100.0, 0.0, 100.0)] {
+        assert!(actions::detail_plan(bounds, v, 2.0, side).is_none(), "{v:?}");
+    }
+    for px in [0.0, -1.0, f64::NAN] {
+        assert!(actions::detail_plan(bounds, R::new(0.0, 0.0, 1440.0, 860.0), px, side).is_none(), "{px}");
+    }
+    // Partly outside: the part inside.
+    let r = actions::detail_plan(bounds, R::new(0.0, -500.0, 1440.0, 360.0), 2.0, side).unwrap();
+    assert!(r.y0 == 0.0 && r.y1 >= 360.0, "{r:?}");
+    // A view whose quarter margin passes the pixel cap gets a smaller margin that fits.
+    let r = actions::detail_plan(bounds, R::new(0.0, 3000.0, 1440.0, 5000.0), 2.0, side).unwrap();
+    assert!(r.height() > 2000.0 && r.height() < 3000.0 && r.width() * r.height() * 4.0 <= 16_777_216.0, "{r:?}");
+    // A view past the caps by itself is returned as it is.
+    let tall = R::new(0.0, 1000.0, 1440.0, 5000.0);
+    assert_eq!(actions::detail_plan(bounds, tall, 2.0, side), Some(tall));
+    // A small texture limit: the view alone is over it, so it is the view.
+    let view = R::new(0.0, 0.0, 1440.0, 860.0);
+    assert_eq!(actions::detail_plan(bounds, view, 2.0, 2048.0), Some(view));
+}
