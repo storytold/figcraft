@@ -809,6 +809,22 @@ fn zoom_to_selection_without_a_toolbar_inset_uses_the_whole_height() {
 }
 
 #[test]
+fn zoom_to_selection_in_a_short_canvas_still_ends_above_the_toolbar() {
+    // A canvas 130 points high with the 60-point toolbar strip leaves 70 above it: too short for
+    // 40 points a side, so the margin shrinks and the selection stays clear of the toolbar.
+    let mut s = Session::new();
+    let r = rect(&mut s, 0.0, 0.0, 100.0, 100.0, None);
+    ex(&mut s, "view.set", json!({"vw": 1389, "vh": 130, "bottomInset": 60}));
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    ex(&mut s, "view.zoomSelection", json!({}));
+    let v = view(&s);
+    let (_, top) = v.page_to_screen(0.0, 0.0);
+    let (_, bottom) = v.page_to_screen(100.0, 100.0);
+    assert!(top >= 0.0 && bottom <= 70.0 + 1e-6, "top {top}, bottom {bottom}");
+    assert!((top - (70.0 - bottom)).abs() < 1e-6, "centred above the toolbar: top {top}, bottom {bottom}");
+}
+
+#[test]
 fn zoom_to_fit_is_unchanged() {
     // Left alone on purpose: its 64-point margin is not measured against Figma yet.
     let mut s = Session::new();

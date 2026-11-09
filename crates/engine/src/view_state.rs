@@ -118,11 +118,14 @@ impl ViewState {
             self.cy = r.center().y;
             return;
         }
-        let margin = 40.0;
-        let inset = if self.bottom_inset.is_finite() { self.bottom_inset.clamp(0.0, (self.vh - 100.0).max(0.0)) } else { 0.0 };
-        let area_h = self.vh - inset;
-        let zx = (self.vw - margin * 2.0).max(50.0) / r.width().max(1e-6);
-        let zy = (area_h - margin * 2.0).max(50.0) / r.height().max(1e-6);
+        let inset = if self.bottom_inset.is_finite() { self.bottom_inset.clamp(0.0, (self.vh - 1.0).max(0.0)) } else { 0.0 };
+        let area_h = (self.vh - inset).max(1.0);
+        // 40 points as measured; a canvas too small for that keeps a quarter of its size on each
+        // side instead, so the selection still ends above the toolbar.
+        let mx = (self.vw / 4.0).clamp(0.0, 40.0);
+        let my = (area_h / 4.0).clamp(0.0, 40.0);
+        let zx = (self.vw - mx * 2.0).max(1.0) / r.width().max(1e-6);
+        let zy = (area_h - my * 2.0).max(1.0) / r.height().max(1e-6);
         self.zoom = zx.min(zy).clamp(Self::MIN_ZOOM, max_zoom);
         // The rect's centre lands at screen y = area_h / 2, the page centre `(vh - area_h) / 2` below it.
         self.cx = r.center().x;
