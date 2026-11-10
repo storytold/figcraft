@@ -1246,6 +1246,7 @@ fn a_scaled_instance_keeps_reset_lists_above_a_changed_style_link() {
     }
 }
 
+/// The checkbox toggles the imported variable before choosing its status branch.
 #[test]
 fn checkbox_variable_and_conditional_actions_round_trip() {
     use figcraft_doc::proto::{ConditionalBlock, Expr, ExprOp};
@@ -1315,6 +1316,7 @@ fn checkbox_variable_and_conditional_actions_round_trip() {
     }
 }
 
+/// An unrepresentable condition leaves other actions in the interaction intact.
 #[test]
 fn overdeep_conditional_is_omitted_without_losing_the_export() {
     use figcraft_doc::proto::{ConditionalBlock, Expr, ExprOp, MAX_EXPR_DEPTH};
@@ -1344,4 +1346,47 @@ fn overdeep_conditional_is_omitted_without_losing_the_export() {
     let (back, _) = import(&bytes, "Depth").unwrap();
     let frame = back.nodes().find(|n| n.name == "Trigger").unwrap();
     assert_eq!(frame.interactions[0].actions, vec![Action::Back]);
+}
+
+/// The longest conditions with a variable-reference leaf survive at each tested nesting level.
+#[test]
+fn conditional_expression_depth_boundary_round_trips() {
+    use figcraft_doc::proto::{ConditionalBlock, Expr, ExprOp};
+
+    let conditional = |condition, action| Action::Conditional { blocks: vec![ConditionalBlock { condition, actions: vec![action] }] };
+    let nested_action = |depth, operators, variable: String| {
+        let flag = Expr::var(variable);
+        let condition = (0..operators).fold(flag.clone(), |inner, _| Expr::op(ExprOp::Not, vec![inner]));
+        (0..depth).fold(conditional(Some(condition), Action::Back), |inner, _| conditional(Some(flag.clone()), inner))
+    };
+
+    // The deepest alias is at Kiwi depth 8 + 2 × conditional depth + 3 × operator count.
+    for (depth, operators) in [(0, 18), (1, 18), (15, 8)] {
+        let mut doc = Document::new("Depth boundary");
+        let page = doc.first_page().unwrap();
+        doc.variables.collections.push(Collection {
+            id: "demo".into(),
+            name: "Demo".into(),
+            modes: vec![Mode { id: "default".into(), name: "Default".into() }],
+            extends: None,
+        });
+        doc.variables.variables.push(var("checked", "checked", "demo", VariableType::Boolean, &[("default", VariableValue::Boolean(true))]));
+        let frame = doc.create(page, NodeKind::Frame, "Trigger", 0.0, 0.0, 100.0, 100.0).unwrap();
+        doc.node_mut(frame).unwrap().interactions.push(Interaction {
+            trigger: Trigger::OnClick,
+            actions: vec![nested_action(depth, operators, "checked".into())],
+            transition: Transition::Instant,
+            duration_ms: 300,
+            easing: Easing::EaseOut,
+            delay_ms: 0,
+        });
+
+        let (bytes, warnings) = export(&doc, None).unwrap();
+        assert!(warnings.is_empty(), "export at conditional depth {depth}: {warnings:?}");
+        let (back, warnings) = import(&bytes, "Depth boundary").unwrap();
+        assert!(warnings.is_empty(), "import at conditional depth {depth}: {warnings:?}");
+        let trigger = back.nodes().find(|node| node.name == "Trigger").unwrap();
+        let checked = back.variables.variables.iter().find(|variable| variable.name == "checked").unwrap();
+        assert_eq!(trigger.interactions[0].actions, [nested_action(depth, operators, checked.id.clone())], "conditional depth {depth}");
+    }
 }

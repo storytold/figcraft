@@ -46,6 +46,7 @@ impl<'d> Exporter<'d> {
         }
     }
 
+    /// Encode the trigger and the actions that can be represented in the export.
     fn interaction(&mut self, it: &Interaction) -> Option<Kv<'static>> {
         let mut event: Fields = Vec::new();
         let ty = match &it.trigger {
@@ -80,6 +81,7 @@ impl<'d> Exporter<'d> {
         (!actions.is_empty()).then(|| o(vec![("event", o(event)), ("actions", arr(actions))]))
     }
 
+    /// Encode one action and warn when a variable or conditional action must be omitted.
     fn action(&mut self, a: &Action, it: &Interaction, depth: usize) -> Option<Kv<'static>> {
         let encoded = self.encode_action(a, it, depth);
         if encoded.is_none() && matches!(a, Action::SetVariable { .. } | Action::SetVariableMode { .. } | Action::Conditional { .. }) {
@@ -88,6 +90,7 @@ impl<'d> Exporter<'d> {
         encoded
     }
 
+    /// Map an action to Kiwi, preserving branch order and bounding conditional recursion.
     fn encode_action(&mut self, a: &Action, it: &Interaction, depth: usize) -> Option<Kv<'static>> {
         let node = |x: &mut Self, dest: &NodeId, nav: &'static str| -> Option<Kv<'static>> {
             let Some(g) = x.guid_of(*dest) else {
@@ -183,6 +186,7 @@ impl<'d> Exporter<'d> {
         }
     }
 
+    /// Encode an expression within the remaining Kiwi operator nesting budget.
     fn expression(&self, expr: &Expr, levels: usize) -> Option<Kv<'static>> {
         match expr {
             Expr::Value(VariableValue::Alias(id)) => self.expression_alias(id),
@@ -220,6 +224,7 @@ impl<'d> Exporter<'d> {
         }
     }
 
+    /// Reference an exported variable by GUID and include its resolved type.
     fn expression_alias(&self, variable: &str) -> Option<Kv<'static>> {
         let var = self.doc.variables.get_by_id(variable)?;
         let local = self.var_ids.get(variable)?;
@@ -275,10 +280,12 @@ impl<'d> Exporter<'d> {
     }
 }
 
+/// Wrap a literal, alias or expression in the Kiwi variable-data record.
 fn variable_data(kind: &'static str, resolved: &'static str, value: (&'static str, Kv<'static>)) -> Kv<'static> {
     o(vec![("dataType", e(kind)), ("resolvedDataType", e(resolved)), ("value", o(vec![value]))])
 }
 
+/// Encode a finite, typed literal without variable references.
 fn literal_data(value: &VariableValue) -> Option<Kv<'static>> {
     let (kind, field) = match value {
         VariableValue::Boolean(v) => ("BOOLEAN", ("boolValue", b(*v))),
@@ -290,6 +297,7 @@ fn literal_data(value: &VariableValue) -> Option<Kv<'static>> {
     Some(variable_data(kind, kind, field))
 }
 
+/// Encode an operator and its ordered arguments with their result type.
 fn expression_data(function: &'static str, resolved: &'static str, args: Vec<Kv<'static>>) -> Kv<'static> {
     variable_data("EXPRESSION", resolved, ("expressionValue", o(vec![("expressionFunction", e(function)), ("expressionArguments", arr(args))])))
 }
