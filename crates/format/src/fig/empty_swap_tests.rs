@@ -4,38 +4,28 @@
 use figcraft_doc::{Document, NodeId, NodeKind};
 
 use super::kiwi::{Kv, Schema};
+use super::tests::{arr, canvas, g, o};
 use super::*;
 
 type Fields = Vec<(&'static str, Kv<'static>)>;
-
-fn o(fields: Fields) -> Kv<'static> {
-    Kv::Object(fields)
-}
-
-fn g(id: u64) -> Kv<'static> {
-    o(vec![("sessionID", Kv::Uint(1)), ("localID", Kv::Uint(id))])
-}
 
 /// The GUID Figma writes for "none".
 fn empty() -> Kv<'static> {
     o(vec![("sessionID", Kv::Uint(4_294_967_295)), ("localID", Kv::Uint(4_294_967_295))])
 }
 
+/// A node under `parent` (the shared `node` with a position from the id).
 fn node(id: u64, parent: Option<u64>, ty: &'static str, name: &str, more: Fields) -> Kv<'static> {
-    let mut fields = vec![("guid", g(id)), ("phase", Kv::Enum("CREATED")), ("type", Kv::Enum(ty)), ("name", Kv::Str(name.into()))];
-    if let Some(parent) = parent {
-        fields.push(("parentIndex", o(vec![("guid", g(parent)), ("position", Kv::Str(format!("{id:04}")))])));
-    }
-    fields.extend(more);
-    o(fields)
+    let pos = format!("{id:04}");
+    super::tests::node(id, parent.map(|p| (p, pos.as_str())), ty, name, more)
 }
 
 fn symbol(main: u64, overrides: Vec<Kv<'static>>) -> Kv<'static> {
-    o(vec![("symbolID", g(main)), ("symbolOverrides", Kv::Array(overrides))])
+    o(vec![("symbolID", g(main)), ("symbolOverrides", arr(overrides))])
 }
 
 fn row(path: &[u64], more: Fields) -> Kv<'static> {
-    let mut fields = vec![("guidPath", o(vec![("guids", Kv::Array(path.iter().map(|id| g(*id)).collect()))]))];
+    let mut fields = vec![("guidPath", o(vec![("guids", arr(path.iter().map(|id| g(*id)).collect()))]))];
     fields.extend(more);
     o(fields)
 }
@@ -46,7 +36,7 @@ fn row(path: &[u64], more: Fields) -> Kv<'static> {
 fn import_cards() -> (Document, Vec<String>) {
     let message = o(vec![(
         "nodeChanges",
-        Kv::Array(vec![
+        arr(vec![
             node(1, None, "DOCUMENT", "Document", vec![]),
             node(2, Some(1), "CANVAS", "Page", vec![]),
             node(10, Some(2), "SYMBOL", "Property 1=Informative", vec![]),
@@ -68,8 +58,9 @@ fn import_cards() -> (Document, Vec<String>) {
             ),
         ]),
     )]);
+    // The export schema: the shared test schema has no `overriddenSymbolID`.
     let schema = Schema::parse(export::SCHEMA).unwrap();
-    import(&super::tests::canvas(&schema, &message), "Empty swap.fig").unwrap()
+    import(&canvas(&schema, &message), "Empty swap.fig").unwrap()
 }
 
 fn named(doc: &Document, name: &str) -> NodeId {
