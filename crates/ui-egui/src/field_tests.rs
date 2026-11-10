@@ -1300,37 +1300,70 @@ fn page_background_shows_fractional_opacity_like_fill_and_keeps_it_when_opening_
     u.app.run("page.setBackground", json!({"color": "#FF000080"}));
     u.frame(vec![]);
     assert_eq!(field(&mut u, "Opacity").1, "50.2%");
+    let page = u.app.session.page().unwrap();
+    let background = |u: &Ui| match u.app.session.doc().unwrap().node(page).unwrap().kind {
+        figcraft_doc::NodeKind::Page { background, .. } => background,
+        _ => panic!("the page"),
+    };
+    let original = background(&u);
     let steps = undo_steps(&u);
     let swatch = u.ctx.read_response(Id::unique("pagebg_swatch")).expect("shared page swatch").rect.center();
     click(&mut u, swatch);
     assert!(matches!(u.app.ui.picker, Some(crate::colorpicker::PickerTarget::PageBackground)));
     assert_eq!(undo_steps(&u), steps, "opening the picker does not edit the colour");
+    assert_eq!(background(&u), original, "opening preserves the stored alpha");
+    assert_eq!(field(&mut u, "Opacity").1, "50.2%");
     click(&mut u, swatch);
     assert!(u.app.ui.picker.is_none(), "the swatch toggles the picker closed");
+    assert_eq!(background(&u), original, "closing preserves the stored alpha");
+    assert_eq!(field(&mut u, "Opacity").1, "50.2%");
+    assert_eq!(undo_steps(&u), steps, "neither toggle creates an edit");
 }
 
 /// The shared page colour row uses the sidebar's width without hiding either field.
 #[test]
 fn page_background_colour_and_opacity_fit_a_resized_sidebar() {
-    let mut u = Ui::new(Session::new());
-    let mut previous_widths: Option<(f32, f32)> = None;
-    for width in [240.0, 500.0] {
-        u.app.ui.right_width = width;
-        for _ in 0..3 {
-            u.frame(vec![]);
+    // Find the whole galley, rather than its already-clipped bounding box.
+    fn hex_text(shape: &egui::Shape) -> Option<&egui::epaint::TextShape> {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(hex_text),
+            egui::Shape::Text(text) if text.galley.text() == "123ABC" => Some(text),
+            _ => None,
         }
-        let hex = u.ctx.read_response(Id::unique("pagebg").with("click")).unwrap().rect;
-        let alpha = u.ctx.read_response(Id::unique("pagebg_a").with("field")).unwrap().rect;
-        let panel = u.app.ui.right_panel_rect.unwrap();
+    }
+    let mut widths = Vec::new();
+    for width in [240.0, 500.0] {
+        let mut session = Session::new();
+        session.prefs.panel_widths.1 = width;
+        session.execute("page.setBackground", &json!({"color": "#123ABC80"})).unwrap();
+        let mut u = Ui::new(session);
+        let mut previous = None;
+        let mut settled = None;
+        // Stop at stable geometry, with a bound so a layout regression cannot hang the test.
+        for _ in 0..16 {
+            let out = u.frame_output(vec![]);
+            let hex = u.ctx.read_response(Id::unique("pagebg").with("click")).unwrap().rect;
+            let alpha = u.ctx.read_response(Id::unique("pagebg_a").with("field")).unwrap().rect;
+            let panel = u.app.ui.right_panel_rect.unwrap();
+            if previous == Some((hex, alpha, panel)) {
+                settled = Some((out, hex, alpha, panel));
+                break;
+            }
+            previous = Some((hex, alpha, panel));
+        }
+        let (out, hex, alpha, panel) = settled.expect("the page row settles");
         assert!(hex.left() >= u.app.canvas.rect.right(), "the colour stays in the sidebar");
         assert!(hex.right() < alpha.left(), "the colour and opacity never overlap");
-        assert!(alpha.right() <= u.screen.x, "the opacity stays visible");
-        // The colour uses the extra room while opacity keeps its place at the right edge.
-        if let Some((previous_hex, previous_panel)) = previous_widths {
-            assert!((hex.width() - previous_hex - (panel.width() - previous_panel)).abs() < 1.0, "the shared control grows with the panel");
-        }
-        previous_widths = Some((hex.width(), panel.width()));
+        // Half a point permits device-pixel rounding, not an arbitrary gap from the panel edge.
+        assert!((alpha.right() - (panel.right() - crate::widgets::PAD_RIGHT)).abs() <= 0.5, "opacity stays at the right edge");
+        assert!((hex.center().y - alpha.center().y).abs() <= 0.5, "both fields stay on the same row");
+        let (text, clip) = out.shapes.iter().find_map(|s| hex_text(&s.shape).map(|text| (text, s.clip_rect))).expect("the HEX text");
+        assert!(!text.galley.elided, "the whole HEX value fits at {width} pt");
+        assert!(hex.expand(0.5).contains_rect(text.visual_bounding_rect()), "the HEX text fits its field");
+        assert!(clip.expand(0.5).contains_rect(text.visual_bounding_rect()), "the HEX text is not clipped");
+        widths.push(hex.width());
     }
+    assert!(widths[1] > widths[0], "a wider sidebar gives the colour field more room");
 }
 
 /// The Page section's opacity field edits the page background's alpha (#1748; it was a label),
