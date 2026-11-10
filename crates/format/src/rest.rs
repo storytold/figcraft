@@ -797,12 +797,16 @@ impl<'a> Ctx<'a> {
     /// The `board` field (a FigCraft extension): what the object is on a board. A sticky or shape
     /// is set at once; anything else, or junk, is ignored with a warning.
     fn board_item(&mut self, n: &mut Node, b: &'a Value) {
+        // A sticky or shape is a frame holding its layers: on anything else it is ignored.
+        let frame = n.kind.is_frame_like();
         let item = match text(b, "type") {
-            Some("sticky") => {
+            Some("sticky") if frame => {
                 let author = text(b, "author").unwrap_or("").trim();
-                Some(figcraft_doc::BoardItem::Sticky { author: author.chars().take(64).collect() })
+                Some(figcraft_doc::BoardItem::Sticky { author: author.chars().filter(|c| !c.is_control()).take(64).collect() })
             }
-            Some("shape") => text(b, "shape").and_then(figcraft_doc::BoardShape::from_id).map(|shape| figcraft_doc::BoardItem::Shape { shape }),
+            Some("shape") if frame => {
+                text(b, "shape").and_then(figcraft_doc::BoardShape::from_id).map(|shape| figcraft_doc::BoardItem::Shape { shape })
+            }
             _ => None,
         };
         match item {

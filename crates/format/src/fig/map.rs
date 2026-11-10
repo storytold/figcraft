@@ -56,8 +56,8 @@ pub(super) fn to_rest(msg: &Kv, name: &str, max_nodes: usize) -> (Value, Vec<Str
     to_rest_for(msg, name, max_nodes, false)
 }
 
-/// [`to_rest`] for a FigJam whiteboard (`board`) or a design file: a whiteboard's stickies come
-/// out as native board items.
+/// The REST JSON (as `to_rest`) for a FigJam whiteboard (`board`) or a design file: a
+/// whiteboard's stickies come out as native board items.
 pub(super) fn to_rest_for(msg: &Kv, name: &str, max_nodes: usize, board: bool) -> (Value, Vec<String>, Vec<Option<VectorNetwork>>) {
     let mut m = Mapper::new(msg, max_nodes);
     m.board = board;

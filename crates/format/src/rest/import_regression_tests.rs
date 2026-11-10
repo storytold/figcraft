@@ -97,7 +97,7 @@ fn thousands_of_distinct_style_references_import_in_linear_time() {
 #[test]
 fn a_board_field_becomes_the_nodes_board_item() {
     let frame = json!({"id": "1:1", "name": "Note", "type": "FRAME", "relativeTransform": at(0.0, 0.0), "size": {"x": 200, "y": 200},
-                       "board": {"type": "sticky", "author": "A"}});
+                       "board": {"type": "sticky", "author": "A\u{7}"}});
     let (doc, warnings) = import(&file(json!([frame])), &no_images).unwrap();
     assert_eq!(named(&doc, "Note").board, Some(figcraft_doc::BoardItem::Sticky { author: "A".into() }));
     assert!(!warnings.iter().any(|w| w.contains("board item")), "{warnings:?}");
@@ -112,4 +112,10 @@ fn junk_board_fields_are_ignored_with_a_warning() {
         assert!(named(&doc, "Junk").board.is_none(), "{junk}");
         assert!(warnings.iter().any(|w| w.contains("unknown board item on Junk was ignored")), "{junk}: {warnings:?}");
     }
+    // A sticky is a frame holding its layers: on a rectangle the item is ignored.
+    let rect = json!({"id": "1:2", "name": "Rect", "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 20, "y": 20},
+                      "board": {"type": "sticky", "author": "A"}});
+    let (doc, warnings) = import(&file(json!([rect])), &no_images).unwrap();
+    assert!(named(&doc, "Rect").board.is_none());
+    assert!(warnings.iter().any(|w| w.contains("unknown board item on Rect was ignored")), "{warnings:?}");
 }
