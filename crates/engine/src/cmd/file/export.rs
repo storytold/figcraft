@@ -55,6 +55,12 @@ pub fn drawn_layers(doc: &Document, ids: &[NodeId], setting: &ExportSetting) -> 
     crate::cmd::edit::z_sorted(doc, &crate::cmd::edit::roots(doc, &own))
 }
 
+/// The top-level layers of the page of `ids`, bottom to top: what a background blur or glass in an
+/// export of `ids` reads from (empty when `ids` are on no page).
+pub fn backdrop_layers(doc: &Document, ids: &[NodeId]) -> Vec<NodeId> {
+    ids.first().and_then(|i| doc.page_of(*i)).and_then(|p| doc.node(p)).map(|p| p.children.clone()).unwrap_or_default()
+}
+
 /// The frame or group a slice sits in: None on the page or in a section.
 fn slice_container(doc: &Document, slice: NodeId) -> Option<NodeId> {
     let parent = doc.node(slice)?.parent?;
