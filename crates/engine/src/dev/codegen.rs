@@ -1,7 +1,7 @@
 //! Code for a layer, as shown by the Inspect panel and returned by `inspect.code`: CSS for the
-//! layer itself, HTML or React for its subtree, and SwiftUI, Jetpack Compose, ArkUI (HarmonyOS) or
-//! Flutter (stacks for auto layout, absolute offsets otherwise). Components become components
-//! whose properties are parameters and instances become calls passing their values (see
+//! layer itself, HTML or React for its subtree, and SwiftUI, Jetpack Compose, ArkUI (HarmonyOS),
+//! Flutter (stacks for auto layout, absolute offsets otherwise) or Uno Platform C# Markup.
+//! Components become components whose properties are parameters and instances become calls passing their values (see
 //! [`crate::component_codegen`]); variables bound to a layer become CSS custom properties, and
 //! their iOS and Android code syntax in SwiftUI and Compose. The output is a starting point, not a
 //! pixel-exact translation.
@@ -24,6 +24,7 @@ mod css;
 mod flutter;
 mod html;
 mod swift;
+mod uno;
 
 pub(crate) use arkui::arkui;
 pub(crate) use compose::{compose, kotlin_color};
@@ -36,19 +37,20 @@ pub(crate) use flutter::{FLUTTER_IMPORT, Place, flutter, flutter_indent};
 use html::html;
 pub(crate) use html::{Markup, Names, class_name};
 pub(crate) use swift::swift;
+pub(crate) use uno::uno;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
         "inspect.code",
         "Code for layer",
-        "{id?, language?: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui|flutter (default css; html, react, leptos and vue are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead; tailwind is React with Tailwind CSS v4 utilities for pages: fluid auto layout boxes, instances inlined with their overrides, bound variables as theme utilities), mobile? (tailwind: a mobile frame with the same layer names; the code is mobile first with the desktop layer's classes behind lg:), unit?: px|rem (CSS, HTML, React, Leptos and Vue; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
+        "{id?, language?: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui|flutter|uno (default css; html, react, leptos and vue are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead; tailwind is React with Tailwind CSS v4 utilities for pages: fluid auto layout boxes, instances inlined with their overrides, bound variables as theme utilities), mobile? (tailwind: a mobile frame with the same layer names; the code is mobile first with the desktop layer's classes behind lg:), unit?: px|rem (CSS, HTML, React, Leptos and Vue; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
         false,
         |s, p| {
             let cmd = "inspect.code";
             let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a layer"))?;
             let lang = match string(p, "language") {
                 Some(l) => {
-                    CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui|flutter"))?
+                    CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui|flutter|uno"))?
                 }
                 None => CodeLang::Css,
             };
@@ -103,10 +105,12 @@ pub enum CodeLang {
     ArkUi,
     /// A Flutter `StatelessWidget` (Dart) with its widget tree.
     Flutter,
+    /// Uno Platform C# Markup (.NET): a fluent C# expression tree of WinUI elements.
+    Uno,
 }
 
 impl CodeLang {
-    pub const ALL: [CodeLang; 10] = [
+    pub const ALL: [CodeLang; 11] = [
         CodeLang::Css,
         CodeLang::Html,
         CodeLang::React,
@@ -117,6 +121,7 @@ impl CodeLang {
         CodeLang::Compose,
         CodeLang::ArkUi,
         CodeLang::Flutter,
+        CodeLang::Uno,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -130,6 +135,7 @@ impl CodeLang {
             CodeLang::Compose => "compose",
             CodeLang::ArkUi => "arkui",
             CodeLang::Flutter => "flutter",
+            CodeLang::Uno => "uno",
         }
     }
     pub fn label(self) -> &'static str {
@@ -144,6 +150,7 @@ impl CodeLang {
             CodeLang::Compose => "Compose",
             CodeLang::ArkUi => "ArkUI",
             CodeLang::Flutter => "Flutter",
+            CodeLang::Uno => "Uno C# Markup",
         }
     }
     /// Languages whose lengths are CSS pixels that can be shown in rem (not Tailwind: its lengths
@@ -168,6 +175,9 @@ impl CodeLang {
         }
         if s.eq_ignore_ascii_case("dart") {
             return Some(CodeLang::Flutter);
+        }
+        if ["csharp-markup", "cs-markup"].iter().any(|a| s.eq_ignore_ascii_case(a)) {
+            return Some(CodeLang::Uno);
         }
         CodeLang::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(s) || l.label().eq_ignore_ascii_case(s))
     }
@@ -284,9 +294,14 @@ pub fn code_for(doc: &Document, id: NodeId, lang: CodeLang) -> String {
         CodeLang::Css => css(doc, id),
         CodeLang::Html => html(doc, id),
         CodeLang::Tailwind => crate::tailwind::code(doc, id, None),
-        CodeLang::React | CodeLang::Leptos | CodeLang::Vue | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::ArkUi | CodeLang::Flutter => {
-            crate::component_codegen::code(doc, id, lang)
-        }
+        CodeLang::React
+        | CodeLang::Leptos
+        | CodeLang::Vue
+        | CodeLang::SwiftUi
+        | CodeLang::Compose
+        | CodeLang::ArkUi
+        | CodeLang::Flutter
+        | CodeLang::Uno => crate::component_codegen::code(doc, id, lang),
     }
 }
 
