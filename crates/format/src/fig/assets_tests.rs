@@ -1245,3 +1245,103 @@ fn a_scaled_instance_keeps_reset_lists_above_a_changed_style_link() {
         same_after_round_trip(&doc, "explicit list values above a changed style link");
     }
 }
+
+#[test]
+fn checkbox_variable_and_conditional_actions_round_trip() {
+    use figcraft_doc::proto::{ConditionalBlock, Expr, ExprOp};
+
+    let mut doc = Document::new("Checkbox");
+    let page = doc.first_page().unwrap();
+    doc.variables.collections.push(Collection {
+        id: "demo".into(),
+        name: "Demo".into(),
+        modes: vec![Mode { id: "default".into(), name: "Default".into() }],
+        extends: None,
+    });
+    doc.variables.variables = vec![
+        var("checked", "checked", "demo", VariableType::Boolean, &[("default", VariableValue::Boolean(false))]),
+        var("status", "status", "demo", VariableType::String, &[("default", VariableValue::String("Unchecked".into()))]),
+    ];
+    let frame = doc.create(page, NodeKind::Frame, "Checkbox demo", 0.0, 0.0, 320.0, 180.0).unwrap();
+    let toggle = doc.create(frame, NodeKind::Frame, "Toggle checkbox", 24.0, 24.0, 44.0, 44.0).unwrap();
+    let mark = doc.create(toggle, NodeKind::Rectangle, "Checked indicator", 12.0, 12.0, 20.0, 20.0).unwrap();
+    let label = doc.create(frame, NodeKind::Text(TextData::new("Unchecked")), "Status", 84.0, 36.0, 120.0, 20.0).unwrap();
+    doc.node_mut(mark).unwrap().bound.insert("visible".into(), "checked".into());
+    doc.node_mut(label).unwrap().bound.insert("characters".into(), "status".into());
+    let set_status = |value| Action::SetVariable { variable: "status".into(), value: json!(value), expr: None };
+    doc.node_mut(toggle).unwrap().interactions.push(Interaction {
+        trigger: Trigger::OnClick,
+        actions: vec![
+            Action::SetVariable { variable: "checked".into(), value: Value::Null, expr: Some(Expr::op(ExprOp::Not, vec![Expr::var("checked")])) },
+            Action::Conditional {
+                blocks: vec![
+                    ConditionalBlock { condition: Some(Expr::var("checked")), actions: vec![set_status("Checked")] },
+                    ConditionalBlock { condition: None, actions: vec![set_status("Unchecked")] },
+                ],
+            },
+        ],
+        transition: Transition::Instant,
+        duration_ms: 300,
+        easing: Easing::EaseOut,
+        delay_ms: 0,
+    });
+
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let (mut back, warnings) = import(&bytes, "Checkbox").unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let toggle = back.nodes().find(|n| n.name == "Toggle checkbox").unwrap();
+    let [interaction] = toggle.interactions.as_slice() else { panic!("missing checkbox interaction") };
+    assert_eq!(interaction.trigger, Trigger::OnClick);
+    let [Action::SetVariable { variable, expr: Some(expr), .. }, Action::Conditional { blocks }] = interaction.actions.as_slice() else {
+        panic!("wrong action order: {:?}", interaction.actions);
+    };
+    let checked = back.nodes().find(|n| n.name == "Checked indicator").unwrap().bound["visible"].clone();
+    let status = back.nodes().find(|n| n.name == "Status").unwrap().bound["characters"].clone();
+    assert_eq!(variable, &checked);
+    assert_eq!(expr, &Expr::op(ExprOp::Not, vec![Expr::var(&checked)]));
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].condition, Some(Expr::var(&checked)));
+    assert_eq!(blocks[1].condition, None);
+    let (expr, blocks) = (expr.clone(), blocks.clone());
+    let modes = BTreeMap::new();
+    for (is_checked, expected) in [(true, "Checked"), (false, "Unchecked")] {
+        let value = expr.eval(&back.variables, &modes).unwrap();
+        assert_eq!(value, VariableValue::Boolean(is_checked));
+        let checked = back.variables.variables.iter_mut().find(|v| v.id == checked).unwrap();
+        *checked.values.values_mut().next().unwrap() = value;
+        let branch = ConditionalBlock::choose(&blocks, &back.variables, &modes).unwrap();
+        assert_eq!(branch, &[Action::SetVariable { variable: status.clone(), value: json!(expected), expr: None }]);
+    }
+}
+
+#[test]
+fn overdeep_conditional_is_omitted_without_losing_the_export() {
+    use figcraft_doc::proto::{ConditionalBlock, Expr, ExprOp, MAX_EXPR_DEPTH};
+
+    let mut doc = Document::new("Depth");
+    let frame = doc.create(doc.first_page().unwrap(), NodeKind::Frame, "Trigger", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let condition = (0..MAX_EXPR_DEPTH).fold(Expr::Value(VariableValue::Boolean(true)), |inner, _| Expr::op(ExprOp::Not, vec![inner]));
+    doc.node_mut(frame).unwrap().interactions.push(Interaction {
+        trigger: Trigger::OnClick,
+        actions: vec![
+            Action::Conditional {
+                blocks: vec![
+                    ConditionalBlock { condition: Some(condition), actions: vec![Action::Back] },
+                    ConditionalBlock { condition: None, actions: vec![Action::CloseOverlay] },
+                ],
+            },
+            Action::Back,
+        ],
+        transition: Transition::Instant,
+        duration_ms: 300,
+        easing: Easing::EaseOut,
+        delay_ms: 0,
+    });
+
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|w| w.contains("nesting")), "{warnings:?}");
+    let (back, _) = import(&bytes, "Depth").unwrap();
+    let frame = back.nodes().find(|n| n.name == "Trigger").unwrap();
+    assert_eq!(frame.interactions[0].actions, vec![Action::Back]);
+}

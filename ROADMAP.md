@@ -365,6 +365,7 @@ Ranked; detail and milestones in [`docs/roadmap.md`](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Experimental `.fig` export preserves set-variable, set-variable-mode and conditional prototype actions (#2210). |
 | 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`, 繁體中文（台灣）) draft catalog: every UI string (1,975), command label (641) and menu wording (31), translated clean-room from the English source; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant` read it while an explicit Hans stays Simplified; the desktop UI prefers an installed Noto Sans CJK TC, then Microsoft JhengHei, PingFang TC and Heiti TC; no font is bundled; native review pending. Numbers unchanged |
 | 2026-11-06 | patch | M1, #2028: Edit ▸ Set default properties gives new rectangles, ellipses, polygons and stars drawn with the tools (and, set from a text layer, new text) the selected layer's properties; it only copied them for Paste properties. Tests: `default_props_tests` (3). Numbers unchanged |
 | 2026-11-06 | patch | M5, #2027: `proto.settings` refuses an unknown device name with the list of devices (it saved any string, and the presenter showed no device), takes known names in any case, and answers the page's prototype settings, so `proto.settings {}` reads them back over MCP. Test: `proto_present_tests::unknown_devices_are_refused_and_settings_read_back`. Numbers unchanged |
