@@ -4,6 +4,8 @@
 //!   sweep-line topology from `linesweeper`); results use the even-odd rule.
 //! - [`stroke_outline`]: a stroke as a fill, with Figma's Inside / Center / Outside alignment,
 //!   dashes, caps, joins, arrowheads, variable width profiles ([`width`]) and brushes ([`brush`]).
+//! - [`round_corners`]: a corner radius (and smoothing) on every corner still sharp in a closed path,
+//!   as a boolean group draws its result.
 //!
 //! Every sweep is capped ([`MAX_SEGMENTS`], [`MAX_CROSSINGS`], and [`MAX_FOLD_SEGMENTS`] over a
 //! fold): past the caps an operation is refused with [`PathOpsError::TooComplex`].
@@ -24,6 +26,9 @@ mod dot_dash_tests;
 #[cfg(test)]
 mod ops_tests;
 mod points;
+mod round;
+#[cfg(test)]
+mod round_tests;
 #[cfg(test)]
 mod rounded_side_strokes_tests;
 #[cfg(test)]
@@ -36,6 +41,7 @@ use figcraft_doc::{BoolOp, StrokeAlign, StrokeCap, StrokeJoin, StrokeProps, Vect
 use figcraft_geom::kurbo::{self, BezPath, Cap, Join, PathEl, PathSeg, Point, Shape, Vec2};
 
 pub use budget::{Complexity, FoldBudget, MAX_CROSSINGS, MAX_FOLD_SEGMENTS, MAX_SEGMENTS, complexity};
+pub use round::round_corners;
 
 #[derive(Debug, PartialEq)]
 pub enum PathOpsError {
