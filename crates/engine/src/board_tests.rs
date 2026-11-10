@@ -365,8 +365,18 @@ fn board_commands_survive_junk() {
         .map(|c| c.id)
         .filter(|i| {
             i.starts_with("board.")
-                || ["tool.sticky", "tool.shape", "tool.connector", "tool.marker", "tool.highlighter", "tool.eraser", "tool.stamp", "file.newBoard"]
-                    .contains(i)
+                || [
+                    "tool.sticky",
+                    "tool.shape",
+                    "tool.connector",
+                    "tool.marker",
+                    "tool.highlighter",
+                    "tool.eraser",
+                    "tool.stamp",
+                    "tool.mindMap",
+                    "file.newBoard",
+                ]
+                .contains(i)
         })
         .collect();
     assert!(ids.len() >= 17, "{ids:?}");

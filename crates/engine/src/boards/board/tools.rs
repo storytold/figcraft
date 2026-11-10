@@ -2,6 +2,7 @@ use super::connectors::{CAPS, at_json, end_json, make, other_end, side_json};
 use super::derived::{ends_now, route};
 use super::edit::label_of;
 use super::items::edit_text;
+use super::mindmap::MIND_ROOT_H;
 use super::{
     BoardItem, Connector, Document, ERASER_PX, End, EngineError, Gesture, NodeId, Point, PointerEvent, Result, SHAPE, STICKY, Session, Side, ToolId,
     id_of, is_board, json,
@@ -63,6 +64,15 @@ impl Session {
                 let half = SHAPE / 2.0;
                 self.execute("board.shape", &json!({"x": ev.x - half, "y": ev.y - half}))?;
                 self.board_placed();
+                Ok(())
+            }
+            ToolId::MindMap => {
+                // The first node's text starts at the click: its left edge there, its middle level with it.
+                let r = self.execute("board.mindMap", &json!({"x": ev.x, "y": ev.y - MIND_ROOT_H / 2.0}))?;
+                self.board_placed();
+                if let Some(id) = r.get("id").and_then(id_of) {
+                    edit_text(self, id)?;
+                }
                 Ok(())
             }
             ToolId::Stamp => {

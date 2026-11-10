@@ -10,6 +10,7 @@ use crate::Session;
 use crate::board::text_of;
 use crate::board_tests::{board, connector, drawn, id, near, node};
 use crate::collab_live_tests::Room;
+use crate::tools::{PointerEvent, PointerKind, ToolId};
 
 fn bx(s: &Session, id: NodeId) -> Rect {
     s.doc().unwrap().world_bounds(id).unwrap()
@@ -382,4 +383,157 @@ fn the_caps_refuse_what_is_too_far_and_cut_what_is_too_long() {
     let out = s.execute("board.mindMap", &json!({"text": long, "children": [long]})).unwrap();
     assert_eq!(text_data(&s, id(&out, "id")).characters.chars().count(), 500);
     assert_eq!(text_data(&s, id(&out["children"][0], "id")).characters.chars().count(), 500);
+}
+
+fn next_sticky(s: &mut Session, p: Value) -> NodeId {
+    id(&s.execute("board.nextSticky", &p).unwrap(), "id")
+}
+
+fn arrives_from(s: &Session, n: NodeId) -> Option<NodeId> {
+    s.doc().unwrap().nodes().find_map(|l| match &l.board {
+        Some(BoardItem::Connector(c)) if c.branch && c.to.node() == Some(n) => c.from.node(),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_next_sticky_key_gives_a_mind_map_node_its_next_sibling() {
+    let mut s = board();
+    let (root, [c0, c1, c2], _) = map(&mut s);
+    let depth = s.undo_depth().0;
+    let out = s.execute("board.nextSticky", &json!({"id": c1})).unwrap();
+    let a = id(&out, "id");
+    assert!(is_mind_node(&s, a));
+    assert!(connector(&s, id(&out, "connector")).branch);
+    assert_eq!(arrives_from(&s, a), Some(root));
+    assert_eq!(kids(s.doc().unwrap(), root), [c0, c1, a, c2]);
+    assert_eq!(s.undo_depth().0, depth + 1);
+    // Unequal heights and a subtree.
+    s.execute("board.mindMapAdd", &json!({"id": c1})).unwrap();
+    s.execute("board.mindMapAdd", &json!({"id": c1})).unwrap();
+    s.execute("node.set", &json!({"id": text_of(s.doc().unwrap(), c1).unwrap(), "props": {"characters": "one\ntwo\nthree"}})).unwrap();
+    let b = next_sticky(&mut s, json!({"id": c1}));
+    assert_eq!(kids(s.doc().unwrap(), root), [c0, c1, b, a, c2]);
+    assert!(same(bx(&s, b).x0, bx(&s, c1).x0));
+    let mids: Vec<f64> = [c0, c1, b, a, c2].iter().map(|n| bx(&s, *n).center().y).collect();
+    assert!(mids.windows(2).all(|w| w[0] < w[1]), "{mids:?}");
+    assert!(bx(&s, b).y0 >= bx(&s, c1).y1 + 48.0 - 1e-6);
+    // The last sibling, and the selection as the default.
+    s.execute("select.set", &json!({"ids": [c2]})).unwrap();
+    let last = next_sticky(&mut s, json!({}));
+    assert_eq!(kids(s.doc().unwrap(), root).last(), Some(&last));
+    // While typing.
+    crate::board::edit_text(&mut s, c0).unwrap();
+    s.ui_requests.clear();
+    let d = next_sticky(&mut s, json!({"edit": true}));
+    assert!(s.ds().unwrap().text_edit.is_none());
+    assert!(s.ui_requests.iter().any(|q| q.kind == "board.editText" && q.data["id"] == json!(d)));
+    let order = kids(s.doc().unwrap(), root);
+    assert_eq!(order.iter().position(|n| *n == d), order.iter().position(|n| *n == c0).map(|i| i + 1));
+    assert_eq!(s.selection(), vec![d]);
+    // The first node has no sibling: refused, and an open edit stays open.
+    let count = s.doc().unwrap().ids().count();
+    crate::board::edit_text(&mut s, root).unwrap();
+    let err = s.execute("board.nextSticky", &json!({"id": root})).unwrap_err().to_string();
+    assert!(err.contains("first node"), "{err}");
+    assert!(s.ds().unwrap().text_edit.is_some());
+    assert_eq!(s.doc().unwrap().ids().count(), count);
+}
+
+#[test]
+fn tab_walks_a_nodes_siblings_in_the_maps_order() {
+    let mut s = board();
+    let (_, [c0, c1, c2], _) = map(&mut s);
+    s.execute("select.set", &json!({"ids": [c0]})).unwrap();
+    for want in [c1, c2, c0] {
+        s.execute("select.next", &json!({})).unwrap();
+        assert_eq!(s.selection(), vec![want]);
+    }
+    s.execute("select.previous", &json!({})).unwrap();
+    assert_eq!(s.selection(), vec![c2]);
+    s.execute("transform.move", &json!({"ids": [c0], "dx": 0, "dy": 100})).unwrap();
+    s.execute("select.set", &json!({"ids": [c1]})).unwrap();
+    s.execute("select.next", &json!({})).unwrap();
+    assert_eq!(s.selection(), vec![c0]);
+    // An only child stays.
+    let g = id(&s.execute("board.mindMapAdd", &json!({"id": c1})).unwrap(), "id");
+    s.execute("select.set", &json!({"ids": [g]})).unwrap();
+    s.execute("select.next", &json!({})).unwrap();
+    assert_eq!(s.selection(), vec![g]);
+    // Layers keep the layer order.
+    let mut t = board();
+    let a = id(&t.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap(), "id");
+    let b = id(&t.execute("board.sticky", &json!({"x": 400, "y": 0})).unwrap(), "id");
+    t.execute("select.set", &json!({"ids": [b]})).unwrap();
+    t.execute("select.next", &json!({})).unwrap();
+    assert_eq!(t.selection(), vec![a]);
+    let mut u = board();
+    let (root, _, _) = map(&mut u);
+    u.execute("select.set", &json!({"ids": [root]})).unwrap();
+    u.execute("select.next", &json!({})).unwrap();
+    assert_eq!(u.selection().len(), 1);
+}
+
+#[test]
+fn the_mind_map_tool_starts_the_first_nodes_text_at_the_click() {
+    let mut s = board();
+    s.execute("tool.mindMap", &json!({})).unwrap();
+    assert_eq!(s.tool.tool, ToolId::MindMap);
+    s.pointer(&PointerEvent::at(PointerKind::Down, 300.0, 200.0, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, 300.0, 200.0, 1.0)).unwrap();
+    let nodes: Vec<NodeId> = s.doc().unwrap().nodes().filter(|n| n.board == Some(BoardItem::MindNode)).map(|n| n.id).collect();
+    assert_eq!((nodes.len(), branches(&s).len()), (4, 3));
+    let root = *nodes.iter().find(|n| arrives_from(&s, **n).is_none()).unwrap();
+    assert_eq!(bx(&s, root).x0, 300.0);
+    assert!(same(bx(&s, root).center().y, 200.0));
+    let te = s.ds().unwrap().text_edit.clone().expect("typing in the first node");
+    assert_eq!(crate::board::owner_of_text(s.doc().unwrap(), te.id), Some(root));
+    assert_eq!((te.anchor.min(te.caret), te.anchor.max(te.caret)), (0, 5));
+    assert_eq!(s.tool.tool, ToolId::Move);
+    crate::textedit::insert(&mut s, "Plan").unwrap();
+    crate::textedit::end(&mut s).unwrap();
+    assert_eq!(text_data(&s, root).characters, "Plan");
+    for k in nodes.iter().filter(|n| **n != root) {
+        assert!(same(bx(&s, *k).x0, bx(&s, root).x1 + 88.0));
+    }
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(text_data(&s, root).characters, "Topic");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.doc().unwrap().nodes().all(|n| n.board != Some(BoardItem::MindNode)));
+    // Tools kept on.
+    s.prefs.keep_tool = true;
+    s.execute("tool.mindMap", &json!({})).unwrap();
+    for y in [200.0, 900.0] {
+        s.pointer(&PointerEvent::at(PointerKind::Down, 300.0, y, 1.0)).unwrap();
+        s.pointer(&PointerEvent::at(PointerKind::Up, 300.0, y, 1.0)).unwrap();
+    }
+    assert_eq!(s.doc().unwrap().nodes().filter(|n| n.board == Some(BoardItem::MindNode)).count(), 8);
+    assert_eq!(s.tool.tool, ToolId::MindMap);
+    // Refusals and names.
+    let mut d = Session::new();
+    for (cmd, p) in [("tool.mindMap", json!({})), ("tool.set", json!({"tool": "mindMap"}))] {
+        assert!(matches!(d.execute(cmd, &p), Err(crate::EngineError::Disabled(..))), "{cmd} on a design file");
+    }
+    assert_eq!(ToolId::from_id("mindMap"), Some(ToolId::MindMap));
+    assert!(ToolId::MindMap.on_boards());
+}
+
+#[test]
+fn a_board_colour_on_a_mind_map_node_is_its_text_colour() {
+    let mut s = board();
+    let (_, [c0, ..], lines) = map(&mut s);
+    let ink = Paint::solid(Color::from_rgb8_const(0x1E, 0x1E, 0x1E));
+    s.execute("board.setColor", &json!({"ids": [c0, lines[0]], "color": "blue"})).unwrap();
+    let text = text_of(s.doc().unwrap(), c0).unwrap();
+    assert_eq!(node(&s, text).fills, node(&s, lines[0]).strokes);
+    assert!(node(&s, c0).fills.is_empty(), "no box");
+    s.execute("board.setColor", &json!({"ids": [c0], "color": "#FF0000"})).unwrap();
+    assert_eq!(node(&s, text).fills, vec![Paint::solid(Color::from_rgb8_const(0xFF, 0, 0))]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(node(&s, text).fills, vec![ink.clone()]);
+    let st = id(&s.execute("board.sticky", &json!({"x": 900, "y": 0})).unwrap(), "id");
+    s.execute("board.setColor", &json!({"ids": [c0, st], "color": "green"})).unwrap();
+    assert_ne!(node(&s, text).fills, vec![ink]);
+    assert_eq!(node(&s, st).fills.len(), 1);
 }

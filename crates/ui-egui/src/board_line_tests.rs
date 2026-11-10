@@ -41,7 +41,7 @@ fn connector() -> (Ui, NodeId, NodeId) {
 }
 
 /// Open the menu at `x` from the bar's left edge and pick `item` in it.
-fn pick(u: &mut Ui, x: f32, item: &str) {
+pub(crate) fn pick(u: &mut Ui, x: f32, item: &str) {
     let r = bar(u).expect("the bar shows");
     click(u, pos2(r.min.x + x, r.center().y));
     let shapes = flat(&u.frame_output(vec![]).shapes);

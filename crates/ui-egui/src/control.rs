@@ -1000,7 +1000,7 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
     use figcraft_engine::keymap::{Context, lookup, normalize};
     // Text editing keys go to the editor (after the shortcuts live while editing).
     if app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
-        if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
+        if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|bd| (m.cmd || m.alt || m.ctrl) && crate::shortcuts::applies(app, bd)) {
             crate::menus::invoke(app, bd.id);
             return Ok(json!({"command": bd.id}));
         }
@@ -1024,7 +1024,7 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
         let r = crate::comments::step(app, ctx, if matches!(key, "ArrowUp" | "Up") { -1 } else { 1 });
         return Ok(json!({"comment": r.and_then(|v| v.get("id").cloned())}));
     }
-    if let Some(bd) = lookup(platform, Context::Canvas, key, m) {
+    if let Some(bd) = lookup(platform, Context::Canvas, key, m).filter(|bd| crate::shortcuts::applies(app, bd)) {
         crate::shortcuts::run_binding(app, bd.id);
         return Ok(json!({"command": bd.id}));
     }

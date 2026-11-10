@@ -145,14 +145,18 @@ pub(super) fn next_sticky(s: &mut Session, p: &Value) -> Result<Value> {
     let from = id(p, "id")
         .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
         .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
-        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky or a shape first".into()))?;
+        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky, a shape or a mind map node first".into()))?;
     let n = doc.get(from)?;
+    if n.board == Some(BoardItem::MindNode) {
+        // A mind map node gets its next sibling (#2226), as a shape gets the next shape joined to it.
+        return super::mindmap::mind_map_add(s, &json!({"id": from, "relation": "sibling", "edit": boolean(p, "edit").unwrap_or(false)}));
+    }
     if matches!(n.board, Some(BoardItem::Shape { .. })) {
         // A shape gets the next one joined to it, as the "+" beside it makes (#1597).
         return add_connected(s, p);
     }
     if !matches!(n.board, Some(BoardItem::Sticky { .. })) {
-        return Err(bad(cmd, "that isn't a sticky or a shape"));
+        return Err(bad(cmd, "that isn't a sticky, a shape or a mind map node"));
     }
     let color = n.fills.iter().find_map(Paint::solid_color).unwrap_or(s.tool.board.sticky);
     let parent = n.parent.ok_or_else(|| bad(cmd, "that sticky has no parent"))?;

@@ -232,6 +232,8 @@ icons! {
     CurvedConnector,
     Shapes,
     Stamp,
+    /// A mind map: a first node with two branches curving out to two lines of text.
+    MindMap,
     /// Running a board session: a stopwatch (the timer), two bars (pause) and a ballot going
     /// into a box (voting).
     Timer,

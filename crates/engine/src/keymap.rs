@@ -201,7 +201,10 @@ pub static KEYS: &[Binding] = &[
     k(Tools, "tool.highlighter", &["U"]),
     k(Tools, "tool.eraser", &["E"]),
     k(Tools, "tool.stamp", &["W"]),
-    k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"]).label("Board: a new sticky beside the selected one, or the next shape joined to it").both(),
+    k(Tools, "board.nextSticky", &["Shift+Cmd+Enter"])
+        .label("Board: a new sticky beside the selected one, the next shape joined to it, or a mind map node's next sibling")
+        .both(),
+    k(Tools, "board.mindMapAdd", &["Cmd+Enter"]).label("Board: a child of the selected mind map node").both(),
     // View
     // The documentation gives both keys for the pixel grid in different places.
     k(View, "view.pixelGrid", &["Shift+'", "Cmd+'"]),

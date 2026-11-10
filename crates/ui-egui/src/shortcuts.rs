@@ -63,6 +63,13 @@ pub fn lookup(context: keymap::Context, key: Key, physical: Option<Key>, m: Modi
     keymap::lookup(platform(), context, key.name(), held)
 }
 
+/// Whether binding `b` is live for the app as it is. Cmd/Ctrl+Enter adds a mind map node's child
+/// only from a mind map node (selected, or being typed in); anywhere else the key is nobody's on
+/// the canvas and ends the edit while typing, as before the binding.
+pub(crate) fn applies(app: &FigApp, b: &keymap::Binding) -> bool {
+    b.id != "board.mindMapAdd" || figcraft_engine::board::mind_node_target(&app.session).is_some()
+}
+
 /// The key a menu shows for a command.
 pub fn shortcut(id: &str) -> Option<&'static str> {
     keymap::primary(id, platform())
@@ -453,7 +460,7 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
             return true;
         }
     }
-    if let Some(b) = lookup(keymap::Context::Canvas, key, physical, m) {
+    if let Some(b) = lookup(keymap::Context::Canvas, key, physical, m).filter(|b| applies(app, b)) {
         // Copy/cut/paste arrive as clipboard events on most platforms.
         if matches!(b.id, "edit.copy" | "edit.cut" | "edit.paste") {
             return true;
@@ -958,7 +965,7 @@ fn text_line_index(app: &FigApp, id: figcraft_doc::NodeId, p: figcraft_geom::Poi
 
 /// Shortcuts live while editing text (Bold, lists, alignment, size/weight/spacing steps, Save…).
 fn text_shortcut(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers) -> bool {
-    match lookup(keymap::Context::Text, key, physical, m) {
+    match lookup(keymap::Context::Text, key, physical, m).filter(|b| applies(app, b)) {
         Some(b) => {
             crate::menus::invoke(app, b.id);
             true

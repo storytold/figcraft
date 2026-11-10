@@ -483,7 +483,8 @@ one undo step and returns the ids it made:
 - `board.nextSticky {id?, side?: right|below|left|above, edit?}` → `{id, text}`: a sticky of the
   same colour beside the selected (or edited) one; with `edit: true` the app goes on typing in it
   (`Shift+Cmd/Ctrl+Enter` in the app does both). On a shape it does what `board.addConnected` does:
-  the next shape, joined to it by a connector (`{id, text, connector}`).
+  the next shape, joined to it by a connector (`{id, text, connector}`). On a mind map node it is
+  the node's next sibling, as `board.mindMapAdd {relation: sibling}`.
 - `board.addConnected {id?, side?: right|below|left|above, edit?}` → `{id, text, connector}`: the
   next sticky or shape of the same kind, size and colour on that side of the selected (or edited)
   one, 80 units away, joined to it by a connector the way the Connector tool makes one; one undo
@@ -531,7 +532,8 @@ one undo step and returns the ids it made:
 - `board.ink {path | points, highlighter?, color?, select? (default true)}` → `{id}`: a marker (or
   wide, see-through highlighter) stroke.
 - `board.setColor {ids?, color}`: stickies and shapes take it as their fill, connectors and ink as
-  their line. `board.setStyle {ids?, shape?, fontSize?, style?: straight|elbow|curved, startCap?,
+  their line, mind map nodes as their text colour (a board colour in its deeper shade).
+  `board.setStyle {ids?, shape?, fontSize?, style?: straight|elbow|curved, startCap?,
   endCap?}`: a shape's outline and text size, a connector's routing and arrowheads.
 - `board.templates` → `[{id, name, description, width, height}]` lists the built-in templates:
   `retrospective brainstorm weeklyPlanner flowChart kanban`. `board.template {name, x?, y?}` →
@@ -546,7 +548,8 @@ one undo step and returns the ids it made:
   (default the last); `id` may be the table or any layer in it.
 - Tools for `pointer`: `tool.sticky {color?}`, `tool.shape {shape?}`, `tool.connector {style?: straight|elbow|curved}`
   (drag from one object to another), `tool.marker {color?}`, `tool.highlighter {color?}`,
-  `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`; Text and Section are the usual tools.
+  `tool.eraser` (drag over strokes), `tool.stamp {stamp?}`, `tool.mindMap` (a click places a mind map, the first node's text starting
+  there, and types in it); Text and Section are the usual tools.
 
 ```json
 {"command": "file.newBoard", "params": {"name": "Retro"}}
@@ -635,8 +638,9 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
 - `doc.nextTab` / `doc.previousTab` (`Ctrl+Tab` / `Ctrl+Shift+Tab`): the next or previous open file.
 - Board tools (boards only): `tool.sticky` (`Q`), `tool.shape` (`B`), `tool.connector` (`X`),
   `tool.marker` (`M`), `tool.highlighter` (`U`), `tool.eraser` (`E`), `tool.stamp` (`W`), and
-  `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky). Keys no design-file
-  shortcut uses; on a design file they refuse.
+  `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky; on a mind map node it
+  makes the node's next sibling) and `board.mindMapAdd` (`Cmd/Ctrl+Enter` on a mind map node, also
+  while typing in one). Keys no design-file shortcut uses; on a design file they refuse.
 - `view.pan {dx, dy, big?}`: the arrow keys with nothing selected (`key ArrowRight` does the same)
   pan the view by 20 screen pixels a step, 200 with `big` (Shift).
 - `view.multiplayerCursors {on?}` (`Alt+Cmd+\`): show or hide others' cursors in a live session.
@@ -2072,7 +2076,7 @@ turned off 0°.
   other than miter (`strokeJoin`) or a miter angle other than the default ~28.96° (`miterAngle`).
 - **Select**: `select.layersAt {x, y}` lists every layer under a page point, front-most first with its
   depth (the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
-  / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab). With `pointer`, `cmd: true`
+  / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab; on a board, a mind map node's next or previous sibling). With `pointer`, `cmd: true`
   clicks select the nested layer, `cmd` drags from empty canvas select the nested layers they touch,
   and `shift` drags toggle what they touch. A press on the background of a top-level frame with
   layers in it (the frame not selected) starts a marquee inside it, as on the canvas; an empty frame

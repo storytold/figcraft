@@ -16,7 +16,7 @@ fn id(v: serde_json::Value) -> NodeId {
     NodeId(v["id"].as_u64().unwrap())
 }
 
-fn press(u: &mut Ui, key: Key, modifiers: Modifiers) {
+pub(crate) fn press(u: &mut Ui, key: Key, modifiers: Modifiers) {
     u.frame(vec![
         Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
         Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },

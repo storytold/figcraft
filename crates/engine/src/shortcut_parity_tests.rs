@@ -129,6 +129,7 @@ static ROWS: &[Row] = &[
     pin(Tools, "tool.eraser", &["E"], &[]),
     pin(Tools, "tool.stamp", &["W"], &[]),
     pin(Tools, "board.nextSticky", &["Shift+Cmd+Enter"], &[]),
+    pin(Tools, "board.mindMapAdd", &["Cmd+Enter"], &[]),
     // Vector edit mode
     doc(Selection, "Edit the selected shape's points", &["Enter"], &[], Bound("select.children"), "Enter on a shape edits it; on a frame or group it selects the children"),
     doc(Shape, "Vector edit: move", &["V"], &[], VectorTool(VTool::Move), ""),
@@ -416,7 +417,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (136, 135, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (136, 135, 1, 0, 2, 58));
 }
 
 #[test]
