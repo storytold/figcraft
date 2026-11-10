@@ -1761,6 +1761,18 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   are snake_case, Dart enum members lowerCamel; names that would shadow framework types get one too, `Text` → `TextComponent`). `inspect.componentCode
   {id?, language?}` returns the parts: `{component, name, set, properties: [{name, param, type,
   default, value? (instances)}], definition, usage? (instances)}`.
+- **Uno C# Markup:** `inspect.code {id, language: uno}` (aliases `csharp-markup`, `cs-markup`) writes the layer and its subtree as a
+  `UserControl` class (file-scoped `namespace MyApp;`, the class named after the layer plus `View`, internal) whose `this.Content(…)` is a
+  Uno C# Markup (`Uno.Extensions.Markup`) expression: a frame, group or rectangle is a `Border` with `Background`, `BorderBrush`,
+  `BorderThickness` (a `Thickness` for per-side strokes), `CornerRadius` (per corner when they differ), `Opacity` and a
+  `RenderTransform` for rotation, holding a `Canvas` whose children carry `.Canvas(left:, top:)`; with a stroke and children it is a
+  `Grid` with the border behind the canvas. Text is a `TextBlock` (`FontFamily`, `FontSize`, `FontWeight`, `FontStyle`, `Foreground`,
+  `LineHeight`, `CharacterSpacing` in thousandths of an em, `TextAlignment`, `TextWrapping`, `TextTrimming`, `MaxLines`,
+  `TextDecorations`; case is applied at run time; style runs are `Inlines` of `Run`s). Vectors and other shapes are an `Image` on
+  `ms-appx:///Assets/<name>.svg`, image fills an `ImageBrush` on `<name>.png` (names lowercase ASCII, unique in the snippet; the files
+  are not written). Everything has a fixed size. Shadows, blurs, blend modes, masks, gradients beyond the first stop, pattern fills,
+  stroke alignment other than inside, corner smoothing and arcs are `// not mapped: …` comments. Components and instances are written
+  as the frames they are; `inspect.componentCode` and code connect do not take `uno` yet.
 - **Code connect:** link a component (a variant links its set) to the code component it is built
   as, per language (`react`, `leptos`, `vue`, `swiftui`, `compose`, `arkui`, `flutter`): `codeConnect.set {id?, language?, importPath?,
   name?, template?}` (undoable; fields left out keep their value; the defaults are the generated
