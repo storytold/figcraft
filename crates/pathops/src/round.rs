@@ -114,10 +114,12 @@ pub fn round_corners(path: &BezPath, radius: f64, smoothing: f64) -> BezPath {
         return path.clone();
     }
     let smoothing = if smoothing.is_finite() { smoothing.clamp(0.0, 1.0) } else { 0.0 };
-    let bb = path.bounding_box();
-    let weld = (bb.width().max(bb.height()) * 1e-6).max(1e-9);
     let mut out = BezPath::new();
     for sub in figcraft_geom::split_subpaths(path) {
+        // Each contour's own size sets its cleanup tolerance, so a large contour can't weld away
+        // the real short edges of a small island or hole beside it.
+        let bb = sub.bounding_box();
+        let weld = (bb.width().max(bb.height()) * 1e-6).max(1e-9);
         let closed = matches!(sub.elements().last(), Some(PathEl::ClosePath));
         match closed.then(|| round_subpath(&sub, radius, smoothing, weld)).flatten() {
             Some(p) => out.extend(p.elements().iter().copied()),

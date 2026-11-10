@@ -236,3 +236,21 @@ fn junk_never_panics() {
     zig.close_path();
     assert!(all_finite(&round_corners(&zig, 2.0, 0.0)));
 }
+
+/// The cleanup tolerance is each contour's own: a contour a million units wide doesn't weld away
+/// the half-unit notch of a separate small contour in the same path.
+#[test]
+fn a_large_contour_does_not_weld_a_small_ones_short_edges() {
+    let mut p = rect(0.0, 0.0, 1e6, 1e6);
+    let x = 2e6;
+    for (i, (dx, y)) in [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (5.5, 10.0), (5.5, 9.5), (5.0, 9.5), (5.0, 10.0), (0.0, 10.0)].into_iter().enumerate()
+    {
+        if i == 0 { p.move_to((x + dx, y)) } else { p.line_to((x + dx, y)) }
+    }
+    p.close_path();
+    let out = round_corners(&p, 0.001, 0.0);
+    let reaches = |q: Point| {
+        out.elements().iter().any(|el| matches!(el, PathEl::MoveTo(e) | PathEl::LineTo(e) | PathEl::CurveTo(_, _, e) if (*e - q).hypot() < 0.01))
+    };
+    assert!(reaches(pt(x + 5.0, 9.5)) && reaches(pt(x + 5.5, 9.5)), "the notch's floor is kept");
+}
