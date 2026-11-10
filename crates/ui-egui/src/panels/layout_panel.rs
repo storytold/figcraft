@@ -30,7 +30,6 @@ fn parent_of(doc: &Document, id: NodeId) -> Option<&Node> {
 pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let ids = sel.to_vec();
     let frames = crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like());
-    let layout_containers = crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Group));
     let no_al = !sel.is_empty() && crate::selection_cache::every(doc, sel, |n| n.layout.is_none());
     let al = common(doc, sel, |n| n.layout.clone());
     let has_al = matches!(al, Some(Some(_)));
@@ -39,9 +38,9 @@ pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &
     // layers inside it override their size and resizing, not their place in the layout.
     let facts = crate::right::in_instance(ui.ctx(), doc, sel);
     let (in_instance, nested) = (facts.any, facts.nested);
-    let btns: Vec<(Icon, &str)> = if in_instance {
+    let btns: Vec<(Icon, &str)> = if nested {
         vec![]
-    } else if layout_containers && no_al {
+    } else if no_al {
         vec![(Icon::Plus, crate::shortcuts::tip(tr("Add auto layout"), "layout.add"))]
     } else if has_al {
         vec![(Icon::Minus, crate::shortcuts::tip(tr("Remove auto layout"), "layout.remove"))]

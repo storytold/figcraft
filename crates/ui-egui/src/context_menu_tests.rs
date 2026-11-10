@@ -85,6 +85,37 @@ fn copying_a_link_with_nothing_selected_copies_nothing() {
     assert!(u.app.ui.toast.is_none());
 }
 
+#[test]
+fn right_clicking_a_selected_layer_keeps_the_whole_selection_in_its_menu() {
+    let mut s = Session::new();
+    let a = id(&s.execute("shape.rectangle", &json!({"name": "A"})).unwrap());
+    let b = id(&s.execute("shape.rectangle", &json!({"name": "B"})).unwrap());
+    let c = id(&s.execute("shape.rectangle", &json!({"name": "C"})).unwrap());
+    s.execute("select.set", &json!({"ids": [a, b]})).unwrap();
+    let mut u = Ui::new(s);
+    let at = u.row_at(a);
+    for pressed in [true, false] {
+        u.frame(vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() },
+        ]);
+    }
+    assert_eq!(u.app.session.selection(), vec![a, b]);
+    assert_eq!(u.app.ui.context_menu.as_ref().map(|(_, ids)| ids.as_slice()), Some([a, b].as_slice()));
+
+    u.app.ui.context_menu = None;
+    u.frame(vec![]);
+    let at = u.row_at(c);
+    for pressed in [true, false] {
+        u.frame(vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() },
+        ]);
+    }
+    assert_eq!(u.app.session.selection(), vec![c]);
+    assert_eq!(u.app.ui.context_menu.as_ref().map(|(_, ids)| ids.as_slice()), Some([c].as_slice()));
+}
+
 /// With a section selected, a right-click on either frame inside it links that frame, not the
 /// section that was selected before.
 #[test]

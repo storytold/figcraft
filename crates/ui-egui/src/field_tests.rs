@@ -149,15 +149,20 @@ fn id(v: serde_json::Value) -> NodeId {
 }
 
 #[test]
-fn layout_add_button_requires_every_selected_container_to_have_no_layout() {
+fn layout_add_button_wraps_shapes_and_instances_without_layout() {
     let mut s = Session::new();
     let rect = id(s.execute("shape.rectangle", &json!({"width": 40, "height": 20})).unwrap());
     let group = id(s.execute("object.group", &json!({"ids": [rect]})).unwrap());
     let frame = id(s.execute("frame.create", &json!({"x": 200, "width": 100, "height": 60})).unwrap());
+    let template = id(s.execute("frame.create", &json!({"x": 400, "width": 100, "height": 60})).unwrap());
+    let component = id(s.execute("component.create", &json!({"ids": [template]})).unwrap());
+    let instance = id(s.execute("instance.create", &json!({"component": component, "x": 600})).unwrap());
     let mut u = Ui::new(s);
     u.ctx.enable_accesskit();
     for (selection, layout, expected) in [
         (vec![group], false, true),
+        (vec![rect], false, true),
+        (vec![instance], false, true),
         (vec![frame, group], false, true),
         (vec![frame, group], true, false),
         (vec![frame], true, false),

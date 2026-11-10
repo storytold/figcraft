@@ -9,9 +9,9 @@ docs/brand/LICENSE-brand.txt.
 
 Third-party material
 
-This product bundles no third-party fonts, icons or images in the repository: every icon is
-drawn in code and original to FigCraft. The per-file list (author, source, license) of any bundled
-asset is in ATTRIBUTION.md.
+The UI icon geometry comes from Lucide static 1.70.0 (ISC); its license is in LICENSE-LUCIDE.
+The FigCraft brand mark is original. The per-file list (author, source, license) of bundled assets
+is in ATTRIBUTION.md.
 
 Release builds made with the optional craft-fonts build input (CRAFT_FONTS_DIR) embed the fonts
 listed in ATTRIBUTION.md (Inter and others, SIL Open Font License 1.1); each package carries their

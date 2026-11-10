@@ -686,7 +686,11 @@ fn layout_add(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("layout.add", s, p)?;
     let dir = string(p, "direction");
     let doc = s.doc()?;
-    let all_frames = ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() && n.layout.is_none()));
+    // An instance inherits its structure from the main component. Wrap it in a new frame rather
+    // than adding auto layout to the instance itself.
+    let all_frames = ids
+        .iter()
+        .all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like() && !matches!(n.kind, NodeKind::Instance { .. }) && n.layout.is_none()));
     let single_group = ids.len() == 1 && ids.first().and_then(|i| doc.node(*i)).is_some_and(|n| matches!(n.kind, NodeKind::Group));
     let in_place = all_frames || single_group;
     let targets = if in_place {
