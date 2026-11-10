@@ -44,6 +44,8 @@ mod slot_tests;
 #[cfg(test)]
 mod source_identity_tests;
 #[cfg(test)]
+mod swapped_look_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod text_paragraph_tests;
