@@ -104,7 +104,8 @@ fn import_text_styles(doc: &mut Document, entries: &Value, ids: &BTreeMap<Variab
         let bind = |doc: &Document, kind: &StyleKind, current: Option<&figcraft_doc::Style>| {
             text_style_bindings(&name, wanted, ids, doc, kind, current, warnings)
         };
-        match super::styles::upsert_text_style(doc, &name, &description, style, e.get("paragraph").unwrap_or(&Value::Null), &touched, bind) {
+        let id = e.get("id").and_then(Value::as_str);
+        match super::styles::upsert_text_style(doc, &name, id, &description, style, e.get("paragraph").unwrap_or(&Value::Null), &touched, bind) {
             Ok((sid, was)) => {
                 touched.push(sid);
                 if was {

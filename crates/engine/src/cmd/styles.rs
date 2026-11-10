@@ -264,11 +264,14 @@ fn text_kind(cmd: &str, style: &Value, paragraph: &Value) -> Result<StyleKind> {
 
 /// Make or redefine this file's text style `name` from JSON (see [`text_kind`]). `bind` gives its
 /// variable bindings from the document, the new value and the style it replaces. The style
-/// redefined is the first local text style of that name not in `touched`. True when one existed
-/// (with the style's id); the caller settles and propagates.
+/// redefined is the local text style of that name with the exported `id` (so a file re-importing
+/// its own export keeps each style's identity when two share a name), else the first of that
+/// name; never one in `touched`. True when one existed (with the style's id); the caller settles
+/// and propagates.
 pub(crate) fn upsert_text_style(
     doc: &mut Document,
     name: &str,
+    id: Option<&str>,
     description: &str,
     style: &Value,
     paragraph: &Value,
@@ -276,9 +279,10 @@ pub(crate) fn upsert_text_style(
     bind: impl FnOnce(&Document, &StyleKind, Option<&Style>) -> BTreeMap<String, VariableId>,
 ) -> Result<(StyleId, bool)> {
     let kind = text_kind("variable.import", style, paragraph)?;
-    let same = doc.styles.iter().position(|x| {
+    let eligible = |x: &Style| {
         x.name == name && matches!(x.kind, StyleKind::Text { .. }) && !crate::library::is_remote_style(doc, &x.id) && !touched.contains(&x.id)
-    });
+    };
+    let same = id.and_then(|id| doc.styles.iter().position(|x| x.id == id && eligible(x))).or_else(|| doc.styles.iter().position(&eligible));
     let updated = same.is_some();
     let bound = bind(doc, &kind, same.and_then(|i| doc.styles.get(i)));
     let mut st = match same.and_then(|i| doc.styles.get(i)) {

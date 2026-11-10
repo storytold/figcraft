@@ -450,6 +450,20 @@ fn a_files_own_export_leaves_its_text_styles_alone() {
     assert!(!r["warnings"].to_string().contains("left unbound"), "{r}");
 }
 
+/// Two text styles share a name and are reordered after the export: re-importing it gives each
+/// style its own values back (matched by the exported id), not its namesake's.
+#[test]
+fn a_files_own_export_keeps_each_same_named_style_after_a_reorder() {
+    let mut s = body_session();
+    ex(&mut s, "style.create", json!({"type": "text", "name": "Body", "value": {"fontFamily": "Inter", "fontSize": 20}}));
+    let out = ex(&mut s, "variable.export", json!({}));
+    let file: Value = serde_json::from_str(out["text"].as_str().unwrap()).unwrap();
+    s.doc_mut().unwrap().styles.reverse();
+    let before = s.doc().unwrap().styles.clone();
+    let r = ex(&mut s, "variable.import", json!({"variables": file}));
+    assert_eq!(s.doc().unwrap().styles, before, "{r}");
+}
+
 #[test]
 fn variables_import_caps_the_file_it_reads() {
     let dir = std::env::temp_dir().join(format!("figcraft-vars-io-cap-{}", std::process::id()));
