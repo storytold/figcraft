@@ -165,8 +165,8 @@ fn copy_layers(
             // No longer a slot in the main: it mirrors the main again.
             n.overrides.remove(SLOT);
         }
-        // Component properties: the main layer's bindings use this instance's values; layers of
-        // nested instances use the nested instance's values (one level per source hop).
+        // Bindings use the enclosing instance of their defining component, even when slot
+        // content has fewer source hops than enclosing instances.
         let enc = enclosing.get(&parent).cloned().unwrap_or_default();
         apply_enclosing_props(doc, &mut n, orig, &enc, &inst_props);
         if let NodeKind::Instance { component: c, props } = &n.kind {
@@ -254,6 +254,8 @@ fn rebuild_nested(doc: &mut Document, nested: Vec<NodeId>, old: &BTreeMap<NodeId
     }
 }
 
+/// Apply bindings from their defining components, preserving explicit overrides and letting
+/// nearer source layers take precedence. Slot content need not have one source hop per instance.
 fn apply_enclosing_props(
     doc: &Document,
     n: &mut Node,
