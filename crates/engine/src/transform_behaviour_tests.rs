@@ -403,6 +403,39 @@ fn shift_rotating_lands_on_multiples_of_15_not_steps_from_the_start() {
     assert!(near(got, 0.0), "-2.27° rounds to 0°: {got}");
 }
 
+/// Rotates a 120 × 80 layer inside a frame turned `frame_rot`, the layer at `start` on the page,
+/// by `turn` from its corner, and returns its rotation on the page.
+fn rotate_drag_in_frame(frame_rot: f64, start: f64, turn: f64, m: Mods) -> f64 {
+    let mut s = session();
+    let f = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 100, "width": 400, "height": 400})));
+    set(&mut s, &[f], json!({"rotation": frame_rot}));
+    let r = rect(&mut s, 100.0, 100.0, 120.0, 80.0, Some(f));
+    set(&mut s, &[r], json!({"rotation": start - frame_rot}));
+    let page = |s: &Session| rotation_degrees(s.doc().unwrap().world_transform(r));
+    assert!(near(page(&s), start), "the layer starts at {start}° on the page: {}", page(&s));
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    let world = s.doc().unwrap().world_transform(r);
+    let (c, corner) = (world * Point::new(60.0, 40.0), world * Point::ZERO);
+    let from = corner + (corner - c) * 0.15;
+    let a = (from - c).atan2() - turn.to_radians();
+    let to = c + figcraft_geom::Vec2::from_angle(a) * 80.0;
+    drag(&mut s, from, to, m);
+    page(&s)
+}
+
+#[test]
+fn shift_rotating_inside_a_rotated_frame_lands_the_page_rotation_on_multiples_of_15() {
+    // Measured in Figma (2026-11-10): the rotation field of a layer inside a frame turned 10° shows
+    // its rotation on the page, and Shift lands that on multiples of 15°: from 7°, turns of 40°,
+    // 6° and -10° end at 45°, 15° and 0°; without Shift 6° ends at 13°. Groups behave the same.
+    for (turn, want) in [(40.0, 45.0), (6.0, 15.0), (-10.0, 0.0)] {
+        let got = rotate_drag_in_frame(10.0, 7.0, turn, SHIFT);
+        assert!(near(got, want), "7° on the page turned by {turn}° with Shift: {got}, want {want}");
+    }
+    let got = rotate_drag_in_frame(10.0, 7.0, 6.0, NONE);
+    assert!(near(got, 13.0), "a free turn: {got}");
+}
+
 #[test]
 fn groups_scale_children_keeping_their_rotation_and_flip() {
     let mut s = session();
