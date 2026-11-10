@@ -518,6 +518,8 @@ mod boolean_budget_tests;
 #[cfg(test)]
 mod boolean_cache_tests;
 #[cfg(test)]
+mod boolean_radius_tests;
+#[cfg(test)]
 mod bounds_memo_tests;
 #[cfg(test)]
 mod dots_tests;

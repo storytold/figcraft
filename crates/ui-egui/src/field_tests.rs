@@ -1403,3 +1403,22 @@ fn alt_held_over_a_field_scrubs_it() {
     u.frame(vec![]);
     assert_eq!(geom(&u, a).0, 65.0, "ten more");
 }
+
+#[test]
+fn a_boolean_group_has_one_corner_radius_field_and_a_mixed_selection_reads_mixed() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let r = id(u.app.session.execute("shape.rectangle", &json!({"x": 400, "y": 0, "width": 50, "height": 50})).unwrap());
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0");
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Corner radius", "20", Key::Enter);
+    let radii = |u: &Ui, n: NodeId| u.app.session.doc().unwrap().node(n).unwrap().corners.radii;
+    assert_eq!(radii(&u, g), [20.0; 4]);
+    assert_eq!(undo_steps(&u), steps + 1, "one undo step");
+    assert!((0..4).all(|k| u.ctx.read_response(Id::unique(("corner", k)).with("field")).is_none()), "no field per corner");
+    u.app.run("select.set", json!({"ids": [g, r]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "Mixed");
+    type_into(&mut u, "Corner radius", "8", Key::Enter);
+    assert_eq!((radii(&u, g), radii(&u, r)), ([8.0; 4], [8.0; 4]));
+}

@@ -812,6 +812,21 @@ fn generated_documents_round_trip() {
 }
 
 #[test]
+fn a_boolean_groups_corner_radius_round_trips() {
+    let mut doc = Document::new("t");
+    let page = doc.first_page().unwrap();
+    let g = doc.create(page, NodeKind::BooleanOp { op: BoolOp::Union }, "G", 0.0, 0.0, 0.0, 0.0).unwrap();
+    doc.create(g, NodeKind::Rectangle, "A", 0.0, 0.0, 200.0, 100.0).unwrap();
+    doc.create(g, NodeKind::Rectangle, "B", 150.0, 0.0, 100.0, 200.0).unwrap();
+    doc.fit_to_children(g).unwrap();
+    doc.get_mut(g).unwrap().corners = Corners { radii: [20.0; 4], smoothing: 0.6 };
+    let (back, _) = round_trip(&doc, "boolean radius");
+    let n = back.nodes().find(|n| matches!(n.kind, NodeKind::BooleanOp { .. })).unwrap();
+    assert!(n.corners.radii.iter().all(|r| (r - 20.0).abs() < 1e-4), "{:?}", n.corners);
+    assert!((n.corners.smoothing - 0.6).abs() < 1e-4, "{:?}", n.corners);
+}
+
+#[test]
 fn round_trip_keeps_the_details() {
     let doc = generate(3);
     let (back, warnings) = round_trip(&doc, "seed 3");
