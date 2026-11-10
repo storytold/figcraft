@@ -230,16 +230,33 @@ fn caret_color(ctx: &egui::Context, n: &figcraft_doc::Node, caret: usize) -> Opt
 }
 
 /// The caret of a text without a solid fill (a gradient, an image, no visible fill): black on a
-/// light surface, white on a dark one. The surface is the nearest layer around the text with a
-/// visible solid fill (a dark frame on a light page counts), else the page. Not the interface's
-/// text colour, which is white in the dark theme and vanishes on the default light page (#2190).
+/// light surface, white on a dark one. The surface is the nearest layer around the text whose
+/// topmost visible fill is a solid at least half opaque as drawn (its paint's opacity times its
+/// own and its containers' layer opacity), else the page; a layer whose top fill is a gradient or an
+/// image is passed over. Not the interface's text colour, which is white in the dark theme and
+/// vanishes on the default light page (#2190).
 fn caret_fallback(doc: &Document, id: NodeId) -> Color32 {
-    let under = doc.ancestors(id).into_iter().find_map(|a| {
-        let n = doc.node(a)?;
+    let chain = doc.ancestors(id);
+    // Each layer's opacity as drawn: its own times every container's above it.
+    let drawn: Vec<f32> = {
+        let mut acc = 1.0f32;
+        let mut out: Vec<f32> = chain
+            .iter()
+            .rev()
+            .map(|a| {
+                acc *= doc.node(*a).map_or(1.0, |n| if n.opacity.is_finite() { n.opacity.clamp(0.0, 1.0) } else { 1.0 });
+                acc
+            })
+            .collect();
+        out.reverse();
+        out
+    };
+    let under = chain.iter().zip(drawn).find_map(|(a, alpha)| {
+        let n = doc.node(*a)?;
         match &n.kind {
             NodeKind::Page { background, .. } => Some(*background),
-            _ => n.fills.iter().rev().find(|p| p.visible && p.opacity >= 0.5).and_then(|p| match &p.kind {
-                figcraft_color::PaintKind::Solid { color } => Some(*color),
+            _ => n.fills.iter().rev().find(|p| p.visible).and_then(|p| match &p.kind {
+                figcraft_color::PaintKind::Solid { color } if p.opacity * alpha >= 0.5 => Some(*color),
                 _ => None,
             }),
         }
@@ -898,6 +915,9 @@ mod caret_tests {
         assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::WHITE, "inside a dark frame on the light page");
         ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#F0F0F0"}}));
         assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "inside a light frame");
+        // A dark frame drawn at 20% opacity shows the light page through it.
+        ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#222222", "opacity": 0.2}}));
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "a faint dark frame on the light page");
     }
 
     #[test]
