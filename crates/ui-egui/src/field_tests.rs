@@ -1421,3 +1421,17 @@ fn a_boolean_group_has_one_corner_radius_field_and_a_mixed_selection_reads_mixed
     type_into(&mut u, "Corner radius", "8", Key::Enter);
     assert_eq!((radii(&u, g), radii(&u, r)), ([8.0; 4], [8.0; 4]));
 }
+
+/// A boolean group draws its first radius; per-corner values a script or a file left behind don't
+/// make its field read Mixed, and a relative edit starts from the radius it draws.
+#[test]
+fn a_boolean_groups_field_shows_the_radius_it_draws() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let corners = json!({"topRightRadius": 30, "bottomRightRadius": 30, "bottomLeftRadius": 30});
+    u.app.session.execute("node.set", &json!({"ids": [g], "props": corners})).unwrap();
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0", "the radius it draws");
+    type_into(&mut u, "Corner radius", "+10", Key::Enter);
+    assert_eq!(u.app.session.doc().unwrap().node(g).unwrap().corners.radii, [10.0; 4], "0 + 10, not 30 + 10");
+}
