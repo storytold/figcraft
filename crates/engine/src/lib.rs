@@ -90,7 +90,7 @@ pub use batch::{BatchScope, BatchStep};
 pub use cmd::{CommandSpec, all_commands, find_command};
 pub use figcraft_collab;
 pub use figcraft_doc as doc;
-pub use figcraft_svg::looks_like_svg;
+pub use figcraft_svg::{imports_as_svg, looks_like_svg};
 pub use tools::{PointerEvent, PointerKind, ToolId};
 
 use std::collections::{BTreeMap, BTreeSet};

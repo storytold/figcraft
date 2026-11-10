@@ -282,6 +282,16 @@ fn svg_markup_pastes_as_vectors_even_when_a_picture_comes_with_it() {
 }
 
 #[test]
+fn svg_markup_that_does_not_import_leaves_the_picture_to_paste() {
+    let mut w = Win::new();
+    // Cut short: it starts like SVG but the importer can't read it.
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80""#;
+    *w.clip.borrow_mut() = Clip { text: Some(svg.into()), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    assert_eq!(w.named("Pasted image"), 1, "the picture copied with the markup was pasted");
+}
+
+#[test]
 fn a_picture_still_wins_over_plain_text_beside_it() {
     let mut w = Win::new();
     *w.clip.borrow_mut() = Clip { text: Some("hello from another app".into()), image: Some((2, 2, vec![255; 16])), ..Clip::default() };

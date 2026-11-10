@@ -56,9 +56,13 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
     let (cx, cy) = at.or_else(|| app.session.ds().ok().map(|d| (d.view.cx, d.view.cy))).unwrap_or((0.0, 0.0));
     if !ours {
         // SVG markup is the copy's source and a picture beside it is only a rendering of it, so the
-        // vectors win over the picture.
-        if let Some(text) = sys_text.as_deref().filter(|t| figcraft_engine::looks_like_svg(t) && !is_clipboard_marker(t)) {
-            return paste_text(app, text, (cx, cy), at.is_none());
+        // vectors win over the picture, and over a table on a board. Markup that doesn't import
+        // (cut short, say) leaves the picture to paste.
+        if let Some(text) = sys_text.as_deref().filter(|t| !is_clipboard_marker(t) && figcraft_engine::imports_as_svg(t)) {
+            if !dev_mode_refuses(app, "edit.paste") {
+                paste_svg(app, text, (cx, cy), at.is_none());
+            }
+            return;
         }
         if let Some((png, w, h)) = clipboard_png(app) {
             if dev_mode_refuses(app, "edit.paste") {
@@ -119,12 +123,18 @@ fn paste_text(app: &mut FigApp, text: &str, (cx, cy): (f64, f64), center: bool) 
             ));
         }
     } else if figcraft_engine::looks_like_svg(text) {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-        app.run_user("file.import", json!({"data": b64, "name": "Pasted SVG.svg", "x": cx, "y": cy, "center": center}));
+        // Markup that doesn't import (a paste of one that does never gets here): the import says why.
+        paste_svg(app, text, (cx, cy), center);
     } else {
         app.run("text.create", json!({"text": text, "x": cx, "y": cy}));
     }
+}
+
+/// Import pasted SVG markup at `(cx, cy)`: centred there, or (`center` false) its top-left there.
+fn paste_svg(app: &mut FigApp, text: &str, (cx, cy): (f64, f64), center: bool) {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    app.run_user("file.import", json!({"data": b64, "name": "Pasted SVG.svg", "x": cx, "y": cy, "center": center}));
 }
 
 /// The system clipboard's image as PNG bytes, with its size.

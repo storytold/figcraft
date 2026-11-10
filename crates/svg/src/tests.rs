@@ -56,6 +56,14 @@ fn export_vector_region_paints_independently() {
 }
 
 #[test]
+fn imports_as_svg_needs_markup_the_importer_reads() {
+    assert!(crate::imports_as_svg(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8" height="4"/></svg>"#));
+    assert!(!crate::imports_as_svg(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8""#), "cut short");
+    assert!(!crate::imports_as_svg("<svg\tName\nAda\tLead"), "a spreadsheet row that starts like SVG");
+    assert!(!crate::imports_as_svg("hello"));
+}
+
+#[test]
 fn import_rejects_garbage() {
     let mut d = Document::new("t");
     let p = d.first_page().unwrap();

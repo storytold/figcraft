@@ -18,7 +18,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod import;
-pub use import::{ImportError, Imported, import_svg, import_svg_with_notes, looks_like_svg};
+pub use import::{ImportError, Imported, import_svg, import_svg_with_notes, imports_as_svg, looks_like_svg};
 
 use std::fmt::Write as _;
 

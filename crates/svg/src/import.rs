@@ -862,6 +862,17 @@ pub fn looks_like_svg(text: &str) -> bool {
     false
 }
 
+/// Whether `text` is SVG markup the importer reads: [`looks_like_svg`], then a trial import into a
+/// scratch document. A paste prefers the markup over a picture copied with it, or over a table on
+/// a board, only when it would import.
+pub fn imports_as_svg(text: &str) -> bool {
+    if !looks_like_svg(text) {
+        return false;
+    }
+    let mut doc = Document::new("scratch");
+    doc.first_page().is_some_and(|page| import_svg(&mut doc, text.as_bytes(), page, 0.0, 0.0, "").is_ok())
+}
+
 /// Import SVG bytes as a new frame under `parent` at `(x, y)`. Returns the frame id.
 pub fn import_svg(doc: &mut Document, data: &[u8], parent: NodeId, x: f64, y: f64, name: &str) -> Result<NodeId, ImportError> {
     import_svg_with_notes(doc, data, parent, x, y, name).map(|i| i.frame)
