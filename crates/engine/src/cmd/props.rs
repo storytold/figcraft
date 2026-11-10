@@ -16,7 +16,7 @@ use crate::{Result, bad};
 pub const STROKE_SIDES: [&str; 4] = ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"];
 
 /// Keys `node.set` understands (documented for agents).
-pub const KEYS: &str = "name, visible, locked, opacity (0-1 or \"50%\"), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), \
+pub const KEYS: &str = "name, visible, locked, opacity (0-1 or \"50%\"), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), absoluteRotation (degrees on the page: the layer's angle plus its parents', what the Design panel's field shows; one of the two per call), \
 fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour, {$var: variable id or name}, or \"none\"/null: no fill), strokes, stroke (colour, {$var: variable id or name}, or \"none\"/null: no stroke), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
 strokeCap / startCap / endCap, strokeJoin, miterAngle (degrees: sharper joins bevel; or miterLimit as a ratio), dashes [..], dashCap (none|round|square; null: dashes take startCap and endCap), widthProfile (preset uniform|wedge|taper|eye|rounded|pinch, [[t, scale], ...] or null), brush (preset id, {preset, spacing, sizeJitter, rotationJitter, scatter, seed} or null), cornerRadius (n or [tl,tr,br,bl]), cornerSmoothing (0-1), effects, \
 clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
@@ -456,7 +456,7 @@ fn apply_order(k: &str, v: &Value) -> u8 {
     match k {
         "path" | "width" | "height" | "w" | "h" => 0,
         "layout" | "layoutMode" => 1,
-        "rotation" => 3,
+        "rotation" | "absoluteRotation" => 3,
         "x" | "y" => 4,
         "fillStyle" | "strokeStyle" | "effectStyle" | "textStyle" | "gridStyle" => 5,
         "boundVariables" => 6,
@@ -594,6 +594,27 @@ fn apply_geometry(
             let deg = f64_of(v).ok_or_else(|| bad(cmd, "`rotation` must be degrees"))?;
             let n = doc.get_mut(id)?;
             n.transform = figcraft_geom::set_rotation_about_center(n.transform, n.width, n.height, deg);
+        }
+        "absoluteRotation" => {
+            let deg = f64_of(v).ok_or_else(|| bad(cmd, "`absoluteRotation` must be degrees"))?;
+            if props.contains_key("rotation") {
+                return Err(bad(cmd, "give one of `rotation` and `absoluteRotation`"));
+            }
+            let (w, h) = {
+                let n = doc.get(id)?;
+                (n.width, n.height)
+            };
+            let world = figcraft_geom::set_rotation_about_center(doc.world_transform(id), w, h, deg);
+            let parent = doc.get(id)?.parent;
+            let pw = parent.map(|p| doc.world_transform(p)).unwrap_or(figcraft_geom::Affine::IDENTITY);
+            let local = pw.inverse() * world;
+            if local.as_coeffs().iter().all(|c| c.is_finite()) {
+                doc.get_mut(id)?.transform = local;
+            } else {
+                // A degenerate parent can't be inverted: turn the local angle instead.
+                let n = doc.get_mut(id)?;
+                n.transform = figcraft_geom::set_rotation_about_center(n.transform, n.width, n.height, deg);
+            }
         }
         _ => return Ok(false),
     }

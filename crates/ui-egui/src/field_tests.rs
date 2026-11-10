@@ -442,6 +442,50 @@ fn the_arrow_keys_step_by_the_nudge_amounts_and_fractional_fields_by_their_own()
 }
 
 #[test]
+fn the_rotation_field_shows_and_sets_the_rotation_on_the_page() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 100, "width": 400, "height": 400})).unwrap());
+    s.execute("node.set", &json!({"ids": [f], "props": {"rotation": 10}})).unwrap();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 120, "height": 80, "parent": f})).unwrap());
+    s.execute("node.set", &json!({"ids": [r], "props": {"rotation": -10}})).unwrap();
+    let b = id(s.execute("shape.rectangle", &json!({"x": 600, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().world_transform(n));
+    let local = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(n).unwrap().transform);
+    assert_eq!(field(&mut u, "Rotation").1, "0°");
+    type_into(&mut u, "Rotation", "7", Key::Enter);
+    assert!((page(&u, r) - 7.0).abs() < 1e-6 && (local(&u, r) + 3.0).abs() < 1e-6, "{} {}", page(&u, r), local(&u, r));
+    assert_eq!(field(&mut u, "Rotation").1, "7°");
+    // Arrows step the shown value.
+    let shift = Modifiers { shift: true, ..Modifiers::NONE };
+    let (p, _) = field(&mut u, "Rotation");
+    click(&mut u, p);
+    key(&mut u, Key::ArrowUp, Modifiers::NONE);
+    key(&mut u, Key::ArrowUp, shift);
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    assert!((page(&u, r) - 18.0).abs() < 1e-6, "{}", page(&u, r));
+    assert_eq!(field(&mut u, "Rotation").1, "18°");
+    // Scrubbing is one undo step.
+    let steps = undo_steps(&u);
+    scrub(&mut u, "Rotation", 15.0, Modifiers::NONE);
+    assert!((page(&u, r) - 33.0).abs() < 1e-6, "{}", page(&u, r));
+    assert_eq!(undo_steps(&u), steps + 1);
+    // Mixed: layers in differently turned parents agree when their page angles do.
+    u.app.session.execute("node.set", &json!({"ids": [b], "props": {"rotation": 33}})).unwrap();
+    u.app.session.execute("select.set", &json!({"ids": [r, b]})).unwrap();
+    assert_eq!(field(&mut u, "Rotation").1, "33°");
+    u.app.session.execute("node.set", &json!({"ids": [b], "props": {"rotation": 20}})).unwrap();
+    assert_eq!(field(&mut u, "Rotation").1, "Mixed");
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Rotation", "+10", Key::Enter);
+    assert!((page(&u, r) - 43.0).abs() < 1e-6 && (page(&u, b) - 30.0).abs() < 1e-6, "{} {}", page(&u, r), page(&u, b));
+    assert_eq!(undo_steps(&u), steps + 1);
+}
+
+#[test]
 fn arithmetic_commits_tab_moves_on_and_escape_restores() {
     let (mut u, a, _) = setup();
     // (field, typed) → (x, y, w, h)

@@ -467,6 +467,48 @@ fn design_panel_edits_reach_every_selected_layer() {
 }
 
 #[test]
+fn absolute_rotation_sets_the_rotation_on_the_page_keeping_the_centre() {
+    let mut s = session();
+    let page = |s: &Session, i: NodeId| rotation_degrees(s.doc().unwrap().world_transform(i));
+    let f = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 100, "width": 400, "height": 400})));
+    set(&mut s, &[f], json!({"rotation": 10}));
+    let r = rect(&mut s, 100.0, 100.0, 120.0, 80.0, Some(f));
+    assert!(near(page(&s, r), 10.0) && near(rotation(&s, r), 0.0));
+    let centre = s.doc().unwrap().world_transform(r) * Point::new(60.0, 40.0);
+    set(&mut s, &[r], json!({"absoluteRotation": 7}));
+    assert!(near(page(&s, r), 7.0), "{}", page(&s, r));
+    assert!(near(rotation(&s, r), -3.0), "{}", rotation(&s, r));
+    let c = s.doc().unwrap().world_transform(r) * Point::new(60.0, 40.0);
+    assert!((c - centre).hypot() < 1e-6, "the centre stays put");
+    set(&mut s, &[r], json!({"absoluteRotation": 0}));
+    assert!(near(page(&s, r), 0.0) && near(rotation(&s, r), -10.0));
+    // `node.get` still reports the local angle.
+    let got = ex(&mut s, "node.get", json!({"id": r}));
+    let rot = got["rotation"].as_f64().unwrap_or(f64::NAN);
+    assert!(near(rot, -10.0), "{got}");
+    // Groups: a child reads and sets the page angle, its sibling keeps its own.
+    let a = rect(&mut s, 0.0, 600.0, 50.0, 50.0, None);
+    let b = rect(&mut s, 100.0, 600.0, 50.0, 50.0, None);
+    let g = id(&ex(&mut s, "object.group", json!({"ids": [a, b]})));
+    set(&mut s, &[g], json!({"rotation": 10}));
+    assert!(near(page(&s, a), 10.0));
+    set(&mut s, &[a], json!({"absoluteRotation": 7}));
+    assert!(near(page(&s, a), 7.0) && near(page(&s, b), 10.0));
+    // Several layers: one value on the page for all, one undo step.
+    let top = rect(&mut s, 800.0, 0.0, 50.0, 50.0, None);
+    let steps = undo_steps(&s);
+    set(&mut s, &[r, top], json!({"absoluteRotation": 45}));
+    assert!(near(page(&s, r), 45.0) && near(page(&s, top), 45.0));
+    assert_eq!(undo_steps(&s), steps + 1);
+    // A flip is kept.
+    ex(&mut s, "object.flipH", json!({"ids": [r]}));
+    set(&mut s, &[r], json!({"absoluteRotation": 30}));
+    assert!(near(page(&s, r), 30.0) && flipped(&s, r), "{}", page(&s, r));
+    // One of the two keys per call.
+    assert!(s.execute("node.set", &json!({"ids": [r], "props": {"rotation": 1, "absoluteRotation": 2}})).is_err());
+}
+
+#[test]
 fn constrain_proportions_keeps_the_other_side_in_ratio() {
     let mut s = session();
     // The Layout panel's link is a per-layer property: typing W or H scales the other side by the
