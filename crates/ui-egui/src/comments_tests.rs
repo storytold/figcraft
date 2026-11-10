@@ -308,6 +308,18 @@ fn a_click_in_the_presenters_comment_mode_adds_a_comment_on_the_frame() {
 }
 
 #[test]
+fn a_click_on_the_presenters_draft_pin_keeps_the_typed_draft() {
+    let (mut u, _, _, frame_min) = present_comment_mode();
+    let at = frame_min + vec2(120.0, 90.0);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("typed".into())]);
+    // The pin's body sits above and right of the point it marks.
+    click(&mut u, at + vec2(6.0, -6.0));
+    let draft = u.app.ui.comments.draft.clone();
+    assert_eq!(draft.as_ref().map(|d| d.2.as_str()), Some("typed"), "the draft stays open with its text: {draft:?}");
+}
+
+#[test]
 fn a_click_off_the_frame_in_the_presenters_comment_mode_adds_no_draft() {
     let (mut u, _, _, frame_min) = present_comment_mode();
     click(&mut u, frame_min + vec2(-60.0, 90.0));

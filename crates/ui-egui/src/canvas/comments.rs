@@ -1241,8 +1241,11 @@ pub fn presenter(app: &mut FigApp, ctx: &egui::Context, frame: NodeId, place: cr
     // presented point back to the frame as designed.
     let frame_rect = place.rect(fb).intersect(clip);
     let click = ctx.input(|i| if i.pointer.primary_clicked() { i.pointer.interact_pos() } else { None });
+    // The draft's own pin isn't interactable, so a click on it would start a new draft and lose
+    // the typed text: it is left alone.
+    let draft_pin = app.ui.comments.draft.as_ref().map(|(x, y, _)| pin_rect(to_screen((*x, *y))));
     if clicked.is_none()
-        && let Some(q) = click.filter(|q| frame_rect.contains(*q))
+        && let Some(q) = click.filter(|q| frame_rect.contains(*q) && !draft_pin.is_some_and(|r| r.contains(*q)))
         && ctx.layer_id_at(q).is_none_or(|l| l.order == egui::Order::Background)
     {
         let pt = place.page(q);
