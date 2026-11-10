@@ -1,7 +1,8 @@
 //! Variables bound inside shared styles. A style's `bound` map names fields of its own value in
 //! the keys a layer's bindings use (`fills/<i>/color`, `fills/<i>/stops/<j>/color`,
 //! `effects/<i>/<field>`, `layoutGrids/<i>/<field>`, a text style's `fontSize`, `lineHeight`,
-//! `letterSpacing`, `fontFamily`, `fontStyle`). Each layer using the style sees those fields
+//! `letterSpacing`, `fontWeight`, `fontFamily`, `fontStyle`; a number weight and a style name set the
+//! same property, the weight wins). Each layer using the style sees those fields
 //! resolved in its own modes; the style itself stores them resolved in the default modes.
 
 use std::borrow::Cow;
@@ -32,7 +33,7 @@ pub fn field_type(kind: &StyleKind, key: &str) -> Option<VariableType> {
         (StyleKind::Effect { effects }, Some((BoundList::Effects, i, field))) => effect_field_type(&effects.get(i)?.kind, field),
         (StyleKind::Grid { grids }, Some((BoundList::Grids, i, "size" | "count" | "gutter" | "offset"))) => grids.get(i).map(|_| Number),
         (StyleKind::Text { .. }, None) => match key {
-            "fontSize" | "lineHeight" | "letterSpacing" => Some(Number),
+            "fontSize" | "lineHeight" | "letterSpacing" | "fontWeight" => Some(Number),
             "fontFamily" | "fontStyle" => Some(String),
             _ => None,
         },
@@ -70,6 +71,7 @@ pub fn field_scopes(kind: &StyleKind, key: &str) -> Option<&'static [&'static st
             "letterSpacing" => &["LETTER_SPACING"],
             "fontFamily" => &["FONT_FAMILY"],
             "fontStyle" => &["FONT_STYLE"],
+            "fontWeight" => &["FONT_WEIGHT"],
             _ => return None,
         },
         _ => return None,
@@ -135,6 +137,13 @@ fn set_text_field(style: &mut TextStyle, key: &str, val: &VariableValue) {
         ("letterSpacing", VariableValue::Number(x)) if x.is_finite() => style.letter_spacing = LetterSpacing::Pixels(x.clamp(-10_000.0, 10_000.0)),
         ("fontFamily", VariableValue::String(f)) if !f.trim().is_empty() => style.font_family = f.clone(),
         ("fontStyle", VariableValue::String(f)) if !f.trim().is_empty() => style.font_style = f.clone(),
+        ("fontWeight", VariableValue::Number(x)) if x.is_finite() => {
+            // The face nearest the number (a static family) and the `wght` axis (a variable font).
+            let w = x.clamp(1.0, 1000.0);
+            let italic = style.italic();
+            style.set_font_style(crate::cmd::props::styled_name(crate::cmd::props::weight_name(w as u16), italic));
+            style.variations.insert("wght".to_string(), w);
+        }
         _ => {}
     }
 }

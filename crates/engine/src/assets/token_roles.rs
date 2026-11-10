@@ -60,6 +60,13 @@ impl Roles {
                 }
             }
         }
+        for st in &doc.styles {
+            for (field, id) in &st.bound {
+                if field == "fontWeight" {
+                    roles.entry(id.clone()).or_insert(NumberRole::Unitless);
+                }
+            }
+        }
         for v in vars.iter().filter(|v| v.kind == VariableType::Number) {
             if let Some(r) = v.scopes.as_ref().and_then(|s| s.iter().find_map(|s| role_of_scope(s))) {
                 roles.entry(v.id.clone()).or_insert(r);

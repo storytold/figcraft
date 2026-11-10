@@ -787,15 +787,16 @@ fn font_style_size_row(ui: &mut Ui, doc: &Document, style: &Style, def: &TextSty
     let id = style.id.as_str();
     let mut style_resp = None;
     ui.horizontal(|ui| {
-        match bound_name(doc, style, "fontStyle") {
+        let weight_field = if style.bound.contains_key("fontWeight") { "fontWeight" } else { "fontStyle" };
+        match bound_name(doc, style, weight_field) {
             Some(name) => {
                 let (r, _) = ui.allocate_exact_size(vec2(half, widgets::FIELD_H), Sense::hover());
                 text_binding(
                     ui,
                     TextBinding {
                         style: id,
-                        field: "fontStyle",
-                        kind: VariableType::String,
+                        field: weight_field,
+                        kind: if weight_field == "fontWeight" { VariableType::Number } else { VariableType::String },
                         rect: r,
                         name: &name,
                         lead: widgets::Lead::Named(tr("Font style")),
@@ -944,7 +945,7 @@ fn font_family_menu(ui: &Ui, id: &str, def: &TextStyle, family_resp: &Response, 
 fn font_style_menu(id: &str, def: &TextStyle, style_resp: &Response, out: &mut Frame) {
     crate::right::menu_popup(style_resp).width(200.0).show(|ui| {
         if crate::right::menu_item(ui, tr("Apply variable"), "") {
-            crate::variable_ui::open_style(ui, id, "fontStyle", VariableType::String, style_resp.rect.left_bottom());
+            crate::variable_ui::open_style_weight(ui, id, style_resp.rect.left_bottom());
             ui.close();
             return;
         }

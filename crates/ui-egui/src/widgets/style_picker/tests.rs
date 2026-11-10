@@ -362,8 +362,18 @@ fn text_variables_session(bind: bool) -> crate::layers_drag_tests::Ui {
         ("Body tracking", "number", json!(1)),
         ("Body font", "string", json!("Inter")),
         ("Body weight", "string", json!("Bold")),
+        ("Body weight number", "number", json!(700)),
     ] {
         s.execute("variable.create", &json!({"collection": "Type", "name": name, "type": ty, "values": {"Base": value}})).unwrap();
+    }
+    for (name, scope) in [
+        ("Body size", "FONT_SIZE"),
+        ("Body leading", "LINE_HEIGHT"),
+        ("Body tracking", "LETTER_SPACING"),
+        ("Body font", "FONT_FAMILY"),
+        ("Body weight number", "FONT_WEIGHT"),
+    ] {
+        s.execute("variable.update", &json!({"variable": name, "scopes": [scope]})).unwrap();
     }
     if bind {
         for (field, var) in [
@@ -451,6 +461,41 @@ fn text_style_editor_shows_bound_fields_as_variables_and_detaches_them() {
         assert_eq!(bound_to(&u, field), None, "{field} is detached");
     }
     assert!(u.app.ui.style_picker.is_some(), "the editor stays open");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+#[test]
+fn the_weight_menu_binds_a_number_variable_as_font_weight() {
+    let mut u = text_variables_session(false);
+    let left = editor_left(&mut u);
+    let in_editor = |u: &mut crate::layers_drag_tests::Ui| -> Vec<(String, Pos2)> {
+        drawn_texts(u).into_iter().filter(|(_, p)| p.x > left && p.x < left + W).collect()
+    };
+    let texts = in_editor(&mut u);
+    click(&mut u, text_at(&texts, "Regular"));
+    let texts = drawn_texts(&mut u);
+    click(&mut u, text_at(&texts, "Apply variable"));
+    assert!(crate::variable_ui::picker_open(&u.ctx), "the variable picker opens");
+    let texts = drawn_texts(&mut u);
+    assert!(texts.iter().any(|(t, _)| t == "Body weight"), "string variables are offered");
+    assert!(!texts.iter().any(|(t, _)| t == "Body font" || t == "Body leading"), "other fields' variables are not");
+    click(&mut u, text_at(&texts, "Body weight number"));
+    assert_eq!(bound_to(&u, "fontWeight").as_deref(), Some("Body weight number"));
+    assert_eq!(bound_to(&u, "fontStyle"), None);
+    let font_style = || {
+        let doc = u.app.session.doc().unwrap();
+        let Some(StyleKind::Text { style: def, .. }) = doc.style("Body").map(|s| s.kind.clone()) else { panic!("a text style") };
+        def.font_style
+    };
+    assert_eq!(font_style(), "Bold");
+    // The chip shows it in the style slot, and its detach button clears the weight binding.
+    for _ in 0..2 {
+        u.frame(vec![]);
+    }
+    let texts = in_editor(&mut u);
+    let chip = text_at(&texts, "Body weight number");
+    click(&mut u, Pos2::new(left + (W - 8.0) / 2.0 - 11.0, chip.y));
+    assert_eq!(bound_to(&u, "fontWeight"), None, "the weight is detached");
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
 }
 
