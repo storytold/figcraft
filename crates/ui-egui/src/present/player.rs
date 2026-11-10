@@ -64,7 +64,13 @@ pub(super) fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrom
             p,
             &ctx,
             &l,
-            InputMode { over_area: over && p.link_notice.is_none() && !(p.view.comments && !chrome.pane), keys_on: keys, pane: chrome.pane, now },
+            InputMode {
+                over_area: over && p.link_notice.is_none(),
+                clicks: !(p.view.comments && !chrome.pane),
+                keys_on: keys,
+                pane: chrome.pane,
+                now,
+            },
         );
     } else {
         p.pads.clear();
