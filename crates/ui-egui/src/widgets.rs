@@ -1013,7 +1013,7 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), r.shrink(6.0), *icon, t.icon);
+        icons::paint(ui.painter(), icon_glyph_rect(r), *icon, t.icon);
         if resp.clicked() {
             out = Some(i);
         }
@@ -1045,6 +1045,15 @@ pub fn tight_end_n<R>(ui: &mut Ui, count: usize, add: impl FnOnce(&mut Ui) -> R)
     add(&mut child)
 }
 
+/// Inset of the glyph inside a 24 pt icon button: a 14 pt glyph, the size every icon button in the
+/// panels draws at (section header buttons included).
+pub const ICON_BUTTON_INSET: f32 = 5.0;
+
+/// The rect a 24 pt icon button paints its glyph in.
+pub fn icon_glyph_rect(button: Rect) -> Rect {
+    button.shrink(ICON_BUTTON_INSET)
+}
+
 /// An icon button at `rect` (hover highlight, tooltip); true when clicked.
 pub fn icon_button_at(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -1052,7 +1061,7 @@ pub fn icon_button_at(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) ->
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), rect.shrink(5.0), icon, t.icon);
+    icons::paint(ui.painter(), icon_glyph_rect(rect), icon, t.icon);
     resp.clicked()
 }
 
