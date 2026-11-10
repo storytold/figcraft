@@ -30,7 +30,7 @@ const MIND_NODE_TRACKING: f64 = -1.1;
 const MIND_MIN_W: f64 = 8.0;
 /// What `board.mindMap` puts in the first node and its children when it isn't told.
 const MIND_ROOT_TEXT: &str = "Topic";
-const MIND_STARTERS: [&str; 3] = ["A concept", "An idea", "A thought"];
+const MIND_STARTERS: [&str; 3] = ["Idea 1", "Idea 2", "Idea 3"];
 /// The most children `board.mindMap` makes, and the longest text it puts in a node.
 const MIND_MAX_STARTERS: usize = 20;
 const MIND_MAX_TEXT: usize = 500;

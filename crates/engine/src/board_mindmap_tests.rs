@@ -68,7 +68,7 @@ fn branches(s: &Session) -> Vec<NodeId> {
 fn check_child(s: &Session, root: NodeId, (k, line): (NodeId, NodeId), i: usize) {
     let r = bx(s, root);
     let td = text_data(s, k);
-    assert_eq!(td.characters, ["A concept", "An idea", "A thought"][i]);
+    assert_eq!(td.characters, ["Idea 1", "Idea 2", "Idea 3"][i]);
     assert_eq!((td.style.font_size, td.style.font_style.as_str()), (16.0, "Medium"));
     assert_eq!((td.style.line_height, td.style.letter_spacing), (LineHeight::Percent(150.0), LetterSpacing::Percent(-1.1)));
     let b = bx(s, k);

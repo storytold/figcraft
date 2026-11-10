@@ -181,7 +181,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.mindMap",
             "Mind map",
-            "{x?, y? (the first node's top-left in the parent; default the middle of the view), text? (default Topic), children? (their texts, at most 20; default A concept, An idea, A thought), parent?, edit? (start typing in the first node; default false)} → {id, text, children: [{id, text, connector}...]}  a first node with children on its right, joined by branches; the map lays itself out",
+            "{x?, y? (the first node's top-left in the parent; default the middle of the view), text? (default Topic), children? (their texts, at most 20; default Idea 1, Idea 2, Idea 3), parent?, edit? (start typing in the first node; default false)} → {id, text, children: [{id, text, connector}...]}  a first node with children on its right, joined by branches; the map lays itself out",
             true,
             mindmap::mind_map_cmd
         ),
