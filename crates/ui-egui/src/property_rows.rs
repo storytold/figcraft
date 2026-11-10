@@ -10,6 +10,10 @@
 //! `stroke.paste`, `effect.paste`) while it is still the last thing copied: on top of their list,
 //! or in place of their highlighted row when it is of the same kind. A copy keeps its kind: a
 //! stroke never lands in the fills, whatever row is highlighted.
+//!
+//! A programmatic copy (the control channel) never writes the system clipboard, so it has no
+//! mirror there: a programmatic paste takes it from the engine clipboard, while a user's paste
+//! goes by what the system clipboard holds, as it does for copied layers.
 
 use egui::{Color32, Context, Rect, Response};
 use figcraft_doc::NodeId;
@@ -224,14 +228,13 @@ pub(crate) fn paste(app: &mut FigApp) -> bool {
         // programmatic paste reads only the engine clipboard.
         && (app.control_synthetic || (c.mirror.is_some() && app.ui.last_copy == c.mirror));
     if !still_last {
-        // The system clipboard still holds this copy's mirror, but the engine's copy of it is gone
-        // (a command copied a paint or effect of another kind since): nothing to paste, rather
-        // than the layers copied before it.
-        return !app.control_synthetic
-            && c.mirror.is_some()
-            && app.ui.last_copy == c.mirror
-            && app.ui.last_copy_generation == app.session.clipboard.layers_generation
-            && c.layers_generation == app.session.clipboard.layers_generation;
+        // No layers were copied since this copy, but the engine's copy of it is gone (a command
+        // copied a paint or effect of another kind since): nothing to paste, rather than the
+        // layers copied before it. For a user's paste, only while the system clipboard still
+        // holds this copy's mirror; a programmatic paste reads only the engine clipboard.
+        let ours = app.control_synthetic
+            || (c.mirror.is_some() && app.ui.last_copy == c.mirror && app.ui.last_copy_generation == app.session.clipboard.layers_generation);
+        return ours && c.layers_generation == app.session.clipboard.layers_generation;
     }
     let ids = app.session.selection();
     if ids.is_empty() {

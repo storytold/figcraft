@@ -444,3 +444,70 @@ fn a_click_on_a_rows_grip_highlights_that_row_for_the_selection() {
     select(&mut u, a);
     assert!(u.app.ui.property_row.is_none());
 }
+
+#[test]
+fn a_programmatic_paste_after_a_property_copy_whose_engine_copy_is_gone_pastes_no_stale_layers() {
+    let (mut u, a, b, _) = setup();
+    u.app.control_synthetic = true;
+    // A layer copy first, then the fill row's, both programmatic.
+    crate::menus::invoke(&mut u.app, "edit.copy");
+    assert_eq!(u.app.session.clipboard.nodes.len(), 1, "A was copied");
+    crate::property_rows::copy(&mut u.app, PropertyKind::Fill, 0, &[a]);
+    // A stroke copied without its row: the fill is no longer on the clipboard.
+    u.app.run("stroke.copy", json!({"id": a}));
+    u.app.run("select.set", json!({"ids": [b]}));
+    let layers = u.app.session.doc().unwrap().node_count();
+    crate::menus::paste(&mut u.app, None, None);
+    assert_eq!(u.app.session.doc().unwrap().node_count(), layers, "the layer copied before wasn't pasted");
+    assert_eq!(fills(&u, b), ["00FF00"]);
+    assert!(u.app.session.doc().unwrap().node(b).unwrap().strokes.is_empty());
+}
+
+#[test]
+fn an_effect_paste_replaces_the_highlighted_effect_above_the_bottom_one() {
+    let (mut u, a, b, clip) = setup();
+    u.app.run("effect.add", json!({"ids": [b], "type": "innerShadow"}));
+    click_row(&mut u, "Layer blur");
+    copy(&mut u);
+    select(&mut u, b);
+    // B's effects, bottom to top: a drop shadow, an inner shadow (drawn first, at the top).
+    click_row(&mut u, "Inner shadow");
+    assert_eq!(u.app.ui.property_row.as_ref().map(|h| (h.kind, h.index)), Some((PropertyKind::Effect, 1)));
+    paste(&mut u, &clip);
+    let doc = u.app.session.doc().unwrap();
+    let (blur, effects) = (&doc.node(a).unwrap().effects[0], &doc.node(b).unwrap().effects);
+    assert_eq!(effects.len(), 2, "replaced, not added");
+    assert_eq!(effects[1], *blur, "the blur took the inner shadow's place");
+    assert_eq!(effects[0].label(), "Drop shadow", "the drop shadow under it stays");
+}
+
+#[test]
+fn a_property_copied_in_one_window_pastes_in_another_and_the_highlight_stays_in_its_window() {
+    let mut s = Session::empty();
+    s.execute("file.new", &json!({"name": "A"})).unwrap();
+    let a = rect(&mut s, 0.0, "#FF0000");
+    s.execute("file.new", &json!({"name": "B"})).unwrap();
+    let b = rect(&mut s, 0.0, "#00FF00");
+    let clip = Rc::new(RefCell::new(None));
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = crate::FigApp::new(s, Box::new(Clip(clip.clone())));
+    ctx.run_ui(egui::RawInput::default(), |ui| app.ui(ui)).textures_delta.clear();
+    // File A goes to a window of its own; the main window shows B.
+    let w = crate::control::handle(&mut app, &ctx, "window.new", &json!({"index": 0})).unwrap()["window"].as_u64().unwrap();
+    app.run("select.set", json!({"ids": [b]}));
+    let doc = app.session.ds().unwrap().uid;
+    app.ui.property_row = Some(Highlight { kind: PropertyKind::Fill, index: 0, ids: vec![b], doc, rect: None });
+    crate::menus::invoke(&mut app, "edit.copy");
+    assert_eq!(clip.borrow().as_deref(), Some("#00FF00"));
+    let text = clip.borrow().clone();
+    let pasted = crate::windows::as_window(&mut app, w, |app| {
+        assert!(app.ui.property_row.is_none(), "the highlight belongs to the main window");
+        app.run("select.set", json!({"ids": [a]}));
+        crate::menus::paste(app, text.as_deref(), None);
+        app.session.doc().unwrap().node(a).unwrap().fills.iter().map(|p| p.solid_color().unwrap().to_hex()).collect::<Vec<_>>()
+    });
+    let fills = pasted.expect("the window exists");
+    assert_eq!(fills, ["FF0000", "00FF00"], "B's fill went on top of A's");
+    assert!(app.ui.property_row.is_some(), "the main window keeps its highlight");
+}
