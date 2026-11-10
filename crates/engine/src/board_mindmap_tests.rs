@@ -314,3 +314,72 @@ fn refusals_saved_files_and_a_second_pass_changes_nothing() {
     crate::normalize(&mut again, doc);
     assert!(again == *doc, "a second pass changes nothing");
 }
+
+/// Every layer touched again on a copy of `s`'s document: a map in place is left as it is.
+fn second_pass_is_a_no_op(s: &Session) {
+    let doc = s.doc().unwrap();
+    let mut again = doc.clone();
+    again.mark_dirty(doc.ids().collect::<Vec<_>>());
+    crate::normalize(&mut again, doc);
+    assert!(again == *doc, "a second pass changes nothing");
+}
+
+#[test]
+fn a_map_around_its_own_container_stays_put() {
+    let mut s = board();
+    let sec = id(&s.execute("node.create", &json!({"type": "section", "x": 0, "y": 0, "width": 800, "height": 600})).unwrap(), "id");
+    let out = s.execute("board.mindMap", &json!({"parent": sec, "x": 40, "y": 40})).unwrap();
+    let line = id(&out["children"][1], "connector");
+    s.execute("board.reattach", &json!({"id": line, "end": "to", "target": sec})).unwrap();
+    let was = bx(&s, sec);
+    second_pass_is_a_no_op(&s);
+    s.execute("node.set", &json!({"id": id(&out, "id"), "props": {"name": "again"}})).unwrap();
+    assert_eq!(bx(&s, sec), was, "the section stays where it is");
+    second_pass_is_a_no_op(&s);
+}
+
+#[test]
+fn a_branch_moved_by_its_start_leaves_no_gap_and_odd_structures_settle() {
+    let mut s = board();
+    let (root, [c0, c1, c2], lines) = map(&mut s);
+    let (h, at) = (bx(&s, c1).height(), bx(&s, c1));
+    s.execute("board.reattach", &json!({"id": lines[1], "end": "from", "target": {"x": 900, "y": 900}})).unwrap();
+    assert_eq!(branches(&s).len(), 2, "one branch fewer");
+    assert_eq!(bx(&s, c1), at, "that child stays where it was");
+    let r = bx(&s, root).center().y;
+    assert!(same(bx(&s, c0).center().y, r - (h + 48.0) / 2.0), "{:?}", bx(&s, c0));
+    assert!(same(bx(&s, c2).center().y, r + (h + 48.0) / 2.0), "{:?}", bx(&s, c2));
+    second_pass_is_a_no_op(&s);
+
+    // Two branches arrive at one node: the lower connector id stays its parent.
+    let mut s = board();
+    let (root, [c0, c1, _], lines) = map(&mut s);
+    let g = id(&s.execute("board.mindMapAdd", &json!({"id": c0})).unwrap(), "id");
+    let gl = branches(&s).into_iter().find(|b| !lines.contains(b)).unwrap();
+    s.execute("board.reattach", &json!({"id": gl, "end": "to", "target": c1})).unwrap();
+    assert_eq!(kids(s.doc().unwrap(), root).len(), 3);
+    assert!(same(bx(&s, c1).x0, bx(&s, root).x1 + 88.0), "c1 stays in the root's column");
+    assert!(is_mind_node(&s, g));
+    second_pass_is_a_no_op(&s);
+
+    // A cycle: nothing in it moves, and nothing changes after.
+    let mut s = board();
+    let (_, [c0, ..], lines) = map(&mut s);
+    let g = id(&s.execute("board.mindMapAdd", &json!({"id": c0})).unwrap(), "id");
+    let gg = id(&s.execute("board.mindMapAdd", &json!({"id": g})).unwrap(), "id");
+    s.execute("board.reattach", &json!({"id": lines[0], "end": "from", "target": gg})).unwrap();
+    let ring = places(&s, &[c0, g, gg]);
+    second_pass_is_a_no_op(&s);
+    assert_eq!(places(&s, &[c0, g, gg]), ring);
+}
+
+#[test]
+fn the_caps_refuse_what_is_too_far_and_cut_what_is_too_long() {
+    let mut s = board();
+    assert!(s.execute("board.mindMap", &json!({"x": 2.0e9})).is_err());
+    assert!(s.execute("board.mindMap", &json!({"y": -2.0e9})).is_err());
+    let long = "x".repeat(600);
+    let out = s.execute("board.mindMap", &json!({"text": long, "children": [long]})).unwrap();
+    assert_eq!(text_data(&s, id(&out, "id")).characters.chars().count(), 500);
+    assert_eq!(text_data(&s, id(&out["children"][0], "id")).characters.chars().count(), 500);
+}

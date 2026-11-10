@@ -263,11 +263,12 @@ fn children_of(bs: &[Branch]) -> (BTreeSet<NodeId>, Children) {
 }
 
 /// Every branch that no longer joins two layers of its own page is removed, and the layers it
-/// joined that are still there count as stirred (so does an end of a branch that is gone).
+/// joined that are still there count as stirred (so do the old ends of a touched branch: one that
+/// is gone, or that was moved to join something else).
 fn prune_branches(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
     let mut stirred = BTreeSet::new();
     let ends = |c: &Connector| [c.from.node(), c.to.node()].into_iter().flatten().collect::<Vec<NodeId>>();
-    for id in touched.iter().filter(|i| !doc.contains(**i)) {
+    for id in touched {
         if let Some(BoardItem::Connector(c)) = before.node(*id).and_then(|n| n.board.as_ref())
             && c.branch
         {
@@ -292,7 +293,8 @@ fn prune_branches(doc: &mut Document, before: &Document, touched: &BTreeSet<Node
 }
 
 /// The boxes of the map under `root`, breadth first (so a parent always comes before its
-/// children), and the connectors that hold it together. `None`: a box is missing.
+/// children), and the connectors that hold it together. `None`: a box is missing, or the map has
+/// more than [`MIND_MAX_NODES`] nodes (it is left as it is).
 fn map_boxes(doc: &Document, root: NodeId, kids: &Children) -> Option<(Vec<MindBox>, Vec<NodeId>)> {
     let first = doc.world_bounds(root)?;
     let mut boxes = vec![MindBox { id: root, rect: first, parent: None, left: false }];
@@ -301,8 +303,11 @@ fn map_boxes(doc: &Document, root: NodeId, kids: &Children) -> Option<(Vec<MindB
     while let Some(b) = boxes.get(at).copied() {
         let depth = depths.get(at).copied().unwrap_or(MIND_MAX_DEPTH);
         for k in kids.get(&b.id).filter(|_| depth < MIND_MAX_DEPTH).into_iter().flatten() {
-            if boxes.len() >= MIND_MAX_NODES || !seen.insert(k.child) {
+            if !seen.insert(k.child) {
                 continue;
+            }
+            if boxes.len() >= MIND_MAX_NODES {
+                return None;
             }
             boxes.push(MindBox { id: k.child, rect: doc.world_bounds(k.child)?, parent: Some(at), left: k.left });
             depths.push(depth + 1);
@@ -316,8 +321,15 @@ fn map_boxes(doc: &Document, root: NodeId, kids: &Children) -> Option<(Vec<MindB
 /// Move layer `id` by `d` on the page.
 fn shift(doc: &mut Document, id: NodeId, d: Point) {
     let parent = doc.node(id).and_then(|n| n.parent).map_or(Affine::IDENTITY, |p| doc.world_transform(p));
+    let inverse = parent.inverse();
+    if !inverse.as_coeffs().iter().all(|v| v.is_finite()) {
+        return;
+    }
     if let Some(n) = doc.node_mut(id) {
-        n.transform = parent.inverse() * Affine::translate((d.x, d.y)) * parent * n.transform;
+        let moved = inverse * Affine::translate((d.x, d.y)) * parent * n.transform;
+        if moved.as_coeffs().iter().all(|v| v.is_finite()) {
+            n.transform = moved;
+        }
     }
 }
 
@@ -327,6 +339,10 @@ fn shift(doc: &mut Document, id: NodeId, d: Point) {
 /// write, and what makes a deleted node's children float free and a detached node stay detached.
 pub(crate) fn settle_mind_maps(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) {
     if !is_board(doc) || touched.is_empty() {
+        return;
+    }
+    // One look at every layer: a board without a branch (nearly all) goes no further.
+    if !doc.nodes().any(|n| matches!(&n.board, Some(BoardItem::Connector(c)) if c.branch)) {
         return;
     }
     let stirred = prune_branches(doc, before, touched);
@@ -340,6 +356,12 @@ pub(crate) fn settle_mind_maps(doc: &mut Document, before: &Document, touched: &
     for root in roots {
         let Some((boxes, lines)) = map_boxes(doc, root, &kids) else { continue };
         if boxes.iter().any(|b| !(b.rect.x0.is_finite() && b.rect.y0.is_finite() && b.rect.x1.is_finite() && b.rect.y1.is_finite())) {
+            continue;
+        }
+        // A map holding a layer and something inside it would move that layer with its own
+        // children: leave it as it is.
+        let ids: BTreeSet<NodeId> = boxes.iter().map(|b| b.id).collect();
+        if boxes.iter().any(|b| doc.ancestors(b.id).iter().any(|a| ids.contains(a))) {
             continue;
         }
         let stale = boxes.iter().any(|b| stirred.contains(&b.id) || hit(doc, b.id)) || lines.iter().any(|l| hit(doc, *l));

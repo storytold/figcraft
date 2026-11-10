@@ -27,6 +27,18 @@ fn three(middle: (f64, f64)) -> Vec<MindBox> {
     vec![root(), node(2, 0, (100.0, 24.0), 0.0), node(3, 0, middle, 22.0 - middle.1 / 2.0), node(4, 0, (80.0, 24.0), 20.0)]
 }
 
+/// The root, two children (100 and 60 wide) under it, two more under the first and one under the second.
+fn six() -> Vec<MindBox> {
+    vec![
+        root(),
+        node(2, 0, (100.0, 24.0), 0.0),
+        node(3, 0, (60.0, 24.0), 10.0),
+        node(4, 1, (40.0, 24.0), 0.0),
+        node(5, 1, (40.0, 24.0), 10.0),
+        node(6, 2, (40.0, 24.0), 0.0),
+    ]
+}
+
 #[test]
 fn three_children_stand_88_right_of_the_root_72_apart_centred_on_it() {
     assert_eq!((MIND_GAP_X, MIND_GAP_Y), (88.0, 48.0));
@@ -43,14 +55,7 @@ fn a_taller_node_pushes_its_neighbours_half_its_growth_each_way() {
 
 #[test]
 fn grandchildren_share_a_column_past_the_widest_sibling_and_their_parents_make_room() {
-    let nodes = vec![
-        root(),
-        node(2, 0, (100.0, 24.0), 0.0),
-        node(3, 0, (60.0, 24.0), 10.0),
-        node(4, 1, (40.0, 24.0), 0.0),
-        node(5, 1, (40.0, 24.0), 10.0),
-        node(6, 2, (40.0, 24.0), 0.0),
-    ];
+    let nodes = six();
     let placed = mind_layout(&nodes);
     // 476 = 288 + 100 + 88, although B is only 60 wide.
     let got: Vec<(f64, f64)> = (2..=6).map(|i| at(&placed, i)).collect();
@@ -67,14 +72,7 @@ fn left_children_mirror_the_right_ones() {
 
 #[test]
 fn the_layout_is_a_fixed_point_ties_go_by_id_and_junk_is_skipped() {
-    let nodes = vec![
-        root(),
-        node(2, 0, (100.0, 24.0), 0.0),
-        node(3, 0, (60.0, 24.0), 10.0),
-        node(4, 1, (40.0, 24.0), 0.0),
-        node(5, 1, (40.0, 24.0), 10.0),
-        node(6, 2, (40.0, 24.0), 0.0),
-    ];
+    let nodes = six();
     let placed = mind_layout(&nodes);
     let again: Vec<MindBox> = nodes
         .iter()
