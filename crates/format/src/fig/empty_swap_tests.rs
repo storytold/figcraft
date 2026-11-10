@@ -41,7 +41,8 @@ fn row(path: &[u64], more: Fields) -> Kv<'static> {
 }
 
 /// A Badge main with a label, a Card main holding a Badge instance whose `overriddenSymbolID` is
-/// the empty GUID (as in the report), and a Card instance whose override row writes it too.
+/// the empty GUID (as in the report) and a second one the Card swaps to an Error variant, and a
+/// Card instance whose override rows write the empty GUID over both.
 fn import_cards() -> (Document, Vec<String>) {
     let message = o(vec![(
         "nodeChanges",
@@ -50,9 +51,21 @@ fn import_cards() -> (Document, Vec<String>) {
             node(2, Some(1), "CANVAS", "Page", vec![]),
             node(10, Some(2), "SYMBOL", "Property 1=Informative", vec![]),
             node(11, Some(10), "RECTANGLE", "Label", vec![]),
+            node(20, Some(2), "SYMBOL", "Property 1=Error", vec![]),
+            node(21, Some(20), "RECTANGLE", "Error label", vec![]),
             node(30, Some(2), "SYMBOL", "Card", vec![]),
             node(31, Some(30), "INSTANCE", "Badge", vec![("symbolData", symbol(10, vec![])), ("overriddenSymbolID", empty())]),
-            node(40, Some(2), "INSTANCE", "Card copy", vec![("symbolData", symbol(30, vec![row(&[31], vec![("overriddenSymbolID", empty())])]))]),
+            node(32, Some(30), "INSTANCE", "Swapped badge", vec![("symbolData", symbol(10, vec![])), ("overriddenSymbolID", g(20))]),
+            node(
+                40,
+                Some(2),
+                "INSTANCE",
+                "Card copy",
+                vec![(
+                    "symbolData",
+                    symbol(30, vec![row(&[31], vec![("overriddenSymbolID", empty())]), row(&[32], vec![("overriddenSymbolID", empty())])]),
+                )],
+            ),
         ]),
     )]);
     let schema = Schema::parse(export::SCHEMA).unwrap();
@@ -63,8 +76,15 @@ fn named(doc: &Document, name: &str) -> NodeId {
     doc.nodes().find(|n| n.name == name).unwrap().id
 }
 
-fn badge_in(doc: &Document, card: &str) -> NodeId {
-    doc.node(named(doc, card)).unwrap().children[0]
+fn badge_in(doc: &Document, card: &str, index: usize) -> NodeId {
+    doc.node(named(doc, card)).unwrap().children[index]
+}
+
+fn main_of(doc: &Document, id: NodeId) -> Option<NodeId> {
+    match doc.node(id)?.kind {
+        NodeKind::Instance { component, .. } => Some(component),
+        _ => None,
+    }
 }
 
 #[test]
@@ -73,9 +93,19 @@ fn an_empty_swap_guid_keeps_the_instance_of_its_main() {
     assert!(notes.is_empty(), "no missing components: {notes:?}");
     let main = named(&doc, "Property 1=Informative");
     for card in ["Card", "Card copy"] {
-        let b = doc.node(badge_in(&doc, card)).unwrap();
+        let b = doc.node(badge_in(&doc, card, 0)).unwrap();
         assert!(matches!(b.kind, NodeKind::Instance { component, .. } if component == main), "{card}: {:?}", b.kind);
         let label = b.children.first().and_then(|c| doc.node(*c)).map(|n| n.name.clone());
         assert_eq!(label.as_deref(), Some("Label"), "{card}: the main's layers");
     }
+}
+
+#[test]
+fn an_empty_swap_guid_on_a_row_resets_a_swap_below_it_to_the_default_main() {
+    let (doc, notes) = import_cards();
+    assert!(notes.is_empty(), "{notes:?}");
+    // In the Card main the badge is swapped to Error; the Card instance's row writes the empty
+    // GUID over that swap: back to the main its symbolData names.
+    assert_eq!(main_of(&doc, badge_in(&doc, "Card", 1)), Some(named(&doc, "Property 1=Error")));
+    assert_eq!(main_of(&doc, badge_in(&doc, "Card copy", 1)), Some(named(&doc, "Property 1=Informative")));
 }
