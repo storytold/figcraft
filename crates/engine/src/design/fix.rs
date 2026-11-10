@@ -13,9 +13,8 @@ use serde_json::{Value, json};
 
 use super::audit::{Report, Settings, backdrop, collect, is_colored_shadow, is_glow, text_color};
 
-/// Fix what `roots` made fixable among `filter`'s rules. With `exact`, only findings on the roots
-/// themselves are repaired, not findings on their descendants. `dry_run` reports the same counts
-/// without changing the document.
+/// Fix what `roots` made fixable among `filter`'s rules. With `exact_ids`, only findings on those
+/// layers are repaired, not findings on their descendants.
 pub(crate) fn run(
     doc: &mut Document,
     roots: &[NodeId],
@@ -24,7 +23,7 @@ pub(crate) fn run(
     scope: &str,
     preset: Option<DesignPreset>,
     filter: Option<&BTreeSet<String>>,
-    exact: bool,
+    exact_ids: Option<&[NodeId]>,
     dry_run: bool,
 ) -> Value {
     let settings = Settings::new(doc, preset);
@@ -34,7 +33,7 @@ pub(crate) fn run(
         .iter()
         .filter(|f| f.fixable && settings.enabled(f.rule))
         .filter(|f| filter.is_none_or(|set| set.contains(f.rule)))
-        .filter(|f| !exact || roots.contains(&f.node))
+        .filter(|f| exact_ids.is_none_or(|ids| ids.contains(&f.node)))
         .map(|f| (f.node, f.rule))
         .collect();
     let mut by_rule: BTreeMap<&'static str, usize> = BTreeMap::new();

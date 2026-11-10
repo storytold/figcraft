@@ -688,6 +688,45 @@ fn fix_with_exact_leaves_a_child_finding_alone() {
 }
 
 #[test]
+fn fix_with_exact_repairs_a_listed_parent_and_child() {
+    let mut s = Session::new();
+    let parent = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Parent", "x": 0, "y": 0, "width": 200, "height": 100,
+               "props": {"layout": "vertical", "cornerRadius": 3}}),
+    ));
+    let child = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "rectangle", "name": "Child", "parent": parent, "x": 0, "y": 0, "width": 80, "height": 40,
+               "props": {"cornerRadius": 3}}),
+    ));
+    let r = ex(&mut s, "design.fix", json!({"ids": [parent, child], "rules": ["radius.off-scale"], "exact": true}));
+    assert_eq!(r["changed"], 2, "{r}");
+    let doc = s.doc().unwrap();
+    assert_ne!(doc.node(parent).unwrap().corners.radii[0], 3.0, "the root is repaired");
+    assert_ne!(doc.node(child).unwrap().corners.radii[0], 3.0, "a listed child is repaired too");
+}
+
+#[test]
+fn fix_dry_run_and_no_op_do_not_dirty_the_document() {
+    let mut s = Session::new();
+    let undo = s.ds().unwrap().history.undo.len();
+    let redo = s.ds().unwrap().history.redo.len();
+    let r = ex(&mut s, "design.fix", json!({"scope": "page", "dryRun": true}));
+    assert_eq!(r["changed"], 0, "{r}");
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo, "a dry run adds no undo step");
+    assert_eq!(s.ds().unwrap().history.redo.len(), redo, "a dry run keeps redo");
+    assert!(!s.ds().unwrap().is_dirty(), "a dry run leaves the file saved");
+    let r = ex(&mut s, "design.fix", json!({"scope": "page"}));
+    assert_eq!(r["changed"], 0, "{r}");
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo, "a no-op fix adds no undo step");
+    assert_eq!(s.ds().unwrap().history.redo.len(), redo, "a no-op fix keeps redo");
+    assert!(!s.ds().unwrap().is_dirty(), "a no-op fix leaves the file saved");
+}
+
+#[test]
 fn hardcoded_values_that_match_variables_are_reported() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "C"}));

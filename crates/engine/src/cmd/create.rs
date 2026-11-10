@@ -99,7 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.create",
             "Text",
-            "{text | characters, x?, y? (ignored inside an auto layout parent), parent?, index?, name? (default: the first line), width? (fixed width wraps), props? (fontSize, fontWeight, fontFamily, …), select? (default true)}",
+            "{text | characters, x?, y? (ignored inside an auto layout parent unless props.absolute is true, which keeps the transform they set), parent?, index?, name? (default: the first line), width? (fixed width wraps), props? (fontSize, fontWeight, fontFamily, …), select? (default true)}",
             true,
             |s, p| { create_kind(s, p, "text") }
         ),

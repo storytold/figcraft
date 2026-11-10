@@ -91,8 +91,16 @@ fn fix_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let filter = filter_arg("design.fix", p)?;
     let preset = preset_arg("design.fix", p)?;
     let exact = params::boolean(p, "exact").unwrap_or(false);
+    let exact_ids = if exact { ids_arg("design.fix", p)? } else { None };
     let dry = params::boolean(p, "dryRun").unwrap_or(false);
-    Ok(fix::run(s.doc_mut()?, &roots, anchor, &path, &label, preset, filter.as_ref(), exact, dry))
+    // A dry run or a fix that changes nothing must not mark the file unsaved or add an undo step:
+    // work on a copy and put it back only when it differs.
+    let mut doc = s.doc()?.clone();
+    let result = fix::run(&mut doc, &roots, anchor, &path, &label, preset, filter.as_ref(), exact_ids.as_deref(), dry);
+    if !dry && s.doc()? != &doc {
+        *s.doc_mut()? = doc;
+    }
+    Ok(result)
 }
 
 /// `design.assert`: a read-only gate for CI. Returns the score when the design passes; an error
@@ -267,16 +275,23 @@ fn settings_json(config: &DesignReview) -> Value {
 
 /// The layers a command works on, its scope label, the layer aggregate findings point at and that
 /// layer's path.
+/// The `ids` parameter, parsed without collapsing ancestors: `exact` needs the layers the caller
+/// listed, while the walk uses their top-most roots.
+fn ids_arg(cmd: &str, p: &Value) -> Result<Option<Vec<NodeId>>> {
+    let Some(v) = params::get(p, "ids") else { return Ok(None) };
+    let Value::Array(items) = v else { return Err(bad(cmd, "`ids` must be an array of layer ids")) };
+    let mut ids = Vec::new();
+    for item in items {
+        let Some(id) = params::id_of(item) else { return Err(bad(cmd, "`ids` must be an array of layer ids")) };
+        ids.push(id);
+    }
+    Ok(Some(ids))
+}
+
 fn scope_of(s: &Session, cmd: &str, p: &Value) -> Result<(String, Vec<NodeId>, Option<NodeId>, String)> {
     let doc = s.doc()?;
     // `ids` names the layers directly (the review window fixes only the findings the user kept).
-    if let Some(v) = params::get(p, "ids") {
-        let Value::Array(items) = v else { return Err(bad(cmd, "`ids` must be an array of layer ids")) };
-        let mut ids = Vec::new();
-        for item in items {
-            let Some(id) = params::id_of(item) else { return Err(bad(cmd, "`ids` must be an array of layer ids")) };
-            ids.push(id);
-        }
+    if let Some(ids) = ids_arg(cmd, p)? {
         let roots = top_most(doc, &ids);
         let anchor = roots.first().copied();
         let path = anchor.map(|id| node_label(doc, id)).unwrap_or_default();

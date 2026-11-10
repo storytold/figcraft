@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use figcraft_color::{Color, Paint};
-use figcraft_doc::{Comment, DevSnapshot, Document, ImageData, Message, Node, NodeId, NodeKind, Style, StyleKind};
+use figcraft_doc::{Comment, DesignPreset, DevSnapshot, Document, ImageData, Message, Node, NodeId, NodeKind, Style, StyleKind};
 
 use crate::change::{Change, DocProp, Entry, Json, Prop};
 use crate::replica::{Mode, Replica};
@@ -46,6 +46,18 @@ fn property_edits_send_only_what_changed() {
     assert_eq!(changes.len(), 2);
     assert!(changes.iter().all(|c| matches!(c, Change::Set { id, prop: Prop::Opacity | Prop::Fills, .. } if *id == kids[1])));
     assert!(round_trip(&a, a.document()).is_empty(), "nothing changed");
+}
+
+#[test]
+fn design_review_settings_round_trip_and_reach_a_snapshot() {
+    let (a, _, _, _) = setup();
+    let mut b = a.document().clone();
+    b.design_review.preset = DesignPreset::Strict;
+    b.design_review.grid = 8.0;
+    let changes = round_trip(&a, &b);
+    assert!(changes.contains(&Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() }));
+    let snapshot = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
+    assert!(snapshot.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::DesignReview, .. })), "a snapshot carries the review settings");
 }
 
 #[test]

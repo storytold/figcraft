@@ -229,6 +229,11 @@ pub enum DocProp {
     Vote,
     /// Ended votes' results kept in the file, oldest first (whole).
     VoteHistory,
+    /// The file's design review settings (`design.configure`).
+    ///
+    /// Kept last: the wire encodes a variant's position, so adding one before it would shift the
+    /// existing properties.
+    DesignReview,
 }
 
 /// A document-level entry, by id.
