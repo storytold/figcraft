@@ -12,6 +12,7 @@ pub mod board;
 mod board_route;
 pub mod colors;
 pub mod comments;
+pub mod design_review;
 pub mod facilitation;
 pub mod geometry;
 pub mod handoff;
@@ -30,6 +31,7 @@ pub use board::*;
 pub use board_route::{END_GAP, MAX_RUNS, RouteEnd, attach_points, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
+pub use design_review::{DesignPreset, DesignReview, GRID_MAX, GRID_MIN, MAX_BRAND_COLORS, MAX_RADII};
 pub use facilitation::*;
 pub use figcraft_color as color;
 pub use figcraft_geom as geom;
@@ -229,6 +231,9 @@ pub struct Document {
     /// Image adjustment presets saved in this file.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_presets: Vec<ImagePreset>,
+    /// The design system and rules this file's review follows (`design.configure`).
+    #[serde(default, skip_serializing_if = "DesignReview::is_default")]
+    pub design_review: DesignReview,
     /// Annotation categories (`None`: [`AnnotationCategory::defaults`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotation_categories: Option<Vec<AnnotationCategory>>,
@@ -285,6 +290,7 @@ impl Document {
             published: None,
             color_profile: ColorProfile::Srgb,
             image_presets: Vec::new(),
+            design_review: DesignReview::default(),
             annotation_categories: None,
             dev_snapshots: BTreeMap::new(),
             timer: None,
