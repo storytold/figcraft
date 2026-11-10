@@ -1,4 +1,4 @@
-use super::{Kv, Mapper, Obj, Value, View, json};
+use super::{Kv, Mapper, Obj, Value, View};
 
 /// One part of a layer's look that a swap can leave as a copy of the previous main's: the wire
 /// keys that hold it, the REST keys `look` writes for it, and the `styles` slot it links with
@@ -119,7 +119,7 @@ impl<'a> Mapper<'a> {
             if let Some((slot, _, _)) = g.style {
                 styles.remove(slot);
                 if let Some(v) = alt_styles.get(slot) {
-                    styles.insert(slot.into(), json!(v));
+                    styles.insert(slot.into(), v.clone());
                 }
             }
         }
