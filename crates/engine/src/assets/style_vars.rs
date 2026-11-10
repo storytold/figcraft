@@ -113,6 +113,8 @@ pub fn from_layer(n: &Node, field: &str, kind: &StyleKind) -> BTreeMap<String, V
 /// `st`'s value with its bound fields resolved in `modes`.
 fn resolved(vars: &Variables, st: &Style, modes: &Modes) -> StyleKind {
     let mut kind = st.kind.clone();
+    // `bound` is a BTreeMap, so `fontStyle` applies before `fontWeight` and a weight wins when a file carries both
+    // (pinned by `font_weight_wins_over_font_style_when_a_file_carries_both`).
     for (key, var) in &st.bound {
         let Some(val) = vars.resolve(var, modes) else { continue };
         match (&mut kind, list_binding(key), &val) {
@@ -136,7 +138,7 @@ fn set_text_field(style: &mut TextStyle, key: &str, val: &VariableValue) {
         ("lineHeight", VariableValue::Number(x)) if x.is_finite() => style.line_height = LineHeight::Pixels(x.clamp(0.0, 100_000.0)),
         ("letterSpacing", VariableValue::Number(x)) if x.is_finite() => style.letter_spacing = LetterSpacing::Pixels(x.clamp(-10_000.0, 10_000.0)),
         ("fontFamily", VariableValue::String(f)) if !f.trim().is_empty() => style.font_family = f.clone(),
-        ("fontStyle", VariableValue::String(f)) if !f.trim().is_empty() => style.font_style = f.clone(),
+        ("fontStyle", VariableValue::String(f)) if !f.trim().is_empty() => style.set_font_style(f.clone()),
         ("fontWeight", VariableValue::Number(x)) if x.is_finite() => {
             // The face nearest the number (a static family) and the `wght` axis (a variable font).
             let w = x.clamp(1.0, 1000.0);

@@ -488,14 +488,27 @@ fn the_weight_menu_binds_a_number_variable_as_font_weight() {
         def.font_style
     };
     assert_eq!(font_style(), "Bold");
-    // The chip shows it in the style slot, and its detach button clears the weight binding.
+    // The chip shows it in the style slot; clicking it lists the string variable too, and picking that
+    // replaces the number: fontStyle is bound and fontWeight is not.
     for _ in 0..2 {
         u.frame(vec![]);
     }
     let texts = in_editor(&mut u);
-    let chip = text_at(&texts, "Body weight number");
+    click(&mut u, text_at(&texts, "Body weight number"));
+    assert!(crate::variable_ui::picker_open(&u.ctx), "the chip opens the weight picker");
+    let texts = drawn_texts(&mut u);
+    assert!(texts.iter().any(|(t, _)| t == "Body weight"), "the string variable is offered beside the number one");
+    click(&mut u, text_at(&texts, "Body weight"));
+    assert_eq!(bound_to(&u, "fontStyle").as_deref(), Some("Body weight"));
+    assert_eq!(bound_to(&u, "fontWeight"), None, "the name replaced the number");
+    // The chip's detach button clears the binding.
+    for _ in 0..2 {
+        u.frame(vec![]);
+    }
+    let texts = in_editor(&mut u);
+    let chip = text_at(&texts, "Body weight");
     click(&mut u, Pos2::new(left + (W - 8.0) / 2.0 - 11.0, chip.y));
-    assert_eq!(bound_to(&u, "fontWeight"), None, "the weight is detached");
+    assert_eq!(bound_to(&u, "fontStyle"), None, "the face name is detached");
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
 }
 
@@ -522,7 +535,7 @@ fn text_style_editor_binds_variables_from_its_fields() {
         click(&mut u, Pos2::new(x, y));
         assert!(crate::variable_ui::picker_open(&u.ctx), "{field}: the variable picker opens");
         let texts = drawn_texts(&mut u);
-        assert!(!texts.iter().any(|(t, _)| t == "Body font"), "{field} offers number variables only");
+        assert!(!texts.iter().any(|(t, _)| t == "Body weight"), "{field} offers number variables only");
         click(&mut u, text_at(&texts, name));
         assert_eq!(bound_to(&u, field).as_deref(), Some(name));
     }
@@ -536,7 +549,7 @@ fn text_style_editor_binds_variables_from_its_fields() {
         assert!(crate::variable_ui::picker_open(&u.ctx), "{field}: the variable picker opens");
         let texts = drawn_texts(&mut u);
         // "Body size" shows once, on the size field's chip: the picker doesn't list it.
-        assert_eq!(texts.iter().filter(|(t, _)| t == "Body size").count(), 1, "{field} offers string variables only");
+        assert_eq!(texts.iter().filter(|(t, _)| t == "Body size").count(), 1, "{field} does not offer the size variable");
         click(&mut u, text_at(&texts, name));
         assert_eq!(bound_to(&u, field).as_deref(), Some(name));
     }

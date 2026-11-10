@@ -289,6 +289,24 @@ fn a_number_weight_picks_the_face_and_the_wght_axis() {
     run(&mut s, "style.bind", json!({"style": body, "field": "fontStyle", "variable": "face"}));
     let bound = s.doc().unwrap().style(&body).unwrap().bound.clone();
     assert!(bound.contains_key("fontStyle") && !bound.contains_key("fontWeight"), "{bound:?}");
+    // The name replaces the number's weight: no stale `wght` axis keeps drawing 700.
+    assert_eq!(face(&s, t1), ("Light".to_string(), None));
+    assert_eq!(text_of(&s, t1).weight(), 300);
+}
+
+#[test]
+fn junk_weight_values_clamp_to_the_lightest_and_heaviest_face() {
+    let mut s = Session::new();
+    let (t1, _, body) = body_style(&mut s, None);
+    run(&mut s, "variable.create", json!({"collection": "Theme", "name": "weight", "type": "number", "values": {"Light": -50, "Dark": 5000}}));
+    run(&mut s, "style.bind", json!({"style": body, "field": "fontWeight", "variable": "weight"}));
+    let face = |s: &Session| {
+        let t = text_of(s, t1);
+        (t.font_style, t.variations.get("wght").copied())
+    };
+    assert_eq!(face(&s), ("Thin".to_string(), Some(1.0)));
+    run(&mut s, "variable.set", json!({"variable": "weight", "mode": "Light", "value": 5000}));
+    assert_eq!(face(&s), ("Black".to_string(), Some(1000.0)));
 }
 
 #[test]

@@ -726,6 +726,8 @@ struct TextBinding<'a> {
 fn text_binding(ui: &mut Ui, binding: TextBinding<'_>, out: &mut Frame) {
     let TextBinding { style, field, kind, rect, name, lead } = binding;
     match widgets::bound_field(ui, Id::unique(("ts_bound", style, field)), lead, rect, name) {
+        // The weight slot takes a face name or a number, so its chip opens the picker that offers both.
+        Some(widgets::BindEvent::Open(at)) if matches!(field, "fontWeight" | "fontStyle") => crate::variable_ui::open_style_weight(ui, style, at),
         Some(widgets::BindEvent::Open(at)) => crate::variable_ui::open_style(ui, style, field, kind, at),
         Some(widgets::BindEvent::Detach) => out.act = Some(Act::Unbind(style.to_string(), field.to_string())),
         None => {}
