@@ -331,10 +331,34 @@ struct Zones {
     tracks: Vec<[Pos2; 2]>,
 }
 
-/// A small screen-space target at the padding band's centre. Keep it independent of the band's
-/// size and zoom: the rest of the band belongs to ordinary canvas selection and movement.
-fn padding_handle(side: usize, band: Rect) -> Rect {
-    Rect::from_center_size(band.center(), if side.is_multiple_of(2) { vec2(20.0, 12.0) } else { vec2(12.0, 20.0) })
+/// Screen-space grip targets. Opposite grips stay at least 20 pixels apart, moving outward from
+/// their midpoint only when needed: tiny frames and zoomed-out content must not merge them into
+/// one indistinguishable target. Bands keep their actual padding geometry.
+fn padding_handles(bands: &[(usize, Rect, f64)]) -> Vec<(usize, Rect, f64)> {
+    bands
+        .iter()
+        .map(|&(side, band, value)| {
+            let mut center = band.center();
+            if let Some((_, opposite, _)) = bands.iter().find(|(s, _, _)| *s == (side + 2) % 4) {
+                let (axis, other) = if side.is_multiple_of(2) { (&mut center.y, opposite.center().y) } else { (&mut center.x, opposite.center().x) };
+                if (*axis - other).abs() < 20.0 {
+                    *axis = (*axis + other) / 2.0 + if matches!(side, 0 | 3) { -10.0 } else { 10.0 };
+                }
+            }
+            let rect = Rect::from_center_size(center, if side.is_multiple_of(2) { vec2(20.0, 12.0) } else { vec2(12.0, 20.0) });
+            (side, rect, value)
+        })
+        .collect()
+}
+
+/// Resolve overlapping targets by distance to the visible grip, shared by hover and press.
+/// Iteration order alone can let an earlier target steal clicks on a later grip's painted bar.
+fn padding_at(handles: &[(usize, Rect, f64)], pos: Pos2) -> Option<(usize, Rect, f64)> {
+    handles
+        .iter()
+        .filter(|(_, rect, _)| rect.contains(pos))
+        .min_by(|(_, a, _), (_, b, _)| a.center().distance_sq(pos).total_cmp(&b.center().distance_sq(pos)))
+        .copied()
 }
 
 /// Alt links opposing sides, Alt+Shift all four. Shift alone retains the existing axis gesture.
@@ -530,21 +554,21 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         return;
     }
     let Some(z) = al_zones(app) else { return };
+    let handles = padding_handles(&z.bands);
     let active_side = match &dragging {
         Some(Drag::Padding { side, .. }) => Some(*side),
-        _ => hover.and_then(|pos| z.bands.iter().find(|(side, r, _)| padding_handle(*side, *r).contains(pos)).map(|(side, _, _)| *side)),
+        _ => hover.and_then(|pos| padding_at(&handles, pos).map(|(side, _, _)| side)),
     };
     for seg in &z.tracks {
         painter.add(Shape::dashed_line(seg, Stroke::new(1.0, PINK.gamma_multiply(0.6)), 3.0, 3.0));
     }
-    for (side, r, v) in &z.bands {
-        let handle = padding_handle(*side, *r);
+    for ((side, r, v), (_, handle, _)) in z.bands.iter().zip(&handles) {
         let linked = active_side.is_some_and(|active| padding_affects(active, *side, modifiers));
-        let hot = hover.is_some_and(|h| r.contains(h) || handle.contains(h)) || linked;
+        let hot = hover.is_some_and(|h| r.contains(h)) || linked;
         if hot {
             painter.rect_filled(*r, CornerRadius::ZERO, PINK.gamma_multiply(0.25));
             let offset = if side.is_multiple_of(2) { vec2(28.0, 0.0) } else { vec2(0.0, -20.0) };
-            pink_label(painter, crate::canvas::fmt(*v), r.center() + offset);
+            pink_label(painter, crate::canvas::fmt(*v), handle.center() + offset);
         }
         let grip = Rect::from_center_size(handle.center(), if side.is_multiple_of(2) { vec2(16.0, 4.0) } else { vec2(4.0, 16.0) });
         painter.rect_filled(grip, CornerRadius::same(2), if linked { PINK } else { PINK.gamma_multiply(0.6) });
@@ -689,16 +713,14 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         return false;
     }
     let Some(Zones { id, bands, gaps, .. }) = al_zones(app) else { return false };
-    for (side, r, v) in bands {
-        if padding_handle(side, r).contains(pos) {
-            ctx.set_cursor_icon(if side % 2 == 0 { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
-            if pressed {
-                let _ = app.session.begin_interaction("Padding");
-                ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side, start: pos, value: v }));
-            }
-            // Hover owns the cursor too; otherwise the canvas tool replaces the resize arrows.
-            return true;
+    if let Some((side, _, value)) = padding_at(&padding_handles(&bands), pos) {
+        ctx.set_cursor_icon(if side.is_multiple_of(2) { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
+        if pressed {
+            let _ = app.session.begin_interaction("Padding");
+            ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side, start: pos, value }));
         }
+        // Hover owns the cursor too; otherwise the canvas tool replaces the resize arrows.
+        return true;
     }
     for g in gaps {
         if g.rect.contains(pos) {

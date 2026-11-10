@@ -24,6 +24,85 @@ fn scene() -> (Ui, NodeId) {
     (Ui::new(s), f)
 }
 
+/// The four visible grips in paint order, without relying on the hit-test geometry.
+fn painted_grips(output: &egui::FullOutput) -> Vec<Rect> {
+    crate::live_tests::flat(&output.shapes)
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(r)
+                if r.fill == super::PINK.gamma_multiply(0.6)
+                    && ((r.rect.width() == 16.0 && r.rect.height() == 4.0) || (r.rect.width() == 4.0 && r.rect.height() == 16.0)) =>
+            {
+                Some(r.rect)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Even collapsed content boxes and reduced zoom leave each painted grip independently usable.
+#[test]
+fn tiny_frames_keep_every_painted_padding_grip_reachable() {
+    for (width, height, zoom, stroke) in [
+        (300.0, 4.0, 1.0, 0.0),
+        (300.0, 6.0, 1.0, 0.0),
+        (300.0, 10.0, 1.0, 0.0),
+        (300.0, 20.0, 0.25, 0.0),
+        (300.0, 20.0, 1.0, 8.0),
+        (4.0, 200.0, 1.0, 0.0),
+        (4.0, 4.0, 0.25, 0.0),
+    ] {
+        for side in 0_usize..4 {
+            let (mut u, f) = scene();
+            u.app.run("node.set", json!({"ids": [f], "props": {"width": width, "height": height, "padding": 0, "strokeWeight": stroke}}));
+            u.app.session.ds_mut().unwrap().view.zoom = zoom;
+            let grips = painted_grips(&u.frame_output(vec![Event::PointerGone]));
+            assert_eq!(grips.len(), 4);
+            let center = grips[side].center();
+            let output = u.frame_output(vec![Event::PointerMoved(center)]);
+            assert_eq!(
+                output.platform_output.cursor_icon,
+                if side.is_multiple_of(2) { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal }
+            );
+            u.button(center, true);
+            assert!(
+                matches!(u.ctx.data(|d| d.get_temp::<Drag>(drag_id())), Some(Drag::Padding { side: active, .. }) if active == side),
+                "{width}x{height}, zoom {zoom}, stroke {stroke}, side {side}"
+            );
+            let to = center + [vec2(0.0, 2.0), vec2(-2.0, 0.0), vec2(0.0, -2.0), vec2(2.0, 0.0)][side] * zoom as f32;
+            u.frame(vec![Event::PointerMoved(to)]);
+            u.button(to, false);
+            let mut expected = [0.0; 4];
+            expected[side] = 2.0;
+            assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().layout.as_ref().unwrap().padding, expected);
+            u.app.run("edit.undo", json!({}));
+            assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().layout.as_ref().unwrap().padding, [0.0; 4]);
+        }
+    }
+}
+
+/// A painted side grip wins over a neighbouring grip's enlarged, overlapping hit target.
+#[test]
+fn overlapping_padding_targets_use_the_nearest_grip_for_hover_and_press() {
+    let (mut u, f) = scene();
+    u.app.run("node.set", json!({"ids": [f], "props": {"width": 4, "height": 4, "padding": 0, "strokeWeight": 0}}));
+    let grips = painted_grips(&u.frame_output(vec![Event::PointerGone]));
+    assert_eq!(grips.len(), 4);
+    // On the upper part of the right bar, also inside the top grip's larger hit target.
+    let point = egui::pos2(grips[1].center().x - 1.0, grips[0].center().y + 5.0);
+    assert!(grips[1].contains(point));
+    let handles = super::padding_handles(&al_zones(&u.app).unwrap().bands);
+    assert_eq!(handles.iter().filter(|(_, r, _)| r.contains(point)).count(), 2);
+    let output = u.frame_output(vec![Event::PointerMoved(point)]);
+    assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
+    let shapes = crate::live_tests::flat(&output.shapes);
+    assert!(shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(r) if r.rect == grips[1] && r.fill == super::PINK)));
+    assert!(!shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(r) if r.rect == grips[0] && r.fill == super::PINK)));
+    u.button(point, true);
+    assert!(matches!(u.ctx.data(|d| d.get_temp::<Drag>(drag_id())), Some(Drag::Padding { side: 1, .. })));
+    u.button(point, false);
+}
+
 #[test]
 fn padding_bands_follow_uniform_and_individual_inside_strokes() {
     let (mut u, f) = scene();
