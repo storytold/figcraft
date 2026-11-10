@@ -127,7 +127,9 @@ fn message(case: Case) -> Kv<'static> {
 }
 
 fn import_case(case: Case) -> (Document, Vec<String>) {
-    let schema = Schema::parse(export::SCHEMA).unwrap();
+    // Our export never writes the older `inheritFillStyleID`; files from Figma can.
+    let schema = export::SCHEMA.replace("message NodeChange GUID guid=1,", "message NodeChange GUID guid=1, GUID inheritFillStyleID=501,");
+    let schema = Schema::parse(&schema).unwrap();
     import(&super::tests::canvas(&schema, &message(case)), "Swap.fig").unwrap()
 }
 
@@ -205,6 +207,22 @@ fn a_fill_row_without_a_style_link_beats_the_new_mains_style() {
     assert_eq!(swapped.styles.fill, None);
     assert!(is_rgb(&swapped.strokes, IDEAL_STROKE), "stroke {:?}", swapped.strokes);
     assert_eq!(style_name(&doc, &swapped.styles.stroke).as_deref(), Some("Ideal stroke"));
+}
+
+#[test]
+fn a_rows_older_style_field_beats_the_new_mains_newer_one() {
+    // The older `inheritFillStyleID` on the swap row is the topmost word on the fill's style: a
+    // detach keeps the row's paints, a link takes that style.
+    let detach = o(vec![("sessionID", Kv::Uint(4_294_967_295)), ("localID", Kv::Uint(4_294_967_295))]);
+    let (doc, notes) = import_case(Case { swap_extra: vec![("fillPaints", paints(BLUE)), ("inheritFillStyleID", detach)], ..Case::copy() });
+    assert!(notes.is_empty(), "{notes:?}");
+    let swapped = doc.node(badge(&doc, "Swapped")).unwrap();
+    assert!(is_rgb(&swapped.fills, BLUE), "fill {:?}", swapped.fills);
+    assert_eq!(swapped.styles.fill, None);
+    let (doc, _) = import_case(Case { swap_extra: vec![("inheritFillStyleID", g(3))], ..Case::copy() });
+    let swapped = doc.node(badge(&doc, "Swapped")).unwrap();
+    assert!(is_rgb(&swapped.fills, INFO_FILL), "fill {:?}", swapped.fills);
+    assert_eq!(style_name(&doc, &swapped.styles.fill).as_deref(), Some("Info fill"));
 }
 
 #[test]

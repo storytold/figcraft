@@ -20,10 +20,13 @@ pub(super) fn color(c: &Kv) -> Value {
 impl<'a> Mapper<'a> {
     /// The style a layer links in `key`, by guid or by library asset (the file's copy of a library
     /// style), or in the older `legacy` field when `key` names none. An explicit NO_STYLE guid in
-    /// `key` with no asset is a detach and wins over the legacy field.
+    /// `key` with no asset is a detach and wins over the legacy field. The topmost layer that names
+    /// either field decides, as for every other field: an override row's older field (a detach or
+    /// a link) over a main's newer one below it; on one layer the newer field wins.
     pub(super) fn style_link(&self, v: &View, key: &str, legacy: &str) -> Option<String> {
         let fallback = || v.get(legacy).and_then(guid).filter(|g| g != NO_STYLE);
-        let Some(link) = v.get(key) else { return fallback() };
+        let top = style_layer(v, key, legacy)?;
+        let Some(link) = top.get(key) else { return top.get(legacy).and_then(guid).filter(|g| g != NO_STYLE) };
         match (self.resource_id(link), link.get("guid").and_then(guid)) {
             (Some(id), _) => Some(id),
             (None, Some(_)) => None,
@@ -39,7 +42,15 @@ impl<'a> Mapper<'a> {
         let found = self.style_link(v, key, legacy).and_then(|id| Some((self.nodes.get(&id).copied()?, id)));
         let Some((node, id)) = found.filter(|(n, _)| n.get("styleType").and_then(Kv::str).is_some()) else {
             let named = |l: &Kv| l.get("assetRef").is_some() || l.get("guid").and_then(guid).is_some_and(|g| g != NO_STYLE);
-            if v.get(key).is_some_and(named) || v.get(legacy).and_then(guid).is_some_and(|g| g != NO_STYLE) {
+            let real = |g: Option<String>| g.is_some_and(|g| g != NO_STYLE);
+            // The layer `style_link` read: its link names a style the file lacks.
+            let missing = style_layer(v, key, legacy).is_some_and(|l| match l.get(key) {
+                Some(k) if named(k) => true,
+                Some(k) if k.get("guid").is_some() => false,
+                Some(_) => real(v.get(legacy).and_then(guid)),
+                None => real(l.get(legacy).and_then(guid)),
+            });
+            if missing {
                 self.warn("links to shared styles that aren't in the file kept the layers' own values");
             }
             return None;
@@ -52,6 +63,11 @@ impl<'a> Mapper<'a> {
         }
         Some(node)
     }
+}
+
+/// The layer that decides a style link: the topmost that names `key` or the older `legacy`.
+fn style_layer<'v>(v: &View<'v>, key: &str, legacy: &str) -> Option<&'v Kv<'v>> {
+    v.layers.iter().rev().copied().find(|l| l.get(key).is_some() || l.get(legacy).is_some())
 }
 
 pub(super) fn stroke(o: &mut Obj, v: &View) {
