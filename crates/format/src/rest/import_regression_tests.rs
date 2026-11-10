@@ -93,3 +93,23 @@ fn thousands_of_distinct_style_references_import_in_linear_time() {
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
     assert_eq!(doc.styles.len(), n);
 }
+
+#[test]
+fn a_board_field_becomes_the_nodes_board_item() {
+    let frame = json!({"id": "1:1", "name": "Note", "type": "FRAME", "relativeTransform": at(0.0, 0.0), "size": {"x": 200, "y": 200},
+                       "board": {"type": "sticky", "author": "A"}});
+    let (doc, warnings) = import(&file(json!([frame])), &no_images).unwrap();
+    assert_eq!(named(&doc, "Note").board, Some(figcraft_doc::BoardItem::Sticky { author: "A".into() }));
+    assert!(!warnings.iter().any(|w| w.contains("board item")), "{warnings:?}");
+}
+
+#[test]
+fn junk_board_fields_are_ignored_with_a_warning() {
+    for junk in [json!(5), json!({"type": "nope"}), json!({"type": "shape", "shape": "blob"}), json!({"type": "connector"})] {
+        let frame =
+            json!({"id": "1:1", "name": "Junk", "type": "FRAME", "relativeTransform": at(0.0, 0.0), "size": {"x": 20, "y": 20}, "board": junk});
+        let (doc, warnings) = import(&file(json!([frame])), &no_images).unwrap();
+        assert!(named(&doc, "Junk").board.is_none(), "{junk}");
+        assert!(warnings.iter().any(|w| w.contains("unknown board item on Junk was ignored")), "{junk}: {warnings:?}");
+    }
+}
