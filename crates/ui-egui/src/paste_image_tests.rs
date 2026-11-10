@@ -292,6 +292,26 @@ fn svg_markup_that_does_not_import_leaves_the_picture_to_paste() {
 }
 
 #[test]
+fn svg_markup_with_only_a_linked_image_leaves_the_picture_to_paste() {
+    let mut w = Win::new();
+    // It imports as an empty frame: the linked image isn't fetched.
+    let svg =
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><image href="https://example.com/a.png" width="80" height="40"/></svg>"#;
+    *w.clip.borrow_mut() = Clip { text: Some(svg.into()), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    assert_eq!(w.named("Pasted image"), 1, "the picture copied with the markup was pasted");
+    assert_eq!(w.named("Pasted SVG"), 0, "not an empty frame");
+}
+
+#[test]
+fn an_empty_svg_alone_still_pastes_as_its_frame() {
+    let mut w = Win::new();
+    *w.clip.borrow_mut() = Clip { text: Some(r#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"/>"#.into()), ..Clip::default() };
+    w.cmd_v();
+    assert_eq!(w.named("Pasted SVG"), 1, "the markup's frame, with no picture to prefer");
+}
+
+#[test]
 fn a_picture_still_wins_over_plain_text_beside_it() {
     let mut w = Win::new();
     *w.clip.borrow_mut() = Clip { text: Some("hello from another app".into()), image: Some((2, 2, vec![255; 16])), ..Clip::default() };

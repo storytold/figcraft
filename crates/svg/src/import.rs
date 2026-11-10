@@ -862,15 +862,18 @@ pub fn looks_like_svg(text: &str) -> bool {
     false
 }
 
-/// Whether `text` is SVG markup the importer reads: [`looks_like_svg`], then a trial import into a
-/// scratch document. A paste prefers the markup over a picture copied with it, or over a table on
-/// a board, only when it would import.
-pub fn imports_as_svg(text: &str) -> bool {
+/// A trial import of `text` into a scratch document: `None` when it isn't SVG markup the importer
+/// reads ([`looks_like_svg`], then the import), else whether the frame it makes holds any layers
+/// (`false`: nothing drawn, an empty `<svg>` or only linked images it doesn't fetch). A paste
+/// prefers the markup over a picture copied with it, or over a table on a board, by this.
+pub fn svg_import_has_layers(text: &str) -> Option<bool> {
     if !looks_like_svg(text) {
-        return false;
+        return None;
     }
     let mut doc = Document::new("scratch");
-    doc.first_page().is_some_and(|page| import_svg(&mut doc, text.as_bytes(), page, 0.0, 0.0, "").is_ok())
+    let page = doc.first_page()?;
+    let frame = import_svg(&mut doc, text.as_bytes(), page, 0.0, 0.0, "").ok()?;
+    Some(doc.node(frame).is_some_and(|f| !f.children.is_empty()))
 }
 
 /// Import SVG bytes as a new frame under `parent` at `(x, y)`. Returns the frame id.

@@ -56,11 +56,16 @@ fn export_vector_region_paints_independently() {
 }
 
 #[test]
-fn imports_as_svg_needs_markup_the_importer_reads() {
-    assert!(crate::imports_as_svg(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8" height="4"/></svg>"#));
-    assert!(!crate::imports_as_svg(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8""#), "cut short");
-    assert!(!crate::imports_as_svg("<svg\tName\nAda\tLead"), "a spreadsheet row that starts like SVG");
-    assert!(!crate::imports_as_svg("hello"));
+fn svg_import_has_layers_needs_markup_the_importer_reads_and_says_whether_it_draws() {
+    use crate::svg_import_has_layers as layers;
+    assert_eq!(layers(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8" height="4"/></svg>"#), Some(true));
+    assert_eq!(layers(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"/>"#), Some(false), "empty");
+    let linked =
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><image href="https://example.com/a.png" width="8" height="4"/></svg>"#;
+    assert_eq!(layers(linked), Some(false), "a linked image isn't fetched");
+    assert_eq!(layers(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8""#), None, "cut short");
+    assert_eq!(layers("<svg\tName\nAda\tLead"), None, "a spreadsheet row that starts like SVG");
+    assert_eq!(layers("hello"), None);
 }
 
 #[test]

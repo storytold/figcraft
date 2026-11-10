@@ -57,14 +57,19 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
     if !ours {
         // SVG markup is the copy's source and a picture beside it is only a rendering of it, so the
         // vectors win over the picture, and over a table on a board. Markup that doesn't import
-        // (cut short, say) leaves the picture to paste.
-        if let Some(text) = sys_text.as_deref().filter(|t| !is_clipboard_marker(t) && figcraft_engine::imports_as_svg(t)) {
+        // (cut short, say), or imports as an empty frame (only linked images, which aren't
+        // fetched) while a picture came with it, leaves the picture to paste.
+        let svg = sys_text.as_deref().filter(|t| !is_clipboard_marker(t)).and_then(|t| figcraft_engine::svg_import_has_layers(t).map(|l| (t, l)));
+        let picture = clipboard_png(app);
+        if let Some((text, has_layers)) = svg
+            && (has_layers || picture.is_none())
+        {
             if !dev_mode_refuses(app, "edit.paste") {
                 paste_svg(app, text, (cx, cy), at.is_none());
             }
             return;
         }
-        if let Some((png, w, h)) = clipboard_png(app) {
+        if let Some((png, w, h)) = picture {
             if dev_mode_refuses(app, "edit.paste") {
                 return;
             }
