@@ -38,6 +38,8 @@ use html::html;
 pub(crate) use html::{Markup, Names, class_name};
 pub(crate) use swift::swift;
 pub(crate) use uno::uno;
+#[cfg(test)]
+pub(crate) use uno::{asset_name, cs_ident, cs_literal, cs_unique};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![spec!(
