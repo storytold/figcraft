@@ -509,6 +509,19 @@ fn absolute_rotation_sets_the_rotation_on_the_page_keeping_the_centre() {
 }
 
 #[test]
+fn absolute_rotation_on_a_frame_and_a_layer_inside_it_lands_both_on_the_page_angle() {
+    let mut s = session();
+    let page = |s: &Session, i: NodeId| rotation_degrees(s.doc().unwrap().world_transform(i));
+    let f = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 100, "width": 400, "height": 400})));
+    set(&mut s, &[f], json!({"rotation": 10}));
+    let r = rect(&mut s, 100.0, 100.0, 120.0, 80.0, Some(f));
+    // The layer inside comes first in the ids: the frame's turn must not carry it past 45.
+    set(&mut s, &[r, f], json!({"absoluteRotation": 45}));
+    assert!(near(page(&s, f), 45.0), "{}", page(&s, f));
+    assert!(near(page(&s, r), 45.0), "{}", page(&s, r));
+}
+
+#[test]
 fn constrain_proportions_keeps_the_other_side_in_ratio() {
     let mut s = session();
     // The Layout panel's link is a per-layer property: typing W or H scales the other side by the

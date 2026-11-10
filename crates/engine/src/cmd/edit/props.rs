@@ -165,6 +165,11 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let doc = s.doc_mut()?;
     let before = crate::cmd::styles::bound_before(doc, &ids);
+    let mut ids = ids;
+    if props.contains_key("absoluteRotation") {
+        // A page angle depends on the parents': turn a selected parent before the layers in it.
+        ids.sort_by_key(|i| doc.ancestors(*i).len());
+    }
     for i in ids {
         crate::cmd::props::apply("node.set", doc, i, skipped.get(&i).unwrap_or(&props))?;
     }
