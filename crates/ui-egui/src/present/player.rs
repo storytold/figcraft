@@ -60,7 +60,12 @@ pub(super) fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrom
         // The pane only takes the keyboard while the pointer is over it. While a link notice shows
         // the prototype takes neither keys nor the pointer (Escape there cancels the notice).
         let keys = chrome.keys && p.link_notice.is_none() && (!chrome.pane || over);
-        input(p, &ctx, &l, InputMode { over_area: over && p.link_notice.is_none(), keys_on: keys, pane: chrome.pane, now });
+        input(
+            p,
+            &ctx,
+            &l,
+            InputMode { over_area: over && p.link_notice.is_none() && !(p.view.comments && !chrome.pane), keys_on: keys, pane: chrome.pane, now },
+        );
     } else {
         p.pads.clear();
     }

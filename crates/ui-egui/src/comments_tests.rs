@@ -272,6 +272,88 @@ fn the_presenter_shows_the_frames_comments() {
     let _ = other;
 }
 
+/// A presenter on a 400 x 300 frame (at page 50, 40) with a second frame, the comment mode on.
+/// Returns the harness, the frame, the other frame and the presented frame's top-left on screen.
+fn present_comment_mode() -> (Ui, figcraft_doc::NodeId, figcraft_doc::NodeId, Pos2) {
+    let mut s = Session::new();
+    let f = id(&s.execute("node.create", &json!({"type": "frame", "x": 50, "y": 40, "width": 400, "height": 300})).unwrap());
+    let other = id(&s.execute("node.create", &json!({"type": "frame", "x": 700, "y": 0, "width": 400, "height": 300})).unwrap());
+    let mut u = Ui::new(s);
+    u.run("proto.present", json!({"start": f}));
+    key(&mut u, Key::C, Modifiers::NONE);
+    assert_eq!(u.app.inspect()["presenter"]["comments"], true);
+    let screen = egui::Rect::from_min_size(pos2(0.0, 80.0), vec2(1440.0, 820.0));
+    (u, f, other, screen.center() - vec2(200.0, 150.0))
+}
+
+fn comment_count(u: &Ui) -> usize {
+    u.app.session.doc().unwrap().comments.len()
+}
+
+#[test]
+fn a_click_in_the_presenters_comment_mode_adds_a_comment_on_the_frame() {
+    let (mut u, f, _, frame_min) = present_comment_mode();
+    click(&mut u, frame_min + vec2(120.0, 90.0));
+    assert!(comments(&u)["draft"].is_array(), "the click opens a draft");
+    u.frame(vec![Event::Text("hello".into())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    assert_eq!(comment_count(&u), 1);
+    let doc = u.app.session.doc().unwrap();
+    let c = &doc.comments[0];
+    assert_eq!(c.first.text, "hello");
+    assert_eq!(c.anchor, Some(f));
+    assert!((c.x - 120.0).abs() <= 1.0 && (c.y - 90.0).abs() <= 1.0, "frame-relative spot {},{}", c.x, c.y);
+    assert_eq!(u.app.inspect()["presenter"]["comments"], true, "the mode stays on");
+    assert!(u.app.ui.present.is_some());
+}
+
+#[test]
+fn a_click_off_the_frame_in_the_presenters_comment_mode_adds_no_draft() {
+    let (mut u, _, _, frame_min) = present_comment_mode();
+    click(&mut u, frame_min + vec2(-60.0, 90.0));
+    assert!(comments(&u)["draft"].is_null());
+    assert_eq!(comment_count(&u), 0);
+    assert_eq!(u.app.inspect()["presenter"]["comments"], true);
+}
+
+#[test]
+fn escape_closes_the_presenters_draft_then_the_mode() {
+    let (mut u, _, _, frame_min) = present_comment_mode();
+    click(&mut u, frame_min + vec2(120.0, 90.0));
+    u.frame(vec![Event::Text("draft".into())]);
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    assert!(comments(&u)["draft"].is_null(), "Escape closes the draft");
+    assert_eq!(comment_count(&u), 0, "and adds no comment");
+    assert_eq!(u.app.inspect()["presenter"]["comments"], true);
+    assert!(u.app.ui.present.is_some());
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    assert_eq!(u.app.inspect()["presenter"]["comments"], false, "Escape with no draft turns the mode off");
+    assert!(u.app.ui.present.is_some(), "and keeps the presentation open");
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    assert!(u.app.ui.present.is_none(), "with the mode off Escape still ends the presentation");
+}
+
+#[test]
+fn a_click_in_the_presenters_comment_mode_does_not_navigate() {
+    let (mut u, f, other, frame_min) = present_comment_mode();
+    u.run("proto.interaction.add", json!({"id": f, "trigger": {"type": "onClick"}, "action": {"type": "navigate", "dest": other}}));
+    u.frames(2, Vec::new);
+    click(&mut u, frame_min + vec2(120.0, 90.0));
+    u.frames(30, Vec::new);
+    assert_eq!(u.app.inspect()["presenter"]["current"], json!(f), "the click placed a comment, it didn't follow the link");
+    assert!(comments(&u)["draft"].is_array());
+}
+
+#[test]
+fn typing_c_into_the_presenters_draft_keeps_the_mode_on() {
+    let (mut u, _, _, frame_min) = present_comment_mode();
+    click(&mut u, frame_min + vec2(120.0, 90.0));
+    u.frame(vec![Event::Text("c".into())]);
+    key(&mut u, Key::C, Modifiers::NONE);
+    assert_eq!(u.app.inspect()["presenter"]["comments"], true);
+    assert!(comments(&u)["draft"].is_array());
+}
+
 #[derive(Clone, Default)]
 struct Clip(Arc<Mutex<Option<String>>>);
 
