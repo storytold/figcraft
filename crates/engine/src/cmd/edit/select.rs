@@ -174,7 +174,8 @@ pub(super) fn nudge(s: &mut Session, p: &Value) -> Result<Value> {
     // no undo step.
     let mut work = s.doc()?.clone();
     let doc = &mut work;
-    let ids = roots(doc, &ids);
+    // A locked layer (or one in a locked layer) ignores the arrow keys.
+    let ids: Vec<NodeId> = roots(doc, &ids).into_iter().filter(|i| !crate::tools::locked_in(doc, *i)).collect();
     let mut changed = false;
     // Children in an auto layout flow move one place instead (see `al_keys`).
     for i in &ids {
@@ -209,6 +210,9 @@ pub(super) fn nudge_size(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("transform.nudgeSize", s, p)?;
     let ids = roots(s.doc()?, &ids);
     for i in ids {
+        if crate::tools::locked_in(s.doc()?, i) {
+            continue;
+        }
         let Some((w, h)) = s.doc()?.node(i).map(|n| (n.width, n.height)) else { continue };
         let mut q = serde_json::Map::new();
         q.insert("ids".into(), json!([i]));
@@ -231,7 +235,9 @@ pub(super) fn toggle(s: &mut Session, p: &Value, what: &str) -> Result<Value> {
     // Figma: if any is visible, hide all (and vice versa).
     let value = explicit.unwrap_or_else(|| match what {
         "visible" => !ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.visible)),
-        _ => !ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.locked)),
+        // A child of a locked layer counts as locked: its own flag can't be toggled while the
+        // parent is locked.
+        _ => !ids.iter().all(|i| crate::tools::locked_in(doc, *i)),
     });
     for i in &ids {
         let n = doc.get_mut(*i)?;

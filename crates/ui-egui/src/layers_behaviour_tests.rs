@@ -253,6 +253,27 @@ fn sweeping_across_eyes_and_padlocks_sets_several_layers() {
 }
 
 #[test]
+fn the_padlock_of_a_layer_in_a_locked_frame_is_inert() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Locked frame"})).unwrap());
+    let child = rect(&mut s, "child", 0.0, Some(frame));
+    s.execute("select.none", &json!({})).unwrap();
+    s.execute("object.toggleLock", &json!({"ids": [frame], "locked": true})).unwrap();
+    let mut u = Ui::new(s);
+    // Selecting the child reveals its row; then the selection goes away.
+    u.app.run("select.set", json!({"ids": [child]}));
+    u.frame(vec![]);
+    u.app.run("select.none", json!({}));
+    u.frame(vec![]);
+    let steps = u.app.session.undo_depth();
+    let r = u.row_at(child);
+    // The padlock column (see the sweep test above).
+    click(&mut u, Pos2::new(250.0, r.y), Modifiers::NONE);
+    assert!(!u.app.session.doc().unwrap().node(child).unwrap().locked, "the child's padlock doesn't lock it");
+    assert_eq!(u.app.session.undo_depth(), steps, "and adds no undo step");
+}
+
+#[test]
 fn renaming_several_layers_opens_the_rename_dialog() {
     let (mut u, [a, b, c, _d]) = four();
     // Cmd/Ctrl+R (F2, the context menu's Rename) with several layers selected.
