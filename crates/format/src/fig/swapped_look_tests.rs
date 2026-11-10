@@ -49,6 +49,19 @@ fn paints((r, gr, b): Rgb) -> Kv<'static> {
     ])])
 }
 
+/// `paints` whose one paint is bound to the variable `var`.
+fn bound_paints(rgb: Rgb, var: u64) -> Kv<'static> {
+    let (r, gr, b) = rgb;
+    let alias = o(vec![("value", o(vec![("alias", o(vec![("guid", g(var))]))])), ("dataType", Kv::Enum("ALIAS"))]);
+    Kv::Array(vec![o(vec![
+        ("type", Kv::Enum("SOLID")),
+        ("color", o(vec![("r", Kv::Float(r)), ("g", Kv::Float(gr)), ("b", Kv::Float(b)), ("a", Kv::Float(1.0))])),
+        ("opacity", Kv::Float(1.0)),
+        ("visible", Kv::Bool(true)),
+        ("colorVar", alias),
+    ])])
+}
+
 fn style_link(id: u64) -> Kv<'static> {
     o(vec![("guid", g(id))])
 }
@@ -64,6 +77,7 @@ const INFO_STROKE: Rgb = (0.1, 0.9, 0.2);
 const IDEAL_STROKE: Rgb = (0.5, 0.5, 0.0);
 const RED: Rgb = (1.0, 0.0, 0.0);
 const BLUE: Rgb = (0.0, 0.0, 1.0);
+const BOUND: Rgb = (0.3, 0.6, 0.3);
 
 /// A variant main: both paints with their styles and a stroke weight, as the file stores them.
 /// `fill` None: the fill links no style.
@@ -78,7 +92,7 @@ fn variant(id: u64, name: &str, styles: (Option<u64>, Rgb, u64, Rgb), weight: f3
 /// What differs between the payloads: the badge's own fill (None: the copy of its main's), the
 /// swap row's extra fields, the main the badge records and whether the Info fill links its style.
 struct Case {
-    badge_fill: Option<Rgb>,
+    badge_fill: Option<Fields>,
     swap_extra: Fields,
     recorded_main: u64,
     info_fill_style: bool,
@@ -100,6 +114,45 @@ fn message(case: Case) -> Kv<'static> {
         style(4, "Info stroke", INFO_STROKE),
         style(5, "Ideal fill", IDEAL_FILL),
         style(6, "Ideal stroke", IDEAL_STROKE),
+        node(
+            7,
+            Some(2),
+            "VARIABLE_SET",
+            "Theme",
+            vec![("variableSetModes", Kv::Array(vec![o(vec![("id", g(90)), ("name", s("Light")), ("sortPosition", s("!"))])]))],
+        ),
+        node(
+            8,
+            Some(2),
+            "VARIABLE",
+            "badge-bg",
+            vec![
+                ("variableSetID", o(vec![("guid", g(7))])),
+                ("variableResolvedType", Kv::Enum("COLOR")),
+                (
+                    "variableDataValues",
+                    o(vec![(
+                        "entries",
+                        Kv::Array(vec![o(vec![
+                            ("modeID", g(90)),
+                            (
+                                "variableData",
+                                o(vec![
+                                    (
+                                        "value",
+                                        o(vec![(
+                                            "colorValue",
+                                            o(vec![("r", Kv::Float(0.3)), ("g", Kv::Float(0.6)), ("b", Kv::Float(0.3)), ("a", Kv::Float(1.0))]),
+                                        )]),
+                                    ),
+                                    ("dataType", Kv::Enum("COLOR")),
+                                ]),
+                            ),
+                        ])]),
+                    )]),
+                ),
+            ],
+        ),
     ];
     let info_fill = case.info_fill_style.then_some(3);
     changes.extend(variant(10, "Type=Info", (info_fill, INFO_FILL, 4, INFO_STROKE), 1.0, 11));
@@ -112,7 +165,7 @@ fn message(case: Case) -> Kv<'static> {
         ("strokeWeight", Kv::Float(1.0)),
     ];
     match case.badge_fill {
-        Some(rgb) => badge.push(("fillPaints", paints(rgb))),
+        Some(fields) => badge.extend(fields),
         None => {
             badge.push(("fillPaints", paints(INFO_FILL)));
             badge.extend(info_fill.map(|f| ("styleIdForFill", style_link(f))));
@@ -176,7 +229,7 @@ fn a_swapped_nested_instance_takes_the_new_mains_look() {
 
 #[test]
 fn a_real_override_on_the_nested_instance_survives_the_swap() {
-    let (doc, notes) = import_case(Case { badge_fill: Some(RED), ..Case::copy() });
+    let (doc, notes) = import_case(Case { badge_fill: Some(vec![("fillPaints", paints(RED))]), ..Case::copy() });
     assert!(notes.is_empty(), "{notes:?}");
     let swapped = doc.node(badge(&doc, "Swapped")).unwrap();
     assert!(is_rgb(&swapped.fills, RED), "fill {:?}", swapped.fills);
@@ -233,4 +286,21 @@ fn a_swap_whose_previous_main_is_missing_takes_the_new_look() {
     let swapped = doc.node(badge(&doc, "Swapped")).unwrap();
     assert!(is_rgb(&swapped.fills, IDEAL_FILL), "fill {:?}", swapped.fills);
     assert!(is_rgb(&swapped.strokes, IDEAL_STROKE), "stroke {:?}", swapped.strokes);
+}
+
+#[test]
+fn a_bound_fill_under_the_old_mains_style_link_survives_the_swap() {
+    // The badge keeps the old main's fill style link but binds its own fill to a variable: `look`
+    // draws that binding over the style, so the swap must not replace it with the new main's fill.
+    let bound = vec![("fillPaints", bound_paints(BOUND, 8)), ("styleIdForFill", style_link(3))];
+    let (doc, notes) = import_case(Case { badge_fill: Some(bound), ..Case::copy() });
+    assert!(notes.is_empty(), "{notes:?}");
+    let swapped = doc.node(badge(&doc, "Swapped")).unwrap();
+    assert!(is_rgb(&swapped.fills, BOUND), "fill {:?}", swapped.fills);
+    assert_eq!(style_name(&doc, &swapped.styles.fill).as_deref(), Some("Info fill"));
+    assert!(is_rgb(&swapped.strokes, IDEAL_STROKE), "stroke {:?}", swapped.strokes);
+    assert_eq!(swapped.stroke.weight, 2.0);
+    let style = doc.styles.iter().find(|s| s.name == "Info fill").unwrap();
+    // The binding moves onto the style, as for any styled layer (`rest::styles_take_bindings`).
+    assert_eq!(style.bound.get("fills/0/color").map(String::as_str), Some("1:8"), "{:?}", style.bound);
 }

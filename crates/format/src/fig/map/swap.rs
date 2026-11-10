@@ -1,3 +1,4 @@
+use super::paint::paint_bound;
 use super::{Kv, Mapper, Obj, Value, View};
 
 /// One part of a layer's look that a swap can leave as a copy of the previous main's: the wire
@@ -7,6 +8,8 @@ struct Group {
     wire: &'static [&'static str],
     rest: &'static [&'static str],
     style: Option<(&'static str, &'static str, &'static str)>,
+    /// The paints key whose own variable bindings `look` draws over the linked style.
+    bound: Option<&'static str>,
 }
 
 const GROUPS: [Group; 5] = [
@@ -14,11 +17,13 @@ const GROUPS: [Group; 5] = [
         wire: &["fillPaints", "styleIdForFill", "inheritFillStyleID"],
         rest: &["fills"],
         style: Some(("fill", "styleIdForFill", "inheritFillStyleID")),
+        bound: Some("fillPaints"),
     },
     Group {
         wire: &["strokePaints", "styleIdForStrokeFill", "inheritFillStyleIDForStroke"],
         rest: &["strokes"],
         style: Some(("stroke", "styleIdForStrokeFill", "inheritFillStyleIDForStroke")),
+        bound: Some("strokePaints"),
     },
     Group {
         wire: &[
@@ -46,11 +51,13 @@ const GROUPS: [Group; 5] = [
             "strokeWidthProfile",
         ],
         style: None,
+        bound: None,
     },
     Group {
         wire: &["effects", "styleIdForEffect", "inheritEffectStyleID"],
         rest: &["effects"],
         style: Some(("effect", "styleIdForEffect", "inheritEffectStyleID")),
+        bound: None,
     },
     Group {
         wire: &[
@@ -64,6 +71,7 @@ const GROUPS: [Group; 5] = [
         ],
         rest: &["cornerRadius", "cornerSmoothing", "rectangleCornerRadii"],
         style: None,
+        bound: None,
     },
 ];
 
@@ -89,6 +97,11 @@ impl<'a> Mapper<'a> {
                 let Some(old) = old else { return true };
                 if g.wire.iter().all(|k| base.get(k) == old.get(k)) {
                     return true;
+                }
+                // Own paints bound to variables are drawn over the linked style (look, #399): paints that
+                // differ from the old main's are an override even under the same link.
+                if g.bound.is_some_and(|k| base.get(k) != old.get(k) && base.get(k).map(Kv::list).unwrap_or_default().iter().any(paint_bound)) {
+                    return false;
                 }
                 // The same linked style is a stale copy of the style's paints: `look` draws the style.
                 g.style.is_some_and(|(_, key, legacy)| {
