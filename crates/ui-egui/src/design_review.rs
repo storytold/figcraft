@@ -354,6 +354,9 @@ pub struct State {
     /// Ignores: one finding and whole rules, kept in the preferences by document path.
     pub(crate) ignored: BTreeSet<(String, u64)>,
     pub(crate) ignored_rules: BTreeSet<String>,
+    /// The document this review belongs to; switching tabs starts a fresh review rather than
+    /// letting an old report's layer ids act on another file.
+    pub(crate) doc_uid: u64,
     /// Live re-lint: the revision last seen, the revision the last check covered, and when the
     /// seen revision last changed.
     seen_revision: u64,
@@ -395,6 +398,7 @@ impl State {
             error: None,
             ignored,
             ignored_rules,
+            doc_uid: active_uid(app),
             seen_revision: 0,
             checked_revision: 0,
             changed_at: 0.0,
@@ -454,6 +458,25 @@ enum Action {
 pub(crate) fn open(app: &mut FigApp) {
     app.ui.design_review = Some(State::new(app));
     check(app);
+}
+
+/// A review belongs to one document. When the active tab changes, start a fresh review for it so
+/// an old report's layer ids can never act on another file.
+pub(crate) fn sync_document(app: &mut FigApp) {
+    if app.session.docs.is_empty() {
+        app.ui.design_review = None;
+        return;
+    }
+    let uid = active_uid(app);
+    let switched = app.ui.design_review.as_ref().is_some_and(|s| s.doc_uid != uid);
+    if switched {
+        app.ui.design_review = Some(State::new(app));
+        check(app);
+    }
+}
+
+fn active_uid(app: &FigApp) -> u64 {
+    app.session.docs.get(app.session.active).map(|d| d.uid).unwrap_or(0)
 }
 
 /// The preferences key the window's ignores are kept under: the document's path, empty for a
@@ -802,6 +825,7 @@ pub(crate) fn live_recheck_due(live: bool, seen: u64, checked: u64, changed_at: 
 
 /// Draw the window. Called once a frame from `dialogs::show`.
 pub(crate) fn show(app: &mut FigApp, ctx: &Context) {
+    sync_document(app);
     let Some(mut state) = app.ui.design_review.take() else { return };
     let t = Tokens::get(ctx);
     let now = ctx.input(|i| i.time);

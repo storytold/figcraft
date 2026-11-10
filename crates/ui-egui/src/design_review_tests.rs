@@ -50,6 +50,23 @@ fn the_review_window_checks_the_page_and_fixes_what_it_can() {
 }
 
 #[test]
+fn switching_documents_resets_the_review() {
+    let mut s = Session::new();
+    let _frame = frame(&mut s);
+    let mut u = Ui::new(s);
+    crate::design_review::open(&mut u.app);
+    let first = u.app.session.docs[u.app.session.active].uid;
+    u.app.session.execute("file.new", &json!({})).unwrap();
+    u.app.session.active = 1;
+    crate::design_review::sync_document(&mut u.app);
+    let state = u.app.ui.design_review.as_ref().expect("the review follows the new document");
+    assert_ne!(state.doc_uid, first);
+    assert_eq!(state.doc_uid, u.app.session.docs[1].uid);
+    let report = state.report.as_ref().expect("the new document was checked");
+    assert!(report["findings"].as_array().unwrap().is_empty(), "an empty document has no findings: {report}");
+}
+
+#[test]
 fn an_ignored_rule_is_not_fixed() {
     let mut s = Session::new();
     let f = frame(&mut s);
