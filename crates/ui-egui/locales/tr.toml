@@ -5,6 +5,7 @@
 # address the user politely (-in/-ın: "seçin", "tıklayın"). The percent sign goes before the number
 # (%50). Turkish nouns stay singular after a count, so plural entries give only `other`. See
 # docs/translating.md.
+# The Developer Mode label (2026-11-07) is machine-translated and awaits review.
 
 [meta]
 name = "Türkçe"
@@ -409,8 +410,8 @@ name = "Türkçe"
 "Detach styles" = "Stilleri ayır"
 "Detach variable" = "Değişkeni ayır"
 "Details" = "Ayrıntılar"
-"Dev Mode" = "Geliştirici Modu"
 "Dev resources" = "Geliştirici kaynakları"
+"Developer Mode" = "Geliştirici Modu"
 "Development" = "Geliştirme"
 "Device" = "Cihaz"
 "Device at 100%" = "Cihaz %100'de"

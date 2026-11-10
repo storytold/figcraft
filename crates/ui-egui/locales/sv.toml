@@ -2,6 +2,7 @@
 #
 # Written from the English catalog with ordinary Swedish software vocabulary; no other catalog and no
 # proprietary localisation was translated from. Brand names and keyboard glyphs stay as they are.
+# The Developer Mode label (2026-11-07) is machine-translated and awaits review.
 
 [meta]
 name = "Svenska"
@@ -442,9 +443,9 @@ name = "Svenska"
 "Detach styles" = "Koppla bort stilar"
 "Detach variable" = "Koppla bort variabel"
 "Details" = "Detaljer"
-"Dev Mode" = "Utvecklarläge"
-"Dev Mode only inspects: switch to Design (Shift+D) to edit" = "Utvecklarläget kan bara granska: växla till Design (Shift+D) för att redigera"
 "Dev resources" = "Utvecklarresurser"
+"Developer Mode" = "Utvecklarläge"
+"Developer Mode only inspects: switch to Design (Shift+D) to edit" = "Utvecklarläget kan bara granska: växla till Design (Shift+D) för att redigera"
 "Development" = "Utveckling"
 "Device" = "Enhet"
 "Device at 100%" = "Enhet i 100 %"
