@@ -55,6 +55,11 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
     let ours = sys_text.is_some() && sys_text == app.ui.last_copy && app.ui.last_copy_generation == app.session.clipboard.layers_generation;
     let (cx, cy) = at.or_else(|| app.session.ds().ok().map(|d| (d.view.cx, d.view.cy))).unwrap_or((0.0, 0.0));
     if !ours {
+        // SVG markup is the copy's source and a picture beside it is only a rendering of it, so the
+        // vectors win over the picture.
+        if let Some(text) = sys_text.as_deref().filter(|t| figcraft_engine::looks_like_svg(t) && !is_clipboard_marker(t)) {
+            return paste_text(app, text, (cx, cy), at.is_none());
+        }
         if let Some((png, w, h)) = clipboard_png(app) {
             if dev_mode_refuses(app, "edit.paste") {
                 return;

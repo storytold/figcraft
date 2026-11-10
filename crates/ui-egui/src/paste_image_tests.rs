@@ -271,6 +271,26 @@ fn text_pastes_once_from_its_paste_event() {
 }
 
 #[test]
+fn svg_markup_pastes_as_vectors_even_when_a_picture_comes_with_it() {
+    let mut w = Win::new();
+    let before = w.rects();
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="#E5484D"/></svg>"##;
+    *w.clip.borrow_mut() = Clip { text: Some(svg.into()), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    assert_eq!(w.named("Pasted image"), 0, "the picture beside the markup is only its rendering");
+    assert!(w.rects() > before, "the SVG's rectangle was imported as a vector layer");
+}
+
+#[test]
+fn a_picture_still_wins_over_plain_text_beside_it() {
+    let mut w = Win::new();
+    *w.clip.borrow_mut() = Clip { text: Some("hello from another app".into()), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    assert_eq!(w.named("Pasted image"), 1, "the picture was pasted");
+    assert_eq!(w.texts(), 0, "and the text beside it was not");
+}
+
+#[test]
 fn text_pastes_once_when_another_key_is_let_go_first() {
     let mut w = Win::new();
     *w.clip.borrow_mut() = Clip { text: Some("hello".into()), ..Clip::default() };
