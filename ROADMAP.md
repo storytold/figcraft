@@ -13,7 +13,6 @@ start with [`docs/gaps.md`](docs/gaps.md).
 
 | | Value | Kind |
 |---|---|---|
-| 2026-11-10 | minor | M12, #2226 (step 1 of 4): mind maps in the document and engine. `board.mindMap` places a first node with three children on curved branches and `board.mindMapAdd` adds a child or a sibling; the normalize pass lays a touched map out again from its first node (88 between columns, 48 between siblings, stacks centred on their parents). No toolbar entry yet; numbers unchanged. |
 | 2026-11-07 | patch | Naming: the handoff mode is called Developer Mode in the interface, its shortcut row, its toasts, the control channel's refusal, the board refusal, the measurement parameter doc, the `.fig` export note, the CLI help and every catalog (24 languages, translations awaiting native review), since Figma holds a US registration for Dev Mode (7574348); command ids (`view.devMode`, `devMode.*`), preference keys and saved-document fields are unchanged, and the Actions palette still finds the command by the old name |
 | Menu/command breadth | **100%** (212 / 212) | measured, [`docs/parity-checklist.md`](docs/parity-checklist.md) (`cargo xtask parity`) |
 | Feature breadth | **~85%** (core editor ~94%) | estimated, [`docs/target-app-parity.md`](docs/target-app-parity.md) |
@@ -366,6 +365,7 @@ Ranked; detail and milestones in [`docs/roadmap.md`](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | M12, #2226 (step 1 of 4): mind maps in the document and engine. `board.mindMap` places a first node with three children on curved branches and `board.mindMapAdd` adds a child or a sibling; the normalize pass lays a touched map out again from its first node (88 between columns, 48 between siblings, stacks centred on their parents). No toolbar entry yet; numbers unchanged. |
 | 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`, 繁體中文（台灣）) draft catalog: every UI string (1,975), command label (641) and menu wording (31), translated clean-room from the English source; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant` read it while an explicit Hans stays Simplified; the desktop UI prefers an installed Noto Sans CJK TC, then Microsoft JhengHei, PingFang TC and Heiti TC; no font is bundled; native review pending. Numbers unchanged |
 | 2026-11-06 | patch | M1, #2028: Edit ▸ Set default properties gives new rectangles, ellipses, polygons and stars drawn with the tools (and, set from a text layer, new text) the selected layer's properties; it only copied them for Paste properties. Tests: `default_props_tests` (3). Numbers unchanged |
 | 2026-11-06 | patch | M5, #2027: `proto.settings` refuses an unknown device name with the list of devices (it saved any string, and the presenter showed no device), takes known names in any case, and answers the page's prototype settings, so `proto.settings {}` reads them back over MCP. Test: `proto_present_tests::unknown_devices_are_refused_and_settings_read_back`. Numbers unchanged |
