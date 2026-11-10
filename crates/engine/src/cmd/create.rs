@@ -194,7 +194,7 @@ fn create_kind(s: &mut Session, p: &Value, t: &str) -> Result<Value> {
 
 /// Parse SVG path data (`M L H V C S Q T A Z`, absolute and relative) into a bezier path.
 pub fn parse_path_data(d: &str) -> Option<figcraft_geom::BezPath> {
-    figcraft_geom::BezPath::from_svg(d).ok()
+    figcraft_geom::svg_path(d).ok()
 }
 
 /// A vector's geometry made from SVG path data (see [`path_network`]).
@@ -213,7 +213,9 @@ pub(crate) struct PathShape {
 pub(crate) fn path_network(cmd: &str, d: &str, width: Option<f64>, height: Option<f64>) -> Result<PathShape> {
     use figcraft_geom::Shape;
     let empty = || bad(cmd, "`path` draws nothing: a vector needs a visible line or area");
-    let mut path = parse_path_data(d).ok_or_else(|| bad(cmd, "`path` is not valid SVG path data"))?;
+    let mut path = figcraft_geom::svg_path(d).map_err(|e| {
+        if e.contains("too large") { bad(cmd, "`path` has coordinates too large to draw") } else { bad(cmd, "`path` is not valid SVG path data") }
+    })?;
     let bb = path.bounding_box();
     if !(bb.x0.is_finite() && bb.y0.is_finite() && bb.width().is_finite() && bb.height().is_finite()) {
         return Err(bad(cmd, "`path` has coordinates too large to draw"));
@@ -302,7 +304,14 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
             }
             (w, h, offset) = (shape.width, shape.height, shape.offset);
         } else if let Some(Value::Array(pts)) = get(p, "points") {
-            let pts: Vec<Point> = pts.iter().filter_map(|v| Some(Point::new(f64_of(v.get(0)?)?, f64_of(v.get(1)?)?))).collect();
+            let pts: Vec<Point> = pts
+                .iter()
+                .map(|v| {
+                    let xy = v.as_array().filter(|a| a.len() == 2)?;
+                    Some(Point::new(f64_of(&xy[0])?, f64_of(&xy[1])?))
+                })
+                .collect::<Option<_>>()
+                .ok_or_else(|| bad(cmd, "`points` entries must be numeric [x, y] pairs"))?;
             if pts.len() < 2 {
                 return Err(bad(cmd, "`points` needs at least two [x, y] pairs"));
             }

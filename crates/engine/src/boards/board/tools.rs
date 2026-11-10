@@ -133,13 +133,19 @@ impl Session {
         (to.node().is_none() || to.node() != from.node()).then_some(to)
     }
 
-    /// The object `end` is on (if any) outlined, with its attach points; the one the end is at
-    /// (`at`, else its named side's) lit.
+    /// The object `end` is on (if any) outlined, with its attach points (the side middles, on the
+    /// border); the one the end is at lit: the nearest to `at` (a route's end sits `END_GAP` outside
+    /// its side's middle, #1916), else its named side's.
     fn show_attach(&mut self, end: Option<End>, at: Option<Point>) {
         let attach = match end {
             Some(End::Node { node, side, .. }) => self.doc().ok().and_then(|d| d.world_bounds(node)).map(|b| {
                 let on = at.or_else(|| (side != Side::Auto).then(|| side.point(b)));
-                SIDES.map(|s| s.point(b)).map(|p| ([p.x, p.y], on.is_some_and(|o| (o - p).hypot() < 1e-6))).to_vec()
+                let pts = SIDES.map(|s| s.point(b));
+                let lit = on.and_then(|o| {
+                    let near = pts.iter().enumerate().map(|(i, p)| (i, (o - *p).hypot())).filter(|(_, d)| *d <= figcraft_doc::END_GAP + 1e-6);
+                    near.min_by(|x, y| x.1.total_cmp(&y.1)).map(|(i, _)| i)
+                });
+                pts.iter().enumerate().map(|(i, p)| ([p.x, p.y], lit == Some(i))).collect()
             }),
             _ => None,
         };

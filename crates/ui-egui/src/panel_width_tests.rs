@@ -211,7 +211,7 @@ fn minimize_ui_hides_the_panels_and_keeps_their_widths() {
 }
 
 /// The middle of the accessible control with `role` and `label`, if one shows.
-fn control(u: &mut Ui, role: egui::accesskit::Role, label: &str) -> Option<Pos2> {
+pub(crate) fn control(u: &mut Ui, role: egui::accesskit::Role, label: &str) -> Option<Pos2> {
     u.ctx.enable_accesskit();
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
@@ -345,4 +345,131 @@ fn a_narrow_window_shows_one_side_panel_at_a_time() {
     app.ui.mobile_panel = Some(MobilePanel::Right);
     let wide = canvas_width(&mut app, vec2(1440.0, 900.0));
     assert!(wide > 600.0 && wide < 1100.0, "a wide window shows both panels beside the canvas ({wide})");
+}
+
+/// Five frames side by side at 46% zoom with the interface minimized and nothing selected.
+fn minimized_row() -> (Ui, Vec<figcraft_doc::NodeId>) {
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for k in 0..5 {
+        let r = s.execute("frame.create", &json!({"x": k * 470, "y": 0, "width": 400, "height": 600})).unwrap();
+        ids.push(figcraft_engine::params::id_of(&r["id"]).unwrap());
+    }
+    s.execute("select.set", &json!({"ids": []})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.run("view.minimize", json!({"on": true}));
+    u.app.run("view.set", json!({"zoom": 0.46, "cx": 1500, "cy": 300}));
+    for _ in 0..4 {
+        u.frame(vec![]);
+    }
+    (u, ids)
+}
+
+fn frame_x(u: &Ui, id: figcraft_doc::NodeId) -> f64 {
+    u.app.session.doc().unwrap().world_bounds(id).unwrap().x0
+}
+
+/// A click on a frame while minimized selects it and shows the right panel (the canvas gets
+/// narrower): the frame stays where it was, and no step is added to the history.
+#[test]
+fn a_click_that_shows_the_right_panel_does_not_move_the_frame() {
+    let (mut u, ids) = minimized_row();
+    assert!(u.app.ui.right_panel_rect.is_none(), "nothing selected: no right panel");
+    let wide = u.app.canvas.rect.width();
+    let steps = u.app.session.ds().unwrap().history.undo.len();
+    let p = u.app.to_screen(1880.0 + 200.0, 300.0);
+    u.frame(vec![Event::PointerMoved(p)]);
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+    u.frame(vec![]);
+    u.frame(vec![]);
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+    for _ in 0..4 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.selection(), vec![ids[4]], "the click selects the frame");
+    assert!(u.app.ui.right_panel_rect.is_some(), "the right panel shows");
+    assert!(u.app.canvas.rect.width() < wide - 100.0, "the canvas is narrower");
+    assert_eq!(frame_x(&u, ids[4]), 1880.0, "a click did not move the frame");
+    assert_eq!(u.app.session.ds().unwrap().history.undo.len(), steps, "no history step");
+}
+
+/// A real drag still moves the frame, by the pointer's screen movement over the zoom, in one step.
+#[test]
+fn a_drag_after_the_right_panel_shows_moves_the_frame_by_the_pointer() {
+    let (mut u, ids) = minimized_row();
+    let steps = u.app.session.ds().unwrap().history.undo.len();
+    let p = u.app.to_screen(1880.0 + 200.0, 300.0);
+    u.frame(vec![Event::PointerMoved(p)]);
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+    u.frame(vec![]);
+    u.frame(vec![Event::PointerMoved(p + vec2(50.0, 0.0))]);
+    u.frame(vec![Event::PointerMoved(p + vec2(100.0, 0.0))]);
+    u.frame(vec![Event::PointerButton {
+        pos: p + vec2(100.0, 0.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    }]);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert!(u.app.ui.right_panel_rect.is_some(), "the right panel shows");
+    let moved = frame_x(&u, ids[4]) - 1880.0;
+    assert!((moved - 100.0 / 0.46).abs() < 6.0, "moved by 100 points over the zoom, got {moved}");
+    assert_eq!(u.app.session.ds().unwrap().history.undo.len(), steps + 1, "one step");
+}
+
+/// Clicking empty canvas deselects and hides the right panel again; the marquee that starts there
+/// has no offset: nothing moves and nothing is selected.
+#[test]
+fn a_click_that_hides_the_right_panel_does_not_move_the_frame() {
+    let (mut u, ids) = minimized_row();
+    u.app.run("select.set", json!({"ids": [ids[4]]}));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert!(u.app.ui.right_panel_rect.is_some());
+    let p = u.app.to_screen(1880.0 + 200.0, 1000.0);
+    let steps = u.app.session.ds().unwrap().history.undo.len();
+    u.frame(vec![Event::PointerMoved(p)]);
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+    u.frame(vec![]);
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert!(u.app.ui.right_panel_rect.is_none(), "deselected: no right panel");
+    assert_eq!(frame_x(&u, ids[4]), 1880.0);
+    assert_eq!(u.app.session.ds().unwrap().history.undo.len(), steps);
+}
+
+/// The left sidebar and rail appearing while a press is held (Minimize toggled off mid-press)
+/// moves the canvas's left edge: a still pointer keeps its page point, so the release moves nothing.
+#[test]
+fn a_held_press_keeps_its_page_point_when_the_canvas_moves() {
+    let (mut u, ids) = minimized_row();
+    u.app.run("select.set", json!({"ids": [ids[3]]}));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    let steps = u.app.session.ds().unwrap().history.undo.len();
+    let left = u.app.canvas.rect.min.x;
+    let p = u.app.to_screen(1880.0 + 200.0, 300.0);
+    u.frame(vec![Event::PointerMoved(p)]);
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+    u.frame(vec![]);
+    let before = u.app.to_page(p);
+    u.app.run("view.minimize", json!({"on": false}));
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(u.app.canvas.rect.min.x > left + 100.0, "the left sidebar and rail moved the canvas's edge");
+    let after = u.app.to_page(p);
+    assert!((after.x - before.x).abs() < 0.5 && (after.y - before.y).abs() < 0.5, "the pointer's page point moved: {before:?} to {after:?}");
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(frame_x(&u, ids[4]), 1880.0, "the frame did not move");
+    assert_eq!(frame_x(&u, ids[3]), 1410.0);
+    assert_eq!(u.app.session.ds().unwrap().history.undo.len(), steps, "no history step");
 }

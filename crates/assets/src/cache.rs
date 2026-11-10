@@ -142,7 +142,26 @@ fn reader() -> &'static Option<std::sync::mpsc::SyncSender<ReadJob>> {
 pub fn clear() -> Result<(), String> {
     crate::preview::clear();
     #[cfg(not(target_arch = "wasm32"))]
-    disk().clear()?;
+    {
+        clear_at(disk())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        clear_memory();
+        Ok(())
+    }
+}
+
+/// Attempt disk removal, but always discard disposable memory and invalidate readers.
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_at(cache: &DiskCache) -> Result<(), String> {
+    let result = cache.clear();
+    clear_memory();
+    result
+}
+
+/// Invalidate queued reads and encoded downloads independently of disk availability.
+fn clear_memory() {
     let mut s = state().0.lock().unwrap_or_else(PoisonError::into_inner);
     s.epoch = s.epoch.wrapping_add(1);
     s.bytes.clear();
@@ -150,7 +169,6 @@ pub fn clear() -> Result<(), String> {
     s.failed.clear();
     drop(s);
     notify_changed();
-    Ok(())
 }
 
 #[derive(Default)]
@@ -620,6 +638,22 @@ mod tests {
         assert_eq!(display(&asset).unwrap().as_slice(), bytes);
         assert!(store_download(&cache, &asset, b"bad checksum").is_err());
         assert_eq!(load(&asset).unwrap().as_slice(), bytes);
+    }
+
+    #[test]
+    fn review_clear_failure_still_discards_memory_and_invalidates_reads() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let cache = DiskCache::new(file.path().into(), 1024);
+        let bytes = b"synthetic clear failure memory";
+        let asset = AssetRef::of(bytes);
+        store_download(&cache, &asset, bytes).unwrap();
+        assert_eq!(load(&asset).unwrap().as_slice(), bytes);
+        let before = generation();
+        let epoch = state().0.lock().unwrap().epoch;
+        assert!(clear_at(&cache).is_err(), "the disk failure must remain visible");
+        assert!(generation() > before);
+        assert_ne!(state().0.lock().unwrap().epoch, epoch);
+        assert!(load(&asset).is_err(), "encoded memory is cleared despite the disk failure");
     }
 
     #[test]

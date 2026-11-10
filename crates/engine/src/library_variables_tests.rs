@@ -386,6 +386,34 @@ fn library_components_keep_their_variable_bindings() {
 }
 
 #[test]
+fn a_file_bringing_older_copies_of_the_same_library_variables_shares_them() {
+    let d = dir("older-copies");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    theme(&mut lib);
+    let lid = publish_to(&mut lib, &lib_path);
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let r = idv(&ex(&mut s, "shape.rectangle", json!({"width": 10, "height": 10, "name": "Swatch"})));
+    ex(&mut s, "library.bindVariable", json!({"library": lid, "variable": "primary", "field": "fill", "ids": [r]}));
+    let old_path = path_str(&d.join("old.figcraft"));
+    ex(&mut s, "file.saveAs", json!({"path": old_path}));
+    // The copies take an update; the saved file keeps the older ones under the same ids.
+    ex(&mut lib, "variable.set", json!({"variable": "primary", "mode": "Light", "value": "#444444"}));
+    republish(&mut lib);
+    ex(&mut s, "library.acceptUpdates", json!({}));
+    let before = s.doc().unwrap().clone();
+    ex(&mut s, "file.import", json!({"path": old_path}));
+    let doc = s.doc().unwrap();
+    assert_eq!((&doc.variables, &doc.libraries.variables), (&before.variables, &before.libraries.variables), "shared by id, as before");
+    let swatches: Vec<&Node> = doc.nodes().filter(|n| n.name == "Swatch").collect();
+    assert_eq!(swatches.len(), 2);
+    assert!(swatches.iter().all(|n| n.bound.get("fill") == Some(&copy_of(&s, "primary").id)));
+    healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn library_variable_commands_fail_cleanly() {
     let mut s = Session::new();
     for cmd in ["library.importVariable", "library.bindVariable", "library.aliasVariable", "library.setVariableMode"] {

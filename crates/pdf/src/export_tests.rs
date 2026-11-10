@@ -306,3 +306,20 @@ fn review_grouped_export_holds_original_scope_when_preflight_evicts_encoded_imag
     let text = String::from_utf8_lossy(&pdf);
     assert!(text.matches("/Subtype/Image").count() >= 2, "both pages must contain an image");
 }
+
+#[test]
+fn an_oversized_link_is_dropped_before_it_is_copied_per_line() {
+    // One link far past MAX_URL on text that wraps onto many lines: no annotation, and the
+    // destination is never copied once per line on the way to being refused.
+    let mut d = Document::new("long link");
+    let p = d.first_page().unwrap_or(NodeId(0));
+    let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 300.0, 4000.0).unwrap();
+    let words = "word ".repeat(2_000);
+    let mut td = TextData::new(words.trim_end());
+    td.style.font_size = 20.0;
+    td.style.link = Some("https://example.com/".to_string() + &"a".repeat(1 << 20));
+    let t = d.create(f, NodeKind::Text(td), "T", 10.0, 10.0, 280.0, 3980.0).unwrap();
+    d.get_mut(t).unwrap().fills = vec![Paint::solid(Color::BLACK)];
+    let pdf = export_pdf(&d, &[f], &PdfOptions::default()).unwrap();
+    assert_eq!(text(&pdf).matches("/Subtype/Link").count(), 0);
+}

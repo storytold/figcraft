@@ -46,6 +46,7 @@ fn host(doc: Document) -> std::io::Result<(Host, Invite)> {
             any_port_if_taken: false,
             file: file.clone(),
             token: token.into(),
+            view_token: None,
             doc,
             name: "Host".into(),
             limits: NetLimits::default(),
@@ -344,6 +345,10 @@ fn corrupt_and_unsolicited_asset_responses_are_refused() {
             assert!(cache::request(asset));
         }
         probe.wait("bad asset refused", |events| events.iter().any(|e| matches!(e, Event::Status(Status::Failed { .. }))));
+        assert!(
+            !probe.events.iter().any(|e| matches!(e, Event::Status(Status::Reconnecting { .. }))),
+            "protocol violations must not reconnect to the same host"
+        );
         assert!(cache::load(asset).is_err());
         assert!(!probe.events.iter().any(|e| matches!(e, Event::AssetsChanged)));
         server.join().unwrap();
@@ -479,4 +484,49 @@ fn team_lookup_keeps_the_upstream_wire_discriminant() {
     });
     // Main's fifteenth (zero-based) variant: extensions must be appended after it.
     assert_eq!(message::encode(&msg).unwrap()[1], 15);
+}
+
+#[test]
+#[allow(clippy::result_large_err)] // tungstenite's handshake callback has this fixed error type.
+fn unrequested_previews_are_terminal_protocol_errors_after_joining() {
+    use figcraft_engine::live::Status;
+    use tungstenite::handshake::server::{Request, Response};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let invite = Invite::new(listener.local_addr().unwrap().to_string(), "unsolicited-preview", "SyntheticAssetSessionSecret");
+    let server = std::thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut ws = tungstenite::accept_hdr(socket, |_: &Request, mut response: Response| {
+            response.headers_mut().insert("X-FigCraft-Assets", crate::assets_wire::PROTOCOL.parse().unwrap());
+            response.headers_mut().insert("X-FigCraft-Previews", crate::previews::PROTOCOL.parse().unwrap());
+            Ok(response)
+        })
+        .unwrap();
+        let tungstenite::Message::Binary(bytes) = ws.read().unwrap() else { panic!("no hello") };
+        let message::ClientMsg::Hello(hello) = message::decode(&bytes, 1 << 20).unwrap() else { panic!("no hello") };
+        let doc = document().unwrap();
+        let asset = doc.images["left"].reference();
+        let mut core = figcraft_collab::Server::new(doc, "SyntheticAssetSessionSecret", Limits::default());
+        let (_, outs) = core.join_as(hello, message::Access::Edit).unwrap();
+        for out in outs {
+            if let figcraft_collab::Outgoing::To(_, welcome @ ServerMsg::Welcome { .. }) = out {
+                ws.send(tungstenite::Message::Binary(crate::assets_wire::server(&welcome, true, true).unwrap().into())).unwrap();
+            }
+        }
+        let bad = ServerMsg::Preview {
+            request: figcraft_assets::preview::Request { asset, side: 128 },
+            bytes: Some(figcraft_assets::Blob(Arc::new(picture(67).unwrap()))),
+            error: None,
+        };
+        ws.send(tungstenite::Message::Binary(message::encode(&bad).unwrap().into())).unwrap();
+        let _ = ws.read();
+    });
+    let (_guest, mut probe, client) = joined(invite).unwrap();
+    probe.wait("unsolicited preview refused", |events| {
+        events.iter().any(|e| matches!(e, Event::Status(Status::Failed { reason }) if reason.contains("unrequested image preview")))
+    });
+    assert!(!probe.events.iter().any(|e| matches!(e, Event::Status(Status::Reconnecting { .. }))));
+    let request = figcraft_assets::preview::Request { asset: client.document().images["left"].asset.clone().unwrap(), side: 128 };
+    assert!(figcraft_assets::preview::load(&request).is_none());
+    server.join().unwrap();
 }

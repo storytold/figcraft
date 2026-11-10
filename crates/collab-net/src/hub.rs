@@ -875,10 +875,14 @@ impl<B: Backend> Hub<B> {
                         continue;
                     }
                     let Some(&conn) = room.ids.get(&id) else { continue };
+                    if matches!(msg, ServerMsg::Presence { .. }) && self.conns.get(&conn).is_some_and(|c| !c.out.takes_presence()) {
+                        continue;
+                    }
                     let Some(peer) = self.conns.get(&conn) else { continue };
                     let (assets, packed) = (peer.out.assets, peer.packed);
                     let mode = usize::from(assets) + 2 * usize::from(packed);
                     let Some(b) = bytes[mode].get_or_insert_with(|| conn::encode_packed(&msg, assets, packed)).clone() else { continue };
+
                     if !deliver(&self.conns, conn, &b, &mut held, &mut stuck) {
                         stuck.push(conn);
                     }

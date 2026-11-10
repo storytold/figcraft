@@ -1,36 +1,54 @@
-//! `window.figcraft`: the control channel for the page, as promises.
+//! `window.figcraft`: the page command API (`craft-web-api`, storytold/craft-libs#413) plus FigCraft's
+//! own file functions.
 //!
-//! The same JSON methods as the desktop control server (`docs/control-protocol.md`), so an agent
-//! driving FigCraft in a browser tab (or an `<iframe>` in another app) uses the same commands as
-//! the CLI and the MCP server:
+//! The crate installs `request`, `execute`, `commands`, `docInspect`, `uiInspect` and `screenshot`
+//! over the same JSON methods as the desktop control server (`docs/control-protocol.md`), as
+//! promises with a timeout, so an agent driving FigCraft in a browser tab (or an `<iframe>` in
+//! another app) uses the same commands as the CLI and the MCP server:
 //!
 //! ```js
-//! await figcraft.execute("node.create", {kind: "frame", name: "Home"})  // engine command → its result
+//! await figcraft.execute("node.create", {type: "frame", name: "Home"})  // engine command → its result
 //! await figcraft.request("document.inspect")                            // control method → its result
 //! await figcraft.commands()                                             // command list
 //! const {data} = await figcraft.screenshot()                            // the canvas as PNG (base64)
+//! ```
+//!
+//! FigCraft adds, on the same object:
+//!
+//! ```js
 //! await figcraft.openFile("home.fig", bytes)                            // `file.open` with the bytes
 //! figcraft.captureDownloads(true)                                       // saves stay in the page…
 //! figcraft.files(); await figcraft.readFile("home.figcraft")            // …to be read back
+//! await figcraft.inspect()                                              // `document.inspect`
 //! ```
 //!
 //! Results resolve with the method's `result`; errors reject with an `Error`.
 
 use std::cell::{Cell, RefCell};
+use std::future::Future;
+use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use base64::Engine as _;
-use figcraft_ui_egui::{ControlReply, ControlRequest};
+use craft_web_api::methods::Methods;
+use craft_web_api::page::{PageApi, Request};
+use figcraft_ui_egui::{ControlReply, ControlRequest, RequestGate};
 use serde_json::{Value, json};
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
 use crate::saved_files::SavedFiles;
 
-type Waiting = (Receiver<ControlReply>, js_sys::Function, js_sys::Function);
+/// The app id in `window.<app>`.
+const APP: &str = "figcraft";
+
+/// How often a waiting call looks for the app's reply, in milliseconds (about a frame).
+const POLL_MS: i32 = 16;
 
 thread_local! {
     static QUEUE: RefCell<Vec<ControlRequest>> = const { RefCell::new(Vec::new()) };
-    static WAITING: RefCell<Vec<Waiting>> = const { RefCell::new(Vec::new()) };
     static NEXT_ID: Cell<u64> = const { Cell::new(0) };
     static CTX: RefCell<Option<egui::Context>> = const { RefCell::new(None) };
     static CAPTURE: Cell<bool> = const { Cell::new(false) };
@@ -59,88 +77,112 @@ fn to_js(v: &Value) -> JsValue {
     js_sys::JSON::parse(&v.to_string()).unwrap_or(JsValue::NULL)
 }
 
-fn from_js(v: &JsValue) -> Value {
-    if v.is_undefined() || v.is_null() {
-        return json!({});
-    }
-    js_sys::JSON::stringify(v).ok().and_then(|s| s.as_string()).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}))
+/// A queued control request whose reply has not arrived. Dropping it before the reply (the page's
+/// timeout fired) cancels the request if the app has not started it: the page was told it failed,
+/// so the app must not run it late.
+struct Waiting {
+    reply: Receiver<ControlReply>,
+    gate: RequestGate,
+    answered: bool,
 }
 
-/// Settle the promises of answered requests (called every frame).
-pub fn poll_replies() {
-    WAITING.with(|w| {
-        w.borrow_mut().retain(|(rx, resolve, reject)| match rx.try_recv() {
-            Ok(ControlReply { result: Ok(v), .. }) => {
-                let _ = resolve.call1(&JsValue::NULL, &to_js(&v));
-                false
+impl Waiting {
+    /// The reply as the protocol's object once the app has answered or gone away; `None` while the
+    /// request is still waiting.
+    fn poll(&mut self) -> Option<Value> {
+        match self.reply.try_recv() {
+            Ok(ControlReply { result, .. }) => {
+                self.answered = true;
+                Some(match result {
+                    Ok(value) => json!({"ok": true, "result": value}),
+                    Err(error) => json!({"ok": false, "error": error}),
+                })
             }
-            Ok(ControlReply { result: Err(e), .. }) => {
-                let _ = reject.call1(&JsValue::NULL, &js_sys::Error::new(&e));
-                false
-            }
-            Err(TryRecvError::Empty) => true,
+            Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
-                let _ = reject.call1(&JsValue::NULL, &js_sys::Error::new("request dropped"));
-                false
+                self.answered = true;
+                Some(json!({"ok": false, "error": "request dropped"}))
             }
-        });
-    });
+        }
+    }
 }
 
-fn request(method: &str, params: Value) -> js_sys::Promise {
-    let method = method.to_string();
-    let p = js_sys::Promise::new(&mut |resolve, reject| {
-        let (reply, rx) = std::sync::mpsc::channel();
-        let id = NEXT_ID.with(|n| {
-            n.set(n.get() + 1);
-            n.get()
-        });
-        let req = ControlRequest { id: json!(id), method: method.clone(), params: params.clone(), reply, state: Default::default() };
-        QUEUE.with(|q| q.borrow_mut().push(req));
-        WAITING.with(|w| w.borrow_mut().push((rx, resolve, reject)));
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        if !self.answered {
+            self.gate.cancel_if_open();
+        }
+    }
+}
+
+/// Queue a control request for the next frame and wait for the app's reply, as the protocol's
+/// `{ok, result}` / `{ok: false, error}` object.
+fn send(method: &str, params: Value) -> Pin<Box<dyn Future<Output = Value>>> {
+    let (reply, rx) = std::sync::mpsc::channel();
+    let id = NEXT_ID.with(|n| {
+        n.set(n.get() + 1);
+        n.get()
     });
+    let gate = RequestGate::new();
+    QUEUE.with(|q| q.borrow_mut().push(ControlRequest { id: json!(id), method: method.to_string(), params, reply, state: gate.clone() }));
     CTX.with(|c| {
         if let Some(ctx) = c.borrow().as_ref() {
             ctx.request_repaint();
         }
     });
-    p
+    let mut waiting = Waiting { reply: rx, gate, answered: false };
+    Box::pin(async move {
+        loop {
+            if let Some(reply) = waiting.poll() {
+                return reply;
+            }
+            sleep(POLL_MS).await;
+        }
+    })
+}
+
+async fn sleep(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(window) = web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        }
+    });
+    let _ = JsFuture::from(promise).await;
+}
+
+/// A reply as a promise outcome: the `result`, or an `Error` carrying the `error`.
+fn outcome(reply: &Value) -> Result<JsValue, JsValue> {
+    if reply.get("ok").and_then(Value::as_bool) == Some(true) {
+        Ok(to_js(reply.get("result").unwrap_or(&Value::Null)))
+    } else {
+        Err(js_sys::Error::new(reply.get("error").and_then(Value::as_str).unwrap_or("error")).into())
+    }
 }
 
 fn set_fn(obj: &js_sys::Object, name: &str, f: JsValue) -> Result<(), JsValue> {
     js_sys::Reflect::set(obj, &name.into(), &f).map(|_| ())
 }
 
-/// Install `window.figcraft`.
+/// Install `window.figcraft`: the crate's functions, then FigCraft's own.
 pub fn install() -> Result<(), JsValue> {
-    let obj = js_sys::Object::new();
+    let request: Request = Rc::new(|method, params| send(&method, params));
+    Rc::new(PageApi::new(APP, Methods::default(), request)).install()?;
+    let window = web_sys::window().ok_or("no window")?;
+    let obj: js_sys::Object = js_sys::Reflect::get(&window, &APP.into())?.unchecked_into();
     set_fn(
         &obj,
-        "request",
-        Closure::<dyn Fn(String, JsValue) -> js_sys::Promise>::new(|method: String, params: JsValue| request(&method, from_js(&params)))
+        "inspect",
+        Closure::<dyn Fn() -> js_sys::Promise>::new(|| future_to_promise(async { outcome(&send("document.inspect", json!({})).await) }))
             .into_js_value(),
-    )?;
-    set_fn(
-        &obj,
-        "execute",
-        Closure::<dyn Fn(String, JsValue) -> js_sys::Promise>::new(|command: String, params: JsValue| {
-            request("engine.execute", json!({"command": command, "params": from_js(&params)}))
-        })
-        .into_js_value(),
-    )?;
-    set_fn(&obj, "commands", Closure::<dyn Fn() -> js_sys::Promise>::new(|| request("engine.commands", json!({}))).into_js_value())?;
-    set_fn(&obj, "inspect", Closure::<dyn Fn() -> js_sys::Promise>::new(|| request("document.inspect", json!({}))).into_js_value())?;
-    set_fn(
-        &obj,
-        "screenshot",
-        Closure::<dyn Fn(JsValue) -> js_sys::Promise>::new(|params: JsValue| request("ui.screenshot", from_js(&params))).into_js_value(),
     )?;
     set_fn(
         &obj,
         "openFile",
         Closure::<dyn Fn(String, js_sys::Uint8Array) -> js_sys::Promise>::new(|name: String, bytes: js_sys::Uint8Array| {
             let data = base64::engine::general_purpose::STANDARD.encode(bytes.to_vec());
-            request("engine.execute", json!({"command": "file.open", "params": {"name": name, "data": data}}))
+            future_to_promise(async move {
+                outcome(&send("engine.execute", json!({"command": "file.open", "params": {"name": name, "data": data}})).await)
+            })
         })
         .into_js_value(),
     )?;
@@ -166,7 +208,5 @@ pub fn install() -> Result<(), JsValue> {
         })
         .into_js_value(),
     )?;
-    let w = web_sys::window().ok_or("no window")?;
-    js_sys::Reflect::set(&w, &"figcraft".into(), &obj)?;
     Ok(())
 }

@@ -1261,6 +1261,20 @@ pub fn paint_all(doc: &mut Document, id: NodeId, pts: &[Point]) -> Result<bool> 
     Ok(filled)
 }
 
+/// The fills the Fill section shows for layer `id` while regions of it are selected in edit
+/// mode: the stack those regions share (their own, else the layer's), `Some(None)` when they
+/// differ (mixed), `None` when no region of that layer is selected (the layer's fills show). The
+/// fill commands edit the same regions then (#1875).
+pub fn selected_region_fills(s: &Session, id: NodeId) -> Option<Option<Vec<figcraft_color::Paint>>> {
+    let ve = s.ds().ok()?.vector_edit.as_ref().filter(|ve| ve.id == id && !ve.regions.is_empty())?;
+    let doc = s.doc().ok()?;
+    let node = doc.node(id)?;
+    let net = network(doc, id)?;
+    let mut stacks = ve.regions.iter().filter_map(|r| net.regions.get(*r)).map(|r| r.fills.clone().unwrap_or_else(|| node.fills.clone()));
+    let first = stacks.next()?;
+    Some(stacks.all(|st| st == first).then_some(first))
+}
+
 /// Add points `vs` of edited layer `id` to its selection.
 pub(crate) fn add_points(ve: &mut VectorEdit, id: NodeId, vs: &[usize]) {
     let list = if id == ve.id { Some(&mut ve.vertices) } else { ve.others.iter_mut().find(|o| o.id == id).map(|o| &mut o.vertices) };

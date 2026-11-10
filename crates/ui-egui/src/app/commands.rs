@@ -1,6 +1,6 @@
 use super::{
-    Done, FigApp, LeftTab, MobilePanel, NodeId, PANEL_DEFAULT, RightTab, Value, comments, dev_compare, dialogs, home, i18n, import_report, json,
-    layers, live, menus, missing_fonts, plugins_ui, present, tabs, updates_ui, versions,
+    Done, FigApp, LeftTab, MobilePanel, NodeId, PANEL_DEFAULT, RightTab, Value, comments, dev_compare, dialogs, home, import_report, json, layers,
+    live, menus, missing_fonts, plugins_ui, present, tabs, updates_ui, versions,
 };
 
 impl FigApp {
@@ -55,7 +55,8 @@ impl FigApp {
     /// Show command `id`'s error.
     pub(crate) fn failed(&mut self, id: &str, e: &figcraft_engine::EngineError) {
         let msg = e.to_string();
-        log::warn!("{id}: {msg}");
+        // A plugin's failure text may carry CR or terminal controls: log it escaped.
+        log::warn!("{id}: {}", msg.escape_debug());
         self.show_error(msg);
     }
 
@@ -270,7 +271,13 @@ impl FigApp {
                     let y = r.data.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     comments::start_draft(self, x, y);
                 }
-                "dialog.unsaved" => self.toast(i18n::tr("This file has unsaved changes")),
+                "dialog.unsaved" => {
+                    // `file.close` refused a file with unsaved changes: ask about it.
+                    let i = r.data.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).unwrap_or(self.session.active);
+                    if let Some(d) = self.session.docs.get(i) {
+                        self.ui.close_tab = Some(crate::windows::TabClose::Ask(d.uid));
+                    }
+                }
                 "dialog.plugins" => self.ui.plugins_window = true,
                 "dialog.pluginSave" => plugins_ui::save_file(self, &r.data),
                 "dialog.cursorChat" => live::open_chat(self),

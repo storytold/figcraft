@@ -31,7 +31,7 @@ use crate::manage;
 use crate::net::{Duplex, NetLimits, config, shutdown};
 use crate::requests;
 pub use crate::requests::Publish;
-use crate::throttle::{PRESENCE_INTERVAL, Throttle, earliest};
+use crate::throttle::{PRESENCE_INTERVAL, Paced, Throttle, earliest};
 
 /// A joined (or joining) session. Dropping it leaves.
 pub struct Guest {
@@ -48,6 +48,8 @@ enum Cmd {
     /// For the server, in order (document changes).
     Send(ClientMsg),
     Leave,
+    /// Try now rather than after the pause under way (reconnecting).
+    Retry,
     /// The reader of connection `epoch` got its welcome.
     Welcomed(u64),
     /// Connection `epoch` ended.
@@ -71,7 +73,7 @@ impl Guest {
                     });
                 if let Err(o) = asked.and_then(|(file, token)| resolved(&mut cfg, file, token)) {
                     if let Next::Stop(Some(e)) = after(unresolved(&cfg, o), &cfg, false, &mut 0, &inbox) {
-                        inbox.push(e);
+                        inbox.push(*e);
                     }
                     return;
                 }
@@ -137,6 +139,11 @@ impl Guest {
         let _ = self.cmd.send(Cmd::Send(msg));
     }
 
+    /// Reconnect now, if it is waiting to.
+    pub fn retry(&self) {
+        let _ = self.cmd.send(Cmd::Retry);
+    }
+
     /// Leave (returns at once: a connection attempt in progress ends on its own).
     pub fn leave(&mut self) {
         let _ = self.cmd.send(Cmd::Leave);
@@ -158,6 +165,9 @@ impl Drop for Guest {
         }
     }
 }
+
+/// How long leaving keeps sending what was waiting its turn.
+const LEAVE_DRAIN: Duration = Duration::from_secs(10);
 
 /// A connected socket: reader and writer ends.
 struct Conn {
@@ -219,7 +229,7 @@ fn supervise(cfg: &GuestConfig, inbox: &Inbox, rx: &Receiver<Cmd>, me: &Sender<C
         match after(outcome, cfg, was_live, &mut attempt, inbox) {
             Next::Stop(e) => {
                 if let Some(e) = e {
-                    inbox.push(e);
+                    inbox.push(*e);
                 }
                 return;
             }
@@ -231,6 +241,12 @@ fn supervise(cfg: &GuestConfig, inbox: &Inbox, rx: &Receiver<Cmd>, me: &Sender<C
                         Ok(Cmd::Presence(p)) => pending = Some(p),
                         Ok(Cmd::Fetch(_, asset)) => figcraft_assets::cache::failed(&asset, "the image's session is reconnecting"),
                         Ok(Cmd::Preview(_, request)) => figcraft_assets::preview::failed(&request),
+                        // A fresh start: the pauses grow from the beginning again.
+                        Ok(Cmd::Retry) => {
+                            attempt = 0;
+                            break;
+                        }
+
                         // From the old connection's client: the next welcome starts over.
                         Ok(_) => {}
                         Err(RecvTimeoutError::Timeout) => break,
@@ -283,6 +299,8 @@ fn session(
     let mut throttle = Throttle::new(PRESENCE_INTERVAL);
     let mut asset_queue = std::collections::VecDeque::new();
     let scope = session_scope(cfg);
+    // Sync messages waiting their turn (a long queue from while offline).
+    let mut paced: Paced<ClientMsg> = Paced::new(Instant::now());
     let mut preview_queue = std::collections::VecDeque::new();
     let mut preview_due = Instant::now();
     let mut preview_rate = crate::net::Bucket::new((cfg.limits.rate * 0.5).clamp(1.0, 50.0), (cfg.limits.burst * 0.25).clamp(1.0, 100.0));
@@ -292,9 +310,9 @@ fn session(
             let preview_wake =
                 (!preview_queue.is_empty() && welcomed && previews.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len() < 8)
                     .then_some(preview_due);
-            let wake = earliest([throttle.due(), Some(ping_at), preview_wake]).unwrap_or(ping_at);
+            let wake = earliest([throttle.due(), Some(ping_at), preview_wake, paced.due()]).unwrap_or(ping_at);
+
             let mut out = None;
-            let mut now_send = Vec::new();
             match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
                 Ok(Cmd::Fetch(e, asset)) if e == epoch && writer.get_ref().assets => {
                     if figcraft_assets::cache::load(&asset).is_ok() {
@@ -323,7 +341,8 @@ fn session(
                 Ok(Cmd::AssetDone(e)) if e == epoch => {}
                 Ok(Cmd::Fetch(_, asset)) => figcraft_assets::cache::failed(&asset, "the image's connection changed or does not support downloads"),
                 Ok(Cmd::AssetDone(_)) => {}
-                Ok(Cmd::Send(m)) if welcomed => now_send.push(m),
+                Ok(Cmd::Send(m)) if welcomed => paced.push(m),
+
                 // Made for the previous connection (the sync client sends again what the server
                 // didn't get once it has caught up with this connection's welcome).
                 Ok(Cmd::Send(_)) => {}
@@ -337,14 +356,20 @@ fn session(
                 }
                 Ok(Cmd::Lost(e, o)) if e == epoch => break o,
                 Ok(Cmd::Leave) | Err(RecvTimeoutError::Disconnected) => {
+                    leave_paced(&mut writer, &mut paced, &requests, inbox, &scope);
                     let _ = writer.close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }));
                     break Outcome::Left;
                 }
                 // From an earlier connection.
-                Ok(Cmd::Welcomed(_) | Cmd::Lost(..)) => {}
+                Ok(Cmd::Welcomed(_) | Cmd::Lost(..) | Cmd::Retry) => {}
                 Err(RecvTimeoutError::Timeout) => {}
             }
-            if !now_send.iter().all(|m| send_edit(&mut writer, m, &requests, inbox, &scope)) {
+            let now = Instant::now();
+            let mut sent = true;
+            while sent && let Some(m) = paced.take_due(now) {
+                sent = send_edit(&mut writer, &m, &requests, inbox, &scope);
+            }
+            if !sent {
                 break Outcome::Retry("the connection dropped".into());
             }
             if welcomed
@@ -378,7 +403,7 @@ fn session(
                     break;
                 }
             }
-            let now = Instant::now();
+
             let out = out.or_else(|| throttle.take_due(now));
             let ok = out.is_none_or(|p| send(&mut writer, &ClientMsg::Presence(p), &requests));
             let ok = ok
@@ -402,6 +427,28 @@ fn session(
         figcraft_assets::preview::failed(&request);
     }
     outcome
+}
+
+/// Send what was waiting its turn before leaving, at its pace, for at most [`LEAVE_DRAIN`]: nothing
+/// waits for this thread (the app has moved on), and going faster would get the rest refused. What
+/// doesn't go is left to the sync client, which says so when you leave.
+fn leave_paced(writer: &mut WebSocket<Duplex>, paced: &mut Paced<ClientMsg>, requests: &Requests, inbox: &Inbox, scope: &str) {
+    let give_up = Instant::now() + LEAVE_DRAIN;
+    loop {
+        let now = Instant::now();
+        if now >= give_up {
+            return;
+        }
+        if let Some(m) = paced.take_due(now) {
+            if !send_edit(writer, &m, requests, inbox, scope) {
+                return;
+            }
+        } else if let Some(at) = paced.due().filter(|at| *at < give_up) {
+            std::thread::sleep(at.saturating_duration_since(now));
+        } else {
+            return;
+        }
+    }
 }
 
 /// Send one message; false when the connection is gone.
@@ -499,7 +546,7 @@ fn read_loop(mut ws: WebSocket<Duplex>, ctx: &ReaderCtx) {
                     if let ServerMsg::Preview { mut request, bytes, error } = m {
                         request.asset.scope = scope.clone();
                         if !ws.get_ref().previews || !ctx.previews.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&request) {
-                            break Outcome::Refused("the host sent an unrequested image preview".into());
+                            break Outcome::Failed("the host sent an unrequested image preview".into());
                         }
                         let valid = bytes
                             .as_ref()
@@ -512,7 +559,7 @@ fn read_loop(mut ws: WebSocket<Duplex>, ctx: &ReaderCtx) {
                         match valid {
                             Some(bytes) => {
                                 if let Err(reason) = figcraft_assets::preview::store(&request, bytes.0.clone()) {
-                                    break Outcome::Refused(reason);
+                                    break Outcome::Failed(reason);
                                 }
                             }
                             None => figcraft_assets::preview::failed(&request),
@@ -525,14 +572,14 @@ fn read_loop(mut ws: WebSocket<Duplex>, ctx: &ReaderCtx) {
                     if let ServerMsg::Asset { mut asset, bytes, error } = m {
                         asset.scope = scope.clone();
                         if !ws.get_ref().assets || !ctx.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&asset) {
-                            break Outcome::Refused("the host sent an unrequested image".into());
+                            break Outcome::Failed("the host sent an unrequested image".into());
                         }
                         match bytes {
                             Some(bytes) if error.is_none() => match figcraft_assets::cache::store(&asset, &bytes.0) {
                                 Ok(()) => ctx.inbox.push(Event::AssetsChanged),
                                 Err(reason) => {
                                     figcraft_assets::cache::failed(&asset, &reason);
-                                    break Outcome::Refused(reason);
+                                    break Outcome::Failed(reason);
                                 }
                             },
                             _ => figcraft_assets::cache::unavailable(&asset, error.as_deref().unwrap_or("the host has no bytes for this image")),
@@ -542,20 +589,20 @@ fn read_loop(mut ws: WebSocket<Duplex>, ctx: &ReaderCtx) {
                     }
                     if ws.get_ref().assets {
                         if let Err(reason) = crate::assets_wire::scope(&mut m, &scope) {
-                            break Outcome::Refused(reason);
+                            break Outcome::Failed(reason);
                         }
                         let assets = match crate::assets_wire::manifests(&m) {
                             Ok(assets) => assets,
-                            Err(reason) => break Outcome::Refused(reason),
+                            Err(reason) => break Outcome::Failed(reason),
                         };
                         if assets.iter().any(|asset| !asset.valid()) || assets.len() > 20_000 {
-                            break Outcome::Refused("the host's image manifest exceeds the receiving budget".into());
+                            break Outcome::Failed("the host's image manifest exceeds the receiving budget".into());
                         }
                         for asset in assets {
                             figcraft_assets::cache::register(&asset, &loader);
                         }
                     } else if let Err(reason) = crate::assets_wire::validate_legacy(&m) {
-                        break Outcome::Refused(reason);
+                        break Outcome::Failed(reason);
                     }
                     let welcomed = || {
                         let _ = ctx.tx.send(Cmd::Welcomed(ctx.epoch));
@@ -565,10 +612,10 @@ fn read_loop(mut ws: WebSocket<Duplex>, ctx: &ReaderCtx) {
                         Taken::End(o) => break o,
                     }
                 }
-                Err(e) => break Outcome::Refused(format!("the host sent a message this version can't read ({e})")),
+                Err(e) => break Outcome::Failed(format!("the host sent a message this version can't read ({e})")),
             },
             Ok(Message::Close(f)) => break f.map_or_else(|| closed(0, ""), |f| closed(f.code.into(), &f.reason)),
-            Ok(Message::Text(_)) => break Outcome::Refused("the host sent a text message".into()),
+            Ok(Message::Text(_)) => break Outcome::Failed("the host sent a text message".into()),
             Ok(_) => {}
             Err(tungstenite::Error::Capacity(_)) => break too_large(&ctx.cfg.limits),
             Err(e) => break Outcome::Retry(e.to_string()),
