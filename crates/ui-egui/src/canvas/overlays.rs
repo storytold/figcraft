@@ -231,8 +231,8 @@ fn caret_color(ctx: &egui::Context, n: &figcraft_doc::Node, caret: usize) -> Opt
 
 /// The caret of a text without a solid fill (a gradient, an image, no visible fill): black on a
 /// light surface, white on a dark one. The surface is the nearest layer around the text whose
-/// topmost visible fill is a solid at least half opaque as drawn (its paint's opacity times its
-/// own and its containers' layer opacity), else the page; a layer whose top fill is a gradient or an
+/// topmost visible fill is a solid at least half opaque as drawn (its colour's alpha times its paint's
+/// opacity times its own and its containers' layer opacity), else the page; a layer whose top fill is a gradient or an
 /// image is passed over. Not the interface's text colour, which is white in the dark theme and
 /// vanishes on the default light page (#2190).
 fn caret_fallback(doc: &Document, id: NodeId) -> Color32 {
@@ -256,7 +256,7 @@ fn caret_fallback(doc: &Document, id: NodeId) -> Color32 {
         match &n.kind {
             NodeKind::Page { background, .. } => Some(*background),
             _ => n.fills.iter().rev().find(|p| p.visible).and_then(|p| match &p.kind {
-                figcraft_color::PaintKind::Solid { color } if p.opacity * alpha >= 0.5 => Some(*color),
+                figcraft_color::PaintKind::Solid { color } if color.a * p.opacity * alpha >= 0.5 => Some(*color),
                 _ => None,
             }),
         }
@@ -918,6 +918,9 @@ mod caret_tests {
         // A dark frame drawn at 20% opacity shows the light page through it.
         ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#222222", "opacity": 0.2}}));
         assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "a faint dark frame on the light page");
+        // The same through the colour's own alpha.
+        ex(&mut s, "node.set", serde_json::json!({"id": f, "props": {"fill": "#22222233", "opacity": 1.0}}));
+        assert_eq!(caret_fallback(s.doc().unwrap(), id), Color32::BLACK, "a dark fill at 20% alpha");
     }
 
     #[test]
