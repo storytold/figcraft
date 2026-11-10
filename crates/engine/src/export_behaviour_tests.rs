@@ -422,6 +422,25 @@ fn exporting_a_background_blur_layer_keeps_the_blurred_backdrop() {
     assert_eq!(exported.dimensions(), (120, 80), "the pane's own bounds");
 }
 
+/// #2213, as reported and as measured in Figma (2026-11-10): the pane inside a frame, exported on
+/// its own, keeps the frame's fill and the blurred layer beneath it, opaque.
+#[test]
+fn a_blurred_pane_inside_a_frame_keeps_the_frame_and_the_layer_beneath() {
+    use figcraft_doc::{Document, NodeKind};
+    let mut d = Document::new("blur-export-frame");
+    let page = d.first_page().unwrap();
+    let art = d.create(page, NodeKind::Frame, "Art", 0.0, 0.0, 300.0, 200.0).unwrap();
+    d.get_mut(art).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("FFFFFF").unwrap())];
+    let under = d.create(art, NodeKind::Rectangle, "Under", 0.0, 0.0, 120.0, 120.0).unwrap();
+    d.get_mut(under).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("E03030").unwrap())];
+    let pane = d.create(art, NodeKind::Rectangle, "Glass", 60.0, 20.0, 120.0, 80.0).unwrap();
+    d.get_mut(pane).unwrap().fills = vec![];
+    d.get_mut(pane).unwrap().effects = vec![Effect { kind: EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(12.0)), visible: true }];
+    let (exported, canvas) = export_vs_canvas(&d, &[pane]);
+    assert_eq!(exported.get_pixel(60, 40), canvas.get_pixel(60, 40), "the blurred square under the pane");
+    assert_eq!(exported.get_pixel(100, 40).0[3], 255, "the frame's white behind the pane, opaque");
+}
+
 /// #2213: the same for Glass.
 #[test]
 fn exporting_a_glass_layer_keeps_the_backdrop_it_bends() {
