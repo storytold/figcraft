@@ -302,6 +302,80 @@ fn variables_import_checks_what_it_reads() {
     let (a, b) = (vars.get("a").unwrap(), vars.get("b").unwrap());
     assert!(!a.values.values().chain(b.values.values()).all(|v| matches!(v, VariableValue::Alias(_))), "no loop");
     healthy(&s);
+    // Junk `textStyles` entries are skipped with a warning, never an internal error.
+    let long = "n".repeat(200);
+    let empty = json!({"variableCollections": {}, "variables": {}});
+    for junk in [json!(5), json!([3]), json!([{"name": 3}]), json!([{"name": "x", "style": "nope"}]), json!([{"name": long, "style": 7}])] {
+        let mut file = empty.clone();
+        file["textStyles"] = junk.clone();
+        match s.execute("variable.import", &json!({"variables": file})) {
+            Ok(r) => assert!(r["warnings"].to_string().contains("text style") || r["warnings"].to_string().contains("textStyles"), "{junk}: {r}"),
+            Err(e) => assert!(!matches!(e, crate::EngineError::Internal { .. }), "{junk}: {e}"),
+        }
+    }
+    assert!(s.doc().unwrap().styles.is_empty(), "no junk style got in");
+}
+
+/// A file with a "Body" text style whose size, line height and style name follow variables.
+fn body_session() -> Session {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Type", "modes": ["Base"]}));
+    ex(&mut s, "variable.create", json!({"collection": "Type", "name": "size", "type": "number", "value": 16}));
+    ex(&mut s, "variable.create", json!({"collection": "Type", "name": "lh", "type": "number", "value": 24}));
+    ex(&mut s, "variable.create", json!({"collection": "Type", "name": "face", "type": "string", "value": "Bold"}));
+    ex(&mut s, "style.create", json!({"type": "text", "name": "Body", "value": {"fontFamily": "Inter", "fontSize": 12, "lineHeight": "150%"}}));
+    for (field, v) in [("fontSize", "size"), ("lineHeight", "lh"), ("fontStyle", "face")] {
+        ex(&mut s, "style.bind", json!({"style": "Body", "field": field, "variable": v}));
+    }
+    s
+}
+
+#[test]
+fn variables_export_carries_text_styles_with_their_bindings() {
+    let mut s = body_session();
+    let out = ex(&mut s, "variable.export", json!({}));
+    let file: Value = serde_json::from_str(out["text"].as_str().unwrap()).unwrap();
+    let styles = file["textStyles"].as_array().unwrap();
+    assert_eq!(styles.len(), 1, "{file}");
+    assert_eq!(styles[0]["name"], "Body");
+    assert_eq!(styles[0]["style"]["font_size"], 16.0);
+    assert_eq!(styles[0]["style"]["font_style"], "Bold");
+    assert_eq!(styles[0], ex(&mut s, "style.list", json!({"type": "text"}))[0], "what style.list returns");
+    for field in ["fontSize", "lineHeight", "fontStyle"] {
+        let id = styles[0]["bound"][field].as_str().unwrap();
+        assert!(file["meta"]["variables"].get(id).is_some(), "{field} -> {id}");
+    }
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}));
+    assert!(!css["text"].as_str().unwrap().contains("Body"), "{css}");
+}
+
+#[test]
+fn text_styles_round_trip_through_variables_import() {
+    let mut s = body_session();
+    let out = ex(&mut s, "variable.export", json!({}));
+    let file: Value = serde_json::from_str(out["text"].as_str().unwrap()).unwrap();
+    let mut t = Session::new();
+    let r = ex(&mut t, "variable.import", json!({"variables": file}));
+    assert_eq!(r["styles"], json!({"added": 1, "updated": 0}), "{r}");
+    let doc = t.doc().unwrap();
+    let body = doc.styles.iter().find(|x| x.name == "Body").unwrap();
+    let ids: Vec<&str> = body.bound.values().map(|v| v.as_str()).collect();
+    assert_eq!(body.bound.len(), 3, "{body:?}");
+    assert!(ids.iter().all(|i| doc.variables.get(i).is_some()), "bindings point at this file's variables");
+    let StyleKind::Text { style, .. } = &body.kind else { panic!("{body:?}") };
+    assert_eq!((style.font_style.as_str(), style.font_size), ("Bold", 16.0));
+    // Again: the style is updated, not duplicated.
+    let r = ex(&mut t, "variable.import", json!({"variables": file}));
+    assert_eq!(r["styles"], json!({"added": 0, "updated": 1}), "{r}");
+    assert_eq!(t.doc().unwrap().styles.len(), 1);
+    // A binding to a variable the JSON lacks is dropped with a warning naming the style.
+    let mut u = Session::new();
+    let mut lone = file.clone();
+    lone["meta"] = json!({"variableCollections": {}, "variables": {}});
+    let r = ex(&mut u, "variable.import", json!({"variables": lone}));
+    assert_eq!(r["styles"]["added"], 1, "{r}");
+    assert!(u.doc().unwrap().styles[0].bound.is_empty());
+    assert!(r["warnings"].to_string().contains("Body"), "{r}");
 }
 
 #[test]

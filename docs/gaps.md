@@ -408,7 +408,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Landed:** extended collections (`library.extendCollection`: a library collection's modes and
   variables in a collection of this file, values overridden per mode with reset, following library
   updates, variables of its own), variables import/export (`variable.export` / `variable.import`:
-  the REST local variables JSON, merged by name; CSS custom properties), gradient stops and variant
+  the REST local variables JSON, merged by name, with the file's text styles under `textStyles`; CSS custom properties), gradient stops and variant
   properties bound to variables.
 - **Landed (2026-10-12):** variables a library adds to a collection this file extends are a library
   update of their own (`library.updates` lists them by name, without an `id` until they have a

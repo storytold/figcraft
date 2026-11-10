@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use figcraft_doc::{Collection, CollectionId, Document, Mode, ModeId, Variable, VariableId, VariableValue, Variables, trim_num};
+use figcraft_doc::{Collection, CollectionId, Document, Mode, ModeId, StyleKind, Variable, VariableId, VariableValue, Variables, trim_num};
 use serde_json::{Value, json};
 
 use super::CommandSpec;
@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "variable.import",
             "Import variables",
-            "{variables (the local variables JSON, as variable.export writes it: an object, JSON text or a path to a regular file of at most 256 MiB; `variableCollections` and `variables` under `meta` or at the top level)}  collections join this file's collection of the same name (values by mode name; new modes and variables are added, a variable of another type is skipped), others are added  → {collections (added), variables (added), updated, warnings (also when it holds no variables, or fewer than its collections list)}",
+            "{variables (the local variables JSON, as variable.export writes it: an object, JSON text or a path to a regular file of at most 256 MiB; `variableCollections` and `variables` under `meta` or at the top level; a top-level `textStyles` array, a FigCraft extension, adds this file's text styles by name with their variable bindings re-pointed)}  collections join this file's collection of the same name (values by mode name; new modes and variables are added, a variable of another type is skipped), others are added  → {collections (added), variables (added), updated, warnings (also when it holds no variables, or fewer than its collections list)}",
             true,
             import
         ),
@@ -44,8 +44,13 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "collections: [collection ids or names]")),
     };
     let text = match string(p, "format").as_deref().unwrap_or("json") {
-        "json" => serde_json::to_string_pretty(&figcraft_format::rest::export_variables(&doc.variables, &colls))
-            .map_err(|e| EngineError::Other(e.to_string()))?,
+        "json" => {
+            let mut out = figcraft_format::rest::export_variables(&doc.variables, &colls);
+            if let Value::Object(m) = &mut out {
+                m.insert("textStyles".into(), text_styles(doc));
+            }
+            serde_json::to_string_pretty(&out).map_err(|e| EngineError::Other(e.to_string()))?
+        }
         "css" => css(doc, &colls, false),
         "tailwind" => css(doc, &colls, true),
         "dart" => dart(&doc.variables, &colls),
@@ -58,6 +63,61 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => Ok(json!({"text": text})),
     }
+}
+
+/// This file's own text styles as `style.list {type: "text"}` returns them (values and `bound`,
+/// the variable ids being those `meta.variables` is keyed by): the `textStyles` of the variables
+/// JSON, a FigCraft extension beside the REST-compatible `meta`.
+fn text_styles(doc: &Document) -> Value {
+    let own = |st: &&figcraft_doc::Style| matches!(st.kind, StyleKind::Text { .. }) && !crate::library::is_remote_style(doc, &st.id);
+    Value::Array(doc.styles.iter().filter(own).filter_map(|st| serde_json::to_value(st).ok()).collect())
+}
+
+/// Read `entries` (the `textStyles` of a variables JSON) into this file: a style joins this file's
+/// text style of the same name, others are added; bindings follow `ids` (imported variable id to
+/// this file's). Returns (added, updated); what can't be read is a warning.
+fn import_text_styles(doc: &mut Document, entries: &Value, ids: &BTreeMap<VariableId, VariableId>, warnings: &mut Vec<String>) -> (usize, usize) {
+    let Value::Array(list) = entries else {
+        warnings.push("`textStyles` should be an array of text styles: skipped".to_string());
+        return (0, 0);
+    };
+    let (mut added, mut updated) = (0, 0);
+    let mut touched = Vec::new();
+    for (i, e) in list.iter().enumerate() {
+        let name = e.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty());
+        let (Some(name), Some(style)) = (name, e.get("style").filter(|x| x.is_object())) else {
+            warnings.push(format!("`textStyles` entry {i} needs a `name` and a `style` object: skipped"));
+            continue;
+        };
+        let mut bound = BTreeMap::new();
+        if let Some(Value::Object(m)) = e.get("bound") {
+            for (field, id) in m {
+                match id.as_str().and_then(|v| ids.get(v)) {
+                    Some(local) => {
+                        bound.insert(field.clone(), local.clone());
+                    }
+                    None => warnings.push(format!("text style `{name}`: `{field}` is bound to a variable the JSON doesn't hold: left unbound")),
+                }
+            }
+        }
+        let description = e.get("description").and_then(Value::as_str).unwrap_or_default();
+        match super::styles::upsert_text_style(doc, name, description, style, e.get("paragraph").unwrap_or(&Value::Null), bound) {
+            Ok((sid, was)) => {
+                touched.push(sid);
+                if was {
+                    updated += 1;
+                } else {
+                    added += 1;
+                }
+            }
+            Err(err) => warnings.push(format!("text style `{name}`: {err}")),
+        }
+    }
+    crate::style_vars::settle(doc);
+    for sid in touched {
+        super::styles::propagate_style(doc, &sid);
+    }
+    (added, updated)
 }
 
 /// `text` as a CSS comment or quoted string body.
@@ -362,5 +422,12 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    Ok(json!({"collections": added_colls, "variables": added, "updated": updated, "warnings": warnings}))
+    let (styles_added, styles_updated) = match v.get("textStyles") {
+        Some(entries) => import_text_styles(doc, entries, &ids, &mut warnings),
+        None => (0, 0),
+    };
+    Ok(json!({
+        "collections": added_colls, "variables": added, "updated": updated,
+        "styles": {"added": styles_added, "updated": styles_updated}, "warnings": warnings
+    }))
 }
