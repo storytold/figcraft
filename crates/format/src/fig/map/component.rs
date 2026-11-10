@@ -1,6 +1,6 @@
 use super::layer::own_text;
 use super::text::char_styles;
-use super::{BTreeMap, BTreeSet, Kv, MAX_DEPTH, MAX_SCALE_FACTOR, MIN_SCALE_FACTOR, Mapper, Obj, Rc, Value, View, guid, json};
+use super::{BTreeMap, BTreeSet, Kv, MAX_DEPTH, MAX_SCALE_FACTOR, MIN_SCALE_FACTOR, Mapper, Obj, Rc, Value, View, guid, json, swap_guid};
 
 /// An override row names a layer of the main by its current GUID or by the `overrideKey` the
 /// layer had when the row was written: the key becomes the current GUID, unless the layer is
@@ -304,7 +304,7 @@ impl<'a> Mapper<'a> {
     /// An instance's main and properties; the context its expanded layers are built in.
     pub(super) fn instance(&mut self, o: &mut Obj, v: &View<'a>, id: &str, outer: Option<&Inst<'a>>, rest_id: &str) -> Option<(Inst<'a>, String)> {
         let sd = v.get("symbolData");
-        let mut sym = v.get("overriddenSymbolID").and_then(guid).or_else(|| sd.and_then(|s| s.get("symbolID")).and_then(guid));
+        let mut sym = v.get("overriddenSymbolID").and_then(swap_guid).or_else(|| sd.and_then(|s| s.get("symbolID")).and_then(guid));
         // An instance swap property value picks the main.
         if let Some(i) = outer
             && let Some(def) = prop_ref(v, "OVERRIDDEN_SYMBOL_ID")

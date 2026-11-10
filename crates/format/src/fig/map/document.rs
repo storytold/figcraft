@@ -1,7 +1,7 @@
 use super::component::{assigned, prop_guid};
 use super::paint::color;
 use super::variables::variable_value;
-use super::{Affine, BTreeMap, BTreeSet, Kv, MAX_DEPTH, Mapper, Obj, Value, View, copy_str, guid, json, rows};
+use super::{Affine, BTreeMap, BTreeSet, Kv, MAX_DEPTH, Mapper, Obj, Value, View, copy_str, guid, json, rows, swap_guid};
 
 impl<'a> Mapper<'a> {
     /// The DOCUMENT with its pages.
@@ -103,7 +103,7 @@ impl<'a> Mapper<'a> {
                 break;
             }
             let data = row.get("symbolData");
-            targets.extend(row.get("overriddenSymbolID").and_then(guid));
+            targets.extend(row.get("overriddenSymbolID").and_then(swap_guid));
             targets.extend(data.and_then(|d| d.get("symbolID")).and_then(guid));
             for assignment in row.get("componentPropAssignments").map(Kv::list).unwrap_or_default() {
                 if assignment.get("defID").is_some_and(|def| self.is_instance_swap(def).is_some()) {
