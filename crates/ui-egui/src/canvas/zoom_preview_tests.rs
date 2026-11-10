@@ -169,6 +169,26 @@ fn a_zoom_out_previews_the_whole_view_then_refines_to_a_fresh_render() {
     assert!(same_pixels(&refined, &fresh), "the settled image is a render from scratch");
 }
 
+#[test]
+fn a_zoom_in_shows_the_kept_image_until_a_preview_would_be_sharper() {
+    let (s, _) = document();
+    let ds = s.ds().unwrap();
+    let at = |scale: f64| job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), scale, 400, 300));
+    let mut r = Renders::with_threshold(0.0);
+    r.refine(&at(1.0)).unwrap();
+    for scale in [1.08, 2.0, PREVIEW_FACTOR] {
+        assert!(r.preview(&at(scale)).is_none(), "{scale}x: the kept image, enlarged, is as sharp as a preview");
+        assert!(!r.wants_late_preview(&at(scale)), "{scale}x: no preview beside the render either");
+    }
+    assert!(r.preview(&at(PREVIEW_FACTOR * 1.5)).is_some(), "enlarged past a preview's sharpness");
+    assert!(r.preview(&at(0.5)).is_some(), "a zoom out");
+    let mut aside = at(2.0);
+    aside.view.origin.0 += 10_000.0;
+    assert!(r.preview(&aside).is_some(), "a zoom in where the kept image isn't");
+    r.refine(&at(2.0)).unwrap();
+    assert!(r.preview(&at(2.0 * PREVIEW_FACTOR)).is_none(), "measured from the image refined last");
+}
+
 /// Zoom, pan and edit with `r`; whether each step was previewed, and the pan's and the edit's
 /// images.
 fn zoom_pan_edit(r: &mut Renders) -> (Vec<bool>, Done, Done) {
@@ -339,7 +359,7 @@ fn renders_from_scratch_with_nothing_to_go_by_get_a_late_preview() {
     let first = at(&doc, page, uid, 1.0);
     assert!(r.wants_late_preview(&first) && r.preview(&first).is_none(), "the first render");
     r.refine(&first).unwrap();
-    assert!(r.wants_late_preview(&at(&doc, page, uid, 4.0)), "a zoom after quick renders");
+    assert!(r.wants_late_preview(&at(&doc, page, uid, 0.25)), "a zoom after quick renders");
     assert!(r.wants_late_preview(&at(&doc, page, uid + 1, 1.0)), "another file");
     let mut panned = first.clone();
     panned.view.origin.0 += 5.0;
@@ -353,7 +373,7 @@ fn renders_from_scratch_with_nothing_to_go_by_get_a_late_preview() {
     // Renders that have been slow: the preview comes first instead.
     let mut slow = Renders::with_threshold(0.0);
     slow.refine(&first).unwrap();
-    let zoom = at(&doc, page, uid, 4.0);
+    let zoom = at(&doc, page, uid, 0.25);
     assert!(!slow.wants_late_preview(&zoom) && slow.preview(&zoom).is_some());
 }
 

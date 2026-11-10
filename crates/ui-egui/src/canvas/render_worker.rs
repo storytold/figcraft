@@ -158,6 +158,7 @@ pub struct Renders {
     preview: Retained,
     /// The last full render's document, page and scale.
     last: Option<(u64, NodeId, f64)>,
+    last_shown: Option<(u64, NodeId, View)>,
     /// How long the last render from scratch took.
     full_ms: f64,
     /// Previews come first only when renders from scratch take at least this long.
@@ -223,7 +224,33 @@ impl Default for Renders {
 impl Renders {
     /// Previews when renders from scratch take at least `ms` (tests: 0, always).
     pub fn with_threshold(ms: f64) -> Self {
-        Self { full: Retained::default(), preview: Retained::default(), last: None, full_ms: 0.0, preview_after_ms: ms, steps: None }
+        Self {
+            full: Retained::default(),
+            preview: Retained::default(),
+            last: None,
+            last_shown: None,
+            full_ms: 0.0,
+            preview_after_ms: ms,
+            steps: None,
+        }
+    }
+
+    fn keep(&mut self, job: &Job) {
+        self.last = Some((job.uid, job.page, job.view.scale));
+        self.last_shown = Some((job.uid, job.page, job.view.clone()));
+    }
+
+    fn kept_image_is_as_sharp_as_a_preview(&self, job: &Job) -> bool {
+        let Some((uid, page, kept)) = &self.last_shown else { return false };
+        let (outer, inner) = (kept.page_rect(), job.view.page_rect());
+        *uid == job.uid
+            && *page == job.page
+            && job.view.scale >= kept.scale
+            && job.view.scale <= kept.scale * PREVIEW_FACTOR
+            && outer.x0 <= inner.x0
+            && outer.y0 <= inner.y0
+            && outer.x1 >= inner.x1
+            && outer.y1 >= inner.y1
     }
 
     /// Whether `job` is a render from scratch: the kept image is of another zoom, page or file, or
@@ -235,7 +262,11 @@ impl Renders {
     /// Whether `job` gets a preview first: it renders from scratch and those have been slow on a
     /// page already drawn (the first render has no measure).
     fn wants_preview(&self, job: &Job) -> bool {
-        job.zoom_preview && self.last.is_some() && self.full_ms_so_far() >= self.preview_after_ms && self.starts_over(job)
+        job.zoom_preview
+            && self.last.is_some()
+            && self.full_ms_so_far() >= self.preview_after_ms
+            && self.starts_over(job)
+            && !self.kept_image_is_as_sharp_as_a_preview(job)
     }
 
     /// How long the last render from scratch took, or what the one being drawn in steps has taken
@@ -246,7 +277,7 @@ impl Renders {
 
     /// Whether `job` should get a preview should its render run long: from scratch, with none first.
     pub fn wants_late_preview(&self, job: &Job) -> bool {
-        job.zoom_preview && self.starts_over(job) && !self.wants_preview(job)
+        job.zoom_preview && self.starts_over(job) && !self.wants_preview(job) && !self.kept_image_is_as_sharp_as_a_preview(job)
     }
 
     /// The coarse preview of the whole of `job`'s view, when one should come first.
@@ -261,7 +292,7 @@ impl Renders {
     pub fn refine(&mut self, job: &Job) -> Option<Done> {
         let done = guarded(&mut self.full, |r| run(job, &job.view, r, false));
         if let Some(d) = &done {
-            self.last = Some((job.uid, job.page, job.view.scale));
+            self.keep(job);
             if d.work == Work::Full {
                 self.full_ms = d.ms;
             }
@@ -357,7 +388,7 @@ impl Renders {
     /// Record a render done at once in [`Self::refine_for`].
     fn finished(&mut self, job: &Job, d: Option<Done>) -> Option<Done> {
         if let Some(d) = &d {
-            self.last = Some((job.uid, job.page, job.view.scale));
+            self.keep(job);
             if d.work == Work::Full {
                 self.full_ms = d.ms;
             }
