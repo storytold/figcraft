@@ -107,9 +107,31 @@ impl<'a> Mapper<'a> {
         // Warnings from this run repeat those `common()` gave for the same style links; counted twice at worst.
         let mut alt = Obj::new();
         self.look(&mut alt, &look, ty);
+        // A row that sets a group's paints above every layer linking a style wins over that style: it
+        // was written against a previous main whose paints had no style to detach. That group is
+        // drawn from the look from that row up.
+        let top = |k: &str| look.layers.iter().rposition(|l| l.get(k).is_some());
+        let mut over_style: Vec<(&Group, Obj)> = Vec::new();
+        for g in &copied {
+            let Some((_, key, legacy)) = g.style else { continue };
+            let (Some(p), Some(st)) = (g.wire.first().and_then(|k| top(k)), top(key).max(top(legacy))) else { continue };
+            if p <= st {
+                continue;
+            }
+            let (Some(layer), Some(scale)) = (look.layers.get(p), look.scales.get(p)) else { continue };
+            let upper = look.layers.iter().copied().zip(look.scales.iter().copied()).skip(p + 1);
+            let mut from_row = Obj::new();
+            self.look(&mut from_row, &View::of_scaled(layer, *scale).with(upper), ty);
+            over_style.push((*g, from_row));
+        }
         let alt_styles = alt.get("styles").and_then(Value::as_object).cloned().unwrap_or_default();
         let mut styles = o.get("styles").and_then(Value::as_object).cloned().unwrap_or_default();
         for g in copied {
+            let row_look = over_style.iter().find(|(r, _)| std::ptr::eq(*r, g)).map(|(_, l)| l);
+            let (alt, alt_styles) = match row_look {
+                Some(l) => (l, l.get("styles").and_then(Value::as_object).cloned().unwrap_or_default()),
+                None => (&alt, alt_styles.clone()),
+            };
             for k in g.rest {
                 o.remove(*k);
                 if let Some(v) = alt.get(*k) {

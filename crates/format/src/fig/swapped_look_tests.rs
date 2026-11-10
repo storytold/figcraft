@@ -66,37 +66,27 @@ const RED: Rgb = (1.0, 0.0, 0.0);
 const BLUE: Rgb = (0.0, 0.0, 1.0);
 
 /// A variant main: both paints with their styles and a stroke weight, as the file stores them.
-fn variant(id: u64, name: &str, styles: (u64, Rgb, u64, Rgb), weight: f32, child: u64) -> Vec<Kv<'static>> {
+/// `fill` None: the fill links no style.
+fn variant(id: u64, name: &str, styles: (Option<u64>, Rgb, u64, Rgb), weight: f32, child: u64) -> Vec<Kv<'static>> {
     let (fill, fill_rgb, stroke, stroke_rgb) = styles;
-    vec![
-        node(
-            id,
-            Some(2),
-            "SYMBOL",
-            name,
-            vec![
-                ("fillPaints", paints(fill_rgb)),
-                ("styleIdForFill", style_link(fill)),
-                ("strokePaints", paints(stroke_rgb)),
-                ("styleIdForStrokeFill", style_link(stroke)),
-                ("strokeWeight", Kv::Float(weight)),
-            ],
-        ),
-        node(child, Some(id), "RECTANGLE", &format!("{name} child"), vec![]),
-    ]
+    let mut fields = vec![("fillPaints", paints(fill_rgb))];
+    fields.extend(fill.map(|f| ("styleIdForFill", style_link(f))));
+    fields.extend([("strokePaints", paints(stroke_rgb)), ("styleIdForStrokeFill", style_link(stroke)), ("strokeWeight", Kv::Float(weight))]);
+    vec![node(id, Some(2), "SYMBOL", name, fields), node(child, Some(id), "RECTANGLE", &format!("{name} child"), vec![])]
 }
 
 /// What differs between the payloads: the badge's own fill (None: the copy of its main's), the
-/// swap row's extra fields and the main the badge records.
+/// swap row's extra fields, the main the badge records and whether the Info fill links its style.
 struct Case {
     badge_fill: Option<Rgb>,
     swap_extra: Fields,
     recorded_main: u64,
+    info_fill_style: bool,
 }
 
 impl Case {
     fn copy() -> Self {
-        Self { badge_fill: None, swap_extra: vec![], recorded_main: 10 }
+        Self { badge_fill: None, swap_extra: vec![], recorded_main: 10, info_fill_style: true }
     }
 }
 
@@ -111,8 +101,9 @@ fn message(case: Case) -> Kv<'static> {
         style(5, "Ideal fill", IDEAL_FILL),
         style(6, "Ideal stroke", IDEAL_STROKE),
     ];
-    changes.extend(variant(10, "Type=Info", (3, INFO_FILL, 4, INFO_STROKE), 1.0, 11));
-    changes.extend(variant(20, "Type=Ideal", (5, IDEAL_FILL, 6, IDEAL_STROKE), 2.0, 21));
+    let info_fill = case.info_fill_style.then_some(3);
+    changes.extend(variant(10, "Type=Info", (info_fill, INFO_FILL, 4, INFO_STROKE), 1.0, 11));
+    changes.extend(variant(20, "Type=Ideal", (Some(5), IDEAL_FILL, 6, IDEAL_STROKE), 2.0, 21));
     changes.push(node(30, Some(2), "SYMBOL", "Card", vec![]));
     let mut badge = vec![
         ("symbolData", symbol(case.recorded_main, vec![])),
@@ -122,7 +113,10 @@ fn message(case: Case) -> Kv<'static> {
     ];
     match case.badge_fill {
         Some(rgb) => badge.push(("fillPaints", paints(rgb))),
-        None => badge.extend([("fillPaints", paints(INFO_FILL)), ("styleIdForFill", style_link(3))]),
+        None => {
+            badge.push(("fillPaints", paints(INFO_FILL)));
+            badge.extend(info_fill.map(|f| ("styleIdForFill", style_link(f))));
+        }
     }
     changes.push(node(31, Some(30), "INSTANCE", "Badge", badge));
     let mut swap = vec![("overriddenSymbolID", g(20))];
@@ -198,6 +192,19 @@ fn a_row_above_the_swap_beats_the_new_main() {
     let swapped = doc.node(badge(&doc, "Swapped")).unwrap();
     assert!(is_rgb(&swapped.fills, BLUE), "fill {:?}", swapped.fills);
     assert!(is_rgb(&swapped.strokes, IDEAL_STROKE), "stroke {:?}", swapped.strokes);
+}
+
+#[test]
+fn a_fill_row_without_a_style_link_beats_the_new_mains_style() {
+    // The previous main's fill links no style, so a row that recolours the badge has none to
+    // detach: its paints must still win over the style the new main links.
+    let (doc, notes) = import_case(Case { info_fill_style: false, swap_extra: vec![("fillPaints", paints(BLUE))], ..Case::copy() });
+    assert!(notes.is_empty(), "{notes:?}");
+    let swapped = doc.node(badge(&doc, "Swapped")).unwrap();
+    assert!(is_rgb(&swapped.fills, BLUE), "fill {:?}", swapped.fills);
+    assert_eq!(swapped.styles.fill, None);
+    assert!(is_rgb(&swapped.strokes, IDEAL_STROKE), "stroke {:?}", swapped.strokes);
+    assert_eq!(style_name(&doc, &swapped.styles.stroke).as_deref(), Some("Ideal stroke"));
 }
 
 #[test]
