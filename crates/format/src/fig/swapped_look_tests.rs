@@ -4,62 +4,41 @@ use figcraft_doc::color::{Paint, PaintKind};
 use figcraft_doc::{Document, NodeId};
 
 use super::kiwi::{Kv, Schema};
+use super::tests::{arr, g, o, s, solid};
 use super::*;
 
 type Fields = Vec<(&'static str, Kv<'static>)>;
 type Rgb = (f32, f32, f32);
 
-fn o(fields: Fields) -> Kv<'static> {
-    Kv::Object(fields)
-}
-
-fn g(id: u64) -> Kv<'static> {
-    o(vec![("sessionID", Kv::Uint(1)), ("localID", Kv::Uint(id))])
-}
-
-fn s(value: &str) -> Kv<'static> {
-    Kv::Str(value.into())
-}
-
+/// A node under `parent` (the shared `node` with a position from the id).
 fn node(id: u64, parent: Option<u64>, ty: &'static str, name: &str, more: Fields) -> Kv<'static> {
-    let mut fields = vec![("guid", g(id)), ("phase", Kv::Enum("CREATED")), ("type", Kv::Enum(ty)), ("name", s(name))];
-    if let Some(parent) = parent {
-        fields.push(("parentIndex", o(vec![("guid", g(parent)), ("position", s(&format!("{id:04}")))])));
-    }
-    fields.extend(more);
-    o(fields)
+    let pos = format!("{id:04}");
+    super::tests::node(id, parent.map(|p| (p, pos.as_str())), ty, name, more)
 }
 
 fn symbol(main: u64, overrides: Vec<Kv<'static>>) -> Kv<'static> {
-    o(vec![("symbolID", g(main)), ("symbolOverrides", Kv::Array(overrides))])
+    o(vec![("symbolID", g(main)), ("symbolOverrides", arr(overrides))])
 }
 
 fn row(path: &[u64], more: Fields) -> Kv<'static> {
-    let mut fields = vec![("guidPath", o(vec![("guids", Kv::Array(path.iter().map(|id| g(*id)).collect()))]))];
+    let mut fields = vec![("guidPath", o(vec![("guids", arr(path.iter().map(|id| g(*id)).collect()))]))];
     fields.extend(more);
     o(fields)
 }
 
 fn paints((r, gr, b): Rgb) -> Kv<'static> {
-    Kv::Array(vec![o(vec![
-        ("type", Kv::Enum("SOLID")),
-        ("color", o(vec![("r", Kv::Float(r)), ("g", Kv::Float(gr)), ("b", Kv::Float(b)), ("a", Kv::Float(1.0))])),
-        ("opacity", Kv::Float(1.0)),
-        ("visible", Kv::Bool(true)),
-    ])])
+    arr(vec![solid(f64::from(r), f64::from(gr), f64::from(b))])
 }
 
 /// `paints` whose one paint is bound to the variable `var`.
-fn bound_paints(rgb: Rgb, var: u64) -> Kv<'static> {
-    let (r, gr, b) = rgb;
+fn bound_paints((r, gr, b): Rgb, var: u64) -> Kv<'static> {
     let alias = o(vec![("value", o(vec![("alias", o(vec![("guid", g(var))]))])), ("dataType", Kv::Enum("ALIAS"))]);
-    Kv::Array(vec![o(vec![
-        ("type", Kv::Enum("SOLID")),
-        ("color", o(vec![("r", Kv::Float(r)), ("g", Kv::Float(gr)), ("b", Kv::Float(b)), ("a", Kv::Float(1.0))])),
-        ("opacity", Kv::Float(1.0)),
-        ("visible", Kv::Bool(true)),
-        ("colorVar", alias),
-    ])])
+    let mut paint = match solid(f64::from(r), f64::from(gr), f64::from(b)) {
+        Kv::Object(fields) => fields,
+        _ => Vec::new(),
+    };
+    paint.push(("colorVar", alias));
+    arr(vec![Kv::Object(paint)])
 }
 
 fn style_link(id: u64) -> Kv<'static> {
