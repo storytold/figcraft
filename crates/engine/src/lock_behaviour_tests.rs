@@ -117,6 +117,20 @@ fn a_child_of_a_locked_frame_cannot_be_locked_or_unlocked_on_its_own() {
 }
 
 #[test]
+fn lock_unlock_on_a_mixed_selection_leaves_a_locked_frames_child_alone() {
+    let mut s = Session::new();
+    let (f, d, _lk, r) = scene(&mut s);
+    ex(&mut s, "object.toggleLock", json!({"ids": [f], "locked": true}));
+    ex(&mut s, "select.set", json!({"ids": [d, r]}));
+    ex(&mut s, "object.toggleLock", json!({}));
+    assert!(locked(&s, r), "the unlocked layer in the selection is locked");
+    assert!(!locked(&s, d), "the locked frame's child keeps its own flag");
+    ex(&mut s, "object.toggleLock", json!({"ids": [f], "locked": false}));
+    click(&mut s, 30.0, 30.0, false);
+    assert_eq!(s.selection(), vec![d], "so unlocking the frame frees the child");
+}
+
+#[test]
 fn ctrl_shift_l_on_a_panel_selected_locked_layer_unlocks_it() {
     let mut s = Session::new();
     let (_f, _d, lk, _r) = scene(&mut s);

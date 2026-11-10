@@ -239,7 +239,12 @@ pub(super) fn toggle(s: &mut Session, p: &Value, what: &str) -> Result<Value> {
         // parent is locked.
         _ => !ids.iter().all(|i| crate::tools::locked_in(doc, *i)),
     });
-    for i in &ids {
+    // Lock/Unlock leaves a child of a locked layer alone, as its padlock does: its own flag must
+    // still hold once the parent is unlocked. An explicit `locked` (scripts) sets it anyway.
+    let under_lock = |i: NodeId| doc.ancestors(i).into_iter().any(|a| doc.node(a).is_some_and(|n| n.locked));
+    let skip: Vec<NodeId> =
+        if what == "locked" && explicit.is_none() { ids.iter().copied().filter(|i| under_lock(*i)).collect() } else { Vec::new() };
+    for i in ids.iter().filter(|i| !skip.contains(i)) {
         let n = doc.get_mut(*i)?;
         if what == "visible" {
             n.visible = value;
