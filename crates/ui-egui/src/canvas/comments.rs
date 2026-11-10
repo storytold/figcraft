@@ -833,7 +833,10 @@ fn escape(app: &mut FigApp, ctx: &egui::Context) -> bool {
 /// The draft's composer next to its pin at `at` (screen), kept inside `bounds`; posting adds the
 /// comment (on `page` when given, else the current one) and shows its thread. The editor and the
 /// presenter both draw it here.
-fn draft_composer(app: &mut FigApp, ctx: &egui::Context, at: Pos2, bounds: Rect, page: Option<NodeId>) {
+///
+/// `target` is the page and the presented frame when called from the presenter: the comment then
+/// anchors within that frame. A comment that fails to post leaves the draft and its text.
+fn draft_composer(app: &mut FigApp, ctx: &egui::Context, at: Pos2, bounds: Rect, target: Option<(NodeId, NodeId)>) {
     let Some((x, y, mut text)) = app.ui.comments.draft.clone() else { return };
     let t = Tokens::get(ctx);
     let people = app.session.doc().map(|d| d.comment_people()).unwrap_or_default();
@@ -849,13 +852,17 @@ fn draft_composer(app: &mut FigApp, ctx: &egui::Context, at: Pos2, bounds: Rect,
     app.ui.comments.mention = pick;
     if post {
         let mut params = json!({"x": x, "y": y, "text": text.trim(), "anchor": true});
-        if let (Some(page), Some(o)) = (page, params.as_object_mut()) {
+        if let (Some((page, frame)), Some(o)) = (target, params.as_object_mut()) {
             o.insert("page".into(), json!(page));
+            o.insert("within".into(), json!(frame));
         }
-        let r = app.run("comment.add", params);
-        app.ui.comments.draft = None;
-        if let Some(id) = r.and_then(|v| v.get("id").and_then(Value::as_u64)) {
-            app.ui.comments.show(id);
+        if let Some(r) = app.run("comment.add", params) {
+            app.ui.comments.draft = None;
+            if let Some(id) = r.get("id").and_then(Value::as_u64) {
+                app.ui.comments.show(id);
+            }
+        } else if let Some(d) = &mut app.ui.comments.draft {
+            d.2 = text;
         }
     } else if let Some(d) = &mut app.ui.comments.draft {
         d.2 = text;
@@ -1262,7 +1269,7 @@ pub fn presenter(app: &mut FigApp, ctx: &egui::Context, frame: NodeId, place: cr
                 ui.painter().circle_filled(rr.center(), 3.0, crate::theme::ACCENT_ON);
             },
         );
-        draft_composer(app, ctx, at, ctx.content_rect(), doc.page_of(frame));
+        draft_composer(app, ctx, at, ctx.content_rect(), doc.page_of(frame).map(|page| (page, frame)));
         return;
     }
     match app.ui.comments.open.and_then(|o| pins.iter().find(|p| p.id == o)) {

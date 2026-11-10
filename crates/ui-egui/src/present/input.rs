@@ -34,6 +34,19 @@ fn release_drag_scroll(p: &mut Presenter, l: &Layout, down: bool, velocity: Vec2
     }
 }
 
+/// Without clicks (the comment mode), forget a press in progress and what it began: a drag-scroll and a
+/// transition following the pointer.
+fn drop_press(p: &mut Presenter, clicks: bool) {
+    if clicks {
+        return;
+    }
+    p.press = None;
+    p.drag_scroll = None;
+    if let Some(a) = p.anim.as_mut() {
+        a.follow = None;
+    }
+}
+
 /// Scrolls the first of `targets` the wheel can still move, and smooths the wheel's speed over
 /// ~50 ms whatever the frame rate.
 fn wheel_scroll(p: &mut Presenter, l: &Layout, base: &Document, targets: Vec<Scroller>, wheel: Vec2, dt: f64) {
@@ -194,6 +207,8 @@ pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, mode: In
     });
     let keys = if keys_on { keys } else { Vec::new() };
     let pressed = pressed && clicks;
+    // A press already in progress when the comment mode starts is dropped, so its release is no click.
+    drop_press(p, clicks);
     // Controller buttons pressed while a link notice shows are dropped, as keys are.
     let pads = std::mem::take(&mut p.pads);
     let pads = if p.link_notice.is_none() { pads } else { Vec::new() };

@@ -366,6 +366,62 @@ fn typing_c_into_the_presenters_draft_keeps_the_mode_on() {
     assert!(comments(&u)["draft"].is_array());
 }
 
+#[test]
+fn a_comment_posted_in_the_overlap_anchors_to_the_presented_frame() {
+    let mut s = Session::new();
+    let a = id(&s.execute("node.create", &json!({"type": "frame", "x": 50, "y": 40, "width": 400, "height": 300})).unwrap());
+    // Stacked after `a` and overlapping its right part.
+    s.execute("node.create", &json!({"type": "frame", "x": 250, "y": 40, "width": 400, "height": 300})).unwrap();
+    let mut u = Ui::new(s);
+    u.run("proto.present", json!({"start": a}));
+    key(&mut u, Key::C, Modifiers::NONE);
+    let screen = egui::Rect::from_min_size(pos2(0.0, 80.0), vec2(1440.0, 820.0));
+    let frame_min = screen.center() - vec2(200.0, 150.0);
+    click(&mut u, frame_min + vec2(250.0, 90.0));
+    u.frame(vec![Event::Text("overlap".into())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    assert_eq!(comment_count(&u), 1);
+    let c = u.app.session.doc().unwrap().comments[0].clone();
+    assert_eq!(c.anchor, Some(a), "the comment is on the presented frame, not the one stacked over it");
+    assert_eq!(comments(&u)["open"], c.id, "its pin shows in the presenter");
+}
+
+#[test]
+fn a_draft_that_fails_to_post_keeps_its_text() {
+    let (mut h, _) = crate::live_tests::Harness::new();
+    // A view-only link: the session refuses every edit, a comment too.
+    crate::live_server_tests::joined(&mut h, figcraft_engine::live::Access::View);
+    h.frames(2);
+    start_draft(&mut h.app, 150.0, 150.0);
+    h.frame(vec![]);
+    h.frame(vec![Event::Text("hello".into())]);
+    let k = |pressed| Event::Key { key: Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    h.frame(vec![k(true), k(false)]);
+    h.frames(2);
+    assert!(h.app.session.doc().unwrap().comments.is_empty(), "the session refused the comment");
+    let draft = h.app.ui.comments.draft.clone();
+    assert_eq!(draft.as_ref().map(|d| d.2.as_str()), Some("hello"), "the draft and its text stay: {draft:?}");
+}
+
+#[test]
+fn a_press_held_into_the_presenters_comment_mode_does_not_navigate_on_release() {
+    let mut s = Session::new();
+    let f = id(&s.execute("node.create", &json!({"type": "frame", "x": 50, "y": 40, "width": 400, "height": 300})).unwrap());
+    let other = id(&s.execute("node.create", &json!({"type": "frame", "x": 700, "y": 0, "width": 400, "height": 300})).unwrap());
+    let mut u = Ui::new(s);
+    u.run("proto.interaction.add", json!({"id": f, "trigger": {"type": "onClick"}, "action": {"type": "navigate", "dest": other}}));
+    u.run("proto.present", json!({"start": f}));
+    u.frames(2, Vec::new);
+    let screen = egui::Rect::from_min_size(pos2(0.0, 80.0), vec2(1440.0, 820.0));
+    let at = screen.center() - vec2(200.0, 150.0) + vec2(120.0, 90.0);
+    u.button(at, true);
+    key(&mut u, Key::C, Modifiers::NONE);
+    assert_eq!(u.app.inspect()["presenter"]["comments"], true);
+    u.button(at, false);
+    u.frames(30, Vec::new);
+    assert_eq!(u.app.inspect()["presenter"]["current"], json!(f), "the press began before comment mode, so its release is no click");
+}
+
 #[derive(Clone, Default)]
 struct Clip(Arc<Mutex<Option<String>>>);
 
