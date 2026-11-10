@@ -972,6 +972,8 @@ fn eye_lock(
     // A sweep across the eyes or padlocks takes in the rows the pointer passes.
     if let Some(sw) = sweep.as_mut()
         && !sw.ids.contains(&row.id)
+        // A padlock sweep leaves the children of a locked layer alone (their padlock is inert).
+        && !(sw.lock && row.locked_above)
         && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.y_range().contains(p.y))
     {
         sw.ids.push(row.id);

@@ -274,6 +274,33 @@ fn the_padlock_of_a_layer_in_a_locked_frame_is_inert() {
 }
 
 #[test]
+fn a_padlock_sweep_skips_the_children_of_a_locked_frame() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Locked frame"})).unwrap());
+    let c1 = rect(&mut s, "child 1", 0.0, Some(frame));
+    let c2 = rect(&mut s, "child 2", 20.0, Some(frame));
+    let sibling = rect(&mut s, "sibling", 40.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    s.execute("object.toggleLock", &json!({"ids": [frame], "locked": true})).unwrap();
+    let mut u = Ui::new(s);
+    // Selecting a child reveals the frame's rows; then the selection goes away.
+    u.app.run("select.set", json!({"ids": [c1]}));
+    u.frame(vec![]);
+    u.app.run("select.none", json!({}));
+    u.frame(vec![]);
+    let padlock = 250.0;
+    let (rs, rc) = (u.row_at(sibling), u.row_at(c1));
+    let from = Pos2::new(padlock, rs.y);
+    u.frame(vec![Event::PointerMoved(from)]);
+    u.drag_to(from, Pos2::new(padlock, rc.y));
+    u.button(Pos2::new(padlock, rc.y), false);
+    let doc = u.app.session.doc().unwrap();
+    assert!(doc.node(sibling).unwrap().locked, "the sibling is locked by the sweep");
+    assert!(!doc.node(c1).unwrap().locked, "a child of a locked frame keeps its own flag");
+    assert!(!doc.node(c2).unwrap().locked, "so does the other child");
+}
+
+#[test]
 fn renaming_several_layers_opens_the_rename_dialog() {
     let (mut u, [a, b, c, _d]) = four();
     // Cmd/Ctrl+R (F2, the context menu's Rename) with several layers selected.
