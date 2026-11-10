@@ -1232,13 +1232,13 @@ Dart constants for Flutter (`format: "dart"`: an `abstract final class` per coll
 default mode's named after the collection and the others after the collection and the mode, with a
 `static const` `Color`, `double`, `String` or `bool` per variable; names become camelCase Dart
 identifiers kept apart, aliases are resolved to their value in that mode), and
-returns `{text}` (or writes `path` and returns `{path}`). The JSON format also carries a top-level `textStyles` array beside `meta`, a FigCraft extension (the REST `styles` metadata has no values): each entry is what `style.list {type: "text"}` returns (`name`, `style`, `paragraph`, and `bound` holding the same variable ids `meta.variables` is keyed by); CSS, Tailwind and Dart are variables only. `variable.import {variables}` (an object,
+returns `{text}` (or writes `path` and returns `{path}`). The JSON format also carries a top-level `textStyles` array beside `meta`, a FigCraft extension (the REST `styles` metadata has no values): each entry is what `style.list {type: "text"}` returns (`name`, `style`, `paragraph`, and `bound` holding the ids `meta.variables` is keyed by, which it holds only for the variables of the exported local collections, so a file's own export with `collections` left out of it names variables its `meta` lacks, and an import keeps such a binding on the style it replaces; an entry's `style` keys are snake_case and its `bound` keys camelCase, `bound.fontSize` binding `style.font_size`); CSS, Tailwind and Dart are variables only. `variable.import {variables}` (an object,
 JSON text or a path to a regular file of at most 256 MiB;
 `variableCollections` and `variables` under `meta` or at the top level) reads
 one back: a collection joins this file's collection of the same name
 (values matched by mode name, new modes and variables added, a same-named variable of another type
 skipped with a warning; library copies and extended collections are never targets), others are
-added; aliases are checked for loops; a `textStyles` array is read too (a style joins this file's text style of the same name, others are added; bindings follow the imported variables, one to a variable the JSON lacks is dropped with a warning); it returns `{collections, variables, updated, styles: {added, updated}, warnings}`,
+added; aliases are checked for loops; a `textStyles` array is read too (a style joins this file's text style of the same name, others are added; bindings follow the imported variables; one to a variable the JSON lacks (unless the style it replaces already holds that id), to a field the style lacks or to a variable of another type is dropped with a warning; at most 10,000 styles and 32 bindings each are read); it returns `{collections, variables, updated, styles: {added, updated}, warnings}`,
 with a warning when the JSON holds no variables (`no variables found: expected meta.variables …`)
 or fewer than its collections list in `variableIds`. The
 Variables editor's Import… and Export… buttons do the same through file dialogs.

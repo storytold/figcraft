@@ -262,22 +262,25 @@ fn text_kind(cmd: &str, style: &Value, paragraph: &Value) -> Result<StyleKind> {
     Ok(StyleKind::Text { style: text_style_json(cmd, style)?, paragraph: Box::new(paragraph_style_json(cmd, paragraph)?) })
 }
 
-/// Make or redefine this file's text style `name` from JSON (see [`text_kind`]), with `bound` as its
-/// variable bindings (those that name no field of the value are dropped). True when a style of
-/// that name existed and was redefined (with the style's id); the caller settles and propagates.
+/// Make or redefine this file's text style `name` from JSON (see [`text_kind`]). `bind` gives its
+/// variable bindings from the document, the new value and the style it replaces. The style
+/// redefined is the first local text style of that name not in `touched`. True when one existed
+/// (with the style's id); the caller settles and propagates.
 pub(crate) fn upsert_text_style(
     doc: &mut Document,
     name: &str,
     description: &str,
     style: &Value,
     paragraph: &Value,
-    bound: BTreeMap<String, VariableId>,
+    touched: &[StyleId],
+    bind: impl FnOnce(&Document, &StyleKind, Option<&Style>) -> BTreeMap<String, VariableId>,
 ) -> Result<(StyleId, bool)> {
-    let cmd = "variable.import";
-    let kind = text_kind(cmd, style, paragraph)?;
-    let same =
-        doc.styles.iter().position(|x| x.name == name && matches!(x.kind, StyleKind::Text { .. }) && !crate::library::is_remote_style(doc, &x.id));
+    let kind = text_kind("variable.import", style, paragraph)?;
+    let same = doc.styles.iter().position(|x| {
+        x.name == name && matches!(x.kind, StyleKind::Text { .. }) && !crate::library::is_remote_style(doc, &x.id) && !touched.contains(&x.id)
+    });
     let updated = same.is_some();
+    let bound = bind(doc, &kind, same.and_then(|i| doc.styles.get(i)));
     let mut st = match same.and_then(|i| doc.styles.get(i)) {
         Some(x) => Style { kind, bound, ..x.clone() },
         None => Style { id: doc.new_style_id(), name: name.to_string(), description: description.to_string(), kind, bound },
