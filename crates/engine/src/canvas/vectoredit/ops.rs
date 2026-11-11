@@ -468,6 +468,22 @@ fn reopen_loops(net: &mut VectorNetwork) {
             }
         }
     }
+    // An open chain whose two ends a segment in no loop already joins (a bridge drawn between two
+    // points before the point between them was deleted) closes through that segment, at the end so
+    // the loop's winding is kept, as `connect` closes it (#1951). One loop at a time, so two loops
+    // can't both take one segment.
+    let places: Vec<(usize, usize)> = net.regions.iter().enumerate().flat_map(|(ri, r)| (0..r.loops.len()).map(move |li| (ri, li))).collect();
+    for (ri, li) in places {
+        let Some(lp) = net.regions.get(ri).and_then(|r| r.loops.get(li)) else { continue };
+        if lp.len() < 2 {
+            continue;
+        }
+        if let Some(closing) = net.closing_segment(lp)
+            && let Some(lp) = net.regions.get_mut(ri).and_then(|r| r.loops.get_mut(li))
+        {
+            lp.push(closing);
+        }
+    }
 }
 
 /// Cut a segment at `t` into two open ends at the same spot. Returns the two end vertices.
@@ -1105,6 +1121,24 @@ mod tests {
         bend(&mut d, 0, f64::NAN, Point::new(1.0, 1.0));
         move_vertices(&mut d, &[0], Vec2::new(f64::INFINITY, 0.0));
         assert!(d.vertices.iter().all(|v| v.x.is_finite() && v.y.is_finite()));
+    }
+
+    /// A curved bridge between two points of a ring, then the point between them deleted (Delete,
+    /// no healing): the region's loop closes through the bridge, so the fill follows its curve and
+    /// is as long as the stroke (#1951).
+    #[test]
+    fn deleting_a_point_behind_a_curved_bridge_keeps_the_bridge_in_the_loop() {
+        use figcraft_geom::BezPath;
+        use figcraft_geom::kurbo::ParamCurveArclen;
+        let pts = [(0.0, 0.0), (50.0, 0.0), (100.0, 0.0), (100.0, 50.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y));
+        let mut n = VectorNetwork::from_points(&pts, true);
+        connect(&mut n, 1, 3, (25.0, 25.0), (-25.0, -25.0)).unwrap();
+        assert_eq!((n.segments.len(), n.regions[0].loops[0].len()), (7, 6), "the ring kept");
+        delete_vertices(&mut n, &[2], false);
+        assert_eq!((n.segments.len(), n.regions[0].loops[0].len()), (5, 5), "the loop holds the bridge: {:?}", n.regions);
+        let length = |p: &BezPath| p.segments().map(|s| s.arclen(1e-9)).sum::<f64>();
+        let (fill, stroke) = (length(&n.fill_path()), length(&n.stroke_path()));
+        assert!((fill - stroke).abs() < 1e-6, "fill {fill} and stroke {stroke} follow the same outline");
     }
 
     #[test]

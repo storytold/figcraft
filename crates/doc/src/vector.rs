@@ -472,15 +472,13 @@ impl VectorNetwork {
         // order the loop meets them. Each loop is rebuilt in one pass, so a polygon with many
         // rounded corners isn't quadratic.
         for lp in out.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
-            let Some(&first_idx) = lp.first() else { continue };
-            let start_v = match (self.segments.get(first_idx), lp.get(1).and_then(|&i| self.segments.get(i))) {
-                (Some(first), Some(second)) if first.a == second.a || first.a == second.b => first.b,
-                (Some(first), _) => first.a,
-                _ => 0,
-            };
+            if lp.is_empty() {
+                continue;
+            }
+            let start_v = self.loop_start(lp).unwrap_or(0);
             let mut rebuilt = Vec::with_capacity(lp.len() + by_vertex.len().min(lp.len()) + 1);
             let mut cur = start_v;
-            let closing = self.closing_segment(lp, start_v);
+            let closing = self.closing_segment(lp);
             for &x in lp.iter().chain(closing.iter()) {
                 rebuilt.push(x);
                 let Some(s) = self.segments.get(x) else { continue };
@@ -498,23 +496,43 @@ impl VectorNetwork {
         Some(out)
     }
 
-    /// The segment that joins the two ends of an open loop `lp` (walked from `start_v`) when it is
-    /// in no loop of its own: a corner cut off by a segment drawn before the corner point was
-    /// deleted leaves the loop open there, and the stroke follows that segment. Rounding walks it
-    /// as the loop's last segment, so the points at the loop's ends are cut by arcs as the stroke's
-    /// are (#1951).
-    fn closing_segment(&self, lp: &[usize], start_v: usize) -> Option<usize> {
+    /// The point loop `lp` is walked from: the end of its first segment that its second does not
+    /// share.
+    fn loop_start(&self, lp: &[usize]) -> Option<usize> {
+        let first = self.segments.get(*lp.first()?)?;
+        match lp.get(1).and_then(|&i| self.segments.get(i)) {
+            Some(second) if first.a == second.a || first.a == second.b => Some(first.b),
+            _ => Some(first.a),
+        }
+    }
+
+    /// The segment that joins the two ends of an open loop `lp` when it is in no loop of its own
+    /// (and the only such segment): a corner cut off by a segment drawn before the corner point was
+    /// deleted leaves the loop open there, and the stroke follows that segment. Only a loop that
+    /// walks in order as one continuous chain has one. Rounding walks it as the loop's last
+    /// segment, so the points at the loop's ends are cut by arcs as the stroke's are, and deleting
+    /// points or segments puts it into the loop (#1951).
+    pub fn closing_segment(&self, lp: &[usize]) -> Option<usize> {
+        let start_v = self.loop_start(lp)?;
         let mut cur = start_v;
         for &x in lp {
             let s = self.segments.get(x)?;
-            cur = if s.a == cur { s.b } else { s.a };
+            cur = if s.a == cur {
+                s.b
+            } else if s.b == cur {
+                s.a
+            } else {
+                return None;
+            };
         }
         if cur == start_v {
             return None;
         }
         let in_loop = |i: usize| self.regions.iter().flat_map(|r| r.loops.iter().flatten()).any(|&x| x == i);
         let ends = |s: &Segment| (s.a == cur && s.b == start_v) || (s.b == cur && s.a == start_v);
-        self.segments.iter().position(ends).filter(|&i| !in_loop(i))
+        let mut joining = self.segments.iter().enumerate().filter(|(i, s)| ends(s) && !in_loop(*i)).map(|(i, _)| i);
+        let first = joining.next()?;
+        joining.next().is_none().then_some(first)
     }
 
     /// How point `v` (its `incident` segments) is rounded, if it is: not where the two segments
