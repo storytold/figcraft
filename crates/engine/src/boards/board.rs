@@ -76,7 +76,7 @@ pub use reshape::selected_connector_handles;
 /// Why a board command refuses on a design file.
 pub const NEEDS_BOARD: &str = "this is for boards: make one with File ▸ New board";
 /// Why prototyping and Dev Mode refuse on a board.
-pub const NOT_ON_BOARDS: &str = "boards have no prototypes or Dev Mode: use a design file for those";
+pub const NOT_ON_BOARDS: &str = "boards have no prototypes or Developer Mode: use a design file for those";
 
 /// A sticky note's side (it grows taller for long notes).
 pub const STICKY: f64 = 200.0;
