@@ -284,20 +284,35 @@ fn insert_model(s: &mut Session, text: &str, ime_commit: bool) -> Result<ImeInse
     let text = normalized;
     edit(s, |t, te| {
         let (a, b) = range(te);
-        // "- ", "* ", "1. " or "1) " typed at the start of a plain paragraph starts a list (the
-        // creation characters of Create bulleted and numbered lists).
+        // "- ", "* ", "<number>. " or "1) " typed at the start of a plain paragraph starts a list
+        // (the creation characters of Create bulleted and numbered lists). As measured in Figma
+        // (2026-11-11), a typed "5. " starts the numbered list at 5 (there is no start-number
+        // field). "0. " and a bracket after a number other than 1 are not measured: plain text.
         if text == " " && a == b && t.para_list(t.para_of(a)).list == ListStyle::None {
             let chars: Vec<char> = t.characters.chars().collect();
             let start = line_start(&chars, a);
             let typed: String = chars.get(start..a).unwrap_or(&[]).iter().collect();
+            let mut first = 1_u32;
             let list = match typed.as_str() {
                 "-" | "*" => ListStyle::Bulleted,
-                "1." | "1)" => ListStyle::Numbered,
-                _ => ListStyle::None,
+                "1)" => ListStyle::Numbered,
+                _ => match typed.strip_suffix('.').filter(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())) {
+                    Some(d) => match d.parse::<u32>() {
+                        Ok(n) if (1..=MAX_TYPED_LIST_START).contains(&n) => {
+                            first = n;
+                            ListStyle::Numbered
+                        }
+                        _ => ListStyle::None,
+                    },
+                    None => ListStyle::None,
+                },
             };
             if list != ListStyle::None {
                 t.replace_range(start, a, "");
-                t.set_para_lists(start, start, |pl| pl.list = list);
+                t.set_para_lists(start, start, |pl| {
+                    pl.list = list;
+                    pl.start_offset = first - 1;
+                });
                 (te.caret, te.anchor) = (start, start);
                 outcome = ImeInsertion::Transformed;
                 return;
@@ -309,6 +324,9 @@ fn insert_model(s: &mut Session, text: &str, ime_commit: bool) -> Result<ImeInse
     })?;
     Ok(outcome)
 }
+
+/// The largest number a typed `N. ` can start a numbered list at.
+const MAX_TYPED_LIST_START: u32 = 9999;
 
 /// What a list key does to the selected items.
 #[derive(Clone, Copy, PartialEq, Eq)]

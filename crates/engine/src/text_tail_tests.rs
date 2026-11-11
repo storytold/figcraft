@@ -84,7 +84,11 @@ fn typed_list_starts() {
         ("- ", "", B, "hyphen and space: bullets"),
         ("* ", "", B, "asterisk and space: bullets"),
         ("1. ", "", N, "one, full stop, space: numbers"),
-        ("2. ", "2. ", P, "silent: only 1. starts a numbered list"),
+        ("2. ", "", N, "as measured in Figma: a typed number starts the list there"),
+        ("0. ", "0. ", P, "zero is not measured: text"),
+        ("12a. ", "12a. ", P, "digits only: text"),
+        ("1) ", "", N, "one and a closing bracket: numbers"),
+        ("2) ", "2) ", P, "silent: only 1) starts with a bracket"),
         ("a- ", "a- ", P, "not at the paragraph's start: text"),
         ("-x ", "-x ", P, "the space must follow the marker"),
     ];
@@ -106,6 +110,32 @@ fn typed_list_starts() {
         insert(&mut s, &c.to_string()).unwrap();
     }
     assert_eq!((data(&s, t).characters.as_str(), lists(&s, t)), ("Intro\n- ", vec![(P, 0), (B, 0)]), "an item's own text stays text");
+}
+
+#[test]
+fn typed_number_starts_the_list_there() {
+    // As measured in Figma (2026-11-11): typing "5. x", Enter, "y" reads 5. then 6.; the start
+    // is the typed number less one, and the next item goes on counting from it.
+    let mut s = Session::new();
+    let t = text(&mut s, "x");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+    begin(&mut s, t, Some(0), false).unwrap();
+    for c in "5. x".chars() {
+        insert(&mut s, &c.to_string()).unwrap();
+    }
+    assert_eq!(data(&s, t).para_list(0).start_offset, 4, "5 starts at offset 4");
+    key(&mut s, "Enter", false, false, false).unwrap();
+    insert(&mut s, "y").unwrap();
+    crate::textedit::end(&mut s).unwrap();
+    let d = data(&s, t);
+    assert_eq!(d.characters, "x\ny");
+    assert_eq!(lists(&s, t), [(N, 0), (N, 0)]);
+    // Enter copies the list onto the new item; `list_markers` ignores the start of an item that
+    // goes on counting (a numbered item right after a numbered item at its level), so 5. then 6.
+    assert_eq!((d.para_list(0).start_offset, d.para_list(1).start_offset), (4, 4), "the copy is ignored: the next item counts on");
+    s.undo().unwrap();
+    assert_eq!(data(&s, t).characters, "", "one undo step for the session");
+    assert_eq!(data(&s, t).para_list(0).start_offset, 0);
 }
 
 #[test]
