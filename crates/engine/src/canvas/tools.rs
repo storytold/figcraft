@@ -422,6 +422,9 @@ pub(crate) enum Gesture {
         additive: bool,
         base: Vec<NodeId>,
         within: Option<NodeId>,
+        /// A click stepping out of a selected descendant picks its frame. Wait for a real drag
+        /// before replacing that selection with the marquee's contents.
+        pending_click: bool,
     },
     Move {
         start: Point,
