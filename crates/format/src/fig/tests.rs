@@ -61,7 +61,7 @@ message FontName string family, string style, string postscript
 message TextData string characters, uint[] characterStyleIDs, NodeChange[] styleOverrideTable
 message Path WindingRule windingRule, uint commandsBlob
 message GUIDPath GUID[] guids
-message SymbolData GUID symbolID, NodeChange[] symbolOverrides
+message SymbolData GUID symbolID, NodeChange[] symbolOverrides, float uniformScaleFactor
 message StyleId GUID guid, AssetRef assetRef
 message PropValue bool boolValue, TextData textValue
 message PropDef GUID id, string name, PropValue initialValue, PropType type
@@ -1824,4 +1824,40 @@ fn same_version_library_copies_resolve_deterministically_and_leave_no_table() {
         assert!(!super::map::VarCanon::installed());
     }
     assert_eq!(picked, ["1:6", "1:6"]);
+}
+
+/// #2091 item 1: an instance scaled with the Scale tool (K) has `symbolData.uniformScaleFactor`.
+#[test]
+fn a_scaled_instance_draws_its_layers_at_the_factor() {
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "D", vec![]),
+        node(1, Some((0, "!")), "CANVAS", "P", vec![]),
+        node(5, Some((1, "!")), "SYMBOL", "Icon", vec![("size", xy(256.0, 256.0)), ("transform", at(0.0, 0.0))]),
+        node(
+            6,
+            Some((5, "!")),
+            "ROUNDED_RECTANGLE",
+            "Mark",
+            vec![("size", xy(256.0, 256.0)), ("transform", at(0.0, 0.0)), ("cornerRadius", f(64.0))],
+        ),
+        node(
+            9,
+            Some((1, "\"")),
+            "INSTANCE",
+            "Half",
+            vec![
+                ("size", xy(128.0, 128.0)),
+                ("transform", at(300.0, 0.0)),
+                ("symbolData", o(vec![("symbolID", g(5)), ("uniformScaleFactor", f(0.5))])),
+            ],
+        ),
+    ];
+    let (doc, _) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    let inst = named(&doc, "Half");
+    let mark = doc.node(inst.children[0]).unwrap();
+    let t = mark.transform.translation();
+    eprintln!("instance {}x{}; child {}x{} at ({}, {}) radii {:?}", inst.width, inst.height, mark.width, mark.height, t.x, t.y, mark.corners.radii);
+    assert_eq!([mark.width, mark.height], [128.0, 128.0]);
+    assert_eq!(mark.corners.radii, [32.0; 4]);
+    assert_eq!([t.x, t.y], [0.0, 0.0]);
 }

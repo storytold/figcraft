@@ -194,9 +194,9 @@ layout (including grid `columnTracks` / `rowTracks`), sizing, `minWidth` / `maxW
 children), `gridCell` (a grid auto layout child's column, row and spans), clip, text properties,
 component/instance links, overrides, `slot` (a slot layer's property name), boundVariables, interactions, exports,
 `devStatus` (handoff status), `devChanged` (changed since it was marked ready for dev),
-`annotations` (Dev Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
+`annotations` (Developer Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
 links to code: `[{language, importPath, name, template}]`), `devResources` (links for developers,
-its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Dev Mode measurements
+its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Developer Mode measurements
 starting from the layer: `[{to} | {side}]`), `pluginData` (layer data written with
 `node.set {props: {pluginData: {key: value}}}`, pages included: `{key: value}`, values as strings;
 only when there is some). The auto layout props
@@ -379,7 +379,7 @@ closes it), `commentDraft` (`{x, y}`: start a new comment there), `commentFilter
 (`date|page`), `commentSearch` (the panel's search text), `commentReply` (the open thread's reply
 text, focused with the cursor at its end: an `@` there shows the mention picker), `commentEdit` (a
 message index of the open thread to edit, 0 for the first; `null` stops), `presentComments` (bool:
-the presenter shows the presented frame's comments, also Shift+C there). Dev Mode: `devCompare` (a
+the presenter shows the presented frame's comments, also Shift+C there). Developer Mode: `devCompare` (a
 frame or section id opens the Compare changes view, like `dev.compare {id, show:
 true}`; `null` closes it) with `devCompareVersion` (a version id to compare with; `null`: when it
 was marked ready for dev), `devCompareMode` (`sideBySide|overlay`) and `devCompareSplit` (the
