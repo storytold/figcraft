@@ -141,7 +141,7 @@ fn a_path_like_rest_image_ref_never_names_an_archive_member() {
 #[test]
 fn an_image_keyed_with_dashes_comes_back_after_a_save() {
     let mut d = Document::new("t");
-    d.images.insert("rest-image-missing".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(png()), width: 2, height: 2 });
+    d.images.insert("rest-image-missing".into(), figcraft_doc::ImageData { asset: None, bytes: std::sync::Arc::new(png()), width: 2, height: 2 });
     let loaded = load_bytes_with_versions(&save_bytes(&d, None).unwrap()).unwrap();
     assert!(loaded.doc.images.contains_key("rest-image-missing"), "{:?}", loaded.issues);
 }
@@ -159,4 +159,89 @@ fn a_hash_shaped_rest_image_ref_never_names_its_placeholder() {
         let (doc, _) = crate::rest::import(&file, &crate::rest::no_images).unwrap();
         assert_eq!(doc.images.keys().collect::<Vec<_>>(), ["rest-image-missing"], "{image_ref}");
     }
+}
+
+#[test]
+fn review_ordinary_save_strips_scopes_from_main_versions_and_branches() {
+    let mut doc = Document::new("Synthetic portable history");
+    let (key, _, _) = add_image(&mut doc, png()).unwrap();
+    let image = doc.images.get_mut(&key).unwrap();
+    let mut asset = image.reference();
+    asset.scope = figcraft_assets::file_scope("wss://history.example/", "file");
+    image.asset = Some(asset.clone());
+    let version = Version::new("snapshot", "V", "", 0, Arc::new(doc.clone()));
+    let branch = Branch {
+        id: "branch".into(),
+        name: "B".into(),
+        time: 0,
+        client: 1,
+        state: BranchState::Active,
+        base: Arc::new(doc.clone()),
+        head: Arc::new(doc.clone()),
+        versions: vec![version.clone()],
+    };
+    let recovery = save_recovery_bytes_with_history(&doc, &[version], &[branch]).unwrap();
+    let loaded = load_recovery_bytes_with_versions(&recovery).unwrap();
+    let saved = save_bytes_with_history(&loaded.doc, None, &loaded.versions, &loaded.branches).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    for i in 0..zip.len() {
+        use std::io::Read;
+        let mut member = zip.by_index(i).unwrap();
+        if member.name().ends_with(".json") {
+            let mut text = String::new();
+            member.read_to_string(&mut text).unwrap();
+            assert!(!text.contains("remoteImageIndex"), "{}", member.name());
+            assert!(!text.contains(&asset.scope), "{}", member.name());
+        }
+    }
+    let portable = load_bytes_with_versions(&saved).unwrap();
+    assert!(portable.issues.is_empty(), "{:?}", portable.issues);
+    assert_eq!(portable.doc.images[&key].bytes, doc.images[&key].bytes);
+    assert!(portable.versions[0].document().unwrap().images[&key].asset.is_none());
+    assert!(portable.branches[0].head.images[&key].asset.is_none());
+    assert!(doc.images[&key].asset.is_some(), "saving must not mutate the source");
+}
+
+#[test]
+fn review_followup_recovery_cannot_introduce_path_like_image_keys() {
+    let asset = figcraft_assets::AssetRef::of(b"synthetic recovery image");
+    for key in ["../escape", "a/b", "", &"x".repeat(129)] {
+        let mut value = to_json(&Document::new("Synthetic recovery names")).unwrap();
+        value["remoteImageIndex"] = json!({key: {"width": 1, "height": 1, "asset": asset}});
+        assert!(load_recovery_bytes_with_versions(&serde_json::to_vec(&value).unwrap()).is_err(), "{key:?}");
+    }
+    let mut value = to_json(&Document::new("Valid recovery name")).unwrap();
+    value["remoteImageIndex"] = json!({"valid-name_1": {"width": 1, "height": 1, "asset": asset}});
+    assert!(load_recovery_bytes_with_versions(&serde_json::to_vec(&value).unwrap()).is_ok());
+}
+
+#[test]
+fn review_final_ordinary_archive_cannot_hide_a_remote_scope_behind_a_history_image() {
+    use std::io::Read;
+    let doc = Document::new("Synthetic scope smuggling");
+    let mut history = doc.clone();
+    let (key, _, _) = add_image(&mut history, png()).unwrap();
+    let version = Version::new("v", "Version", "", 0, Arc::new(history));
+    let archive = save_bytes_with_versions(&doc, None, &[version]).unwrap();
+    assert!(load_bytes_with_versions(&archive).is_ok());
+    let mut input = zip::ZipArchive::new(std::io::Cursor::new(&archive)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..input.len() {
+        let mut entry = input.by_index(i).unwrap();
+        let name = entry.name().to_string();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        if name == "document.json" {
+            let mut value: Value = serde_json::from_slice(&data).unwrap();
+            let mut foreign = figcraft_assets::AssetRef::of(b"other file's cached original");
+            foreign.scope = figcraft_assets::file_scope("wss://scope.example/", "other");
+            value["remoteImageIndex"] = json!({key.clone(): {"width": 2, "height": 2, "asset": foreign}});
+            value["imageIndex"] = json!([]); // K exists only in the version and archive members.
+            data = serde_json::to_vec(&value).unwrap();
+        }
+        out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        out.write_all(&data).unwrap();
+    }
+    let hostile = out.finish().unwrap().into_inner();
+    assert!(load_bytes_with_versions(&hostile).unwrap_err().to_string().contains("external cache"));
 }

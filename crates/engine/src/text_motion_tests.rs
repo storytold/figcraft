@@ -70,3 +70,27 @@ fn a_recovered_copy_opens_unsaved_without_a_path() {
     assert!(s.execute("file.recover", &json!({"path": dir.join("missing.figcraft").to_string_lossy()})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn external_recovery_references_are_only_enabled_by_the_trusted_desktop_entry_point() {
+    let dir = std::env::temp_dir().join(format!("figcraft-recovery-permission-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("references.figcraft");
+    let mut doc = figcraft_doc::Document::new("Synthetic recovery references");
+    let asset = figcraft_assets::AssetRef::of(b"synthetic unavailable original");
+    doc.images
+        .insert("synthetic".into(), figcraft_doc::ImageData { asset: Some(asset), bytes: std::sync::Arc::new(Vec::new()), width: 1, height: 1 });
+    let id = doc.create(doc.first_page().unwrap(), figcraft_doc::NodeKind::Rectangle, "Image", 0.0, 0.0, 10.0, 10.0).unwrap();
+    doc.get_mut(id).unwrap().fills = vec![figcraft_doc::color::Paint::image("synthetic", figcraft_doc::color::ImageScaleMode::Fill)];
+    std::fs::write(&path, figcraft_format::save_recovery_bytes_with_history(&doc, &[], &[]).unwrap()).unwrap();
+    let mut s = Session::new();
+    let params = json!({"path":path.to_string_lossy(),"allowRemoteReferences":true});
+    assert!(s.execute("file.recover", &params).unwrap_err().to_string().contains("app-owned"));
+    assert!(s.execute("file.recover", &json!({"path":path.to_string_lossy()})).is_err());
+    crate::cmd::file::recover_app_owned(&mut s, &path.to_string_lossy()).unwrap();
+    assert!(s.doc().unwrap().images.values().all(|image| image.asset.is_some()));
+    assert!(s.execute("file.recover", &params).is_err(), "temporary permission must be reset after success");
+    assert!(crate::cmd::file::recover_app_owned(&mut s, &dir.join("missing.figcraft").to_string_lossy()).is_err());
+    assert!(s.execute("file.recover", &params).is_err(), "temporary permission must be reset after failure");
+    std::fs::remove_dir_all(dir).unwrap();
+}

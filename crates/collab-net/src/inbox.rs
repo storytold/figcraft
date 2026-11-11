@@ -50,6 +50,9 @@ impl Inbox {
 
     pub fn push(&self, e: Event) {
         self.with(|s| {
+            if matches!(e, Event::AssetsChanged) && s.others.iter().any(|(_, old)| matches!(old, Event::AssetsChanged)) {
+                return;
+            }
             if let Event::PeerLeft(id) = &e {
                 s.presence.remove(id);
             }
@@ -138,6 +141,21 @@ mod tests {
         let out = inbox.drain();
         assert_eq!(sync_ids(&out), vec![1, 2]);
         assert!(out.len() <= MAX_EVENTS + 2, "{} events kept", out.len());
+    }
+
+    #[test]
+    fn asset_notifications_coalesce_without_dropping_or_reordering_syncs() {
+        let inbox = Inbox::new(Arc::new(|| {}));
+        inbox.push(Event::AssetsChanged);
+        inbox.push(reject(1));
+        inbox.push(Event::AssetsChanged);
+        inbox.push(reject(2));
+        let out = inbox.drain();
+        assert_eq!(out.len(), 3);
+        assert!(matches!(out[0], Event::AssetsChanged));
+        assert_eq!(sync_ids(&out), vec![1, 2]);
+        inbox.push(Event::AssetsChanged);
+        assert!(matches!(inbox.drain().as_slice(), [Event::AssetsChanged]));
     }
 
     #[test]

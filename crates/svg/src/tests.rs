@@ -283,6 +283,7 @@ fn unique_id_is_linear_for_repeated_names() {
     let d = Document::new("t");
     let opts = SvgOptions::default();
     let mut w = W {
+        asset_error: None,
         doc: &d,
         roots: &[],
         page: Affine::IDENTITY,
@@ -449,4 +450,23 @@ fn a_whole_ellipse_drawn_backwards_keeps_its_simple_stroke() {
         assert!(forwards.contains("stroke-width=\"8\""), "{align:?}: {forwards}");
         assert_eq!(backwards, forwards, "{align:?}");
     }
+}
+
+#[test]
+fn review_svg_zero_opacity_skips_unavailable_images_but_visible_nodes_require_them() {
+    let mut doc = Document::new("Synthetic transparent SVG resources");
+    let page = doc.first_page().unwrap();
+    let frame = doc.create(page, NodeKind::Frame, "Frame", 0.0, 0.0, 40.0, 40.0).unwrap();
+    let image = doc.create(frame, NodeKind::Rectangle, "Invisible image", 0.0, 0.0, 20.0, 20.0).unwrap();
+    let asset = figcraft_assets::AssetRef::of(b"synthetic missing zero-opacity image");
+    doc.images
+        .insert("unavailable".into(), figcraft_doc::ImageData { asset: Some(asset), bytes: std::sync::Arc::new(Vec::new()), width: 1, height: 1 });
+    doc.get_mut(image).unwrap().fills = vec![Paint::image("unavailable", figcraft_color::ImageScaleMode::Fill)];
+    doc.get_mut(image).unwrap().opacity = 0.0;
+    let svg = try_export_svg(&doc, &[frame], &SvgOptions::default()).unwrap();
+    assert!(!svg.contains("data:image"));
+    doc.get_mut(image).unwrap().opacity = 1.0;
+    assert!(matches!(try_export_svg(&doc, &[frame], &SvgOptions::default()), Err(SvgError::Asset(_))));
+    doc.get_mut(frame).unwrap().opacity = 0.0;
+    assert!(try_export_svg(&doc, &[frame], &SvgOptions::default()).is_ok(), "a transparent parent suppresses its descendants too");
 }

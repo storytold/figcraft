@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use figcraft_doc::{ImageData, LibraryManifest, NodeKind, PublishedLibrary, used_images};
 
-use crate::{FormatError, MAX_MEMBER, Unpacked, from_json, image_data, io_err, json_options, put, put_json};
+use crate::{FormatError, MAX_MEMBER, Unpacked, image_data, io_err, json_options, put, put_json};
 
 const MANIFEST: &str = "library/manifest.json";
 const SNAPSHOT: &str = "library/document.json";
@@ -42,10 +42,11 @@ pub fn is_valid_library_id(id: &str) -> bool {
 pub(crate) fn write<W: Write + Seek>(z: &mut zip::ZipWriter<W>, lib: &PublishedLibrary, written: &BTreeSet<&String>) -> Result<(), FormatError> {
     let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     put(z, MANIFEST, json_options(), &serde_json::to_vec(&lib.manifest).map_err(io_err)?)?;
-    put_json(z, SNAPSHOT, &lib.doc)?;
+    put_json(z, SNAPSHOT, &lib.doc, false)?;
     for (hash, img) in &lib.doc.images {
         if !written.contains(hash) && ImageData::is_valid_key(hash) {
-            put(z, &format!("{IMAGES}{hash}"), stored, &img.bytes)?;
+            let bytes = figcraft_assets::require(&img.bytes, img.asset.as_ref()).map_err(FormatError::Io)?;
+            put(z, &format!("{IMAGES}{hash}"), stored, &bytes)?;
         }
     }
     Ok(())
@@ -68,7 +69,12 @@ pub(crate) fn read<R: Read + Seek>(
     }
     let text = String::from_utf8(unpacked.read(z, SNAPSHOT, MAX_MEMBER)?).map_err(corrupt)?;
     let mut budget = MAX_IMAGE_BYTES;
-    let (mut doc, _) = from_json(&text)?;
+    let (mut doc, _, _) = crate::parse_json(&text)?;
+    // The archive itself may not introduce external cache capabilities. App-owned recovery
+    // images merged below are already authorized by the containing document.
+    if doc.images.values().any(|image| image.asset.is_some()) {
+        return Err(crate::external_images());
+    }
     for hash in used_images(&doc) {
         if !ImageData::is_valid_key(&hash) {
             continue;

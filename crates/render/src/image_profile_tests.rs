@@ -114,7 +114,7 @@ fn samples() -> RgbaImage {
 
 /// `bytes` decoded for a document in `target` (straight RGBA, every pixel).
 fn pixels(bytes: &[u8], target: ColorProfile) -> Vec<[u8; 4]> {
-    let data = ImageData { bytes: Arc::new(bytes.to_vec()), width: 0, height: 0 };
+    let data = ImageData { asset: None, bytes: Arc::new(bytes.to_vec()), width: 0, height: 0 };
     let hash = format!("icc-test-{:08x}-{}", crc32fast::hash(bytes), bytes.len());
     let p = images::get(&hash, Some(&data), &ImageFilters::default(), target).unwrap();
     p.pixels().iter().map(|c| c.demultiply()).map(|c| [c.red(), c.green(), c.blue(), c.alpha()]).collect()
@@ -287,7 +287,7 @@ fn png_colour_chunks() {
 fn profile_names_are_cached_and_cleaned() {
     let img = samples();
     let bytes = png(&img, Some(icc(b"RGB ", "  Odd\u{1}name  ", ADOBE_D50, &Trc::Gamma(2.2))));
-    let data = ImageData { bytes: Arc::new(bytes), width: 4, height: 1 };
+    let data = ImageData { asset: None, bytes: Arc::new(bytes), width: 4, height: 1 };
     assert_eq!(images::profile_name("icc-name-test", Some(&data)).as_deref(), Some("Oddname"));
     assert_eq!(images::profile_name("icc-name-test", None).as_deref(), Some("Oddname"), "cached");
     assert_eq!(images::profile_name("icc-name-missing", None), None);
@@ -327,7 +327,7 @@ fn profile_parser_survives_junk() {
         let bytes = png(&img, Some(icc));
         let _ = Source::of(&bytes);
         for target in ColorProfile::ALL {
-            let data = ImageData { bytes: Arc::new(bytes.clone()), width: 1, height: 1 };
+            let data = ImageData { asset: None, bytes: Arc::new(bytes.clone()), width: 1, height: 1 };
             let _ = images::get(&format!("icc-fuzz-{i}"), Some(&data), &ImageFilters::default(), target);
         }
     }
