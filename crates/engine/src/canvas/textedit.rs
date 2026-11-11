@@ -319,6 +319,14 @@ fn insert_model(s: &mut Session, text: &str, ime_commit: bool) -> Result<ImeInse
             }
         }
         t.replace_range(a, b, &text);
+        // As measured in Figma (2026-11-11): an item made by Enter has no start of its own, so
+        // unlisting the item before it makes it restart at 1 rather than at the copied start.
+        // Every paragraph after the first that the insertion made loses the start it was copied.
+        for (i, c) in text.chars().enumerate() {
+            if c == '\n' {
+                t.set_para_lists(a + i + 1, a + i + 1, |pl| pl.start_offset = 0);
+            }
+        }
         te.caret = a + text.chars().count();
         te.anchor = te.caret;
     })?;

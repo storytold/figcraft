@@ -130,12 +130,56 @@ fn typed_number_starts_the_list_there() {
     let d = data(&s, t);
     assert_eq!(d.characters, "x\ny");
     assert_eq!(lists(&s, t), [(N, 0), (N, 0)]);
-    // Enter copies the list onto the new item; `list_markers` ignores the start of an item that
-    // goes on counting (a numbered item right after a numbered item at its level), so 5. then 6.
-    assert_eq!((d.para_list(0).start_offset, d.para_list(1).start_offset), (4, 4), "the copy is ignored: the next item counts on");
+    // An item made by Enter has no start of its own and goes on counting: 5. then 6.
+    assert_eq!((d.para_list(0).start_offset, d.para_list(1).start_offset), (4, 0), "the new item has no start");
     s.undo().unwrap();
     assert_eq!(data(&s, t).characters, "", "one undo step for the session");
     assert_eq!(data(&s, t).para_list(0).start_offset, 0);
+}
+
+/// Type `first` ("5. a" style), then Enter, "b", Enter, "c", leaving the caret in "c".
+fn three_typed_items(s: &mut Session, first: &str) -> NodeId {
+    let t = text(s, "x");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+    begin(s, t, Some(0), false).unwrap();
+    for c in first.chars() {
+        insert(s, &c.to_string()).unwrap();
+    }
+    for step in ["Enter", "b", "Enter", "c"] {
+        if step == "Enter" {
+            key(s, step, false, false, false).unwrap();
+        } else {
+            insert(s, step).unwrap();
+        }
+    }
+    t
+}
+
+#[test]
+fn a_list_split_by_unlisting_a_middle_item_restarts_at_one() {
+    // As measured in Figma (2026-11-11): typed "5. a", Enter, "b", Enter, "c" reads 5. 6. 7.;
+    // Backspace at the start of "b" takes its marker and "c" then reads 1., for "1. " too.
+    // `list_markers` counts on after a numbered item and restarts a numbered item that follows a
+    // plain paragraph at its own start, so the starts and the neighbours give the markers.
+    for (first, start) in [("5. a", 4), ("1. a", 0)] {
+        let mut s = Session::new();
+        let t = three_typed_items(&mut s, first);
+        assert_eq!(
+            data(&s, t).characters,
+            "a
+b
+c"
+        );
+        // The guard: unsplit, "b" and "c" go on counting (5. 6. 7.).
+        let d = data(&s, t);
+        assert_eq!(lists(&s, t), [(N, 0); 3], "{first}: no split");
+        assert_eq!((d.para_list(0).start_offset, d.para_list(1).start_offset, d.para_list(2).start_offset), (start, 0, 0), "{first}");
+        set_caret(&mut s, 2, false).unwrap();
+        key(&mut s, "Backspace", false, false, false).unwrap();
+        let d = data(&s, t);
+        assert_eq!(lists(&s, t), [(N, 0), (P, 0), (N, 0)], "{first}: split");
+        assert_eq!(d.para_list(2).start_offset, 0, "{first}: c restarts at 1 (the item made by Enter has no start)");
+    }
 }
 
 #[test]
