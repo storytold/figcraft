@@ -1159,6 +1159,9 @@ pub fn grid_snap_lines(doc: &Document, frame: NodeId) -> (Vec<f64>, Vec<f64>) {
     grid_snap_lines_in(doc, frame, doc.world_transform(frame))
 }
 
+/// The most snap coordinates a frame's grids give together (a few dozen grids' worth of lines).
+const MAX_SNAP_LINES: usize = 200_000;
+
 /// [`grid_snap_lines`] mapped from the frame's coordinates by `xf` (the frame's world transform
 /// for page lines).
 pub fn grid_snap_lines_in(doc: &Document, frame: NodeId, xf: Affine) -> (Vec<f64>, Vec<f64>) {
@@ -1166,6 +1169,10 @@ pub fn grid_snap_lines_in(doc: &Document, frame: NodeId, xf: Affine) -> (Vec<f64
     let mut xs = Vec::new();
     let mut ys = Vec::new();
     for g in f.grids.iter().filter(|g| g.visible) {
+        // A frame-wide budget: each grid adds up to ~17,000 lines, and a file can hold any number of grids.
+        if xs.len() + ys.len() >= MAX_SNAP_LINES {
+            break;
+        }
         for r in grid_lines(g, f.width, f.height) {
             let a = xf * Point::new(r.x0, r.y0);
             let b = xf * Point::new(r.x1, r.y1);
