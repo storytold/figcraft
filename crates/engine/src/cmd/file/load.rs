@@ -399,11 +399,19 @@ pub(crate) fn load_fig(bytes: &[u8], name: &str) -> Option<Result<figcraft_forma
     }))
 }
 
+/// The most layers all of a Penpot file's raw SVG placeholders may expand to together.
+const MAX_PENPOT_SVG_LAYERS: usize = 100_000;
+
 /// Turn Penpot raw SVG placeholders into editable FigCraft SVG content, using the
 /// normal SVG importer. The parser (figcraft-format) only stores bounded XML so it
 /// does not need to depend on the SVG crate; the engine does this second pass.
 /// Any failure leaves the original placeholder and XML data intact for later use.
 fn expand_penpot_raw_svgs(doc: &mut Document, notes: &mut Vec<String>) {
+    expand_penpot_raw_svgs_within(doc, notes, MAX_PENPOT_SVG_LAYERS);
+}
+
+/// [`expand_penpot_raw_svgs`] with at most `room` layers made in all.
+fn expand_penpot_raw_svgs_within(doc: &mut Document, notes: &mut Vec<String>, mut room: usize) {
     let layers = doc
         .nodes()
         .filter_map(|node| {
@@ -413,12 +421,25 @@ fn expand_penpot_raw_svgs(doc: &mut Document, notes: &mut Vec<String>) {
         })
         .collect::<Vec<_>>();
     let mut ok_count = 0usize;
+    // The SVG importer caps its own layers per file; `room` is the cap over all of a file's placeholders.
     for (id, name, width, height, xml, empty) in layers {
+        if room == 0 {
+            if let Some(n) = doc.node_mut(id) {
+                n.plugin_data.insert("penpot.svgRawStatus".into(), "not-expanded".into());
+            }
+            if notes.len() < 100 {
+                notes.push(format!("Penpot SVG '{name}': not converted, the file's SVG layers are over the limit; the original markup is preserved"));
+            }
+            continue;
+        }
         if !empty {
             notes.push(format!("Penpot SVG '{name}': has separate child layers; the original tree was preserved to prevent duplicate rendering"));
             continue;
         }
-        match figcraft_svg::import_svg_with_notes(doc, xml.as_bytes(), id, 0.0, 0.0, &name) {
+        let before = doc.node_count();
+        let imported = figcraft_svg::import_svg_with_notes(doc, xml.as_bytes(), id, 0.0, 0.0, &name);
+        room = room.saturating_sub(doc.node_count().saturating_sub(before));
+        match imported {
             Ok(imported) => {
                 // An SVG can be syntactically valid yet contain no supported drawable
                 // elements. Do not claim success or leave an empty extra frame.
@@ -470,6 +491,28 @@ fn expand_penpot_raw_svgs(doc: &mut Document, notes: &mut Vec<String>) {
     }
 }
 
+/// Whether some of the first `len` characters are in none of `runs`. Where runs start and stop
+/// covering is summed once, so runs overlapping any number of times cost no more than their count.
+fn has_uncovered(len: usize, runs: &[figcraft_doc::StyleRun]) -> bool {
+    let mut change = vec![0i64; len + 1];
+    for run in runs {
+        let (start, end) = (run.start.min(len), run.end.min(len));
+        if start < end {
+            if let Some(c) = change.get_mut(start) {
+                *c += 1;
+            }
+            if let Some(c) = change.get_mut(end) {
+                *c -= 1;
+            }
+        }
+    }
+    let mut open = 0i64;
+    change.iter().take(len).any(|c| {
+        open += c;
+        open <= 0
+    })
+}
+
 /// Non-destructive font diagnostic for the action palette, CLI and control API.
 /// Includes styled runs, not just the default typeface of each text layer.
 pub(super) fn font_report(doc: &Document) -> Value {
@@ -485,21 +528,15 @@ fn font_report_with_families(doc: &Document, installed: &[String]) -> Value {
         if text.characters.is_empty() {
             continue;
         }
-        let mut covered = vec![false; text.characters.chars().count().min(100_000)];
+        let len = text.characters.chars().count().min(100_000);
         let mut used = BTreeSet::new();
         for run in &text.runs {
-            let start = run.start.min(covered.len());
-            let end = run.end.min(covered.len());
-            if start < end {
-                if !run.style.font_family.trim().is_empty() {
-                    used.insert(run.style.font_family.clone());
-                }
-                for entry in covered.iter_mut().take(end).skip(start) {
-                    *entry = true;
-                }
+            if run.start.min(len) < run.end.min(len) && !run.style.font_family.trim().is_empty() {
+                used.insert(run.style.font_family.clone());
             }
         }
-        if covered.iter().any(|entry| !entry) {
+        let uncovered = has_uncovered(len, &text.runs);
+        if uncovered {
             used.insert(text.style.font_family.clone());
         }
         for family in used {
@@ -599,19 +636,14 @@ fn missing_penpot_font_warnings(doc: &Document, families: &[String]) -> Vec<Stri
         if text_len == 0 {
             continue;
         }
-        let mut covered = vec![false; text_len.min(100_000)];
+        let len = text_len.min(100_000);
         let mut used = BTreeSet::new();
         for run in &text.runs {
-            let start = run.start.min(covered.len());
-            let end = run.end.min(covered.len());
-            if start < end {
+            if run.start.min(len) < run.end.min(len) {
                 used.insert(run.style.font_family.clone());
-                for flag in covered.iter_mut().take(end).skip(start) {
-                    *flag = true;
-                }
             }
         }
-        if covered.iter().any(|present| !present) {
+        if has_uncovered(len, &text.runs) {
             used.insert(text.style.font_family.clone());
         }
         for family in used {
@@ -789,6 +821,45 @@ mod penpot_font_warning_tests {
 mod penpot_svg_v10_tests {
     use super::*;
     use figcraft_doc::TextData;
+
+    #[test]
+    fn placeholders_share_one_layer_allowance() {
+        let mut doc = Document::new("Two SVGs");
+        let page = doc.first_page().unwrap();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="5" height="5" fill="red"/><rect x="5" width="5" height="5" fill="blue"/></svg>"#;
+        let ids: Vec<NodeId> = (0..2)
+            .map(|i| {
+                let id = doc.create(page, NodeKind::Frame, &format!("S{i}"), 0.0, 0.0, 10.0, 10.0).unwrap();
+                let layer = doc.node_mut(id).unwrap();
+                layer.plugin_data.insert("penpot.svgRawXml".into(), svg.into());
+                layer.plugin_data.insert("penpot.svgRawStatus".into(), "pending".into());
+                id
+            })
+            .collect();
+        let mut warnings = Vec::new();
+        expand_penpot_raw_svgs_within(&mut doc, &mut warnings, 1);
+        let status = |i: usize| doc.node(ids[i]).unwrap().plugin_data.get("penpot.svgRawStatus").cloned();
+        assert_eq!(status(0).as_deref(), Some("expanded"), "the first uses the allowance");
+        assert_eq!(status(1).as_deref(), Some("not-expanded"));
+        assert!(doc.node(ids[1]).unwrap().children.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("over the limit")), "{warnings:?}");
+    }
+
+    #[test]
+    fn many_overlapping_style_runs_are_summed_once() {
+        use figcraft_doc::StyleRun;
+        let mut doc = Document::new("Runs");
+        let page = doc.first_page().unwrap();
+        let mut t = TextData::new("x".repeat(100_000));
+        t.style.font_family = "Unused Base".into();
+        let mut run = t.style.clone();
+        run.font_family = "Run Font".into();
+        t.runs = (0..50_000).map(|_| StyleRun { start: 0, end: 100_000, style: run.clone() }).collect();
+        doc.create(page, NodeKind::Text(t), "Long", 0.0, 0.0, 100.0, 30.0).unwrap();
+        let report = font_report_with_families(&doc, &[]);
+        assert_eq!(report["fonts"].as_array().map(Vec::len), Some(1), "{report}");
+        assert_eq!(report["fonts"][0]["family"], "Run Font");
+    }
 
     #[test]
     fn expands_inline_svg_into_editable_shapes_without_discarding_source() {
