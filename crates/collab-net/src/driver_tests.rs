@@ -660,3 +660,33 @@ fn joins_a_real_host_and_edits_with_it() {
     assert!(d.done());
     assert!(doc.contains(page));
 }
+
+#[test]
+fn packed_welcome_cannot_bypass_browser_resource_negotiation() {
+    for after_join in [false, true] {
+        let mut w: ServerMsg = message::decode(&welcome(), 1 << 20).unwrap();
+        let ServerMsg::Welcome { catch_up: message::CatchUp::Snapshot(changes), .. } = &mut w else { panic!("no snapshot") };
+        let mut asset = figcraft_assets::AssetRef::of(b"synthetic foreign browser asset");
+        asset.scope = figcraft_assets::AssetRef::of(b"another file").sha256;
+        changes.push(figcraft_collab::Change::Image(figcraft_collab::change::ImageChange {
+            key: "foreign".into(),
+            width: 1,
+            height: 1,
+            asset,
+            bytes: None,
+        }));
+        message::pack(&mut w).unwrap();
+        let now = Instant::now();
+        let (mut d, inbox) = start(Script::default(), now);
+        d.opened(now);
+        if after_join {
+            d.message(&welcome(), now);
+            let _ = inbox.drain();
+        }
+        d.message(&encode(&w), now);
+        let events = inbox.drain();
+        assert!(events.iter().any(|e| matches!(e, Event::Status(Status::Failed { reason }) if reason.contains("without negotiating"))));
+        assert!(!events.iter().any(|e| matches!(e, Event::Sync(ServerMsg::Welcome { .. }) | Event::Welcome { .. })));
+        assert!(!events.iter().any(|e| matches!(e, Event::Status(Status::Reconnecting { .. }))));
+    }
+}

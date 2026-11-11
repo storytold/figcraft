@@ -238,12 +238,18 @@ pub(crate) enum Taken {
 /// Take in one message from the host: events for the UI go to `inbox`, and `resume` follows the
 /// session. On the welcome, `welcomed` runs before the UI hears of it: what the sync client sends
 /// in answer must go out on this connection.
+/// Bound decompression before resource authorization, preserving the normal size-limit outcome.
+pub(crate) fn unpack_message(msg: &mut ServerMsg, cfg: &GuestConfig) -> Result<(), Outcome> {
+    match message::unpack(msg, cfg.limits.max_server_message) {
+        Ok(()) => Ok(()),
+        Err(figcraft_collab::Error::TooLarge(_)) => Err(too_large(&cfg.limits)),
+        Err(e) => Err(Outcome::Failed(format!("the host sent a document this version can't read ({e})"))),
+    }
+}
+
 pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mut Seen, resume: &Resuming, welcomed: &dyn Fn()) -> Taken {
-    // A compressed document is read here, within the size the welcome could have had unpacked.
-    match message::unpack(&mut m, cfg.limits.max_server_message) {
-        Ok(()) => {}
-        Err(figcraft_collab::Error::TooLarge(_)) => return Taken::End(too_large(&cfg.limits)),
-        Err(e) => return Taken::End(Outcome::Refused(format!("the host sent a document this version can't read ({e})"))),
+    if let Err(outcome) = unpack_message(&mut m, cfg) {
+        return Taken::End(outcome);
     }
     match m {
         ServerMsg::Welcome { session, client_id, seq, ref peers, access, secret, .. } => {
@@ -320,7 +326,13 @@ pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mu
         ServerMsg::Hosting(info) => inbox.push(Event::Hosting(*info)),
         ServerMsg::Reported { error } => inbox.push(Event::Reported(error)),
         // Answers for managing and library connections, and to a join code: not this one's.
-        ServerMsg::Pong | ServerMsg::Admin(_) | ServerMsg::Library(_) | ServerMsg::Plugins(_) | ServerMsg::Resolved { .. } => {}
+        ServerMsg::Pong
+        | ServerMsg::Admin(_)
+        | ServerMsg::Library(_)
+        | ServerMsg::Plugins(_)
+        | ServerMsg::Resolved { .. }
+        | ServerMsg::Asset { .. }
+        | ServerMsg::Preview { .. } => {}
     }
     Taken::Continue
 }

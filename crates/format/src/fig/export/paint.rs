@@ -91,14 +91,24 @@ impl<'d> Exporter<'d> {
 
     /// The hash bytes of image `key`, writing its file once (empty when its bytes aren't there).
     fn image(&mut self, key: &str) -> Vec<u8> {
+        if self.asset_error.is_some() {
+            return Vec::new();
+        }
         let hex = match self.images.get(key) {
             Some(h) => h.clone(),
             None => {
                 let h = match self.doc.images.get(key) {
-                    Some(img) if img.bytes.len() as u64 <= MAX_IMAGE => {
-                        let h = sha1_hex(&img.bytes);
+                    Some(img) if img.asset.as_ref().map_or(img.bytes.len() as u64, |asset| asset.len) <= MAX_IMAGE => {
+                        let bytes = match figcraft_assets::require(&img.bytes, img.asset.as_ref()) {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                self.asset_error = Some(error);
+                                return Vec::new();
+                            }
+                        };
+                        let h = sha1_hex(&bytes);
                         if !self.files.iter().any(|(x, _)| *x == h) {
-                            self.files.push((h.clone(), img.bytes.clone()));
+                            self.files.push((h.clone(), bytes));
                         }
                         Some(h)
                     }

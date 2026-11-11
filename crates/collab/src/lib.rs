@@ -28,6 +28,8 @@ mod diff;
 mod docprops;
 pub mod frac;
 mod history;
+#[cfg(test)]
+mod image_undo_tests;
 pub mod merge;
 pub mod message;
 pub mod replica;
