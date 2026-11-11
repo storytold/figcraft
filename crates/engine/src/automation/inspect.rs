@@ -165,6 +165,14 @@ pub fn node_json(doc: &Document, id: NodeId, depth: usize) -> Value {
 
 /// A node's selected properties, applied at every level of its subtree.
 pub fn node_json_with_options(doc: &Document, id: NodeId, depth: usize, options: &InspectOptions) -> Value {
+    node_json_in(doc, id, depth, options, &GridCells::default())
+}
+
+/// The cells of the grid frames met so far in one inspection, so a grid's geometry is worked out
+/// once, not once per child.
+type GridCells = std::cell::RefCell<std::collections::HashMap<NodeId, std::collections::HashMap<NodeId, figcraft_layout::GridCell>>>;
+
+fn node_json_in(doc: &Document, id: NodeId, depth: usize, options: &InspectOptions, grids: &GridCells) -> Value {
     let Some(n) = doc.node(id) else { return Value::Null };
     let mut v = json!({"id": n.id});
     let Some(o) = v.as_object_mut() else { return v };
@@ -176,7 +184,7 @@ pub fn node_json_with_options(doc: &Document, id: NodeId, depth: usize, options:
     if !n.is_page() {
         base_props(doc, n, id, o, options);
         paint_props(n, o, options);
-        layout_props(doc, n, o, options);
+        layout_props(doc, n, o, options, grids);
         dev_props(doc, n, o, options);
     }
     // Layer data written with `node.set {props: {pluginData}}` (pages too).
@@ -189,7 +197,7 @@ pub fn node_json_with_options(doc: &Document, id: NodeId, depth: usize, options:
     }
     if !n.children.is_empty() {
         if depth > 0 {
-            o.insert("children".into(), Value::Array(n.children.iter().map(|c| node_json_with_options(doc, *c, depth - 1, options)).collect()));
+            o.insert("children".into(), Value::Array(n.children.iter().map(|c| node_json_in(doc, *c, depth - 1, options, grids)).collect()));
         } else {
             o.insert("childCount".into(), json!(n.children.len()));
         }
@@ -286,7 +294,7 @@ fn paint_props(n: &Node, o: &mut serde_json::Map<String, Value>, options: &Inspe
     }
 }
 
-fn layout_props(doc: &Document, n: &Node, o: &mut serde_json::Map<String, Value>, options: &InspectOptions) {
+fn layout_props(doc: &Document, n: &Node, o: &mut serde_json::Map<String, Value>, options: &InspectOptions, grids: &GridCells) {
     if let Some(l) = &n.layout {
         insert_prop(o, options, "layout", || camel(serde_json::to_value(l).unwrap_or(Value::Null)));
     }
@@ -303,11 +311,14 @@ fn layout_props(doc: &Document, n: &Node, o: &mut serde_json::Map<String, Value>
             insert_prop(o, options, k, || json!(v));
         }
     }
-    if let Some(cell) = (parent_al && options.includes("gridCell"))
-        .then(|| n.parent.and_then(|p| figcraft_layout::grid_geometry(doc, p)))
-        .flatten()
-        .and_then(|g| g.cells.into_iter().find(|c| c.id == n.id))
-    {
+    let cell = (parent_al && options.includes("gridCell")).then_some(n.parent).flatten().and_then(|p| {
+        let mut grids = grids.borrow_mut();
+        let cells = grids
+            .entry(p)
+            .or_insert_with(|| figcraft_layout::grid_geometry(doc, p).map(|g| g.cells.into_iter().map(|c| (c.id, c)).collect()).unwrap_or_default());
+        cells.get(&n.id).copied()
+    });
+    if let Some(cell) = cell {
         insert_prop(o, options, "gridCell", || {
             json!({"column": cell.column, "row": cell.row, "columnSpan": cell.column_span, "rowSpan": cell.row_span,
                        "anchored": cl.grid_column.is_some() || cl.grid_row.is_some(), "alignH": cl.grid_align_h, "alignV": cl.grid_align_v})
