@@ -475,7 +475,9 @@ fn reopen_loops(net: &mut VectorNetwork) {
     // share it. The lookups are built once, so a segment one loop took doesn't hide it from the
     // next.
     let index = net.loop_index();
-    let mut closings: Vec<(usize, usize, usize, Vec<usize>)> = Vec::new();
+    // The chain that first took each closing segment, so a later loop is checked in one lookup.
+    let mut owner: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    let mut closings: Vec<(usize, usize, usize)> = Vec::new();
     for (ri, r) in net.regions.iter().enumerate() {
         for (li, lp) in r.loops.iter().enumerate() {
             if lp.len() < 2 {
@@ -484,13 +486,13 @@ fn reopen_loops(net: &mut VectorNetwork) {
             if let Some(closing) = net.closing_segment(lp, &index) {
                 let mut chain = lp.clone();
                 chain.sort_unstable();
-                if closings.iter().all(|(_, _, c, other)| *c != closing || *other == chain) {
-                    closings.push((ri, li, closing, chain));
+                if *owner.entry(closing).or_insert_with(|| chain.clone()) == chain {
+                    closings.push((ri, li, closing));
                 }
             }
         }
     }
-    for (ri, li, closing, _) in closings {
+    for (ri, li, closing) in closings {
         if let Some(lp) = net.regions.get_mut(ri).and_then(|r| r.loops.get_mut(li)) {
             lp.push(closing);
         }
@@ -1259,6 +1261,29 @@ mod tests {
         for i in 0..2 {
             let fill = length(&rounded.region_path(i).unwrap());
             assert!((fill - stroke).abs() < 1e-6, "region {i}: fill {fill} and stroke {stroke} trace the same outline");
+        }
+    }
+
+    /// Many independent open chains, each with its own closing segment, all close through it.
+    #[test]
+    fn many_open_chains_each_close_through_their_own_segment() {
+        let one = bridged_open_chain();
+        let (nv, ns) = (one.vertices.len(), one.segments.len());
+        let mut n = VectorNetwork::default();
+        for (i, dx) in (0..50usize).zip((0..50u32).map(|k| f64::from(k) * 1000.0)) {
+            n.vertices.extend(one.vertices.iter().map(|v| Vertex { x: v.x + dx, ..*v }));
+            n.segments.extend(one.segments.iter().map(|s| Segment { a: s.a + i * nv, b: s.b + i * nv, ..*s }));
+            let base = i * ns;
+            n.regions.push(Region {
+                loops: vec![vec![base + 3, base + 1, base + 2, base]],
+                winding: WindingRule::NonZero,
+                fills: None,
+                ..Default::default()
+            });
+        }
+        reopen_loops(&mut n);
+        for (i, r) in n.regions.iter().enumerate() {
+            assert_eq!(r.loops[0].last(), Some(&(i * ns + 4)), "chain {i} closes through its own segment");
         }
     }
 
