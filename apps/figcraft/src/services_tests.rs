@@ -142,3 +142,13 @@ fn the_next_dialog_starts_in_the_folder_of_the_last_pick() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(start_folder(Some(dir)), None, "a folder deleted since: the system's own");
 }
+
+/// The update prompt's What's new and Download, and the About and Credits links, open through
+/// `ctx.open_url`. eframe drops those with only a log warning unless it is built with `links`.
+#[test]
+fn links_in_the_interface_open_in_the_browser() {
+    let manifest = include_str!("../Cargo.toml");
+    let eframe: Vec<&str> = manifest.lines().filter(|l| l.trim_start().starts_with("eframe =")).collect();
+    assert!(!eframe.is_empty(), "the app depends on eframe");
+    assert!(eframe.iter().any(|l| l.contains("\"links\"")), "eframe is built with `links`: {eframe:?}");
+}
