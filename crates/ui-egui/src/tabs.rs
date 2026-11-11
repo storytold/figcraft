@@ -107,6 +107,17 @@ fn tab_drop_position(visible: &[(usize, Rect)], from: usize, pointer_x: f32) -> 
     }
 }
 
+/// Split a file tab into a draggable body and a non-overlapping close target.
+/// In RTL interfaces close is at the visual start (left), while stable egui IDs
+/// and tab indices continue to follow the document, not its screen coordinates.
+fn document_tab_regions(r: Rect, mirrored: bool) -> (Rect, Rect) {
+    if mirrored {
+        (Rect::from_min_max(pos2(r.min.x + 32.0, r.min.y), r.max), Rect::from_min_max(r.min, pos2(r.min.x + 32.0, r.max.y)))
+    } else {
+        (Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y)), Rect::from_min_max(pos2(r.max.x - 32.0, r.min.y), r.max))
+    }
+}
+
 /// Draw the top tab bar: Home, document and presenter tabs, new-tab and window controls,
 /// open/close/reorder animation and tab closing, pausing the presenter when going Home.
 pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
@@ -162,8 +173,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             let lost = live_lost(app, d.uid);
             let dirty = d.is_dirty();
             let r = tab_rects[slot];
-            let body_r = Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y));
-            let close_r = Rect::from_min_max(body_r.right_top(), r.max);
+            let (body_r, close_r) = document_tab_regions(r, app.ui.mirrored);
             let resp = ui.interact(body_r, ui.scope_id().with(("tab", d.uid)), Sense::click_and_drag());
             let cresp = ui.interact(close_r, ui.scope_id().with(("tabclose", d.uid)), Sense::click()).tip(tr("Close tab"));
             match tab_gesture(ui, &resp, rect, several) {
@@ -195,6 +205,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 live,
                 lost,
                 progress,
+                mirrored: app.ui.mirrored,
             };
             paint_tab(ui, &t, &tab);
             if cresp.clicked() {
@@ -475,11 +486,12 @@ struct TabPaint<'a> {
     lost: bool,
     /// How far the opening animation is (0..=1).
     progress: f32,
+    mirrored: bool,
 }
 
 /// Draws a document tab: background, icon, name, live mark, unsaved dot and close button.
 fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
-    let TabPaint { name, kind, rects: [r, close_r], width: w, state: [active, hovered, close_hovered, dirty], live, lost, progress } = *tab;
+    let TabPaint { name, kind, rects: [r, close_r], width: w, state: [active, hovered, close_hovered, dirty], live, lost, progress, mirrored } = *tab;
     let mark_w = if live.is_some() || lost { LIVE_MARK_WIDTH } else { 0.0 };
     let paint_r = r.translate(vec2(-28.0 * (1.0 - progress).powi(2), 0.0));
     let painter = ui.painter().with_clip_rect(r);
@@ -490,27 +502,44 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
     }
     icons::paint(
         &painter,
-        Rect::from_center_size(pos2(paint_r.min.x + 17.0, paint_r.center().y), Vec2::splat(BAR_ICON)),
+        Rect::from_center_size(pos2(if mirrored { paint_r.max.x - 17.0 } else { paint_r.min.x + 17.0 }, paint_r.center().y), Vec2::splat(BAR_ICON)),
         icons::file_mark(kind),
         crate::theme::ACCENT.linear_multiply(progress),
     );
     // The unsaved-changes dot follows the name on screen, whichever way the name reads.
-    let shown = crate::bidi::paint_name(
-        &painter,
-        pos2(paint_r.min.x + 32.0, paint_r.center().y),
-        name,
-        regular(12.0),
-        t.text.linear_multiply(progress),
-        (w - mark_w - if dirty { 72.0 } else { 60.0 }).max(0.0),
-    );
-    let at = Rect::from_center_size(pos2(paint_r.max.x - 42.0, paint_r.center().y), Vec2::splat(BAR_ICON));
+    let max_name_w = (w - mark_w - if dirty { 72.0 } else { 60.0 }).max(0.0);
+    let shown = if mirrored {
+        // The visual text ends next to the file icon on the right. The bidi shaper
+        // still receives the original logical filename, including Latin fragments.
+        let galley = crate::bidi::name_galley(&painter, name, regular(12.0), t.text.linear_multiply(progress), max_name_w);
+        let at = pos2(paint_r.max.x - 32.0 - galley.size().x, paint_r.center().y - galley.size().y / 2.0);
+        let shown = Rect::from_min_size(at, galley.size());
+        painter.galley(at, galley, t.text.linear_multiply(progress));
+        shown
+    } else {
+        crate::bidi::paint_name(
+            &painter,
+            pos2(paint_r.min.x + 32.0, paint_r.center().y),
+            name,
+            regular(12.0),
+            t.text.linear_multiply(progress),
+            max_name_w,
+        )
+    };
+    let live_x = if mirrored { paint_r.min.x + 42.0 } else { paint_r.max.x - 42.0 };
+    let at = Rect::from_center_size(pos2(live_x, paint_r.center().y), Vec2::splat(BAR_ICON));
     if lost {
         icons::paint(&painter, at, Icon::LiveDisconnected, t.danger.linear_multiply(progress));
     } else if let Some(shared) = live {
         icons::paint(&painter, at, crate::online::mark(shared), if shared { t.success } else { t.icon_secondary }.linear_multiply(progress));
     }
     if dirty {
-        painter.text(pos2(shown.max.x + 4.0, paint_r.center().y), Align2::LEFT_CENTER, "•", regular(12.0), t.text.linear_multiply(progress));
+        let (at, align) = if mirrored {
+            (shown.left_center() - vec2(4.0, 0.0), Align2::RIGHT_CENTER)
+        } else {
+            (shown.right_center() + vec2(4.0, 0.0), Align2::LEFT_CENTER)
+        };
+        painter.text(at, align, "•", regular(12.0), t.text.linear_multiply(progress));
     }
     let cr = Rect::from_center_size(close_r.center() + vec2(paint_r.min.x - r.min.x, 0.0), Vec2::splat(20.0));
     // The close target never overlaps the draggable body, including on inactive tabs.
@@ -769,7 +798,9 @@ pub fn resize_edges(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod layout_tests {
-    use super::{MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, open_progress, present_room, tab_drop_position, tab_layout};
+    use super::{
+        MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, document_tab_regions, open_progress, present_room, tab_drop_position, tab_layout,
+    };
     use egui::{Rect, pos2};
 
     #[test]
@@ -813,6 +844,28 @@ mod layout_tests {
             .collect::<Vec<_>>();
         assert_eq!(tab_drop_position(&visible, 0, 330.0).map(|(to, _)| to), Some(2));
         assert_eq!(tab_drop_position(&visible, 3, 30.0).map(|(to, _)| to), Some(0));
+    }
+
+    #[test]
+    fn hebrew_document_tab_mirrors_close_hitbox_without_stealing_tab_clicks() {
+        let tab = Rect::from_min_max(pos2(100.0, 5.0), pos2(300.0, 45.0));
+        let (ltr_body, ltr_close) = document_tab_regions(tab, false);
+        let (rtl_body, rtl_close) = document_tab_regions(tab, true);
+        assert_eq!(ltr_body.width(), 168.0);
+        assert_eq!(rtl_body.width(), 168.0);
+        assert_eq!(ltr_close.width(), 32.0);
+        assert_eq!(rtl_close.width(), 32.0);
+        assert_eq!(ltr_close.max.x, tab.max.x);
+        assert_eq!(rtl_close.min.x, tab.min.x);
+        assert_eq!(ltr_body.min.x, tab.min.x);
+        assert_eq!(rtl_body.max.x, tab.max.x);
+        // egui Rect::intersects regards two touching edges as intersecting;
+        // their hit targets share the boundary but have no overlapping area.
+        assert_eq!(ltr_body.max.x, ltr_close.min.x);
+        assert_eq!(rtl_close.max.x, rtl_body.min.x);
+        assert!(ltr_body.contains(pos2(110.0, 25.0)));
+        assert!(rtl_close.contains(pos2(110.0, 25.0)));
+        assert!(rtl_body.contains(pos2(290.0, 25.0)));
     }
 
     #[test]
