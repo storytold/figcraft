@@ -268,10 +268,16 @@ impl FigApp {
             return;
         }
         if !self.has_files() || self.ui.home {
+            let docs = &self.session.docs;
+            self.canvas.drop_closed(|uid| docs.iter().any(|d| d.uid == uid));
             home::show(self, ui);
             // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
             // (cleared after the home widgets, which may have just asked for it).
             self.ui.shortcuts_panel = false;
+            // The keymap runs with the canvas; here the one shortcut that still applies is read directly.
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
+                self.run("app.preferences", serde_json::json!({}));
+            }
             dialogs::keys(self, &ctx);
             dialogs::show(self, &ctx);
             updates_ui::show(self, &ctx);
@@ -358,11 +364,7 @@ impl FigApp {
                 // each side of the panel (240 pt by default). The edge is drawn in `right_panel`.
                 .frame(egui::Frame::NONE.fill(t.panel))
                 .show(ui, |ui| {
-                    let label = match self.ui.right_tab {
-                        RightTab::Design => i18n::tr("Design"),
-                        RightTab::Prototype => i18n::tr("Prototype"),
-                        RightTab::Inspect => i18n::tr("Dev Mode"),
-                    };
+                    let label = right_tab_label(self.ui.right_tab);
                     a11y::region(&mut self.ui.nav, ui, a11y::Region::Properties, egui::accesskit::Role::Pane, label);
                     right::right_panel(self, ui)
                 });
@@ -447,5 +449,14 @@ impl FigApp {
         // field or an open palette owns the platform IME instead; the early `home`/present paths
         // above make the same single idle observation.
         self.observe_ime(&ctx, !typing && !self.field_focus && self.ui.palette.is_none());
+    }
+}
+
+/// The right panel's tab name, which its accessibility region reads.
+pub(crate) fn right_tab_label(tab: RightTab) -> &'static str {
+    match tab {
+        RightTab::Design => i18n::tr("Design"),
+        RightTab::Prototype => i18n::tr("Prototype"),
+        RightTab::Inspect => i18n::tr("Developer Mode"),
     }
 }
