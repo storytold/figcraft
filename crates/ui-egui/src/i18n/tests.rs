@@ -551,6 +551,18 @@ fn arabic_tags_and_count_neutral_forms() {
 }
 
 #[test]
+fn hebrew_catalog_is_available_for_regional_tags_and_uses_rtl() {
+    let he = LANGS.iter().position(|l| l.code == "he").expect("Hebrew catalog must be embedded");
+    assert_eq!(LANGS[he].name, "עברית");
+    assert!(LANGS[he].draft, "first Hebrew catalog requires native review");
+    for tag in ["he", "he-IL", "he_IL.UTF-8"] {
+        assert_eq!(resolve(tag, None), he, "{tag}");
+        assert_eq!(resolve("system", Some(tag)), he, "{tag}");
+    }
+    assert!(writes_right_to_left(LANGS[he].code));
+}
+
+#[test]
 fn right_to_left_languages_mirror_the_window() {
     for code in ["ar", "ar-SA", "AR", "he", "he-IL", "fa", "ur", "ckb", "yi"] {
         assert!(writes_right_to_left(code), "{code}");
