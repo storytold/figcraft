@@ -3,7 +3,7 @@
 use super::kiwi::Kv;
 
 const SCHEMA: &str = "
-enum NodeType DOCUMENT CANVAS TEXT TEXT_PATH
+enum NodeType DOCUMENT CANVAS TEXT TEXT_PATH SYMBOL INSTANCE
 enum StyleType NONE TEXT
 enum TextDecoration NONE UNDERLINE STRIKETHROUGH
 struct GUID uint sessionID, uint localID
@@ -17,7 +17,8 @@ message TextData string characters, uint[] characterStyleIDs, TextOverride[] sty
 message TextPathStart float tValue, bool forward
 message VectorData uint vectorNetworkBlob, Vector normalizedSize
 message Blob byte[] bytes
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, TextData textData, float fontSize, FontName fontName, TextPathStart textPathStart, VectorData vectorData, StyleType styleType, StyleId styleIdForText, TextDecoration textDecoration
+message SymbolData GUID symbolID, float uniformScaleFactor
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, Vector size, Matrix transform, TextData textData, float fontSize, FontName fontName, TextPathStart textPathStart, VectorData vectorData, StyleType styleType, StyleId styleIdForText, TextDecoration textDecoration, SymbolData symbolData
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
 use figcraft_doc::{NodeKind, TextPath};
@@ -208,4 +209,56 @@ fn linked_text_style_decoration_warns_from_effective_mapped_style() {
     let (json, warnings, _) = super::map::to_rest(&message, "Text path", crate::rest::MAX_NODES);
     assert_eq!(json["document"]["children"][0]["children"][0]["style"]["textDecoration"], "UNDERLINE");
     assert!(warnings.iter().any(|w| w == "text path underline or strikethrough decoration is not rendered"), "{warnings:?}");
+}
+
+/// A component holding a text on a path (path 100 long) and a half-scale instance of it.
+fn scaled_instance_message() -> Kv<'static> {
+    let identity = || o(vec![("m00", f(1.0)), ("m01", f(0.0)), ("m02", f(0.0)), ("m10", f(0.0)), ("m11", f(1.0)), ("m12", f(0.0))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", vec![]),
+        node(1, Some(0), "CANVAS", vec![]),
+        node(5, Some(1), "SYMBOL", vec![("name", s("Main")), ("size", point(100.0, 100.0)), ("transform", identity())]),
+        node(
+            6,
+            Some(5),
+            "TEXT_PATH",
+            vec![
+                ("name", s("arc")),
+                ("size", point(100.0, 0.0)),
+                ("transform", identity()),
+                ("textData", o(vec![("characters", s("alpha"))])),
+                ("fontSize", f(24.0)),
+                ("fontName", o(vec![("family", s("Inter")), ("style", s("Regular"))])),
+                ("textPathStart", o(vec![("tValue", f(0.5)), ("forward", Kv::Bool(true))])),
+                ("vectorData", o(vec![("vectorNetworkBlob", u(0)), ("normalizedSize", point(100.0, 0.0))])),
+            ],
+        ),
+        node(
+            9,
+            Some(1),
+            "INSTANCE",
+            vec![
+                ("name", s("Half")),
+                ("size", point(50.0, 50.0)),
+                ("transform", identity()),
+                ("symbolData", o(vec![("symbolID", guid(5)), ("uniformScaleFactor", f(0.5))])),
+            ],
+        ),
+    ];
+    o(vec![("nodeChanges", a(nodes)), ("blobs", a(vec![o(vec![("bytes", Kv::Bytes(blob()))])]))])
+}
+
+#[test]
+fn a_text_on_a_path_in_a_scaled_instance_has_its_path_scaled() {
+    let (json, warnings, _) = super::map::to_rest(&scaled_instance_message(), "Scaled path", crate::rest::MAX_NODES);
+    assert!(!warnings.iter().any(|w| w.contains("text path")), "{warnings:?}");
+    let (doc, _) = crate::rest::import_fig(&json, &|_| None).unwrap();
+    let path_of = |parent: &str| {
+        let parent = doc.nodes().find(|n| n.name == parent).unwrap();
+        let node = doc.node(parent.children[0]).unwrap();
+        let NodeKind::Text(text) = &node.kind else { panic!("expected text") };
+        text.path.as_deref().unwrap().d.clone()
+    };
+    assert_eq!(path_of("Main"), "M0,0 L100,0");
+    assert_eq!(path_of("Half"), "M0,0 L50,0");
 }
