@@ -113,3 +113,15 @@ fn faces_checks_the_closed_inputs_before_normalising() {
     assert!(complexity([&p]).is_some_and(|c| c.crossings <= MAX_CROSSINGS), "open input passes");
     assert!(matches!(faces(&[(p, false)]), Err(PathOpsError::TooComplex)));
 }
+
+#[test]
+fn closing_drops_move_only_subpaths() {
+    let mut p = BezPath::new();
+    for i in 0..1000 {
+        p.move_to((i as f64, 0.0));
+    }
+    assert!(crate::closed(&p).elements().is_empty());
+    p.line_to((5.0, 5.0));
+    let c = crate::closed(&p);
+    assert_eq!(c.elements().len(), 3, "the last move, the line and the close: {:?}", c.elements());
+}

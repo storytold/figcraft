@@ -324,10 +324,12 @@ pub fn variable_outline(path: &BezPath, width: f64, props: &StrokeProps, profile
                 [0.5 * width * right, 0.5 * width * left]
             })
             .collect();
-        match &pattern {
-            Some(pat) if dashes_fit(len, pat) && dash_count(len, pat) < dash_budget => {
-                dash_budget -= dash_count(len, pat);
-                let (pat, offset) = line_dashes(len, line.closed, pat);
+        // Budgeted by the pattern as fitted to this line (a short line still takes a whole pattern).
+        let fit = pattern.as_ref().map(|pat| line_dashes(len, line.closed, pat));
+        let used = fit.as_ref().map_or(0.0, |(pat, _)| dash_count(len, pat).max(pat.len() as f64));
+        match fit {
+            Some((pat, offset)) if used < dash_budget && dashes_fit(len, &pat) => {
+                dash_budget -= used;
                 for (p, h) in dashes(&pts, &hw, &pat, offset) {
                     outline_piece(&mut out, &p, &h, false, style);
                 }

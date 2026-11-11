@@ -57,20 +57,27 @@ impl std::fmt::Display for PathOpsError {
     }
 }
 
-/// Close every open subpath (a filled open path paints as if closed).
+/// Close every open subpath (a filled open path paints as if closed). A subpath of a lone move
+/// fills nothing and is left out.
 pub fn closed(path: &BezPath) -> BezPath {
     let mut out = BezPath::new();
     let mut open = false;
+    let mut pending: Option<PathEl> = None;
     for el in path.elements() {
         match el {
             PathEl::MoveTo(_) => {
                 if open {
                     out.close_path();
                 }
-                open = true;
+                open = false;
+                pending = Some(*el);
+                continue;
             }
             PathEl::ClosePath => open = false,
-            _ => {}
+            _ => open = true,
+        }
+        if let Some(m) = pending.take() {
+            out.push(m);
         }
         out.push(*el);
     }

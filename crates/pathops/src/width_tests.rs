@@ -160,3 +160,16 @@ fn dashes_of_all_subpaths_share_one_allowance() {
     // The later subpaths draw solid once the first has used most of the allowance.
     assert!(many(10) < 3 * many(1), "{} vs {}", many(10), many(1));
 }
+
+#[test]
+fn a_short_subpath_is_budgeted_by_the_whole_pattern_it_takes() {
+    // 100 one-unit lines, each fitted to a 4,000-entry pattern: ~400,000 dashes if not budgeted.
+    let long = StrokeProps { dashes: vec![1.0; 4000], ..props(1.0, Some(WidthProfile::uniform())) };
+    let mut p = BezPath::new();
+    for i in 0..100 {
+        p.move_to((0.0, i as f64 * 4.0));
+        p.line_to((1.0, i as f64 * 4.0));
+    }
+    let n = variable_outline(&p, 1.0, &long, &WidthProfile::uniform()).unwrap().elements().len();
+    assert!(n < 20_000 * 12, "{n}");
+}
