@@ -7,8 +7,8 @@ use crate::i18n::trf;
 /// Paste: the system clipboard wins when it holds something newer than our own copy (layers copied
 /// from another design app, an image, SVG or text from another app); otherwise our copied layers.
 /// `event_text` is the text the platform handed over with the paste event (the browser has no
-/// other way to read it). `at`: the page point to paste at (Paste here); `None` pastes in the
-/// middle of the view.
+/// other way to read it; the desktop's clipboard bridge has already read it). `at`: the page
+/// point to paste at (Paste here); `None` pastes in the middle of the view.
 /// In Dev Mode only a comment's link pastes (it opens the thread); everything else would edit.
 pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>) {
     // A gesture injected through the control channel pastes only our own copied layers: it must not
@@ -47,7 +47,15 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
         }
         return;
     }
-    let sys_text = app.services.clipboard_get_text().or_else(|| event_text.map(str::to_string)).filter(|t| !t.is_empty());
+    // The text the platform handed over with the paste event is the system clipboard's text: the
+    // browser delivers it, and the desktop's async clipboard bridge read it while the window
+    // thread was free to serve the transfer. Never re-read the clipboard synchronously for it —
+    // on the desktop that read blocks the window thread for the read timeout, and when this app
+    // itself owns the clipboard (a self-paste) its own source can only be served by that very
+    // thread, so the read waits the full timeout and the window freezes for seconds (#2021).
+    // A paste the platform didn't hand text over (a chord, an image, the menu) reads it, as before.
+    let sys_text =
+        if let Some(t) = event_text { (!t.is_empty()).then(|| t.to_string()) } else { app.services.clipboard_get_text().filter(|t| !t.is_empty()) };
     // The text matching `last_copy` means the system clipboard still holds what we mirrored only
     // while the engine clipboard is the one we mirrored. A control-channel copy changes the engine
     // clipboard without writing the system clipboard, so its generation no longer matches and the
