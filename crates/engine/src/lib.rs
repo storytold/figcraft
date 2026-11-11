@@ -421,6 +421,8 @@ mod live_tests;
 #[cfg(test)]
 mod lock_behaviour_tests;
 #[cfg(test)]
+mod marquee_behaviour_tests;
+#[cfg(test)]
 mod mask_tests;
 #[cfg(test)]
 mod masks_behaviour_tests;
