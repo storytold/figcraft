@@ -470,17 +470,28 @@ fn reopen_loops(net: &mut VectorNetwork) {
     }
     // An open chain whose two ends a segment in no loop already joins (a bridge drawn between two
     // points before the point between them was deleted) closes through that segment, at the end so
-    // the loop's winding is kept, as `connect` closes it (#1951). One loop at a time, so two loops
-    // can't both take one segment.
-    let places: Vec<(usize, usize)> = net.regions.iter().enumerate().flat_map(|(ri, r)| (0..r.loops.len()).map(move |li| (ri, li))).collect();
-    for (ri, li) in places {
-        let Some(lp) = net.regions.get(ri).and_then(|r| r.loops.get(li)) else { continue };
-        if lp.len() < 2 {
-            continue;
+    // the loop's winding is kept, as `connect` closes it (#1951). Every loop that walks the same
+    // chain (two regions over one ring) takes it, as the render does; a different chain can't
+    // share it. The lookups are built once, so a segment one loop took doesn't hide it from the
+    // next.
+    let index = net.loop_index();
+    let mut closings: Vec<(usize, usize, usize, Vec<usize>)> = Vec::new();
+    for (ri, r) in net.regions.iter().enumerate() {
+        for (li, lp) in r.loops.iter().enumerate() {
+            if lp.len() < 2 {
+                continue;
+            }
+            if let Some(closing) = net.closing_segment(lp, &index) {
+                let mut chain = lp.clone();
+                chain.sort_unstable();
+                if closings.iter().all(|(_, _, c, other)| *c != closing || *other == chain) {
+                    closings.push((ri, li, closing, chain));
+                }
+            }
         }
-        if let Some(closing) = net.closing_segment(lp)
-            && let Some(lp) = net.regions.get_mut(ri).and_then(|r| r.loops.get_mut(li))
-        {
+    }
+    for (ri, li, closing, _) in closings {
+        if let Some(lp) = net.regions.get_mut(ri).and_then(|r| r.loops.get_mut(li)) {
             lp.push(closing);
         }
     }
@@ -1208,5 +1219,92 @@ mod tests {
         let ends: Vec<f64> = n.vertices.iter().map(|v| v.x).collect();
         assert!(ends.iter().any(|x| (x - (centre.x - 0.5)).abs() < 0.01), "{ends:?}");
         assert!(ends.iter().any(|x| (x - (centre.x + 0.5)).abs() < 0.01), "{ends:?}");
+    }
+
+    /// An open chain of four segments over five points whose two ends a fifth segment (in no
+    /// loop) joins, as a bridge drawn before the point between them was deleted.
+    fn bridged_open_chain() -> VectorNetwork {
+        let corners = [
+            Point::new(0.0, 0.0),
+            Point::new(525.0, 525.0),
+            Point::new(0.0, 525.0),
+            Point::new(333.0, 0.0),
+            Point::new(525.0, 183.0),
+            Point::new(900.0, 900.0),
+        ];
+        let mut n = VectorNetwork::from_points(&corners, false);
+        n.segments = [(0, 3), (1, 2), (2, 0), (4, 1), (3, 4)].iter().map(|&(a, b)| Segment::line(a, b)).collect();
+        n.regions.clear();
+        for v in &mut n.vertices {
+            v.radius = 125.0;
+        }
+        n
+    }
+
+    #[test]
+    fn regions_over_one_open_chain_all_close_through_the_joining_segment() {
+        use figcraft_geom::BezPath;
+        use figcraft_geom::kurbo::ParamCurveArclen;
+        let mut n = bridged_open_chain();
+        for _ in 0..2 {
+            n.regions.push(Region { loops: vec![vec![3, 1, 2, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        }
+        delete_vertices(&mut n, &[5], false);
+        for (i, r) in n.regions.iter().enumerate() {
+            assert_eq!(r.loops[0], vec![3, 1, 2, 0, 4], "region {i} closes through the segment: {:?}", n.regions);
+        }
+        let length = |path: &BezPath| path.segments().map(|s| s.arclen(1e-9)).sum::<f64>();
+        let stroke = length(&n.stroke_path());
+        let rounded = n.rounded().unwrap();
+        for i in 0..2 {
+            let fill = length(&rounded.region_path(i).unwrap());
+            assert!((fill - stroke).abs() < 1e-6, "region {i}: fill {fill} and stroke {stroke} trace the same outline");
+        }
+    }
+
+    #[test]
+    fn a_segment_joining_two_different_chains_goes_to_the_first_only() {
+        let mut n = bridged_open_chain();
+        n.regions.push(Region { loops: vec![vec![3, 1, 2, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        n.regions.push(Region { loops: vec![vec![0, 2, 1, 3]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        reopen_loops(&mut n);
+        assert_eq!(n.regions[0].loops[0].len(), 5);
+        assert_eq!(n.regions[1].loops[0].len(), 5, "the same segment set is the same chain");
+        let mut m = bridged_open_chain();
+        m.segments.push(Segment::line(1, 2));
+        m.regions.push(Region { loops: vec![vec![3, 1, 2, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        m.regions.push(Region { loops: vec![vec![3, 5, 2, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        reopen_loops(&mut m);
+        let closed = m.regions.iter().filter(|r| r.loops[0].len() == 5).count();
+        assert!(closed <= 1, "different chains don't share the segment: {:?}", m.regions);
+    }
+
+    #[test]
+    fn many_open_loops_with_no_closing_segment_round_as_before() {
+        let mut n = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)], false);
+        n.segments.clear();
+        n.vertices.clear();
+        for k in 0..40 {
+            let x = f64::from(k) * 100.0;
+            let base = n.vertices.len();
+            for p in [(x, 0.0), (x + 50.0, 0.0), (x + 50.0, 50.0), (x, 50.0)] {
+                n.vertices.push(Vertex { radius: 8.0, ..Vertex::new(p.0, p.1) });
+            }
+            let first = n.segments.len();
+            // Three sides of a square, an open loop with nothing to close it.
+            for (a, b) in [(0, 1), (1, 2), (2, 3)] {
+                n.segments.push(Segment::line(base + a, base + b));
+            }
+            n.regions.push(Region {
+                loops: vec![vec![first, first + 1, first + 2]],
+                winding: WindingRule::NonZero,
+                fills: None,
+                ..Default::default()
+            });
+        }
+        let r = n.rounded().unwrap();
+        assert_eq!(r.regions.len(), 40);
+        // Each loop gained only its two inner corners' arcs (two corners, one arc each).
+        assert!(r.regions.iter().all(|reg| reg.loops[0].len() == 5), "{:?}", r.regions[0]);
     }
 }
