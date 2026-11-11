@@ -408,6 +408,24 @@ fn mirroring_position_and_join_commands() {
 }
 
 #[test]
+fn mirror_mode_on_sharp_points_is_one_undo_step() {
+    // #2110: a mirror mode turns sharp points smooth; the whole command undoes in one step.
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[-250, -174], [117, -174], [-67, 194]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [1]}));
+    ex(&mut s, "vector.edit.mirroring", json!({"mode": "angleAndLength"}));
+    let n = net(&s, id);
+    let (i, o) = (n.segments[0].tb, n.segments[1].ta);
+    assert!((o.0 - 86.24).abs() < 0.1 && (o.1 - 114.47).abs() < 0.1, "{o:?}");
+    assert!((i.0 + o.0).abs() < 1e-9 && (i.1 + o.1).abs() < 1e-9, "{i:?}");
+    s.undo().unwrap();
+    let n = net(&s, id);
+    assert!(n.segments.iter().all(|x| x.is_straight()), "one undo restores the sharp point");
+}
+
+#[test]
 fn a_point_dropped_on_another_merges_into_it() {
     // #401: an open path's end dragged onto its start closes the path at that point.
     let mut s = Session::new();
