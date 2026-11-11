@@ -285,7 +285,7 @@ impl<'a> Mapper<'a> {
         if let Some(name) = v.str("name") {
             vector.insert("name".into(), json!(if nested { format!("{name} vector") } else { name.to_string() }));
         }
-        let line_view = View::of(line).with([line_style]);
+        let line_view = View::of(line).with([(line_style, 1.0)]);
         self.common(&mut vector, &line_view, "VECTOR", space, None);
         self.geometry(&mut vector, &line_view);
         for (from, to) in [("connectorStartCap", "strokeCapStart"), ("connectorEndCap", "strokeCapEnd")] {
@@ -328,7 +328,7 @@ impl<'a> Mapper<'a> {
             }
             return children;
         };
-        let text_view = View::of(text_frame).with([text_style]);
+        let text_view = View::of(text_frame).with([(text_style, 1.0)]);
         let Some(characters) = text_view.get("textData").and_then(|d| d.get("characters")).and_then(Kv::str).filter(|s| !s.trim().is_empty()) else {
             return children;
         };
@@ -359,7 +359,7 @@ impl<'a> Mapper<'a> {
             self.add_connector_text(&mut children, rest_id, characters, text_size, composed_text_transform, &text_view);
             return children;
         };
-        let background_view = View::of(background).with([background_style]);
+        let background_view = View::of(background).with([(background_style, 1.0)]);
         if !background_view.list("fillPaints").is_empty() {
             if self.count >= self.budget() {
                 self.warn(format!("the file has more than {} layers; connector label background was skipped", self.max_nodes));

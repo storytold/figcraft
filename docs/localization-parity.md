@@ -26,7 +26,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   a missing translation shows English, never a raw key. One English text that needs two
   translations takes a context (`"Fill|sizing"`).
 - **Strings:** 1,747 UI keys in `en.toml` (42 with plural forms; ~110 are labels from engine and
-  document data, such as tool names, blend modes and Dev Mode properties) plus 574 command labels
+  document data, such as tool names, blend modes and Developer Mode properties) plus 574 command labels
   and 31 menu wordings by command id: 2,352 entries (counted against `en.toml` and the complete
   Spanish catalog's command and menu tables). Command ids, the CLI, MCP and the control
   channel stay English. Accessibility names come from the same strings.
@@ -51,7 +51,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   added later shows English until someone translates it, and `cargo xtask i18n-report` (part of
   `cargo xtask ci`) lists what each language lacks. Every draft translated every string on
   2026-10-12; by 2026-10-17 the strings added since left them at 95–99% (table below).
-- **Not yet localized:** messages the engine writes (errors, a few toasts, Dev Mode property values
+- **Not yet localized:** messages the engine writes (errors, a few toasts, Developer Mode property values
   such as "inside"), number formatting (decimal points stay `.`), and decimal plural rules
   (`trn` takes integers: Czech and Bosnian use one/few/other and Russian one/few/many; French and Brazilian
   Portuguese take the singular for 0 as well; Japanese, Korean, Chinese and Vietnamese have one form;
