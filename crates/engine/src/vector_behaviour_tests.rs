@@ -829,3 +829,68 @@ fn vector_points_take_the_requested_size() {
     let e = s.execute("vector.create", &json!({"points": points, "width": 16, "height": -1})).unwrap_err().to_string();
     assert!(e.contains("positive"), "{e}");
 }
+
+/// A vector from `points` with a corner radius per point (`radii`), via `vector.create`.
+fn rounded_vector(s: &mut Session, points: &[(f64, f64)], radii: &[f64], closed: bool) -> NodeId {
+    let pts: Vec<Value> = points.iter().map(|p| json!([p.0, p.1])).collect();
+    let id = id_of(&ex(s, "vector.create", json!({"points": pts, "closed": closed}))["id"]).unwrap();
+    if let NodeKind::Vector { network } = &mut s.doc_mut().unwrap().get_mut(id).unwrap().kind {
+        for (v, r) in network.vertices.iter_mut().zip(radii) {
+            v.radius = *r;
+        }
+    }
+    id
+}
+
+/// #2195: Flatten bakes a vector's point radii into its path: the rounded vertex becomes the
+/// arc's end points joined by curves, the layer stays a vector, the box fits the real geometry.
+#[test]
+fn flatten_bakes_a_vectors_point_radius() {
+    // An open V with the apex rounded.
+    let mut s = Session::new();
+    let v = rounded_vector(&mut s, &[(0.0, 0.0), (184.0, 245.0), (368.0, 0.0)], &[0.0, 60.0, 0.0], false);
+    let before = net(&s, v);
+    let drawn = before.rounded().unwrap().stroke_path().perimeter(1e-4);
+    let h_before = s.doc().unwrap().node(v).unwrap().height;
+    let out = ex(&mut s, "vector.flatten", json!({"ids": [v]}));
+    let f = id_of(&out["id"]).unwrap();
+    let after = net(&s, f);
+    assert_eq!(after.vertices.len(), 4, "the apex became two points: 3 + 1");
+    assert!(after.vertices.iter().all(|p| p.radius == 0.0), "no radius left");
+    let len = after.stroke_path().perimeter(1e-4);
+    assert!((len - drawn).abs() < 0.5, "the outline is the same: {len} vs {drawn}");
+    let h = s.doc().unwrap().node(f).unwrap().height;
+    let bb = after.bounds().unwrap();
+    assert!(h < h_before && (h - 245.0).abs() > 1.0, "the box shrinks from 245: {h}");
+    assert!((h - bb.height()).abs() < 1e-6 && bb.y0.abs() < 1e-6, "the box is the baked path's bounds: {h} vs {bb:?}");
+    println!("open V: points {} -> {}, height {h_before} -> {h}", before.vertices.len(), after.vertices.len());
+    s.undo().unwrap();
+    assert!(s.doc().unwrap().node(v).is_some() && s.doc().unwrap().node(f).is_none(), "one undo step");
+    assert_eq!(net(&s, v).vertices[1].radius, 60.0);
+
+    // A closed triangle rounded at every point.
+    let mut s = Session::new();
+    let v = rounded_vector(&mut s, &[(0.0, 0.0), (368.0, 0.0), (184.0, 245.0)], &[40.0; 3], true);
+    let drawn = net(&s, v).rounded().unwrap();
+    let (len, area) = (drawn.stroke_path().perimeter(1e-4), drawn.fill_path().area().abs());
+    let f = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [v]}))["id"]).unwrap();
+    let after = net(&s, f);
+    assert_eq!(after.vertices.len(), 6, "each corner became two points");
+    assert!(after.vertices.iter().all(|p| p.radius == 0.0));
+    assert_eq!(after.regions.len(), 1, "still one filled region");
+    assert!((after.stroke_path().perimeter(1e-4) - len).abs() < 0.5);
+    assert!((after.fill_path().area().abs() - area).abs() < 0.5, "same fill area");
+    let n = s.doc().unwrap().node(f).unwrap().clone();
+    let bb = after.bounds().unwrap();
+    assert!(n.height < 245.0 && (n.height - bb.height()).abs() < 1e-6 && (n.width - bb.width()).abs() < 1e-6);
+    println!("triangle: points 3 -> {}, height 245 -> {}", after.vertices.len(), n.height);
+
+    // Guard: no radius, nothing changes.
+    let mut s = Session::new();
+    let v = rounded_vector(&mut s, &[(0.0, 0.0), (184.0, 245.0), (368.0, 0.0)], &[0.0; 3], false);
+    let before = net(&s, v);
+    let f = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [v]}))["id"]).unwrap();
+    assert_eq!(net(&s, f).vertices.len(), 3);
+    assert_eq!(s.doc().unwrap().node(f).unwrap().height, 245.0);
+    assert_eq!(net(&s, f).vertices, before.vertices);
+}
