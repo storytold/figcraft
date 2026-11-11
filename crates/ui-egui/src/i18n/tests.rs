@@ -657,6 +657,41 @@ fn hebrew_inspector_and_layer_panels_have_native_labels() {
 }
 
 #[test]
+fn hebrew_context_edit_and_selection_menus_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    // Native context-menu actions must not silently fall back to English.
+    for key in [
+        "Actions…",
+        "Convert to frame",
+        "Convert to section",
+        "Copy as CSS",
+        "Copy as PNG",
+        "Crop image",
+        "Detach instance",
+        "Flip horizontal",
+        "Flip vertical",
+        "Frame selection",
+        "Go to main component",
+        "Lock/Unlock",
+        "Paste here",
+        "Paste to replace",
+        "Select all",
+        "Send backward",
+        "Send to back",
+        "Show/Hide UI",
+        "Use as mask",
+        "Zoom to fit",
+        "Search actions, layers and tools",
+        "Select layer",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew context-menu translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} unexpectedly fell back to English");
+    }
+}
+
+#[test]
 fn right_to_left_languages_mirror_the_window() {
     for code in ["ar", "ar-SA", "AR", "he", "he-IL", "fa", "ur", "ckb", "yi"] {
         assert!(writes_right_to_left(code), "{code}");
