@@ -905,6 +905,50 @@ fn hebrew_native_document_and_inspector_basics_are_translated() {
     }
 }
 
+/// File recovery, version history and import failures remain readable in Native Hebrew.
+#[test]
+fn hebrew_native_file_recovery_and_versions_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Back to the current version",
+        "Current version",
+        "Drop a .figcraft, .fig, .jam, .sketch, .json, .svg or image file.",
+        "FigCraft couldn't open its window: {error}",
+        "Fold autosaves",
+        "Show autosaves",
+        "No saved versions yet. Save a version to mark a point in your work you can come back to.",
+        "Nothing changed since this version.",
+        "Reload the page to get back the unsaved files the browser had room for.",
+        "Reload the page to get your unsaved files back.",
+        "Remove from recents",
+        "Restore this version",
+        "Save version  {key}",
+        "Search files and templates",
+        "Show open",
+        "This version can't be read.",
+        "Version",
+        "Version {version}",
+        "Version {v} · {components} · {styles} · {variables}",
+        "What changed since a saved version",
+        "Your unsaved files were too large for the browser to keep.",
+        "Your copy of the file stays open",
+        "The destination document is unavailable. Nothing was imported.",
+        "The destination document was closed. Nothing was imported.",
+        "The destination page was removed. Nothing was imported.",
+        "Imported {name}",
+        "Link copied: it opens the file in FigCraft",
+        "Link copied: it opens the file in the browser",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew file/recovery translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        for placeholder in ["{error}", "{key}", "{name}", "{version}", "{v}", "{components}", "{styles}", "{variables}"] {
+            assert_eq!(key.contains(placeholder), value.contains(placeholder), "placeholder parity: {key:?}");
+        }
+    }
+}
+
 /// The Native export dialog and PDF print controls must not silently switch
 /// back to English when using Hebrew, including numeric export notifications.
 #[test]
