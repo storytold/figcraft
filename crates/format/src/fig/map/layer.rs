@@ -3,8 +3,8 @@ use super::connector::{ConnectorShape, connector_has_saved_label};
 use super::layout::{layout_grid, tracks};
 use super::paint::{effect, export_setting, has_bound_variables, paint, paint_bound, stroke};
 use super::{
-    Affine, BTreeMap, BTreeSet, Kv, MAX_COMMANDS, MAX_DEPTH, Mapper, Obj, Value, View, copy_num, copy_str, generated_record, guid, json, matrix,
-    network, num, rows, size,
+    Affine, BTreeMap, BTreeSet, Kv, MAX_COMMANDS, MAX_DEPTH, Mapper, Obj, Value, View, copy_len, copy_num, copy_str, generated_record, guid, json,
+    matrix, network, num, rows, scaled, size,
 };
 
 /// How the layers of a resized container follow it when the file gives no derived layout for
@@ -126,23 +126,39 @@ impl<'a> Mapper<'a> {
             (Some(i), Some(p)) => i.overrides.get(p).map(Vec::as_slice).unwrap_or_default(),
             _ => &[],
         };
-        let mut view = View::of(base).with(entries.iter().map(|e| e.row));
+        // Inside a scaled instance the main's lengths are the factor times as long; the rows of
+        // the instance are at its scale already (#2091).
+        let scale = inst.map_or(1.0, |i| i.scale);
+        let mut view = View::of_scaled(base, scale).with(entries.iter().map(|e| (e.row, e.scale)));
         // A layer of a resized instance the file gives no derived layout for follows its
         // constraints from the main's geometry, then takes the size and place overridden on it
         // (auto layout places the others, as in the editor).
         let derived = entries.iter().any(|e| e.entry == Entry::Derived && (e.row.get("size").is_some() || e.row.get("transform").is_some()));
         let stacked = parent.and_then(|p| p.str("stackMode")).is_some_and(|m| matches!(m, "HORIZONTAL" | "VERTICAL" | "GRID"))
             && view.str("stackPositioning") != Some("ABSOLUTE");
-        let main = View::of(base);
-        let set = |k: &str| entries.iter().rev().filter(|e| e.entry != Entry::Stale).find_map(|e| e.row.get(k));
+        let main = View::of_scaled(base, scale);
+        // The size and place a row gives, at the scale of the row (a nested instance's own rows
+        // are at its enclosing main's scale).
+        let set = |k: &str| entries.iter().rev().filter(|e| e.entry != Entry::Stale).find_map(|e| e.row.get(k).map(|r| (r, e.scale)));
+        let set_size = || {
+            let (r, k) = set("size")?;
+            let (x, y) = size(r)?;
+            Some((scaled(x, k)?, scaled(y, k)?))
+        };
+        let set_transform = || {
+            let (r, k) = set("transform")?;
+            let m = matrix(r)?;
+            let [a, b, c, d, e, f] = m.as_coeffs();
+            Some(Affine::new([a, b, c, d, scaled(e, k)?, scaled(f, k)?]))
+        };
         if let (Some(f), false, false, Some((w, h))) = (fit, derived, stacked, main.size()) {
             let t = main.transform().unwrap_or_default();
             let (fw, ft) = f.apply(w, h, t, view.str("horizontalConstraint"), view.str("verticalConstraint"));
-            view.fitted = Some((set("size").and_then(size).unwrap_or(fw), set("transform").and_then(matrix).unwrap_or(ft)));
+            view.fitted = Some((set_size().unwrap_or(fw), set_transform().unwrap_or(ft)));
         } else if entries.iter().any(|e| e.entry == Entry::Stale && (e.row.get("size").is_some() || e.row.get("transform").is_some()))
-            && let Some(s) = set("size").and_then(size).or_else(|| main.size())
+            && let Some(s) = set_size().or_else(|| main.size())
         {
-            view.fitted = Some((s, set("transform").and_then(matrix).or_else(|| main.transform()).unwrap_or_default()));
+            view.fitted = Some((s, set_transform().or_else(|| main.transform()).unwrap_or_default()));
         }
         let rest_id = match (inst, &path) {
             (Some(i), Some(p)) => format!("I{};{}", i.root, p.join(";")),
@@ -280,12 +296,18 @@ impl<'a> Mapper<'a> {
             // The saved vector is flattened into the connector node when no child slot remains.
         } else if ty == "INSTANCE" {
             if let Some((sub, sym)) = self.instance(o, view, id, inst, rest_id) {
-                let main = self.nodes.get(&sym).map(|m| View::of(m));
-                let fit = Fit::frame(main.as_ref().and_then(View::size), view.size());
+                let main = self.nodes.get(&sym).map(|m| View::of_scaled(m, sub.scale));
+                // A scaled main's size is the factor's product, rounded to a float: it matches an
+                // instance of that size without a fit that would round the layers again.
+                let near = |a: f64, b: f64| (a - b).abs() <= 1e-4 * a.abs().max(b.abs()).max(1.0);
+                let fit = match (main.as_ref().and_then(View::size), view.size()) {
+                    (Some(a), Some(b)) if sub.scale != 1.0 && near(a.0, b.0) && near(a.1, b.1) => None,
+                    (a, b) => Fit::frame(a, b),
+                };
                 // An instance that records no auto layout of its own has its main's.
                 let view = match main {
                     Some(m) if view.get("stackMode").is_none() && m.get("stackMode").is_some() => {
-                        let layered = View { fitted: view.fitted, ..m.with(view.layers.iter().copied()) };
+                        let layered = m.over(view);
                         self.auto_layout(o, &layered);
                         layered
                     }
@@ -309,8 +331,8 @@ impl<'a> Mapper<'a> {
             // size to its own.
             let fit = match (inst, ty) {
                 (None, _) => None,
-                (Some(_), "GROUP" | "BOOLEAN_OPERATION") => Fit::scale(View::of(base).size(), view.size()),
-                (Some(_), _) => Fit::frame(View::of(base).size(), view.size()),
+                (Some(i), "GROUP" | "BOOLEAN_OPERATION") => Fit::scale(View::of_scaled(base, i.scale).size(), view.size()),
+                (Some(i), _) => Fit::frame(View::of_scaled(base, i.scale).size(), view.size()),
             };
             for c in self.children(id) {
                 kids.extend(self.layer_filtered(&c, inst, child_space, Some(view), fit, depth + 1, included));
@@ -361,7 +383,7 @@ impl<'a> Mapper<'a> {
                 }
                 continue;
             };
-            let child = View::of(style).with([bounds]);
+            let child = View::of(style).with([(bounds, 1.0)]);
             let chars = own_text(&child);
             if local_id != 0 && chars.is_none() {
                 continue;
@@ -509,14 +531,16 @@ impl<'a> Mapper<'a> {
             .unwrap_or_else(|| stroke_style.map_or_else(|| v.list("strokePaints"), |s| s.get("fillPaints").map(Kv::list).unwrap_or_default()));
         o.insert("strokes".into(), Value::Array(strokes.iter().filter_map(|p| paint(p, &mut |w| self.warn(w))).collect()));
         let effect_style = self.style(v, "styleIdForEffect", "inheritEffectStyleID", "effect", &mut styles);
-        let effects = effect_style.map_or_else(|| v.list("effects"), |s| s.get("effects").map(Kv::list).unwrap_or_default());
+        let (effects, effects_scale) =
+            effect_style.map_or_else(|| v.list_scaled("effects"), |s| v.styled_list(s, "effects", "styleIdForEffect", "inheritEffectStyleID"));
         if !effects.is_empty() {
-            o.insert("effects".into(), Value::Array(effects.iter().filter_map(effect).collect()));
+            o.insert("effects".into(), Value::Array(effects.iter().filter_map(|e| effect(e, effects_scale)).collect()));
         }
         let grid_style = self.style(v, "styleIdForGrid", "inheritGridStyleID", "grid", &mut styles);
-        let grids = grid_style.map_or_else(|| v.list("layoutGrids"), |s| s.get("layoutGrids").map(Kv::list).unwrap_or_default());
+        let (grids, grids_scale) =
+            grid_style.map_or_else(|| v.list_scaled("layoutGrids"), |s| v.styled_list(s, "layoutGrids", "styleIdForGrid", "inheritGridStyleID"));
         if !grids.is_empty() {
-            o.insert("layoutGrids".into(), Value::Array(grids.iter().map(layout_grid).collect()));
+            o.insert("layoutGrids".into(), Value::Array(grids.iter().map(|g| layout_grid(g, grids_scale)).collect()));
         }
         if ty == "TEXT" {
             self.style(v, "styleIdForText", "inheritTextStyleID", "text", &mut styles);
@@ -525,10 +549,10 @@ impl<'a> Mapper<'a> {
             o.insert("styles".into(), Value::Object(styles));
         }
         stroke(o, v);
-        copy_num(o, v, "cornerRadius", "cornerRadius");
+        copy_len(o, v, "cornerRadius", "cornerRadius");
         copy_num(o, v, "cornerSmoothing", "cornerSmoothing");
         if v.flag("rectangleCornerRadiiIndependent") == Some(true) {
-            let r = |k: &str| v.num(k).unwrap_or(0.0);
+            let r = |k: &str| v.len(k).unwrap_or(0.0);
             o.insert(
                 "rectangleCornerRadii".into(),
                 json!([
@@ -604,7 +628,7 @@ impl<'a> Mapper<'a> {
     /// scaled to the layer's size, with per-point corner radii, handle mirroring and end caps.
     /// False when there's none or it's damaged (the outlines stand in).
     fn network(&mut self, o: &mut Obj, v: &View<'a>) -> bool {
-        let Some(vd) = v.get("vectorData") else { return false };
+        let Some((vd, radius_scale)) = v.find("vectorData") else { return false };
         let Some(blob_id) = num(vd, "vectorNetworkBlob").map(|i| i as usize) else { return false };
         let Some(blob) = self.blobs.get(blob_id).copied() else { return false };
         let Some(net) = network::decode(blob) else {
@@ -650,7 +674,9 @@ impl<'a> Mapper<'a> {
             .map(|p| {
                 let mut out = json!({"x": p.x * sx, "y": p.y * sy});
                 let st = style(p.style);
-                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).filter(|r| *r > 0.0) {
+                // Point radii are lengths in this row's space, unlike the normalized positions.
+                // An override/derived row already carries the instance's scale.
+                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).and_then(|r| scaled(r, radius_scale)).filter(|r| *r > 0.0) {
                     out["radius"] = json!(r);
                 }
                 match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
@@ -766,7 +792,8 @@ impl<'a> Mapper<'a> {
             o.insert("vectorNetwork".into(), entry);
             return true;
         }
-        let key = (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize);
+        // A resized instance and a K-scaled one can have the same box but different radii.
+        let key = (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize, radius_scale.to_bits());
         let id = match self.network_ids.get(&key) {
             Some(id) => *id,
             None => {
@@ -834,9 +861,9 @@ fn child_layout(o: &mut Obj, v: &View, parent: Option<&View>) {
         o.insert("layoutPositioning".into(), json!("ABSOLUTE"));
     }
     for (k, w, h) in [("minSize", "minWidth", "minHeight"), ("maxSize", "maxWidth", "maxHeight")] {
-        if let Some(val) = v.get(k).and_then(|s| s.get("value")) {
+        if let Some((val, scale)) = v.find(k).and_then(|(s, scale)| Some((s.get("value")?, scale))) {
             for (axis, to) in [("x", w), ("y", h)] {
-                if let Some(x) = num(val, axis).filter(|x| *x > 0.0 && *x < 1e9) {
+                if let Some(x) = num(val, axis).and_then(|x| scaled(x, scale)).filter(|x| *x > 0.0 && *x < 1e9) {
                     o.insert(to.into(), json!(x));
                 }
             }
