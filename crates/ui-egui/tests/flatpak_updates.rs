@@ -3,7 +3,7 @@ fn finish_args(manifest: &str) -> Vec<&str> {
     manifest
         .split("finish-args:")
         .nth(1)
-        .unwrap()
+        .unwrap_or_default()
         .lines()
         .take_while(|line| line.is_empty() || line.starts_with(' ') || line.starts_with('#'))
         .filter_map(|line| line.trim().strip_prefix("- "))
