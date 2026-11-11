@@ -37,6 +37,9 @@ env_logger = { version = "0.11", default-features = false, features = ["auto-col
 [target.'cfg(windows)'.dependencies]
 craft-update = { workspace = true }
 windows = { version = "0.62", default-features = false, features = ["UI_ViewManagement", "System_UserProfile", "Foundation_Collections", "Gaming_Input"] }
+# The custom title bar's window styles (src/window_frame.rs): safe Win32 wrappers (MIT); the `user`
+# feature is User32.dll only. Same version as DesignCraft and PhotoCraft.
+winsafe = { version = "0.0.29", default-features = false, features = ["user"] }
 
 # The system colour scheme (org.freedesktop.portal.Settings): winit reports no theme on Linux and
 # the BSDs, so the interface's "system" mode follows the portal's instead. zbus comes in through

@@ -1810,6 +1810,7 @@ dependencies = [
  "windows",
  "winit",
  "winresource",
+ "winsafe",
  "zbus",
 ]
 
