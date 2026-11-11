@@ -235,6 +235,8 @@ static ROWS: &[Row] = &[
         "then the arrows move it, Cmd/Ctrl+arrows draw it out (Shift: farther), Enter selects, Escape closes; F8 kept")
         .reserved("Ctrl+Space switches the input method with some Chinese, Japanese and Korean input methods on Windows and Linux"),
     doc(Selection, "Select nested layers", &["Cmd"], &[], Gesture("Deep select"), "held while clicking or dragging"),
+    doc(Selection, "Pick select (while the keyboard box selection shows)", &["Tab"], &[], Gesture("Selection box: switch to pick select"),
+        "or the chord again; then Tab and Shift+Tab move the pick cursor between layers, Enter and Shift+Enter into and out of a layer, Space selects, Escape ends"),
     pin(Selection, "object.rename", &["F2"], &[]),
     pin(Selection, "select.area", &["F8"], &[]),
     // Edit
@@ -279,6 +281,7 @@ static ROWS: &[Row] = &[
     doc(Arrange, "Add auto layout", &["Shift+A"], &[], Bound("layout.add"), ""),
     doc(Arrange, "Remove auto layout", &["Alt+Shift+A"], &[], Bound("layout.remove"), ""),
     doc(Arrange, "Suggest auto layout", &["Ctrl+Shift+A"], &["Ctrl+Alt+Shift+A"], Bound("layout.suggest"), "was unbound"),
+    doc(Arrange, "Edit padding on all sides (from right panel)", &["Cmd"], &["Ctrl"], Gesture("Edit padding on all sides"), "held while clicking a padding field: the value typed goes to every side"),
     pin(Arrange, "distribute.horizontal", &["Ctrl+Alt+H"], &["Alt+Shift+H"]),
     pin(Arrange, "distribute.vertical", &["Ctrl+Alt+V"], &["Alt+Shift+V"]),
     pin(Arrange, "arrange.tidy", &["Ctrl+Alt+T"], &["Ctrl+Alt+Shift+T"]),
@@ -413,7 +416,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (134, 133, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (136, 135, 1, 0, 2, 57));
 }
 
 #[test]

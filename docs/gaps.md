@@ -18,7 +18,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 2 | Multiplayer and sharing are a preview, without accounts (**beta blocker**) | Feature | 42–84 | [collaboration-parity](collaboration-parity.md) |
 | 3 | No representative corpus checked against real Figma files | Fidelity | 15–30 | [target-app-parity](target-app-parity.md) |
 | 4 | Interaction fidelity not compared tool by tool | UI/UX | 40–60 | [ui-parity](ui-parity.md) |
-| 5 | Localization: English, reviewed Russian and Turkish, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian and Czech drafts; Turkish and Swedish catalogs; Arabic draft: 2,508 entries, native review and panel mirroring pending | Localization | 29–51 | [localization-parity](localization-parity.md) |
+| 5 | Localization: English, reviewed Russian and Turkish, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian and Czech drafts; Turkish and Swedish catalogs; Arabic draft: 2,508 entries, native review and mirrored panel rows pending (the window mirrors) | Localization | 29–51 | [localization-parity](localization-parity.md) |
 | 6 | Plugins: widgets without timers, a self-hosted directory but no public catalogue; Figma's plugins don't run | Ecosystem | 6–22 | [target-app-parity](target-app-parity.md) |
 | 7 | CPU canvas where Figma uses the GPU | Hardware/performance | 30–60 | [hardware-parity](hardware-parity.md) |
 | 8 | Platform QA: Linux and the browser left (Windows pass done 2026-10-11) | Stability/platforms | 10–20 | [hardware-parity](hardware-parity.md) |
@@ -209,15 +209,20 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 ### 5. Localization: English, reviewed Russian and Turkish, plus unreviewed drafts
 - **Missing:** native reviews of the Spanish, French, German, Brazilian Portuguese, Japanese,
   Korean, Simplified Chinese, Indonesian and Czech drafts and the Latin American Spanish
-  overlay, the strings added since each catalog was drafted (1–5% of each), the Arabic draft's native review and panel mirroring, Hindi and
+  overlay, the strings added since each catalog was drafted (1–5% of each), the Arabic draft's native review and mirrored rows inside the panels (the window mirrors since 2026-10-31), Hindi and
   Vietnamese, localized engine messages and number formatting; CJK UI text on the web without the
   craft-fonts CJK build.
+  Korean, Simplified Chinese, Traditional Chinese, Indonesian and Czech drafts and the Latin
+  American Spanish overlay, the strings added since each catalog was drafted (1–5% of each), the
+  Arabic draft's native review and panel mirroring, Hindi and Vietnamese, localized engine
+  messages and number formatting; CJK UI text on the web without the craft-fonts CJK build.
 - **Evidence (measured from source):** the layer landed 2026-10-11: catalogs in
-  `crates/ui-egui/locales/` (measured 2026-10-17: 1,680 UI keys plus 561 command labels and 31
-  menu wordings, 2,272 entries), Preferences ▸ Language, `pref.language`; `en.toml` is complete,
+  `crates/ui-egui/locales/` (measured 2026-11-03: 1,975 UI keys plus 641 command labels and 31
+  menu wordings, 2,647 entries), Preferences ▸ Language, `pref.language`; `en.toml` is complete,
   Spanish is held to completeness by the check, and the French, German, Brazilian Portuguese,
-  Japanese, Korean and Simplified Chinese machine drafts cover 95–99% (strings added since they
-  were drafted show English), with `es-419.toml` a Latin American overlay listing only what
+  Japanese, Korean, Simplified Chinese and Traditional Chinese machine drafts cover 95–100%
+  (the Traditional Chinese draft covers all 2,647 entries; strings added since the other drafts
+  were written show English), with `es-419.toml` a Latin American overlay listing only what
   differs from Spanish. Russian (reviewed and approved by VanTan, one/few/many integer plurals)
   covers 98.8%; Indonesian and Czech drafts, a Turkish catalog whose header says a native speaker
   reviewed it, and a Swedish catalog (with its command labels since 2026-10-17) cover 98.7–99.6% ([localization-parity](localization-parity.md#languages)).
@@ -384,8 +389,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Landed (2026-10-12):** several Bezier handles selected with Shift-click and dragged together,
   sharp points beside curved segments rounded, a stroke cap and join per point (canvas, PNG, SVG,
   PDF, outline stroke), the Pen outside edit mode connecting to its own points and continuing a
-  selected open path. Left: corner smoothing on vectors, corner radius and smoothing on boolean
-  groups that contain rectangles, per-point caps and joins on dashed, variable-width and brush
+  selected open path. Left: corner radius and smoothing on boolean groups that contain
+  rectangles, per-point caps and joins on dashed, variable-width and brush
   strokes.
 - **Landed (2026-10-11):** boolean groups are clicked where their result is (a click in a
   subtracted hole reaches what's behind; with the group or an operand selected its operands are
@@ -588,6 +593,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`) draft catalog: 1,975 UI strings, 641 command labels and 31 menu wordings, clean-room from the English source; zh-TW, zh-HK, zh-MO and zh-Hant read it, explicit Hans stays Simplified; Noto Sans CJK TC then Taiwan system faces; no bundled font; native review pending. Numbers unchanged |
 | 2026-10-31 | minor | Gap 10: library analytics list the layers and files using each style and variable; their insertions, detachments and modes stay on the missing list. |
 | 2026-10-31 | minor | Gap 15: the Controller menu names buttons as PlayStation and Switch controllers do; that item leaves the missing list. Estimate unchanged. Test: `present::tail_tests`. |
 | 2026-10-30 | minor | Gap 7: text reads only the fallback fonts it draws with: a face per fallback family and style, a file's bytes shared between families, the faces worked out once per style (first text laid out: 41 font files and 265 MiB read down to 3 files and 20 MiB on a Linux machine with Noto Sans CJK). Numbers unchanged |

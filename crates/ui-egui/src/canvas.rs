@@ -195,21 +195,37 @@ fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers
 /// labels, handles, comments, versions/branch/dev/live UI and the cursor.
 pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let rect = ui.max_rect();
-    app.canvas.rect = rect;
+    let old_rect = std::mem::replace(&mut app.canvas.rect, rect);
     let ctx = ui.ctx().clone();
     let ppp = ctx.pixels_per_point();
     let resp = ui.interact(rect, ui.scope_id().with("canvas"), Sense::click_and_drag());
     let key_box = app.ui.key_box;
     crate::a11y::canvas(&mut app.ui.nav, &resp, || key_box.map_or_else(|| describe(&app.session), describe_box));
-    if let Ok(ds) = app.session.ds_mut()
-        && ((ds.view.vw - f64::from(rect.width())).abs() > 0.5 || (ds.view.vh - f64::from(rect.height())).abs() > 0.5)
-    {
-        // Keep the centre; the first sizing after opening re-fits.
+    if let Ok(ds) = app.session.ds_mut() {
+        let resized = (ds.view.vw - f64::from(rect.width())).abs() > 0.5 || (ds.view.vh - f64::from(rect.height())).abs() > 0.5;
+        // The first sizing after opening re-fits.
         let first = ds.view.vw == 1200.0 && ds.view.vh == 800.0;
-        ds.view.vw = f64::from(rect.width());
-        ds.view.vh = f64::from(rect.height());
-        if first {
-            ds.zoom_to_fit();
+        // While a button is held that went down on the canvas (a click that selects shows the
+        // right panel, minimized, and a click that deselects hides it; the left panel and rail
+        // can appear too) the page point under a still pointer stays where it is: the gesture's
+        // own pointer events would otherwise map to another page point and the move handling
+        // would take that for a drag. `to_page` is `origin + (p - rect.min) / z` with
+        // `origin = c - vw / 2 / z`, so the centre moves by half the size change plus the
+        // rect's own move, over the zoom.
+        let held = resp.is_pointer_button_down_on() && !first && old_rect.is_finite();
+        let z = ds.view.zoom.max(1e-9);
+        let (dw, dh) = if resized { (f64::from(rect.width()) - ds.view.vw, f64::from(rect.height()) - ds.view.vh) } else { (0.0, 0.0) };
+        if resized {
+            // Otherwise keep the centre.
+            ds.view.vw = f64::from(rect.width());
+            ds.view.vh = f64::from(rect.height());
+            if first {
+                ds.zoom_to_fit();
+            }
+        }
+        if held {
+            ds.view.cx += (dw / 2.0 + f64::from(rect.min.x - old_rect.min.x)) / z;
+            ds.view.cy += (dh / 2.0 + f64::from(rect.min.y - old_rect.min.y)) / z;
         }
     }
     let own_cursor = input(app, ui, &resp);
@@ -219,7 +235,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let label = if documents {
         tr("Drop to open")
     } else if app.ui.right_tab == crate::RightTab::Inspect {
-        tr("Dev Mode only inspects: switch to Design (Shift+D) to edit")
+        tr("Developer Mode only inspects: switch to Design (Shift+D) to edit")
     } else {
         tr("Drop to import")
     };
@@ -312,11 +328,13 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     crate::live::draw(app, &painter, &ctx);
     crate::live::agent::draw(app, &painter, &ctx);
     crate::live::chat_box(app, &ctx);
-    crate::live::spotlight_banner(app, &ctx, rect);
+    // The other banners float below the strip that says the session is disconnected.
+    let banners = rect.with_min_y(rect.min.y + crate::live::connection_banner(app, &ctx, rect));
+    crate::live::spotlight_banner(app, &ctx, banners);
     crate::comments::popovers(app, &ctx);
-    crate::versions::preview_banner(app, &ctx, rect);
-    crate::branch_ui::banner(app, &ctx, rect);
-    crate::dev_mode::focus_bar(app, &ctx, rect);
+    crate::versions::preview_banner(app, &ctx, banners);
+    crate::branch_ui::banner(app, &ctx, banners);
+    crate::dev_mode::focus_bar(app, &ctx, banners);
     // The cursor: the tool's, unless something on the canvas with its own has the pointer.
     app.canvas.cursor = None;
     if let (true, Some(at)) = (own_cursor && resp.hovered(), ctx.input(|i| i.pointer.hover_pos())) {

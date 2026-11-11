@@ -2,7 +2,7 @@ use super::layer::{cap_name, own_text, svg_path, valid_size};
 use super::paint::{paint, stroke};
 use super::{Affine, Kv, Mapper, NO_STYLE, Obj, Point, Value, View, generated_record, guid, json, matrix, network, num, rows};
 use figcraft_doc::geom::kurbo::{BezPath, PathEl, Rect, Shape};
-use figcraft_doc::{RouteEnd, Routing, Side, route_points};
+use figcraft_doc::{ConnectorPath, MAX_RUNS, RouteEnd, Routing, Side, attach_points, attached_sides, route_along};
 
 /// How a connector imports: from its saved snapshot (`terminal`: as one vector, no room for its
 /// label), or drawn from its ends, as a frame with its line and `label` when it has one.
@@ -48,7 +48,8 @@ impl<'a> Mapper<'a> {
 
     /// A connector's end caps, and when it has no saved outline or network its line between its
     /// ends (free points, or a sibling layer): straight to the point given on the layer (its
-    /// centre unless given), or elbowed or curved from a side of it, as a board connector runs.
+    /// centre unless given), or elbowed or curved from a side of it, as a board connector runs;
+    /// an elbow saved with its path (FigJam's control points) runs along it (#1910).
     /// Returns the middle of that line by length, in the connector's own coordinates.
     pub(super) fn connector(&mut self, o: &mut Obj, v: &View<'a>, space: Affine) -> Option<Point> {
         for (from, to) in [("connectorStartCap", "strokeCapStart"), ("connectorEndCap", "strokeCapEnd")] {
@@ -77,8 +78,13 @@ impl<'a> Mapper<'a> {
                     let (w, h) = n.get("size").map_or((0.0, 0.0), |s| (num(s, "x").unwrap_or(0.0), num(s, "y").unwrap_or(0.0)));
                     let at = e.get("relativePosition").and_then(|r| Some((num(r, "x")?, num(r, "y")?)));
                     let t = n.get("transform").and_then(matrix).unwrap_or_default();
+                    // An automatic magnet (`AUTO`: the side is picked when the connector is drawn;
+                    // `CENTER`: the end aims at the layer's middle) attaches to the side facing the
+                    // other end, as a board connector drawn here does; the file's `relativePosition`
+                    // is not where such an end sits (#1909).
+                    let automatic = matches!(e.get("magnet").and_then(Kv::str), Some("AUTO" | "CENTER"));
                     match routing {
-                        Routing::Straight => {
+                        Routing::Straight if !automatic => {
                             let (rx, ry) = at.unwrap_or((0.5, 0.5));
                             RouteEnd::Point(t * Point::new(w * rx, h * ry))
                         }
@@ -94,11 +100,13 @@ impl<'a> Mapper<'a> {
             };
             ok.then_some(end)
         };
-        let Some(pts) = end("connectorStart").zip(end("connectorEnd")).and_then(|(a, b)| route_points(a, b, routing)) else {
+        let ends = end("connectorStart").zip(end("connectorEnd"));
+        let path = ends.filter(|_| routing == Routing::Elbow).and_then(|(a, b)| saved_runs(v, a, b));
+        let Some(pts) = ends.and_then(|(a, b)| route_along(a, b, routing, path.as_ref())) else {
             self.warn("connectors whose ends can't be placed are empty");
             return None;
         };
-        if routing != Routing::Straight {
+        if routing != Routing::Straight && path.is_none() {
             self.warn("elbowed and curved connectors without a saved path follow FigCraft's own routing");
         }
         // A curved route is one curve: its ends and the two control points between them.
@@ -277,7 +285,7 @@ impl<'a> Mapper<'a> {
         if let Some(name) = v.str("name") {
             vector.insert("name".into(), json!(if nested { format!("{name} vector") } else { name.to_string() }));
         }
-        let line_view = View::of(line).with([line_style]);
+        let line_view = View::of(line).with([(line_style, 1.0)]);
         self.common(&mut vector, &line_view, "VECTOR", space, None);
         self.geometry(&mut vector, &line_view);
         for (from, to) in [("connectorStartCap", "strokeCapStart"), ("connectorEndCap", "strokeCapEnd")] {
@@ -320,7 +328,7 @@ impl<'a> Mapper<'a> {
             }
             return children;
         };
-        let text_view = View::of(text_frame).with([text_style]);
+        let text_view = View::of(text_frame).with([(text_style, 1.0)]);
         let Some(characters) = text_view.get("textData").and_then(|d| d.get("characters")).and_then(Kv::str).filter(|s| !s.trim().is_empty()) else {
             return children;
         };
@@ -351,7 +359,7 @@ impl<'a> Mapper<'a> {
             self.add_connector_text(&mut children, rest_id, characters, text_size, composed_text_transform, &text_view);
             return children;
         };
-        let background_view = View::of(background).with([background_style]);
+        let background_view = View::of(background).with([(background_style, 1.0)]);
         if !background_view.list("fillPaints").is_empty() {
             if self.count >= self.budget() {
                 self.warn(format!("the file has more than {} layers; connector label background was skipped", self.max_nodes));
@@ -407,7 +415,51 @@ pub(super) fn connector_has_saved_label(v: &View<'_>) -> bool {
             .is_some_and(|s| !s.trim().is_empty())
 }
 
-/// The side of its layer a connector end leaves from: the `magnet` the file names, else the edge
+/// The path a FigJam elbow connector was saved with: its `connectorControlPoints`, one per run
+/// between the first and the last, each a point on its run (in the connector's parent's
+/// coordinates, like its ends) with the run's axis; the first run leaves the start's side and the
+/// last arrives at the end's, so neither is saved. `None` without any, or when they don't make
+/// such a path: a point off both axes, two runs in a row the same way, a first or last run that
+/// would leave or arrive sideways to its side, or more runs than a hand could make here.
+fn saved_runs(v: &View<'_>, from: RouteEnd, to: RouteEnd) -> Option<ConnectorPath> {
+    let saved = v.list("connectorControlPoints");
+    if saved.is_empty() || saved.len() + 2 > MAX_RUNS {
+        return None;
+    }
+    let (p0, p1) = attach_points(from, to);
+    let mid = p0.midpoint(p1);
+    let mut at = Vec::with_capacity(saved.len());
+    let (mut first, mut last) = (None, None);
+    for p in saved {
+        let pos = p.get("position").and_then(|q| Some(Point::new(num(q, "x")?, num(q, "y")?)))?;
+        let (ax, ay) = p.get("axis").and_then(|q| Some((num(q, "x")?, num(q, "y")?)))?;
+        let sideways = match (ax != 0.0, ay != 0.0) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => return None,
+        };
+        if last == Some(sideways) {
+            return None;
+        }
+        first.get_or_insert(!sideways);
+        last = Some(sideways);
+        at.push(if sideways { pos.y - mid.y } else { pos.x - mid.x });
+    }
+    // The run through each end goes the way its side faces, out of the object: the first leaves
+    // the start's side for the first saved run, the last arrives at the end's from the last saved
+    // run. One along the side, or back into the object, doesn't.
+    let (across, last) = (first?, last?);
+    let (&a0, &a1) = (at.first()?, at.last()?);
+    // Where the run from `p` (`sideways`: going across) meets the saved run at `v`.
+    let onto = |sideways: bool, p: Point, v: f64| if sideways { Point::new(mid.x + v, p.y) } else { Point::new(p.x, mid.y + v) };
+    let out_of = |s: Option<Side>, p: Point, q: Point| s.is_none_or(|s| (q - p).dot(s.normal()) > 0.0);
+    let (s0, s1) = attached_sides(from, to);
+    let fits = out_of(s0, p0, onto(across, p0, a0)) && out_of(s1, p1, onto(!last, p1, a1));
+    fits.then_some(ConnectorPath::Runs { across, at })
+}
+
+/// The side of its layer a connector end leaves from: the `magnet` the file names (`AUTO` and
+/// `CENTER`: the side facing the other end, whatever `relativePosition` says; #1909), else the edge
 /// its point on the layer (`relativePosition`, 0–1) lies on, else the side facing the other end.
 fn side(e: &Kv<'_>, at: Option<(f64, f64)>) -> Side {
     match e.get("magnet").and_then(Kv::str) {
@@ -415,6 +467,7 @@ fn side(e: &Kv<'_>, at: Option<(f64, f64)>) -> Side {
         Some("RIGHT") => Side::Right,
         Some("BOTTOM") => Side::Bottom,
         Some("LEFT") => Side::Left,
+        Some("AUTO" | "CENTER") => Side::Auto,
         _ => match at {
             Some((x, _)) if x <= 0.0 => Side::Left,
             Some((x, _)) if x >= 1.0 => Side::Right,

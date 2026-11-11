@@ -8,9 +8,16 @@ pub const FLATTEN_TOL: f64 = 0.05;
 /// The most flattened points a path is measured with; longer paths are refused.
 pub const MAX_SAMPLES: usize = 40_000;
 
-/// Every coordinate is finite and of a sane magnitude.
+/// How far out a measured coordinate may lie. The shape builders hold their sizes, radii and
+/// angles to [`crate::MAX_COORD`], so a path built at the cap has its points there and the
+/// control points of its curves a little past them (the cubics approximating an arc reach past
+/// the arc's box by up to about a tenth of the radius). Half as much again keeps every built path
+/// measurable and still refuses the absurd.
+pub const MAX_MEASURED_COORD: f64 = crate::MAX_COORD * 1.5;
+
+/// Every coordinate is finite and of a sane magnitude (within [`MAX_MEASURED_COORD`]).
 pub fn finite_path(path: &BezPath) -> bool {
-    let ok = |p: &Point| p.x.is_finite() && p.y.is_finite() && p.x.abs() < 1e9 && p.y.abs() < 1e9;
+    let ok = |p: &Point| p.x.is_finite() && p.y.is_finite() && p.x.abs() <= MAX_MEASURED_COORD && p.y.abs() <= MAX_MEASURED_COORD;
     path.elements().iter().all(|el| match el {
         PathEl::MoveTo(p) | PathEl::LineTo(p) => ok(p),
         PathEl::QuadTo(a, b) => ok(a) && ok(b),
@@ -66,7 +73,7 @@ impl Polyline {
     /// The nearest point to `p`: (t by length, distance).
     pub fn nearest(&self, p: Point) -> Option<(f64, f64)> {
         let len = self.length();
-        if len <= 1e-9 {
+        if len <= 1e-9 || !(p.x.is_finite() && p.y.is_finite()) {
             return None;
         }
         let mut best: Option<(f64, f64)> = None;

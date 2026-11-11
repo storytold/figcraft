@@ -59,8 +59,10 @@ queue. A screenshot settles on three completed, presented UI frames (a discarded
 not count), then is issued, and expires once at its 60 s deadline if no paint arrives. `window.new`
 remains an error at once (`window 0 is minimised or hidden: …`) instead of waiting for the window
 to show; `ui.render` draws the document without it. Under Wayland the app can't tell that its
-window is minimised: where the compositor then stops drawing it, a request waits for the window
-and gets the 60 s timeout error. The browser's shared eframe runner does not implement
+window is minimised, and the compositor stops asking it to draw: a window that draws no frame for
+0.2 s while a request waits for it is treated as hidden, so the requests that act on the app's
+state are answered without a frame (about half a second each), while `ui.screenshot` and
+`ui.input` keep waiting for one. The browser's shared eframe runner does not implement
 `RequestPaintWhileHidden` yet, so hidden-tab screenshots and injected input are unqualified there.
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent
@@ -192,9 +194,9 @@ layout (including grid `columnTracks` / `rowTracks`), sizing, `minWidth` / `maxW
 children), `gridCell` (a grid auto layout child's column, row and spans), clip, text properties,
 component/instance links, overrides, `slot` (a slot layer's property name), boundVariables, interactions, exports,
 `devStatus` (handoff status), `devChanged` (changed since it was marked ready for dev),
-`annotations` (Dev Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
+`annotations` (Developer Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
 links to code: `[{language, importPath, name, template}]`), `devResources` (links for developers,
-its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Dev Mode measurements
+its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Developer Mode measurements
 starting from the layer: `[{to} | {side}]`), `pluginData` (layer data written with
 `node.set {props: {pluginData: {key: value}}}`, pages included: `{key: value}`, values as strings;
 only when there is some). The auto layout props
@@ -377,7 +379,7 @@ closes it), `commentDraft` (`{x, y}`: start a new comment there), `commentFilter
 (`date|page`), `commentSearch` (the panel's search text), `commentReply` (the open thread's reply
 text, focused with the cursor at its end: an `@` there shows the mention picker), `commentEdit` (a
 message index of the open thread to edit, 0 for the first; `null` stops), `presentComments` (bool:
-the presenter shows the presented frame's comments, also Shift+C there). Dev Mode: `devCompare` (a
+the presenter shows the presented frame's comments, also Shift+C there). Developer Mode: `devCompare` (a
 frame or section id opens the Compare changes view, like `dev.compare {id, show:
 true}`; `null` closes it) with `devCompareVersion` (a version id to compare with; `null`: when it
 was marked ready for dev), `devCompareMode` (`sideBySide|overlay`) and `devCompareSplit` (the
@@ -463,11 +465,15 @@ app. It is opt-in: the page installs `window.figcraft` only when its URL has a `
 |---|---|
 | `figcraft.request(method, params)` | any control method of this document → its `result` |
 | `figcraft.execute(command, params)` | `engine.execute` |
-| `figcraft.commands()` / `figcraft.inspect()` | `engine.commands` / the inspect method |
-| `figcraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline) |
+| `figcraft.commands()` | `engine.commands` |
+| `figcraft.docInspect(params)` / `figcraft.uiInspect(params)` | `document.inspect` / `ui.inspect` |
+| `figcraft.inspect()` | `document.inspect` (the name before `docInspect`) |
+| `figcraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline, also as `data`) |
 | `figcraft.openFile(name, bytes)` | runs `file.open` with the bytes as `data` and resolves with its result |
 | `figcraft.captureDownloads(on)` | while on, a save or export is kept in the page instead of downloaded |
 | `figcraft.files()` / `figcraft.readFile(name)` | the kept files (`{path, size}`) / one of them as a `Uint8Array` |
 
 Errors reject with an `Error` carrying the method's message. Requests run on the UI's next frame, so a
 hidden tab (whose frames the browser pauses) answers when it is shown again.
+
+`request`, `execute`, `commands`, `docInspect`, `uiInspect` and `screenshot` come from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app. A call the app does not answer within 30 seconds rejects, and the app drops it unrun if it had not started it. `openFile`, `captureDownloads`, `files`, `readFile` and `inspect` are FigCraft's own.

@@ -58,7 +58,7 @@ pub(super) fn spacing_input(ui: &mut Ui, field: &SpacingField, value: &str, widt
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
     let numeric = value.trim_end_matches('%').parse::<f64>().ok();
-    match widgets::scrub(ui, field.id, &response, numeric, 1.0) {
+    match widgets::scrub(ui, field.id, &response, numeric, 1.0, true) {
         Some(FieldEdit::Scrub(v, done)) => Some(SpacingEdit::Scrub(v, done)),
         _ => typed.map(SpacingEdit::Typed),
     }

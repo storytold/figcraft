@@ -53,7 +53,7 @@ pub const UI_COMMANDS: &[&str] = &[
 pub fn dev_mode_refuses(app: &mut FigApp, id: &str) -> bool {
     let refused = app.ui.right_tab == crate::RightTab::Inspect && !figcraft_engine::devinspect::dev_mode_allows(id);
     if refused {
-        app.toast(tr("Dev Mode only inspects: switch to Design (Shift+D) to edit"));
+        app.toast(tr("Developer Mode only inspects: switch to Design (Shift+D) to edit"));
     }
     refused
 }
@@ -212,11 +212,7 @@ pub fn invoke(app: &mut FigApp, id: &str) {
         }
         "edit.paste" => paste(app, None, None),
         "file.close" if app.session.ds().is_ok_and(|d| d.is_dirty() && d.branch_of.is_none()) => {
-            let save = pretty_shortcut(crate::shortcuts::shortcut("file.save").unwrap_or(""));
-            app.toast(trf(
-                "Unsaved changes: save first ({save}), or close the tab with {alt}-click to discard",
-                &[("save", &save), ("alt", &pretty_shortcut("Alt"))],
-            ));
+            crate::windows::ask_close_tab(app, app.session.active);
         }
         _ => {
             app.run(id, json!({}));

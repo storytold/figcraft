@@ -8,10 +8,12 @@ use crate::params::{boolean, get, num, num_or, req_index, req_num, req_string, s
 use crate::tools::ToolId;
 use crate::{EngineError, Result, Session, ViewState, bad, spec};
 
+/// The active document's view state, for changing it.
 fn view(s: &mut Session) -> Result<&mut ViewState> {
     Ok(&mut s.ds_mut()?.view)
 }
 
+/// Set one of a view's on/off settings from `on`, or toggle it when `on` is absent.
 fn flag(s: &mut Session, p: &Value, f: fn(&mut ViewState) -> &mut bool) -> Result<Value> {
     let v = view(s)?;
     let slot = f(v);
@@ -90,6 +92,7 @@ fn pixel_preview(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"on": v.pixel_preview, "scale": v.pixel_scale}))
 }
 
+/// Zoom the active document to `z` about the view's centre, keeping that point in place.
 fn zoom_to(s: &mut Session, z: f64) -> Result<Value> {
     let v = view(s)?;
     let c = (v.cx, v.cy);
@@ -114,6 +117,7 @@ fn pan(s: &mut Session, p: &Value) -> Result<Value> {
 /// Figma's zoom steps.
 const STEPS: &[f64] = &[0.02, 0.03, 0.06, 0.13, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0];
 
+/// The next zoom step above (`up`) or below `z` in Figma's fixed steps.
 fn step(z: f64, up: bool) -> f64 {
     if up {
         STEPS.iter().copied().find(|s| *s > z * 1.001).unwrap_or(256.0)
@@ -141,6 +145,7 @@ fn zoom_at(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"zoom": v.zoom, "cx": v.cx, "cy": v.cy}))
 }
 
+/// Select and fit the next (`dir` 1) or previous (-1) top-level frame on the page.
 fn zoom_frame(s: &mut Session, dir: i64) -> Result<Value> {
     let ds = s.ds()?;
     let frames = ds.doc.top_frames(ds.page);
@@ -161,6 +166,7 @@ fn zoom_frame(s: &mut Session, dir: i64) -> Result<Value> {
     Ok(json!({"frame": f}))
 }
 
+/// Move to the next (`dir` 1) or previous (-1) page, skipping dividers, and fit it.
 fn page_step(s: &mut Session, dir: i64) -> Result<Value> {
     let ds = s.ds()?;
     let pages = &ds.doc.pages;
@@ -183,6 +189,7 @@ fn page_step(s: &mut Session, dir: i64) -> Result<Value> {
     Ok(json!({"page": pg}))
 }
 
+/// Ask the UI to open or toggle the panel or dialog named `kind`.
 fn ui(s: &mut Session, kind: &str) -> Result<Value> {
     s.request_ui(kind, json!({}));
     ok()
@@ -210,12 +217,14 @@ fn ui_scale_step(s: &mut Session, dir: i32) -> Result<Value> {
     Ok(json!({"scale": s.prefs.ui_scale}))
 }
 
+/// Set one of the preferences' on/off settings from `on`, or toggle it when `on` is absent.
 fn pref(s: &mut Session, p: &Value, f: fn(&mut crate::Prefs) -> &mut bool) -> Result<Value> {
     let slot = f(&mut s.prefs);
     *slot = boolean(p, "on").unwrap_or(!*slot);
     Ok(json!({"on": *slot}))
 }
 
+/// Switch the tool, unless the file is read-only and this tool needs editing.
 pub(crate) fn tool(s: &mut Session, t: ToolId) -> Result<Value> {
     // A file you can't edit now (view only, or on its way to a server): moving around only, and
     // commenting with a comment link.
@@ -226,6 +235,7 @@ pub(crate) fn tool(s: &mut Session, t: ToolId) -> Result<Value> {
     Ok(json!({"tool": t.id()}))
 }
 
+/// The View menu's commands and their parameters.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("view.zoomIn", "Zoom in", "{}", false, |s, _| {
@@ -337,7 +347,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.design", "Design panel", "{}", false, |s, _| ui(s, "panel.design")),
         spec!("view.prototype", "Prototype panel", "{}", false, |s, _| ui(s, "panel.prototype")),
         spec!("view.designPrototype", "Switch between Design and Prototype", "{}", false, |s, _| ui(s, "panel.designPrototype")),
-        spec!("view.devMode", "Dev Mode", "{}", false, |s, _| ui(s, "panel.devMode")),
+        spec!("view.devMode", "Developer Mode", "{}", false, |s, _| ui(s, "panel.devMode")),
         spec!("view.leftSidebar", "Show/Hide left sidebar", "{}", false, |s, _| ui(s, "panel.leftSidebar")),
         spec!(
             "view.panelWidths",
@@ -421,7 +431,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "pref.uiScaleUp",
             "Larger interface",
-            "{}  the next of the Preferences sizes above the current one (the interface size keys of Accessibility at Figma); at the largest it stays → {scale}",
+            "{}  the next of the Preferences sizes above the current one; at the largest it stays → {scale}",
             false,
             |s, _| ui_scale_step(s, 1)
         ),
@@ -480,7 +490,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "pref.language",
             "Interface language",
-            "{language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|vi|zh-Hans|…; else English}",
+            "{language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|vi|zh-Hans|zh-Hant|…; else English}",
             false,
             |s, p| {
                 let lang = req_string("pref.language", p, "language")?;
@@ -527,6 +537,42 @@ pub fn specs() -> Vec<CommandSpec> {
                     crate::board::require(s, &format!("tool.{}", t.id()))?;
                 }
                 tool(s, t)
+            }
+        ),
+        spec!(
+            "tool.crosshair",
+            "Move the placement crosshair",
+            "{dx?, dy? (arrow-key steps, e.g. 1 or -1), big? (the large nudge, like Shift)} — the arrows with a shape or frame tool chosen and nothing selected: the first shows the crosshair in the middle of the view, the next move it by the nudge amount; Enter (`tool.place`) puts the object there",
+            false,
+            |s, p| {
+                if !s.tool.tool.draws_shape() {
+                    return Err(EngineError::Disabled("tool.crosshair".into(), "choose a shape or frame tool first".into()));
+                }
+                let step = if boolean(p, "big").unwrap_or(false) { s.prefs.nudge_big } else { s.prefs.nudge_small };
+                let dir = |k| num(p, k).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(-100.0, 100.0) * step;
+                let (dx, dy) = (dir("dx"), dir("dy"));
+                let (uid, page, centre, half) = {
+                    let ds = s.ds()?;
+                    let z = ds.view.zoom.max(1e-6);
+                    (ds.uid, ds.page, figcraft_geom::Point::new(ds.view.cx, ds.view.cy), (ds.view.vw / z / 2.0, ds.view.vh / z / 2.0))
+                };
+                // "It will appear in the middle of the viewport": the first arrow shows it there (a
+                // crosshair left on another page or document starts over).
+                let at = match s.crosshair() {
+                    Some(c) => figcraft_geom::Point::new(c.x + dx, c.y + dy),
+                    None => centre,
+                };
+                s.tool.place_at = Some(at);
+                s.tool.place_on = Some((uid, page));
+                if let Ok(ds) = s.ds_mut() {
+                    // "Move the crosshair around the canvas": nudged past an edge of the view, the
+                    // view pans by the overshoot to keep it in sight.
+                    let v = &mut ds.view;
+                    v.cx += (at.x - (v.cx + half.0)).max(0.0) + (at.x - (v.cx - half.0)).min(0.0);
+                    v.cy += (at.y - (v.cy + half.1)).max(0.0) + (at.y - (v.cy - half.1)).min(0.0);
+                    ds.revision += 1;
+                }
+                Ok(json!({"x": at.x, "y": at.y}))
             }
         ),
         spec!(

@@ -1,8 +1,8 @@
 use super::common::{style_fields, unsupported_decoration_look};
 use super::{
     Affine, BezPath, Bound, Exporter, Fields, Kv, ListStyle, MAX_CANVAS, MAX_CHARS, MAX_NETWORK, Node, NodeKind, Paint, StrokeAlign, StrokeCap,
-    StrokeJoin, TextAlignH, TextAlignV, TextAutoResize, TextData, TextStyle, VectorNetwork, WindingRule, arr, b, cap_name, e, finite, fl, int,
-    join_name, network, o, path_blob, s, u, xy,
+    StrokeJoin, TextAlignH, TextAlignV, TextAutoResize, TextData, TextDirection, TextStyle, VectorNetwork, WindingRule, arr, b, cap_name, e, finite,
+    fl, int, join_name, network, o, path_blob, s, u, xy,
 };
 
 impl<'d> Exporter<'d> {
@@ -56,16 +56,24 @@ impl<'d> Exporter<'d> {
         }
         let spans = td.spans();
         let mut table: Vec<&TextStyle> = Vec::new();
+        // Each distinct style once, found by its serialized form rather than by comparing it
+        // with every earlier one (quadratic in the number of distinct styles).
+        let mut index: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         let mut span_ids = Vec::with_capacity(spans.len());
         for (_, _, st) in &spans {
             span_ids.push(if **st == td.style {
                 0
             } else {
-                let i = table.iter().position(|t| *t == *st).unwrap_or_else(|| {
-                    table.push(st);
-                    table.len() - 1
-                });
-                i as u32 + 1
+                match serde_json::to_string(st) {
+                    Ok(key) => *index.entry(key).or_insert_with(|| {
+                        table.push(st);
+                        table.len() as u32
+                    }),
+                    Err(_) => {
+                        table.push(st);
+                        table.len() as u32
+                    }
+                }
             });
         }
         let mut chars = String::new();
@@ -128,11 +136,16 @@ impl<'d> Exporter<'d> {
             let listed = *l != ListStyle::None;
             let begins = first(i, l);
             let start = starts.get(i).copied().unwrap_or(0);
+            let direction = match td.para_list(i).direction {
+                TextDirection::Auto => "AUTO",
+                TextDirection::Ltr => "LTR",
+                TextDirection::Rtl => "RTL",
+            };
             o(vec![
                 ("lineType", e(ty)),
                 ("styleId", int(0)),
                 ("indentationLevel", int(i64::from(listed))),
-                ("sourceDirectionality", e("AUTO")),
+                ("sourceDirectionality", e(direction)),
                 ("listStartOffset", int(i64::from(start))),
                 ("isFirstLineOfList", b(begins)),
             ])
@@ -257,7 +270,7 @@ impl<'d> Exporter<'d> {
             if net.regions.iter().any(|r| r.winding != winding) {
                 self.warn("vectors whose filled areas use different winding rules use the first one's in their outline");
             }
-            self.geometry("fillGeometry", &net.fill_path(), winding, f);
+            self.geometry("fillGeometry", &figcraft_doc::geometry::drawn_network(net, n.corners.smoothing).fill_path(), winding, f);
         }
     }
 
@@ -309,7 +322,7 @@ impl<'d> Exporter<'d> {
             self.geometry("strokeGeometry", &ring, WindingRule::EvenOdd, f);
         } else if sp.align == StrokeAlign::Center {
             let path = match &n.kind {
-                NodeKind::Vector { network } => Some(network.stroke_path()),
+                NodeKind::Vector { .. } => figcraft_doc::geometry::stroke_geometry(n),
                 NodeKind::Text(_) => None,
                 _ => figcraft_doc::geometry::shape_path(n),
             };

@@ -33,6 +33,36 @@ pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
 pub use derived::route;
 pub(crate) use derived::{settle_routes, settle_stamps, settle_text, stamp_target};
+
+/// The topmost sticky or shape at `p` on `page`, other than `except`, sections and frames looked
+/// into: what a "+" handle dragged onto it joins (#1919).
+pub fn sticky_or_shape_at(doc: &Document, page: NodeId, p: Point, except: Option<NodeId>) -> Option<NodeId> {
+    fn find(doc: &Document, id: NodeId, p: Point, except: Option<NodeId>, depth: usize) -> Option<NodeId> {
+        let n = doc.node(id)?;
+        for c in n.children.iter().rev() {
+            let Some(k) = doc.node(*c) else { continue };
+            if !k.visible {
+                continue;
+            }
+            match k.board {
+                Some(BoardItem::Sticky { .. } | BoardItem::Shape { .. }) => {
+                    if Some(*c) != except && doc.world_bounds(*c).is_some_and(|b| b.contains(p)) {
+                        return Some(*c);
+                    }
+                }
+                // Not a board object of its own (a section, a frame): what is inside it may be.
+                None if depth < 32 => {
+                    if let Some(hit) = find(doc, *c, p, except, depth + 1) {
+                        return Some(hit);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    find(doc, page, p, except, 0)
+}
 pub use edit::label_of;
 pub(crate) use edit::{copied_items, copy_map, rejoin};
 use edit::{label_cmd, set_color, set_style};
@@ -46,7 +76,7 @@ pub use reshape::selected_connector_handles;
 /// Why a board command refuses on a design file.
 pub const NEEDS_BOARD: &str = "this is for boards: make one with File ▸ New board";
 /// Why prototyping and Dev Mode refuse on a board.
-pub const NOT_ON_BOARDS: &str = "boards have no prototypes or Dev Mode: use a design file for those";
+pub const NOT_ON_BOARDS: &str = "boards have no prototypes or Developer Mode: use a design file for those";
 
 /// A sticky note's side (it grows taller for long notes).
 pub const STICKY: f64 = 200.0;
@@ -114,7 +144,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.addConnected",
             "Add connected shape",
-            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector}  the next one of the same kind, size and colour on that side, joined by a connector",
+            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), at? ([x, y] on the page: the next one's centre, anywhere, instead of its place on that side; the connector then leaves by `side` and arrives by the side facing it), edit? (start typing in it; default false)} → {id, text, connector}  the next one of the same kind, size and colour on that side, joined by a connector",
             true,
             add_connected
         ),

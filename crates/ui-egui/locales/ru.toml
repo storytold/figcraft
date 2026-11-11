@@ -1,8 +1,9 @@
 # FigCraft interface strings: Russian.
 # Wording reviewed and approved by VanTan.
 # Strings added since that review (2026-10-20) are a machine draft awaiting review.
-# Keep Frame, Dev Mode and Smart animate as familiar tool names.
+# Keep Frame and Smart animate as familiar tool names.
 # See docs/translating.md; plural forms follow Russian integer rules.
+# The Developer Mode label (2026-11-07) is machine-translated and awaits review.
 
 [meta]
 name = "Русский"
@@ -416,8 +417,8 @@ name = "Русский"
 "Detach styles" = "Отвязать стили"
 "Detach variable" = "Отвязать переменную"
 "Details" = "Подробности"
-"Dev Mode" = "Dev Mode"
 "Dev resources" = "Ресурсы для разработки"
+"Developer Mode" = "Режим разработчика"
 "Development" = "Разработка"
 "Device" = "Устройство"
 "Device at 100%" = "Устройство в масштабе 100%"
@@ -1488,7 +1489,6 @@ name = "Русский"
 "This page keeps the owner token only while it is open. Copy it to manage the file later: it is a password for this file and won't be shown again." = "Эта страница хранит токен владельца, только пока она открыта. Скопируйте токен, чтобы управлять файлом позже: это пароль к файлу, он больше не будет показан."
 "This condition is edited as an expression" = "Это условие редактируется как выражение"
 "This file" = "Этот файл"
-"This file has unsaved changes" = "В файле есть несохранённые изменения"
 "This file is on {server}, open only to you. Share it to let others in with a new code." = "Файл находится на {server} и доступен только вам. Включите общий доступ, чтобы пригласить других по новому коду."
 "This file is too large to join here (up to {mb} MB)" = "Этот файл слишком большой, чтобы подключиться здесь (до {mb} МБ)"
 "This file uses fonts that aren't installed on this computer. Their text is drawn in a fallback font until you install them." = "В этом файле используются шрифты, не установленные на этом компьютере. Их текст отрисовывается запасным шрифтом, пока вы их не установите."
@@ -1545,8 +1545,6 @@ name = "Русский"
 "Unresolve" = "Снова открыть"
 "Unsaved changes" = "Несохранённые изменения"
 "Unsaved changes in {names}. Save them before closing?" = "Несохранённые изменения в {names}. Сохранить их перед закрытием?"
-"Unsaved changes: save first ({save}), or close the tab with {alt}-click to discard" = "Есть несохранённые изменения: сохраните ({save}) или закройте вкладку нажатием с {alt}, чтобы отбросить их"
-"Unsaved changes: save first, or close again with {key} to discard" = "Есть несохранённые изменения: сохраните или закройте ещё раз с {key}, чтобы отбросить их"
 "Up" = "Вверх"
 "Update plugin" = "Обновить плагин"
 "Update" = "Обновить"
@@ -2430,7 +2428,7 @@ name = "Русский"
 "view.contextMenu" = "Показать контекстное меню"
 "view.design" = "Панель дизайна"
 "view.designPrototype" = "Переключить дизайн/прототип"
-"view.devMode" = "Dev Mode"
+"view.devMode" = "Режим разработчика"
 "view.frameOutlines" = "Контуры Frame"
 "view.get" = "Получить вид"
 "view.layers" = "Панель слоёв"

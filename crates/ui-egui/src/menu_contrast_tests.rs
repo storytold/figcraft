@@ -1,8 +1,15 @@
-//! Panel dropdowns (the prototype device picker, Preferences, blend modes…) draw on the theme's
-//! popup fill, so their rows' text must read on it in both themes (#972): drawn headless.
+//! Panel dropdowns (the prototype device picker, Preferences, blend modes…), a file tab's menu and
+//! the board bar's shape menu draw on the theme's popup fill, so what is in them must read on it
+//! in both themes (#972): drawn headless.
 
+use egui::accesskit::Node;
+use egui::epaint::ColorMode;
 use egui::{Color32, Event, Order, PointerButton, Pos2, RawInput, Rect, Shape, pos2, vec2};
+use figcraft_doc::BoardShape;
+use figcraft_engine::Session;
+use serde_json::json;
 
+use crate::present_tests::Ui;
 use crate::right::{menu_check, menu_item, menu_popup};
 use crate::theme::{self, Tokens};
 
@@ -79,6 +86,103 @@ fn dropdown_rows_read_on_the_popup_in_both_themes() {
             };
             let ratio = color(*col).contrast(fill);
             assert!(ratio >= min, "{label} at {ratio:.2}:1 on the popup (dark {}): {texts:?}", tokens.dark);
+        }
+    }
+}
+
+/// The whole app headless on `s` in the `dark` or light theme, with windows of their own allowed
+/// (a tab offers Open in new window only then); the theme's tokens.
+fn app(mut s: Session, dark: bool) -> (Ui, Tokens) {
+    s.execute(if dark { "view.themeDark" } else { "view.themeLight" }, &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.set_embed_viewports(false);
+    u.frame(vec![]);
+    let t = Tokens::get(&u.ctx);
+    assert_eq!(t.dark, dark, "the app took the theme");
+    (u, t)
+}
+
+fn click(u: &mut Ui, at: Pos2, button: PointerButton) {
+    for pressed in [true, false] {
+        u.frame(vec![Event::PointerMoved(at), Event::PointerButton { pos: at, button, pressed, modifiers: Default::default() }]);
+    }
+}
+
+/// The pointer away from the open menu until its fade-in is over: that frame's output.
+fn settle(u: &mut Ui) -> egui::FullOutput {
+    for _ in 0..30 {
+        u.frame(vec![Event::PointerMoved(pos2(1430.0, 600.0))]);
+    }
+    u.frame_output(vec![])
+}
+
+/// The AccessKit nodes on screen.
+fn nodes(u: &mut Ui) -> Vec<Node> {
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    u.frame_output(vec![]).platform_output.accesskit_update.expect("an AccessKit update").nodes.into_iter().map(|(_, n)| n).collect()
+}
+
+fn bounds(n: &Node) -> Rect {
+    let b = n.bounds().unwrap();
+    Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32))
+}
+
+/// The colours of the lines painted inside `r`.
+fn lines_in(out: &egui::FullOutput, r: Rect) -> Vec<Color32> {
+    fn walk(s: &Shape, r: Rect, out: &mut Vec<Color32>) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, r, out)),
+            Shape::Path(p) if r.contains_rect(s.visual_bounding_rect()) => {
+                if let ColorMode::Solid(c) = p.stroke.color {
+                    out.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut lines = Vec::new();
+    for c in &out.shapes {
+        walk(&c.shape, r, &mut lines);
+    }
+    lines
+}
+
+#[test]
+fn a_file_tabs_menu_reads_on_its_popup_in_both_themes() {
+    for dark in [false, true] {
+        let (mut u, t) = app(Session::new(), dark);
+        click(&mut u, pos2(100.0, 20.0), PointerButton::Secondary);
+        let texts = menu_texts(&settle(&mut u));
+        let Some((_, col)) = texts.iter().find(|(s, _)| s == "Open in new window") else { panic!("the tab's menu opened (dark {dark}): {texts:?}") };
+        let ratio = color(*col).contrast(color(t.panel));
+        assert!(ratio >= 4.5, "Open in new window at {ratio:.2}:1 on the popup (dark {dark})");
+    }
+}
+
+#[test]
+fn the_board_bars_shape_menu_shows_every_shape_in_both_themes() {
+    for dark in [false, true] {
+        let mut s = Session::new();
+        s.execute("file.newBoard", &json!({})).unwrap();
+        s.execute("board.shape", &json!({"shape": "rectangle", "x": 0, "y": 0})).unwrap();
+        let (mut u, t) = app(s, dark);
+        let all = nodes(&mut u);
+        let button = all.iter().find(|n| n.label() == Some("Shape")).expect("the board bar's Shape button");
+        click(&mut u, bounds(button).center(), PointerButton::Primary);
+        let all = nodes(&mut u);
+        let out = settle(&mut u);
+        // Every shape but the picked one (white on the green highlight) on the popup itself.
+        for b in BoardShape::ALL.into_iter().filter(|b| *b != BoardShape::Rectangle) {
+            let label = crate::i18n::tr(b.label());
+            let cell = all.iter().find(|n| n.label() == Some(label)).unwrap_or_else(|| panic!("{label} in the menu (dark {dark})"));
+            let lines = lines_in(&out, bounds(cell));
+            assert!(!lines.is_empty(), "{label}'s outline painted (dark {dark})");
+            for c in lines {
+                // Non-text contrast (WCAG 1.4.11): at least 3:1.
+                let ratio = color(c).contrast(color(t.panel));
+                assert!(ratio >= 3.0, "{label}'s outline at {ratio:.2}:1 on the popup (dark {dark})");
+            }
         }
     }
 }

@@ -10,17 +10,18 @@ catalog reads English): a regional tag reads its language's catalog (`fr-CA` →
 with only a regional catalog reads that one (`pt-PT` → `pt-BR`), and Latin American and US Spanish
 (`es-MX`, `es-AR`, `es-CO`, `es-US`, `es-419`…) read `es-419`.
 Chinese (`zh`, `zh-CN`, `zh-SG`, `zh-Hans`) reads `zh-Hans`; Traditional Chinese (`zh-Hant`,
-`zh-TW`, `zh-HK`, `zh-MO`) has no catalog and reads English (or the next OS language), not
+`zh-TW`, `zh-HK`, `zh-MO`) reads `zh-Hant`, and an explicit `Hans` (`zh-Hans-TW`) still reads
 Simplified.
 `pref.language {language}` does the same from the CLI, MCP and the control channel.
 
 The catalogs: English (`en`, the source), and Spanish (`es`, with the Latin American overlay
 `es-419`), French (`fr`), German (`de`), Dutch (`nl`), Brazilian Portuguese (`pt-BR`), Japanese
-(`ja`), Korean (`ko`), Simplified Chinese (`zh-Hans`), Czech (`cs`), Indonesian (`id`), Finnish
+(`ja`), Korean (`ko`), Simplified Chinese (`zh-Hans`), Traditional Chinese (`zh-Hant`), Czech
+(`cs`), Indonesian (`id`), Finnish
 (`fi`), Bengali (`bn`), Italian (`it`), Vietnamese (`vi`), Thai (`th`) and Bosnian (`bs`), machine-drafted and waiting for native speakers' review. Polish (`pl`,
 Polski) was reviewed and approved by Lucas (@lukasz-sklad). Georgian (`ka`) was written with AI
 assistance and reviewed by a native speaker, and stays a draft until a maintainer changes its status.
-Russian (`ru`, Русский) was reviewed and approved by VanTan; its catalog keeps Frame, Dev Mode and
+Russian (`ru`, Русский) was reviewed and approved by VanTan; its catalog keeps Frame and
 Smart animate as familiar tool names and uses « » quotes. Turkish (`tr`) was machine-drafted and
 reviewed by a native speaker, and Swedish (`sv`) translates every UI string, command label and menu wording.
 
@@ -51,6 +52,9 @@ Enter for the key, control for a gamepad, resorte) and keeps Spanish's tú. Japa
 concise, without です/ます endings, with full-width （）「」：、。 where Japanese UI text has them;
 Korean labels end without 합니다 (instructions in -세요). Simplified Chinese is concise, with
 full-width （）：，、。“” in Chinese text and a space between Chinese and Latin words or numbers.
+Traditional Chinese (Taiwan) is concise too, with full-width （）：，、「」 and a space between
+Chinese and Latin words or numbers, and Taiwan design terms (畫布, 圖層, 框架, 元件, 原型, 約束,
+填色, 邊框, 效果, 匯出, 版本; Auto Layout stays English).
 None of the three has plural forms. Turkish uses bare imperatives for buttons and menu items
 (Kaydet, Sil) and the polite -in/-ın for instructions (seçin, tıklayın), puts the percent sign before
 the number (%50) and keeps a noun singular after a count, so its plural entries give only `other`.
@@ -78,7 +82,16 @@ CJK and Thai text need their own fonts, which egui and Inter lack: the desktop a
 one when something on screen needs it, so layer and page names in those scripts show whatever the
 UI language (see `crates/ui-egui/src/cjk.rs`). The web build has no system fonts,
 so Japanese, Korean and Chinese appear there only in a build with craft-fonts and
-`FIGCRAFT_EMBED_CJK=1` (Noto Sans CJK SC, +16 MB); otherwise they are left out of the picker. A
+`FIGCRAFT_EMBED_CJK=1` (Noto Sans CJK SC, +16 MB); otherwise they are left out of the picker, and
+Traditional Chinese is left out unless that build has a Noto Sans CJK TC face. A
+Chinese UI puts its Chinese face first so Han takes Simplified Chinese shapes, and a Traditional
+Chinese UI puts an installed Noto Sans CJK TC first, then the system's Taiwan faces (Microsoft
+JhengHei, PingFang TC, Heiti TC), so Han takes Traditional shapes. No font is added to this
+repository. Georgian is drawn in
+`FIGCRAFT_EMBED_CJK=1` (Noto Sans CJK SC, +16 MB); otherwise they are left out of the picker. The other
+scripts' faces (Noto Sans Arabic, Hebrew, Thai, Devanagari) join a web build only with
+`FIGCRAFT_EMBED_SCRIPTS=Arab,Hebr,Thai,Deva` (one tag per script wanted, as the manifest lists them), for
+documents in those scripts; with `Arab` embedded the picker offers Arabic too (#1902). A
 Chinese UI puts its Chinese face first so Han takes Simplified Chinese shapes. Georgian is drawn in
 craft-fonts' Noto Sans Georgian, one of the built-in faces in `theme::install_fonts`, or else in an
 installed font on the desktop. Web builds keep it only when the craft-fonts they're built with has
@@ -103,6 +116,25 @@ require an embedded Noto Sans Arabic face to offer Arabic. The current web font 
 that face out, so Arabic is not offered on the web yet. No font is added to
 this repository. The interface's panels are not mirrored; this catalog does not claim a complete
 right-to-left interface. Native review and representative in-app checks remain required.
+
+## Traditional Chinese (Taiwan) draft
+
+`zh-Hant.toml` adds 繁體中文（台灣） as a draft: 1,975 UI entries, 641 command labels and 31 menu
+wordings (2,647 entries, measured 2026-11-03). It was translated clean-room from the English source
+in `en.toml`; the Simplified Chinese catalog was not used as a source. It covers every English key,
+so the completeness test keeps it that way.
+
+Taiwan design terms: 畫布 (canvas), 圖層 (layer), 框架 (frame), 元件 (component), 原型 (prototype),
+Auto Layout (kept in English), 約束 (constraints), 填色 (fill), 邊框 (stroke), 效果 (effects),
+匯出 (export) and 版本 (version). Actions use concise Taiwan verbs (儲存, 刪除, 建立副本), and
+quotes are 「」. Placeholders, command ids, keyboard glyphs and product names stay as in English.
+
+Traditional Chinese has no plural forms, so plural entries give the same text for `one` and
+`other`; `plural` never picks `one` for `zh-Hant`. The desktop UI adds an installed Noto Sans CJK
+TC first, then Microsoft JhengHei, PingFang TC, Heiti TC and the other Taiwan faces; no font is
+bundled. The web picker leaves Traditional Chinese out unless the build embeds a Noto Sans CJK TC
+face, as it does for the other CJK catalogs. Native review remains open (draft), as do the in-app
+checks of long labels in the right panel.
 
 ## Adding a language
 

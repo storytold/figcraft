@@ -535,12 +535,32 @@ fn alignment_rules() {
             rects: &[(0.0, 10.0, 30.0, 14.0), (35.0, 0.0, 60.0, 28.0)],
         },
         Case {
-            // Docs silent on layers without text: they keep to the top of the line.
-            rule: "baseline alignment: a layer without text sits at the top",
+            // "for baseline alignment, the bottoms of the icon and the word home are aligned on
+            // the red line" (the figure's caption): a layer without text sits on the baseline with
+            // its bottom edge. Baseline 20, icon 10 high: the icon moves down 10 (#1825).
+            rule: "baseline alignment: a layer without text puts its bottom on the baseline",
             frame: Frame { sizing: (Hug, Hug), cross: CrossAlign::Baseline, ..FRAME },
             kids: &[kid(10.0, 10.0), Kid { text: Some((60.0, 28.0, 20.0)), sizing: (Hug, Hug), ..KID }],
             want: (70.0, 28.0),
-            rects: &[(0.0, 0.0, 10.0, 10.0), (10.0, 0.0, 60.0, 28.0)],
+            rects: &[(0.0, 10.0, 10.0, 10.0), (10.0, 0.0, 60.0, 28.0)],
+        },
+        Case {
+            // The icon (30 high) reaches below the text's baseline (20): the line's baseline is the
+            // icon's bottom, so the text moves down 10 and the frame hugs 10 + 28.
+            rule: "baseline alignment: a layer taller than the baseline moves the text down",
+            frame: Frame { sizing: (Hug, Hug), cross: CrossAlign::Baseline, ..FRAME },
+            kids: &[kid(10.0, 30.0), Kid { text: Some((60.0, 28.0, 20.0)), sizing: (Hug, Hug), ..KID }],
+            want: (70.0, 38.0),
+            rects: &[(0.0, 0.0, 10.0, 30.0), (10.0, 10.0, 60.0, 28.0)],
+        },
+        Case {
+            // Docs silent on a line with no text at all: every layer's baseline is its bottom
+            // edge (as the icon's), so the bottoms line up, as they do under CSS baseline alignment.
+            rule: "baseline alignment without text: the layers' bottoms line up",
+            frame: Frame { sizing: (Hug, Hug), cross: CrossAlign::Baseline, ..FRAME },
+            kids: &[kid(10.0, 10.0), kid(10.0, 30.0)],
+            want: (20.0, 30.0),
+            rects: &[(0.0, 20.0, 10.0, 10.0), (10.0, 0.0, 10.0, 30.0)],
         },
     ]);
 }

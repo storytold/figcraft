@@ -271,3 +271,13 @@ fn later_runs_dont_inherit_the_first_runs_settings() {
     assert_eq!(second.line_height, figcraft_doc::LineHeight::Auto, "{second:?}");
     assert!(second.variations.is_empty(), "{second:?}");
 }
+
+#[test]
+fn runs_that_overlap_a_great_deal_stop_being_applied() {
+    // 17 runs over the whole of a text of 2^20 characters: 17 × 2^20 writes without the limit.
+    let n = 1 << 20;
+    let mut runs = vec![(0, 1, "Helvetica", 10.0, BLACK)];
+    runs.extend((0..17).map(|i| (0, n, "Helvetica", 11.0 + f64::from(i), BLACK)));
+    let (_, warnings) = open(vec![text("Long", 0.0, 0.0, 200.0, 20.0, &"a".repeat(n), &runs)]);
+    assert!(warnings.iter().any(|w| w.contains("overlap a great deal")), "{warnings:?}");
+}

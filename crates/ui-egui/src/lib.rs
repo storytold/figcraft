@@ -54,6 +54,8 @@ mod async_dialog_tests;
 #[cfg(test)]
 mod blend_preview_tests;
 #[cfg(test)]
+mod bool_menu_icon_tests;
+#[cfg(test)]
 mod branch_ui_tests;
 #[cfg(test)]
 mod canvas_double_click_tests;
@@ -124,6 +126,8 @@ mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
 #[cfg(test)]
+mod host_save_tests;
+#[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
 mod ime_tests;
@@ -134,6 +138,8 @@ mod inspect_fields_tests;
 #[cfg(test)]
 mod layers_behaviour_tests;
 #[cfg(test)]
+mod layers_component_rows_tests;
+#[cfg(test)]
 mod layers_drag_tests;
 #[cfg(test)]
 mod layers_keyboard_tests;
@@ -141,6 +147,8 @@ mod layers_keyboard_tests;
 mod layers_keys_tests;
 #[cfg(test)]
 mod layers_rename_tests;
+#[cfg(test)]
+mod layers_wide_names_tests;
 #[cfg(test)]
 mod library_beacon_tests;
 #[cfg(test)]
@@ -172,7 +180,11 @@ mod menu_contrast_tests;
 #[cfg(test)]
 mod menu_input_tests;
 #[cfg(test)]
+mod mirror_tests;
+#[cfg(test)]
 mod missing_fonts_tests;
+#[cfg(test)]
+mod naming_tests;
 #[cfg(test)]
 mod online_tests;
 #[cfg(test)]
@@ -221,6 +233,8 @@ mod proto_reorder_tests;
 #[cfg(test)]
 mod proto_responsive_tests;
 #[cfg(test)]
+mod region_fill_rows_tests;
+#[cfg(test)]
 mod resources_tests;
 #[cfg(test)]
 mod sampled_color_tests;
@@ -245,15 +259,21 @@ mod text_enter_tests;
 #[cfg(test)]
 mod text_link_tests;
 #[cfg(test)]
+mod text_mixed_fill_tests;
+#[cfg(test)]
 mod titlebar_tests;
 #[cfg(test)]
 mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
 #[cfg(test)]
+mod variable_picker_tests;
+#[cfg(test)]
 mod variables_export_ui_tests;
 #[cfg(test)]
 mod variables_rename_tests;
+#[cfg(test)]
+mod variables_select_tests;
 #[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]
@@ -481,6 +501,11 @@ pub struct UiState {
     /// A selection box drawn from the keyboard (`select.area`), page `[x0, y0, x1, y1]` with the
     /// marquee's start at `x0, y0`.
     pub key_box: Option<[f64; 4]>,
+    /// Pick select (#1836): the layer the pink outline is on while the keys walk the layer tree
+    /// (Tab or the selection-box chord again while the box shows; Space selects it), with the uid
+    /// of its document: layer ids are only unique within a document, and the pick holds only on
+    /// the page shown ([`FigApp::picked`]).
+    pub pick: Option<(u64, NodeId)>,
     /// Layers panel search: open, the filter text, the shift-click range anchor and the selection
     /// the tree last revealed (ancestors expand and the row scrolls into view when it changes).
     pub layer_search: bool,
@@ -545,6 +570,9 @@ pub struct UiState {
     pub mobile_panel: Option<MobilePanel>,
     /// The window was narrow (one side panel at a time) at the last frame.
     pub narrow: bool,
+    /// The window is mirrored for a right-to-left UI language: the icon rail and the layers panel
+    /// on the right, the Design panel on the left, popovers beside it on its right.
+    pub mirrored: bool,
     pub comments: comments::CommentUi,
     pub versions: versions::VersionUi,
     /// The branch review dialog, while open.
@@ -590,6 +618,8 @@ pub struct UiState {
     pub online: online::OnlineUi,
     /// The window was asked to close with unsaved changes: the question shows.
     pub confirm_close: bool,
+    /// A tab was asked to close with unsaved changes: the question for it, then its save.
+    pub close_tab: Option<windows::TabClose>,
     /// The file a Save as started from the unsaved-changes question is saving: the window closes
     /// once it is saved, and stays open if the dialog is cancelled or the save fails.
     pub close_after_save_as: Option<u64>,
@@ -656,6 +686,7 @@ impl Default for UiState {
             context_menu: None,
             key_menu: false,
             key_box: None,
+            pick: None,
             layer_search: false,
             layer_filter: String::new(),
             layer_anchor: None,
@@ -693,6 +724,7 @@ impl Default for UiState {
             left_collapsed: false,
             mobile_panel: None,
             narrow: false,
+            mirrored: false,
             comments: comments::CommentUi::default(),
             versions: versions::VersionUi::default(),
             branch_review: None,
@@ -713,6 +745,7 @@ impl Default for UiState {
             live: live::LiveUi::default(),
             online: online::OnlineUi::default(),
             confirm_close: false,
+            close_tab: None,
             close_after_save_as: None,
             save_on_close: false,
         }
@@ -748,6 +781,9 @@ pub struct FigApp {
     panels_unsaved: bool,
     /// Control-channel requests waiting for the next frame.
     pub control_queue: Vec<ControlRequest>,
+    /// Windows a control request waits for: the window's pass count when the wait began and the
+    /// app-clock time it began, to tell a window that stopped drawing ([`control::background`]).
+    control_waits: std::collections::BTreeMap<u64, (u64, f64)>,
     /// Input events from the control channel (`ui.input`) for the next frame's raw input.
     pub control_input: Vec<egui::Event>,
     /// Frames drawn and what asked for them (`ui.inspect`).

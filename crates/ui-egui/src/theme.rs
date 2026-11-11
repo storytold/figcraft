@@ -29,8 +29,15 @@ pub struct Tokens {
     pub accent_text: Color32,
     pub selected_row: Color32,
     pub selected_row_child: Color32,
+    /// Component, variant and instance names and icons in the panels: at least 4.5:1 (WCAG AA
+    /// for text) on the panel, on a hovered row and on `component_row`. The canvas keeps
+    /// [`COMPONENT`] for its outlines and labels.
     pub component: Color32,
+    /// A selected component's row in the Layers panel.
     pub component_row: Color32,
+    /// The rows inside a selected component: a tone of its row (`selected_row_child` is the plain
+    /// selection's).
+    pub component_row_child: Color32,
     pub danger: Color32,
     pub success: Color32,
     pub warning: Color32,
@@ -101,7 +108,9 @@ impl Tokens {
             text: Color32::from_rgb(0x1E, 0x1E, 0x1E),
             // 4.7:1 on fields and hovered rows (#F5F5F5), 4.6:1 on selected rows: WCAG AA.
             text_secondary: Color32::from_rgb(0x6E, 0x6E, 0x6E),
-            text_tertiary: Color32::from_rgb(0x8A, 0x8A, 0x8A),
+            // Dim text: 3.2:1 on the selected component row (#F1E9FF, the tightest of the
+            // rows it lands on; #8A8A8A was 2.93:1 there), still dimmer than secondary text.
+            text_tertiary: Color32::from_rgb(0x84, 0x84, 0x84),
             icon: Color32::from_rgb(0x1E, 0x1E, 0x1E),
             icon_secondary: Color32::from_rgb(0x75, 0x75, 0x75),
             hover: Color32::from_rgb(0xF5, 0xF5, 0xF5),
@@ -115,8 +124,11 @@ impl Tokens {
             accent_text: Color32::from_rgb(0x00, 0x7A, 0x56),
             selected_row: Color32::from_rgb(0xE0, 0xFB, 0xF1),
             selected_row_child: Color32::from_rgb(0xF1, 0xFC, 0xF7),
-            component: COMPONENT,
+            // A shade darker than the canvas purple: 5.5:1 on white, 4.7:1 on the selected
+            // component row and 5.0:1 on a hovered row (the canvas purple reaches 3.8:1 and 4.1:1).
+            component: Color32::from_rgb(0x86, 0x38, 0xF0),
             component_row: Color32::from_rgb(0xF1, 0xE9, 0xFF),
+            component_row_child: Color32::from_rgb(0xF8, 0xF4, 0xFF),
             danger: Color32::from_rgb(0xF2, 0x48, 0x22),
             success: DEV_READY,
             warning: Color32::from_rgb(0xFF, 0xCD, 0x29),
@@ -155,8 +167,11 @@ impl Tokens {
             accent_text: Color32::from_rgb(0x52, 0xE9, 0xB7),
             selected_row: Color32::from_rgb(0x16, 0x42, 0x36),
             selected_row_child: Color32::from_rgb(0x12, 0x37, 0x2D),
+            // 5.4:1 on the panel, 4.6:1 on the selected component row, 4.5:1 on a hovered row
+            // (the canvas purple reaches 3.1:1 and 2.7:1, #1903).
             component: Color32::from_rgb(0xD2, 0x7C, 0xFF),
             component_row: Color32::from_rgb(0x3E, 0x30, 0x52),
+            component_row_child: Color32::from_rgb(0x36, 0x2B, 0x47),
             danger: Color32::from_rgb(0xF2, 0x48, 0x22),
             success: DEV_READY,
             warning: Color32::from_rgb(0xFF, 0xCD, 0x29),
@@ -271,7 +286,8 @@ pub fn on_dark<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) -> R) -> R {
 
 /// UI fonts: Inter and the Archivo wordmark (from the craft-fonts build input) when present;
 /// otherwise egui's defaults. With
-/// `system`, also system faces for scripts those lack (Hebrew, joined Arabic) so names in them show,
+/// `system`, also system faces for scripts those lack (Hebrew, joined Arabic, Ethiopic, the Indic
+/// scripts and the others [`crate::bidi::script_fallbacks`] names) so names in them show,
 /// and faces for the CJK scripts in `cjk` ([`crate::cjk`]).
 ///
 /// The craft-fonts set embeds Noto Sans Arabic and Noto Sans Hebrew; with `system` off those
@@ -493,7 +509,7 @@ mod tests {
             let theme = if t.dark { "dark" } else { "light" };
             // Disabled text (a disabled button's label, placeholders) on panels, fields and
             // selected rows, still dimmer than secondary text.
-            for bg in [t.panel, t.field, t.hover, t.selected_row] {
+            for bg in [t.panel, t.field, t.hover, t.selected_row, t.selected_row_child, t.component_row, t.component_row_child] {
                 let ratio = c(t.text_tertiary).contrast(c(bg));
                 assert!(ratio >= 3.0, "{theme}: dim text {:?} on {bg:?} is {ratio:.2}:1", t.text_tertiary);
                 assert!(ratio < c(t.text_secondary).contrast(c(bg)), "{theme}: dim text reads dimmer than secondary text");
