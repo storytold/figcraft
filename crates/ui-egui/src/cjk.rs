@@ -126,6 +126,11 @@ fn shows(code: &str, web: bool) -> bool {
     if code.split('-').next() == Some("ka") {
         return figcraft_text::face_with_char('ა', &["Noto Sans Georgian"]).is_some();
     }
+    if code.split('-').next() == Some("he") {
+        // A web build cannot borrow desktop Hebrew fonts. Hide the picker entry
+        // unless a Hebrew face was actually embedded with the app.
+        return figcraft_text::face_with_char('א', &["Noto Sans Hebrew"]).is_some();
+    }
     if code.split('-').next() == Some("ar") {
         // Web cannot borrow the desktop's Arabic faces. Its current font budget excludes
         // Arabic; keep the catalog out until an embedded Arabic fallback is supplied.
