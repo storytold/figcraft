@@ -438,7 +438,6 @@ fn expand_penpot_raw_svgs_within(doc: &mut Document, notes: &mut Vec<String>, mu
         }
         let before = doc.node_count();
         let imported = figcraft_svg::import_svg_with_notes(doc, xml.as_bytes(), id, 0.0, 0.0, &name);
-        room = room.saturating_sub(doc.node_count().saturating_sub(before));
         match imported {
             Ok(imported) => {
                 // An SVG can be syntactically valid yet contain no supported drawable
@@ -453,6 +452,21 @@ fn expand_penpot_raw_svgs_within(doc: &mut Document, notes: &mut Vec<String>, mu
                     }
                     continue;
                 }
+                // Charged once the empty ones are gone; one that doesn't fit is taken out again.
+                let added = doc.node_count().saturating_sub(before);
+                if added > room {
+                    let _ = doc.remove(imported.frame);
+                    if let Some(n) = doc.node_mut(id) {
+                        n.plugin_data.insert("penpot.svgRawStatus".into(), "not-expanded".into());
+                    }
+                    if notes.len() < 100 {
+                        notes.push(format!(
+                            "Penpot SVG '{name}': not converted, the file's SVG layers are over the limit; the original markup is preserved"
+                        ));
+                    }
+                    continue;
+                }
+                room -= added;
                 let size = doc.node(imported.frame).map(|n| (n.width, n.height));
                 if let Some((svg_w, svg_h)) = size
                     && svg_w.is_finite()
@@ -837,7 +851,9 @@ mod penpot_svg_v10_tests {
             })
             .collect();
         let mut warnings = Vec::new();
-        expand_penpot_raw_svgs_within(&mut doc, &mut warnings, 1);
+        let nodes = doc.node_count();
+        expand_penpot_raw_svgs_within(&mut doc, &mut warnings, 4);
+        assert!(doc.node_count() - nodes <= 4, "never more layers than the allowance");
         let status = |i: usize| doc.node(ids[i]).unwrap().plugin_data.get("penpot.svgRawStatus").cloned();
         assert_eq!(status(0).as_deref(), Some("expanded"), "the first uses the allowance");
         assert_eq!(status(1).as_deref(), Some("not-expanded"));
