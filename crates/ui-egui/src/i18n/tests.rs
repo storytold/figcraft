@@ -844,3 +844,28 @@ fn the_language_preference_takes_language_codes() {
         assert!(s.execute("pref.language", &serde_json::json!({"language": bad})).is_err(), "{bad:?}");
     }
 }
+
+/// High-frequency Hebrew labels seen on the native document and inspector screen.
+#[test]
+fn hebrew_native_document_and_inspector_basics_are_translated() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Position",
+        "Dimensions",
+        "Clip content",
+        "Drafts",
+        "Variables",
+        "Selection colors",
+        "Stroke weight",
+        "Visibility",
+        "Background blur",
+        "Keyboard shortcuts",
+        "Local variables",
+        "Prototype settings",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew native document/inspector label for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+    }
+}
