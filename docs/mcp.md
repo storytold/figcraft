@@ -675,8 +675,11 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   panel has the keyboard (after F6 or a click on a row), else on the canvas below the selection; the
   menu takes the keyboard and gives it back when it closes (no-op headless).
 - `select.area {x, y, width, height, add?, deep?}`: select what a marquee from `x, y` over that box
-  (page units) would: the top-level layers it touches (a rotated shape by its outline), a frame or section
-  only when the box covers it and otherwise the layers in it the box touches, never the frame the box starts in; `add` toggles like a Shift marquee, `deep` takes nested layers
+  (page units) would: the top-level layers it touches (a rotated shape by its outline); an empty
+  frame on touch; any other frame or section only when the box covers it, otherwise the layers in it
+  the box touches, except that once the box takes a frame whole, a partly covered frame comes whole
+  too, and the frame the box starts in is selected only then (when the box also takes another
+  top-level frame); `add` toggles like a Shift marquee, `deep` takes nested layers
   like Cmd/Ctrl. Returns `{selection}`. Without a box (`F8` in the app) it draws one for the
   keyboard around the selection (or in the middle of the view): the arrows move it, Shift+arrows
   move its far corner (10 screen pixels a press), Enter selects (Shift+Enter adds, Cmd/Ctrl+Enter

@@ -454,7 +454,8 @@ fn path_touches_rect(n: &Node, path: &BezPath, xf: figcraft_geom::Affine, rect: 
 /// Whether a marquee takes a touched top-level layer whole, opens it for the layers in it, or skips it.
 enum Touch {
     Whole,
-    /// The frame the drag started in: only the layers in it the marquee touches.
+    /// The frame the drag started in: the layers in it the marquee touches, or the frame itself
+    /// (whole) once the marquee is at the top level.
     Open,
     /// A partly covered frame or section: the layers in it, or the frame itself once the marquee is at the top level.
     Partial,
@@ -464,9 +465,10 @@ enum Touch {
 /// Figma's marquee rule (measured in the web app, 2026-11-11): each top-level layer the marquee
 /// touches is selected whole, except a frame with children or a section with its contents shown:
 /// enclosed by the marquee it is selected itself, otherwise the marquee takes the layers in it that
-/// it touches. The frame the drag started in (`start_inside`) is never selected itself, only the
-/// layers in it the marquee touches. Selecting a frame or section whole keeps the marquee at the
-/// top level: no frame opens then, and a partly covered one is selected whole. Components, instances, board items and sections with hidden
+/// it touches. The frame the drag started in (`start_inside`) is selected only when the marquee also
+/// takes another top-level frame (then whole); otherwise only the layers in it the marquee touches.
+/// Selecting a frame or section whole keeps the marquee at the top level: no frame opens then, and a
+/// partly covered one is selected whole. Components, instances, board items and sections with hidden
 /// contents are selected only when enclosed.
 pub fn marquee_select(doc: &Document, page: NodeId, rect: Rect, start_inside: Option<NodeId>) -> Vec<NodeId> {
     let Some(page_node) = doc.node(page) else { return Vec::new() };
@@ -500,13 +502,13 @@ pub fn marquee_select(doc: &Document, page: NodeId, rect: Rect, start_inside: Op
     for (t, act, _) in &classified {
         match act {
             Touch::Whole => out.push(*t),
-            Touch::Partial if top_level_mode => out.push(*t),
-            Touch::Open | Touch::Partial if !top_level_mode => {
+            Touch::Open | Touch::Partial if top_level_mode => out.push(*t),
+            Touch::Open | Touch::Partial => {
                 if let Some(n) = doc.node(*t) {
                     out.extend(marquee_children(doc, n, rect));
                 }
             }
-            Touch::Open | Touch::Partial | Touch::Skip => {}
+            Touch::Skip => {}
         }
     }
     out

@@ -1,8 +1,8 @@
 //! Marquee selection, as measured in Figma's web app (2026-11-11, the "marquee rules" and "confirming
-//! pass" readings) and described in the help-center article "Select layers and objects": a drag
+//! pass" readings, and the two evening re-measures) and described in the help-center article "Select layers and objects": a drag
 //! selects each top-level layer it touches; a partly covered frame or section gives the layers in it
-//! the marquee touches, an enclosed one is selected itself; a drag started inside a frame never selects
-//! that frame; selecting a frame whole keeps the marquee at the top level; a rotated shape is touched by
+//! the marquee touches, an enclosed one is selected itself; a drag started inside a frame selects that frame
+//! only when the marquee also takes another top-level frame (then whole); selecting a frame whole keeps the marquee at the top level; a rotated shape is touched by
 //! its outline, an unrotated one by its box.
 
 use serde_json::{Value, json};
@@ -154,17 +154,18 @@ fn a_rotated_ellipse_is_not_touched_by_its_axis_aligned_box() {
 fn a_rotated_ellipse_is_not_touched_through_the_corner_of_its_turned_box() {
     let mut s = Session::new();
     let k = scene(&mut s);
-    // Not the measurement's literal numbers (see the brief, section 5): a point inside the turned box
-    // but outside the ellipse.
-    let p = Point::new(690.0, 420.0);
+    // The re-measure's literal marquees (evening, section 1): corner A, the deeper B, and the control.
+    let p = Point::new(692.0, 419.0);
     let doc = s.doc().unwrap();
     let n = doc.node(k.re).unwrap();
     assert!(n.local_rect().contains(doc.world_transform(k.re).inverse() * p), "the probe is inside the turned box");
-    assert_eq!(selected(&mut s, (727.0, 407.0), (690.0, 420.0)), Vec::<NodeId>::new());
+    assert_eq!(selected(&mut s, (715.0, 411.0), (692.0, 419.0)), Vec::<NodeId>::new(), "measured marquee A");
+    assert_eq!(selected(&mut s, (715.0, 411.0), (683.0, 419.0)), Vec::<NodeId>::new(), "measured marquee B");
+    assert_eq!(selected(&mut s, (715.0, 411.0), (667.0, 419.0)), vec![k.re], "measured control");
 }
 
 #[test]
-fn a_drag_from_inside_a_frame_never_selects_it() {
+fn a_drag_from_inside_a_frame_selects_only_what_it_touches() {
     let mut s = Session::new();
     let k = scene(&mut s);
     let start_x = |s: &Session| s.doc().unwrap().world_bounds(k.f1).map(|b| (b.x0, b.y0));
@@ -197,4 +198,21 @@ fn a_marquee_enclosing_an_empty_frame_takes_a_partly_covered_frame_whole() {
     let _r1 = rect(&mut s, 20.0, 20.0, 60.0, 60.0, Some(f1));
     let f2 = id(&ex(&mut s, "frame.create", json!({"x": 400, "y": 0, "width": 200, "height": 150})));
     assert_eq!(selected(&mut s, (650.0, 170.0), (40.0, -10.0)), sorted(vec![f1, f2]), "measured re-measure: F2 and F1, not R1");
+}
+
+#[test]
+fn a_drag_from_inside_a_frame_takes_it_whole_when_it_takes_another_top_level_frame() {
+    let mut s = Session::new();
+    let f1 = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 200})));
+    let r1 = rect(&mut s, 20.0, 20.0, 60.0, 60.0, Some(f1));
+    let _r2 = rect(&mut s, 220.0, 120.0, 60.0, 60.0, Some(f1));
+    let f2 = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 400, "width": 200, "height": 150})));
+    let rr = rect(&mut s, 400.0, 400.0, 200.0, 100.0, None);
+    ex(&mut s, "select.none", json!({}));
+    assert_eq!(selected(&mut s, (150.0, 100.0), (90.0, 720.0)), sorted(vec![f1, f2]), "re-measure 2, case 1");
+    let sel = selected(&mut s, (150.0, 50.0), (50.0, 720.0));
+    assert_eq!(sel, sorted(vec![f1, f2]), "re-measure 2, case 2b: R1 is covered in part and still not selected");
+    assert!(!sel.contains(&r1));
+    assert_eq!(selected(&mut s, (150.0, 100.0), (450.0, 450.0)), sorted(vec![f1, f2, rr]), "re-measure 2, case 3");
+    assert_eq!(selected(&mut s, (290.0, 100.0), (450.0, 450.0)), vec![rr], "re-measure 2, case 3b: the frame only when another is taken");
 }
