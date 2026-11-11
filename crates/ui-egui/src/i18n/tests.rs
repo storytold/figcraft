@@ -590,6 +590,31 @@ fn hebrew_file_open_save_messages_have_native_translations() {
 }
 
 #[test]
+fn hebrew_home_settings_and_export_labels_are_native() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Home",
+        "Browse",
+        "Language",
+        "Missing fonts",
+        "Open presentations",
+        "Open variables ({count})",
+        "Retry now",
+        "Export all",
+        "Import variables",
+        "New board",
+        "Close tab",
+        "Export…",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew UI translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        assert_eq!(key.contains("{count}"), value.contains("{count}"), "placeholder in {key:?}");
+    }
+}
+
+#[test]
 fn right_to_left_languages_mirror_the_window() {
     for code in ["ar", "ar-SA", "AR", "he", "he-IL", "fa", "ur", "ckb", "yi"] {
         assert!(writes_right_to_left(code), "{code}");
