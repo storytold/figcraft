@@ -563,6 +563,33 @@ fn hebrew_catalog_is_available_for_regional_tags_and_uses_rtl() {
 }
 
 #[test]
+fn hebrew_file_open_save_messages_have_native_translations() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Save file",
+        "Save files automatically",
+        "Save a copy…",
+        "Don't Save",
+        "Unsaved changes",
+        "Unsaved changes in {names}. Save them before closing?",
+        "Couldn't save the file",
+        "Couldn't save automatically: {error}",
+        "Opening the file…",
+        "Opened “{name}” in a new tab",
+        "No files or templates match your search",
+        "File not found",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew UI translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        for placeholder in ["{names}", "{name}", "{error}"] {
+            assert_eq!(key.contains(placeholder), value.contains(placeholder), "placeholder in {key:?}");
+        }
+    }
+}
+
+#[test]
 fn right_to_left_languages_mirror_the_window() {
     for code in ["ar", "ar-SA", "AR", "he", "he-IL", "fa", "ur", "ckb", "yi"] {
         assert!(writes_right_to_left(code), "{code}");
