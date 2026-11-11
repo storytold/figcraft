@@ -291,6 +291,7 @@ pub(super) fn submenu_at<R>(ui: &mut Ui, options: SubmenuOptions<'_>, add: impl 
         .fixed_pos(pos)
         .order(egui::Order::Foreground)
         .constrain(constrain || cramped)
+        .constrain_to(if constrain || cramped { screen } else { vertical_bounds(ui.ctx()) })
         .show(ui.ctx(), |ui| menu_frame(ui, t, child, add));
     let panel = shown.response.rect;
     with_level(ui.ctx(), &at, |l| l.panel = Some(panel));
@@ -318,10 +319,62 @@ pub(super) fn menu_frame<R>(ui: &mut Ui, t: &Tokens, at: At, add: impl FnOnce(&m
             ui.set_width(w);
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             let key = at_key(ui);
-            ui.data_mut(|d| d.insert_temp(key, at));
-            add(ui)
+            ui.data_mut(|d| d.insert_temp(key, at.clone()));
+            // Taller than the window (as measured last frame): its rows scroll. Otherwise they
+            // draw straight into the panel, so a menu that fits behaves as it always did.
+            let max_h = (ui.ctx().content_rect().height() - 2.0 * EDGE_MARGIN - 16.0).max(MENU_ROW_H);
+            let height_key = at_key(ui).with("content_h");
+            let last_h = ui.data(|d| d.get_temp::<f32>(height_key)).unwrap_or(0.0);
+            if last_h <= max_h {
+                let top = ui.cursor().min.y;
+                let r = add(ui);
+                let h = ui.min_rect().max.y - top;
+                ui.data_mut(|d| d.insert_temp(height_key, h));
+                if h > max_h {
+                    ui.ctx().request_repaint();
+                }
+                return r;
+            }
+            // The scroll area's ui has its own scope, so it gets the level and width state of this
+            // one, and hands back the width its rows asked for.
+            let outer_w = width_key(ui);
+            let asked = ui.data(|d| d.get_temp::<f32>(outer_w));
+            let shown = egui::ScrollArea::vertical()
+                .max_height(max_h)
+                .auto_shrink([false, true])
+                .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::SCROLL_BAR)
+                .show(ui, |ui| {
+                    let (inner_at, inner_w) = (at_key(ui), width_key(ui));
+                    ui.data_mut(|d| {
+                        d.insert_temp(inner_at, at);
+                        if let Some(a) = asked {
+                            d.insert_temp(inner_w, a);
+                        }
+                    });
+                    let r = add(ui);
+                    (r, ui.data(|d| d.get_temp::<f32>(inner_w)))
+                });
+            ui.data_mut(|d| d.insert_temp(height_key, shown.content_size.y));
+            let (r, wanted) = shown.inner;
+            if let Some(wanted) = wanted.filter(|w| asked.is_none_or(|a| *w > a)) {
+                ui.data_mut(|d| d.insert_temp(outer_w, wanted));
+            }
+            r
         })
         .inner
+}
+
+/// The gap a menu keeps from the window's top and bottom edges.
+pub(super) const EDGE_MARGIN: f32 = 8.0;
+
+/// A menu row's height.
+const MENU_ROW_H: f32 = 28.0;
+
+/// Where a menu may sit: anywhere across, within the window's height less the margins. A menu that
+/// would run past the bottom moves up (never above the top); one taller than that scrolls.
+pub(super) fn vertical_bounds(ctx: &egui::Context) -> Rect {
+    let s = ctx.content_rect();
+    Rect::from_min_max(pos2(-1.0e5, s.min.y + EDGE_MARGIN), pos2(1.0e5, s.max.y - EDGE_MARGIN))
 }
 
 /// A menu's narrowest width.
