@@ -82,16 +82,19 @@ pub fn points(app: &mut FigApp, ui: &mut Ui, doc: &Document, ve: &VectorEdit) {
     let Some(net) = vectoredit::network(doc, ve.id) else { return };
     let pts = vectoredit::selected_points(net, ve);
     widgets::section_header(ui, if pts.len() > 1 { tr("Points") } else { tr("Point") }, &[], false);
+    let col = widgets::col_width(ui.available_width());
+    // Figma puts alignment first; one point is a no-op there too. The count is the engine's, so
+    // selected segments' ends in any edited layer count as the commands do: the row shows even
+    // when only another edited layer has points selected.
+    let count = vectoredit::transform::edit_point_count(doc, ve);
+    if count > 0 {
+        crate::right::align_row(app, ui, crate::right::AlignTarget::Points(count), true, col);
+    }
     if pts.is_empty() {
         let t = crate::theme::Tokens::get(ui.ctx());
         widgets::note(ui, tr("Select points to edit their position, radius and mirroring"), t.text_secondary);
         return;
     }
-    let col = widgets::col_width(ui.available_width());
-    // Figma puts alignment first; one point is a no-op there too. The count is the engine's, so
-    // selected segments' ends in any edited layer count as the commands do.
-    let count = vectoredit::transform::edit_point_count(doc, ve);
-    crate::right::align_row(app, ui, crate::right::AlignTarget::Points(count), true, col);
     let pos = vectoredit::selection_position(doc, ve);
     let round = |v: f64| (v * 100.0).round() / 100.0;
     widgets::sublabels(ui, tr("Position"), None);

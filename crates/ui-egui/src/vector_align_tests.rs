@@ -64,6 +64,25 @@ fn the_distribute_menu_shows_from_three_points() {
     assert!(button(&nodes, "Distribute and tidy").is_some());
 }
 
+/// Two layers edited at once, points selected only in the one that isn't active: the row still
+/// shows, since the commands act on every edited layer's selected points.
+#[test]
+fn the_alignment_row_shows_when_only_another_edited_layer_has_points_selected() {
+    let mut s = Session::new();
+    let mut make =
+        |pts: serde_json::Value| NodeId(s.execute("vector.create", &json!({"points": pts, "closed": false})).unwrap()["id"].as_u64().unwrap());
+    let a = make(json!([[330, 480], [480, 430], [560, 560]]));
+    let b = make(json!([[700, 480], [800, 430], [900, 560]]));
+    s.execute("vector.edit.begin", &json!({"ids": [a, b]})).unwrap();
+    s.execute("vector.edit.select", &json!({"id": a, "vertices": [0, 1, 2]})).unwrap();
+    s.execute("vector.edit.select", &json!({"id": b, "vertices": [], "add": true})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let nodes = tree(&mut u);
+    assert!(button(&nodes, "Align left").is_some(), "the row shows for the other layer's points");
+    assert!(button(&nodes, "Distribute and tidy").is_some(), "three points there: distribute too");
+}
+
 #[test]
 fn alt_d_in_edit_mode_aligns_the_points_right() {
     let (mut u, path) = two_selected();
