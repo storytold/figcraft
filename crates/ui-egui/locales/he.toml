@@ -83,8 +83,8 @@ status = "draft — needs native review"
 "No saved versions yet. Save a version to mark a point in your work you can come back to." = "עדיין אין גרסאות שמורות. שמירת גרסה תאפשר לחזור למצב הזה בהמשך."
 "Nothing changed since this version." = "לא בוצעו שינויים מאז גרסה זו."
 "Nothing to export" = "אין תוכן לייצוא"
-"Opening {n} files as new files" = "פתיחת {n} קבצים כקבצים חדשים"
-"Recovered {n} unsaved files after the app quit unexpectedly: save them to keep them" = "שוחזרו {n} קבצים שלא נשמרו לאחר סגירה בלתי צפויה. יש לשמור אותם כדי שלא יאבדו."
+"Opening {n} files as new files" = { one = "פתיחה כקובץ חדש", other = "פתיחת {n} קבצים כקבצים חדשים" }
+"Recovered {n} unsaved files after the app quit unexpectedly: save them to keep them" = { one = "שוחזר קובץ שלא נשמר לאחר סגירה בלתי צפויה. יש לשמור אותו כדי שלא יאבד.", other = "שוחזרו {n} קבצים שלא נשמרו לאחר סגירה בלתי צפויה. יש לשמור אותם כדי שלא יאבדו." }
 "Reload the page to get back the unsaved files the browser had room for." = "יש לטעון את הדף מחדש כדי לשחזר את הקבצים שלא נשמרו ושהדפדפן הצליח לשמור."
 "Reload the page to get your unsaved files back." = "יש לטעון את הדף מחדש כדי לשחזר את הקבצים שלא נשמרו."
 "Remove from recents" = "הסרה מרשימת האחרונים"
