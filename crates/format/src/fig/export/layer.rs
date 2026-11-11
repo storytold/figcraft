@@ -1,8 +1,8 @@
 use super::common::{export_setting, layout_grid, outlined, prop_type, variant_pairs};
 use super::{
     AUX, AutoLayout, BoolOp, Bound, ContentAlign, CrossAlign, Exporter, Fields, HConstraint, Kv, LAYERS, LayoutMode, MAX_DEPTH, MainAlign, MaskType,
-    Node, NodeId, NodeKind, PropDef, STASH, Sizing, TextData, TextStyle, VConstraint, WindingRule, arr, b, blend_name, color, e, fl, grid_sizing,
-    guid, int, matrix, o, position, root_fields, s, u, xy,
+    Node, NodeId, NodeKind, STASH, Sizing, TextData, TextStyle, VConstraint, WindingRule, arr, b, blend_name, color, e, fl, grid_sizing, guid, int,
+    matrix, o, position, root_fields, s, u, xy,
 };
 
 impl<'d> Exporter<'d> {
@@ -147,9 +147,6 @@ impl<'d> Exporter<'d> {
                     if !defs.is_empty() {
                         f.push(("componentPropDefs", arr(defs)));
                     }
-                }
-                if props.values().any(|d| matches!(d, PropDef::Slot { .. })) {
-                    self.warn("slot properties were left out");
                 }
                 if !description.is_empty() {
                     f.push(("symbolDescription", s(description)));

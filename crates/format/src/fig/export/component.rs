@@ -3,7 +3,9 @@ use super::common::{
     bool_data, changed, layout_grid, prop_type, resolved_alike, scaled, sort_position, symbol_data, text_data, text_value, var_data, variant_pairs,
 };
 use super::scale::main_equal_lengths;
-use super::{AUX, BTreeMap, Bound, Exporter, Fields, Kv, MAX_NODES, Node, NodeId, NodeKind, PropDef, StyleKind, Value, arr, b, e, fl, guid, o, s};
+use super::{
+    AUX, BTreeMap, Bound, Exporter, Fields, Kv, LAYERS, MAX_NODES, Node, NodeId, NodeKind, PropDef, StyleKind, Value, arr, b, e, fl, guid, o, s,
+};
 
 /// A changed effect/grid style, and a payload only when it differs from that style's values.
 struct ListStyleOverride {
@@ -47,7 +49,16 @@ impl<'d> Exporter<'d> {
                 let main = self.guid_of(*default)?;
                 (o(vec![("guidValue", main.clone())]), symbol_data(main))
             }
-            PropDef::Variant { .. } | PropDef::Slot { .. } => return None,
+            // A slot has no scalar default: its content lives in a private frame assigned by each
+            // instance. `initialValue` and `varValue` stay empty, as readers of SLOT definitions do.
+            PropDef::Slot { preferred } => {
+                if !preferred.is_empty() {
+                    self.warn("preferred components of slot properties were left out");
+                }
+                (o(Vec::new()), o(Vec::new()))
+            }
+            // A variant's definitions are written on its set (`set_props`), not on the variant.
+            PropDef::Variant { .. } => return None,
         };
         Some(o(vec![
             ("id", guid(AUX, id)),
@@ -134,6 +145,7 @@ impl<'d> Exporter<'d> {
             "visible" => ("VISIBLE", "BOOL", "BOOLEAN"),
             "characters" => ("TEXT_DATA", "TEXT", "TEXT_DATA"),
             "mainComponent" => ("OVERRIDDEN_SYMBOL_ID", "INSTANCE_SWAP", "SYMBOL_ID"),
+            "slot" => ("SLOT_CONTENT_ID", "SLOT", "SLOT_CONTENT_ID"),
             _ => {
                 self.warn("slot layers were written as plain layers");
                 return None;
@@ -189,6 +201,10 @@ impl<'d> Exporter<'d> {
         let mut seen = 0usize;
         while let Some((id, parent)) = stack.pop() {
             let Some(d) = doc.node(id) else { continue };
+            // Layers written as private slot content are not overrides of the main's layers.
+            if self.private_layers.contains(&id) {
+                continue;
+            }
             seen += 1;
             if seen > MAX_NODES {
                 break;
@@ -203,6 +219,15 @@ impl<'d> Exporter<'d> {
             let (mut mine, mut theirs) = (Vec::new(), Vec::new());
             self.layer(d, doc.node(parent), &mut mine, true);
             self.layer(src, src.parent.and_then(|p| doc.node(p)), &mut theirs, true);
+            // Property bindings belong to the main: an instance layer does not repeat them in the
+            // document. Inherit them for the diff, or `changed` writes an "unset" row for
+            // `parameterConsumptionMap` that clears the binding on import — including a slot's
+            // SLOT_CONTENT_ID reference, and with it the instance's own slot content.
+            for (k, v) in &theirs {
+                if matches!(*k, "parameterConsumptionMap" | "componentPropRefs") && !mine.iter().any(|(mk, _)| *mk == *k) {
+                    mine.push((*k, v.clone()));
+                }
+            }
             // A nested instance swapped for another component.
             let swap = match (&d.kind, &src.kind) {
                 (NodeKind::Instance { component, .. }, NodeKind::Instance { component: was, .. }) if component == was => None,
@@ -298,10 +323,28 @@ impl<'d> Exporter<'d> {
                 assignments.push(o(vec![("defID", guid(AUX, id)), ("value", value), ("varValue", var)]));
             }
         }
+        // A slot whose content is this instance's own names the private frame that holds it. The
+        // frame's GUID was reserved in `assign`; the importer resolves the property definition
+        // (a variant's copy included) and expands the frame's layers into the instance's slot.
+        for slot in self.instance_slots.get(&n.id).cloned().unwrap_or_default() {
+            let Some(info) = self.slot_frames.get(&slot) else { continue };
+            assignments.push(o(vec![
+                ("defID", guid(AUX, info.def)),
+                ("value", o(Vec::new())),
+                (
+                    "varValue",
+                    o(vec![
+                        ("value", o(vec![("slotContentIdValue", o(vec![("guid", guid(LAYERS, info.frame))]))])),
+                        ("dataType", e("SLOT_CONTENT_ID")),
+                        ("resolvedDataType", e("SLOT_CONTENT_ID")),
+                    ]),
+                ),
+            ]));
+        }
         if !assignments.is_empty() {
             f.push(("componentPropAssignments", arr(assignments)));
         }
-        if n.children.iter().filter_map(|c| doc.node(*c)).any(|c| c.source.is_none()) {
+        if n.children.iter().filter_map(|c| doc.node(*c)).any(|c| c.source.is_none() && !self.private_layers.contains(&c.id)) {
             self.warn("instance layers that don't come from their main component were left out");
         }
     }

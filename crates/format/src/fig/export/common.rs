@@ -258,7 +258,8 @@ pub(super) fn prop_type(d: &PropDef) -> Option<&'static str> {
         PropDef::Boolean { .. } => Some("BOOL"),
         PropDef::Text { .. } => Some("TEXT"),
         PropDef::InstanceSwap { .. } => Some("INSTANCE_SWAP"),
-        PropDef::Variant { .. } | PropDef::Slot { .. } => None,
+        PropDef::Slot { .. } => Some("SLOT"),
+        PropDef::Variant { .. } => None,
     }
 }
 

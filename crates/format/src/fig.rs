@@ -23,6 +23,8 @@ mod deep_import_tests;
 mod expansion_cost_tests;
 mod export;
 #[cfg(test)]
+mod export_slot_tests;
+#[cfg(test)]
 mod export_tests;
 #[cfg(test)]
 mod interop_tests;
