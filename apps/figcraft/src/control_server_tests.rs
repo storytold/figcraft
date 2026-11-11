@@ -381,3 +381,18 @@ fn tokens_are_fresh_hex_and_the_file_is_user_only() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_failed_bind_leaves_the_existing_token_file_alone() {
+    let taken = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let path = std::env::temp_dir().join(format!("figcraft-bind-first-{port}.token"));
+    std::fs::write(&path, "old").unwrap();
+    assert!(bind_then_write_token(port, &path, "new").is_none());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+    drop(taken);
+    let listener = bind_then_write_token(port, &path, "new").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    drop(listener);
+    std::fs::remove_file(&path).unwrap();
+}

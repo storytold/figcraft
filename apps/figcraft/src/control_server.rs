@@ -117,6 +117,24 @@ fn authenticate(stream: &mut TcpStream, token: &str) -> std::io::Result<()> {
     Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "control token refused"))
 }
 
+/// Bind first: a second launch on a taken port must not overwrite the running instance's token file.
+fn bind_then_write_token(port: u16, path: &Path, token: &str) -> Option<TcpListener> {
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(l) => l,
+        Err(e) => {
+            log::error!("control server: can't bind 127.0.0.1:{port}: {e} (another app may own it; pick another port)");
+            eprintln!("FigCraft control server failed to bind port {port}: {e}");
+            return None;
+        }
+    };
+    if let Err(e) = write_token(path, token) {
+        log::error!("control server disabled: can't write the token to {}: {e}", path.display());
+        eprintln!("FigCraft control server disabled: can't write the token to {}: {e}", path.display());
+        return None;
+    }
+    Some(listener)
+}
+
 pub fn start(port: u16, queue: Queue, ctx: CtxSlot) {
     // Fail closed: without a token file the channel stays off rather than open to any local client.
     let token = match random_token() {
@@ -132,19 +150,7 @@ pub fn start(port: u16, queue: Queue, ctx: CtxSlot) {
         eprintln!("FigCraft control server disabled: no config folder for the token");
         return;
     };
-    if let Err(e) = write_token(&path, &token) {
-        log::error!("control server disabled: can't write the token to {}: {e}", path.display());
-        eprintln!("FigCraft control server disabled: can't write the token to {}: {e}", path.display());
-        return;
-    }
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => l,
-        Err(e) => {
-            log::error!("control server: can't bind 127.0.0.1:{port}: {e} (another app may own it; pick another port)");
-            eprintln!("FigCraft control server failed to bind port {port}: {e}");
-            return;
-        }
-    };
+    let Some(listener) = bind_then_write_token(port, &path, &token) else { return };
     eprintln!("FigCraft control server listening on 127.0.0.1:{port}; token in {}", path.display());
     let token: Arc<str> = Arc::from(token);
     let spawned = std::thread::Builder::new().name("figcraft-control".into()).spawn(move || {
