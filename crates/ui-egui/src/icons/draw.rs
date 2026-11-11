@@ -1055,11 +1055,24 @@ fn draw(p: &P, icon: Icon) {
             p.poly(&[(5.0, 8.3), (7.2, 10.5), (11.0, 6.0)], false);
         }
         MindMap => {
-            p.fill_rect(1.0, 6.5, 6.0, 9.5, 1.0);
-            p.path(&[(6.0, 8.0), (7.5, 8.0), (8.3, 7.2), (8.7, 5.0), (9.5, 4.0), (11.0, 4.0)], false);
-            p.path(&[(6.0, 8.0), (7.5, 8.0), (8.3, 8.8), (8.7, 11.0), (9.5, 12.0), (11.0, 12.0)], false);
-            p.line(11.0, 4.0, 15.0, 4.0);
-            p.line(11.0, 12.0, 15.0, 12.0);
+            // One outlined idea on the left branching into three outlined ideas on the right,
+            // the middle one level with the root.
+            p.rect(1.5, 6.0, 5.5, 10.0, 1.0);
+            p.line(5.5, 8.0, 10.5, 8.0);
+            for (y, ty) in [(1.5, 3.0), (11.5, 13.0)] {
+                p.rect(10.5, y, 14.5, y + 3.0, 1.0);
+                let curve: Vec<(f32, f32)> = (0..=10)
+                    .map(|i| {
+                        let t = i as f32 / 10.0;
+                        let u = 1.0 - t;
+                        let x = u * u * u * 5.5 + 3.0 * u * u * t * 8.0 + 3.0 * u * t * t * 8.0 + t * t * t * 10.5;
+                        let y = u * u * u * 8.0 + 3.0 * u * u * t * 8.0 + 3.0 * u * t * t * ty + t * t * t * ty;
+                        (x, y)
+                    })
+                    .collect();
+                p.path(&curve, false);
+            }
+            p.rect(10.5, 6.5, 14.5, 9.5, 1.0);
         }
         Timer => {
             p.circle(8.0, 9.0, 5.5);
