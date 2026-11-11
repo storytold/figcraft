@@ -281,6 +281,10 @@ pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mu
                 view: None,
             };
             seen.peers = peers.clone();
+            // The sync client keeps the roster of the welcome it is handed: the bounded one.
+            if let ServerMsg::Welcome { peers: sent, .. } = &mut m {
+                sent.clone_from(&peers);
+            }
             seen.info = Some(info.clone());
             welcomed();
             inbox.push(Event::Welcome { info, peers });
