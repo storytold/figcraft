@@ -615,6 +615,48 @@ fn hebrew_home_settings_and_export_labels_are_native() {
 }
 
 #[test]
+fn hebrew_inspector_and_layer_panels_have_native_labels() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Appearance",
+        "Fills",
+        "Strokes",
+        "Opacity & blend",
+        "Layout grid",
+        "Layout grids",
+        "Layout grid settings",
+        "Text direction",
+        "Letter spacing",
+        "Horizontal spacing",
+        "Vertical spacing",
+        "Fill container",
+        "Fill window",
+        "Fixed size",
+        "Auto width",
+        "Auto height",
+        "Component name",
+        "Component property",
+        "Instance properties",
+        "Layer name",
+        "Corner smoothing",
+        "Frames",
+        "Group selection",
+        "Delete page",
+        "Duplicate page",
+        "No matching layers",
+        "Find layers",
+        "Align text baselines",
+        "Variable",
+        "Color variables",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew inspector/layer translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+    }
+}
+
+#[test]
 fn right_to_left_languages_mirror_the_window() {
     for code in ["ar", "ar-SA", "AR", "he", "he-IL", "fa", "ur", "ckb", "yi"] {
         assert!(writes_right_to_left(code), "{code}");
