@@ -1045,9 +1045,10 @@ pub fn tight_end_n<R>(ui: &mut Ui, count: usize, add: impl FnOnce(&mut Ui) -> R)
     add(&mut child)
 }
 
-/// Inset of the glyph inside a 24 pt icon button: a 14 pt glyph, the size every icon button in the
-/// panels draws at (section header buttons included).
-pub const ICON_BUTTON_INSET: f32 = 5.0;
+/// Inset of the glyph inside a 24 pt icon button: a 16 pt glyph, the icons' native size and what
+/// `icons::button` draws (a fill row's eye), so every 24 pt icon button in the panels matches it
+/// (section header buttons included).
+pub const ICON_BUTTON_INSET: f32 = 4.0;
 
 /// The rect a 24 pt icon button paints its glyph in.
 pub fn icon_glyph_rect(button: Rect) -> Rect {
