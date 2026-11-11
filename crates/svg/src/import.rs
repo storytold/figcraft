@@ -714,18 +714,26 @@ pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
     scan(data, limit).0
 }
 
-/// Whether an element of `data` has more than [`MAX_ATTRIBUTES`] attributes (counted as quoted
-/// values, before the parser sees them).
+/// The most the parser's duplicate-attribute checks may cost over a whole document, as the sum of
+/// each element's attribute count squared (a real file with 100,000 elements of 20 attributes is
+/// 40 million).
+const MAX_ATTRIBUTE_WORK: usize = 1 << 28;
+
+/// Whether an element of `data` has more than [`MAX_ATTRIBUTES`] attributes, or all of them cost
+/// more than [`MAX_ATTRIBUTE_WORK`] (counted as quoted values, before the parser sees them; the
+/// declarations of a DTD count as one element, as entities can hold elements).
 pub(crate) fn too_wide(data: &[u8]) -> bool {
-    scan(data, usize::MAX).1 > MAX_ATTRIBUTES
+    let (_, widest, work) = scan(data, usize::MAX);
+    widest > MAX_ATTRIBUTES || work > MAX_ATTRIBUTE_WORK
 }
 
-/// [`nesting`] and the most attribute values on one element; stops once either is past its limit.
-fn scan(data: &[u8], limit: usize) -> (usize, usize) {
+/// [`nesting`], the most attribute values on one element and the attribute work (see
+/// [`MAX_ATTRIBUTE_WORK`]); stops once any is past its limit.
+fn scan(data: &[u8], limit: usize) -> (usize, usize, usize) {
     let find = |from: usize, pat: &[u8]| -> usize {
         data.get(from..).and_then(|r| r.windows(pat.len()).position(|w| w == pat)).map_or(data.len(), |p| from + p + pat.len())
     };
-    let (mut depth, mut max, mut i, mut widest) = (0usize, 0usize, 0usize, 0usize);
+    let (mut depth, mut max, mut i, mut widest, mut work) = (0usize, 0usize, 0usize, 0usize, 0usize);
     while let Some(off) = data.get(i..).and_then(|r| r.iter().position(|b| *b == b'<')) {
         i += off;
         let rest = data.get(i..).unwrap_or(&[]);
@@ -733,6 +741,19 @@ fn scan(data: &[u8], limit: usize) -> (usize, usize) {
             i = find(i + 4, b"-->");
         } else if rest.starts_with(b"<![CDATA[") {
             i = find(i + 9, b"]]>");
+        } else if rest.starts_with(b"<!DOCTYPE") {
+            // To the `]>` closing its subset (the first `>` when it has none).
+            let end = match (rest.iter().position(|b| *b == b'['), rest.iter().position(|b| *b == b'>')) {
+                (Some(o), Some(g)) if o < g => find(i, b"]>"),
+                _ => find(i, b">"),
+            };
+            let quotes = data.get(i..end).unwrap_or(&[]).iter().filter(|b| matches!(**b, b'"' | b'\'')).count();
+            widest = widest.max(quotes / 2);
+            work = work.saturating_add((quotes / 2).saturating_mul(quotes / 2));
+            if widest > MAX_ATTRIBUTES || work > MAX_ATTRIBUTE_WORK {
+                return (max, widest, work);
+            }
+            i = end;
         } else if rest.starts_with(b"<?") || rest.starts_with(b"<!") {
             i = find(i + 2, b">");
         } else if rest.starts_with(b"</") {
@@ -758,20 +779,21 @@ fn scan(data: &[u8], limit: usize) -> (usize, usize) {
                 j += 1;
             }
             widest = widest.max(attrs);
-            if widest > MAX_ATTRIBUTES {
-                return (max, widest);
+            work = work.saturating_add(attrs * attrs);
+            if widest > MAX_ATTRIBUTES || work > MAX_ATTRIBUTE_WORK {
+                return (max, widest, work);
             }
             if !closed {
                 depth += 1;
                 max = max.max(depth);
                 if max > limit {
-                    return (max, widest);
+                    return (max, widest, work);
                 }
             }
             i = j + 1;
         }
     }
-    (max, widest)
+    (max, widest, work)
 }
 
 /// Whether `data` nests elements more than [`MAX_NESTING`] deep: the byte scan first, then the

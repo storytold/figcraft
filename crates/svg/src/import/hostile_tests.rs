@@ -193,3 +193,15 @@ fn an_element_with_thousands_of_attributes_is_refused_before_parsing() {
     let p = d.first_page().unwrap();
     assert!(import_svg(&mut d, &svg(&format!("<g{}/>", many(100_000))), p, 0.0, 0.0, "x").is_err());
 }
+
+#[test]
+fn attribute_work_is_bounded_over_the_whole_document_and_its_dtd() {
+    use super::too_wide;
+    let many = |n: usize| (0..n).map(|i| format!(" a{i}=\"1\"")).collect::<String>();
+    let tag = format!("<g{}/>", many(4000));
+    assert!(!too_wide(format!("<svg>{}</svg>", tag.repeat(10)).as_bytes()));
+    assert!(too_wide(format!("<svg>{}</svg>", tag.repeat(40)).as_bytes()), "each element is within the limit, all together are not");
+    let dtd = format!("<!DOCTYPE svg [<!ENTITY e '<g{}/>'>]><svg>&e;</svg>", many(5000));
+    assert!(too_wide(dtd.as_bytes()), "entities can hold elements");
+    assert!(!too_wide(b"<?xml version='1.0'?><!DOCTYPE svg [<!ENTITY ns 'http://www.w3.org/2000/svg'>]><svg/>"));
+}
