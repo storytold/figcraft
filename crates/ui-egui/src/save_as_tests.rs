@@ -142,11 +142,7 @@ fn native_save_as_preserves_hebrew_document_name_and_mixed_direction_filename_on
 
     assert_eq!(
         *picks.lock().unwrap(),
-        vec![(
-            "Save as".into(),
-            "פרויקט אב - חלון 1.figcraft".into(),
-            vec!["figcraft".into(), "fig".into()],
-        )],
+        vec![("Save as".into(), "פרויקט אב - חלון 1.figcraft".into(), vec!["figcraft".into(), "fig".into()],)],
         "the native picker retains the original Hebrew document name and format extensions"
     );
     assert!(path.is_file());
