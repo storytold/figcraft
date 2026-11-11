@@ -59,3 +59,17 @@ fn joins_past_the_cap_are_left_out_until_someone_leaves() {
     send(joined(over));
     assert!(matches!(inbox.drain().as_slice(), [Event::PeerLeft(7), Event::PeerJoined(p)] if p.client_id == over));
 }
+
+#[test]
+fn a_hosts_long_names_and_colours_are_cut_where_they_are_kept() {
+    let inbox = inbox();
+    let cfg = GuestConfig::new(Invite::new("127.0.0.1:47900", "0123456789abcdef", "AbCdEfGhIjKlMnOpQrStUv"), "Ada".into());
+    let resume = Mutex::new(None);
+    let mut seen = Seen::default();
+    let long = "x".repeat(100_000);
+    take(ServerMsg::PeerJoined(Peer { client_id: 1, name: long.clone(), color: long }), &cfg, &inbox, &mut seen, &resume, &|| {});
+    match inbox.drain().as_slice() {
+        [Event::PeerJoined(p)] => assert!(p.name.chars().count() <= 256 && p.color.chars().count() <= 32),
+        other => panic!("{other:?}"),
+    }
+}

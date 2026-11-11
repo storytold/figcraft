@@ -226,6 +226,19 @@ pub(crate) struct Seen {
     peers: Vec<Peer>,
 }
 
+/// `p` with its name and colour cut to what the UI shows: the host is untrusted, and the roster is
+/// copied whenever someone's identity is updated.
+fn bounded(mut p: Peer) -> Peer {
+    p.name = p.name.chars().take(MAX_PEER_NAME).collect();
+    p.color = p.color.chars().take(MAX_COLOR).collect();
+    p
+}
+
+/// The most characters of a colour (`#rrggbb` and a few spellings more) kept for someone.
+const MAX_COLOR: usize = 32;
+/// The most characters of a name kept for someone.
+const MAX_PEER_NAME: usize = 256;
+
 /// What taking in one message from the host means for the connection.
 pub(crate) enum Taken {
     Continue,
@@ -251,7 +264,7 @@ pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mu
                 *r = Some(Resume { session, client_id, seq, secret });
             }
             // The sync client opens the document (and fills in its name and pages).
-            let peers: Vec<Peer> = peers.iter().take(MAX_PEERS).cloned().collect();
+            let peers: Vec<Peer> = peers.iter().take(MAX_PEERS).cloned().map(bounded).collect();
             let inv = &cfg.invite;
             let info = SessionInfo {
                 role: Role::Guest,
@@ -274,14 +287,14 @@ pub(crate) fn take(mut m: ServerMsg, cfg: &GuestConfig, inbox: &Inbox, seen: &mu
             inbox.push(Event::Sync(m));
             return Taken::Welcomed;
         }
-        ServerMsg::PeerJoined(p) => match seen.info.as_mut() {
+        ServerMsg::PeerJoined(p) => match (seen.info.as_mut(), bounded(p)) {
             // The host tells you how you are shown.
-            Some(info) if p.client_id == info.me => {
+            (Some(info), p) if p.client_id == info.me => {
                 info.name = p.name;
                 info.color = p.color;
                 inbox.push(Event::Welcome { info: info.clone(), peers: seen.peers.clone() });
             }
-            _ => {
+            (_, p) => {
                 match seen.peers.iter().position(|q| q.client_id == p.client_id) {
                     Some(i) => {
                         seen.peers.remove(i);
