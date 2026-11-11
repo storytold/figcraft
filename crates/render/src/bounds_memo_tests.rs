@@ -94,14 +94,8 @@ fn kept_splat_answers_are_the_answers_worked_out_afresh() {
 
 #[test]
 fn ids_chosen_to_differ_only_in_high_bits_still_spread_over_buckets() {
-    use std::hash::{BuildHasher, Hash, Hasher};
+    use std::hash::BuildHasher;
     let state = crate::draw::IdState::default();
-    let buckets: std::collections::HashSet<u64> = (0..4096u64)
-        .map(|k| {
-            let mut h = state.build_hasher();
-            NodeId(k << 40).hash(&mut h);
-            h.finish() & 0xfff
-        })
-        .collect();
+    let buckets: std::collections::HashSet<u64> = (0..4096u64).map(|k| state.hash_one(NodeId(k << 40)) & 0xfff).collect();
     assert!(buckets.len() > 2000, "{}", buckets.len());
 }
