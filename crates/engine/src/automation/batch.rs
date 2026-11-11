@@ -25,9 +25,18 @@ fn weight(v: &Value, limit: usize) -> usize {
         total += 1;
         match v {
             Value::String(s) => total += s.len(),
-            Value::Array(a) => stack.extend(a),
+            // Checked before they are queued, so a huge list can't grow the worklist past the limit.
+            Value::Array(a) => {
+                if total + a.len() > limit {
+                    return total + a.len();
+                }
+                stack.extend(a);
+            }
             Value::Object(o) => {
                 total += o.keys().map(String::len).sum::<usize>();
+                if total + o.len() > limit {
+                    return total + o.len();
+                }
                 stack.extend(o.values());
             }
             _ => {}
@@ -264,5 +273,11 @@ mod expansion_tests {
         assert!(scope.resolve(&refs(4)).is_ok());
         let err = scope.resolve(&refs(200)).unwrap_err().to_string();
         assert!(err.contains("more than the batch may expand"), "{err}");
+    }
+
+    #[test]
+    fn a_huge_list_is_refused_before_it_is_queued() {
+        assert!(weight(&json!(vec![0; 100_000]), 1000) > 1000);
+        assert!(weight(&json!(vec![0; 10]), 1000) <= 1000);
     }
 }
