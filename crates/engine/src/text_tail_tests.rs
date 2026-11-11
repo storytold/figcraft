@@ -446,3 +446,39 @@ fn typing_a_creation_character_and_a_space_starts_a_list() {
     }
     assert_eq!((data(&s, t).characters.as_str(), lists(&s, t)), ("2) ", vec![(P, 0)]));
 }
+
+#[test]
+fn splitting_a_plain_paragraph_that_kept_its_level_keeps_the_level() {
+    // Backspace at a nested item's start unlists it but keeps indent 1; Enter inside it then
+    // splits it, and neither half loses the level (the start reset changes only starts).
+    let mut s = Session::new();
+    let t = text(&mut s, "ab\ncd");
+    let ps = vec![ParaList { list: N, start_offset: 4, ..ParaList::default() }, ParaList { list: N, indent: 1, ..ParaList::default() }];
+    if let figcraft_doc::NodeKind::Text(td) = &mut s.doc_mut().unwrap().get_mut(t).unwrap().kind {
+        td.paragraphs = ps;
+    }
+    begin(&mut s, t, Some(3), false).unwrap();
+    key(&mut s, "Backspace", false, false, false).unwrap();
+    assert_eq!(lists(&s, t), [(N, 0), (P, 1)], "unlisted, level kept");
+    set_caret(&mut s, 4, false).unwrap();
+    key(&mut s, "Enter", false, false, false).unwrap();
+    assert_eq!(data(&s, t).characters, "ab\nc\nd");
+    assert_eq!(lists(&s, t), [(N, 0), (P, 1), (P, 1)], "both halves keep indent 1");
+}
+
+#[test]
+fn a_many_line_paste_clears_every_created_start() {
+    let mut s = Session::new();
+    let t = text(&mut s, "x");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+    begin(&mut s, t, Some(0), false).unwrap();
+    for c in "5. x".chars() {
+        insert(&mut s, &c.to_string()).unwrap();
+    }
+    let lines: Vec<String> = (0..2001).map(|i| format!("l{i}")).collect();
+    insert(&mut s, &lines.join("\n")).unwrap();
+    let d = data(&s, t);
+    assert_eq!(d.paragraph_count(), 2001);
+    assert_eq!(d.para_list(0).start_offset, 4, "the first item keeps its start");
+    assert!((1..d.paragraph_count()).all(|p| d.para_list(p).start_offset == 0 && d.para_list(p).list == N));
+}
