@@ -102,6 +102,6 @@ fn snap_lines_are_bounded_across_a_frames_grids() {
     let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 4000.0, 4000.0).unwrap();
     d.get_mut(f).unwrap().grids = vec![LayoutGrid { kind: GridKind::Grid, size: 1.0, visible: true, ..LayoutGrid::default() }; 1000];
     let (xs, ys) = crate::grid_snap_lines(&d, f);
-    assert!(xs.len() + ys.len() < 250_000, "{}", xs.len() + ys.len());
+    assert!(xs.len() + ys.len() <= 200_000, "{}", xs.len() + ys.len());
     assert!(xs.len() > 4000 && ys.len() > 4000, "the first grids still give their lines");
 }

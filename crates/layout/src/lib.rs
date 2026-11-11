@@ -1169,11 +1169,13 @@ pub fn grid_snap_lines_in(doc: &Document, frame: NodeId, xf: Affine) -> (Vec<f64
     let mut xs = Vec::new();
     let mut ys = Vec::new();
     for g in f.grids.iter().filter(|g| g.visible) {
-        // A frame-wide budget: each grid adds up to ~17,000 lines, and a file can hold any number of grids.
-        if xs.len() + ys.len() >= MAX_SNAP_LINES {
+        // A frame-wide budget: each grid adds up to ~17,000 lines, and a file can hold any number of grids;
+        // a grid that would pass it is left out whole.
+        let lines = grid_lines(g, f.width, f.height);
+        if xs.len() + ys.len() + 2 * lines.len() > MAX_SNAP_LINES {
             break;
         }
-        for r in grid_lines(g, f.width, f.height) {
+        for r in lines {
             let a = xf * Point::new(r.x0, r.y0);
             let b = xf * Point::new(r.x1, r.y1);
             match g.kind {
