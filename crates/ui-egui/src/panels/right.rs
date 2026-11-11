@@ -111,6 +111,23 @@ impl FigApp {
     }
 }
 
+/// Keep the Native property-panel tab hitboxes close to the canvas-facing
+/// edge in either writing direction. Only geometry changes; stable IDs stay put.
+fn panel_tab_rect(tabs: Rect, cursor: f32, label_width: f32, mirrored: bool) -> Rect {
+    let size = vec2(label_width + 16.0, 24.0);
+    let left = if mirrored { cursor - size.x } else { cursor };
+    Rect::from_min_size(pos2(left, tabs.center().y - 12.0), size)
+}
+
+fn next_panel_tab_cursor(tab: Rect, mirrored: bool) -> f32 {
+    if mirrored { tab.min.x - 2.0 } else { tab.max.x + 2.0 }
+}
+
+fn panel_zoom_rect(tabs: Rect, mirrored: bool) -> Rect {
+    let left = if mirrored { tabs.min.x + 8.0 } else { tabs.max.x - 64.0 };
+    Rect::from_min_size(pos2(left, tabs.center().y - 12.0), vec2(56.0, 24.0))
+}
+
 /// Draw the right panel: people, present and share controls, Design/Prototype tabs and zoom
 /// menu, then route the scroll area to comments, frame presets, design, prototype or inspect.
 pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
@@ -165,10 +182,10 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     // Tabs row.
     let (tabs, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     ui.painter().line_segment([tabs.left_top(), tabs.right_top()], Stroke::new(1.0, t.border));
-    let mut x = tabs.min.x + 8.0;
+    let mut x = if app.ui.mirrored { tabs.max.x - 8.0 } else { tabs.min.x + 8.0 };
     for (tab, label) in [(RightTab::Design, tr("Design")), (RightTab::Prototype, tr("Prototype"))] {
         let galley = ui.painter().layout_no_wrap(label.into(), semibold(11.0), t.text);
-        let r = Rect::from_min_size(pos2(x, tabs.center().y - 12.0), vec2(galley.size().x + 16.0, 24.0));
+        let r = panel_tab_rect(tabs, x, galley.size().x, app.ui.mirrored);
         let resp = ui.interact(r, ui.scope_id().with(("rtab", label)), Sense::click());
         let active = app.ui.right_tab == tab;
         a11y::tab(&resp, label, active);
@@ -182,11 +199,11 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
             }
             app.ui.right_tab = tab;
         }
-        x = r.max.x + 2.0;
+        x = next_panel_tab_cursor(r, app.ui.mirrored);
     }
     // Zoom menu.
     let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
-    let zr = Rect::from_min_size(pos2(tabs.max.x - 64.0, tabs.center().y - 12.0), vec2(56.0, 24.0));
+    let zr = panel_zoom_rect(tabs, app.ui.mirrored);
     let zresp = ui.interact(zr, ui.scope_id().with("zoommenu"), Sense::click());
     // The value is only spelled out while a screen reader reads the tree.
     let value = if a11y::active(&zresp.ctx) { format!("{}%", (zoom * 100.0).round()) } else { String::new() };
@@ -833,5 +850,36 @@ fn pretty(s: &str) -> String {
         "LeftRight" => "Left & right".into(),
         "TopBottom" => "Top & bottom".into(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod right_panel_mirror_tests {
+    use super::*;
+
+    #[test]
+    fn hebrew_tabs_reverse_hitboxes_and_keep_zoom_separate() {
+        let strip = Rect::from_min_size(pos2(100.0, 20.0), vec2(240.0, 40.0));
+        for mirrored in [false, true] {
+            let first_cursor = if mirrored { strip.max.x - 8.0 } else { strip.min.x + 8.0 };
+            let design = panel_tab_rect(strip, first_cursor, 45.0, mirrored);
+            let prototype = panel_tab_rect(strip, next_panel_tab_cursor(design, mirrored), 55.0, mirrored);
+            let zoom = panel_zoom_rect(strip, mirrored);
+            if mirrored {
+                assert!(design.center().x > prototype.center().x);
+                assert!(prototype.min.x > zoom.max.x);
+                assert_eq!(design.max.x, strip.max.x - 8.0);
+                assert_eq!(zoom.min.x, strip.min.x + 8.0);
+            } else {
+                assert!(design.center().x < prototype.center().x);
+                assert!(prototype.max.x < zoom.min.x);
+                assert_eq!(design.min.x, strip.min.x + 8.0);
+                assert_eq!(zoom.max.x, strip.max.x - 8.0);
+            }
+            for rect in [design, prototype, zoom] {
+                assert!(strip.contains(rect.center()));
+                assert_eq!(rect.center().y, strip.center().y);
+            }
+        }
     }
 }
