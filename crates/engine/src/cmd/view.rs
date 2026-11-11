@@ -302,7 +302,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.multiplayerCursors", "Multiplayer cursors", "{on?}  others' cursors in a live session", false, |s, p| {
             toggle(s, p, "view.multiplayerCursors")
         }),
-        spec!("view.pan", "Pan the view", "{dx, dy (arrow-key steps, e.g. 1 or -1), big? (ten times as far, like Shift)}", false, pan),
+        spec!("view.pan", "Pan the view", "{dx, dy (arrow-key steps, e.g. 1 or -1), big? (five times as far, like Shift)}", false, pan),
         spec!("view.outlines", "Outlines", "{on?}", false, |s, p| toggle(s, p, "view.outlines")),
         spec!("view.outlinesSelection", "Outlines for selection", "{on?}  outline mode for the selected layers only", false, |s, p| {
             toggle(s, p, "view.outlinesSelection")

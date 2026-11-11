@@ -622,7 +622,7 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky). Keys no design-file
   shortcut uses; on a design file they refuse.
 - `view.pan {dx, dy, big?}`: the arrow keys with nothing selected (`key ArrowRight` does the same)
-  pan the view by 20 screen pixels a step, 200 with `big` (Shift).
+  pan the view by 64 screen pixels a step, 320 with `big` (Shift).
 - `view.multiplayerCursors {on?}` (`Alt+Cmd+\`): show or hide others' cursors in a live session.
 - `view.outlinesHiddenLayers {on?}` and `view.outlinesObjectBounds {on?}`: what outline mode
   (`view.outlines`, `view.outlinesSelection`) draws besides the shapes: hidden layers, and the box
