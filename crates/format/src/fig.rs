@@ -38,6 +38,8 @@ mod paste_style_tests;
 #[cfg(test)]
 mod prop_value_tests;
 #[cfg(test)]
+mod scale_factor_tests;
+#[cfg(test)]
 mod slot_tests;
 #[cfg(test)]
 mod source_identity_tests;
@@ -56,6 +58,8 @@ mod text_style_tests;
 mod text_wrap_tests;
 #[cfg(test)]
 mod value_budget_tests;
+#[cfg(test)]
+mod vector_scale_tests;
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
