@@ -453,7 +453,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         if sresp.hovered() {
             ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), sr.shrink(5.0), Icon::Rotate, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(sr), Icon::Rotate, t.icon);
         if sresp.clicked() {
             app.run("frame.swapOrientation", json!({"ids": sel}));
         }
@@ -505,7 +505,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             ("bool.union", Some(op)) => crate::layers::op_icon(op),
             _ => icon,
         };
-        icons::paint(ui.painter(), br.shrink(5.0), icon, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(br), icon, t.icon);
         if cmd == "bool.union" {
             menu_popup(&bresp).width(180.0).show(|ui| {
                 for (op, c) in [
