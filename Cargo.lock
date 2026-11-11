@@ -1806,6 +1806,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "rfd",
+ "rustix 1.1.5",
  "serde_json",
  "wat",
  "webbrowser",

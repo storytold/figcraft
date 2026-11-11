@@ -115,6 +115,12 @@ impl Desktop {
         }
     }
 
+    /// Whether this run has a settings folder to read preferences from and keep them in
+    /// ([`config_dir`]; they may not be there yet, on a first start).
+    pub fn has_settings(&self) -> bool {
+        self.dir.is_some()
+    }
+
     /// winit reports no system theme on Linux and the BSDs: there the freedesktop colour scheme
     /// answers instead, read once and then watched in the background, calling `wake` when it
     /// changes (an idle window draws no frames). Elsewhere this does nothing.

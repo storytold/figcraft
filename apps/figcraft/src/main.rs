@@ -29,6 +29,7 @@ mod graphics;
 mod recovery;
 mod services;
 mod startup;
+mod user_name;
 
 #[cfg(all(test, target_os = "macos"))]
 mod apple_events_tests;
@@ -213,6 +214,12 @@ fn main() -> eframe::Result {
     if let Some(prefs) = svc.prefs.clone() {
         session.prefs = prefs;
     }
+    // A desktop run that holds no chosen name signs comments, board stickies and live sessions with
+    // the system account's name rather than the default "You" ([`user_name`]). Asked here, where
+    // what this run is stays known: whether it has a settings folder to keep a name in, and whether
+    // an agent started it. Nothing has been commented or drawn yet, so the name is in place before
+    // anything can be signed.
+    use_system_user_name(&mut session, asks_for_user_name(svc.has_settings(), port.is_some()), user_name::system);
     let recovered = recovery_root.as_deref().map(|r| recovery::recover_all(r, &mut session)).unwrap_or_default();
     let mut copies = recovery_root.as_deref().and_then(recovery::Recovery::start);
     // Copies of online files stay until their files arrive from their servers.
@@ -323,6 +330,43 @@ fn opens_new_file(first_run: bool, start_on_home: bool, control: bool) -> bool {
     !first_run && (!start_on_home || control)
 }
 
+/// Whether this start should ask the system for a name to sign work with ([`user_name`]): the run
+/// has a settings folder, so a name taken now is kept with the preferences and never asked for
+/// again, and it was not started for an agent (`--control`, `FIGCRAFT_CONTROL_PORT`), which has to
+/// sign the same way on every machine. A machine that gives the app nowhere to keep anything
+/// (`FIGCRAFT_CONFIG_DIR` set empty) asks nothing either. The browser build, `figcraft-cli` and the
+/// commands over the control channel never come through here at all.
+fn asks_for_user_name(settings: bool, control: bool) -> bool {
+    settings && !control
+}
+
+/// The system account's name ([`user_name`]) as the name from Preferences, while that is still the
+/// default: on a start before the person has named themselves, and on preferences saved back when
+/// "You" was the only name there. `ask` is the caller's decision ([`asks_for_user_name`]), so no
+/// part of this reads the environment and the tests cover both kinds of run. A name set in
+/// Preferences ▸ Your name always wins, and the system is asked only until one is saved.
+///
+/// A blank stored name counts as that default too, because that is what `pref.userName` keeps:
+/// clearing Preferences ▸ Your name puts the default back, there being no empty name to hold. So,
+/// unlike WordCraft (#4368, where a name cleared in Options stays empty), a FigCraft name cleared
+/// on a desktop start is filled from the account again; the name to keep is one typed there.
+///
+/// The name goes through `pref.userName`, as one typed in Preferences does, so it is cleaned the
+/// same way: trimmed, control characters out, capped at `figcraft_engine::live::MAX_NAME`. That
+/// command is not journaled and touches no document, so nothing becomes dirty and no undo step
+/// appears, and a live session renames you at once, as typing the name does.
+fn use_system_user_name(session: &mut Session, ask: bool, system: impl FnOnce() -> Option<String>) {
+    let stored = session.prefs.user_name.trim();
+    if !ask || !(stored.is_empty() || stored == figcraft_engine::cmd::comment::DEFAULT_AUTHOR) {
+        return;
+    }
+    if let Some(name) = system()
+        && let Err(e) = session.execute("pref.userName", &json!({"name": name}))
+    {
+        log::debug!("user name: the system's isn't usable: {e}");
+    }
+}
+
 /// The title bar FigCraft starts with, decided by the shared craft-window crate so every Craft app
 /// agrees on who draws the frame per desktop. The override variable is `FIGCRAFT_TITLEBAR`
 /// (`app` / `system`). macOS keeps its inset traffic lights unchanged (craft-window returns the
@@ -424,5 +468,112 @@ mod start_tests {
         assert!(!opens_new_file(false, true, false), "Home when the preference asks");
         assert!(opens_new_file(false, true, true), "--control still starts with a document");
         assert!(!opens_new_file(true, false, false), "a first run shows the home screen");
+    }
+}
+
+#[cfg(test)]
+mod system_name_tests {
+    use figcraft_engine::Session;
+    use serde_json::json;
+
+    use super::{asks_for_user_name, use_system_user_name};
+
+    /// The name comments are signed with until the user sets theirs.
+    const DEFAULT: &str = figcraft_engine::cmd::comment::DEFAULT_AUTHOR;
+
+    #[test]
+    fn the_system_user_name_replaces_only_the_default() {
+        let mut s = Session::new();
+        use_system_user_name(&mut s, true, || Some(" Ada\u{7} Lovelace\n".into()));
+        assert_eq!(s.prefs.user_name, "Ada Lovelace", "cleaned as a name typed in Preferences is");
+        assert_eq!(figcraft_engine::live::display_name(&s.prefs), "Ada Lovelace", "and it names you in a live session");
+        // A name chosen since, this run or an earlier one, is never asked over.
+        let mut asked = false;
+        use_system_user_name(&mut s, true, || {
+            asked = true;
+            Some("Grace Hopper".into())
+        });
+        assert!(!asked, "the system isn't asked once a name is there");
+        assert_eq!(s.prefs.user_name, "Ada Lovelace");
+    }
+
+    #[test]
+    fn a_name_from_preferences_wins_and_a_blank_one_counts_as_the_default() {
+        let mut s = Session::new();
+        s.execute("pref.userName", &json!({"name": "Grace Hopper"})).unwrap();
+        let mut asked = false;
+        use_system_user_name(&mut s, true, || {
+            asked = true;
+            Some("Ada Lovelace".into())
+        });
+        assert!(!asked, "a name the person set asks nothing");
+        assert_eq!(s.prefs.user_name, "Grace Hopper");
+        // Preferences saved before this change hold the default, and a hand-edited settings file
+        // can hold nothing: both are the missing name the system fills.
+        for stored in [DEFAULT, "", "   "] {
+            let mut s = Session::new();
+            s.prefs.user_name = stored.into();
+            use_system_user_name(&mut s, true, || Some("Ada Lovelace".into()));
+            assert_eq!(s.prefs.user_name, "Ada Lovelace", "{stored:?}");
+        }
+    }
+
+    #[test]
+    fn a_comment_signed_with_the_system_name_is_still_yours() {
+        // Which comments are yours is the name in the message against the name in the preferences,
+        // so taking the system's name signs and owns them like any other name.
+        let mut s = Session::new();
+        use_system_user_name(&mut s, true, || Some("Ada Lovelace".into()));
+        let c = s.execute("comment.add", &json!({"x": 0, "y": 0, "text": "Mine"})).unwrap()["id"].as_u64().unwrap();
+        assert_eq!(s.doc().unwrap().comment(c).unwrap().first.author, "Ada Lovelace");
+        s.execute("comment.edit", &json!({"id": c, "text": "Still mine"})).unwrap();
+        s.execute("comment.delete", &json!({"id": c})).unwrap();
+    }
+
+    #[test]
+    fn only_a_run_with_a_settings_folder_and_no_agent_asks() {
+        assert!(asks_for_user_name(true, false), "a desktop run with somewhere to keep the name");
+        assert!(!asks_for_user_name(false, false), "nowhere to keep a name");
+        assert!(!asks_for_user_name(true, true), "--control: started for an agent");
+        assert!(!asks_for_user_name(false, true), "neither a settings folder nor a person");
+    }
+
+    #[test]
+    fn a_cleared_name_is_the_default_and_is_taken_from_the_account_again() {
+        // Clearing Preferences ▸ Your name puts the default back (`pref.userName` has no empty name
+        // to hold), so the next desktop start reads it as "no name chosen" and fills the account's.
+        // WordCraft (#4368) keeps a cleared name empty; FigCraft has no cleared state to honour, so
+        // the name to keep is one typed there.
+        let mut s = Session::new();
+        s.execute("pref.userName", &json!({"name": "Grace Hopper"})).unwrap();
+        s.execute("pref.userName", &json!({"name": " "})).unwrap();
+        assert_eq!(s.prefs.user_name, DEFAULT, "cleared: the default, not an empty name");
+        use_system_user_name(&mut s, asks_for_user_name(true, false), || Some("Ada Lovelace".into()));
+        assert_eq!(s.prefs.user_name, "Ada Lovelace", "the account names the run again");
+        use_system_user_name(&mut s, asks_for_user_name(true, false), || Some("Someone Else".into()));
+        assert_eq!(s.prefs.user_name, "Ada Lovelace", "and is never asked over a chosen name");
+    }
+
+    #[test]
+    fn a_run_without_a_settings_folder_or_an_agents_run_never_asks() {
+        for (settings, control, why) in [(false, false, "no settings folder"), (true, true, "started for an agent")] {
+            let mut asked = false;
+            let mut s = Session::new();
+            use_system_user_name(&mut s, asks_for_user_name(settings, control), || {
+                asked = true;
+                Some("Ada Lovelace".into())
+            });
+            assert!(!asked, "{why}: no lookup at all");
+            assert_eq!(s.prefs.user_name, DEFAULT, "{why}: the default signs");
+        }
+    }
+
+    #[test]
+    fn no_usable_system_name_keeps_the_default() {
+        for system in [None, Some(String::new()), Some(" \t\n".into()), Some("\u{0}\u{1b}".into())] {
+            let mut s = Session::new();
+            use_system_user_name(&mut s, true, || system.clone());
+            assert_eq!(s.prefs.user_name, DEFAULT, "{system:?}");
+        }
     }
 }
