@@ -180,8 +180,14 @@ impl P<'_> {
     }
 }
 
-/// Paint `icon` centred in `rect` (a 16-unit glyph scaled to fit) in `color`.
+/// Paint a Lucide icon centred in `rect`, or FigCraft's original brand mark.
 pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
+    if icon != Icon::Logo
+        && let Some(path) = super::lucide_path(icon)
+    {
+        paint_outlines(painter, rect, 24.0, &[(path, false)], color, 2.0);
+        return;
+    }
     let ppp = painter.ctx().pixels_per_point();
     let px = 1.0 / ppp;
     // Physical pixels per grid unit: whole steps from 16 px up (quarter steps on fractional

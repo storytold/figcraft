@@ -1255,11 +1255,12 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 app.ui.rename = Some(Rename { id: row.id, start: true });
             }
             if resp.secondary_clicked() {
-                if !sel.contains(&row.id) {
+                let in_selection = sel.contains(&row.id);
+                if !in_selection {
                     clicked = Some((row.id, egui::Modifiers::NONE));
                 }
                 let pos = ui.input(|i| i.pointer.hover_pos()).unwrap_or(r.center());
-                app.ui.context_menu = Some((pos, vec![row.id]));
+                app.ui.context_menu = Some((pos, if in_selection { sel.clone() } else { vec![row.id] }));
                 app.ui.context_menu_shown = false;
             }
             // Drag to reorder.

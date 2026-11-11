@@ -27,6 +27,26 @@ fn al_frame(s: &mut Session, props: Value) -> NodeId {
     f
 }
 
+#[test]
+fn add_auto_layout_wraps_instances_without_changing_their_mains() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"width": 80, "height": 40})).unwrap());
+    let component = id(s.execute("component.create", &json!({"ids": [frame]})).unwrap());
+    let first = id(s.execute("instance.create", &json!({"component": component, "x": 200})).unwrap());
+    let second = id(s.execute("instance.create", &json!({"component": component, "x": 300})).unwrap());
+
+    let result = s.execute("layout.add", &json!({"ids": [first, second]})).unwrap();
+    let wrapper = id_of(&result["ids"][0]).unwrap();
+    let doc = s.doc().unwrap();
+    let outer = doc.node(wrapper).unwrap();
+    assert!(matches!(outer.kind, figcraft_doc::NodeKind::Frame));
+    assert!(outer.layout.is_some());
+    assert!(outer.children.contains(&first) && outer.children.contains(&second));
+    assert!(doc.node(component).unwrap().layout.is_none());
+    assert!(doc.node(first).unwrap().layout.is_none());
+    assert!(doc.node(second).unwrap().layout.is_none());
+}
+
 fn set(s: &mut Session, node: NodeId, props: Value) {
     s.execute("node.set", &json!({"id": node, "props": props})).unwrap();
 }

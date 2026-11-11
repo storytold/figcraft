@@ -1,17 +1,16 @@
-//! FigCraft's icon set, drawn in code from simple primitives on a 16×16 grid. Original artwork
-//! (MIT OR Apache-2.0): no third-party icons are used anywhere.
+//! FigCraft's UI icons use Lucide's ISC-licensed vector geometry; the brand mark stays original.
 //!
-//! The grid is pixel-exact at 16 px: 1-unit strokes sit on half coordinates (pixel centres) and
-//! fills on whole ones. Larger boxes scale by whole steps and smaller ones are hinted: straight
-//! strokes snap to the pixel grid so they stay one sharp pixel wide at any size.
+//! Lucide paths use a 24×24 grid. The original FigCraft brand mark uses the former 16×16 grid.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
+use std::sync::OnceLock;
 
 use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, Stroke, Vec2, pos2, vec2};
 
 macro_rules! icons {
     ($($(#[$m:meta])* $name:ident,)*) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[repr(usize)]
         pub enum Icon {
             $($(#[$m])* $name,)*
         }
@@ -24,8 +23,65 @@ macro_rules! icons {
 }
 
 mod draw;
+mod lucide_data;
 
 pub use draw::{paint, paint_outlines};
+
+fn lucide_path(icon: Icon) -> Option<&'static figcraft_geom::BezPath> {
+    static PATHS: OnceLock<Vec<Option<figcraft_geom::BezPath>>> = OnceLock::new();
+    let index = icon as usize;
+    if lucide_data::NAMES.get(index) == Some(&"figcraft-logo") {
+        return None;
+    }
+    PATHS
+        .get_or_init(|| lucide_data::PATHS.iter().map(|data| figcraft_geom::BezPath::from_svg(data).ok()).collect())
+        .get(index)
+        .and_then(Option::as_ref)
+}
+
+#[cfg(test)]
+mod lucide_tests {
+    use super::{Icon, lucide_data, lucide_path};
+    use figcraft_geom::kurbo::Shape as _;
+
+    #[test]
+    fn every_ui_icon_has_parseable_lucide_geometry() {
+        assert_eq!(lucide_data::PATHS.len(), Icon::ALL.len());
+        assert_eq!(lucide_data::NAMES.len(), Icon::ALL.len());
+        for &icon in Icon::ALL {
+            if icon != Icon::Logo {
+                assert!(lucide_path(icon).is_some(), "{icon:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn lucide_geometry_stays_inside_its_24_unit_box() {
+        for &icon in Icon::ALL {
+            if let Some(path) = lucide_path(icon) {
+                let bounds = path.bounding_box();
+                assert!(
+                    bounds.x0 >= -0.01 && bounds.y0 >= -0.01 && bounds.x1 <= 24.01 && bounds.y1 <= 24.01,
+                    "{icon:?} extends beyond its icon box: {bounds:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn main_tools_use_their_lucide_roles() {
+        for (icon, name) in [
+            (Icon::Move, "mouse-pointer-2"),
+            (Icon::Scale, "maximize-2"),
+            (Icon::Pen, "pen-tool"),
+            (Icon::Pencil, "pencil"),
+            (Icon::Assets, "boxes"),
+            (Icon::PenNib, "file-pen-line"),
+        ] {
+            assert_eq!(lucide_data::NAMES[icon as usize], name, "{icon:?}");
+        }
+    }
+}
 
 icons! {
     Move,
@@ -360,25 +416,23 @@ mod tests {
         assert!(out.shapes.len() > Icon::ALL.len() * 10);
     }
 
-    /// The gradient kinds' icons show a fade: a mesh whose vertices run from opaque to clear.
+    /// The gradient kinds each have a distinct Lucide mark.
     #[test]
-    fn gradient_icons_fade() {
+    fn gradient_icons_differ() {
         let ctx = egui::Context::default();
+        let mut painted = Vec::new();
         for icon in [Icon::GradientLinear, Icon::GradientRadial, Icon::GradientAngular, Icon::GradientDiamond] {
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, Vec2::splat(16.0)), icon, Color32::WHITE);
             });
             out.textures_delta.clear();
-            let alphas: Vec<u8> = out
-                .shapes
-                .iter()
-                .filter_map(|c| match &c.shape {
-                    Shape::Mesh(m) => Some(m.vertices.iter().map(|v| v.color.a()).collect::<Vec<_>>()),
-                    _ => None,
-                })
-                .flatten()
-                .collect();
-            assert!(alphas.contains(&255) && alphas.contains(&0), "{icon:?} fades from opaque to clear: {alphas:?}");
+            assert!(!out.shapes.is_empty(), "{icon:?} paints");
+            painted.push(format!("{:?}", out.shapes));
+        }
+        for (i, a) in painted.iter().enumerate() {
+            for b in &painted[i + 1..] {
+                assert_ne!(a, b);
+            }
         }
     }
 
@@ -462,50 +516,23 @@ mod tests {
         out.shapes.into_iter().map(|c| c.shape).collect()
     }
 
-    /// Frame and Text stay a grid unit inside the box, so their long hinted strokes don't
-    /// outweigh the outlines beside them in the toolbar (#737).
+    /// The toolbar's frame, text, and slice marks stay inside their hit boxes.
     #[test]
-    fn frame_and_text_marks_are_inset() {
-        for icon in [Icon::Frame, Icon::Text] {
+    fn tool_marks_stay_inside_their_boxes() {
+        for icon in [Icon::Frame, Icon::Text, Icon::Slice] {
             let pts: Vec<Pos2> = shapes_at_32(icon)
                 .iter()
                 .flat_map(|s| match s {
                     Shape::LineSegment { points, .. } => points.to_vec(),
-                    other => panic!("{icon:?} draws straight strokes only: {other:?}"),
+                    Shape::Path(path) => path.points.clone(),
+                    _ => Vec::new(),
                 })
                 .collect();
             assert!(!pts.is_empty());
             for p in pts {
-                // Grid units 3..13, two points each.
-                assert!((6.0..=26.0).contains(&p.x) && (6.0..=26.0).contains(&p.y), "{icon:?} reaches {p:?}");
+                assert!((0.0..=32.0).contains(&p.x) && (0.0..=32.0).contains(&p.y), "{icon:?} reaches {p:?}");
             }
         }
-    }
-
-    /// Slice is one knife (#739): an outlined blade and a solid handle that covers the middle of
-    /// the blade's base, so the two read as one mark rather than separate pieces.
-    #[test]
-    fn slice_is_one_connected_knife() {
-        let shapes = shapes_at_32(Icon::Slice);
-        let paths: Vec<_> = shapes
-            .iter()
-            .map(|s| match s {
-                Shape::Path(p) => p,
-                other => panic!("Slice draws paths only: {other:?}"),
-            })
-            .collect();
-        let blade = paths.iter().find(|p| p.closed && p.fill == Color32::TRANSPARENT).expect("an outlined blade");
-        let handle = paths.iter().find(|p| p.fill != Color32::TRANSPARENT).expect("a solid handle");
-        assert_eq!((paths.len(), blade.points.len()), (2, 3), "a blade and a handle, nothing else");
-        // The blade's base runs between its second and third points; the handle is convex.
-        let base = blade.points[1] + (blade.points[2] - blade.points[1]) / 2.0;
-        let h = &handle.points;
-        let side = |i: usize| {
-            let (a, b) = (h[i], h[(i + 1) % h.len()]);
-            (b - a).x * (base - a).y - (b - a).y * (base - a).x
-        };
-        let inside = (0..h.len()).all(|i| side(i) >= 0.0) || (0..h.len()).all(|i| side(i) <= 0.0);
-        assert!(inside, "the handle covers the blade's base at {base:?}");
     }
 
     /// Each corner's icon shows its own corner: no two of the four draw alike.
