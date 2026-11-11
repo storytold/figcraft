@@ -66,10 +66,21 @@ impl Styled {
         }
         // Each point's own join: a short corner along its two segments stroked with that join.
         let reach = (width * 0.05).max(0.2);
+        // Segments per point, built once (a scan of every segment per point is quadratic); like `incident`, a loop segment counts at its `a` end only.
+        let mut incident: Vec<Vec<(usize, bool)>> = vec![Vec::new(); self.net.vertices.len()];
+        for (i, s) in self.net.segments.iter().enumerate() {
+            if let Some(list) = incident.get_mut(s.a) {
+                list.push((i, true));
+            }
+            if s.b != s.a
+                && let Some(list) = incident.get_mut(s.b)
+            {
+                list.push((i, false));
+            }
+        }
         for (v, x) in self.net.vertices.iter().enumerate() {
             let Some(join) = x.join.filter(|_| self.breaks(v)) else { continue };
-            let inc = self.net.incident(v);
-            let [(s1, a1), (s2, a2)] = inc.as_slice() else { continue };
+            let Some([(s1, a1), (s2, a2)]) = incident.get(v).map(Vec::as_slice) else { continue };
             let (Some(d1), Some(d2)) = (self.net.tangent_out(*s1, *a1), self.net.tangent_out(*s2, *a2)) else { continue };
             let p = x.point();
             let mut corner = BezPath::new();

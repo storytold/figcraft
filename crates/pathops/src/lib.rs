@@ -240,7 +240,10 @@ pub fn faces(paths: &[(BezPath, bool)]) -> Result<Vec<ArrangementFace>, PathOpsE
     // corner folds over itself and touches the shape's fill) leave the winding on each side of a
     // segment ambiguous where they touch, which made the sweep report overlapping faces. Reducing
     // every input to the simple contours of the area it fills first keeps the faces disjoint.
-    let closed_paths: Vec<BezPath> = paths.iter().map(|(p, even_odd)| plain(&closed(p), *even_odd)).collect();
+    // Closing adds edges, so what `plain` sweeps is checked first.
+    let closed_inputs: Vec<BezPath> = paths.iter().map(|(p, _)| closed(p)).collect();
+    budget::check(&closed_inputs)?;
+    let closed_paths: Vec<BezPath> = closed_inputs.iter().zip(paths).map(|(p, (_, even_odd))| plain(p, *even_odd)).collect();
     if closed_paths.iter().all(|p| p.elements().is_empty()) {
         return Ok(Vec::new());
     }

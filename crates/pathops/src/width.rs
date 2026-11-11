@@ -262,7 +262,12 @@ const DASH_ACCURACY: f64 = 0.05;
 /// Whether `pattern` (from [`dash_pattern`]) makes at most [`MAX_DASHES`] dashes along `len`;
 /// past that a stroke draws solid instead of one outline per dash (#1060).
 pub(crate) fn dashes_fit(len: f64, pattern: &[f64]) -> bool {
-    len / pattern.iter().sum::<f64>() * (pattern.len() as f64) < MAX_DASHES as f64
+    dash_count(len, pattern) < MAX_DASHES as f64
+}
+
+/// About how many dashes `pattern` makes along `len`.
+fn dash_count(len: f64, pattern: &[f64]) -> f64 {
+    len / pattern.iter().sum::<f64>() * (pattern.len() as f64)
 }
 
 /// Resample a polyline so no step is longer than `max_step`; returns the points and the length at
@@ -303,6 +308,8 @@ pub fn variable_outline(path: &BezPath, width: f64, props: &StrokeProps, profile
     let style = Style { join: props.join, miter_limit: props.miter_limit.clamp(1.0, 100.0), cap_start, cap_end };
     let pattern = dash_pattern(props);
     let mut budget = MAX_WIDTH_SAMPLES;
+    // The dashes of all subpaths together stay within MAX_DASHES; the rest draw solid.
+    let mut dash_budget = MAX_DASHES as f64;
     let mut out = BezPath::new();
     for line in &lines {
         let len = line.length();
@@ -318,7 +325,8 @@ pub fn variable_outline(path: &BezPath, width: f64, props: &StrokeProps, profile
             })
             .collect();
         match &pattern {
-            Some(pat) if dashes_fit(len, pat) => {
+            Some(pat) if dashes_fit(len, pat) && dash_count(len, pat) < dash_budget => {
+                dash_budget -= dash_count(len, pat);
                 let (pat, offset) = line_dashes(len, line.closed, pat);
                 for (p, h) in dashes(&pts, &hw, &pat, offset) {
                     outline_piece(&mut out, &p, &h, false, style);
