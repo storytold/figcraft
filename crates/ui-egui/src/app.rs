@@ -268,6 +268,8 @@ impl FigApp {
             return;
         }
         if !self.has_files() || self.ui.home {
+            let docs = &self.session.docs;
+            self.canvas.drop_closed(|uid| docs.iter().any(|d| d.uid == uid));
             home::show(self, ui);
             // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
             // (cleared after the home widgets, which may have just asked for it).
