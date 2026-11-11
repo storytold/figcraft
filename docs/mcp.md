@@ -1274,9 +1274,11 @@ and read state are its own, it can edit and delete only its own messages, and it
 `"agent": true` in `comment.list` (the app shows an **Agent** label by the name); the user's name in
 Preferences is unchanged. It is set once per connection, so no command needs `author`; an `author`
 param still wins. In the app, comments act as the name from Preferences (`pref.userName {name}`,
-default "You"); only a message's author can edit or delete it. `@Name` in a message mentions
-someone (`comment.people` lists the names used in the file: everyone who wrote or reacted, and
-every name a message @mentions, once each in any case; and, as `you`, who is acting).
+default "You"); only a message's author can edit or delete it. A first desktop start takes the
+operating system account's name into that preference instead of "You"; the CLI, this server and a
+`--control` run keep the default, so what an agent signs is the same on every machine. `@Name` in a
+message mentions someone (`comment.people` lists the names used in the file: everyone who wrote or
+reacted, and every name a message @mentions, once each in any case; and, as `you`, who is acting).
 
 Read state is kept per name: a new message is unread for everyone but its author;
 `comment.markRead {id? | link?, read?}` marks one thread (or, without `id`, all of them) read or
