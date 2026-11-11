@@ -652,8 +652,10 @@ fn link_instances(doc: &mut Document) {
     let mut insts: Vec<(usize, NodeId)> =
         doc.nodes().filter(|n| matches!(n.kind, NodeKind::Instance { .. })).map(|n| (doc.ancestors(n.id).len(), n.id)).collect();
     insts.sort_by_key(|a| std::cmp::Reverse(a.0));
+    // Rebasing leaves the mains alone, so each main's layer paths are worked out once.
+    let mut mains = crate::components::MainPaths::new();
     for (_, i) in insts {
-        crate::components::rebase_instance(doc, i);
+        crate::components::rebase_instance_with(doc, i, &mut mains);
     }
 }
 
