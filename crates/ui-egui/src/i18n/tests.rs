@@ -904,3 +904,63 @@ fn hebrew_native_document_and_inspector_basics_are_translated() {
         assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
     }
 }
+
+/// The Native export dialog and PDF print controls must not silently switch
+/// back to English when using Hebrew, including numeric export notifications.
+#[test]
+fn hebrew_native_export_and_pdf_print_controls_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Replace mixed export settings",
+        "Click + to replace mixed content",
+        "Export {name}",
+        "Suffix",
+        "Remove export setting",
+        "Android Vector Drawable",
+        "Best effort",
+        "Exact only",
+        "Ignore unsupported",
+        "Ignore overlapping layers",
+        "Include bounding box",
+        "Outline text",
+        "Include id attribute",
+        "Simplify stroke",
+        "Compatibility",
+        "Color profile",
+        "Same as file ({profile})",
+        "PDF print settings",
+        "{length} bleed",
+        "crop marks",
+        "bleed marks",
+        "no bleed",
+        "Bleed",
+        "Crop marks",
+        "Bleed marks",
+        "CMYK colour",
+        "Bleed marks need a bleed",
+        "Preview",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew Native export control: {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        for placeholder in ["{name}", "{profile}", "{length}"] {
+            assert_eq!(key.contains(placeholder), value.contains(placeholder), "placeholder in {key:?}");
+        }
+    }
+    for key in [
+        "Export {n} layers",
+        "Exported {n} files",
+        "Exported {n} files; some content was changed or left out",
+        "Exported {name}; {n} kinds of content were changed or left out",
+    ] {
+        let Some(Text::Plural(Forms { one: Some(one), other, .. })) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew Native export count forms: {key:?}");
+        };
+        for value in [one, other] {
+            assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)));
+            assert!(value.contains("{n}"), "lost export count in {key:?}");
+            assert_eq!(key.contains("{name}"), value.contains("{name}"), "lost export filename in {key:?}");
+        }
+    }
+}
