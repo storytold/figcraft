@@ -43,6 +43,7 @@ mod component;
 mod layer;
 mod paint;
 mod prototype;
+mod scale;
 mod shape;
 
 /// Most layers written, and deepest nesting followed (the import's limits).
