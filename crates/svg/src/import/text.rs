@@ -195,7 +195,7 @@ pub(crate) fn text(cx: &mut Ctx, t: &usvg::Text, parent: NodeId, base: Affine, d
         let x = chunk.x().map_or(pen_x, f64::from) + d(t.dx());
         let y = chunk.y().map_or(pen_y, f64::from) + d(t.dy());
         char_at += count;
-        let ci = |b: usize| text.get(..b).map_or(count, |p| p.chars().count());
+        let ci = char_index(text);
         let spans: Vec<_> = chunk.spans().iter().map(|sp| (ci(sp.start()), ci(sp.end()), sp, span_style(sp, s, fonts))).collect();
         if spans.is_empty() {
             continue;
@@ -227,6 +227,13 @@ pub(crate) fn text(cx: &mut Ctx, t: &usvg::Text, parent: NodeId, base: Affine, d
         }
         i = j;
     }
+}
+
+/// The characters of `text` before a byte offset (all of them for an offset that is past the end
+/// or inside a character), by a search in a table built once: many spans don't rescan the prefix.
+fn char_index(text: &str) -> impl Fn(usize) -> usize + '_ {
+    let starts: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+    move |b| if text.is_char_boundary(b) { starts.partition_point(|s| *s < b) } else { starts.len() }
 }
 
 /// The text of `lines` (one per line, stacked at their pitch; `s`: their scale): characters, the
@@ -262,8 +269,7 @@ fn on_path(cx: &mut Ctx, t: &usvg::Text, world: Affine, parent: NodeId) -> bool 
     let Some(len) = figcraft_geom::measure::polylines(&path).and_then(|l| l.first().map(|l| l.length())).filter(|l| *l > 1e-9) else { return false };
     let fonts = cx.fonts.get_or_insert_with(Fonts::load);
     let text = chunk.text();
-    let count = text.chars().count();
-    let ci = |b: usize| text.get(..b).map_or(count, |p| p.chars().count());
+    let ci = char_index(text);
     let spans: Vec<_> = chunk.spans().iter().map(|sp| (ci(sp.start()), ci(sp.end()), sp, span_style(sp, 1.0, fonts))).collect();
     let line = Line { x: 0.0, y: 0.0, anchor: chunk.anchor(), text: text.to_string(), spans };
     let mut td = text_data(std::slice::from_ref(&line), 1.0);
