@@ -39,6 +39,10 @@ const MAX_DEPTH: usize = 256;
 const MAX_COMMANDS: usize = 200_000;
 const MAX_GRID_TRACKS: usize = 1_000;
 pub(super) const MAX_GRID_TRACK_VALUE: f64 = 1e6;
+/// Smallest and largest scale factor of a scaled instance (`symbolData.uniformScaleFactor`, times
+/// those of the instances around it) that is followed: a junk factor changes nothing.
+pub(super) const MIN_SCALE_FACTOR: f64 = 1e-3;
+pub(super) const MAX_SCALE_FACTOR: f64 = 1e3;
 /// Id of "no style".
 const NO_STYLE: &str = "4294967295:4294967295";
 /// Longest asset `key` or `version` kept for resolving references given as assets.
@@ -147,6 +151,22 @@ fn copy_num(o: &mut Obj, n: &View, from: &str, to: &str) {
     }
 }
 
+/// [`copy_num`] for a length: the layers of a scaled instance give it at the instance's scale.
+fn copy_len(o: &mut Obj, n: &View, from: &str, to: &str) {
+    if let Some(x) = n.len(from) {
+        o.insert(to.into(), json!(x));
+    }
+}
+
+/// `x` at scale `k`; `None` when the result is not finite.
+fn scaled(x: f64, k: f64) -> Option<f64> {
+    if k == 1.0 {
+        return Some(x);
+    }
+    let r = x * k;
+    r.is_finite().then_some(r)
+}
+
 fn copy_str(o: &mut Obj, n: &View, from: &str, to: &str) {
     if let Some(s) = n.str(from) {
         o.insert(to.into(), json!(s));
@@ -157,27 +177,73 @@ fn copy_str(o: &mut Obj, n: &View, from: &str, to: &str) {
 #[derive(Clone)]
 struct View<'a> {
     layers: Vec<&'a Kv<'a>>,
+    /// The factor each layer's lengths take (`scales[i]` is for `layers[i]`): the layers of a main
+    /// inside a scaled instance have the instance's, the override and derived rows of the instance
+    /// 1, being at the instance's scale already (#2091).
+    scales: Vec<f64>,
     /// Size and transform worked out from the constraints, over the layers' own.
     fitted: Option<((f64, f64), Affine)>,
 }
 
 impl<'a> View<'a> {
     fn of(n: &'a Kv<'a>) -> Self {
-        Self { layers: vec![n], fitted: None }
+        Self::of_scaled(n, 1.0)
+    }
+
+    /// A node of a main inside an instance scaled by `k`: its lengths read `k` times as long.
+    fn of_scaled(n: &'a Kv<'a>, k: f64) -> Self {
+        Self { layers: vec![n], scales: vec![k], fitted: None }
+    }
+
+    /// This view with the layers of `upper` over it (`upper`'s fitted size and place).
+    fn over(&self, upper: &Self) -> Self {
+        let mut v = self.clone();
+        v.layers.extend(upper.layers.iter().copied());
+        v.scales.extend(upper.scales.iter().copied());
+        v.fitted = upper.fitted;
+        v
+    }
+
+    /// The factor of the lowest layer (the layer's own main), for values a style gives.
+    fn base_scale(&self) -> f64 {
+        self.scales.first().copied().unwrap_or(1.0)
     }
 
     fn size(&self) -> Option<(f64, f64)> {
-        self.fitted.map(|f| f.0).or_else(|| self.get("size").and_then(size))
+        self.fitted.map(|f| f.0).or_else(|| {
+            let (v, k) = self.find("size")?;
+            let (x, y) = size(v)?;
+            Some((scaled(x, k)?, scaled(y, k)?))
+        })
     }
 
     fn transform(&self) -> Option<Affine> {
-        self.fitted.map(|f| f.1).or_else(|| self.get("transform").and_then(matrix))
+        self.fitted.map(|f| f.1).or_else(|| {
+            let (v, k) = self.find("transform")?;
+            let m = matrix(v)?;
+            if k == 1.0 {
+                return Some(m);
+            }
+            let [a, b, c, d, e, f] = m.as_coeffs();
+            let m = Affine::new([a, b, c, d, scaled(e, k)?, scaled(f, k)?]);
+            Some(m)
+        })
     }
 
-    fn with(&self, top: impl IntoIterator<Item = &'a Kv<'a>>) -> Self {
+    /// This view with `top` over it, each layer with the factor its lengths take.
+    fn with(&self, top: impl IntoIterator<Item = (&'a Kv<'a>, f64)>) -> Self {
         let mut v = self.clone();
-        v.layers.extend(top);
+        for (layer, scale) in top {
+            v.layers.push(layer);
+            v.scales.push(scale);
+        }
         v
+    }
+
+    /// The factor of the layer that links a style in `key` (or `legacy`), the lowest layer's when
+    /// none does: what the linked style's lengths take.
+    fn link_scale(&self, key: &str, legacy: &str) -> f64 {
+        self.find(key).or_else(|| self.find(legacy)).map_or_else(|| self.base_scale(), |f| f.1)
     }
 
     /// This view with `style` just above the layer that links it in `key` (or `legacy`): the style
@@ -188,13 +254,48 @@ impl<'a> View<'a> {
         if let Some(s) = style {
             let linked_in = |k: &str| v.layers.iter().rposition(|l| l.get(k).is_some());
             let at = linked_in(key).or_else(|| linked_in(legacy)).map_or(1, |i| i + 1);
-            v.layers.insert(at.min(v.layers.len()), s);
+            let at = at.min(v.layers.len());
+            // The style is at the scale of the layer that links it.
+            let k = at.checked_sub(1).and_then(|i| v.scales.get(i)).copied().unwrap_or(1.0);
+            v.layers.insert(at, s);
+            v.scales.insert(at, k);
         }
         v
     }
 
+    /// An effect/grid list follows the same precedence as text styles: an override above the
+    /// style link wins, while the style beats stale copies on and below its linking row. A style
+    /// without the list is empty; it must not expose a stale list from a lower row.
+    fn styled_list(&self, style: &'a Kv<'a>, list: &str, key: &str, legacy: &str) -> (&'a [Kv<'a>], f64) {
+        let linked_in = |k: &str| self.layers.iter().rposition(|l| l.get(k).is_some());
+        let above = linked_in(key).or_else(|| linked_in(legacy)).map_or(1, |i| i + 1);
+        self.layers
+            .iter()
+            .zip(&self.scales)
+            .skip(above)
+            .rev()
+            .find_map(|(row, scale)| row.get(list).map(|v| (v.list(), *scale)))
+            .unwrap_or_else(|| (style.get(list).map(Kv::list).unwrap_or_default(), self.link_scale(key, legacy)))
+    }
+
     fn get(&self, k: &str) -> Option<&'a Kv<'a>> {
         self.layers.iter().rev().find_map(|l| l.get(k))
+    }
+
+    /// [`Self::get`], and the factor of the layer that has it.
+    fn find(&self, k: &str) -> Option<(&'a Kv<'a>, f64)> {
+        self.layers.iter().zip(&self.scales).rev().find_map(|(l, s)| l.get(k).map(|v| (v, *s)))
+    }
+
+    /// A length: the number `k` holds at the scale of the layer that has it.
+    fn len(&self, k: &str) -> Option<f64> {
+        let (v, s) = self.find(k)?;
+        scaled(v.f64()?, s)
+    }
+
+    /// [`Self::list`], and the factor of the layer that has it.
+    fn list_scaled(&self, k: &str) -> (&'a [Kv<'a>], f64) {
+        self.find(k).map_or((&[], 1.0), |(v, s)| (v.list(), s))
     }
 
     fn num(&self, k: &str) -> Option<f64> {
@@ -255,8 +356,8 @@ struct Mapper<'a> {
     /// holding it) name it by `vectorNetworkRef`. Kept out of the JSON, where a large file's
     /// networks took gigabytes.
     networks: Vec<Option<VectorNetwork>>,
-    /// Index in `networks` by what a network is made from: its blob, its scale and its style table.
-    network_ids: HashMap<(usize, u64, u64, usize), usize>,
+    /// Index in `networks` by its blob, position scale, style table and point-radius scale.
+    network_ids: HashMap<(usize, u64, u64, usize, u64), usize>,
     /// Region paint elements (paints and gradient stops) read so far: one budget for the whole
     /// file, since layers with region paints don't share their network.
     region_paint_elements: usize,
