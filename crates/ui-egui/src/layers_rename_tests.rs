@@ -88,14 +88,17 @@ fn tab_and_shift_tab_commit_and_rename_the_next_and_previous_rows() {
 }
 
 #[test]
-fn tab_on_the_last_row_commits_and_ends() {
-    let (mut u, a, _, _, _) = setup();
+fn tab_on_the_last_row_commits_and_wraps_to_the_first() {
+    // Measured in Figma's web app, 2026-11-12: Tab on the last row commits and opens the first
+    // row's rename. The selection is left as FigCraft's Tab leaves it (it follows the rename);
+    // Figma's was seen to stay on the first layer, to be rechecked.
+    let (mut u, a, _, _, c) = setup();
     double_click(&mut u, a);
     type_text(&mut u, "Bottom");
     press(&mut u, Key::Tab, Modifiers::NONE);
     assert_eq!(name(&u, a), "Bottom");
-    assert_eq!(renaming(&u), None);
-    assert_eq!(u.app.session.selection(), vec![a]);
+    assert_eq!(renaming(&u), Some(c), "Tab on the last row renames the first");
+    assert_eq!(u.app.session.selection(), vec![c]);
 }
 
 #[test]
