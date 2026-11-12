@@ -241,6 +241,7 @@ pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
         to: End::Node { node: id, side: to_side, at: None },
         routing,
         path: None,
+        branch: false,
     };
     let line = make(doc, page, connector, CAPS)?;
     s.set_selection(vec![id]);

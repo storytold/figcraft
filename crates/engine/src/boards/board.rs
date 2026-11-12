@@ -25,6 +25,7 @@ mod connectors;
 mod derived;
 mod edit;
 mod items;
+mod mindmap;
 mod reshape;
 mod tools;
 
@@ -70,6 +71,7 @@ pub(crate) use items::add_text;
 pub use items::{CONNECTED_GAP, connected_place};
 pub use items::{STICKY_TEXT_SIZE, edit_text, owner_of_text, text_of};
 use items::{add_connected, ink_cmd, next_sticky, shape_cmd, stamp_cmd, sticky_cmd};
+pub(crate) use mindmap::settle_mind_maps;
 pub(crate) use reshape::path_handle_at;
 pub use reshape::selected_connector_handles;
 
@@ -175,6 +177,20 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id? (a connector; default the selection), portion (0 is the first run of an elbow, or a curve's middle), x, y (where it moves to on the page; a first or last run gets an extra run to stay on its end)} → {id}",
             true,
             reshape::reshape
+        ),
+        spec!(
+            "board.mindMap",
+            "Mind map",
+            "{x?, y? (the first node's top-left in the parent; default the middle of the view), text? (default Topic), children? (their texts, at most 20; default Idea 1, Idea 2, Idea 3), parent?, edit? (start typing in the first node; default false)} → {id, text, children: [{id, text, connector}...]}  a first node with children on its right, joined by branches; the map lays itself out",
+            true,
+            mindmap::mind_map_cmd
+        ),
+        spec!(
+            "board.mindMapAdd",
+            "Add mind map node",
+            "{id? (a mind map node; default the selected or edited one), relation?: child|sibling (default child), text?, edit? (start typing in it; default false)} → {id, text, connector}  a child below the node's other children, or a sibling right after it; the map lays itself out again",
+            true,
+            mindmap::mind_map_add
         ),
         spec!("board.label", "Connector label", "{id (a connector; default the selection), text (empty removes it)} → {id, label}", true, label_cmd),
         spec!(

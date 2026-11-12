@@ -65,7 +65,7 @@ pub(super) fn connector_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let end = cap_of(cmd, p, "endCap")?.unwrap_or(CAPS.1);
     let page = s.page()?;
     let doc = s.doc_mut()?;
-    let id = make(doc, page, Connector { from, to, routing, path: None }, (start, end))?;
+    let id = make(doc, page, Connector { from, to, routing, path: None, branch: false }, (start, end))?;
     let mut out = json!({"id": id});
     if let Some(text) = string(p, "label").filter(|t| !t.trim().is_empty()) {
         out["label"] = json!(set_label(doc, id, &text)?);

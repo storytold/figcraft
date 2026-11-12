@@ -39,6 +39,10 @@ pub fn nested<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
 /// the pixmap, the cell and the pixmap's pixels per unit on each axis (whole pixels per cell, so
 /// the repeat lines up exactly).
 pub fn cell_pixmap(doc: &Document, pt: &PatternPaint, w: f64, h: f64, scale: f64, time: f64) -> Option<(Pixmap, PatternCell, (f64, f64))> {
+    // Past the nesting limit nothing is drawn, so don't allocate a cell first.
+    if DEPTH.with(Cell::get) >= MAX_DEPTH {
+        return None;
+    }
     let src = doc.node(NodeId(pt.source)).filter(|n| !n.is_page())?;
     let cell = pt.cell(src.width, src.height, w, h)?;
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
