@@ -264,6 +264,9 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
     let sel = ds.selection.clone();
     let vector_edit = ds.vector_edit.clone();
     if sel.is_empty() {
+        if app.session.tool.tool == figcraft_engine::ToolId::Scale {
+            crate::scale_panel::note_no_selection(ui);
+        }
         page_section(app, ui, &doc);
         return;
     }
@@ -494,7 +497,10 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     // Layers in boolean groups, or one boolean group: the operation they use (checked in the menu).
     let current = figcraft_engine::booleans::shown_op(doc, sel);
     for (icon, label, cmd) in actions.into_iter().rev() {
-        let br = Rect::from_min_size(pos2(x - 24.0, r.center().y - 12.0), vec2(24.0, 24.0));
+        // With several layers the component button is a dropdown: a small chevron sits beside its icon.
+        let dropdown = cmd == "component.create" && sel.len() > 1;
+        let bw = if dropdown { 34.0 } else { 24.0 };
+        let br = Rect::from_min_size(pos2(x - bw, r.center().y - 12.0), vec2(bw, 24.0));
         let tip = if cmd == "bool.union" { label } else { crate::shortcuts::tip(label, cmd) };
         let bresp = ui.interact(br, ui.scope_id().with(("qa", cmd)), Sense::click()).tip(tip);
         if bresp.hovered() {
@@ -505,7 +511,11 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             ("bool.union", Some(op)) => crate::layers::op_icon(op),
             _ => icon,
         };
-        icons::paint(ui.painter(), br.shrink(5.0), icon, t.icon);
+        let icon_rect = Rect::from_min_size(br.min, vec2(24.0, 24.0)).shrink(5.0);
+        icons::paint(ui.painter(), icon_rect, icon, t.icon);
+        if dropdown {
+            icons::paint(ui.painter(), Rect::from_center_size(pos2(br.max.x - 6.0, br.center().y), vec2(8.0, 8.0)), Icon::Chevron, t.icon_secondary);
+        }
         if cmd == "bool.union" {
             menu_popup(&bresp).width(180.0).show(|ui| {
                 for (op, c) in [
@@ -530,10 +540,35 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     ui.close();
                 }
             });
+        } else if cmd == "component.create" && sel.len() > 1 {
+            // Several layers: the button opens a menu, as Figma's does (#2088). One layer keeps the plain click.
+            let create = crate::i18n::command("component.create", "Create component");
+            let multiple = crate::i18n::command("component.createMultiple", "Create multiple components");
+            let set = crate::i18n::command("component.createSet", "Create component set");
+            // Like the layers menu, leave out what the selection can't use.
+            let can_set = figcraft_engine::cmd::component::can_create_set(doc, sel);
+            let mut entries = vec![("component.create", &create), ("component.createMultiple", &multiple)];
+            if can_set {
+                entries.push(("component.createSet", &set));
+            }
+            // Wide enough for the longest translated label (the rows grow with it, the menu never clips).
+            let widest = entries
+                .iter()
+                .map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), regular(11.5), Color32::PLACEHOLDER).size().x)
+                .fold(0.0f32, f32::max);
+            menu_popup(&bresp).width(menu::menu_row_width(widest, 0.0).ceil().max(160.0)).show(|ui| {
+                for (c, label) in &entries {
+                    let key = crate::shortcuts::shortcut(c).unwrap_or("");
+                    if menu_item(ui, label, key) {
+                        app.run(c, json!({}));
+                        ui.close();
+                    }
+                }
+            });
         } else if bresp.clicked() {
             app.run(cmd, json!({}));
         }
-        x -= 26.0;
+        x -= bw + 2.0;
     }
     crate::component_panel::instance_section(app, ui, doc, sel);
 }

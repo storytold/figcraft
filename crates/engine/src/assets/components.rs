@@ -60,7 +60,7 @@ pub use patch::sync_after_edit;
 pub(crate) use patch::{FULL_REBUILD, PATCHED};
 #[cfg(test)]
 use rebase::RebaseSources;
-pub use rebase::rebase_instance;
+pub use rebase::{MainPaths, rebase_instance, rebase_instance_with};
 pub use sync::keep_text_overrides;
 pub use variants::{default_variant, exposed_copies, find_variant, mirror_issues, variant_conflicts, variant_name, variant_options, variant_props};
 
