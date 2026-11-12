@@ -172,6 +172,7 @@ Or in a project's `.mcp.json`:
 - `create_node` and `set_properties` take `x`/`y` **relative to the parent frame** (the page when
   there is none, so they are page coordinates then). Groups and boolean groups have no coordinate
   space of their own: a layer in a group is placed in the frame (or on the page) the group is in.
+  `rotation` is the layer's angle to its parent (Figma's plugin API `rotation` is the same); `absoluteRotation` sets its rotation on the page, what the Design panel's field shows; a call takes one of the two.
   `inspect_document` reports `x`/`y` the same way, plus `absoluteBounds` in page coordinates.
   In `props`, `fill` and `stroke` also accept `"none"` (either case) or `null` as no paint, the
   same as an empty `fills`/`strokes` list, so an outline-only shape can be made in one call.
@@ -298,6 +299,11 @@ Or in a project's `.mcp.json`:
   `textDecorationOffset` (`auto`, px, or `"10%"` of the font size; the offset runs from the baseline
   down to an underline's top edge), `textDecorationSkipInk` (underlines break around descenders) and
   `textDecorationColor` (a colour, or `auto` for the text's) are character props too.
+- **Wrap style** (`auto`, `balance`, `pretty`) works at three levels: `wrapStyle` on `node.set`
+  sets the layer (every paragraph); with `start`/`end` it sets the paragraphs those chars touch,
+  and a paragraph's own style beats the layer's. `text.wrapStyle` sets the selected paragraphs while
+  text is edited. `get_node` reports one `wrapStyle`, or `lineWrapStyles` per paragraph when they
+  differ.
 - **Lists** are per paragraph: `listStyle` (`none`, `bulleted`, `numbered`) and `indentation` (the
   nesting level, 0–8) apply to the paragraphs chars `start`..`end` touch (all of them without a
   range); `get_node` reports one `listStyle` for the layer, or `lineTypes` and `lineIndentations`
@@ -313,10 +319,11 @@ Or in a project's `.mcp.json`:
   `style.detach {which: "text", start?, end?}` unlinks them (values stay). A layer's `styles.text` is
   the style all its chars share (none when they differ); `get_node` lists the linked chars as
   `textStyleRanges` (`[start, end, style id]`).
-  A text style also carries paragraph spacing and indent, the list style and the OpenType features
-  (`paragraph` beside `style` in `style.list`): applying it sets them (on a range, the list goes to
-  the paragraphs touched; the rest is the layer's), `style.update` moves them too, and a `.fig`
-  file keeps them with the style.
+  A text style also carries paragraph spacing and indent, the list style, the wrap style and the
+  OpenType features (`paragraph` beside `style` in `style.list`; a `value` takes `wrapStyle`):
+  applying it sets them (on a range, the list and wrap style go to the paragraphs touched; the rest
+  is the layer's), `style.update` moves them too, and a `.fig` file keeps them with the style
+  (not the wrap style yet).
   Changing what a text style sets (font, size, line height, letter spacing, decoration, case, axis
   values; at the paragraph level the spacing, indent, list and features) on linked chars unlinks
   them; `style.update` moves every linked char. `style.create {type: "text", name}` takes the
@@ -638,7 +645,7 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky). Keys no design-file
   shortcut uses; on a design file they refuse.
 - `view.pan {dx, dy, big?}`: the arrow keys with nothing selected (`key ArrowRight` does the same)
-  pan the view by 20 screen pixels a step, 200 with `big` (Shift).
+  pan the view by 64 screen pixels a step, 320 with `big` (Shift).
 - `view.multiplayerCursors {on?}` (`Alt+Cmd+\`): show or hide others' cursors in a live session.
 - `view.outlinesHiddenLayers {on?}` and `view.outlinesObjectBounds {on?}`: what outline mode
   (`view.outlines`, `view.outlinesSelection`) draws besides the shapes: hidden layers, and the box
@@ -761,7 +768,7 @@ page line crosses; parts that come apart move to layers of their own above, list
 `vector.deleteHeal`, `vector.join` / `vector.smoothJoin` (join the selected points while editing),
 `vector.edit.cornerRadius` (rounds the selected sharp points, next to straight or curved segments: a
 curve is cut where the arc meets it and keeps the rest of its shape; drawn and exported;
-`node.set {cornerRadius}` on a vector rounds every point), `vector.edit.strokeCap {cap, vertices?}`
+`node.set {cornerRadius}` on a vector rounds every point, and on a boolean group every sharp corner of its result, while its layers keep their own radius), `vector.edit.strokeCap {cap, vertices?}`
 and `vector.edit.strokeJoin {join, vertices?}` (the stroke's cap where it ends at these points and
 its join where it turns there, `null` for the layer's; drawn, exported and outlined),
 `vector.edit.moveHandles {dx, dy, handles?}` (moves the selected handles by a page offset),
@@ -1886,7 +1893,9 @@ properties with their values, its code and, with `path`, a PNG of it. The docume
 unbinds): `fill` or `fills/<i>/color` and `fills/<i>/stops/<j>/color` on a paint style,
 `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` on an effect style,
 `layoutGrids/<i>/<size|count|gutter|offset>` on a grid style, `fontSize`, `lineHeight`,
-`letterSpacing`, `fontFamily`, `fontStyle` on a text style. Each layer using the style shows the
+`letterSpacing`, `fontWeight` (numbers; a weight picks the family's face nearest it and sets the
+`wght` axis of a variable font), `fontFamily`, `fontStyle` (strings; a bound weight and a bound style
+name replace each other) on a text style. Each layer using the style shows the
 field in its own modes and stays linked; `style.list` gives a style's `bound` map.
 
 `effect.add {ids?, type? | effect?}` adds an effect (`dropShadow`, `innerShadow`, `layerBlur`,

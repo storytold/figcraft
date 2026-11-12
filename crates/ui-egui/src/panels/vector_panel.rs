@@ -12,7 +12,7 @@ use crate::FigApp;
 use crate::i18n::tr;
 use crate::icons::Icon;
 use crate::right::{CAP_ART_W, cap_art, join_label, menu_item, menu_item_with, menu_popup, row};
-use crate::widgets::{self, FieldEdit, Lead};
+use crate::widgets::{self, Edit, FieldEdit, Lead, Rel};
 
 /// Run a point command from a field: typed values are one step, scrubs one step when released.
 fn point_field(app: &mut FigApp, cmd: &str, edit: Option<FieldEdit>, params: impl Fn(f64) -> Value) {
@@ -26,6 +26,23 @@ fn point_field(app: &mut FigApp, cmd: &str, edit: Option<FieldEdit>, params: imp
             if done {
                 let _ = app.session.commit_interaction();
             }
+        }
+        None => {}
+    }
+}
+
+/// A point position field's edit: a value (typed or scrubbed) sets every selected point's own
+/// coordinate; a relative edit of a Mixed field (`+10`, `*2`) applies to each point's own.
+fn point_edit(app: &mut FigApp, axis: &'static str, edit: Option<Edit>) {
+    match edit {
+        Some(Edit::All(e)) => point_field(app, "vector.edit.position", Some(e), |v| json!({ axis: v })),
+        Some(Edit::Each(rel)) => {
+            let op = match rel {
+                Rel::Add(n) => json!({"add": n}),
+                Rel::Mul(n) => json!({"mul": n}),
+                Rel::Div(n) => json!({"div": n}),
+            };
+            app.run("vector.edit.position", json!({ axis: op }));
         }
         None => {}
     }
@@ -95,14 +112,19 @@ pub fn points(app: &mut FigApp, ui: &mut Ui, doc: &Document, ve: &VectorEdit) {
         widgets::note(ui, tr("Select points to edit their position, radius and mirroring"), t.text_secondary);
         return;
     }
-    let pos = vectoredit::selection_position(doc, ve);
     let round = |v: f64| (v * 100.0).round() / 100.0;
+    let parent_pts = vectoredit::selected_parent_points(doc, ve);
+    // The value the selected points share (within 1e-6), or none: Mixed.
+    let shared = |axis: fn(&figcraft_geom::Point) -> f64| {
+        let first = parent_pts.first().map(axis)?;
+        parent_pts.iter().all(|p| (axis(p) - first).abs() < 1e-6).then(|| round(first))
+    };
     widgets::sublabels(ui, tr("Position"), None);
     row(ui, 32.0, |ui| {
-        let e = widgets::number_field(ui, Id::unique("vpt_x"), Lead::Text("X"), pos.map(|p| round(p.x)), "", col, 1.0);
-        point_field(app, "vector.edit.position", e, |v| json!({"x": v}));
-        let e = widgets::number_field(ui, Id::unique("vpt_y"), Lead::Text("Y"), pos.map(|p| round(p.y)), "", col, 1.0);
-        point_field(app, "vector.edit.position", e, |v| json!({"y": v}));
+        let e = widgets::number_field_mixed(ui, Id::unique("vpt_x"), Lead::Text("X"), shared(|p| p.x), "", col, 1.0);
+        point_edit(app, "x", e);
+        let e = widgets::number_field_mixed(ui, Id::unique("vpt_y"), Lead::Text("Y"), shared(|p| p.y), "", col, 1.0);
+        point_edit(app, "y", e);
     });
     if let Some(b) = vectoredit::transform::point_box(doc, ve).filter(|b| b.points.len() > 1) {
         widgets::sublabels(ui, tr("Dimensions"), None);
