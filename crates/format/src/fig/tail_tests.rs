@@ -376,7 +376,7 @@ fn vector_region_fills_survive_a_fig_export() {
     let first = network_of(&doc, "Wave").regions[0].fills.clone();
     assert!(first.as_ref().is_some_and(|fills| fills.len() == 2), "{first:?}");
     let (bytes, warnings) = crate::fig::export::export(&doc, None).unwrap();
-    assert!(!warnings.iter().any(|warning| warning.contains("region paints")), "{warnings:?}");
+    assert!(!warnings.iter().any(|warning| warning.contains("region")), "{warnings:?}");
     let (back, _) = import(&bytes, "Again").unwrap();
     assert_eq!(network_of(&back, "Wave").regions[0].fills, first);
 }
