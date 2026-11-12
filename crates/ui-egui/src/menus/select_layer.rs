@@ -15,7 +15,8 @@ pub fn open_select_layer(ctx: &egui::Context, open: bool) {
 }
 
 /// The context menu's "Select layer" submenu (right-click on the canvas): every layer under the
-/// click, nested ones indented, the selected ones checked. Returns whether one was picked.
+/// click (locked ones with a padlock), nested ones indented, the selected ones checked; shown
+/// only with more than one layer under the pointer. Returns whether one was picked.
 pub(super) fn select_layer_menu(app: &mut FigApp, ui: &mut Ui, pos: egui::Pos2, t: &Tokens) -> bool {
     if !app.canvas.rect.contains(pos) {
         return false;
@@ -23,15 +24,21 @@ pub(super) fn select_layer_menu(app: &mut FigApp, ui: &mut Ui, pos: egui::Pos2, 
     let p = app.to_page(pos);
     let Ok(ds) = app.session.ds() else { return false };
     let tol = 2.0 / ds.view.zoom.max(1e-6);
-    let layers: Vec<(figcraft_doc::NodeId, usize, String)> =
-        figcraft_doc::geometry::layers_at(&ds.doc, ds.page, p, tol, Some(&figcraft_engine::booleans::result_outline(&ds.doc, &ds.selection)))
+    let opts = figcraft_doc::geometry::HitOpts { locked: true };
+    let layers: Vec<(figcraft_doc::NodeId, usize, String, bool)> = {
+        let result = figcraft_engine::booleans::result_outline(&ds.doc, &ds.selection);
+        figcraft_doc::geometry::layers_at_opts(&ds.doc, ds.page, p, tol, Some(&result), opts)
             .into_iter()
             .take(40)
             .filter_map(|(id, depth)| {
-                ds.doc.node(id).map(|n| (id, depth, if n.name.is_empty() { n.kind.type_name().to_lowercase() } else { n.name.clone() }))
+                ds.doc.node(id).map(|n| {
+                    let name = if n.name.is_empty() { n.kind.type_name().to_lowercase() } else { n.name.clone() };
+                    (id, depth, name, figcraft_engine::tools::locked_in(&ds.doc, id))
+                })
             })
-            .collect();
-    if layers.is_empty() {
+            .collect()
+    };
+    if layers.len() < 2 {
         return false;
     }
     let sel = ds.selection.clone();
@@ -40,8 +47,8 @@ pub(super) fn select_layer_menu(app: &mut FigApp, ui: &mut Ui, pos: egui::Pos2, 
         SubmenuOptions { area: Id::unique("ctx_select_layer"), key: SELECT_LAYER, label: tr("Select layer"), gap: 4.0, constrain: true, tokens: t },
         |ui| {
             let mut picked = None;
-            for (id, depth, name) in &layers {
-                if indented_item(ui, name, "", true, sel.contains(id), 12.0 * (*depth).min(8) as f32, t) {
+            for (id, depth, name, locked) in &layers {
+                if indented_item(ui, name, "", true, sel.contains(id), *locked, 12.0 * (*depth).min(8) as f32, t) {
                     picked = Some(*id);
                 }
             }

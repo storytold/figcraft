@@ -395,11 +395,13 @@ fn need_width(ui: &Ui, w: f32) {
 }
 
 pub(crate) fn item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, checked: bool, t: &Tokens) -> bool {
-    indented_item(ui, label, shortcut, enabled, checked, 0.0, t)
+    indented_item(ui, label, shortcut, enabled, checked, false, 0.0, t)
 }
 
-/// A menu row whose label starts `indent` pixels further in (nested layers).
-pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, checked: bool, indent: f32, t: &Tokens) -> bool {
+/// A menu row whose label starts `indent` pixels further in (nested layers); `locked` paints a
+/// padlock in the leading column (a checked row shows the check instead).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, checked: bool, locked: bool, indent: f32, t: &Tokens) -> bool {
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
     a11y::menu_item(&resp, label, shortcut, checked.then_some(true));
@@ -415,6 +417,8 @@ pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: b
     let col = if enabled { t.menu_text } else { t.menu_dim };
     if checked {
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(12.0, 12.0)), Icon::Check, col);
+    } else if locked {
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(12.0, 12.0)), Icon::Lock, col);
     }
     let galley = ui.painter().layout_no_wrap(label.to_string(), regular(12.0), col);
     let keys = (!shortcut.is_empty())

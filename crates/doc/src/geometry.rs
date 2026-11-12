@@ -152,7 +152,7 @@ fn near_path(path: &BezPath, p: Point, dist: f64) -> bool {
 /// boolean groups are hit where their `result` is.
 pub fn hit_leaf(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult) -> Option<NodeId> {
     let p = doc.node(page)?;
-    p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, None).filter(|_| !masked_out(doc, p, *c, pt)))
+    p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, None, HitOpts::default()).filter(|_| !masked_out(doc, p, *c, pt)))
 }
 
 /// Whether child `c` of `parent` is masked at `pt`: a visible mask below it (the nearest mask
@@ -175,7 +175,7 @@ fn covers(doc: &Document, id: NodeId, n: &Node, pt: Point, depth: usize) -> bool
 
 /// Like [`hit_leaf`], but only within layer `root` (it included).
 pub fn hit_in(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolResult) -> Option<NodeId> {
-    hit_rec(doc, root, pt, tol, 0, result, None)
+    hit_rec(doc, root, pt, tol, 0, result, None, HitOpts::default())
 }
 
 /// [`hit_leaf`] (or [`hit_in`] for a `root` that isn't a page) in outline mode: shapes are hit
@@ -185,8 +185,8 @@ pub fn hit_in(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolRes
 /// when it shows them, and every layer on the edge of its box when it shows object bounds.
 pub fn hit_outlines(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolResult, also: OutlineHits) -> Option<NodeId> {
     match doc.node(root) {
-        Some(p) if p.is_page() => p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, Some(also))),
-        _ => hit_rec(doc, root, pt, tol, 0, result, Some(also)),
+        Some(p) if p.is_page() => p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, Some(also), HitOpts::default())),
+        _ => hit_rec(doc, root, pt, tol, 0, result, Some(also), HitOpts::default()),
     }
 }
 
@@ -204,13 +204,31 @@ fn on_box_edge(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64) -> boo
     r.inflate(tol, tol).contains(lp) && !(r.width() > 2.0 * tol && r.height() > 2.0 * tol && r.inflate(-tol, -tol).contains(lp))
 }
 
-fn hit_rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, also: Option<OutlineHits>) -> Option<NodeId> {
+/// Options for the hit tests that the plain pick never sets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HitOpts {
+    /// Reach locked layers (and what a locked frame holds) too. A click, hover or marquee never
+    /// does; the Select layer list does.
+    pub locked: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn hit_rec(
+    doc: &Document,
+    id: NodeId,
+    pt: Point,
+    tol: f64,
+    depth: usize,
+    result: BoolResult,
+    also: Option<OutlineHits>,
+    opts: HitOpts,
+) -> Option<NodeId> {
     if depth > 512 {
         return None;
     }
     let n = doc.node(id)?;
     let outline = also.is_some();
-    if (!n.visible && !also.is_some_and(|a| a.hidden)) || n.locked {
+    if (!n.visible && !also.is_some_and(|a| a.hidden)) || n.locked && !opts.locked {
         return None;
     }
     if let NodeKind::Section { contents_hidden: true } = n.kind {
@@ -228,7 +246,7 @@ fn hit_rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result
         return None;
     }
     for c in n.paint_order().rev() {
-        if let Some(h) = hit_rec(doc, c, pt, tol, depth + 1, result, also).filter(|_| !masked_out(doc, n, c, pt)) {
+        if let Some(h) = hit_rec(doc, c, pt, tol, depth + 1, result, also, opts).filter(|_| !masked_out(doc, n, c, pt)) {
             return Some(h);
         }
     }
@@ -239,14 +257,21 @@ fn hit_rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result
     None
 }
 
-/// Every visible, unlocked layer under `pt` (page coordinates) with its depth below the page, in
-/// layer-tree order (each layer before what it contains, the front-most first): what
-/// "Select layer" in the context menu lists. Clip content is honoured; boolean groups (hit where
-/// their `result` is) and sections with hidden contents count as one layer.
+/// Every visible, unlocked layer under `pt`: [`layers_at_opts`] with the default options.
 pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult) -> Vec<(NodeId, usize)> {
-    fn rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, out: &mut Vec<(NodeId, usize)>) {
+    layers_at_opts(doc, page, pt, tol, result, HitOpts::default())
+}
+
+/// Every visible layer under `pt` (page coordinates) with its depth below the page, in
+/// layer-tree order (each layer before what it contains, the front-most first): what
+/// "Select layer" in the context menu lists. Locked layers are left out unless `opts.locked`.
+/// Clip content is honoured; boolean groups (hit where their `result` is) and sections with
+/// hidden contents count as one layer.
+pub fn layers_at_opts(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult, opts: HitOpts) -> Vec<(NodeId, usize)> {
+    #[allow(clippy::too_many_arguments)]
+    fn rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, opts: HitOpts, out: &mut Vec<(NodeId, usize)>) {
         let Some(n) = doc.node(id) else { return };
-        if !n.visible || n.locked || depth > 512 {
+        if !n.visible || n.locked && !opts.locked || depth > 512 {
             return;
         }
         let clips = n.clip && n.kind.is_frame_like();
@@ -256,14 +281,14 @@ pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: Bool
         let at = out.len();
         let whole = matches!(n.kind, NodeKind::BooleanOp { .. } | NodeKind::Section { contents_hidden: true });
         if whole {
-            if hit_rec(doc, id, pt, tol, depth, result, None).is_some() {
+            if hit_rec(doc, id, pt, tol, depth, result, None, opts).is_some() {
                 out.push((id, depth));
             }
             return;
         }
         for c in n.paint_order().rev() {
             let before = out.len();
-            rec(doc, c, pt, tol, depth + 1, result, out);
+            rec(doc, c, pt, tol, depth + 1, result, opts, out);
             if out.len() > before && masked_out(doc, n, c, pt) {
                 out.truncate(before);
             }
@@ -276,7 +301,7 @@ pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: Bool
     if let Some(p) = doc.node(page) {
         for c in p.children.iter().rev() {
             let before = out.len();
-            rec(doc, *c, pt, tol, 0, result, &mut out);
+            rec(doc, *c, pt, tol, 0, result, opts, &mut out);
             if out.len() > before && masked_out(doc, p, *c, pt) {
                 out.truncate(before);
             }
