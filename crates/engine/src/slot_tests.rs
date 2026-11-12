@@ -376,6 +376,265 @@ fn slots_of_nested_instances_fill_from_the_outer_main_and_its_instances() {
     assert_eq!(fill(&s, *kids(&s, nslot).first().unwrap()), "CCCCCC", "content no longer follows the Card main");
 }
 
+/// Wrap a component instance in another main, keeping the nested instance addressable.
+fn slot_text_wrapper(s: &mut Session, component: NodeId, name: &str) -> (NodeId, NodeId) {
+    let frame = idv(&ex(s, "frame.create", json!({"width": 300, "height": 200, "name": name})));
+    let nested = idv(&ex(s, "instance.create", json!({"component": component, "parent": frame})));
+    (idv(&ex(s, "component.create", json!({"ids": [frame]}))), nested)
+}
+
+/// Content.Label binds Text; Composition holds Base, whose Body uses default or own Content.
+/// Returns (Content main, Label, Base main, Composition main, nested Content instance).
+fn slot_text_composition(s: &mut Session, own: bool) -> (NodeId, NodeId, NodeId, NodeId, NodeId) {
+    let frame = idv(&ex(s, "frame.create", json!({"width": 100, "height": 40, "name": "Content"})));
+    let label = idv(&ex(s, "text.create", json!({"text": "Default", "parent": frame, "props": {"name": "Label"}})));
+    let content = idv(&ex(s, "component.create", json!({"ids": [frame]})));
+    ex(s, "component.addProperty", json!({"id": content, "name": "Text", "type": "text", "default": "Default", "layer": label}));
+    let frame = idv(&ex(s, "frame.create", json!({"width": 200, "height": 100, "name": "Base"})));
+    let body = idv(&ex(s, "frame.create", json!({"width": 180, "height": 80, "name": "Body", "parent": frame})));
+    let default = (!own).then(|| idv(&ex(s, "instance.create", json!({"component": content, "parent": body}))));
+    let base = idv(&ex(s, "component.create", json!({"ids": [frame]})));
+    ex(s, "component.makeSlot", json!({"id": body}));
+    let (composition, nested_base) = slot_text_wrapper(s, base, "Composition");
+    let nested_content = if let Some(default) = default {
+        copy_of(s, nested_base, default)
+    } else {
+        idv(&ex(s, "instance.slotInsert", json!({"id": nested_base, "slot": "Body", "component": content})))
+    };
+    (content, label, base, composition, nested_content)
+}
+
+fn assert_slot_text(s: &mut Session, instance: NodeId, expected: &str) {
+    let children = kids(s, instance);
+    assert_eq!(children.len(), 1, "Content {instance} must have exactly one Label");
+    let label = children[0];
+    assert_eq!(node(s, label).name, "Label");
+    let characters = node(s, label).kind.text().expect("Content's only child must be text").characters.clone();
+    let html = ex(s, "inspect.code", json!({"id": instance, "language": "html"}))["code"].as_str().unwrap().to_string();
+    assert_eq!(characters, expected, "slot Label characters; HTML: {html}");
+    assert_eq!(html.matches("<p ").count(), 1, "slot Label HTML must contain exactly one paragraph: {html}");
+    assert_eq!(html.matches("</p>").count(), 1, "slot Label HTML must contain exactly one paragraph: {html}");
+    assert!(html.contains(&format!(">{expected}</p>")), "slot Label HTML: {html}");
+}
+
+fn assert_local_slot_text(s: &mut Session, instance: NodeId, expected: &str) {
+    assert!(
+        matches!(&node(s, instance).kind, NodeKind::Instance { props, .. } if props.get("Text") == Some(&json!(expected))),
+        "instance {instance} must store its own Text value {expected:?}: {:?}",
+        node(s, instance).kind
+    );
+    let properties = props_of(s, instance);
+    let text = properties.iter().find(|p| p["name"] == "Text").unwrap_or_else(|| panic!("instance {instance} has no Text property: {properties:?}"));
+    assert_eq!(text["value"], expected, "instance {instance} Text property");
+}
+
+/// Exercise the same ownership contract for default slot content and content supplied by the
+/// Composition main; separate tests identify which route regresses.
+fn check_slot_text_properties_stay_local(own: bool) {
+    let mut s = Session::new();
+    let (content, label, _base, composition, main_content) = slot_text_composition(&mut s, own);
+    let a = idv(&ex(&mut s, "instance.create", json!({"component": composition, "x": 400})));
+    let b = idv(&ex(&mut s, "instance.create", json!({"component": composition, "x": 800})));
+    let ac = copy_of(&s, a, main_content);
+    let bc = copy_of(&s, b, main_content);
+    ex(&mut s, "instance.setProperties", json!({"ids": [ac], "properties": {"Text": "Custom"}}));
+    assert_local_slot_text(&mut s, ac, "Custom");
+    assert_slot_text(&mut s, ac, "Custom");
+    assert_local_slot_text(&mut s, bc, "Default");
+    assert_slot_text(&mut s, bc, "Default");
+    assert_local_slot_text(&mut s, main_content, "Default");
+    assert_slot_text(&mut s, main_content, "Default");
+    assert_eq!(node(&s, label).kind.text().unwrap().characters, "Default");
+    // Main property edits propagate without replacing another instance's local value.
+    ex(&mut s, "instance.setProperties", json!({"ids": [main_content], "properties": {"Text": "Main value"}}));
+    assert_slot_text(&mut s, ac, "Custom");
+    assert_slot_text(&mut s, bc, "Main value");
+    assert_slot_text(&mut s, main_content, "Main value");
+    ex(&mut s, "component.editProperty", json!({"id": content, "name": "Text", "default": "New default"}));
+    assert_slot_text(&mut s, ac, "Custom");
+    assert_slot_text(&mut s, bc, "Main value");
+    assert_local_slot_text(&mut s, main_content, "Main value");
+    assert_slot_text(&mut s, main_content, "Main value");
+    healthy(&s);
+}
+
+#[test]
+fn slot_text_properties_stay_local_in_default_content() {
+    check_slot_text_properties_stay_local(false);
+}
+
+#[test]
+fn slot_text_properties_stay_local_in_own_content() {
+    check_slot_text_properties_stay_local(true);
+}
+
+#[test]
+fn slot_text_properties_do_not_read_an_unbound_base_property() {
+    let mut s = Session::new();
+    let (_content, _label, base, composition, main_content) = slot_text_composition(&mut s, true);
+    ex(&mut s, "component.addProperty", json!({"id": base, "name": "Text", "type": "text", "default": "Wrong owner"}));
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": composition, "x": 400})));
+    let nested_base = kids(&s, i)[0];
+    assert_local_slot_text(&mut s, nested_base, "Wrong owner");
+    let nested = copy_of(&s, i, main_content);
+    assert_local_slot_text(&mut s, nested, "Default");
+    assert_slot_text(&mut s, nested, "Default");
+    ex(&mut s, "instance.setProperties", json!({"ids": [nested], "properties": {"Text": "Custom"}}));
+    assert_local_slot_text(&mut s, nested, "Custom");
+    assert_slot_text(&mut s, nested, "Custom");
+    assert_local_slot_text(&mut s, nested_base, "Wrong owner");
+    assert_slot_text(&mut s, main_content, "Default");
+    healthy(&s);
+}
+
+#[test]
+fn slot_text_properties_survive_inherited_own_content_and_persistence() {
+    let mut s = Session::new();
+    let (_content, _label, _base, composition, main_content) = slot_text_composition(&mut s, true);
+    let (outer, inherited) = slot_text_wrapper(&mut s, composition, "Outer composition");
+    let inherited_content = copy_of(&s, inherited, main_content);
+    let a = idv(&ex(&mut s, "instance.create", json!({"component": outer, "x": 400})));
+    let b = idv(&ex(&mut s, "instance.create", json!({"component": outer, "x": 800})));
+    let ac = copy_of(&s, a, inherited_content);
+    let bc = copy_of(&s, b, inherited_content);
+    ex(&mut s, "instance.setProperties", json!({"ids": [ac], "properties": {"Text": "Custom"}}));
+    assert_local_slot_text(&mut s, ac, "Custom");
+    assert_local_slot_text(&mut s, bc, "Default");
+    assert_local_slot_text(&mut s, inherited_content, "Default");
+    assert_local_slot_text(&mut s, main_content, "Default");
+    let bytes = figcraft_format::save_bytes(s.doc().unwrap(), None).unwrap();
+    let (back, _) = figcraft_format::load_bytes(&bytes).unwrap();
+    let mut s = Session::with_document(back);
+    assert_local_slot_text(&mut s, ac, "Custom");
+    assert_slot_text(&mut s, ac, "Custom");
+    assert_slot_text(&mut s, bc, "Default");
+    assert_slot_text(&mut s, inherited_content, "Default");
+    assert_slot_text(&mut s, main_content, "Default");
+    // Explicit characters override the bound property, even after a main update.
+    let alabel = kids(&s, ac)[0];
+    ex(&mut s, "text.set", json!({"id": alabel, "characters": "Explicit"}));
+    ex(&mut s, "instance.setProperties", json!({"ids": [ac], "properties": {"Text": "Later"}}));
+    ex(&mut s, "instance.setProperties", json!({"ids": [main_content], "properties": {"Text": "Main value"}}));
+    assert_local_slot_text(&mut s, ac, "Later");
+    assert_slot_text(&mut s, ac, "Explicit");
+    assert_slot_text(&mut s, bc, "Main value");
+    ex(&mut s, "component.resetOverride", json!({"id": alabel, "group": "characters"}));
+    assert_slot_text(&mut s, ac, "Later");
+    s.undo().unwrap();
+    assert_slot_text(&mut s, ac, "Explicit");
+    healthy(&s);
+}
+
+/// Check both the stored property and the Label it drives, not just one representation.
+fn assert_slot_visibility(s: &mut Session, instance: NodeId, expected: bool) {
+    assert!(
+        matches!(&node(s, instance).kind, NodeKind::Instance { props, .. } if props.get("Visible") == Some(&json!(expected))),
+        "instance {instance} must store Visible={expected}: {:?}",
+        node(s, instance).kind
+    );
+    let properties = props_of(s, instance);
+    let visible =
+        properties.iter().find(|p| p["name"] == "Visible").unwrap_or_else(|| panic!("instance {instance} has no Visible property: {properties:?}"));
+    assert_eq!(visible["value"], expected, "instance {instance} Visible property");
+    let children = kids(s, instance);
+    assert_eq!(children.len(), 1, "Content {instance} must have exactly one Label");
+    assert_eq!(node(s, children[0]).name, "Label");
+    assert_eq!(node(s, children[0]).visible, expected, "instance {instance} Label visibility");
+}
+
+#[test]
+fn slot_boolean_properties_stay_local_in_inherited_own_content() {
+    let mut s = Session::new();
+    let (content, label, base, composition, main_content) = slot_text_composition(&mut s, true);
+    ex(&mut s, "component.addProperty", json!({"id": content, "name": "Visible", "type": "boolean", "default": true, "layer": label}));
+    ex(&mut s, "component.addProperty", json!({"id": base, "name": "Visible", "type": "boolean", "default": false}));
+    let (outer, inherited) = slot_text_wrapper(&mut s, composition, "Outer composition");
+    let inherited_base = kids(&s, inherited)[0];
+    let inherited_content = copy_of(&s, inherited, main_content);
+    let a = idv(&ex(&mut s, "instance.create", json!({"component": outer, "x": 400})));
+    let b = idv(&ex(&mut s, "instance.create", json!({"component": outer, "x": 800})));
+    let ac = copy_of(&s, a, inherited_content);
+    let bc = copy_of(&s, b, inherited_content);
+    let abase = copy_of(&s, a, inherited_base);
+    assert!(matches!(&node(&s, abase).kind, NodeKind::Instance { props, .. } if props.get("Visible") == Some(&json!(false))));
+    assert_slot_visibility(&mut s, ac, true);
+    assert_slot_visibility(&mut s, bc, true);
+    ex(&mut s, "instance.setProperties", json!({"ids": [ac], "properties": {"Visible": false}}));
+    assert_slot_visibility(&mut s, ac, false);
+    assert_slot_visibility(&mut s, bc, true);
+    assert_slot_visibility(&mut s, inherited_content, true);
+    assert_slot_visibility(&mut s, main_content, true);
+    // A main update must not replace either instance's local value with the Base's homonym.
+    ex(&mut s, "instance.setProperties", json!({"ids": [main_content], "properties": {"Visible": false}}));
+    assert_slot_visibility(&mut s, ac, false);
+    assert_slot_visibility(&mut s, bc, false);
+    ex(&mut s, "instance.setProperties", json!({"ids": [bc], "properties": {"Visible": true}}));
+    ex(&mut s, "node.set", json!({"id": content, "props": {"fill": "#abcdef"}}));
+    assert_slot_visibility(&mut s, ac, false);
+    assert_slot_visibility(&mut s, bc, true);
+    assert_slot_visibility(&mut s, main_content, false);
+    healthy(&s);
+    let bytes = figcraft_format::save_bytes(s.doc().unwrap(), None).unwrap();
+    let (back, _) = figcraft_format::load_bytes(&bytes).unwrap();
+    let mut s = Session::with_document(back);
+    assert_slot_visibility(&mut s, ac, false);
+    assert_slot_visibility(&mut s, bc, true);
+    assert_slot_visibility(&mut s, inherited_content, false);
+    assert_slot_visibility(&mut s, main_content, false);
+    ex(&mut s, "instance.setProperties", json!({"ids": [main_content], "properties": {"Visible": true}}));
+    assert_slot_visibility(&mut s, ac, false);
+    assert_slot_visibility(&mut s, bc, true);
+    assert_slot_visibility(&mut s, main_content, true);
+    healthy(&s);
+}
+
+#[test]
+fn same_component_in_own_slot_keeps_independent_text_properties() {
+    let mut s = Session::new();
+    let frame = idv(&ex(&mut s, "frame.create", json!({"width": 200, "height": 100, "name": "Card"})));
+    let label = idv(&ex(&mut s, "text.create", json!({"text": "Default", "parent": frame, "props": {"name": "Label"}})));
+    let body = idv(&ex(&mut s, "frame.create", json!({"width": 180, "height": 60, "y": 40, "name": "Body", "parent": frame})));
+    let card = idv(&ex(&mut s, "component.create", json!({"ids": [frame]})));
+    ex(&mut s, "component.addProperty", json!({"id": card, "name": "Text", "type": "text", "default": "Default", "layer": label}));
+    ex(&mut s, "component.makeSlot", json!({"id": body}));
+    // Only page instance content holds another Card: the main never contains itself.
+    let outer = idv(&ex(&mut s, "instance.create", json!({"component": card, "x": 400})));
+    let inner = idv(&ex(&mut s, "instance.slotInsert", json!({"id": outer, "slot": "Body", "component": card})));
+    let check = |s: &mut Session, outer_text: &str, inner_text: &str| {
+        assert_local_slot_text(s, outer, outer_text);
+        assert_local_slot_text(s, inner, inner_text);
+        assert_eq!(node(s, copy_of(s, outer, label)).kind.text().unwrap().characters, outer_text);
+        assert_eq!(node(s, copy_of(s, inner, label)).kind.text().unwrap().characters, inner_text);
+        let outer_body = copy_of(s, outer, body);
+        assert!(slot_edited(s.doc().unwrap(), outer_body));
+        assert_eq!(kids(s, outer_body), vec![inner]);
+        assert!(kids(s, copy_of(s, inner, body)).is_empty());
+        assert!(kids(s, body).is_empty(), "the main's slot must remain empty");
+        healthy(s);
+    };
+    ex(&mut s, "instance.setProperties", json!({"ids": [outer], "properties": {"Text": "Outer"}}));
+    check(&mut s, "Outer", "Default");
+    ex(&mut s, "instance.setProperties", json!({"ids": [inner], "properties": {"Text": "Inner"}}));
+    check(&mut s, "Outer", "Inner");
+    ex(&mut s, "text.set", json!({"id": label, "characters": "New default"}));
+    ex(&mut s, "node.set", json!({"id": card, "props": {"fill": "#abcdef"}}));
+    check(&mut s, "Outer", "Inner");
+    assert_eq!(fill(&s, outer), "ABCDEF");
+    assert_eq!(fill(&s, inner), "ABCDEF");
+    ex(&mut s, "instance.setProperties", json!({"ids": [outer], "properties": {"Text": "Outer updated"}}));
+    check(&mut s, "Outer updated", "Inner");
+    ex(&mut s, "instance.setProperties", json!({"ids": [inner], "properties": {"Text": "Inner updated"}}));
+    check(&mut s, "Outer updated", "Inner updated");
+    let bytes = figcraft_format::save_bytes(s.doc().unwrap(), None).unwrap();
+    let (back, _) = figcraft_format::load_bytes(&bytes).unwrap();
+    let mut s = Session::with_document(back);
+    check(&mut s, "Outer updated", "Inner updated");
+    ex(&mut s, "node.set", json!({"id": card, "props": {"fill": "#123456"}}));
+    check(&mut s, "Outer updated", "Inner updated");
+    assert_eq!(fill(&s, outer), "123456");
+    assert_eq!(fill(&s, inner), "123456");
+}
+
 /// Random slot edits, main edits and resets keep every instance mirroring its main.
 #[test]
 fn random_slot_edits_keep_instances_consistent() {

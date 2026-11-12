@@ -207,7 +207,9 @@ impl<'d> Exporter<'d> {
                 .enumerate()
                 .map(|(i, v)| {
                     let mut st: Fields = Vec::new();
-                    if v.radius > 0.0 {
+                    // A point without a radius of its own is drawn with the layer's, so a sharp
+                    // point on a rounded layer says so.
+                    if v.radius > 0.0 || n.corners.radii[0] > 0.0 {
                         st.push(("cornerRadius", fl(v.radius)));
                     }
                     if let Some(m) = v.mirror {

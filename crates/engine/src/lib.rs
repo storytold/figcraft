@@ -213,6 +213,8 @@ mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
 #[cfg(test)]
+mod board_mindmap_tests;
+#[cfg(test)]
 mod board_reshape_tests;
 #[cfg(test)]
 mod board_table_paste_tests;
