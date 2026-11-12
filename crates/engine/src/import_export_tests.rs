@@ -283,7 +283,7 @@ fn export_sizes_parse_and_label() {
         assert_eq!(ExportSize::parse(text), Some(want), "{text}");
         assert_eq!(ExportSize::parse(&want.label()), Some(want));
     }
-    for bad in ["", "x", "0x", "-1x", "NaNx", "infx", "65x", "20000w", "2q", "2xx"] {
+    for bad in ["", "x", "0x", "-1x", "NaNx", "infx", "65x", "20000w", "2q", "2xx", "+2x", "+512w", "2e0x", "2E0x", "+0.5x"] {
         assert_eq!(ExportSize::parse(bad), None, "{bad}");
     }
     let e = |size, suffix: &str, format| ExportSetting { size, suffix: suffix.into(), format, ..Default::default() };
