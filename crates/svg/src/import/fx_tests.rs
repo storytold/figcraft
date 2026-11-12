@@ -228,3 +228,15 @@ fn coloured_copies_of_a_blurred_layer_arent_shadows() {
         assert!(!notes.is_empty(), "{filter}: reported");
     }
 }
+
+#[test]
+fn a_doubling_chain_of_merges_is_refused_not_expanded() {
+    // Each merge holds the previous result twice: 2^40 layers if expanded.
+    let mut f = String::from(r##"<feMerge result="r0"><feMergeNode in="SourceGraphic"/><feMergeNode in="SourceGraphic"/></feMerge>"##);
+    for i in 1..40 {
+        f.push_str(&format!(r##"<feMerge result="r{i}"><feMergeNode in="r{}"/><feMergeNode in="r{}"/></feMerge>"##, i - 1, i - 1));
+    }
+    let (fx, notes) = effects(&f, "");
+    assert!(fx.is_empty(), "{fx:?}");
+    assert!(!notes.is_empty());
+}

@@ -704,13 +704,36 @@ fn simple_hash(b: &[u8]) -> String {
 /// Deepest element nesting the parser is given: deeper documents would exhaust the stack.
 const MAX_NESTING: usize = 512;
 
+/// The most attributes one element may have. The XML parser checks each attribute against the
+/// earlier ones, so a huge count is quadratic work; real elements have a few dozen at most.
+const MAX_ATTRIBUTES: usize = 4096;
+
 /// How deep elements nest in `data`: a scan of its tags (comments, CDATA, declarations and quoted
 /// attribute values skipped) that stops once past `limit`.
 pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
+    scan(data, limit).0
+}
+
+/// The most the parser's duplicate-attribute checks may cost over a whole document, as the sum of
+/// each element's attribute count squared (a real file with 100,000 elements of 20 attributes is
+/// 40 million).
+const MAX_ATTRIBUTE_WORK: usize = 1 << 28;
+
+/// Whether an element of `data` has more than [`MAX_ATTRIBUTES`] attributes, or all of them cost
+/// more than [`MAX_ATTRIBUTE_WORK`] (counted as quoted values, before the parser sees them; the
+/// declarations of a DTD count as one element, as entities can hold elements).
+pub(crate) fn too_wide(data: &[u8]) -> bool {
+    let (_, widest, work) = scan(data, usize::MAX);
+    widest > MAX_ATTRIBUTES || work > MAX_ATTRIBUTE_WORK
+}
+
+/// [`nesting`], the most attribute values on one element and the attribute work (see
+/// [`MAX_ATTRIBUTE_WORK`]); stops once any is past its limit.
+fn scan(data: &[u8], limit: usize) -> (usize, usize, usize) {
     let find = |from: usize, pat: &[u8]| -> usize {
         data.get(from..).and_then(|r| r.windows(pat.len()).position(|w| w == pat)).map_or(data.len(), |p| from + p + pat.len())
     };
-    let (mut depth, mut max, mut i) = (0usize, 0usize, 0usize);
+    let (mut depth, mut max, mut i, mut widest, mut work) = (0usize, 0usize, 0usize, 0usize, 0usize);
     while let Some(off) = data.get(i..).and_then(|r| r.iter().position(|b| *b == b'<')) {
         i += off;
         let rest = data.get(i..).unwrap_or(&[]);
@@ -718,6 +741,19 @@ pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
             i = find(i + 4, b"-->");
         } else if rest.starts_with(b"<![CDATA[") {
             i = find(i + 9, b"]]>");
+        } else if rest.starts_with(b"<!DOCTYPE") {
+            // To the `]>` closing its subset (the first `>` when it has none).
+            let end = match (rest.iter().position(|b| *b == b'['), rest.iter().position(|b| *b == b'>')) {
+                (Some(o), Some(g)) if o < g => find(i, b"]>"),
+                _ => find(i, b">"),
+            };
+            let quotes = data.get(i..end).unwrap_or(&[]).iter().filter(|b| matches!(**b, b'"' | b'\'')).count();
+            widest = widest.max(quotes / 2);
+            work = work.saturating_add((quotes / 2).saturating_mul(quotes / 2));
+            if widest > MAX_ATTRIBUTES || work > MAX_ATTRIBUTE_WORK {
+                return (max, widest, work);
+            }
+            i = end;
         } else if rest.starts_with(b"<?") || rest.starts_with(b"<!") {
             i = find(i + 2, b">");
         } else if rest.starts_with(b"</") {
@@ -725,12 +761,15 @@ pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
             i = find(i + 2, b">");
         } else {
             // A start tag: to its `>` outside quotes; `/>` closes it.
-            let (mut quote, mut j, mut closed) = (None, i + 1, false);
+            let (mut quote, mut j, mut closed, mut attrs) = (None, i + 1, false, 0usize);
             while let Some(&c) = data.get(j) {
                 match quote {
                     Some(q) if c == q => quote = None,
                     Some(_) => {}
-                    None if c == b'"' || c == b'\'' => quote = Some(c),
+                    None if c == b'"' || c == b'\'' => {
+                        quote = Some(c);
+                        attrs += 1;
+                    }
                     None if c == b'>' => {
                         closed = data.get(j.wrapping_sub(1)) == Some(&b'/');
                         break;
@@ -739,17 +778,22 @@ pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
                 }
                 j += 1;
             }
+            widest = widest.max(attrs);
+            work = work.saturating_add(attrs * attrs);
+            if widest > MAX_ATTRIBUTES || work > MAX_ATTRIBUTE_WORK {
+                return (max, widest, work);
+            }
             if !closed {
                 depth += 1;
                 max = max.max(depth);
                 if max > limit {
-                    return max;
+                    return (max, widest, work);
                 }
             }
             i = j + 1;
         }
     }
-    max
+    (max, widest, work)
 }
 
 /// Whether `data` nests elements more than [`MAX_NESTING`] deep: the byte scan first, then the
@@ -897,6 +941,9 @@ fn import_within(
 ) -> Result<Imported, ImportError> {
     // SVGZ is unpacked here, within a budget, so every check below sees the real document.
     let data = budget::document(data, &limits).map_err(ImportError)?;
+    if too_wide(&data) {
+        return Err(ImportError(format!("an element has more than {MAX_ATTRIBUTES} attributes")));
+    }
     if too_deep(&data) {
         return Err(ImportError(format!("elements nested more than {MAX_NESTING} deep")));
     }
