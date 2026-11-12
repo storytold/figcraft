@@ -341,8 +341,7 @@ fn a_whole_ellipse_is_four_cubics_through_the_extremes() {
             assert!((s.p3 - want[i]).hypot() < 1e-9, "{w}x{h}: anchor {i} is {:?}", s.p3);
             // Handle length is 0.5523 of the radius along the tangent.
             let k = 0.552_284_749_830_793_4;
-            let (r_along, r_across) = if i % 2 == 0 { (ry, rx) } else { (rx, ry) };
-            let _ = r_across;
+            let r_along = if i % 2 == 0 { ry } else { rx };
             assert!(((s.p1 - s.p0).hypot() - k * r_along).abs() < 1e-9, "{w}x{h}: handle {i}");
         }
     }

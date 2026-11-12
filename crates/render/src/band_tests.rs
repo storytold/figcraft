@@ -96,9 +96,8 @@ fn a_real_band_artifact_fails_but_edge_noise_passes() {
     let width = 880; // scale 2
     let flat = vec![100u8; width * 4];
     // 44 pixels whose colour channels differ by 60 (alpha unchanged): the mean is
-    // 44 * 3 * 60 / (880 * 4) = 2.25, which the earlier `0.25 + 0.05 * off` allowance (2.45 here)
-    // let through; the count, 44, is within a twentieth of the row. A real artifact, so it fails
-    // on the mean now.
+    // 44 * 3 * 60 / (880 * 4) = 2.25, and the count, 44, is within a twentieth of the row. A real
+    // artifact, so it fails on the mean.
     let mut artifact = flat.clone();
     for px in artifact.chunks_mut(4).take(44) {
         px.iter_mut().take(3).for_each(|c| *c += 60);
