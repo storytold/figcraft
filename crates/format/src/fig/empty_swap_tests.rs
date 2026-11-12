@@ -4,30 +4,23 @@
 use figcraft_doc::{Document, NodeId, NodeKind};
 
 use super::kiwi::{Kv, Schema};
+use super::source_identity_tests::{node, row, symbol};
 use super::tests::{arr, canvas, g, o};
 use super::*;
-
-type Fields = Vec<(&'static str, Kv<'static>)>;
 
 /// The GUID Figma writes for "none".
 fn empty() -> Kv<'static> {
     o(vec![("sessionID", Kv::Uint(4_294_967_295)), ("localID", Kv::Uint(4_294_967_295))])
 }
 
-/// A node under `parent` (the shared `node` with a position from the id).
-fn node(id: u64, parent: Option<u64>, ty: &'static str, name: &str, more: Fields) -> Kv<'static> {
-    let pos = format!("{id:04}");
-    super::tests::node(id, parent.map(|p| (p, pos.as_str())), ty, name, more)
+/// A Badge instance of main 10 whose `overriddenSymbolID` is `swap`.
+fn badge(id: u64, name: &str, swap: Kv<'static>) -> Kv<'static> {
+    node(id, Some(30), "INSTANCE", name, vec![("symbolData", symbol(10, vec![])), ("overriddenSymbolID", swap)])
 }
 
-fn symbol(main: u64, overrides: Vec<Kv<'static>>) -> Kv<'static> {
-    o(vec![("symbolID", g(main)), ("symbolOverrides", arr(overrides))])
-}
-
-fn row(path: &[u64], more: Fields) -> Kv<'static> {
-    let mut fields = vec![("guidPath", o(vec![("guids", arr(path.iter().map(|id| g(*id)).collect()))]))];
-    fields.extend(more);
-    o(fields)
+/// An override row for the badge at `id` that writes the empty GUID.
+fn reset(id: u64) -> Kv<'static> {
+    row(&[id], vec![("overriddenSymbolID", empty())])
 }
 
 /// A Badge main with a label, a Card main holding a Badge instance whose `overriddenSymbolID` is
@@ -44,18 +37,9 @@ fn import_cards() -> (Document, Vec<String>) {
             node(20, Some(2), "SYMBOL", "Property 1=Error", vec![]),
             node(21, Some(20), "RECTANGLE", "Error label", vec![]),
             node(30, Some(2), "SYMBOL", "Card", vec![]),
-            node(31, Some(30), "INSTANCE", "Badge", vec![("symbolData", symbol(10, vec![])), ("overriddenSymbolID", empty())]),
-            node(32, Some(30), "INSTANCE", "Swapped badge", vec![("symbolData", symbol(10, vec![])), ("overriddenSymbolID", g(20))]),
-            node(
-                40,
-                Some(2),
-                "INSTANCE",
-                "Card copy",
-                vec![(
-                    "symbolData",
-                    symbol(30, vec![row(&[31], vec![("overriddenSymbolID", empty())]), row(&[32], vec![("overriddenSymbolID", empty())])]),
-                )],
-            ),
+            badge(31, "Badge", empty()),
+            badge(32, "Swapped badge", g(20)),
+            node(40, Some(2), "INSTANCE", "Card copy", vec![("symbolData", symbol(30, vec![reset(31), reset(32)]))]),
         ]),
     )]);
     // The export schema: the shared test schema has no `overriddenSymbolID`.

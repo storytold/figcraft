@@ -33,7 +33,7 @@ fn matrix(x: f32) -> Kv<'static> {
     ])
 }
 
-fn node(id: u64, parent: Option<u64>, ty: &'static str, name: &str, more: Fields) -> Kv<'static> {
+pub(super) fn node(id: u64, parent: Option<u64>, ty: &'static str, name: &str, more: Fields) -> Kv<'static> {
     let mut fields = vec![("guid", g(id)), ("phase", Kv::Enum("CREATED")), ("type", Kv::Enum(ty)), ("name", s(name))];
     if let Some(parent) = parent {
         fields.push(("parentIndex", o(vec![("guid", g(parent)), ("position", s(&format!("{id:04}")))])));
@@ -42,11 +42,11 @@ fn node(id: u64, parent: Option<u64>, ty: &'static str, name: &str, more: Fields
     o(fields)
 }
 
-fn symbol(main: u64, overrides: Vec<Kv<'static>>) -> Kv<'static> {
+pub(super) fn symbol(main: u64, overrides: Vec<Kv<'static>>) -> Kv<'static> {
     o(vec![("symbolID", g(main)), ("symbolOverrides", Kv::Array(overrides))])
 }
 
-fn row(path: &[u64], more: Fields) -> Kv<'static> {
+pub(super) fn row(path: &[u64], more: Fields) -> Kv<'static> {
     let mut fields = vec![("guidPath", o(vec![("guids", Kv::Array(path.iter().map(|id| g(*id)).collect()))]))];
     fields.extend(more);
     o(fields)
