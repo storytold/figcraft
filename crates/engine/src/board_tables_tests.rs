@@ -182,6 +182,9 @@ fn table_edits_add_and_remove_rows_and_columns_keeping_text() {
 
 #[test]
 fn a_double_click_types_in_the_cell_and_its_row_grows_with_the_text() {
+    // Measure with system fonts when the optional craft-fonts checkout is absent,
+    // without depending on another test having scanned them first.
+    figcraft_text::scan_system_fonts();
     let mut s = board();
     let r = s.execute("board.table", &json!({"x": 0, "y": 0})).unwrap();
     let t = id(&r, "id");
