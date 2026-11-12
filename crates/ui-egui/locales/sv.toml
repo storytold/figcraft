@@ -2,6 +2,7 @@
 #
 # Written from the English catalog with ordinary Swedish software vocabulary; no other catalog and no
 # proprietary localisation was translated from. Brand names and keyboard glyphs stay as they are.
+# The Developer Mode label (2026-11-07) is machine-translated and awaits review.
 
 [meta]
 name = "Svenska"
@@ -442,9 +443,9 @@ name = "Svenska"
 "Detach styles" = "Koppla bort stilar"
 "Detach variable" = "Koppla bort variabel"
 "Details" = "Detaljer"
-"Dev Mode" = "Utvecklarläge"
-"Dev Mode only inspects: switch to Design (Shift+D) to edit" = "Utvecklarläget kan bara granska: växla till Design (Shift+D) för att redigera"
 "Dev resources" = "Utvecklarresurser"
+"Developer Mode" = "Utvecklarläge"
+"Developer Mode only inspects: switch to Design (Shift+D) to edit" = "Utvecklarläget kan bara granska: växla till Design (Shift+D) för att redigera"
 "Development" = "Utveckling"
 "Device" = "Enhet"
 "Device at 100%" = "Enhet i 100 %"
@@ -1536,7 +1537,7 @@ name = "Svenska"
 "Text styles" = "Textstilar"
 "Texts" = "Texter"
 "Texture" = "Textur"
-"The canvas previews colors in sRGB; exported PNG, JPG and WebP files are tagged Display P3." = "Arbetsytan förhandsgranskar färger i sRGB; exporterade PNG-, JPG- och WebP-filer märks med Display P3."
+"The canvas previews colors in sRGB; PNG, JPG and WebP exports that use the file's profile are tagged Display P3." = "Arbetsytan förhandsgranskar färger i sRGB; PNG-, JPG- och WebP-filer som exporteras med filens profil märks med Display P3."
 "The destination document is unavailable. Nothing was imported." = "Måldokumentet är inte tillgängligt. Ingenting importerades."
 "The destination document was closed. Nothing was imported." = "Måldokumentet stängdes. Ingenting importerades."
 "The destination page was removed. Nothing was imported." = "Målsidan togs bort. Ingenting importerades."
@@ -2076,6 +2077,7 @@ name = "Svenska"
 "component.combineVariants" = "Kombinera som varianter"
 "component.create" = "Skapa komponent"
 "component.createMultiple" = "Skapa flera komponenter"
+"component.createSet" = "Skapa komponentuppsättning"
 "component.deleteProperty" = "Radera komponentegenskap"
 "component.detach" = "Koppla bort instans"
 "component.editProperty" = "Redigera komponentegenskap"

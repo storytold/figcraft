@@ -84,7 +84,7 @@ pub(super) fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
                 n.strokes = vec![Paint::solid(line_shade(color))];
             }
             BoardItem::Connector(_) | BoardItem::Ink => doc.get_mut(id)?.strokes = vec![Paint::solid(line_shade(color))],
-            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table => continue,
+            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table | BoardItem::MindNode => continue,
         }
         changed.push(id);
     }
@@ -132,7 +132,7 @@ impl Restyle {
         };
         // Text sizes: shapes' and labels' text (stickies size theirs to fit).
         let sized = match (self.size, &item) {
-            (Some(size), BoardItem::Shape { .. } | BoardItem::Label { .. }) => resize_text(doc, id, size),
+            (Some(size), BoardItem::Shape { .. } | BoardItem::Label { .. } | BoardItem::MindNode) => resize_text(doc, id, size),
             _ => false,
         };
         Ok(changed || sized)
