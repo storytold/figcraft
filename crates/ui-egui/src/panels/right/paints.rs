@@ -1,10 +1,11 @@
-use super::menu::{blend_menu, context_popup, menu_check, menu_item, menu_popup, preview_blend, row, row_context_menu, row_rect};
+use super::menu::{blend_menu, context_popup, menu_check, menu_item, menu_popup, preview_blend, row, row_context_menu, row_target};
 use super::stroke::stroke_settings;
 use super::{
     Align2, BlendMode, CornerRadius, Document, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, ListDrag, MaskType, Node, NodeId, NodeKind, Paint,
     PaintKind, Rect, Sense, Stroke, StrokeAlign, StyleSlot, Tip, Tokens, Ui, Value, VariableType, common, icons, json, moved_index, pos2, regular,
     removed_index, style_picker, tr, trf, vec2, widgets,
 };
+use crate::property_rows::PropertyKind;
 
 /// Draw visibility/blend/mask, opacity, uniform or per-corner radius, corner smoothing and
 /// the blend-mode row.
@@ -348,10 +349,13 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
             let mut drag = ListDrag::new(ui, if fills { "fills" } else { "strokes" });
             for (i, p) in l.iter().enumerate().rev() {
                 let r = paint_row(app, ui, &ids, i, p, fills, region);
-                drag.row(ui, i, r, r, || paint_label(p));
+                if drag.row_clicked(ui, i, r, r, || paint_label(p)) {
+                    crate::property_rows::click(app, if fills { PropertyKind::Fill } else { PropertyKind::Stroke }, i, &ids, r);
+                }
             }
             if let Some((from, to)) = drag.finish(ui) {
                 app.run(if fills { "fill.move" } else { "stroke.move" }, json!({"ids": ids, "from": from, "to": to}));
+                crate::property_rows::follow(app, if fills { PropertyKind::Fill } else { PropertyKind::Stroke }, from, Some(to));
                 // An open colour picker keeps editing the paint it was on.
                 if let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
                     && *f == fills
@@ -458,12 +462,15 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
 
 /// Paint `i`'s row (swatch, colour or kind, opacity, visibility, remove); returns its area.
 /// One paint's row; `region`: a row of the regions selected in vector edit mode (#1875), which
-/// leaves out what belongs to the layer (its variable binding, the image crop).
+/// leaves out what belongs to the layer (its variable binding, the image crop). A click on its
+/// background highlights it for Cmd/Ctrl+C ([`crate::property_rows`]).
 fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint, fills: bool, region: bool) -> Rect {
     let t = Tokens::get(ui.ctx());
     let ids = ids.to_vec();
     let cmd = if fills { "fill.set" } else { "stroke.set" };
-    let r = row_rect(ui, 32.0, |ui| {
+    let kind = if fills { PropertyKind::Fill } else { PropertyKind::Stroke };
+    let highlight = crate::property_rows::fill(app, kind, i, t.selected_row);
+    let resp = row_target(ui, 32.0, highlight, |ui| {
         let w = ui.available_width() - 60.0;
         let (sresp, e) = widgets::paint_field(ui, Id::unique(("swatch", fills, i)), Id::unique(("pop", fills, i)), p, w, |child, text_r| {
             let r = child.max_rect();
@@ -544,24 +551,28 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
         if toggle {
             app.run(cmd, json!({"ids": ids, "index": i, "visible": !p.visible}));
         }
-        if remove
-            && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some()
-            && let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
-            && *f == fills
-        {
+        if remove && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some() {
+            // A highlighted row stays on its paint, or goes with it.
+            crate::property_rows::follow(app, kind, i, None);
             // An open colour picker keeps editing the paint it was on, or closes with it.
-            match removed_index(*index, i) {
-                Some(k) => *index = k,
-                None => app.ui.picker = None,
+            if let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
+                && *f == fills
+            {
+                match removed_index(*index, i) {
+                    Some(k) => *index = k,
+                    None => app.ui.picker = None,
+                }
             }
         }
     });
+    crate::property_rows::row(app, &resp, kind, i, &ids);
+    let r = resp.rect;
     let copy = if fills { tr("Copy fill") } else { tr("Copy stroke") };
     let paste = if fills { tr("Paste fill") } else { tr("Paste stroke") };
     let can_paste = app.session.clipboard.paint.as_ref().is_some_and(|(f, _)| *f == fills);
     row_context_menu(ui, r, Id::unique(("paint_menu", fills, i))).show(|ui| {
         if menu_item(ui, copy, "") {
-            app.run(if fills { "fill.copy" } else { "stroke.copy" }, json!({"ids": ids, "index": i}));
+            crate::property_rows::copy(app, kind, i, &ids);
             ui.close();
         }
         if can_paste && menu_item(ui, paste, "") {
