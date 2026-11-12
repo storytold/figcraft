@@ -336,7 +336,7 @@ fn tools() -> Vec<Value> {
                     "y": num("Page y"),
                     "to": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "Drag end [x, y] (page)"},
                     "steps": int("Intermediate move events for drag (default 8)"),
-                    "tool": {"type": "string", "description": "Tool to choose first: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment"},
+                    "tool": {"type": "string", "description": "Tool to choose first: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|annotation"},
                     "shift": boolean("Shift held"),
                     "alt": boolean("Alt/Option held"),
                     "cmd": boolean("Cmd (macOS) / Ctrl held"),
