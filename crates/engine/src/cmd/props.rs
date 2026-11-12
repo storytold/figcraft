@@ -16,7 +16,7 @@ use crate::{Result, bad};
 pub const STROKE_SIDES: [&str; 4] = ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"];
 
 /// Keys `node.set` understands (documented for agents).
-pub const KEYS: &str = "name, visible, locked, opacity (0-1 or \"50%\"), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), \
+pub const KEYS: &str = "name, visible, locked, opacity (0-1 or \"50%\"), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), absoluteRotation (degrees on the page: the layer's angle plus its parents', what the Design panel's field shows; one of the two per call), \
 fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour, {$var: variable id or name}, or \"none\"/null: no fill), strokes, stroke (colour, {$var: variable id or name}, or \"none\"/null: no stroke), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
 strokeCap / startCap / endCap, strokeJoin, miterAngle (degrees: sharper joins bevel; or miterLimit as a ratio), dashes [..], dashCap (none|round|square; null: dashes take startCap and endCap), widthProfile (preset uniform|wedge|taper|eye|rounded|pinch, [[t, scale], ...] or null), brush (preset id, {preset, spacing, sizeJitter, rotationJitter, scatter, seed} or null), cornerRadius (n or [tl,tr,br,bl]), cornerSmoothing (0-1), effects, \
 clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
@@ -29,7 +29,7 @@ fontSize, lineHeight (auto|px|\"150%\"), letterSpacing (px|\"2%\"), textAlign (l
 (auto|px|\"10%\" of the font size; the offset runs from the baseline down to an underline's top edge), textDecorationSkipInk (underlines break around descenders), \
 textDecorationColor (colour, or auto/null: the text's), textCase (original|upper|lower|title|smallCaps), paragraphSpacing, paragraphIndent, \
 listStyle (none|bulleted|numbered; with start/end: the paragraphs those chars touch), indentation (list nesting level 0-8, same range rule), \
-listSpacing (px between list items, in place of paragraphSpacing), hangingPunctuation, hangingList (markers outside the box), leadingTrim (vertical trim: none|capHeight), maxLines, features ({tag: bool}, e.g. {\"liga\": false, \"tnum\": true}), \
+listSpacing (px between list items, in place of paragraphSpacing), wrapStyle (auto|balance|pretty; with start/end: the paragraphs those chars touch), hangingPunctuation, hangingList (markers outside the box), leadingTrim (vertical trim: none|capHeight), maxLines, features ({tag: bool}, e.g. {\"liga\": false, \"tnum\": true}), \
 fontVariations / variationSettings ({axis: number}, e.g. {\"wght\": 550, \"wdth\": 85}; null = none), \
 path (a vector's SVG path data: replaces its geometry, keeping the layer, its paints, styles and bindings; width/height in the same call scale it as \
 node.create does; its own box goes at the layer's x/y, or with x/y given, at x + its left edge and y + its top as node.create places it), pointCount, innerRadius, arcStart, arcSweep, \
@@ -456,7 +456,7 @@ fn apply_order(k: &str, v: &Value) -> u8 {
     match k {
         "path" | "width" | "height" | "w" | "h" => 0,
         "layout" | "layoutMode" => 1,
-        "rotation" => 3,
+        "rotation" | "absoluteRotation" => 3,
         "x" | "y" => 4,
         "fillStyle" | "strokeStyle" | "effectStyle" | "textStyle" | "gridStyle" => 5,
         "boundVariables" => 6,
@@ -594,6 +594,27 @@ fn apply_geometry(
             let deg = f64_of(v).ok_or_else(|| bad(cmd, "`rotation` must be degrees"))?;
             let n = doc.get_mut(id)?;
             n.transform = figcraft_geom::set_rotation_about_center(n.transform, n.width, n.height, deg);
+        }
+        "absoluteRotation" => {
+            let deg = f64_of(v).ok_or_else(|| bad(cmd, "`absoluteRotation` must be degrees"))?;
+            if props.contains_key("rotation") {
+                return Err(bad(cmd, "give one of `rotation` and `absoluteRotation`"));
+            }
+            let (w, h) = {
+                let n = doc.get(id)?;
+                (n.width, n.height)
+            };
+            let world = figcraft_geom::set_rotation_about_center(doc.world_transform(id), w, h, deg);
+            let parent = doc.get(id)?.parent;
+            let pw = parent.map(|p| doc.world_transform(p)).unwrap_or(figcraft_geom::Affine::IDENTITY);
+            let local = pw.inverse() * world;
+            if local.as_coeffs().iter().all(|c| c.is_finite()) {
+                doc.get_mut(id)?.transform = local;
+            } else {
+                // A degenerate parent can't be inverted: turn the local angle instead.
+                let n = doc.get_mut(id)?;
+                n.transform = figcraft_geom::set_rotation_about_center(n.transform, n.width, n.height, deg);
+            }
         }
         _ => return Ok(false),
     }
@@ -1008,7 +1029,14 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
         }
         "leadingTrim" => text_mut(cmd, doc.get_mut(id)?)?.leading_trim = enum_of(v).ok_or_else(|| bad(cmd, "leadingTrim: none|capHeight"))?,
         "wrapStyle" | "textWrap" => {
-            text_mut(cmd, doc.get_mut(id)?)?.wrap_style = enum_of(v).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?
+            let w: figcraft_doc::WrapStyle = enum_of(v).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?;
+            let t = text_mut(cmd, doc.get_mut(id)?)?;
+            if props.contains_key("start") || props.contains_key("end") {
+                let (start, end) = range_of(props, t.char_count());
+                t.set_para_wrap_styles(start, end, w);
+            } else {
+                t.set_wrap_style(w);
+            }
         }
         "maxLines" => {
             let lines = f64_of(v).unwrap_or(0.0).clamp(0.0, 10_000.0) as u32;
