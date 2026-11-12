@@ -515,6 +515,20 @@ fn shift_a_on_a_group_follows_the_wrap_rule() {
     assert_eq!((canvas(&s, a).0, canvas(&s, b).0), (0.0, 100.0));
 }
 
+#[test]
+fn shift_a_on_a_one_child_group_follows_the_group_rule_not_the_one_child_frame_exception() {
+    let mut s = Session::new();
+    let a = rect_at(&mut s, None, 0.0, 0.0, 40.0, 40.0);
+    let g = id(s.execute("object.group", &json!({"ids": [a]})).unwrap());
+    let r = s.execute("layout.add", &json!({"ids": [g], "direction": "vertical"})).unwrap();
+    assert_eq!(id_of(&r["ids"][0]), Some(g));
+    let n = s.doc().unwrap().node(g).unwrap();
+    let l = n.layout.clone().unwrap();
+    assert_eq!((l.mode, l.padding), (LayoutMode::Vertical, [0.0; 4]));
+    assert_eq!((n.child_layout.sizing_h, n.child_layout.sizing_v), (Sizing::Fixed, Sizing::Hug));
+    assert!(n.fills.is_empty() && !n.clip);
+}
+
 fn add_layout_dir(s: &mut Session, ids: &[NodeId], direction: &str) -> NodeId {
     let r = s.execute("layout.add", &json!({"ids": ids, "direction": direction})).unwrap();
     id_of(&r["ids"][0]).unwrap()

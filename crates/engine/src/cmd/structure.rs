@@ -714,7 +714,7 @@ fn add_layout(doc: &Document, frame: NodeId, new_wrap: bool, group: bool, dir: O
         plan.layout = al;
         return plan;
     };
-    if flow.is_empty() || (!new_wrap && flow.len() == 1) {
+    if flow.is_empty() || (!wrapped && flow.len() == 1) {
         plan.layout = al;
         return plan;
     }
