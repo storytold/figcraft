@@ -1583,7 +1583,8 @@ fn dump_samples() {
         std::fs::write(format!("{out}/{stem}.schema.txt"), txt).unwrap();
         let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
         std::fs::write(format!("{out}/{stem}.json"), serde_json::to_string_pretty(&debug_json(&msg)).unwrap()).unwrap();
-        let (rest, ..) = map::to_rest(&msg, &stem, super::layer_budget(message.len()));
+        // A whiteboard's dump shows its native board items as the import makes them.
+        let (rest, ..) = map::to_rest_for(&msg, &stem, super::layer_budget(message.len()), a.canvas.starts_with(super::JAM_HEADER));
         std::fs::write(format!("{out}/{stem}.rest.json"), serde_json::to_string_pretty(&rest).unwrap()).unwrap();
     }
 }

@@ -107,6 +107,7 @@ fn each_tool_has_its_cursor_by_modifier_and_what_is_under_the_pointer() {
         (ToolId::TextOnPath, NONE, ON_SQUARE_EDGE, Text, "the I-beam over a shape's path: a click puts text on it"),
         (ToolId::Pen, NONE, EMPTY, Pen(PenCursor::New), "the pen: a new point"),
         (ToolId::Comment, NONE, EMPTY, Comment, "the comment pin"),
+        (ToolId::Annotation, NONE, ON_SQUARE, Crosshair, "the annotation tool marks the layer it is pressed on"),
         (ToolId::Eyedropper, NONE, ON_SQUARE, Eyedropper, "the eyedropper"),
     ];
     for (tool, m, at, want, why) in rows {
