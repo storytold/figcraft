@@ -293,8 +293,8 @@ pub struct ParaList {
     /// The paragraph's base direction (Text ▸ Text direction); `Auto` follows its letters.
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub direction: TextDirection,
-    /// The paragraph's own wrap style ("You can apply a wrap style at three levels: Text layer,
-    /// Paragraph, Text style"); `None` follows the layer's [`TextData::wrap_style`].
+    /// The paragraph's own wrap style (a wrap style can be set on the text layer, a paragraph or a
+    /// text style); `None` follows the layer's [`TextData::wrap_style`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrap: Option<WrapStyle>,
 }

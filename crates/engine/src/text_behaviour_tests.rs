@@ -497,8 +497,8 @@ fn balance_and_pretty_wrap_styles_break_lines_as_documented() {
 
 #[test]
 fn wrap_style_per_paragraph_overrides_the_layers() {
-    // Explore text properties: "You can apply a wrap style at three levels: Text layer,
-    // Paragraph, Text style." A paragraph's own wrap style beats the layer's; setting the layer
+    // Explore text properties: a wrap style can be set on the text layer, a paragraph or a text
+    // style. A paragraph's own wrap style beats the layer's; setting the layer
     // sets every paragraph again.
     let font = test_mono_font();
     let mut s = Session::new();

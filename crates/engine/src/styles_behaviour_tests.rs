@@ -420,8 +420,8 @@ fn text_styles_carry_paragraph_spacing_indent_lists_and_features() {
 
 #[test]
 fn text_styles_carry_the_wrap_style() {
-    // Explore text properties: "You can apply a wrap style at three levels: Text layer,
-    // Paragraph, Text style." A style made from a text takes its wrap style, applying it sets it,
+    // Explore text properties: a wrap style can be set on the text layer, a paragraph or a text
+    // style. A style made from a text takes its wrap style, applying it sets it,
     // editing it on a styled text unlinks it.
     use figcraft_doc::WrapStyle::{Auto, Balance, Pretty};
     let mut s = Session::new();
