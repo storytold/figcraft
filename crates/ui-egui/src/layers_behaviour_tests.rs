@@ -914,3 +914,27 @@ fn an_icon_double_click_keeps_its_selection_when_a_modifier_is_held() {
     let v = &u.app.session.ds().unwrap().view;
     assert_ne!((v.cx, v.zoom), before, "the view frames the layer");
 }
+
+/// A Shift-double-click on an icon leaves just that layer selected, and it becomes the anchor: the
+/// next Shift-click selects the range from it, not a toggle.
+#[test]
+fn an_icon_double_click_becomes_the_range_anchor() {
+    let (mut u, [a, b, c, d]) = four();
+    u.frame(vec![]);
+    let a_row = u.row_at(a);
+    click(&mut u, a_row, Modifiers::NONE);
+    let icon = icon_of(&mut u, b);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: SHIFT };
+            u.frame_with(vec![Event::PointerMoved(icon), e], SHIFT);
+        }
+    }
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.selection(), vec![b], "the icon's layer is all that is selected");
+    let d_row = u.row_at(d);
+    click(&mut u, d_row, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![b, c, d]), "the range from the icon's layer");
+}
