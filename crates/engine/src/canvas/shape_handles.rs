@@ -6,12 +6,16 @@
 //!   [`INSET_PX`] in, so it can be grabbed at radius 0). Dragging it along the bisector sets the
 //!   radius of every corner; with Alt, only that corner of a rectangle or frame (the documentation
 //!   is silent on Alt).
+//! - **Count**: a polygon's or star's sits on its first point clockwise from the top; dragging it
+//!   sets the count from the pointer's angle about the centre, measured clockwise from the top
+//!   point: `round(360 / angle)`, clamped to 3 to 60 (measured in Figma's web app, 2026-11-12; a
+//!   polygon's maximum wasn't read).
 //! - **Ratio**: a star's sits on its first inner point; dragging it towards or away from the
 //!   centre sets the inner radius as a share of the outer one.
 //!
 //! Positions are in page coordinates and work for rotated and flipped layers at any zoom; the
 //! handles hide on layers smaller than [`MIN_PX`] on screen. The Move tool's gesture (`tools.rs`)
-//! writes the result through `node.set` (`cornerRadius`, `topLeftRadius`…, `innerRadius`), one
+//! writes the result through `node.set` (`cornerRadius`, `topLeftRadius`…, `innerRadius`, `pointCount`), one
 //! undo step per drag.
 
 use figcraft_doc::{Document, Node, NodeId, NodeKind};
@@ -20,18 +24,22 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 /// One shape handle: a corner's radius (corner index: tl, tr, br, bl; 0 for a polygon's or
-/// star's top point) or a star's ratio.
+/// star's top point), a star's ratio or a polygon's or star's point count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum ShapeHandle {
     Radius { corner: usize },
     Ratio,
+    Count,
 }
 
 /// Layers smaller than this on screen (either side, in pixels) show no shape handles.
 pub const MIN_PX: f64 = 48.0;
 /// How far in from its corner a handle sits at least (screen pixels).
 pub const INSET_PX: f64 = 10.0;
+/// The fewest and most points the Count handle sets (a star's range in the help center).
+const COUNT_MIN: f64 = 3.0;
+const COUNT_MAX: f64 = 60.0;
 /// How near the pointer must be to pick a handle (screen pixels).
 const HIT_PX: f64 = 6.0;
 
@@ -113,6 +121,29 @@ fn ratio_point(n: &Node, count: u32, ratio: f64) -> Option<Point> {
     figcraft_geom::star_points(n.width, n.height, count, ratio).get(1).copied()
 }
 
+/// The Count handle (local): a polygon's vertex 1 or a star's outer point 1, the first clockwise
+/// from the top.
+fn count_point(n: &Node) -> Option<Point> {
+    match n.kind {
+        NodeKind::Polygon { count } => figcraft_geom::polygon_points(n.width, n.height, count).get(1).copied(),
+        NodeKind::Star { count, inner_ratio } => figcraft_geom::star_points(n.width, n.height, count, inner_ratio).get(2).copied(),
+        _ => None,
+    }
+}
+
+/// The count a pointer at local point `q` sets: `round(360 / angle)` for its clockwise angle from
+/// the top about the centre, on the unit circle the shape's box maps from; finite for any `q`.
+fn count_at(n: &Node, q: Point) -> Option<f64> {
+    let (rx, ry) = (n.width / 2.0, n.height / 2.0);
+    if rx.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || ry.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
+        return None;
+    }
+    let (x, y) = (q.x / rx - 1.0, q.y / ry - 1.0);
+    let angle = x.atan2(-y).rem_euclid(std::f64::consts::TAU).to_degrees();
+    let count = (360.0 / angle.max(1e-9)).round();
+    count.is_finite().then(|| count.clamp(COUNT_MIN, COUNT_MAX))
+}
+
 /// The shape handles of the selection at `zoom` (screen pixels per page unit): each handle and
 /// where it is (page coordinates).
 pub fn handles(doc: &Document, sel: &[NodeId], zoom: f64) -> Vec<(ShapeHandle, [f64; 2])> {
@@ -127,6 +158,9 @@ pub fn handles(doc: &Document, sel: &[NodeId], zoom: f64) -> Vec<(ShapeHandle, [
         && let Some(p) = ratio_point(n, count, inner_ratio)
     {
         out.push((ShapeHandle::Ratio, pt(p)));
+    }
+    if let Some(p) = count_point(n) {
+        out.push((ShapeHandle::Count, pt(p)));
     }
     out
 }
@@ -160,6 +194,10 @@ pub fn drag(doc: &Document, id: NodeId, h: ShapeHandle, p: Point, alt: bool) -> 
             };
             Some(Map::from_iter([(key.to_string(), json!(r))]))
         }
+        ShapeHandle::Count => {
+            count_point(n)?;
+            Some(Map::from_iter([("pointCount".to_string(), json!(count_at(n, q)?))]))
+        }
         ShapeHandle::Ratio => {
             let NodeKind::Star { count, .. } = n.kind else { return None };
             // Along the inner point's ray, measured on the unit circle the star's box maps from.
@@ -172,11 +210,12 @@ pub fn drag(doc: &Document, id: NodeId, h: ShapeHandle, p: Point, alt: bool) -> 
     }
 }
 
-/// The live readout while dragging `h` of `id`: the corner's radius, or the star's ratio in percent.
+/// The live readout while dragging `h` of `id`: the corner's radius, the star's ratio in percent or the point count.
 pub fn value(doc: &Document, id: NodeId, h: ShapeHandle) -> Option<f64> {
     let n = doc.node(id)?;
     let v = match (h, &n.kind) {
         (ShapeHandle::Ratio, NodeKind::Star { inner_ratio, .. }) => inner_ratio * 100.0,
+        (ShapeHandle::Count, NodeKind::Polygon { count }) | (ShapeHandle::Count, NodeKind::Star { count, .. }) => f64::from(*count),
         (ShapeHandle::Radius { corner }, _) => corners(n).into_iter().nth(corner).map(|(c, r)| r.clamp(0.0, c.max_r))?,
         _ => return None,
     };
