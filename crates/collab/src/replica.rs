@@ -80,7 +80,7 @@ impl Replica {
     pub(crate) fn from_snapshot_leaving_out(changes: &[Change]) -> Result<(Replica, usize), Error> {
         let mut r = Replica { doc: Document::without_pages(""), positions: Positions::new() };
         let mut changes = changes.to_vec();
-        let left_out = r.apply_kept(&mut changes, Change::is_image)?;
+        let left_out = r.apply_kept(&mut changes, |c| Change::is_image(c) || Change::is_oversized_design_review(c))?;
         if r.doc.pages.is_empty() {
             return Err(Error::Invalid("a snapshot needs a page".into()));
         }

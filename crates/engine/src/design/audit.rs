@@ -461,18 +461,21 @@ impl Ctx<'_> {
         if !n.clip || n.children.is_empty() || n.layout.is_none() {
             return;
         }
-        if self.measured_frames >= MAX_FRAMES_MEASURED {
-            // The frame was seen but not measured: an assertion on this rule cannot prove a pass.
-            self.frames_unmeasured += 1;
-            return;
-        }
         // An instance mirrors its main; the main is audited where it lives.
         if matches!(n.kind, NodeKind::Instance { .. }) {
             return;
         }
         let fixed_h = n.child_layout.sizing_h != Sizing::Hug;
         let fixed_v = n.child_layout.sizing_v != Sizing::Hug;
+        // A hug frame cannot clip, and the walk never measures it: not work the cap left behind.
         if !(fixed_h || fixed_v) {
+            return;
+        }
+        if self.measured_frames >= MAX_FRAMES_MEASURED {
+            // The frame was seen but not measured: an assertion on this rule cannot prove a pass.
+            if self.settings.enabled("layout.clipped") {
+                self.frames_unmeasured += 1;
+            }
             return;
         }
         let Some(frame) = self.doc.world_bounds(n.id) else { return };
@@ -801,10 +804,15 @@ impl Ctx<'_> {
 
         // A fixed-width text box whose stored height is shorter than the laid-out text clips or
         // overlaps what follows it. Truncating boxes and auto-width boxes are intentional.
+        let overflow_asked = self.settings.enabled("layout.text-overflow");
         if !chars.is_empty() && n.width > 0.0 && matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Height) {
             if self.measured >= MAX_TEXT_MEASURED {
                 // The box was seen but not laid out: an assertion on this rule cannot prove a pass.
-                self.text_unmeasured += 1;
+                // A file that disabled the rule would never have measured it either way, so it
+                // does not make the run incomplete.
+                if overflow_asked {
+                    self.text_unmeasured += 1;
+                }
                 return;
             }
             self.measured += 1;

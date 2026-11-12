@@ -409,6 +409,21 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
 pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Index) -> Result<bool, Error> {
     match change {
         Change::SetDoc { prop, value } => {
+            // A peer's review settings stay inside the limits `design.configure` enforces, so an
+            // edit cannot smuggle in tens of thousands of radii or accents for every corner
+            // check to scan. An oversized value arrives only in an old snapshot: snapshots keep
+            // applying as they are.
+            if *prop == DocProp::DesignReview {
+                let config: figcraft_doc::DesignReview = value.read("design review")?;
+                if config.radii.len() > figcraft_doc::MAX_RADII || config.brand.len() > figcraft_doc::MAX_BRAND_COLORS {
+                    return Err(Error::Invalid(format!(
+                        "design review: {} radii and {} brand colours pass the {} limit `design.configure` keeps",
+                        config.radii.len(),
+                        config.brand.len(),
+                        figcraft_doc::MAX_RADII
+                    )));
+                }
+            }
             if set_scalar(doc, *prop, value)? {
                 return Ok(*prop == DocProp::Libraries);
             }

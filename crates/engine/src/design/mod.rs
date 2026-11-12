@@ -345,6 +345,11 @@ fn scope_of(s: &Session, cmd: &str, p: &Value) -> Result<(String, Vec<NodeId>, O
     let scope = scope_arg(cmd, p)?;
     let selection = s.selection();
     let page = s.page()?;
+    // An explicitly empty selection checks nothing either; only the implicit default falls back
+    // to the page. A CI gate must not read an unchecked scope as a pass.
+    if scope.as_deref() == Some("selection") && selection.is_empty() {
+        return Err(bad(cmd, "nothing is selected: name `ids`, pick a scope of page or document, or select the layers to audit"));
+    }
     let (roots, label, anchor, path) = match scope.as_deref() {
         None if selection.is_empty() => (vec![page], "page", Some(page), node_label(doc, page)),
         None => selection_scope(doc, &selection),

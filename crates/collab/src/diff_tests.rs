@@ -61,6 +61,24 @@ fn design_review_settings_round_trip_and_reach_a_snapshot() {
 }
 
 #[test]
+fn an_edit_past_the_review_limits_is_refused_but_a_snapshot_applies() {
+    let (a, _, _, _) = setup();
+    // An edit peer trying to hand the file tens of thousands of radii is refused at apply.
+    let mut b = a.document().clone();
+    b.design_review.radii = (0..40).map(|i| i as f64).collect();
+    let mut r = a.clone();
+    let change = Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() };
+    let err = r.apply(&[change.clone()], Mode::Strict).unwrap_err().to_string();
+    assert!(err.contains("pass the 32 limit `design.configure` keeps"), "{err}");
+    // A snapshot holding settings over the limits (an old file's) still opens: like an image
+    // entry that fails today's checks, the oversized entry is left out of what it loads.
+    let snap = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
+    let (r2, left_out) = Replica::from_snapshot_leaving_out(&snap).unwrap();
+    assert_eq!(left_out, 1, "the oversized settings entry is the one left out");
+    assert!(r2.document().design_review.radii.is_empty(), "the file opens without them");
+}
+
+#[test]
 fn creations_moves_reorders_and_deletions_round_trip() {
     let (a, page, frame, kids) = setup();
     let mut b = a.document().clone();

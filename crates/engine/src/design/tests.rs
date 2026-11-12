@@ -879,6 +879,34 @@ fn assert_refuses_a_scope_whose_measured_checks_were_capped() {
     // A gate that does not ask for the capped rule is unaffected.
     let other = json!(["color.gradient"]);
     assert!(s.execute("design.assert", &json!({"scope": "page", "rules": &other})).is_ok());
+    // A file that disabled the capped rule would not have measured it either way: the run is
+    // whole under its own settings, not incomplete.
+    ex(&mut s, "design.configure", json!({"disabled": ["layout.text-overflow"]}));
+    let audit = ex(&mut s, "design.audit", json!({"scope": "page"}));
+    assert!(audit["textUnmeasured"].is_null(), "{audit}");
+    assert!(s.execute("design.assert", &json!({"scope": "page"})).is_ok(), "a disabled rule leaves nothing unchecked");
+}
+
+#[test]
+fn assert_refuses_an_explicit_empty_selection() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})));
+    s.set_selection(vec![]);
+    // With nothing selected, an explicit `selection` scope checks nothing: refused, while the
+    // implicit default (no scope) still falls back to the page and an explicit empty `ids`
+    // stays refused too.
+    for p in [json!({"scope": "selection"}), json!({"scope": "selection", "ids": []}), json!({"ids": []})] {
+        let err = s.execute("design.assert", &p).unwrap_err().to_string();
+        assert!(err.contains("nothing is selected") || err.contains("`ids`"), "{p}: {err}");
+    }
+    // The layer is there: selecting it audits and gates as usual.
+    s.set_selection(vec![f]);
+    let r = ex(&mut s, "design.audit", json!({"scope": "selection"}));
+    assert_eq!(r["nodes"], 1, "{r}");
+    assert!(s.execute("design.assert", &json!({"scope": "selection"})).is_ok());
+    // The implicit page default still works with nothing selected.
+    s.set_selection(vec![]);
+    assert!(s.execute("design.audit", &json!({})).is_ok());
 }
 
 #[test]
