@@ -29,6 +29,7 @@ mod graphics;
 mod recovery;
 mod services;
 mod startup;
+mod window_frame;
 
 #[cfg(all(test, target_os = "macos"))]
 mod apple_events_tests;
@@ -63,6 +64,8 @@ struct App {
     title: String,
     /// Shared with the services, which write the copies after a panic.
     recovery: recovery::Shared,
+    /// Keeps the custom title bar's undecorated windows borderless (Windows, #1343).
+    window_frame: window_frame::WindowFrame,
     /// Documents and quit requests from Finder, the Dock and Open With.
     #[cfg(target_os = "macos")]
     apple_events: fmv_macos_events::Inbox,
@@ -111,6 +114,9 @@ impl eframe::App for App {
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // winit gives an undecorated window its caption back when it changes the window's flags
+        // (maximize, restore, ...): take it off again before the frame is laid out (#1343).
+        self.window_frame.run();
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
         if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
@@ -268,6 +274,7 @@ fn main() -> eframe::Result {
     // the old bespoke xdg-decoration probe that always drew FigCraft's custom title bar on KDE.
     fig.ui.title_bar = desktop_title_bar();
     viewport = window_chrome(viewport, fig.ui.title_bar);
+    let custom_titlebar = fig.ui.title_bar == figcraft_ui_egui::TitleBar::Custom;
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
@@ -304,6 +311,9 @@ fn main() -> eframe::Result {
                 ctx_slot,
                 title: String::new(),
                 recovery,
+                // The custom title bar's undecorated window must stay borderless, or its caption
+                // and border offset the content and the pointer on some Windows systems (#1343).
+                window_frame: window_frame::WindowFrame::new(custom_titlebar),
                 #[cfg(target_os = "macos")]
                 apple_events: apple_events.connect(&cc.egui_ctx),
             }))
