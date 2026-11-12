@@ -471,7 +471,8 @@ Returns `{fitted: [{id, fontSize, lines, fits, orphan}]}`. Use case: a carousel 
 
 A board is a file of its own kind for thinking together: `file.newBoard {name?}` opens one (its
 page is light; `inspect_document` says `kind: "board"`). Board objects are ordinary layers with a
-`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink, …}`), so the usual
+`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode, …}`; a connector may say
+`branch: true`), so the usual
 commands move, resize, recolour, copy, delete and undo them. On a design file the board commands
 refuse; on a board `proto.*`, `dev.*`, `view.prototype` and `view.devMode` refuse. Each of these is
 one undo step and returns the ids it made:
@@ -489,6 +490,21 @@ one undo step and returns the ids it made:
   one, 80 units away, joined to it by a connector the way the Connector tool makes one; one undo
   step. With `edit: true` the app goes on typing in it (the "+" beside a selected sticky or shape
   in the app does both).
+- `board.mindMap {x?, y?, text?, children?, parent?, edit?}` → `{id, text, children: [{id, text, connector}]}`:
+  a mind map: a first node (`mindNode`, bold 24, no box; `text` defaults to `Topic`, `x`/`y` to the
+  middle of the view) with up to 20 `children` (texts; default `Idea 1`, `Idea 2`, `Idea 3`)
+  on its right, each joined to it by a curved branch (a connector with `branch: true`: stroke 4,
+  `#757575`, round caps). The map lays itself out: children stand in one column 88 units right of
+  the widest node of their parent's column, 48 apart, centred on their parent; a node is its text,
+  sized to it. One undo step. A map's shape is read from its branches alone: the parent of a node
+  is the layer a branch arrives from. After every edit (a command, typing, a gesture, undo, a live
+  session's change) a touched map is laid out again from its first node, so moving the first node
+  moves the map, a child moved by hand goes back (or swaps with the sibling whose middle it
+  passed), and a deleted node's children stay where they are, without their branch.
+- `board.mindMapAdd {id?, relation?: child|sibling, text?, edit?}` → `{id, text, connector}`: a node
+  of the map that the given (or selected, or edited) one belongs to: a child below its other
+  children, or a sibling right after it (the first node has none); the map lays itself out again.
+  One undo step. With `edit: true` the app goes on typing in it.
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
   wrapping text: `rectangle roundedRectangle ellipse diamond triangle triangleDown parallelogramRight parallelogramLeft trapezoid pentagon hexagon octagon star plus arrowLeft arrowRight chevron speechBubble database document predefinedProcess manualInput internalStorage`.
 - `board.connector {from, to, fromSide?, toSide?, fromAt?, toAt?, style?: straight|elbow|curved, startCap?, endCap?, label?}`

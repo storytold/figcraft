@@ -87,7 +87,7 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], opts: &Options) -> Option
         }
     };
     used.bytes.fetch_add(plain.len(), Ordering::Relaxed);
-    if super::too_deep(&plain) {
+    if super::too_wide(&plain) || super::too_deep(&plain) {
         return None;
     }
     used.depth.fetch_add(1, Ordering::Relaxed);

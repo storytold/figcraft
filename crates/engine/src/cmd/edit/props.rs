@@ -254,7 +254,7 @@ pub(super) fn stroke_brush(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn reparent(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("node.reparent", s, p)?;
     let parent = req_id("node.reparent", p, "parent")?;
-    let index = num(p, "index").map(|i| i.max(0.0) as usize);
+    let index = opt_index("node.reparent", p, "index")?;
     let doc = s.doc_mut()?;
     let ids = z_sorted(doc, &roots(doc, &ids));
     // `index` is where the first moved layer ends up among the parent's children (bottom first),
