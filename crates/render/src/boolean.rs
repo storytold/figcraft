@@ -7,6 +7,11 @@
 //! edited one are never recombined, and groups whose operands didn't change aren't recomputed at
 //! all. The caches drop their least recently used half when full, so a long drag doesn't evict
 //! every other group's result.
+//!
+//! The group's own corner radius is applied to the finished fold ([`result_cached`]) and cached in a
+//! separate, smaller map keyed by the folded path plus the radius and smoothing: the fold's caches
+//! are keyed by the operands alone, so scrubbing the radius never redoes the fold or evicts its
+//! prefixes, and a rounded path is never stored where a fold would find it.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -107,6 +112,30 @@ pub fn fold_cached(operands: &[(BezPath, BoolOp)]) -> Option<BezPath> {
         }
         Err(PathOpsError::BadInput) => Some(BezPath::new()),
     }
+}
+
+fn rounded() -> &'static Mutex<PathCache> {
+    static C: OnceLock<Mutex<PathCache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(PathCache::new(512)))
+}
+
+/// A boolean group's result as it is drawn: the fold of `operands` ([`fold_cached`]), then the
+/// group's corner `radius` and `smoothing` on every corner still sharp.
+pub fn result_cached(operands: &[(BezPath, BoolOp)], radius: f64, smoothing: f64) -> Option<BezPath> {
+    let folded = fold_cached(operands)?;
+    if !(radius.is_finite() && radius > 0.0) {
+        return Some(folded);
+    }
+    let mut h = DefaultHasher::new();
+    hash_path(&folded, &mut h);
+    (radius.to_bits(), smoothing.to_bits(), 0x52u8).hash(&mut h);
+    let key = h.finish();
+    if let Some(p) = locked(rounded()).get(key) {
+        return Some((*p).clone());
+    }
+    let out = figcraft_pathops::round_corners(&folded, radius, smoothing);
+    locked(rounded()).insert(key, Arc::new(out.clone()));
+    Some(out)
 }
 
 /// `keys[i]`: the cache key of the fold of operands `0..=i`.

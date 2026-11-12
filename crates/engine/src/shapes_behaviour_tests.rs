@@ -189,6 +189,7 @@ fn corner_radius_follows_the_documented_rules() {
         (NodeKind::Polygon { count: 5 }, true, false, "polygons: one radius for every corner"),
         (NodeKind::Star { count: 5, inner_ratio: 0.4 }, true, false, "stars: one radius for every corner"),
         (NodeKind::Vector { network: Default::default() }, true, false, "vectors: a radius, and one per point in edit mode"),
+        (NodeKind::BooleanOp { op: BoolOp::Union }, true, false, "boolean groups: one radius for every sharp corner of the result"),
         (NodeKind::Line, false, false, "lines and arrows take no radius"),
     ];
     for (kind, radius, independent, why) in doc_rows {
@@ -241,6 +242,7 @@ fn corner_smoothing_follows_the_documented_rules() {
             "vector networks that are closed shapes",
         ),
         (NodeKind::Vector { network: Default::default() }, false, "an open vector has no closed shape to smooth"),
+        (NodeKind::BooleanOp { op: BoolOp::Union }, true, "boolean groups (the plugin API's corner mixin; the look is pinned)"),
         (NodeKind::Line, false, "lines take no radius, so no smoothing"),
     ];
     for (kind, smoothing, why) in doc_rows {
