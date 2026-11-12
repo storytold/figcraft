@@ -727,6 +727,34 @@ fn fix_dry_run_and_no_op_do_not_dirty_the_document() {
 }
 
 #[test]
+fn assert_fails_when_the_audit_is_truncated() {
+    let mut s = Session::new();
+    // The audit stops at the 50,000-node cap, so the badge at the end is never reached: white
+    // text in a white frame, a contrast failure the truncated report cannot see.
+    let page = s.page().unwrap();
+    {
+        let doc = s.doc_mut().unwrap();
+        for i in 0..50_100 {
+            doc.create(page, NodeKind::Rectangle, &format!("Filler {i}"), 0.0, 0.0, 1.0, 1.0).unwrap();
+        }
+    }
+    let holder = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Badge holder", "x": 0.0, "y": 0.0, "width": 40.0, "height": 24.0, "props": {"fill": "#FFFFFF"}}),
+    ));
+    let badge = id(&ex(&mut s, "text.create", json!({"text": "0", "name": "Badge", "parent": holder, "props": {"fill": "#FFFFFF"}})));
+    // Auditing the badge alone reports it: the cap is what hides it, not innocence.
+    let r = ex(&mut s, "design.audit", json!({"ids": [badge], "rules": ["color.contrast"]}));
+    assert!(has(&r, "color.contrast"), "{r}");
+    let r = ex(&mut s, "design.audit", json!({"scope": "page"}));
+    assert_eq!(r["truncated"], true, "{r}");
+    // The gate must not turn a truncated audit into a pass at score 100.
+    let err = s.execute("design.assert", &json!({"scope": "page", "failOn": "high"})).unwrap_err().to_string();
+    assert!(err.contains("node cap"), "{err}");
+}
+
+#[test]
 fn hardcoded_values_that_match_variables_are_reported() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "C"}));

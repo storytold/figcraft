@@ -44,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "design.assert",
             "Assert design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes), failOn?: low|medium|high (default high), minScore?: 0-100 (default 0)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists or the score is below minScore; read-only, for CI",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes), failOn?: low|medium|high (default high), minScore?: 0-100 (default 0)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists, the score is below minScore, or the audit was truncated by the node cap (what it did not reach is unchecked: narrow the scope or filter the rules); read-only, for CI",
             false,
             assert_cmd
         ),
@@ -126,6 +126,15 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|v| v.iter().filter(|f| f["severity"].as_str().and_then(Severity::from_id).is_some_and(|s| s >= fail_on)).collect())
         .unwrap_or_default();
     let score = report["score"].as_f64().unwrap_or(0.0);
+    // A truncated audit checked only the first nodes of the scope: what it did not reach is
+    // unchecked, so it can never prove a design passes (a white-on-white label past the cap
+    // would sail through as score 100).
+    if report["truncated"].as_bool() == Some(true) {
+        let nodes = report["nodes"].as_u64().unwrap_or(0);
+        return Err(EngineError::Other(format!(
+            "design review failed: the audit stopped at the node cap after {nodes} nodes, so what it did not reach is unchecked; audit a smaller scope (selection, page or ids) or filter the rules, then assert again"
+        )));
+    }
     if !failing.is_empty() || score < min_score {
         let mut by_rule: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
         for f in &failing {
