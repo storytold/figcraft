@@ -197,13 +197,24 @@ pub fn invoke(app: &mut FigApp, id: &str) {
             let ids = app.session.selection();
             // For other apps: text layers' text, other layers as SVG; taken before a cut removes them.
             let doc = app.session.doc().ok();
-            let mirror = doc.and_then(|d| text_layers_text(d, &ids).or_else(|| figcraft_svg_export(d, &ids)));
-            app.run(id, json!({}));
+            // Points or segments selected in vector edit mode copy just those: the whole vector's
+            // SVG would misdescribe them.
+            let partial = app
+                .session
+                .ds()
+                .ok()
+                .and_then(|d| d.vector_edit.as_ref())
+                .is_some_and(|ve| ve.parts().iter().any(|p| !p.vertices.is_empty() || !p.segments.is_empty()));
+            let mirror = doc.filter(|_| !partial).and_then(|d| text_layers_text(d, &ids).or_else(|| figcraft_svg_export(d, &ids)));
+            let ran = app.run(id, json!({}));
+            // A partial copy put temporary layers on the engine clipboard; mirror their SVG.
+            let refused = partial && ran.is_none();
+            let mirror = if partial { ran.and_then(|_| figcraft_engine::cmd::edit::clipboard_svg(&app.session)) } else { mirror };
             // Mirror to the system clipboard (text or SVG, else a marker) and remember it, so a
             // later paste knows whether the clipboard still holds our layers. Control-channel
             // gestures keep the engine's copy but never replace the user's clipboard; `run` then
             // invalidates the old mirror because it no longer describes the engine clipboard.
-            if !app.control_synthetic {
+            if !app.control_synthetic && !refused {
                 let text = mirror.unwrap_or_else(|| format!("figcraft://clipboard/{}", ids.len()));
                 app.clipboard_set_text(&text);
                 app.ui.last_copy = Some(text);
