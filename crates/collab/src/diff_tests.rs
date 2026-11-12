@@ -68,7 +68,7 @@ fn an_edit_past_the_review_limits_is_refused_but_a_snapshot_applies() {
     b.design_review.radii = (0..40).map(|i| i as f64).collect();
     let mut r = a.clone();
     let change = Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() };
-    let err = r.apply(&[change.clone()], Mode::Strict).unwrap_err().to_string();
+    let err = r.apply(std::slice::from_ref(&change), Mode::Strict).unwrap_err().to_string();
     assert!(err.contains("pass the 32 limit `design.configure` keeps"), "{err}");
     // A snapshot holding settings over the limits (an old file's) still opens: like an image
     // entry that fails today's checks, the oversized entry is left out of what it loads.
