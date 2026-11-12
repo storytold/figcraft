@@ -801,3 +801,15 @@ fn an_arc_without_an_end_is_whole_wherever_it_starts() {
         assert_eq!(sweep, std::f64::consts::TAU, "start {start}");
     }
 }
+
+#[test]
+fn a_start_on_every_line_counts_only_where_the_list_starts() {
+    let (doc, _) = one(json!([
+        {"id": "t1", "name": "Every", "type": "TEXT", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}, "characters": "a\nb\nc",
+         "style": {"fontFamily": "Inter", "fontSize": 12},
+         "lineTypes": ["ORDERED", "ORDERED", "ORDERED"], "lineIndentations": [1, 1, 1], "listStartOffsets": [4, 4, 4]}
+    ]));
+    let figcraft_doc::NodeKind::Text(t) = &named(&doc, "Every").kind else { panic!("not text") };
+    let offsets: Vec<u32> = (0..t.paragraph_count()).map(|p| t.para_list(p).start_offset).collect();
+    assert_eq!(offsets, [4, 0, 0]);
+}

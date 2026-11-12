@@ -277,6 +277,31 @@ pub enum TextDirection {
 pub const MAX_LIST_INDENT: u8 = 8;
 
 /// One paragraph's list settings and base direction.
+/// For each paragraph, whether it is an item where a list starts counting. Numbers count the items
+/// of one list at one level and restart after a plain paragraph, a shallower item or the other
+/// kind of list; the first item of such a run starts counting (and takes its own start number).
+/// The layout numbers by this rule.
+pub fn list_item_starts_counting(lists: &[ParaList]) -> Vec<bool> {
+    let mut run = [ListStyle::None; MAX_LIST_INDENT as usize + 1];
+    lists
+        .iter()
+        .map(|pl| {
+            if pl.list == ListStyle::None {
+                run.fill(ListStyle::None);
+                return false;
+            }
+            let d = usize::from(pl.indent).min(run.len() - 1);
+            for c in run.iter_mut().skip(d + 1) {
+                *c = ListStyle::None;
+            }
+            let Some(c) = run.get_mut(d) else { return false };
+            let starts = *c != pl.list;
+            *c = pl.list;
+            starts
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ParaList {
@@ -933,6 +958,24 @@ impl TextData {
         self.fill_paragraphs();
         for pl in self.paragraphs.get_mut(a..=b).unwrap_or(&mut []) {
             pl.start_offset = 0;
+        }
+        self.fold_paragraph_lists();
+    }
+
+    /// Keep a start number only on the item where a numbered list starts counting, and give every
+    /// item that goes on counting 0 (the rule the layout numbers by, [`list_item_starts_counting`]).
+    /// An imported file may carry the list's start on every line; once the list is split, the
+    /// items after the split must restart at 1, not at the old start.
+    pub fn keep_list_starts_where_counting_starts(&mut self) {
+        if self.paragraphs.iter().all(|p| p.start_offset == 0) {
+            return;
+        }
+        self.fill_paragraphs();
+        let starts = list_item_starts_counting(&(0..self.paragraph_count()).map(|i| self.para_list(i)).collect::<Vec<_>>());
+        for (pl, starts) in self.paragraphs.iter_mut().zip(starts) {
+            if !starts {
+                pl.start_offset = 0;
+            }
         }
         self.fold_paragraph_lists();
     }

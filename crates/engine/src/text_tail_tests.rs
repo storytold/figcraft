@@ -482,3 +482,28 @@ fn a_many_line_paste_clears_every_created_start() {
     assert_eq!(d.para_list(0).start_offset, 4, "the first item keeps its start");
     assert!((1..d.paragraph_count()).all(|p| d.para_list(p).start_offset == 0 && d.para_list(p).list == N));
 }
+
+#[test]
+fn an_imported_list_split_in_the_middle_restarts_at_one() {
+    // #2273: a list started at 5 reaches us with 4 on every line; splitting off "b" must leave "c"
+    // reading 1., not 5.
+    let file = json!({"name": "File", "document": {"id": "0:0", "type": "DOCUMENT", "children": [{"id": "0:1", "name": "Page", "type": "CANVAS", "children": [
+        {"id": "1:2", "name": "List", "type": "TEXT", "relativeTransform": [[1, 0, 0], [0, 1, 0]], "size": {"x": 100, "y": 60}, "characters": "a\nb\nc",
+         "style": {"fontFamily": "Inter", "fontSize": 12},
+         "lineTypes": ["ORDERED", "ORDERED", "ORDERED"], "lineIndentations": [1, 1, 1], "listStartOffsets": [4, 4, 4]}]}]}});
+    let (imported, _) = figcraft_format::rest::import(&file, &figcraft_format::rest::no_images).unwrap();
+    let from = imported.nodes().find_map(|n| if let figcraft_doc::NodeKind::Text(td) = &n.kind { Some(td.clone()) } else { None }).unwrap();
+    assert_eq!(from.para_list(0).start_offset, 4);
+    assert_eq!((from.para_list(1).start_offset, from.para_list(2).start_offset), (0, 0), "the items that go on counting carry no start");
+    let mut s = Session::new();
+    let t = text(&mut s, "x");
+    if let figcraft_doc::NodeKind::Text(td) = &mut s.doc_mut().unwrap().get_mut(t).unwrap().kind {
+        td.characters = from.characters.clone();
+        td.paragraphs = (0..from.paragraph_count()).map(|i| from.para_list(i)).collect();
+    }
+    begin(&mut s, t, Some(2), false).unwrap();
+    key(&mut s, "Backspace", false, false, false).unwrap();
+    let d = data(&s, t);
+    assert_eq!(lists(&s, t).iter().map(|l| l.0).collect::<Vec<_>>(), vec![N, P, N]);
+    assert_eq!((d.para_list(0).start_offset, d.para_list(2).start_offset), (4, 0), "c reads 1.");
+}
