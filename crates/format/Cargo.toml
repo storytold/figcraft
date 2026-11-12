@@ -20,3 +20,5 @@ ruzstd = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
 image = { workspace = true }
+craft-fig = { workspace = true }
+craft-figma-rest = { workspace = true }

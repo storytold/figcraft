@@ -15,7 +15,6 @@
 //! (`docs/file-format-parity.md` says what was checked); other apps may not open every file.
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::sync::Arc;
 
 use figcraft_doc::color::{BlendMode, Color, GradientKind, ImageScaleMode, Paint, PaintKind};
@@ -33,8 +32,8 @@ use figcraft_doc::{
 use serde_json::Value;
 use sha1::Digest;
 
-use super::kiwi::{Kv, Schema, encode};
-use super::network;
+use craft_fig::kiwi::{Kv, Schema, encode};
+use craft_fig::{network, path};
 use crate::FormatError;
 
 mod assets;
@@ -50,18 +49,18 @@ mod shape;
 const MAX_NODES: usize = crate::rest::MAX_NODES;
 const MAX_DEPTH: usize = 256;
 /// Largest `canvas.fig` and image written (what the import reads).
-const MAX_CANVAS: u64 = super::MAX_CANVAS;
+const MAX_CANVAS: u64 = craft_fig::MAX_CANVAS;
 const MAX_IMAGE: u64 = super::MAX_IMAGE;
-/// Largest whole file written.
-const MAX_FILE: u64 = 2 * 1024 * 1024 * 1024;
 /// Most characters of one text layer, and vertices + segments + loop entries of one vector
 /// network (what the import reads).
 const MAX_CHARS: usize = 1 << 20;
 const MAX_NETWORK: usize = 200_000;
 /// Largest magnitude written for a float (the format stores 32-bit floats).
 const MAX_FLOAT: f64 = 1e30;
-/// The version number in the `canvas.fig` header.
-const VERSION: u32 = 101;
+/// Grid track values, and the scale factor of a scaled instance, that the import follows.
+const MAX_GRID_TRACK_VALUE: f64 = 1e6;
+const MIN_SCALE_FACTOR: f64 = 1e-3;
+const MAX_SCALE_FACTOR: f64 = 1e3;
 /// Session ids of the GUIDs: layers, and grid tracks and component properties.
 const LAYERS: u32 = 1;
 const AUX: u32 = 2;
@@ -199,39 +198,17 @@ message Message MessageType type=1, uint sessionID=2, NodeChange[] nodeChanges=4
 pub fn export(doc: &Document, thumbnail: Option<&[u8]>) -> Result<(Vec<u8>, Vec<String>), FormatError> {
     let mut x = Exporter::new(doc);
     let message = x.message();
-    let fail = |e: super::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
+    let fail = |e: craft_fig::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
     let schema = Schema::parse(SCHEMA).map_err(fail)?;
     let root = schema.find("Message").ok_or_else(|| FormatError::Io(".fig export: the schema has no Message".into()))?;
     let body = encode::message(&schema, root, &message).map_err(fail)?;
-    let canvas = canvas(&encode::schema(&schema), &body)?;
+    let canvas = craft_fig::encode_canvas(&encode::schema(&schema), &body).map_err(super::fig_err)?;
     let background = doc.pages.first().and_then(|p| doc.node(*p)).and_then(|p| match &p.kind {
         NodeKind::Page { background, .. } => Some(*background),
         _ => None,
     });
     let bytes = archive(&doc.name, background.unwrap_or(Color::WHITE), &canvas, &x.files, thumbnail)?;
     Ok((bytes, x.warnings))
-}
-
-fn too_large() -> FormatError {
-    FormatError::Io("the document is too large for a .fig file".into())
-}
-
-/// `canvas.fig`: the magic, the version and the two deflated chunks, each after its length.
-pub(super) fn canvas(schema: &[u8], message: &[u8]) -> Result<Vec<u8>, FormatError> {
-    let mut out = b"fig-kiwi".to_vec();
-    out.extend_from_slice(&VERSION.to_le_bytes());
-    for chunk in [schema, message] {
-        let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-        z.write_all(chunk).map_err(crate::io_err)?;
-        let c = z.finish().map_err(crate::io_err)?;
-        let len = u32::try_from(c.len()).map_err(|_| too_large())?;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&c);
-    }
-    if out.len() as u64 > MAX_CANVAS {
-        return Err(too_large());
-    }
-    Ok(out)
 }
 
 /// The zip around `canvas.fig`.
@@ -242,33 +219,9 @@ fn archive(
     images: &[(String, Arc<Vec<u8>>)],
     thumbnail: Option<&[u8]>,
 ) -> Result<Vec<u8>, FormatError> {
-    let mut buf = std::io::Cursor::new(Vec::new());
-    {
-        let mut z = zip::ZipWriter::new(&mut buf);
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        crate::put(&mut z, "canvas.fig", stored, canvas)?;
-        if let Some(t) = thumbnail {
-            crate::put(&mut z, "thumbnail.png", stored, t)?;
-        }
-        let mut client = serde_json::json!({"background_color": {"r": background.r, "g": background.g, "b": background.b, "a": background.a}});
-        // A PNG says its size right after its signature and header chunk name.
-        let be = |at: usize| thumbnail.and_then(|t| t.get(at..at + 4)).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes);
-        if let (Some(w), Some(h)) = (be(16), be(20)) {
-            client["thumbnail_size"] = serde_json::json!({"width": w, "height": h});
-        }
-        let meta = serde_json::to_vec(&serde_json::json!({"client_meta": client, "file_name": name})).map_err(crate::io_err)?;
-        crate::put(&mut z, "meta.json", crate::json_options(), &meta)?;
-        let mut total = canvas.len() as u64;
-        for (hash, bytes) in images {
-            total += bytes.len() as u64;
-            if total > MAX_FILE {
-                return Err(too_large());
-            }
-            crate::put(&mut z, &format!("images/{hash}"), stored, bytes)?;
-        }
-        z.finish().map_err(crate::io_err)?;
-    }
-    Ok(buf.into_inner())
+    let images: Vec<(&str, &[u8])> = images.iter().map(|(hash, bytes)| (hash.as_str(), bytes.as_slice())).collect();
+    let background = [background.r, background.g, background.b, background.a].map(f64::from);
+    craft_fig::write_archive(&craft_fig::Package { file_name: name, background, canvas, images: &images, thumbnail }).map_err(super::fig_err)
 }
 
 type Fields = Vec<(&'static str, Kv<'static>)>;
@@ -303,7 +256,7 @@ fn b(x: bool) -> Kv<'static> {
 /// importer keeps only those). `None`: the format has no name for it, so an equal track stands in.
 fn grid_track_size(track: &GridTrack) -> Option<(&'static str, f64)> {
     let value = track.value;
-    let fits = value.is_finite() && (0.0..=crate::fig::map::MAX_GRID_TRACK_VALUE).contains(&value);
+    let fits = value.is_finite() && (0.0..=MAX_GRID_TRACK_VALUE).contains(&value);
     match track.sizing {
         Sizing::Fixed if fits => Some(("FIXED", value)),
         Sizing::Fill if fits && value > 0.0 => Some(("FLEX", value)),
@@ -416,27 +369,21 @@ fn join_name(j: StrokeJoin) -> &'static str {
     }
 }
 
-/// A geometry blob (the import's `svg_path` reads it): commands `0` close, `1` move, `2` line,
-/// `3` quadratic, `4` cubic, each followed by its points as little-endian `f32` pairs.
+/// A geometry blob (`craft_fig::path`), with every value finite.
 fn path_blob(p: &BezPath) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut put = |cmd: u8, pts: &[figcraft_doc::geom::Point]| {
-        out.push(cmd);
-        for q in pts {
-            out.extend_from_slice(&(finite(q.x) as f32).to_le_bytes());
-            out.extend_from_slice(&(finite(q.y) as f32).to_le_bytes());
-        }
-    };
-    for el in p.elements() {
-        match *el {
-            PathEl::MoveTo(a) => put(1, &[a]),
-            PathEl::LineTo(a) => put(2, &[a]),
-            PathEl::QuadTo(a, c) => put(3, &[a, c]),
-            PathEl::CurveTo(a, c, d) => put(4, &[a, c, d]),
-            PathEl::ClosePath => put(0, &[]),
-        }
-    }
-    out
+    let pt = |q: figcraft_doc::geom::Point| [finite(q.x) as f32, finite(q.y) as f32];
+    let commands: Vec<path::Command> = p
+        .elements()
+        .iter()
+        .map(|el| match *el {
+            PathEl::MoveTo(a) => path::Command::Move(pt(a)),
+            PathEl::LineTo(a) => path::Command::Line(pt(a)),
+            PathEl::QuadTo(a, c) => path::Command::Quad(pt(a), pt(c)),
+            PathEl::CurveTo(a, c, d) => path::Command::Cubic(pt(a), pt(c), pt(d)),
+            PathEl::ClosePath => path::Command::Close,
+        })
+        .collect();
+    path::encode(&commands)
 }
 
 /// Settings an overlay's destination carries.

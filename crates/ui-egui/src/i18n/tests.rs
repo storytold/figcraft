@@ -204,7 +204,28 @@ fn importer_notes() -> BTreeSet<String> {
             keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), &["warn("]));
         }
     }
+    // The `.fig` mapping itself is craft-fig's (`craft_fig::rest`); its notes are ours to translate.
+    let rest = craft_fig_src().join("rest");
+    for path in sources(&rest).into_iter().chain([rest.with_extension("rs")]) {
+        if !path.file_name().unwrap().to_string_lossy().contains("tests") {
+            keys.extend(literals(&std::fs::read_to_string(&path).unwrap(), &["warn("]));
+        }
+    }
     keys
+}
+
+/// The `src` directory of the craft-fig sources this build uses, as Cargo resolved them.
+fn craft_fig_src() -> std::path::PathBuf {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let out = std::process::Command::new(cargo)
+        .args(["metadata", "--format-version", "1", "--offline"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "cargo metadata: {}", String::from_utf8_lossy(&out.stderr));
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let package = meta["packages"].as_array().unwrap().iter().find(|p| p["name"] == "craft-fig").expect("craft-fig is a dependency");
+    std::path::Path::new(package["manifest_path"].as_str().unwrap()).parent().unwrap().join("src")
 }
 
 /// The lookup functions whose first argument is a catalog key.
