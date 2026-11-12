@@ -30,6 +30,9 @@ enum Target {
     Proto(crate::proto_editor::VarSlot),
     /// Bind it to `field` of the shared style `style`.
     Style { style: String, field: String },
+    /// Bind it to the weight of the shared text style `style`: a string variable names the face
+    /// (`fontStyle`), a number one sets the weight (`fontWeight`).
+    StyleWeight { style: String },
 }
 
 /// The open variable picker: what it does, the variable type (None: any), where it opens.
@@ -195,6 +198,13 @@ pub fn open_proto(ui: &Ui, slot: crate::proto_editor::VarSlot, kind: Option<Vari
 pub fn open_style(ui: &Ui, style: &str, field: &str, kind: VariableType, at: Pos2) {
     let target = Target::Style { style: style.to_string(), field: field.to_string() };
     ui.data_mut(|d| d.insert_temp(picker_id(), Picker { target, kind: Some(kind), at }));
+}
+
+/// Open the picker at `at` to bind a string (face name) or number (weight) variable to the weight of
+/// the shared text style `style`.
+pub fn open_style_weight(ui: &Ui, style: &str, at: Pos2) {
+    let target = Target::StyleWeight { style: style.to_string() };
+    ui.data_mut(|d| d.insert_temp(picker_id(), Picker { target, kind: None, at }));
 }
 
 /// Where the open picker is on screen (clicks in it don't close what opened it).
@@ -398,7 +408,7 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
     let (scope, own) = match &p.target {
         Target::Bind { ids, field } => (ids.first().and_then(|id| figcraft_engine::cmd::variables::field_scope(&doc, *id, field)), None),
         Target::Alias { variable, .. } => (None, doc.variables.get_by_id(variable)),
-        Target::Proto(_) | Target::Style { .. } => (None, None),
+        Target::Proto(_) | Target::Style { .. } | Target::StyleWeight { .. } => (None, None),
     };
     // A style's fields offer variables scoped to one of the properties the field sets.
     let style_scopes = match &p.target {
@@ -406,7 +416,8 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
         _ => None,
     };
     // Prototypes and styles use this file's variables.
-    let local_only = matches!(p.target, Target::Proto(_) | Target::Style { .. });
+    let local_only = matches!(p.target, Target::Proto(_) | Target::Style { .. } | Target::StyleWeight { .. });
+    let weight_target = matches!(p.target, Target::StyleWeight { .. });
     let field = match &p.target {
         Target::Bind { field, .. } => Some(field.as_str()),
         _ => None,
@@ -417,6 +428,12 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
             && (q.is_empty() || v.name.to_lowercase().contains(&q))
             && scope.is_none_or(|s| v.in_scope(s))
             && style_scopes.is_none_or(|list| list.iter().any(|s| v.in_scope(s)))
+            && (!weight_target
+                || match v.kind {
+                    VariableType::String => v.in_scope("FONT_STYLE"),
+                    VariableType::Number => v.in_scope("FONT_WEIGHT"),
+                    _ => false,
+                })
             && (lib.is_some() || own.is_none_or(|o| figcraft_engine::cmd::variables::alias_target(&doc.variables, o, &v.id).is_ok()))
     };
     let groups = groups(&doc, &libs, keep);
@@ -493,6 +510,11 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
             }
             (Target::Proto(slot), _) => crate::proto_editor::pick_variable(app, slot, &pick.id),
             (Target::Style { style, field }, _) => {
+                app.run("style.bind", json!({"style": style, "field": field, "variable": pick.id}));
+            }
+            (Target::StyleWeight { style }, _) => {
+                let number = app.session.ds().is_ok_and(|d| d.doc.variables.get_by_id(&pick.id).is_some_and(|v| v.kind == VariableType::Number));
+                let field = if number { "fontWeight" } else { "fontStyle" };
                 app.run("style.bind", json!({"style": style, "field": field, "variable": pick.id}));
             }
         }
