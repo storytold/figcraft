@@ -6,7 +6,7 @@ use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, RawInput, R
 use figcraft_engine::Session;
 use serde_json::json;
 
-use super::input::{is_mouse_wheel, swap_wheel};
+use super::input::{invert_zoom_factor, is_mouse_wheel, swap_wheel};
 use crate::{FigApp, NoServices};
 
 /// The view's zoom, cx and cy.
@@ -25,8 +25,13 @@ fn wheel(unit: MouseWheelUnit, dy: f32, modifiers: Modifiers) -> Event {
 
 impl Canvas {
     fn new(scroll_wheel_zoom: bool) -> Self {
+        Self::with_invert(scroll_wheel_zoom, false)
+    }
+
+    fn with_invert(scroll_wheel_zoom: bool, invert_zoom: bool) -> Self {
         let mut c = Self { ctx: egui::Context::default(), app: FigApp::new(Session::new(), Box::new(NoServices)), time: 0.0 };
         c.app.run("pref.scrollWheelZoom", json!({"on": scroll_wheel_zoom}));
+        c.app.run("pref.invertZoom", json!({"on": invert_zoom}));
         for _ in 0..3 {
             c.frame(vec![], Modifiers::NONE);
         }
@@ -125,4 +130,64 @@ fn the_swap_keeps_egui_rates() {
     // Shift+wheel and nothing at all are left alone.
     assert_eq!(swap_wheel(vec2(40.0, 0.0), 1.0, true, speed), (vec2(40.0, 0.0), 1.0));
     assert_eq!(swap_wheel(Vec2::ZERO, 1.0, false, speed), (Vec2::ZERO, 1.0));
+}
+
+#[test]
+fn invert_zoom_reverses_cmd_or_ctrl_wheel_by_the_same_factor() {
+    for mods in [Modifiers::COMMAND, Modifiers::CTRL] {
+        let (mut off, mut on) = (Canvas::with_invert(false, false), Canvas::with_invert(false, true));
+        let (a, b, _) = off.gesture(wheel(MouseWheelUnit::Line, 3.0, mods), mods);
+        let (c, d, _) = on.gesture(wheel(MouseWheelUnit::Line, 3.0, mods), mods);
+        assert!(b.0 > a.0 * 1.05, "{mods:?} off zooms in: {a:?} -> {b:?}");
+        assert!(d.0 < c.0 / 1.05, "{mods:?} on zooms out: {c:?} -> {d:?}");
+        assert!(((b.0 / a.0) * (d.0 / c.0) - 1.0).abs() < 1e-3, "{mods:?} by the same factor");
+    }
+}
+
+#[test]
+fn invert_zoom_reverses_a_plain_mouse_wheel_with_scroll_wheel_zoom_on() {
+    let (mut off, mut on) = (Canvas::with_invert(true, false), Canvas::with_invert(true, true));
+    let (a, b, _) = off.gesture(wheel(MouseWheelUnit::Line, 3.0, Modifiers::NONE), Modifiers::NONE);
+    let (c, d, _) = on.gesture(wheel(MouseWheelUnit::Line, 3.0, Modifiers::NONE), Modifiers::NONE);
+    assert!(b.0 > a.0 * 1.05, "off zooms in: {a:?} -> {b:?}");
+    assert!(d.0 < c.0 / 1.05, "on zooms out: {c:?} -> {d:?}");
+    assert!(((b.0 / a.0) * (d.0 / c.0) - 1.0).abs() < 1e-3, "by the same factor");
+}
+
+/// Panning is never inverted: the scroll vector is the same with the preference on and off.
+#[test]
+fn invert_zoom_leaves_panning_unchanged() {
+    // (Scroll wheel zoom, modifiers): a plain wheel without it, Cmd/Ctrl+wheel with it, Shift+wheel.
+    for (swz, mods) in [(false, Modifiers::NONE), (true, Modifiers::COMMAND), (true, Modifiers::CTRL), (true, Modifiers::SHIFT)] {
+        let (mut off, mut on) = (Canvas::with_invert(swz, false), Canvas::with_invert(swz, true));
+        let (a, b, _) = off.gesture(wheel(MouseWheelUnit::Line, -3.0, mods), mods);
+        let (c, d, _) = on.gesture(wheel(MouseWheelUnit::Line, -3.0, mods), mods);
+        assert!((b.0 - a.0).abs() < 1e-9 && (d.0 - c.0).abs() < 1e-9, "{mods:?} no zoom");
+        assert!(b.1 != a.1 || b.2 != a.2, "{mods:?} off pans: {a:?} -> {b:?}");
+        assert!(
+            ((b.1 - a.1) - (d.1 - c.1)).abs() < 1e-9 && ((b.2 - a.2) - (d.2 - c.2)).abs() < 1e-9,
+            "{mods:?} same pan: {a:?} -> {b:?} vs {c:?} -> {d:?}"
+        );
+    }
+}
+
+#[test]
+fn a_pinch_zooms_the_same_with_invert_zoom_on_and_off() {
+    for (swz, invert, factor) in
+        [(false, false, 1.5), (false, true, 1.5), (true, false, 1.5), (true, true, 1.5), (true, true, 0.5), (false, true, 0.5)]
+    {
+        let mut c = Canvas::with_invert(swz, invert);
+        let (a, b, _) = c.gesture(Event::Zoom(factor), Modifiers::NONE);
+        assert!((b.0 / a.0 - f64::from(factor)).abs() < 1e-3, "scroll wheel zoom {swz}, invert {invert}, x{factor}: {a:?} -> {b:?}");
+    }
+}
+
+#[test]
+fn the_inverted_factor_is_the_reciprocal_and_guards_bad_values() {
+    assert!((invert_zoom_factor(2.0) - 0.5).abs() < 1e-6);
+    assert_eq!(invert_zoom_factor(1.0), 1.0);
+    for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        let r = invert_zoom_factor(bad);
+        assert!(r == bad || (r.is_nan() && bad.is_nan()), "{bad} left alone");
+    }
 }
