@@ -206,6 +206,7 @@ fn routes_are_the_same_for_the_same_document() {
         to: End::Point { x: 300.0, y: 500.0 },
         routing: Routing::Elbow,
         path: None,
+        branch: false,
     };
     let doc = s.doc().unwrap();
     let r = route(doc, &c).unwrap();
@@ -357,6 +358,7 @@ fn board_commands_survive_junk() {
         json!({"path": "M0 0 L 1e308 1e308", "points": [[0, 0], [1e308, 1]]}),
         json!({"end": "from", "target": {"x": 1e308, "y": -1e308}, "side": "inside", "style": "curved"}),
         json!({"id": 99_999, "end": 7, "target": [1], "style": "wavy"}),
+        json!({"id": 99_999, "relation": 7, "children": "x", "text": [1], "x": "NaN", "y": 1e308}),
     ];
     let ids: Vec<&str> = crate::cmd::all_commands()
         .iter()
