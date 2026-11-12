@@ -60,7 +60,7 @@ pub use patch::sync_after_edit;
 pub(crate) use patch::{FULL_REBUILD, PATCHED};
 #[cfg(test)]
 use rebase::RebaseSources;
-pub use rebase::rebase_instance;
+pub use rebase::{MainPaths, rebase_instance, rebase_instance_with};
 pub use sync::keep_text_overrides;
 pub use variants::{default_variant, exposed_copies, find_variant, mirror_issues, variant_conflicts, variant_name, variant_options, variant_props};
 
@@ -296,6 +296,30 @@ pub fn prop_list(doc: &Document, c: NodeId) -> Vec<(String, PropDef)> {
         }
         _ => Vec::new(),
     }
+}
+
+/// The properties an instance of `component` lists: [`prop_list`] without the boolean, text and
+/// instance swap properties that no layer of the component reads. A set's variants share its
+/// definitions, so one a variant's layers don't bind (another variant's text, a leftover of a
+/// deleted variant) stays defined, and shows on the set, but not on this variant's instances
+/// (#2022). Slots stay. Walks as [`slots_of`] does: a nested instance counts, its own layers and
+/// the content put into slots are not entered.
+pub fn instance_prop_list(doc: &Document, component: NodeId) -> Vec<(String, PropDef)> {
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut stack = vec![component];
+    let mut seen = 0usize;
+    while let Some(c) = stack.pop() {
+        seen += 1;
+        if seen > 1_000_000 {
+            break;
+        }
+        let Some(n) = doc.node(c) else { continue };
+        used.extend(n.prop_refs.values().cloned());
+        if c == component || (!is_instance(doc, c) && !holds_content(n)) {
+            stack.extend(n.children.iter().rev().copied());
+        }
+    }
+    prop_list(doc, component).into_iter().filter(|(k, d)| !takes_value(d) || used.contains(k)).collect()
 }
 
 /// Whether instances store a value for the property (every kind but slots).
