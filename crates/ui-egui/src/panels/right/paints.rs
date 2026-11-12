@@ -52,11 +52,16 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
     let op_of = |n: &Node| (f64::from(n.opacity) * 100.0).round();
     let op = common(doc, sel, op_of);
     let radius_ok = crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_radius());
-    // Only rectangles and frames round each corner on its own.
+    // Only rectangles and frames round each corner on its own; a boolean group has one radius for
+    // every sharp corner of its result.
     let indep_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_independent_corners());
-    // For polygons, stars and closed vectors the same panel holds only the Corner smoothing row.
+    // For polygons, stars, boolean groups and closed vectors the same panel holds only the Corner
+    // smoothing row.
     let smooth_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_smoothing());
-    let r = common(doc, sel, |n| n.corners.uniform().map(|r| (r * 100.0).round() / 100.0));
+    // A layer with one radius (polygon, star, boolean group, vector) draws its first one, whatever
+    // the other three hold; a rectangle or frame shows a value only when its four corners agree.
+    let shown = |n: &Node| if n.kind.has_independent_corners() { n.corners.uniform() } else { n.corners.radii.first().copied() };
+    let r = common(doc, sel, |n| shown(n).map(|r| (r * 100.0).round() / 100.0));
     widgets::sublabels(ui, tr("Opacity"), radius_ok.then_some(tr("Corner radius")));
     row(ui, 32.0, |ui| {
         let lead = Lead::Icon(Icon::Opacity, tr("Opacity"));
@@ -74,11 +79,13 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
                 "",
                 col,
             );
-            // A layer with corners of its own starts from its largest.
-            let radius_of = |n: &Node| n.corners.uniform().unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max));
+            // A relative edit starts from the radius shown; a rectangle with differing corners
+            // starts from its largest.
+            let radius_of = |n: &Node| shown(n).unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max));
             app.field_of(&ids, "cornerRadius", e, radius_of, |v| json!(v.max(0.0)));
             let open = ui.data(|d| d.get_temp::<bool>(Id::unique("indep_corners"))).unwrap_or(false);
-            // Polygons and stars have no corners of their own: the button opens only Corner smoothing.
+            // Polygons, stars and boolean groups have no corners of their own: the button opens only
+            // Corner smoothing.
             let tip = if indep_ok { tr("Individual corners") } else { tr("Corner smoothing") };
             if smooth_ok && icons::button(ui, Icon::IndependentCorners, 24.0, open, tip).clicked() {
                 ui.data_mut(|d| d.insert_temp(Id::unique("indep_corners"), !open));
