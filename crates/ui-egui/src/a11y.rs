@@ -883,9 +883,17 @@ pub fn tab(resp: &Response, label: &str, selected: bool) {
 }
 
 pub fn checkbox(resp: &Response, label: &str, on: bool) {
+    checkbox_tri(resp, label, Some(on));
+}
+
+/// A checkbox that can be mixed (`None`, announced as "mixed" rather than unchecked).
+pub fn checkbox_tri(resp: &Response, label: &str, state: Option<bool>) {
     node(resp, label, |n| {
         n.set_role(Role::CheckBox);
-        n.set_toggled(toggled(on));
+        n.set_toggled(match state {
+            Some(on) => toggled(on),
+            None => Toggled::Mixed,
+        });
     });
 }
 

@@ -44,13 +44,13 @@ fn arrows_pan_the_view_when_nothing_is_selected() {
     u.app.run("select.set", json!({"ids": []}));
     u.app.run("view.set", json!({"zoom": 2.0, "cx": 0, "cy": 0}));
     press(&mut u, Key::ArrowRight, Modifiers::NONE);
-    assert_eq!(view(&u), (10.0, 0.0, 2.0), "20 screen pixels at 200%");
+    assert_eq!(view(&u), (32.0, 0.0, 2.0), "64 screen pixels at 200% are 32 document pixels");
     press(&mut u, Key::ArrowUp, Modifiers::SHIFT);
-    assert_eq!(view(&u), (10.0, -100.0, 2.0), "Shift: ten times as far");
+    assert_eq!(view(&u), (32.0, -160.0, 2.0), "Shift: 320 screen pixels, 160 document pixels");
     // With a selection the arrows nudge it and the view stays.
     u.app.run("select.set", json!({"ids": [r]}));
     press(&mut u, Key::ArrowRight, Modifiers::NONE);
-    assert_eq!(view(&u), (10.0, -100.0, 2.0));
+    assert_eq!(view(&u), (32.0, -160.0, 2.0));
     assert_eq!(u.app.session.doc().unwrap().world_bounds(r).unwrap().x0, 1.0);
 }
 
