@@ -47,16 +47,23 @@ impl Session {
     /// the layers it touches (`deep`: nested ones too); `additive` (Shift) toggles them.
     pub(crate) fn marquee_selection(&self, r: Rect, within: Option<NodeId>, deep: bool, base: &[NodeId], additive: bool) -> Result<Vec<NodeId>> {
         let (doc, page) = (self.doc()?, self.page()?);
-        let mut hits =
-            if deep { figcraft_doc::geometry::marquee_deep(doc, page, r) } else { figcraft_doc::geometry::marquee_select(doc, page, r, within) };
-        if let Some(f) = self.ds()?.focused() {
+        let focused = self.ds()?.focused();
+        let mut hits = match (deep, focused) {
+            (true, _) => figcraft_doc::geometry::marquee_deep(doc, page, r),
+            (false, Some(f)) => figcraft_doc::geometry::marquee(doc, page, r, Some(f)),
+            (false, None) => figcraft_doc::geometry::marquee_select(doc, page, r, within),
+        };
+        if let Some(f) = focused {
             hits.retain(|h| *h != f && doc.is_ancestor(f, *h));
         }
-        // A marquee over a frame from outside selects the frame only when it covers it fully.
-        if within.is_none() && !deep {
+        // A widget's layers are part of the widget: a marquee from outside never opens one.
+        if !deep {
             hits.retain(|h| {
-                let full = doc.world_bounds(*h).is_some_and(|b| r.contains(b.origin()) && r.contains(Point::new(b.x1, b.y1)));
-                full || !doc.node(*h).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }))
+                doc.node(*h)
+                    .and_then(|n| n.parent)
+                    .filter(|p| Some(*p) != within)
+                    .and_then(|p| doc.node(p))
+                    .is_none_or(|p| !crate::widgets::is_widget(p))
             });
         }
         // Shift toggles: what was selected and is touched again comes out.
