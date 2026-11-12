@@ -886,6 +886,25 @@ impl TextData {
             }
             pl.indent = pl.indent.min(MAX_LIST_INDENT);
         }
+        self.fold_paragraph_lists();
+    }
+
+    /// Give paragraphs `a..=b` (by index) no start number of their own, as an item made by Enter
+    /// has none. Touches nothing else: a plain paragraph keeps its level, a bullet its settings.
+    /// One pass over the range, and nothing at all when no paragraph carries a start.
+    pub fn clear_list_starts(&mut self, a: usize, b: usize) {
+        if self.paragraphs.iter().all(|p| p.start_offset == 0) {
+            return;
+        }
+        self.fill_paragraphs();
+        for pl in self.paragraphs.get_mut(a..=b).unwrap_or(&mut []) {
+            pl.start_offset = 0;
+        }
+        self.fold_paragraph_lists();
+    }
+
+    /// One style for all paragraphs with no nesting or start folds back into `list`.
+    fn fold_paragraph_lists(&mut self) {
         if let Some(first) = self.paragraphs.first().copied()
             && first == (ParaList { list: first.list, ..ParaList::default() })
             && self.paragraphs.iter().all(|p| *p == first)
@@ -1103,6 +1122,25 @@ mod case_tests {
         // A plain paragraph has none.
         t.set_para_lists(0, 0, |p| p.list = P);
         assert_eq!(t.para_list(0), ParaList::default());
+    }
+
+    #[test]
+    fn clear_list_starts_touches_only_starts() {
+        use ListStyle::{None as P, Numbered as N};
+        let mut t = TextData { characters: "a\nb\nc".into(), ..Default::default() };
+        t.paragraphs = vec![
+            ParaList { list: N, start_offset: 4, ..ParaList::default() },
+            ParaList { list: P, indent: 1, ..ParaList::default() },
+            ParaList { list: N, indent: 2, start_offset: 7, ..ParaList::default() },
+        ];
+        t.clear_list_starts(1, 2);
+        assert_eq!(t.para_list(0).start_offset, 4, "outside the range");
+        assert_eq!(t.para_list(1), ParaList { list: P, indent: 1, ..ParaList::default() }, "a plain paragraph keeps its level");
+        assert_eq!(t.para_list(2), ParaList { list: N, indent: 2, start_offset: 0, ..ParaList::default() });
+        // Out of range and no-start cases leave it alone.
+        t.clear_list_starts(5, 9);
+        t.clear_list_starts(0, 0);
+        assert_eq!(t.para_list(0).start_offset, 0);
     }
 }
 
