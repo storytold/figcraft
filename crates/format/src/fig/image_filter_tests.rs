@@ -16,8 +16,8 @@ fn image_filter_schema() -> Schema {
     Schema::parse(&text).unwrap()
 }
 
-#[test]
-fn image_filters_import_from_current_container_and_skip_ambiguous_data() {
+/// A file with one image rectangle per filter case (current container, legacy, both, neutral, unknown fields).
+fn image_filter_fixture() -> Vec<u8> {
     let filter = |fields: Vec<(&'static str, Kv<'static>)>| o(fields);
     let image_paint = |id: u64, name: &'static str, mut extra: Vec<(&'static str, Kv<'static>)>| {
         let mut paint = vec![("type", e("IMAGE")), ("image", o(vec![("hash", Kv::Bytes(HASH.to_vec()))]))];
@@ -54,7 +54,12 @@ fn image_filters_import_from_current_container_and_skip_ambiguous_data() {
             vec![("paintFilter", filter(vec![("brightness", f(0.4)), ("detail", f(-0.2)), ("vignette", f(0.3)), ("mystery", f(0.1))]))],
         ),
     ];
-    let bytes = zip_file(&canvas(&image_filter_schema(), &o(vec![("nodeChanges", arr(nodes))])));
+    zip_file(&canvas(&image_filter_schema(), &o(vec![("nodeChanges", arr(nodes))])))
+}
+
+#[test]
+fn image_filters_import_from_current_container_and_skip_ambiguous_data() {
+    let bytes = image_filter_fixture();
     let (doc, warnings) = import(&bytes, "ImageFilters.fig").unwrap();
     let get = |name: &str| {
         let node = doc.nodes().find(|node| node.name == name).unwrap();
@@ -101,4 +106,58 @@ fn warnings_naming_unknown_filter_fields_are_capped() {
     let (_, warnings) = import(&bytes, "ManyFilters.fig").unwrap();
     let named = warnings.iter().filter(|w| w.contains("unsupported image filter")).count();
     assert!((100..=crate::rest::MAX_WARNINGS).contains(&named), "{named} of {} warnings", warnings.len());
+}
+
+#[test]
+fn image_adjustments_survive_a_fig_export() {
+    let (doc, _) = import(&image_filter_fixture(), "ImageFilters.fig").unwrap();
+    let filters_of = |doc: &figcraft_doc::Document, name: &str| {
+        let node = doc.nodes().find(|node| node.name == name).unwrap();
+        let figcraft_doc::color::PaintKind::Image(image) = &node.fills[0].kind else { panic!("{name} is not an image fill") };
+        image.filters
+    };
+    let (bytes, warnings) = export::export(&doc, None).unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("image adjustments")), "{warnings:?}");
+    let (back, _) = import(&bytes, "Back.fig").unwrap();
+    for name in ["Current", "Negative tint", "Neutral"] {
+        let (a, b) = (filters_of(&doc, name), filters_of(&back, name));
+        for (x, y) in [
+            (a.exposure, b.exposure),
+            (a.contrast, b.contrast),
+            (a.saturation, b.saturation),
+            (a.temperature, b.temperature),
+            (a.tint, b.tint),
+            (a.highlights, b.highlights),
+            (a.shadows, b.shadows),
+        ] {
+            assert!((x - y).abs() < 1e-6, "{name}: {a:?} came back as {b:?}");
+        }
+    }
+    assert!(filters_of(&back, "Neutral").is_identity());
+    assert!(!filters_of(&back, "Current").is_identity());
+
+    // What is written: the file's names and signs.
+    let archive = Archive::open(&bytes).unwrap();
+    let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+    let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+    let fill_of = |name: &str| {
+        let nc = msg.get("nodeChanges").unwrap().list().iter().find(|nc| nc.get("name").and_then(Kv::str) == Some(name)).unwrap();
+        nc.get("fillPaints").unwrap().list()[0].clone()
+    };
+    let current = fill_of("Current");
+    let written = |paint: &Kv, field: &str| paint.get("paintFilter").and_then(|f| f.get(field)).and_then(Kv::f64);
+    assert!((written(&current, "vibrance").unwrap() + 0.4).abs() < 1e-6);
+    assert!((written(&current, "tint").unwrap() - 1.0).abs() < 1e-6);
+    assert!((written(&current, "shadows").unwrap() - 0.7).abs() < 1e-6);
+    assert!(fill_of("Neutral").get("paintFilter").is_none());
+
+    // The numbers the format uses.
+    let s = Schema::parse(export::SCHEMA).unwrap();
+    let def = |n: &str| s.defs.iter().find(|d| d.name == n).unwrap();
+    let id = |d: &str, f: &str| def(d).fields.iter().find(|x| x.name == f).unwrap().value;
+    assert_eq!(id("Paint", "paintFilter"), 14);
+    assert_eq!(
+        ["tint", "shadows", "highlights", "exposure", "temperature", "vibrance", "contrast"].map(|f| id("PaintFilterMessage", f)),
+        [1, 2, 3, 5, 7, 8, 9]
+    );
 }
