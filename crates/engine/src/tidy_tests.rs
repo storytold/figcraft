@@ -107,17 +107,41 @@ fn the_gap_is_the_most_common_one_else_the_mean() {
     }
 }
 
+/// Within a pixel: Figma read 52 for the vertical gap in one column and 51 in two (the mean of 60,
+/// 40, 55 is 51.67), probably from pixel snapping, so a layer's place along a stack may differ by one.
+fn near(got: &[(f64, f64)], want: &[(f64, f64)]) {
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(want) {
+        assert!((g.0 - w.0).abs() <= 1.0 && (g.1 - w.1).abs() <= 1.0, "{got:?} vs {want:?}");
+    }
+}
+
 #[test]
 fn a_grid_is_tidied_by_columns() {
     let mut s = Session::new();
     let ids = grid(&mut s);
     tidy(&mut s, &ids);
-    assert_eq!(all_xy(&s, &ids), vec![(6., -3.), (93., -3.), (203., -3.), (1., 78.), (108., 98.), (195., 88.)]);
+    near(&all_xy(&s, &ids), &[(6., -3.), (93., -3.), (203., -3.), (1., 79.), (108., 98.), (195., 88.)]);
     assert_eq!(size(&s, ids[4]), (40., 50.));
 }
 
 #[test]
-fn two_layers_and_overlapping_layers_are_left_alone() {
+fn a_transposed_grid_is_tidied_by_rows() {
+    let mut s = Session::new();
+    let ids = vec![
+        make(&mut s, 0., 0., 30., 50.),
+        make(&mut s, 5., 80., 50., 70.),
+        make(&mut s, -3., 190., 40., 40.),
+        make(&mut s, 90., 2., 20., 60.),
+        make(&mut s, 95., 85., 50., 40.),
+        make(&mut s, 92., 200., 35., 55.),
+    ];
+    tidy(&mut s, &ids);
+    near(&all_xy(&s, &ids), &[(-3., 6.), (-3., 93.), (-3., 203.), (78., 1.), (98., 108.), (88., 195.)]);
+}
+
+#[test]
+fn two_layers_and_a_selection_in_one_cell_are_left_alone() {
     let mut s = Session::new();
     let two = squares(&mut s, &[0., 87.]);
     let before = (all_xy(&s, &two), s.undo_depth());
@@ -149,31 +173,33 @@ fn two_equally_common_gaps_give_the_smaller() {
     let mut s = Session::new();
     let ids = squares(&mut s, &[0., 60., 120., 220., 320.]);
     tidy(&mut s, &ids);
-    assert_eq!(xs_of(&s, &ids), vec![0., 60., 120., 180., 240.], "not measured in Figma: a tie takes the smaller gap");
+    assert_eq!(xs_of(&s, &ids), vec![0., 60., 120., 180., 240.]);
 }
 
 #[test]
-fn a_mean_is_taken_down_not_rounded() {
+fn a_mean_is_rounded_half_up() {
     let mut s = Session::new();
     let ids = squares(&mut s, &[0., 60., 135.]);
     tidy(&mut s, &ids);
-    assert_eq!(xs_of(&s, &ids), vec![0., 67., 134.], "not measured in Figma: a mean of 17.5 goes down");
+    assert_eq!(xs_of(&s, &ids), vec![0., 68., 136.], "a mean of 17.5 goes up");
     let mut s = Session::new();
     let ids = squares(&mut s, &[0., 60., 135., 215.]);
     tidy(&mut s, &ids);
-    assert_eq!(xs_of(&s, &ids), vec![0., 71., 142., 213.], "not measured in Figma: a mean of 21.67 goes down");
+    assert_eq!(xs_of(&s, &ids), vec![0., 72., 144., 216.], "a mean of 21.67 goes to 22");
 }
 
 #[test]
-fn layers_on_a_diagonal_are_a_row() {
+fn layers_on_a_diagonal_are_unavailable() {
     let mut s = Session::new();
     let ids = vec![make(&mut s, 0., 0., 50., 50.), make(&mut s, 60., 70., 50., 50.), make(&mut s, 140., 150., 50., 50.)];
+    let before = (all_xy(&s, &ids), s.undo_depth());
     tidy(&mut s, &ids);
-    assert_eq!(all_xy(&s, &ids), vec![(0., 0.), (70., 70.), (140., 150.)], "not measured in Figma: a diagonal is a row");
+    assert_eq!((all_xy(&s, &ids), s.undo_depth()), before);
+    assert!(!can(&s, &ids));
 }
 
 #[test]
-fn a_grid_with_an_empty_place_stacks_each_column() {
+fn a_grid_with_an_empty_place_is_unavailable() {
     let mut s = Session::new();
     let ids = vec![
         make(&mut s, 0., 0., 50., 50.),
@@ -182,18 +208,19 @@ fn a_grid_with_an_empty_place_stacks_each_column() {
         make(&mut s, 0., 80., 50., 50.),
         make(&mut s, 72., 90., 50., 50.),
     ];
+    let before = (all_xy(&s, &ids), s.undo_depth());
     tidy(&mut s, &ids);
-    assert_eq!(all_xy(&s, &ids), vec![(0., 0.), (75., 0.), (150., 0.), (0., 85.), (75., 85.)], "not measured in Figma: an empty place in a grid");
+    assert_eq!((all_xy(&s, &ids), s.undo_depth()), before, "not measured in Figma: an empty place in a grid");
+    assert!(!can(&s, &ids), "not measured in Figma: an empty place in a grid");
 }
 
 #[test]
-fn one_overlapping_pair_makes_tidy_up_unavailable() {
+fn an_overlapping_pair_in_a_row_is_tidied_and_its_negative_gap_counts() {
     let mut s = Session::new();
     let ids = squares(&mut s, &[0., 60., 105., 170.]);
-    let before = (xs_of(&s, &ids), s.undo_depth());
+    assert!(can(&s, &ids));
     tidy(&mut s, &ids);
-    assert_eq!((xs_of(&s, &ids), s.undo_depth()), before, "not measured in Figma: one overlapping pair");
-    assert!(!can(&s, &ids), "not measured in Figma: one overlapping pair");
+    assert_eq!(xs_of(&s, &ids), vec![0., 57., 114., 171.], "gaps 10, -5, 15 have the mean 6.67, which gives 7");
 }
 
 #[test]
@@ -224,11 +251,13 @@ fn layers_in_an_auto_layout_flow_are_left_alone() {
 }
 
 #[test]
-fn an_irregular_selection_keeps_the_earlier_rule() {
+fn an_irregular_selection_is_unavailable() {
     let mut s = Session::new();
     let ids = vec![make(&mut s, 0., 0., 200., 30.), make(&mut s, 0., 50., 90., 50.), make(&mut s, 110., 50., 90., 50.)];
+    let before = (all_xy(&s, &ids), s.undo_depth());
     tidy(&mut s, &ids);
-    assert_eq!(all_xy(&s, &ids), vec![(0., 0.), (0., 70.), (220., 70.)]);
+    assert_eq!((all_xy(&s, &ids), s.undo_depth()), before);
+    assert!(!can(&s, &ids));
 }
 
 #[test]
@@ -250,11 +279,9 @@ fn without_pixel_snapping_a_centred_layer_keeps_its_half_pixel() {
     s.execute("view.snapPixel", &json!({"on": false})).unwrap();
     let ids = grid(&mut s);
     tidy(&mut s, &ids);
-    assert_eq!(
-        all_xy(&s, &ids),
-        vec![(6., -3.), (93., -3.), (202.5, -3.), (1., 78.), (108., 98.), (195., 88.)],
-        "not measured in Figma: no rounding with Snap to pixel grid off"
-    );
+    let got = all_xy(&s, &ids);
+    assert_eq!(got.get(2).map(|p| p.0), Some(202.5), "not measured in Figma: no rounding with Snap to pixel grid off");
+    near(&got, &[(6., -3.), (93., -3.), (202.5, -3.), (1., 79.), (108., 98.), (195., 88.)]);
 }
 
 #[test]
@@ -267,7 +294,7 @@ fn a_rotated_layer_is_tidied_by_its_box() {
     let boxes = |s: &Session| -> Vec<figcraft_geom::Rect> { [a, m, c].iter().map(|i| s.doc().unwrap().world_bounds(*i).unwrap()).collect() };
     let b = boxes(&s);
     let (g1, g2) = (b[1].x0 - b[0].x1, b[2].x0 - b[1].x1);
-    let want = ((g1 + g2) / 2.0).floor();
+    let want = ((g1 + g2) / 2.0 + 0.5).floor();
     let rot = figcraft_geom::rotation_degrees(s.doc().unwrap().node(m).unwrap().transform);
     tidy(&mut s, &[a, m, c]);
     let b = boxes(&s);

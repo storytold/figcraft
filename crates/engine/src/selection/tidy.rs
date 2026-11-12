@@ -1,21 +1,24 @@
 //! Tidy up: the moves that even a selection's gaps the way Figma's web app does.
 //!
-//! Measured in Figma's web app on 2026-11-12 (top-level rectangles): a row, a column and a 2 x 3
-//! grid of unequal sizes, and eight runs on the gap. Figma keeps the order and the sizes of every
-//! layer and keeps the first layer where it is. A row evens its horizontal gaps and keeps every Y,
-//! a column the mirror image. The one gap is the most common existing gap, else the mean of the
-//! gaps taken down to a whole number. A grid is tidied by columns: each column is as wide as its
-//! widest layer, centred where its layers were, the columns are evened, every layer is centred in
-//! its column and every column is stacked from the selection's top. Tidy up is greyed out for fewer
-//! than three layers and for layers that overlap.
+//! Measured in Figma's web app on 2026-11-12 (top-level rectangles): a row, a column, a 2 x 3 grid
+//! and its transpose, and many runs on the gap. Figma keeps the order and the sizes of every layer
+//! and keeps the first layer where it is. Rows are the groups of layers whose Y ranges overlap
+//! (transitively), columns the groups whose X ranges overlap. A row is one row group of layers
+//! side by side: its horizontal gaps are evened and every Y kept; a column is the mirror image.
+//! Layers of a row may overlap along X: a negative gap counts in the mean. The one gap is the most
+//! common existing gap (the smaller of two equally common ones), else the mean rounded to a whole
+//! number, half up. A grid (two or more rows and two or more columns, one layer in every cell) is
+//! packed along the axis that has more groups: for 2 rows by 3 columns each column is as wide as
+//! its widest layer, centred where its layers were, the columns are evened, every layer is
+//! centred in its column and every column is stacked from the selection's top; 3 rows by 2
+//! columns is the mirror image. Tidy up is unavailable for fewer than three layers, for layers all
+//! in one row and one column (overlapping each other), for a diagonal and for an irregular layout.
 //!
-//! Not measured, FigCraft's choices: the smaller of two equally common gaps; a mean ending in .5
-//! going down; gaps a pixel apart being different gaps; a diagonal being a row; a grid with an
-//! empty place; a grid always read by columns; one overlapping pair among other layers making it
-//! unavailable; layers in an auto layout flow making it unavailable; the 2,000 layer cap; rotated
-//! layers counting by their box; an explicit `spacing` taking two layers; no rounding in a grid
-//! with Snap to pixel grid off. A selection that is none of a row, a column or a grid keeps the
-//! earlier rule (the cells of the largest layer).
+//! Not measured, FigCraft's choices: a 2 x 2 grid packed as columns; layers in an auto layout flow
+//! making it unavailable (the frame places them, and the measurement could not tell this from an
+//! irregular layout); the 2,000 layer cap; rotated layers counting by their box; gaps a pixel
+//! apart being different gaps; an explicit `spacing` taking two layers; no rounding in a grid with
+//! Snap to pixel grid off.
 
 use std::collections::BTreeSet;
 
@@ -30,33 +33,34 @@ const MAX_LAYERS: usize = 2000;
 type Item = (NodeId, Rect);
 type Move = (NodeId, f64, f64);
 
+/// What a selection is: a row or a column (`vertical`), or a grid packed in units along an axis
+/// (`vertical`: the units are rows).
+#[derive(Clone, Copy)]
+enum Shape {
+    Line { vertical: bool },
+    Grid { vertical: bool },
+}
+
 /// Whether Tidy up is offered for `ids`: three to 2,000 layers with boxes, none in an auto layout
-/// flow, none overlapping another.
+/// flow, forming a row, a column or a grid.
 pub fn can_tidy(doc: &Document, ids: &[NodeId]) -> bool {
     available(doc, ids, 3).is_some()
 }
 
 /// The page-space moves that tidy `ids` (empty when unavailable or when nothing would move).
-/// `spacing` sets the gap and lets two layers through; `snap` rounds a grid's column positions to
-/// whole pixels.
+/// `spacing` sets the gap and lets two layers through; `snap` rounds a grid's positions across its
+/// packing axis to whole pixels.
 pub(crate) fn tidy_moves(doc: &Document, ids: &[NodeId], spacing: Option<f64>, snap: bool) -> Vec<Move> {
     let min = if spacing.is_some() { 2 } else { 3 };
-    let Some(items) = available(doc, ids, min) else { return Vec::new() };
-    let cols = groups(&items, false);
-    let rows = groups(&items, true);
-    let moves = if cols.len() == items.len() {
-        line_moves(&items, false, spacing)
-    } else if rows.len() == items.len() {
-        line_moves(&items, true, spacing)
-    } else if is_grid(&cols, &rows) {
-        grid_moves(&cols, spacing, snap)
-    } else {
-        irregular_moves(items, spacing)
+    let Some((items, shape)) = available(doc, ids, min) else { return Vec::new() };
+    let moves = match shape {
+        Shape::Line { vertical } => line_moves(&items, vertical, spacing),
+        Shape::Grid { vertical } => grid_moves(&groups(&items, vertical), vertical, spacing, snap),
     };
     moves.into_iter().filter(|(_, dx, dy)| !(dx.is_finite() && dy.is_finite()) || dx.abs() > 1e-9 || dy.abs() > 1e-9).collect()
 }
 
-fn available(doc: &Document, ids: &[NodeId], min: usize) -> Option<Vec<Item>> {
+fn available(doc: &Document, ids: &[NodeId], min: usize) -> Option<(Vec<Item>, Shape)> {
     let mut seen = BTreeSet::new();
     let ids: Vec<NodeId> = roots(doc, ids).into_iter().filter(|i| seen.insert(*i)).collect();
     if ids.len() < min || ids.len() > MAX_LAYERS {
@@ -74,13 +78,30 @@ fn available(doc: &Document, ids: &[NodeId], min: usize) -> Option<Vec<Item>> {
         }
         items.push((id, b));
     }
-    let overlapping = items.iter().enumerate().any(|(i, a)| items.iter().skip(i + 1).any(|b| overlap(a.1, b.1)));
-    if overlapping { None } else { Some(items) }
+    let shape = classify(&items)?;
+    Some((items, shape))
 }
 
-/// Two boxes overlap when they share more than `EPS` on both axes; touching edges do not count.
-fn overlap(a: Rect, b: Rect) -> bool {
-    a.x1.min(b.x1) - a.x0.max(b.x0) > EPS && a.y1.min(b.y1) - a.y0.max(b.y0) > EPS
+/// A row: one row group over two or more column groups (layers sharing a column group overlap).
+/// A column: the mirror image. A grid: two or
+/// more of each, one layer in every cell, packed along the axis with more groups (columns on a tie).
+fn classify(items: &[Item]) -> Option<Shape> {
+    let cols = groups(items, false);
+    let rows = groups(items, true);
+    match (cols.len(), rows.len()) {
+        (c, 1) if c >= 2 && cols.iter().all(|g| overlapping(g)) => Some(Shape::Line { vertical: false }),
+        (1, r) if r >= 2 && rows.iter().all(|g| overlapping(g)) => Some(Shape::Line { vertical: true }),
+        (c, r) if c >= 2 && r >= 2 && one_per_cell(&cols, &rows) => Some(Shape::Grid { vertical: r > c }),
+        _ => None,
+    }
+}
+
+/// Layers that share a group along a row's or column's own axis must overlap each other (50 px
+/// squares at X 0, 60, 105, 170: the middle two do), not merely sit in the same band: a header
+/// above two layers side by side is irregular.
+fn overlapping(group: &[Item]) -> bool {
+    let both = |a: Rect, b: Rect| a.x1.min(b.x1) - a.x0.max(b.x0) > EPS && a.y1.min(b.y1) - a.y0.max(b.y0) > EPS;
+    group.iter().enumerate().all(|(i, a)| group.iter().skip(i + 1).all(|b| both(a.1, b.1)))
 }
 
 fn span(b: Rect, vertical: bool) -> (f64, f64) {
@@ -110,13 +131,13 @@ fn groups(items: &[Item], vertical: bool) -> Vec<Vec<Item>> {
     out
 }
 
-/// No two layers share both a column and a row.
-fn is_grid(cols: &[Vec<Item>], rows: &[Vec<Item>]) -> bool {
-    cols.iter().all(|c| rows.iter().all(|r| c.iter().filter(|a| r.iter().any(|b| b.0 == a.0)).count() <= 1))
+/// Every (column, row) cell holds exactly one layer.
+fn one_per_cell(cols: &[Vec<Item>], rows: &[Vec<Item>]) -> bool {
+    cols.iter().all(|c| rows.iter().all(|r| c.iter().filter(|a| r.iter().any(|b| b.0 == a.0)).count() == 1))
 }
 
-/// The one gap an axis is evened to: `spacing`, a single gap, the most common gap, else the mean
-/// taken down to a whole number.
+/// The one gap an axis is evened to: `spacing`, a single gap, the most common gap (the smaller of
+/// two equally common ones), else the mean rounded to a whole number, half up.
 fn even_gap(gaps: &[f64], spacing: Option<f64>) -> f64 {
     if let Some(s) = spacing {
         return s;
@@ -129,7 +150,7 @@ fn even_gap(gaps: &[f64], spacing: Option<f64>) -> f64 {
     match best {
         Some((n, g)) if n >= 2 => g,
         _ if gaps.is_empty() => 0.0,
-        _ => (gaps.iter().sum::<f64>() / gaps.len() as f64 + 1e-9).floor(),
+        _ => (gaps.iter().sum::<f64>() / gaps.len() as f64 + 0.5 + 1e-9).floor(),
     }
 }
 
@@ -161,31 +182,34 @@ fn snap_to(v: f64, snap: bool) -> f64 {
     if snap { (v + 0.5).floor() } else { v }
 }
 
-/// A column box: where it starts and how wide it is (its widest layer, around the middle of the
-/// column's X range).
-fn column_box(col: &[Item]) -> (f64, f64) {
-    let lo = col.iter().map(|i| i.1.x0).fold(f64::MAX, f64::min);
-    let hi = col.iter().map(|i| i.1.x1).fold(f64::MIN, f64::max);
-    let w = col.iter().map(|i| i.1.width()).fold(0.0, f64::max);
+/// A unit's box on the packing axis: where it starts and how wide it is (its widest layer, around
+/// the middle of the unit's range).
+fn unit_box(unit: &[Item], vertical: bool) -> (f64, f64) {
+    let lo = unit.iter().map(|i| span(i.1, vertical).0).fold(f64::MAX, f64::min);
+    let hi = unit.iter().map(|i| span(i.1, vertical).1).fold(f64::MIN, f64::max);
+    let w = unit.iter().map(|i| span(i.1, vertical).1 - span(i.1, vertical).0).fold(0.0, f64::max);
     ((lo + hi) / 2.0 - w / 2.0, w)
 }
 
-/// Vertical gaps inside every column, pooled.
-fn column_gaps(cols: &[Vec<Item>]) -> Vec<f64> {
+/// The gaps inside every unit along the other axis, pooled.
+fn unit_gaps(units: &[Vec<Item>], vertical: bool) -> Vec<f64> {
     let mut out = Vec::new();
-    for col in cols {
-        let mut c = col.clone();
-        c.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0));
-        out.extend(c.windows(2).filter_map(|w| match w {
-            [a, b] => Some(b.1.y0 - a.1.y1),
+    for unit in units {
+        let mut u = unit.clone();
+        u.sort_by(|a, b| span(a.1, !vertical).0.total_cmp(&span(b.1, !vertical).0));
+        out.extend(u.windows(2).filter_map(|w| match w {
+            [a, b] => Some(span(b.1, !vertical).0 - span(a.1, !vertical).1),
             _ => None,
         }));
     }
     out
 }
 
-fn grid_moves(cols: &[Vec<Item>], spacing: Option<f64>, snap: bool) -> Vec<Move> {
-    let boxes: Vec<(f64, f64)> = cols.iter().map(|c| column_box(c)).collect();
+/// A grid packed in `units` (columns, or rows when `vertical`): the units are evened around where
+/// they were, every layer is centred in its unit and each unit is laid out from the selection's
+/// start on the other axis.
+fn grid_moves(units: &[Vec<Item>], vertical: bool, spacing: Option<f64>, snap: bool) -> Vec<Move> {
+    let boxes: Vec<(f64, f64)> = units.iter().map(|u| unit_box(u, vertical)).collect();
     let across: Vec<f64> = boxes
         .windows(2)
         .filter_map(|w| match w {
@@ -193,68 +217,24 @@ fn grid_moves(cols: &[Vec<Item>], spacing: Option<f64>, snap: bool) -> Vec<Move>
             _ => None,
         })
         .collect();
-    let gx = even_gap(&across, spacing);
-    let gy = even_gap(&column_gaps(cols), spacing);
-    let top = cols.iter().flatten().map(|i| i.1.y0).fold(f64::MAX, f64::min);
-    let mut left = boxes.first().map_or(0.0, |b| snap_to(b.0, snap));
+    let g_units = even_gap(&across, spacing);
+    let g_within = even_gap(&unit_gaps(units, vertical), spacing);
+    let start = units.iter().flatten().map(|i| span(i.1, !vertical).0).fold(f64::MAX, f64::min);
+    let mut at = boxes.first().map_or(0.0, |b| snap_to(b.0, snap));
     let mut out = Vec::new();
-    for (col, (_, w)) in cols.iter().zip(&boxes) {
-        let mut c = col.clone();
-        c.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0));
-        let mut y = top;
-        for (id, b) in c {
-            let x = snap_to(left + (w - b.width()) / 2.0, snap);
-            out.push((id, x - b.x0, y - b.y0));
-            y += b.height() + gy;
+    for (unit, (_, w)) in units.iter().zip(&boxes) {
+        let mut u = unit.clone();
+        u.sort_by(|a, b| span(a.1, !vertical).0.total_cmp(&span(b.1, !vertical).0));
+        let mut pos = start;
+        for (id, b) in u {
+            let (lo, hi) = span(b, vertical);
+            let (lo2, hi2) = span(b, !vertical);
+            let d_main = snap_to(at + (w - (hi - lo)) / 2.0, snap) - lo;
+            let d_cross = pos - lo2;
+            pos += (hi2 - lo2) + g_within;
+            out.push(if vertical { (id, d_cross, d_main) } else { (id, d_main, d_cross) });
         }
-        left += w + gx;
+        at += w + g_units;
     }
     out
-}
-
-/// The earlier rule, unchanged: rows by overlapping vertical centres on a grid whose every cell is
-/// the largest layer's size, from the union's top left, at the average horizontal gap (at least 10).
-fn irregular_moves(mut items: Vec<Item>, spacing: Option<f64>) -> Vec<Move> {
-    items.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0));
-    let mut rows: Vec<Vec<Item>> = Vec::new();
-    for it in items {
-        match rows.last_mut() {
-            Some(row) if row.iter().any(|(_, b)| it.1.center().y < b.y1 && it.1.center().y > b.y0) => row.push(it),
-            _ => rows.push(vec![it]),
-        }
-    }
-    let all: Vec<Rect> = rows.iter().flatten().map(|(_, b)| *b).collect();
-    let (Some(origin), maxw, maxh) = (
-        all.iter().copied().reduce(|a, b| a.union(b)),
-        all.iter().map(Rect::width).fold(0.0, f64::max),
-        all.iter().map(Rect::height).fold(0.0, f64::max),
-    ) else {
-        return Vec::new();
-    };
-    let gap = spacing.unwrap_or_else(|| average_gap(&rows));
-    let mut out = Vec::new();
-    for (ri, row) in rows.iter_mut().enumerate() {
-        row.sort_by(|a, b| a.1.x0.total_cmp(&b.1.x0));
-        for (ci, (id, b)) in row.iter().enumerate() {
-            let x = origin.x0 + ci as f64 * (maxw + gap);
-            let y = origin.y0 + ri as f64 * (maxh + gap);
-            out.push((*id, x - b.x0, y - b.y0));
-        }
-    }
-    out
-}
-
-/// The average existing horizontal gap of the widest row, at least 10.
-fn average_gap(rows: &[Vec<Item>]) -> f64 {
-    10f64.max(
-        rows.iter()
-            .filter(|r| r.len() > 1)
-            .map(|r| {
-                (r.iter().map(|(_, b)| b.x1).fold(f64::MIN, f64::max)
-                    - r.iter().map(|(_, b)| b.x0).fold(f64::MAX, f64::min)
-                    - r.iter().map(|(_, b)| b.width()).sum::<f64>())
-                    / (r.len() - 1) as f64
-            })
-            .fold(0.0, f64::max),
-    )
 }
