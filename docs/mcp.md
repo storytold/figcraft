@@ -1886,7 +1886,9 @@ properties with their values, its code and, with `path`, a PNG of it. The docume
 unbinds): `fill` or `fills/<i>/color` and `fills/<i>/stops/<j>/color` on a paint style,
 `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` on an effect style,
 `layoutGrids/<i>/<size|count|gutter|offset>` on a grid style, `fontSize`, `lineHeight`,
-`letterSpacing`, `fontFamily`, `fontStyle` on a text style. Each layer using the style shows the
+`letterSpacing`, `fontWeight` (numbers; a weight picks the family's face nearest it and sets the
+`wght` axis of a variable font), `fontFamily`, `fontStyle` (strings; a bound weight and a bound style
+name replace each other) on a text style. Each layer using the style shows the
 field in its own modes and stays linked; `style.list` gives a style's `bound` map.
 
 `effect.add {ids?, type? | effect?}` adds an effect (`dropShadow`, `innerShadow`, `layerBlur`,
