@@ -457,7 +457,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         if sresp.hovered() {
             ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), sr.shrink(5.0), Icon::Rotate, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(sr), Icon::Rotate, t.icon);
         if sresp.clicked() {
             app.run("frame.swapOrientation", json!({"ids": sel}));
         }
@@ -512,8 +512,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             ("bool.union", Some(op)) => crate::layers::op_icon(op),
             _ => icon,
         };
-        let icon_rect = Rect::from_min_size(br.min, vec2(24.0, 24.0)).shrink(5.0);
-        icons::paint(ui.painter(), icon_rect, icon, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(br), icon, t.icon);
         if dropdown {
             icons::paint(ui.painter(), Rect::from_center_size(pos2(br.max.x - 6.0, br.center().y), vec2(8.0, 8.0)), Icon::Chevron, t.icon_secondary);
         }
