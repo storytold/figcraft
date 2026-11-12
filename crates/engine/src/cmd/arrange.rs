@@ -164,12 +164,27 @@ pub fn can_align(doc: &Document, ids: &[NodeId]) -> bool {
     align_target(doc, &roots(doc, ids)).is_some()
 }
 
+/// Whether `ids` is one layer that its auto layout frame places: Figma greys out Align for it,
+/// since the frame decides where it goes (measured in Figma's web app, 2026-11-12).
+pub fn align_blocked_by_auto_layout(doc: &Document, ids: &[NodeId]) -> bool {
+    matches!(roots(doc, ids).as_slice(), [id] if in_auto_layout_flow(doc, *id))
+}
+
+/// Whether the layer sits in an auto layout frame and takes part in its flow (not absolutely positioned).
+fn in_auto_layout_flow(doc: &Document, id: NodeId) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+}
+
 /// What `roots` align to: one layer to its parent frame, several to their combined bounds.
 fn align_target(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
     match roots {
         [] => None,
         [id] => {
             let parent = doc.node(*id)?.parent.filter(|pp| !doc.node(*pp).is_some_and(Node::is_page))?;
+            if in_auto_layout_flow(doc, *id) {
+                return None;
+            }
             Some(doc.world_bounds(parent).unwrap_or_default())
         }
         _ => Some(doc.bounds_of(roots).unwrap_or_default()),
