@@ -1,7 +1,6 @@
 use figcraft_doc::RouteEnd;
 
-use super::edit::set_font_size;
-use super::items::{owner_of_text, shape_padding, sticky_font_size, text_of};
+use super::items::shape_padding;
 use super::{
     Affine, BTreeSet, BezPath, BoardItem, Connector, Document, End, NodeId, NodeKind, PathEl, Point, Rect, Routing, Shape, VectorNetwork, is_board,
 };
@@ -9,8 +8,8 @@ use super::{
 // ---------------------------------------------------------------------------------------------
 // Derived data (the normalize pass).
 
-/// Before text is measured: a sticky's note takes the size its length calls for, and a resized
-/// shape keeps its text inside its outline.
+/// Before text is measured: a resized shape keeps its text inside its outline. A sticky's text
+/// keeps whatever size it has (FigJam's size is the note's own setting).
 pub(crate) fn settle_text(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) {
     if !is_board(doc) {
         return;
@@ -18,18 +17,6 @@ pub(crate) fn settle_text(doc: &mut Document, before: &Document, touched: &BTree
     crate::board_table::settle_resize(doc, before, touched);
     for &id in touched {
         let Some(n) = doc.node(id) else { continue };
-        if let Some(owner) =
-            owner_of_text(doc, id).or(Some(id)).filter(|o| doc.node(*o).is_some_and(|k| matches!(k.board, Some(BoardItem::Sticky { .. }))))
-            && let Some(t) = text_of(doc, owner)
-            && let Some(NodeKind::Text(td)) = doc.node(t).map(|k| &k.kind)
-        {
-            let size = sticky_font_size(&td.characters);
-            let off = td.style.font_size != size || td.runs.iter().any(|r| r.style.font_size != size);
-            if off && let Some(NodeKind::Text(td)) = doc.node_mut(t).map(|k| &mut k.kind) {
-                set_font_size(td, size);
-            }
-            continue;
-        }
         if let Some(BoardItem::Shape { shape }) = n.board
             && before.node(id).is_none_or(|b| (b.width, b.height) != (n.width, n.height))
         {
