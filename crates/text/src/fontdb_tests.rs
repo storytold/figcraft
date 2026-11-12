@@ -382,6 +382,45 @@ fn font_bytes_load_into_the_db() {
     }
 }
 
+/// #2092: a font loaded with `text.loadFont` wins over the built-in and installed faces of its family
+/// and style, the latest load over earlier ones; other styles resolve as before.
+#[test]
+fn a_loaded_face_wins_over_the_built_in_one_of_its_family_and_style() {
+    // Any embedded or installed font stands in for the faces (none without craft-fonts on CI).
+    let stand_in = CRAFT_FONTS.first().map(|f| f.bytes.to_vec()).or_else(|| {
+        let mut installed = BTreeMap::new();
+        for dir in system_font_dirs() {
+            scan_dir(&dir, 0, &mut installed);
+        }
+        installed.values().flat_map(|(_, v)| v).find_map(|p| std::fs::read(&p.path).ok())
+    });
+    let Some(bytes) = stand_in.map(Arc::new) else {
+        eprintln!("skipping: no font to stand in");
+        return;
+    };
+    let face = |style: &str, name: &str| {
+        let mut f = Face::from_bytes(FontBytes::Shared(bytes.clone()), 0, Some("Brand Sans"), Some(style)).unwrap();
+        f.instances.clear();
+        f.postscript = Some(name.into());
+        f
+    };
+    let name = |db: &FontDb, style: &str| db.best("Brand Sans", style).and_then(|f| f.postscript.clone());
+    let mut db = FontDb::default();
+    db.add(face("Regular", "Built-in-Regular"));
+    db.add(face("Bold", "Built-in-Bold"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Built-in-Regular"));
+    db.add_loaded(face("Regular", "Loaded-Regular"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Loaded-Regular"));
+    // Bold wasn't loaded: the built-in one stays. Nor does the loaded Regular stand in for it.
+    assert_eq!(name(&db, "Bold").as_deref(), Some("Built-in-Bold"));
+    // The latest load wins.
+    db.add_loaded(face("Regular", "Loaded-Regular-2"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Loaded-Regular-2"));
+    // A face added after a load, not loaded, doesn't displace it.
+    db.add(face("Regular", "Installed-Regular"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Loaded-Regular-2"));
+}
+
 /// Apple's system font answers to the names designs and CSS use for it (SF Pro, SF UI Text,
 /// system-ui, …), unless a font of that name is installed.
 #[test]
