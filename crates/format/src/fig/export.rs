@@ -32,9 +32,9 @@ use figcraft_doc::{
 use serde_json::Value;
 use sha1::Digest;
 
+use crate::FormatError;
 use craft_fig::kiwi::{Kv, Schema, encode};
 use craft_fig::{network, path};
-use crate::FormatError;
 
 mod assets;
 mod common;

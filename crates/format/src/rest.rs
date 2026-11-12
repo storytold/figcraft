@@ -67,12 +67,12 @@ pub(crate) use craft_fig::rest::{FIG_CAPPED_MAINS_FIELD, FIG_LIBRARY_CONTEXTS_FI
 const MAX_PATH_BYTES: usize = 4 << 20;
 /// Most path elements in one vector.
 const MAX_PATH_ELEMENTS: usize = 200_000;
+#[cfg(test)]
+pub(crate) use craft_figma_rest::MAX_WARNINGS;
 /// Distinct warnings in first-seen order, with repeat counts (at most 200). The
 /// import report reads the `(×n)` suffix off before it looks the note up in the catalogue, so a
 /// counted note is still translated (`ui-egui`'s `note_text`).
 pub(crate) use craft_figma_rest::Warnings;
-#[cfg(test)]
-pub(crate) use craft_figma_rest::MAX_WARNINGS;
 /// Most shared style definitions read.
 const MAX_STYLES: usize = 10_000;
 /// Image key used for image fills without an `imageRef`.
