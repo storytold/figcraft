@@ -180,8 +180,7 @@ fn is_plain(td: &TextData) -> bool {
 /// `paragraphs` with no list, level or counting offset (the direction stays); empty when that
 /// leaves every paragraph at its default.
 fn plain_paragraphs(paragraphs: &[ParaList]) -> Vec<ParaList> {
-    let v: Vec<ParaList> =
-        paragraphs.iter().map(|p| ParaList { list: ListStyle::None, indent: 0, start_offset: 0, direction: p.direction }).collect();
+    let v: Vec<ParaList> = paragraphs.iter().map(|p| ParaList { direction: p.direction, ..ParaList::default() }).collect();
     if v.iter().all(|p| *p == ParaList::default()) { Vec::new() } else { v }
 }
 

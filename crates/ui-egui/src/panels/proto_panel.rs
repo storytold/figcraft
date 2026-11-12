@@ -684,7 +684,7 @@ fn editor_popover(app: &mut FigApp, ctx: &egui::Context, popover: InteractionPop
                 if xr.hovered() {
                     ui.painter().rect_filled(x, CornerRadius::same(5), t.hover);
                 }
-                icons::paint(ui.painter(), x.shrink(6.0), Icon::Close, t.icon);
+                icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(x), Icon::Close, t.icon);
                 if xr.clicked() {
                     close = true;
                 }

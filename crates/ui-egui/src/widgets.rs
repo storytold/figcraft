@@ -1024,7 +1024,7 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), r.shrink(6.0), *icon, t.icon);
+        icons::paint(ui.painter(), icon_glyph_rect(r), *icon, t.icon);
         if resp.clicked() {
             out = Some(i);
         }
@@ -1056,6 +1056,16 @@ pub fn tight_end_n<R>(ui: &mut Ui, count: usize, add: impl FnOnce(&mut Ui) -> R)
     add(&mut child)
 }
 
+/// Inset of the glyph inside a 24 pt icon button: a 16 pt glyph, the icons' native size and what
+/// `icons::button` draws (a fill row's eye), so every 24 pt icon button in the panels matches it
+/// (section header buttons included).
+pub const ICON_BUTTON_INSET: f32 = 4.0;
+
+/// The rect a 24 pt icon button paints its glyph in.
+pub fn icon_glyph_rect(button: Rect) -> Rect {
+    button.shrink(ICON_BUTTON_INSET)
+}
+
 /// An icon button at `rect` (hover highlight, tooltip); true when clicked.
 pub fn icon_button_at(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -1063,7 +1073,7 @@ pub fn icon_button_at(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) ->
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), rect.shrink(5.0), icon, t.icon);
+    icons::paint(ui.painter(), icon_glyph_rect(rect), icon, t.icon);
     resp.clicked()
 }
 
@@ -1285,13 +1295,19 @@ pub fn paint_swatch(painter: &egui::Painter, rect: Rect, paint: &figcraft_color:
 
 /// A small checkbox with label.
 pub fn checkbox(ui: &mut Ui, on: bool, label: &str) -> bool {
+    checkbox_tri(ui, Some(on), label)
+}
+
+/// A checkbox that can show a mixed state (`None`: a dash, for a setting that differs across a
+/// selection); returns whether it was clicked.
+pub fn checkbox_tri(ui: &mut Ui, state: Option<bool>, label: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(200.0), FIELD_H), Sense::click());
-    a11y::checkbox(&resp, label, on);
+    a11y::checkbox_tri(&resp, label, state);
     let b = Rect::from_min_size(pos2(rect.min.x, rect.center().y - 7.0), vec2(14.0, 14.0));
-    if on {
+    if state != Some(false) {
         ui.painter().rect_filled(b, CornerRadius::same(3), t.accent);
-        icons::paint(ui.painter(), b.shrink(1.5), Icon::Check, t.accent_on);
+        icons::paint(ui.painter(), b.shrink(1.5), if state.is_some() { Icon::Check } else { Icon::Minus }, t.accent_on);
     } else {
         ui.painter().rect_stroke(b, CornerRadius::same(3), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
     }
