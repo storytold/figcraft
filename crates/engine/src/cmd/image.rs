@@ -5,7 +5,7 @@ use figcraft_doc::{Document, ImagePreset, Node};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::{f64_of, get, num, req_index, req_string, req_targets, string, targets};
+use crate::params::{f64_of, get, req_index, req_string, req_targets, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -236,7 +236,10 @@ fn save_preset(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => with_values(cmd, ImageFilters::NONE, v)?,
         None => {
             let stroke = strokes(cmd, p)?;
-            let index = num(p, "index").filter(|k| k.is_finite() && *k >= 0.0).map(|k| k as usize);
+            let index = match get(p, "index") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(req_index(cmd, p, "index")?),
+            };
             let doc = s.doc()?;
             targets(s, p)
                 .iter()
