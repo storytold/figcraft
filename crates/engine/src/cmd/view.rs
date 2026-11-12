@@ -501,7 +501,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !tag {
                     return Err(bad("pref.language", format!("`{lang}` is not a language code")));
                 }
-                s.prefs.language = lang.to_string();
+                // UI commands change the language immediately; persist it for the next launch.
+                if s.prefs.language != lang {
+                    s.prefs.language = lang.to_string();
+                    s.prefs_unsaved = true;
+                }
                 Ok(json!({"language": s.prefs.language}))
             }
         ),
@@ -671,5 +675,23 @@ mod start_on_home_tests {
         assert_eq!(s.execute("pref.startOnHome", &json!({"on": false})).unwrap()["on"], false);
         let old: crate::Prefs = serde_json::from_value(json!({"theme": "dark"})).unwrap();
         assert!(!old.start_on_home);
+    }
+
+    #[test]
+    fn language_change_marks_preferences_for_immediate_persistence() {
+        let mut s = Session::new();
+        assert_eq!(s.prefs.language, "system");
+        assert!(!s.prefs_unsaved);
+        assert_eq!(s.execute("pref.language", &json!({"language": "he"})).unwrap()["language"], "he");
+        assert!(s.prefs_unsaved, "Hebrew language must survive app relaunch");
+
+        s.prefs_unsaved = false;
+        s.execute("pref.language", &json!({"language": "he"})).unwrap();
+        assert!(!s.prefs_unsaved, "unchanged language should not cause repeated writes");
+
+        s.execute("pref.language", &json!({"language": "en"})).unwrap();
+        assert!(s.prefs_unsaved);
+        let saved: crate::Prefs = serde_json::from_value(serde_json::to_value(&s.prefs).unwrap()).unwrap();
+        assert_eq!(saved.language, "en");
     }
 }
