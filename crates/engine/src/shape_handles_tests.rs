@@ -160,10 +160,10 @@ fn dragging_the_count_handle_sets_the_count_by_the_angle_about_the_centre() {
     // The readout is the count.
     let doc = s.doc().unwrap();
     assert_eq!(crate::shape_handles::value(doc, poly, ShapeHandle::Count), Some(4.0));
-    // The finite guard: a pointer on the centre gives a finite count.
+    // A pointer on the centre has no direction: it gives the most points.
     let h = count_handle(&s, poly);
     drag(&mut s, (h[0], h[1]), (100.0, 100.0), false);
-    assert!((3..=60).contains(&count_of(&s, poly)));
+    assert_eq!(count_of(&s, poly), 60, "a pointer on the centre");
 }
 
 #[test]

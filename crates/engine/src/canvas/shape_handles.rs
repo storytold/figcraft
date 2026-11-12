@@ -139,6 +139,11 @@ fn count_at(n: &Node, q: Point) -> Option<f64> {
         return None;
     }
     let (x, y) = (q.x / rx - 1.0, q.y / ry - 1.0);
+    // On the centre there is no direction (atan2 of two zeros would read as 180 degrees): treat it
+    // as no angle, the most points.
+    if x.hypot(y) < 1e-9 {
+        return Some(COUNT_MAX);
+    }
     let angle = x.atan2(-y).rem_euclid(std::f64::consts::TAU).to_degrees();
     let count = (360.0 / angle.max(1e-9)).round();
     count.is_finite().then(|| count.clamp(COUNT_MIN, COUNT_MAX))
