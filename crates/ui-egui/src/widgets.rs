@@ -228,6 +228,16 @@ pub fn number_field(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, suffix:
     number_field_mixed(ui, id, lead, value, suffix, width, step)?.settled()
 }
 
+/// Ask number field `id` to open for typing on its next frame, its text selected (a tool that
+/// opens with its field focused, such as Scale). An edit left over from when the field was last
+/// shown (it went away with the keyboard on it) is dropped first, or the request would be ignored.
+pub fn request_edit(ui: &Ui, id: Id) {
+    ui.data_mut(|d| {
+        d.remove::<String>(id.with("editing"));
+        d.insert_temp(id.with("beginedit"), true);
+    });
+}
+
 /// Whether the edit of number field `id` began with a Cmd/Ctrl-click. A padding field edited
 /// that way sets every side (Guide to auto layout, Keyboard shortcut guide).
 pub fn edit_began_with_command(ui: &Ui, id: Id) -> bool {
@@ -405,7 +415,8 @@ fn number_field_impl(
     }
     // Typing on a field the keyboard reached (Tab) edits it: the editor takes the typed text.
     let typed_now = editing.is_none() && on_field && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))));
-    let started = editing.is_none() && ((field_resp.clicked() && !alt_now) || typed_now);
+    let requested = ui.data_mut(|d| d.remove_temp::<bool>(id.with("beginedit"))).unwrap_or(false);
+    let started = editing.is_none() && ((field_resp.clicked() && !alt_now) || typed_now || requested);
     // The text the field would commit to no effect: what it showed when the edit began, or the
     // value the arrows last stepped it to.
     let kept_id = id.with("kept");

@@ -737,6 +737,199 @@ fn scrubbing_the_scale_panel_width_scales_live_in_one_undo_step() {
     assert_eq!((w, h, undo_steps(&u)), (50.0, 37.5, steps + 1), "40×30 scaled to a width of 50");
 }
 
+/// A 100 x 100 rectangle at the origin, selected, in a Ui with the Move tool.
+fn scale_setup() -> (Ui, NodeId) {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    u.frame(vec![]);
+    (u, r)
+}
+
+fn scale_field_focused(u: &Ui) -> bool {
+    u.ctx.memory(|m| m.has_focus(Id::unique("scale_k").with("te")))
+}
+
+/// Measured in Figma's web app (2026-11-09): K opens the Scale section with its input focused.
+#[test]
+fn pressing_k_focuses_the_scale_field_with_its_text_selected() {
+    let (mut u, _) = scale_setup();
+    assert!(!scale_field_focused(&u));
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+    assert!(scale_field_focused(&u), "the scale field has the keyboard");
+    let state = egui::TextEdit::load_state(&u.ctx, Id::unique("scale_k").with("te")).expect("the editor exists");
+    let range = state.cursor.char_range().expect("a selection");
+    let shown = u.ctx.data(|d| d.get_temp::<String>(Id::unique("scale_k").with("editing"))).expect("the field is being edited");
+    let (lo, hi) = (range.primary.index.min(range.secondary.index), range.primary.index.max(range.secondary.index));
+    assert_eq!((lo, hi), (egui::text::CCursor::new(0).index, egui::text::CCursor::new(shown.chars().count()).index), "all of its text is selected");
+}
+
+/// K with nothing selected, then a selection: the field doesn't take the keyboard from the canvas.
+#[test]
+fn a_selection_after_k_does_not_move_the_keyboard_to_the_scale_field() {
+    let (mut u, r) = scale_setup();
+    u.app.run("select.set", json!({"ids": []}));
+    u.frame(vec![]);
+    key(&mut u, Key::K, Modifiers::NONE);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    u.app.run("select.set", json!({"ids": [r]}));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+    assert!(!scale_field_focused(&u), "the canvas keeps the keyboard");
+}
+
+/// Ctrl+Enter in the factor field is not the tool's exit.
+#[test]
+fn ctrl_enter_in_the_scale_field_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    key(&mut u, Key::Enter, Modifiers::CTRL);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// An Enter on the first frame the panel is back from another tab (the field not yet focused again)
+/// doesn't end the tool on a stale "had the keyboard" flag.
+#[test]
+fn enter_on_the_first_frame_back_from_another_tab_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// The Scale tool chosen again while the Design tab was away (Prototype tab, Move, then K): the
+/// field takes the keyboard again when the Design tab comes back.
+#[test]
+fn the_scale_field_takes_the_keyboard_again_after_another_tab() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.app.run("tool.set", json!({"tool": "move"}));
+    u.frame(vec![]);
+    u.app.run("tool.set", json!({"tool": "scale"}));
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u), "the field has the keyboard again");
+}
+
+/// A value typed and left unsettled when the panel went away is dropped: back again, the field
+/// shows the fresh value with all of its text selected, so typing replaces it.
+#[test]
+fn the_scale_field_comes_back_fresh_with_its_text_selected() {
+    let (mut u, r) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("7".to_string())]);
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    let shown = u.ctx.data(|d| d.get_temp::<String>(Id::unique("scale_k").with("editing"))).expect("the field is being edited");
+    assert_ne!(shown, "7", "the leftover edit is gone");
+    let state = egui::TextEdit::load_state(&u.ctx, Id::unique("scale_k").with("te")).expect("the editor exists");
+    let range = state.cursor.char_range().expect("a selection");
+    let (lo, hi) = (range.primary.index.min(range.secondary.index), range.primary.index.max(range.secondary.index));
+    assert_eq!((lo, hi), (egui::text::CCursor::new(0).index, egui::text::CCursor::new(shown.chars().count()).index));
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+}
+
+/// Tab moves the keyboard from the factor field to the next one; an Enter there leaves the
+/// Scale tool on.
+#[test]
+fn enter_in_another_field_after_tab_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    // Tab, then Enter on the very next frame (as a quick Tab, Enter or a click and Enter would).
+    let ev = |key, pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    u.frame(vec![ev(Key::Tab, true), ev(Key::Tab, false)]);
+    assert!(!scale_field_focused(&u), "Tab moved the keyboard on");
+    for _ in 0..4 {
+        u.frame(vec![]);
+        assert!(!scale_field_focused(&u), "the field doesn't take the keyboard back");
+    }
+    u.frame(vec![ev(Key::Enter, true), ev(Key::Enter, false)]);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// K, 2, Enter: 100 x 100 becomes 200 x 200 about the panel's origin, the tool is Move, one undo step.
+#[test]
+fn k_two_enter_scales_the_selection_by_two() {
+    let (mut u, r) = scale_setup();
+    let steps = undo_steps(&u);
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("2".to_string())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![]);
+    // About the panel's origin, FigCraft's top-left default (Figma's grid starts at the centre).
+    assert_eq!(geom(&u, r), (0.0, 0.0, 200.0, 200.0));
+    assert!(!scale_field_focused(&u), "the field let go of the keyboard");
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
+    assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
+    assert_eq!(undo_steps(&u), steps + 1);
+    u.app.run("edit.undo", json!({}));
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+}
+
+/// "2x" and "1.5" are factors too.
+#[test]
+fn the_scale_field_takes_2x_and_1_5() {
+    for (text, size) in [("2x", 200.0), ("1.5", 150.0)] {
+        let (mut u, r) = scale_setup();
+        key(&mut u, Key::K, Modifiers::NONE);
+        u.frame(vec![]);
+        u.frame(vec![Event::Text(text.to_string())]);
+        key(&mut u, Key::Enter, Modifiers::NONE);
+        u.frame(vec![]);
+        assert_eq!(geom(&u, r), (0.0, 0.0, size, size), "{text}");
+    }
+}
+
+/// Escape in the scale field closes it and changes nothing.
+#[test]
+fn escape_in_the_scale_field_closes_it_and_changes_nothing() {
+    let (mut u, r) = scale_setup();
+    let steps = undo_steps(&u);
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("3".to_string())]);
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+    assert!(!scale_field_focused(&u), "the field let go of the keyboard");
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
+    assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
+    assert_eq!(undo_steps(&u), steps);
+}
+
 /// The texts painted in the last frame: what they say, whether they end in an ellipsis, and where
 /// they show (within their clip).
 fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, bool, egui::Rect)> {
