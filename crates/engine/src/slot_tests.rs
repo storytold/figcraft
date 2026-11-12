@@ -417,12 +417,16 @@ fn assert_slot_text(s: &mut Session, instance: NodeId, expected: &str) {
     assert!(html.contains(&format!(">{expected}</p>")), "slot Label HTML: {html}");
 }
 
-fn assert_local_slot_text(s: &mut Session, instance: NodeId, expected: &str) {
+fn assert_stored_slot_text(s: &Session, instance: NodeId, expected: &str) {
     assert!(
         matches!(&node(s, instance).kind, NodeKind::Instance { props, .. } if props.get("Text") == Some(&json!(expected))),
         "instance {instance} must store its own Text value {expected:?}: {:?}",
         node(s, instance).kind
     );
+}
+
+fn assert_local_slot_text(s: &mut Session, instance: NodeId, expected: &str) {
+    assert_stored_slot_text(s, instance, expected);
     let properties = props_of(s, instance);
     let text = properties.iter().find(|p| p["name"] == "Text").unwrap_or_else(|| panic!("instance {instance} has no Text property: {properties:?}"));
     assert_eq!(text["value"], expected, "instance {instance} Text property");
@@ -475,14 +479,15 @@ fn slot_text_properties_do_not_read_an_unbound_base_property() {
     ex(&mut s, "component.addProperty", json!({"id": base, "name": "Text", "type": "text", "default": "Wrong owner"}));
     let i = idv(&ex(&mut s, "instance.create", json!({"component": composition, "x": 400})));
     let nested_base = kids(&s, i)[0];
-    assert_local_slot_text(&mut s, nested_base, "Wrong owner");
+    // Bound to no layer, the base's Text isn't listed on its instance (#2269); its value stays stored.
+    assert_stored_slot_text(&s, nested_base, "Wrong owner");
     let nested = copy_of(&s, i, main_content);
     assert_local_slot_text(&mut s, nested, "Default");
     assert_slot_text(&mut s, nested, "Default");
     ex(&mut s, "instance.setProperties", json!({"ids": [nested], "properties": {"Text": "Custom"}}));
     assert_local_slot_text(&mut s, nested, "Custom");
     assert_slot_text(&mut s, nested, "Custom");
-    assert_local_slot_text(&mut s, nested_base, "Wrong owner");
+    assert_stored_slot_text(&s, nested_base, "Wrong owner");
     assert_slot_text(&mut s, main_content, "Default");
     healthy(&s);
 }
