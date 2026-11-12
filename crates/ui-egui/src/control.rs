@@ -6,6 +6,8 @@
 //! - `engine.execute {command, params}` — run any command (no dialogs open)
 //! - `engine.commands {}` — every command with its params doc
 //! - `document.inspect {depth?, allPages?}` / `node.get {id, depth?}`
+//! - `agent.join {agent}` / `agent.leave {agent}` / `agent.list {}` — several named AI agents in
+//!   one file, each on its own page and selection
 //! - `ui.inspect {}` — panel/tab/tool state, canvas rect, timings
 //! - `ui.pointer {kind: down|move|up|click|double|hover|drag, x, y (page) | sx, sy (screen), to?, shift?, alt?, cmd?}`
 //! - `ui.key {key, shift?, cmd?, alt?}` — a shortcut as if typed on the canvas
@@ -784,7 +786,10 @@ fn route_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now
     // restored so a batch already in a frame's raw input keeps its own provenance).
     let before = app.control_synthetic;
     app.control_synthetic = true;
-    let res = handle(app, ctx, &r.method, &r.params);
+    // Confined here too: the frame around this request may be the user's own, which the
+    // Preferences' folder for agents leaves unconfined.
+    let roots = app.automation_roots.clone();
+    let res = figcraft_engine::file_access::confined(roots.as_ref(), || handle(app, ctx, &r.method, &r.params));
     app.control_synthetic = before;
     if r.method == "ui.input" && std::mem::take(&mut app.control_input_queued) {
         // Acknowledge once the pass that applies the batch is presented, never from a sizing
@@ -1470,6 +1475,9 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             let layers_generation = app.session.clipboard.layers_generation;
             let agent = p.get("agent").and_then(Value::as_str);
             let r = in_document(app, p, |s| s.execute_as(agent, cmd, &params).map_err(|e| e.to_string()));
+            // An agent working apart leaves the window's page and selection as they were, yet the
+            // document changed: the canvas has to show it.
+            ctx.request_repaint();
             app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             app.invalidate_synthetic_copy(layers_generation);
             // Programmatic calls never open dialogs.
@@ -1489,8 +1497,20 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
         "document.inspect" => {
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
             let options = figcraft_engine::inspect::InspectOptions::parse(p)?;
-            in_document(app, p, |s| Ok(figcraft_engine::inspect::document_with_options(s, depth, b(p, "allPages"), &options)))
+            // An agent working apart reads its own page and selection, as its commands do.
+            let agent = p.get("agent").and_then(Value::as_str);
+            in_document(
+                app,
+                p,
+                |s| Ok(s.with_agent(agent, |s| figcraft_engine::inspect::document_with_options(s, depth, b(p, "allPages"), &options))),
+            )
         }
+        "agent.join" | "agent.leave" => {
+            let agent = p.get("agent").and_then(Value::as_str).ok_or("`agent` required")?;
+            let r = if method == "agent.join" { app.session.agent_join(agent) } else { app.session.agent_leave(agent) };
+            r.map_err(|e| e.to_string())
+        }
+        "agent.list" => Ok(app.session.agent_list()),
         "node.get" => {
             let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required")?;
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(1) as usize;

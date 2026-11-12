@@ -21,6 +21,19 @@ The server lives in `crates/mcp` (`figcraft-mcp`) and is started by the CLI:
 to 60 s over each request; `--timeout SECONDS` (1–600) raises that for a client that sends big
 batches: `figcraft-cli mcp --attach 7979 --timeout 300`. Headless has no such limit.
 
+`--attach auto` finds the app by itself: the one whose **Preferences ▸ Allow AI agents to control
+FigCraft** is on (or that was started with `--control`), from the `control.json` it keeps while it
+listens (see [control-protocol.md › Finding the app](control-protocol.md#finding-the-app)). No app
+listening is an error that says so.
+
+**Several agents on one file.** Each agent works under a name: the client's own (`clientInfo`), or
+the one `--agent NAME` gives this server, which is what tells apart several agents started by the
+same client (`figcraft-cli mcp --attach auto --agent Header`). They share one app, one window and
+one file. As soon as two are there (or after `agent_join`), each keeps its own current page and
+selection, apart from the window's, so they work on parts of one page or on different pages,
+shown or not, without waiting for each other. `edit.undo` and `edit.redo` are refused to an agent
+while another is there: fix a mistake with a new command. Send a block of work as one `batch`.
+
 While an attached agent works, the app shows where, as it shows a person in a live session: its
 avatar, in a colour of its own and named as its comments are signed ("Claude (agent)", see
 Comments), joins the people row at the top of the right panel, and the canvas outlines the layers
@@ -389,6 +402,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `type_text {text, id?}` | Type into the text being edited, or replace the contents of text layer `id`. |
 | `inspect_ui {}` | Tool, view and status (and panels, timings and the app's `windows` when attached). |
 | `wait_for_changes {after?, timeoutMs?, topics?, limit?}` | Wait for new comment events in the attached app; returns pending events at once, else waits up to `timeoutMs` (default 20 s, max 25 s). Pass the returned `cursor` back to keep watching. Headless returns immediately. |
+| `agent_join {}` / `agent_leave {}` / `agent_list {}` | Several agents on one file: `agent_join` announces this server's agent, which works apart from then on (its own page and selection), even alone; `agent_leave` forgets it; `agent_list` returns `{agents: [{agent, apart, page, selection}]}`. |
 
 ### Compact layer trees
 

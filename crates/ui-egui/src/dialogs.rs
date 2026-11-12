@@ -163,6 +163,75 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
     );
 }
 
+/// Preferences ▸ AI agents: the switch, which asks before it changes (it opens a local port, or
+/// cuts agents off), and the folder agents read and write. Only this screen writes these two
+/// preferences: no command does (see [`figcraft_engine::Prefs::agent_control`]).
+fn agent_control_prefs(app: &mut FigApp, ui: &mut egui::Ui, prefs: &figcraft_engine::Prefs, t: &Tokens) {
+    ui.add_space(8.0);
+    if crate::widgets::checkbox(ui, prefs.agent_control, tr("Allow AI agents to control FigCraft")) {
+        app.ui.agent_control_ask = Some(!prefs.agent_control);
+    }
+    ui.horizontal(|ui| {
+        let name = tr("Folder for agents");
+        ui.label(name);
+        if let Some(dir) = crate::widgets::text_field_named(ui, egui::Id::unique("pref_automation_root"), &prefs.automation_root, 160.0, name) {
+            set_automation_root(app, dir.trim());
+        }
+        if crate::widgets::button(ui, tr("Browse"), false, true).clicked() {
+            app.pick_folder(name, |app, dir| set_automation_root(app, &dir.to_string_lossy()));
+        }
+    });
+    crate::widgets::label(ui, tr("Agents read and write files in this folder only. Empty: the FigCraft folder in your documents."), t.text_secondary);
+}
+
+/// Keep the folder agents read and write (Preferences only; the app follows it at once).
+fn set_automation_root(app: &mut FigApp, dir: &str) {
+    if app.session.prefs.automation_root != dir {
+        app.session.prefs.automation_root = dir.to_owned();
+        app.session.prefs_unsaved = true;
+    }
+}
+
+/// The question Preferences asks before AI agents are let in or shut out (Cancel / Allow or
+/// Stop; the dialog's close button answers Cancel).
+fn agent_control_question(app: &mut FigApp, ctx: &Context) {
+    let Some(on) = app.ui.agent_control_ask else {
+        return;
+    };
+    let t = Tokens::get(ctx);
+    let mut open = true;
+    let mut answer = None;
+    let (title, text, yes) = if on {
+        (tr("Allow AI agents?"), tr("Programs on this computer will be able to read and change the files open in FigCraft."), tr("Allow"))
+    } else {
+        (tr("Stop AI agents?"), tr("Agents at work lose their connection at once."), tr("Stop"))
+    };
+    window(title, ctx).order(egui::Order::Foreground).open(&mut open).show(ctx, |ui| {
+        ui.set_width(340.0);
+        crate::widgets::label(ui, text, t.text);
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            if crate::widgets::button(ui, tr("Cancel"), false, true).clicked() {
+                answer = Some(false);
+            }
+            if crate::widgets::button(ui, yes, true, true).clicked() {
+                answer = Some(true);
+            }
+        });
+    });
+    if !open {
+        answer = Some(false);
+    }
+    let Some(confirmed) = answer else {
+        return;
+    };
+    app.ui.agent_control_ask = None;
+    if confirmed && app.session.prefs.agent_control != on {
+        app.session.prefs.agent_control = on;
+        app.session.prefs_unsaved = true;
+    }
+}
+
 /// Escape closes the topmost simple dialog (one without menus of its own), before the canvas's
 /// shortcuts see it (it doesn't deselect), like a system dialog: from one of its fields too. A menu
 /// open over the dialog (Preferences ▸ Interface size) takes the first Escape and closes alone.
@@ -172,6 +241,7 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     }
     let u = &mut app.ui;
     let open = u.color_profile.is_some()
+        || u.agent_control_ask.is_some()
         || u.menu_input.is_some()
         || u.find.is_some()
         || u.batch_rename.is_some()
@@ -186,7 +256,9 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     if !open || !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         return;
     }
-    if u.menu_input.take().is_some()
+    // The question over Preferences first: Escape answers Cancel and leaves Preferences open.
+    if u.agent_control_ask.take().is_some()
+        || u.menu_input.take().is_some()
         || u.color_profile.take().is_some()
         || u.find.take().is_some()
         || u.batch_rename.take().is_some()
@@ -264,6 +336,10 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             }
             for c in toggles {
                 app.run(c, json!({}));
+            }
+            // The browser has no local port to listen on.
+            if !cfg!(target_arch = "wasm32") {
+                agent_control_prefs(app, ui, &prefs, &t);
             }
             // Where the app registers itself as the opener of invite links (Windows).
             if let Some(on) = app.session.invite_links_on() {
@@ -357,6 +433,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             app.ui.preferences = false;
         }
     }
+    agent_control_question(app, ctx);
     crate::shortcuts_panel::show(app, ctx);
     if let Some((mut find, mut replace)) = app.ui.find.clone() {
         let mut open = true;

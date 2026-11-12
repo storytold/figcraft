@@ -91,7 +91,8 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         // `--attach` conflicts with the roots: the app runs the commands, only its own roots can confine them.
-        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, roots_of(&a.roots)?),
+        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, a.agent.as_deref(), roots_of(&a.roots)?),
+        Command::Call(a) => call(&a),
         Command::Plugin { command: PluginCommand::Publish(a) } => publish_plugin(&a.folder, &a.server),
         Command::Connect { command: ConnectCommand::Publish(a) } => confined(&a.roots, || files::connect_publish(&a.file, &a.mappings, a.dry_run)),
         Command::Perf(a) => {
@@ -148,23 +149,79 @@ fn publish_plugin(folder: &str, server: &str) -> CliResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine::file_access::Roots>) -> CliResult<ExitCode> {
+/// `--attach auto`: the address of the app that lets AI agents in, from the state file it keeps
+/// in its settings folder while it listens.
+fn running_app() -> CliResult<String> {
+    use figcraft_engine::discovery;
+    let dirs = discovery::search_dirs();
+    let Some((port, _)) = dirs.iter().find_map(|dir| discovery::read(dir)) else {
+        return Err(no_running_app(&dirs).into());
+    };
+    Ok(std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)).to_string())
+}
+
+/// Why `--attach auto` found no app: the folders searched for its state file, and what to do.
+fn no_running_app(dirs: &[std::path::PathBuf]) -> String {
+    use figcraft_engine::discovery::{CONFIG_DIR_VAR, STATE_FILE};
+    let searched = if dirs.is_empty() {
+        format!("{CONFIG_DIR_VAR} is set but empty, so no folder was searched")
+    } else {
+        let dirs: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+        format!("no readable {STATE_FILE} in {}", dirs.join(" or in "))
+    };
+    format!(
+        "no FigCraft app lets AI agents in ({searched}): turn on Preferences ▸ Allow AI agents to control FigCraft (or start it with `figcraft --control PORT`); if the app keeps its settings in another folder, name it with {CONFIG_DIR_VAR}"
+    )
+}
+
+/// A connection to the running app `attach` names (`auto`: the one that lets AI agents in),
+/// which may take `timeout` seconds over each request.
+fn attached(attach: &str, timeout: Option<u64>) -> CliResult<figcraft_mcp::Attached> {
+    let addr = if attach == args::ATTACH_AUTO { running_app()? } else { attach.to_owned() };
+    let no_app = |e: std::io::Error| format!("can't reach the FigCraft app at {addr}: {e} (start it with `figcraft --control PORT`)");
+    let app = figcraft_mcp::Attached::connect(&addr).map_err(no_app)?;
+    Ok(match timeout {
+        Some(secs) => app.with_timeout(std::time::Duration::from_secs(secs)).map_err(no_app)?,
+        None => app,
+    })
+}
+
+/// The most text `call` reads as parameters from standard input.
+const MAX_CALL_PARAMS: u64 = 16 << 20;
+
+/// `call`: one request to the running app, named for `--agent`; its result on standard output.
+fn call(a: &args::CallArgs) -> CliResult<ExitCode> {
+    use figcraft_mcp::Backend;
+    use std::io::Read;
+    let text = if a.params == "-" {
+        let mut text = String::new();
+        std::io::stdin().lock().take(MAX_CALL_PARAMS).read_to_string(&mut text).map_err(|e| format!("stdin: {e}"))?;
+        text
+    } else {
+        a.params.clone()
+    };
+    let mut params: Value = serde_json::from_str(&text).map_err(|e| CliError::Usage(format!("the parameters are not JSON: {e}")))?;
+    if !params.is_object() {
+        return Err(CliError::Usage("the parameters must be a JSON object, like {\"command\":\"select.all\"}".into()));
+    }
+    if let Some(agent) = a.agent.as_deref() {
+        figcraft_mcp::name_agent(&a.method, &mut params, agent);
+    }
+    let result = attached(&a.attach, a.timeout)?.call(&a.method, params)?;
+    writeln!(std::io::stdout().lock(), "{result}").map_err(|e| format!("stdout: {e}"))?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn mcp(attach: Option<&str>, timeout: Option<u64>, agent: Option<&str>, roots: Option<figcraft_engine::file_access::Roots>) -> CliResult<ExitCode> {
     let backend: Box<dyn figcraft_mcp::Backend> = match attach {
-        Some(addr) => {
-            let no_app = |e: std::io::Error| format!("can't reach the FigCraft app at {addr}: {e} (start it with `figcraft --control PORT`)");
-            let b = figcraft_mcp::Attached::connect(addr).map_err(no_app)?;
-            match timeout {
-                Some(secs) => Box::new(b.with_timeout(std::time::Duration::from_secs(secs)).map_err(no_app)?),
-                None => Box::new(b),
-            }
-        }
+        Some(app) => Box::new(attached(app, timeout)?),
         None => Box::new(figcraft_mcp::Headless::new()),
     };
     eprintln!("figcraft MCP server ({}) on stdio", backend.describe());
     if let Some(r) = &roots {
         eprintln!("file access confined to {}", r.to_json());
     }
-    let mut server = figcraft_mcp::Server::new(backend).with_roots(roots);
+    let mut server = figcraft_mcp::Server::new(backend).with_roots(roots).with_agent(agent.unwrap_or_default());
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     server.serve(stdin.lock(), stdout.lock()).map_err(|e| format!("stdio: {e}"))?;

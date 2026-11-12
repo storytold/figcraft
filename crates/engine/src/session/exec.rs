@@ -26,7 +26,7 @@ pub(crate) fn finite_check_candidates(doc: &Document, before: &Document) -> Vec<
 impl Session {
     /// Append a live event with the active document's identity (nothing without one). Inside a
     /// [`Session::grouped`] call the event is buffered and committed only when the group succeeds.
-    fn record_event(&mut self, kind: &str, data: Value) {
+    pub(crate) fn record_event(&mut self, kind: &str, data: Value) {
         let (document, path) = match self.ds() {
             Ok(d) => (d.doc.name.clone(), d.path.clone()),
             Err(_) => (String::new(), None),
@@ -55,13 +55,19 @@ impl Session {
     /// [`Session::execute`] for an AI agent named `agent` (the client's name; empty when it gave
     /// none), or for the user (`None`): the comments it makes are signed with the agent's name and
     /// marked as an agent's, and the app shows where it works ([`Session::agent_presence_at`]).
+    ///
+    /// While several named agents work in the session, each has its own page and selection
+    /// ([`Session::with_agent`]): the command runs on those, and the window keeps its own.
     pub fn execute_as(&mut self, agent: Option<&str>, id: &str, params: &Value) -> Result<Value> {
         let was = std::mem::replace(&mut self.agent, agent.map(cmd::comment::agent_author));
-        let before = agent.and_then(|_| self.agent_before());
-        let r = self.execute(id, params);
-        if agent.is_some() {
-            self.note_agent(before);
-        }
+        let r = self.with_agent(agent, |s| {
+            let before = agent.and_then(|_| s.agent_before());
+            let r = s.execute(id, params);
+            if agent.is_some() {
+                s.note_agent(before);
+            }
+            r
+        });
         self.agent = was;
         r
     }
@@ -72,6 +78,7 @@ impl Session {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         crate::cmd::refuse_unknown_params(id, params)?;
         board::refuse_on_board(self, id)?;
+        self.refuse_shared_undo(id)?;
         // Revert replaces the document's uid: refuse before ending previews or syncing branches.
         if id == "file.revert" && self.live().doc_uid.is_some() {
             return Err(EngineError::Disabled(id.into(), "leave the live session before reverting to the saved file".into()));

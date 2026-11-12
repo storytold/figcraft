@@ -253,7 +253,8 @@ impl Headless {
             "document.inspect" => {
                 let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
                 let options = figcraft_engine::inspect::InspectOptions::parse(&p)?;
-                Ok(figcraft_engine::inspect::document_with_options(&self.session, depth, b(&p, "allPages"), &options))
+                let agent = p.get("agent").and_then(Value::as_str);
+                Ok(self.session.with_agent(agent, |s| figcraft_engine::inspect::document_with_options(s, depth, b(&p, "allPages"), &options)))
             }
             "node.get" => {
                 let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required (a node id)")?;
@@ -296,6 +297,12 @@ impl Headless {
                 let result = self.session.events.poll(after, &topics, limit, std::time::Duration::ZERO);
                 serde_json::to_value(result).map_err(|e| e.to_string())
             }
+            "agent.join" | "agent.leave" => {
+                let agent = p.get("agent").and_then(Value::as_str).ok_or("`agent` required")?;
+                let r = if method == "agent.join" { self.session.agent_join(agent) } else { self.session.agent_leave(agent) };
+                r.map_err(|e| e.to_string())
+            }
+            "agent.list" => Ok(self.session.agent_list()),
             "app.quit" => Ok(json!({"ok": true})),
             other => Err(format!("unknown method `{other}`")),
         }

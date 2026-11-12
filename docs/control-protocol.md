@@ -32,8 +32,11 @@ HTTP request a web page makes the browser send here never runs). The implementat
 
 A request line is limited to **32 MiB before the newline**, including whitespace. The reader stops
 at the first excess byte, replies `{"id": null, "ok": false, "error": "message too large"}`, then
-closes the connection without consuming the rest of the frame. The server accepts at most **8
-active connections**; additional connections are closed immediately. Socket reads and writes each
+closes the connection without consuming the rest of the frame. The server accepts at most **256
+active connections**; an additional connection gets
+`{"id": null, "ok": false, "error": "too many control connections (256 at most): the app is busy, try again shortly"}`
+and is closed. A client that had already sent a request may see the connection reset instead of
+that line; either way, reconnect a little later. Socket reads and writes each
 have a **60 s inactivity timeout**, so idle clients and clients that stop reading release their
 worker. This bounds blocked socket operations, not the total duration of a frame arriving slowly.
 Clients can reconnect after an idle timeout (the attached MCP backend already does).
@@ -83,6 +86,30 @@ an error, and so is a `document` naming a file behind the tab in front on any ot
 (`ui.screenshot`, `ui.input`, `ui.key`… act on what the window shows). `doc.list` includes each file's
 `path` only when the call names no `agent`: an AI agent's calls (MCP sets `agent`) get ids and names.
 
+## Finding the app
+
+An app started without `--control` listens too while **Preferences ▸ Allow AI agents to control
+FigCraft** is on (off by default; the app asks before it turns on, and before it turns off). It
+takes a free port, starts and stops listening at once when the preference changes, with no
+restart, and stops when it quits. `--control PORT` keeps its fixed port whatever the preference
+says.
+
+While it listens, the app keeps `control.json` in its settings folder (`FigCraft` in the system's
+configuration folder, or the folder `FIGCRAFT_CONFIG_DIR` names): `{"port": 51234, "pid": 4242}`,
+written atomically and removed when it stops listening. `figcraft-cli mcp --attach auto` and
+`figcraft-cli call` read it. Without `FIGCRAFT_CONFIG_DIR`, a client looks in `FigCraft` in the
+system's configuration folder, then in `~/.config/FigCraft`: a client run in a sandbox (Flatpak,
+Snap) has its own configuration folder, while the app outside keeps its settings in `~/.config`.
+When no folder holds the file, the error names the folders searched. A file left by an app that
+crashed names a port nothing listens on: connecting fails.
+
+An app that listens because of the preference, started without automation roots, confines agents
+to **Folder for agents** in Preferences (empty: `FigCraft` in the user's documents, made if
+missing). A folder that can't be used is an error shown in the app, and it doesn't listen.
+
+No command sets these two preferences, so a control client can neither open the channel nor
+widen its folder: only the Preferences window does.
+
 ## Confining file access
 
 ```sh
@@ -129,6 +156,17 @@ server does with its client's name: comments it makes are signed "<agent> (agent
 an empty name), marked `"agent": true`, and keep their own read state. Without it the command acts
 as the user (the name from Preferences).
 
+Several agents can work in one file at the same time, each under its own name. One named agent
+alone works on the window's page and selection, as the user does. From the moment a second name is
+there, or once it called `agent.join`, an agent works apart: it has its own current page and its
+own selection in each file, so `page.select`, `select.set` and every command that acts on "the
+current page" or "the selection" act on the agent's, on a page the window shows or not. The
+window's page, selection and view stay the user's; the document is the same for everyone, and the
+last edit of a layer wins. A new agent starts on the window's page with the window's selection.
+`document.inspect` takes `agent` too and then reads that agent's page and selection. The history is
+one per file and a step holds the whole document, so `edit.undo` and `edit.redo` are refused to an
+agent while another one is there: it corrects with a new edit. The user's undo is never refused.
+
 ```json
 {"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":10,"y":10,"width":100,"height":50}}}
 {"id":1,"ok":true,"result":{"id":2}}
@@ -153,6 +191,17 @@ it and duplicate it:
 {"id":4,"method":"engine.execute","params":{"command":"command.batch","params":{"commands":[{"command":"node.create","as":"card","params":{"type":"frame","width":200,"height":100}},{"command":"node.create","params":{"type":"rectangle","parent":{"$ref":"card"},"width":20,"height":20}},{"command":"edit.duplicate","as":"copy","params":{"ids":[{"$ref":"card"}]}},{"command":"node.set","params":{"ids":[{"$ref":"copy","field":"ids/0"}],"props":{"name":"Card copy"}}}]}}}
 ```
 
+### `agent.join {agent}` / `agent.leave {agent}` / `agent.list {}`
+
+`agent.join` announces a named agent and makes it work apart at once, even alone; it returns
+`{agent, agents}`. `agent.leave` forgets the agent, its pages and its selections, and returns
+`{left}`; closing a connection does not do it. An agent that made no request for 30 minutes is
+forgotten the same way (its client stopped without leaving); if it comes back, it is a new agent
+and starts where the window is. `agent.list` returns `{agents: [{agent, apart, page,
+selection}]}`, in the order they came: `page` and `selection` are those of an agent working apart
+in the file in front, else `null`. Names are trimmed and cut to 64 characters; an empty name is no
+agent.
+
 ### `engine.commands {}`
 
 Every command: `[{id, label, params, menu, shortcut, undoable}]`.
@@ -161,8 +210,12 @@ Every command: `[{id, label, params, menu, shortcut, undoable}]`.
 
 Wait for live changes: the app's in-memory event log records `comment.added`, `comment.replied`,
 `comment.edited`, `comment.reacted`, `comment.resolved`, `comment.moved` and `comment.deleted`
-(`topics`: `comments` (default), `document`, `all`). Only comment events are emitted today;
-`document` and `all` are accepted for forward compatibility. Returns pending events after `after`
+(`topics`: `comments` (default), `document`, `agents`, `all`). While several named agents are
+there, the log also records `agent.joined {agent}` (the first agent's when the second one comes),
+`agent.left {agent}` (with `reason: "idle"` for an agent forgotten after 30 minutes without a
+request) and `agent.selection {agent, page, selection}` when the page or selection of
+an agent working apart changed (topic `agents`). No `document` event is emitted today; the topic
+is accepted for forward compatibility. Returns pending events after `after`
 at once, otherwise waits up to `timeoutMs` (default 20 000, max 25 000; 0 = no wait):
 
 ```json

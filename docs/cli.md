@@ -281,11 +281,41 @@ folders) confine the files the agent's calls read (inside a read or write root) 
 write root); everything else is refused ([mcp.md › Confining file access](mcp.md#confining-file-access)).
 They apply to the headless session only, and that is why `--attach` refuses them: an attached server
 is confined by the app it attaches to, from the flags that app was started with. With `--attach`,
-`--timeout SECONDS` (1–600, default 60) is how long the app may take over each request. The headless
+`--timeout SECONDS` (1–600, default 60) is how long the app may take over each request.
+`--attach auto` finds the app that lets AI agents in (its Preferences) instead of naming a port, and
+`--agent NAME` names this server's agent, for several agents on one file. The headless
 session can host, join and publish
 live sessions (`collab.*`: without a key on a server open to the public, with `collab.serverInfo`,
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories
 (`plugin.directory.*`); the one-shot `run` can't (no network link).
+
+### `call <method> [PARAMS|-] [--attach auto|PORT] [--agent NAME] [--timeout SECONDS]`
+
+Send one request of the [control protocol](control-protocol.md) to the running app and print its
+result as JSON: what an AI agent that has a shell, and no MCP client of its own, drives the app
+with. The app is the one that lets AI agents in (**Preferences ▸ Allow AI agents to control
+FigCraft**), found by itself (`--attach auto`, the default), or the one `--attach PORT` names.
+It is found from the `control.json` in its settings folder (see
+[control-protocol.md › Finding the app](control-protocol.md#finding-the-app)); when none is found,
+the error names the folders searched, and `FIGCRAFT_CONFIG_DIR` names another one.
+`PARAMS` is the request's parameters, a JSON object (default `{}`); `-` reads them from standard
+input, which is the way to send a long batch. A request the app refuses prints its message on
+stderr and exits with code 1; parameters that are not a JSON object exit with code 2.
+
+`--agent NAME` names the agent the request is made for (`engine.execute`, `document.inspect`,
+`agent.join` and `agent.leave` carry it): several agents on one file each give their own name and
+keep their own page and selection.
+
+```sh
+figcraft-cli call --agent Header agent.join
+figcraft-cli call --agent Header engine.execute - <<'JSON'
+{"command": "command.batch", "params": {"label": "Header", "commands": [
+  {"command": "select.set", "params": {"ids": [12]}},
+  {"command": "node.set", "params": {"ids": [12], "props": {"name": "Header"}}}
+]}}
+JSON
+figcraft-cli call --agent Header agent.leave
+```
 
 ### `plugin publish <folder> --server ws://host:port/[?key=KEY]`
 

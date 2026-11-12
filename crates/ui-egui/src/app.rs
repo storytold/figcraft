@@ -46,6 +46,7 @@ impl FigApp {
             pending_dialog: None,
             ui_context: None,
             automation_roots: None,
+            automation_roots_for_agents: false,
             control_input_doc: None,
             control_synthetic: false,
             input_acks: Vec::new(),

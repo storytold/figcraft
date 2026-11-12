@@ -55,21 +55,31 @@ pub struct Server {
     /// The client's name from `initialize` (`clientInfo.title`, else `.name`; empty until then):
     /// every command runs as this AI agent, so its comments are signed with it, not the user's name.
     agent: String,
+    /// The name was given when the server started ([`Server::with_agent`]): `initialize` keeps it.
+    named: bool,
 }
 
-/// The backend as the MCP client's AI agent: `engine.execute` carries its name (`agent`).
+/// The backend as the MCP client's AI agent: `engine.execute`, `document.inspect`, `agent.join`
+/// and `agent.leave` carry its name (`agent`).
 struct AsAgent<'a> {
     inner: &'a mut dyn Backend,
     agent: &'a str,
 }
 
+/// Name the AI agent a control request is made for: the methods that act as an agent
+/// (`engine.execute`, `document.inspect`, `agent.join`, `agent.leave`) get it as `agent`; the
+/// others are left as they are.
+pub fn name_agent(method: &str, params: &mut Value, agent: &str) {
+    if matches!(method, "engine.execute" | "document.inspect" | "agent.join" | "agent.leave")
+        && let Some(p) = params.as_object_mut()
+    {
+        p.insert("agent".into(), json!(agent));
+    }
+}
+
 impl Backend for AsAgent<'_> {
     fn call(&mut self, method: &str, mut params: Value) -> Result<Value, String> {
-        if method == "engine.execute"
-            && let Some(p) = params.as_object_mut()
-        {
-            p.insert("agent".into(), json!(self.agent));
-        }
+        name_agent(method, &mut params, self.agent);
         self.inner.call(method, params)
     }
 
@@ -115,7 +125,19 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false, roots: None, agent: String::new() }
+        Self { backend, initialized: false, roots: None, agent: String::new(), named: false }
+    }
+
+    /// Work as the AI agent `name` whatever the client calls itself (`figcraft-cli mcp --agent`):
+    /// several agents started by one client each get their own name, so their own page and
+    /// selection. An empty name keeps the client's.
+    pub fn with_agent(mut self, name: &str) -> Self {
+        let name: String = name.trim().chars().take(256).collect();
+        if !name.is_empty() {
+            self.agent = name;
+            self.named = true;
+        }
+        self
     }
 
     /// Confine the files every request reads and writes to `roots` (see
@@ -247,7 +269,9 @@ impl Server {
     fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
-                self.agent = client_name(params);
+                if !self.named {
+                    self.agent = client_name(params);
+                }
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
                 let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
                 Ok(json!({

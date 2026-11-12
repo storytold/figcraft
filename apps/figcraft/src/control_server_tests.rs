@@ -305,7 +305,12 @@ fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
         &mut workers,
         Duration::from_secs(5),
     );
-    assert_eq!(extra.read(&mut [0]).unwrap(), 0);
+    // The refused client is told why, then its connection closes: never a bare reset.
+    let mut refusal = String::new();
+    extra.read_to_string(&mut refusal).unwrap();
+    let refusal: serde_json::Value = serde_json::from_str(refusal.trim()).unwrap();
+    assert_eq!(refusal["ok"], false);
+    assert!(refusal["error"].as_str().is_some_and(|e| e.contains("too many control connections")), "{refusal}");
     assert_eq!(workers.len(), MAX_CONNECTIONS);
     for client in clients {
         client.shutdown(Shutdown::Both).unwrap();
@@ -512,4 +517,20 @@ fn events_poll_reports_reset_for_a_cursor_ahead_of_the_log() {
     assert_eq!(r["result"]["cursor"], 1);
     reader.get_ref().shutdown(Shutdown::Write).unwrap();
     worker.join().unwrap().unwrap();
+}
+
+#[test]
+fn a_finished_connection_leaves_no_handle_behind() {
+    // Each accepted connection used to keep a file descriptor for the life of the server: after
+    // about a thousand requests the app could serve none.
+    let stop = start(0, Duration::ZERO, queue(), context(), Arc::new(figcraft_engine::events::EventLog::default())).unwrap();
+    for _ in 0..3 {
+        drop(TcpStream::connect(("127.0.0.1", stop.port())).unwrap());
+    }
+    let begun = Instant::now();
+    while !stop.open.lock().unwrap().is_empty() {
+        assert!(begun.elapsed() < Duration::from_secs(5), "{} handles are still kept", stop.open.lock().unwrap().len());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    stop.stop();
 }

@@ -98,6 +98,7 @@ fn man_pages_cover_every_subcommand_without_synthetic_help_pages() -> std::io::R
     assert_eq!(
         pages,
         [
+            "figcraft-cli-call.1",
             "figcraft-cli-commands.1",
             "figcraft-cli-connect-publish.1",
             "figcraft-cli-connect.1",
@@ -145,7 +146,7 @@ fn generation_creates_the_output_directory_and_can_run_again() -> std::io::Resul
     fs::write(&page, "old page")?;
     generator::generate(&output)?;
     assert_eq!(fs::read(page)?, first);
-    assert_eq!(fs::read_dir(output)?.count(), 18);
+    assert_eq!(fs::read_dir(output)?.count(), 19);
     Ok(())
 }
 

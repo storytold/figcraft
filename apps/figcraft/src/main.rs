@@ -20,6 +20,7 @@
 #[cfg(all(target_os = "windows", target_env = "gnu", not(windows_slim_errors)))]
 compile_error!("Windows GNU builds must set windows_slim_errors to keep UI Automation responsive");
 
+mod agent_control;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod args;
@@ -61,6 +62,8 @@ struct App {
     /// The window title last sent: a viewport command asks for another frame, so it's only sent
     /// when the title changes (sending it every frame kept an idle window redrawing).
     title: String,
+    /// The control server: the launch's own, or the one Preferences turn on and off.
+    agent_control: agent_control::AgentControl,
     /// Shared with the services, which write the copies after a panic.
     recovery: recovery::Shared,
     /// Documents and quit requests from Finder, the Dock and Open With.
@@ -80,6 +83,8 @@ impl eframe::App for App {
             }
         }
         let title = with_app(|fig| {
+            // Before the queue is read: turning agent control off drops what it still held.
+            self.agent_control.follow(fig);
             control_server::drain_queue(&self.queue, &mut fig.control_queue);
             // Phase-safe background work: control queues, autosave/recovery deadlines, live polling.
             // It runs on logic-only callbacks too, so it never reads UI input.
@@ -126,6 +131,8 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         // With the app out of reach (busy), its recovery copies stay for the next start.
         let copies = recovery::lock(&self.recovery).take();
+        // The state file must not outlive the server it names.
+        self.agent_control.stop();
         with_app(|fig| {
             services::shutdown(fig, services::config_dir().as_deref(), copies);
             // An update that waits for the app to close installs now: the app lives in a
@@ -235,6 +242,7 @@ fn main() -> eframe::Result {
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
     fig.set_startup_update_check(true);
+    let launch_roots = roots.is_some();
     fig.automation_roots = roots;
     fig.ui.home = false;
     // Files named on the command line are the user's too: their missing fonts are listed.
@@ -247,9 +255,9 @@ fn main() -> eframe::Result {
         figcraft_ui_egui::live::open_invite(&mut fig, link);
     }
     let queue: Arc<Mutex<Vec<ControlRequest>>> = Arc::new(Mutex::new(Vec::new()));
-    if let Some(p) = port {
-        control_server::start(p, graphics::port_wait(), queue.clone(), ctx_slot.clone(), fig.session.events.clone());
-    }
+    let wiring =
+        agent_control::Wiring { queue: queue.clone(), ctx: ctx_slot.clone(), events: fig.session.events.clone(), config_dir: services::config_dir() };
+    let agent_control = agent_control::AgentControl::new(wiring, port, graphics::port_wait(), launch_roots);
     let icon = services::window_icon();
     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
     // and StartupWMClass (FreeBSD's package matches the binary's name instead).
@@ -301,6 +309,7 @@ fn main() -> eframe::Result {
             }
             Ok(Box::new(App {
                 queue,
+                agent_control,
                 ctx_slot,
                 title: String::new(),
                 recovery,

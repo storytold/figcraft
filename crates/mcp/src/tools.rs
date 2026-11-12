@@ -112,6 +112,9 @@ pub const TOOL_NAMES: &[&str] = &[
     "type_text",
     "inspect_ui",
     "wait_for_changes",
+    "agent_join",
+    "agent_leave",
+    "agent_list",
 ];
 
 /// The tools that take `document`: they act on the file it names instead of the one in front.
@@ -387,6 +390,27 @@ fn tools() -> Vec<Value> {
             ),
             true,
         ),
+        tool(
+            "agent_join",
+            "Join as an agent",
+            "Announce yourself as an AI agent working on the file, under this server's agent name: from now on you keep your own current page and selection, apart from the window's and from the other agents', even alone (two agents are set apart without it). Returns {agent, agents}. While another agent is there, undo and redo are refused: fix a mistake with a new command.",
+            empty(),
+            false,
+        ),
+        tool(
+            "agent_leave",
+            "Leave as an agent",
+            "Say you are done: your agent name, its pages and its selections are forgotten (closing the connection does not do it). Returns {left}.",
+            empty(),
+            false,
+        ),
+        tool(
+            "agent_list",
+            "List agents",
+            "The AI agents working on the app's files, in the order they came: {agents: [{agent, apart, page, selection}]}; `page` and `selection` are those of an agent working apart in the file in front, else null.",
+            empty(),
+            true,
+        ),
     ]
 }
 
@@ -576,6 +600,10 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "type_text" => type_text(b, &a),
         "inspect_ui" => b.call("ui.inspect", json!({})).map(|v| ToolResult::json(&v)),
         "wait_for_changes" => wait_for_changes(b, &a),
+        // The server names the agent (`agent`) on the way to the backend.
+        "agent_join" => b.call("agent.join", json!({})).map(|v| ToolResult::json(&v)),
+        "agent_leave" => b.call("agent.leave", json!({})).map(|v| ToolResult::json(&v)),
+        "agent_list" => b.call("agent.list", json!({})).map(|v| ToolResult::json(&v)),
         other => Err(format!("unknown tool `{other}` (tools/list has: {})", TOOL_NAMES.join(", "))),
     };
     r.unwrap_or_else(ToolResult::error)

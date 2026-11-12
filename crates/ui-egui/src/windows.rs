@@ -128,7 +128,9 @@ pub fn with_app<R>(f: impl FnOnce(&mut FigApp) -> R) -> Option<R> {
 /// keeps the copies instead, `apps/figcraft-web/src/recovery.rs`.)
 pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
     // Started with automation roots, everything the window and the control channel do is confined.
-    let roots = app.automation_roots.clone();
+    // The Preferences' folder for agents confines the control channel's work only (requests and
+    // the frames that apply injected input): the user still opens and saves files anywhere.
+    let roots = if app.automation_roots_for_agents && !app.control_synthetic { None } else { app.automation_roots.clone() };
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| figcraft_engine::file_access::confined(roots.as_ref(), || f(&mut *app))));
     if let Err(e) = res {
         let msg = e.downcast_ref::<&str>().map(ToString::to_string).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());

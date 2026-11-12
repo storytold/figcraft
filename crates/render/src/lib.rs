@@ -520,6 +520,8 @@ mod boolean_cache_tests;
 #[cfg(test)]
 mod bounds_memo_tests;
 #[cfg(test)]
+mod clip_mask_tests;
+#[cfg(test)]
 mod dots_tests;
 #[cfg(test)]
 mod effect_order_tests;

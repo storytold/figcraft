@@ -257,6 +257,28 @@ fn wait_for_changes_reads_comment_events_headless() {
 }
 
 #[test]
+fn an_agent_joins_is_listed_and_leaves_headless() {
+    let mut c = Client::new();
+    assert_eq!(c.ok("agent_join", json!({}))["agent"], "test");
+    let listed = c.ok("agent_list", json!({}));
+    assert_eq!(listed["agents"][0]["agent"], "test");
+    assert_eq!(listed["agents"][0]["apart"], true);
+    assert_eq!(c.ok("agent_leave", json!({}))["left"], "test");
+    let listed = c.ok("agent_list", json!({}));
+    assert!(!listed["agents"].as_array().unwrap().iter().any(|a| a["agent"] == "test"), "{listed}");
+}
+
+#[test]
+fn a_server_started_with_an_agent_name_keeps_it_over_the_clients() {
+    let mut c = Client::new();
+    c.server = Server::headless().with_agent("  Layout ");
+    let r = c.rpc("initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}));
+    assert!(r.get("result").is_some(), "initialize failed: {r}");
+    assert!(c.server.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+    assert_eq!(c.ok("agent_join", json!({}))["agent"], "Layout");
+}
+
+#[test]
 fn list_commands_filters() {
     let mut c = Client::new();
     let all = c.ok("list_commands", json!({}));
