@@ -213,6 +213,8 @@ mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
 #[cfg(test)]
+mod board_mindmap_tests;
+#[cfg(test)]
 mod board_reshape_tests;
 #[cfg(test)]
 mod board_table_paste_tests;
@@ -420,6 +422,8 @@ mod live_signal_tests;
 mod live_tests;
 #[cfg(test)]
 mod lock_behaviour_tests;
+#[cfg(test)]
+mod marquee_behaviour_tests;
 #[cfg(test)]
 mod mask_tests;
 #[cfg(test)]
