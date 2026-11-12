@@ -88,6 +88,8 @@ mod context_menu_tests;
 #[cfg(test)]
 mod corner_individual_tests;
 #[cfg(test)]
+mod create_multiple_menu_tests;
+#[cfg(test)]
 mod crop_image_tests;
 #[cfg(test)]
 mod cursors_tests;
