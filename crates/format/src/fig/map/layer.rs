@@ -174,7 +174,7 @@ impl<'a> Mapper<'a> {
         // A label without a snapshot: the connector becomes a frame holding its line and its label.
         let connector_label = own == "CONNECTOR" && !connector_snapshot && self.connector_label_fits(&view, depth);
         let ty = if connector_label { "FRAME" } else { Self::mapped_type(own, &view, connector_snapshot, connector_terminal, stand)? };
-        // A whiteboard's sticky says it imports as a frame only when it can't be a native one.
+        // A whiteboard's sticky or shape with text says it imports as a frame only when it can't be a native one.
         let native_board = self.board && matches!(own, "STICKY" | "SHAPE_WITH_TEXT");
         if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH" && !native_board) {
             self.warn(format!("{} layers import as {what}", own.to_ascii_lowercase().replace('_', " ")));

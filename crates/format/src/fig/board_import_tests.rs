@@ -566,6 +566,11 @@ fn a_jam_diamond_is_a_native_shape_drawn_by_figcraft() {
     assert!(frame.fills.is_empty());
     assert_eq!((frame.width, frame.height), (240.0, 240.0));
     assert_eq!(frame.layout.as_ref().expect("shape auto layout").padding, [0.25 * 240.0; 4]);
+    assert_eq!(
+        (frame.child_layout.sizing_h, frame.child_layout.sizing_v),
+        (figcraft_doc::Sizing::Fixed, figcraft_doc::Sizing::Fixed),
+        "a fixed box, as a shape made here: it must not hug its text"
+    );
     assert_eq!(frame.children.len(), 2, "the outline and the text: {warnings:?}");
     let outline = doc.node(frame.children[0]).unwrap();
     let NodeKind::Vector { network } = &outline.kind else { panic!("{:?}", outline.kind) };
@@ -685,4 +690,18 @@ fn a_jam_shape_without_text_is_still_a_native_shape() {
     let frame = named(&doc, "Board object");
     assert_eq!(frame.board, Some(figcraft_doc::BoardItem::Shape { shape: figcraft_doc::BoardShape::Rectangle }));
     assert_eq!(doc.node(frame.children[1]).unwrap().kind.text().unwrap().characters, "");
+}
+
+/// Blank generated text must not hide text the outer node still carries (#1397): on a whiteboard
+/// too, such a shape keeps the generated layers.
+#[test]
+fn a_jam_shape_whose_text_only_the_outer_node_carries_keeps_it() {
+    let mut layer = shape_node("SQUARE");
+    set(&mut layer, "textData", o(vec![("characters", s("Outer saved text"))]));
+    let background = record(0, vec![("fillPaints", arr(vec![solid(1.0, 1.0, 1.0)]))]);
+    set(&mut layer, "nodeGenerationData", o(vec![("overrides", arr(vec![background, record(1, text("  ", 24.0))]))]));
+    let (doc, _) = jam(layer);
+    let frame = named(&doc, "Board object");
+    assert!(frame.board.is_none(), "the generated layers keep the outer text");
+    assert!(frame.children.iter().filter_map(|id| doc.node(*id)?.kind.text()).any(|t| t.characters == "Outer saved text"));
 }

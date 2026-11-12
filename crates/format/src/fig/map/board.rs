@@ -110,7 +110,7 @@ impl<'a> Mapper<'a> {
     pub(super) fn native_shape(&mut self, o: &mut Obj, v: &View<'a>, rest_id: &str, depth: usize) -> Option<Vec<Value>> {
         let kind = v.str("shapeWithTextType").unwrap_or("SQUARE");
         let Some(shape) = board_shape(kind) else {
-            self.warn(format!("shape with text kind {kind} has no FigCraft outline; kept as a frame"));
+            self.warn(format!("shape with text kind {} has no FigCraft outline; kept as a frame", crate::rest::props::clip_str(kind)));
             return None;
         };
         if v.get("nodeGenerationData").is_none() || v.get("derivedImmutableFrameData").and_then(|d| num(d, "version")) != Some(1.0) {
@@ -123,6 +123,11 @@ impl<'a> Mapper<'a> {
         };
         let background = record(0)?;
         let body = record(1)?;
+        // Blank generated text must not hide text the outer node still carries (#1397): the
+        // generated layers keep it.
+        if own_text(&body).is_none() && own_text(v).is_some() {
+            return None;
+        }
         if depth >= MAX_DEPTH || self.count.saturating_add(2) > self.budget() {
             return None;
         }
@@ -162,6 +167,8 @@ impl<'a> Mapper<'a> {
             ("layoutMode", json!("VERTICAL")),
             ("primaryAxisAlignItems", json!("CENTER")),
             ("counterAxisAlignItems", json!("CENTER")),
+            ("primaryAxisSizingMode", json!("FIXED")),
+            ("counterAxisSizingMode", json!("FIXED")),
             ("paddingTop", json!(top * h)),
             ("paddingRight", json!(right * w)),
             ("paddingBottom", json!(bottom * h)),
