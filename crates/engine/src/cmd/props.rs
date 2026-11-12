@@ -29,7 +29,7 @@ fontSize, lineHeight (auto|px|\"150%\"), letterSpacing (px|\"2%\"), textAlign (l
 (auto|px|\"10%\" of the font size; the offset runs from the baseline down to an underline's top edge), textDecorationSkipInk (underlines break around descenders), \
 textDecorationColor (colour, or auto/null: the text's), textCase (original|upper|lower|title|smallCaps), paragraphSpacing, paragraphIndent, \
 listStyle (none|bulleted|numbered; with start/end: the paragraphs those chars touch), indentation (list nesting level 0-8, same range rule), \
-listSpacing (px between list items, in place of paragraphSpacing), hangingPunctuation, hangingList (markers outside the box), leadingTrim (vertical trim: none|capHeight), maxLines, features ({tag: bool}, e.g. {\"liga\": false, \"tnum\": true}), \
+listSpacing (px between list items, in place of paragraphSpacing), wrapStyle (auto|balance|pretty; with start/end: the paragraphs those chars touch), hangingPunctuation, hangingList (markers outside the box), leadingTrim (vertical trim: none|capHeight), maxLines, features ({tag: bool}, e.g. {\"liga\": false, \"tnum\": true}), \
 fontVariations / variationSettings ({axis: number}, e.g. {\"wght\": 550, \"wdth\": 85}; null = none), \
 path (a vector's SVG path data: replaces its geometry, keeping the layer, its paints, styles and bindings; width/height in the same call scale it as \
 node.create does; its own box goes at the layer's x/y, or with x/y given, at x + its left edge and y + its top as node.create places it), pointCount, innerRadius, arcStart, arcSweep, \
@@ -1008,7 +1008,14 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
         }
         "leadingTrim" => text_mut(cmd, doc.get_mut(id)?)?.leading_trim = enum_of(v).ok_or_else(|| bad(cmd, "leadingTrim: none|capHeight"))?,
         "wrapStyle" | "textWrap" => {
-            text_mut(cmd, doc.get_mut(id)?)?.wrap_style = enum_of(v).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?
+            let w: figcraft_doc::WrapStyle = enum_of(v).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?;
+            let t = text_mut(cmd, doc.get_mut(id)?)?;
+            if props.contains_key("start") || props.contains_key("end") {
+                let (start, end) = range_of(props, t.char_count());
+                t.set_para_wrap_styles(start, end, w);
+            } else {
+                t.set_wrap_style(w);
+            }
         }
         "maxLines" => {
             let lines = f64_of(v).unwrap_or(0.0).clamp(0.0, 10_000.0) as u32;
