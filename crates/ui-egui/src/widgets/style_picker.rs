@@ -11,7 +11,7 @@
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{Paint, PaintKind};
 use figcraft_doc::{
-    Document, GridKind, ListStyle, Node, NodeId, ParagraphStyle, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, trim_num,
+    Document, GridKind, ListStyle, Node, NodeId, ParagraphStyle, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, WrapStyle, trim_num,
 };
 use figcraft_engine::library;
 use serde_json::{Value, json};
@@ -1001,6 +1001,11 @@ fn paragraph_rows(ui: &mut Ui, ps: &ParagraphStyle) {
         ListStyle::None => {}
         ListStyle::Bulleted => rows.push(tr("Bulleted list").into()),
         ListStyle::Numbered => rows.push(tr("Numbered list").into()),
+    }
+    match ps.wrap_style {
+        WrapStyle::Auto => {}
+        WrapStyle::Balance => rows.push(format!("{}: {}", tr("Wrap style"), tr("Balance"))),
+        WrapStyle::Pretty => rows.push(format!("{}: {}", tr("Wrap style"), tr("Pretty"))),
     }
     if !ps.features.is_empty() {
         rows.push(ps.features.iter().map(|(tag, on)| format!("{}{tag}", if *on { '+' } else { '-' })).collect::<Vec<_>>().join(" "));
