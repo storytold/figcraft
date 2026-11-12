@@ -66,10 +66,10 @@ fn cmd_click_selects_the_nested_layer() {
 #[test]
 fn cmd_marquee_selects_nested_layers() {
     let mut s = Session::new();
-    let (f, _, [a, b, c], out) = scene(&mut s);
-    // From empty canvas, a plain marquee across the frame only touches top-level layers (and the
-    // frame isn't fully covered).
-    assert_eq!(marquee(&mut s, (-10.0, 10.0), (500.0, 70.0), false, false), vec![out]);
+    let (f, g, [a, b, c], out) = scene(&mut s);
+    // From empty canvas, a plain marquee across the frame (not fully covered) gives the layers in it
+    // it touches (the group whole), plus the top-level layer.
+    assert_eq!(sorted(marquee(&mut s, (-10.0, 10.0), (500.0, 70.0), false, false)), sorted(vec![g, out]));
     // Cmd/Ctrl: the innermost layers it touches, through the frame and the group.
     assert_eq!(sorted(marquee(&mut s, (-10.0, 10.0), (500.0, 70.0), false, true)), sorted(vec![a, b, out]));
     assert_eq!(sorted(marquee(&mut s, (-10.0, 10.0), (100.0, 190.0), false, true)), sorted(vec![a, b, c]));
