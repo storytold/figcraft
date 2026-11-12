@@ -631,8 +631,9 @@ impl Duplicated {
     }
 
     /// The step from the sources to the copies, if both are still there and the copies move freely
-    /// (an auto layout places its own): the move of their combined centre in the page frame, and
-    /// the turn every copy has over its source (zero unless they all agree).
+    /// (an auto layout places its own): the mean move of the copies' own centres in the page frame
+    /// (less what a size change shifts them by, and not counting a turn in place), and the turn
+    /// every copy has over its source (zero unless they all agree, or when a flip differs).
     fn step(&self, doc: &Document) -> Option<Step> {
         let free = self
             .copies
@@ -641,29 +642,26 @@ impl Duplicated {
         if !free || self.sources.iter().chain(&self.copies).any(|i| !doc.contains(*i)) {
             return None;
         }
-        let (a, b) = (doc.bounds_of(&self.sources)?, doc.bounds_of(&self.copies)?);
-        let same_size = self.sources.iter().zip(&self.copies).all(|(s, c)| match (doc.node(*s), doc.node(*c)) {
-            (Some(s), Some(c)) => (s.width - c.width).abs() < 1e-9 && (s.height - c.height).abs() < 1e-9,
-            _ => false,
-        });
-        let (dx, dy) = if same_size {
-            (b.center().x - a.center().x, b.center().y - a.center().y)
-        } else {
-            // A resized copy: follow where each copy's top-left anchored, source-sized centre went,
-            // so the size change itself is not repeated as a move.
-            let moves: Vec<(f64, f64)> = self
-                .sources
-                .iter()
-                .zip(&self.copies)
-                .filter_map(|(s, c)| {
-                    let half = doc.node(*s).map(|n| Point::new(n.width / 2.0, n.height / 2.0))?;
-                    let (ps, pc) = (doc.world_transform(*s) * half, doc.world_transform(*c) * half);
-                    Some((pc.x - ps.x, pc.y - ps.y))
-                })
-                .collect();
-            let n = moves.len() as f64;
-            (moves.iter().map(|m| m.0).sum::<f64>() / n, moves.iter().map(|m| m.1).sum::<f64>() / n)
-        };
+        // Per pair, how far the copy's own centre went, less what its size change moved that
+        // centre by (a growing edge shifts it, in the source's frame). A turn about a layer's own
+        // centre does not move it, so it is not recorded as a move.
+        let mut moves = Vec::new();
+        for (s, c) in self.sources.iter().zip(&self.copies) {
+            let (sn, cn) = (doc.node(*s)?, doc.node(*c)?);
+            let (sw, cw) = (doc.world_transform(*s), doc.world_transform(*c));
+            let (ps, pc) = (sw * Point::new(sn.width / 2.0, sn.height / 2.0), cw * Point::new(cn.width / 2.0, cn.height / 2.0));
+            let grow = Point::new((cn.width - sn.width) / 2.0, (cn.height - sn.height) / 2.0);
+            let shift = sw * grow - sw * Point::ORIGIN;
+            moves.push((pc.x - ps.x - shift.x, pc.y - ps.y - shift.y));
+        }
+        let n = moves.len() as f64;
+        let (dx, dy) = (moves.iter().map(|m| m.0).sum::<f64>() / n, moves.iter().map(|m| m.1).sum::<f64>() / n);
+        // A flip reads as a half turn and was not measured: never repeat a turn across one.
+        let flips_differ = self
+            .sources
+            .iter()
+            .zip(&self.copies)
+            .any(|(s, c)| figcraft_geom::is_flipped(doc.world_transform(*s)) != figcraft_geom::is_flipped(doc.world_transform(*c)));
         let turns: Vec<f64> = self
             .sources
             .iter()
@@ -675,7 +673,7 @@ impl Duplicated {
             })
             .collect();
         let angle = match turns.first() {
-            Some(first) if turns.iter().all(|t| (t - first).abs() < 1e-6) => *first,
+            Some(first) if !flips_differ && turns.iter().all(|t| (t - first).abs() < 1e-6) => *first,
             _ => 0.0,
         };
         let step = Step { dx, dy, angle };

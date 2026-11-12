@@ -359,3 +359,55 @@ fn a_deselect_forgets_the_duplicate_step() {
     let c2 = cmd_d(&mut s);
     assert_eq!(at(&s, c2), (150.0, 0.0), "no step after a deselect: the copy lands in place");
 }
+
+#[test]
+fn several_uneven_layers_turned_in_place_repeat_the_turn_without_a_move() {
+    let mut s = Session::new();
+    let wide = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 200, "y": 0, "width": 300, "height": 100}))["id"]).unwrap();
+    let ids = [rect(&mut s, 0.0, 200.0), wide];
+    ex(&mut s, "select.set", json!({"ids": ids}));
+    let out = ex(&mut s, "edit.duplicate", json!({}));
+    let copies: Vec<NodeId> = out["ids"].as_array().unwrap().iter().map(|v| id_of(v).unwrap()).collect();
+    for c in &copies {
+        ex(&mut s, "node.set", json!({"ids": [*c], "props": {"rotation": -45}}));
+    }
+    let pivot = s.doc().unwrap().bounds_of(&copies).unwrap().center();
+    let before: Vec<(f64, f64)> = copies.iter().map(|c| centre(&s, *c)).collect();
+    let again = ex(&mut s, "edit.duplicate", json!({}));
+    let next: Vec<NodeId> = again["ids"].as_array().unwrap().iter().map(|v| id_of(v).unwrap()).collect();
+    for (i, c) in next.iter().enumerate() {
+        assert!(near(turn(&s, *c), -90.0), "layer {i}: rotation {}", turn(&s, *c));
+        // No move: each layer's centre only turned -45 about the copies' shared centre.
+        let want =
+            figcraft_geom::translation(figcraft_geom::rotate_about(figcraft_geom::Affine::translate((before[i].0, before[i].1)), pivot, -45.0));
+        let got = centre(&s, *c);
+        assert!(near(got.0, want.x) && near(got.1, want.y), "layer {i}: {got:?} vs {want:?}");
+    }
+}
+
+#[test]
+fn a_widened_copy_turned_in_place_repeats_the_turn_without_a_move() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let c1 = cmd_d(&mut s);
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"width": 120}}));
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"rotation": -90}}));
+    let c1_centre = centre(&s, c1);
+    let c2 = cmd_d(&mut s);
+    let got = centre(&s, c2);
+    assert!(near(got.0, c1_centre.0) && near(got.1, c1_centre.1), "centre {got:?} vs {c1_centre:?}");
+    assert!(near(turn(&s, c2).abs(), 180.0), "rotation {}", turn(&s, c2));
+    assert!(near(s.doc().unwrap().get(c2).unwrap().width, 120.0));
+}
+
+#[test]
+fn a_flipped_copy_does_not_repeat_a_half_turn() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let c1 = cmd_d(&mut s);
+    ex(&mut s, "object.flipH", json!({"ids": [c1]}));
+    let c2 = cmd_d(&mut s);
+    assert!(near(turn(&s, c2), turn(&s, c1)), "rotation {} vs {}", turn(&s, c2), turn(&s, c1));
+}
