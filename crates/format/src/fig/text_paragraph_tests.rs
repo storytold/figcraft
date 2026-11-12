@@ -343,3 +343,25 @@ fn encoded_instance_paragraph_overrides_fall_back_only_when_invalid() {
     assert!(!text.hanging_punctuation);
     assert_eq!(text.leading_trim, figcraft_doc::LeadingTrim::CapHeight);
 }
+
+#[test]
+fn an_instance_layer_set_back_to_the_defaults_survives_a_fig_round_trip() {
+    // The main's text has all four off their defaults (from its text style); the instance's copy sets them back.
+    let reset = vec![
+        ("listSpacing", Kv::Float(0.0)),
+        ("hangingList", Kv::Bool(false)),
+        ("hangingPunctuation", Kv::Bool(false)),
+        ("leadingTrim", Kv::Enum("NONE")),
+    ];
+    let (doc, _) = import(&instance_paragraph_fig(reset, false), "Synthetic instance paragraph resets").unwrap();
+    let (bytes, _) = export(&doc, None).unwrap();
+    let (back, _) = import(&bytes, "Exported instance paragraph resets").unwrap();
+    let options = |parent: &str| {
+        let parent = back.nodes().find(|node| node.name == parent).unwrap();
+        let text = back.node(*parent.children.first().unwrap()).unwrap().kind.text().unwrap();
+        (text.list_spacing, text.hanging_list, text.hanging_punctuation, text.leading_trim)
+    };
+    assert_eq!(options("Main"), (18.0, true, true, figcraft_doc::LeadingTrim::CapHeight));
+    // The override row clears each field; without it the instance's text takes the main's values again.
+    assert_eq!(options("Copy"), (0.0, false, false, figcraft_doc::LeadingTrim::None));
+}

@@ -44,7 +44,8 @@ impl<'d> Exporter<'d> {
             ("textTracking", fl(0.0)),
             ("emojiImageSet", e("APPLE")),
         ]);
-        // Figma writes these four only when they differ from their defaults.
+        // Written only off their defaults: a text at the defaults carries none of these four in a design file saved by
+        // Figma. A text style holds none of them, so a layer at the defaults has no style value to take on import.
         if td.list_spacing != 0.0 {
             f.push(("listSpacing", fl(td.list_spacing)));
         }
