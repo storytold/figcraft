@@ -160,6 +160,7 @@ fn what_a_style_cannot_bind_is_refused() {
         ("fills/3/color", "bg", "no field"),
         ("effects/0/radius", "blur", "no field"),
         ("fontSize", "size", "no field"),
+        ("fontWeight", "bg", "no field"),
         ("opacity", "size", "no field"),
         ("fill", "nope", "no such variable"),
     ] {
@@ -209,6 +210,7 @@ fn style_fields_offer_their_properties_scopes() {
         (&body, "letterSpacing", Some(&["LETTER_SPACING"][..])),
         (&body, "fontFamily", Some(&["FONT_FAMILY"][..])),
         (&body, "fontStyle", Some(&["FONT_STYLE"][..])),
+        (&body, "fontWeight", Some(&["FONT_WEIGHT"][..])),
         // Grid fields take any number variable, as on layers; fields a style lacks take none.
         (&grid, "layoutGrids/0/size", None),
         (&sid, "fills/3/color", None),
@@ -243,4 +245,119 @@ fn rest_and_fig_carry_style_bindings() {
         let got = named(n);
         assert!(got.bound.is_empty() && got.styles.fill.as_deref() == Some(st.id.as_str()), "{got:?}");
     }
+}
+
+/// A text style "Body" (made from a layer, or from `value`) used by a layer in the Light frame
+/// and one in the Dark one; returns (light layer, dark layer, style id).
+fn body_style(s: &mut Session, value: Option<Value>) -> (NodeId, NodeId, String) {
+    let (_, dark, a, _, _) = two_modes(s);
+    let light = node(s, a).parent.unwrap();
+    let text = |s: &mut Session, f: NodeId| id(run(s, "text.create", json!({"text": "Hello", "x": 0, "y": 60, "parent": f})));
+    let (t1, t2) = (text(s, light), text(s, dark));
+    let from = match &value {
+        Some(v) => json!({"type": "text", "name": "Body", "value": v}),
+        None => json!({"type": "text", "name": "Body", "from": t1}),
+    };
+    let body = run(s, "style.create", from)["id"].as_str().unwrap().to_string();
+    run(s, "style.apply", json!({"ids": [t1, t2], "style": body}));
+    (t1, t2, body)
+}
+
+fn text_of(s: &Session, n: NodeId) -> figcraft_doc::TextStyle {
+    node(s, n).kind.text().unwrap().style.clone()
+}
+
+#[test]
+fn a_number_weight_picks_the_face_and_the_wght_axis() {
+    let mut s = Session::new();
+    let (t1, t2, body) = body_style(&mut s, None);
+    run(&mut s, "variable.create", json!({"collection": "Theme", "name": "weight", "type": "number", "values": {"Light": 700, "Dark": 400}}));
+    run(&mut s, "style.bind", json!({"style": body, "field": "fontWeight", "variable": "weight"}));
+    let face = |s: &Session, n: NodeId| {
+        let t = text_of(s, n);
+        (t.font_style, t.variations.get("wght").copied())
+    };
+    assert_eq!(face(&s, t1), ("Bold".to_string(), Some(700.0)));
+    assert_eq!(face(&s, t2), ("Regular".to_string(), Some(400.0)));
+    run(&mut s, "variable.set", json!({"variable": "weight", "mode": "Dark", "value": 650}));
+    assert_eq!(face(&s, t2), ("Bold".to_string(), Some(650.0)));
+    let e = s.execute("style.bind", &json!({"style": body, "field": "fontWeight", "variable": "bg"})).unwrap_err().to_string();
+    assert!(e.contains("takes a number variable"), "{e}");
+    // A style name bound afterwards replaces the number binding.
+    run(&mut s, "variable.createCollection", json!({"name": "Names", "modes": ["Only"]}));
+    run(&mut s, "variable.create", json!({"collection": "Names", "name": "face", "type": "string", "values": {"Only": "Light"}}));
+    run(&mut s, "style.bind", json!({"style": body, "field": "fontStyle", "variable": "face"}));
+    let bound = s.doc().unwrap().style(&body).unwrap().bound.clone();
+    assert!(bound.contains_key("fontStyle") && !bound.contains_key("fontWeight"), "{bound:?}");
+    // The name replaces the number's weight: no stale `wght` axis keeps drawing 700.
+    assert_eq!(face(&s, t1), ("Light".to_string(), None));
+    assert_eq!(text_of(&s, t1).weight(), 300);
+}
+
+#[test]
+fn junk_weight_values_clamp_to_the_lightest_and_heaviest_face() {
+    let mut s = Session::new();
+    let (t1, _, body) = body_style(&mut s, None);
+    run(&mut s, "variable.create", json!({"collection": "Theme", "name": "weight", "type": "number", "values": {"Light": -50, "Dark": 5000}}));
+    run(&mut s, "style.bind", json!({"style": body, "field": "fontWeight", "variable": "weight"}));
+    let face = |s: &Session| {
+        let t = text_of(s, t1);
+        (t.font_style, t.variations.get("wght").copied())
+    };
+    assert_eq!(face(&s), ("Thin".to_string(), Some(1.0)));
+    run(&mut s, "variable.set", json!({"variable": "weight", "mode": "Light", "value": 5000}));
+    assert_eq!(face(&s), ("Black".to_string(), Some(1000.0)));
+}
+
+#[test]
+fn font_weight_wins_over_font_style_when_a_file_carries_both() {
+    let mut s = Session::new();
+    let (t1, _, body) = body_style(&mut s, None);
+    run(&mut s, "variable.create", json!({"collection": "Theme", "name": "weight", "type": "number", "values": {"Light": 700, "Dark": 400}}));
+    run(&mut s, "variable.createCollection", json!({"name": "Names", "modes": ["Only"]}));
+    run(&mut s, "variable.create", json!({"collection": "Names", "name": "face", "type": "string", "values": {"Only": "Light"}}));
+    let doc = s.doc_mut().unwrap();
+    let (w, f) = (doc.variables.get("weight").unwrap().id.clone(), doc.variables.get("face").unwrap().id.clone());
+    let st = doc.styles.iter_mut().find(|x| x.id == body).unwrap();
+    st.bound.insert("fontStyle".into(), f);
+    st.bound.insert("fontWeight".into(), w);
+    crate::style_vars::after_load(doc);
+    assert_eq!(text_of(&s, t1).font_style, "Bold");
+}
+
+#[test]
+fn a_number_bound_to_a_percent_line_height_applies_as_pixels() {
+    let mut s = Session::new();
+    let (t1, _, body) = body_style(&mut s, Some(json!({"fontSize": 24, "lineHeight": "150%"})));
+    run(&mut s, "variable.create", json!({"collection": "Theme", "name": "lh", "type": "number", "values": {"Light": 150, "Dark": 36}}));
+    run(&mut s, "style.bind", json!({"style": body, "field": "lineHeight", "variable": "lh"}));
+    let lh = |s: &Session| match &s.doc().unwrap().style(&body).unwrap().kind {
+        StyleKind::Text { style, .. } => style.line_height,
+        k => panic!("{k:?}"),
+    };
+    assert_eq!(lh(&s), figcraft_doc::LineHeight::Pixels(150.0));
+    assert_eq!(text_of(&s, t1).line_height, figcraft_doc::LineHeight::Pixels(150.0));
+    assert_eq!(node(&s, t1).height, 150.0);
+    run(&mut s, "variable.set", json!({"variable": "lh", "mode": "Light", "value": 36}));
+    assert_eq!((lh(&s), node(&s, t1).height), (figcraft_doc::LineHeight::Pixels(36.0), 36.0));
+}
+
+#[test]
+fn a_text_style_binding_round_trips_through_fig() {
+    let mut s = Session::new();
+    let (_, _, body) = body_style(&mut s, None);
+    run(&mut s, "variable.create", json!({"collection": "Theme", "name": "weight", "type": "number", "values": {"Light": 700, "Dark": 400}}));
+    for (field, var) in [("fontSize", "size"), ("lineHeight", "size"), ("fontWeight", "weight")] {
+        run(&mut s, "style.bind", json!({"style": body, "field": field, "variable": var}));
+    }
+    let doc = s.doc().unwrap().clone();
+    let (bytes, warnings) = figcraft_format::fig::export(&doc, None).unwrap();
+    let (mut back, _) = figcraft_format::fig::import(&bytes, "x").unwrap();
+    crate::style_vars::after_load(&mut back);
+    let st = back.styles.iter().find(|x| x.name == "Body").unwrap();
+    assert!(st.bound.contains_key("fontSize") && st.bound.contains_key("lineHeight"), "{st:?}");
+    // The format has no weight field yet: the settled name comes back, not the binding (the file has no `wght` axis field yet).
+    assert!(warnings.iter().any(|w| w.contains("no field for")), "{warnings:?}");
+    let StyleKind::Text { style, .. } = &st.kind else { panic!("{st:?}") };
+    assert_eq!(style.font_style, "Bold");
 }
