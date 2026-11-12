@@ -377,6 +377,9 @@ fn a_table_never_shrinks_below_its_cells() {
 
 #[test]
 fn a_resized_table_still_grows_with_its_text_and_undoes_in_one_step() {
+    // Text measures only once system fonts are scanned (without craft-fonts), so scan them here
+    // without depending on another test having scanned them first.
+    figcraft_text::scan_system_fonts();
     let (mut s, t) = table_3x3(["", "", ""]);
     drag(&mut s, (240.0, 122.0), (240.0, 272.0));
     assert!(near(node(&s, t).height, 272.0));
