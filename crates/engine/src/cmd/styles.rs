@@ -275,6 +275,9 @@ fn paragraph_style_json(cmd: &str, v: &Value) -> Result<ParagraphStyle> {
             "paragraphSpacing" | "paragraph_spacing" => ps.paragraph_spacing = length(k, x)?,
             "paragraphIndent" | "paragraph_indent" => ps.paragraph_indent = length(k, x)?,
             "listStyle" | "list" => ps.list = super::props::enum_of(x).ok_or_else(|| bad(cmd, "listStyle: none|bulleted|numbered"))?,
+            "wrapStyle" | "textWrap" | "wrap_style" => {
+                ps.wrap_style = super::props::enum_of(x).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?;
+            }
             "features" | "openTypeFeatures" | "fontFeatures" | "textFeatures" => {
                 ps.features = super::props::features_of(cmd, x)?.into_iter().filter_map(|(tag, on)| Some((tag, on?))).collect();
             }
@@ -289,10 +292,11 @@ fn paragraph_style_json(cmd: &str, v: &Value) -> Result<ParagraphStyle> {
 fn paragraph_style_of(n: &Node, range: Option<(usize, usize)>) -> Option<ParagraphStyle> {
     let t = n.kind.text()?;
     let mut ps = t.paragraph_style();
-    if let Some((a, b)) = range
-        && let Some(pl) = t.common_para_list(a, b)
-    {
-        ps.list = pl.list;
+    if let Some((a, b)) = range {
+        if let Some(pl) = t.common_para_list(a, b) {
+            ps.list = pl.list;
+        }
+        ps.wrap_style = t.common_wrap_style(a, b).unwrap_or(t.wrap_style);
     }
     Some(ps)
 }
