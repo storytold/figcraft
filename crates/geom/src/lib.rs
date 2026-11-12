@@ -474,15 +474,29 @@ pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> B
     let mut path = BezPath::new();
     // A whole turn as an arc with these radii: kurbo's `Ellipse` recovers its radii from an
     // affine map, which overflows to infinity for radii near f64's limit (and infinite cubics).
-    let whole = |rx: f64, ry: f64| kurbo::Arc::new(c, (rx, ry), 0.0, TAU, 0.0);
+    // Four cubics through the right, bottom, left and top extremes (clockwise from 3 o'clock),
+    // the same four anchors an ellipse has when edited as a vector; an arc subdivided by
+    // tolerance would give five or six.
+    let whole = |rx: f64, ry: f64| {
+        const K: f64 = 0.552_284_749_830_793_4;
+        let (kx, ky) = (rx * K, ry * K);
+        let mut p = BezPath::new();
+        p.move_to(c + Vec2::new(rx, 0.0));
+        p.curve_to(c + Vec2::new(rx, ky), c + Vec2::new(kx, ry), c + Vec2::new(0.0, ry));
+        p.curve_to(c + Vec2::new(-kx, ry), c + Vec2::new(-rx, ky), c + Vec2::new(-rx, 0.0));
+        p.curve_to(c + Vec2::new(-rx, -ky), c + Vec2::new(-kx, -ry), c + Vec2::new(0.0, -ry));
+        p.curve_to(c + Vec2::new(kx, -ry), c + Vec2::new(rx, -ky), c + Vec2::new(rx, 0.0));
+        p.close_path();
+        p
+    };
     if full && inner <= 0.0 {
-        return whole(rx, ry).to_path(tol);
+        return whole(rx, ry);
     }
     if full {
         // A ring: outer clockwise, inner counter-clockwise.
-        path.extend(whole(rx, ry).path_elements(tol));
-        let inner_path = whole(rx * inner, ry * inner).to_path(tol);
-        path.extend(inner_path.reverse_subpaths());
+        path.extend(whole(rx, ry).elements().iter().copied());
+        let inner_path = whole(rx * inner, ry * inner);
+        path.extend(inner_path.reverse_subpaths().elements().iter().copied());
         return path;
     }
     let outer = kurbo::Arc::new(c, (rx, ry), start, sweep, 0.0);

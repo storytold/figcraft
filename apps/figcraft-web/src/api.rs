@@ -37,7 +37,7 @@ use figcraft_ui_egui::{ControlReply, ControlRequest, RequestGate};
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::{JsFuture, future_to_promise};
+use wasm_bindgen_futures::JsFuture;
 
 use crate::saved_files::SavedFiles;
 
@@ -150,15 +150,6 @@ async fn sleep(ms: i32) {
     let _ = JsFuture::from(promise).await;
 }
 
-/// A reply as a promise outcome: the `result`, or an `Error` carrying the `error`.
-fn outcome(reply: &Value) -> Result<JsValue, JsValue> {
-    if reply.get("ok").and_then(Value::as_bool) == Some(true) {
-        Ok(to_js(reply.get("result").unwrap_or(&Value::Null)))
-    } else {
-        Err(js_sys::Error::new(reply.get("error").and_then(Value::as_str).unwrap_or("error")).into())
-    }
-}
-
 fn set_fn(obj: &js_sys::Object, name: &str, f: JsValue) -> Result<(), JsValue> {
     js_sys::Reflect::set(obj, &name.into(), &f).map(|_| ())
 }
@@ -169,20 +160,20 @@ pub fn install() -> Result<(), JsValue> {
     Rc::new(PageApi::new(APP, Methods::default(), request)).install()?;
     let window = web_sys::window().ok_or("no window")?;
     let obj: js_sys::Object = js_sys::Reflect::get(&window, &APP.into())?.unchecked_into();
-    set_fn(
-        &obj,
-        "inspect",
-        Closure::<dyn Fn() -> js_sys::Promise>::new(|| future_to_promise(async { outcome(&send("document.inspect", json!({})).await) }))
-            .into_js_value(),
-    )?;
+    // `inspect` is `docInspect` under its earlier name: the crate's function, so it times out too.
+    let doc_inspect = js_sys::Reflect::get(&obj, &"docInspect".into())?;
+    js_sys::Reflect::set(&obj, &"inspect".into(), &doc_inspect)?;
+    // `openFile` runs `file.open` through the crate's `execute`, so a call the app does not answer times out and is cancelled.
+    let execute: js_sys::Function = js_sys::Reflect::get(&obj, &"execute".into())?.unchecked_into();
+    let this = obj.clone();
     set_fn(
         &obj,
         "openFile",
-        Closure::<dyn Fn(String, js_sys::Uint8Array) -> js_sys::Promise>::new(|name: String, bytes: js_sys::Uint8Array| {
+        Closure::<dyn Fn(String, js_sys::Uint8Array) -> JsValue>::new(move |name: String, bytes: js_sys::Uint8Array| {
             let data = base64::engine::general_purpose::STANDARD.encode(bytes.to_vec());
-            future_to_promise(async move {
-                outcome(&send("engine.execute", json!({"command": "file.open", "params": {"name": name, "data": data}})).await)
-            })
+            execute
+                .call2(&this, &"file.open".into(), &to_js(&json!({"name": name, "data": data})))
+                .unwrap_or_else(|e| js_sys::Promise::reject(&e).into())
         })
         .into_js_value(),
     )?;
