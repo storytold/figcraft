@@ -614,6 +614,35 @@ fn hebrew_home_settings_and_export_labels_are_native() {
     }
 }
 
+/// Home search, templates and online file sharing must stay Hebrew in the real tr() path.
+#[test]
+fn hebrew_home_and_online_file_flow_replaces_english_labels() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Search results",
+        "Start from a blank canvas",
+        "Getting started",
+        "No templates match your search",
+        "Join with a code",
+        "Search templates",
+        "Shared",
+        "Not shared",
+        "Start sharing",
+        "Stop sharing",
+        "Checking the server…",
+        "Remove from server",
+        "Rename on the server",
+        "Show as grid",
+        "Show as list",
+        "Last modified",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew Home/Online Files UI translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+    }
+}
+
 #[test]
 fn hebrew_inspector_and_layer_panels_have_native_labels() {
     let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
