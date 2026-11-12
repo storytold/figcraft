@@ -1,7 +1,7 @@
 use super::load::{ext, write};
 use super::save::thumbnail;
 use super::*;
-use crate::params::f64_of;
+use crate::params::{f64_of, req_targets};
 
 /// Encode `ids` (or the page) in `format` at `scale`.
 pub fn export_bytes(doc: &Document, ids: &[NodeId], format: ExportFormat, scale: f64) -> Result<Vec<u8>> {
@@ -92,7 +92,7 @@ pub(super) fn export(s: &mut Session, p: &Value) -> Result<Value> {
         _ => {}
     }
     let doc = s.doc()?;
-    let mut ids = targets(s, p);
+    let mut ids = export_targets(cmd, s, p)?;
     if ids.is_empty() {
         ids = doc.get(s.page()?)?.children.clone();
     }
@@ -331,11 +331,22 @@ pub fn exportable_layers(doc: &Document, page: NodeId) -> Vec<NodeId> {
     doc.subtree(page).into_iter().skip(1).filter(|i| doc.node(*i).is_some_and(|n| !n.exports.is_empty())).collect()
 }
 
+/// Named layers (`ids` / `id`), checked like other commands; empty when none are named, so the
+/// caller can fall back to its default instead of silently dropping a bad id.
+fn export_targets(cmd: &str, s: &Session, p: &Value) -> Result<Vec<NodeId>> {
+    let named = match get(p, "ids") {
+        Some(Value::Array(a)) if !a.is_empty() => true,
+        Some(Value::Array(_) | Value::Null) | None => get(p, "id").is_some_and(|v| !v.is_null()),
+        Some(_) => true,
+    };
+    if named { req_targets(cmd, s, p) } else { Ok(targets(s, p)) }
+}
+
 pub(super) fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.exportLayers";
     let doc = s.doc()?;
     let assets = boolean(p, "assets").unwrap_or(false);
-    let mut ids = targets(s, p);
+    let mut ids = export_targets(cmd, s, p)?;
     if ids.is_empty() {
         ids = if assets { vec![s.page()?] } else { exportable_layers(doc, s.page()?) };
     }

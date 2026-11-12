@@ -186,3 +186,43 @@ fn property_values_written_only_as_variables_are_applied() {
     assert_eq!(props.get("Hint"), Some(&Value::Bool(false)));
     assert_eq!(props.get("Label"), Some(&Value::String("Name on card".into())));
 }
+
+/// #2022: a set keeps each named text definition under its own name (Figma writes one per variant,
+/// plus leftovers of deleted variants), and each variant's text reads its own copy.
+#[test]
+fn a_set_keeps_each_named_text_definition_and_layers_read_their_own() {
+    let text = |chars: &str| o(vec![("textValue", o(vec![("characters", s(chars))]))]);
+    let names = ["Type=Flag /  State=Default label", "Type=Flag /  State=Selected label", "Type=Issue /  State=Default label"];
+    let set_defs: Vec<Kv<'static>> =
+        names.iter().zip([70, 71, 72]).zip(["One", "Two", "Gone"]).map(|((n, id), c)| definition(id, n, "TEXT", text(c))).collect();
+    let copies = |first: u32| Kv::Array((0..3).map(|k| o(vec![("id", g(first + k)), ("parentPropDefId", g(70 + k))])).collect());
+    let msg = message(vec![
+        node(9, "FRAME", "Chip", Some(2), vec![("isStateGroup", Kv::Bool(true)), ("componentPropDefs", Kv::Array(set_defs))]),
+        node(10, "SYMBOL", "Type=Flag, State=Default", Some(9), vec![("componentPropDefs", copies(80))]),
+        node(11, "TEXT", "Label", Some(10), vec![bound("TEXT_DATA", 80)]),
+        node(20, "SYMBOL", "Type=Flag, State=Selected", Some(9), vec![("componentPropDefs", copies(90))]),
+        node(21, "TEXT", "Label", Some(20), vec![bound("TEXT_DATA", 91)]),
+    ]);
+    let (rest, _, _) = to_rest(&msg, "Synthetic", crate::rest::MAX_NODES);
+    let defs = &by_id(&rest["document"], "9:9")["componentPropertyDefinitions"];
+    for (k, n) in names.iter().enumerate() {
+        assert_eq!(defs[format!("{n}#9:{}", 70 + k)]["type"], "TEXT", "{n}");
+    }
+    assert_eq!(defs.as_object().map(|d| d.len()), Some(3), "{defs}");
+    assert_eq!(by_id(&rest["document"], "9:11")["componentPropertyReferences"]["characters"], format!("{}#9:70", names[0]));
+    assert_eq!(by_id(&rest["document"], "9:21")["componentPropertyReferences"]["characters"], format!("{}#9:71", names[1]));
+
+    let (doc, _) = crate::rest::import_fig(&rest, &crate::rest::no_images).unwrap();
+    let refs: Vec<Option<String>> = doc
+        .ids()
+        .filter_map(|id| doc.node(id))
+        .filter(|n| n.name == "Label" && n.source.is_none())
+        .map(|n| n.prop_refs.get("characters").cloned())
+        .collect();
+    assert_eq!(refs.len(), 2, "{refs:?}");
+    assert!(refs.contains(&Some(names[0].to_string())) && refs.contains(&Some(names[1].to_string())), "{refs:?}");
+    for set in doc.ids().filter_map(|id| doc.node(id)).filter(|n| matches!(n.kind, NodeKind::Component { .. })) {
+        let NodeKind::Component { props, .. } = &set.kind else { continue };
+        assert!(names.iter().all(|n| props.contains_key(*n)), "{} holds {:?}", set.name, props.keys().collect::<Vec<_>>());
+    }
+}
