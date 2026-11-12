@@ -290,6 +290,8 @@ fn vectors_ellipses_stars_and_booleans() {
     counted["pointCount"] = json!(6);
     let mut boolean = base("Bool", "BOOLEAN_OPERATION");
     boolean["booleanOperation"] = json!("SUBTRACT");
+    boolean["cornerRadius"] = json!(12);
+    boolean["cornerSmoothing"] = json!(0.6);
     boolean["children"] =
         json!([base("A", "RECTANGLE"), {"id": "B", "name": "B", "type": "ELLIPSE", "relativeTransform": at(5.0, 5.0), "size": {"x": 10, "y": 10}}]);
     let (doc, warnings) = one(json!([tri, wire, empty, arc, star, plain_star, counted, boolean]));
@@ -311,6 +313,8 @@ fn vectors_ellipses_stars_and_booleans() {
     assert!(matches!(b.kind, NodeKind::BooleanOp { op: BoolOp::Subtract }));
     assert_eq!(b.children.len(), 2);
     assert!(close(b.width, 15.0), "booleans wrap their children");
+    assert_eq!(b.corners.radii, [12.0; 4], "a boolean group keeps its corner radius");
+    assert!(close(b.corners.smoothing, 0.6));
 }
 
 #[test]
