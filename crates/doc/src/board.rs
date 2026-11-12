@@ -37,8 +37,8 @@ impl FileKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum BoardItem {
-    /// A sticky note: a frame whose first text layer is the note (its size shrinks as the note
-    /// grows) and, below it, who wrote it.
+    /// A sticky note: a frame whose first text layer is the note (its size stays fixed, the note
+    /// grows taller) and, below it, who wrote it.
     Sticky {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         author: String,

@@ -799,7 +799,7 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
                     WindingRule::NonZero
                 };
                 let path = drawn.fill_path();
-                let path = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
+                let path = figcraft_geom::simplify_path(&path, tol);
                 let (path, output_winding) = match figcraft_pathops::simplify_with_rule(&path, winding == WindingRule::EvenOdd) {
                     Ok(path) => (path, WindingRule::EvenOdd),
                     Err(_) => (path, winding),
@@ -809,7 +809,7 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
             } else {
                 for (index, region) in source.regions.iter().enumerate() {
                     let Some(path) = drawn.region_path(index) else { continue };
-                    let path = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
+                    let path = figcraft_geom::simplify_path(&path, tol);
                     let path = figcraft_pathops::simplify_with_rule(&path, region.winding == WindingRule::EvenOdd).unwrap_or(path);
                     append_region_path(&mut net, &path, region, region.winding);
                 }
@@ -826,7 +826,7 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
                 open.regions.clear();
                 if !open.segments.is_empty() {
                     let path = open.stroke_path();
-                    let simplified = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
+                    let simplified = figcraft_geom::simplify_path(&path, tol);
                     let mut loose = VectorNetwork::from_path(&simplified);
                     loose.regions.clear();
                     append_network(&mut net, loose);
@@ -834,7 +834,7 @@ fn simplify(s: &mut Session, p: &Value) -> Result<Value> {
             }
             if source.regions.is_empty() {
                 let path = source.stroke_path();
-                let simplified = figcraft_geom::kurbo::simplify::simplify_bezpath(path.iter(), tol, &Default::default());
+                let simplified = figcraft_geom::simplify_path(&path, tol);
                 net = VectorNetwork::from_path(&simplified);
                 net.regions.clear();
             }
