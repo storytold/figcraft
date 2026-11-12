@@ -1,8 +1,9 @@
 # FigCraft interface strings: Russian.
 # Wording reviewed and approved by VanTan.
 # Strings added since that review (2026-10-20) are a machine draft awaiting review.
-# Keep Frame, Dev Mode and Smart animate as familiar tool names.
+# Keep Frame and Smart animate as familiar tool names.
 # See docs/translating.md; plural forms follow Russian integer rules.
+# The Developer Mode label (2026-11-07) is machine-translated and awaits review.
 
 [meta]
 name = "Русский"
@@ -416,8 +417,8 @@ name = "Русский"
 "Detach styles" = "Отвязать стили"
 "Detach variable" = "Отвязать переменную"
 "Details" = "Подробности"
-"Dev Mode" = "Dev Mode"
 "Dev resources" = "Ресурсы для разработки"
+"Developer Mode" = "Режим разработчика"
 "Development" = "Разработка"
 "Device" = "Устройство"
 "Device at 100%" = "Устройство в масштабе 100%"
@@ -1969,6 +1970,7 @@ name = "Русский"
 "component.combineVariants" = "Объединить в варианты"
 "component.create" = "Создать компонент"
 "component.createMultiple" = "Создать несколько компонентов"
+"component.createSet" = "Создать набор компонентов"
 "component.deleteProperty" = "Удалить свойство компонента"
 "component.detach" = "Отсоединить экземпляр"
 "component.editProperty" = "Изменить свойство компонента"
@@ -2427,7 +2429,7 @@ name = "Русский"
 "view.contextMenu" = "Показать контекстное меню"
 "view.design" = "Панель дизайна"
 "view.designPrototype" = "Переключить дизайн/прототип"
-"view.devMode" = "Dev Mode"
+"view.devMode" = "Режим разработчика"
 "view.frameOutlines" = "Контуры Frame"
 "view.get" = "Получить вид"
 "view.layers" = "Панель слоёв"

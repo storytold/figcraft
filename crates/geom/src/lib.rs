@@ -12,7 +12,9 @@ use kurbo::ParamCurve;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 pub mod measure;
+mod simplify;
 mod transform;
+pub use simplify::simplify_path;
 pub use transform::*;
 
 /// Corner radii in clockwise order from the top-left: `[tl, tr, br, bl]`.

@@ -3,6 +3,7 @@
 # Wording reviewed and approved by Lucas (@lukasz-sklad).
 # Complete Polish localization for FigCraft.
 # See docs/translating.md; plural forms follow Polish CLDR integer rules.
+# The Developer Mode label (2026-11-07) is machine-translated and awaits review.
 
 [meta]
 name = "Polski"
@@ -416,8 +417,8 @@ name = "Polski"
 "Detach styles" = "Odłącz style"
 "Detach variable" = "Odłącz zmienną"
 "Details" = "Szczegóły"
-"Dev Mode" = "Tryb deweloperski"
 "Dev resources" = "Zasoby programistyczne"
+"Developer Mode" = "Tryb deweloperski"
 "Development" = "Programowanie"
 "Device" = "Urządzenie"
 "Device at 100%" = "Urządzenie w 100%"
@@ -1969,6 +1970,7 @@ name = "Polski"
 "component.combineVariants" = "Połącz jako warianty"
 "component.create" = "Utwórz komponent"
 "component.createMultiple" = "Utwórz wiele komponentów"
+"component.createSet" = "Utwórz zestaw komponentów"
 "component.deleteProperty" = "Usuń właściwość komponentu"
 "component.detach" = "Odłącz instancję"
 "component.editProperty" = "Edytuj właściwość komponentu"
@@ -2426,7 +2428,7 @@ name = "Polski"
 "view.contextMenu" = "Pokaż menu kontekstowe"
 "view.design" = "Panel projektu"
 "view.designPrototype" = "Przełącz między Projektem a Prototypem"
-"view.devMode" = "Tryb programisty"
+"view.devMode" = "Tryb deweloperski"
 "view.frameOutlines" = "Kontury ramek"
 "view.fullscreen" = "Tryb pełnoekranowy"
 "view.get" = "Pobierz widok"
