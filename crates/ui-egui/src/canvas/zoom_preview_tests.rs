@@ -23,8 +23,12 @@ use crate::render_worker::{
     Done, Inline, Job, PREVIEW_AFTER_MS, PREVIEW_FACTOR, Refined, Renders, SETTLE_MS, Worker, better, coarse_view, preview_with, render_now,
 };
 
-/// A page of ellipses with a rectangle on top; the session and the rectangle.
+/// A page of ellipses with a rectangle on top; the session and the rectangle. The system fonts are
+/// scanned first (once per process, and a concurrent caller waits for it): the scan another test
+/// starts bumps the global font generation, and a render kept from before it is stale, so a pan
+/// or an edit meanwhile would redraw in full instead of patching.
 fn document() -> (Session, NodeId) {
+    figcraft_text::scan_system_fonts();
     let mut s = Session::new();
     for k in 0..12 {
         let k = f64::from(k);
