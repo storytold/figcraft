@@ -88,6 +88,8 @@ mod context_menu_tests;
 #[cfg(test)]
 mod corner_individual_tests;
 #[cfg(test)]
+mod create_multiple_menu_tests;
+#[cfg(test)]
 mod crop_image_tests;
 #[cfg(test)]
 mod cursors_tests;
@@ -236,6 +238,8 @@ mod proto_editor_tests;
 mod proto_reorder_tests;
 #[cfg(test)]
 mod proto_responsive_tests;
+#[cfg(test)]
+mod proto_variant_connect_tests;
 #[cfg(test)]
 mod region_fill_rows_tests;
 #[cfg(test)]

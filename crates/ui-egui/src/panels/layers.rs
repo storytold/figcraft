@@ -972,6 +972,8 @@ fn eye_lock(
     // A sweep across the eyes or padlocks takes in the rows the pointer passes.
     if let Some(sw) = sweep.as_mut()
         && !sw.ids.contains(&row.id)
+        // A padlock sweep leaves the children of a locked layer alone (their padlock is inert).
+        && !(sw.lock && row.locked_above)
         && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.y_range().contains(p.y))
     {
         sw.ids.push(row.id);
@@ -1003,13 +1005,20 @@ fn eye_lock(
         icons::paint(ui.painter(), lr.shrink(3.0), if locked || row.locked_above { Icon::Lock } else { Icon::Unlock }, col);
     }
     if show_lock && !dev {
-        let lresp = ui.interact(lr, ui.scope_id().with(("lock", row.id)), Sense::click_and_drag());
+        // A child of a locked layer can't be locked or unlocked on its own while the parent is
+        // locked (Lock and unlock layers): its padlock is inert.
+        let sense = if row.locked_above { Sense::hover() } else { Sense::click_and_drag() };
+        let lresp = ui.interact(lr, ui.scope_id().with(("lock", row.id)), sense);
         a11y::toggle(&lresp, tr("Locked"), locked || row.locked_above);
-        if lresp.clicked() {
-            lock = Some(row.id);
-        }
-        if lresp.drag_started() {
-            *sweep = Some(Sweep { lock: true, on: !n.locked, ids: vec![row.id] });
+        if row.locked_above {
+            a11y::disabled(&lresp);
+        } else {
+            if lresp.clicked() {
+                lock = Some(row.id);
+            }
+            if lresp.drag_started() {
+                *sweep = Some(Sweep { lock: true, on: !n.locked, ids: vec![row.id] });
+            }
         }
     }
     (vis, lock)
