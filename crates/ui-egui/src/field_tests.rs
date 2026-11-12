@@ -189,7 +189,7 @@ fn setup() -> (Ui, NodeId, NodeId) {
 
 /// The topmost field named `name` in the Design panel: its value centre and displayed text.
 /// Layer opacity precedes the equally named opacity fields in paint rows.
-fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
+pub(crate) fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
@@ -234,7 +234,7 @@ fn geom(u: &Ui, n: NodeId) -> (f64, f64, f64, f64) {
     (b.x0, b.y0, b.width(), b.height())
 }
 
-fn undo_steps(u: &Ui) -> usize {
+pub(crate) fn undo_steps(u: &Ui) -> usize {
     u.app.session.ds().unwrap().history.undo.len()
 }
 
@@ -252,7 +252,7 @@ fn click(u: &mut Ui, p: Pos2) {
 }
 
 /// Click into field `name`, type `text` over what it shows and press `end`.
-fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
+pub(crate) fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
     let (p, _) = field(u, name);
     click(u, p);
     u.frame(vec![Event::Text(text.into())]);
@@ -261,7 +261,7 @@ fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
 }
 
 /// Scrub field `name` by its label: `dx` points with `modifiers` held, then let go.
-fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
+pub(crate) fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
     let from = label(u, name);
     drag(u, from, dx, modifiers);
 }
@@ -1669,4 +1669,36 @@ fn alt_held_over_a_field_scrubs_it() {
     u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y)), press(false, alt, pos2(at.x + 10.0, at.y))], alt);
     u.frame(vec![]);
     assert_eq!(geom(&u, a).0, 65.0, "ten more");
+}
+
+#[test]
+fn a_boolean_group_has_one_corner_radius_field_and_a_mixed_selection_reads_mixed() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let r = id(u.app.session.execute("shape.rectangle", &json!({"x": 400, "y": 0, "width": 50, "height": 50})).unwrap());
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0");
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Corner radius", "20", Key::Enter);
+    let radii = |u: &Ui, n: NodeId| u.app.session.doc().unwrap().node(n).unwrap().corners.radii;
+    assert_eq!(radii(&u, g), [20.0; 4]);
+    assert_eq!(undo_steps(&u), steps + 1, "one undo step");
+    u.app.run("select.set", json!({"ids": [g, r]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "Mixed");
+    type_into(&mut u, "Corner radius", "8", Key::Enter);
+    assert_eq!((radii(&u, g), radii(&u, r)), ([8.0; 4], [8.0; 4]));
+}
+
+/// A boolean group draws its first radius; per-corner values a script or a file left behind don't
+/// make its field read Mixed, and a relative edit starts from the radius it draws.
+#[test]
+fn a_boolean_groups_field_shows_the_radius_it_draws() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let corners = json!({"topRightRadius": 30, "bottomRightRadius": 30, "bottomLeftRadius": 30});
+    u.app.session.execute("node.set", &json!({"ids": [g], "props": corners})).unwrap();
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0", "the radius it draws");
+    type_into(&mut u, "Corner radius", "+10", Key::Enter);
+    assert_eq!(u.app.session.doc().unwrap().node(g).unwrap().corners.radii, [10.0; 4], "0 + 10, not 30 + 10");
 }

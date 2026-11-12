@@ -395,7 +395,8 @@ impl NodeKind {
         )
     }
 
-    /// Kinds whose corners can be rounded from the panel.
+    /// Kinds whose corners can be rounded from the panel. A boolean group has one radius for every
+    /// sharp corner of its result.
     pub fn has_corner_radius(&self) -> bool {
         matches!(
             self,
@@ -408,16 +409,19 @@ impl NodeKind {
                 | NodeKind::Star { .. }
                 | NodeKind::Vector { .. }
                 | NodeKind::Section { .. }
+                | NodeKind::BooleanOp { .. }
         )
     }
 
-    /// Kinds with a radius per corner (the others round every corner alike).
+    /// Kinds with a radius per corner (the others, boolean groups included, round every corner alike).
     pub fn has_independent_corners(&self) -> bool {
-        self.has_corner_radius() && !matches!(self, NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. })
+        self.has_corner_radius()
+            && !matches!(self, NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Vector { .. } | NodeKind::BooleanOp { .. })
     }
 
     /// Kinds whose rounded corners are drawn with corner smoothing: a vector only when its network
-    /// has a closed region (an open path's rounded points are drawn without it).
+    /// has a closed region (an open path's rounded points are drawn without it). A boolean group's
+    /// smoothing applies to its result's corners between straight edges.
     pub fn has_corner_smoothing(&self) -> bool {
         match self {
             NodeKind::Vector { network } => !network.regions.is_empty(),
