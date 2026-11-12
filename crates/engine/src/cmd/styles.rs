@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "style.bind",
             "Bind variable in style",
-            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` (glass: `lightAngle|lightIntensity|refraction|depth|dispersion|radius|splay`), a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing` (numbers, px) and `fontFamily|fontStyle` (strings). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
+            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` (glass: `lightAngle|lightIntensity|refraction|depth|dispersion|radius|splay`), a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing|fontWeight` (numbers; line height and letter spacing in px, as the reference tool applies them; a weight picks the family's face nearest it and the `wght` axis of a variable font) and `fontFamily|fontStyle` (strings; a weight bound as a number replaces a bound style name and the reverse). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
             true,
             bind_style
         ),
@@ -520,6 +520,11 @@ fn bind_style(s: &mut Session, p: &Value) -> Result<Value> {
             {
                 rebind_paint_alpha(paints, &mut [], &key, true);
             }
+            match key.as_str() {
+                "fontWeight" => style.bound.remove("fontStyle"),
+                "fontStyle" => style.bound.remove("fontWeight"),
+                _ => None,
+            };
             style.bound.insert(key, id);
         }
         None => {
