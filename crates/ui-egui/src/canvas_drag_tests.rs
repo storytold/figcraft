@@ -302,3 +302,21 @@ fn outline_views_keep_the_old_path() {
         u.button(p + vec2(30.0, 10.0), false);
     }
 }
+
+#[test]
+fn a_page_switch_does_not_keep_the_drags_base_render_as_the_pages_image() {
+    let (mut u, f, p) = frame_with_child(false);
+    u.button(p, true);
+    drag_frames(&mut u, p, 4);
+    settle(&mut u);
+    assert_eq!(u.app.canvas.submitted_skip(), Some(&[f][..]), "the render shown leaves the dragged layer out");
+    let ds = u.app.session.ds().unwrap();
+    let (here, other) = ((ds.uid, ds.page), (ds.uid, figcraft_doc::NodeId(ds.page.0 + 1)));
+    assert_eq!(u.app.canvas.tex_of(), Some(here));
+    // Switching away while it shows must not keep it: coming back would show the page without the dragged layer.
+    u.app.canvas.switch_to(other);
+    assert!(!u.app.canvas.keeps(here), "an image without the dragged layers is not kept");
+    u.app.canvas.switch_to(here);
+    assert!(!u.app.canvas.has_texture(), "so coming back shows no image until the render lands");
+    u.button(p + vec2(30.0, 10.0), false);
+}
