@@ -30,11 +30,9 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
             allow(&path, Access::Read)?;
             Some(path)
         }
-        (None, Some(i)) => {
-            if !(i >= 0.0 && i.fract() == 0.0) {
-                return Err(bad(CMD, "no such recent file"));
-            }
-            Some(s.prefs.recent_files.iter().filter(|r| listed(r)).nth(i as usize).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?)
+        (None, Some(_)) => {
+            let i = req_index(CMD, p, "index")?;
+            Some(s.prefs.recent_files.iter().filter(|r| listed(r)).nth(i).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?)
         }
         _ => None,
     };
