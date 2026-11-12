@@ -217,6 +217,8 @@ impl Session {
                     }
                 }
                 // Cmd/Ctrl (and Control on macOS) held while dragging suspends snapping.
+                // The pointer's own drag, before snapping: a reorder in auto layout follows it.
+                let raw = d;
                 let snap_on = self.ds().map(|ds| ds.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl;
                 let mut guides = Vec::new();
                 if self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
@@ -269,8 +271,18 @@ impl Session {
                         // cell) under the pointer, as the frame shows it now. A frame other than the
                         // one they come from is outlined too.
                         let cell = if mode == LayoutMode::Grid { crate::drop::grid_cell_at(doc, target, p) } else { None };
-                        let idx =
-                            if mode == LayoutMode::Grid { 0 } else { crate::drop::auto_layout_slot(doc, target, p, &moving).map_or(0, |(i, _)| i) };
+                        // Within the frame they came from, the slot follows the leading edge of the
+                        // box they would fill (their combined start bounds moved by the drag), not
+                        // the pointer. The preview starts from the document as the drag began.
+                        let within = moving.iter().all(|m| doc.node(*m).is_some_and(|n| n.parent == Some(target)));
+                        let idx = if mode == LayoutMode::Grid {
+                            0
+                        } else if let (true, Some(b)) = (within, doc.bounds_of(&moving)) {
+                            let moved = Rect::new(b.x0 + raw.x, b.y0 + raw.y, b.x1 + raw.x, b.y1 + raw.y);
+                            crate::drop::auto_layout_slot_within(doc, target, p, &moving, moved, Point::new(raw.x, raw.y)).map_or(0, |(i, _)| i)
+                        } else {
+                            crate::drop::auto_layout_slot(doc, target, p, &moving).map_or(0, |(i, _)| i)
+                        };
                         for m in &moving {
                             if doc.get(*m)?.parent != Some(target) {
                                 doc.reparent(*m, target, None)?;
