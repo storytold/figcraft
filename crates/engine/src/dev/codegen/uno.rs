@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 
 use figcraft_color::{BlendMode, Color, ImageScaleMode, PaintKind};
 use figcraft_doc::{
-    Document, EffectKind, LetterSpacing, LineHeight, Node, NodeId, NodeKind, StrokeAlign, TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData,
-    TextDecoration, TextStyle,
+    AutoLayout, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, StrokeAlign, TextAlignH,
+    TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle,
 };
 
 use super::swift::one_line;
@@ -269,11 +269,21 @@ impl Element {
     }
 }
 
+/// Where a child sits in its parent: at an offset in a `Canvas`, or wherever the parent's flow
+/// (an `AutoLayout`) puts it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Place {
+    Flow,
+    At(f64, f64),
+}
+
 /// What a tree walk keeps between layers.
 struct Gen<'a> {
     ctx: &'a Ctx<'a>,
     /// Asset names given out, so no two layers share a file.
     assets: BTreeSet<String>,
+    /// Frames written as a `Canvas` for lack of auto layout (one warning per view says how many).
+    free_frames: usize,
 }
 
 /// Uno C# Markup for layer `id` and its subtree: a `UserControl` class whose content is the tree.
@@ -281,14 +291,24 @@ pub(crate) fn uno(doc: &Document, id: NodeId) -> String {
     let Some(root) = doc.node(id) else { return String::new() };
     // The tree sits three levels in: namespace member, constructor body, `Content(` argument.
     let ctx = Ctx { base: 3, ..Ctx::new(doc, id) };
-    let mut g = Gen { ctx: &ctx, assets: BTreeSet::new() };
-    let body = g.layer(root, 3, None).unwrap_or_else(|| format!("{}new Border()", uno_indent(3)));
+    let mut g = Gen { ctx: &ctx, assets: BTreeSet::new(), free_frames: 0 };
+    let mut body = g.layer(root, 3, Place::Flow).unwrap_or_else(|| format!("{}new Border()", uno_indent(3)));
+    if g.free_frames > 0 {
+        // One warning per view, above everything else written for the root layer.
+        let (count, verb) = if g.free_frames == 1 {
+            ("1 frame has".to_string(), "its children are")
+        } else {
+            (format!("{} frames have", g.free_frames), "children are")
+        };
+        body = format!("{}// warning: {count} no auto layout: {verb} positioned absolutely and do not adapt to size.\n{body}", uno_indent(3));
+    }
     let mut out = String::new();
     let usings: Vec<&str> = [
         ("using Microsoft.UI.Text;", "FontWeights."),
         ("using Windows.Foundation;", "new Rect("),
         ("using Windows.UI;", "Color.FromArgb("),
         ("using Windows.UI.Text;", "FontStyle."),
+        ("using Uno.Toolkit.UI;", "new AutoLayout("),
     ]
     .into_iter()
     .filter(|(_, marker)| body.contains(marker))
@@ -313,9 +333,9 @@ pub(crate) fn uno(doc: &Document, id: NodeId) -> String {
 }
 
 impl Gen<'_> {
-    /// A layer and its subtree at `depth`, placed in a `Canvas` at `at`. `None` for a layer that
-    /// draws nothing.
-    fn layer(&mut self, n: &Node, depth: usize, at: Option<(f64, f64)>) -> Option<String> {
+    /// A layer and its subtree at `depth`, placed in its parent as `at` says. `None` for a layer
+    /// that draws nothing.
+    fn layer(&mut self, n: &Node, depth: usize, at: Place) -> Option<String> {
         if matches!(n.kind, NodeKind::Slice) {
             return None;
         }
@@ -332,10 +352,72 @@ impl Gen<'_> {
         Some(e.write(depth))
     }
 
-    /// A frame-like layer, group or rectangle: a `Border` with its fill, stroke and corners holding
-    /// a `Canvas` with the children at their offsets. With a stroke and children the border sits
-    /// behind the canvas in a `Grid`, since a `Border` pushes its content in by its thickness.
-    fn boxed(&mut self, n: &Node, depth: usize, at: Option<(f64, f64)>) -> Element {
+    /// A frame-like layer, group or rectangle. Horizontal and vertical auto layout is an
+    /// `AutoLayout`; anything else is a `Border` holding a `Canvas` with the children at their
+    /// offsets.
+    fn boxed(&mut self, n: &Node, depth: usize, at: Place) -> Element {
+        match n.layout.as_ref() {
+            Some(l) if matches!(l.mode, LayoutMode::Horizontal | LayoutMode::Vertical) && !matches!(n.kind, NodeKind::Rectangle) => {
+                self.auto_layout(n, l, depth, at)
+            }
+            _ => self.canvas_box(n, depth, at),
+        }
+    }
+
+    /// A frame with horizontal or vertical auto layout: an `AutoLayout` that takes the box
+    /// (fill, border, corners) itself. A `Border` pushes its content in by its thickness, so
+    /// the padding is written less the stroke weight, as FigCraft's layout ignores strokes (unless
+    /// they are included). Where that would be negative the border sits behind the layout in a
+    /// `Grid`, as for a frame without auto layout.
+    fn auto_layout(&mut self, n: &Node, l: &AutoLayout, depth: usize, at: Place) -> Element {
+        let [pt, pr, pb, pl] = l.padding;
+        let weights = match (stroke_color(n), n.stroke.sides) {
+            (None, _) => [0.0; 4],
+            (Some(_), Some(s)) => s,
+            (Some(_), None) => [n.stroke.weight; 4],
+        };
+        let weights = if l.strokes_included { [0.0; 4] } else { weights };
+        let pad = [pt - weights[0], pr - weights[1], pb - weights[2], pl - weights[3]];
+        let behind = pad.iter().any(|p| *p < 0.0);
+        let mut line = Element::new("new AutoLayout()");
+        let mut exprs: Vec<String> = Vec::new();
+        for k in self.ctx.kids(n).iter().take(MAX_CHILDREN) {
+            let Some(c) = self.ctx.doc.node(*k) else { continue };
+            exprs.extend(self.layer(c, depth + if behind { 4 } else { 2 }, Place::Flow));
+        }
+        if !exprs.is_empty() {
+            line.kids = Some(("Children", exprs));
+        }
+        let mut outer;
+        if behind {
+            // The layout inside keeps the whole padding; the border is drawn behind it.
+            let mut border = Element::new("new Border()");
+            self.paint_box(&mut border, n, false);
+            layout_calls(&mut line, l, [pt, pr, pb, pl]);
+            outer = Element::new("new Grid()");
+            place(&mut outer, at);
+            size(&mut outer, n);
+            outer.kids = Some(("Children", vec![border.write(depth + 2), line.write(depth + 2)]));
+            common(&mut outer, n);
+        } else {
+            outer = line;
+            place(&mut outer, at);
+            size(&mut outer, n);
+            self.paint_box(&mut outer, n, false);
+            layout_calls(&mut outer, l, pad);
+            common(&mut outer, n);
+        }
+        if n.clip && n.corners.radii.iter().all(|r| *r <= 0.0) && !n.children.is_empty() {
+            outer.call(format!(".Clip(new RectangleGeometry().Rect(new Rect(0, 0, {}, {})))", num(n.width), num(n.height)));
+        }
+        outer
+    }
+
+    /// A frame-like layer, group or rectangle without a layout of its own to map: a `Border`
+    /// with its fill, stroke and corners holding a `Canvas` with the children at their offsets.
+    /// With a stroke and children the border sits behind the canvas in a `Grid`, since a `Border`
+    /// pushes its content in by its thickness.
+    fn canvas_box(&mut self, n: &Node, depth: usize, at: Place) -> Element {
         let mut border = Element::new("new Border()");
         let sized = !matches!(n.kind, NodeKind::Group | NodeKind::Section { .. });
         self.paint_box(&mut border, n, sized);
@@ -343,12 +425,15 @@ impl Gen<'_> {
         for k in self.ctx.kids(n).iter().take(MAX_CHILDREN) {
             let Some(c) = self.ctx.doc.node(*k) else { continue };
             let [_, _, _, _, x, y] = c.transform.as_coeffs();
-            exprs.extend(self.layer(c, depth + 4, Some((x, y))));
+            exprs.extend(self.layer(c, depth + 4, Place::At(x, y)));
         }
         let mut canvas = Element::new("new Canvas()");
         let has_kids = !exprs.is_empty();
         if has_kids {
             canvas.kids = Some(("Children", exprs));
+            if n.layout.is_none() {
+                self.free_frames += 1;
+            }
         }
         let mut outer;
         if has_kids && stroke_color(n).is_some() {
@@ -365,6 +450,9 @@ impl Gen<'_> {
                 outer.kids = Some(("Child", vec![canvas.write(depth + 2)]));
             }
             common(&mut outer, n);
+        }
+        if n.layout.as_ref().is_some_and(|l| l.mode == LayoutMode::Grid) {
+            outer.note("grid auto layout (children are positioned absolutely)");
         }
         if n.clip && has_kids && n.corners.radii.iter().all(|r| *r <= 0.0) {
             outer.call(format!(".Clip(new RectangleGeometry().Rect(new Rect(0, 0, {}, {})))", num(n.width), num(n.height)));
@@ -434,7 +522,7 @@ impl Gen<'_> {
     }
 
     /// An ellipse: `Ellipse` with `Fill` and a centred `Stroke`.
-    fn ellipse(&mut self, n: &Node, (start, sweep, inner): (f64, f64, f64), at: Option<(f64, f64)>) -> Element {
+    fn ellipse(&mut self, n: &Node, (start, sweep, inner): (f64, f64, f64), at: Place) -> Element {
         let mut e = Element::new("new Ellipse()");
         place(&mut e, at);
         size(&mut e, n);
@@ -456,7 +544,7 @@ impl Gen<'_> {
     }
 
     /// A vector, shape or other layer without a counterpart: the image the app is to hold.
-    fn asset(&mut self, n: &Node, at: Option<(f64, f64)>) -> Element {
+    fn asset(&mut self, n: &Node, at: Place) -> Element {
         let name = asset_name(&n.name, n.kind.label(), &mut self.assets);
         let mut e = Element::new("new Image()");
         e.lead.push(format!("// {} \"{}\": export it as an SVG to Assets/{name}.svg", n.kind.label(), comment_name(&n.name)));
@@ -470,7 +558,7 @@ impl Gen<'_> {
 
     /// Text: a `TextBlock`, in a `Grid` of the box's height when it is aligned to the middle or
     /// bottom of a fixed box.
-    fn text(&mut self, n: &Node, t: &TextData, depth: usize, at: Option<(f64, f64)>) -> Element {
+    fn text(&mut self, n: &Node, t: &TextData, depth: usize, at: Place) -> Element {
         let fixed = matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate);
         let framed = fixed && t.align_v != TextAlignV::Top;
         let mut tb = text_block(n, t, !framed);
@@ -489,11 +577,45 @@ impl Gen<'_> {
     }
 }
 
-/// The `Canvas` offsets of a child at `at`.
-fn place(e: &mut Element, at: Option<(f64, f64)>) {
-    if let Some((x, y)) = at {
+/// The `Canvas` offsets of a child at `at`; a child in a flow carries nothing.
+fn place(e: &mut Element, at: Place) {
+    if let Place::At(x, y) = at {
         // The offsets come first in the chain: they read as the element's address.
         e.calls.insert(0, format!(".Canvas(left: {}, top: {})", num(x), num(y)));
+    }
+}
+
+/// The calls an `AutoLayout` takes for its orientation, gap, padding (`pad` is top, right,
+/// bottom, left as written) and alignment.
+fn layout_calls(e: &mut Element, l: &AutoLayout, pad: [f64; 4]) {
+    e.call(format!(".Orientation(Orientation.{})", if l.mode == LayoutMode::Vertical { "Vertical" } else { "Horizontal" }));
+    // The space distributions make the gaps themselves.
+    if l.gap != 0.0 && !l.main_align.is_auto_gap() {
+        e.call(format!(".Spacing({})", num(l.gap)));
+    }
+    let [t, r, b, lf] = pad;
+    if [t, r, b, lf].iter().any(|p| *p != 0.0) {
+        if t == r && r == b && b == lf {
+            e.call(format!(".Padding({})", num(t)));
+        } else {
+            e.call(format!(".Padding({}, {}, {}, {})", num(lf), num(t), num(r), num(b)));
+        }
+    }
+    match l.main_align {
+        MainAlign::Min => {}
+        MainAlign::Center => e.call(".PrimaryAxisAlignment(AutoLayoutAlignment.Center)"),
+        MainAlign::Max => e.call(".PrimaryAxisAlignment(AutoLayoutAlignment.End)"),
+        MainAlign::SpaceBetween => e.call(".Justify(AutoLayoutJustify.SpaceBetween)"),
+        MainAlign::SpaceAround | MainAlign::SpaceEvenly => {
+            e.call(".Justify(AutoLayoutJustify.SpaceBetween)");
+            e.note("space around/evenly exported as space between");
+        }
+    }
+    match l.cross_align {
+        CrossAlign::Min => {}
+        CrossAlign::Center => e.call(".CounterAxisAlignment(AutoLayoutAlignment.Center)"),
+        CrossAlign::Max => e.call(".CounterAxisAlignment(AutoLayoutAlignment.End)"),
+        CrossAlign::Baseline => e.note("baseline alignment (children are aligned to the start)"),
     }
 }
 
