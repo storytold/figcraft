@@ -110,7 +110,7 @@ impl Session {
     /// The tool pointer events go to: in Dev Mode every tool but the hand and comments selects.
     fn acting_tool(&self) -> ToolId {
         match self.tool.tool {
-            t if self.tool.dev_mode && !matches!(t, ToolId::Hand | ToolId::Comment) => ToolId::Move,
+            t if self.tool.dev_mode && !t.works_in_dev_mode() => ToolId::Move,
             t => t,
         }
     }
@@ -176,6 +176,7 @@ impl Session {
                     self.request_ui("comment.new", json!({"x": ev.x, "y": ev.y}));
                     Ok(())
                 }
+                ToolId::Annotation => self.annotation_down(ev),
                 ToolId::Eyedropper => self.eyedrop(ev),
                 t if t.on_boards() => self.board_down(ev),
                 t if t.draws_shape() => self.draw_down(ev),
@@ -204,6 +205,19 @@ impl Session {
         }
         self.tool.overlay.cursor = Cursor::Move;
         Ok(true)
+    }
+
+    /// The Annotation tool's press: the layer under the pointer is selected and the UI is asked
+    /// for its note (the engine writes nothing; the note is typed in the Inspect tab). A press on
+    /// empty canvas does nothing.
+    fn annotation_down(&mut self, ev: &PointerEvent) -> Result<()> {
+        let ds = self.ds()?;
+        let (doc, page) = (ds.doc.clone(), ds.page);
+        // The same reach as the Move tool's pick (`ev.tol() * 2.0`); never the page itself.
+        let Some(id) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0).filter(|i| doc.node(*i).is_some_and(|n| !n.is_page())) else { return Ok(()) };
+        self.set_selection(vec![id]);
+        self.request_ui("annotation.new", json!({"id": id}));
+        Ok(())
     }
 
     pub(super) fn hover(&mut self, ev: &PointerEvent) -> Result<()> {
