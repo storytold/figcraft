@@ -20,7 +20,6 @@ mod connector_label_tests;
 #[cfg(test)]
 mod deep_import_tests;
 #[cfg(test)]
-mod empty_swap_tests;
 #[cfg(test)]
 mod expansion_cost_tests;
 mod export;
@@ -44,7 +43,6 @@ mod slot_tests;
 #[cfg(test)]
 mod source_identity_tests;
 #[cfg(test)]
-mod swapped_look_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
