@@ -303,7 +303,8 @@ fn menu_icon(ui: &mut Ui, rect: Rect, icon: Icon, tip: &str, on: bool) -> Respon
     if on || resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.menu_hover);
     }
-    icons::paint(ui.painter(), rect.shrink(5.0), icon, t.menu_text);
+    let glyph = if rect.size() == vec2(24.0, 24.0) { crate::widgets::icon_glyph_rect(rect) } else { rect.shrink(5.0) };
+    icons::paint(ui.painter(), glyph, icon, t.menu_text);
     resp
 }
 
