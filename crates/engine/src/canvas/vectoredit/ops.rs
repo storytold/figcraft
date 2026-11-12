@@ -365,6 +365,7 @@ fn remove_vertex_index(net: &mut VectorNetwork, vi: usize) {
 
 /// Remove segments (fixing region loops); points left without any segment go too.
 pub fn remove_segments(net: &mut VectorNetwork, segs: &[usize]) {
+    let before = net.segments.len();
     let mut touched: Vec<usize> = segs.iter().filter_map(|s| net.segments.get(*s)).flat_map(|s| [s.a, s.b]).collect();
     remove_segments_only(net, segs);
     touched.sort_unstable();
@@ -375,6 +376,9 @@ pub fn remove_segments(net: &mut VectorNetwork, segs: &[usize]) {
         }
     }
     reopen_loops(net);
+    if net.segments.len() != before {
+        close_bridged_loops(net);
+    }
 }
 
 fn remove_segments_only(net: &mut VectorNetwork, segs: &[usize]) {
@@ -402,6 +406,7 @@ fn remove_segments_only(net: &mut VectorNetwork, segs: &[usize]) {
 
 /// Delete vertices, joining their neighbours where a vertex had exactly two segments (`heal`).
 pub fn delete_vertices(net: &mut VectorNetwork, idx: &[usize], heal: bool) {
+    let before = net.vertices.len();
     let mut idx: Vec<usize> = idx.to_vec();
     idx.sort_unstable();
     idx.dedup();
@@ -461,6 +466,9 @@ pub fn delete_vertices(net: &mut VectorNetwork, idx: &[usize], heal: bool) {
     }
     net.sanitize();
     reopen_loops(net);
+    if net.vertices.len() != before {
+        close_bridged_loops(net);
+    }
 }
 
 /// Handles for the curve that heals over deleted point `vi` between `(vertex, handle)` ends `o1`
@@ -519,6 +527,24 @@ fn reopen_loops(net: &mut VectorNetwork) {
             if let Some(k) = brk {
                 lp.rotate_left(k);
             }
+        }
+    }
+}
+
+/// After points or segments were removed: an open loop whose two ends a segment in no loop already
+/// joins (a bridge drawn between two points before what lay between them was deleted) closes
+/// through that segment, at the loop's end so its winding is kept, as `connect` closes it (#1951).
+/// Every loop takes what [`VectorNetwork::closing_segment`] gives it against one snapshot of the
+/// network, which is what rounding walks: two fills that shared the removed border share the
+/// bridge, as they shared the border. Only a removal can open a loop at two points a segment
+/// already joins (a cut's ends are new points), so only `delete_vertices` and `remove_segments`
+/// run this, and only when they removed something.
+fn close_bridged_loops(net: &mut VectorNetwork) {
+    let index = net.loop_index();
+    let closings: Vec<Option<usize>> = net.regions.iter().flat_map(|r| r.loops.iter()).map(|lp| net.closing_segment(lp, &index)).collect();
+    for (lp, closing) in net.regions.iter_mut().flat_map(|r| r.loops.iter_mut()).zip(closings) {
+        if let Some(closing) = closing {
+            lp.push(closing);
         }
     }
 }
@@ -1226,6 +1252,24 @@ mod tests {
         assert!(d.vertices.iter().all(|v| v.x.is_finite() && v.y.is_finite()));
     }
 
+    /// A curved bridge between two points of a ring, then the point between them deleted (Delete,
+    /// no healing): the region's loop closes through the bridge, so the fill follows its curve and
+    /// is as long as the stroke (#1951).
+    #[test]
+    fn deleting_a_point_behind_a_curved_bridge_keeps_the_bridge_in_the_loop() {
+        use figcraft_geom::BezPath;
+        use figcraft_geom::kurbo::ParamCurveArclen;
+        let pts = [(0.0, 0.0), (50.0, 0.0), (100.0, 0.0), (100.0, 50.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y));
+        let mut n = VectorNetwork::from_points(&pts, true);
+        connect(&mut n, 1, 3, (25.0, 25.0), (-25.0, -25.0)).unwrap();
+        assert_eq!((n.segments.len(), n.regions[0].loops[0].len()), (7, 6), "the ring kept");
+        delete_vertices(&mut n, &[2], false);
+        assert_eq!((n.segments.len(), n.regions[0].loops[0].len()), (5, 5), "the loop holds the bridge: {:?}", n.regions);
+        let length = |p: &BezPath| p.segments().map(|s| s.arclen(1e-9)).sum::<f64>();
+        let (fill, stroke) = (length(&n.fill_path()), length(&n.stroke_path()));
+        assert!((fill - stroke).abs() < 1e-6, "fill {fill} and stroke {stroke} follow the same outline");
+    }
+
     #[test]
     fn lasso_polygon() {
         let pts = [Point::new(5.0, 5.0), Point::new(50.0, 50.0), Point::new(15.0, 5.0)];
@@ -1293,5 +1337,170 @@ mod tests {
         let ends: Vec<f64> = n.vertices.iter().map(|v| v.x).collect();
         assert!(ends.iter().any(|x| (x - (centre.x - 0.5)).abs() < 0.01), "{ends:?}");
         assert!(ends.iter().any(|x| (x - (centre.x + 0.5)).abs() < 0.01), "{ends:?}");
+    }
+
+    /// An open chain of four segments over five points whose two ends a fifth segment (in no
+    /// loop) joins, as a bridge drawn before the point between them was deleted.
+    fn bridged_open_chain() -> VectorNetwork {
+        let corners = [
+            Point::new(0.0, 0.0),
+            Point::new(525.0, 525.0),
+            Point::new(0.0, 525.0),
+            Point::new(333.0, 0.0),
+            Point::new(525.0, 183.0),
+            Point::new(900.0, 900.0),
+        ];
+        let mut n = VectorNetwork::from_points(&corners, false);
+        n.segments = [(0, 3), (1, 2), (2, 0), (4, 1), (3, 4)].iter().map(|&(a, b)| Segment::line(a, b)).collect();
+        n.regions.clear();
+        for v in &mut n.vertices {
+            v.radius = 125.0;
+        }
+        n
+    }
+
+    #[test]
+    fn regions_over_one_open_chain_all_close_through_the_joining_segment() {
+        use figcraft_geom::BezPath;
+        use figcraft_geom::kurbo::ParamCurveArclen;
+        let mut n = bridged_open_chain();
+        for _ in 0..2 {
+            n.regions.push(Region { loops: vec![vec![3, 1, 2, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        }
+        delete_vertices(&mut n, &[5], false);
+        for (i, r) in n.regions.iter().enumerate() {
+            assert_eq!(r.loops[0], vec![3, 1, 2, 0, 4], "region {i} closes through the segment: {:?}", n.regions);
+        }
+        let length = |path: &BezPath| path.segments().map(|s| s.arclen(1e-9)).sum::<f64>();
+        let stroke = length(&n.stroke_path());
+        let rounded = n.rounded().unwrap();
+        for i in 0..2 {
+            let fill = length(&rounded.region_path(i).unwrap());
+            assert!((fill - stroke).abs() < 1e-6, "region {i}: fill {fill} and stroke {stroke} trace the same outline");
+        }
+    }
+
+    /// Many independent open chains, each with its own closing segment, all close through it.
+    #[test]
+    fn many_open_chains_each_close_through_their_own_segment() {
+        let one = bridged_open_chain();
+        let (nv, ns) = (one.vertices.len(), one.segments.len());
+        let mut n = VectorNetwork::default();
+        for (i, dx) in (0..50usize).zip((0..50u32).map(|k| f64::from(k) * 1000.0)) {
+            n.vertices.extend(one.vertices.iter().map(|v| Vertex { x: v.x + dx, ..*v }));
+            n.segments.extend(one.segments.iter().map(|s| Segment { a: s.a + i * nv, b: s.b + i * nv, ..*s }));
+            let base = i * ns;
+            n.regions.push(Region {
+                loops: vec![vec![base + 3, base + 1, base + 2, base]],
+                winding: WindingRule::NonZero,
+                fills: None,
+                ..Default::default()
+            });
+        }
+        close_bridged_loops(&mut n);
+        for (i, r) in n.regions.iter().enumerate() {
+            assert_eq!(r.loops[0].last(), Some(&(i * ns + 4)), "chain {i} closes through its own segment");
+        }
+    }
+
+    #[test]
+    fn a_segment_joining_two_different_chains_closes_both() {
+        let mut n = bridged_open_chain();
+        n.regions.push(Region { loops: vec![vec![3, 1, 2, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        n.regions.push(Region { loops: vec![vec![0, 2, 1, 3]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        delete_vertices(&mut n, &[5], false);
+        assert_eq!(n.regions[0].loops[0].len(), 5);
+        assert_eq!(n.regions[1].loops[0].len(), 5, "the same segment set is the same chain");
+        let mut m = bridged_open_chain();
+        m.segments.push(Segment::line(1, 2));
+        m.regions.push(Region { loops: vec![vec![3, 1, 2, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        m.regions.push(Region { loops: vec![vec![3, 5, 2, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        let drawn = m.rounded().unwrap();
+        delete_vertices(&mut m, &[5], false);
+        assert_eq!(m.regions[0].loops[0], vec![3, 1, 2, 0, 4], "{:?}", m.regions);
+        assert_eq!(m.regions[1].loops[0], vec![3, 5, 2, 0, 4], "different chains share the segment too: {:?}", m.regions);
+        let after = m.rounded().unwrap();
+        for i in 0..2 {
+            assert_eq!(after.region_path(i).unwrap(), drawn.region_path(i).unwrap(), "region {i} is stored as rounding drew it");
+        }
+    }
+
+    /// Two fills that shared a border, a bridge drawn between the border's ends, then the border's
+    /// middle point deleted: both fills close through the bridge (#1951).
+    #[test]
+    fn two_fills_that_shared_a_deleted_border_both_close_through_the_bridge() {
+        use figcraft_geom::Shape;
+        let pts = [(0.0, 0.0), (50.0, 0.0), (100.0, 0.0), (100.0, 100.0), (50.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y));
+        let mut n = VectorNetwork::from_points(&pts, true);
+        n.vertices.push(Vertex::new(50.0, 50.0));
+        n.segments.push(Segment::line(1, 6));
+        n.segments.push(Segment::line(6, 4));
+        n.regions.clear();
+        for lp in [vec![0, 6, 7, 4, 5], vec![1, 2, 3, 7, 6]] {
+            n.regions.push(Region { loops: vec![lp], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        }
+        connect(&mut n, 1, 4, (30.0, 30.0), (30.0, -30.0)).unwrap();
+        delete_vertices(&mut n, &[6], false);
+        assert_eq!(n.regions[0].loops[0], vec![4, 5, 0, 6]);
+        assert_eq!(n.regions[1].loops[0], vec![1, 2, 3, 6], "the second fill closes through the bridge too");
+        let area = |i: usize| n.region_path(i).unwrap().area().abs();
+        assert!((area(0) + area(1) - 10_000.0).abs() < 1e-6, "the fills meet along the bridge");
+    }
+
+    #[test]
+    fn removing_nothing_leaves_an_open_loop_alone() {
+        let mut n = bridged_open_chain();
+        n.regions.push(Region { loops: vec![vec![3, 1, 2, 0]], winding: WindingRule::NonZero, fills: None, ..Default::default() });
+        let before = n.clone();
+        remove_segments(&mut n, &[]);
+        assert_eq!(n, before);
+        remove_segments(&mut n, &[99]);
+        assert_eq!(n, before);
+        delete_vertices(&mut n, &[], false);
+        assert_eq!(n, before);
+        delete_vertices(&mut n, &[99], true);
+        assert_eq!(n, before);
+        delete_vertices(&mut n, &[5], false);
+        assert_eq!(n.regions[0].loops[0], vec![3, 1, 2, 0, 4]);
+    }
+
+    /// The same bridge as the curved-bridge test, reached by removing segments.
+    #[test]
+    fn removing_segments_behind_a_curved_bridge_keeps_the_bridge_in_the_loop() {
+        let pts = [(0.0, 0.0), (50.0, 0.0), (100.0, 0.0), (100.0, 50.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y));
+        let mut n = VectorNetwork::from_points(&pts, true);
+        connect(&mut n, 1, 3, (25.0, 25.0), (-25.0, -25.0)).unwrap();
+        remove_segments(&mut n, &[1, 2]);
+        assert_eq!((n.segments.len(), n.regions[0].loops[0].len()), (5, 5));
+        assert_eq!(n.regions[0].loops[0], vec![1, 2, 3, 0, 4]);
+    }
+
+    #[test]
+    fn many_open_loops_with_no_closing_segment_round_as_before() {
+        let mut n = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)], false);
+        n.segments.clear();
+        n.vertices.clear();
+        for k in 0..40 {
+            let x = f64::from(k) * 100.0;
+            let base = n.vertices.len();
+            for p in [(x, 0.0), (x + 50.0, 0.0), (x + 50.0, 50.0), (x, 50.0)] {
+                n.vertices.push(Vertex { radius: 8.0, ..Vertex::new(p.0, p.1) });
+            }
+            let first = n.segments.len();
+            // Three sides of a square, an open loop with nothing to close it.
+            for (a, b) in [(0, 1), (1, 2), (2, 3)] {
+                n.segments.push(Segment::line(base + a, base + b));
+            }
+            n.regions.push(Region {
+                loops: vec![vec![first, first + 1, first + 2]],
+                winding: WindingRule::NonZero,
+                fills: None,
+                ..Default::default()
+            });
+        }
+        let r = n.rounded().unwrap();
+        assert_eq!(r.regions.len(), 40);
+        // Each loop gained only its two inner corners' arcs (two corners, one arc each).
+        assert!(r.regions.iter().all(|reg| reg.loops[0].len() == 5), "{:?}", r.regions[0]);
     }
 }
