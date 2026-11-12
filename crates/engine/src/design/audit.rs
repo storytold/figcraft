@@ -17,8 +17,11 @@ use crate::cmd::lists::paint_binding_key;
 
 use super::rules::{Severity, rule};
 
-/// Most layers one audit looks at; past it the report says `truncated`.
-const MAX_NODES: usize = 50_000;
+/// Most layers one audit looks at; past it the report says `truncated`. A call may raise it with
+/// `limit` (a CI gate over a huge file), but never past [`MAX_LIMIT`].
+pub(crate) const MAX_NODES: usize = 50_000;
+/// The most nodes one audit may be asked to look at, so a typo cannot stall a machine for minutes.
+pub(crate) const MAX_LIMIT: usize = 1_000_000;
 /// Most text layers one audit lays out for the overflow check (text layout is the expensive part).
 const MAX_TEXT_MEASURED: usize = 2_000;
 /// Most auto layout frames one audit measures for clipped children (bounds are per-subtree).
@@ -186,6 +189,8 @@ pub(crate) struct Report {
     pub(crate) findings: Vec<Finding>,
     pub(crate) nodes: usize,
     pub(crate) truncated: bool,
+    /// The node cap this report was collected under (`limit`).
+    pub(crate) limit: usize,
 }
 
 /// A colour token's default-mode value, for the hardcoded-value check.
@@ -265,11 +270,21 @@ struct Ctx<'a> {
     /// Distinct accent colours, with the first layer that paints each (for `color.accents`).
     accents: BTreeMap<[u8; 4], String>,
     truncated: bool,
+    /// The node cap this run stops at.
+    max_nodes: usize,
 }
 
 /// Walk `roots` and collect every finding. `design.audit` reports them; `design.fix` acts on the
 /// ones marked fixable.
-pub(crate) fn collect(doc: &Document, roots: &[NodeId], anchor: Option<NodeId>, anchor_path: &str, scope: &str, settings: &Settings) -> Report {
+pub(crate) fn collect(
+    doc: &Document,
+    roots: &[NodeId],
+    anchor: Option<NodeId>,
+    anchor_path: &str,
+    scope: &str,
+    settings: &Settings,
+    max_nodes: usize,
+) -> Report {
     let mut ctx = Ctx {
         doc,
         findings: Vec::new(),
@@ -284,12 +299,13 @@ pub(crate) fn collect(doc: &Document, roots: &[NodeId], anchor: Option<NodeId>, 
         settings: settings.clone(),
         accents: BTreeMap::new(),
         truncated: false,
+        max_nodes,
     };
     for root in roots {
         ctx.walk(*root);
     }
     ctx.scope_rules(anchor, anchor_path, scope);
-    Report { findings: ctx.findings, nodes: ctx.visited, truncated: ctx.truncated }
+    Report { findings: ctx.findings, nodes: ctx.visited, truncated: ctx.truncated, limit: max_nodes }
 }
 
 /// Audit `roots` (pages, frames or layers), labelled `scope` in the report. Aggregate findings
@@ -304,9 +320,10 @@ pub(crate) fn run(
     filter: Option<&BTreeSet<String>>,
     preset: Option<DesignPreset>,
     modes: BTreeMap<CollectionId, ModeId>,
+    max_nodes: usize,
 ) -> Value {
     let settings = Settings::new(doc, preset).in_modes(doc, modes);
-    let report = collect(doc, roots, anchor, anchor_path, scope, &settings);
+    let report = collect(doc, roots, anchor, anchor_path, scope, &settings, max_nodes);
     let shown: Vec<&Finding> = report
         .findings
         .iter()
@@ -330,6 +347,7 @@ pub(crate) fn run(
         o.insert("counts".into(), json!({"high": counts[2], "medium": counts[1], "low": counts[0]}));
         o.insert("byRule".into(), json!(by_rule));
         o.insert("nodes".into(), json!(report.nodes));
+        o.insert("limit".into(), json!(report.limit));
         o.insert("findings".into(), json!(findings));
         o.insert("truncated".into(), json!(report.truncated));
     }
@@ -340,7 +358,7 @@ impl Ctx<'_> {
     fn walk(&mut self, root: NodeId) {
         let mut stack = vec![(root, String::new())];
         while let Some((id, parent)) = stack.pop() {
-            if self.visited >= MAX_NODES {
+            if self.visited >= self.max_nodes {
                 self.truncated = true;
                 return;
             }

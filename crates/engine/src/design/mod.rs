@@ -30,21 +30,21 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "design.audit",
             "Check design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], minSeverity?: low|medium|high (default low), preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes; the contrast check uses them)} → {preset, grid, modes?, scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], minSeverity?: low|medium|high (default low), preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes; the contrast check uses them), limit?: 1000-1000000 (nodes before the report says truncated; default 50000)} → {preset, grid, modes?, scope, score, counts: {high, medium, low}, byRule: {rule: count}, nodes, limit, findings: [{rule, severity, node, path, message, fixable, suggestion?}], truncated}  reads the design and reports the AI-slop tells; changes nothing",
             false,
             audit_cmd
         ),
         spec!(
             "design.fix",
             "Fix design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), exact?: bool (with ids: repair only findings on those layers, not their descendants), dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), exact?: bool (with ids: repair only findings on those layers, not their descendants), limit?: 1000-1000000 (nodes the walk looks at; default 50000), dryRun?: bool (default false)} → {scope, dryRun, changed, skipped, byRule, before: {score, counts, nodes, findings}, after: {score, counts, nodes, findings}}  repairs the findings marked fixable in one undo step; content, naming and gradients are left alone",
             true,
             fix_cmd
         ),
         spec!(
             "design.assert",
             "Assert design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes), failOn?: low|medium|high (default high), minScore?: 0-100 (default 0)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists, the score is below minScore, or the audit was truncated by the node cap (what it did not reach is unchecked: narrow the scope or filter the rules); read-only, for CI",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes), failOn?: low|medium|high (default high), minScore?: 0-100 (default 0), limit?: 1000-1000000 (nodes before the audit says truncated; default 50000)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists, the score is below minScore, or the audit was truncated at the node limit it ran with (what it did not reach is unchecked: narrow the scope, filter the rules or raise `limit`); read-only, for CI",
             false,
             assert_cmd
         ),
@@ -83,7 +83,8 @@ fn audit_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let filter = filter_arg("design.audit", p)?;
     let preset = preset_arg("design.audit", p)?;
     let modes = modes_arg("design.audit", p, s.doc()?)?;
-    Ok(audit::run(s.doc()?, &roots, &label, anchor, &path, min, filter.as_ref(), preset, modes))
+    let limit = limit_arg("design.audit", p)?;
+    Ok(audit::run(s.doc()?, &roots, &label, anchor, &path, min, filter.as_ref(), preset, modes, limit))
 }
 
 fn fix_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -92,11 +93,12 @@ fn fix_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let preset = preset_arg("design.fix", p)?;
     let exact = params::boolean(p, "exact").unwrap_or(false);
     let exact_ids = if exact { ids_arg("design.fix", p)? } else { None };
+    let limit = limit_arg("design.fix", p)?;
     let dry = params::boolean(p, "dryRun").unwrap_or(false);
     // A dry run or a fix that changes nothing must not mark the file unsaved or add an undo step:
     // work on a copy and put it back only when it differs.
     let mut doc = s.doc()?.clone();
-    let result = fix::run(&mut doc, &roots, anchor, &path, &label, preset, filter.as_ref(), exact_ids.as_deref(), dry);
+    let result = fix::run(&mut doc, &roots, anchor, &path, &label, preset, filter.as_ref(), exact_ids.as_deref(), limit, dry);
     if !dry && s.doc()? != &doc {
         *s.doc_mut()? = doc;
     }
@@ -120,7 +122,8 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // The score covers the whole review (as the window shows it); only findings at or above
     // `failOn` fail the gate.
-    let report = audit::run(s.doc()?, &roots, &label, anchor, &path, Severity::Low, filter.as_ref(), preset, modes);
+    let limit = limit_arg("design.assert", p)?;
+    let report = audit::run(s.doc()?, &roots, &label, anchor, &path, Severity::Low, filter.as_ref(), preset, modes, limit);
     let failing: Vec<&Value> = report["findings"]
         .as_array()
         .map(|v| v.iter().filter(|f| f["severity"].as_str().and_then(Severity::from_id).is_some_and(|s| s >= fail_on)).collect())
@@ -132,7 +135,7 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     if report["truncated"].as_bool() == Some(true) {
         let nodes = report["nodes"].as_u64().unwrap_or(0);
         return Err(EngineError::Other(format!(
-            "design review failed: the audit stopped at the node cap after {nodes} nodes, so what it did not reach is unchecked; audit a smaller scope (selection, page or ids) or filter the rules, then assert again"
+            "design review failed: the audit stopped at the {limit}-node limit after {nodes} nodes, so what it did not reach is unchecked; audit a smaller scope (selection, page or ids), filter the rules, or raise `limit`, then assert again"
         )));
     }
     if !failing.is_empty() || score < min_score {
@@ -158,6 +161,17 @@ fn severity_named(cmd: &str, p: &Value, key: &str, default: Severity) -> Result<
         None => Ok(default),
         Some(s) => Severity::from_id(&s).ok_or_else(|| bad(cmd, format!("`{key}` must be low, medium or high, not `{s}`"))),
     }
+}
+
+/// The `limit` parameter: how many nodes one audit walk may look at before the report says
+/// `truncated`. Default 50,000; a CI gate over a huge file may raise it, never past the hard cap.
+fn limit_arg(cmd: &str, p: &Value) -> Result<usize> {
+    let Some(v) = params::get(p, "limit") else { return Ok(audit::MAX_NODES) };
+    let Some(n) = params::f64_of(v) else { return Err(bad(cmd, "`limit` must be a whole number of nodes between 1,000 and 1,000,000")) };
+    if !n.is_finite() || n.fract() != 0.0 || !(1_000.0..=(audit::MAX_LIMIT as f64)).contains(&n) {
+        return Err(bad(cmd, "`limit` must be a whole number of nodes between 1,000 and 1,000,000"));
+    }
+    Ok(n as usize)
 }
 
 fn preset_arg(cmd: &str, p: &Value) -> Result<Option<DesignPreset>> {

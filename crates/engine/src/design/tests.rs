@@ -749,9 +749,48 @@ fn assert_fails_when_the_audit_is_truncated() {
     assert!(has(&r, "color.contrast"), "{r}");
     let r = ex(&mut s, "design.audit", json!({"scope": "page"}));
     assert_eq!(r["truncated"], true, "{r}");
+    assert_eq!(r["limit"], 50_000, "{r}");
     // The gate must not turn a truncated audit into a pass at score 100.
     let err = s.execute("design.assert", &json!({"scope": "page", "failOn": "high"})).unwrap_err().to_string();
-    assert!(err.contains("node cap"), "{err}");
+    assert!(err.contains("stopped at the 50000-node limit"), "{err}");
+}
+
+#[test]
+fn a_raised_limit_lets_a_huge_page_finish_and_assert_for_real() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    {
+        let doc = s.doc_mut().unwrap();
+        for i in 0..50_100 {
+            doc.create(page, NodeKind::Rectangle, &format!("Filler {i}"), 0.0, 0.0, 1.0, 1.0).unwrap();
+        }
+    }
+    let holder = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Badge holder", "x": 0.0, "y": 0.0, "width": 40.0, "height": 24.0, "props": {"fill": "#FFFFFF"}}),
+    ));
+    ex(&mut s, "text.create", json!({"text": "0", "name": "Badge", "parent": holder, "props": {"fill": "#FFFFFF"}}));
+    // With the limit raised, the same page finishes: the audit is not truncated and reports the
+    // badge's real contrast failure, so the gate fails on the finding, not on the cap.
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "limit": 60_000, "rules": ["color.contrast"]}));
+    assert_eq!(r["truncated"], false, "{r}");
+    assert_eq!(r["limit"], 60_000, "{r}");
+    assert!(has(&r, "color.contrast"), "{r}");
+    let err = s.execute("design.assert", &json!({"scope": "page", "limit": 60_000, "failOn": "high"})).unwrap_err().to_string();
+    assert!(err.contains("color.contrast"), "{err}");
+}
+
+#[test]
+fn a_bad_limit_is_an_error() {
+    let mut s = Session::new();
+    for limit in [json!(999), json!(1_000_001), json!(5.5), json!("many")] {
+        let err = s.execute("design.audit", &json!({"scope": "page", "limit": limit})).unwrap_err().to_string();
+        assert!(err.contains("`limit` must be a whole number of nodes between 1,000 and 1,000,000"), "{err}");
+    }
+    // The bounds themselves are accepted.
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "limit": 1_000}));
+    assert_eq!(r["limit"], 1_000, "{r}");
 }
 
 #[test]

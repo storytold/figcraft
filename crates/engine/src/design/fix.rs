@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use super::audit::{Report, Settings, backdrop, collect, is_colored_shadow, is_glow, text_color};
 
 /// Fix what `roots` made fixable among `filter`'s rules. With `exact_ids`, only findings on those
-/// layers are repaired, not findings on their descendants.
+/// layers are repaired, not findings on their descendants. The walk stops at `max_nodes` nodes.
 pub(crate) fn run(
     doc: &mut Document,
     roots: &[NodeId],
@@ -24,10 +24,11 @@ pub(crate) fn run(
     preset: Option<DesignPreset>,
     filter: Option<&BTreeSet<String>>,
     exact_ids: Option<&[NodeId]>,
+    max_nodes: usize,
     dry_run: bool,
 ) -> Value {
     let settings = Settings::new(doc, preset);
-    let before = collect(doc, roots, anchor, anchor_path, scope, &settings);
+    let before = collect(doc, roots, anchor, anchor_path, scope, &settings, max_nodes);
     let targets: Vec<(NodeId, &'static str)> = before
         .findings
         .iter()
@@ -55,7 +56,7 @@ pub(crate) fn run(
             }
         }
     }
-    let after = collect(doc, roots, anchor, anchor_path, scope, &settings);
+    let after = collect(doc, roots, anchor, anchor_path, scope, &settings, max_nodes);
     json!({
         "scope": scope,
         "dryRun": dry_run,
