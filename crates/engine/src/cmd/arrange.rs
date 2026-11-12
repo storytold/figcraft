@@ -89,41 +89,17 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("arrange.forward", "Bring forward", "{ids?}", true, |s, p| zorder(s, p, Z::Forward)),
         spec!("arrange.backward", "Send backward", "{ids?}", true, |s, p| zorder(s, p, Z::Backward)),
         spec!("arrange.back", "Send to back", "{ids?}", true, |s, p| zorder(s, p, Z::Back)),
-        spec!(
-            "object.flipH",
-            "Flip horizontal",
-            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
-            true,
-            |s, p| flip(s, p, true)
-        ),
-        spec!(
-            "object.flipV",
-            "Flip vertical",
-            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
-            true,
-            |s, p| flip(s, p, false)
-        ),
-        spec!(
-            "object.rotate180",
-            "Rotate 180°",
-            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
-            true,
-            |s, p| rotate_by(s, p, 180.0)
-        ),
-        spec!(
-            "object.rotateLeft",
-            "Rotate 90° left",
-            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
-            true,
-            |s, p| rotate_by(s, p, 90.0)
-        ),
-        spec!(
-            "object.rotateRight",
-            "Rotate 90° right",
-            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
-            true,
-            |s, p| { rotate_by(s, p, -90.0) }
-        ),
+        spec!("object.flipH", "Flip horizontal", "{ids?} (in vector edit mode without ids: the selected points)", true, |s, p| flip(s, p, true)),
+        spec!("object.flipV", "Flip vertical", "{ids?} (in vector edit mode without ids: the selected points)", true, |s, p| flip(s, p, false)),
+        spec!("object.rotate180", "Rotate 180°", "{ids?} (in vector edit mode without ids: the selected points)", true, |s, p| rotate_by(
+            s, p, 180.0
+        )),
+        spec!("object.rotateLeft", "Rotate 90° left", "{ids?} (in vector edit mode without ids: the selected points)", true, |s, p| rotate_by(
+            s, p, 90.0
+        )),
+        spec!("object.rotateRight", "Rotate 90° right", "{ids?} (in vector edit mode without ids: the selected points)", true, |s, p| {
+            rotate_by(s, p, -90.0)
+        }),
         spec!("transform.move", "Move", "{ids?, dx, dy}  (page units)", true, |s, p| {
             let (dx, dy) = (num_or(p, "dx", 0.0), num_or(p, "dy", 0.0));
             let ids = req_targets("transform.move", s, p)?;
