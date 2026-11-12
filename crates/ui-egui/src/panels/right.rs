@@ -75,7 +75,12 @@ impl FigApp {
             None => return,
         };
         let Ok(doc) = self.session.doc() else { return };
-        let values: Vec<(NodeId, f64)> = ids.iter().filter_map(|i| Some((*i, rel.apply(shown(doc.node(*i)?))?))).collect();
+        let mut values: Vec<(NodeId, f64)> = ids.iter().filter_map(|i| Some((*i, rel.apply(shown(doc.node(*i)?))?))).collect();
+        if key == "absoluteRotation" {
+            // A page angle depends on the parents': turn a selected parent before the layers in it
+            // (as `node.set` orders a multi-id call), whatever order the selection is in.
+            values.sort_by_key(|(i, _)| doc.ancestors(*i).len());
+        }
         if values.is_empty() || self.session.begin_interaction("Edit").is_err() {
             return;
         }
@@ -627,8 +632,9 @@ fn y_of(doc: &Document, n: &Node) -> f64 {
     (doc.frame_relative(n.id).as_coeffs()[5] * 100.0).round() / 100.0
 }
 
-fn rot_of(n: &Node) -> f64 {
-    (figcraft_geom::rotation_degrees(n.transform) * 100.0).round() / 100.0
+/// The layer's rotation on the page (its own angle plus its parents'), what the field shows.
+fn rot_of(doc: &Document, n: &Node) -> f64 {
+    (figcraft_geom::rotation_degrees(doc.world_transform(n.id)) * 100.0).round() / 100.0
 }
 
 pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> PositionValues {
@@ -637,7 +643,7 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
         can_align: figcraft_engine::cmd::arrange::can_align(doc, sel),
         x: common(doc, sel, |n| x_of(doc, n)),
         y: common(doc, sel, |n| y_of(doc, n)),
-        rot: common(doc, sel, rot_of),
+        rot: common(doc, sel, |n| rot_of(doc, n)),
         parent_al: sel.iter().all(|i| doc.node(*i).and_then(parent).is_some_and(|p| p.layout.is_some())),
         absolute: common(doc, sel, |n| n.child_layout.absolute),
         // Constraints: children of frames without auto layout, or ignoring it.
@@ -655,7 +661,7 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[No
     let col = widgets::col_width(ui.available_width());
     align_row(app, ui, sel, pv.can_align, col);
     position_row(app, ui, doc, sel, &pv, col);
-    rotation_row(app, ui, sel, pv.rot, col);
+    rotation_row(app, ui, doc, sel, pv.rot, col);
     if pv.in_frame {
         constraints_row(app, ui, sel, pv.constraints, col);
     }
@@ -732,12 +738,12 @@ fn position_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], p
 }
 
 /// Rotation, with the rotate and flip buttons.
-fn rotation_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], rot: Option<f64>, col: f32) {
+fn rotation_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], rot: Option<f64>, col: f32) {
     let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Rotation"), None);
     row(ui, 32.0, |ui| {
         let e = widgets::number_field_mixed(ui, Id::unique("pos_rot"), Lead::Icon(Icon::Angle, tr("Rotation")), rot, "°", col, 1.0);
-        app.field_of(&ids, "rotation", e, rot_of, |v| json!(v));
+        app.field_of(&ids, "absoluteRotation", e, |n| rot_of(doc, n), |v| json!(v));
         let items = [
             (Icon::Rotate, tr("Rotate 90° right")),
             (Icon::FlipH, crate::shortcuts::tip(tr("Flip horizontal"), "object.flipH")),

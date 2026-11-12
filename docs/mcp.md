@@ -172,6 +172,7 @@ Or in a project's `.mcp.json`:
 - `create_node` and `set_properties` take `x`/`y` **relative to the parent frame** (the page when
   there is none, so they are page coordinates then). Groups and boolean groups have no coordinate
   space of their own: a layer in a group is placed in the frame (or on the page) the group is in.
+  `rotation` is the layer's angle to its parent (Figma's plugin API `rotation` is the same); `absoluteRotation` sets its rotation on the page, what the Design panel's field shows; a call takes one of the two.
   `inspect_document` reports `x`/`y` the same way, plus `absoluteBounds` in page coordinates.
   In `props`, `fill` and `stroke` also accept `"none"` (either case) or `null` as no paint, the
   same as an empty `fills`/`strokes` list, so an outline-only shape can be made in one call.
