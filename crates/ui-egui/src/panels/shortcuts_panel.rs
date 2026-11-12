@@ -57,15 +57,20 @@ fn rows(group: Option<Group>, query: &str, platform: Platform) -> Vec<Row> {
     out
 }
 
-/// Paint `text` as a keycap ending at `right`; returns its left edge.
-fn keycap(ui: &Ui, t: &Tokens, text: &str, right: f32, cy: f32) -> f32 {
+/// A keycap's left edge: LTR keycaps grow left; RTL keycaps grow right.
+fn keycap_left(anchor: f32, width: f32, rtl: bool) -> f32 {
+    if rtl { anchor } else { anchor - width }
+}
+
+/// Paint `text` as a keycap at the reading-side edge, returning the next edge.
+fn keycap(ui: &Ui, t: &Tokens, text: &str, edge: f32, cy: f32, rtl: bool) -> f32 {
     let galley = ui.painter().layout_no_wrap(text.to_string(), regular(11.0), t.text);
     let w = galley.size().x + 10.0;
-    let r = egui::Rect::from_min_size(pos2(right - w, cy - 10.0), vec2(w, 20.0));
+    let r = egui::Rect::from_min_size(pos2(keycap_left(edge, w, rtl), cy - 10.0), vec2(w, 20.0));
     ui.painter().rect_filled(r, CornerRadius::same(4), t.field);
     ui.painter().rect_stroke(r, CornerRadius::same(4), Stroke::new(1.0, t.border), StrokeKind::Inside);
     ui.painter().galley(pos2(r.min.x + 5.0, cy - galley.size().y / 2.0), galley, t.text);
-    r.min.x
+    if rtl { r.max.x } else { r.min.x }
 }
 
 fn row(ui: &mut Ui, t: &Tokens, row: &Row, width: f32) {
@@ -74,24 +79,34 @@ fn row(ui: &mut Ui, t: &Tokens, row: &Row, width: f32) {
         ui.painter().rect_filled(r, CornerRadius::same(4), t.hover);
     }
     let cy = r.center().y;
-    let mut right = r.max.x - 6.0;
+    let rtl = i18n::right_to_left();
+    let mut edge = if rtl { r.min.x + 6.0 } else { r.max.x - 6.0 };
     for (i, k) in row.keys.iter().enumerate().rev() {
-        right = keycap(ui, t, k, right, cy);
+        edge = keycap(ui, t, k, edge, cy, rtl);
         if i > 0 {
             let or = ui.painter().layout_no_wrap(tr("or").into(), regular(10.0), t.text_tertiary);
-            right -= 4.0 + or.size().x;
-            ui.painter().galley(pos2(right, cy - or.size().y / 2.0), or, t.text_tertiary);
-            right -= 4.0;
+            if rtl {
+                edge += 4.0;
+                let or_width = or.size().x;
+                let or_height = or.size().y;
+                ui.painter().galley(pos2(edge, cy - or_height / 2.0), or, t.text_tertiary);
+                edge += or_width + 4.0;
+            } else {
+                edge -= 4.0 + or.size().x;
+                ui.painter().galley(pos2(edge, cy - or.size().y / 2.0), or, t.text_tertiary);
+                edge -= 4.0;
+            }
         }
     }
-    let label_w = (right - r.min.x - 14.0).max(20.0);
-    // Measured in the font it's painted in: a long translation ends with "…" before the keycaps and
-    // shows in full on hover.
+    let label_w = (if rtl { r.max.x - edge - 14.0 } else { edge - r.min.x - 14.0 }).max(20.0);
+    // Elide against the free space between translated label and keycaps; keep the full hover tip.
     let label = crate::widgets::elide_font(ui, &row.label, label_w, regular(12.0));
     if label != row.label {
         resp.on_hover_text(&*row.label);
     }
-    ui.painter().text(pos2(r.min.x + 6.0, cy), Align2::LEFT_CENTER, label, regular(12.0), t.text);
+    let anchor = if rtl { r.max.x - 6.0 } else { r.min.x + 6.0 };
+    let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    ui.painter().text(pos2(anchor, cy), align, label, regular(12.0), t.text);
 }
 
 pub fn show(app: &mut FigApp, ctx: &Context) {
@@ -125,11 +140,16 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         let gap = 24.0;
         let col_w = (width - gap * (COLUMNS as f32 - 1.0)) / COLUMNS as f32;
         let per = list.len().div_ceil(COLUMNS);
+        // The first logical shortcut group starts in the rightmost column in Hebrew.
+        let mut groups: Vec<_> = list.chunks(per.max(1)).collect();
+        if i18n::right_to_left() {
+            groups.reverse();
+        }
         egui::ScrollArea::vertical().min_scrolled_height(body_h).max_height(body_h).show(ui, |ui| {
             ui.set_min_height(body_h);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing = vec2(gap, 0.0);
-                for chunk in list.chunks(per.max(1)) {
+                for chunk in groups {
                     ui.vertical(|ui| {
                         ui.set_width(col_w);
                         ui.spacing_mut().item_spacing.y = 2.0;
@@ -143,5 +163,15 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     });
     if !open {
         app.ui.shortcuts_panel = false;
+    }
+}
+#[cfg(test)]
+mod rtl_tests {
+    use super::keycap_left;
+
+    #[test]
+    fn hebrew_keycaps_use_opposite_reading_edge() {
+        assert_eq!(keycap_left(100.0, 30.0, false), 70.0);
+        assert_eq!(keycap_left(100.0, 30.0, true), 100.0);
     }
 }
