@@ -365,8 +365,9 @@ struct Mapper<'a> {
     /// holding it) name it by `vectorNetworkRef`. Kept out of the JSON, where a large file's
     /// networks took gigabytes.
     networks: Vec<Option<VectorNetwork>>,
-    /// Index in `networks` by its blob, position scale, style table and point-radius scale.
-    network_ids: HashMap<(usize, u64, u64, usize, u64), usize>,
+    /// Index in `networks` by its blob, position scale, style table, point-radius scale and the
+    /// layer's corner radius (which points without one of their own take).
+    network_ids: HashMap<(usize, u64, u64, usize, u64, u64), usize>,
     /// Region paint elements (paints and gradient stops) read so far: one budget for the whole
     /// file, since layers with region paints don't share their network.
     region_paint_elements: usize,
