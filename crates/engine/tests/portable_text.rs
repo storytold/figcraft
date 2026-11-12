@@ -14,7 +14,8 @@ fn portable_text_other_computer() {
         return;
     }
     figcraft_text::scan_system_fonts();
-    let Some(font) = figcraft_text::find_face("Arial", "Regular") else {
+    let Some(font) = figcraft_text::find_face("Inter", "Regular") else {
+        assert!(std::env::var_os("CRAFT_FONTS_REQUIRED").is_none(), "the required Inter face is missing");
         eprintln!("portable text: skipped separate-process check because no source face is available");
         return;
     };
@@ -33,6 +34,7 @@ fn portable_text_other_computer() {
     let id = doc.create(doc.first_page().unwrap(), NodeKind::Text(t), "Portable", 0.0, 0.0, 360.0, 120.0).unwrap();
     assert_eq!(figcraft_text::appearance::capture(&mut doc, None), 1);
     assert_eq!(figcraft_text::appearance::capture(&mut doc, None), 0);
+    upgrade_legacy_geometry(&mut doc, id);
     // Old imported files can link a text style on the layer before per-character links exist.
     // Opening must settle those links before fingerprinting the portable geometry.
     let style = doc.node(id).unwrap().kind.text().unwrap().style.clone();
@@ -48,6 +50,7 @@ fn portable_text_other_computer() {
     let node = doc.node(id).unwrap();
     assert!(figcraft_text::appearance::has_saved(node.kind.text().unwrap(), Some(node.width), Some(node.height)));
     assert_eq!(figcraft_text::appearance::capture(&mut doc, None), 0);
+    add_compact_variants(&mut doc);
     let dir = std::env::temp_dir().join(format!("figcraft-portable-text-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let replica = figcraft_collab::Replica::new(doc.clone());
@@ -55,6 +58,10 @@ fn portable_text_other_computer() {
     std::fs::write(dir.join("test.figcraft"), figcraft_format::save_bytes(&doc, None).unwrap()).unwrap();
     std::fs::write(dir.join("pixels.bin"), figcraft_render::render_node(&doc, id, 2.0).unwrap().data()).unwrap();
     std::fs::write(dir.join("text.svg"), figcraft_svg::export_svg(&doc, &[id], &Default::default()).unwrap()).unwrap();
+    for n in doc.nodes().filter(|n| n.kind.text().is_some() && n.id != id) {
+        std::fs::write(dir.join(format!("{}.pixels", n.id.0)), figcraft_render::render_node(&doc, n.id, 2.0).unwrap().data()).unwrap();
+        std::fs::write(dir.join(format!("{}.svg", n.id.0)), figcraft_svg::export_svg(&doc, &[n.id], &Default::default()).unwrap()).unwrap();
+    }
     let child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "portable_text_other_computer", "--nocapture"])
         .env("FIGCRAFT_PORTABLE_TEXT_CHILD", &dir)
@@ -66,11 +73,41 @@ fn portable_text_other_computer() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+fn upgrade_legacy_geometry(doc: &mut Document, id: figcraft_doc::NodeId) {
+    let layout = figcraft_text::layout_node(doc.node(id).unwrap()).unwrap().0;
+    let expected = layout.to_path().to_svg();
+    let NodeKind::Text(text) = &mut doc.node_mut(id).unwrap().kind else { panic!("text") };
+    let saved = std::sync::Arc::make_mut(text.appearance.as_mut().unwrap());
+    for (glyph, original) in saved.glyphs.iter_mut().zip(&layout.glyphs) {
+        glyph.d = original.path().to_svg().into();
+        glyph.transform = None;
+    }
+    assert_eq!(figcraft_text::appearance::capture(doc, None), 1);
+    assert_eq!(figcraft_text::appearance::capture(doc, None), 0);
+    assert_eq!(figcraft_text::layout_node(doc.node(id).unwrap()).unwrap().0.to_path().to_svg(), expected);
+}
+
+fn add_compact_variants(doc: &mut Document) {
+    let page = doc.first_page().unwrap();
+    for on_path in [false, true] {
+        let mut text = TextData::new(if on_path { "AV office on a curve" } else { "אבג office AV" });
+        text.style.font_family = FAMILY.into();
+        text.style.font_size = 29.125;
+        text.auto_resize = TextAutoResize::None;
+        if on_path {
+            let path = figcraft_geom::BezPath::from_svg("M0 120C100 -50 200 220 350 40").unwrap();
+            text.path = Some(Box::new(figcraft_doc::TextPath::new(&path)));
+        }
+        doc.create(page, NodeKind::Text(text), "Compact variant", 0.0, 0.0, 400.0, 240.0).unwrap();
+    }
+    assert_eq!(figcraft_text::appearance::capture(doc, None), 2);
+}
+
 fn verify_without_fonts(dir: &std::path::Path) {
     assert!(!figcraft_text::has_family(FAMILY));
     let (doc, issues) = figcraft_format::load_bytes(&std::fs::read(dir.join("test.figcraft")).unwrap()).unwrap();
     assert!(issues.is_empty());
-    let id = doc.nodes().find(|n| matches!(n.kind, NodeKind::Text(_))).unwrap().id;
+    let id = doc.nodes().find(|n| n.name == "Portable" && n.kind.text().is_some()).unwrap().id;
     let n = doc.node(id).unwrap();
     let (l, _) = figcraft_text::layout_node(n).unwrap();
     assert!(!l.glyphs.is_empty());
@@ -86,6 +123,14 @@ fn verify_without_fonts(dir: &std::path::Path) {
     let live_svg = figcraft_svg::export_svg(&doc, &[id], &figcraft_svg::SvgOptions { outline_text: false, ..Default::default() }).unwrap();
     assert!(!live_svg.contains("<text"), "an absent font must not change the exported appearance");
     assert!(figcraft_pdf::export_nodes_pdf(&doc, &[id]).unwrap().starts_with(b"%PDF"));
+    for n in doc.nodes().filter(|n| n.kind.text().is_some() && n.id != id) {
+        assert!(figcraft_text::layout_node(n).unwrap().0.glyphs.iter().all(|g| g.face.is_none()));
+        assert_eq!(figcraft_render::render_node(&doc, n.id, 2.0).unwrap().data(), std::fs::read(dir.join(format!("{}.pixels", n.id.0))).unwrap());
+        assert_eq!(
+            figcraft_svg::export_svg(&doc, &[n.id], &Default::default()).unwrap(),
+            std::fs::read_to_string(dir.join(format!("{}.svg", n.id.0))).unwrap()
+        );
+    }
     verify_current_links(&doc, id);
     verify_edit_protection(doc, id);
 }

@@ -69,8 +69,8 @@ anything. Capturing only at export time would not fix that live-document use cas
 font-independent display, not permission to edit text using an absent font.
 
 Appearances are immutable shared data in memory (`Arc`); cloning a text node, an undo entry or
-fingerprinting editable inputs does not clone its outline strings. The serialized native shape
-is unchanged. Exact named-face availability (including missing results) is bounded and cached:
+fingerprinting editable inputs does not clone its outline strings. The compact wire/native
+encoding is described below; readers also accept the earlier positioned-path records. Exact named-face availability (including missing results) is bounded and cached:
 a warm appearance check takes a read lock, not the font database’s write lock. Adding fonts and
 both initial indexing and rescans invalidate these results, including late-installed styles.
 The cache contains face names/results only, never font binaries.
@@ -114,7 +114,7 @@ Keep the exact revisions and results together: capture and serialization costs d
 text/font workload, and a resize microbenchmark does not answer the load/save question.
 
 
-### Windows before/after, 2026-11-12
+### Earlier positioned-path baseline, 2026-11-12
 
 Base: `0d6ce1124c03c8efc3807db5689fee7f8ec94756` (main), with only this benchmark harness applied.
 Feature: portable-text integrated with that same main, measured with the harness in this change.
@@ -131,10 +131,103 @@ All times below are medians in milliseconds; sizes are exact ZIP byte counts.
 | 10,000 | portable text | 8380.447 | 19743.431 | 20262.586 | 5891.669 | 294,632,582 | 10,000 |
 
 The 10,000-layer document contains 1,170,000 characters. All text layers survived every load;
-the feature stored an appearance for every layer (main stored none). The current representation
-is **not within the requested 10% overhead target**: at 10,000 layers, repeat save is **12.04×**, reopen **101.38×**, and ZIP size **1110.25×** main.
+the feature stored an appearance for every layer (main stored none). That earlier representation
+was **not within the requested 10% overhead target**: at 10,000 layers, repeat save is **12.04×**, reopen **101.38×**, and ZIP size **1110.25×** main.
 The roughly 294.6 MB archive is a text-only synthetic case; it is not a measurement of a user's
 image-heavy file. These results expose the cost of per-positioned-glyph SVG strings in native
 serialization. Shared in-memory geometry and deferred gesture capture do not remove that file
 size or load/save cost. Further storage-representation work or a different capture policy is
-needed before claiming the performance criterion is satisfied.
+needed before claiming the performance criterion is satisfied; see the compact encoding follow-up below.
+
+
+## Compact encoding and migration
+
+`appearance.encoding: 1` (read compatibility) stores a self-contained `outlines` table and glyph tuples:
+`[outlineIndex, x, y, size, advance, charStart, charEnd, style, rtl, placement]`.
+Shapes are saved in their original font units, once for every distinct path in that appearance.
+Ordinary placement is one scale number (the tuple already has x/y); text on a curve keeps all
+six affine coefficients. Null placement means an earlier, already-placed path. No coordinate
+rounding or lossy simplification is used. Capturing shares outline strings across layers for
+one capture operation, bounded to 20,000 entries and 16 MiB; restoration parses a repeated shape
+only once per layout. Version-one glyph tuples are read directly, without buffering a generic JSON tree.
+Current writers use encoding 2: the same outline table plus a lossless packed `glyphs` string
+described below.
+
+Each text node remains independently transferable in collaboration, clipboard and history;
+there is no live-document table that another client's edit could invalidate. The reader
+accepts the earlier object-shaped glyph records without `encoding` as version zero. With the
+source faces installed, capture replaces valid version-zero positioned paths with normalized
+geometry; without them, the earlier geometry remains exact and can still be saved and displayed.
+The new encoding alone cannot remove position-dependent duplicates from an old file whose
+fonts are absent. Neither reader nor writer embeds a font binary.
+
+Unknown encodings, invalid table references, more than 100,000 glyphs/outlines, more than 16 MiB
+of dictionary strings (including unused entries), or more than 16 MiB of expanded path strings
+are refused. Display additionally checks finite transforms, paths, ranges and metrics.
+Upgrade experimental clients and servers together: builds of this PR before compact encoding
+may reject the new records. New readers open the earlier records. Experimental `.fig`
+export still does not write portable appearances.
+
+
+### Native file table
+
+Native `document.json` also carries `textOutlines: {version: 1, paths: [...]}`. During
+serialization only, its local appearance dictionaries use `@<index>` strings into that file
+table. The writer clones only affected text nodes in a temporary document; it does not change
+the live document, fingerprints, undo, or collaboration state. Loading resolves references
+before returning a document or validating its editable content. A saved version or branch
+snapshot has its own table. Plain in-memory/collaboration serialization stays self-contained.
+
+The file table is bounded to 100,000 paths and 64 MiB. Shapes that do not fit are written inline,
+so the bound never silently discards content. Missing references and unknown versions are
+refused. Resolved paths are charged against both the 16 MiB per-layer limit and the native
+document work limit (4 GiB on native 64-bit, 1 GiB on 32-bit). References are resolved once,
+not recursively. Existing archive member, compression-ratio and total unpacking caps remain.
+
+
+### Packed numeric records (encoding 2)
+
+`glyphs` is standard padded base64 of little-endian columns, not an image. The first u32 is
+record count. Four u32 columns follow (outline index, char start, char end, style), then four
+IEEE-754 f64 columns (x, y, font size, advance). Each column writes byte plane 0 for all rows,
+then plane 1, and so on. This preserves the exact bits while exposing repeated low/high bytes
+to ordinary ZIP compression, instead of repeatedly formatting/parsing decimal numbers.
+Next are one RTL byte per row (0/1), one placement tag per row (0/1/2), and placement payloads
+in row order: none, one f64 scale, or six f64 affine coefficients. Payload numbers are ordinary
+little-endian f64s. No lossy quantization or font re-shaping is needed to decode them.
+
+The decoder bounds encoded/raw lengths, record count, every column/payload read and indices;
+it refuses invalid flags, non-finite values, truncation and trailing bytes. Writing applies
+the native finite-number policy (non-finite values become zero). Old encoding-zero objects
+and encoding-one tuples are still accepted. Font-unit paths and editable characters remain
+ordinary document data; the glyph number encoding contains no font binary.
+
+
+### Lossless packed follow-up, 2026-11-12
+
+Same corpus, Inter input, release profile and one warm-up/five measured medians as above.
+The unoptimized portable baseline is PR head `194909935faf18753d5fe4dd7e810c377a2cb66d`.
+The compact variant includes normalized shared shapes, the native file dictionary, and encoding-2
+byte-plane glyph numbers. A fresh sequential main run uses the already-built main binary from
+`0d6ce1124c03c8efc3807db5689fee7f8ec94756`; release compilation is excluded from all timings.
+
+| Text layers | Storage variant | Prepare ms | First save ms | Repeat save ms | Reopen ms | ZIP bytes | Appearances |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1,000 | main (fresh run) | 0.292 | 122.237 | 119.880 | 5.271 | 127,908 | 0 |
+| 1,000 | portable, positioned SVG | 720.823 | 1802.479 | 1748.249 | 520.258 | 29,457,300 | 1,000 |
+| 1,000 | portable, pooled/packed | 14.447 | 205.341 | 204.655 | 56.744 | 939,721 | 1,000 |
+| 10,000 | main (fresh run) | 3.343 | 2085.005 | 2053.145 | 63.888 | 265,376 | 0 |
+| 10,000 | portable, positioned SVG | 8380.447 | 19743.431 | 20262.586 | 5891.669 | 294,632,582 | 10,000 |
+| 10,000 | portable, pooled/packed | 975.043 | 3021.400 | 2860.561 | 528.367 | 8,275,682 | 10,000 |
+
+At 10,000 layers / 1,170,000 characters, the optimized archive is **35.60 times
+smaller (97.19% fewer bytes)** than the earlier portable implementation.
+Measured repeat save is **7.08 times faster** and reopen **11.15 times faster**.
+All 10,000 appearances and text layers survived every round trip. No image rasterization,
+coordinate quantization or font substitution accounts for these reductions.
+
+The original review's roughly 10% overhead target versus main is **still not met**: repeat
+save is 1.39 times main, reopen 8.27 times, and ZIP size 31.18 times.
+These are local synthetic text-only measurements, not a guarantee about GUI/network latency
+or an image-heavy customer document. The earlier and fresh main timings also show normal
+run-to-run machine variation; no confidence interval or controlled cross-machine speedup is claimed.

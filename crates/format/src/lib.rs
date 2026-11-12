@@ -29,6 +29,7 @@ pub use density::{pixel_density, placed_size};
 pub use library::{is_valid_library_id, read_library, read_library_within};
 
 mod density;
+mod text_outlines;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, Write};
@@ -252,12 +253,15 @@ struct DocumentJson<'a> {
     #[serde(rename = "imageIndex", serialize_with = "image_index")]
     images: &'a BTreeMap<String, ImageData>,
     #[serde(flatten)]
-    doc: &'a Document,
+    doc: std::borrow::Cow<'a, Document>,
+    #[serde(rename = "textOutlines", skip_serializing_if = "Option::is_none")]
+    outlines: Option<text_outlines::Pool>,
 }
 
 impl<'a> DocumentJson<'a> {
     fn new(doc: &'a Document) -> Self {
-        Self { format: FORMAT, version: VERSION, images: &doc.images, doc }
+        let (packed, outlines) = text_outlines::pack(doc);
+        Self { format: FORMAT, version: VERSION, images: &doc.images, doc: packed, outlines }
     }
 }
 
@@ -475,6 +479,7 @@ type ImageIndex = Option<BTreeSet<String>>;
 struct Header {
     version: Option<u64>,
     images: ImageIndex,
+    outlines: Option<text_outlines::Pool>,
 }
 
 impl<'de> Deserialize<'de> for Header {
@@ -490,6 +495,7 @@ impl<'de> Deserialize<'de> for Header {
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "version" => h.version = map.next_value::<Value>()?.as_u64(),
+                        "textOutlines" => h.outlines = map.next_value()?,
                         "imageIndex" => {
                             h.images = map
                                 .next_value::<Value>()?
@@ -520,6 +526,7 @@ fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatE
         return Err(FormatError::Newer(u32::try_from(ver).unwrap_or(u32::MAX)));
     }
     let mut doc: Document = serde_json::from_str(text).map_err(corrupt)?;
+    text_outlines::expand(&mut doc, header.outlines.as_ref())?;
     let issues = doc.validate();
     if !issues.is_empty() {
         doc.repair();

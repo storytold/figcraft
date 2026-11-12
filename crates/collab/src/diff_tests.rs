@@ -331,7 +331,8 @@ fn portable_text() -> figcraft_doc::TextData {
         width: 100.0,
         height: 20.0,
         glyphs: vec![figcraft_doc::TextGlyph {
-            d: "M0 0L10 0L10 10Z".repeat(10000),
+            d: "M0 0L10 0L10 10Z".repeat(10000).into(),
+            transform: None,
             x: 0.0,
             y: 0.0,
             size: 20.0,

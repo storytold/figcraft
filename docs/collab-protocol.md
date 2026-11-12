@@ -1111,3 +1111,10 @@ property is added. A receiving machine with absent faces uses the saved geometry
 author's text box. SVG/PDF exports use those outlines too. See [portable-text.md](portable-text.md).
 Both server and clients must implement the retained-field update semantics; older builds may
 discard the optional geometry when applying an update. Upgrade participating clients together.
+
+Compact appearance encoding 1 stores normalized outlines in a table local to that text node,
+with glyph tuples referencing shapes and retaining exact placement/metrics. It remains a
+self-contained kind update; no session-global table, message variant or property is added.
+Readers accept earlier object-shaped glyphs as encoding zero. Experimental builds before
+encoding 1 can reject the new tuples, so update the server and participating clients together.
+See [portable-text.md](portable-text.md#compact-encoding-and-migration) for migration and limits.

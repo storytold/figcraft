@@ -23,6 +23,8 @@ pub mod props;
 pub mod proto;
 pub mod styles;
 pub mod text;
+mod text_appearance;
+mod text_glyph_bytes;
 pub mod vector;
 pub mod vector_faces;
 pub mod vector_regions;

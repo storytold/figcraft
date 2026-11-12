@@ -83,6 +83,7 @@ pub(crate) fn restore(t: &TextData, w: Option<f64>, h: Option<f64>) -> Option<Te
     }
     let chars = t.char_count();
     let mut bytes = 0usize;
+    let mut parsed = std::collections::HashMap::new();
     let glyphs = a
         .glyphs
         .iter()
@@ -96,7 +97,14 @@ pub(crate) fn restore(t: &TextData, w: Option<f64>, h: Option<f64>) -> Option<Te
             {
                 return None;
             }
-            let path = BezPath::from_svg(&g.d).ok()?;
+            let path = parsed.entry(g.d.as_ref()).or_insert_with(|| BezPath::from_svg(&g.d).ok());
+            let mut path = path.as_ref()?.clone();
+            if let Some(matrix) = g.transform {
+                if !matrix.iter().all(|v| v.is_finite()) {
+                    return None;
+                }
+                path.apply_affine(Affine::new(matrix));
+            }
             if !path.is_finite() {
                 return None;
             }
@@ -187,16 +195,46 @@ pub(crate) fn restore(t: &TextData, w: Option<f64>, h: Option<f64>) -> Option<Te
     Some(TextLayout { glyphs, lines, decorations, styles, width: a.width, height: a.height, truncated: a.truncated, on_path: None })
 }
 
+/// Shared within one capture, bounded independently of document size. Keying by face and
+/// normalized variation coordinates avoids conflating different fonts or variable instances.
+#[derive(Default)]
+struct OutlineCache {
+    entries: std::collections::HashMap<(u32, u32, crate::Coords), Arc<str>>,
+    bytes: usize,
+}
+
+impl OutlineCache {
+    fn get(&mut self, glyph: &Glyph) -> Arc<str> {
+        let Some(face) = &glyph.face else { return glyph.path().to_svg().into() };
+        let key = (face.id, glyph.gid, glyph.coords.clone());
+        if let Some(path) = self.entries.get(&key) {
+            return path.clone();
+        }
+        let path: Arc<str> = face.outline_at(glyph.gid, &glyph.coords).to_svg().into();
+        if path.len() > MAX_PATH_BYTES {
+            return path;
+        }
+        if self.bytes.saturating_add(path.len()) > MAX_PATH_BYTES || self.entries.len() >= 20_000 {
+            self.entries.clear();
+            self.bytes = 0;
+        }
+        self.bytes += path.len();
+        self.entries.insert(key, path.clone());
+        path
+    }
+}
+
 /// Add/update appearances on machines with the original fonts. Existing valid geometry is
 /// retained on a guest missing fonts. Returns the number of changed text layers.
 pub fn capture(doc: &mut Document, ids: Option<&[figcraft_doc::NodeId]>) -> usize {
     let ids = ids.map_or_else(|| doc.nodes().map(|n| n.id).collect::<Vec<_>>(), |v| v.to_vec());
     let mut changed = 0;
+    let mut outlines = OutlineCache::default();
     for id in ids {
         let Some(n) = doc.node(id) else { continue };
         let NodeKind::Text(t) = &n.kind else { continue };
         let Some(key) = fingerprint(t, Some(n.width), Some(n.height)) else { continue };
-        if t.appearance.as_ref().is_some_and(|a| a.fingerprint == key) || !fonts_available(t) {
+        if t.appearance.as_ref().is_some_and(|a| a.fingerprint == key && a.glyphs.iter().all(|g| g.transform.is_some())) || !fonts_available(t) {
             continue;
         }
         let Some((l, _)) = crate::layout_node(n) else { continue };
@@ -207,7 +245,11 @@ pub fn capture(doc: &mut Document, ids: Option<&[figcraft_doc::NodeId]>) -> usiz
             .glyphs
             .iter()
             .map(|g| TextGlyph {
-                d: g.path().to_svg(),
+                d: outlines.get(g),
+                transform: g.face.as_ref().map(|face| {
+                    let scale = g.size / face.upem;
+                    (g.warp * Affine::new([scale, 0.0, 0.0, scale, g.x, g.y])).as_coeffs()
+                }),
                 x: g.x,
                 y: g.y,
                 size: g.size,
@@ -284,6 +326,7 @@ mod tests {
             height: 40.0,
             glyphs: vec![TextGlyph {
                 d: "M0 0L25 0L25 40Z".into(),
+                transform: None,
                 x: 0.0,
                 y: 30.0,
                 size: 40.0,

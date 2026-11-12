@@ -1888,6 +1888,7 @@ dependencies = [
 name = "figcraft-doc"
 version = "0.18.1"
 dependencies = [
+ "base64 0.22.1",
  "figcraft-color",
  "figcraft-geom",
  "imbl",
