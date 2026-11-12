@@ -477,6 +477,76 @@ fn a_layer_without_backdrop_effects_still_leaves_the_layers_below_out() {
 }
 
 #[test]
+fn node_set_takes_back_the_export_settings_node_get_returns() {
+    use figcraft_doc::{ExportColorProfile, ExportFormat, ExportSetting, PrintSettings, VdCompat};
+
+    // Every multi-word field (and `quality`) away from its default.
+    let expected = ExportSetting {
+        format: ExportFormat::Jpg,
+        suffix: "@3x".into(),
+        print: PrintSettings { bleed: 9.0, crop_marks: true, bleed_marks: true, cmyk: true },
+        contents_only: false,
+        include_bounding_box: true,
+        svg_outline_text: false,
+        svg_id_attribute: true,
+        svg_simplify_stroke: false,
+        vd_compat: VdCompat::Exact,
+        color_profile: ExportColorProfile::DisplayP3,
+        quality: 55,
+        ..Default::default()
+    };
+    let default = ExportSetting::default();
+    for (field, differs) in [
+        ("print", expected.print != default.print),
+        ("contents_only", expected.contents_only != default.contents_only),
+        ("include_bounding_box", expected.include_bounding_box != default.include_bounding_box),
+        ("svg_outline_text", expected.svg_outline_text != default.svg_outline_text),
+        ("svg_id_attribute", expected.svg_id_attribute != default.svg_id_attribute),
+        ("svg_simplify_stroke", expected.svg_simplify_stroke != default.svg_simplify_stroke),
+        ("vd_compat", expected.vd_compat != default.vd_compat),
+        ("color_profile", expected.color_profile != default.color_profile),
+        ("quality", expected.quality != default.quality),
+    ] {
+        assert!(differs, "{field} must be non-default in the expected setting");
+    }
+
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0, 40.0, 20.0, "#FF0000", None);
+    let stored = |s: &Session| s.doc().unwrap().node(a).unwrap().exports.clone();
+    ex(
+        &mut s,
+        "export.add",
+        json!({"ids": [a], "setting": {
+            "format": "jpg", "suffix": "@3x", "bleed": 9, "cropMarks": true, "bleedMarks": true, "cmyk": true,
+            "contentsOnly": false, "includeBoundingBox": true, "svgOutlineText": false, "svgIdAttribute": true,
+            "svgSimplifyStroke": false, "vdCompat": "exact", "colorProfile": "displayP3", "quality": 55,
+        }}),
+    );
+    assert_eq!(stored(&s), vec![expected.clone()], "export.add stores every field");
+
+    // What node.get returns goes back through node.set unchanged.
+    let got = ex(&mut s, "node.get", json!({"id": a}))["exports"].clone();
+    set(&mut s, &[a], json!({"exports": []}));
+    assert!(stored(&s).is_empty());
+    set(&mut s, &[a], json!({"exports": got}));
+    assert_eq!(stored(&s), vec![expected.clone()], "node.set stores what node.get returned, unchanged");
+
+    // The snake_case spelling is taken too.
+    set(&mut s, &[a], json!({"exports": []}));
+    set(
+        &mut s,
+        &[a],
+        json!({"exports": [{
+            "format": "jpg", "suffix": "@3x",
+            "print": {"bleed": 9, "crop_marks": true, "bleed_marks": true, "cmyk": true},
+            "contents_only": false, "include_bounding_box": true, "svg_outline_text": false, "svg_id_attribute": true,
+            "svg_simplify_stroke": false, "vd_compat": "exact", "color_profile": "displayP3", "quality": 55,
+        }]}),
+    );
+    assert_eq!(stored(&s), vec![expected], "node.set takes the snake_case keys");
+}
+
+#[test]
 fn export_rejects_an_invalid_layer_id_instead_of_exporting_the_page() {
     let mut s = Session::new();
     let r = rect(&mut s, 0.0, 0.0, 10.0, 10.0, "#ff0000", None);
