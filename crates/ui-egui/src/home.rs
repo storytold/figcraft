@@ -102,8 +102,10 @@ pub(crate) fn file_row(ui: &Ui, t: &Tokens, r: Rect, resp: &Response, row: &File
     if resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
     }
+    let mirrored = crate::i18n::right_to_left();
     if let Some((icon, tint)) = row.mark {
-        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, tint);
+        let x = if mirrored { r.max.x - 24.0 } else { r.min.x + 8.0 };
+        icons::paint(ui.painter(), Rect::from_min_size(pos2(x, r.center().y - 8.0), vec2(16.0, 16.0)), icon, tint);
     }
     let (name_font, detail_font) = (regular(12.0), regular(row.detail_size));
     let width = |s: &str, font: &egui::FontId| ui.painter().layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x;
@@ -120,8 +122,14 @@ pub(crate) fn file_row(ui: &Ui, t: &Tokens, r: Rect, resp: &Response, row: &File
         widgets::elide_start_font(ui, row.detail, detail_room, detail_font.clone())
     };
     let cut = name != row.name || detail != row.detail;
-    ui.painter().text(pos2(r.min.x + 32.0, r.center().y), Align2::LEFT_CENTER, name, name_font, row.ink);
-    ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, detail, detail_font, row.detail_ink);
+    // Filenames follow the reading edge; location/path details retain their own LTR character order.
+    if mirrored {
+        ui.painter().text(pos2(r.max.x - 32.0, r.center().y), Align2::RIGHT_CENTER, name, name_font, row.ink);
+        ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, detail, detail_font, row.detail_ink);
+    } else {
+        ui.painter().text(pos2(r.min.x + 32.0, r.center().y), Align2::LEFT_CENTER, name, name_font, row.ink);
+        ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, detail, detail_font, row.detail_ink);
+    }
     cut
 }
 
@@ -139,22 +147,37 @@ fn listed(ui: &mut Ui, t: &Tokens, id: Id, height: f32, row: &FileRow) -> bool {
     resp.clicked()
 }
 
+/// Split Home into a fixed-width navigation sidebar and content; never mirror document coordinates.
+fn home_columns(rect: Rect, mirrored: bool) -> (Rect, Rect) {
+    let width = SIDEBAR.min(rect.width());
+    if mirrored {
+        let bar = Rect::from_min_max(pos2(rect.max.x - width, rect.min.y), rect.max);
+        let main = Rect::from_min_max(rect.min, pos2(bar.min.x, rect.max.y));
+        (bar, main)
+    } else {
+        let bar = Rect::from_min_size(rect.min, vec2(width, rect.height()));
+        let main = Rect::from_min_max(pos2(bar.max.x, rect.min.y), rect.max);
+        (bar, main)
+    }
+}
+
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     dropped(app, ui.ctx());
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
         let rect = ui.max_rect();
-        let left = Rect::from_min_size(rect.min, vec2(SIDEBAR, rect.height()));
-        ui.painter().line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.border));
-        sidebar(app, ui, &t, left);
+        let mirrored = app.ui.mirrored;
+        let (bar, main) = home_columns(rect, mirrored);
+        let (top, bottom) = if mirrored { (bar.left_top(), bar.left_bottom()) } else { (bar.right_top(), bar.right_bottom()) };
+        ui.painter().line_segment([top, bottom], Stroke::new(1.0, t.border));
+        sidebar(app, ui, &t, bar, mirrored);
         if app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == Section::Online {
             // Your online files lay themselves out in the area (and scroll their own list).
-            let area = Rect::from_min_max(pos2(left.max.x + 40.0, rect.min.y + 24.0), rect.max - vec2(40.0, 24.0));
+            let area = Rect::from_min_max(main.min + vec2(40.0, 24.0), main.max - vec2(40.0, 24.0));
             crate::online::section(app, ui, area, &t);
             opened_join(app);
             return;
         }
-        let main = Rect::from_min_max(pos2(left.max.x, rect.min.y), rect.max);
         ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
             egui::ScrollArea::vertical().id_salt("home").auto_shrink([false, false]).show(ui, |ui| {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 24)).show(ui, |ui| {
@@ -192,12 +215,14 @@ fn dropped(app: &mut FigApp, ctx: &egui::Context) {
 
 /// Draw the Home sidebar: app icon and wordmark, file/template search (Escape clears it), section
 /// tabs (choosing one clears the file query) and Preferences at the bottom.
-fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
+fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect, mirrored: bool) {
     let mut y = left.min.y + 20.0;
-    crate::theme::paint_app_icon(ui, Rect::from_min_size(pos2(left.min.x + 12.0, y - 4.0), vec2(32.0, 32.0)));
-    crate::theme::paint_wordmark(ui.painter(), pos2(left.min.x + 52.0, y + 12.0), 16.0, t);
+    let icon_x = if mirrored { left.max.x - 44.0 } else { left.min.x + 12.0 };
+    let word_x = if mirrored { left.min.x + 12.0 } else { left.min.x + 52.0 };
+    crate::theme::paint_app_icon(ui, Rect::from_min_size(pos2(icon_x, y - 4.0), vec2(32.0, 32.0)));
+    crate::theme::paint_wordmark(ui.painter(), pos2(word_x, y + 12.0), 16.0, t);
     y += 52.0;
-    let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, widgets::FIELD_H));
+    let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2((left.width() - 16.0).max(0.0), widgets::FIELD_H));
     ui.scope_builder(egui::UiBuilder::new().max_rect(search), |ui| {
         let response = widgets::text_input(
             ui,
@@ -213,7 +238,7 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
     });
     y += widgets::FIELD_H + 12.0;
     for (section, icon, label) in Section::ALL {
-        let r = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, 32.0));
+        let r = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2((left.width() - 16.0).max(0.0), 32.0));
         let resp = ui.interact(r, ui.scope_id().with(("home_section", label)), Sense::click());
         let current = app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == section;
         a11y::tab(&resp, tr(label), current);
@@ -221,8 +246,11 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
             ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
         }
         focus_ring(ui, t, r, &resp, 5);
-        icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), icon, t.icon);
-        ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr(label), regular(12.0), t.text);
+        let icon_x = if mirrored { r.max.x - 26.0 } else { r.min.x + 10.0 };
+        let text_x = if mirrored { r.max.x - 36.0 } else { r.min.x + 36.0 };
+        let align = if mirrored { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+        icons::paint(ui.painter(), Rect::from_min_size(pos2(icon_x, r.center().y - 8.0), vec2(16.0, 16.0)), icon, t.icon);
+        ui.painter().text(pos2(text_x, r.center().y), align, tr(label), regular(12.0), t.text);
         if resp.clicked() {
             app.ui.home_view.section = section;
             app.ui.home_view.file_query.clear();
@@ -233,7 +261,7 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
     if pref_y > y + 12.0 {
         ui.painter().line_segment([pos2(left.min.x + 12.0, pref_y - 6.0), pos2(left.max.x - 12.0, pref_y - 6.0)], Stroke::new(1.0, t.border));
     }
-    let r = Rect::from_min_size(pos2(left.min.x + 8.0, pref_y), vec2(SIDEBAR - 16.0, 32.0));
+    let r = Rect::from_min_size(pos2(left.min.x + 8.0, pref_y), vec2((left.width() - 16.0).max(0.0), 32.0));
     let mut resp = ui.interact(r, ui.scope_id().with("home_preferences"), Sense::click());
     let current = app.ui.preferences;
     a11y::button(&resp, tr("Preferences"));
@@ -241,10 +269,15 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
         ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
     }
     focus_ring(ui, t, r, &resp, 5);
-    icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Adjust, t.icon);
-    ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr("Preferences"), regular(12.0), t.text);
+    let icon_x = if mirrored { r.max.x - 26.0 } else { r.min.x + 10.0 };
+    let text_x = if mirrored { r.max.x - 36.0 } else { r.min.x + 36.0 };
+    let align = if mirrored { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    icons::paint(ui.painter(), Rect::from_min_size(pos2(icon_x, r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Adjust, t.icon);
+    ui.painter().text(pos2(text_x, r.center().y), align, tr("Preferences"), regular(12.0), t.text);
     let key_label = figcraft_engine::keymap::display("Cmd+,", crate::shortcuts::platform());
-    ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, &key_label, regular(11.0), t.text_secondary);
+    let shortcut_x = if mirrored { r.min.x + 8.0 } else { r.max.x - 8.0 };
+    let shortcut_align = if mirrored { Align2::LEFT_CENTER } else { Align2::RIGHT_CENTER };
+    ui.painter().text(pos2(shortcut_x, r.center().y), shortcut_align, &key_label, regular(11.0), t.text_secondary);
     resp = resp.on_hover_text(format!("{} ({})", tr("Preferences"), key_label));
     if resp.clicked() {
         app.ui.preferences = !app.ui.preferences;
@@ -340,11 +373,15 @@ fn action_card(ui: &mut Ui, t: &Tokens, icon: Icon, title: &str, sub: &str) -> b
         resp = resp.on_hover_text(format!("{title}\n{sub}"));
     }
     card_frame(ui, t, r, &resp);
-    let ir = Rect::from_min_size(pos2(r.min.x + 16.0, r.center().y - 16.0), vec2(32.0, 32.0));
+    let mirrored = crate::i18n::right_to_left();
+    let x = if mirrored { r.max.x - 48.0 } else { r.min.x + 16.0 };
+    let ir = Rect::from_min_size(pos2(x, r.center().y - 16.0), vec2(32.0, 32.0));
     ui.painter().rect_filled(ir, CornerRadius::same(6), t.accent);
     icons::paint(ui.painter(), ir.shrink(8.0), icon, t.accent_on);
-    ui.painter().text(pos2(r.min.x + 60.0, r.center().y - 8.0), Align2::LEFT_CENTER, title_shown, semibold(12.0), t.text);
-    ui.painter().text(pos2(r.min.x + 60.0, r.center().y + 9.0), Align2::LEFT_CENTER, sub_shown, regular(11.0), t.text_secondary);
+    let text_x = if mirrored { r.max.x - 60.0 } else { r.min.x + 60.0 };
+    let align = if mirrored { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    ui.painter().text(pos2(text_x, r.center().y - 8.0), align, title_shown, semibold(12.0), t.text);
+    ui.painter().text(pos2(text_x, r.center().y + 9.0), align, sub_shown, regular(11.0), t.text_secondary);
     resp.clicked()
 }
 
@@ -629,4 +666,37 @@ fn thumbnail(ctx: &egui::Context, template: &Template, background: figcraft_colo
 pub(crate) fn cached_thumbnails(ctx: &egui::Context, dark: bool) -> Vec<&'static str> {
     let thumbs: Thumbs = ctx.data(|d| d.get_temp(Id::unique("template_thumbs"))).unwrap_or_default();
     thumbs.0.iter().filter(|((_, d), thumb)| *d == dark && thumb.is_some()).map(|((id, _), _)| *id).collect()
+}
+
+#[cfg(test)]
+mod home_rtl_tests {
+    use super::*;
+
+    #[test]
+    fn home_sidebar_moves_to_right_only_for_rtl() {
+        let bounds = Rect::from_min_max(pos2(20.0, 30.0), pos2(1420.0, 930.0));
+        let (left_bar, left_main) = home_columns(bounds, false);
+        assert_eq!(left_bar.min.x, bounds.min.x);
+        assert_eq!(left_bar.max.x, left_main.min.x);
+        assert_eq!(left_main.max.x, bounds.max.x);
+        let (right_bar, right_main) = home_columns(bounds, true);
+        assert_eq!(right_bar.max.x, bounds.max.x);
+        assert_eq!(right_bar.min.x, right_main.max.x);
+        assert_eq!(right_main.min.x, bounds.min.x);
+        assert_eq!(left_bar.width(), right_bar.width());
+        assert_eq!(left_main.width(), right_main.width());
+        assert_eq!(left_bar.height(), right_bar.height());
+    }
+
+    #[test]
+    fn tiny_home_window_never_extends_sidebar_past_bounds() {
+        let bounds = Rect::from_min_max(pos2(0.0, 0.0), pos2(180.0, 120.0));
+        for rtl in [false, true] {
+            let (bar, main) = home_columns(bounds, rtl);
+            assert_eq!(bar.width(), 180.0);
+            assert_eq!(main.width(), 0.0);
+            assert_eq!(bar.min.x, bounds.min.x);
+            assert_eq!(bar.max.x, bounds.max.x);
+        }
+    }
 }
