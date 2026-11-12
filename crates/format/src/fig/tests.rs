@@ -28,7 +28,9 @@ enum StrokeCap NONE ROUND SQUARE ARROW_LINES ARROW_EQUILATERAL
 enum StrokeJoin MITER BEVEL ROUND
 enum VectorMirror NONE ANGLE ANGLE_AND_LENGTH
 enum ShapeWithTextType SQUARE ELLIPSE
+enum NodePhase CREATED REMOVED
 enum ConnectorLineStyle ELBOWED STRAIGHT CURVED
+enum ConnectorMagnet NONE AUTO TOP LEFT BOTTOM RIGHT CENTER
 enum ExpressionFunction ADDITION SUBTRACTION RESOLVE_VARIANT MULTIPLY DIVIDE EQUALS
 enum NavigationType NAVIGATE OVERLAY
 enum TransitionType INSTANT_TRANSITION DISSOLVE SMART_ANIMATE
@@ -50,7 +52,8 @@ message VariableTarget VariableID id
 message VariableSetID GUID guid, AssetRef assetRef
 message ConditionalActions Action[] actions, VariableData condition
 message VectorData uint vectorNetworkBlob, Vector normalizedSize, NodeChange[] styleOverrideTable
-message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition
+message ConnectorEndpoint GUID endpointNodeID, Vector position, Vector relativePosition, ConnectorMagnet magnet
+message ConnectorControlPoint Vector position, Vector axis
 message VariableData AnyValue value, DataType dataType
 message Paint PaintType type, Color color, float opacity, bool visible, Image image, Matrix transform, ColorStop[] stops, VariableData colorVar, ImageScaleMode imageScaleMode
 message ParentIndex GUID guid, string position
@@ -58,7 +61,7 @@ message FontName string family, string style, string postscript
 message TextData string characters, uint[] characterStyleIDs, NodeChange[] styleOverrideTable
 message Path WindingRule windingRule, uint commandsBlob
 message GUIDPath GUID[] guids
-message SymbolData GUID symbolID, NodeChange[] symbolOverrides
+message SymbolData GUID symbolID, NodeChange[] symbolOverrides, float uniformScaleFactor
 message StyleId GUID guid, AssetRef assetRef
 message PropValue bool boolValue, TextData textValue
 message PropDef GUID id, string name, PropValue initialValue, PropType type
@@ -74,7 +77,7 @@ message Event InteractionType interactionType
 message Action GUID transitionNodeID, TransitionType transitionType, float transitionDuration, EasingType easingType, ConnectionType connectionType, NavigationType navigationType, VariableTarget targetVariable, VariableData targetVariableData, VariableSetID targetVariableSetID, GUID targetVariableModeID, ConditionalActions[] conditionalActions
 message Interaction Event event, Action[] actions
 message StartingPoint string name, string position
-message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern
+message NodeChange GUID guid, ParentIndex parentIndex, NodeType type, string name, bool visible, float opacity, Vector size, Matrix transform, Paint[] fillPaints, Paint[] strokePaints, float strokeWeight, float cornerRadius, bool resizeToFit, bool internalOnly, float fontSize, FontName fontName, TextData textData, uint styleID, Path[] fillGeometry, Path[] strokeGeometry, StyleType styleType, StyleId styleIdForFill, SymbolData symbolData, PropDef[] componentPropDefs, PropAssignment[] componentPropAssignments, VariableDataMap parameterConsumptionMap, SetMode[] variableSetModes, VariableID variableSetID, ResolvedType variableResolvedType, Values variableDataValues, ModeMap variableModeBySetMap, Interaction[] prototypeInteractions, StartingPoint prototypeStartingPoint, GUIDPath guidPath, StackMode stackMode, float stackSpacing, float stackHorizontalPadding, float stackVerticalPadding, uint count, float starInnerScale, VectorData vectorData, StrokeCap strokeCap, StrokeJoin strokeJoin, VectorMirror handleMirroring, ShapeWithTextType shapeWithTextType, ConnectorEndpoint connectorStart, ConnectorEndpoint connectorEnd, StrokeCap connectorStartCap, StrokeCap connectorEndCap, ConnectorLineStyle connectorLineStyle, ConstraintType horizontalConstraint, ConstraintType verticalConstraint, NodeChange[] derivedSymbolData, string key, string version, LeadingTrim leadingTrim, float[] dashPattern, ConnectorControlPoint[] connectorControlPoints, NodePhase phase
 message Blob byte[] bytes
 message Message NodeChange[] nodeChanges, Blob[] blobs
 ";
@@ -563,6 +566,11 @@ fn oversized_grid_track_lists_warn_and_use_default_tracks() {
 }
 
 #[test]
+fn duplicate_explicit_field_ids_are_ambiguous() {
+    assert!(Schema::parse("message M uint a=1, uint b=1").is_err());
+}
+
+#[test]
 fn kiwi_round_trip() {
     let sc = schema();
     let back = Schema::decode(&encode::schema(&sc)).unwrap();
@@ -793,6 +801,44 @@ fn hashes_naming_one_blob_share_one_copy_of_it() {
     assert_eq!(**first, *png());
     assert_eq!(copies.values().filter(|c| Arc::ptr_eq(c, first)).count(), 50);
     assert_eq!(*copies[&"63".repeat(20)], [7; 16]);
+}
+
+/// Hashes naming one blob are imported as one image: every alias is renamed to the first hash
+/// before layers are built, so the blob is copied and hashed once, not once per hash.
+#[test]
+fn hashes_naming_one_blob_are_imported_once() {
+    let rect = |i: u64, hash: u8, blob: u64| {
+        let paint = o(vec![("type", e("IMAGE")), ("image", o(vec![("hash", Kv::Bytes(vec![hash; 20])), ("dataBlob", u(blob))]))]);
+        node(i, Some((1, &format!("{i:04}"))), "RECTANGLE", &format!("R{i}"), vec![("size", xy(10.0, 10.0)), ("fillPaints", arr(vec![paint]))])
+    };
+    let mut nodes = vec![node(0, None, "DOCUMENT", "D", vec![]), node(1, Some((0, "!")), "CANVAS", "P", vec![])];
+    nodes.extend((2..42).map(|i| rect(i, i as u8, 0)));
+    let msg = o(vec![("nodeChanges", arr(nodes)), ("blobs", arr(vec![o(vec![("bytes", Kv::Bytes(png()))])]))]);
+    let copies = embedded_copies(&msg);
+    let aliases = embedded_aliases(&copies, |_| false);
+    assert_eq!(aliases.len(), 39);
+    assert!(aliases.values().all(|c| *c == "02".repeat(20)));
+    // A hash `images/` also holds keeps its own name.
+    assert!(!embedded_aliases(&copies, |h| h == "05".repeat(20)).contains_key(&"05".repeat(20)));
+    let (doc, warnings) = import(&canvas(&schema(), &msg), "x").unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("isn't in the file")), "{warnings:?}");
+    assert_eq!(doc.images.len(), 1);
+    let key = doc.images.keys().next().unwrap();
+    for i in 2..42 {
+        let figcraft_doc::color::PaintKind::Image(img) = &named(&doc, &format!("R{i}")).fills[0].kind else { panic!("not an image fill") };
+        assert_eq!(&img.image, key);
+    }
+}
+
+#[test]
+fn image_refs_are_renamed_wherever_they_sit() {
+    let aliases: BTreeMap<String, String> = [("b".to_string(), "a".to_string())].into();
+    let mut json = serde_json::json!({"fills": [{"imageRef": "b"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "b"}]}}, "name": "b"});
+    canonical_image_refs(&mut json, &aliases);
+    assert_eq!(
+        json,
+        serde_json::json!({"fills": [{"imageRef": "a"}, {"imageRef": "c"}], "styles": {"s": {"fills": [{"imageRef": "a"}]}}, "name": "b"})
+    );
 }
 
 mod image_budget {
@@ -1180,6 +1226,60 @@ fn scalar_fields_count_against_the_value_budget() {
 }
 
 #[test]
+fn empty_arrays_count_against_the_value_budget() {
+    // 1000 empty `uint[]` fields: each field is a value even with no elements, so a small budget
+    // can't be outgrown by piling up empty containers.
+    let fields = vec![Field { name: "a".into(), ty: Some(Type::Uint), array: true, value: 1 }];
+    let sc = Schema { defs: vec![Def { name: "Message".into(), kind: Kind::Message, fields }] };
+    let mut data = [1u8, 0].repeat(1000);
+    data.push(0);
+    let e = sc.decode_message_within(0, &data, 10).unwrap_err();
+    assert_eq!(e.0, "message: too many values");
+    assert!(sc.decode_message_within(0, &data, 1001).is_ok());
+}
+
+#[test]
+fn message_tags_find_their_field_by_id_in_a_wide_definition() {
+    // A wide definition: every tag is looked up by id, and the first field with an id wins, as
+    // before the lookup was indexed.
+    let mut fields: Vec<Field> = (1..=5000).map(|i| Field { name: format!("f{i}"), ty: Some(Type::Bool), array: false, value: i }).collect();
+    fields.push(Field { name: "shadow".into(), ty: Some(Type::Bool), array: false, value: 7 });
+    let sc = Schema { defs: vec![Def { name: "Message".into(), kind: Kind::Message, fields }] };
+    let mut w = encode::Writer::default();
+    for _ in 0..20_000 {
+        w.var_uint(5000);
+        w.byte(1);
+    }
+    w.var_uint(7);
+    w.byte(0);
+    w.var_uint(0);
+    let Kv::Object(out) = sc.decode_message(0, &w.0).unwrap() else { panic!() };
+    assert_eq!(out.len(), 20_001);
+    assert!(out.iter().take(20_000).all(|(n, v)| *n == "f5000" && *v == Kv::Bool(true)));
+    assert_eq!(out.last().map(|(n, _)| *n), Some("f7"));
+}
+
+#[test]
+fn a_schema_is_refused_past_its_total_field_count() {
+    // 25 definitions of 10 000 fields each: every one is within the per-definition cap, but
+    // together they pass the schema's total.
+    let mut w = encode::Writer::default();
+    w.var_uint(25);
+    for d in 0..25 {
+        w.string(&format!("D{d}"));
+        w.byte(0);
+        w.var_uint(10_000);
+        for i in 0..10_000u32 {
+            w.string("");
+            w.var_int(0);
+            w.byte(0);
+            w.var_uint(i);
+        }
+    }
+    assert_eq!(Schema::decode(&w.0).unwrap_err().0, "schema: too many fields");
+}
+
+#[test]
 fn hostile_input_is_refused() {
     // A message that contains itself, nested past the depth cap.
     let field = |ty, array| vec![Field { name: "m".into(), ty: Some(ty), array, value: 1 }];
@@ -1437,6 +1537,9 @@ mod image_filters;
 #[path = "text_list_tests.rs"]
 mod text_list;
 
+#[path = "text_direction_tests.rs"]
+mod text_direction;
+
 /// `.fig` files in the folder `FIGCRAFT_FIG_SAMPLES` names (none when it's unset).
 pub(super) fn samples() -> Vec<std::path::PathBuf> {
     let Some(dir) = std::env::var_os("FIGCRAFT_FIG_SAMPLES") else { return Vec::new() };
@@ -1487,3 +1590,274 @@ fn dump_samples() {
 
 #[path = "board_import_tests.rs"]
 mod board;
+
+/// A file that took several updates of a library holds a copy of its collection and of each of
+/// its variables per version it met (same asset key, another version). Layers and modes name any
+/// of them by asset, never by guid: they all become the newest copy, which has every mode — a page
+/// set to a mode only the newer copies have keeps it, and fills bound to an older copy of a
+/// variable follow its newest values.
+#[test]
+fn library_copies_of_several_versions_become_the_newest() {
+    let mode = |id, name: &'static str, pos: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s(pos))]);
+    let by_asset = |key: &'static str, version: &'static str| o(vec![("assetRef", o(vec![("key", s(key)), ("version", s(version))]))]);
+    let color_value = |c| o(vec![("value", o(vec![("colorValue", c)])), ("dataType", e("COLOR"))]);
+    let values = |pairs: Vec<(u64, Kv<'static>)>| {
+        o(vec![("entries", arr(pairs.into_iter().map(|(m, c)| o(vec![("modeID", g(m)), ("variableData", color_value(c))])).collect()))])
+    };
+    let asset_alias =
+        |key: &'static str, version: &'static str| o(vec![("value", o(vec![("alias", by_asset(key, version))])), ("dataType", e("ALIAS"))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "Document", vec![]),
+        // The page is set to "Purple", a mode the oldest copy of the collection didn't have yet.
+        node(
+            1,
+            Some((0, "!")),
+            "CANVAS",
+            "Page",
+            vec![(
+                "variableModeBySetMap",
+                o(vec![("entries", arr(vec![o(vec![("variableSetID", by_asset("products", "10:1")), ("variableModeID", g(92))])]))]),
+            )],
+        ),
+        node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        node(
+            4,
+            Some((2, "!")),
+            "VARIABLE_SET",
+            "Products",
+            // "Legacy" was removed from the library since: only this older copy has it.
+            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!"), mode(93, "Legacy", "\"")])), ("key", s("products")), ("version", s("10:1"))],
+        ),
+        node(
+            6,
+            Some((2, "#")),
+            "VARIABLE_SET",
+            "Products",
+            vec![("variableSetModes", arr(vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")])), ("key", s("products")), ("version", s("20:1"))],
+        ),
+        node(
+            5,
+            Some((2, "\"")),
+            "VARIABLE",
+            "button-bg",
+            vec![
+                ("variableSetID", by_asset("products", "10:1")),
+                ("variableResolvedType", e("COLOR")),
+                ("variableDataValues", values(vec![(90, rgb(0.0, 0.0, 1.0))])),
+                ("key", s("button-bg")),
+                ("version", s("10:1")),
+            ],
+        ),
+        node(
+            7,
+            Some((2, "$")),
+            "VARIABLE",
+            "button-bg",
+            vec![
+                ("variableSetID", by_asset("products", "20:1")),
+                ("variableResolvedType", e("COLOR")),
+                ("variableDataValues", values(vec![(90, rgb(0.0, 0.0, 1.0)), (92, rgb(0.5, 0.0, 0.5))])),
+                ("key", s("button-bg")),
+                ("version", s("20:1")),
+            ],
+        ),
+        // A pasted layer names the variable by the library's own guid (not a node of this file)
+        // and by its asset: the asset wins.
+        node(
+            11,
+            Some((1, "\"")),
+            "FRAME",
+            "Pasted button",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "fillPaints",
+                    arr(vec![o(vec![
+                        ("type", e("SOLID")),
+                        ("color", rgb(0.0, 0.0, 1.0)),
+                        (
+                            "colorVar",
+                            o(vec![
+                                (
+                                    "value",
+                                    o(vec![(
+                                        "alias",
+                                        o(vec![("guid", g(777)), ("assetRef", o(vec![("key", s("button-bg")), ("version", s("20:1"))]))]),
+                                    )]),
+                                ),
+                                ("dataType", e("ALIAS")),
+                            ]),
+                        ),
+                    ])]),
+                ),
+            ],
+        ),
+        // A page section set by a versionless reference, while the file holds several copies.
+        node(
+            12,
+            Some((1, "#")),
+            "FRAME",
+            "Versionless",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "variableModeBySetMap",
+                    o(vec![(
+                        "entries",
+                        arr(vec![o(vec![("variableSetID", o(vec![("assetRef", o(vec![("key", s("products"))]))])), ("variableModeID", g(92))])]),
+                    )]),
+                ),
+            ],
+        ),
+        // The button names the older copy of the variable.
+        node(
+            10,
+            Some((1, "!")),
+            "FRAME",
+            "Button",
+            vec![
+                ("size", xy(100.0, 40.0)),
+                (
+                    "fillPaints",
+                    arr(vec![o(vec![("type", e("SOLID")), ("color", rgb(0.0, 0.0, 1.0)), ("colorVar", asset_alias("button-bg", "10:1"))])]),
+                ),
+            ],
+        ),
+    ];
+    let (doc, warnings) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+    let products = &doc.variables.collections[0];
+    assert_eq!(products.modes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Blue", "Purple", "Legacy"]);
+    assert_eq!(doc.variables.variables.len(), 1);
+    let var = &doc.variables.variables[0];
+    assert_eq!(var.collection, products.id);
+    // The newest copy's values: Purple included (a mode only it has), Legacy filled from the default.
+    assert_eq!(var.values.len(), 3, "{:?}", var.values);
+    assert!(matches!(var.values.get("1:92"), Some(figcraft_doc::VariableValue::Color(c)) if (c.r - 0.5).abs() < 1e-6), "{:?}", var.values);
+    let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+    assert_eq!(page.var_modes.get(&products.id).map(String::as_str), Some("1:92"));
+    let button = named(&doc, "Button");
+    assert_eq!(button.bound.values().next(), Some(&var.id), "{:?}", button.bound);
+    assert_eq!(named(&doc, "Versionless").var_modes.get(&products.id).map(String::as_str), Some("1:92"));
+    let pasted = named(&doc, "Pasted button");
+    assert_eq!(pasted.bound.values().next(), Some(&var.id), "{:?}", pasted.bound);
+    assert!(!warnings.iter().any(|w| w.contains("variable modes of collections")), "{warnings:?}");
+}
+
+/// A copy of a library collection that a later change removed, followed by a live node for the
+/// same asset key and version: the live one is the collection, not the removed one the asset
+/// index met first.
+#[test]
+fn removed_library_collection_copies_give_way_to_live_ones() {
+    let mode = |id, name: &'static str, pos: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s(pos))]);
+    let by_asset = |version: &'static str| o(vec![("assetRef", o(vec![("key", s("products")), ("version", s(version))]))]);
+    let set = |id, version: &'static str, modes: Vec<Kv<'static>>| {
+        node(id, Some((2, "!")), "VARIABLE_SET", "Products", vec![("variableSetModes", arr(modes)), ("key", s("products")), ("version", s(version))])
+    };
+    let removed = o(vec![("guid", g(8)), ("phase", e("REMOVED"))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "Document", vec![]),
+        node(
+            1,
+            Some((0, "!")),
+            "CANVAS",
+            "Page",
+            vec![("variableModeBySetMap", o(vec![("entries", arr(vec![o(vec![("variableSetID", by_asset("30:1")), ("variableModeID", g(92))])]))]))],
+        ),
+        node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        set(4, "10:1", vec![mode(90, "Blue", "!")]),
+        set(8, "30:1", vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")]),
+        removed,
+        set(9, "30:1", vec![mode(90, "Blue", "!"), mode(92, "Purple", "\"")]),
+    ];
+    let (doc, warnings) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+    let products = &doc.variables.collections[0];
+    assert_eq!(products.id, "1:9");
+    let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+    assert_eq!(page.var_modes.get("1:9").map(String::as_str), Some("1:92"), "{warnings:?}");
+}
+
+/// Two copies of a library collection with the same version: the choice doesn't depend on the order
+/// of the node changes (the higher guid wins), and the thread's lookup table is gone after the import.
+#[test]
+fn same_version_library_copies_resolve_deterministically_and_leave_no_table() {
+    let mode = |id, name: &'static str| o(vec![("id", g(id)), ("name", s(name)), ("sortPosition", s("!"))]);
+    let set = |id, modes: Vec<Kv<'static>>| {
+        node(id, Some((2, "!")), "VARIABLE_SET", "Products", vec![("variableSetModes", arr(modes)), ("key", s("products")), ("version", s("20:1"))])
+    };
+    let page = node(
+        1,
+        Some((0, "!")),
+        "CANVAS",
+        "Page",
+        vec![(
+            "variableModeBySetMap",
+            o(vec![(
+                "entries",
+                arr(vec![o(vec![("variableSetID", o(vec![("assetRef", o(vec![("key", s("products"))]))])), ("variableModeID", g(90))])]),
+            )]),
+        )],
+    );
+    let base = || {
+        vec![
+            node(0, None, "DOCUMENT", "Document", vec![]),
+            page.clone(),
+            node(2, Some((0, "~")), "CANVAS", "Internal", vec![("internalOnly", Kv::Bool(true))]),
+        ]
+    };
+    let mut picked = Vec::new();
+    for swap in [false, true] {
+        let (a, b) = (set(4, vec![mode(90, "Blue")]), set(6, vec![mode(90, "Blue")]));
+        let mut nodes = base();
+        if swap {
+            nodes.extend([b, a]);
+        } else {
+            nodes.extend([a, b]);
+        }
+        let (doc, _) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+        assert_eq!(doc.variables.collections.len(), 1, "{:?}", doc.variables.collections);
+        let id = doc.variables.collections[0].id.clone();
+        let page = doc.nodes().find(|n| n.name == "Page").unwrap();
+        assert_eq!(page.var_modes.get(&id).map(String::as_str), Some("1:90"));
+        picked.push(id);
+        assert!(!super::map::VarCanon::installed());
+    }
+    assert_eq!(picked, ["1:6", "1:6"]);
+}
+
+/// #2091 item 1: an instance scaled with the Scale tool (K) has `symbolData.uniformScaleFactor`.
+#[test]
+fn a_scaled_instance_draws_its_layers_at_the_factor() {
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "D", vec![]),
+        node(1, Some((0, "!")), "CANVAS", "P", vec![]),
+        node(5, Some((1, "!")), "SYMBOL", "Icon", vec![("size", xy(256.0, 256.0)), ("transform", at(0.0, 0.0))]),
+        node(
+            6,
+            Some((5, "!")),
+            "ROUNDED_RECTANGLE",
+            "Mark",
+            vec![("size", xy(256.0, 256.0)), ("transform", at(0.0, 0.0)), ("cornerRadius", f(64.0))],
+        ),
+        node(
+            9,
+            Some((1, "\"")),
+            "INSTANCE",
+            "Half",
+            vec![
+                ("size", xy(128.0, 128.0)),
+                ("transform", at(300.0, 0.0)),
+                ("symbolData", o(vec![("symbolID", g(5)), ("uniformScaleFactor", f(0.5))])),
+            ],
+        ),
+    ];
+    let (doc, _) = import(&canvas(&schema(), &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    let inst = named(&doc, "Half");
+    let mark = doc.node(inst.children[0]).unwrap();
+    let t = mark.transform.translation();
+    eprintln!("instance {}x{}; child {}x{} at ({}, {}) radii {:?}", inst.width, inst.height, mark.width, mark.height, t.x, t.y, mark.corners.radii);
+    assert_eq!([mark.width, mark.height], [128.0, 128.0]);
+    assert_eq!(mark.corners.radii, [32.0; 4]);
+    assert_eq!([t.x, t.y], [0.0, 0.0]);
+}

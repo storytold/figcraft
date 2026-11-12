@@ -98,6 +98,8 @@ fn resource_reads_and_lists_are_scoped_to_current_account_connection() {
     assert!(h.disconnect().is_err());
     h.take_actions();
     h.finish_open(&request, "file-1", "remote.figcraft", Err("invalid archive".into()));
+    assert!(h.disconnect().is_err());
+    assert!(h.take_events().iter().any(|event| event.metadata["type"] == "openFailed" && event.metadata["requestId"] == request));
     h.disconnect().unwrap();
     let next = h.connect("test".into(), "Test storage".into(), "account-b".into()).unwrap();
     assert_ne!(connection, next);
@@ -354,4 +356,195 @@ fn capture_target_must_belong_to_its_snapshot_aliases() {
     let snapshots = h.state().dialogs.get(&request).unwrap().snapshots.clone();
     assert!(h.begin(snapshots, u64::MAX, 1, format!("Other{EXTENSION}"), vec![1], false).is_err());
     assert!(!h.pending_for(u64::MAX));
+}
+
+#[test]
+fn failed_save_delivery_bypasses_a_full_action_queue_without_acknowledging() {
+    let h = host();
+    let filename = terminal_resource(&h);
+    let (request, uid) = capture(&h, false);
+    h.resolve_dialog(&request, "provider", "Captured.figcraft").unwrap();
+    for _ in 0..MAX_PENDING {
+        let read = h.request_open("file-1").unwrap();
+        h.open(read, filename.clone(), vec![1]).unwrap();
+    }
+    assert_eq!(h.state().actions.len(), MAX_PENDING);
+    let mut errors = 0;
+    assert!(h.publish_events_with(
+        |metadata, bytes| {
+            if metadata["type"] == "save" {
+                assert_eq!(metadata["requestId"], request);
+                assert_eq!(bytes.unwrap(), [1, 2, 3]);
+                Err("synthetic copy failure")
+            } else {
+                Ok(())
+            }
+        },
+        |_| errors += 1,
+    ));
+    assert_eq!(errors, 1);
+    assert_eq!(h.state().failed_deliveries.len(), 1);
+    assert!(h.pending_for(uid));
+    assert!(h.result(request.clone(), "saved".into(), "late".into()).is_err());
+    assert!(h.bound_document("late").is_none());
+    let actions = h.take_actions();
+    assert_eq!(actions.len(), MAX_PENDING + 1);
+    let (failed_request, captured) = actions
+        .into_iter()
+        .find_map(|action| match action {
+            Action::Save { request, capture, status, resource } => {
+                assert_eq!(status, "failed");
+                assert!(resource.is_empty() && capture.bytes.is_none());
+                Some((request, capture))
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!((failed_request.as_str(), captured.doc, captured.name.as_str()), (request.as_str(), uid, "Captured.figcraft"));
+    h.finish_save(&failed_request, &captured, "failed", "", true);
+    let events = h.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metadata["type"], "saveFailed");
+    assert_eq!(events[0].metadata["requestId"], request);
+    assert!(!h.pending_for(uid));
+}
+
+#[test]
+fn synchronous_accepted_choice_and_save_result_survive_dispatch_failure() {
+    for fails_after_callback in [false, true] {
+        let h = host();
+        let (request, uid) = capture(&h, false);
+        assert!(h.publish_events_with(
+            |metadata, _| {
+                match metadata["type"].as_str() {
+                    Some("saveDialog") => h.resolve_dialog(&request, "provider", "Accepted.figcraft").unwrap(),
+                    Some("save") => h.result(request.clone(), "saved".into(), "accepted-resource".into()).unwrap(),
+                    _ => panic!("unexpected publication"),
+                }
+                assert!(h.disconnect().is_err());
+                if fails_after_callback { Err("after accepted callback") } else { Ok(()) }
+            },
+            |_| {},
+        ));
+        assert!(h.state().failed_deliveries.is_empty());
+        let mut actions = h.take_actions();
+        assert_eq!(actions.len(), 1);
+        let Action::Save { request: accepted, capture, status, resource } = actions.remove(0) else { panic!("expected accepted save") };
+        assert_eq!((accepted.as_str(), capture.doc, status.as_str(), resource.as_str()), (request.as_str(), uid, "saved", "accepted-resource"));
+        h.finish_save(&accepted, &capture, &status, &resource, true);
+        assert_eq!(h.bound_document("accepted-resource"), Some(uid));
+        assert_eq!(h.take_events()[0].metadata["type"], "saved");
+    }
+}
+
+#[test]
+fn failed_open_is_settled_before_a_later_batch_callback_despite_full_transport() {
+    let h = host();
+    let filename = terminal_resource(&h);
+    let failed = h.request_open("file-1").unwrap();
+    let later = h.request_open("file-1").unwrap();
+    h.cancel_open(later.clone(), String::new()).unwrap();
+    let mut late_callback_rejected = false;
+    assert!(h.publish_events_with(
+        |metadata, _| {
+            if metadata["type"] == "openRequested" && metadata["requestId"] == failed {
+                fill_transport_event_queue(&h);
+                return Err("failed read dispatch");
+            }
+            if metadata["type"] == "openRequested" && metadata["requestId"] == later {
+                assert!(h.state().opens.contains_key(&failed));
+                assert!(h.state().queued_opens.contains(&failed));
+                assert_eq!(h.state().finished.len(), 1);
+                assert!(h.open(failed.clone(), filename.clone(), vec![1]).is_err());
+                assert!(h.cancel_open(failed.clone(), String::new()).is_err());
+                late_callback_rejected = true;
+            }
+            Ok(())
+        },
+        |_| {},
+    ));
+    assert!(late_callback_rejected);
+    assert!(h.take_actions().is_empty());
+    let terminals = h.take_events();
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(terminals[0].metadata["type"], "openFailed");
+    assert_eq!(terminals[0].metadata["requestId"], failed);
+    assert_eq!(terminals[0].metadata["resourceId"], "file-1");
+    let retry = h.request_open("file-1").unwrap();
+    h.open(retry.clone(), filename.clone(), vec![1]).unwrap();
+    assert!(matches!(h.take_actions().as_slice(), [Action::Open { request, .. }] if request == &retry));
+    h.finish_open(&retry, "file-1", &filename, Ok(99));
+    assert_eq!(h.bound_document("file-1"), Some(99));
+}
+
+#[test]
+fn queued_and_taken_terminals_preserve_connection_and_reject_nested_publication() {
+    let h = host();
+    terminal_resource(&h);
+    let old_connection = h.snapshot()["connectionId"].clone();
+    let request = h.request_open("file-1").unwrap();
+    h.cancel_open(request.clone(), String::new()).unwrap();
+    assert!(h.state().opens.is_empty());
+    assert!(h.disconnect().is_err());
+    let mut kinds = Vec::new();
+    h.publish_events_with(
+        |metadata, _| {
+            assert!(h.disconnect().is_err());
+            assert!(h.connect("other".into(), "Other".into(), "other-account".into()).is_err());
+            assert!(!h.publish_events_with(|_, _| -> Result<(), ()> { panic!("nested dispatch") }, |_| {}));
+            assert_eq!(metadata["connectionId"], old_connection);
+            kinds.push(metadata["type"].as_str().unwrap().to_string());
+            Ok::<_, ()>(())
+        },
+        |_| {},
+    );
+    assert_eq!(kinds, ["openRequested", "openCancelled"]);
+    assert!(!h.busy());
+    h.disconnect().unwrap();
+    let new_connection = h.connect("other".into(), "Other".into(), "other-account".into()).unwrap();
+    assert_ne!(new_connection, old_connection.as_str().unwrap());
+    assert!(h.cancel_open(request, String::new()).is_err());
+}
+
+#[test]
+fn failed_chooser_and_already_admitted_read_keep_their_distinct_owners() {
+    let h = host();
+    let filename = terminal_resource(&h);
+    let (choice, uid) = capture(&h, false);
+    let read = h.request_open("file-1").unwrap();
+    h.publish_events_with(
+        |metadata, _| {
+            if metadata["type"] == "openRequested" {
+                h.open(read.clone(), filename.clone(), vec![1]).unwrap();
+            }
+            Err("dispatch failure")
+        },
+        |_| {},
+    );
+    assert!(h.pending_for(uid));
+    assert!(h.resolve_dialog(&choice, "provider", "Late.figcraft").is_err());
+    let actions = h.take_actions();
+    assert_eq!(actions.len(), 2);
+    assert!(matches!(actions.first(), Some(Action::Open { request, .. }) if request == &read));
+    assert!(matches!(actions.last(), Some(Action::Save { request, status, .. }) if request == &choice && status == "failed"));
+    assert!(!h.state().finished.iter().any(|terminal| terminal.request == read));
+}
+
+#[test]
+fn failed_delivery_snapshots_are_bounded_by_admitted_save_ownership() {
+    let h = host();
+    let mut last_uid = 0;
+    for _ in 0..MAX_PENDING {
+        let (_, uid) = capture(&h, false);
+        last_uid = uid;
+    }
+    h.publish_events_with(|_, _| Err("choice dispatch failed"), |_| {});
+    assert_eq!(h.state().failed_deliveries.len(), MAX_PENDING);
+    assert_eq!(h.state().finishing_saves.len(), MAX_PENDING);
+    assert!(h.pending_for(last_uid));
+    let mut session = Session::new();
+    session.execute("file.new", &json!({})).unwrap();
+    let snapshot = session.ds().unwrap().clone();
+    assert!(h.begin(vec![snapshot.clone()], snapshot.uid, snapshot.revision, "Extra.figcraft".into(), vec![1], false).is_err());
+    assert!(h.state().failed_deliveries.iter().all(|action| matches!(action, Action::Save { capture, .. } if capture.bytes.is_none())));
 }

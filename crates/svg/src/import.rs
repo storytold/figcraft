@@ -103,11 +103,34 @@ pub(crate) struct Ctx<'a> {
     pattern_depth: usize,
     /// Tiles drawn so far, by pattern and scale (see [`paint`]'s `render_tile`).
     tiles: HashMap<(*const usvg::Pattern, u64), Option<paint::Tile>>,
+    /// The document image key of each embedded image's bytes already added, so an image a
+    /// pattern paints on many shapes is hashed once, not once per shape.
+    image_keys: HashMap<*const Vec<u8>, String>,
 }
 
 impl<'a> Ctx<'a> {
     pub(crate) fn new(doc: &'a mut Document) -> Self {
-        Ctx { doc, count: 0, anonymous: HashSet::new(), notes: BTreeSet::new(), fonts: None, pattern_depth: 0, tiles: HashMap::new() }
+        Ctx {
+            doc,
+            count: 0,
+            anonymous: HashSet::new(),
+            notes: BTreeSet::new(),
+            fonts: None,
+            pattern_depth: 0,
+            tiles: HashMap::new(),
+            image_keys: HashMap::new(),
+        }
+    }
+
+    /// [`add_image`] for `bytes`, once per distinct buffer.
+    pub(crate) fn image(&mut self, bytes: std::sync::Arc<Vec<u8>>, w: f64, h: f64) -> String {
+        if let Some(k) = self.image_keys.get(&std::sync::Arc::as_ptr(&bytes)) {
+            return k.clone();
+        }
+        let ptr = std::sync::Arc::as_ptr(&bytes);
+        let key = add_image(self.doc, bytes, w, h);
+        self.image_keys.insert(ptr, key.clone());
+        key
     }
 
     pub(crate) fn full(&self) -> bool {
@@ -374,8 +397,11 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
     let local = to_bez(p.data());
     let (fill, stroke) = (p.fill(), p.stroke());
     let shaped = shape::recognize(&local, stroke.is_none()).and_then(|prim| primitive(prim, world));
-    let (kind, transform, w, h, radius) = match shaped {
-        Some(s) => s,
+    let (kind, transform, w, h, radius, closed_outline) = match shaped {
+        Some((kind, transform, w, h, radius)) => {
+            let closed_outline = !matches!(kind, NodeKind::Line);
+            (kind, transform, w, h, radius, closed_outline)
+        }
         None => {
             let mut path = local;
             path.apply_affine(world);
@@ -406,7 +432,10 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
                 let fill_only =
                     Node::new(cx.doc.alloc_id(), vector(&closed, true), format!("{} fill", layer_name(p.id(), "Vector")), bb.width(), bb.height());
                 let stroke_only = Node::new(cx.doc.alloc_id(), vector(&snapped, false), layer_name(p.id(), "Vector"), bb.width(), bb.height());
-                let mut layers = [paint_path(cx, p, fill_only, at, world, true, false), paint_path(cx, p, stroke_only, at, world, false, true)];
+                let mut layers = [
+                    paint_path(cx, p, fill_only, at, world, Paints { fill: true, stroke: false, closed: true }),
+                    paint_path(cx, p, stroke_only, at, world, Paints { fill: false, stroke: true, closed: every_subpath_closed(&snapped) }),
+                ];
                 if p.paint_order() == usvg::PaintOrder::StrokeAndFill {
                     layers.reverse();
                 }
@@ -415,7 +444,8 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
                 }
                 return;
             }
-            (vector(if fill.is_some() { &closed } else { &path }, fill.is_some()), at, bb.width(), bb.height(), 0.0)
+            let outline = if fill.is_some() { &closed } else { &path };
+            (vector(outline, fill.is_some()), at, bb.width(), bb.height(), 0.0, every_subpath_closed(outline))
         }
     };
     let fallback = match kind {
@@ -426,19 +456,28 @@ fn path(cx: &mut Ctx, p: &usvg::Path, parent: NodeId, base: Affine) {
     };
     let mut n = Node::new(cx.doc.alloc_id(), kind, layer_name(p.id(), fallback), w, h);
     n.corners.radii = [radius; 4];
-    let n = paint_path(cx, p, n, transform, world, true, true);
+    let n = paint_path(cx, p, n, transform, world, Paints { fill: true, stroke: true, closed: closed_outline });
     cx.add(n, parent);
 }
 
+/// Which of a path's paints a layer takes, and whether its stroked outline closes on itself (see
+/// [`stroke_props`]).
+#[derive(Clone, Copy)]
+struct Paints {
+    fill: bool,
+    stroke: bool,
+    closed: bool,
+}
+
 /// Layer `n` of path `p` placed at `transform`, with the path's fill and / or stroke.
-fn paint_path(cx: &mut Ctx, p: &usvg::Path, mut n: Node, transform: Affine, world: Affine, with_fill: bool, with_stroke: bool) -> Node {
+fn paint_path(cx: &mut Ctx, p: &usvg::Path, mut n: Node, transform: Affine, world: Affine, paints: Paints) -> Node {
     n.transform = transform;
     let target = Target { to_node: transform.inverse() * world, size: (n.width, n.height) };
-    n.fills = p.fill().filter(|_| with_fill).and_then(|f| paint::paint(cx, f.paint(), f.opacity().get(), target)).into_iter().collect();
+    n.fills = p.fill().filter(|_| paints.fill).and_then(|f| paint::paint(cx, f.paint(), f.opacity().get(), target)).into_iter().collect();
     n.strokes.clear();
-    if let Some(s) = p.stroke().filter(|_| with_stroke) {
+    if let Some(s) = p.stroke().filter(|_| paints.stroke) {
         n.strokes = paint::paint(cx, s.paint(), s.opacity().get(), target).into_iter().collect();
-        n.stroke = stroke_props(s, length_scale(world));
+        n.stroke = stroke_props(s, length_scale(world), paints.closed);
         // A stroke painted under the fill shows only its outer half.
         if p.paint_order() == usvg::PaintOrder::StrokeAndFill && !n.fills.is_empty() && figcraft_doc::geometry::is_closed(&n) {
             n.stroke.align = StrokeAlign::Outside;
@@ -521,7 +560,27 @@ fn primitive(prim: Prim, world: Affine) -> Option<(NodeKind, Affine, f64, f64, f
     }
 }
 
-pub(crate) fn stroke_props(s: &usvg::Stroke, k: f64) -> figcraft_doc::StrokeProps {
+/// Whether every subpath of `path` closes on itself (and a dash pattern on it runs from its start,
+/// as on any closed outline; an open one starts half a dash in).
+fn every_subpath_closed(path: &BezPath) -> bool {
+    use figcraft_geom::kurbo::PathEl;
+    let els = path.elements();
+    let mut closed = true;
+    for e in els {
+        match e {
+            PathEl::MoveTo(_) if !closed => return false,
+            PathEl::ClosePath => closed = true,
+            _ => closed = false,
+        }
+    }
+    !els.is_empty() && closed
+}
+
+/// The stroke of `s` on a layer whose lengths `world` scales by `k`; `closed` says whether its
+/// outline closes on itself: a closed outline runs a dash pattern from its start, so an offset into
+/// the pattern rotates it, while an open line starts half a dash in by itself (and export writes
+/// that offset), so that one is already there.
+pub(crate) fn stroke_props(s: &usvg::Stroke, k: f64, closed: bool) -> figcraft_doc::StrokeProps {
     let cap = match s.linecap() {
         usvg::LineCap::Round => StrokeCap::Round,
         usvg::LineCap::Square => StrokeCap::Square,
@@ -530,8 +589,8 @@ pub(crate) fn stroke_props(s: &usvg::Stroke, k: f64) -> figcraft_doc::StrokeProp
     let mut dashes: Vec<f64> = s.dasharray().unwrap_or(&[]).iter().map(|v| f64::from(*v) * k).collect();
     if !dashes.is_empty() {
         let offset = f64::from(s.dashoffset()) * k;
-        // Half a dash in is how a line starts by itself (and how export writes one).
-        if dashes.first().is_none_or(|d| (d / 2.0 - offset).abs() > 1e-3) {
+        let half_dash_in = !closed && dashes.first().is_some_and(|d| (d / 2.0 - offset).abs() <= 1e-3);
+        if !half_dash_in {
             dashes = dash_offset(&dashes, offset, cap == StrokeCap::None).unwrap_or(dashes);
         }
     }
@@ -605,10 +664,20 @@ fn image(cx: &mut Ctx, img: &usvg::Image, id: &str, parent: NodeId, base: Affine
     let size = img.size();
     let (iw, ih) = (f64::from(size.width()), f64::from(size.height()));
     let (transform, w, h) = place(world, Point::ZERO, iw, ih).unwrap_or((world, iw, ih));
-    let hash = add_image(cx.doc, bytes, iw, ih);
+    let hash = cx.image(bytes, iw, ih);
     let mut n = Node::new(cx.doc.alloc_id(), NodeKind::Rectangle, layer_name(id, "Image"), w, h);
     n.transform = transform;
-    n.fills = vec![Paint::image(hash, ImageScaleMode::Fill)];
+    let mut fill = Paint::image(hash, ImageScaleMode::Fill);
+    // usvg sizes the box to the picture (`meet` and `slice` are in the transform), so a box of
+    // another shape is `preserveAspectRatio="none"`: the picture stretched edge to edge. A Fill
+    // would keep its shape and crop it; a crop of the whole picture stretches it.
+    if (w * ih - h * iw).abs() > 1e-6 * (w * ih).max(h * iw)
+        && let figcraft_color::PaintKind::Image(ip) = &mut fill.kind
+    {
+        ip.scale_mode = ImageScaleMode::Crop;
+        ip.crop = Some(Affine::IDENTITY.as_coeffs());
+    }
+    n.fills = vec![fill];
     cx.add(n, parent);
 }
 
@@ -635,13 +704,36 @@ fn simple_hash(b: &[u8]) -> String {
 /// Deepest element nesting the parser is given: deeper documents would exhaust the stack.
 const MAX_NESTING: usize = 512;
 
+/// The most attributes one element may have. The XML parser checks each attribute against the
+/// earlier ones, so a huge count is quadratic work; real elements have a few dozen at most.
+const MAX_ATTRIBUTES: usize = 4096;
+
 /// How deep elements nest in `data`: a scan of its tags (comments, CDATA, declarations and quoted
 /// attribute values skipped) that stops once past `limit`.
 pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
+    scan(data, limit).0
+}
+
+/// The most the parser's duplicate-attribute checks may cost over a whole document, as the sum of
+/// each element's attribute count squared (a real file with 100,000 elements of 20 attributes is
+/// 40 million).
+const MAX_ATTRIBUTE_WORK: usize = 1 << 28;
+
+/// Whether an element of `data` has more than [`MAX_ATTRIBUTES`] attributes, or all of them cost
+/// more than [`MAX_ATTRIBUTE_WORK`] (counted as quoted values, before the parser sees them; the
+/// declarations of a DTD count as one element, as entities can hold elements).
+pub(crate) fn too_wide(data: &[u8]) -> bool {
+    let (_, widest, work) = scan(data, usize::MAX);
+    widest > MAX_ATTRIBUTES || work > MAX_ATTRIBUTE_WORK
+}
+
+/// [`nesting`], the most attribute values on one element and the attribute work (see
+/// [`MAX_ATTRIBUTE_WORK`]); stops once any is past its limit.
+fn scan(data: &[u8], limit: usize) -> (usize, usize, usize) {
     let find = |from: usize, pat: &[u8]| -> usize {
         data.get(from..).and_then(|r| r.windows(pat.len()).position(|w| w == pat)).map_or(data.len(), |p| from + p + pat.len())
     };
-    let (mut depth, mut max, mut i) = (0usize, 0usize, 0usize);
+    let (mut depth, mut max, mut i, mut widest, mut work) = (0usize, 0usize, 0usize, 0usize, 0usize);
     while let Some(off) = data.get(i..).and_then(|r| r.iter().position(|b| *b == b'<')) {
         i += off;
         let rest = data.get(i..).unwrap_or(&[]);
@@ -649,6 +741,19 @@ pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
             i = find(i + 4, b"-->");
         } else if rest.starts_with(b"<![CDATA[") {
             i = find(i + 9, b"]]>");
+        } else if rest.starts_with(b"<!DOCTYPE") {
+            // To the `]>` closing its subset (the first `>` when it has none).
+            let end = match (rest.iter().position(|b| *b == b'['), rest.iter().position(|b| *b == b'>')) {
+                (Some(o), Some(g)) if o < g => find(i, b"]>"),
+                _ => find(i, b">"),
+            };
+            let quotes = data.get(i..end).unwrap_or(&[]).iter().filter(|b| matches!(**b, b'"' | b'\'')).count();
+            widest = widest.max(quotes / 2);
+            work = work.saturating_add((quotes / 2).saturating_mul(quotes / 2));
+            if widest > MAX_ATTRIBUTES || work > MAX_ATTRIBUTE_WORK {
+                return (max, widest, work);
+            }
+            i = end;
         } else if rest.starts_with(b"<?") || rest.starts_with(b"<!") {
             i = find(i + 2, b">");
         } else if rest.starts_with(b"</") {
@@ -656,12 +761,15 @@ pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
             i = find(i + 2, b">");
         } else {
             // A start tag: to its `>` outside quotes; `/>` closes it.
-            let (mut quote, mut j, mut closed) = (None, i + 1, false);
+            let (mut quote, mut j, mut closed, mut attrs) = (None, i + 1, false, 0usize);
             while let Some(&c) = data.get(j) {
                 match quote {
                     Some(q) if c == q => quote = None,
                     Some(_) => {}
-                    None if c == b'"' || c == b'\'' => quote = Some(c),
+                    None if c == b'"' || c == b'\'' => {
+                        quote = Some(c);
+                        attrs += 1;
+                    }
                     None if c == b'>' => {
                         closed = data.get(j.wrapping_sub(1)) == Some(&b'/');
                         break;
@@ -670,17 +778,22 @@ pub(crate) fn nesting(data: &[u8], limit: usize) -> usize {
                 }
                 j += 1;
             }
+            widest = widest.max(attrs);
+            work = work.saturating_add(attrs * attrs);
+            if widest > MAX_ATTRIBUTES || work > MAX_ATTRIBUTE_WORK {
+                return (max, widest, work);
+            }
             if !closed {
                 depth += 1;
                 max = max.max(depth);
                 if max > limit {
-                    return max;
+                    return (max, widest, work);
                 }
             }
             i = j + 1;
         }
     }
-    max
+    (max, widest, work)
 }
 
 /// Whether `data` nests elements more than [`MAX_NESTING`] deep: the byte scan first, then the
@@ -814,6 +927,9 @@ fn import_within(
 ) -> Result<Imported, ImportError> {
     // SVGZ is unpacked here, within a budget, so every check below sees the real document.
     let data = budget::document(data, &limits).map_err(ImportError)?;
+    if too_wide(&data) {
+        return Err(ImportError(format!("an element has more than {MAX_ATTRIBUTES} attributes")));
+    }
     if too_deep(&data) {
         return Err(ImportError(format!("elements nested more than {MAX_NESTING} deep")));
     }

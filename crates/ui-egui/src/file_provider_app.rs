@@ -102,7 +102,7 @@ mod tests {
     struct NoServices;
     impl crate::Services for NoServices {}
     fn app() -> FigApp {
-        let mut session = Session::new();
+        let mut session = Session::empty();
         session.execute("file.new", &json!({})).unwrap();
         let app = FigApp::new(session, Box::new(NoServices));
         app.file_providers.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
@@ -275,6 +275,11 @@ mod tests {
         std::sync::Arc::make_mut(&mut doc.doc).name = "Later branch edit".into();
         app.file_providers.result(request, "saved".into(), "file-1".into()).unwrap();
         tick(&mut app);
+        // Mirror the browser's terminal publication before asking to close.
+        let events = app.file_providers.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["type"], "saved");
+        assert!(!app.file_providers.busy());
         assert!(!app.session.docs.iter().find(|doc| doc.uid == main).unwrap().is_dirty());
         assert!(app.session.docs.iter().find(|doc| doc.uid == branch).unwrap().is_dirty());
         (app, main, branch)
@@ -401,5 +406,172 @@ mod tests {
         tick(&mut app);
         assert!(app.session.ds().unwrap().is_dirty());
         assert!(app.file_providers.snapshot()["resources"].as_array().unwrap().is_empty());
+    }
+
+    fn recovery_project(app: &mut FigApp) -> (String, Vec<u8>) {
+        use base64::Engine as _;
+        // Original synthetic PNG generated in Rust, MIT OR Apache-2.0; no external asset.
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([196, 40, 20, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let hash = figcraft_format::image_hash(&png);
+        app.session
+            .execute("file.placeImage", &json!({"name":"Synthetic.png","data":base64::engine::general_purpose::STANDARD.encode(&png)}))
+            .unwrap();
+        app.session.execute("file.saveVersion", &json!({"name":"Captured version"})).unwrap();
+        let main_tab = app.session.active;
+        app.session.execute("branch.create", &json!({"name":"Captured branch"})).unwrap();
+        app.session.active = main_tab;
+        assert!(app.session.ds().unwrap().doc.images.contains_key(&hash));
+        (hash, png)
+    }
+    fn verify_recovery_archive(bytes: &[u8], hash: &str, png: &[u8]) {
+        let archive = figcraft_format::load_bytes_with_versions(bytes).unwrap();
+        assert!(archive.issues.is_empty());
+        assert_eq!(archive.doc.images[hash].bytes.as_slice(), png);
+        let version = archive.versions.iter().find(|version| version.name == "Captured version").unwrap();
+        assert_eq!(version.document().unwrap().images[hash].bytes.as_slice(), png);
+        let branch = archive.branches.iter().find(|branch| branch.name == "Captured branch").unwrap();
+        assert_eq!(branch.base.images[hash].bytes.as_slice(), png);
+        assert_eq!(branch.head.images[hash].bytes.as_slice(), png);
+    }
+    #[test]
+    fn failed_delivery_preserves_fig_resources_history_branch_aliases_and_later_edits_then_retries() {
+        let mut app = app();
+        let (hash, png) = recovery_project(&mut app);
+        let host = app.file_providers.clone();
+        let original = app.session.ds().unwrap().uid;
+        let initial = request(&mut app);
+        host.resolve_dialog(&initial, "provider", "Original.figcraft").unwrap();
+        host.publish_events_with(|_, _| Ok::<_, ()>(()), |_| {});
+        host.result(initial, "saved".into(), "original-resource".into()).unwrap();
+        tick(&mut app);
+        host.take_events();
+        assert!(!app.session.ds().unwrap().is_dirty());
+        app.session.execute("shape.rectangle", &json!({"x":1,"y":1,"width":2,"height":2})).unwrap();
+        let failed = request(&mut app);
+        let captured_revision = app.session.ds().unwrap().revision;
+        host.resolve_dialog(&failed, "provider", "Retry.figcraft").unwrap();
+        app.session.execute("shape.rectangle", &json!({"x":4,"y":4,"width":2,"height":2})).unwrap();
+        app.session.execute("file.saveVersion", &json!({"name":"Later version"})).unwrap();
+        app.ui.comments.draft = Some((3.0, 4.0, "Comment typed after capture".into()));
+        let draft = app.ui.comments.draft.clone();
+        let before = app.session.docs.clone();
+        let mut captured = Vec::new();
+        assert!(host.publish_events_with(
+            |metadata, bytes| {
+                if metadata["type"] == "save" {
+                    captured = bytes.unwrap();
+                    Err("synthetic copy failure")
+                } else {
+                    Ok(())
+                }
+            },
+            |_| {}
+        ));
+        verify_recovery_archive(&captured, &hash, &png);
+        assert!(!figcraft_format::load_bytes_with_versions(&captured).unwrap().versions.iter().any(|version| version.name == "Later version"));
+        for snapshot in &before {
+            assert!(host.pending_for(snapshot.uid));
+        }
+        assert!(host.result(failed.clone(), "saved".into(), "wrong-resource".into()).is_err());
+        tick(&mut app); // Actual app Action::Save failure consumption, including all branch aliases.
+        assert_eq!(app.ui.comments.draft, draft);
+        for old in &before {
+            let current = app.session.docs.iter().find(|doc| doc.uid == old.uid).unwrap();
+            assert_eq!(
+                (current.revision, current.is_dirty(), current.versions.len(), current.branches.len(), &current.path),
+                (old.revision, old.is_dirty(), old.versions.len(), old.branches.len(), &old.path)
+            );
+            assert!(std::sync::Arc::ptr_eq(&current.doc, &old.doc));
+        }
+        assert!(app.session.docs.iter().find(|doc| doc.uid == original).unwrap().is_dirty());
+        assert_eq!(host.bound_document("original-resource"), Some(original));
+        assert_eq!(host.bound_filename(original).as_deref(), Some("Original.figcraft"));
+        let terminals = host.take_events();
+        assert_eq!(terminals.len(), 1);
+        assert_eq!(terminals[0].metadata["type"], "saveFailed");
+        assert_eq!(terminals[0].metadata["requestId"], failed);
+        assert_eq!(terminals[0].metadata["revision"], captured_revision.to_string());
+        app.ui.comments.draft = None; // Explicit fixture cancellation; the draft was not persisted by Save.
+        let retry = request(&mut app);
+        host.resolve_dialog(&retry, "provider", "Retry.figcraft").unwrap();
+        let mut delivered = Vec::new();
+        host.publish_events_with(
+            |metadata, bytes| {
+                if metadata["type"] == "save" {
+                    delivered = bytes.unwrap();
+                }
+                Ok::<_, ()>(())
+            },
+            |_| {},
+        );
+        verify_recovery_archive(&delivered, &hash, &png);
+        assert!(figcraft_format::load_bytes_with_versions(&delivered).unwrap().versions.iter().any(|version| version.name == "Later version"));
+        assert!(app.session.ds().unwrap().is_dirty());
+        host.result(retry, "saved".into(), "original-resource".into()).unwrap();
+        tick(&mut app);
+        assert!(!app.session.ds().unwrap().is_dirty());
+        assert_eq!(host.bound_document("original-resource"), Some(original));
+    }
+    #[test]
+    fn failed_open_backpressure_rejects_late_fig_archive_before_actual_consumer_and_retries() {
+        let mut app = app();
+        let (hash, png) = recovery_project(&mut app);
+        let encoded = app.session.execute("file.saveAs", &json!({"data":true})).unwrap();
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded["data"].as_str().unwrap()).unwrap();
+        let before = app.session.docs.clone();
+        let active = app.session.active;
+        let host = app.file_providers.clone();
+        let connection = host.snapshot()["connectionId"].as_str().unwrap().to_string();
+        host.set_resources(
+            &connection,
+            vec![crate::file_providers::Resource { id: "incoming".into(), name: "Incoming.figcraft".into(), updated_at: String::new() }],
+        )
+        .unwrap();
+        let failed = host.request_open("incoming").unwrap();
+        let later = host.request_open("incoming").unwrap();
+        host.cancel_open(later.clone(), String::new()).unwrap();
+        let mut rejected = false;
+        host.publish_events_with(
+            |metadata, _| {
+                if metadata["type"] == "openRequested" && metadata["requestId"] == failed {
+                    for _ in 0..32 {
+                        let request = host.request_open("incoming").unwrap();
+                        host.cancel_open(request, String::new()).unwrap();
+                    }
+                    return Err("read dispatch failed with full transport");
+                }
+                if metadata["type"] == "openRequested" && metadata["requestId"] == later {
+                    assert!(host.open(failed.clone(), "Incoming.figcraft".into(), bytes.clone()).is_err());
+                    assert!(host.cancel_open(failed.clone(), String::new()).is_err());
+                    rejected = true;
+                }
+                Ok(())
+            },
+            |_| {},
+        );
+        assert!(rejected);
+        tick(&mut app);
+        assert_eq!((app.session.active, app.session.docs.len()), (active, before.len()));
+        for (current, old) in app.session.docs.iter().zip(&before) {
+            assert_eq!((current.uid, current.revision, current.is_dirty()), (old.uid, old.revision, old.is_dirty()));
+            assert!(std::sync::Arc::ptr_eq(&current.doc, &old.doc));
+        }
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["type"], "openFailed");
+        assert_eq!(events[0].metadata["requestId"], failed);
+        let retry = host.request_open("incoming").unwrap();
+        host.open(retry.clone(), "Incoming.figcraft".into(), bytes).unwrap();
+        tick(&mut app);
+        let admitted = app.session.ds().unwrap();
+        assert_ne!(admitted.uid, before[active].uid);
+        assert_eq!(admitted.doc.images[&hash].bytes.as_slice(), png.as_slice());
+        assert!(admitted.versions.iter().any(|version| version.name == "Captured version"));
+        assert!(admitted.branches.iter().any(|branch| branch.name == "Captured branch"));
+        assert_eq!(host.bound_document("incoming"), Some(admitted.uid));
+        assert!(host.take_events().iter().any(|event| event.metadata["type"] == "opened" && event.metadata["requestId"] == retry));
     }
 }

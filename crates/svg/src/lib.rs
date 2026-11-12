@@ -93,6 +93,8 @@ struct W<'a> {
     used_ids: std::collections::BTreeSet<String>,
     /// The next `_k` suffix to try per base id, so repeated names don't rescan from `_2`.
     next_suffix: std::collections::HashMap<String, usize>,
+    /// The `<image>` written to `defs` per image key, so paints of one image share its bytes.
+    images: std::collections::HashMap<String, String>,
 }
 
 /// ` clip-path="url(#…)"` for a clip path id (else nothing).
@@ -269,17 +271,29 @@ impl W<'_> {
             PaintKind::Image(img) => {
                 let data = self.doc.images.get(&img.image)?;
                 let pid = self.id("pattern");
-                let iid = self.id("image");
-                // Formats SVG viewers don't show (TIFF, BMP) go in as PNG.
-                let png;
-                let (mime, bytes) = match sniff_mime(&data.bytes) {
-                    "application/octet-stream" => {
-                        png = figcraft_render::images::decode(&data.bytes).and_then(|p| figcraft_render::encode_png(&p).ok())?;
-                        ("image/png", png.as_slice())
+                let iid = match self.images.get(&img.image) {
+                    Some(iid) => iid.clone(),
+                    None => {
+                        let iid = self.id("image");
+                        // Formats SVG viewers don't show (TIFF, BMP) go in as PNG.
+                        let png;
+                        let (mime, bytes) = match sniff_mime(&data.bytes) {
+                            "application/octet-stream" => {
+                                png = figcraft_render::images::decode(&data.bytes).and_then(|p| figcraft_render::encode_png(&p).ok())?;
+                                ("image/png", png.as_slice())
+                            }
+                            m => (m, data.bytes.as_slice()),
+                        };
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                        let _ = write!(
+                            self.defs,
+                            "<image id=\"{iid}\" width=\"{}\" height=\"{}\" href=\"data:{mime};base64,{b64}\"/>",
+                            data.width, data.height
+                        );
+                        self.images.insert(img.image.clone(), iid.clone());
+                        iid
                     }
-                    m => (m, data.bytes.as_slice()),
                 };
-                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
                 let t = figcraft_render::paint::image_transform(img, f64::from(data.width), f64::from(data.height), w, h);
                 let m = Affine::new([f64::from(t.sx), f64::from(t.ky), f64::from(t.kx), f64::from(t.sy), f64::from(t.tx), f64::from(t.ty)]);
                 let (pw, ph) = if img.scale_mode == figcraft_color::ImageScaleMode::Tile {
@@ -289,12 +303,10 @@ impl W<'_> {
                 };
                 let _ = write!(
                     self.defs,
-                    "<pattern id=\"{pid}\" patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\" patternTransform=\"{}\"><image id=\"{iid}\" width=\"{}\" height=\"{}\" href=\"data:{mime};base64,{b64}\"/></pattern>",
+                    "<pattern id=\"{pid}\" patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\" patternTransform=\"{}\"><use href=\"#{iid}\"/></pattern>",
                     num(pw),
                     num(ph),
-                    matrix(m),
-                    data.width,
-                    data.height
+                    matrix(m)
                 );
                 let op = if p.opacity < 0.999 { format!(" fill-opacity=\"{}\"", num(f64::from(p.opacity))) } else { String::new() };
                 Some(format!("fill=\"url(#{pid})\"{op}{blend}"))
@@ -537,8 +549,8 @@ impl W<'_> {
             if let NodeKind::Vector { network } = &n.kind
                 && network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some())
             {
-                let rounded = network.rounded();
-                let net = rounded.as_ref().unwrap_or(network);
+                let drawn = figcraft_doc::geometry::drawn_network(network, n.corners.smoothing);
+                let net = drawn.as_ref();
                 for (i, region) in net.regions.iter().enumerate() {
                     let paints = region.fills.as_deref().unwrap_or(&n.fills);
                     let fr = if region.winding == figcraft_doc::WindingRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };
@@ -802,7 +814,7 @@ impl W<'_> {
                     return None;
                 }
                 match n.kind {
-                    NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && sweep >= std::f64::consts::TAU - 1e-9 => {
+                    NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && figcraft_geom::full_sweep(sweep) => {
                         figcraft_geom::kurbo::Shape::to_path(&figcraft_geom::kurbo::Ellipse::from_rect(r), 0.1)
                     }
                     NodeKind::Rectangle | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. } if n.corners.smoothing == 0.0 => {
@@ -1052,10 +1064,14 @@ impl W<'_> {
             else {
                 continue;
             };
-            let reach = s.spread.abs() * SPREAD_MITER_LIMIT + s.radius.abs() * 1.5 + 2.0;
+            // The spread grows the outline in its own units (mitres up to the limit), drawn through
+            // `xf`: as far across and down as a local step that long goes. The blur is in page units.
+            let spread = if s.spread.is_finite() { s.spread.abs() * SPREAD_MITER_LIMIT } else { 0.0 };
+            let [a, b_, c, d, _, _] = xf.as_coeffs();
+            let blur = s.radius.abs() * 1.5 + 2.0;
+            let region = b.inflate(spread * a.hypot(c) + blur, spread * b_.hypot(d) + blur);
             let cover = if s.show_behind { None } else { self.cover_input(n, xf) };
-            let filter =
-                self.blur_filter(s.radius, b.inflate(reach, reach), cover.as_deref()).map(|f| format!(" filter=\"url(#{f})\"")).unwrap_or_default();
+            let filter = self.blur_filter(s.radius, region, cover.as_deref()).map(|f| format!(" filter=\"url(#{f})\"")).unwrap_or_default();
             let op = f64::from(s.color.a * n.opacity.clamp(0.0, 1.0));
             let blend = if matches!(s.blend, figcraft_color::BlendMode::Normal | figcraft_color::BlendMode::PassThrough) {
                 String::new()
@@ -1144,6 +1160,7 @@ pub fn try_export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Resu
         clip: None,
         used_ids: Default::default(),
         next_suffix: Default::default(),
+        images: Default::default(),
     };
     for id in ids {
         let parent_xf = doc.node(*id).and_then(|n| n.parent).map(|p| doc.world_transform(p)).unwrap_or(Affine::IDENTITY);

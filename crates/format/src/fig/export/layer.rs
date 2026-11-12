@@ -91,7 +91,10 @@ impl<'d> Exporter<'d> {
             NodeKind::Group => f.push(("resizeToFit", b(true))),
             NodeKind::Section { contents_hidden } => f.push(("sectionContentsHidden", b(*contents_hidden))),
             NodeKind::Ellipse { start, sweep, inner } => {
-                f.push(("arcData", o(vec![("startingAngle", fl(*start)), ("endingAngle", fl(start + sweep)), ("innerRadius", fl(*inner))])))
+                // Within a turn, where a 32-bit angle still holds the start and the sweep exactly
+                // enough; a start past a turn draws the same.
+                let start = crate::rest::start_within_a_turn(*start);
+                f.push(("arcData", o(vec![("startingAngle", fl(start)), ("endingAngle", fl(start + sweep)), ("innerRadius", fl(*inner))])))
             }
             NodeKind::Polygon { count } => f.push(("count", u(*count))),
             NodeKind::Star { count, inner_ratio } => f.extend([("count", u(*count)), ("starInnerScale", fl(*inner_ratio))]),
@@ -301,7 +304,7 @@ impl<'d> Exporter<'d> {
             || !n.measurements.is_empty()
             || !n.dev_status.is_none()
         {
-            self.warn("Dev Mode annotations, statuses, resources, measurements and code links were left out");
+            self.warn("Developer Mode annotations, statuses, resources, measurements and code links were left out");
         }
         if !n.plugin_data.is_empty() {
             self.warn("plugin data was left out");

@@ -192,8 +192,9 @@ impl Replica {
         self.doc.take_dirty();
         let mut out = Applied::default();
         let (mut relist, mut relist_all) = (BTreeSet::new(), false);
+        let mut index = docprops::Index::default();
         for c in changes {
-            match self.apply_one(c, &mut out) {
+            match self.apply_one(c, &mut out, &mut index) {
                 Ok(Relist::No) => {}
                 Ok(Relist::Page(p)) => {
                     relist.insert(p);
@@ -214,7 +215,7 @@ impl Replica {
     }
 
     /// Apply one change. Returns what of the page list needs rebuilding.
-    fn apply_one(&mut self, c: &Change, out: &mut Applied) -> Result<Relist, Error> {
+    fn apply_one(&mut self, c: &Change, out: &mut Applied, index: &mut docprops::Index) -> Result<Relist, Error> {
         match c {
             Change::Create { id, kind, parent, position, props } => {
                 frac::validate(position).map_err(|e| Error::Invalid(e.to_string()))?;
@@ -235,7 +236,9 @@ impl Replica {
                         self.doc.insert_page(node).map_err(doc_err)?;
                     }
                     (false, Some(p)) => {
-                        let at = self.slot(&self.doc.get(*p).map_err(doc_err)?.children, *id, position);
+                        // A new id sits in no sibling list yet: no scan for it, just the binary search.
+                        let siblings = &self.doc.get(*p).map_err(doc_err)?.children;
+                        let at = siblings.partition_point(|c| (self.key(*c), *c) < (position.as_str(), *id));
                         self.doc.insert(node, *p, Some(at)).map_err(doc_err)?;
                     }
                     _ => return Err(Error::Invalid("pages, and only pages, have no parent".into())),
@@ -297,7 +300,7 @@ impl Replica {
                 Ok(if page { Relist::Page(*id) } else { Relist::No })
             }
             Change::SetDoc { .. } | Change::Put { .. } | Change::Remove { .. } => {
-                Ok(if docprops::apply(&mut self.doc, c)? { Relist::All } else { Relist::No })
+                Ok(if docprops::apply_indexed(&mut self.doc, c, index)? { Relist::All } else { Relist::No })
             }
         }
     }

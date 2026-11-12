@@ -267,3 +267,122 @@ fn the_about_window_draws_every_tab() {
         assert_eq!(app.ui.about_tab, tab);
     }
 }
+
+const WINDOW: f32 = 640.5;
+const WIDTHS: [Option<f32>; 3] = [None, Some(80.0), Some(80.0)];
+const NAME: f32 = 120.0;
+
+/// One frame of a table long enough to scroll, in a window `width` wide; the rects of its header cells.
+fn table_frame(ctx: &egui::Context, width: f32, widths: &[Option<f32>], name: f32, events: Vec<egui::Event>) -> Vec<Rect> {
+    let screen_rect = Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 300.0)));
+    let raw = egui::RawInput { screen_rect, events, ..Default::default() };
+    let mut cells = Vec::new();
+    let out = ctx.run_ui(raw, |ui| {
+        cells.clear();
+        credits_table(
+            ui,
+            "test",
+            widths,
+            name,
+            240.0,
+            |mut header| {
+                for _ in widths {
+                    header.col(|ui| cells.push(ui.max_rect()));
+                }
+            },
+            |body| {
+                body.rows(TABLE_ROW_H, 40, |mut row| {
+                    for _ in widths {
+                        row.col(|ui| {
+                            ui.label("x");
+                        });
+                    }
+                });
+            },
+        );
+    });
+    out.drop_without_applying_deltas();
+    cells
+}
+
+/// [`table_frame`] at the usual size.
+fn settled_frame(ctx: &egui::Context) -> Vec<Rect> {
+    table_frame(ctx, WINDOW, &WIDTHS, NAME, Vec::new())
+}
+
+/// A new context with the table open and settled, and the rects of its header cells.
+fn opened_table() -> (egui::Context, Vec<Rect>) {
+    let ctx = egui::Context::default();
+    settled_frame(&ctx);
+    let cells = settled_frame(&ctx);
+    (ctx, cells)
+}
+
+/// Drags a column's right edge (cells have no gap between them), then lets go.
+fn drag_edge(ctx: &egui::Context, cell: Rect, by: f32) {
+    let start = egui::pos2(cell.right(), cell.center().y);
+    let halfway = start + vec2(by / 2.0, 0.0);
+    let end = start + vec2(by, 0.0);
+    let moved = egui::Event::PointerMoved;
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    for event in [moved(start), button(start, true), moved(halfway), moved(end), button(end, false)] {
+        table_frame(ctx, WINDOW, &WIDTHS, NAME, vec![event]);
+    }
+}
+
+#[test]
+fn every_column_can_be_dragged_at_its_right_edge_and_stays_there() {
+    let (_, opened) = opened_table();
+    for (dragged, cell) in opened.iter().enumerate() {
+        let (ctx, _) = opened_table();
+        drag_edge(&ctx, *cell, -30.0);
+        settled_frame(&ctx);
+        let after = settled_frame(&ctx);
+        for (column, (was, now)) in opened.iter().zip(&after).enumerate() {
+            let want = if column == dragged { was.width() - 30.0 } else { was.width() };
+            assert!((now.width() - want).abs() < 1.0, "dragging column {dragged}: column {column} is {now:?}, was {was:?}");
+        }
+    }
+}
+
+#[test]
+fn a_changed_fit_replaces_the_column_widths() {
+    let (ctx, opened) = opened_table();
+    drag_edge(&ctx, opened[0], -30.0);
+    let longer_name = table_frame(&ctx, WINDOW, &WIDTHS, NAME + 80.0, Vec::new());
+    assert!((longer_name[0].width() - opened[0].width()).abs() < 1.0, "a longer name drops a dragged width: {longer_name:?}");
+    let wider = table_frame(&ctx, WINDOW, &[None, Some(200.0), Some(80.0)], NAME, Vec::new());
+    let widths: Vec<f32> = wider.iter().map(|c| c.width().round()).collect();
+    assert!(widths.ends_with(&[200.0, 80.0]), "a longer cell widens its column: {widths:?}");
+    // The table fills the window, which the layout rounds to whole points.
+    assert!(wider[2].right() <= WINDOW.ceil(), "the table still fits the window: {wider:?}");
+    let narrower = table_frame(&ctx, 400.0, &WIDTHS, NAME, Vec::new());
+    assert!(narrower[2].right() <= 400.0, "a narrower window refits the table: {narrower:?}");
+}
+
+#[test]
+fn scrolling_sideways_keeps_dragged_widths() {
+    let (ctx, opened) = opened_table();
+    drag_edge(&ctx, opened[0], 100.0);
+    settled_frame(&ctx);
+    let dragged = settled_frame(&ctx);
+    assert!((dragged[0].width() - opened[0].width() - 100.0).abs() < 1.0, "the drag took: {dragged:?}");
+    table_frame(&ctx, WINDOW, &WIDTHS, NAME, vec![egui::Event::PointerMoved(dragged[0].center())]);
+    let mut scrolled = false;
+    for delta in [-13.3, -27.77, -41.1, 30.6] {
+        let wheel = egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(delta, 0.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        };
+        table_frame(&ctx, WINDOW, &WIDTHS, NAME, vec![wheel]);
+        for _ in 0..8 {
+            let cells = settled_frame(&ctx);
+            assert!((cells[0].width() - dragged[0].width()).abs() < 1.0, "scrolled by {delta}: {cells:?}");
+            scrolled |= cells[0].left() < dragged[0].left() - 1.0;
+        }
+    }
+    assert!(scrolled, "the wheel never moved the table sideways");
+}

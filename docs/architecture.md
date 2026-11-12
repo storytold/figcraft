@@ -1,6 +1,6 @@
 # FigCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (the `vectordrawable` crate, L4: Android Vector Drawable export; earlier: the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (corrected the file I/O overview to include the existing best-effort `.fig` import and experimental export; earlier: the `vectordrawable` crate, L4: Android Vector Drawable export; the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
 
 How FigCraft is built today. Engine first, a thin swappable UI, everything a command; a Figma-shaped
 data model (a scene graph of frames with auto layout, components and variables). ~108,800 lines of
@@ -23,11 +23,11 @@ replaced.
 | L2 | `figcraft-plugin` | ~1.0k | Plugin manifest and the WebAssembly sandbox (wasmi, metered, memory cap, no file system, network or clock) |
 | L2 | `figcraft-pathops` | ~1.1k | Booleans (linesweeper), outline stroke with alignment, arrowheads |
 | L3 | `figcraft-render` | ~5.4k | Scene → pixels on tiny-skia (CPU): isolated layers for opacity/blend/effects, clips, masks, shadows, blurs (uniform, progressive, background), noise, texture, glass, text; banded in parallel; retained rendering of only what changed; levels of detail when zoomed out |
-| L3 | `figcraft-format` | ~5.2k | Native `.figcraft` (zip of `document.json` + images; streamed JSON), local library files, versions, REST API file JSON import (`rest/`) |
+| L3 | `figcraft-format` | ~5.2k | Native `.figcraft` (zip of `document.json` + images; streamed JSON), local library files, versions, REST API file JSON import (`rest/`), best-effort `.fig` import and experimental export (`fig` module) |
 | L4 | `figcraft-svg` | ~3.7k | SVG export and import (usvg) |
 | L4 | `figcraft-pdf` | ~2.3k | PDF export (krilla) with print options |
 | L4 | `figcraft-vectordrawable` | ~1.2k | Android Vector Drawable (XML) export: baked path data, gradients through `aapt:attr`, clip groups, compatibility modes and warnings |
-| L5 | `figcraft-engine` | ~39.3k | Sessions, undo history (`Arc` snapshots), the command registry (`cmd/*`, `spec!`), pointer tools and vector edit mode, snapping and measuring, components sync, libraries, prototype runtime, Dev Mode code generation, the menu catalog (`catalog.rs`) and the keymap (`keymap.rs`), a panic guard |
+| L5 | `figcraft-engine` | ~39.3k | Sessions, undo history (`Arc` snapshots), the command registry (`cmd/*`, `spec!`), pointer tools and vector edit mode, snapping and measuring, components sync, libraries, prototype runtime, Developer Mode code generation, the menu catalog (`catalog.rs`) and the keymap (`keymap.rs`), a panic guard |
 | L6 | `figcraft-ui-egui` | ~31.9k | The UI3-style frontend: canvas (render worker), toolbar, layers, Design/Prototype/Inspect panels, colour picker, menus, dialogs, presenter, comments, accessibility (AccessKit), the control channel server |
 | L6 | `figcraft-mcp` | ~2.4k | MCP server (JSON-RPC over stdio), headless or bridged to a running app |
 | L6 | `figcraft-collab-net` | ~3.0k | Live sessions over the network: the WebSocket transport (tungstenite, a reader and a writer thread per connection), the hub that runs a collaboration core server per open file for the session host the app embeds and for `figcraft-server` (behind a `Backend`), the joining and managing clients (publishing), invite links, presence relay and limits; the browser client; the only crate allowed networking dependencies |
@@ -67,9 +67,11 @@ express an effect.
 
 `.figcraft` is the native format (atomic saves, autosave checkpoints; the desktop app keeps
 recovery copies of unsaved documents that reopen after a crash or a forced quit). Imports: REST API
-file JSON with variables and images, SVG, raster images, clipboard
-content. Exports: PNG, JPG, WebP, SVG, PDF, code. There is no `.fig` reader yet
-([`file-format-parity.md`](file-format-parity.md)).
+file JSON with variables and images, SVG, raster images, clipboard content and `.fig` files (best
+effort). Exports: PNG, JPG, WebP, SVG, PDF, code and `.fig` (experimental). The `.fig`
+[reader](../crates/format/src/fig.rs) and [writer](../crates/format/src/fig/export.rs) belong to
+`figcraft-format`; fidelity limits and validation are documented in
+[`file-format-parity.md`](file-format-parity.md).
 
 ## Robustness
 
@@ -83,6 +85,7 @@ input.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Corrected the file I/O overview and format-crate row: best-effort `.fig` import and experimental export already exist in `figcraft-format`. No capability or readiness change. |
 | 2026-10-18 | minor | Added `vectordrawable` (L4), the Android Vector Drawable (XML) writer |
 | 2026-10-11 | minor | `collab-net` hosts through one hub for the app's sessions and the standalone server; added the `figcraft-server` app |
 | 2026-10-10 | minor | Merged main after #101–#103: WASM plugins (plugins area 0% → 35% breadth, 20% ready; ecosystem 5% → 20%) and the multiplayer core without networking (multiplayer 5% → 15% breadth, 5% ready; collaboration 8% → 12%); menu breadth 97.5% → 98.5% (200/203); ready for real work ~46% → ~47%; full parity 420–790 h → 390–745 h; beta 210–380 h → 200–365 h. Fixed the stated weight sums (areas 1–16 sum to 94, total 113; percentages were already computed with those) |

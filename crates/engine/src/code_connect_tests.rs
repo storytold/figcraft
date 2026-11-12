@@ -260,6 +260,9 @@ fn vue_links_are_a_default_import_with_quoted_bindings() {
     ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Say \"hi\""}}));
     ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<Card title=\"{title} {title}\" />"}));
     assert_eq!(code(&mut s, i, "vue"), "import Card from \"./Card.vue\";\n\n<Card title=\"Say &quot;hi&quot; Say &quot;hi&quot;\" />\n");
+    // Literal text before the first placeholder keeps it inside the attribute value.
+    ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<Card title=\"Say: {title}\" />"}));
+    assert_eq!(code(&mut s, i, "vue"), "import Card from \"./Card.vue\";\n\n<Card title=\"Say: Say &quot;hi&quot;\" />\n");
     // Text after a completed tag is text, even when it contains `=`.
     ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Buy"}}));
     ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<p>Total = {title}</p>"}));
@@ -281,4 +284,17 @@ fn vue_layer_trees_import_connected_components_in_script_setup() {
     let want = "<script setup lang=\"ts\">\n\nimport Card from \"./Card.vue\";\n\n</script>\n\n<template>\n";
     assert!(code.starts_with(want), "{code}");
     assert_eq!(code.matches("import Card").count(), 1, "{code}");
+}
+
+#[test]
+fn many_entries_for_one_component_each_link() {
+    let mut s = Session::new();
+    let (_, hover) = button(&mut s);
+    let links: Vec<Value> = (0..crate::code_connect::MAX_FILE_LINKS)
+        .map(|i| json!({"component": "Button", "language": if i % 2 == 0 { "react" } else { "vue" }, "name": "Button", "template": "<Button />"}))
+        .collect();
+    let r = ex(&mut s, "codeConnect.import", json!({"json": {"version": 1, "links": links}}));
+    assert_eq!(r["linked"], crate::code_connect::MAX_FILE_LINKS, "{r}");
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": hover, "x": 0, "y": 500})));
+    assert_eq!(code(&mut s, i, "react"), "<Button />\n");
 }

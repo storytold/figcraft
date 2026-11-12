@@ -293,12 +293,21 @@ pub fn decode_frames(bytes: &[u8]) -> Option<Vec<(Pixmap, f64)>> {
     if image::guess_format(bytes).ok()? != image::ImageFormat::Gif {
         return None;
     }
-    let dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).ok()?;
+    let mut dec = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).ok()?;
     let (w, h) = dec.dimensions();
     let frame_bytes = u64::from(w) * u64::from(h) * 4;
     if frame_bytes == 0 || w > MAX_SIDE || h > MAX_SIDE {
         return None;
     }
+    // A frame's own descriptor can ask for a far larger buffer than the canvas: the decoder
+    // reserves each frame and canvas buffer against these limits before allocating it.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    // The decoder charges its canvas, its composited output and the partial frame against this
+    // together, besides the frames kept (capped by `most` below): one frame of working room.
+    limits.max_alloc = Some(MAX_ANIMATION_BYTES.saturating_add(frame_bytes));
+    dec.set_limits(limits).ok()?;
     let most = (MAX_ANIMATION_BYTES / frame_bytes).min(MAX_FRAMES as u64) as usize;
     let mut out = Vec::new();
     for f in dec.into_frames().take(most) {

@@ -14,6 +14,40 @@ use crate::{Result, bad};
 /// Deepest params nesting the resolver walks before giving up.
 const MAX_DEPTH: usize = 64;
 
+/// How much referenced data (values and string bytes) the params of one step may copy in.
+const MAX_EXPANDED: usize = 8 << 20;
+
+/// What copying `v` costs: its values and string bytes, counting stops past `limit`.
+fn weight(v: &Value, limit: usize) -> usize {
+    let mut total = 0usize;
+    let mut stack = vec![v];
+    while let Some(v) = stack.pop() {
+        total += 1;
+        match v {
+            Value::String(s) => total += s.len(),
+            // Checked before they are queued, so a huge list can't grow the worklist past the limit.
+            Value::Array(a) => {
+                if total + a.len() > limit {
+                    return total + a.len();
+                }
+                stack.extend(a);
+            }
+            Value::Object(o) => {
+                total += o.keys().map(String::len).sum::<usize>();
+                if total + o.len() > limit {
+                    return total + o.len();
+                }
+                stack.extend(o.values());
+            }
+            _ => {}
+        }
+        if total > limit {
+            return total;
+        }
+    }
+    total
+}
+
 /// One step of a batch: a command, its params and the name later steps can call it by.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BatchStep {
@@ -99,30 +133,32 @@ impl BatchScope {
 
     /// `params` of the next step with every reference in it replaced.
     pub(crate) fn resolve(&self, params: &Value) -> Result<Value> {
-        self.resolve_in(params, 0)
+        let mut left = MAX_EXPANDED;
+        self.resolve_in(params, 0, &mut left)
     }
 
-    fn resolve_in(&self, v: &Value, depth: usize) -> Result<Value> {
+    /// `left`: how much referenced data one step's params may still copy in.
+    fn resolve_in(&self, v: &Value, depth: usize, left: &mut usize) -> Result<Value> {
         let step = self.next_step();
         if depth > MAX_DEPTH {
             return Err(bad("command.batch", format!("step {step}: params nest deeper than {MAX_DEPTH} levels")));
         }
         match v {
-            Value::Object(o) if o.contains_key("$step") || o.contains_key("$ref") => self.reference(o),
+            Value::Object(o) if o.contains_key("$step") || o.contains_key("$ref") => self.reference(o, left),
             Value::Object(o) => {
                 let mut out = Map::with_capacity(o.len());
                 for (k, x) in o {
-                    out.insert(k.clone(), self.resolve_in(x, depth + 1)?);
+                    out.insert(k.clone(), self.resolve_in(x, depth + 1, left)?);
                 }
                 Ok(Value::Object(out))
             }
-            Value::Array(a) => a.iter().map(|x| self.resolve_in(x, depth + 1)).collect::<Result<Vec<_>>>().map(Value::Array),
+            Value::Array(a) => a.iter().map(|x| self.resolve_in(x, depth + 1, left)).collect::<Result<Vec<_>>>().map(Value::Array),
             _ => Ok(v.clone()),
         }
     }
 
     /// The value a `{"$step": n}` or `{"$ref": "name"}` object (with an optional `field`) stands for.
-    fn reference(&self, o: &Map<String, Value>) -> Result<Value> {
+    fn reference(&self, o: &Map<String, Value>, left: &mut usize) -> Result<Value> {
         let step = self.next_step();
         let fail = |msg: String| bad("command.batch", format!("step {step}: {msg}"));
         let key = if o.contains_key("$step") { "$step" } else { "$ref" };
@@ -153,8 +189,14 @@ impl BatchScope {
             Some(_) => return Err(fail("`field` must be a string".into())),
         };
         let result = self.results.get(n).ok_or_else(|| fail(format!("{who} has no result")))?;
-        lookup(result, path).cloned().map_err(|why| fail(format!("{who}'s result has no `{path}`{why}")))
+        let value = lookup(result, path).map_err(|why| fail(format!("{who}'s result has no `{path}`{why}")))?;
+        // Counted before copying: a few references to one big result can't multiply it.
+        *left = left.checked_sub(weight(value, *left)).ok_or_else(|| fail("the references copy more than the batch may expand".into()))?;
+        Ok(value.clone())
     }
+
+    /// Most step names a missing-reference error lists.
+    const NAME_HINTS: usize = 12;
 
     fn known_names(&self) -> String {
         let mut names: Vec<_> = self.names.iter().collect();
@@ -162,8 +204,11 @@ impl BatchScope {
         if names.is_empty() {
             return "no step has an `as` name".into();
         }
-        let list: Vec<_> = names.iter().map(|(name, i)| format!("\"{name}\" is step {i}")).collect();
-        list.join(", ")
+        // A few of them: the list is built for every missing reference and, with `onError:
+        // continue`, kept for each, so a long table would cost its length per failed step.
+        let list: Vec<_> = names.iter().take(Self::NAME_HINTS).map(|(name, i)| format!("\"{name}\" is step {i}")).collect();
+        let more = names.len().saturating_sub(Self::NAME_HINTS);
+        if more > 0 { format!("{}, {more} more", list.join(", ")) } else { list.join(", ") }
     }
 }
 
@@ -210,5 +255,29 @@ fn kind(v: &Value) -> &'static str {
         Value::String(_) => "a string",
         Value::Array(_) => "a list",
         Value::Object(_) => "an object",
+    }
+}
+
+#[cfg(test)]
+mod expansion_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn references_copy_a_bounded_amount_into_one_step() {
+        let steps = [BatchStep::new("a", json!({})), BatchStep::new("b", json!({}))];
+        let mut scope = BatchScope::new(&steps).unwrap();
+        // A result of about 1 MB.
+        scope.push(json!({"ids": vec!["x".repeat(1000); 1000]}));
+        let refs = |n: usize| json!({"all": vec![json!({"$step": 0, "field": "ids"}); n]});
+        assert!(scope.resolve(&refs(4)).is_ok());
+        let err = scope.resolve(&refs(200)).unwrap_err().to_string();
+        assert!(err.contains("more than the batch may expand"), "{err}");
+    }
+
+    #[test]
+    fn a_huge_list_is_refused_before_it_is_queued() {
+        assert!(weight(&json!(vec![0; 100_000]), 1000) > 1000);
+        assert!(weight(&json!(vec![0; 10]), 1000) <= 1000);
     }
 }

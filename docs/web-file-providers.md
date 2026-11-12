@@ -6,6 +6,11 @@ it does not enable storage, render provider Recents, change ordinary local saves
 A host must explicitly call registerProvider. No server, account system, login, VM, domain,
 filesystem mount or cloud vendor is built into this feature.
 
+Use the regular web editor URL to register a provider, including from a same-origin
+frame. When FigCraft starts in embedded host mode (`?host=parent` with an eligible parent
+or `data-host="page"` on the canvas), that host owns file delivery and the provider
+object is unavailable. This keeps the two save destinations independent.
+
 ## Contract
 
 window.figcraftFileProviders has protocolVersion 1 and app figcraft. Events are dispatched on window
@@ -69,6 +74,23 @@ result, **not durable provider confirmation**, and does not clear the document's
 Save Copy, Export and programmatic commands keep their existing local behavior. With the capability
 disabled or unregistered, the original browser/native save flow remains in use.
 
+The production publisher catches recoverable JavaScript byte-copy and dispatch exceptions, logs
+the error and continues the taken batch. Recovery consumes only a still-owned request in the same
+provider/account/connection, with the captured document, revision, filename and intent (and chosen
+destination for save). Its existing immutable snapshots move into a bounded failure inbox for the
+ordinary application consumer, even when the normal action queue is full. At most 16 already-admitted
+save captures wait there, without transfer bytes. No persistence acknowledgement, saved checkpoint,
+resource rebinding, draft cancellation or fallback download is fabricated. A synchronous choice,
+read response or result already accepted by a callback retains its existing owner and outcome.
+
+A failed openRequested settles its read before queuing the failure terminal. When backpressure
+retains that terminal, later read responses and cancellation still reject immediately. Independent
+new requests remain available within the existing limits. Queued/retained terminals and the whole
+currently publishing batch retain their connection: unregistering and nested publication cannot
+replace account ownership before a later event in the taken batch. Two bounded drains request an
+ordinary later frame for remaining work. This covers returned JavaScript exceptions, not fatal
+WASM traps, process termination or true OOM.
+
 Provider Save/Save As always captures .figcraft, the editable native project with its embedded resources.
 Use the existing local Copy/Export commands for interchange formats. The host must preserve the native
 extension; changing a suffix cannot turn native bytes into PDF, SVG or another interchange format.
@@ -114,6 +136,28 @@ conservative device results. The source includes the WASM adapter and native enc
 Run the ordinary repository checks and browser integration checks after publishing the complete suite's
 source, as required by this contribution's development order. This document does not claim those checks
 have been executed merely because fixtures are present.
+
+Recovery regression source includes six Host cases for full action queues, bounded failed snapshots,
+accepted synchronous callbacks, failed-read backpressure, queued/taken terminals and nested publication.
+Two native application-consumer cases preserve later revisions/version metadata, resident comment
+draft state, all captured branch aliases and the previous binding, then retry through the real native
+encoder/decoder. Their original 2x2 PNG is checked in the main document, captured version and branch
+base/head after decoding the actual archive; later version changes are absent from the older capture.
+
+The WASM fixture
+file_providers::browser_tests::real_window_delivery_recovery_preserves_fig_archive_history_and_actual_app_ownership
+uses a fresh owned page, actual window.figcraftFileProviders callbacks and CustomEvents, interactive
+FigApp::save, the production publisher and public FigApp::background_tick consumer. Rust callbacks
+inject genuine JavaScript copy/dispatch exceptions. A catch-enabled invocation restores the exact
+original property descriptors before propagating its Result or asserting outcomes. The source checks
+continued terminal delivery, failed chooser/read cleanup, stale ACK refusal, native archive/history
+reopen, retry, accepted synchronous completion, later edits and alias invalidation. The resident comment
+draft is seeded in the actual UI state and must survive failure; this does not claim DOM typing coverage.
+It uses no handwritten JavaScript, graphics or WebRunner, and does not prove backend durability or OOM
+recovery. These declarations are not execution results. Root must generate/review the real lock for
+the WASM-only wasm-bindgen-test =0.3.79 and existing workspace image test edges, publish the complete
+source/lock, then run actual native/WASM/browser gates. Never hand-edit Cargo.lock or credit a native
+build as execution of this browser fixture.
 
 Contributor credit: @alejocapo04.
 

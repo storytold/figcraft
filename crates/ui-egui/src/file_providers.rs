@@ -74,9 +74,12 @@ struct State {
     opens: HashMap<String, String>,
     queued_opens: HashSet<String>,
     actions: Vec<Action>,
+    // Only previously admitted captures; at most MAX_PENDING and no transfer bytes.
+    failed_deliveries: Vec<Action>,
     events: Vec<Event>,
     // At most MAX_PENDING saves plus MAX_PENDING reads; never stores transfer bytes.
     finished: VecDeque<Terminal>,
+    publishing: bool,
     documents: Value,
     open_error: Option<String>,
 }
@@ -88,6 +91,9 @@ impl State {
             || !self.opens.is_empty()
             || !self.actions.is_empty()
             || !self.finished.is_empty()
+            || !self.failed_deliveries.is_empty()
+            || self.publishing
+            || self.events.iter().any(|event| terminal_event(&event.metadata))
     }
     fn next(&mut self, kind: &str) -> Result<String, String> {
         if self.nonce.is_empty() {
@@ -136,6 +142,12 @@ impl State {
 }
 #[derive(Clone, Default)]
 pub struct Host(Arc<Mutex<State>>);
+struct Publication(Host);
+impl Drop for Publication {
+    fn drop(&mut self) {
+        self.0.state().publishing = false;
+    }
+}
 impl Host {
     fn state(&self) -> MutexGuard<'_, State> {
         self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -356,7 +368,94 @@ impl Host {
         Ok(())
     }
     pub(crate) fn take_actions(&self) -> Vec<Action> {
-        std::mem::take(&mut self.state().actions)
+        let mut s = self.state();
+        let mut actions = std::mem::take(&mut s.actions);
+        actions.append(&mut s.failed_deliveries);
+        actions
+    }
+    fn delivery_failed(&self, metadata: &Value) {
+        let mut s = self.state();
+        let Some(provider) = &s.provider else { return };
+        if metadata["connectionId"].as_str() != Some(s.connection.as_str())
+            || metadata["providerId"].as_str() != Some(provider.provider_id.as_str())
+            || metadata["namespace"].as_str() != Some(provider.namespace.as_str())
+        {
+            return;
+        }
+        let Some(request) = metadata["requestId"].as_str() else { return };
+        let matches = |capture: &Capture| {
+            metadata["documentId"].as_str() == Some(capture.doc.to_string().as_str())
+                && metadata["revision"].as_str() == Some(capture.revision.to_string().as_str())
+                && metadata["filename"].as_str() == Some(capture.name.as_str())
+                && metadata["intent"].as_str() == Some(capture.intent.as_str())
+        };
+        let capture = match metadata["type"].as_str() {
+            Some("save")
+                if s.pending
+                    .get(request)
+                    .is_some_and(|capture| matches(capture) && metadata["destination"].as_str() == Some(capture.destination.as_str())) =>
+            {
+                s.pending.remove(request)
+            }
+            Some("saveDialog") if s.dialogs.get(request).is_some_and(matches) => s.dialogs.remove(request),
+            Some("openRequested") => {
+                if !s.queued_opens.contains(request)
+                    && let Some(resource) =
+                        s.opens.get(request).filter(|resource| metadata["resourceId"].as_str() == Some(resource.as_str())).cloned()
+                {
+                    // Settle immediately, even when the full transport queue retains this
+                    // terminal. A later callback in the taken batch must not admit its bytes.
+                    s.queued_opens.insert(request.into());
+                    s.finished.push_back(Terminal {
+                        request: request.into(),
+                        metadata: json!({"type":"openFailed","requestId":request,"resourceId":resource,
+                            "error":"Provider event delivery failed."}),
+                        owner: TerminalOwner::Open,
+                    });
+                    s.flush_finished();
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(mut capture) = capture {
+            // A synchronous accepted result/choice has already removed this original owner.
+            // Retain only a still-owned snapshot, never bytes or a fabricated durable ACK.
+            capture.bytes = None;
+            s.finishing_saves.insert(request.into(), capture.snapshots.iter().map(|doc| doc.uid).collect());
+            s.failed_deliveries.push(Action::Save { request: request.into(), capture, status: "failed".into(), resource: String::new() });
+        }
+    }
+    /// Dispatch without a state lock across callbacks. Recovery uses the normal app consumer.
+    /// The whole taken batch owns its connection, including terminals later in that batch.
+    pub fn publish_events_with<E>(&self, mut dispatch: impl FnMut(&Value, Option<Vec<u8>>) -> Result<(), E>, mut on_error: impl FnMut(E)) -> bool {
+        {
+            let mut s = self.state();
+            if s.publishing {
+                return false;
+            }
+            s.publishing = true;
+        }
+        let _publication = Publication(self.clone());
+        let mut repaint = false;
+        for _ in 0..2 {
+            let events = self.take_events();
+            if events.is_empty() {
+                break;
+            }
+            for event in events {
+                repaint |= terminal_event(&event.metadata);
+                if let Err(error) = dispatch(&event.metadata, event.bytes) {
+                    self.delivery_failed(&event.metadata);
+                    repaint = true;
+                    on_error(error);
+                }
+            }
+        }
+        repaint || {
+            let s = self.state();
+            !s.actions.is_empty() || !s.failed_deliveries.is_empty() || !s.events.is_empty() || !s.finished.is_empty()
+        }
     }
     pub fn take_events(&self) -> Vec<Event> {
         let mut s = self.state();
@@ -448,6 +547,9 @@ impl Host {
         ui.weak("Recent files on this device");
         selected
     }
+}
+fn terminal_event(metadata: &Value) -> bool {
+    matches!(metadata["type"].as_str(), Some("saved" | "downloaded" | "saveCancelled" | "saveFailed" | "opened" | "openCancelled" | "openFailed"))
 }
 fn bounded_error(message: &str) -> String {
     let mut error = String::new();

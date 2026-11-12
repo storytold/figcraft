@@ -288,41 +288,45 @@ fn pieces(t: &str) -> Vec<Piece<'_>> {
     checkable.then(|| parse(t).ok()).flatten().unwrap_or_else(|| vec![Piece::Text(t)])
 }
 
-/// Whether `s` ends inside an unclosed opening tag (no `>` outside quotes since the last `<`).
-fn inside_open_tag(s: &str) -> bool {
+/// Whether `s` ends inside an unclosed opening tag (no `>` outside quotes since the last `<`), and
+/// the quote (with its byte offset) still open there.
+fn tag_state(s: &str) -> (bool, Option<(char, usize)>) {
     let mut in_tag = false;
     let mut quote = None;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
         match quote {
-            Some(q) => {
+            Some((q, _)) => {
                 if c == q {
                     quote = None;
                 }
             }
             None => match c {
-                '<' if !in_tag && chars.peek().is_some_and(|ch| ch.is_ascii_alphabetic() || matches!(*ch, '/' | '!' | '?')) => {
+                '<' if !in_tag && chars.peek().is_some_and(|(_, ch)| ch.is_ascii_alphabetic() || matches!(*ch, '/' | '!' | '?')) => {
                     in_tag = true;
                 }
                 '>' if in_tag => in_tag = false,
-                '"' | '\'' if in_tag => quote = Some(c),
+                '"' | '\'' if in_tag => quote = Some((c, i)),
                 _ => {}
             },
         }
     }
-    in_tag
+    (in_tag, quote)
 }
 
 /// Where a placeholder sits in a Vue template: whether the attribute is bound, and the quote the
 /// template already opened (if any). `None` when it isn't in an attribute at all.
 fn vue_attribute(out: &str) -> Option<(bool, Option<char>)> {
     let end = out.trim_end();
-    if !inside_open_tag(end) {
+    let (in_tag, open) = tag_state(out);
+    if !in_tag {
         return None;
     }
-    let (after, quote) = match end.chars().last() {
-        Some(q @ ('"' | '\'')) => (&end[..end.len() - q.len_utf8()], Some(q)),
-        _ => (end, None),
+    // A quote still open, with literal text after it (`title="Buy {x}"`), puts the placeholder in
+    // that attribute's value as much as one directly after the quote does.
+    let (after, quote) = match open {
+        Some((q, at)) => (&out[..at], Some(q)),
+        None => (end, None),
     };
     let after = after.trim_end();
     let eq = after.rfind('=')?;
@@ -665,7 +669,12 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let doc = s.doc()?;
     // Components and sets by name (variants are linked through their set).
-    let owners: Vec<(String, NodeId)> = doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).map(|n| (n.name.clone(), n.id)).collect();
+    let mut owners: std::collections::HashMap<&str, Vec<NodeId>> = std::collections::HashMap::new();
+    for n in doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)) {
+        owners.entry(n.name.as_str()).or_default().push(n.id);
+    }
+    // What each component looks like, worked out once however many entries name it.
+    let mut described: std::collections::HashMap<NodeId, Option<Component>> = std::collections::HashMap::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut apply: Vec<(NodeId, CodeLink)> = Vec::new();
     for (i, e) in entries.iter().enumerate() {
@@ -685,13 +694,13 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             name: name.into(),
             template: template.into(),
         };
-        let matches: Vec<NodeId> = owners.iter().filter(|(n, _)| n == component).map(|(_, id)| *id).collect();
+        let matches = owners.get(component).cloned().unwrap_or_default();
         if matches.is_empty() {
             warnings.push(format!("link {}: no component named {component:?}", i + 1));
         }
         for id in matches {
-            let Some(c) = main_of(doc, id).and_then(|m| describe(doc, m)) else { continue };
-            match check(&c, &link, lang) {
+            let Some(c) = described.entry(id).or_insert_with(|| main_of(doc, id).and_then(|m| describe(doc, m))).as_ref() else { continue };
+            match check(c, &link, lang) {
                 Ok(_) => apply.push((id, link.clone())),
                 Err(err) => warnings.push(format!("link {} ({component}): {err}", i + 1)),
             }

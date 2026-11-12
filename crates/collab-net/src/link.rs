@@ -1,6 +1,6 @@
 //! [`NetLink`]: the engine's [`LiveLink`] over the network.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -9,7 +9,7 @@ use figcraft_collab::code;
 use figcraft_collab::message::{Access, Admin, AdminReply, ClientMsg, LibraryReply, LibraryReq, PluginReply, PluginReq};
 use figcraft_engine::live::{
     Bind, Event, HostInfo, HostOptions, LiveLink, NO_SESSION, NetReply, NetRequest, PageInfo, Presence, PublishOptions, Published, Resume, Role,
-    SessionId, SessionInfo, Shared,
+    SessionId, SessionInfo, Shared, WayIn,
 };
 
 use crate::guest::{Guest, GuestConfig, Publish, upload_file};
@@ -97,24 +97,62 @@ impl NetLink {
     }
 }
 
+/// A new secret for a hosted session: one a join code can carry (`short`: 44 bits, see
+/// `figcraft_collab::code`), else a full one.
+fn session_secret(short: bool) -> Result<String, String> {
+    match short {
+        true => Ok(code::Local::new(Ipv4Addr::UNSPECIFIED, 0, token::random()?).token()),
+        false => token::secret(),
+    }
+}
+
+/// A view-only secret for a session whose edit secret is `edit`: of the same kind, never the same.
+fn view_secret(short: bool, edit: &str) -> Result<String, String> {
+    for _ in 0..3 {
+        let view = session_secret(short)?;
+        if view != edit {
+            return Ok(view);
+        }
+    }
+    Err("couldn't make a view-only secret".into())
+}
+
 /// This machine's address on the local network: the interface the default route leaves by (no
 /// packet is sent).
 pub fn lan_ip() -> Option<IpAddr> {
-    let sock = UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).ok()?;
     // Documentation and private ranges: only the route matters.
-    for probe in ["192.0.2.1:9", "10.255.255.255:9"] {
-        if sock.connect(probe).is_ok()
-            && let Ok(a) = sock.local_addr()
-            && !a.ip().is_loopback()
-            && !a.ip().is_unspecified()
-        {
-            return Some(a.ip());
-        }
-    }
-    None
+    route_ip(Ipv4Addr::UNSPECIFIED.into(), &["192.0.2.1:9", "10.255.255.255:9"])
+}
+
+/// The address of `any`'s family that the route to the first of `probes` that has one leaves by
+/// (no packet is sent): never a loopback, unspecified or IPv6 link-local one, which others can't
+/// reach this machine at.
+fn route_ip(any: IpAddr, probes: &[&str]) -> Option<IpAddr> {
+    let sock = UdpSocket::bind(SocketAddr::new(any, 0)).ok()?;
+    probes.iter().find_map(|probe| {
+        sock.connect(probe).ok()?;
+        let ip = sock.local_addr().ok()?.ip();
+        let link_local = matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local());
+        (!ip.is_loopback() && !ip.is_unspecified() && !link_local).then_some(ip)
+    })
+}
+
+/// Where others reach a session listening on `addr`: `addr` itself, or for a listener on every
+/// interface (`0.0.0.0`, `::`) this machine's local network address of the same family (its
+/// loopback without one), on the same port. Links name it; the listener keeps every interface.
+pub(crate) fn reachable(addr: SocketAddr) -> SocketAddr {
+    let ip = match addr.ip() {
+        ip if !ip.is_unspecified() => ip,
+        IpAddr::V4(_) => lan_ip().unwrap_or(Ipv4Addr::LOCALHOST.into()),
+        // Documentation and unique local ranges, as for IPv4.
+        IpAddr::V6(_) => route_ip(Ipv6Addr::UNSPECIFIED.into(), &["[2001:db8::1]:9", "[fd00::1]:9"]).unwrap_or(Ipv6Addr::LOCALHOST.into()),
+    };
+    SocketAddr::new(ip, addr.port())
 }
 
 impl LiveLink for NetLink {
+    /// Host the open file on `o.bind`: a join code's short secret when `o.short`, and a second,
+    /// view-only secret with its invite link when `o.view`.
     fn host(&mut self, session: SessionId, o: HostOptions) -> Result<SessionInfo, String> {
         let ip = match o.bind {
             Bind::Local => IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -123,11 +161,10 @@ impl LiveLink for NetLink {
         };
         // A session shared with a join code: its secret is short enough to be typed with the
         // address (see `figcraft_collab::code`); the code and the invite link name the same session.
-        let (file, token) = if o.short {
-            (code::LOCAL_FILE.to_string(), code::Local::new(Ipv4Addr::UNSPECIFIED, 0, token::random()?).token())
-        } else {
-            (token::file_id()?, token::secret()?)
-        };
+        let file = if o.short { code::LOCAL_FILE.to_string() } else { token::file_id()? };
+        let token = session_secret(o.short)?;
+        // A way in for looking only: a second secret of the same kind, never the edit one.
+        let view_token = o.view.then(|| view_secret(o.short, &token)).transpose()?;
         let inbox = self.sessions.inbox();
         let doc = (*o.doc).clone();
         let pages = doc.pages.iter().map(|p| PageInfo { id: p.0, name: doc.node(*p).map(|n| n.name.clone()).unwrap_or_default() }).collect();
@@ -137,13 +174,17 @@ impl LiveLink for NetLink {
             any_port_if_taken: o.port.is_none(),
             file: file.clone(),
             token: token.clone(),
+            view_token: view_token.clone(),
             doc,
             name: o.name,
             limits: self.limits,
             core: figcraft_collab::Limits::default(),
         };
         let host = Host::start(cfg, inbox.clone()).map_err(|e| format!("can't listen on {ip}: {e}"))?;
-        let invite = Invite::new(host.addr().to_string(), file, token);
+        // Listening on every interface (`0.0.0.0`, `::`), the links name an address others reach.
+        let at = reachable(host.addr()).to_string();
+        let view = view_token.map(|v| Invite::new(at.clone(), file.clone(), v)).map(|v| WayIn { link: v.link(), url: v.url() });
+        let invite = Invite::new(at.clone(), file, token);
         let info = SessionInfo {
             role: Role::Host,
             me: host.me().client_id,
@@ -153,9 +194,10 @@ impl LiveLink for NetLink {
             pages,
             link: invite.link(),
             url: invite.url(),
-            address: host.addr().to_string(),
+            address: at,
             network: !ip.is_loopback(),
             access: Access::Edit,
+            view,
         };
         self.started(session, Active::Host(host), inbox);
         Ok(info)
@@ -178,6 +220,7 @@ impl LiveLink for NetLink {
         let (server, query) = Endpoint::parse(&o.server)?;
         // Without a key: as anyone may, when the server is open to the public (it says if not).
         let key = requests::server_key(o.key, query);
+        requests::key_over_tls(&server, key.as_deref())?;
         // Until the upload is done the invite names only the server.
         let cfg = self.guest_config(Invite { server: server.clone(), file: String::new(), token: String::new() }, None, &o.me);
         let inbox = self.sessions.inbox();
@@ -266,6 +309,12 @@ impl LiveLink for NetLink {
         }
     }
 
+    fn retry(&mut self, session: SessionId) {
+        if let Some(Active::Guest(g)) = self.sessions.get(session) {
+            g.retry();
+        }
+    }
+
     fn presence(&mut self, session: SessionId, p: &Presence) {
         match self.sessions.get(session) {
             Some(Active::Host(h)) => h.presence(p.clone()),
@@ -294,6 +343,7 @@ fn upload(o: PublishOptions, limits: &NetLimits) -> Result<Published, String> {
     let (server, query) = Endpoint::parse(&o.server)?;
     let key = requests::server_key(o.key, query)
         .ok_or("the server address needs the server's key (ws://host:port/?key=…; `figcraft-server key` prints it)")?;
+    requests::key_over_tls(&server, Some(&key))?;
     upload_file(&server, Some(&key), &o.name, &o.doc, limits, CONNECT).map(|(_, published, _)| published)
 }
 
@@ -310,6 +360,7 @@ fn hosting(server: &str, file: &str, owner: &str, req: Option<Admin>, limits: &N
 fn share(server: &str, file: &str, owner: &str, revoke: &[String], create: bool, limits: &NetLimits) -> Result<Option<Shared>, String> {
     let (endpoint, query) = Endpoint::parse(server)?;
     let key = requests::server_key(None, query);
+    requests::key_over_tls(&endpoint, key.as_deref())?;
     manage::share(&endpoint, key.as_deref(), file, owner, revoke, create, limits, CONNECT)
 }
 
@@ -317,6 +368,7 @@ fn share(server: &str, file: &str, owner: &str, revoke: &[String], create: bool,
 fn plugins(server: &str, req: PluginReq, limits: &NetLimits) -> Result<PluginReply, String> {
     let (server, query) = Endpoint::parse(server)?;
     let key = query.into_iter().find(|(k, _)| k == "key").map(|(_, v)| v).unwrap_or_default();
+    requests::key_over_tls(&server, Some(&key))?;
     manage::plugins(&server, key.trim(), req, limits, CONNECT)
 }
 

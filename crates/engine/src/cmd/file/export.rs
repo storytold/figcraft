@@ -1,6 +1,7 @@
 use super::load::{ext, write};
 use super::save::thumbnail;
 use super::*;
+use crate::params::{f64_of, req_targets};
 
 /// Encode `ids` (or the page) in `format` at `scale`.
 pub fn export_bytes(doc: &Document, ids: &[NodeId], format: ExportFormat, scale: f64) -> Result<Vec<u8>> {
@@ -85,7 +86,7 @@ pub(super) fn export(s: &mut Session, p: &Value) -> Result<Value> {
         _ => {}
     }
     let doc = s.doc()?;
-    let mut ids = targets(s, p);
+    let mut ids = export_targets(cmd, s, p)?;
     if ids.is_empty() {
         ids = doc.get(s.page()?)?.children.clone();
     }
@@ -159,7 +160,8 @@ pub fn export_scale(doc: &Document, ids: &[NodeId], setting: &ExportSetting) -> 
     export_area(doc, ids, setting).map_or(1.0, |b| setting.size.scale_for(b.width(), b.height()))
 }
 
-/// `e` with the `size` ("2x", "512w", "512h" or `{by, value}`), `suffix` and `format` that `p` sets.
+/// `e` with the `size` ("2x", "512w", "512h" or `{by, value}`), `suffix`, `format` and the
+/// format options (`quality`, `vdCompat`, PDF print options, the SVG flags) that `p` sets.
 pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value) -> Result<ExportSetting> {
     if let Some(size) = size_param(cmd, p)? {
         e.size = size;
@@ -172,6 +174,12 @@ pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value)
     }
     if let Some(c) = vd_compat_param(cmd, p)? {
         e.vd_compat = c;
+    }
+    if let Some(c) = color_profile_param(cmd, p)? {
+        e.color_profile = c;
+    }
+    if let Some(q) = quality_param(cmd, p)? {
+        e.quality = q;
     }
     e.print = print_param(cmd, p, e.print)?;
     for (key, slot) in [
@@ -187,6 +195,16 @@ pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value)
         }
     }
     Ok(e)
+}
+
+/// The JPG `quality` `p` passes: a whole number from 1 to 100 (anything else is an error).
+fn quality_param(cmd: &str, p: &Value) -> Result<Option<u8>> {
+    let Some(v) = get(p, "quality") else { return Ok(None) };
+    let q = if v.is_boolean() { None } else { f64_of(v) };
+    match q.filter(|q| q.fract() == 0.0 && (1.0..=100.0).contains(q)) {
+        Some(q) => Ok(Some(q as u8)),
+        None => Err(bad(cmd, "quality: a whole number from 1 to 100 (JPG)")),
+    }
 }
 
 /// Whether `p` sets any PDF print option.
@@ -307,11 +325,22 @@ pub fn exportable_layers(doc: &Document, page: NodeId) -> Vec<NodeId> {
     doc.subtree(page).into_iter().skip(1).filter(|i| doc.node(*i).is_some_and(|n| !n.exports.is_empty())).collect()
 }
 
+/// Named layers (`ids` / `id`), checked like other commands; empty when none are named, so the
+/// caller can fall back to its default instead of silently dropping a bad id.
+fn export_targets(cmd: &str, s: &Session, p: &Value) -> Result<Vec<NodeId>> {
+    let named = match get(p, "ids") {
+        Some(Value::Array(a)) if !a.is_empty() => true,
+        Some(Value::Array(_) | Value::Null) | None => get(p, "id").is_some_and(|v| !v.is_null()),
+        Some(_) => true,
+    };
+    if named { req_targets(cmd, s, p) } else { Ok(targets(s, p)) }
+}
+
 pub(super) fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.exportLayers";
     let doc = s.doc()?;
     let assets = boolean(p, "assets").unwrap_or(false);
-    let mut ids = targets(s, p);
+    let mut ids = export_targets(cmd, s, p)?;
     if ids.is_empty() {
         ids = if assets { vec![s.page()?] } else { exportable_layers(doc, s.page()?) };
     }
@@ -327,10 +356,16 @@ pub(super) fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let print = has_print_param(p).then(|| print_param(cmd, p, PrintSettings::default())).transpose()?;
     // And a compatibility mode for every Android Vector Drawable.
     let compat = vd_compat_param(cmd, p)?;
+    // And a color profile for every PNG, JPG and WebP.
+    let profile = color_profile_param(cmd, p)?;
     let mut files = Vec::with_capacity(jobs.len());
     for job in &jobs {
-        let setting =
-            ExportSetting { print: print.unwrap_or(job.setting.print), vd_compat: compat.unwrap_or(job.setting.vd_compat), ..job.setting.clone() };
+        let setting = ExportSetting {
+            print: print.unwrap_or(job.setting.print),
+            vd_compat: compat.unwrap_or(job.setting.vd_compat),
+            color_profile: profile.unwrap_or(job.setting.color_profile),
+            ..job.setting.clone()
+        };
         let scale = export_scale(doc, &[job.id], &setting);
         let (bytes, warnings) = export_file(doc, &[job.id], &setting, scale)?;
         let mut f = json!({"name": job.file, "id": job.id, "bytes": bytes.len()});

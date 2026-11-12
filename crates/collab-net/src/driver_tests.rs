@@ -252,7 +252,7 @@ fn a_silent_host_counts_as_dropped_and_the_client_reconnects() {
 }
 
 #[test]
-fn reconnects_back_off_then_give_up() {
+fn a_live_connection_reconnects_in_rounds_and_never_gives_up() {
     let t0 = Instant::now();
     let (mut d, inbox) = start(Script::default(), t0);
     d.opened(t0);
@@ -260,7 +260,7 @@ fn reconnects_back_off_then_give_up() {
     let mut now = t0;
     let mut pauses = Vec::new();
     d.closed(1006, "", now);
-    while !d.done() {
+    for _ in 0..26 {
         let next = d.deadline().unwrap();
         pauses.push(next - now);
         now = next;
@@ -269,11 +269,183 @@ fn reconnects_back_off_then_give_up() {
         d.closed(1006, "", now);
     }
     let secs: Vec<f64> = pauses.iter().map(Duration::as_secs_f64).collect();
-    assert_eq!(secs, [0.5, 1.0, 2.0, 4.0, 8.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0]);
+    let round = [1.0, 2.0, 4.0, 8.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0];
+    assert_eq!(secs[0], 0.5);
+    assert_eq!(secs[1..12], round);
+    assert_eq!(secs[12], 60.0, "a longer pause after a round");
+    assert_eq!(secs[13..24], round, "then as many again");
+    assert_eq!(secs[24], 60.0);
+    assert!(!d.done());
     let st = statuses(&inbox.drain());
-    assert_eq!(st.len(), 14, "connecting, 12 reconnects, then failed");
-    assert!(matches!(st.last(), Some(Status::Failed { reason }) if reason.starts_with("Lost the connection to the host")), "{st:?}");
-    assert_eq!(d.deadline(), None);
+    assert!(!st.iter().any(|s| matches!(s, Status::Failed { .. })), "{st:?}");
+    assert!(matches!(st.last(), Some(Status::Reconnecting { attempt: 27 })), "{st:?}");
+}
+
+#[test]
+fn retry_now_skips_the_pause_and_starts_the_round_over() {
+    let t0 = Instant::now();
+    let (mut d, inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    d.closed(1006, "", t0);
+    let mut now = t0;
+    for _ in 0..12 {
+        now = d.deadline().unwrap();
+        d.tick(now);
+        d.closed(1006, "", now);
+    }
+    assert_eq!(d.deadline().unwrap() - now, Duration::from_secs(60));
+    let opened = d.sock.opened.len();
+    d.retry(now);
+    assert_eq!(d.sock.opened.len(), opened + 1, "connects at once");
+    inbox.drain();
+    d.closed(1006, "", now);
+    assert_eq!(statuses(&inbox.drain()), vec![Status::Reconnecting { attempt: 1 }]);
+    assert_eq!(d.deadline().unwrap() - now, ms(500), "the pauses grow from the beginning again");
+}
+
+#[test]
+fn a_session_that_was_live_only_stops_for_a_refusal_that_is_for_good() {
+    let t0 = Instant::now();
+    // The words servers turn a session away with for now.
+    for reason in [
+        "too many messages",
+        "the server is busy: try again in a moment",
+        "the session is full",
+        "no hello in time",
+        "this file can't be opened on the server (its data is damaged); tell the server's owner",
+        "too many connections from your address lately: wait a minute and try again",
+    ] {
+        for frame in [false, true] {
+            let (mut d, inbox) = start(Script::default(), t0);
+            d.opened(t0);
+            d.message(&welcome(), t0);
+            inbox.drain();
+            if frame {
+                d.closed(1008, reason, t0);
+            } else {
+                d.message(&encode(&ServerMsg::Refused { reason: reason.into() }), t0);
+            }
+            assert!(!d.done(), "{reason}");
+            assert_eq!(statuses(&inbox.drain()), vec![Status::Reconnecting { attempt: 1 }], "{reason}");
+        }
+    }
+    // And the words for good.
+    for reason in [
+        "this link isn't valid (it may have been revoked)",
+        "this file isn't on the server (it may have been removed)",
+        "this file was removed from the server",
+        "you were removed from this session",
+        "this server no longer accepts connections from your address",
+        "this server doesn't accept connections from your address",
+        "wrong session token",
+        "protocol 9 isn't supported",
+        "message too large: this server takes at most 64 MiB at once (a change that big can't be kept here)",
+    ] {
+        let (mut d, inbox) = start(Script::default(), t0);
+        d.opened(t0);
+        d.message(&welcome(), t0);
+        d.closed(1008, reason, t0);
+        assert!(d.done(), "{reason}");
+        assert!(matches!(statuses(&inbox.drain()).last(), Some(Status::Failed { reason: r }) if r.contains(reason)), "{reason}");
+    }
+    // What this end finds it can't talk to: a text frame, or a message it can't read.
+    for text in [true, false] {
+        let (mut d, inbox) = start(Script::default(), t0);
+        d.opened(t0);
+        d.message(&welcome(), t0);
+        if text {
+            d.text(t0);
+        } else {
+            d.message(&[0xFF, 1, 2, 3], t0);
+        }
+        assert!(d.done(), "text: {text}");
+        assert!(matches!(statuses(&inbox.drain()).last(), Some(Status::Failed { .. })));
+    }
+}
+
+#[test]
+fn a_long_queue_goes_out_paced_and_in_order() {
+    let t0 = Instant::now();
+    let (mut d, _inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    let before = d.sock.sent.len();
+    for seq in 0..500 {
+        d.send(ClientMsg::Ack { seq }, t0);
+    }
+    let at_once = d.sock.sent.len() - before;
+    assert!((1..=200).contains(&at_once), "{at_once} at once: a server drops a connection past 400");
+    let mut now = t0;
+    while d.sock.sent.iter().filter(|m| matches!(m, ClientMsg::Ack { .. })).count() < 500 {
+        now = d.deadline().unwrap();
+        d.tick(now);
+    }
+    let seqs: Vec<u64> = d.sock.sent.iter().filter_map(|m| if let ClientMsg::Ack { seq } = m { Some(*seq) } else { None }).collect();
+    assert_eq!(seqs, (0..500).collect::<Vec<u64>>());
+    assert!(now - t0 >= Duration::from_secs(4), "the rest take their time: {:?}", now - t0);
+    // Unsent ones were made for this connection: the sync client sends them again.
+    for seq in 0..500 {
+        d.send(ClientMsg::Ack { seq }, now);
+    }
+    d.closed(1006, "", now);
+    assert_eq!(d.deadline().unwrap() - now, ms(500), "nothing left to send but the reconnect");
+}
+
+#[test]
+fn messages_held_up_by_a_stall_dont_leave_together() {
+    let t0 = Instant::now();
+    let (mut d, _inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    for seq in 0..700 {
+        d.send(ClientMsg::Ack { seq }, t0);
+    }
+    let acks = |d: &Driver<Script>| d.sock.sent.iter().filter(|m| matches!(m, ClientMsg::Ack { .. })).count();
+    let first = acks(&d);
+    // Nothing ran for 8 s.
+    d.tick(t0 + Duration::from_secs(8));
+    assert!(acks(&d) - first <= 200, "{} at once: a server drops a connection past 400", acks(&d) - first);
+}
+
+#[test]
+fn a_new_connection_starts_with_a_fresh_pace() {
+    let t0 = Instant::now();
+    let (mut d, _inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    for seq in 0..500 {
+        d.send(ClientMsg::Ack { seq }, t0);
+    }
+    d.closed(1006, "", t0);
+    let back = d.deadline().unwrap();
+    d.tick(back);
+    d.opened(back);
+    d.message(&welcome(), back);
+    d.send(ClientMsg::Ack { seq: 900 }, back);
+    assert!(d.sock.sent.iter().any(|m| matches!(m, ClientMsg::Ack { seq: 900 })), "sent at once");
+}
+
+#[test]
+fn leaving_sends_what_may_go_at_its_pace() {
+    let t0 = Instant::now();
+    let (mut d, _inbox) = start(Script::default(), t0);
+    d.opened(t0);
+    d.message(&welcome(), t0);
+    for seq in 0..150 {
+        d.send(ClientMsg::Ack { seq }, t0);
+    }
+    let later = t0 + Duration::from_secs(1);
+    for seq in 150..600 {
+        d.send(ClientMsg::Ack { seq }, later);
+    }
+    let before = d.sock.sent.iter().filter(|m| matches!(m, ClientMsg::Ack { .. })).count();
+    d.leave(later + Duration::from_secs(1));
+    let seqs: Vec<u64> = d.sock.sent.iter().filter_map(|m| if let ClientMsg::Ack { seq } = m { Some(*seq) } else { None }).collect();
+    assert!(seqs.len() > before, "more goes on leaving");
+    assert!(seqs.len() - before <= 200, "{} at once: a server drops a connection past 400", seqs.len() - before);
+    assert_eq!(seqs, (0..seqs.len() as u64).collect::<Vec<u64>>(), "in order");
+    assert!(d.done());
 }
 
 #[test]
@@ -419,6 +591,8 @@ fn pump(d: &mut Driver<Loopback>) {
     }
 }
 
+/// The browser's driver joins a real host over loopback, edits with it, sends presence and hears
+/// the session end.
 #[test]
 fn joins_a_real_host_and_edits_with_it() {
     let host_probe = Inbox::new(Arc::new(|| {}));
@@ -428,6 +602,7 @@ fn joins_a_real_host_and_edits_with_it() {
             any_port_if_taken: false,
             file: FILE.into(),
             token: TOKEN.into(),
+            view_token: None,
             doc: shared(),
             name: "Hana".into(),
             limits: fast_limits(),

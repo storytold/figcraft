@@ -69,16 +69,37 @@ impl<'a> Bounds<'a> {
 }
 
 /// A hash map keyed by node ids, which need no SipHash: they are counters (or a peer's range of
-/// them), and SipHash took a good part of a render.
-type IdMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<IdHash>>;
+/// them), and SipHash took a good part of a render. A file can choose its ids, so each map is
+/// seeded at random and the hash mixes its high bits down (ids differing only up high would
+/// otherwise share a bucket).
+type IdMap<K, V> = HashMap<K, V, IdState>;
+
+/// Builds [`IdHash`]es from a per-map random seed.
+#[derive(Clone)]
+pub(crate) struct IdState(u64);
+
+impl Default for IdState {
+    fn default() -> Self {
+        use std::hash::BuildHasher;
+        IdState(std::collections::hash_map::RandomState::new().hash_one(0u8))
+    }
+}
+
+impl std::hash::BuildHasher for IdState {
+    type Hasher = IdHash;
+    fn build_hasher(&self) -> IdHash {
+        IdHash(self.0)
+    }
+}
 
 /// Mixes each word in with a multiply (Fibonacci hashing), so ids that differ in low bits spread.
-#[derive(Default)]
 pub(crate) struct IdHash(u64);
 
 impl Hasher for IdHash {
     fn finish(&self) -> u64 {
-        self.0
+        // The multiply's low bits depend only on the input's low bits: mix the high ones down.
+        let h = (self.0 ^ (self.0 >> 32)).wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+        h ^ (h >> 29)
     }
     fn write(&mut self, bytes: &[u8]) {
         for b in bytes {
@@ -217,7 +238,7 @@ pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
                     p.apply_affine(Affine::translate((x0, y0)));
                     Some(p)
                 }
-                NodeKind::Ellipse { sweep, inner, .. } if sweep.abs() >= std::f64::consts::TAU - 1e-9 && inner == 0.0 => {
+                NodeKind::Ellipse { sweep, inner, .. } if figcraft_geom::full_sweep(sweep) && inner == 0.0 => {
                     Some(figcraft_geom::kurbo::Ellipse::from_rect(Rect::new(x0, y0, x0 + ww, y0 + hh)).to_path(0.05))
                 }
                 _ => None,
@@ -274,7 +295,9 @@ fn cached_stroke_outline(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath>
     if let Some(p) = locked(stroke_cache()).get(key) {
         return p;
     }
-    let out = Arc::new(figcraft_pathops::stroke_outline_of(path, props, closed, net));
+    // Points with styles of their own are stroked on the network as drawn (smoothed corners in).
+    let drawn = net.map(|network| figcraft_doc::geometry::drawn_network(network, n.corners.smoothing));
+    let out = Arc::new(figcraft_pathops::stroke_outline_of(path, props, closed, drawn.as_deref()));
     locked(stroke_cache()).insert(key, out.clone());
     out
 }
@@ -334,9 +357,9 @@ fn node_outline_at(doc: &Document, n: &Node, depth: usize) -> Option<(BezPath, F
             Some((p, FillRule::Winding))
         }
         NodeKind::Vector { network } => {
+            let drawn = figcraft_doc::geometry::drawn_network(network, n.corners.smoothing);
+            let net = drawn.as_ref();
             if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) {
-                let rounded = network.rounded();
-                let net = rounded.as_ref().unwrap_or(network);
                 let mut areas = BezPath::new();
                 for (i, region) in net.regions.iter().enumerate() {
                     let paints = region.fills.as_deref().unwrap_or(&n.fills);
@@ -357,7 +380,7 @@ fn node_outline_at(doc: &Document, n: &Node, depth: usize) -> Option<(BezPath, F
             }
             let rule =
                 if network.regions.iter().any(|r| r.winding == figcraft_doc::WindingRule::EvenOdd) { FillRule::EvenOdd } else { FillRule::Winding };
-            Some((network.fill_path(), rule))
+            Some((net.fill_path(), rule))
         }
         _ => figcraft_doc::geometry::shape_path(n).map(|p| (p, FillRule::Winding)),
     }
@@ -849,8 +872,8 @@ fn region_painted(n: &Node) -> Option<&figcraft_doc::VectorNetwork> {
 /// Each region of a vector with region paints, filled with its own paints (or the layer's) in its
 /// own paint frame.
 fn fill_vector_regions(ctx: &Ctx, pix: &mut Pixmap, n: &Node, network: &figcraft_doc::VectorNetwork, xf: Affine) {
-    let rounded = network.rounded();
-    let net = rounded.as_ref().unwrap_or(network);
+    let drawn = figcraft_doc::geometry::drawn_network(network, n.corners.smoothing);
+    let net = drawn.as_ref();
     for (i, region) in net.regions.iter().enumerate() {
         let paints = region.fills.as_deref().unwrap_or(&n.fills);
         if let Some(mut path) = net.region_path(i) {
@@ -1031,6 +1054,11 @@ fn masked_area(ctx: &Ctx, pix: &Pixmap, mask_id: NodeId, content: &[NodeId], xf:
 /// Mask `m` drawn as if it weren't a mask into a `w` × `h` pixmap at `xf` (a vector mask: its
 /// outline, fully opaque).
 fn mask_pixels(ctx: &Ctx, m: &Node, (w, h): (u32, u32), xf: Affine, depth: usize) -> Option<Pixmap> {
+    // A mask's content is drawn here, not through `draw_layer`, so a chain of masks inside
+    // masks needs the nesting limit checked here too, or it runs down the stack.
+    if depth > crate::MAX_EXPORT_DEPTH {
+        return None;
+    }
     let mut mask_px = Pixmap::new(w, h)?;
     let mut m2 = m.clone();
     m2.is_mask = false;
