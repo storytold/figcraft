@@ -164,7 +164,10 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         }
     }
     touched.extend(doc.take_dirty());
-    // 4b. Board connectors follow the layers they join; their labels sit at their middles.
+    // 4b. Mind maps re-flow from their first nodes; then board connectors follow the layers they
+    // join and their labels sit at their middles.
+    board::settle_mind_maps(doc, before, &touched);
+    touched.extend(doc.take_dirty());
     board::settle_routes(doc, before, &touched);
     board::settle_stamps(doc, before, &touched);
     touched.extend(doc.take_dirty());
