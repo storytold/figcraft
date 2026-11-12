@@ -431,3 +431,80 @@ fn the_custom_panel_edges_never_enter_the_keyboard_or_focus_order() {
     }
     assert!(!seen.contains(&left) && !seen.contains(&right), "Tab never stops on a panel edge: {seen:?}");
 }
+
+#[test]
+fn a_mixed_checkbox_is_announced_as_mixed_and_a_checked_one_as_true() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::widgets::checkbox_tri(ui, None, "Mixed one");
+        crate::widgets::checkbox_tri(ui, Some(true), "Checked one");
+        crate::widgets::checkbox_tri(ui, Some(false), "Plain one");
+    });
+    out.textures_delta.clear();
+    let nodes: Vec<Node> = out.platform_output.accesskit_update.expect("an AccessKit update").nodes.into_iter().map(|(_, n)| n).collect();
+    assert_eq!(find(&nodes, Role::CheckBox, "Mixed one").toggled(), Some(Toggled::Mixed));
+    assert_eq!(find(&nodes, Role::CheckBox, "Checked one").toggled(), Some(Toggled::True));
+    assert_eq!(find(&nodes, Role::CheckBox, "Plain one").toggled(), Some(Toggled::False));
+}
+
+/// Runs one headless frame of a lone tri-state checkbox; returns whether it was clicked.
+fn tri_frame(ctx: &egui::Context, state: Option<bool>, events: Vec<Event>) -> bool {
+    let mut clicked = false;
+    let input = egui::RawInput { events, ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| {
+        clicked = crate::widgets::checkbox_tri(ui, state, "Keyed one");
+    });
+    out.textures_delta.clear();
+    clicked
+}
+
+fn key(key: Key, pressed: bool) -> Event {
+    Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }
+}
+
+#[test]
+fn a_checkbox_is_keyboard_operable_tab_to_it_then_space_or_enter_toggles_it() {
+    for activate in [Key::Space, Key::Enter] {
+        let ctx = egui::Context::default();
+        tri_frame(&ctx, Some(false), vec![]);
+        tri_frame(&ctx, Some(false), vec![key(Key::Tab, true), key(Key::Tab, false)]);
+        assert!(ctx.memory(|m| m.focused()).is_some(), "Tab focuses the checkbox");
+        tri_frame(&ctx, Some(false), vec![]);
+        let clicked = tri_frame(&ctx, Some(false), vec![key(activate, true), key(activate, false)]);
+        assert!(clicked, "{activate:?} on the focused checkbox toggles it");
+    }
+}
+
+/// The marks (paths, meshes, segments) painted inside the 14-point box of a lone checkbox.
+fn box_marks(state: Option<bool>) -> Vec<egui::Rect> {
+    fn walk(s: &egui::Shape, out: &mut Vec<egui::Rect>) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Path(_) | egui::Shape::Mesh(_) | egui::Shape::LineSegment { .. } => out.push(s.visual_bounding_rect()),
+            _ => {}
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut out = Vec::new();
+    for _ in 0..2 {
+        let mut o = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::widgets::checkbox_tri(ui, state, "Painted one");
+        });
+        o.textures_delta.clear();
+        out.clear();
+        o.shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+    }
+    out
+}
+
+#[test]
+fn a_mixed_checkbox_paints_a_dash_and_a_checked_one_a_tick() {
+    // Icon::Minus is one flat bar; Icon::Check is a taller path.
+    let mixed = box_marks(None);
+    assert!(mixed.iter().any(|r| r.width() >= 5.0 && r.height() <= 2.5), "a flat dash is painted for the mixed state: {mixed:?}");
+    let checked = box_marks(Some(true));
+    assert!(checked.iter().any(|r| r.width() >= 5.0 && r.height() > 3.5), "a tick is painted for the checked state: {checked:?}");
+    assert!(!checked.iter().any(|r| r.width() >= 5.0 && r.height() <= 2.5), "no dash on a checked box: {checked:?}");
+    assert!(box_marks(Some(false)).is_empty(), "an empty box paints no mark");
+}
