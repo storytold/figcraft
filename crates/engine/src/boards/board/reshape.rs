@@ -26,7 +26,7 @@ fn moved(doc: &Document, c: &Connector, portion: usize, p: Point) -> Option<Conn
     let (from, to) = route_ends(doc, c)?;
     let path = reshaped(from, to, c.routing, c.path.as_ref(), portion, p)?;
     let (s0, s1) = attached_sides(from, to);
-    Some(Connector { from: pinned(c.from, s0), to: pinned(c.to, s1), routing: c.routing, path: Some(path) })
+    Some(Connector { from: pinned(c.from, s0), to: pinned(c.to, s1), routing: c.routing, path: Some(path), branch: c.branch })
 }
 
 /// Write `c` into connector `id` and run it along its new route.
