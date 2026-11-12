@@ -377,6 +377,7 @@ fn board_commands_survive_junk() {
             let a = s.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap()["id"].clone();
             let b = s.execute("board.shape", &json!({"x": 300, "y": 0})).unwrap()["id"].clone();
             let _ = s.execute("board.connector", &json!({"from": a, "to": b, "label": "x"}));
+            let _ = s.execute("board.codeBlock", &json!({"x": 0, "y": 300, "text": "a\nb"}));
             if let Err(EngineError::Internal { cmd, msg }) = s.execute(cmd, j) {
                 panic!("{cmd} panicked on {j}: {msg}");
             }
@@ -392,6 +393,7 @@ fn board_commands_survive_junk() {
             let a = s.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap()["id"].clone();
             let b = s.execute("board.stamp", &json!({"x": 300, "y": 0})).unwrap()["id"].clone();
             let _ = s.execute("board.connector", &json!({"from": a, "to": b}));
+            let _ = s.execute("board.codeBlock", &json!({"x": 0, "y": 300, "text": "a\nb"}));
             if let Err(EngineError::Internal { cmd, msg }) = s.execute(spec.id, j) {
                 panic!("{cmd} panicked on {j}: {msg}");
             }

@@ -185,6 +185,49 @@ fn only_the_width_is_the_users() {
     assert_eq!(bx(&s, f).height(), 32.0 + 24.0 * now as f64);
 }
 
+/// A block settled after `how` made it incoherent: still 5 lines tall, 576 wide, hugging, with
+/// its layout, and a second pass changes nothing.
+fn settled_after(how: impl Fn(&mut Session, NodeId)) {
+    let mut s = board();
+    let (f, t) = block(&mut s, json!({"x": 0, "y": 0, "text": ten(4)}));
+    how(&mut s, f);
+    s.execute("text.set", &json!({"id": t, "characters": ten(5)})).unwrap();
+    let n = node(&s, f);
+    assert!(n.layout.is_some(), "the layout is restored");
+    assert_eq!((n.child_layout.sizing_h, n.child_layout.sizing_v), (Sizing::Fixed, Sizing::Hug));
+    assert_eq!((bx(&s, f).width(), bx(&s, f).height()), (576.0, 152.0));
+    assert_eq!(node(&s, t).child_layout.sizing_h, Sizing::Fill);
+    let doc = s.doc().unwrap().clone();
+    let mut again = doc.clone();
+    again.mark_dirty(doc.ids().collect::<Vec<_>>());
+    crate::normalize(&mut again, &doc);
+    assert_eq!(again, doc, "a second pass changes nothing");
+}
+
+#[test]
+fn the_pass_keeps_a_blocks_layout_and_width_sizing() {
+    settled_after(|s, f| {
+        s.execute("layout.remove", &json!({"ids": [f]})).unwrap();
+    });
+    settled_after(|s, f| {
+        s.execute("node.set", &json!({"id": f, "props": {"layout": null}})).unwrap();
+    });
+    settled_after(|s, f| {
+        s.execute("node.set", &json!({"id": f, "props": {"sizingH": "hug"}})).unwrap();
+    });
+}
+
+#[test]
+fn a_default_position_is_within_a_billion_too() {
+    let mut s = board();
+    s.execute("view.set", &json!({"cx": 1e300})).unwrap();
+    match s.execute("board.codeBlock", &json!({})) {
+        Err(EngineError::BadParams { .. }) => {}
+        Err(other) => panic!("not a named refusal: {other:?}"),
+        Ok(out) => panic!("placed at {out}"),
+    }
+}
+
 #[test]
 fn the_next_block_is_128_to_the_right_as_wide_and_in_the_same_language() {
     let mut s = board();
@@ -340,14 +383,22 @@ fn lists_links_and_styled_ranges_do_not_stick() {
         ("text.underline", json!({"ids": [t]})),
         ("text.caseUpper", json!({"ids": [t]})),
     ] {
-        let _ = s.execute(cmd, &p);
+        // Done or refused by name, and the block is plain either way.
+        match s.execute(cmd, &p) {
+            Ok(_) | Err(EngineError::BadParams { .. } | EngineError::Disabled(..)) => {}
+            Err(other) => panic!("{cmd}: {other:?}"),
+        }
         plain(&s);
     }
-    s.execute("text.edit.begin", &json!({"id": t})).unwrap();
-    let _ = s.execute("text.bold", &json!({}));
+    s.execute("text.edit.begin", &json!({"id": t, "caret": 0})).unwrap();
+    for _ in 0..3 {
+        key(&mut s, "ArrowRight", true);
+    }
+    s.execute("text.bold", &json!({})).unwrap();
     s.execute("text.edit.key", &json!({"key": "Escape"})).unwrap();
     plain(&s);
-    s.execute("node.set", &json!({"id": t, "props": {"textAutoResize": "widthAndHeight"}})).ok();
+    assert_eq!(td(&s, f).style.font_style, "Regular");
+    s.execute("node.set", &json!({"id": t, "props": {"textAutoResize": "widthAndHeight"}})).unwrap();
     plain(&s);
     // A sticky's note keeps its link (the guard).
     let note = id(&s.execute("board.sticky", &json!({"x": 900, "y": 0, "text": "hi"})).unwrap(), "text");
@@ -392,4 +443,38 @@ fn saved_files_live_sessions_and_a_second_pass() {
     assert_eq!(d.doc().unwrap().kind, FileKind::Design);
     assert!(matches!(d.execute("board.codeBlock", &json!({})), Err(EngineError::Disabled(..))));
     assert!(matches!(d.execute("board.setLanguage", &json!({"language": "go"})), Err(EngineError::Disabled(..))));
+}
+
+#[test]
+fn code_blocks_survive_junk_commands() {
+    let junk = [
+        json!({}),
+        json!(null),
+        json!({"language": 7, "id": "x", "ids": [1], "side": 3, "text": [1]}),
+        json!({"language": "nope", "id": 99_999, "side": "up", "width": 1e308, "x": "NaN"}),
+    ];
+    let ids: Vec<&str> = crate::cmd::all_commands()
+        .iter()
+        .map(|c| c.id)
+        .filter(|i| {
+            i.starts_with("text.") && *i != "text.rescanFonts" || i.starts_with("layout.") || matches!(*i, "board.nextSticky" | "board.setLanguage")
+        })
+        .collect();
+    assert!(ids.len() > 20, "{ids:?}");
+    for editing in [false, true] {
+        for cmd in &ids {
+            for j in &junk {
+                let mut s = board();
+                let (f, t) = block(&mut s, json!({"x": 0, "y": 0, "text": "a\nb"}));
+                if editing {
+                    s.execute("text.edit.begin", &json!({"id": t})).unwrap();
+                } else {
+                    s.set_selection(vec![f]);
+                }
+                if let Err(EngineError::Internal { cmd, msg }) = s.execute(cmd, j) {
+                    panic!("{cmd} panicked on {j} (editing {editing}): {msg}");
+                }
+            }
+        }
+    }
 }

@@ -25,6 +25,11 @@ pub fn is_code_text(doc: &Document, text: NodeId) -> bool {
     owner_of_text(doc, text).and_then(|o| doc.node(o)).is_some_and(|n| matches!(n.board, Some(BoardItem::CodeBlock { .. })))
 }
 
+/// The auto layout every code block has: its text stacked inside the padding.
+fn block_layout() -> AutoLayout {
+    AutoLayout { mode: LayoutMode::Vertical, gap: 0.0, padding: CODE_PAD, ..AutoLayout::default() }
+}
+
 /// A code block's frame and its text: `width` wide at `at` in `parent`, holding `text`.
 fn make_code_block(doc: &mut Document, parent: NodeId, at: (f64, f64), width: f64, language: CodeLanguage, text: &str) -> Result<(NodeId, NodeId)> {
     let frame = add(doc, parent, NodeKind::Frame, "Code block", at, (width, CODE_MIN_H), |n| {
@@ -32,7 +37,7 @@ fn make_code_block(doc: &mut Document, parent: NodeId, at: (f64, f64), width: f6
         n.corners.radii = [CODE_RADIUS; 4];
         n.effects = vec![soft_shadow()];
         n.clip = false;
-        n.layout = Some(AutoLayout { mode: LayoutMode::Vertical, gap: 0.0, padding: CODE_PAD, ..AutoLayout::default() });
+        n.layout = Some(block_layout());
         n.child_layout.sizing_v = Sizing::Hug;
         n.child_layout.min_h = Some(CODE_MIN_H);
         n.child_layout.min_w = Some(CODE_MIN_W);
@@ -59,12 +64,8 @@ fn language_of(cmd: &str, v: &str) -> Result<CodeLanguage> {
 
 /// A coordinate from the params: given, it is a finite number within a billion of the origin.
 fn coord(cmd: &str, p: &Value, key: &str, default: f64) -> Result<f64> {
-    if get(p, key).is_none_or(Value::is_null) {
-        return Ok(default);
-    }
-    num(p, key)
-        .filter(|v| v.is_finite() && v.abs() <= CODE_MAX_COORD)
-        .ok_or_else(|| bad(cmd, format!("`{key}` is a position within a billion of the origin")))
+    let v = if get(p, key).is_none_or(Value::is_null) { Some(default) } else { num(p, key) };
+    v.filter(|v| v.is_finite() && v.abs() <= CODE_MAX_COORD).ok_or_else(|| bad(cmd, format!("`{key}` is a position within a billion of the origin")))
 }
 
 pub(super) fn code_block_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -208,6 +209,16 @@ pub(crate) fn settle_code(doc: &mut Document, touched: &BTreeSet<NodeId>) {
         }
     }
     for b in blocks {
+        // The frame's form is complete first: auto layout (or it cannot hug) and a width that
+        // is not Hug (or its text cannot fill), else normalize puts them back every pass.
+        if let Some(n) = doc.node_mut(b) {
+            if n.layout.is_none() {
+                n.layout = Some(block_layout());
+            }
+            if n.child_layout.sizing_h == Sizing::Hug {
+                n.child_layout.sizing_h = Sizing::Fixed;
+            }
+        }
         // A fixed height is not kept: the layout pass sizes the block to its lines again.
         if doc.node(b).is_some_and(|n| n.child_layout.sizing_v != Sizing::Hug)
             && let Some(n) = doc.node_mut(b)
