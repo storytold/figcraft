@@ -70,12 +70,12 @@ pub use export::export;
 
 use crate::FormatError;
 #[cfg(test)]
-use craft_fig::{MAX_CANVAS, chunks, network};
-use craft_fig::{Archive, Limits, decode_canvas, embedded_aliases, embedded_copies, kiwi};
-pub(crate) use craft_fig::rest::layer_budget;
-#[cfg(test)]
 use craft_fig::rest::MAX_FIG_NODES;
+pub(crate) use craft_fig::rest::layer_budget;
+use craft_fig::{Archive, Limits, decode_canvas, embedded_aliases, embedded_copies, kiwi};
 pub use craft_fig::{JAM_HEADER, is_fig};
+#[cfg(test)]
+use craft_fig::{MAX_CANVAS, chunks, network};
 pub(crate) use craft_figma_rest::style_name;
 
 /// Largest image member read.
