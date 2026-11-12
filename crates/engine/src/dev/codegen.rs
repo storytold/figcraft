@@ -6,7 +6,7 @@
 //! their iOS and Android code syntax in SwiftUI and Compose. The output is a starting point, not a
 //! pixel-exact translation.
 
-use figcraft_color::{Color, PaintKind};
+use figcraft_color::{Color, Gradient, GradientKind, Paint, PaintKind};
 use figcraft_doc::{
     ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, Shadow, Sizing,
     TextAlignH, TextCase, TextDecoration, Variable,
@@ -343,6 +343,35 @@ fn first_fill(n: &Node) -> Option<Color> {
         PaintKind::Gradient(g) => g.sorted_stops().first().map(|s| s.color),
         PaintKind::Image(_) | PaintKind::Pattern(_) => None,
     })
+}
+
+/// A layer's visible fills with their place in the document. Document order is bottom first, as
+/// the renderer paints them; the index tells a target which paint is the bottom one.
+fn visible_fills(n: &Node) -> impl DoubleEndedIterator<Item = (usize, &Paint)> {
+    n.fills.iter().enumerate().filter(|(_, p)| p.visible)
+}
+
+/// A gradient's sorted stops as (position, colour), the paint's opacity folded into each colour.
+/// A lone stop is written twice (at 1 as well), since Android and Flutter need two colours.
+fn gradient_stops(g: &Gradient, opacity: f32) -> Vec<(f64, Color)> {
+    let mut stops: Vec<(f64, Color)> = g.sorted_stops().iter().map(|s| (f64::from(s.position), s.color.with_alpha(s.color.a * opacity))).collect();
+    if let [(_, only)] = stops[..] {
+        stops.push((1.0, only));
+    }
+    stops
+}
+
+/// A gradient's main axis in pixels on a `w` x `h` box.
+fn gradient_axis(g: &Gradient, w: f64, h: f64) -> (f64, f64) {
+    ((g.to.0 - g.from.0) * w, (g.to.1 - g.from.1) * h)
+}
+
+/// The kind a native target writes: a diamond reads as a radial gradient.
+fn native_gradient_kind(g: &Gradient) -> GradientKind {
+    match g.kind {
+        GradientKind::Diamond => GradientKind::Radial,
+        k => k,
+    }
 }
 
 fn stroke_color(n: &Node) -> Option<Color> {
@@ -763,6 +792,190 @@ mod tests {
                 let t = line.trim_start();
                 assert!(!t.starts_with("evil()") && !t.starts_with("more()"), "layer name leaked as code:\n{code}");
             }
+        }
+    }
+
+    /// White, a 20% default linear gradient of black, then 50% black: bottom to top.
+    fn three_fills() -> Vec<figcraft_color::Paint> {
+        let mut gradient = figcraft_color::Paint::gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, Color::BLACK));
+        gradient.opacity = 0.2;
+        let mut top = figcraft_color::Paint::solid(Color::BLACK);
+        top.opacity = 0.5;
+        vec![figcraft_color::Paint::solid(Color::WHITE), gradient, top]
+    }
+
+    /// A 200 x `h` layer of `kind` (`frame`, `rectangle` or `ellipse`, a rectangle with corner
+    /// radius 8) with exactly `fills`.
+    fn fill_layer(s: &mut Session, kind: &str, h: f64, fills: Vec<figcraft_color::Paint>) -> NodeId {
+        let id = match kind {
+            "frame" => id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": h})).unwrap()["id"]).unwrap(),
+            _ => id_of(&s.execute(&format!("shape.{kind}"), &json!({"x": 0, "y": 0, "width": 200, "height": h})).unwrap()["id"]).unwrap(),
+        };
+        if kind == "rectangle" {
+            s.execute("node.set", &json!({"id": id, "props": {"cornerRadius": 8}})).unwrap();
+        }
+        s.doc_mut().unwrap().get_mut(id).unwrap().fills = fills;
+        id
+    }
+
+    fn one_gradient(s: &mut Session, g: figcraft_color::Gradient) -> NodeId {
+        fill_layer(s, "frame", 120.0, vec![figcraft_color::Paint::gradient(g)])
+    }
+
+    const SWIFT_WHITE: &str = "Color(red: 1, green: 1, blue: 1, opacity: 1)";
+    const SWIFT_HALF: &str = "Color(red: 0, green: 0, blue: 0, opacity: 0.5)";
+    const SWIFT_GRADIENT: &str = "LinearGradient(stops: [Gradient.Stop(color: Color(red: 0, green: 0, blue: 0, opacity: 0.2), location: 0), Gradient.Stop(color: Color(red: 0, green: 0, blue: 0, opacity: 0), location: 1)], startPoint: UnitPoint(x: 0.5, y: 0), endPoint: UnitPoint(x: 0.5, y: 1))";
+
+    #[test]
+    fn swiftui_writes_every_fill_top_first() {
+        let mut s = Session::new();
+        let f = fill_layer(&mut s, "frame", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), f, CodeLang::SwiftUi);
+        let backgrounds: Vec<&str> = code.lines().map(str::trim).filter(|l| l.starts_with(".background(")).collect();
+        let want = [format!(".background({SWIFT_HALF})"), format!(".background({SWIFT_GRADIENT})"), format!(".background({SWIFT_WHITE})")];
+        assert_eq!(backgrounds, want.iter().map(String::as_str).collect::<Vec<_>>(), "{code}");
+    }
+
+    #[test]
+    fn swiftui_shapes_fill_with_the_bottom_paint_and_overlay_the_rest() {
+        let mut s = Session::new();
+        let r = fill_layer(&mut s, "rectangle", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), r, CodeLang::SwiftUi);
+        let mods: Vec<&str> = code.lines().map(str::trim).filter(|l| l.starts_with('.')).collect();
+        let want = [
+            format!(".fill({SWIFT_WHITE})"),
+            format!(".overlay(RoundedRectangle(cornerRadius: 8).fill({SWIFT_GRADIENT}))"),
+            format!(".overlay(RoundedRectangle(cornerRadius: 8).fill({SWIFT_HALF}))"),
+            ".frame(width: 200, height: 120)".to_string(),
+        ];
+        assert_eq!(mods, want.iter().map(String::as_str).collect::<Vec<_>>(), "{code}");
+        assert!(!code.contains(".background("), "{code}");
+        let mut half = figcraft_color::Paint::solid(Color::BLACK);
+        half.opacity = 0.5;
+        let e = fill_layer(&mut s, "ellipse", 120.0, vec![figcraft_color::Paint::solid(Color::WHITE), half]);
+        let code = code_for(s.doc().unwrap(), e, CodeLang::SwiftUi);
+        assert!(code.contains(&format!(".overlay(Ellipse().fill({SWIFT_HALF}))")), "{code}");
+    }
+
+    #[test]
+    fn compose_writes_every_fill_bottom_first() {
+        let mut s = Session::new();
+        let f = fill_layer(&mut s, "frame", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), f, CodeLang::Compose);
+        let want = "Modifier.size(200.dp, 120.dp).background(Color(0xFFFFFFFF), RectangleShape).background(Brush.linearGradient(0f to Color(0x33000000), 1f to Color(0x00000000), start = Offset(0f, 0f), end = Offset(0f, Float.POSITIVE_INFINITY)), RectangleShape).background(Color(0x80000000), RectangleShape)";
+        assert!(code.contains(want), "{code}");
+        let r = fill_layer(&mut s, "rectangle", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), r, CodeLang::Compose);
+        assert_eq!(code.matches(".background(").count(), 3, "{code}");
+        assert_eq!(code.matches(", RoundedCornerShape(8.dp))").count(), 3, "{code}");
+        assert!(code.contains(".background(Color(0xFFFFFFFF), RoundedCornerShape(8.dp)).background(Brush."), "{code}");
+    }
+
+    #[test]
+    fn flutter_nests_a_box_per_fill_bottom_outermost() {
+        let mut s = Session::new();
+        let f = fill_layer(&mut s, "frame", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), f, CodeLang::Flutter);
+        let want = "DecoratedBox(
+  decoration: BoxDecoration(
+    color: Color(0xFFFFFFFF),
+  ),
+  child: DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(begin: Alignment(0, -1), end: Alignment(0, 1), colors: [Color(0x33000000), Color(0x00000000)], stops: [0, 1]),
+    ),
+    child: Container(
+      width: 200,
+      height: 120,
+      decoration: BoxDecoration(
+        color: Color(0x80000000),
+      ),
+    )
+  )
+)";
+        assert_eq!(code, want);
+    }
+
+    #[test]
+    fn flutter_keeps_the_shadow_under_every_fill() {
+        let mut s = Session::new();
+        let f = fill_layer(&mut s, "frame", 120.0, three_fills());
+        s.execute("effect.add", &json!({"ids": [f], "type": "dropShadow"})).unwrap();
+        let code = code_for(s.doc().unwrap(), f, CodeLang::Flutter);
+        assert_eq!(code.matches("boxShadow:").count(), 1, "{code}");
+        let (shadow, gradient) = (code.find("boxShadow:").unwrap(), code.find("gradient:").unwrap());
+        assert!(shadow < gradient, "the shadow is on the outermost box: {code}");
+        let r = fill_layer(&mut s, "rectangle", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), r, CodeLang::Flutter);
+        assert_eq!(code.matches("borderRadius: BorderRadius.circular(8)").count(), 3, "{code}");
+    }
+
+    #[test]
+    fn native_gradients_are_written_as_gradients() {
+        use figcraft_color::{Gradient, GradientKind};
+        let mut s = Session::new();
+        let radial = one_gradient(&mut s, Gradient::default_for(GradientKind::Radial, Color::BLACK));
+        let doc = s.doc().unwrap();
+        let sw = code_for(doc, radial, CodeLang::SwiftUi);
+        assert!(sw.contains("RadialGradient(stops: ["), "{sw}");
+        assert!(sw.contains("center: UnitPoint(x: 0.5, y: 0.5), startRadius: 0, endRadius: 60)"), "{sw}");
+        let kt = code_for(doc, radial, CodeLang::Compose);
+        assert!(kt.contains(".background(Brush.radialGradient(0f to Color(0xFF000000), 1f to Color(0x00000000)), RectangleShape)"), "{kt}");
+        let dart = code_for(doc, radial, CodeLang::Flutter);
+        assert!(
+            dart.contains(
+                "gradient: RadialGradient(center: Alignment(0, 0), radius: 0.5, colors: [Color(0xFF000000), Color(0x00000000)], stops: [0, 1])"
+            ),
+            "{dart}"
+        );
+        let angular = one_gradient(&mut s, Gradient::default_for(GradientKind::Angular, Color::BLACK));
+        let doc = s.doc().unwrap();
+        assert!(code_for(doc, angular, CodeLang::SwiftUi).contains("angle: .degrees(90))"));
+        assert!(code_for(doc, angular, CodeLang::Compose).contains("Brush.sweepGradient("));
+        assert!(code_for(doc, angular, CodeLang::Flutter).contains("transform: GradientRotation(1.57))"));
+        // Compose snaps a linear gradient to one of eight directions.
+        let mut directed = |from: (f64, f64), to: (f64, f64)| {
+            let mut g = Gradient::default_for(GradientKind::Linear, Color::BLACK);
+            (g.from, g.to) = (from, to);
+            let id = one_gradient(&mut s, g);
+            code_for(s.doc().unwrap(), id, CodeLang::Compose)
+        };
+        let up = directed((0.5, 1.0), (0.5, 0.0));
+        assert!(up.contains("start = Offset(0f, Float.POSITIVE_INFINITY), end = Offset(0f, 0f)"), "{up}");
+        let right = directed((0.0, 0.5), (1.0, 0.5));
+        assert!(right.contains("end = Offset(Float.POSITIVE_INFINITY, 0f)"), "{right}");
+        let corner = directed((0.0, 0.0), (1.0, 1.0));
+        assert!(corner.contains("end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)"), "{corner}");
+        // A single stop is written twice, since a brush needs two colours.
+        let mut one = Gradient::default_for(GradientKind::Linear, Color::BLACK);
+        one.stops.truncate(1);
+        let id = one_gradient(&mut s, one);
+        let kt = code_for(s.doc().unwrap(), id, CodeLang::Compose);
+        assert_eq!(kt.matches(" to Color(").count(), 2, "{kt}");
+    }
+
+    #[test]
+    fn one_solid_fill_is_unchanged_in_native_code() {
+        let mut hidden = figcraft_color::Paint::solid(Color::BLACK);
+        hidden.visible = false;
+        let mut s = Session::new();
+        for fills in [vec![figcraft_color::Paint::solid(Color::WHITE)], vec![figcraft_color::Paint::solid(Color::WHITE), hidden]] {
+            let f = fill_layer(&mut s, "frame", 100.0, fills);
+            let doc = s.doc().unwrap();
+            let sw = code_for(doc, f, CodeLang::SwiftUi);
+            let backgrounds: Vec<&str> = sw.lines().map(str::trim).filter(|l| l.starts_with(".background(")).collect();
+            assert_eq!(backgrounds, [format!(".background({SWIFT_WHITE})")], "{sw}");
+            assert!(!sw.contains("Gradient"), "{sw}");
+            let kt = code_for(doc, f, CodeLang::Compose);
+            assert!(kt.contains("Modifier.size(200.dp, 100.dp).background(Color(0xFFFFFFFF), RectangleShape))"), "{kt}");
+            assert!(!kt.contains("Brush"), "{kt}");
+            let dart = code_for(doc, f, CodeLang::Flutter);
+            assert!(
+                dart.starts_with("Container(\n  width: 200,\n  height: 100,\n  decoration: BoxDecoration(\n    color: Color(0xFFFFFFFF),\n  ),\n)"),
+                "{dart}"
+            );
+            assert!(!dart.contains("DecoratedBox"), "{dart}");
+            assert!(code_for(doc, f, CodeLang::ArkUi).contains(".backgroundColor('#FFFFFF')"));
         }
     }
 }
