@@ -14,8 +14,8 @@ use egui::{Id, Sense, Ui, vec2};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, PropDef, VariableType};
 use figcraft_engine::cmd::component::{can_add_variant, can_combine_variants};
 use figcraft_engine::components::{
-    PROP_BINDING, default_variant, inside_instance, owning_component, owning_instance, prop_list, slot_def, slot_edited, slots_of, variant_conflicts,
-    variant_options, variant_props, variant_set,
+    PROP_BINDING, default_variant, inside_instance, instance_prop_list, owning_component, owning_instance, prop_list, slot_def, slot_edited,
+    slots_of, variant_conflicts, variant_options, variant_props, variant_set,
 };
 use serde_json::{Value, json};
 
@@ -748,7 +748,7 @@ fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node, comps
         }
     }
     // Boolean, text and instance-swap properties.
-    for (k, d) in prop_list(doc, *component) {
+    for (k, d) in instance_prop_list(doc, *component) {
         let v = props.get(&k).cloned().unwrap_or_else(|| figcraft_engine::components::prop_default_value(&d));
         row(ui, 32.0, |ui| {
             prop_label(ui, &k, type_icon(&d));
@@ -968,8 +968,12 @@ fn comp_rows(ui: &mut Ui, found: &CompSearch, checked: &impl Fn(NodeId) -> bool)
 
 fn prop_label(ui: &mut Ui, name: &str, icon: Icon) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(84.0, 20.0), Sense::hover());
+    let (r, resp) = ui.allocate_exact_size(vec2(84.0, 20.0), Sense::hover());
     icons::paint(ui.painter(), egui::Rect::from_min_size(egui::pos2(r.min.x, r.center().y - 6.0), vec2(12.0, 12.0)), icon, t.icon_secondary);
-    let g = ui.painter().layout(name.to_string(), crate::theme::regular(11.0), t.text_secondary, r.width() - 18.0);
+    let shown = widgets::elide(ui, name, r.width() - 18.0);
+    let g = ui.painter().layout_no_wrap(shown.clone(), crate::theme::regular(11.0), t.text_secondary);
     ui.painter().galley(egui::pos2(r.min.x + 18.0, r.center().y - g.size().y / 2.0), g, t.text_secondary);
+    if shown != name {
+        resp.on_hover_text(name);
+    }
 }
