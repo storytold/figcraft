@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_doc::{Document, Effect, ExportSetting, ImageData, LayoutGrid, Node, NodeId, NodeKind};
-use figcraft_geom::Affine;
+use figcraft_geom::{Affine, Point};
 use serde_json::{Map, Value, json};
 
 use super::{CommandSpec, ok};
@@ -616,7 +616,8 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Layers duplicated last (Duplicate or Alt-drag) and their copies, in the same order. While the
 /// copies are the selection, Duplicate places the next copies as far from them as they are from
-/// their sources, measured then: so moving the copies first sets the step.
+/// their sources, measured then (their move and turn, not their size): so moving or turning the
+/// copies first sets the step.
 #[derive(Clone, Debug)]
 pub struct Duplicated {
     pub sources: Vec<NodeId>,
@@ -629,9 +630,10 @@ impl Duplicated {
         !self.copies.is_empty() && set(&self.copies) == set(sel)
     }
 
-    /// The page offset from the sources to the copies, if both are still there and the copies move
-    /// freely (an auto layout places its own).
-    fn offset(&self, doc: &Document) -> Option<(f64, f64)> {
+    /// The step from the sources to the copies, if both are still there and the copies move freely
+    /// (an auto layout places its own): the move of their combined centre in the page frame, and
+    /// the turn every copy has over its source (zero unless they all agree).
+    fn step(&self, doc: &Document) -> Option<Step> {
         let free = self
             .copies
             .iter()
@@ -640,9 +642,54 @@ impl Duplicated {
             return None;
         }
         let (a, b) = (doc.bounds_of(&self.sources)?, doc.bounds_of(&self.copies)?);
-        let d = (b.x0 - a.x0, b.y0 - a.y0);
-        (d.0.is_finite() && d.1.is_finite() && (d.0 != 0.0 || d.1 != 0.0)).then_some(d)
+        let same_size = self.sources.iter().zip(&self.copies).all(|(s, c)| match (doc.node(*s), doc.node(*c)) {
+            (Some(s), Some(c)) => (s.width - c.width).abs() < 1e-9 && (s.height - c.height).abs() < 1e-9,
+            _ => false,
+        });
+        let (dx, dy) = if same_size {
+            (b.center().x - a.center().x, b.center().y - a.center().y)
+        } else {
+            // A resized copy: follow where each copy's top-left anchored, source-sized centre went,
+            // so the size change itself is not repeated as a move.
+            let moves: Vec<(f64, f64)> = self
+                .sources
+                .iter()
+                .zip(&self.copies)
+                .filter_map(|(s, c)| {
+                    let half = doc.node(*s).map(|n| Point::new(n.width / 2.0, n.height / 2.0))?;
+                    let (ps, pc) = (doc.world_transform(*s) * half, doc.world_transform(*c) * half);
+                    Some((pc.x - ps.x, pc.y - ps.y))
+                })
+                .collect();
+            let n = moves.len() as f64;
+            (moves.iter().map(|m| m.0).sum::<f64>() / n, moves.iter().map(|m| m.1).sum::<f64>() / n)
+        };
+        let turns: Vec<f64> = self
+            .sources
+            .iter()
+            .zip(&self.copies)
+            .map(|(s, c)| {
+                let d = figcraft_geom::rotation_degrees(doc.world_transform(*c)) - figcraft_geom::rotation_degrees(doc.world_transform(*s));
+                let d = d.rem_euclid(360.0);
+                if d > 180.0 { d - 360.0 } else { d }
+            })
+            .collect();
+        let angle = match turns.first() {
+            Some(first) if turns.iter().all(|t| (t - first).abs() < 1e-6) => *first,
+            _ => 0.0,
+        };
+        let step = Step { dx, dy, angle };
+        (step.dx.is_finite() && step.dy.is_finite() && step.angle.is_finite() && (dx != 0.0 || dy != 0.0 || angle != 0.0)).then_some(step)
     }
+}
+
+/// What Duplicate repeats: a move of the copies' centre in the page frame, then a turn about the
+/// centre of the new copies. Size is not part of it.
+#[derive(Clone, Copy, Debug)]
+struct Step {
+    dx: f64,
+    dy: f64,
+    angle: f64,
 }
 
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -651,7 +698,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let explicit = num(p, "dx").is_some() || num(p, "dy").is_some();
     let ds = s.ds()?;
     let roots_now = z_sorted(&ds.doc, &roots(&ds.doc, &ids));
-    let repeat = ds.last_duplicate.as_ref().filter(|d| !explicit && d.is_selection(&roots_now)).and_then(|d| d.offset(&ds.doc));
+    let repeat = ds.last_duplicate.as_ref().filter(|d| !explicit && d.is_selection(&roots_now)).and_then(|d| d.step(&ds.doc));
     let doc = s.doc_mut()?;
     let ids = roots_now;
     let mut out = Vec::new();
@@ -670,7 +717,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             _ => (0.0, 0.0),
         };
         match repeat {
-            Some((rx, ry)) => super::arrange::move_world(doc, nid, rx, ry)?,
+            Some(st) => super::arrange::move_world(doc, nid, st.dx, st.dy)?,
             None => {
                 let nn = doc.get_mut(nid)?;
                 nn.transform = Affine::translate((dx, dy)) * nn.transform;
@@ -682,6 +729,14 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             nn.name = bump_name(&nn.name);
         }
         out.push(nid);
+    }
+    // A repeated turn is about the new copies' own centre (one layer) or their shared one.
+    if let Some(st) = repeat.filter(|st| st.angle != 0.0)
+        && let Some(c) = doc.bounds_of(&out).map(|b| b.center())
+    {
+        for nid in out.iter().copied() {
+            super::arrange::rotate_world(doc, nid, c, st.angle)?;
+        }
     }
     crate::library::count_inserted(doc, &out);
     // Board connectors copied with what they join join the copies.

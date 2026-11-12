@@ -255,3 +255,107 @@ fn duplicate_repeats_a_nudged_step() {
     let c2 = cmd_d(&mut s);
     assert_eq!(at(&s, c2), (80.0, 0.0), "the nudge is the step");
 }
+
+fn centre(s: &Session, id: NodeId) -> (f64, f64) {
+    let c = s.doc().unwrap().world_bounds(id).unwrap().center();
+    (c.x, c.y)
+}
+
+fn turn(s: &Session, id: NodeId) -> f64 {
+    figcraft_geom::rotation_degrees(s.doc().unwrap().world_transform(id))
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-6
+}
+
+#[test]
+fn duplicate_repeats_the_copys_move_and_rotation() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let c1 = cmd_d(&mut s);
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"x": 150}}));
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"rotation": -15}}));
+    assert!(near(centre(&s, c1).0, 200.0) && near(centre(&s, c1).1, 50.0));
+    for k in 1..=3 {
+        let c = cmd_d(&mut s);
+        let (x, y) = centre(&s, c);
+        let want = 200.0 + 150.0 * f64::from(k);
+        assert!(near(x, want) && near(y, 50.0), "repeat {k}: centre ({x}, {y})");
+        assert!(near(turn(&s, c), -15.0 - 15.0 * f64::from(k)), "repeat {k}: rotation {}", turn(&s, c));
+    }
+}
+
+#[test]
+fn duplicate_repeats_a_rotation_in_place() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let c1 = cmd_d(&mut s);
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"rotation": 30}}));
+    for k in 1..=3 {
+        let c = cmd_d(&mut s);
+        let (x, y) = centre(&s, c);
+        assert!(near(x, 50.0) && near(y, 50.0), "repeat {k}: centre ({x}, {y})");
+        assert!(near(turn(&s, c), 30.0 + 30.0 * f64::from(k)), "repeat {k}: rotation {}", turn(&s, c));
+    }
+}
+
+#[test]
+fn duplicate_does_not_step_the_size() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let c1 = cmd_d(&mut s);
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"x": 150}}));
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"width": 120}}));
+    let c1_centre = centre(&s, c1);
+    for k in 1..=2 {
+        let c = cmd_d(&mut s);
+        let w = s.doc().unwrap().get(c).unwrap().width;
+        assert!(near(w, 120.0), "repeat {k}: width {w}");
+        assert!(near(centre(&s, c).0, c1_centre.0 + 150.0 * f64::from(k)), "repeat {k}: centre {:?}", centre(&s, c));
+    }
+}
+
+#[test]
+fn duplicate_turns_several_layers_about_their_selection_centre() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    let b = rect(&mut s, 150.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a, b]}));
+    let out = ex(&mut s, "edit.duplicate", json!({}));
+    let copies: Vec<NodeId> = out["ids"].as_array().unwrap().iter().map(|v| id_of(v).unwrap()).collect();
+    ex(&mut s, "transform.nudge", json!({"dx": 150, "dy": 0}));
+    // Turn the pair -15 about its combined centre.
+    ex(&mut s, "transform.rotate", json!({"ids": copies, "degrees": -15}));
+    let before: Vec<(f64, f64)> = copies.iter().map(|c| centre(&s, *c)).collect();
+    let pair_before = s.doc().unwrap().bounds_of(&copies).unwrap().center();
+    let again = ex(&mut s, "edit.duplicate", json!({}));
+    let next: Vec<NodeId> = again["ids"].as_array().unwrap().iter().map(|v| id_of(v).unwrap()).collect();
+    assert_eq!(next.len(), 2);
+    let after = s.doc().unwrap().bounds_of(&next).unwrap().center();
+    assert!(near(after.x, pair_before.x + 150.0) && near(after.y, pair_before.y), "pair centre {after:?}");
+    for (i, c) in next.iter().enumerate() {
+        assert!(near(turn(&s, *c), -30.0), "layer {i}: rotation {}", turn(&s, *c));
+        // Expected: the layer's centre moved +150, then turned -15 about the moved pair's centre.
+        let moved = figcraft_geom::Affine::translate((before[i].0 + 150.0, before[i].1));
+        let want = figcraft_geom::translation(figcraft_geom::rotate_about(moved, after, -15.0));
+        let got = centre(&s, *c);
+        assert!(near(got.0, want.x) && near(got.1, want.y), "layer {i}: {got:?} vs {want:?}");
+    }
+}
+
+#[test]
+fn a_deselect_forgets_the_duplicate_step() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let c1 = cmd_d(&mut s);
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"x": 150}}));
+    ex(&mut s, "select.none", json!({}));
+    ex(&mut s, "select.set", json!({"ids": [c1]}));
+    let c2 = cmd_d(&mut s);
+    assert_eq!(at(&s, c2), (150.0, 0.0), "no step after a deselect: the copy lands in place");
+}
