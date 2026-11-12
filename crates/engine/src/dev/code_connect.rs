@@ -669,7 +669,12 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let doc = s.doc()?;
     // Components and sets by name (variants are linked through their set).
-    let owners: Vec<(String, NodeId)> = doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).map(|n| (n.name.clone(), n.id)).collect();
+    let mut owners: std::collections::HashMap<&str, Vec<NodeId>> = std::collections::HashMap::new();
+    for n in doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)) {
+        owners.entry(n.name.as_str()).or_default().push(n.id);
+    }
+    // What each component looks like, worked out once however many entries name it.
+    let mut described: std::collections::HashMap<NodeId, Option<Component>> = std::collections::HashMap::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut apply: Vec<(NodeId, CodeLink)> = Vec::new();
     for (i, e) in entries.iter().enumerate() {
@@ -689,13 +694,13 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             name: name.into(),
             template: template.into(),
         };
-        let matches: Vec<NodeId> = owners.iter().filter(|(n, _)| n == component).map(|(_, id)| *id).collect();
+        let matches = owners.get(component).cloned().unwrap_or_default();
         if matches.is_empty() {
             warnings.push(format!("link {}: no component named {component:?}", i + 1));
         }
         for id in matches {
-            let Some(c) = main_of(doc, id).and_then(|m| describe(doc, m)) else { continue };
-            match check(&c, &link, lang) {
+            let Some(c) = described.entry(id).or_insert_with(|| main_of(doc, id).and_then(|m| describe(doc, m))).as_ref() else { continue };
+            match check(c, &link, lang) {
                 Ok(_) => apply.push((id, link.clone())),
                 Err(err) => warnings.push(format!("link {} ({component}): {err}", i + 1)),
             }
