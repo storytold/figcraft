@@ -1269,6 +1269,8 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                         app.run("select.set", json!({"ids": [row.id]}));
                     }
                     app.run("view.zoomSelection", json!({}));
+                    // The release is also a click: it must not toggle or extend the selection.
+                    clicked = None;
                 } else if !crate::menus::dev_mode_refuses(app, "object.rename") {
                     app.ui.rename = Some(Rename { id: row.id, start: true });
                 }

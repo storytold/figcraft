@@ -842,6 +842,24 @@ fn search_fields_keep_their_text_in_the_middle() {
     assert!(off < 1.0, "Search assets is {off} points off the middle");
 }
 
+/// The centre of `id`'s icon, a top-level row: the row's left edge is the first point from the
+/// left at which the pointer is over it, and the icon's centre is 8 (margin) + 4 + 22 points
+/// further right.
+fn icon_of(u: &mut Ui, id: NodeId) -> Pos2 {
+    let y = u.row_at(id).y;
+    let mut left = None;
+    for x in 0..150 {
+        let p = Pos2::new(x as f32, y);
+        u.app.session.ds_mut().unwrap().hover = None;
+        u.frame(vec![Event::PointerMoved(p)]);
+        if u.app.session.ds().unwrap().hover == Some(id) {
+            left = Some(x as f32);
+            break;
+        }
+    }
+    Pos2::new(left.expect("the row has a left edge") + 34.0, y)
+}
+
 /// Measured in Figma's web app, 2026-11-12: a double-click on a layer's icon zooms the canvas to
 /// the layer and starts no rename (a double-click on the name renames, as before).
 #[test]
@@ -852,20 +870,7 @@ fn a_double_click_on_a_layers_icon_zooms_to_it_instead_of_renaming() {
     s.execute("select.none", &json!({})).unwrap();
     let mut u = Ui::new(s);
     u.frame(vec![]);
-    let y = u.row_at(far).y;
-    // The row's left edge: the first point from the left at which the pointer is over it. At depth
-    // 0 the icon's centre is 8 (margin) + 4 + 22 points further right.
-    let mut left = None;
-    for x in 0..150 {
-        let p = Pos2::new(x as f32, y);
-        u.app.session.ds_mut().unwrap().hover = None;
-        u.frame(vec![Event::PointerMoved(p)]);
-        if u.app.session.ds().unwrap().hover == Some(far) {
-            left = Some(x as f32);
-            break;
-        }
-    }
-    let icon = Pos2::new(left.expect("the row has a left edge") + 34.0, y);
+    let icon = icon_of(&mut u, far);
     let view = |u: &Ui| {
         let v = &u.app.session.ds().unwrap().view;
         (v.cx, v.cy, v.zoom)
@@ -883,4 +888,29 @@ fn a_double_click_on_a_layers_icon_zooms_to_it_instead_of_renaming() {
     u.app.session.execute("view.set", &json!({"cx": before.0, "cy": before.1, "zoom": before.2})).unwrap();
     u.app.session.execute("view.zoomSelection", &json!({})).unwrap();
     assert_eq!(after, view(&u), "the view frames the layer, as view.zoomSelection does");
+}
+
+/// A double-click's release is also a click on the row; with Ctrl held it must not toggle the layer
+/// back out of the selection the zoom just made, nor can Shift restore a range.
+#[test]
+fn an_icon_double_click_keeps_its_selection_when_a_modifier_is_held() {
+    let mut s = Session::new();
+    rect(&mut s, "near", 0.0, None);
+    let far = rect(&mut s, "far", 3000.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let icon = icon_of(&mut u, far);
+    let before = (u.app.session.ds().unwrap().view.cx, u.app.session.ds().unwrap().view.zoom);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: CMD };
+            u.frame_with(vec![Event::PointerMoved(icon), e], CMD);
+        }
+    }
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), vec![far], "the layer stays selected");
+    assert_eq!(u.app.ui.rename, None);
+    let v = &u.app.session.ds().unwrap().view;
+    assert_ne!((v.cx, v.zoom), before, "the view frames the layer");
 }
