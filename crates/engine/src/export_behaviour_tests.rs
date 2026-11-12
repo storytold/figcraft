@@ -454,3 +454,17 @@ fn node_set_takes_back_the_export_settings_node_get_returns() {
     );
     assert_eq!(stored(&s), vec![expected], "node.set takes the snake_case keys");
 }
+
+#[test]
+fn export_rejects_an_invalid_layer_id_instead_of_exporting_the_page() {
+    let mut s = Session::new();
+    let r = rect(&mut s, 0.0, 0.0, 10.0, 10.0, "#ff0000", None);
+    ex(&mut s, "export.add", json!({"ids": [r]}));
+    for cmd in ["file.export", "file.exportLayers"] {
+        for p in [json!({"ids": ["abc"], "format": "svg"}), json!({"id": "abc", "format": "svg"}), json!({"ids": [], "id": "abc", "format": "svg"})] {
+            let res = s.execute(cmd, &p);
+            assert!(res.is_err(), "{cmd} {p} exported for an invalid id: {res:?}");
+        }
+    }
+    assert!(s.execute("file.export", &json!({"format": "svg"})).is_ok());
+}
