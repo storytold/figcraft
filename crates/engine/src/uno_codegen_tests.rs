@@ -81,7 +81,8 @@ fn a_frame_with_a_stroke_and_children_keeps_the_children_out_of_the_border() {
     let f = frame(&mut s, "Login Screen", 200.0, 100.0);
     set(&mut s, f, json!({"fill": "#112233", "stroke": "#FF0000", "strokeWeight": 3, "opacity": 0.5, "cornerRadius": 8}));
     ex(&mut s, "shape.rectangle", json!({"x": 5, "y": 5, "width": 20, "height": 20, "parent": f, "props": {"name": "Box"}}));
-    let expected = "new Grid()
+    let expected = "// warning: 1 frame has no auto layout: its children are positioned absolutely and do not adapt to size.
+new Grid()
     .Width(200)
     .Height(100)
     .Opacity(0.5)
@@ -333,4 +334,145 @@ fn instances_and_components_are_walked_as_frames() {
     let code = uno(&mut s, c);
     assert!(code.contains("internal sealed partial class CardView : UserControl"), "{code}");
     assert!(!code.contains("export default") && !code.contains("function "), "{code}");
+}
+
+/// The body of a view with the class shell and its indent taken off.
+fn body(code: &str) -> String {
+    tree(code).lines().map(|l| format!("{}\n", l.get(12..).unwrap_or(l))).collect::<String>().trim_end().to_string()
+}
+
+fn rect(s: &mut Session, parent: NodeId, w: f64, h: f64, name: &str) -> NodeId {
+    idv(&ex(s, "shape.rectangle", json!({"parent": parent, "x": 0, "y": 0, "width": w, "height": h, "props": {"name": name, "fill": "#FF0000"}})))
+}
+
+/// A frame with auto layout and one rectangle child.
+fn row(s: &mut Session, props: serde_json::Value) -> NodeId {
+    let f = frame(s, "Row", 200.0, 100.0);
+    let mut all = json!({"layout": "horizontal", "padding": 0, "gap": 0, "fills": [], "sizingH": "fixed", "sizingV": "fixed"});
+    if let (Some(all), serde_json::Value::Object(extra)) = (all.as_object_mut(), props) {
+        all.extend(extra);
+    }
+    set(s, f, all);
+    rect(s, f, 20.0, 20.0, "A");
+    f
+}
+
+#[test]
+fn a_row_is_an_auto_layout_with_its_box_gap_padding_and_alignment() {
+    let mut s = Session::new();
+    let f = row(
+        &mut s,
+        json!({"fills": ["#112233"], "gap": 12, "padding": [7, 15, 7, 15], "mainAlign": "center", "crossAlign": "center", "cornerRadius": 8}),
+    );
+    rect(&mut s, f, 20.0, 20.0, "B");
+    let code = uno(&mut s, f);
+    assert!(code.starts_with("using Windows.UI;\nusing Uno.Toolkit.UI;\n") || code.contains("using Uno.Toolkit.UI;"), "{code}");
+    let expected = "new AutoLayout()
+    .Width(200)
+    .Height(100)
+    .Background(Color.FromArgb(0xFF, 0x11, 0x22, 0x33))
+    .CornerRadius(8)
+    .Orientation(Orientation.Horizontal)
+    .Spacing(12)
+    .Padding(15, 7, 15, 7)
+    .PrimaryAxisAlignment(AutoLayoutAlignment.Center)
+    .CounterAxisAlignment(AutoLayoutAlignment.Center)
+    .Children(
+        new Border()
+            .Width(20)
+            .Height(20)
+            .Background(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00)),
+        new Border()
+            .Width(20)
+            .Height(20)
+            .Background(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00)))";
+    assert_eq!(body(&code), expected, "{code}");
+    // A frame with auto layout is not a frame without one: no warning.
+    assert!(!code.contains("// warning"), "{code}");
+}
+
+#[test]
+fn a_column_has_a_vertical_orientation_and_a_uniform_padding_is_one_number() {
+    let mut s = Session::new();
+    let f = row(&mut s, json!({"layout": "vertical", "padding": 8, "gap": 0}));
+    let code = uno(&mut s, f);
+    assert!(code.contains(".Orientation(Orientation.Vertical)\n"), "{code}");
+    assert!(code.contains(".Padding(8)\n"), "{code}");
+    assert!(!code.contains(".Spacing("), "no gap, no spacing: {code}");
+    set(&mut s, f, json!({"padding": 0}));
+    assert!(!uno(&mut s, f).contains(".Padding("));
+}
+
+#[test]
+fn main_and_cross_alignment_map_with_notes_for_what_the_toolkit_lacks() {
+    let mut s = Session::new();
+    let f = row(&mut s, json!({"gap": 5}));
+    for (main, line) in [("max", ".PrimaryAxisAlignment(AutoLayoutAlignment.End)"), ("spaceBetween", ".Justify(AutoLayoutJustify.SpaceBetween)")] {
+        set(&mut s, f, json!({"mainAlign": main}));
+        let code = uno(&mut s, f);
+        assert!(code.contains(line), "{main}: {code}");
+        assert!(!code.contains("// not mapped"), "{main}: {code}");
+    }
+    // The distributions make the gaps: the gap value is not written.
+    assert!(!uno(&mut s, f).contains(".Spacing("));
+    for main in ["spaceAround", "spaceEvenly"] {
+        set(&mut s, f, json!({"mainAlign": main}));
+        let code = uno(&mut s, f);
+        assert!(
+            code.contains(".Justify(AutoLayoutJustify.SpaceBetween)")
+                && code.contains("// not mapped: space around/evenly exported as space between"),
+            "{code}"
+        );
+    }
+    set(&mut s, f, json!({"mainAlign": "min", "crossAlign": "max"}));
+    assert!(uno(&mut s, f).contains(".CounterAxisAlignment(AutoLayoutAlignment.End)"));
+    set(&mut s, f, json!({"crossAlign": "baseline"}));
+    let code = uno(&mut s, f);
+    assert!(!code.contains("CounterAxisAlignment") && code.contains("// not mapped: baseline alignment"), "{code}");
+}
+
+#[test]
+fn the_stroke_weight_comes_off_the_padding_unless_strokes_are_included() {
+    let mut s = Session::new();
+    let f = row(&mut s, json!({"padding": 10, "stroke": "#0000FF", "strokeWeight": 4, "strokeAlign": "inside", "strokesIncluded": false}));
+    let code = uno(&mut s, f);
+    assert!(code.contains(".BorderThickness(4)") && code.contains(".Padding(6)\n"), "{code}");
+    assert!(!code.contains("new Grid()"), "{code}");
+    set(&mut s, f, json!({"strokesIncluded": true}));
+    assert!(uno(&mut s, f).contains(".Padding(10)\n"));
+    // A stroke thicker than the padding on a side: the border sits behind the layout.
+    set(&mut s, f, json!({"strokesIncluded": false, "padding": 2}));
+    let code = uno(&mut s, f);
+    assert!(code.contains("new Grid()") && code.contains("new Border()") && code.contains(".Padding(2)\n"), "{code}");
+    let (grid, layout) = (code.find("new Grid()"), code.find("new AutoLayout()"));
+    assert!(grid < layout, "{code}");
+    assert!(!code[layout.unwrap_or(0)..].contains(".BorderThickness("), "{code}");
+}
+
+#[test]
+fn frames_without_auto_layout_get_one_warning_per_view_with_their_count() {
+    let mut s = Session::new();
+    let outer = frame(&mut s, "Free", 200.0, 200.0);
+    for name in ["One", "Two"] {
+        let inner = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 50, "parent": outer, "name": name})));
+        rect(&mut s, inner, 10.0, 10.0, "R");
+    }
+    let code = uno(&mut s, outer);
+    assert_eq!(code.matches("// warning:").count(), 1, "{code}");
+    assert!(code.contains("// warning: 3 frames have no auto layout: children are positioned absolutely and do not adapt to size."), "{code}");
+    // An empty frame has no children to place: nothing to warn about.
+    let empty = frame(&mut s, "Empty2", 10.0, 10.0);
+    assert!(!uno(&mut s, empty).contains("// warning"));
+}
+
+#[test]
+fn nested_auto_layouts_carry_no_canvas_offsets() {
+    let mut s = Session::new();
+    let outer = row(&mut s, json!({"layout": "vertical"}));
+    let inner = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 50, "parent": outer, "name": "Inner"})));
+    set(&mut s, inner, json!({"layout": "horizontal", "padding": 3, "gap": 2}));
+    rect(&mut s, inner, 5.0, 5.0, "C");
+    let code = uno(&mut s, outer);
+    assert_eq!(code.matches("new AutoLayout()").count(), 2, "{code}");
+    assert!(!code.contains(".Canvas("), "{code}");
 }
