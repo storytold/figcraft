@@ -408,6 +408,9 @@ pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: b
     if !enabled {
         a11y::disabled(&resp);
     }
+    if locked {
+        a11y::describe(&resp, i18n::tr("locked"));
+    }
     // The keyboard's item is highlighted like the hovered one.
     a11y::own_focus(&resp);
     let hov = plain_row_hover(ui, &resp) && enabled;

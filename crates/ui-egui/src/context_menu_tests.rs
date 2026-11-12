@@ -189,6 +189,28 @@ fn select_layer_marks_locked_layers_with_a_padlock_and_picks_them() {
     let _ = lower;
 }
 
+/// The padlock is only paint: the locked row says "locked" to assistive technology too.
+#[test]
+fn select_layer_locked_row_is_described_as_locked() {
+    let (mut u, _, _) = overlap_ui();
+    let at = u.app.to_screen(150.0, 150.0);
+    crate::canvas::open_context_menu(&mut u.app, at, false);
+    u.app.session.set_selection(vec![]);
+    crate::menus::open_select_layer(&u.ctx, true);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let nodes: Vec<egui::accesskit::Node> =
+        u.frame_output(vec![]).platform_output.accesskit_update.expect("an AccessKit update").nodes.into_iter().map(|(_, n)| n).collect();
+    let row = |name: &str| {
+        nodes
+            .iter()
+            .find(|n| n.role() == egui::accesskit::Role::MenuItem && n.label() == Some(name))
+            .unwrap_or_else(|| panic!("no menu row {name:?}"))
+    };
+    assert!(row("Upper").description().is_some_and(|d| d.contains("locked")), "the locked row says locked");
+    assert!(!row("Lower").description().is_some_and(|d| d.contains("locked")), "the other row doesn't");
+}
+
 /// Measured on a single locked layer only (Figma's web app, 2026-11-10): the least certain rule.
 #[test]
 fn select_layer_needs_more_than_one_layer_under_the_pointer() {
