@@ -184,6 +184,13 @@ fn redirect_last_segment(net: &mut VectorNetwork, loop_segs: &[usize], from: usi
     }
 }
 
+/// Which segments are in a loop, and which segments join each pair of points: the lookups
+/// [`VectorNetwork::closing_segment`] reads, built once per pass by [`VectorNetwork::loop_index`].
+pub struct LoopIndex {
+    in_loop: Vec<bool>,
+    by_ends: std::collections::BTreeMap<(usize, usize), Vec<usize>>,
+}
+
 impl VectorNetwork {
     /// A network from a polyline / polygon.
     pub fn from_points(points: &[Point], closed: bool) -> Self {
@@ -471,16 +478,16 @@ impl VectorNetwork {
         // The curves go between the two segments wherever a loop walks through the point, in the
         // order the loop meets them. Each loop is rebuilt in one pass, so a polygon with many
         // rounded corners isn't quadratic.
+        let index = self.loop_index();
         for lp in out.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
-            let Some(&first_idx) = lp.first() else { continue };
-            let start_v = match (self.segments.get(first_idx), lp.get(1).and_then(|&i| self.segments.get(i))) {
-                (Some(first), Some(second)) if first.a == second.a || first.a == second.b => first.b,
-                (Some(first), _) => first.a,
-                _ => 0,
-            };
-            let mut rebuilt = Vec::with_capacity(lp.len() + by_vertex.len().min(lp.len()));
+            if lp.is_empty() {
+                continue;
+            }
+            let start_v = self.loop_start(lp).unwrap_or(0);
+            let mut rebuilt = Vec::with_capacity(lp.len() + by_vertex.len().min(lp.len()) + 1);
             let mut cur = start_v;
-            for &x in lp.iter() {
+            let closing = self.closing_segment(lp, &index);
+            for &x in lp.iter().chain(closing.iter()) {
                 rebuilt.push(x);
                 let Some(s) = self.segments.get(x) else { continue };
                 cur = if s.a == cur { s.b } else { s.a };
@@ -495,6 +502,60 @@ impl VectorNetwork {
             *lp = rebuilt;
         }
         Some(out)
+    }
+
+    /// The point loop `lp` is walked from: the end of its first segment that its second does not
+    /// share.
+    fn loop_start(&self, lp: &[usize]) -> Option<usize> {
+        let first = self.segments.get(*lp.first()?)?;
+        match lp.get(1).and_then(|&i| self.segments.get(i)) {
+            Some(second) if first.a == second.a || first.a == second.b => Some(first.b),
+            _ => Some(first.a),
+        }
+    }
+
+    /// The lookups [`Self::closing_segment`] needs, built once for a pass over every loop.
+    pub fn loop_index(&self) -> LoopIndex {
+        let mut in_loop = vec![false; self.segments.len()];
+        for &x in self.regions.iter().flat_map(|r| r.loops.iter().flatten()) {
+            if let Some(f) = in_loop.get_mut(x) {
+                *f = true;
+            }
+        }
+        let mut by_ends: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
+        for (i, s) in self.segments.iter().enumerate() {
+            by_ends.entry((s.a.min(s.b), s.a.max(s.b))).or_default().push(i);
+        }
+        LoopIndex { in_loop, by_ends }
+    }
+
+    /// The segment that joins the two ends of an open loop `lp` when it is in no loop of its own
+    /// (and the only such segment): a corner cut off by a segment drawn before the corner point was
+    /// deleted leaves the loop open there, and the stroke follows that segment. Only a loop that
+    /// walks in order as one continuous chain has one. Rounding walks it as the loop's last
+    /// segment, so the points at the loop's ends are cut by arcs as the stroke's are, and deleting
+    /// points or segments puts it into the loop (#1951). `index` is this network's [`Self::loop_index`],
+    /// shared by every loop of one pass.
+    pub fn closing_segment(&self, lp: &[usize], index: &LoopIndex) -> Option<usize> {
+        let start_v = self.loop_start(lp)?;
+        let mut cur = start_v;
+        for &x in lp {
+            let s = self.segments.get(x)?;
+            cur = if s.a == cur {
+                s.b
+            } else if s.b == cur {
+                s.a
+            } else {
+                return None;
+            };
+        }
+        if cur == start_v {
+            return None;
+        }
+        let mut joining =
+            index.by_ends.get(&(cur.min(start_v), cur.max(start_v)))?.iter().copied().filter(|&i| !index.in_loop.get(i).copied().unwrap_or(false));
+        let first = joining.next()?;
+        joining.next().is_none().then_some(first)
     }
 
     /// How point `v` (its `incident` segments) is rounded, if it is: not where the two segments
