@@ -353,3 +353,19 @@ fn font_family_with_quote_and_bracket_stays_a_valid_class_token() {
     assert!(after.starts_with('>') && !attr.contains('\\'), "{out}");
     assert!(!inner.is_empty() && !inner.contains(['\\', '"', ']']), "{out}");
 }
+
+#[test]
+fn several_fills_are_one_layered_background_class() {
+    let mut s = Session::new();
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 120})));
+    let mut g =
+        figcraft_color::Paint::gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, figcraft_color::Color::BLACK));
+    g.opacity = 0.2;
+    let mut top = figcraft_color::Paint::solid(figcraft_color::Color::BLACK);
+    top.opacity = 0.5;
+    s.doc_mut().unwrap().get_mut(f).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::WHITE), g, top];
+    let out = code(&mut s, f, json!({}));
+    let class = out.split(['"', ' ']).find(|c| c.starts_with("[background:")).unwrap_or_default();
+    assert!(class.starts_with("[background:linear-gradient(0deg,_rgba(0,_0,_0,_0.50),_rgba(0,_0,_0,_0.50)),_linear-gradient(180deg"), "{out}");
+    assert!(class.ends_with(",_#FFFFFF]"), "{out}");
+}
