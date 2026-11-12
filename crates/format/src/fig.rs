@@ -20,6 +20,8 @@ mod connector_label_tests;
 #[cfg(test)]
 mod deep_import_tests;
 #[cfg(test)]
+mod empty_swap_tests;
+#[cfg(test)]
 mod expansion_cost_tests;
 mod export;
 #[cfg(test)]
