@@ -1399,6 +1399,10 @@ impl ExportSize {
             Some((i, c)) if c.is_ascii_alphabetic() => (s.get(..i)?.trim(), Some(c)),
             _ => (s.as_str(), None),
         };
+        // Plain decimal only: no sign, exponent, "inf" or "nan".
+        if !num.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+            return None;
+        }
         let value: f64 = num.parse().ok()?;
         match unit {
             None | Some('x') => ExportSize::Scale { value },
