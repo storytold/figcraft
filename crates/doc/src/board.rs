@@ -62,18 +62,29 @@ pub enum BoardItem {
     /// A table: a frame of row frames holding cell frames with text (its column lines are thin
     /// rectangles laid over it).
     Table,
+    /// A mind map's node: a frame hugging its text, with no outline. What it hangs from is the
+    /// branch (a connector with `branch`) arriving at it.
+    MindNode,
 }
 
 impl BoardItem {
     /// Objects selected and moved as a whole: a click on their text or outline picks them, and
     /// they never take other layers in.
     pub fn is_atom(&self) -> bool {
-        matches!(self, BoardItem::Sticky { .. } | BoardItem::Shape { .. } | BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table)
+        matches!(
+            self,
+            BoardItem::Sticky { .. }
+                | BoardItem::Shape { .. }
+                | BoardItem::Label { .. }
+                | BoardItem::Stamp { .. }
+                | BoardItem::Table
+                | BoardItem::MindNode
+        )
     }
 
     /// Objects whose first text layer is their text (a double-click or Enter edits it).
     pub fn has_text(&self) -> bool {
-        matches!(self, BoardItem::Sticky { .. } | BoardItem::Shape { .. } | BoardItem::Label { .. })
+        matches!(self, BoardItem::Sticky { .. } | BoardItem::Shape { .. } | BoardItem::Label { .. } | BoardItem::MindNode)
     }
 
     /// Who made it (stickies and stamps; empty when unknown).
@@ -115,6 +126,7 @@ impl BoardItem {
             BoardItem::Stamp { .. } => "stamp",
             BoardItem::Ink => "ink",
             BoardItem::Table => "table",
+            BoardItem::MindNode => "mindNode",
         }
     }
 }
@@ -619,4 +631,7 @@ pub struct Connector {
     /// Its path as reshaped by hand; `None`: routed by itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<ConnectorPath>,
+    /// A mind map's branch: `from` is the parent, `to` the child. The map's shape is read from these.
+    #[serde(default, skip_serializing_if = "crate::node::is_default")]
+    pub branch: bool,
 }
