@@ -486,6 +486,24 @@ fn the_rotation_field_shows_and_sets_the_rotation_on_the_page() {
 }
 
 #[test]
+fn a_relative_rotation_edit_turns_a_selected_parent_before_its_child_whatever_the_selection_order() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 400, "height": 400})).unwrap());
+    let c = id(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 120, "height": 80, "parent": f})).unwrap());
+    s.execute("node.set", &json!({"ids": [f], "props": {"rotation": 10}})).unwrap();
+    s.execute("node.set", &json!({"ids": [c], "props": {"absoluteRotation": 30}})).unwrap();
+    // The child first, then its parent.
+    s.execute("select.set", &json!({"ids": [c, f]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().world_transform(n));
+    assert_eq!(field(&mut u, "Rotation").1, "Mixed");
+    type_into(&mut u, "Rotation", "+10", Key::Enter);
+    assert!((page(&u, f) - 20.0).abs() < 1e-6 && (page(&u, c) - 40.0).abs() < 1e-6, "{} {}", page(&u, f), page(&u, c));
+}
+
+#[test]
 fn arithmetic_commits_tab_moves_on_and_escape_restores() {
     let (mut u, a, _) = setup();
     // (field, typed) → (x, y, w, h)

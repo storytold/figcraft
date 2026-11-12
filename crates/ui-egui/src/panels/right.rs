@@ -75,7 +75,12 @@ impl FigApp {
             None => return,
         };
         let Ok(doc) = self.session.doc() else { return };
-        let values: Vec<(NodeId, f64)> = ids.iter().filter_map(|i| Some((*i, rel.apply(shown(doc.node(*i)?))?))).collect();
+        let mut values: Vec<(NodeId, f64)> = ids.iter().filter_map(|i| Some((*i, rel.apply(shown(doc.node(*i)?))?))).collect();
+        if key == "absoluteRotation" {
+            // A page angle depends on the parents': turn a selected parent before the layers in it
+            // (as `node.set` orders a multi-id call), whatever order the selection is in.
+            values.sort_by_key(|(i, _)| doc.ancestors(*i).len());
+        }
         if values.is_empty() || self.session.begin_interaction("Edit").is_err() {
             return;
         }
