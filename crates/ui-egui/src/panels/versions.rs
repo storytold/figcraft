@@ -108,6 +108,17 @@ enum Action {
 const DOT_X: f32 = 20.0;
 const TEXT_X: f32 = 36.0;
 
+/// A fixed inset measured from the UI reading edge, not always the left edge.
+/// Keep this independent of document text direction: only the chosen UI locale
+/// controls where controls, timeline marks and labels appear.
+fn reading_edge_x(left: f32, right: f32, inset: f32, rtl: bool) -> f32 {
+    if rtl { right - inset } else { left + inset }
+}
+
+fn reading_align(rtl: bool) -> Align2 {
+    if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER }
+}
+
 pub fn panel(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
@@ -115,9 +126,17 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
 
     // Header: title, save, close.
     let (head, _) = ui.allocate_exact_size(vec2(w, 48.0), Sense::hover());
-    ui.painter().text(pos2(head.min.x + 16.0, head.center().y), Align2::LEFT_CENTER, tr("Version history"), semibold(13.0), t.text);
-    let mut bar =
-        ui.new_child(egui::UiBuilder::new().max_rect(head.shrink2(vec2(12.0, 12.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    let rtl = crate::i18n::right_to_left();
+    ui.painter().text(
+        pos2(reading_edge_x(head.min.x, head.max.x, 16.0, rtl), head.center().y),
+        reading_align(rtl),
+        tr("Version history"),
+        semibold(13.0),
+        t.text,
+    );
+    // Actions sit opposite the heading in Hebrew; keep English's original edge.
+    let header_layout = if rtl { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
+    let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(head.shrink2(vec2(12.0, 12.0))).layout(header_layout));
     if icons::button(&mut bar, Icon::Close, 24.0, false, tr("Close version history")).clicked() {
         action = Some(Action::Close);
     }
@@ -220,7 +239,12 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
         }
         if rows.is_empty() {
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            let layout = if crate::i18n::right_to_left() {
+                egui::Layout::right_to_left(egui::Align::Center)
+            } else {
+                egui::Layout::left_to_right(egui::Align::Center)
+            };
+            ui.with_layout(layout, |ui| {
                 ui.add_space(16.0);
                 ui.add(
                     egui::Label::new(
@@ -320,7 +344,12 @@ fn form(ui: &mut Ui, f: &mut Form, submit: &str, indent: f32) -> Option<Action> 
     let field = |ui: &mut Ui, add: &mut dyn FnMut(&mut Ui) -> egui::Response| {
         egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(5)).inner_margin(egui::Margin::symmetric(8, 5)).show(ui, add).inner
     };
-    ui.horizontal(|ui| {
+    let layout = if crate::i18n::right_to_left() {
+        egui::Layout::right_to_left(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    };
+    ui.with_layout(layout, |ui| {
         ui.add_space(indent);
         ui.vertical(|ui| {
             ui.set_width(ui.available_width() - 16.0);
@@ -373,7 +402,7 @@ fn form(ui: &mut Ui, f: &mut Form, submit: &str, indent: f32) -> Option<Action> 
 /// The timeline's line and dot for a row (`top`/`bottom`: the line continues above/below).
 fn timeline(ui: &Ui, r: Rect, dot_y: f32, top: bool, bottom: bool, current: bool) {
     let t = Tokens::get(ui.ctx());
-    let x = r.min.x + DOT_X;
+    let x = reading_edge_x(r.min.x, r.max.x, DOT_X, crate::i18n::right_to_left());
     let p = ui.painter();
     let line = Stroke::new(1.0, t.border_strong);
     if top {
@@ -399,7 +428,14 @@ fn current_row(ui: &mut Ui, more: bool, active: bool) -> bool {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
     timeline(ui, r, r.center().y, false, more, true);
-    ui.painter().text(pos2(r.min.x + TEXT_X, r.center().y), Align2::LEFT_CENTER, tr("Current version"), semibold(11.0), t.text);
+    let rtl = crate::i18n::right_to_left();
+    ui.painter().text(
+        pos2(reading_edge_x(r.min.x, r.max.x, TEXT_X, rtl), r.center().y),
+        reading_align(rtl),
+        tr("Current version"),
+        semibold(11.0),
+        t.text,
+    );
     !active && resp.on_hover_text(tr("Back to the current version")).clicked()
 }
 
@@ -409,6 +445,7 @@ fn version_row(ui: &mut Ui, row: &Row, last: bool, previewing: bool) -> Option<A
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let text_w = (w - TEXT_X - 36.0).max(40.0);
+    let rtl = crate::i18n::right_to_left();
     // Up to three lines of description, then an ellipsis.
     let desc = (!row.description.is_empty()).then(|| {
         let mut job = egui::text::LayoutJob::simple(row.description.clone(), regular(11.0), t.text, text_w);
@@ -425,16 +462,23 @@ fn version_row(ui: &mut Ui, row: &Row, last: bool, previewing: bool) -> Option<A
     }
     let name_y = r.min.y + 17.0;
     timeline(ui, r, name_y, true, !last, false);
-    let clip = Rect::from_min_max(pos2(r.min.x + TEXT_X, r.min.y), pos2(r.min.x + TEXT_X + text_w, r.max.y));
+    let clip = if rtl {
+        Rect::from_min_max(pos2(r.max.x - TEXT_X - text_w, r.min.y), pos2(r.max.x - TEXT_X, r.max.y))
+    } else {
+        Rect::from_min_max(pos2(r.min.x + TEXT_X, r.min.y), pos2(r.min.x + TEXT_X + text_w, r.max.y))
+    };
     let p = ui.painter().with_clip_rect(clip);
-    p.text(pos2(clip.min.x, name_y), Align2::LEFT_CENTER, &row.name, semibold(11.0), t.text);
-    p.text(pos2(clip.min.x, name_y + 16.0), Align2::LEFT_CENTER, crate::comments::ago_long(row.time), regular(11.0), t.text_secondary);
+    let text_x = if rtl { clip.max.x } else { clip.min.x };
+    p.text(pos2(text_x, name_y), reading_align(rtl), &row.name, semibold(11.0), t.text);
+    p.text(pos2(text_x, name_y + 16.0), reading_align(rtl), crate::comments::ago_long(row.time), regular(11.0), t.text_secondary);
     if let Some(g) = desc {
-        p.galley(pos2(clip.min.x, name_y + 26.0), g, t.text);
+        let desc_x = if rtl { clip.max.x - g.size().x } else { clip.min.x };
+        p.galley(pos2(desc_x, name_y + 26.0), g, t.text);
     }
     let mut out = None;
     // More menu (on hover), also on right-click.
-    let br = Rect::from_center_size(pos2(r.max.x - 22.0, name_y), vec2(24.0, 24.0));
+    let more_x = if rtl { r.min.x + 22.0 } else { r.max.x - 22.0 };
+    let br = Rect::from_center_size(pos2(more_x, name_y), vec2(24.0, 24.0));
     let more = ui.interact(br, Id::unique(("version_more", &row.id)), Sense::click());
     let menu_open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&more));
     if hovered || menu_open {
@@ -483,13 +527,20 @@ fn branch_row(ui: &mut Ui, b: &BranchRow) -> Option<Action> {
         BranchState::Merged => tr("Merged"),
         BranchState::Archived => tr("Archived"),
     };
-    let clip = Rect::from_min_max(pos2(r.min.x + 16.0, r.min.y), pos2(r.max.x - 40.0, r.max.y));
+    let rtl = crate::i18n::right_to_left();
+    let clip = if rtl {
+        Rect::from_min_max(pos2(r.min.x + 40.0, r.min.y), pos2(r.max.x - 16.0, r.max.y))
+    } else {
+        Rect::from_min_max(pos2(r.min.x + 16.0, r.min.y), pos2(r.max.x - 40.0, r.max.y))
+    };
     let p = ui.painter().with_clip_rect(clip);
-    p.text(pos2(clip.min.x, r.min.y + 15.0), Align2::LEFT_CENTER, &b.name, semibold(11.0), if active { t.text } else { t.text_secondary });
+    let text_x = if rtl { clip.max.x } else { clip.min.x };
+    p.text(pos2(text_x, r.min.y + 15.0), reading_align(rtl), &b.name, semibold(11.0), if active { t.text } else { t.text_secondary });
     let sub = format!("{state} · {}", crate::comments::ago_long(b.time));
-    p.text(pos2(clip.min.x, r.min.y + 31.0), Align2::LEFT_CENTER, sub, regular(11.0), t.text_secondary);
+    p.text(pos2(text_x, r.min.y + 31.0), reading_align(rtl), sub, regular(11.0), t.text_secondary);
     let mut out = None;
-    let br = Rect::from_center_size(pos2(r.max.x - 22.0, r.min.y + 15.0), vec2(24.0, 24.0));
+    let more_x = if rtl { r.min.x + 22.0 } else { r.max.x - 22.0 };
+    let br = Rect::from_center_size(pos2(more_x, r.min.y + 15.0), vec2(24.0, 24.0));
     let more = ui.interact(br, Id::unique(("branch_more", &b.id)), Sense::click());
     let menu_open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&more));
     if hovered || menu_open {
@@ -561,10 +612,23 @@ fn autosave_group(ui: &mut Ui, n: usize, open: bool, last: bool) -> bool {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
     timeline(ui, r, r.center().y, true, !last, false);
-    let chevron = Rect::from_center_size(pos2(r.min.x + TEXT_X + 6.0, r.center().y), vec2(12.0, 12.0));
-    icons::paint(ui.painter(), chevron, if open { Icon::Chevron } else { Icon::ChevronRight }, t.icon_secondary);
+    let rtl = crate::i18n::right_to_left();
+    let chevron = Rect::from_center_size(pos2(reading_edge_x(r.min.x, r.max.x, TEXT_X + 6.0, rtl), r.center().y), vec2(12.0, 12.0));
+    icons::paint(
+        ui.painter(),
+        chevron,
+        if open {
+            Icon::Chevron
+        } else if rtl {
+            Icon::ChevronLeft
+        } else {
+            Icon::ChevronRight
+        },
+        t.icon_secondary,
+    );
     let label = trn("{n} autosave versions", n, &[]);
-    ui.painter().text(pos2(chevron.max.x + 6.0, r.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.text_secondary);
+    let label_x = if rtl { chevron.min.x - 6.0 } else { chevron.max.x + 6.0 };
+    ui.painter().text(pos2(label_x, r.center().y), reading_align(rtl), label, regular(11.0), t.text_secondary);
     resp.on_hover_text(if open { tr("Fold autosaves") } else { tr("Show autosaves") }).clicked()
 }
 
@@ -582,7 +646,13 @@ fn inline_row(ui: &mut Ui, last: bool, add: impl FnOnce(&mut Ui) -> Option<Actio
 fn confirm_row(ui: &mut Ui, row: &Row) -> Option<Action> {
     let t = Tokens::get(ui.ctx());
     let mut out = None;
-    egui::Frame::NONE.inner_margin(egui::Margin { left: TEXT_X as i8, right: 16, top: 4, bottom: 0 }).show(ui, |ui| {
+    let rtl = crate::i18n::right_to_left();
+    let margin = if rtl {
+        egui::Margin { left: 16, right: TEXT_X as i8, top: 4, bottom: 0 }
+    } else {
+        egui::Margin { left: TEXT_X as i8, right: 16, top: 4, bottom: 0 }
+    };
+    egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
         ui.add(
             egui::Label::new(
                 egui::RichText::new(trf("Delete “{name}”? This can't be undone.", &[("name", &row.name)])).font(regular(11.0)).color(t.text),
@@ -599,11 +669,32 @@ fn confirm_row(ui: &mut Ui, row: &Row) -> Option<Action> {
 /// Cancel.
 fn buttons(ui: &mut Ui, primary: &str, enabled: bool) -> Option<bool> {
     let size = vec2(ui.available_width(), widgets::FIELD_H);
-    ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    let layout = if crate::i18n::right_to_left() {
+        egui::Layout::left_to_right(egui::Align::Center)
+    } else {
+        egui::Layout::right_to_left(egui::Align::Center)
+    };
+    ui.allocate_ui_with_layout(size, layout, |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let ok = widgets::button(ui, primary, true, enabled).clicked();
         let cancel = widgets::button(ui, tr("Cancel"), false, true).clicked();
         if ok { Some(true) } else { cancel.then_some(false) }
     })
     .inner
+}
+
+#[cfg(test)]
+mod version_history_rtl_tests {
+    use super::reading_edge_x;
+
+    #[test]
+    fn timeline_and_text_insets_mirror_without_changing_ltr() {
+        let left = 10.0;
+        let right = 210.0;
+        for inset in [16.0, 20.0, 36.0, 42.0] {
+            assert_eq!(reading_edge_x(left, right, inset, false), left + inset);
+            assert_eq!(reading_edge_x(left, right, inset, true), right - inset);
+            assert_eq!(reading_edge_x(left, right, inset, false) + reading_edge_x(left, right, inset, true), left + right);
+        }
+    }
 }
