@@ -821,7 +821,7 @@ fn a_limit_reached_by_hidden_nodes_is_not_truncation() {
             doc.get_mut(id).unwrap().visible = false;
         }
     }
-    let badge = id(&ex(&mut s, "text.create", json!({"text": "0", "x": 0.0, "y": 0.0, "props": {"fill": "#FFFFFF"}})));
+    ex(&mut s, "text.create", json!({"text": "0", "x": 0.0, "y": 0.0, "props": {"fill": "#FFFFFF"}}));
     // Exactly limit visible nodes were audited; the stacked hidden ones are skips, not unchecked
     // work, so the walk is whole and the badge's finding stands on its own.
     let r = ex(&mut s, "design.audit", json!({"scope": "page", "limit": 1_001, "rules": ["color.contrast"]}));
