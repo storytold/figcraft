@@ -359,6 +359,7 @@ fn board_commands_survive_junk() {
         json!({"end": "from", "target": {"x": 1e308, "y": -1e308}, "side": "inside", "style": "curved"}),
         json!({"id": 99_999, "end": 7, "target": [1], "style": "wavy"}),
         json!({"id": 99_999, "relation": 7, "children": "x", "text": [1], "x": "NaN", "y": 1e308}),
+        json!({"id": 99_999, "language": 7, "text": [1], "width": "wide", "x": "NaN", "y": 1e308, "side": 3}),
     ];
     let ids: Vec<&str> = crate::cmd::all_commands()
         .iter()

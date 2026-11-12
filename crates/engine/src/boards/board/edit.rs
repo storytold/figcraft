@@ -84,7 +84,7 @@ pub(super) fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
                 n.strokes = vec![Paint::solid(line_shade(color))];
             }
             BoardItem::Connector(_) | BoardItem::Ink => doc.get_mut(id)?.strokes = vec![Paint::solid(line_shade(color))],
-            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table | BoardItem::MindNode => continue,
+            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table | BoardItem::MindNode | BoardItem::CodeBlock { .. } => continue,
         }
         changed.push(id);
     }

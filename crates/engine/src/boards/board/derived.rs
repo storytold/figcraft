@@ -15,6 +15,7 @@ pub(crate) fn settle_text(doc: &mut Document, before: &Document, touched: &BTree
     if !is_board(doc) {
         return;
     }
+    super::code::settle_code(doc, touched);
     for &id in touched {
         let Some(n) = doc.node(id) else { continue };
         if let Some(owner) =

@@ -470,7 +470,7 @@ Returns `{fitted: [{id, fontSize, lines, fits, orphan}]}`. Use case: a carousel 
 
 A board is a file of its own kind for thinking together: `file.newBoard {name?}` opens one (its
 page is light; `inspect_document` says `kind: "board"`). Board objects are ordinary layers with a
-`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode, …}`; a connector may say
+`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode|codeBlock, …}`; a connector may say
 `branch: true`), so the usual
 commands move, resize, recolour, copy, delete and undo them. On a design file the board commands
 refuse; on a board `proto.*`, `dev.*`, `view.prototype` and `view.devMode` refuse. Each of these is
@@ -484,6 +484,8 @@ one undo step and returns the ids it made:
   same colour beside the selected (or edited) one; with `edit: true` the app goes on typing in it
   (`Shift+Cmd/Ctrl+Enter` in the app does both). On a shape it does what `board.addConnected` does:
   the next shape, joined to it by a connector (`{id, text, connector}`).
+  On a code block it makes the next code block 128 units beside it (`side`, default right), as wide and
+  in the same language, not joined (`{id, text, language}`).
 - `board.addConnected {id?, side?: right|below|left|above, edit?}` → `{id, text, connector}`: the
   next sticky or shape of the same kind, size and colour on that side of the selected (or edited)
   one, 80 units away, joined to it by a connector the way the Connector tool makes one; one undo
@@ -504,6 +506,16 @@ one undo step and returns the ids it made:
   of the map that the given (or selected, or edited) one belongs to: a child below its other
   children, or a sibling right after it (the first node has none); the map lays itself out again.
   One undo step. With `edit: true` the app goes on typing in it.
+- `board.codeBlock {x?, y?, language?, text?, width?, parent?, edit?}` → `{id, text, language}`: a code
+  block (`codeBlock` with its `language`): a dark panel holding monospace text (Liberation Mono 16 on a
+  24 line where it is embedded or installed). `language` is `bash cpp css go graphql html javascript json
+  kotlin plainText python ruby rust sql swift typescript` (default `typescript`); `width` is 210 to 100000
+  (default 576); `x`/`y` default to the middle of the view. Its height is its lines: 32 + 24 a visual line,
+  never under four lines, so only its width can be changed (a set or dragged height is not kept). In its
+  text Tab types two spaces, Enter keeps the line's indent, and lists, links and styled ranges do not stick.
+  One undo step.
+- `board.setLanguage {id?, ids?, language}` → `{ids}`: the language of the given (or selected, or edited)
+  code blocks, by id or name (`cpp` or `C++`).
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
   wrapping text: `rectangle roundedRectangle ellipse diamond triangle triangleDown parallelogramRight parallelogramLeft trapezoid pentagon hexagon octagon star plus arrowLeft arrowRight chevron speechBubble database document predefinedProcess manualInput internalStorage`.
 - `board.connector {from, to, fromSide?, toSide?, fromAt?, toAt?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
