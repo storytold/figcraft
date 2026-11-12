@@ -470,7 +470,7 @@ fn the_rotation_field_shows_and_sets_the_rotation_on_the_page() {
     assert_eq!(field(&mut u, "Rotation").1, "18°");
     // Scrubbing is one undo step.
     let steps = undo_steps(&u);
-    scrub(&mut u, "Rotation", 15.0, Modifiers::NONE);
+    scrub(&mut u, "Rotation", 30.0, Modifiers::NONE);
     assert!((page(&u, r) - 33.0).abs() < 1e-6, "{}", page(&u, r));
     assert_eq!(undo_steps(&u), steps + 1);
     // Mixed: layers in differently turned parents agree when their page angles do.
