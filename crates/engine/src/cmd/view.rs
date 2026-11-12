@@ -641,7 +641,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.scaleAnchor",
             "Scale anchor",
-            "{anchor?: tl|t|tr|l|c|r|bl|b|br} (the point of the selection that stays put when the Scale tool scales; omit to read it)",
+            "{anchor?: tl|t|tr|l|c|r|bl|b|br} (the origin of the Scale tool's factor field: the point of the selection that stays put; defaults to c, handle drags pivot on the opposite handle whatever it is; omit to read it)",
             false,
             |s, p| {
                 if let Some(a) = string(p, "anchor") {
