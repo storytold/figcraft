@@ -1,4 +1,4 @@
-use super::super::map::{MAX_SCALE_FACTOR, MIN_SCALE_FACTOR};
+use super::{MAX_SCALE_FACTOR, MIN_SCALE_FACTOR};
 use super::common::{
     bool_data, changed, layout_grid, prop_type, resolved_alike, scaled, sort_position, symbol_data, text_data, text_value, var_data, variant_pairs,
 };

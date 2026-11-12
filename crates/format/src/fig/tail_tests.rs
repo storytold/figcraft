@@ -753,7 +753,7 @@ fn connectors_without_a_saved_path_follow_their_line_style() {
     let line: Vec<_> =
         network_of(&doc, "Line").vertices.iter().map(|v| world("Line") * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
     assert_eq!(line, [(100.0, 650.0), (300.0, 650.0)]);
-    assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("are routed afresh")), "{warnings:?}");
 }
 
 /// #1909: a connector end whose magnet is `AUTO` (FigJam picks the side when it draws) or `CENTER`
@@ -1033,7 +1033,7 @@ fn an_elbow_connector_saved_with_its_path_keeps_it() {
     // Each end starts `END_GAP` (4) outside its side's border.
     assert_eq!(line, [(50.0, 704.0), (50.0, 740.0), (200.0, 740.0), (200.0, 850.0), (296.0, 850.0)]);
     // The fixture's own Link, saved without a path, is routed here: the note counts it alone.
-    let routed: Vec<_> = warnings.iter().filter(|w| w.contains("FigCraft's own routing")).collect();
+    let routed: Vec<_> = warnings.iter().filter(|w| w.contains("are routed afresh")).collect();
     assert_eq!(routed.len(), 1, "{warnings:?}");
     assert!(!routed[0].contains('×'), "a connector with its path isn't counted among those routed here: {routed:?}");
 }
@@ -1081,5 +1081,5 @@ fn an_elbow_whose_saved_path_doesnt_fit_its_sides_is_routed_here() {
     for name in ["Sideways", "Askew", "Repeated", "Backwards", "Inside"] {
         assert_eq!(line(name), plain, "{name} is routed as one without a path");
     }
-    assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("are routed afresh")), "{warnings:?}");
 }

@@ -1012,6 +1012,31 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 
 [[package]]
+name = "craft-fig"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26#e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26"
+dependencies = [
+ "craft-figma-rest",
+ "craft-kiwi",
+ "craft-zip",
+ "flate2",
+ "kurbo",
+ "ruzstd",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-figma-rest"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26#e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
@@ -1075,6 +1100,11 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "craft-kiwi"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26#e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26"
 
 [[package]]
 name = "craft-menu"
@@ -1184,6 +1214,16 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 dependencies = [
  "wayland-client",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26#e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+ "zip 9.1.1",
 ]
 
 [[package]]
@@ -1935,6 +1975,8 @@ dependencies = [
 name = "figcraft-format"
 version = "0.18.1"
 dependencies = [
+ "craft-fig",
+ "craft-figma-rest",
  "figcraft-doc",
  "figcraft-layout",
  "figcraft-pathops",
