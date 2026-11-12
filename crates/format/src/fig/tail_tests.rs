@@ -360,6 +360,28 @@ fn vector_region_missing_and_empty_paints_remain_distinct() {
 }
 
 #[test]
+fn vector_region_fills_survive_a_fig_export() {
+    let solid = o(vec![("type", e("SOLID")), ("color", o(vec![("r", f(0.2)), ("g", f(0.4)), ("b", f(0.8)), ("a", f(1.0))])), ("opacity", f(0.5))]);
+    let gradient = o(vec![
+        ("type", e("GRADIENT_LINEAR")),
+        (
+            "stops",
+            arr(vec![
+                o(vec![("position", f(0.0)), ("color", o(vec![("r", f(1.0)), ("g", f(0.0)), ("b", f(0.0)), ("a", f(1.0))]))]),
+                o(vec![("position", f(1.0)), ("color", o(vec![("r", f(0.0)), ("g", f(0.0)), ("b", f(1.0)), ("a", f(1.0))]))]),
+            ]),
+        ),
+    ]);
+    let (doc, _) = import(&region_canvas(Some(vec![solid, gradient]), 1), "Region fills").unwrap();
+    let first = network_of(&doc, "Wave").regions[0].fills.clone();
+    assert!(first.as_ref().is_some_and(|fills| fills.len() == 2), "{first:?}");
+    let (bytes, warnings) = crate::fig::export::export(&doc, None).unwrap();
+    assert!(!warnings.iter().any(|warning| warning.contains("region paints")), "{warnings:?}");
+    let (back, _) = import(&bytes, "Again").unwrap();
+    assert_eq!(network_of(&back, "Wave").regions[0].fills, first);
+}
+
+#[test]
 fn vector_region_linked_fill_uses_style_paints_without_recording_definition() {
     let linked = solid(0.9, 0.1, 0.2);
     let own = solid(0.1, 0.2, 0.9);

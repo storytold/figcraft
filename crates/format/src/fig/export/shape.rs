@@ -170,8 +170,8 @@ impl<'d> Exporter<'d> {
     /// The editable network (with per-point corner radii, handle mirroring and end caps) and,
     /// when it has filled areas, their outline.
     pub(super) fn vector(&mut self, n: &Node, net: &VectorNetwork, f: &mut Fields) {
-        if net.regions.iter().any(|region| region.fills.is_some() || region.paint_space.is_some()) {
-            self.warn("vector region paints were left out of the .fig export");
+        if net.regions.iter().any(|region| region.paint_space.is_some()) {
+            self.warn("vector region paint frames were left out (their gradients and images follow the layer's box)");
         }
         let entries: usize = net.regions.iter().flat_map(|r| &r.loops).map(Vec::len).sum();
         if net.vertices.len() + net.segments.len() + entries > MAX_NETWORK {
@@ -249,11 +249,19 @@ impl<'d> Exporter<'d> {
                     tb: (finite(sg.tb.0), finite(sg.tb.1)),
                 })
                 .collect();
-            let regions = net
-                .regions
-                .iter()
-                .map(|r| network::Region { style: 0, non_zero: r.winding == WindingRule::NonZero, loops: r.loops.clone() })
-                .collect();
+            // A region with paints of its own (an empty list included) names a style entry that
+            // holds them; one without writes style 0 and shows the layer's fills.
+            let mut regions = Vec::with_capacity(net.regions.len());
+            for r in &net.regions {
+                let style = match &r.fills {
+                    Some(paints) => {
+                        let list = self.paints(paints, true, &Bound::default());
+                        style_of(vec![("fillPaints", list)])
+                    }
+                    None => 0,
+                };
+                regions.push(network::Region { style, non_zero: r.winding == WindingRule::NonZero, loops: r.loops.clone() });
+            }
             let blob = network::encode(&network::Network { vertices, segments, regions });
             let table = styles.into_iter().zip(1u32..).map(|(mut st, id)| {
                 st.insert(0, ("styleID", u(id)));
