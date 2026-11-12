@@ -212,7 +212,6 @@ pub struct HitOpts {
     pub locked: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn hit_rec(
     doc: &Document,
     id: NodeId,
@@ -268,7 +267,6 @@ pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: Bool
 /// Clip content is honoured; boolean groups (hit where their `result` is) and sections with
 /// hidden contents count as one layer.
 pub fn layers_at_opts(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult, opts: HitOpts) -> Vec<(NodeId, usize)> {
-    #[allow(clippy::too_many_arguments)]
     fn rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, opts: HitOpts, out: &mut Vec<(NodeId, usize)>) {
         let Some(n) = doc.node(id) else { return };
         if !n.visible || n.locked && !opts.locked || depth > 512 {
