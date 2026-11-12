@@ -57,18 +57,9 @@ pub(crate) fn add_text(doc: &mut Document, parent: NodeId, text: &str, size: f64
     Ok(id)
 }
 
-/// The text size a sticky's note gets: smaller the more it holds (by characters and lines, so
-/// every copy of the file picks the same size whatever fonts it has).
-pub fn sticky_font_size(text: &str) -> f64 {
-    let weight = text.chars().count() + 24 * text.matches('\n').count();
-    match weight {
-        0..=24 => 24.0,
-        25..=64 => 20.0,
-        65..=140 => 16.0,
-        141..=280 => 13.0,
-        _ => 11.0,
-    }
-}
+/// The text size of a new sticky's note, FigJam's "Small" default (measured in the web app,
+/// 2026-11-09): it never changes as the note fills, the note grows taller instead.
+pub const STICKY_TEXT_SIZE: f64 = 18.0;
 
 /// A sticky note's layers: the frame, the note and (when known) its author.
 fn make_sticky(doc: &mut Document, parent: NodeId, at: (f64, f64), text: &str, color: Color, author: &str) -> Result<(NodeId, NodeId)> {
@@ -89,7 +80,7 @@ fn make_sticky(doc: &mut Document, parent: NodeId, at: (f64, f64), text: &str, c
         n.board = Some(BoardItem::Sticky { author: author.to_string() });
     })?;
     let inner = STICKY - 2.0 * STICKY_PAD;
-    let note = add_text(doc, id, text, sticky_font_size(text), INK, TextAlignH::Left, inner)?;
+    let note = add_text(doc, id, text, STICKY_TEXT_SIZE, INK, TextAlignH::Left, inner)?;
     if !author.is_empty() {
         let a = add_text(doc, id, author, 10.0, AUTHOR_INK, TextAlignH::Left, inner)?;
         if let Some(n) = doc.node_mut(a) {
