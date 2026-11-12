@@ -197,13 +197,24 @@ pub fn invoke(app: &mut FigApp, id: &str) {
             let ids = app.session.selection();
             // For other apps: text layers' text, other layers as SVG; taken before a cut removes them.
             let doc = app.session.doc().ok();
-            let mirror = doc.and_then(|d| text_layers_text(d, &ids).or_else(|| figcraft_svg_export(d, &ids)));
-            app.run(id, json!({}));
+            // Points or segments selected in vector edit mode copy just those: the whole vector's
+            // SVG would misdescribe them.
+            let partial = app
+                .session
+                .ds()
+                .ok()
+                .and_then(|d| d.vector_edit.as_ref())
+                .is_some_and(|ve| ve.parts().iter().any(|p| !p.vertices.is_empty() || !p.segments.is_empty()));
+            let mirror = doc.filter(|_| !partial).and_then(|d| text_layers_text(d, &ids).or_else(|| figcraft_svg_export(d, &ids)));
+            let ran = app.run(id, json!({}));
+            // A partial copy put temporary layers on the engine clipboard; mirror their SVG.
+            let refused = partial && ran.is_none();
+            let mirror = if partial { ran.and_then(|_| figcraft_engine::cmd::edit::clipboard_svg(&app.session)) } else { mirror };
             // Mirror to the system clipboard (text or SVG, else a marker) and remember it, so a
             // later paste knows whether the clipboard still holds our layers. Control-channel
             // gestures keep the engine's copy but never replace the user's clipboard; `run` then
             // invalidates the old mirror because it no longer describes the engine clipboard.
-            if !app.control_synthetic {
+            if !app.control_synthetic && !refused {
                 let text = mirror.unwrap_or_else(|| format!("figcraft://clipboard/{}", ids.len()));
                 app.clipboard_set_text(&text);
                 app.ui.last_copy = Some(text);
@@ -382,40 +393,49 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
     // Main menu.
     if app.ui.main_menu {
         let mut close = false;
-        let area = egui::Area::new(main_menu_id()).fixed_pos(pos2(8.0, crate::tabs::HEIGHT + 48.0)).order(egui::Order::Foreground).show(ctx, |ui| {
-            menu_frame(ui, &t, At { root: main_menu_id(), path: String::new() }, |ui| {
-                // Quick actions search row.
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-                plain_row_hover(ui, &resp);
-                a11y::menu_item(&resp, tr("Actions…"), crate::shortcuts::shortcut("app.actions").unwrap_or(""), None);
-                ui.painter().rect_filled(r.shrink(2.0), CornerRadius::same(5), Color32::from_white_alpha(18));
-                icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(14.0, 14.0)), Icon::Search, t.menu_dim);
-                ui.painter().text(pos2(r.min.x + 32.0, r.center().y), Align2::LEFT_CENTER, tr("Actions…"), regular(12.0), t.menu_dim);
-                ui.painter().text(
-                    pos2(r.max.x - 10.0, r.center().y),
-                    Align2::RIGHT_CENTER,
-                    pretty_shortcut(crate::shortcuts::shortcut("app.actions").unwrap_or("")),
-                    regular(12.0),
-                    t.menu_dim,
-                );
-                if resp.clicked() {
-                    set_palette(&mut app.ui, true);
-                    close = true;
-                }
-                ui.add_space(6.0);
-                for top in TOP_MENUS {
-                    if submenu_at(
-                        ui,
-                        SubmenuOptions { area: Id::unique(("menu", *top)), key: top, label: tr(top), gap: 12.0, constrain: false, tokens: &t },
-                        |ui| menu_level(app, ui, top).then_some(()),
-                    )
-                    .is_some()
-                    {
+        let area = egui::Area::new(main_menu_id())
+            .fixed_pos(pos2(8.0, crate::tabs::HEIGHT + 48.0))
+            .order(egui::Order::Foreground)
+            .constrain_to(tree::vertical_bounds(ctx))
+            .show(ctx, |ui| {
+                menu_frame(ui, &t, At { root: main_menu_id(), path: String::new() }, |ui| {
+                    // Quick actions search row.
+                    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+                    plain_row_hover(ui, &resp);
+                    a11y::menu_item(&resp, tr("Actions…"), crate::shortcuts::shortcut("app.actions").unwrap_or(""), None);
+                    ui.painter().rect_filled(r.shrink(2.0), CornerRadius::same(5), Color32::from_white_alpha(18));
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(14.0, 14.0)),
+                        Icon::Search,
+                        t.menu_dim,
+                    );
+                    ui.painter().text(pos2(r.min.x + 32.0, r.center().y), Align2::LEFT_CENTER, tr("Actions…"), regular(12.0), t.menu_dim);
+                    ui.painter().text(
+                        pos2(r.max.x - 10.0, r.center().y),
+                        Align2::RIGHT_CENTER,
+                        pretty_shortcut(crate::shortcuts::shortcut("app.actions").unwrap_or("")),
+                        regular(12.0),
+                        t.menu_dim,
+                    );
+                    if resp.clicked() {
+                        set_palette(&mut app.ui, true);
                         close = true;
                     }
-                }
+                    ui.add_space(6.0);
+                    for top in TOP_MENUS {
+                        if submenu_at(
+                            ui,
+                            SubmenuOptions { area: Id::unique(("menu", *top)), key: top, label: tr(top), gap: 12.0, constrain: false, tokens: &t },
+                            |ui| menu_level(app, ui, top).then_some(()),
+                        )
+                        .is_some()
+                        {
+                            close = true;
+                        }
+                    }
+                });
             });
-        });
         let clicked_outside = ctx.input(|i| i.pointer.any_pressed()) && !over_menu(ctx) || ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if close || (clicked_outside && !area.response.hovered()) {
             app.ui.main_menu = false;
