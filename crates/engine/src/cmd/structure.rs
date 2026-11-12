@@ -496,7 +496,9 @@ fn collect_flatten_parts(
     }
     let part = match &node.kind {
         NodeKind::Vector { network } => {
-            let mut part = network.clone();
+            // Rounded points bake into the path (the arc's end points joined by curves), drawn the way
+            // the layer draws them, so the shape looks the same and the box fits the real geometry.
+            let mut part = figcraft_doc::geometry::drawn_network(network, node.corners.smoothing).into_owned();
             if !part.regions.is_empty() && part.regions.iter().all(|region| region.fills.is_none() && region.paint_space.is_none()) {
                 let winding = if part.regions.iter().any(|region| region.winding == WindingRule::EvenOdd) {
                     WindingRule::EvenOdd

@@ -32,7 +32,7 @@ use handles::DRAG_SLOP_PX;
 pub(crate) use handles::scale_factor;
 pub use handles::{
     PENCIL_STROKE, SMALL_BOX_PX, anchor_name, anchor_of, box_sides_px, handle_at, handle_at_corners, label_at, locked_in, scale_anchor_point,
-    selection_box, selection_frame,
+    selection_box, selection_frame, shared_rotation_degrees,
 };
 pub(crate) use handles::{SNAP_PX, handle_cursor, readable_text_fills, resized_box};
 #[cfg(test)]
@@ -58,6 +58,7 @@ pub enum ToolId {
     Text,
     TextOnPath,
     Comment,
+    Annotation,
     Eyedropper,
     ShapeBuilder,
     // Board tools.
@@ -72,7 +73,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 27] = [
+    pub const ALL: [ToolId; 28] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -90,6 +91,7 @@ impl ToolId {
         ToolId::Text,
         ToolId::TextOnPath,
         ToolId::Comment,
+        ToolId::Annotation,
         ToolId::Eyedropper,
         ToolId::ShapeBuilder,
         ToolId::Sticky,
@@ -120,6 +122,7 @@ impl ToolId {
             ToolId::Text => "text",
             ToolId::TextOnPath => "textOnPath",
             ToolId::Comment => "comment",
+            ToolId::Annotation => "annotation",
             ToolId::Eyedropper => "eyedropper",
             ToolId::ShapeBuilder => "shapeBuilder",
             ToolId::Sticky => "sticky",
@@ -131,6 +134,11 @@ impl ToolId {
             ToolId::Stamp => "stamp",
             ToolId::MindMap => "mindMap",
         }
+    }
+    /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
+    /// The one list behind the engine's pointer routing and command allowlist and the toolbar.
+    pub fn works_in_dev_mode(self) -> bool {
+        matches!(self, ToolId::Move | ToolId::Hand | ToolId::Comment | ToolId::Annotation)
     }
     pub fn from_id(s: &str) -> Option<ToolId> {
         ToolId::ALL.into_iter().find(|t| t.id().eq_ignore_ascii_case(s))
@@ -154,6 +162,7 @@ impl ToolId {
             ToolId::Text => "Text",
             ToolId::TextOnPath => "Text on a path",
             ToolId::Comment => "Comment",
+            ToolId::Annotation => "Annotation",
             ToolId::Eyedropper => "Pick color",
             ToolId::ShapeBuilder => "Shape builder",
             ToolId::Sticky => "Sticky note",
@@ -456,6 +465,8 @@ pub(crate) enum Gesture {
     Rotate {
         center: Point,
         start_angle: f64,
+        /// The rotation (Design panel convention) the layers share when the drag began, else 0.
+        base: f64,
         ids: Vec<NodeId>,
     },
     Draw {

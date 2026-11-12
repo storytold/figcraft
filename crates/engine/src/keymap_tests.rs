@@ -213,6 +213,8 @@ fn tool_keys_come_from_the_keymap() {
     assert_eq!(ToolId::Eyedropper.shortcut(), "I");
     assert_eq!(ToolId::Polygon.shortcut(), "");
     assert_eq!(crate::catalog::shortcut("tool.text"), Some("T"));
+    assert_eq!(ToolId::Annotation.shortcut(), "Shift+T");
+    assert_eq!(crate::catalog::shortcut("tool.annotation"), Some("Shift+T"));
 }
 
 #[test]

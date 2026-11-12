@@ -155,12 +155,31 @@ pub(crate) fn row_rect(ui: &mut Ui, h: f32, add: impl FnOnce(&mut Ui)) -> Rect {
 pub(crate) fn block(ui: &mut Ui, h: f32, inset_y: f32, add: impl FnOnce(&mut Ui)) -> Rect {
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    lay_out(ui, r, inset_y, add);
+    r
+}
+
+/// A [`row_rect`] that is a pointer target itself: a click on its background (beside and between
+/// its controls, which are on top of it) comes back in the response. It senses clicks without
+/// being focusable, so Tab and F6 still go from control to control. `fill` is drawn under the
+/// controls (a highlighted fill, stroke or effect row).
+pub(crate) fn row_target(ui: &mut Ui, h: f32, fill: Option<Color32>, add: impl FnOnce(&mut Ui)) -> egui::Response {
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(vec2(w, h), Sense::CLICK);
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, fill);
+    }
+    lay_out(ui, r, (h - FIELD_H) / 2.0, add);
+    resp
+}
+
+/// Add a row's controls in `r`, on the section's grid, inset `inset_y` from its top and bottom.
+fn lay_out(ui: &mut Ui, r: Rect, inset_y: f32, add: impl FnOnce(&mut Ui)) {
     // The section's grid: 16 in from the left, 8 from the right (not 16 on both sides).
     let inner = Rect::from_min_max(pos2(r.min.x + PAD, r.min.y + inset_y), pos2(r.max.x - crate::widgets::PAD_RIGHT, r.max.y - inset_y));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.spacing_mut().item_spacing = vec2(crate::widgets::GUTTER, 0.0);
     add(&mut child);
-    r
 }
 
 /// Width of the check column of [`menu_icon_item`] (the mark, or nothing, so labels line up).
