@@ -84,3 +84,46 @@ fn copying_a_link_with_nothing_selected_copies_nothing() {
     assert!(copied.lock().unwrap().is_empty(), "no link to node 0");
     assert!(u.app.ui.toast.is_none());
 }
+
+/// With a section selected, a right-click on either frame inside it links that frame, not the
+/// section that was selected before.
+#[test]
+fn copying_a_link_on_a_frame_inside_a_selected_section_links_that_frame() {
+    let mut s = Session::new();
+    let sec = id(&s.execute("node.create", &json!({"type": "section", "x": 0, "y": 0, "width": 800, "height": 400, "name": "Flow"})).unwrap());
+    let a = id(&s.execute("frame.create", &json!({"x": 20, "y": 60, "width": 300, "height": 200, "name": "main", "parent": sec})).unwrap());
+    let b = id(&s.execute("frame.create", &json!({"x": 400, "y": 60, "width": 300, "height": 200, "name": "dropdown", "parent": sec})).unwrap());
+    s.set_selection(vec![sec]);
+    let copied = Arc::new(Mutex::new(Vec::new()));
+    let mut u = Ui::new(s);
+    u.app.services = Box::new(Copied(copied.clone()));
+    u.frame(vec![]);
+    for (frame, x) in [(a, 170.0), (b, 550.0)] {
+        let at = u.app.to_screen(x, 160.0);
+        crate::canvas::open_context_menu(&mut u.app, at, false);
+        crate::menus::invoke(&mut u.app, "edit.copyLink");
+        let last = copied.lock().unwrap().last().cloned();
+        assert_eq!(last, Some(format!("figcraft://node/{}", frame.0)), "the frame at x={x}");
+    }
+}
+
+/// A frame inside a section has its label above it, inside the section: a right-click there picks
+/// the frame whose label it is, not the section behind the label.
+#[test]
+fn copying_a_link_from_a_frames_name_label_links_that_frame() {
+    let mut s = Session::new();
+    let sec = id(&s.execute("node.create", &json!({"type": "section", "x": 0, "y": 0, "width": 800, "height": 400, "name": "Flow"})).unwrap());
+    let a = id(&s.execute("frame.create", &json!({"x": 20, "y": 80, "width": 300, "height": 200, "name": "main", "parent": sec})).unwrap());
+    s.set_selection(vec![sec]);
+    let copied = Arc::new(Mutex::new(Vec::new()));
+    let mut u = Ui::new(s);
+    u.app.services = Box::new(Copied(copied.clone()));
+    u.frame(vec![]);
+    let quad = u.app.session.tool.labels.iter().find(|(i, _)| *i == a).map(|(_, q)| *q).expect("the frame has a label");
+    let (cx, cy) = (quad.iter().map(|p| p.x).sum::<f64>() / 4.0, quad.iter().map(|p| p.y).sum::<f64>() / 4.0);
+    let at = u.app.to_screen(cx, cy);
+    crate::canvas::open_context_menu(&mut u.app, at, false);
+    assert_eq!(u.app.session.selection(), vec![a], "the label's frame is selected");
+    crate::menus::invoke(&mut u.app, "edit.copyLink");
+    assert_eq!(copied.lock().unwrap().last().cloned(), Some(format!("figcraft://node/{}", a.0)));
+}

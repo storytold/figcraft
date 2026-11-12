@@ -14,6 +14,7 @@ use crate::i18n::{tr, trf, trn};
 use crate::render_worker::{Done, Job, Worker};
 use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 
+mod background;
 mod builder;
 mod input;
 mod outline;
@@ -31,6 +32,7 @@ use render::{JobKey, request_render, shows};
 pub use rulers::fmt;
 pub(crate) use rulers::{status_badge, status_label};
 pub mod board_bar;
+pub mod board_connect;
 pub mod board_facilitate;
 pub mod comments;
 pub mod cursors;
@@ -56,6 +58,10 @@ pub struct CanvasState {
     pub tex_coarse: bool,
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
+    /// Refined images of the files and pages shown before, newest first: switching back to one
+    /// shows its image at once while it renders again, instead of a blank canvas (and, where
+    /// renders are slow, a coarse preview).
+    kept: Vec<Kept>,
     submitted: Option<JobKey>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
@@ -74,6 +80,9 @@ pub struct CanvasState {
     pub last_pointer: Option<Point>,
     /// The real pointer was over the canvas last frame (leaving it clears what it hovered).
     hovering: bool,
+    /// The hover last sent to the tools and the state it was found in ([`input::HoverKey`]): the
+    /// frames egui draws after a pointer move carry no new input, and would find the same again.
+    last_hover: Option<input::HoverKey>,
     /// What the pointer shows over the canvas (`ui.inspect`); none while it is elsewhere or
     /// something on the canvas with a cursor of its own has it (a ruler guide, a gradient handle).
     pub cursor: Option<crate::cursors::Shown>,
@@ -81,6 +90,8 @@ pub struct CanvasState {
     /// The pen pressure last reported during the current press (pen and stylus touches; the
     /// winit backends and browsers that report it).
     pressure: Option<f32>,
+    /// The latest scroll came from a mouse wheel rather than a trackpad (Scroll wheel zoom).
+    wheel_is_mouse: bool,
 }
 
 impl Default for CanvasState {
@@ -92,6 +103,7 @@ impl Default for CanvasState {
             tex_of: None,
             tex_coarse: false,
             tex_seq: 0,
+            kept: Vec::new(),
             submitted: None,
             want_view: None,
             render_work: None,
@@ -105,9 +117,50 @@ impl Default for CanvasState {
             zoom_drag: None,
             last_pointer: None,
             hovering: false,
+            last_hover: None,
             preedit: None,
             pressure: None,
+            wheel_is_mouse: false,
         }
+    }
+}
+
+/// At most this many images of files and pages not shown are kept (each is a canvas-sized texture).
+const KEPT: usize = 4;
+
+/// A refined canvas image of a file and page not shown now ([`CanvasState::kept`]).
+struct Kept {
+    texture: egui::TextureHandle,
+    view: figcraft_render::View,
+    of: (u64, NodeId),
+    seq: u64,
+}
+
+impl CanvasState {
+    /// When the file or page shown is no longer the one the texture is of, set the texture aside
+    /// (if refined) and bring back the image kept for `shown`, if any. Images of files that are no
+    /// longer open (`open` says which are) are dropped every frame, not only on a switch: a
+    /// background tab can close while the file shown stays the same.
+    fn switch_texture(&mut self, shown: Option<(u64, NodeId)>, open: impl Fn(u64) -> bool) {
+        if shown.is_some() && self.tex_of != shown {
+            let back = self.kept.iter().position(|k| Some(k.of) == shown).map(|i| self.kept.remove(i));
+            let (texture, view, of) = (self.texture.take(), self.tex_view.take(), self.tex_of.take());
+            if let (Some(texture), Some(view), Some(of), false) = (texture, view, of, self.tex_coarse) {
+                self.kept.insert(0, Kept { texture, view, of, seq: self.tex_seq });
+            }
+            self.tex_coarse = false;
+            if let Some(k) = back {
+                (self.texture, self.tex_view, self.tex_of, self.tex_seq) = (Some(k.texture), Some(k.view), Some(k.of), k.seq);
+            }
+        }
+        self.drop_closed(open);
+        self.kept.truncate(KEPT);
+    }
+
+    /// Drop the kept images of files that are no longer open (`open` says which are). Home calls
+    /// this too: the canvas isn't shown there, and closing the last file leads to it.
+    pub(crate) fn drop_closed(&mut self, open: impl Fn(u64) -> bool) {
+        self.kept.retain(|k| open(k.of.0));
     }
 }
 
@@ -173,7 +226,8 @@ fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers
         sy: f64::from(pos.y),
         shift: m.shift,
         alt: m.alt,
-        cmd: m.command,
+        // Crop mode: resizing the layer crops it, as Cmd/Ctrl-resizing does.
+        cmd: m.command || app.ui.crop.is_some(),
         ctrl: m.ctrl,
         zoom,
         pressure: app.canvas.pressure,
@@ -186,21 +240,37 @@ fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers
 /// labels, handles, comments, versions/branch/dev/live UI and the cursor.
 pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let rect = ui.max_rect();
-    app.canvas.rect = rect;
+    let old_rect = std::mem::replace(&mut app.canvas.rect, rect);
     let ctx = ui.ctx().clone();
     let ppp = ctx.pixels_per_point();
     let resp = ui.interact(rect, ui.scope_id().with("canvas"), Sense::click_and_drag());
     let key_box = app.ui.key_box;
     crate::a11y::canvas(&mut app.ui.nav, &resp, || key_box.map_or_else(|| describe(&app.session), describe_box));
-    if let Ok(ds) = app.session.ds_mut()
-        && ((ds.view.vw - f64::from(rect.width())).abs() > 0.5 || (ds.view.vh - f64::from(rect.height())).abs() > 0.5)
-    {
-        // Keep the centre; the first sizing after opening re-fits.
+    if let Ok(ds) = app.session.ds_mut() {
+        let resized = (ds.view.vw - f64::from(rect.width())).abs() > 0.5 || (ds.view.vh - f64::from(rect.height())).abs() > 0.5;
+        // The first sizing after opening re-fits.
         let first = ds.view.vw == 1200.0 && ds.view.vh == 800.0;
-        ds.view.vw = f64::from(rect.width());
-        ds.view.vh = f64::from(rect.height());
-        if first {
-            ds.zoom_to_fit();
+        // While a button is held that went down on the canvas (a click that selects shows the
+        // right panel, minimized, and a click that deselects hides it; the left panel and rail
+        // can appear too) the page point under a still pointer stays where it is: the gesture's
+        // own pointer events would otherwise map to another page point and the move handling
+        // would take that for a drag. `to_page` is `origin + (p - rect.min) / z` with
+        // `origin = c - vw / 2 / z`, so the centre moves by half the size change plus the
+        // rect's own move, over the zoom.
+        let held = resp.is_pointer_button_down_on() && !first && old_rect.is_finite();
+        let z = ds.view.zoom.max(1e-9);
+        let (dw, dh) = if resized { (f64::from(rect.width()) - ds.view.vw, f64::from(rect.height()) - ds.view.vh) } else { (0.0, 0.0) };
+        if resized {
+            // Otherwise keep the centre.
+            ds.view.vw = f64::from(rect.width());
+            ds.view.vh = f64::from(rect.height());
+            if first {
+                ds.zoom_to_fit();
+            }
+        }
+        if held {
+            ds.view.cx += (dw / 2.0 + f64::from(rect.min.x - old_rect.min.x)) / z;
+            ds.view.cy += (dh / 2.0 + f64::from(rect.min.y - old_rect.min.y)) / z;
         }
     }
     let own_cursor = input(app, ui, &resp);
@@ -210,11 +280,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let label = if documents {
         tr("Drop to open")
     } else if app.ui.right_tab == crate::RightTab::Inspect {
-        tr("Dev Mode only inspects: switch to Design (Shift+D) to edit")
+        tr("Developer Mode only inspects: switch to Design (Shift+D) to edit")
     } else {
         tr("Drop to import")
     };
-    crate::drop_overlay(&ctx, ctx.content_rect(), label);
+    match crate::colorpicker::image_drop_target(app, &ctx).filter(|_| !documents && app.ui.right_tab != crate::RightTab::Inspect) {
+        Some((rect, _)) => crate::drop_overlay(&ctx, rect, tr("Drop to use this image")),
+        None => crate::drop_overlay(&ctx, ctx.content_rect(), label),
+    }
     crate::guides::end_released(&ctx);
     crate::live::track_pointer(app, &ctx);
     app.sync_preedit();
@@ -236,6 +309,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
+    let docs = &app.session.docs;
+    app.canvas.switch_texture(shown, |uid| docs.iter().any(|d| d.uid == uid));
     if let Some(done) = worker.poll()
         && shows(&app.canvas, &done, shown)
     {
@@ -265,15 +340,20 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_seq = done.seq;
     }
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, bg);
     crate::theme::set_canvas_page(&ctx, bg);
-    if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
+    let image = if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
         // Re-project the last render onto the current view.
         let tl = app.to_screen(v.origin.0, v.origin.1);
         let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
         let pixel_preview = app.session.ds().ok().and_then(|ds| ds.view.pixel_preview_scale()) == Some(v.scale);
         let image_rect = presented_image_rect(tl, v, zoom, ppp, pixel_preview);
-        painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        Some((tex.id(), image_rect))
+    } else {
+        None
+    };
+    background::paint(&painter, rect, bg, image.map(|(_, r)| r));
+    if let Some((texture, image_rect)) = image {
+        painter.image(texture, image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     crate::dev_mode::refresh_measurements(app);
     app.session.tool.labels = overlays(app, &painter, &t);
@@ -291,18 +371,22 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     crate::board_facilitate::badges(app, &painter);
     crate::board_bar::stamp_author(app, &painter, ctx.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)));
     crate::board_bar::show(app, &ctx);
+    crate::board_connect::show(app, &ctx);
     crate::board_facilitate::show(app, &ctx, rect);
     crate::widget_bar::show(app, &ctx);
     crate::selection_spacing::draw(app, &painter);
     crate::comments::draw(app, &painter);
     crate::live_text::draw(app, &painter);
     crate::live::draw(app, &painter, &ctx);
+    crate::live::agent::draw(app, &painter, &ctx);
     crate::live::chat_box(app, &ctx);
-    crate::live::spotlight_banner(app, &ctx, rect);
+    // The other banners float below the strip that says the session is disconnected.
+    let banners = rect.with_min_y(rect.min.y + crate::live::connection_banner(app, &ctx, rect));
+    crate::live::spotlight_banner(app, &ctx, banners);
     crate::comments::popovers(app, &ctx);
-    crate::versions::preview_banner(app, &ctx, rect);
-    crate::branch_ui::banner(app, &ctx, rect);
-    crate::dev_mode::focus_bar(app, &ctx, rect);
+    crate::versions::preview_banner(app, &ctx, banners);
+    crate::branch_ui::banner(app, &ctx, banners);
+    crate::dev_mode::focus_bar(app, &ctx, banners);
     // The cursor: the tool's, unless something on the canvas with its own has the pointer.
     app.canvas.cursor = None;
     if let (true, Some(at)) = (own_cursor && resp.hovered(), ctx.input(|i| i.pointer.hover_pos())) {
@@ -363,4 +447,19 @@ fn describe_box([x0, y0, x1, y1]: [f64; 4]) -> String {
 mod builder_poly_tests;
 
 #[cfg(test)]
+mod outline_tests;
+
+#[cfg(test)]
+mod panel_nodes_tests;
+
+#[cfg(test)]
+mod selection_cache_tests;
+
+#[cfg(test)]
+mod wheel_zoom_tests;
+
+#[cfg(test)]
 mod zoom_preview_tests;
+
+#[cfg(test)]
+mod tab_switch_tests;

@@ -6,6 +6,7 @@ use figcraft_geom::{Affine, Point, Rect, Vec2};
 use serde_json::json;
 
 use super::regions::*;
+use super::selected_region_fills;
 use super::tests::{ex, net, ve};
 use crate::Session;
 use crate::tools::{PointerEvent, PointerKind};
@@ -31,7 +32,7 @@ fn nested(regions: Vec<Region>) -> VectorNetwork {
 }
 
 fn region(loops: Vec<Vec<usize>>, winding: WindingRule) -> Region {
-    Region { loops, winding }
+    Region { loops, winding, fills: None, ..Default::default() }
 }
 
 /// The 7.1 region: both squares as one region.
@@ -116,6 +117,17 @@ fn only_filled_areas_are_regions() {
     assert_eq!(hover(&mut s, 100.0, 100.0, 1.0), None, "no fill: nothing to hatch");
     click(&mut s, 100.0, 100.0, false);
     assert!(ve(&s).regions.is_empty());
+}
+
+#[test]
+fn styled_region_hit_ignores_empty_override_and_needs_no_layer_fill() {
+    let mut n = overlapping();
+    n.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+    n.regions[1].fills = Some(Vec::new());
+    let mut s = Session::new();
+    let id = editing_vector(&mut s, n);
+    s.doc_mut().unwrap().get_mut(id).unwrap().fills.clear();
+    assert_eq!(hover(&mut s, 100.0, 100.0, 1.0), Some(0));
 }
 
 #[test]
@@ -528,4 +540,86 @@ fn hovered_and_selected_is_hatched_once_and_regions_share_one_pattern() {
     let part = offsets(&s.vector_region_hatch(Affine::IDENTITY, Some(Rect::new(0.0, 0.0, 50.0, 50.0))), Point::ZERO);
     assert!(!part.is_empty() && part.len() < all.len());
     assert!(part.iter().all(|x| all.iter().any(|y| (x - y).abs() < 1e-6)));
+}
+
+/// Each closed region of a vector network has its own fill (#1875): with regions selected in edit mode, the fill
+/// commands edit those regions' own fills and leave the layer's; `regions` names them outright.
+#[test]
+fn the_fill_commands_edit_the_selected_regions() {
+    let mut s = Session::new();
+    let id = editing_vector(&mut s, overlapping());
+    let fills_of = |s: &Session, r: usize| net(s, id).regions[r].fills.clone();
+    let layer = |s: &Session| s.doc().unwrap().node(id).unwrap().fills.clone();
+    let colour = |s: &Session, r: usize, i: usize| fills_of(s, r).unwrap()[i].solid_color().unwrap().to_css_hex().to_ascii_uppercase();
+    let before = layer(&s);
+    ex(&mut s, "vector.edit.select", json!({"regions": [1]}));
+    ex(&mut s, "fill.set", json!({"ids": [id], "color": "#FF0000"}));
+    assert_eq!(fills_of(&s, 1).map(|f| f.len()), Some(1));
+    assert_eq!(colour(&s, 1, 0), "#FF0000");
+    assert_eq!(fills_of(&s, 0), None, "the other region still inherits");
+    assert_eq!(layer(&s), before, "the layer's fills are untouched");
+    // The section's list for the layer is the region's own stack.
+    assert_eq!(selected_region_fills(&s, id).and_then(|l| l).map(|l| l.len()), Some(1));
+    ex(&mut s, "fill.add", json!({"ids": [id], "color": "#00FF00"}));
+    assert_eq!(fills_of(&s, 1).unwrap().len(), 2);
+    ex(&mut s, "fill.move", json!({"ids": [id], "from": 0, "to": 1}));
+    assert_eq!((colour(&s, 1, 0), colour(&s, 1, 1)), ("#00FF00".to_string(), "#FF0000".to_string()));
+    ex(&mut s, "fill.remove", json!({"ids": [id], "index": 0}));
+    assert_eq!(fills_of(&s, 1).unwrap().len(), 1);
+    assert_eq!(colour(&s, 1, 0), "#FF0000");
+    assert_eq!(layer(&s), before);
+    // Both regions selected with different fills: the section shows mixed content.
+    ex(&mut s, "vector.edit.select", json!({"regions": [0, 1]}));
+    assert_eq!(selected_region_fills(&s, id), Some(None));
+    // Named outright, with no selection; junk is refused.
+    ex(&mut s, "vector.edit.select", json!({}));
+    ex(&mut s, "fill.set", json!({"ids": [id], "regions": [0], "color": "#0000FF"}));
+    assert_eq!(colour(&s, 0, 0), "#0000FF");
+    assert!(s.execute("fill.set", &json!({"ids": [id], "regions": [9], "color": "#0000FF"})).is_err());
+    assert!(s.execute("fill.set", &json!({"ids": [id], "regions": "all", "color": "#0000FF"})).is_err());
+    assert!(s.execute("fill.set", &json!({"ids": [id], "regions": [], "color": "#0000FF"})).is_err());
+    // Nothing selected: the layer's fills, as before; the regions keep their own.
+    ex(&mut s, "fill.set", json!({"ids": [id], "color": "#123456"}));
+    assert_ne!(layer(&s), before);
+    assert_eq!(colour(&s, 1, 0), "#FF0000");
+    assert_eq!(selected_region_fills(&s, id), None);
+    s.undo().unwrap();
+    assert_eq!(layer(&s), before, "one undo step per command");
+}
+
+/// Region fill edits from review: a region named twice is edited once; an edit that changes
+/// nothing leaves an inheriting region inheriting; Copy fill reads the selected region's fill.
+#[test]
+fn region_fill_edits_apply_once_skip_no_ops_and_copy_the_region() {
+    let mut s = Session::new();
+    let id = editing_vector(&mut s, overlapping());
+    let fills_of = |s: &Session, r: usize| net(s, id).regions[r].fills.clone();
+    ex(&mut s, "vector.edit.select", json!({"regions": [1]}));
+    ex(&mut s, "fill.move", json!({"ids": [id], "from": 0, "to": 0}));
+    assert_eq!(fills_of(&s, 1), None, "moving a paint onto itself leaves the region inheriting");
+    ex(&mut s, "fill.remove", json!({"ids": [id], "index": 5}));
+    assert_eq!(fills_of(&s, 1), None, "removing a paint that isn't there leaves it inheriting");
+    ex(&mut s, "fill.add", json!({"ids": [id], "regions": [0, 0], "color": "#00FF00"}));
+    assert_eq!(fills_of(&s, 0).map(|f| f.len()), Some(2), "the layer's fill and one added, once");
+    // Copy fill takes the selected region's own paint, not the layer's.
+    ex(&mut s, "fill.set", json!({"ids": [id], "color": "#FF0000"}));
+    ex(&mut s, "fill.copy", json!({"ids": [id], "index": 0}));
+    let copied = s.clipboard.paint.clone().map(|(_, p)| p.solid_color().unwrap().to_css_hex().to_ascii_uppercase());
+    assert_eq!(copied.as_deref(), Some("#FF0000"));
+    // Regions whose fills differ have no one paint to copy.
+    ex(&mut s, "vector.edit.select", json!({"regions": [0, 1]}));
+    assert!(s.execute("fill.copy", &json!({"ids": [id], "index": 0})).is_err());
+}
+
+/// `fill.pattern` sets the layer's fill, as its spec says, also while regions are selected.
+#[test]
+fn fill_pattern_sets_the_layers_fill_with_regions_selected() {
+    let mut s = Session::new();
+    let src = crate::params::id_of(&ex(&mut s, "shape.rectangle", json!({"x": 400, "y": 0, "width": 20, "height": 20}))["id"]).unwrap();
+    let id = editing_vector(&mut s, overlapping());
+    ex(&mut s, "vector.edit.select", json!({"regions": [1]}));
+    ex(&mut s, "fill.pattern", json!({"ids": [id], "source": src}));
+    assert_eq!(net(&s, id).regions[1].fills, None, "the region still inherits");
+    let top = s.doc().unwrap().node(id).unwrap().fills.last().cloned().unwrap();
+    assert!(matches!(top.kind, figcraft_color::PaintKind::Pattern(_)), "{top:?}");
 }

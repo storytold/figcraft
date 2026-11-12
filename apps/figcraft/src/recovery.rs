@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
+use figcraft_engine::branches::{needs_copy, recovery_copy, stamp};
 use figcraft_engine::{DocState, Session};
 use figcraft_format::{Branch, Version};
 use serde_json::json;
@@ -203,8 +204,7 @@ impl Recovery {
             if entry.done.as_ref() == Some(&stamp) || entry.flight.is_some() {
                 continue;
             }
-            let doc = d.doc.clone();
-            let (versions, branches) = (d.versions.clone(), figcraft_engine::branches::current(s, d.uid));
+            let (doc, versions, branches) = recovery_copy(s, d);
             // Which online file it is and what of the server's this very copy has (a line each:
             // the server, the file's id, then the session, client id, last change and the secret the
             // client id resumes with), while it
@@ -217,7 +217,8 @@ impl Recovery {
                     return false;
                 }
                 let _ = match online {
-                    Some(text) => std::fs::write(&note, text),
+                    // The note holds the secret the client resumes with: owner-only, as the copy.
+                    Some(text) => write_private(&note, text.as_bytes()),
                     None => std::fs::remove_file(&note),
                 };
                 true
@@ -321,46 +322,34 @@ fn rejoin_online(file: &Path, s: &mut Session) -> Option<u64> {
     s.execute("collab.recoverFile", &params).ok()?.get("session")?.as_u64()
 }
 
-/// A file whose changes would be lost: in its document, its history or one of its branch tabs
-/// (a branch tab's edits are saved with its main file, so the tab has no copy of its own).
-fn needs_copy(s: &Session, d: &DocState) -> bool {
-    d.branch_of.is_none() && (d.is_dirty() || branch_tabs(s, d.uid).any(DocState::is_dirty))
-}
-
-/// The tabs showing branches of the file in tab `uid`.
-fn branch_tabs(s: &Session, uid: u64) -> impl Iterator<Item = &DocState> {
-    s.docs.iter().filter(move |t| t.branch_of.as_ref().is_some_and(|(main, _)| *main == uid))
-}
-
-/// The revisions a copy of `d` is of: its own and its branch tabs' (a branch tab's edits change
-/// only its own revision). A new copy is due when they change.
-fn stamp(s: &Session, d: &DocState) -> Vec<u64> {
-    std::iter::once(d.revision).chain(branch_tabs(s, d.uid).map(|t| t.revision)).collect()
-}
-
 /// Write `doc` with its version history and branches to `path` through a temporary file; false
 /// when it couldn't be written (the copy before it is still there).
 fn write_atomic(path: &Path, doc: &figcraft_engine::doc::Document, versions: &[Version], branches: &[Branch]) -> bool {
     let Ok(bytes) = figcraft_format::save_bytes_with_history(doc, None, versions, branches) else { return false };
     let tmp = path.with_extension("tmp");
+    if write_private(&tmp, &bytes).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
+    std::fs::rename(&tmp, path).is_ok()
+}
+
+/// Write `bytes` to `path`, created (or cut back) readable by its owner only on Unix.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create(true).truncate(true).mode(0o600);
-        let Ok(mut f) = opts.open(&tmp) else { return false };
-        if std::io::Write::write_all(&mut f, &bytes).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-            return false;
-        }
+        let mut f = opts.open(path)?;
+        // `mode` applies to a new file only: one that was there keeps its mode unless set.
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        std::io::Write::write_all(&mut f, bytes)
     }
     #[cfg(not(unix))]
     {
-        if std::fs::write(&tmp, bytes).is_err() {
-            return false;
-        }
+        std::fs::write(path, bytes)
     }
-    std::fs::rename(&tmp, path).is_ok()
 }
 
 /// [`recover_all`], for a start that keeps nothing waiting: how many documents came back as

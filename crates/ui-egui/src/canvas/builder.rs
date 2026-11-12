@@ -1,6 +1,6 @@
 use super::outline::stroke;
 use super::overlays::accent;
-use super::*;
+use super::{Color32, FigApp, Pos2, Shape, Tokens, pos2};
 
 /// Width of the lines hatching the hovered and selected regions in vector edit mode (screen px).
 const REGION_HATCH_WIDTH: f32 = 1.4;

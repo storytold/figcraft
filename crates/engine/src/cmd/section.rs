@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::CommandSpec;
 use crate::devinspect::{dev_items, has_status};
-use crate::params::*;
+use crate::params::{boolean, get, req_targets, string, targets};
 use crate::{Result, Session, bad, spec};
 
 /// Longest change reason kept.

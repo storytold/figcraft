@@ -17,8 +17,16 @@ reply:    {"id": 1, "ok": true, "result": ...}
 ```
 
 Requests are queued and run on the UI thread at the start of the next frame, so replies reflect the
-real UI state. A request that the UI doesn't answer within 60 s gets a timeout error. A line that is
-not JSON gets `{"id": null, "ok": false, "error": "bad JSON: …"}` and ends the connection (so an
+real UI state. A request that the UI doesn't answer within 60 s gets a timeout error that says what
+happened to it: one the app never started (it was busy, or its window wasn't drawing) was dropped
+and not applied; one it had started (a long `batch`, say) can't be stopped, so the error says it is
+still running and will take effect, and to check the document before retrying; only `ui.screenshot`
+and `ui.input`, which need a drawn frame, point at the window being minimised or covered. A request
+that knows it will take longer (a big `batch`, say) can set its own wait with `timeoutMs` beside
+`id` and `method`, in whole milliseconds, up to 600 000 (10 minutes): `{"id": 1, "method":
+"engine.execute", "params": {...}, "timeoutMs": 300000}`. Anything else is ignored and the wait
+stays 60 s, as it is in an app from before this. A screenshot keeps its own 60 s deadline. A line
+that is not JSON gets `{"id": null, "ok": false, "error": "bad JSON: …"}` and ends the connection (so an
 HTTP request a web page makes the browser send here never runs). The implementation is in
 `crates/ui-egui/src/control.rs` (methods) and `apps/figcraft/src/control_server.rs` (socket).
 
@@ -29,12 +37,14 @@ active connections**; additional connections are closed immediately. Socket read
 have a **60 s inactivity timeout**, so idle clients and clients that stop reading release their
 worker. This bounds blocked socket operations, not the total duration of a frame arriving slowly.
 Clients can reconnect after an idle timeout (the attached MCP backend already does).
+Replies have no size limit on the app's side. The attached MCP backend reads them up to **512 MiB
+before the newline** and drops the connection on a longer one (see [MCP server](mcp.md)).
 
 Both the socket queue and the UI queue hold at most **8 requests** each, including requests waiting
 for another window's frame. A full socket queue replies with `"control request queue is full"`
 instead of dispatching the new request. These limits apply to the opt-in loopback control channel;
-requests still queued after the UI timeout are discarded, including requests deferred to a hidden
-window. A command already running is not interrupted.
+requests still queued after the UI timeout are discarded (never run), including requests deferred to
+a hidden window. A command already running is not interrupted: it takes effect when it finishes.
 
 A minimised or covered window (the main one or another, see Windows below) draws no frames, but
 still answers every method that acts on the app's state (`engine.execute`, `document.inspect`,
@@ -49,12 +59,15 @@ queue. A screenshot settles on three completed, presented UI frames (a discarded
 not count), then is issued, and expires once at its 60 s deadline if no paint arrives. `window.new`
 remains an error at once (`window 0 is minimised or hidden: …`) instead of waiting for the window
 to show; `ui.render` draws the document without it. Under Wayland the app can't tell that its
-window is minimised: where the compositor then stops drawing it, a request waits for the window
-and gets the 60 s timeout error. The browser's shared eframe runner does not implement
+window is minimised, and the compositor stops asking it to draw: a window that draws no frame for
+0.2 s while a request waits for it is treated as hidden, so the requests that act on the app's
+state are answered without a frame (about half a second each), while `ui.screenshot` and
+`ui.input` keep waiting for one. The browser's shared eframe runner does not implement
 `RequestPaintWhileHidden` yet, so hidden-tab screenshots and injected input are unqualified there.
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent
 frame (groups have no coordinate space of their own).
+`rotation` in `node.set` is the layer's angle to its parent; `absoluteRotation` sets its rotation on the page (what the Design panel's field shows); a call takes one of the two.
 
 **Windows.** The desktop app can show files in several windows (`window.new`). Every method takes
 an optional `window` (an id from `window.list`; `0` is the main window) and then runs in that
@@ -62,6 +75,14 @@ window, with its tabs, panels and canvas: `engine.execute` acts on the file it s
 `ui.screenshot` captures it, `ui.input` reaches it. Without `window`, a request goes to the window
 last in front (the one the user clicked last, or the last `window.new` / `window.focus`). An
 unknown id is an error.
+
+**Documents.** `engine.execute`, `document.inspect`, `node.get` and `ui.render` take an optional
+`document`: an open file's `id` (from `doc.list`, or `document.inspect`'s `id`) or its path. The
+request acts on that file without bringing its tab to the front; the tab in front comes back
+afterwards unless the command opened or switched to another file itself. A file that isn't open is
+an error, and so is a `document` naming a file behind the tab in front on any other method
+(`ui.screenshot`, `ui.input`, `ui.key`… act on what the window shows). `doc.list` includes each file's
+`path` only when the call names no `agent`: an AI agent's calls (MCP sets `agent`) get ids and names.
 
 ## Confining file access
 
@@ -79,7 +100,11 @@ read or write root and written only inside a write root; anything else is an ord
 resolved as `docs/mcp.md` › Confining file access describes. A root that isn't an existing folder
 stops the app before its window opens, and so does any option the app doesn't know (a mistyped
 flag such as `--automation-write-roots` exits with `unknown option`, never starts unconfined).
-Without the flags nothing changes. The flags arrived in FigCraft 0.7.0: 0.6.0 and earlier ignore
+Confined work reaches no FigCraft or plugin server either: hosting, joining, publishing and
+sharing files, team libraries on a server and plugin directories are refused (`automation roots
+are set: commands don't reach the network …`). A root on a network share (a UNC path such as
+`\\server\share\…`, or a mounted network drive) is the exception: files read and written inside it,
+documents saved there included, go to that file server. Without the flags nothing changes. The flags arrived in FigCraft 0.7.0: 0.6.0 and earlier ignore
 them and confine nothing.
 
 Not confined: opening the files given on the command line when the app starts and the documents
@@ -97,7 +122,13 @@ Run any command (the same ids as the menus, shortcuts, Actions palette, CLI and 
 calls never open dialogs: dialog requests are dropped. Returns the command's result (creation
 commands return `{"id": N}`). Paints (`fills`, `strokes`, `paint`) take a colour, the full paint
 JSON or the gradient shorthand `{"type":"linearGradient","stops":["#hex","#hex"],"from"?,"to"?}`
-(as in `docs/mcp.md`).
+(as in `docs/mcp.md`). A parameter the command's doc (`engine.commands`) doesn't list is an error
+naming it and the ones it takes, never ignored; `ids` and `id` are always taken.
+
+`agent` (a string, next to `command`) runs the command for an AI agent of that name, as the MCP
+server does with its client's name: comments it makes are signed "<agent> (agent)" ("AI agent" for
+an empty name), marked `"agent": true`, and keep their own read state. Without it the command acts
+as the user (the name from Preferences).
 
 ```json
 {"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":10,"y":10,"width":100,"height":50}}}
@@ -105,6 +136,10 @@ JSON or the gradient shorthand `{"type":"linearGradient","stops":["#hex","#hex"]
 {"id":2,"method":"engine.execute","params":{"command":"node.set","params":{"ids":[2],"props":{"fill":"#FF6B6B","cornerRadius":8}}}}
 {"id":3,"method":"engine.execute","params":{"command":"command.batch","params":{"label":"Tidy","commands":[{"command":"align.left","params":{"ids":[2,3]}},{"command":"distribute.vertical","params":{"ids":[2,3]}}]}}}
 ```
+
+With `"onError": "continue"` in its params, `command.batch` rolls back only the steps that fail,
+runs the rest and returns one `{step, command, ok, result}` or `{step, command, ok, error}` object
+per step; the request succeeds even when some steps fail (see [MCP server](mcp.md)).
 
 Inside `command.batch`, a step can name itself with `"as"` and later steps use its result:
 `{"$ref": "name"}` in a step's params stands for the `id` in that step's result, and `{"$step": n}`
@@ -123,14 +158,35 @@ it and duplicate it:
 
 Every command: `[{id, label, params, menu, shortcut, undoable}]`.
 
-### `document.inspect {depth?, allPages?}`
+### `events.poll {after?, timeoutMs?, topics?, limit?}`
+
+Wait for live changes: the app's in-memory event log records `comment.added`, `comment.replied`,
+`comment.edited`, `comment.reacted`, `comment.resolved`, `comment.moved` and `comment.deleted`
+(`topics`: `comments` (default), `document`, `all`). Only comment events are emitted today;
+`document` and `all` are accepted for forward compatibility. Returns pending events after `after`
+at once, otherwise waits up to `timeoutMs` (default 20 000, max 25 000; 0 = no wait):
+
+```json
+{"id":1,"method":"events.poll","params":{"after":41,"timeoutMs":20000}}
+{"id":1,"ok":true,"result":{"events":[{"seq":42,"kind":"comment.added","document":"Checkout","path":"…","data":{"commentId":12}}],"cursor":42,"reset":false,"dropped":0}}
+```
+
+`cursor` is the sequence to pass next; `reset: true` means `after` is ahead of the log (the app
+restarted) and the caller should re-read the comments; `dropped` counts events lost because `after`
+is older than the retained window (1024 events). The method is answered by the control worker
+against the shared log, not by the UI thread, so it does not freeze the app, use a request slot, or
+need a drawn frame: it works while the window is minimised. Other requests on the same connection
+wait until the poll finishes (at most 25 s); use a separate connection to keep editing meanwhile.
+
+### `document.inspect {depth?, allPages?, fields?, outline?}`
 
 The active document as JSON: name, path, dirty, currentPage, selection, pages (the current page's
 layer tree to `depth`, default 8; others summarised unless `allPages`), styles, variable count,
 images, the colour profile (`colorProfile`: `srgb` or `displayP3`), the text being edited and the
-undo history.
+undo history. `fields` and `outline` select layer properties at every level, pages included, without
+changing document metadata (see below).
 
-### `node.get {id, depth?}`
+### `node.get {id, depth?, fields?, outline?}`
 
 One layer (children to `depth`, default 1). Fields: id, name, type, x, y, width, height, rotation,
 absoluteBounds, visible, locked, opacity, blend, fills, strokes, strokeWeight, effects, cornerRadius,
@@ -139,20 +195,40 @@ layout (including grid `columnTracks` / `rowTracks`), sizing, `minWidth` / `maxW
 children), `gridCell` (a grid auto layout child's column, row and spans), clip, text properties,
 component/instance links, overrides, `slot` (a slot layer's property name), boundVariables, interactions, exports,
 `devStatus` (handoff status), `devChanged` (changed since it was marked ready for dev),
-`annotations` (Dev Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
+`annotations` (Developer Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
 links to code: `[{language, importPath, name, template}]`), `devResources` (links for developers,
-its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Dev Mode measurements
+its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Developer Mode measurements
 starting from the layer: `[{to} | {side}]`), `pluginData` (layer data written with
 `node.set {props: {pluginData: {key: value}}}`, pages included: `{key: value}`, values as strings;
 only when there is some). The auto layout props
 that `node.set` accepts are listed in [mcp.md](mcp.md#conventions-agents-must-know).
+
+Both inspection methods accept `fields: [string]`: exact, case-sensitive top-level node keys such
+as `name`, `type`, `x`, `fills`, `characters` or `pluginData`, applied recursively to pages too.
+`[]` keeps only ids and structure. `id`, `children` and depth-boundary `childCount` are always kept.
+An unknown key is an error that lists the valid keys; a `fields` that is not an array of strings,
+or an `outline` that is not a boolean, is an error too.
+
+`outline: true` selects `id`, `name`, `type`, `characters`, `mainComponentName` and `visible`, plus
+structure. `characters` is cut after 120 characters (Unicode scalars), with ASCII `...` appended
+only when longer. When `visible` is selected (by either option), every node has an explicit
+boolean; without options the output stays sparse. `outline: true` with `fields` is an error;
+`outline: false` with `fields` is allowed. Document metadata is unchanged. Through
+`engine.execute`, the engine command `node.get` takes the same options but no `depth`; it always
+returns one level of children.
+
+```json
+{"id":5,"method":"document.inspect","params":{"depth":6,"outline":true}}
+{"id":6,"method":"node.get","params":{"id":3,"depth":2,"fields":["name","width","height"]}}
+```
 
 ### `ui.inspect {}`
 
 UI state: panels and tabs (`panels`: the `left` and `right` panels' widths as asked for and whether the left one is closed, `leftCollapsed`), the cursor the canvas shows (`cursor`: a CSS cursor name such as `default`, `crosshair`, `ew-resize`, `grab`, `copy`, `not-allowed`, `zoom-in`, or one FigCraft draws: `rotate <degrees>`, `pen`, `pen-close`, `pen-add`, `pen-bend`, `eyedropper`, `comment`; `null` while the pointer is elsewhere or over something with a cursor of its own, a ruler guide or a gradient handle; the engine's own hint is `tool.overlay.cursor`), current tool (`tool`: its id, overlay hints and, for a selected
 ellipse, its arc handles `arcHandles`, for a selected rectangle, frame, polygon or star, its corner radius and ratio handles `shapeHandles`; see [mcp.md](mcp.md#measuring-the-scale-tool-arc-handles-and-selecting)), canvas rect, dialogs, view, timings (`frameMs`,
 `renderMs`), frames drawn since start or the last `ui.set {resetFrameStats: true}` (`framesDrawn`;
-an idle window draws none) with the most frequent repaint requests behind them (`repaintCauses`:
+an idle window draws none), how long building them took (`frameTimes`: `{frames, meanMs, maxMs}`, the
+UI pass before it is painted) and the most frequent repaint requests behind them (`repaintCauses`:
 `[{at: "file:line", count}]`, every request made in the frame before each one, delayed ones such as
 the autosave deadline included; egui's `context.rs` begin-pass line means input events) and what the last canvas render had to do (`canvas.renderWork`: `full`, `partial` with
 the `pixels` re-rendered after a pan or an edit, or `reused`), whether the canvas shows a coarse
@@ -177,9 +253,9 @@ far the view is panned (`pan`, `panRange`), whether a scroll is still coasting (
 active screen's `hotspots` (`[{id, rect: [x0, y0, x1, y1]}]` in window points, bottom-most first),
 whether a click where nothing reacts flashes them (`hotspotHints`) and they are flashing now
 (`hotspotFlash`), and whether the Inspect panel shows (`inspect`) with the layer it shows
-(`inspected`), and the link an Open link notice waits to open (`linkNotice`, else `null`) (`null`
+(`inspected`), whether its bars are hidden (`hideUi`), and the link an Open link notice waits to open (`linkNotice`, else `null`) (`null`
 when nothing plays). `presentOptions` holds the options the next presentation
-starts with (`scale`, `deviceFrame`, `comments`, `hotspotHints`, `inspect`).
+starts with (`scale`, `deviceFrame`, `comments`, `hotspotHints`, `inspect`, `hideUi`).
 `textPreview` is true while a live text preview shows on the canvas (a hovered text style or named
 instance, a dragged axis slider; see `text.preview` in [mcp.md](mcp.md)).
 `focus` is keyboard navigation's state: the `region` with the keyboard (`toolbar`, `layers`,
@@ -198,7 +274,7 @@ server dialogs are open (`joinDialog`, `publishDialog`; Escape closes them), the
 Share popover shows (`code`, with `share: {via, access}`; null when the file isn't shared with
 one), what is typed in the popover's and the home screen's join field (`joinField`), whether the
 popover has Local network chosen and Advanced open (`local`, `advanced`), and why the active
-document can't be edited now (`readOnly`: the "View only" or "Publishing" reason, else null); the
+document can't be edited now (`readOnly`: the "View only", "Can comment" or "Publishing" reason, else null); the
 session itself is `engine.execute {command: "collab.peers"}` (sharing with a join code, hosting,
 joining and publishing are `collab.share`, `collab.host`, `collab.join` and `collab.publish`, opening invite links `collab.registerLinks`,
 see [mcp.md](mcp.md#live-sessions)). The app also joins the invite link it
@@ -304,13 +380,13 @@ closes it), `commentDraft` (`{x, y}`: start a new comment there), `commentFilter
 (`date|page`), `commentSearch` (the panel's search text), `commentReply` (the open thread's reply
 text, focused with the cursor at its end: an `@` there shows the mention picker), `commentEdit` (a
 message index of the open thread to edit, 0 for the first; `null` stops), `presentComments` (bool:
-the presenter shows the presented frame's comments, also Shift+C there). Dev Mode: `devCompare` (a
+the presenter shows the presented frame's comments, also Shift+C there). Developer Mode: `devCompare` (a
 frame or section id opens the Compare changes view, like `dev.compare {id, show:
 true}`; `null` closes it) with `devCompareVersion` (a version id to compare with; `null`: when it
 was marked ready for dev), `devCompareMode` (`sideBySide|overlay`) and `devCompareSplit` (the
 overlay slider, 0–1), `annotationFilter` (`all`, `none` for uncategorised, or a category id or name:
-the annotations the canvas shows). `resetFrameStats` (true: start `framesDrawn` and
-`repaintCauses` over). Returns `ui.inspect` (which reports `stylePicker`,
+the annotations the canvas shows). `resetFrameStats` (true: start `framesDrawn`,
+`frameTimes` and `repaintCauses` over). Returns `ui.inspect` (which reports `stylePicker`,
 `stylePickerView`, `comments`: `open`, `draft`, `filter`, `sort`, `search`, `editing` and the
 `mentions` the picker offers, `devCompare` (`{id, mode, split, version}` or `null`), `devFocus` (the frame the
 focus view shows, or `null`) and `annotationFilter`).
@@ -390,11 +466,15 @@ app. It is opt-in: the page installs `window.figcraft` only when its URL has a `
 |---|---|
 | `figcraft.request(method, params)` | any control method of this document → its `result` |
 | `figcraft.execute(command, params)` | `engine.execute` |
-| `figcraft.commands()` / `figcraft.inspect()` | `engine.commands` / the inspect method |
-| `figcraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline) |
+| `figcraft.commands()` | `engine.commands` |
+| `figcraft.docInspect(params)` / `figcraft.uiInspect(params)` | `document.inspect` / `ui.inspect` |
+| `figcraft.inspect()` | `document.inspect` (the name before `docInspect`) |
+| `figcraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline, also as `data`) |
 | `figcraft.openFile(name, bytes)` | runs `file.open` with the bytes as `data` and resolves with its result |
 | `figcraft.captureDownloads(on)` | while on, a save or export is kept in the page instead of downloaded |
 | `figcraft.files()` / `figcraft.readFile(name)` | the kept files (`{path, size}`) / one of them as a `Uint8Array` |
 
 Errors reject with an `Error` carrying the method's message. Requests run on the UI's next frame, so a
 hidden tab (whose frames the browser pauses) answers when it is shown again.
+
+`request`, `execute`, `commands`, `docInspect`, `uiInspect` and `screenshot` come from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app. A call the app does not answer within 30 seconds rejects, and the app drops it unrun if it had not started it. `openFile`, `captureDownloads`, `files`, `readFile` and `inspect` are FigCraft's own.

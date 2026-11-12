@@ -87,15 +87,29 @@ pub fn start(cfg: &Config) -> Result<Running, String> {
 }
 
 #[cfg(test)]
+mod admin_budget_tests;
+#[cfg(test)]
 mod background_tests;
 #[cfg(test)]
 mod cli_tests;
 #[cfg(test)]
 mod codes_tests;
 #[cfg(test)]
+mod comment_link_tests;
+#[cfg(test)]
 mod directory_tests;
 #[cfg(test)]
+mod download_burst_tests;
+#[cfg(test)]
 mod hardening_tests;
+#[cfg(test)]
+mod idle_io_tests;
+#[cfg(test)]
+mod library_actions_tests;
+#[cfg(test)]
+mod library_assets_tests;
+#[cfg(test)]
+mod library_detach_tests;
 #[cfg(test)]
 mod library_tests;
 #[cfg(test)]
@@ -106,5 +120,7 @@ mod public_tests;
 mod server_tests;
 #[cfg(test)]
 mod store_tests;
+#[cfg(test)]
+mod team_tests;
 #[cfg(test)]
 mod test_util;

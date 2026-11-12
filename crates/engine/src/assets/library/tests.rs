@@ -107,6 +107,49 @@ fn publish_to(s: &mut Session, path: &str) -> String {
     r["id"].as_str().unwrap().to_string()
 }
 
+/// `publish_manifest_roundtrip`: the file saved and read back keeps the manifest.
+fn saved_and_read_back(doc: &Document, lib: &PublishedLibrary) {
+    let m = &lib.manifest;
+    // Saved and read back: the author's file and a reader of the library see the same manifest.
+    let bytes = figcraft_format::save_bytes(doc, None).unwrap();
+    let (back, issues) = figcraft_format::load_bytes(&bytes).unwrap();
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back.published.as_ref().map(|p| &p.manifest), Some(m));
+    let read = figcraft_format::read_library(std::io::Cursor::new(&bytes)).unwrap().unwrap();
+    assert_eq!(read.manifest, *m);
+    assert_eq!(read.doc.node_count(), lib.doc.node_count());
+    // Older files and files never published have no library; readers that don't know libraries
+    // are unaffected (the entries are extra archive members).
+    let plain = figcraft_format::save_bytes(&Document::new("x"), None).unwrap();
+    assert!(figcraft_format::read_library(std::io::Cursor::new(&plain)).unwrap().is_none());
+    assert!(figcraft_format::load_bytes(&plain).unwrap().0.published.is_none());
+}
+
+/// `publish_manifest_roundtrip`: a republish bumps only what changed.
+fn republish_bumps_touched(s: &mut Session, k: &Kit) {
+    // Nothing changed: refused. A change bumps only what it touches (and what uses it).
+    let e = s.execute("library.publish", &json!({})).unwrap_err();
+    assert!(e.to_string().contains("no changes"), "{e}");
+    ex(s, "node.set", json!({"id": k.card, "props": {"fill": "#eeeeee"}}));
+    let r = ex(s, "library.publish", json!({}));
+    assert_eq!(r["version"], 2);
+    let m = s.doc().unwrap().published.clone().unwrap().manifest.clone();
+    assert_eq!(m.component(k.card).map(|a| a.version), Some(2));
+    assert_eq!(m.component(k.button).map(|a| a.version), Some(1), "untouched assets keep their version");
+    assert_eq!(m.description, "Our kit", "the description carries over");
+    // Excluding an asset; a used component still comes along (not offered).
+    let r = ex(s, "library.publish", json!({"exclude": ["Button"]}));
+    assert_eq!(r["components"], 1);
+    let m = s.doc().unwrap().published.clone().unwrap().manifest.clone();
+    assert!(m.component(k.button).is_some_and(|a| !a.published));
+    // Unknown assets are an error, not ignored.
+    assert!(s.execute("library.publish", &json!({"include": ["Nope"]})).is_err());
+    assert!(s.execute("library.publish", &json!({"include": "Button"})).is_err());
+    // Undo takes the publish back.
+    s.undo().unwrap();
+    assert_eq!(s.doc().unwrap().published.as_ref().map(|p| p.manifest.version), Some(2));
+}
+
 #[test]
 fn publish_manifest_roundtrip() {
     let mut s = Session::new();
@@ -126,41 +169,160 @@ fn publish_manifest_roundtrip() {
     assert!(lib.doc.node(k.label).is_some());
     assert!(lib.doc.validate().is_empty());
     assert_eq!(lib.doc.styles.len(), 1);
-    // Saved and read back: the author's file and a reader of the library see the same manifest.
-    let bytes = figcraft_format::save_bytes(doc, None).unwrap();
-    let (back, issues) = figcraft_format::load_bytes(&bytes).unwrap();
-    assert!(issues.is_empty(), "{issues:?}");
-    assert_eq!(back.published.as_ref().map(|p| &p.manifest), Some(m));
-    let read = figcraft_format::read_library(std::io::Cursor::new(&bytes)).unwrap().unwrap();
-    assert_eq!(read.manifest, *m);
-    assert_eq!(read.doc.node_count(), lib.doc.node_count());
-    // Older files and files never published have no library; readers that don't know libraries
-    // are unaffected (the entries are extra archive members).
-    let plain = figcraft_format::save_bytes(&Document::new("x"), None).unwrap();
-    assert!(figcraft_format::read_library(std::io::Cursor::new(&plain)).unwrap().is_none());
-    assert!(figcraft_format::load_bytes(&plain).unwrap().0.published.is_none());
+    saved_and_read_back(doc, &lib);
 
-    // Nothing changed: refused. A change bumps only what it touches (and what uses it).
-    let e = s.execute("library.publish", &json!({})).unwrap_err();
-    assert!(e.to_string().contains("no changes"), "{e}");
-    ex(&mut s, "node.set", json!({"id": k.card, "props": {"fill": "#eeeeee"}}));
-    let r = ex(&mut s, "library.publish", json!({}));
-    assert_eq!(r["version"], 2);
-    let m = s.doc().unwrap().published.clone().unwrap().manifest.clone();
-    assert_eq!(m.component(k.card).map(|a| a.version), Some(2));
-    assert_eq!(m.component(k.button).map(|a| a.version), Some(1), "untouched assets keep their version");
-    assert_eq!(m.description, "Our kit", "the description carries over");
-    // Excluding an asset; a used component still comes along (not offered).
-    let r = ex(&mut s, "library.publish", json!({"exclude": ["Button"]}));
-    assert_eq!(r["components"], 1);
-    let m = s.doc().unwrap().published.clone().unwrap().manifest.clone();
-    assert!(m.component(k.button).is_some_and(|a| !a.published));
-    // Unknown assets are an error, not ignored.
-    assert!(s.execute("library.publish", &json!({"include": ["Nope"]})).is_err());
-    assert!(s.execute("library.publish", &json!({"include": "Button"})).is_err());
-    // Undo takes the publish back.
+    republish_bumps_touched(&mut s, &k);
+}
+
+/// `add_place_and_update_keep_overrides`: library copies refuse every edit and roll back.
+fn assert_remote_read_only(s: &mut Session, b: NodeId, remote_button: NodeId) {
+    let unchanged = s.doc().unwrap().clone();
+    let e = s.execute("node.set", &json!({"id": remote_button, "props": {"fill": "#ff0000"}})).unwrap_err();
+    assert!(e.to_string().contains("can't be edited"), "{e}");
+    assert_eq!(s.doc().unwrap(), &unchanged, "a refused remote edit rolls back");
+    for (cmd, args) in
+        [("node.reparent", json!({"ids": [remote_button], "parent": s.page().unwrap()})), ("edit.delete", json!({"ids": [remote_button]}))]
+    {
+        assert!(s.execute(cmd, &args).is_err(), "{cmd} must preserve read-only copies");
+        assert_eq!(s.doc().unwrap(), &unchanged, "refused {cmd} rolls back");
+    }
+    let style = s.doc().unwrap().styles[0].id.clone();
+    assert!(s.execute("style.update", &json!({"style": style, "name": "Mine"})).is_err());
+    assert!(s.execute("style.delete", &json!({"style": style})).is_err());
+    assert!(s.execute("select.set", &json!({"ids": [remote_button]})).is_err(), "library copies can't be selected");
+    assert!(s.doc().unwrap().pages.contains(&s.page().unwrap()));
+    assert!(s.execute("component.pushChanges", &json!({"id": b})).is_err());
+    assert_eq!(fill(s, remote_button), "0000FF");
+}
+
+/// `add_place_and_update_keep_overrides`: the library changes and publishes; the copies follow. Returns the Card's instance.
+fn library_updates_flow(s: &mut Session, lib: &mut Session, k: &Kit, lid: &str, [b, b_label, remote_button, main]: [NodeId; 4]) -> NodeId {
+    // The library changes the Button (fill via its style, and its label) and publishes again.
+    ex(lib, "style.update", json!({"style": "Brand", "value": "#00ff00"}));
+    ex(lib, "text.set", json!({"id": k.label, "characters": "Go"}));
+    ex(lib, "library.publish", json!({}));
+    ex(lib, "file.save", json!({}));
+
+    let u = ex(s, "library.updates", json!({}));
+    assert_eq!(u["count"], 3, "Button, Card and the style: {u}");
+    let label_ids: Vec<NodeId> = s.doc().unwrap().subtree(b);
+    ex(s, "library.acceptUpdates", json!({}));
+    assert_eq!(fill(s, b), "00FF00", "the instance follows the updated main");
+    assert_eq!(chars(s, b_label), "Buy", "its override is kept");
+    assert_eq!(s.doc().unwrap().subtree(b), label_ids, "layer ids are kept");
+    assert_eq!(fill(s, remote_button), "00FF00");
+    let style = s.doc().unwrap().styles[0].clone();
+    assert!(matches!(&style.kind, StyleKind::Paint { paints } if paints[0].solid_color().unwrap().to_hex() == "00FF00"));
+    let doc = s.doc().unwrap();
+    assert_eq!(doc.libraries.link(lid).map(|l| l.version), Some(2));
+    // The Card's nested Button follows too.
+    let card_inst = doc.nodes().find(|n| matches!(n.kind, NodeKind::Instance { component, .. } if component == main)).map(|n| n.id).unwrap();
+    let nested = node(s, card_inst).children[0];
+    assert_eq!(fill(s, nested), "00FF00");
+    assert_eq!(ex(s, "library.updates", json!({}))["count"], 0);
+    healthy(s);
+    // A structural change: the Button gains a layer (the Card's nested Button too).
+    ex(lib, "shape.ellipse", json!({"x": 80, "y": 10, "width": 8, "height": 8, "parent": k.button, "props": {"name": "Dot"}}));
+    ex(lib, "library.publish", json!({}));
+    ex(lib, "file.save", json!({}));
+    ex(s, "library.acceptUpdates", json!({"ids": [lid]}));
+    assert_eq!(node(s, b).children.len(), 2);
+    assert_eq!(node(s, nested).children.len(), 2);
+    assert_eq!(chars(s, b_label), "Buy", "overrides survive a structural update");
+    assert_eq!(s.doc().unwrap().libraries.link(lid).map(|l| l.version), Some(3));
+    healthy(s);
+    // Overrides still work after the update; resetting shows the library's text.
+    ex(s, "component.resetInstance", json!({"ids": [b]}));
+    assert_eq!(chars(s, node(s, b).children[0]), "Go");
+    card_inst
+}
+
+/// Detaching an instance of a library component counts it, for the library's analytics: kept with
+/// the file and reported to the library's server with its usage.
+fn detaching_a_library_instance_counts_it(s: &mut Session, d: &std::path::Path, lid: &str, inst: NodeId) {
+    ex(s, "component.detach", json!({"ids": [inst]}));
+    let detached = s.doc().unwrap().libraries.detached.clone();
+    assert_eq!(detached.len(), 1, "{detached:?}");
+    assert_eq!((detached[0].library.as_str(), detached[0].count), (lid, 1));
+    let report = crate::library_server::detached(s.doc().unwrap(), lid).expect("a report");
+    assert_eq!(report.components, [(detached[0].key, 1)]);
+    let again = path_str(&d.join("app-detached.figcraft"));
+    ex(s, "file.saveAs", json!({"path": again}));
+    let mut t = Session::empty();
+    ex(&mut t, "file.open", json!({"path": again}));
+    assert_eq!(t.doc().unwrap().libraries.detached, detached, "kept with the file");
+    // A plain frame detaches nothing (and counts nothing).
+    assert!(s.execute("component.detach", &json!({"ids": [inst]})).is_err());
+    assert_eq!(s.doc().unwrap().libraries.detached, detached);
+}
+
+/// Placing, duplicating, Alt-dragging, creating and pasting an instance of a library component
+/// count it as inserted, for the library's analytics: kept with the file and reported with its
+/// usage. Instances nested in another instance don't count; an instance in a duplicated frame does.
+#[test]
+fn inserting_library_instances_counts_them() {
+    let d = dir("inserted");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    kit(&mut lib);
+    let lid = publish_to(&mut lib, &lib_path);
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let counts = |s: &Session| -> Vec<u32> {
+        let doc = s.doc().unwrap();
+        let name = |key| doc.libraries.components.iter().find(|r| r.key == key).map(|r| r.root);
+        let mut c: Vec<_> = doc.libraries.inserted.iter().map(|c| (name(c.key).and_then(|r| doc.node(r)).map(|n| n.name.clone()), c.count)).collect();
+        c.sort();
+        c.into_iter().map(|c| c.1).collect()
+    };
+    // The Card holds a Button: only the Card counts.
+    let card = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Card", "x": 300, "y": 300})));
+    assert_eq!(counts(&s), [1]);
+    assert_eq!(node(&s, node(&s, card).parent.unwrap()).id, s.page().unwrap());
+    let main = match node(&s, card).kind {
+        NodeKind::Instance { component, .. } => component,
+        _ => panic!("not an instance"),
+    };
+    ex(&mut s, "edit.duplicate", json!({"ids": [card]}));
+    assert_eq!(counts(&s), [2], "duplicated");
+    ex(&mut s, "instance.create", json!({"component": main, "x": 900, "y": 0}));
+    assert_eq!(counts(&s), [3], "created from the copy");
+    // A frame holding one, pasted: the instance inside counts.
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 600, "width": 400, "height": 400})));
+    let inside = idv(&ex(&mut s, "instance.create", json!({"component": main, "x": 10, "y": 10, "parent": f})));
+    assert_eq!(counts(&s), [4]);
+    assert_eq!(node(&s, inside).parent, Some(f));
+    ex(&mut s, "edit.copy", json!({"ids": [f]}));
+    ex(&mut s, "edit.paste", json!({}));
+    assert_eq!(counts(&s), [5], "pasted inside a frame");
+    // Undo takes the count back with the insert.
     s.undo().unwrap();
-    assert_eq!(s.doc().unwrap().published.as_ref().map(|p| p.manifest.version), Some(2));
+    assert_eq!(counts(&s), [4]);
+    // Alt-dragging a copy out counts once, however far it was dragged.
+    ex(&mut s, "select.set", json!({"ids": [card]}));
+    let bounds = s.doc().unwrap().world_bounds(card).unwrap();
+    let (x, y) = (bounds.center().x, bounds.center().y);
+    let ev = |kind, dx: f64| crate::tools::PointerEvent { alt: true, ..crate::tools::PointerEvent::at(kind, x + dx, y, 1.0) };
+    s.pointer(&ev(crate::tools::PointerKind::Down, 0.0)).unwrap();
+    for dx in [40.0, 80.0, 120.0] {
+        s.pointer(&ev(crate::tools::PointerKind::Move, dx)).unwrap();
+    }
+    s.pointer(&ev(crate::tools::PointerKind::Up, 120.0)).unwrap();
+    assert_eq!(counts(&s), [5], "Alt-dragged");
+    let report = crate::library_server::inserted(s.doc().unwrap(), &lid).expect("a report");
+    assert_eq!(report.components.iter().map(|c| c.1).collect::<Vec<_>>(), [5]);
+    // Kept with the file.
+    let saved = path_str(&d.join("app.figcraft"));
+    ex(&mut s, "file.saveAs", json!({"path": saved}));
+    let mut t = Session::empty();
+    ex(&mut t, "file.open", json!({"path": saved}));
+    assert_eq!(t.doc().unwrap().libraries.inserted, s.doc().unwrap().libraries.inserted);
+    // Local components count nothing.
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 10, "height": 10, "name": "Mine"})));
+    let mine = idv(&ex(&mut s, "component.create", json!({"ids": [f]})));
+    ex(&mut s, "instance.create", json!({"component": mine, "x": 50, "y": 0}));
+    assert_eq!(counts(&s), [5]);
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
@@ -211,63 +373,9 @@ fn add_place_and_update_keep_overrides() {
         NodeKind::Instance { component, .. } => component,
         _ => panic!("not an instance"),
     };
-    let unchanged = s.doc().unwrap().clone();
-    let e = s.execute("node.set", &json!({"id": remote_button, "props": {"fill": "#ff0000"}})).unwrap_err();
-    assert!(e.to_string().contains("can't be edited"), "{e}");
-    assert_eq!(s.doc().unwrap(), &unchanged, "a refused remote edit rolls back");
-    for (cmd, args) in
-        [("node.reparent", json!({"ids": [remote_button], "parent": s.page().unwrap()})), ("edit.delete", json!({"ids": [remote_button]}))]
-    {
-        assert!(s.execute(cmd, &args).is_err(), "{cmd} must preserve read-only copies");
-        assert_eq!(s.doc().unwrap(), &unchanged, "refused {cmd} rolls back");
-    }
-    let style = s.doc().unwrap().styles[0].id.clone();
-    assert!(s.execute("style.update", &json!({"style": style, "name": "Mine"})).is_err());
-    assert!(s.execute("style.delete", &json!({"style": style})).is_err());
-    let e = s.execute("component.goToMain", &json!({"id": b})).unwrap_err();
-    assert!(e.to_string().contains("library"), "{e}");
-    assert!(s.execute("select.set", &json!({"ids": [remote_button]})).is_err(), "library copies can't be selected");
-    assert!(s.doc().unwrap().pages.contains(&s.page().unwrap()));
-    assert!(s.execute("component.pushChanges", &json!({"id": b})).is_err());
-    assert_eq!(fill(&s, remote_button), "0000FF");
+    assert_remote_read_only(&mut s, b, remote_button);
 
-    // The library changes the Button (fill via its style, and its label) and publishes again.
-    ex(&mut lib, "style.update", json!({"style": "Brand", "value": "#00ff00"}));
-    ex(&mut lib, "text.set", json!({"id": k.label, "characters": "Go"}));
-    ex(&mut lib, "library.publish", json!({}));
-    ex(&mut lib, "file.save", json!({}));
-
-    let u = ex(&mut s, "library.updates", json!({}));
-    assert_eq!(u["count"], 3, "Button, Card and the style: {u}");
-    let label_ids: Vec<NodeId> = s.doc().unwrap().subtree(b);
-    ex(&mut s, "library.acceptUpdates", json!({}));
-    assert_eq!(fill(&s, b), "00FF00", "the instance follows the updated main");
-    assert_eq!(chars(&s, b_label), "Buy", "its override is kept");
-    assert_eq!(s.doc().unwrap().subtree(b), label_ids, "layer ids are kept");
-    assert_eq!(fill(&s, remote_button), "00FF00");
-    let style = s.doc().unwrap().styles[0].clone();
-    assert!(matches!(&style.kind, StyleKind::Paint { paints } if paints[0].solid_color().unwrap().to_hex() == "00FF00"));
-    let doc = s.doc().unwrap();
-    assert_eq!(doc.libraries.link(&lid).map(|l| l.version), Some(2));
-    // The Card's nested Button follows too.
-    let card_inst = doc.nodes().find(|n| matches!(n.kind, NodeKind::Instance { component, .. } if component == main)).map(|n| n.id).unwrap();
-    let nested = node(&s, card_inst).children[0];
-    assert_eq!(fill(&s, nested), "00FF00");
-    assert_eq!(ex(&mut s, "library.updates", json!({}))["count"], 0);
-    healthy(&s);
-    // A structural change: the Button gains a layer (the Card's nested Button too).
-    ex(&mut lib, "shape.ellipse", json!({"x": 80, "y": 10, "width": 8, "height": 8, "parent": k.button, "props": {"name": "Dot"}}));
-    ex(&mut lib, "library.publish", json!({}));
-    ex(&mut lib, "file.save", json!({}));
-    ex(&mut s, "library.acceptUpdates", json!({"ids": [lid]}));
-    assert_eq!(node(&s, b).children.len(), 2);
-    assert_eq!(node(&s, nested).children.len(), 2);
-    assert_eq!(chars(&s, b_label), "Buy", "overrides survive a structural update");
-    assert_eq!(s.doc().unwrap().libraries.link(&lid).map(|l| l.version), Some(3));
-    healthy(&s);
-    // Overrides still work after the update; resetting shows the library's text.
-    ex(&mut s, "component.resetInstance", json!({"ids": [b]}));
-    assert_eq!(chars(&s, node(&s, b).children[0]), "Go");
+    let card_inst = library_updates_flow(&mut s, &mut lib, &k, &lid, [b, b_label, remote_button, main]);
 
     // Saved and reopened, the document keeps its links, copies and records.
     let user_path = path_str(&d.join("app.figcraft"));
@@ -277,14 +385,84 @@ fn add_place_and_update_keep_overrides() {
     healthy(&t);
     assert_eq!(t.doc().unwrap().libraries, s.doc().unwrap().libraries);
 
+    detaching_a_library_instance_counts_it(&mut s, &d, &lid, card_inst);
+
     // Removing the library keeps the copies instances use and drops the rest.
-    ex(&mut s, "component.detach", json!({"ids": [card_inst]}));
     ex(&mut s, "library.remove", json!({"id": lid}));
     let doc = s.doc().unwrap();
     assert!(doc.libraries.enabled.is_empty());
     assert_eq!(doc.libraries.components.len(), 1, "only the Button is still used");
     assert!(doc.contains(remote_button) && !doc.contains(main));
     healthy(&s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+fn go_to_main(s: &mut Session, id: NodeId) -> Value {
+    s.active = 0;
+    ex(s, "component.goToMain", json!({"id": id}))
+}
+
+#[test]
+fn going_to_a_library_main_opens_the_library_file() {
+    let d = dir("go-to-main");
+    let lib_path = path_str(&d.join("kit.figcraft"));
+    let mut lib = Session::new();
+    let k = kit(&mut lib);
+    let mut chips = Vec::new();
+    for (i, color) in ["#ff0000", "#00ff00"].iter().enumerate() {
+        let f = idv(&ex(&mut lib, "frame.create", json!({"x": 400.0 + i as f64 * 100.0, "y": 0, "width": 60, "height": 20, "name": "Chip"})));
+        ex(&mut lib, "node.set", json!({"id": f, "props": {"fill": color}}));
+        chips.push(idv(&ex(&mut lib, "component.create", json!({"ids": [f]}))));
+    }
+    ex(&mut lib, "component.combineVariants", json!({"ids": chips}));
+    let kit_page = lib.doc().unwrap().page_of(k.card).unwrap();
+    ex(&mut lib, "page.add", json!({"name": "Notes"}));
+    let lid = publish_to(&mut lib, &lib_path);
+
+    let mut s = Session::new();
+    ex(&mut s, "library.add", json!({"path": lib_path}));
+    let card = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Card", "x": 0, "y": 0})));
+    let nested_button = node(&s, card).children[0];
+    let chip = idv(&ex(&mut s, "library.place", json!({"library": lid, "component": "Chip", "x": 0, "y": 200})));
+    ex(&mut s, "instance.setProperties", json!({"ids": [chip], "properties": {"Property 1": "Variant2"}}));
+    s.ds_mut().unwrap().view.vw = 900.0;
+    s.ds_mut().unwrap().view.vh = 500.0;
+    let using = s.doc().unwrap().clone();
+
+    let r = go_to_main(&mut s, card);
+    assert_eq!((id_of(&r["id"]), r["index"].as_u64()), (Some(k.card), Some(1)), "{r}");
+    let ds = s.ds().unwrap();
+    assert_eq!(ds.path.as_deref(), Some(lib_path.as_str()));
+    assert_eq!((ds.selection.clone(), ds.page), (vec![k.card], kit_page));
+    assert_eq!((ds.view.vw, ds.view.vh), (900.0, 500.0), "the canvas it opens on is the one shown, so the fit stands");
+    let shown = ds.doc.world_bounds(k.card).unwrap().center();
+    assert_eq!((ds.view.cx, ds.view.cy), (shown.x, shown.y));
+
+    for (layer, main) in [(nested_button, k.button), (chip, chips[1])] {
+        let r = go_to_main(&mut s, layer);
+        assert_eq!((id_of(&r["id"]), r["index"].as_u64()), (Some(main), Some(1)), "{r}");
+        assert_eq!(s.ds().unwrap().selection, vec![main]);
+    }
+    assert_eq!(s.docs.len(), 2, "the open library file comes to the front");
+    assert_eq!(s.docs[0].doc.as_ref(), &using, "the file going there is unchanged");
+
+    s.active = 1;
+    ex(&mut s, "edit.delete", json!({"ids": [k.card]}));
+    let r = go_to_main(&mut s, card);
+    assert!(r["id"].is_null() && r["index"] == 1, "{r}");
+    assert!(s.message.take().is_some_and(|m| m.contains("isn't in this file any more")));
+
+    ex(&mut s, "file.close", json!({"index": 1, "force": true}));
+    std::fs::rename(&lib_path, d.join("moved.figcraft")).unwrap();
+    s.active = 0;
+    let e = s.execute("component.goToMain", &json!({"id": card})).unwrap_err();
+    assert!(e.to_string().contains("isn't at"), "{e}");
+    assert_eq!(s.docs.len(), 1);
+
+    let NodeKind::Instance { component: copy, .. } = node(&s, card).kind else { panic!("not an instance") };
+    s.doc_mut().unwrap().libraries_mut().components.retain(|r| r.root != copy);
+    let e = s.execute("component.goToMain", &json!({"id": card})).unwrap_err();
+    assert!(e.to_string().contains("no link to its library"), "an imported copy without its record: {e}");
     let _ = std::fs::remove_dir_all(&d);
 }
 

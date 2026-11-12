@@ -17,6 +17,7 @@ type Queue = Arc<Mutex<Vec<(u64, LiveEvent)>>>;
 struct Hosting(Queue);
 
 impl LiveLink for Hosting {
+    /// Host at once, with an invite link and nobody else in the session.
     fn host(&mut self, session: u64, _: HostOptions) -> Result<SessionInfo, String> {
         let address = format!("127.0.0.1:{}", 47_899 + session);
         Ok(SessionInfo {
@@ -31,6 +32,7 @@ impl LiveLink for Hosting {
             address,
             network: false,
             access: Access::Edit,
+            view: None,
         })
     }
     fn join(&mut self, _: u64, _: &str, _: &str) -> Result<(), String> {

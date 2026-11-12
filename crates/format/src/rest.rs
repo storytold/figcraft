@@ -7,7 +7,7 @@
 //! corners, constraints, auto layout, layout grids, export settings, text with styled runs,
 //! vectors from `fillGeometry` / `strokeGeometry`, components, component sets, instances and
 //! component properties (slots included) are imported. Image fills keep their `imageRef` as the
-//! image key and show a grey placeholder unless an [`ImageResolver`] supplies the bytes (nothing is fetched).
+//! image key and show a missing-image placeholder unless an [`ImageResolver`] supplies the bytes (nothing is fetched).
 //! Prototyping comes along: interactions (triggers, actions, transitions, easing), flows,
 //! scrolling and the prototype device. Variables come from the local variables response
 //! (`GET /v1/files/:key/variables/local`), embedded next to the file JSON or passed separately
@@ -397,6 +397,22 @@ impl Default for Space {
     }
 }
 
+/// A layer [`Ctx::build`] has yet to import, with where it goes.
+struct Layer<'a> {
+    j: &'a Value,
+    parent: NodeId,
+    space: Space,
+    parent_mode: Option<LayoutMode>,
+    depth: usize,
+    root_abs: bool,
+}
+
+/// [`Ctx::build`]'s work list: layers to import, and groups to fit once their children are in.
+enum Build<'a> {
+    Layer(Layer<'a>),
+    Fit(NodeId),
+}
+
 pub(crate) struct Ctx<'a> {
     doc: Document,
     images: ImageResolver<'a>,
@@ -411,6 +427,9 @@ pub(crate) struct Ctx<'a> {
     component_meta: BTreeMap<&'a str, &'a Value>,
     set_meta: BTreeMap<&'a str, &'a Value>,
     style_meta: BTreeMap<&'a str, &'a Value>,
+    /// The ids of the styles imported so far (`doc.styles` is a Vec: a lookup per reference
+    /// would be quadratic in a document with many distinct references).
+    style_ids: BTreeSet<String>,
     /// Instances (imported as frames until their main is resolved) with their JSON.
     instances: Vec<(NodeId, &'a Value)>,
     /// `SLOT` layers (imported as frames until their slot property is resolved) with their JSON.
@@ -423,6 +442,8 @@ pub(crate) struct Ctx<'a> {
     set_defs: BTreeMap<NodeId, BTreeMap<String, PropDef>>,
     /// Prototype starting points: (page, name, REST node id).
     flows: Vec<(NodeId, String, String)>,
+    /// Board connectors and labels, resolved once every layer is imported (their ends name layers).
+    pending_boards: Vec<(NodeId, &'a Value)>,
     /// Layers with prototype interactions, resolved once every layer is imported.
     protos: Vec<(NodeId, &'a Value)>,
     /// Layers that carry overlay settings (position, background, outside clicks), by REST id.
@@ -452,12 +473,14 @@ impl<'a> Ctx<'a> {
             component_meta: BTreeMap::new(),
             set_meta: BTreeMap::new(),
             style_meta: BTreeMap::new(),
+            style_ids: BTreeSet::new(),
             instances: Vec::new(),
             slots: Vec::new(),
             slot_defaults: BTreeMap::new(),
             swap_defaults: Vec::new(),
             set_defs: BTreeMap::new(),
             flows: Vec::new(),
+            pending_boards: Vec::new(),
             protos: Vec::new(),
             overlay_meta: BTreeMap::new(),
             var_kinds: BTreeMap::new(),
@@ -514,8 +537,26 @@ impl<'a> Ctx<'a> {
     }
 
     /// Import layer `j` (and its subtree) under `parent`. `root_abs`: place it by its absolute
-    /// bounds (roots of a nodes response, whose parent isn't in the file).
+    /// bounds (roots of a nodes response, whose parent isn't in the file). Depth first in the
+    /// file's order, on a work list rather than the call stack (#1101): a level took about 4 KB of
+    /// stack, so the deepest files filled the browser's 1 MB.
     fn build(&mut self, j: &'a Value, parent: NodeId, space: Space, parent_mode: Option<LayoutMode>, depth: usize, root_abs: bool) {
+        let mut work = vec![Build::Layer(Layer { j, parent, space, parent_mode, depth, root_abs })];
+        while let Some(step) = work.pop() {
+            match step {
+                Build::Layer(layer) => self.build_layer(layer, &mut work),
+                // A group or boolean fits its children once all of them are in.
+                Build::Fit(id) => {
+                    let _ = self.doc.fit_to_children(id);
+                }
+            }
+        }
+    }
+
+    /// One layer of [`Self::build`]: its node, then its children pushed on `work` (and, when its
+    /// bounds follow them, the fit after them).
+    fn build_layer(&mut self, layer: Layer<'a>, work: &mut Vec<Build<'a>>) {
+        let Layer { j, parent, space, parent_mode, depth, root_abs } = layer;
         if depth > MAX_DEPTH {
             self.warn(format!("layers nested deeper than {MAX_DEPTH} levels were skipped"));
             return;
@@ -570,12 +611,13 @@ impl<'a> Ctx<'a> {
             return;
         }
         let inner = Space { world, frame: if follows { space.frame } else { world } };
-        for c in kids {
-            self.build(c, id, inner, mode, depth + 1, false);
-        }
         if follows {
-            let _ = self.doc.fit_to_children(id);
+            work.push(Build::Fit(id));
         }
+        // Reversed, so the first child comes off the list first.
+        work.extend(
+            kids.iter().rev().map(|c| Build::Layer(Layer { j: c, parent: id, space: inner, parent_mode: mode, depth: depth + 1, root_abs: false })),
+        );
     }
 
     fn kind(&mut self, ty: &str, j: &'a Value) -> Option<NodeKind> {
@@ -591,10 +633,27 @@ impl<'a> Ctx<'a> {
             "ELLIPSE" => {
                 let a = j.get("arcData");
                 let arc = |k: &str| a.and_then(|a| num(a, k));
-                let start = arc("startingAngle").unwrap_or(0.0).clamp(-1e3, 1e3);
-                let end = arc("endingAngle").map_or(start + std::f64::consts::TAU, |e| e.clamp(-1e3, 1e3));
                 let tau = std::f64::consts::TAU;
-                NodeKind::Ellipse { start, sweep: (end - start).clamp(-tau, tau), inner: arc("innerRadius").unwrap_or(0.0).clamp(0.0, 1.0) }
+                // Capped only so the difference stays finite: the sweep is the difference of the
+                // angles as written, wherever they lie.
+                let start = arc("startingAngle").unwrap_or(0.0).clamp(-1e15, 1e15);
+                // No end goes all the way round, however far out the start is.
+                let end = arc("endingAngle").map(|e| e.clamp(-1e15, 1e15));
+                // The angles are 32-bit floats: a whole turn from anywhere but zero comes out a
+                // hair short of 2π as often as not. Within their precision of a turn, it is one.
+                // Far enough out (thousands of radians) that precision is too coarse to tell a
+                // whole turn from a nearly whole arc, the sweep is kept as written.
+                let sweep = end.map_or(tau, |end| {
+                    let precision = (start.abs() + end.abs() + tau) * f64::from(f32::EPSILON);
+                    let sweep = end - start;
+                    let whole = precision <= WHOLE_TURN_SLACK && sweep.abs() >= tau - precision;
+                    if whole { tau.copysign(sweep) } else { sweep }
+                });
+                NodeKind::Ellipse {
+                    start: start_within_a_turn(start),
+                    sweep: sweep.clamp(-tau, tau),
+                    inner: arc("innerRadius").unwrap_or(0.0).clamp(0.0, 1.0),
+                }
             }
             // Point counts aren't part of the documented JSON: the outline is exact when present.
             "REGULAR_POLYGON" | "STAR" if point_count().is_none() && has_geometry => NodeKind::Vector { network: VectorNetwork::default() },
@@ -613,7 +672,7 @@ impl<'a> Ctx<'a> {
                 },
             },
             "TEXT" => NodeKind::Text(text::text_data(self, j)),
-            "COMPONENT" => NodeKind::Component { description: description(&self.component_meta, j), props: BTreeMap::new() },
+            "COMPONENT" => NodeKind::Component { description: description(&self.component_meta, j), props: BTreeMap::new(), prop_order: Vec::new() },
             "COMPONENT_SET" => NodeKind::ComponentSet { description: description(&self.set_meta, j) },
             "SLICE" => NodeKind::Slice,
             _ => return None,
@@ -725,10 +784,43 @@ impl<'a> Ctx<'a> {
             self.overlay_meta.entry(rid).or_insert(j);
         }
         self.bindings(n, j);
+        if let Some(b) = j.get("board") {
+            self.board_item(n, b);
+        }
         let restored = j.get("outlinedStroke").is_some_and(|original| restore_stroke(n, original));
         // Styles and bindings were read against the stroke: they follow its paints to the fill.
         if outlined && !restored {
             outline_stroke(n);
+        }
+    }
+
+    /// The `board` field (a FigCraft extension): what the object is on a board. A sticky or shape
+    /// is set at once; anything else, or junk, is ignored with a warning.
+    fn board_item(&mut self, n: &mut Node, b: &'a Value) {
+        // A sticky or shape is a frame holding its layers: on anything else it is ignored.
+        let frame = n.kind.is_frame_like();
+        let item = match text(b, "type") {
+            Some("sticky") if frame => {
+                let author = text(b, "author").unwrap_or("").trim();
+                Some(figcraft_doc::BoardItem::Sticky { author: author.chars().filter(|c| !c.is_control()).take(64).collect() })
+            }
+            Some("shape") if frame => {
+                text(b, "shape").and_then(figcraft_doc::BoardShape::from_id).map(|shape| figcraft_doc::BoardItem::Shape { shape })
+            }
+            _ => None,
+        };
+        match item {
+            Some(item) => n.board = Some(item),
+            None => self.warn(format!("unknown board item on {} was ignored", n.name)),
+        }
+    }
+
+    /// Board items that name other layers (connector ends, a label's connector), once every
+    /// layer is imported and `ids` can resolve them.
+    fn resolve_boards(&mut self) {
+        for (id, _) in std::mem::take(&mut self.pending_boards) {
+            let name = self.doc.node(id).map(|n| n.name.clone()).unwrap_or_default();
+            self.warn(format!("unknown board item on {name} was ignored"));
         }
     }
 
@@ -738,9 +830,30 @@ impl<'a> Ctx<'a> {
     /// (exact look, editable as a shape): returns whether it does, and the caller moves the paints
     /// with [`outline_stroke`] once the styles and variables of the stroke are read.
     fn vector(&mut self, n: &mut Node, j: &Value) -> bool {
-        let net = match j.get("vectorNetworkRef") {
-            Some(r) => Some(r.as_u64().and_then(|i| self.networks.get(usize::try_from(i).ok()?).cloned().flatten())),
-            None => j.get("vectorNetwork").map(network),
+        let net = match j.get("vectorNetwork") {
+            Some(net) => Some(network(net).map(|mut network| {
+                // Private `.fig` mapper handoff only. Public REST `vectorNetwork` remains
+                // native network JSON; it never consumes the private mapper paint fields.
+                if self.fig_sources.is_some()
+                    && let Some(regions) = net.get("regions").and_then(Value::as_array)
+                {
+                    for (region, source) in network.regions.iter_mut().zip(regions) {
+                        let Some(fills) = source.get("_figRegionFills") else { continue };
+                        let Some(list) = fills.as_array() else {
+                            self.warn("invalid vector region paints were skipped");
+                            continue;
+                        };
+                        let before = list.len();
+                        let wrapper = serde_json::json!({"fills": fills});
+                        region.fills = props::paints(self, &wrapper, "fills");
+                        if region.fills.as_ref().is_some_and(|parsed| parsed.len() < before) {
+                            self.warn("invalid vector region paints were skipped");
+                        }
+                    }
+                }
+                network
+            })),
+            None => j.get("vectorNetworkRef").map(|r| r.as_u64().and_then(|i| self.networks.get(usize::try_from(i).ok()?).cloned().flatten())),
         };
         if let Some(net) = net {
             match net {
@@ -782,7 +895,7 @@ impl<'a> Ctx<'a> {
                 self.warn("very long vector paths were skipped");
                 continue;
             }
-            match BezPath::from_svg(d) {
+            match figcraft_doc::geom::svg_path(d) {
                 Ok(bp) if sane(&bp) && out.elements().len() + bp.elements().len() <= MAX_PATH_ELEMENTS => {
                     winding.get_or_insert(if text(p, "windingRule") == Some("EVENODD") { WindingRule::EvenOdd } else { WindingRule::NonZero });
                     out.extend(bp);
@@ -845,14 +958,18 @@ impl<'a> Ctx<'a> {
     fn style_definitions(&mut self, v: &'a Value) {
         for d in list(v, "styleDefinitions").iter().take(MAX_STYLES) {
             let (Some(id), Some(node)) = (text(d, "id").filter(|i| !i.is_empty()).map(clip_str), d.get("node")) else { continue };
-            if self.doc.styles.iter().any(|s| s.id == id) {
+            if self.style_ids.contains(id) {
                 continue;
             }
             let kind = match text(d, "styleType") {
                 Some("FILL") => StyleKind::Paint { paints: props::paints(self, node, "fills").unwrap_or_default() },
                 Some("EFFECT") => StyleKind::Effect { effects: props::effects(self, node) },
                 Some("GRID") => StyleKind::Grid { grids: props::layout_grids(node) },
-                Some("TEXT") => StyleKind::Text { style: text::text_data(self, node).style.as_text_style() },
+                Some("TEXT") => {
+                    // The sample layer carries the paragraph-level values too (#1829).
+                    let td = text::text_data(self, node);
+                    StyleKind::Text { style: td.style.as_text_style(), paragraph: Box::new(td.paragraph_style()) }
+                }
                 _ => continue,
             };
             let name = text(d, "name").filter(|s| !s.is_empty()).map_or_else(|| format!("Style {id}"), |s| clip_str(s).to_string());
@@ -880,6 +997,7 @@ impl<'a> Ctx<'a> {
             };
             self.bindings(&mut sample, node);
             let bound = sample.bound.iter().filter_map(|(k, v)| Some((style_binding(slot, k)?, v.clone()))).collect();
+            self.style_ids.insert(id.to_string());
             self.doc.styles.push(Style { id: id.to_string(), name, description, kind, bound });
         }
     }
@@ -894,19 +1012,22 @@ impl<'a> Ctx<'a> {
                 "effect" | "effects" => (StyleKind::Effect { effects: n.effects.clone() }, &mut n.styles.effect),
                 "grid" | "grids" => (StyleKind::Grid { grids: n.grids.clone() }, &mut n.styles.grid),
                 "text" => match &n.kind {
-                    NodeKind::Text(t) => (StyleKind::Text { style: t.style.as_text_style() }, &mut n.styles.text),
+                    NodeKind::Text(t) => {
+                        (StyleKind::Text { style: t.style.as_text_style(), paragraph: Box::new(t.paragraph_style()) }, &mut n.styles.text)
+                    }
                     _ => continue,
                 },
                 _ => continue,
             };
             *target = Some(sid.to_string());
-            if self.doc.styles.iter().any(|s| s.id == sid) {
+            if self.style_ids.contains(sid) {
                 continue;
             }
             let meta = self.style_meta.get(sid);
             let name =
                 meta.and_then(|m| text(m, "name")).filter(|s| !s.is_empty()).map_or_else(|| format!("Style {sid}"), |s| clip_str(s).to_string());
             let description = meta.and_then(|m| text(m, "description")).map(|s| clip_str(s).to_string()).unwrap_or_default();
+            self.style_ids.insert(sid.to_string());
             self.doc.styles.push(Style { id: sid.to_string(), name, description, kind, bound: BTreeMap::new() });
         }
     }
@@ -947,7 +1068,10 @@ impl<'a> Ctx<'a> {
     }
 
     /// The document image key for an `imageRef`: its bytes when the resolver has them, else a
-    /// grey placeholder stored under the `imageRef` itself.
+    /// missing-image placeholder stored under the `imageRef` itself when that name can legitimately be an
+    /// archive member (`is_valid_key`) and claims no content hash (`claims_content_hash`: the
+    /// placeholder's bytes don't hash to it); any other name shares the `rest-image-missing`
+    /// placeholder.
     pub(crate) fn image_key(&mut self, image_ref: &str) -> String {
         if let Some(k) = self.image_keys.get(image_ref) {
             return k.clone();
@@ -957,11 +1081,24 @@ impl<'a> Ctx<'a> {
             Some((hash, _, _)) => hash,
             None => {
                 self.missing_images += 1;
-                let key = if image_ref.is_empty() { MISSING_IMAGE } else { clip_str(image_ref) }.to_string();
+                // A design file's (or a paste's) image fill names its image by hash: one note per
+                // fill, counted, read the same in every language.
+                if self.fig_sources.is_some() {
+                    self.warn("image fills whose image isn't in the file show a missing-image placeholder and keep its name");
+                }
+                // An `imageRef` arrives from an untrusted file, and keys become archive member
+                // names on save: a name that can't legitimately be one must not reach the map,
+                // nor one claiming a content hash the placeholder's bytes don't have.
+                let candidate = if image_ref.is_empty() { MISSING_IMAGE } else { clip_str(image_ref) };
+                let named = ImageData::is_valid_key(candidate) && !ImageData::claims_content_hash(candidate);
+                let key = if named { candidate } else { MISSING_IMAGE };
+                let key = key.to_string();
                 if !self.doc.images.contains_key(&key)
-                    && let Some(png) = placeholder_png()
+                    && let Some(png) = missing_image_placeholder()
                 {
-                    self.doc.images.insert(key.clone(), ImageData { bytes: Arc::new(png), width: PLACEHOLDER_SIDE, height: PLACEHOLDER_SIDE });
+                    self.doc
+                        .images
+                        .insert(key.clone(), ImageData { bytes: Arc::new(png.to_vec()), width: PLACEHOLDER_SIDE, height: PLACEHOLDER_SIDE });
                 }
                 key
             }
@@ -981,6 +1118,8 @@ impl<'a> Ctx<'a> {
 
     /// Cross-references that need every layer imported first.
     fn finish(&mut self) {
+        // A `.fig` import (its sources are taken below) noted each missing image already.
+        let fig = self.fig_sources.is_some();
         self.resolve_swap_defaults();
         // Variants share their set's property definitions.
         for (set, defs) in std::mem::take(&mut self.set_defs) {
@@ -993,6 +1132,7 @@ impl<'a> Ctx<'a> {
             }
         }
         self.resolve_instances();
+        self.resolve_boards();
         if let Some(sources) = self.fig_sources.take() {
             let missing = sources.apply(&mut self.doc, &self.ids);
             if missing > 0 {
@@ -1014,11 +1154,11 @@ impl<'a> Ctx<'a> {
                 flows.push(Flow { name, start: id, description: String::new() });
             }
         }
-        if self.missing_images > 0 {
+        if self.missing_images > 0 && !fig {
             let n = self.missing_images;
             let (s, verb) = if n == 1 { ("", "shows") } else { ("s", "show") };
             self.warn(format!(
-                "{n} image{s} without image data {verb} a grey placeholder named by its imageRef (put the downloaded images, named by imageRef, in an `images` folder next to the JSON)"
+                "{n} image{s} without image data {verb} a missing-image placeholder, named by its imageRef when that can legitimately name a file and by the shared name otherwise (put the downloaded images, named by imageRef, in an `images` folder next to the JSON)"
             ));
         }
         let unused = self.style_meta.keys().filter(|k| !self.doc.styles.iter().any(|s| s.id == **k)).count();
@@ -1382,6 +1522,11 @@ pub(crate) fn network(v: &Value) -> Option<VectorNetwork> {
     if !fits {
         return None;
     }
+    // Region paints come only from the validated `.fig` mapper handoff, never from public JSON.
+    for r in &mut net.regions {
+        r.fills = None;
+        r.paint_space = None;
+    }
     for p in &mut net.vertices {
         p.radius = p.radius.clamp(0.0, MAX_SIZE);
     }
@@ -1395,12 +1540,52 @@ fn sane(p: &BezPath) -> bool {
 }
 
 /// Side of the placeholder image (large enough that scaling it up stays flat).
-const PLACEHOLDER_SIDE: u32 = 64;
+const PLACEHOLDER_SIDE: u32 = 256;
 
-/// A light-grey PNG standing in for image fills whose bytes aren't available.
-fn placeholder_png() -> Option<Vec<u8>> {
-    let img = image::RgbaImage::from_pixel(PLACEHOLDER_SIDE, PLACEHOLDER_SIDE, image::Rgba([0xD9, 0xD9, 0xD9, 0xFF]));
-    let mut out = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
-    Some(out)
+/// The PNG standing in for image fills whose bytes aren't available (#1646): light grey crossed
+/// by darker diagonal stripes, so it reads as an image that is missing, not as a grey the design
+/// chose. Made once; [`is_missing_image`] recognises it.
+pub fn missing_image_placeholder() -> Option<&'static [u8]> {
+    static PNG: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+    PNG.get_or_init(|| {
+        // Stripes 6 px wide every 18 px across the diagonal, their edges anti-aliased, so they
+        // stay clean when a fill scales the picture up.
+        let (period, width) = (18.0f32, 6.0f32);
+        let (ground, stripe) = ([0xE6u8, 0xE6, 0xE6], [0xB4u8, 0xB4, 0xB4]);
+        let img = image::RgbaImage::from_fn(PLACEHOLDER_SIDE, PLACEHOLDER_SIDE, |x, y| {
+            let t = ((x + y) as f32 + 1.0) / std::f32::consts::SQRT_2 % period;
+            let inside = if t < width { t.min(width - t) + 0.5 } else { 0.5 - (t - width).min(period - t) };
+            let k = inside.clamp(0.0, 1.0);
+            let mix = |i: usize| (f32::from(ground[i]) + (f32::from(stripe[i]) - f32::from(ground[i])) * k).round() as u8;
+            image::Rgba([mix(0), mix(1), mix(2), 0xFF])
+        });
+        let mut out = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
+        Some(out)
+    })
+    .as_deref()
+}
+
+/// `data` is the placeholder an import stored for an image it didn't have.
+pub fn is_missing_image(data: &ImageData) -> bool {
+    missing_image_placeholder().is_some_and(|png| data.bytes.as_slice() == png)
+}
+
+/// The most a sweep may fall short of a turn and still be read as a whole one (radians, about
+/// 0.06°): far more than 32-bit angles round by within a few hundred turns of zero, and far less
+/// than any arc anyone draws.
+const WHOLE_TURN_SLACK: f64 = 1e-3;
+
+/// An ellipse's start brought within a turn, drawn the same: a start already within one is kept
+/// as it is, one past a turn comes to [0, 2π). It is reduced the way the renderer's sine and
+/// cosine see it, exactly, rather than by dividing by a rounded 2π, which drifts a little with
+/// every turn.
+pub(crate) fn start_within_a_turn(start: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    if !start.is_finite() || start.abs() < tau {
+        return start;
+    }
+    // `rem_euclid` rounds a hair below zero up to 2π itself.
+    let within = start.sin().atan2(start.cos()).rem_euclid(tau);
+    if within < tau { within } else { 0.0 }
 }

@@ -159,6 +159,20 @@ fn oval_slice_and_bitmap() {
 }
 
 #[test]
+fn image_bombs_are_refused() {
+    // A valid 2×2 PNG followed by 40 MB of zeros packs to a few dozen kilobytes.
+    let mut png = Vec::new();
+    image::RgbaImage::new(2, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png.resize(png.len() + 40 * 1024 * 1024, 0);
+    let mut bitmap = rect("Photo", 0.0, 0.0, 30.0, 20.0);
+    bitmap["_class"] = json!("bitmap");
+    bitmap["image"] = json!({"_class": "MSJSONFileReference", "_ref_class": "MSImageData", "_ref": "images/bomb.png"});
+    let (doc, _) = open_with(vec![artboard("A", "Board", 0.0, 0.0, 100.0, 100.0, vec![bitmap])], &[("images/bomb.png", &png)]);
+    let total: usize = doc.images.values().map(|i| i.bytes.len()).sum();
+    assert!(total < 1024 * 1024, "{total} image bytes kept");
+}
+
+#[test]
 fn unknown_class_is_a_warning() {
     let mut odd = rect("Odd", 0.0, 0.0, 10.0, 10.0);
     odd["_class"] = json!("MSSomethingNew");

@@ -1,4 +1,17 @@
-use super::*;
+use super::{
+    Action, Document, Easing, FrameTex, NodeId, NodeKind, OverlayAnchor, OverlayPosition, OverlayState, Presenter, Rect, ScrollAnim, Temp,
+    Transition, Trigger, Waiting,
+};
+
+#[derive(Clone, Copy)]
+struct ActionTiming {
+    transition: Transition,
+    duration: f64,
+    easing: Easing,
+    rect: Option<Rect>,
+    now: f64,
+    depth: usize,
+}
 
 impl Presenter {
     /// A mouse enter, leave, down or up on `node` (shown on `root`) met its interaction `k`: its
@@ -23,14 +36,23 @@ impl Presenter {
         self.waiting.retain(|w| w.root == root);
         let mut did = false;
         for w in due.into_iter().filter(|w| w.root == root) {
-            // An earlier one may have left the screen: the rest are dropped with it.
-            did = did || self.fire(w.node, w.k, w.rect, now);
+            // An earlier one may have left the screen: the rest are dropped with it. The gesture
+            // is long over: what these open is not the viewer's doing (#1096).
+            did = did || self.fire_from(w.node, w.k, w.rect, now, false);
         }
         did
     }
 
     /// Run the actions of interaction `k` on `node`. `rect` is the layer's screen rect.
     pub(crate) fn fire(&mut self, node: NodeId, k: usize, rect: Option<Rect>, now: f64) -> bool {
+        self.fire_from(node, k, rect, now, true)
+    }
+
+    /// [`fire`](Self::fire); `live`: the viewer's input fired it just now (not a delay it waited
+    /// out). The links it opens are the viewer's own only when live from a click, press, drag or
+    /// key: a delay, the pointer passing over a layer and a timed mouse trigger fire without the
+    /// viewer asking for anything ([`Presenter::urls`], #1096).
+    fn fire_from(&mut self, node: NodeId, k: usize, rect: Option<Rect>, now: f64, live: bool) -> bool {
         let Some(it) = self.doc.as_ref().and_then(|d| d.node(node)).and_then(|n| n.interactions.get(k)).cloned() else { return false };
         let dur = it.easing.seconds(it.duration_ms);
         let temp = match it.trigger {
@@ -40,8 +62,17 @@ impl Presenter {
         };
         let snap = if temp.is_some() && self.temp.is_none() { self.snapshot() } else { None };
         let mut did = false;
+        let first_link = self.urls.len();
         for a in &it.actions {
             did |= self.perform(a, node, it.transition, dur, it.easing, rect, now);
+        }
+        let asked = live
+            && matches!(
+                it.trigger,
+                Trigger::OnClick | Trigger::OnPress | Trigger::OnDrag | Trigger::MouseDown | Trigger::MouseUp | Trigger::KeyPress { .. }
+            );
+        for link in self.urls.iter_mut().skip(first_link) {
+            link.1 = asked;
         }
         if did && let (Some(press), Some(snap), Some(rect)) = (temp, snap, rect) {
             self.temp = Some(Temp { rect, press, snap, transition: it.transition, dur, easing: it.easing });
@@ -68,12 +99,12 @@ impl Presenter {
     }
 
     pub(crate) fn perform(&mut self, a: &Action, node: NodeId, tr: Transition, dur: f64, easing: Easing, rect: Option<Rect>, now: f64) -> bool {
-        self.perform_at(a, node, tr, dur, easing, rect, now, 0)
+        self.perform_at(a, node, ActionTiming { transition: tr, duration: dur, easing, rect, now, depth: 0 })
     }
 
     /// One action; `depth` counts the conditional actions it is inside.
-    #[allow(clippy::too_many_arguments)]
-    fn perform_at(&mut self, a: &Action, node: NodeId, tr: Transition, dur: f64, easing: Easing, rect: Option<Rect>, now: f64, depth: usize) -> bool {
+    fn perform_at(&mut self, a: &Action, node: NodeId, timing: ActionTiming) -> bool {
+        let ActionTiming { transition: tr, duration: dur, easing, rect, now, depth } = timing;
         let Some(doc) = self.doc.clone() else { return false };
         match a {
             Action::Navigate { dest, preserve_scroll } => {
@@ -163,11 +194,12 @@ impl Presenter {
                 true
             }
             Action::CloseOverlay => self.close_overlay(now),
-            Action::OpenUrl { url } => {
+            Action::OpenUrl { url, new_tab } => {
                 // The URL comes from the document and this action fires from whatever trigger the
-                // prototype sets, including a delay, so no click is implied: only a web link opens.
+                // prototype sets, including a delay, so no click is implied: only a web or mail
+                // link is kept, as not the viewer's doing until `fire_from` says otherwise.
                 if figcraft_engine::doc_urls::openable(url) {
-                    self.urls.push(url.clone());
+                    self.urls.push((url.clone(), false, *new_tab));
                 }
                 true
             }
@@ -200,7 +232,7 @@ impl Presenter {
             Action::SetVariableMode { collection, mode } => {
                 let Some(d) = self.design.as_mut() else { return false };
                 let before = d.clone();
-                let set = figcraft_engine::proto_run::set_mode(d, self.current, collection, mode);
+                let set = figcraft_engine::proto_run::set_mode_by_id(d, self.current, collection, mode);
                 if set {
                     self.settle(&before);
                 }
@@ -213,7 +245,7 @@ impl Presenter {
                 // Evaluated now: earlier actions of the interaction may have changed variables.
                 let mut did = false;
                 for inner in figcraft_engine::proto_run::branch(&doc, node, blocks) {
-                    did |= self.perform_at(&inner, node, tr, dur, easing, rect, now, depth + 1);
+                    did |= self.perform_at(&inner, node, ActionTiming { depth: depth + 1, ..timing });
                 }
                 did
             }

@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    Arc, COMPONENT, Color32, CornerRadius, Document, FigApp, NodeId, NodeKind, Point, Pos2, Rect, Shape, Stroke, pos2, regular, semibold, tr, vec2,
+};
 
 pub(super) fn stroke(c: Color32, w: f32) -> Stroke {
     Stroke::new(w, c)
@@ -69,7 +71,33 @@ pub(super) fn quad(painter: &egui::Painter, q: [Pos2; 4], s: Stroke) {
 /// The slots of the selected components and instances (and a slot being dropped onto): a dashed
 /// outline and the slot's name above its top-left corner, like a frame label (never over the
 /// content).
-pub(super) fn slot_badges(app: &FigApp, painter: &egui::Painter, doc: &Document, sel: &[NodeId], drop: Option<NodeId>) {
+pub(super) fn slot_badges(app: &FigApp, painter: &egui::Painter, doc: &Arc<Document>, sel: &[NodeId], drop: Option<NodeId>) {
+    let key = [drop.map_or(0, |d| d.0.wrapping_add(1))];
+    // Which slots show doesn't change while the selection is only moved: the gesture's start keeps it.
+    let base = app.session.ds().ok().and_then(crate::selection_cache::moved).map(|(b, _)| b);
+    let from = base.as_ref().unwrap_or(doc);
+    let slots = crate::selection_cache::cached(painter.ctx(), "slots", from, sel, &key, || slots_shown(from, sel, drop));
+    for (id, name) in slots {
+        let Some(q) = node_quad(app, doc, id) else { continue };
+        if !Rect::from_points(&q).intersects(app.canvas.rect) {
+            continue;
+        }
+        painter.extend(Shape::dashed_line(&[q[0], q[1], q[2], q[3], q[0]], stroke(COMPONENT, 1.0), 4.0, 3.0));
+        // The label, when the slot is wide enough on screen to hold it.
+        let galley = painter.layout_no_wrap(name, regular(10.0), COMPONENT);
+        let (w, h) = (galley.size().x + 14.0, galley.size().y.max(11.0));
+        if (q[1] - q[0]).length() < w {
+            continue;
+        }
+        let at = q[0] - vec2(0.0, h + 2.0);
+        crate::icons::paint(painter, Rect::from_min_size(pos2(at.x, at.y + (h - 11.0) / 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Slot, COMPONENT);
+        painter.galley(pos2(at.x + 14.0, at.y + (h - galley.size().y) / 2.0), galley, COMPONENT);
+    }
+}
+
+/// The slots [`slot_badges`] shows, with their names: those of the selected components and
+/// instances (and of the ones the selected layers are in), and the slot being dropped onto.
+fn slots_shown(doc: &Document, sel: &[NodeId], drop: Option<NodeId>) -> Vec<(NodeId, String)> {
     use figcraft_engine::components::{owning_component, owning_instance, slot_name, slots_of};
     let mut roots: Vec<NodeId> = Vec::new();
     for id in sel {
@@ -88,22 +116,7 @@ pub(super) fn slot_badges(app: &FigApp, painter: &egui::Painter, doc: &Document,
     {
         slots.push((d, name));
     }
-    for (id, name) in slots {
-        let Some(q) = node_quad(app, doc, id) else { continue };
-        if !Rect::from_points(&q).intersects(app.canvas.rect) {
-            continue;
-        }
-        painter.extend(Shape::dashed_line(&[q[0], q[1], q[2], q[3], q[0]], stroke(COMPONENT, 1.0), 4.0, 3.0));
-        // The label, when the slot is wide enough on screen to hold it.
-        let galley = painter.layout_no_wrap(name, regular(10.0), COMPONENT);
-        let (w, h) = (galley.size().x + 14.0, galley.size().y.max(11.0));
-        if (q[1] - q[0]).length() < w {
-            continue;
-        }
-        let at = q[0] - vec2(0.0, h + 2.0);
-        crate::icons::paint(painter, Rect::from_min_size(pos2(at.x, at.y + (h - 11.0) / 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Slot, COMPONENT);
-        painter.galley(pos2(at.x + 14.0, at.y + (h - galley.size().y) / 2.0), galley, COMPONENT);
-    }
+    slots
 }
 
 /// The instance an Alt-drop of a component from the Assets panel swaps: tinted and outlined in
@@ -136,16 +149,31 @@ pub(super) fn outline_colour(doc: &Document, id: NodeId, green: Color32) -> Colo
     if set || owning_component(doc, id).is_some() || owning_instance(doc, id).is_some() { COMPONENT } else { green }
 }
 
-/// The outline path of shapes (ellipses, vectors) for hover/selection outlines.
-fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos2>>> {
-    let n = doc.node(id)?;
-    if !matches!(
-        n.kind,
-        NodeKind::Ellipse { .. } | NodeKind::Vector { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::BooleanOp { .. }
-    ) {
+/// The path a layer's hover and selection outline follows, in its own space, when that isn't just
+/// its box: the shape of ellipses, vectors, polygons, stars and boolean groups, and of rectangles
+/// and frames with rounded corners (each corner's radius and the smoothing, as the fill draws them,
+/// whatever the stroke's alignment).
+pub(super) fn outline_path(doc: &Document, n: &figcraft_doc::Node) -> Option<figcraft_geom::kurbo::BezPath> {
+    let shaped = match n.kind {
+        NodeKind::Ellipse { .. } | NodeKind::Vector { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::BooleanOp { .. } => true,
+        NodeKind::Rectangle
+        | NodeKind::Frame
+        | NodeKind::Component { .. }
+        | NodeKind::ComponentSet { .. }
+        | NodeKind::Instance { .. }
+        | NodeKind::Section { .. } => n.corners.radii.iter().any(|r| *r > 0.0),
+        _ => false,
+    };
+    if !shaped {
         return None;
     }
-    let (path, _) = figcraft_render::node_outline(doc, n)?;
+    figcraft_render::node_outline(doc, n).map(|(p, _)| p)
+}
+
+/// [`outline_path`] on screen, flattened into polylines.
+fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos2>>> {
+    let n = doc.node(id)?;
+    let path = outline_path(doc, n)?;
     let w = doc.world_transform(id);
     let mut out = Vec::new();
     let mut cur: Vec<Pos2> = Vec::new();
@@ -178,19 +206,15 @@ fn outline_shape(app: &FigApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos
     Some(out)
 }
 
-/// A layer's outline on the canvas: its shape for ellipses, vectors, polygons, stars and boolean
-/// groups, its box otherwise.
+/// A layer's outline on the canvas: its shape where [`outline_path`] has one, its box otherwise.
 pub(super) fn draw_outline(app: &FigApp, painter: &egui::Painter, doc: &Document, id: NodeId, s: Stroke) {
+    painter.extend(outline_shapes(app, doc, id, s));
+}
+
+/// The shapes [`draw_outline`] draws.
+pub(super) fn outline_shapes(app: &FigApp, doc: &Document, id: NodeId, s: Stroke) -> Vec<Shape> {
     match outline_shape(app, doc, id) {
-        Some(lines) => {
-            for l in lines {
-                painter.add(Shape::line(l, s));
-            }
-        }
-        None => {
-            if let Some(q) = node_quad(app, doc, id) {
-                quad(painter, q, s);
-            }
-        }
+        Some(lines) => lines.into_iter().map(|l| Shape::line(l, s)).collect(),
+        None => node_quad(app, doc, id).map(|q| Shape::closed_line(q.to_vec(), s)).into_iter().collect(),
     }
 }

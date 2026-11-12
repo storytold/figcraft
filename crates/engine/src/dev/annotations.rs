@@ -7,12 +7,12 @@
 
 use std::sync::LazyLock;
 
-use figcraft_doc::*;
+use figcraft_doc::{Annotation, AnnotationCategory, Document, NodeId};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::devinspect::{Prop, Section, properties};
-use crate::params::*;
+use crate::params::{color_of, get, id, req_index, req_string, string, targets};
 use crate::{bad, spec};
 
 /// Most annotations on one layer.
@@ -247,7 +247,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "annotation.add",
             "Add annotation",
-            "{id? (default the first selected layer), label? (the note), properties?: [width|height|top|left|rotation|opacity|cornerRadius|direction|gap|padding|alignment|fontFamily|fontStyle|fontSize|lineHeight|letterSpacing|textAlign|fill|stroke|strokeWeight|effects], category? (id or name)} → {id, index}  (a note, pinned properties or both)",
+            "{id? (default the first selected layer), label? | text? (the note), properties?: [width|height|top|left|rotation|opacity|cornerRadius|direction|gap|padding|alignment|fontFamily|fontStyle|fontSize|lineHeight|letterSpacing|textAlign|fill|stroke|strokeWeight|effects], category? (id or name)} → {id, index}  (a note, pinned properties or both)",
             true,
             |s, p| {
                 let cmd = "annotation.add";
@@ -270,7 +270,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "annotation.edit",
             "Edit annotation",
-            "{id?, index, label?, properties?: [..] (replaces the pinned properties), category? (id or name; null: none)}",
+            "{id?, index, label? | text?, properties?: [..] (replaces the pinned properties), category? (id or name; null: none)}",
             true,
             |s, p| {
                 let cmd = "annotation.edit";

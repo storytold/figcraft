@@ -98,7 +98,8 @@ Copy-Item -LiteralPath (Join-Path $Root 'NOTICE') -Destination $Stage
 $Exes = $Bins | ForEach-Object { "$_.exe" }
 foreach ($exe in $Exes) { Copy-Item (Join-Path $Bin $exe) $Stage }
 
-& (Join-Path $PSScriptRoot 'sign.ps1') @($Exes | ForEach-Object { Join-Path $Stage $_ })
+$SignFiles = @($Exes | ForEach-Object { Join-Path $Stage $_ })
+& (Join-Path $PSScriptRoot 'sign.ps1') @SignFiles
 
 # ---- font notices for the MSI ------------------------------------------------------------------
 # The portable ZIP already carries these notices; stage the complete files before MSI creation too.
@@ -165,6 +166,8 @@ Invoke-Native 'wix build' {
 Invoke-Native 'MSI shortcut icon validation (ICE50)' {
   wix msi validate $Msi -ice ICE50 -intermediateFolder (Join-Path $Stage 'msi-validation')
 }
+# Check the compiled scope, path and registration contract before signing.
+& (Join-Path $PSScriptRoot 'check-install-policy.ps1') -MsiPath $Msi
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
 Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
@@ -186,7 +189,10 @@ if ($env:CRAFT_FONTS_DIR) {
     if (Test-Path $lic) { Copy-Item $lic (Join-Path $Portable "OFL-$($_.Name).txt") }
   }
 }
-# files go to FigCraftData\ next to the exe instead of %APPDATA% (#228; see app_dirs.rs).
+# A `portable` file next to figcraft.exe keeps its settings, recovery copies and plugins in
+# config\ beside it instead of %APPDATA%\FigCraft (#1320). The first start copies the
+# preferences an installed FigCraft kept there, if any.
+New-Item -ItemType File -Force -Path (Join-Path $Portable 'portable') | Out-Null
 $Zip = Join-Path $Dist "figcraft-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip

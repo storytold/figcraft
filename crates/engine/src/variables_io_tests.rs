@@ -232,6 +232,40 @@ fn variables_export_and_import_round_trip() {
 }
 
 #[test]
+fn stored_variable_ids_keep_remapped_import_aliases() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    let shadow = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "shadow", "type": "number", "value": 100}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let target = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "target", "type": "number", "value": 5}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ex(&mut s, "variable.update", json!({"variable": shadow, "name": target}));
+    let imported = json!({"meta": {
+        "variableCollections": {"c": {"id": "c", "name": "Theme", "modes": [{"modeId": "m", "name": "Mode 1"}]}},
+        "variables": {
+            "t": {"id": "t", "name": "target", "variableCollectionId": "c", "resolvedType": "FLOAT", "valuesByMode": {"m": 5}},
+            "a": {"id": "a", "name": "alias", "variableCollectionId": "c", "resolvedType": "FLOAT",
+                  "valuesByMode": {"m": {"type": "VARIABLE_ALIAS", "id": "t"}}}
+        }
+    }});
+    let result = ex(&mut s, "variable.import", json!({"variables": imported}));
+    assert_eq!(result["warnings"], json!([]));
+    let vars = &s.doc().unwrap().variables;
+    let alias = vars.get("alias").unwrap();
+    assert_eq!(alias.values.values().next(), Some(&VariableValue::Alias(target.clone())));
+    assert_eq!(vars.resolve(&alias.id, &Default::default()), Some(VariableValue::Number(5.0)));
+    // The command's alias argument accepts names, but an exact id comes first (#1613): the
+    // variable renamed to target's id doesn't take its place.
+    ex(&mut s, "variable.set", json!({"variable": "alias", "value": {"alias": target}}));
+    let vars = &s.doc().unwrap().variables;
+    assert_eq!(vars.resolve(&vars.get("alias").unwrap().id, &Default::default()), Some(VariableValue::Number(5.0)));
+}
+
+#[test]
 fn variables_import_checks_what_it_reads() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
@@ -268,6 +302,36 @@ fn variables_import_checks_what_it_reads() {
     let (a, b) = (vars.get("a").unwrap(), vars.get("b").unwrap());
     assert!(!a.values.values().chain(b.values.values()).all(|v| matches!(v, VariableValue::Alias(_))), "no loop");
     healthy(&s);
+}
+
+#[test]
+fn variables_import_caps_the_file_it_reads() {
+    let dir = std::env::temp_dir().join(format!("figcraft-vars-io-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new();
+    theme(&mut s);
+    let small = dir.join("theme.json").to_string_lossy().into_owned();
+    ex(&mut s, "variable.export", json!({"path": small}));
+    let mut t = Session::new();
+    ex(&mut t, "variable.createCollection", json!({"name": "Other"}));
+    // One byte over the limit (sparse, so nothing is written), a folder, and a device: refused,
+    // nothing changes.
+    let big = dir.join("big.json");
+    std::fs::File::create(&big).unwrap().set_len(256 * 1024 * 1024 + 1).unwrap();
+    let mut refused = vec![big.to_string_lossy().into_owned(), dir.to_string_lossy().into_owned()];
+    if cfg!(unix) {
+        refused.push("/dev/null".to_string());
+    }
+    for bad in &refused {
+        let before = (format!("{:?}", t.docs), t.active);
+        let e = t.execute("variable.import", &json!({"variables": bad})).unwrap_err().to_string();
+        assert!(["more than the 256 MB allowed here", "is a folder, not a file", "isn't a regular file"].iter().any(|w| e.contains(w)), "{bad}: {e}");
+        assert_eq!((format!("{:?}", t.docs), t.active), before, "{bad}");
+    }
+    // A file under the limit still imports.
+    ex(&mut t, "variable.import", json!({"variables": small}));
+    assert_eq!(t.doc().unwrap().variables.collections.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A rectangle filled with a three-stop linear gradient, and colour variables `brand` and `ink`.
@@ -499,6 +563,19 @@ fn css_export_gives_lengths_a_unit_and_keeps_opacity_bare() {
 }
 
 #[test]
+fn css_export_keeps_a_style_weight_bare() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "weight", "type": "number", "value": 700}));
+    let t = idv(&ex(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 0})));
+    let st = ex(&mut s, "style.create", json!({"type": "text", "name": "Body", "from": t}))["id"].as_str().unwrap_or_default().to_string();
+    ex(&mut s, "style.bind", json!({"style": st, "field": "fontWeight", "variable": "weight"}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
+    // A weight bound only to a text style is still a bare number, not a length.
+    assert!(css.contains("--weight: 700;") && !css.contains("700px"), "{css}");
+}
+
+#[test]
 fn review_a_long_alias_chain_keeps_its_role_to_the_end() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
@@ -512,4 +589,89 @@ fn review_a_long_alias_chain_keeps_its_role_to_the_end() {
     ex(&mut s, "variable.bind", json!({"ids": [f], "field": "opacity", "variable": "o12"}));
     let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
     assert!(css.contains("--o0: 0.5;"), "{css}");
+}
+
+#[test]
+fn css_export_neutralises_every_css_newline_in_strings() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "t", "type": "string", "value": "a\rb\u{c}c"}));
+    for format in ["css", "tailwind"] {
+        let css = ex(&mut s, "variable.export", json!({"format": format}))["text"].as_str().unwrap_or_default().to_string();
+        assert!(!css.contains('\r') && !css.contains('\u{c}'), "{css:?}");
+        assert!(css.contains("\"a b c\""), "{css:?}");
+    }
+}
+
+#[test]
+fn stored_variable_ids_keep_exported_css_alias_names() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Theme"}));
+    let shadow = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "shadow", "type": "color", "value": "#FF0000"}));
+    let surface = ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "surface", "type": "color", "value": "#0D99FF"}));
+    ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "alias", "type": "color", "value": {"alias": surface["id"]}}));
+    ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"], "codeSyntax": {"WEB": "--shadow"}}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}));
+    assert!(css["text"].as_str().unwrap().contains("--alias: var(--surface);"));
+}
+
+#[test]
+fn stored_variable_ids_reset_only_the_inherited_parent_and_collection() {
+    for collection_shadow in [false, true] {
+        let mut s = Session::new();
+        let shadow_coll = ex(&mut s, "variable.createCollection", json!({"name": "Shadow"}));
+        ex(&mut s, "variable.createCollection", json!({"name": "Base", "modes": ["Light", "Dark"]}));
+        let shadow = ex(&mut s, "variable.create", json!({"collection": "Shadow", "name": "shadow", "type": "number", "value": 0}));
+        let surface =
+            ex(&mut s, "variable.create", json!({"collection": "Base", "name": "surface", "type": "number", "values": {"Light": 4, "Dark": 8}}));
+        if collection_shadow {
+            ex(&mut s, "variable.renameCollection", json!({"collection": shadow_coll["id"], "name": "extended"}));
+        } else {
+            ex(&mut s, "variable.update", json!({"variable": shadow["id"], "name": surface["id"]}));
+        }
+        let doc = s.doc_mut().unwrap();
+        let parent = doc.variables.get_by_id(surface["id"].as_str().unwrap()).unwrap().clone();
+        let mut coll = doc.variables.collection_by_id(&parent.collection).unwrap().clone();
+        let (light, dark) = (coll.find_mode("Light").unwrap().id.clone(), coll.find_mode("Dark").unwrap().id.clone());
+        coll.extends = Some(coll.id.clone());
+        coll.id = "extended".into();
+        coll.name = "Extended".into();
+        let mut inherited = parent.clone();
+        inherited.id = "inherited".into();
+        inherited.name = "inherited".into();
+        inherited.collection = coll.id.clone();
+        inherited.extends = Some(parent.id);
+        inherited.overrides = inherited.values.keys().cloned().collect();
+        inherited.values.values_mut().for_each(|v| *v = VariableValue::Number(2.0));
+        doc.variables.collections.push(coll);
+        doc.variables.variables.push(inherited);
+        ex(&mut s, "variable.resetOverride", json!({"variable": "inherited", "mode": "Dark"}));
+        let result = s.doc().unwrap().variables.get_by_id("inherited").unwrap();
+        assert_eq!(result.values[&light], VariableValue::Number(2.0));
+        assert_eq!(result.values[&dark], VariableValue::Number(8.0));
+        assert_eq!(result.overrides, std::collections::BTreeSet::from([light]));
+    }
+}
+
+#[test]
+fn css_export_gives_clashing_variable_names_their_own_property() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "Brand/Primary", "type": "color", "value": "#ff0000"}));
+    let blue = ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "Brand Primary", "type": "color", "value": "#0000ff"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "link", "type": "color", "value": {"alias": blue["id"]}}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
+    let decls: Vec<(&str, &str)> =
+        css.lines().filter_map(|l| l.trim().strip_prefix("--").and_then(|d| d.strip_suffix(';')).and_then(|d| d.split_once(": "))).collect();
+    let mut names: Vec<&str> = decls.iter().map(|(n, _)| *n).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), decls.len(), "{css}");
+    let red = decls.iter().find(|(_, v)| *v == "#FF0000").map(|(n, _)| *n);
+    let blue = decls.iter().find(|(_, v)| *v == "#0000FF").map(|(n, _)| *n);
+    // The first keeps its plain name; the alias reads the one its target is declared under.
+    assert_eq!(red, Some("brand-primary"), "{css}");
+    let blue = blue.unwrap_or_default();
+    assert_ne!(blue, "brand-primary", "{css}");
+    assert!(css.contains(&format!("--link: var(--{blue});")), "{css}");
 }

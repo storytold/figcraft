@@ -6,9 +6,23 @@ use wasm_bindgen::JsCast as _;
 
 const CANVAS_ID: &str = "figcraft_canvas";
 const LOADING_ID: &str = "figcraft_loading";
+/// What the page shows once it stopped on an internal error (styled in `index.html`).
+const STOPPED_ID: &str = "figcraft_stopped";
+/// The local storage key your name is kept under ([`crate::kept`]).
+const NAME_KEY: &str = "figcraft.userName";
+/// The local storage key the recovery copies are kept under ([`crate::recovery`]): a JSON list of
+/// base64 `.figcraft` files.
+const RECOVERY_KEY: &str = "figcraft.recovery";
+
+thread_local! {
+    /// The files with unsaved changes as of the last frame, for the panic hook ([`crate::recovery`]).
+    static UNSAVED: std::cell::RefCell<crate::recovery::Unsaved> = std::cell::RefCell::default();
+}
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
+    // Before the runner's own hook, which logs the panic and then calls this one.
+    keep_unsaved_on_panic();
     wasm_bindgen_futures::spawn_local(async {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
@@ -18,6 +32,15 @@ pub fn start() {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
             return;
         };
+        // Host modes (`craft-web-host`): `?host=parent`, a same-origin page framing FigCraft, opens
+        // documents in it and stores what it saves (`host`); unframed there is no parent, so that URL
+        // on its own stays the normal app with downloads. `data-host="page"` on the canvas opts a
+        // page in instead: it runs FigCraft in its own document and talks over DOM `CustomEvent`s on
+        // the canvas.
+        let bridge = crate::host::Bridge::connect(&canvas);
+        let app_bridge = bridge.clone();
+        // Files the host sends, on their way into the app's own open queue each frame.
+        let opens: crate::host::OpenQueue = std::rc::Rc::default();
         let mut options = eframe::WebOptions::default();
         // `?webgl`: force the WebGL2 backend (troubleshooting, and headless browsers whose WebGPU
         // adapter request returns nothing).
@@ -30,17 +53,37 @@ pub fn start() {
             .start(
                 canvas,
                 options,
-                Box::new(|cc| {
+                Box::new(move |cc| {
                     if let Some(rs) = &cc.wgpu_render_state {
                         log::info!("figcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
                     let reduce_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
-                    let mut session = Session::new();
-                    // Live sessions: the browser joins sessions a desktop app hosts; whatever arrives
-                    // on the socket wakes the page for a frame.
+                    // Host mode: the host sends the file to edit, so start with no document (the
+                    // home screen), as the desktop app does without a file; otherwise the session
+                    // starts with one new document.
+                    let mut session = if app_bridge.is_some() { Session::empty() } else { Session::new() };
+                    // The host names its own server: the default for sharing, codes and the team list.
+                    if let Some(server) = page_meta("figcraft-server").as_deref().and_then(crate::query::page_server) {
+                        session.prefs.publish_server = server;
+                    }
+                    crate::kept::restore_name(&mut session, local_storage().and_then(|s| s.get_item(NAME_KEY).ok().flatten()));
+                    let recovered = restore_unsaved(&mut session);
+                    // Live sessions: the browser joins sessions and publishes files to servers;
+                    // whatever arrives on the socket wakes the page for a frame.
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
-                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone() }));
+                    let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone(), host: app_bridge.clone() }));
+                    fig.note_recovered(recovered);
+                    if let Err(e) = crate::pasted::install(cc.egui_ctx.clone()) {
+                        log::error!("couldn't listen for pasted images: {e:?}");
+                    }
+                    // `?author=`: the host's name for the user signs this visit's comments and board
+                    // notes (nothing is stored in the browser, so nothing needs keeping).
+                    if app_bridge.is_some()
+                        && let Some(author) = query_param("author")
+                    {
+                        crate::host::Bridge::set_author(&mut fig, &author);
+                    }
                     // `#join=<link>`: join that session, as opening an invite link does on the desktop.
                     let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
                     if let Some(link) = crate::query::join_link(&hash) {
@@ -54,10 +97,21 @@ pub fn start() {
                             log::error!("couldn't install window.figcraft: {e:?}");
                         }
                     }
-                    Ok(Box::new(WebShell { fig }))
+                    // The host's files arrive on the app's own open path (a dropped file's).
+                    if let Some(bridge) = &app_bridge {
+                        bridge.listen(opens.clone(), cc.egui_ctx.clone());
+                    }
+                    Ok(Box::new(WebShell { fig, host: app_bridge, opens }))
                 }),
             )
             .await;
+        // Ready only once the runner is up: starting can still fail after the app is made.
+        if let Some(bridge) = &bridge {
+            match &result {
+                Ok(()) => bridge.post_ready(),
+                Err(e) => bridge.post_failed(&format!("{e:?}")),
+            }
+        }
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
@@ -67,39 +121,130 @@ pub fn start() {
     });
 }
 
+/// The browser can't catch a panic (wasm32 aborts), so the page ends with it: keep the files with
+/// unsaved changes in the page's storage for the next page, and say so on the page.
+fn keep_unsaved_on_panic() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        previous(info);
+        // Callbacks that run after the page stopped can panic again: the files are kept once.
+        ONCE.call_once(|| {
+            let (unsaved, files) = UNSAVED.with(|u| u.try_borrow().map(|u| (u.count(), u.files())).unwrap_or_default());
+            let kept = local_storage().map_or(0, |s| crate::recovery::store(files, |v| s.set_item(RECOVERY_KEY, v).is_ok()));
+            show_stopped(&figcraft_ui_egui::browser_stopped(unsaved, kept));
+        });
+    }));
+}
+
+/// Open the files the last page kept when it stopped; how many came back.
+fn restore_unsaved(session: &mut Session) -> usize {
+    let Some(storage) = local_storage() else { return 0 };
+    let kept = storage.get_item(RECOVERY_KEY).ok().flatten();
+    // Gone before they open: a copy that stops the page again must not come back on every reload
+    // (once a frame ran, the files it opened are followed as any unsaved file).
+    let _ = storage.remove_item(RECOVERY_KEY);
+    crate::recovery::restore(session, kept)
+}
+
+/// Say on the page that it stopped (the canvas stays as it was).
+fn show_stopped(text: &str) {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else { return };
+    let (Ok(el), Some(body)) = (document.create_element("div"), document.body()) else { return };
+    el.set_id(STOPPED_ID);
+    el.set_text_content(Some(text));
+    let _ = body.append_child(&el);
+}
+
+/// The page's local storage (`None` where the browser keeps none, e.g. storage turned off).
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+}
+
+/// The `content` of the page's `<meta name="…">`, if it has one.
+fn page_meta(name: &str) -> Option<String> {
+    let document = web_sys::window()?.document()?;
+    document.query_selector(&format!("meta[name=\"{name}\"]")).ok().flatten()?.get_attribute("content")
+}
+
 fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
 
+fn query_param(key: &str) -> Option<String> {
+    web_sys::UrlSearchParams::new_with_str(&query()).ok()?.get(key)
+}
+
 struct WebShell {
     fig: FigApp,
+    /// The host bridge, when the page hosts the app (`?host=parent` or `data-host="page"`).
+    host: Option<crate::host::Bridge>,
+    /// Files the host sent, waiting to join the app's own open queue.
+    opens: crate::host::OpenQueue,
 }
 
 impl eframe::App for WebShell {
     // eframe runs `logic` for visible tabs and, with only `run_logic`, for hidden ones: keep
     // autosave/live/control deadlines moving without a paint. `FigApp::ui` does not repeat it.
-    /// Run the browser shell's eframe logic callback: guard `background_tick` so hidden tabs
-    /// still advance autosave, live and control deadlines without painting. `FigApp::ui` does
+    /// Run the browser shell's eframe logic callback: hand the host's files to the app's open
+    /// queue, guard `background_tick` so hidden tabs still advance autosave, live and control
+    /// deadlines without painting, and report unsaved changes to the host. `FigApp::ui` does
     /// not repeat it.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Every frame, hidden or not, starts here: what the last one left is what a panic keeps.
+        UNSAVED.with(|u| u.try_borrow_mut().map(|mut u| u.follow(&self.fig.session))).ok();
+        // Files the host sent join the app's own open queue (a dropped file's): the same
+        // "Opening as a new file" card, and `file.open` with the contents once read.
+        for (name, bytes) in std::mem::take(&mut *self.opens.borrow_mut()) {
+            let read: figcraft_ui_egui::ReadFuture = Box::pin(std::future::ready(Ok(bytes)));
+            self.fig.ui.pending_opens.push(figcraft_ui_egui::pending_open::PendingOpen {
+                label: name.clone(),
+                params: serde_json::json!({ "name": name }),
+                command: "file.open",
+                target: None,
+                read: Some(read),
+            });
+        }
         figcraft_ui_egui::windows::guard(&mut self.fig, ctx, |fig| fig.background_tick(ctx));
+        // The host hears when unsaved changes appear or go away (crate::host).
+        if let Some(bridge) = &self.host {
+            bridge.set_dirty(self.fig.session.docs.iter().any(|d| d.is_dirty()));
+        }
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Pointer and key events sent over the control channel (`ui.input`), for the frame about
+        // to draw: the batch is applied by this frame and acknowledged once it is presented, as on
+        // the desktop (`apps/figcraft/src/main.rs`). Without this hook the batch sat in its queue
+        // and its promise never settled.
+        let events = figcraft_ui_egui::windows::take_input(&mut self.fig, raw_input.viewport_id);
+        raw_input.events.extend(events);
+        crate::pasted::begin_frame(&mut self.fig, raw_input, ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
-        crate::api::poll_replies();
+        // The fonts on this computer that text asked for this frame are read; once one is in,
+        // auto-sizing text measured in a fallback fits it.
+        crate::local_fonts::load_wanted(ui.ctx());
+        if crate::local_fonts::take_loaded() {
+            self.fig.run("text.refit", serde_json::json!({}));
+        }
     }
 }
 
 /// Browser services. Files are opened and imported through the browser's file picker, which hands
 /// over their contents (pickers that need a path return nothing, the trait's defaults); files are
-/// saved as downloads. Copies go to the system clipboard through egui's output; pastes arrive as
-/// paste events with their text (a page can't read the clipboard when it likes).
+/// saved as downloads, or handed to the host page in host mode. Copies go to the system clipboard
+/// through egui's output; pastes arrive as paste events with their text or image (a page can't
+/// read the clipboard when it likes).
 struct WebServices {
     /// `prefers-reduced-motion: reduce` (it follows the setting while the page is open).
     reduce_motion: Option<web_sys::MediaQueryList>,
     ctx: egui::Context,
+    /// The host bridge in host mode: files are handed over instead of downloaded ([`crate::host`]).
+    host: Option<crate::host::Bridge>,
 }
 
 impl Services for WebServices {
@@ -116,10 +261,14 @@ impl Services for WebServices {
     fn downloads(&self) -> bool {
         true
     }
-    /// A Blob behind a temporary `<a download>` link, clicked and removed.
+    /// A Blob behind a temporary `<a download>` link, clicked and removed; in host mode the file
+    /// goes to the host page instead ([`crate::host`]).
     fn download(&mut self, name: &str, bytes: &[u8]) -> bool {
         if crate::api::capture(name, bytes) {
             return true;
+        }
+        if let Some(bridge) = &self.host {
+            return bridge.post_save(name, bytes);
         }
         match download(name, bytes) {
             Ok(()) => true,
@@ -129,11 +278,17 @@ impl Services for WebServices {
             }
         }
     }
+    fn host_file(&self) -> Option<String> {
+        self.host.as_ref()?.host_file()
+    }
     fn clipboard_set_text(&mut self, s: &str) {
         figcraft_ui_egui::egui_copy_text(&self.ctx, s);
     }
     fn clipboard_set_png(&mut self, w: u32, h: u32, rgba: &[u8]) {
         figcraft_ui_egui::egui_copy_png(&self.ctx, w, h, rgba);
+    }
+    fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
+        crate::pasted::take_png()
     }
     fn open_url(&mut self, url: &str) {
         let Some(window) = web_sys::window() else { return };
@@ -141,8 +296,22 @@ impl Services for WebServices {
             log::error!("couldn't open {url}: {e:?}");
         }
     }
+    /// The page itself goes to `url` (an Open link action that doesn't open a new tab). Only web
+    /// and mail links reach here ([`figcraft_engine::doc_urls::openable`]).
+    fn open_url_here(&mut self, url: &str) {
+        let Some(window) = web_sys::window() else { return };
+        if let Err(e) = window.location().set_href(url) {
+            log::error!("couldn't open {url}: {e:?}");
+        }
+    }
     fn reduce_motion(&self) -> bool {
         self.reduce_motion.as_ref().is_some_and(web_sys::MediaQueryList::matches)
+    }
+    /// Only your name is kept ([`crate::kept`]): the rest starts afresh with each page.
+    fn save_prefs(&mut self, prefs: &figcraft_engine::Prefs) {
+        if let Some(Err(e)) = local_storage().map(|s| s.set_item(NAME_KEY, &prefs.user_name)) {
+            log::warn!("couldn't keep your name: {e:?}");
+        }
     }
     /// The browser's language (`navigator.language`).
     fn system_language(&self) -> Option<String> {
@@ -164,6 +333,13 @@ impl Services for WebServices {
             }
         }
         held
+    }
+    /// Local Font Access (`window.queryLocalFonts`, Chromium), not asked yet.
+    fn can_ask_for_local_fonts(&self) -> bool {
+        crate::local_fonts::can_ask()
+    }
+    fn ask_for_local_fonts(&mut self) {
+        crate::local_fonts::ask(self.ctx.clone());
     }
 }
 
@@ -187,17 +363,20 @@ async fn pick_file(accept: &str) -> Result<Option<Result<(String, Vec<u8>), Stri
     drop(picker);
     result?;
     let Some(file) = file else { return Ok(None) };
+    Ok(Some(read_file(&file).await.map(|bytes| (file.name(), bytes))))
+}
+
+/// The contents of a file the browser handed over, or why they can't be read.
+pub(crate) async fn read_file(file: &web_sys::File) -> Result<Vec<u8>, String> {
     let name = file.name();
-    if let Err(why) = figcraft_ui_egui::browser_can_read(&name, file.size()) {
-        return Ok(Some(Err(why)));
-    }
-    Ok(Some(match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
-        Ok(buffer) => Ok((name, js_sys::Uint8Array::new(&buffer).to_vec())),
+    figcraft_ui_egui::browser_can_read(&name, file.size())?;
+    match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+        Ok(buffer) => Ok(js_sys::Uint8Array::new(&buffer).to_vec()),
         Err(e) => {
             log::error!("couldn't read {name}: {e:?}");
             Err(figcraft_ui_egui::unreadable(&name))
         }
-    }))
+    }
 }
 
 /// How long after the page gets focus back the file picker counts as closed (milliseconds): a

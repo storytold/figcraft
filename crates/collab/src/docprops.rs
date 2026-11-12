@@ -8,6 +8,7 @@ use base64::Engine as _;
 use figcraft_doc::{Collection, Comment, DevSnapshot, Document, ImageData, Style, Variable};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::Error;
 use crate::change::{Change, DocProp, Entry, Family, Json};
@@ -53,18 +54,71 @@ struct List<T: Keyed> {
     entry: fn(T::Key) -> Entry,
     get: fn(&Document) -> &Vec<T>,
     get_mut: fn(&mut Document) -> &mut Vec<T>,
+    /// The list's slot in an [`Index`].
+    index: fn(&mut Index) -> &mut Option<KeyIndex<T::Key>>,
 }
 
-const STYLES: List<Style> =
-    List { whole: DocProp::Styles, order: DocProp::StyleOrder, entry: Entry::Style, get: |d| &d.styles, get_mut: |d| &mut d.styles };
-const COMMENTS: List<Comment> =
-    List { whole: DocProp::Comments, order: DocProp::CommentOrder, entry: Entry::Comment, get: |d| &d.comments, get_mut: |d| &mut d.comments };
+/// Where the entries of each keyed list sit, kept while one batch is applied: a batch can put
+/// hundreds of thousands of new entries, and finding each one's place by a scan of the growing
+/// list would cost the square of that on the thread every session shares.
+#[derive(Default)]
+pub(crate) struct Index {
+    styles: Option<KeyIndex<String>>,
+    comments: Option<KeyIndex<u64>>,
+    collections: Option<KeyIndex<String>>,
+    variables: Option<KeyIndex<String>>,
+}
+
+/// The position of the first entry with each key in one list, and the list's length when it was
+/// last brought up to date: a list whose length changed since is indexed again.
+struct KeyIndex<K> {
+    at: BTreeMap<K, usize>,
+    len: usize,
+}
+
+impl<K: Ord> KeyIndex<K> {
+    fn of<T: Keyed<Key = K>>(list: &[T]) -> Self {
+        let mut at = BTreeMap::new();
+        for (i, e) in list.iter().enumerate() {
+            at.entry(e.key()).or_insert(i);
+        }
+        KeyIndex { at, len: list.len() }
+    }
+
+    /// The index in `slot`, built again from `list` unless its length and its place for `key`
+    /// still match the list, so a list changed some other way is never trusted.
+    fn current<'a, T: Keyed<Key = K>>(slot: &'a mut Option<Self>, list: &[T], key: &K) -> &'a mut Self {
+        let stale = |ix: &Self| ix.len != list.len() || ix.at.get(key).is_some_and(|&i| list.get(i).is_none_or(|e| e.key() != *key));
+        if slot.as_ref().is_none_or(stale) {
+            *slot = Some(KeyIndex::of(list));
+        }
+        slot.get_or_insert_with(|| KeyIndex::of(list))
+    }
+}
+
+const STYLES: List<Style> = List {
+    whole: DocProp::Styles,
+    order: DocProp::StyleOrder,
+    entry: Entry::Style,
+    get: |d| &d.styles,
+    get_mut: |d| &mut d.styles,
+    index: |i| &mut i.styles,
+};
+const COMMENTS: List<Comment> = List {
+    whole: DocProp::Comments,
+    order: DocProp::CommentOrder,
+    entry: Entry::Comment,
+    get: |d| &d.comments,
+    get_mut: |d| &mut d.comments,
+    index: |i| &mut i.comments,
+};
 const COLLECTIONS: List<Collection> = List {
     whole: DocProp::Collections,
     order: DocProp::CollectionOrder,
     entry: Entry::Collection,
     get: |d| &d.variables.collections,
     get_mut: |d| &mut d.variables.collections,
+    index: |i| &mut i.collections,
 };
 const VARIABLES: List<Variable> = List {
     whole: DocProp::Variables,
@@ -72,6 +126,7 @@ const VARIABLES: List<Variable> = List {
     entry: Entry::Variable,
     get: |d| &d.variables.variables,
     get_mut: |d| &mut d.variables.variables,
+    index: |i| &mut i.variables,
 };
 
 impl<T: Keyed> List<T> {
@@ -110,25 +165,53 @@ impl<T: Keyed> List<T> {
         Ok(())
     }
 
-    fn put(&self, doc: &mut Document, key: T::Key, value: &Json) -> Result<(), Error> {
+    fn put(&self, doc: &mut Document, key: T::Key, value: &Json, index: &mut Index) -> Result<(), Error> {
         let t: T = value.read("entry")?;
         if t.key() != key {
             return Err(Error::Invalid("an entry's id must match the entry it is put at".into()));
         }
         let list = (self.get_mut)(doc);
-        match list.iter_mut().find(|e| e.key() == key) {
+        let ix = KeyIndex::current((self.index)(index), list, &key);
+        match ix.at.get(&key).copied().and_then(|i| list.get_mut(i)) {
             Some(e) => *e = t,
-            None => list.push(t),
+            None => {
+                list.push(t);
+                ix.at.insert(key, list.len() - 1);
+                ix.len = list.len();
+            }
         }
         Ok(())
     }
 
-    fn remove(&self, doc: &mut Document, key: &T::Key) {
-        (self.get_mut)(doc).retain(|e| e.key() != *key);
+    fn remove(&self, doc: &mut Document, key: &T::Key, index: &mut Index) {
+        let list = (self.get_mut)(doc);
+        let slot = (self.index)(index);
+        let ix = KeyIndex::current(slot, list, key);
+        // An absent entry leaves the list as it is, without a scan of it.
+        let Some(at) = ix.at.get(key).copied() else {
+            return;
+        };
+        let before = list.len();
+        list.retain(|e| e.key() != *key);
+        // One entry gone at `at`: the index is kept current by shifting the entries after it down,
+        // so the next removal in the batch need not index the list again. Duplicates of the key
+        // (more than one entry gone) leave it to be rebuilt.
+        if list.len() + 1 == before {
+            ix.at.remove(key);
+            for i in ix.at.values_mut() {
+                if *i > at {
+                    *i -= 1;
+                }
+            }
+            ix.len = list.len();
+        } else {
+            *slot = None;
+        }
     }
 
     /// Entries in `keys` order first, the rest after in their current order.
-    fn reorder(&self, doc: &mut Document, value: &Json) -> Result<(), Error> {
+    fn reorder(&self, doc: &mut Document, value: &Json, index: &mut Index) -> Result<(), Error> {
+        *(self.index)(index) = None;
         let keys: Vec<T::Key> = value.read("order")?;
         let list = (self.get_mut)(doc);
         let mut slots: Vec<Option<T>> = std::mem::take(list).into_iter().map(Some).collect();
@@ -149,7 +232,8 @@ impl<T: Keyed> List<T> {
         Ok(())
     }
 
-    fn set_whole(&self, doc: &mut Document, value: &Json) -> Result<(), Error> {
+    fn set_whole(&self, doc: &mut Document, value: &Json, index: &mut Index) -> Result<(), Error> {
+        *(self.index)(index) = None;
         *(self.get_mut)(doc) = value.read("list")?;
         Ok(())
     }
@@ -164,13 +248,68 @@ struct ImageValue {
     bytes: String,
 }
 
+/// Largest image side: JPEG and GIF size fields are 16-bit; PNG can claim more, but no
+/// image this app realistically opens reaches it — an entry claiming a bigger side is
+/// refused rather than trusted. Zero is allowed: the format crate stores 0×0 for bytes it
+/// couldn't probe (`image_data`).
+pub(crate) const MAX_IMAGE_SIDE: u32 = 65_535;
+
+/// Lowercase sha256 hex, the same form `figcraft_format::image_hash` produces.
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The image an entry puts under `key`, which now holds `held`: [`image_of`], and a key that
+/// already holds an image can't be given other bytes. A key always names the same bytes
+/// (producers key images by their bytes; the REST importer's placeholder keys always hold the
+/// same grey picture), so nobody can swap the picture under a key someone else added.
+fn image_for(held: Option<&ImageData>, key: &str, value: &Json) -> Result<ImageData, Error> {
+    let img = image_of(key, value)?;
+    if held.is_some_and(|old| old.bytes != img.bytes) {
+        return Err(Error::Invalid(format!("image: {key} already holds other bytes")));
+    }
+    Ok(img)
+}
+
+/// The JSON value an image entry carries: its size and its encoded bytes in base64.
 fn image_json(img: &ImageData) -> Result<Json, Error> {
     Json::of(&ImageValue { width: img.width, height: img.height, bytes: base64::engine::general_purpose::STANDARD.encode(img.bytes.as_slice()) })
 }
 
-fn image_of(value: &Json) -> Result<ImageData, Error> {
+/// The image a change carries, validated as a collaborator's claim (an invalid entry
+/// rejects its batch, leaving every replica's store clean): a key that can name an archive
+/// member ([`ImageData::is_valid_key`]: a saved file writes it as `images/<key>`), dimensions within
+/// [`MAX_IMAGE_SIDE`], decoded bytes within [`ImageData::MAX_BYTES`] (what the importers read;
+/// the encoded length is capped before decoding so hostile text can't force a large
+/// allocation), and a key that claims a content hash ([`ImageData::claims_content_hash`]) must
+/// be exactly the lowercase sha256 of these bytes, the form `figcraft_format::image_hash`
+/// writes — a poisoned content-addressed store would show the wrong image everywhere at once
+/// (#1086). Other keys (the svg importer's FNV-128 keys, the REST importer's placeholders)
+/// claim no content address, so only the name and size rules apply to them.
+fn image_of(key: &str, value: &Json) -> Result<ImageData, Error> {
+    image_within(key, value, ImageData::MAX_BYTES)
+}
+
+/// [`image_of`] with `max_bytes` for the decoded size.
+pub(crate) fn image_within(key: &str, value: &Json, max_bytes: u64) -> Result<ImageData, Error> {
+    if !ImageData::is_valid_key(key) {
+        return Err(Error::Invalid(format!("image: {key:?} can't name an image (1–128 letters, digits, - or _)")));
+    }
     let v: ImageValue = value.read("image")?;
+    if v.width > MAX_IMAGE_SIDE || v.height > MAX_IMAGE_SIDE {
+        return Err(Error::Invalid(format!("image: {}×{} passes the {} a side may be", v.width, v.height, MAX_IMAGE_SIDE)));
+    }
+    let max_encoded = (max_bytes / 3).saturating_mul(4).saturating_add(4);
+    if u64::try_from(v.bytes.len()).unwrap_or(u64::MAX) > max_encoded {
+        return Err(Error::Invalid(format!("image: base64 text longer than {max_encoded} bytes for {max_bytes} of bytes")));
+    }
     let bytes = base64::engine::general_purpose::STANDARD.decode(v.bytes.as_bytes()).map_err(|e| Error::Invalid(format!("image: {e}")))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+        return Err(Error::Invalid(format!("image: {} bytes pass the {max_bytes} an image may be", bytes.len())));
+    }
+    if ImageData::claims_content_hash(key) && key != sha256_hex(&bytes) {
+        return Err(Error::Invalid(format!("image: the bytes aren't what their key {key} hashes to")));
+    }
     Ok(ImageData { bytes: Arc::new(bytes), width: v.width, height: v.height })
 }
 
@@ -213,6 +352,7 @@ doc_scalars! {
     Kind => kind,
     Timer => timer,
     Vote => vote,
+    VoteHistory => vote_history,
 }
 
 /// Keyed maps (no order): changed and added entries are put, missing ones removed.
@@ -256,37 +396,44 @@ pub(crate) fn diff(a: &Document, b: &Document, out: &mut Vec<Change>) -> Result<
     diff_map(&a.votes, &b.votes, |x, y| x == y, |k| Entry::Ballot(k.clone()), Json::of, out)
 }
 
-/// Apply a document-level change. Returns whether it can change which pages are listed (the
-/// library store page is never listed).
+/// [`apply_indexed`] for one change on its own.
+#[cfg(test)]
 pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> {
+    apply_indexed(doc, change, &mut Index::default())
+}
+
+/// Apply a document-level change, with the keyed lists' positions kept in `index` between the
+/// changes of one batch. Returns whether it can change which pages are listed (the library store
+/// page is never listed).
+pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Index) -> Result<bool, Error> {
     match change {
         Change::SetDoc { prop, value } => {
             if set_scalar(doc, *prop, value)? {
                 return Ok(*prop == DocProp::Libraries);
             }
             match prop {
-                DocProp::Styles => STYLES.set_whole(doc, value),
-                DocProp::StyleOrder => STYLES.reorder(doc, value),
-                DocProp::Comments => COMMENTS.set_whole(doc, value),
-                DocProp::CommentOrder => COMMENTS.reorder(doc, value),
-                DocProp::Collections => COLLECTIONS.set_whole(doc, value),
-                DocProp::CollectionOrder => COLLECTIONS.reorder(doc, value),
-                DocProp::Variables => VARIABLES.set_whole(doc, value),
-                DocProp::VariableOrder => VARIABLES.reorder(doc, value),
+                DocProp::Styles => STYLES.set_whole(doc, value, index),
+                DocProp::StyleOrder => STYLES.reorder(doc, value, index),
+                DocProp::Comments => COMMENTS.set_whole(doc, value, index),
+                DocProp::CommentOrder => COMMENTS.reorder(doc, value, index),
+                DocProp::Collections => COLLECTIONS.set_whole(doc, value, index),
+                DocProp::CollectionOrder => COLLECTIONS.reorder(doc, value, index),
+                DocProp::Variables => VARIABLES.set_whole(doc, value, index),
+                DocProp::VariableOrder => VARIABLES.reorder(doc, value, index),
                 _ => Err(Error::Invalid(format!("{prop:?} is not a list"))),
             }?;
         }
         Change::Put { entry, value } => match entry {
-            Entry::Style(k) => STYLES.put(doc, k.clone(), value)?,
-            Entry::Comment(k) => COMMENTS.put(doc, *k, value)?,
-            Entry::Collection(k) => COLLECTIONS.put(doc, k.clone(), value)?,
-            Entry::Variable(k) => VARIABLES.put(doc, k.clone(), value)?,
+            Entry::Style(k) => STYLES.put(doc, k.clone(), value, index)?,
+            Entry::Comment(k) => COMMENTS.put(doc, *k, value, index)?,
+            Entry::Collection(k) => COLLECTIONS.put(doc, k.clone(), value, index)?,
+            Entry::Variable(k) => VARIABLES.put(doc, k.clone(), value, index)?,
             Entry::DevSnapshot(k) => {
                 let snap: DevSnapshot = value.read("dev snapshot")?;
                 doc.dev_snapshots.insert(*k, Arc::new(snap));
             }
             Entry::Image(k) => {
-                let img = image_of(value)?;
+                let img = image_for(doc.images.get(k), k, value)?;
                 doc.images.insert(k.clone(), img);
             }
             Entry::Ballot(k) => {
@@ -294,14 +441,23 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
             }
         },
         Change::Remove { entry } => match entry {
-            Entry::Style(k) => STYLES.remove(doc, k),
-            Entry::Comment(k) => COMMENTS.remove(doc, k),
-            Entry::Collection(k) => COLLECTIONS.remove(doc, k),
-            Entry::Variable(k) => VARIABLES.remove(doc, k),
+            Entry::Style(k) => STYLES.remove(doc, k, index),
+            Entry::Comment(k) => COMMENTS.remove(doc, k, index),
+            Entry::Collection(k) => COLLECTIONS.remove(doc, k, index),
+            Entry::Variable(k) => VARIABLES.remove(doc, k, index),
             Entry::DevSnapshot(k) => {
                 doc.dev_snapshots.remove(k);
             }
             Entry::Image(k) => {
+                // Nothing to remove: no need to look through the document for what shows it.
+                if !doc.images.contains_key(k) {
+                    return Ok(false);
+                }
+                // An image a layer or style shows stays: removing it would let other bytes go
+                // under its key, swapping the picture that layer shows ([`image_for`]).
+                if figcraft_doc::used_images(doc).contains(k) {
+                    return Err(Error::Invalid(format!("image: {k} is still in use")));
+                }
                 doc.images.remove(k);
             }
             Entry::Ballot(k) => {

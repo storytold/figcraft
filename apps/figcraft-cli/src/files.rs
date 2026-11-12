@@ -10,8 +10,20 @@ use serde_json::{Value, json};
 
 use crate::{CliError, CliResult};
 
+/// A document's or plugin's text as a terminal should show it: control characters escaped, and
+/// everything else (quotes, backslashes in paths) left as it is.
+fn plain(text: &str) -> String {
+    text.chars().map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() }).collect()
+}
+
 pub fn load(path: &str) -> CliResult<Document> {
-    load_noted(path).map(|(d, _)| d)
+    let (doc, notes) = load_noted(path)?;
+    if ext(path) == "penpot" {
+        for note in notes {
+            eprintln!("note: {note}");
+        }
+    }
+    Ok(doc)
 }
 
 /// The document with the loader's notes (repairs of a damaged file, or import warnings).
@@ -120,7 +132,8 @@ pub fn write_doc(doc: &Document, page: NodeId, out: &str) -> CliResult<()> {
         "png" | "jpg" | "jpeg" | "webp" => encode(doc, &render_page(doc, page, 1.0)?, &e)?,
         "pdf" => page_pdf(doc, page, &PrintSettings::default())?,
         "fig" => fig_bytes(doc)?,
-        other => return Err(CliError::Usage(format!("unknown output format `.{other}` (figcraft, json, svg, png, jpg, webp, pdf, fig)"))),
+        "penpot" => penpot_bytes(doc)?,
+        other => return Err(CliError::Usage(format!("unknown output format `.{other}` (figcraft, json, svg, png, jpg, webp, pdf, fig, penpot)"))),
     };
     write(out, &bytes)
 }
@@ -128,6 +141,14 @@ pub fn write_doc(doc: &Document, page: NodeId, out: &str) -> CliResult<()> {
 /// `doc` as a `.fig` file (experimental), printing what was left out.
 fn fig_bytes(doc: &Document) -> CliResult<Vec<u8>> {
     let (bytes, warnings) = figcraft_engine::cmd::file::fig_bytes(doc).map_err(|e| CliError::Failed(e.to_string()))?;
+    for w in warnings {
+        eprintln!("note: {w}");
+    }
+    Ok(bytes)
+}
+
+fn penpot_bytes(doc: &Document) -> CliResult<Vec<u8>> {
+    let (bytes, warnings) = figcraft_engine::cmd::file::penpot_bytes(doc).map_err(|e| CliError::Failed(e.to_string()))?;
     for w in warnings {
         eprintln!("note: {w}");
     }
@@ -184,26 +205,33 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     for n in &notes {
-        eprintln!("note: {n}");
+        eprintln!("note: {}", plain(&n.to_string()));
     }
     println!(
         "{} — {} ({} nodes, {} styles, {} variables, {} images)",
-        path,
-        doc.name,
+        plain(path),
+        plain(&doc.name),
         doc.node_count(),
         doc.styles.len(),
         doc.variables.variables.len(),
         doc.images.len()
     );
     for p in &pages {
-        println!("page {} \"{}\": {} nodes, {} top-level", p["id"], p["name"].as_str().unwrap_or(""), p["nodes"], p["topLevel"]);
+        println!("page {} \"{}\": {} nodes, {} top-level", p["id"], plain(p["name"].as_str().unwrap_or("")), p["nodes"], p["topLevel"]);
         for f in p["frames"].as_array().into_iter().flatten() {
-            println!("  {} {} \"{}\" {}×{}", f["id"], f["type"].as_str().unwrap_or(""), f["name"].as_str().unwrap_or(""), f["width"], f["height"]);
+            println!(
+                "  {} {} \"{}\" {}×{}",
+                f["id"],
+                f["type"].as_str().unwrap_or(""),
+                plain(f["name"].as_str().unwrap_or("")),
+                f["width"],
+                f["height"]
+            );
         }
     }
     for m in &missing {
         let layers = if m.layers == 1 { "text layer" } else { "text layers" };
-        println!("missing font \"{}\": {} {layers} (drawn in a fallback font)", m.family, m.layers);
+        println!("missing font \"{}\": {} {layers} (drawn in a fallback font)", plain(&m.family), m.layers);
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -237,12 +265,16 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
         println!("{out}");
         return Ok(ExitCode::SUCCESS);
     }
+    if t.format.as_deref().map_or(ext(out) == "penpot", |f| f.eq_ignore_ascii_case("penpot")) {
+        write(out, &penpot_bytes(&doc)?)?;
+        println!("{out}");
+        return Ok(ExitCode::SUCCESS);
+    }
     let page = page_named(&doc, t.page.as_deref())?;
     let (scale, node, print) = (t.scale, t.node.as_deref(), &t.print);
     let fmt = match t.format.as_deref() {
-        Some(f) => {
-            image_format(&f.to_ascii_lowercase()).ok_or_else(|| CliError::Usage(format!("unknown --format `{f}` (png|jpg|svg|webp|pdf|xml|fig)")))?
-        }
+        Some(f) => image_format(&f.to_ascii_lowercase())
+            .ok_or_else(|| CliError::Usage(format!("unknown --format `{f}` (png|jpg|svg|webp|pdf|xml|fig|penpot)")))?,
         None => image_format(&ext(out)).unwrap_or(ExportFormat::Png),
     };
     let target = node.map(|q| find_node(&doc, page, q)).transpose()?;
@@ -321,6 +353,11 @@ fn refuse_dropping_images_from_script(input: Option<(&str, usize)>, active: &fig
 pub fn convert(input: &str, out: &str) -> CliResult<ExitCode> {
     let (loaded, _) = figcraft_engine::cmd::file::load_path(input, None).map_err(|e| CliError::Failed(format!("can't open {input}: {e}")))?;
     refuse_dropping_images(input, out, loaded.images_past_budget)?;
+    if ext(input) == "penpot" {
+        for note in &loaded.issues {
+            eprintln!("note: {note}");
+        }
+    }
     let doc = loaded.doc;
     let page = doc
         .current_page
@@ -366,6 +403,7 @@ pub fn parse_script(text: &str) -> Result<Vec<BatchStep>, String> {
         .enumerate()
         .map(|(i, s)| {
             let cmd = s.get("command").and_then(Value::as_str).ok_or_else(|| format!("step {i}: `command` (a string) is required"))?;
+            figcraft_engine::batch::refuse_unknown_step_keys(i, &s).map_err(|e| e.to_string())?;
             let params = match s.get("params") {
                 None | Some(Value::Null) => json!({}),
                 Some(p @ Value::Object(_)) => p.clone(),
@@ -377,8 +415,12 @@ pub fn parse_script(text: &str) -> Result<Vec<BatchStep>, String> {
         .collect()
 }
 
+/// The largest script `run` reads (one may carry images as base64): a device, a pipe or a larger
+/// file is refused before it is read (#1114).
+pub const MAX_SCRIPT: u64 = 1 << 30;
+
 pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliResult<ExitCode> {
-    let bytes = figcraft_engine::file_access::read(script).map_err(|e| CliError::Failed(e.to_string()))?;
+    let bytes = figcraft_engine::file_access::read_capped(script, MAX_SCRIPT).map_err(|e| CliError::Failed(e.to_string()))?;
     let text = String::from_utf8(bytes).map_err(|_| CliError::Failed(format!("{script}: not UTF-8")))?;
     let steps = parse_script(&text).map_err(|e| CliError::Failed(format!("{script}: {e}")))?;
     let (mut s, input_images_left_out) = match input {
@@ -409,7 +451,8 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
         let cmd = steps.get(failed_at).map_or("", |step| step.command.as_str());
         let i = failed_at;
         println!("{}", json!({"step": i, "command": cmd, "ok": false, "error": e.to_string(), "rolledBack": true}));
-        eprintln!("error: step {i} ({cmd}) failed: {e}");
+        // Plugin-supplied text: escape terminal controls and line breaks.
+        eprintln!("error: step {i} ({}) failed: {}", plain(cmd), plain(&e.to_string()));
         eprintln!("the script's document changes were rolled back");
         return Ok(ExitCode::from(1));
     }
@@ -430,9 +473,56 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
     Ok(ExitCode::SUCCESS)
 }
 
+/// Link the components of `file` (a `.figcraft`) to their code as `mappings` (a
+/// `figcraft.connect.json`) says, and save it in place unless `dry_run`. Prints what was linked;
+/// entries that were skipped are warnings on stderr, and linking nothing fails (exit code 1).
+pub fn connect_publish(file: &str, mappings: &str, dry_run: bool) -> CliResult<ExitCode> {
+    if ext(file) != "figcraft" {
+        return Err(CliError::Usage(format!("{file}: connect publish saves code links in a .figcraft file")));
+    }
+    let mut s = Session::empty();
+    s.execute("file.open", &json!({"path": file})).map_err(|e| CliError::Failed(format!("can't open {file}: {e}")))?;
+    let r = s.execute("codeConnect.import", &json!({"path": mappings})).map_err(|e| CliError::Failed(format!("{mappings}: {e}")))?;
+    for w in r["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        eprintln!("warning: {w}");
+    }
+    let linked = r["linked"].as_u64().unwrap_or(0);
+    if linked == 0 {
+        eprintln!("error: no component of {file} matches a link in {mappings}: nothing published");
+        return Ok(ExitCode::from(1));
+    }
+    if dry_run {
+        println!("{linked} component link(s) from {mappings} would be published to {file} (dry run: not saved)");
+        return Ok(ExitCode::SUCCESS);
+    }
+    // The engine's save: written whole or not at all, with the file's version history.
+    s.execute("file.save", &json!({})).map_err(|e| CliError::Failed(format!("can't save {file}: {e}")))?;
+    println!("published {linked} component link(s) from {mappings} to {file}");
+    Ok(ExitCode::SUCCESS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `info` and a script's failure print what a file and its steps name, controls escaped.
+    #[test]
+    fn info_and_a_failed_script_print_what_they_were_given() {
+        let dir = std::env::temp_dir().join(format!("figcraft-cli-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (svg, script) = (dir.join("a.svg"), dir.join("s.json"));
+        std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>"#).unwrap();
+        std::fs::write(&script, r#"[{"command":"no.such\u001b"}]"#).unwrap();
+        assert_eq!(info(svg.to_str().unwrap(), false).unwrap(), ExitCode::SUCCESS);
+        assert_eq!(run_script(script.to_str().unwrap(), None, None).unwrap(), ExitCode::from(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plain_escapes_controls_and_leaves_quotes_and_paths() {
+        assert_eq!(plain("a\u{1b}[31m\nb"), r"a\u{1b}[31m\nb");
+        assert_eq!(plain(r"Bob's C:\files"), r"Bob's C:\files");
+    }
 
     #[test]
     fn script_formats() {
@@ -443,6 +533,9 @@ mod tests {
         assert!(parse_script("[{\"command\":\"a\",\"params\":3}]").is_err());
         assert!(parse_script("not json\n").is_err());
         assert!(parse_script("42").is_err());
+        // `args` for `params` would run the step without them (#1413).
+        let e = parse_script(r#"[{"command":"a"},{"command":"b","args":{"x":1}}]"#).unwrap_err().to_string();
+        assert!(e.contains("step 1: unknown key `args`"), "{e}");
     }
 
     #[test]
@@ -508,6 +601,57 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("figcraft-cli-{tag}-{}-{stamp}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
         dir
+    }
+
+    /// A script path that is a folder or a device is refused before anything is read (#1114).
+    #[test]
+    fn a_script_that_isnt_a_regular_file_is_refused() {
+        let dir = temp_dir("script-caps");
+        let mut bad = vec![dir.to_string_lossy().into_owned()];
+        if cfg!(unix) {
+            bad.push("/dev/zero".into());
+        }
+        for path in bad {
+            let Err(CliError::Failed(e)) = run_script(&path, None, None) else { panic!("{path} ran") };
+            assert!(e.contains("is a folder, not a file") || e.contains("isn't a regular file"), "{path}: {e}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `connect publish` links the file's components as the mappings say and saves the file in
+    /// place; a dry run saves nothing, and mappings that link nothing fail.
+    #[test]
+    fn connect_publish_links_components_and_saves_the_file() {
+        let dir = temp_dir("connect");
+        let file = dir.join("ui.figcraft");
+        let file = file.to_str().unwrap();
+        let mut s = Session::new();
+        let frame = s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 40, "name": "Card"})).unwrap();
+        s.execute("component.create", &json!({"ids": [frame["id"]]})).unwrap();
+        s.execute("file.saveAs", &json!({"path": file})).unwrap();
+        let mappings = dir.join("figcraft.connect.json");
+        let link =
+            |component: &str| json!({"component": component, "language": "react", "importPath": "@acme/ui", "name": "Card", "template": "<Card />"});
+        std::fs::write(&mappings, json!({"version": 1, "links": [link("Card"), link("Nope")]}).to_string()).unwrap();
+        let mappings = mappings.to_str().unwrap();
+        let links = || {
+            let mut s = Session::empty();
+            s.execute("file.open", &json!({"path": file})).unwrap();
+            let doc = s.doc().unwrap();
+            doc.nodes().filter(|n| n.name == "Card").map(|n| n.code_links.len()).sum::<usize>()
+        };
+
+        assert_eq!(connect_publish(file, mappings, true).unwrap(), ExitCode::SUCCESS);
+        assert_eq!(links(), 0, "a dry run saves nothing");
+        assert_eq!(connect_publish(file, mappings, false).unwrap(), ExitCode::SUCCESS, "an unknown component is only a warning");
+        assert_eq!(links(), 1, "Card is linked to its code in the saved file");
+
+        let none = dir.join("none.json");
+        std::fs::write(&none, json!({"version": 1, "links": [link("Nope")]}).to_string()).unwrap();
+        assert_eq!(connect_publish(file, none.to_str().unwrap(), false).unwrap(), ExitCode::from(1));
+        assert!(matches!(connect_publish(dir.join("ui.svg").to_str().unwrap(), mappings, false), Err(CliError::Usage(_))));
+        assert!(matches!(connect_publish(file, dir.join("missing.json").to_str().unwrap(), false), Err(CliError::Failed(_))));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A script resolves `{"$step": n}` like the same commands through `command.batch`. Each step

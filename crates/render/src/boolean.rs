@@ -7,13 +7,20 @@
 //! edited one are never recombined, and groups whose operands didn't change aren't recomputed at
 //! all. The caches drop their least recently used half when full, so a long drag doesn't evict
 //! every other group's result.
+//!
+//! The group's own corner radius is applied to the finished fold ([`result_cached`]) and cached in a
+//! separate, smaller map keyed by the folded path plus the radius and smoothing: the fold's caches
+//! are keyed by the operands alone, so scrubbing the radius never redoes the fold or evicts its
+//! prefixes, and a rounded path is never stored where a fold would find it.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use figcraft_doc::BoolOp;
 use figcraft_geom::BezPath;
+use figcraft_pathops::{FoldBudget, PathOpsError};
 
 use crate::draw::hash_path;
 
@@ -72,15 +79,69 @@ pub fn boolean_steps() -> u64 {
     STEPS.with(std::cell::Cell::get)
 }
 
+/// The folds refused as too complex to combine, so a refused group costs nothing the next time it
+/// is drawn (an empty path marks each).
+fn refused() -> &'static Mutex<PathCache> {
+    static C: OnceLock<Mutex<PathCache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(PathCache::new(256)))
+}
+
+static WARNED: AtomicBool = AtomicBool::new(false);
+
 /// The result of folding `operands` (bottom to top, each with its operation; the bottom one's is
-/// unused), reusing the longest cached prefix. Invalid geometry gives an empty path.
-pub fn fold_cached(operands: &[(BezPath, BoolOp)]) -> BezPath {
-    if operands.len() < 2 {
-        return figcraft_pathops::boolean_ops(operands.iter().map(|(p, op)| (p, *op))).unwrap_or_default();
+/// unused), reusing the longest cached prefix. Invalid geometry gives an empty path. `None`: the
+/// fold is past the path operations' caps ([`PathOpsError::TooComplex`]), so the group draws
+/// without its result, as layers past the render's memory budget are left out (with a warning,
+/// once).
+pub fn fold_cached(operands: &[(BezPath, BoolOp)]) -> Option<BezPath> {
+    let keys = fold_keys(operands);
+    let Some(&last) = keys.last() else { return Some(BezPath::new()) };
+    if locked(refused()).get(last).is_some() {
+        return None;
     }
-    // keys[i]: the fold of operands 0..=i.
+    let folded =
+        if operands.len() < 2 { figcraft_pathops::boolean_ops(operands.iter().map(|(p, op)| (p, *op))) } else { fold_from_cache(operands, &keys) };
+    match folded {
+        Ok(p) => Some(p),
+        Err(PathOpsError::TooComplex) => {
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                log::warn!("render: a boolean group's result is left out: {}", PathOpsError::TooComplex);
+            }
+            locked(refused()).insert(last, Arc::default());
+            None
+        }
+        Err(PathOpsError::BadInput) => Some(BezPath::new()),
+    }
+}
+
+fn rounded() -> &'static Mutex<PathCache> {
+    static C: OnceLock<Mutex<PathCache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(PathCache::new(512)))
+}
+
+/// A boolean group's result as it is drawn: the fold of `operands` ([`fold_cached`]), then the
+/// group's corner `radius` and `smoothing` on every corner still sharp.
+pub fn result_cached(operands: &[(BezPath, BoolOp)], radius: f64, smoothing: f64) -> Option<BezPath> {
+    let folded = fold_cached(operands)?;
+    if !(radius.is_finite() && radius > 0.0) {
+        return Some(folded);
+    }
     let mut h = DefaultHasher::new();
-    let keys: Vec<u64> = operands
+    hash_path(&folded, &mut h);
+    (radius.to_bits(), smoothing.to_bits(), 0x52u8).hash(&mut h);
+    let key = h.finish();
+    if let Some(p) = locked(rounded()).get(key) {
+        return Some((*p).clone());
+    }
+    let out = figcraft_pathops::round_corners(&folded, radius, smoothing);
+    locked(rounded()).insert(key, Arc::new(out.clone()));
+    Some(out)
+}
+
+/// `keys[i]`: the cache key of the fold of operands `0..=i`.
+fn fold_keys(operands: &[(BezPath, BoolOp)]) -> Vec<u64> {
+    let mut h = DefaultHasher::new();
+    operands
         .iter()
         .enumerate()
         .map(|(i, (p, op))| {
@@ -91,31 +152,35 @@ pub fn fold_cached(operands: &[(BezPath, BoolOp)]) -> BezPath {
             9u8.hash(&mut h);
             h.finish()
         })
-        .collect();
+        .collect()
+}
+
+/// The fold of two or more `operands` from the longest cached prefix (`keys`: [`fold_keys`]); the
+/// steps it computes count against one [`FoldBudget`].
+fn fold_from_cache(operands: &[(BezPath, BoolOp)], keys: &[u64]) -> Result<BezPath, PathOpsError> {
     let hit = {
         let mut c = locked(cache());
         keys.iter().enumerate().skip(1).rev().find_map(|(i, k)| c.get(*k).map(|p| (i, p)))
     };
     let (start, mut acc) = match hit {
-        Some((i, p)) if i + 1 == operands.len() => return (*p).clone(),
+        Some((i, p)) if i + 1 == operands.len() => return Ok((*p).clone()),
         Some((i, p)) => (i, (*p).clone()),
         None => match operands.first() {
             Some((p, _)) => (0, p.clone()),
-            None => return BezPath::new(),
+            None => return Ok(BezPath::new()),
         },
     };
+    let mut budget = FoldBudget::default();
     let mut fresh = Vec::new();
-    for ((p, op), key) in operands.iter().zip(&keys).skip(start + 1) {
+    for ((p, op), key) in operands.iter().zip(keys).skip(start + 1) {
         STEPS.with(|s| s.set(s.get() + 1));
-        acc = match figcraft_pathops::boolean_step(&acc, p, *op) {
-            Ok(r) => r,
-            Err(_) => return BezPath::new(),
-        };
+        budget.spend(&acc, p)?;
+        acc = figcraft_pathops::boolean_step(&acc, p, *op)?;
         fresh.push((*key, Arc::new(acc.clone())));
     }
     let mut c = locked(cache());
     for (k, p) in fresh {
         c.insert(k, p);
     }
-    acc
+    Ok(acc)
 }

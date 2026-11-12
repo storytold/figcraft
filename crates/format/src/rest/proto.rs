@@ -228,7 +228,11 @@ impl Ctx<'_> {
         let mapped = match text(a, "type") {
             Some("BACK") => Some(Action::Back),
             Some("CLOSE") => Some(Action::CloseOverlay),
-            Some("URL") => text(a, "url").filter(|u| !u.trim().is_empty()).map(|u| Action::OpenUrl { url: u.chars().take(MAX_URL).collect() }),
+            Some("URL") => text(a, "url").filter(|u| !u.trim().is_empty()).map(|u| Action::OpenUrl {
+                url: u.chars().take(MAX_URL).collect(),
+                // A new tab unless the action says otherwise.
+                new_tab: a.get("openInNewTab").and_then(Value::as_bool).unwrap_or(true),
+            }),
             Some("NODE") => {
                 let mapped = self.node_action(a);
                 if mapped.is_some() && transition.is_none() {
@@ -355,7 +359,7 @@ impl Ctx<'_> {
             Some(VariableValue::Number(n)) => json!(n),
             Some(VariableValue::String(s)) => json!(s),
             Some(VariableValue::Boolean(b)) => json!(b),
-            Some(VariableValue::Alias(_)) | None => {
+            Some(VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. }) | None => {
                 self.warn("set-variable actions with values that don't fit the variable were skipped");
                 return None;
             }
@@ -442,8 +446,8 @@ impl Ctx<'_> {
         };
         let vars = &self.doc.variables;
         let found = parts.filter(|(id, _)| self.var_kinds.contains_key(*id)).and_then(|(id, mode)| {
-            let v = vars.get(id)?;
-            let m = vars.collection(&v.collection)?.modes.iter().find(|m| m.id == mode)?;
+            let v = vars.get_by_id(id)?;
+            let m = vars.collection_by_id(&v.collection)?.mode_by_id(mode)?;
             Some(Expr::InMode { variable: v.id.clone(), mode: m.id.clone() })
         });
         if found.is_none() {

@@ -344,6 +344,47 @@ fn cjk_names_are_looked_for_in_edits_not_on_every_pan() {
     assert_eq!(h.app.cjk_needed(&ctx, 0), crate::cjk::HANGUL);
 }
 
+/// #1673: the UI runs a queued request only if the transport hasn't given up on it, and marks it
+/// started first, so a timeout can tell "not applied" from "still running". Both from a frame and
+/// from a hidden window's logic pass.
+#[test]
+fn a_request_the_transport_gave_up_on_is_never_applied() {
+    let (mut h, text) = document();
+    h.settle();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let rename = |id: u64, name: &str| ControlRequest {
+        id: json!(id),
+        method: "engine.execute".into(),
+        params: json!({"command": "node.set", "params": {"ids": [text.clone()], "props": {"name": name}}}),
+        reply: tx.clone(),
+        state: Default::default(),
+    };
+    let node = figcraft_doc::NodeId(text.as_u64().unwrap());
+    let name = |h: &Harness| h.app.session.doc().unwrap().node(node).unwrap().name.clone();
+    let before = name(&h);
+    let mut hidden = RawInput::default();
+    hidden.viewports.insert(ViewportId::ROOT, egui::ViewportInfo { minimized: Some(true), ..Default::default() });
+    for on_screen in [true, false] {
+        let gave_up = rename(1, "late");
+        gave_up.state.cancel_if_open();
+        let wanted = rename(2, "wanted");
+        let gate = wanted.state.clone();
+        h.app.control_queue.extend([gave_up, wanted]);
+        if on_screen {
+            h.frame(vec![]);
+        } else {
+            let ctx = h.ctx.clone();
+            let _ = ctx.run_logic(&hidden, |ctx| crate::control::background(&mut h.app, ctx));
+        }
+        let reply = rx.try_recv().expect("the wanted request is answered");
+        assert_eq!(reply.id, json!(2), "on screen: {on_screen}");
+        assert!(rx.try_recv().is_err(), "nothing answers the cancelled one");
+        assert_eq!(gate.state(), crate::RequestState::Running, "started before it ran");
+        assert_eq!(name(&h), "wanted");
+        h.app.session.execute("node.set", &json!({"ids": [text.clone()], "props": {"name": before.clone()}})).unwrap();
+    }
+}
+
 /// Asserts a hidden window answers edits and inspection at once, while a screenshot is
 /// parked with a deadline and times out once instead of waiting for a frame.
 #[test]
@@ -391,6 +432,53 @@ fn a_hidden_window_answers_at_once() {
     assert!(shot.result.unwrap_err().contains("didn't deliver a screenshot"), "a capture needs paint");
     assert!(h.app.capture.shots.is_empty(), "released after its deadline");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #1906: under Wayland a minimised window still reports itself visible (no `minimized`, no
+/// `occluded`) and draws no frames; eframe runs only its logic. A request waiting for that
+/// window's frame is answered from the logic passes once the window has drawn nothing for
+/// [`crate::control::NOT_DRAWING_AFTER`], instead of timing out after 60 s. A window that draws
+/// keeps answering from its frame.
+#[test]
+fn a_window_that_stopped_drawing_answers_from_its_logic_passes() {
+    let (mut h, text) = document();
+    h.settle();
+    h.time += 120.0;
+    h.app.clock.set_test_now(Some(h.time));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let rename = |id: u64, name: &str| ControlRequest {
+        id: json!(id),
+        method: "engine.execute".into(),
+        params: json!({"command": "node.set", "params": {"ids": [text.clone()], "props": {"name": name}}}),
+        reply: tx.clone(),
+        state: Default::default(),
+    };
+    let node = figcraft_doc::NodeId(text.as_u64().unwrap());
+    let name = |h: &Harness| h.app.session.doc().unwrap().node(node).unwrap().name.clone();
+    // What Wayland reports for a minimised window: nothing about its visibility.
+    let unknown = RawInput::default();
+    let ctx = h.ctx.clone();
+    h.app.control_queue.push(rename(1, "while minimised"));
+    let _ = ctx.run_logic(&unknown, |ctx| crate::control::background(&mut h.app, ctx));
+    assert!(rx.try_recv().is_err(), "a window that may still draw answers from its frame");
+    assert_eq!(h.app.control_queue.len(), 1);
+    // No frame comes: the next logic pass answers.
+    h.app.clock.set_test_now(Some(h.time + crate::control::NOT_DRAWING_AFTER + 0.05));
+    let _ = ctx.run_logic(&unknown, |ctx| crate::control::background(&mut h.app, ctx));
+    let reply = rx.try_recv().expect("answered while the window draws nothing");
+    assert_eq!(reply.id, json!(1));
+    assert!(reply.result.is_ok(), "{:?}", reply.result);
+    assert_eq!(name(&h), "while minimised");
+    assert!(h.app.control_queue.is_empty(), "nothing waits for the window");
+    // Back on screen: a frame drawn after the wait began starts it again, and the frame answers.
+    h.time += 1.0;
+    h.app.clock.set_test_now(Some(h.time));
+    h.app.control_queue.push(rename(2, "on screen"));
+    let _ = ctx.run_logic(&unknown, |ctx| crate::control::background(&mut h.app, ctx));
+    h.app.clock.set_test_now(Some(h.time + crate::control::NOT_DRAWING_AFTER + 0.05));
+    h.frame(vec![]);
+    let reply = rx.try_recv().expect("the frame answers");
+    assert_eq!((reply.id, name(&h)), (json!(2), "on screen".to_string()));
 }
 
 #[test]
@@ -471,4 +559,21 @@ fn a_discarded_sizing_pass_sets_up_and_counts_one_frame_only() {
     out.textures_delta.clear();
     assert_eq!(passes, 2, "egui reran the frame");
     assert_eq!(app.frame_stats.frames, frames + 1, "one frame was drawn, not one per pass");
+}
+
+#[test]
+fn a_rename_started_while_minimized_waits_for_the_layers_panel_quietly() {
+    let (mut h, _) = document();
+    let r = h.run("shape.rectangle", json!({"x": 500, "y": 500, "width": 40, "height": 40}));
+    h.run("view.minimize", json!({"on": true}));
+    h.settle();
+    // What Cmd/Ctrl+R leaves: the field opens when the layers panel next draws, which a minimized
+    // interface doesn't do; no frame is asked for meanwhile.
+    h.app.ui.rename = Some(crate::panels::layers::Rename { id: id(&r), start: true });
+    h.assert_idle("a rename started while the interface is minimized");
+    h.run("view.minimize", json!({"on": false}));
+    for _ in 0..3 {
+        h.frame(vec![]);
+    }
+    assert!(h.app.ui.rename.is_some_and(|r| !r.start), "the field opened once the interface expanded");
 }

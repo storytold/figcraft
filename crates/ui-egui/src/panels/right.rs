@@ -1,8 +1,14 @@
 //! The right panel: Design, Prototype and Inspect tabs.
 
+use std::sync::Arc;
+
 use egui::{Align2, Color32, CornerRadius, Id, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{BlendMode, Paint, PaintKind};
-use figcraft_doc::*;
+use figcraft_doc::{
+    Blur, BlurType, BoolOp, Brush, Document, Effect, EffectKind, ExportFormat, ExportSetting, Glass, GridAlign, GridKind, LayoutGrid,
+    MAX_BLUR_RADIUS, MaskType, Node, NodeId, NodeKind, Noise, NoiseMode, Shadow, StrokeAlign, StrokeCap, StrokeJoin, StrokeProps, Texture,
+    VariableType, WidthPoint, WidthPreset, WidthProfile,
+};
 use figcraft_engine::cmd::lists::{moved_index, removed_index};
 use serde_json::{Value, json};
 
@@ -27,16 +33,20 @@ use inspect::inspect;
 pub(crate) use inspect::{inspect_section, prop_row};
 #[cfg(test)]
 pub(crate) use menu::menu_row_width;
-pub use menu::{blend_menu, context_popup, menu_check, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
-pub(crate) use menu::{block, menu_style, row, row_rect};
+#[cfg(test)]
+pub(crate) use menu::preview_blend;
+pub use menu::{blend_menu, context_popup, menu_check, menu_icon_item, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
+pub(crate) use menu::{block, menu_row_lit, menu_style, row, row_rect};
 use paints::{appearance, paints, variable_modes};
 pub(crate) use stroke::{CAP_ART_W, cap_art, join_label};
 
 /// Common value of `f` across `ids` (None when mixed or empty).
 pub(crate) fn common<T: PartialEq + Clone>(doc: &Document, ids: &[NodeId], f: impl Fn(&Node) -> T) -> Option<T> {
-    let mut it = ids.iter().filter_map(|i| doc.node(*i));
-    let first = f(it.next()?);
-    if it.all(|n| f(n) == first) { Some(first) } else { None }
+    crate::selection_cache::with_nodes(doc, ids, |it| {
+        let mut it = it.flatten();
+        let first = f(it.next()?);
+        if it.all(|n| f(n) == first) { Some(first) } else { None }
+    })
 }
 
 impl FigApp {
@@ -65,7 +75,12 @@ impl FigApp {
             None => return,
         };
         let Ok(doc) = self.session.doc() else { return };
-        let values: Vec<(NodeId, f64)> = ids.iter().filter_map(|i| Some((*i, rel.apply(shown(doc.node(*i)?))?))).collect();
+        let mut values: Vec<(NodeId, f64)> = ids.iter().filter_map(|i| Some((*i, rel.apply(shown(doc.node(*i)?))?))).collect();
+        if key == "absoluteRotation" {
+            // A page angle depends on the parents': turn a selected parent before the layers in it
+            // (as `node.set` orders a multi-id call), whatever order the selection is in.
+            values.sort_by_key(|(i, _)| doc.ancestors(*i).len());
+        }
         if values.is_empty() || self.session.begin_interaction("Edit").is_err() {
             return;
         }
@@ -79,12 +94,18 @@ impl FigApp {
 
     /// Apply a field edit through any command: `params` builds the command's params from the value.
     pub fn field_run(&mut self, edit: Option<FieldEdit>, cmd: &str, params: impl Fn(f64) -> Value) {
+        self.field_run_named(edit, "Edit", cmd, params);
+    }
+
+    /// Apply a field edit with a specific undo label for scrubs; commit only on release.
+    /// Typed edits use `run`; scrub errors are discarded as in `field_run`.
+    pub(crate) fn field_run_named(&mut self, edit: Option<FieldEdit>, label: &str, cmd: &str, params: impl Fn(f64) -> Value) {
         match edit {
             Some(FieldEdit::Set(v)) => {
                 self.run(cmd, params(v));
             }
             Some(FieldEdit::Scrub(v, done)) => {
-                let _ = self.session.begin_interaction("Edit");
+                let _ = self.session.begin_interaction(label);
                 let _ = self.session.execute(cmd, &params(v));
                 if done {
                     let _ = self.session.commit_interaction();
@@ -99,6 +120,13 @@ impl FigApp {
 /// menu, then route the scroll area to comments, frame presets, design, prototype or inspect.
 pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // The panel's edge, drawn here: the frame has no stroke (a stroke counts as margin and would
+    // take 1 pt off each side of the panel (240 pt by default)).
+    let edge = ui.max_rect();
+    app.ui.right_panel_rect = Some(edge);
+    // On the side facing the canvas (its right in a mirrored window).
+    let x = if app.ui.mirrored { edge.max.x } else { edge.min.x };
+    ui.painter().vline(x, edge.y_range(), Stroke::new(1.0, t.border));
     let w = ui.available_width();
     // Top bar: people (you and the others in a live session), present, share.
     let (top, _) = ui.allocate_exact_size(vec2(w, 48.0), Sense::hover());
@@ -235,89 +263,115 @@ fn design(app: &mut FigApp, ui: &mut Ui) {
     let Ok(ds) = app.session.ds() else { return };
     // The panel shows the document itself, not a live text preview over it.
     let doc = ds.text_preview.clone().unwrap_or_else(|| ds.doc.clone());
+    // While a gesture only moves the selection, nothing the sections show changes but where it
+    // is: they show the document it started from, so what they keep stays kept (#1571).
+    let shown = crate::selection_cache::moved(ds).filter(|_| ds.text_preview.is_none()).map_or_else(|| doc.clone(), |(b, _)| b);
     let sel = ds.selection.clone();
     let vector_edit = ds.vector_edit.clone();
     if sel.is_empty() {
+        if app.session.tool.tool == figcraft_engine::ToolId::Scale {
+            crate::scale_panel::note_no_selection(ui);
+        }
         page_section(app, ui, &doc);
         return;
     }
-    header(app, ui, &doc, &sel);
+    crate::selection_cache::show(&shown, &sel);
+    header(app, ui, &shown, &sel);
     widgets::separator(ui);
     // Editing a vector with points selected, the points' fields stand in for the layer's position
     // and dimensions.
     let points_selected = vector_edit.as_ref().is_some_and(|ve| !ve.vertices.is_empty() || !ve.segments.is_empty());
     let vector_edit_none = vector_edit.is_none();
     match vector_edit {
-        Some(ve) => crate::vector_panel::points(app, ui, &doc, &ve),
+        Some(ve) => crate::vector_panel::points(app, ui, &shown, &ve),
         None => {
-            crate::section_panel::section(app, ui, &doc, &sel);
+            crate::section_panel::section(app, ui, &shown, &sel);
             if app.session.tool.tool == figcraft_engine::ToolId::Scale {
-                crate::scale_panel::section(app, ui, &doc, &sel);
+                crate::scale_panel::section(app, ui, &shown, &sel);
                 widgets::separator(ui);
             }
-            position(app, ui, &doc, &sel);
+            position(app, ui, &doc, &shown, &sel);
         }
     }
     widgets::separator(ui);
     if !points_selected {
-        crate::layout_panel::layout_section(app, ui, &doc, &sel);
+        crate::layout_panel::layout_section(app, ui, &shown, &sel);
         widgets::separator(ui);
     }
-    if vector_edit_none && (arc_section(app, ui, &doc, &sel) || points_section(app, ui, &doc, &sel)) {
+    if vector_edit_none && arc_section(app, ui, &shown, &sel) || points_section(app, ui, &shown, &sel) {
         widgets::separator(ui);
     }
-    appearance(app, ui, &doc, &sel);
+    appearance(app, ui, &shown, &sel);
     widgets::separator(ui);
-    if variable_modes(app, ui, &doc, &sel) {
+    if variable_modes(app, ui, &shown, &sel) {
         widgets::separator(ui);
     }
-    if sel.iter().any(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_)))) {
-        crate::typography::typography(app, ui, &doc, &sel);
+    if crate::selection_cache::with_nodes(&shown, &sel, |it| it.flatten().any(|n| matches!(n.kind, NodeKind::Text(_)))) {
+        crate::typography::typography(app, ui, &shown, &sel);
         widgets::separator(ui);
     }
-    paints(app, ui, &doc, &sel, true);
+    paints(app, ui, &shown, &sel, true);
     widgets::separator(ui);
-    paints(app, ui, &doc, &sel, false);
+    paints(app, ui, &shown, &sel, false);
     widgets::separator(ui);
-    effects(app, ui, &doc, &sel);
+    effects(app, ui, &shown, &sel);
     widgets::separator(ui);
-    crate::selection_colors::section(app, ui, &doc, &sel);
-    if sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like())) {
-        grids(app, ui, &doc, &sel);
+    crate::selection_colors::section(app, ui, &shown, &sel);
+    if crate::selection_cache::every(&shown, &sel, |n| n.kind.is_frame_like()) {
+        grids(app, ui, &shown, &sel);
         widgets::separator(ui);
     }
-    crate::export_panel::section(app, ui, &doc, &sel);
+    crate::export_panel::section(app, ui, &shown, &sel);
 }
 
 /// Draw the page section: background and colour profile, local variables/styles, and the
 /// page export section.
 fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
-    let t = Tokens::get(ui.ctx());
     let Ok(page) = app.session.page() else { return };
     let bg = match doc.node(page).map(|n| &n.kind) {
         Some(NodeKind::Page { background, .. }) => *background,
         _ => figcraft_color::Color::DEFAULT_PAGE,
     };
     widgets::section_header(ui, tr("Page"), &[], false);
-    let mut open_picker = false;
-    let mut new_hex = None;
+    // The new colour and, from a scrub, whether the scrub is over (live edits stay one undo step).
+    let mut new_color: Option<(figcraft_color::Color, Option<bool>)> = None;
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
-        if widgets::swatch(ui, &p, 16.0).clicked() {
-            open_picker = true;
+        let (sw, opacity) =
+            widgets::paint_field(ui, Id::unique("pagebg_swatch"), Id::unique("pagebg_a"), &p, ui.available_width(), |child, text_r| {
+                // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
+                // (`FF000080`; `FF0000FF` asks for opaque).
+                if let Some(h) = widgets::text_field_inline(child, Id::unique("pagebg"), &bg.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
+                    && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+                {
+                    let digits = h.trim().trim_start_matches('#');
+                    let carries_alpha = matches!(digits.len(), 4 | 8) && digits.chars().all(|ch| ch.is_ascii_hexdigit());
+                    new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
+                }
+            });
+        app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
+        // The opacity: a field like every other opacity field, not a label (#1748).
+        let alpha = |v: f64| bg.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);
+        match opacity {
+            Some(FieldEdit::Set(v)) => new_color = Some((alpha(v), None)),
+            Some(FieldEdit::Scrub(v, done)) => new_color = Some((alpha(v), Some(done))),
+            None => {}
         }
-        if let Some(h) = widgets::text_field(ui, Id::unique("pagebg"), &bg.to_hex(), 96.0, "") {
-            new_hex = Some(h);
-        }
-        widgets::label(ui, "100 %", t.text);
     });
-    if open_picker {
-        app.ui.picker = Some(crate::colorpicker::PickerTarget::PageBackground);
-    }
-    if let Some(h) = new_hex
-        && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
-    {
-        app.run("page.setBackground", json!({"color": c.to_css_hex()}));
+    if let Some((c, scrub)) = new_color {
+        let p = json!({"color": c.to_css_hex()});
+        match scrub {
+            None => {
+                app.run("page.setBackground", p);
+            }
+            Some(done) => {
+                let _ = app.session.begin_interaction("Page background");
+                let _ = app.session.execute("page.setBackground", &p);
+                if done {
+                    let _ = app.session.commit_interaction();
+                }
+            }
+        }
     }
     widgets::separator(ui);
     widgets::section_header(ui, tr("Color profile"), &[], false);
@@ -365,7 +419,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     };
     let is_frame = sel.len() == 1 && sel.first().and_then(|i| doc.node(*i)).is_some_and(|n| matches!(n.kind, NodeKind::Frame));
     // Frames and groups convert into each other from the type menu.
-    let is_group = !sel.is_empty() && sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Group)));
+    let is_group = !sel.is_empty() && crate::selection_cache::every(doc, sel, |n| matches!(n.kind, NodeKind::Group));
     let kind_items = |app: &mut FigApp, ui: &mut Ui, frame: bool| {
         for (to_frame, label, cmd) in [(true, tr("Frame"), "object.convertToFrame"), (false, tr("Group"), "object.convertToGroup")] {
             if menu_check(ui, to_frame == frame, label, "") {
@@ -378,16 +432,23 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     };
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
-    let lr = Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 12.0), vec2(120.0, 24.0));
+    // Keep the type menu and frame actions together. A short label must not leave
+    // the orientation icon floating in the middle of the header.
+    // The handoff icon also fits beside the frame controls at the panel minimum.
+    let max_label_width = if is_frame { (w - 202.0).clamp(40.0, 120.0) } else { 92.0 };
+    let shown = if is_frame || is_group { widgets::elide_font(ui, &label, max_label_width, semibold(13.0)) } else { label.clone() };
+    let label_width = if is_frame || is_group { ui.painter().layout_no_wrap(shown.clone(), semibold(13.0), t.text).size().x + 28.0 } else { 120.0 };
+    let lr = Rect::from_min_size(pos2(r.min.x + 8.0, r.center().y - 12.0), vec2(label_width, 24.0));
     let resp = ui.interact(lr, ui.scope_id().with("typedd"), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(lr, CornerRadius::same(5), t.hover);
     }
-    ui.painter().text(pos2(lr.min.x + 8.0, lr.center().y), Align2::LEFT_CENTER, &label, semibold(13.0), t.text);
+    let resp = if shown == label { resp } else { resp.on_hover_text(&label) };
+    let label_rect = ui.painter().text(pos2(lr.min.x + 8.0, lr.center().y), Align2::LEFT_CENTER, &shown, semibold(13.0), t.text);
     if is_frame || is_group {
         icons::paint(
             ui.painter(),
-            Rect::from_center_size(pos2(lr.min.x + 18.0 + label.len() as f32 * 6.5, lr.center().y), vec2(10.0, 10.0)),
+            Rect::from_center_size(pos2(label_rect.right() + 8.0, lr.center().y), vec2(10.0, 10.0)),
             Icon::Chevron,
             t.icon_secondary,
         );
@@ -396,14 +457,22 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         menu_popup(&resp).width(180.0).show(|ui| kind_items(app, ui, false));
     }
     if is_frame {
-        let sr = Rect::from_min_size(pos2(lr.max.x + 4.0, r.center().y - 12.0), vec2(24.0, 24.0));
+        let sr = Rect::from_min_size(pos2(lr.max.x + 2.0, r.center().y - 12.0), vec2(24.0, 24.0));
         let sresp = ui.interact(sr, ui.scope_id().with("swap_orient"), Sense::click()).tip(tr("Swap orientation"));
         if sresp.hovered() {
             ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), sr.shrink(5.0), Icon::Rotate, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(sr), Icon::Rotate, t.icon);
         if sresp.clicked() {
             app.run("frame.swapOrientation", json!({"ids": sel}));
+        }
+        let fit_r = sr.translate(vec2(26.0, 0.0));
+        let fit_tip = crate::shortcuts::tip(tr("Fit to contents"), "object.resizeToFit");
+        if widgets::icon_button_at(ui, ui.scope_id().with("frame_fit_contents"), fit_r, Icon::FitContents, fit_tip) {
+            app.run("object.resizeToFit", json!({"ids": sel}));
+        }
+        if figcraft_engine::devinspect::has_status(doc, sel[0]) {
+            crate::section_panel::status_icon(app, ui, doc, sel, fit_r.translate(vec2(26.0, 0.0)));
         }
         let ids: Vec<NodeId> = sel.to_vec();
         menu_popup(&resp).width(260.0).show(|ui| {
@@ -434,7 +503,10 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     // Layers in boolean groups, or one boolean group: the operation they use (checked in the menu).
     let current = figcraft_engine::booleans::shown_op(doc, sel);
     for (icon, label, cmd) in actions.into_iter().rev() {
-        let br = Rect::from_min_size(pos2(x - 24.0, r.center().y - 12.0), vec2(24.0, 24.0));
+        // With several layers the component button is a dropdown: a small chevron sits beside its icon.
+        let dropdown = cmd == "component.create" && sel.len() > 1;
+        let bw = if dropdown { 34.0 } else { 24.0 };
+        let br = Rect::from_min_size(pos2(x - bw, r.center().y - 12.0), vec2(bw, 24.0));
         let tip = if cmd == "bool.union" { label } else { crate::shortcuts::tip(label, cmd) };
         let bresp = ui.interact(br, ui.scope_id().with(("qa", cmd)), Sense::click()).tip(tip);
         if bresp.hovered() {
@@ -445,7 +517,10 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             ("bool.union", Some(op)) => crate::layers::op_icon(op),
             _ => icon,
         };
-        icons::paint(ui.painter(), br.shrink(5.0), icon, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(br), icon, t.icon);
+        if dropdown {
+            icons::paint(ui.painter(), Rect::from_center_size(pos2(br.max.x - 6.0, br.center().y), vec2(8.0, 8.0)), Icon::Chevron, t.icon_secondary);
+        }
         if cmd == "bool.union" {
             menu_popup(&bresp).width(180.0).show(|ui| {
                 for (op, c) in [
@@ -454,46 +529,147 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
                     (BoolOp::Intersect, "bool.intersect"),
                     (BoolOp::Exclude, "bool.exclude"),
                 ] {
+                    // Each entry leads with its operation's icon (the result it previews).
                     let key = crate::shortcuts::shortcut(c).unwrap_or("");
-                    let picked = match current {
-                        Some(cur) => menu_check(ui, cur == op, tr(op.label()), key),
-                        None => menu_item(ui, tr(op.label()), key),
-                    };
+                    let icon = crate::layers::op_icon(op);
+                    let picked = menu_icon_item(ui, Some(icon), current.map(|cur| cur == op), tr(op.label()), key);
                     if picked {
                         app.run(c, json!({}));
                         ui.close();
                     }
                 }
                 let key = crate::shortcuts::shortcut("vector.flatten").unwrap_or("");
-                let flatten = if current.is_some() { menu_item_beside_checks(ui, tr("Flatten"), key) } else { menu_item(ui, tr("Flatten"), key) };
+                let flatten = menu_icon_item(ui, None, None, tr("Flatten"), key);
                 if flatten {
                     app.run("vector.flatten", json!({}));
                     ui.close();
                 }
             });
+        } else if cmd == "component.create" && sel.len() > 1 {
+            // Several layers: the button opens a menu, as Figma's does (#2088). One layer keeps the plain click.
+            let create = crate::i18n::command("component.create", "Create component");
+            let multiple = crate::i18n::command("component.createMultiple", "Create multiple components");
+            let set = crate::i18n::command("component.createSet", "Create component set");
+            // Like the layers menu, leave out what the selection can't use.
+            let can_set = figcraft_engine::cmd::component::can_create_set(doc, sel);
+            let mut entries = vec![("component.create", &create), ("component.createMultiple", &multiple)];
+            if can_set {
+                entries.push(("component.createSet", &set));
+            }
+            // Wide enough for the longest translated label (the rows grow with it, the menu never clips).
+            let widest = entries
+                .iter()
+                .map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), regular(11.5), Color32::PLACEHOLDER).size().x)
+                .fold(0.0f32, f32::max);
+            menu_popup(&bresp).width(menu::menu_row_width(widest, 0.0).ceil().max(160.0)).show(|ui| {
+                for (c, label) in &entries {
+                    let key = crate::shortcuts::shortcut(c).unwrap_or("");
+                    if menu_item(ui, label, key) {
+                        app.run(c, json!({}));
+                        ui.close();
+                    }
+                }
+            });
         } else if bresp.clicked() {
             app.run(cmd, json!({}));
         }
-        x -= 26.0;
+        x -= bw + 2.0;
     }
     crate::component_panel::instance_section(app, ui, doc, sel);
 }
 
-fn position(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+/// Whether a selected layer is an instance or in one, and whether one is inside an instance (not
+/// the instance itself): the Design panel asks every frame, kept while the document and the
+/// selection stay the same ([`crate::selection_cache`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InInstance {
+    pub any: bool,
+    pub nested: bool,
+}
+
+pub(crate) fn in_instance(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> InInstance {
+    use figcraft_engine::components::{inside_instance, owning_instance};
+    crate::selection_cache::cached(ctx, "in instance", doc, sel, &[], || InInstance {
+        any: sel.iter().any(|i| owning_instance(doc, *i).is_some()),
+        nested: sel.iter().any(|i| inside_instance(doc, *i)),
+    })
+}
+
+/// The Position section: its values from `doc`, what doesn't change with where the layers are from
+/// `shown` (the panel's document, see `design`).
+fn position(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, shown: &Arc<Document>, sel: &[NodeId]) {
     widgets::section_header(ui, tr("Position"), &[], false);
     // Layers inside an instance take their place and constraints from the main component.
-    let nested = sel.iter().any(|i| figcraft_engine::components::inside_instance(doc, *i));
+    let nested = in_instance(ui.ctx(), shown, sel).nested;
     ui.add_enabled_ui(!nested, |ui| position_fields(app, ui, doc, sel))
         .response
         .on_disabled_hover_text(tr("Layers in an instance take their position from the main component"));
     ui.add_space(8.0);
 }
 
+/// What the position fields show of the selection (`None`: mixed), kept like [`in_instance`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PositionValues {
+    pub can_align: bool,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub rot: Option<f64>,
+    /// Every selected layer is in an auto layout frame, and whether they ignore its layout.
+    pub parent_al: bool,
+    pub absolute: Option<bool>,
+    /// Every selected layer is in a frame that places it by constraints, and those constraints.
+    pub in_frame: bool,
+    pub constraints: Option<figcraft_doc::Constraints>,
+}
+
+/// What the X field shows of a layer (in its frame's space: groups have none of their own); a
+/// relative edit of mixed values starts from it.
+fn x_of(doc: &Document, n: &Node) -> f64 {
+    (doc.frame_relative(n.id).as_coeffs()[4] * 100.0).round() / 100.0
+}
+
+fn y_of(doc: &Document, n: &Node) -> f64 {
+    (doc.frame_relative(n.id).as_coeffs()[5] * 100.0).round() / 100.0
+}
+
+/// The layer's rotation on the page (its own angle plus its parents'), what the field shows.
+fn rot_of(doc: &Document, n: &Node) -> f64 {
+    (figcraft_geom::rotation_degrees(doc.world_transform(n.id)) * 100.0).round() / 100.0
+}
+
+pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> PositionValues {
+    let parent = |n: &Node| n.parent.and_then(|p| doc.node(p));
+    crate::selection_cache::cached(ctx, "position", doc, sel, &[], || PositionValues {
+        can_align: figcraft_engine::cmd::arrange::can_align(doc, sel),
+        x: common(doc, sel, |n| x_of(doc, n)),
+        y: common(doc, sel, |n| y_of(doc, n)),
+        rot: common(doc, sel, |n| rot_of(doc, n)),
+        parent_al: sel.iter().all(|i| doc.node(*i).and_then(parent).is_some_and(|p| p.layout.is_some())),
+        absolute: common(doc, sel, |n| n.child_layout.absolute),
+        // Constraints: children of frames without auto layout, or ignoring it.
+        in_frame: sel.iter().all(|i| {
+            doc.node(*i).is_some_and(|n| parent(n).is_some_and(|p| p.kind.is_frame_like() && (p.layout.is_none() || n.child_layout.absolute)))
+        }),
+        constraints: common(doc, sel, |n| n.constraints),
+    })
+}
+
 /// Draw alignment and distribution, X/Y and rotation with flip/rotate controls, the
 /// absolute-position toggle and frame constraints.
-fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
-    let ids = sel.to_vec();
+fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
+    let pv = position_values(ui.ctx(), doc, sel);
     let col = widgets::col_width(ui.available_width());
+    align_row(app, ui, sel, pv.can_align, col);
+    position_row(app, ui, doc, sel, &pv, col);
+    rotation_row(app, ui, doc, sel, pv.rot, col);
+    if pv.in_frame {
+        constraints_row(app, ui, sel, pv.constraints, col);
+    }
+}
+
+/// Alignment, and distribution and tidy up for three or more layers.
+fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col: f32) {
+    let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Alignment"), None);
     row(ui, 32.0, |ui| {
         let cmds = ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"];
@@ -507,7 +683,7 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
             (Icon::AlignBottom, tip(tr("Align bottom"), cmds[5])),
         ];
         let w = col / 3.0;
-        let picked = ui.add_enabled_ui(figcraft_engine::cmd::arrange::can_align(doc, sel), |ui| {
+        let picked = ui.add_enabled_ui(can_align, |ui| {
             let h = widgets::segmented(ui, &items[..3], None, w);
             let v = widgets::segmented(ui, &items[3..], None, w).map(|i| i + 3);
             h.or(v)
@@ -532,23 +708,20 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
             });
         }
     });
-    // In the frame's space: groups have none of their own.
-    // What each field shows of a layer (a relative edit of mixed values starts from it).
-    let x_of = |n: &Node| (doc.frame_relative(n.id).as_coeffs()[4] * 100.0).round() / 100.0;
-    let y_of = |n: &Node| (doc.frame_relative(n.id).as_coeffs()[5] * 100.0).round() / 100.0;
-    let rot_of = |n: &Node| (figcraft_geom::rotation_degrees(n.transform) * 100.0).round() / 100.0;
-    let (x, y, rot) = (common(doc, sel, x_of), common(doc, sel, y_of), common(doc, sel, rot_of));
-    let parent_al = sel.iter().all(|i| doc.node(*i).and_then(|n| n.parent).and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some()));
-    let absolute = common(doc, sel, |n| n.child_layout.absolute);
+}
+
+/// X and Y, and the absolute-position toggle for children of auto layout frames.
+fn position_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], pv: &PositionValues, col: f32) {
+    let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Position"), None);
     row(ui, 32.0, |ui| {
-        let e = widgets::number_field_mixed(ui, Id::unique("pos_x"), Lead::Text("X"), x, "", col, 1.0);
-        app.field_of(&ids, "x", e, x_of, |v| json!(v));
-        let e = widgets::number_field_mixed(ui, Id::unique("pos_y"), Lead::Text("Y"), y, "", col, 1.0);
-        app.field_of(&ids, "y", e, y_of, |v| json!(v));
+        let e = widgets::number_field_mixed(ui, Id::unique("pos_x"), Lead::Text("X"), pv.x, "", col, 1.0);
+        app.field_of(&ids, "x", e, |n| x_of(doc, n), |v| json!(v));
+        let e = widgets::number_field_mixed(ui, Id::unique("pos_y"), Lead::Text("Y"), pv.y, "", col, 1.0);
+        app.field_of(&ids, "y", e, |n| y_of(doc, n), |v| json!(v));
         // Children of auto layout frames can ignore the layout (absolute position).
-        if parent_al {
-            let on = absolute.unwrap_or(false);
+        if pv.parent_al {
+            let on = pv.absolute.unwrap_or(false);
             if icons::button(
                 ui,
                 Icon::AbsolutePosition,
@@ -562,10 +735,15 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
             }
         }
     });
+}
+
+/// Rotation, with the rotate and flip buttons.
+fn rotation_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], rot: Option<f64>, col: f32) {
+    let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Rotation"), None);
     row(ui, 32.0, |ui| {
         let e = widgets::number_field_mixed(ui, Id::unique("pos_rot"), Lead::Icon(Icon::Angle, tr("Rotation")), rot, "°", col, 1.0);
-        app.field_of(&ids, "rotation", e, rot_of, |v| json!(v));
+        app.field_of(&ids, "absoluteRotation", e, |n| rot_of(doc, n), |v| json!(v));
         let items = [
             (Icon::Rotate, tr("Rotate 90° right")),
             (Icon::FlipH, crate::shortcuts::tip(tr("Flip horizontal"), "object.flipH")),
@@ -575,50 +753,38 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
             app.run(["object.rotateRight", "object.flipH", "object.flipV"][i], json!({"ids": ids}));
         }
     });
-    // Constraints (children of frames without auto layout, or ignoring it).
-    let in_frame = sel.iter().all(|i| {
-        doc.node(*i).is_some_and(|n| {
-            n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.kind.is_frame_like() && (p.layout.is_none() || n.child_layout.absolute))
-        })
-    });
-    if in_frame {
-        let c = common(doc, sel, |n| n.constraints);
-        widgets::sublabels(ui, tr("Constraints"), None);
-        row(ui, 32.0, |ui| {
-            let h = c.map(|c| format!("{:?}", c.horizontal)).unwrap_or_else(|| "Mixed".into());
-            let resp = widgets::dropdown(ui, tr(&pretty(&h)), col, None);
-            menu_popup(&resp).show(|ui| {
-                for (l, v) in [
-                    (tr("Left"), "left"),
-                    (tr("Right"), "right"),
-                    (tr("Left & right"), "leftRight"),
-                    (tr("Center"), "center"),
-                    (tr("Scale"), "scale"),
-                ] {
-                    if menu_item(ui, l, "") {
-                        app.set_props(&ids, json!({"constraints": {"horizontal": v}}));
-                        ui.close();
-                    }
+}
+
+/// The horizontal and vertical constraints of children of frames without auto layout.
+fn constraints_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], c: Option<figcraft_doc::Constraints>, col: f32) {
+    let ids = sel.to_vec();
+    widgets::sublabels(ui, tr("Constraints"), None);
+    row(ui, 32.0, |ui| {
+        let h = c.map(|c| format!("{:?}", c.horizontal)).unwrap_or_else(|| "Mixed".into());
+        let resp = widgets::dropdown(ui, tr(&pretty(&h)), col, None);
+        menu_popup(&resp).show(|ui| {
+            for (l, v) in
+                [(tr("Left"), "left"), (tr("Right"), "right"), (tr("Left & right"), "leftRight"), (tr("Center"), "center"), (tr("Scale"), "scale")]
+            {
+                if menu_item(ui, l, "") {
+                    app.set_props(&ids, json!({"constraints": {"horizontal": v}}));
+                    ui.close();
                 }
-            });
-            let v = c.map(|c| format!("{:?}", c.vertical)).unwrap_or_else(|| "Mixed".into());
-            let resp = widgets::dropdown(ui, tr(&pretty(&v)), col, None);
-            menu_popup(&resp).show(|ui| {
-                for (l, val) in [
-                    (tr("Top"), "top"),
-                    (tr("Bottom"), "bottom"),
-                    (tr("Top & bottom"), "topBottom"),
-                    (tr("Center"), "center"),
-                    (tr("Scale"), "scale"),
-                ] {
-                    if menu_item(ui, l, "") {
-                        app.set_props(&ids, json!({"constraints": {"vertical": val}}));
-                        ui.close();
-                    }
-                }
-            });
+            }
         });
-    }
+        let v = c.map(|c| format!("{:?}", c.vertical)).unwrap_or_else(|| "Mixed".into());
+        let resp = widgets::dropdown(ui, tr(&pretty(&v)), col, None);
+        menu_popup(&resp).show(|ui| {
+            for (l, val) in
+                [(tr("Top"), "top"), (tr("Bottom"), "bottom"), (tr("Top & bottom"), "topBottom"), (tr("Center"), "center"), (tr("Scale"), "scale")]
+            {
+                if menu_item(ui, l, "") {
+                    app.set_props(&ids, json!({"constraints": {"vertical": val}}));
+                    ui.close();
+                }
+            }
+        });
+    });
 }
 
 /// The selected ellipses' arc: Start (degrees), Sweep (a share of a full turn, negative running
@@ -626,13 +792,14 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]
 /// (`node.set`'s `arcStart` / `arcSweep` / `arcInner`; bindable to number variables, sweep and
 /// ratio ones holding percentages). Returns whether it showed.
 fn arc_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) -> bool {
-    let arcs: Vec<(f64, f64, f64)> = sel
-        .iter()
-        .filter_map(|i| match doc.node(*i)?.kind {
-            NodeKind::Ellipse { start, sweep, inner } => Some((start, sweep, inner)),
-            _ => None,
-        })
-        .collect();
+    let arcs: Vec<(f64, f64, f64)> = crate::selection_cache::with_nodes(doc, sel, |it| {
+        it.flatten()
+            .filter_map(|n| match n.kind {
+                NodeKind::Ellipse { start, sweep, inner } => Some((start, sweep, inner)),
+                _ => None,
+            })
+            .collect()
+    });
     if arcs.is_empty() || arcs.len() != sel.len() {
         return false;
     }
@@ -669,14 +836,15 @@ fn arc_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) ->
 /// inner radius as a share of the outer one), as `node.set`'s `pointCount` / `innerRadius`.
 /// Returns whether it showed.
 fn points_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) -> bool {
-    let shapes: Vec<(u32, Option<f64>)> = sel
-        .iter()
-        .filter_map(|i| match doc.node(*i)?.kind {
-            NodeKind::Polygon { count } => Some((count, None)),
-            NodeKind::Star { count, inner_ratio } => Some((count, Some(inner_ratio))),
-            _ => None,
-        })
-        .collect();
+    let shapes: Vec<(u32, Option<f64>)> = crate::selection_cache::with_nodes(doc, sel, |it| {
+        it.flatten()
+            .filter_map(|n| match n.kind {
+                NodeKind::Polygon { count } => Some((count, None)),
+                NodeKind::Star { count, inner_ratio } => Some((count, Some(inner_ratio))),
+                _ => None,
+            })
+            .collect()
+    });
     if shapes.is_empty() || shapes.len() != sel.len() {
         return false;
     }

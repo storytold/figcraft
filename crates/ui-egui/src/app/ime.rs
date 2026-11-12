@@ -1,4 +1,4 @@
-use super::*;
+use super::{FigApp, shortcuts};
 
 impl FigApp {
     /// The pass's one IME observation: the focused on-canvas editor, or an explicit idle.

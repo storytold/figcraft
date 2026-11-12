@@ -1,5 +1,10 @@
 use super::types::{Bind, HostOptions, NetReply, NetRequest, ONLINE_OFF, PublishOptions, Role, SessionId, Share, Shared, SharedLink, Status, Via};
-use super::*;
+use super::{
+    Access, Admin, AdminReply, ClientMsg, EngineError, HostInfo, IpAddr, Live, Result, Session, Value, bad, code, display_name, get, json,
+    req_string, string,
+};
+use figcraft_doc::Document;
+use std::sync::Arc;
 
 /// What a server says about its hosting, made safe to show: no control characters, short, and a
 /// terms address only when it is a web page (`http(s)://`).
@@ -33,8 +38,9 @@ pub(super) fn unavailable(cmd: &str) -> EngineError {
     )
 }
 
+/// `collab.host`: host the open file (on this machine unless `p` says where) with an invite link.
 pub(super) fn host(s: &mut Session, p: &Value) -> Result<Value> {
-    start_host(s, "collab.host", p, Bind::Local, false)?;
+    start_host(s, "collab.host", p, Bind::Local, false, false)?;
     Ok(s.live_summary())
 }
 
@@ -49,8 +55,9 @@ fn document_for_sharing(s: &Session) -> Result<(Arc<Document>, u64)> {
 }
 
 /// Start hosting the open file for command `cmd` (on `bind` unless `p` says where; `short`: with
-/// a secret a join code can carry): the new session.
-fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool) -> Result<SessionId> {
+/// a secret a join code can carry; `view`: with a second secret for looking only): the new
+/// session.
+fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool, view: bool) -> Result<SessionId> {
     let port = match get(p, "port") {
         None => None,
         Some(v) => Some(v.as_u64().and_then(|n| u16::try_from(n).ok()).ok_or_else(|| bad(cmd, "`port` must be a whole number from 0 to 65535"))?),
@@ -62,7 +69,7 @@ fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool) ->
         Some(other) => other.parse::<IpAddr>().map(Bind::Addr).map_err(|_| bad(cmd, "`bind` must be \"local\", \"lan\" or an IP address"))?,
     };
     let (doc, uid) = document_for_sharing(s)?;
-    let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc: doc.clone(), short };
+    let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc: doc.clone(), short, view };
     let (id, info) = s.live.start(cmd, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
     // A failed host start must leave both the document and its saved baseline untouched.
     if let Some(ds) = s.docs.iter_mut().find(|d| d.uid == uid)
@@ -104,9 +111,21 @@ fn start_publish(s: &mut Session, cmd: &str, server: &str, p: &Value, share: boo
     Ok(id)
 }
 
-/// Why a local network share has no view-only code.
-const LOCAL_EDITS: &str = "everyone who joins a file shared on the local network can edit it: share it online for a view-only code";
+/// Why a local network share has no comment code.
+const LOCAL_COMMENTS: &str =
+    "a file shared on the local network has an edit code and a view-only code, not a comment code: share it online for a comment code";
 
+/// Why a share has no comment code.
+const NO_COMMENT_LINK: &str =
+    "this share has no comment code (its server is older than comment links, or it was shared before them): stop sharing and share again";
+
+/// The `access` parameter of `cmd`, if given.
+fn access_param(cmd: &str, p: &Value) -> Result<Option<Access>> {
+    string(p, "access").map(|a| Access::parse(&a).ok_or_else(|| bad(cmd, "`access` must be \"edit\", \"comment\" or \"view\""))).transpose()
+}
+
+/// `collab.share`: share the open file with join codes, online or on the local network, or (shared
+/// already) switch which code shows.
 pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "collab.share";
     let via = match string(p, "via").as_deref().map(str::trim) {
@@ -114,10 +133,7 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
         Some("local") => Via::Local,
         Some(_) => return Err(bad(CMD, "`via` must be \"online\" or \"local\"")),
     };
-    let access = match string(p, "access") {
-        None => None,
-        Some(a) => Some(Access::parse(&a).ok_or_else(|| bad(CMD, "`access` must be \"edit\" or \"view\""))?),
-    };
+    let access = access_param(CMD, p)?;
     // A share of this file is there already: only which code is shown changes, or (the file is
     // on the server, not shared at the moment) it gets new links and codes. Nothing is published
     // twice.
@@ -128,14 +144,17 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
                 "this file is shared the other way already: stop sharing it first (collab.stop), or leave its session (collab.leave)",
             ));
         }
-        if access == Some(Access::View) && shared == Via::Local {
-            return Err(bad(CMD, LOCAL_EDITS));
+        if access == Some(Access::Comment) && shared == Via::Local {
+            return Err(bad(CMD, LOCAL_COMMENTS));
         }
         if let Some(req) = share_request(s, Vec::new(), true).filter(|_| s.live().share.as_ref().is_some_and(|sh| sh.links.is_none())) {
             let links = share_answer(s, req)?.ok_or_else(|| EngineError::Other("the server made no links".into()))?;
             shared_now(s, Some(clean_shared(links)));
         }
         if let (Some(a), Some(sh)) = (access, s.live_mut().and_then(|l| l.share.as_mut())) {
+            if sh.links.as_ref().is_some_and(|l| l.of(a).is_none()) {
+                return Err(bad(CMD, NO_COMMENT_LINK));
+            }
             sh.access = a;
         }
         return Ok(s.live_summary());
@@ -143,8 +162,8 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
     let access = access.unwrap_or_default();
     let mut server = String::new();
     let id = match via {
-        Via::Local if access == Access::View => return Err(bad(CMD, LOCAL_EDITS)),
-        Via::Local => start_host(s, CMD, p, Bind::Lan, true)?,
+        Via::Local if access == Access::Comment => return Err(bad(CMD, LOCAL_COMMENTS)),
+        Via::Local => start_host(s, CMD, p, Bind::Lan, true, true)?,
         Via::Online => {
             server = string(p, "server").unwrap_or_else(|| s.prefs.publish_server.clone()).trim().to_string();
             if server.is_empty() {
@@ -154,15 +173,23 @@ pub(super) fn share(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     if let Some(live) = s.live.sessions.get_mut(&id) {
-        // On the local network the session's own link is what others join with, and the code says
-        // what the link says: where the session is and its secret. (Online they arrive with the file.)
-        let links = live.info.as_ref().filter(|_| via == Via::Local).map(|i| {
-            let code = code::Local::from_link(&i.link).map(|l| l.code());
-            Shared { edit: SharedLink { id: String::new(), link: i.link.clone(), code }, view: None }
+        // On the local network the session's own links are what others join with (its view link
+        // only lets them look), and each code says what its link says: where the session is and
+        // that link's secret. (Online they arrive with the file.)
+        let links = live.info.as_ref().filter(|_| via == Via::Local).map(|i| Shared {
+            edit: local_link(&i.link),
+            view: i.view.as_ref().map(|v| local_link(&v.link)),
+            comment: None,
         });
         live.share = Some(Share { via, server, access, links });
     }
     Ok(s.live_summary())
+}
+
+/// A way into a session this app hosts: its invite link and the join code that stands for it
+/// (none when the link can't be put in one: a host without an IPv4 address).
+fn local_link(link: &str) -> SharedLink {
+    SharedLink { id: String::new(), link: link.to_string(), code: code::Local::from_link(link).map(|l| l.code()) }
 }
 
 /// What others join the open file's server file with changed: in its session and its record.
@@ -177,6 +204,7 @@ pub(crate) fn clean_shared(mut links: Shared) -> Shared {
     let clean = |l: &mut SharedLink| l.code = l.code.take().and_then(|c| code::normalize(&c).ok()).filter(|c| c.len() == code::ONLINE_LEN);
     clean(&mut links.edit);
     links.view.as_mut().map(clean);
+    links.comment.as_mut().map(clean);
     links
 }
 
@@ -239,11 +267,7 @@ pub(super) fn manage_file(s: &mut Session, p: &Value) -> Result<Value> {
         "unshare" => return crate::online::set_shared(s, CMD, &server, &file, &owner, false),
         "links" => Admin::Links { file: file.clone() },
         "createLink" => {
-            let access = match string(p, "access").as_deref().map(str::trim) {
-                None | Some("view") => Access::View,
-                Some("edit") => Access::Edit,
-                Some(_) => return Err(bad(CMD, "`access` must be \"edit\" or \"view\"")),
-            };
+            let access = access_param(CMD, p)?.unwrap_or(Access::View);
             Admin::CreateLink { file: file.clone(), access, label: string(p, "label").unwrap_or_default() }
         }
         "revoke" => Admin::Revoke { file: file.clone(), link: req_string(CMD, p, "link")?.trim().to_string() },

@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::EngineError;
 use crate::tools::{PointerEvent, PointerKind};
+use figcraft_doc::{ExportFormat, WidthSide};
 
 fn ex(s: &mut Session, c: &str, p: Value) -> Value {
     s.execute(c, &p).unwrap_or_else(|e| panic!("{c}: {e}"))

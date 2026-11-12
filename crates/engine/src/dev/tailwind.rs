@@ -297,7 +297,11 @@ fn decl(key: &str, value: &str) -> Vec<(String, String)> {
         ("transform-origin", "top left" | "0 0") => kw("origin-top-left"),
         // `font-(--x)` would read as a weight; the hint makes an un-namespaced variable a family.
         ("font-family", v) if var_name(v).is_some() => one(util("font", "font", v, "family-name:")),
-        ("font-family", v) => one(format!("font-{}", arb(&format!("'{}'", v.trim_matches('"'))))),
+        ("font-family", v) => {
+            // Quotes, backslashes and brackets would end the JSX attribute or the arbitrary value.
+            let family: String = v.chars().filter(|c| !matches!(c, '"' | '\\' | '[' | ']' | '\'')).collect();
+            one(format!("font-{}", arb(&format!("'{family}'"))))
+        }
         ("font-size", v) => one(util("text", "text", v, "length:")),
         ("font-weight", v) => one(font_weight(v)),
         ("font-style", "italic") => kw("italic"),
@@ -310,6 +314,8 @@ fn decl(key: &str, value: &str) -> Vec<(String, String)> {
         ("text-transform", "uppercase") => kw("uppercase"),
         ("text-transform", "lowercase") => kw("lowercase"),
         ("text-transform", "capitalize") => kw("capitalize"),
+        ("text-wrap", "balance") => kw("text-balance"),
+        ("text-wrap", "pretty") => kw("text-pretty"),
         ("text-decoration", "underline") => kw("underline"),
         ("text-decoration", "line-through") => kw("line-through"),
         _ => one(format!("[{key}:{}]", arb(value).trim_matches(['[', ']']))),

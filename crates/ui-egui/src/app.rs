@@ -2,7 +2,12 @@ use super::clock::{AUTO_SAVE_RETRY_SECS, AUTO_SAVE_SECS, AUTOSAVE_SECS, CJK_CHAN
 use super::open::OPEN_EXTENSIONS;
 use super::services::{DialogFuture, PickFuture, Picked, RepaintWaker, Services};
 use super::state::{LEFT_PANEL, LeftTab, MOBILE_STRIP, MobilePanel, NARROW_WIDTH, PANEL_DEFAULT, RIGHT_PANEL, RightTab, TitleBar, fit_panels};
-use super::*;
+use super::{
+    Arc, Done, FigApp, NodeId, OsStr, Path, PathBuf, PendingAck, PendingDialog, Poll, Session, TaskContext, UiState, Value, Waker, a11y, branch_ui,
+    canvas, cjk, comments, cursors, dev_compare, dialogs, frame_stats, home, home_recents, i18n, icons, import_report, json, layers, live, menus,
+    missing_fonts, online, plugins_ui, present, render_worker, right, selection_spacing, shortcuts, style_picker, tabs, theme, toolbar, ui_scale,
+    updates_ui, variable_ui, versions, widgets, windows,
+};
 
 mod clipboard;
 mod commands;
@@ -17,7 +22,11 @@ impl FigApp {
     /// state.
     pub fn new(session: Session, services: Box<dyn Services>) -> Self {
         // The main window's panels open as wide as they were left.
+        // Widths saved under other limits are clamped to the current ones, not rejected; one that
+        // isn't finite falls back to the default.
         let (left_width, right_width) = session.prefs.panel_widths;
+        let within = |w: f32, range: std::ops::RangeInclusive<f32>| if w.is_finite() { w.clamp(*range.start(), *range.end()) } else { PANEL_DEFAULT };
+        let (left_width, right_width) = (within(left_width, LEFT_PANEL), within(right_width, RIGHT_PANEL));
         let pages_height = session.prefs.pages_height;
         Self {
             ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
@@ -32,6 +41,7 @@ impl FigApp {
             field_focus: false,
             panels_unsaved: false,
             control_queue: Vec::new(),
+            control_waits: Default::default(),
             control_input: Vec::new(),
             frame_stats: frame_stats::FrameStats::default(),
             windows: windows::Windows::default(),
@@ -74,6 +84,13 @@ impl FigApp {
         if self.language.as_ref() != Some(&self.session.prefs.language) {
             i18n::set(&self.session.prefs.language, self.services.system_language().as_deref());
             self.language = Some(self.session.prefs.language.clone());
+            self.ui.mirrored = i18n::right_to_left();
+        }
+        // egui's own chrome follows: scroll bars on the left, submenus opening to the left,
+        // checkboxes with their label on the left.
+        if ctx.global_style().right_to_left != self.ui.mirrored {
+            let mirrored = self.ui.mirrored;
+            ctx.all_styles_mut(|s| s.right_to_left = mirrored);
         }
         // Screen-reader and bidi language of the UI (fork E17).
         ctx.set_language(i18n::current().map(|l| l.code.to_string()));
@@ -111,6 +128,11 @@ impl FigApp {
             let plan = ui_scale::plan(size, ctx.native_pixels_per_point(), Some((window_px.x, window_px.y)));
             if ctx.viewport_id() == egui::ViewportId::ROOT {
                 ctx.set_zoom_factor(plan.zoom);
+            }
+            // A size that just changed (a key, Preferences, a command) draws at the new size from
+            // the next frame: ask for it rather than wait for the next input.
+            if plan != self.ui.ui_scale {
+                ctx.request_repaint();
             }
             self.ui.ui_scale = plan;
         }
@@ -172,6 +194,9 @@ impl FigApp {
         self.frame(ui);
         windows::settle(self, &ctx, files);
         if self.session.prefs != prefs {
+            // This window too: a preference set during the frame (the interface size, the theme)
+            // is applied as the next frame begins, so ask for it now rather than wait for input.
+            ctx.request_repaint();
             windows::repaint_others(self, &ctx);
         }
         windows::show(self, &ctx);
@@ -180,13 +205,17 @@ impl FigApp {
         // already happened and would otherwise duplicate).
         self.end_input_frame(&ctx);
         // Plugins installed, removed or set up are kept at once: a crash doesn't lose them.
-        // So are the owner tokens of files put online.
-        if std::mem::take(&mut self.session.plugins.unsaved) | std::mem::take(&mut self.session.live.unsaved) {
+        // So are the owner tokens of files put online, and preferences a command keeps at once.
+        if std::mem::take(&mut self.session.plugins.unsaved)
+            | std::mem::take(&mut self.session.live.unsaved)
+            | std::mem::take(&mut self.session.prefs_unsaved)
+        {
             self.services.save_prefs(&self.session.prefs);
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.ui.frame_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            self.frame_stats.timed(self.ui.frame_ms);
         }
     }
 
@@ -204,7 +233,7 @@ impl FigApp {
         // Bind the originating field/file before tabs can switch. Its widget commits only after
         // processing this batch; delivery remains deferred until the following frame.
         let field_save = shortcuts::prepare_field_save(self, &ctx);
-        let swallowed = shortcuts::swallowed_paste(self, &ctx);
+        let paste = shortcuts::paste_events(self, &ctx);
         // A dialog that closed acts first, in the window it was opened from.
         self.poll_dialog(&ctx);
         // Control requests run first so their results reflect this frame.
@@ -243,10 +272,16 @@ impl FigApp {
             return;
         }
         if !self.has_files() || self.ui.home {
+            let docs = &self.session.docs;
+            self.canvas.drop_closed(|uid| docs.iter().any(|d| d.uid == uid));
             home::show(self, ui);
             // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
             // (cleared after the home widgets, which may have just asked for it).
             self.ui.shortcuts_panel = false;
+            // The keymap runs with the canvas; here the one shortcut that still applies is read directly.
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
+                self.run("app.preferences", serde_json::json!({}));
+            }
             dialogs::keys(self, &ctx);
             dialogs::show(self, &ctx);
             updates_ui::show(self, &ctx);
@@ -257,14 +292,29 @@ impl FigApp {
             return;
         }
         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
+        // Minimized (Shift+Cmd/Ctrl+\, the Minimize button by the file name): "collapses the
+        // navigation bar, left sidebar, and right sidebar"; "If you select an object while the
+        // panels are minimized, the left sidebar remains minimized while the right sidebar expands
+        // [...] Once all objects are deselected, the right panel minimizes again" (Explore the
+        // navigation bar and left sidebar). The toolbar stays; Hide UI takes everything.
         let narrow = !hidden && ui.available_width() < NARROW_WIDTH;
+        // A narrow window has no sidebars beside the canvas to take: its panels open from their
+        // buttons as before, and the interface is minimized again once the window is wide.
+        let minimized = !hidden && !narrow && self.session.ds().is_ok_and(|d| d.view.ui_minimized);
+        let right_minimized = minimized && self.session.selection().is_empty();
         let mobile = self.ui.mobile_panel.filter(|_| narrow);
         self.ui.narrow = narrow;
         // A narrow window shows the right panel when its button asks for it, a board's too.
-        let right_open = (self.right_panel_shown(hidden) && !narrow) || mobile == Some(MobilePanel::Right);
-        if !hidden && (!narrow || mobile == Some(MobilePanel::Left)) {
-            egui::Panel::left("left_rail")
-                .exact_size(56.0)
+        let right_open = (self.right_panel_shown(hidden) && !narrow && !right_minimized) || mobile == Some(MobilePanel::Right);
+        // A highlighted fill, stroke or effect row goes with the panel it's in, before it draws.
+        crate::property_rows::reconcile(self, &ctx, right_open);
+        // A right-to-left UI language mirrors the window: the "left" rail and panel go on the
+        // right, the "right" (Design) panel on the left. Their ids and widths stay as they are.
+        let mirrored = self.ui.mirrored;
+        let side = |start: bool, id: &'static str| if start != mirrored { egui::Panel::left(id) } else { egui::Panel::right(id) };
+        if !hidden && !minimized && (!narrow || mobile == Some(MobilePanel::Left)) {
+            side(true, "left_rail")
+                .exact_size(layers::RAIL_WIDTH)
                 .resizable(false)
                 .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
                 .show(ui, |ui| {
@@ -273,7 +323,7 @@ impl FigApp {
                 });
         }
         // The panels are as wide as asked, less in a window too small for them and the canvas.
-        let left_open = !hidden && if narrow { mobile == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
+        let left_open = !hidden && !minimized && if narrow { mobile == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
         let (left_w, right_w) = if narrow {
             let w = (ui.available_width() - MOBILE_STRIP).max(0.0);
             (if left_open { w } else { 0.0 }, w)
@@ -282,11 +332,18 @@ impl FigApp {
         };
         let rows = ui.available_rect_before_wrap().y_range();
         let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();
+        // The x of the edge facing the canvas of a panel `w` wide on the window's start (left)
+        // side, or its end side, and which way a drag to the right sizes it.
+        let edge = |ui: &egui::Ui, start: bool, w: f32| {
+            let room = ui.available_rect_before_wrap();
+            if start != mirrored { (room.min.x + w, 1.0) } else { (room.max.x - w, -1.0) }
+        };
         if left_open {
             if !narrow {
-                edges.push(("left", ui.available_rect_before_wrap().min.x + left_w, left_w, 1.0));
+                let (x, grows) = edge(ui, true, left_w);
+                edges.push(("left", x, left_w, grows));
             }
-            egui::Panel::left("left_panel")
+            side(true, "left_panel")
                 .resizable(false)
                 .exact_size(left_w)
                 .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
@@ -300,20 +357,20 @@ impl FigApp {
                     layers::left_panel(self, ui)
                 });
         }
+        self.ui.right_panel_rect = None;
         if right_open {
             if !narrow {
-                edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
+                let (x, grows) = edge(ui, false, right_w);
+                edges.push(("right", x, right_w, grows));
             }
-            egui::Panel::right("right_panel")
+            side(false, "right_panel")
                 .resizable(false)
                 .exact_size(right_w)
-                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
+                // No stroke: a frame's stroke is part of its margin, which would take 1 pt off
+                // each side of the panel (240 pt by default). The edge is drawn in `right_panel`.
+                .frame(egui::Frame::NONE.fill(t.panel))
                 .show(ui, |ui| {
-                    let label = match self.ui.right_tab {
-                        RightTab::Design => i18n::tr("Design"),
-                        RightTab::Prototype => i18n::tr("Prototype"),
-                        RightTab::Inspect => i18n::tr("Dev Mode"),
-                    };
+                    let label = right_tab_label(self.ui.right_tab);
                     a11y::region(&mut self.ui.nav, ui, a11y::Region::Properties, egui::accesskit::Role::Pane, label);
                     right::right_panel(self, ui)
                 });
@@ -331,8 +388,14 @@ impl FigApp {
             }
         });
         if narrow {
-            let x = if mobile == Some(MobilePanel::Left) { ctx.content_rect().max.x - MOBILE_STRIP + 4.0 } else { ctx.content_rect().min.x + 4.0 };
+            // In the strip beside the open panel; with none open, on the Design panel's side.
+            let at_right = (mobile == Some(MobilePanel::Left)) != mirrored;
+            let x = if at_right { ctx.content_rect().max.x - MOBILE_STRIP + 4.0 } else { ctx.content_rect().min.x + 4.0 };
             self.mobile_buttons(&ctx, egui::pos2(x, rows.min + 8.0));
+        } else if minimized {
+            // Where the navigation bar was: on the right in a mirrored window.
+            let x = if mirrored { ctx.content_rect().max.x - 40.0 } else { ctx.content_rect().min.x + 8.0 };
+            self.expand_button(&ctx, egui::pos2(x, rows.min + 8.0));
         }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
@@ -355,7 +418,7 @@ impl FigApp {
         branch_ui::keys(self, &ctx);
         live::dialog_keys(self, &ctx);
         dialogs::keys(self, &ctx);
-        shortcuts::handle_input(self, &ctx, typing, swallowed, ime_input, field_save);
+        shortcuts::handle_input(self, &ctx, typing, paste, ime_input, field_save);
         menus::popups(self, &ctx);
         variable_ui::picker(self, &ctx);
         style_picker::show(self, &ctx);
@@ -363,10 +426,15 @@ impl FigApp {
         self.end_pen_outside_design();
         dialogs::show(self, &ctx);
         updates_ui::show(self, &ctx);
+        // A scrub that changed speed (the pointer moved up or down) says so at the bottom.
+        if let Some(notice) = ctx.data_mut(|d| d.remove_temp::<&'static str>(widgets::scrub_notice_id())) {
+            self.toast(i18n::tr(notice));
+        }
         self.toast_ui(&ctx);
         // A rename started after the layers panel drew (Cmd/Ctrl+R, a double-click) opens its field
-        // next frame.
-        if self.ui.rename.is_some_and(|r| r.start) && !hidden && !self.ui.left_collapsed && self.ui.left_tab == LeftTab::File {
+        // next frame; while the panel isn't drawn (the interface hidden or minimized, the panel
+        // closed in a narrow window) the rename waits for it without asking for frames.
+        if self.ui.rename.is_some_and(|r| r.start) && left_open && self.ui.left_tab == LeftTab::File {
             ctx.request_repaint();
         }
         a11y::end(self, &ctx);
@@ -381,5 +449,14 @@ impl FigApp {
         // field or an open palette owns the platform IME instead; the early `home`/present paths
         // above make the same single idle observation.
         self.observe_ime(&ctx, !typing && !self.field_focus && self.ui.palette.is_none());
+    }
+}
+
+/// The right panel's tab name, which its accessibility region reads.
+pub(crate) fn right_tab_label(tab: RightTab) -> &'static str {
+    match tab {
+        RightTab::Design => i18n::tr("Design"),
+        RightTab::Prototype => i18n::tr("Prototype"),
+        RightTab::Inspect => i18n::tr("Developer Mode"),
     }
 }

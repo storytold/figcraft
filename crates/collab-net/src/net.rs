@@ -242,18 +242,30 @@ pub fn shutdown(s: &TcpStream) {
 /// Connect to `server` (through TLS for `wss://`): the reader's and the writer's handles, and the
 /// socket to shut it down with.
 pub fn open(server: &Endpoint, timeout: Duration, limits: &NetLimits) -> Result<(Duplex, Duplex, TcpStream), String> {
-    let stream = dial(&server.host, timeout, limits)?;
+    // A plain `ws://localhost` is trusted as this machine (a key may go over it), so only loopback
+    // addresses are connected to: a resolver mapping the name elsewhere must not carry it off-machine.
+    let stream = dial(&server.host, !server.secure && server.loopback(), timeout, limits)?;
     let tls = if server.secure { Some(tls::handshake(&stream, &server.host)?) } else { None };
     Duplex::split(stream, tls).map_err(|e| e.to_string())
 }
 
-/// Connect to `host` (`name:port`), trying each of its addresses within `timeout`, with Nagle off
-/// and reads and writes bounded by `limits`' hello and write timeouts.
-fn dial(host: &str, timeout: Duration, limits: &NetLimits) -> Result<TcpStream, String> {
+/// Whether `a` may be connected to: any address, or with `loopback_only` just this machine's.
+fn dialable(a: &std::net::SocketAddr, loopback_only: bool) -> bool {
+    !loopback_only || a.ip().is_loopback()
+}
+
+/// Connect to `host` (`name:port`), trying each of its addresses within `timeout` (only loopback
+/// ones with `loopback_only`), with Nagle off and reads and writes bounded by `limits`' hello and
+/// write timeouts.
+fn dial(host: &str, loopback_only: bool, timeout: Duration, limits: &NetLimits) -> Result<TcpStream, String> {
     use std::net::ToSocketAddrs;
     let addrs = host.to_socket_addrs().map_err(|e| format!("can't find {host}: {e}"))?;
     let mut last = format!("can't find {host}");
     for a in addrs {
+        if !dialable(&a, loopback_only) {
+            last = format!("{host} resolves to {a}, which is not this machine");
+            continue;
+        }
         match TcpStream::connect_timeout(&a, timeout) {
             Ok(s) => {
                 let _ = s.set_nodelay(true);
@@ -298,8 +310,41 @@ impl Bucket {
         true
     }
 
+    /// Like [`take_n`](Self::take_n), but more than the burst may be taken from a full bucket,
+    /// which it leaves in debt: nothing more until the rate has paid it back. Something larger
+    /// than the burst (a big download) is then never refused for good, and the average stays at
+    /// `rate`.
+    pub fn take_spread(&mut self, now: Instant, n: f64) -> bool {
+        if n <= self.burst {
+            return self.take_n(now, n);
+        }
+        if !self.take_n(now, self.burst) {
+            return false;
+        }
+        self.tokens -= n - self.burst;
+        true
+    }
+
     /// Give back `n` tokens (up to the burst).
     pub fn give(&mut self, n: f64) {
         self.tokens = (self.tokens + n).min(self.burst);
+    }
+}
+
+#[cfg(test)]
+mod dial_tests {
+    use super::dialable;
+    use std::net::SocketAddr;
+
+    #[test]
+    fn a_loopback_only_dial_skips_addresses_off_this_machine() {
+        let at = |s: &str| s.parse::<SocketAddr>().unwrap();
+        for a in ["127.0.0.1:9", "[::1]:9", "127.5.5.5:9"] {
+            assert!(dialable(&at(a), true), "{a}");
+        }
+        for a in ["10.0.0.5:9", "203.0.113.7:9", "[2001:db8::1]:9"] {
+            assert!(!dialable(&at(a), true), "{a}");
+            assert!(dialable(&at(a), false), "{a} when anywhere is allowed");
+        }
     }
 }

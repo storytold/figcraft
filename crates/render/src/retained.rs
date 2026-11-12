@@ -127,6 +127,70 @@ impl Px {
     }
 }
 
+/// What [`Retained::prepare`] found.
+enum Prepared {
+    /// The previous render patched (or reused as is), now kept.
+    Patched(View, Work),
+    /// Only a full render will do: the snapped view, its top-left device pixel, the font
+    /// generation and what [`sensitive`] found when the previous render's document was checked.
+    Full { snapped: View, px: (i64, i64), fonts: u64, sensitive: Option<Arc<Sensitive>> },
+}
+
+/// What [`Retained::begin`] did.
+pub enum Begun<'a> {
+    /// The view drawn, its image and what it took.
+    Done(View, &'a Pixmap, Work),
+    /// A full render to draw band by band (boxed: it holds the image).
+    Steps(Box<Steps>),
+}
+
+/// A full render drawn a band at a time ([`Retained::begin`]): bands overlap by what background
+/// blurs read and keep only their own rows, as the desktop's parallel bands do.
+pub struct Steps {
+    doc: Arc<Document>,
+    page: NodeId,
+    view: View,
+    px: (i64, i64),
+    fonts: u64,
+    opts: Options,
+    sensitive: Option<Arc<Sensitive>>,
+    pix: Pixmap,
+    /// The first row not drawn yet.
+    next: u32,
+    band_h: u32,
+    overlap: u32,
+}
+
+impl Steps {
+    /// Draw the next band; `true` once every row is drawn.
+    pub fn step(&mut self) -> bool {
+        if self.done() {
+            return true;
+        }
+        let y0 = self.next;
+        if let Some(part) = crate::render_band(&self.doc, self.page, &self.view, &self.opts, y0, self.band_h, self.overlap) {
+            crate::put_band(&mut self.pix, y0, &part);
+        }
+        self.next = y0.saturating_add(self.band_h);
+        self.done()
+    }
+
+    /// Whether every row is drawn.
+    pub fn done(&self) -> bool {
+        self.next >= self.view.height
+    }
+
+    /// The view drawn (snapped to device pixels).
+    pub fn view(&self) -> &View {
+        &self.view
+    }
+
+    /// The page drawn.
+    pub fn page(&self) -> NodeId {
+        self.page
+    }
+}
+
 /// Keeps the last rendered view; see the module docs.
 #[derive(Default)]
 pub struct Retained {
@@ -142,13 +206,73 @@ impl Retained {
     /// Render `view` of `page`, reusing the previous render where nothing changed. Returns the
     /// view actually drawn (snapped to device pixels, see [`snap`]), the image and what it took.
     pub fn render(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options) -> Option<(View, &Pixmap, Work)> {
+        match self.prepare(doc, page, view, opts)? {
+            Prepared::Patched(snapped, work) => Some((snapped, &self.last.as_ref()?.pix, work)),
+            Prepared::Full { snapped, px, fonts, sensitive } => {
+                let pix = render_view(doc, page, &snapped, opts)?;
+                let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
+                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                Some((snapped, &frame.pix, Work::Full))
+            }
+        }
+    }
+
+    /// [`Self::render`], except that a full render comes back as [`Steps`] to draw `band_h` rows
+    /// at a time (the browser, whose renders block the page: input is handled between bands) and
+    /// keep with [`Self::finish`]. A render that is reused or patched is done at once.
+    pub fn begin(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options, band_h: u32) -> Option<Begun<'_>> {
+        match self.prepare(doc, page, view, opts)? {
+            Prepared::Patched(snapped, work) => Some(Begun::Done(snapped, &self.last.as_ref()?.pix, work)),
+            Prepared::Full { snapped, px, fonts, sensitive } => {
+                // Bands at least twice what they overlap (each draws its overlap again both ways),
+                // so a background blur reaching past `band_h` makes the bands taller.
+                let overlap = crate::band_overlap(doc, &snapped, u32::MAX).map(|o| o.min(snapped.height));
+                let band_h = band_h.max(1).max(overlap.unwrap_or(0).saturating_mul(2));
+                // A blur that can't be measured: one piece.
+                let Some(overlap) = overlap else {
+                    let pix = render_view(doc, page, &snapped, opts)?;
+                    let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(doc)));
+                    let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                    return Some(Begun::Done(snapped, &frame.pix, Work::Full));
+                };
+                let pix = crate::new_pixmap(snapped.width, snapped.height)?;
+                // One render, as the desktop's parallel bands are: glass keeps the shapes a
+                // later render asks for again, and the bands of this one are not later renders.
+                crate::start_render();
+                Some(Begun::Steps(Box::new(Steps {
+                    doc: doc.clone(),
+                    page,
+                    view: snapped,
+                    px,
+                    fonts,
+                    opts: opts.clone(),
+                    sensitive,
+                    pix,
+                    next: 0,
+                    band_h,
+                    overlap,
+                })))
+            }
+        }
+    }
+
+    /// Keep the image `steps` drew (all its bands: see [`Steps::step`]) as a full render.
+    pub fn finish(&mut self, steps: Steps) -> (View, &Pixmap) {
+        let Steps { doc, page, view, px, fonts, opts, sensitive, pix, .. } = steps;
+        let s = sensitive.unwrap_or_else(|| Arc::new(self::sensitive(&doc)));
+        let frame = self.keep(&doc, page, (&view, px, fonts), &opts, pix, s);
+        (view, &frame.pix)
+    }
+
+    /// The previous render patched where it could be (kept, see [`Self::keep`]), or what a full
+    /// render of `view` needs.
+    fn prepare(&mut self, doc: &Arc<Document>, page: NodeId, view: &View, opts: &Options) -> Option<Prepared> {
         // A view that can't be put on a pixel grid (non-finite or absurd) draws nothing.
         let Some((snapped, px)) = snap(view) else {
             self.last = None;
             return None;
         };
         let fonts = figcraft_text::layout_generation();
-        let mut work = Work::Full;
         let mut sens = None;
         if let Some(last) = self.last.take()
             && last.page == page
@@ -173,16 +297,13 @@ impl Retained {
             let same_doc = Arc::ptr_eq(&last.doc, doc);
             let s = if same_doc { last.sensitive.clone() } else { Arc::new(sensitive(doc)) };
             if let Some((pix, pixels)) = patch(last, doc, page, &snapped, px, opts, &s) {
-                work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
-                let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
-                return Some((snapped, &frame.pix, work));
+                let work = if pixels == 0 { Work::Reused } else { Work::Partial { pixels } };
+                self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
+                return Some(Prepared::Patched(snapped, work));
             }
             sens = Some(s);
         }
-        let pix = render_view(doc, page, &snapped, opts)?;
-        let s = sens.unwrap_or_else(|| Arc::new(sensitive(doc)));
-        let frame = self.keep(doc, page, (&snapped, px, fonts), opts, pix, s);
-        Some((snapped, &frame.pix, work))
+        Some(Prepared::Full { snapped, px, fonts, sensitive: sens })
     }
 
     /// Keep `pix`, the render of `at`: the snapped view, its top-left device pixel and the font
@@ -292,6 +413,19 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
     } else if dy < 0 {
         damage.push(Px { x0: 0, y0: 0, x1: w, y1: reach - dy });
     }
+    // And at the edges that moved in: a backdrop there read what is now past the edge.
+    if reach > 0 {
+        if dx > 0 {
+            damage.push(Px { x0: 0, y0: 0, x1: reach, y1: h });
+        } else if dx < 0 {
+            damage.push(Px { x0: w - reach, y0: 0, x1: w, y1: h });
+        }
+        if dy > 0 {
+            damage.push(Px { x0: 0, y0: 0, x1: w, y1: reach });
+        } else if dy < 0 {
+            damage.push(Px { x0: 0, y0: h - reach, x1: w, y1: h });
+        }
+    }
     // Layers that changed, where they were and where they are now.
     if !Arc::ptr_eq(&last.doc, doc) {
         let mut areas = Vec::new();
@@ -344,7 +478,7 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
     let mut pix = last.pix;
     shift(&mut pix, dx, dy)?;
     for d in &damage {
-        render_into(doc, page, view, px, d, margin, opts, &mut pix)?;
+        render_into(FrameRender { doc, page, view, px, opts }, d, margin, &mut pix)?;
     }
     Some((pix, pixels))
 }
@@ -399,18 +533,30 @@ fn merge(mut rects: Vec<Px>) -> Vec<Px> {
     rects
 }
 
-/// Render the frame pixels `d` (with `margin` more around, discarded) into `pix`.
-#[allow(clippy::too_many_arguments)]
-fn render_into(doc: &Document, page: NodeId, view: &View, px: (i64, i64), d: &Px, margin: i64, opts: &Options, pix: &mut Pixmap) -> Option<()> {
+struct FrameRender<'a> {
+    doc: &'a Document,
+    page: NodeId,
+    view: &'a View,
+    px: (i64, i64),
+    opts: &'a Options,
+}
+
+/// Render the frame pixels `d` (with `margin` more around, discarded) into `pix`. The margin stops
+/// at the frame's edge: background blurs and glass read what is drawn under them, and a full
+/// render's backdrops end where the frame does.
+fn render_into(frame: FrameRender<'_>, d: &Px, margin: i64, pix: &mut Pixmap) -> Option<()> {
+    let FrameRender { doc, page, view, px, opts } = frame;
     let s = view.scale;
-    let (ox, oy) = (d.x0 - margin, d.y0 - margin);
-    let (rw, rh) = (u32::try_from(d.x1 - d.x0 + 2 * margin).ok()?, u32::try_from(d.y1 - d.y0 + 2 * margin).ok()?);
+    let (w, h) = (i64::from(pix.width()), i64::from(pix.height()));
+    let (ox, oy) = ((d.x0 - margin).max(0), (d.y0 - margin).max(0));
+    let (ex, ey) = ((d.x1 + margin).min(w), (d.y1 + margin).min(h));
+    let (rw, rh) = (u32::try_from(ex - ox).ok()?, u32::try_from(ey - oy).ok()?);
     // The same pixel grid as the frame: origin (px + offset) / scale.
     let sub = View { origin: ((px.0 + ox) as f64 / s, (px.1 + oy) as f64 / s), scale: s, width: rw, height: rh };
     let part = render_view(doc, page, &sub, opts)?;
     let inner = IntRect::from_xywh(
-        i32::try_from(margin).ok()?,
-        i32::try_from(margin).ok()?,
+        i32::try_from(d.x0 - ox).ok()?,
+        i32::try_from(d.y0 - oy).ok()?,
         u32::try_from(d.x1 - d.x0).ok()?,
         u32::try_from(d.y1 - d.y0).ok()?,
     )?;

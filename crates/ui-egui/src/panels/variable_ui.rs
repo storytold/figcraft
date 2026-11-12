@@ -30,6 +30,9 @@ enum Target {
     Proto(crate::proto_editor::VarSlot),
     /// Bind it to `field` of the shared style `style`.
     Style { style: String, field: String },
+    /// Bind it to the weight of the shared text style `style`: a string variable names the face
+    /// (`fontStyle`), a number one sets the weight (`fontWeight`).
+    StyleWeight { style: String },
 }
 
 /// The open variable picker: what it does, the variable type (None: any), where it opens.
@@ -52,7 +55,7 @@ pub fn bound_name(doc: &Document, ids: &[NodeId], field: &str) -> Option<String>
     if !it.all(|v| v.as_ref() == Some(&first)) {
         return None;
     }
-    doc.variables.get(&first).map(|v| v.name.clone())
+    doc.variables.get_by_id(&first).map(|v| v.name.clone())
 }
 
 /// A variable a picker offers: one of this file's, or a published one of an enabled library.
@@ -131,7 +134,7 @@ pub fn mode_rows<'a>(doc: &'a Document, libs: &'a [Arc<PublishedLibrary>]) -> Ve
         let (id, name) = (lib.manifest.id.as_str(), library::library_name(doc, &lib.manifest.id));
         for c in library::published_collections(lib) {
             let local = copy(id, &c.id).map(|r| r.local.as_str());
-            let coll = local.and_then(|l| doc.variables.collection(l)).unwrap_or(c);
+            let coll = local.and_then(|l| doc.variables.collection_by_id(l)).unwrap_or(c);
             if several(coll) {
                 out.push(ModeRow { coll, library: Some((id, name)), key: Some(&c.id), local });
             }
@@ -141,7 +144,7 @@ pub fn mode_rows<'a>(doc: &'a Document, libs: &'a [Arc<PublishedLibrary>]) -> Ve
         if out.iter().any(|x| x.local == Some(r.local.as_str())) {
             continue;
         }
-        if let Some(c) = doc.variables.collection(&r.local).filter(|c| several(c)) {
+        if let Some(c) = doc.variables.collection_by_id(&r.local).filter(|c| several(c)) {
             out.push(ModeRow { coll: c, library: Some((&r.library, library::library_name(doc, &r.library))), key: None, local: Some(&r.local) });
         }
     }
@@ -195,6 +198,13 @@ pub fn open_proto(ui: &Ui, slot: crate::proto_editor::VarSlot, kind: Option<Vari
 pub fn open_style(ui: &Ui, style: &str, field: &str, kind: VariableType, at: Pos2) {
     let target = Target::Style { style: style.to_string(), field: field.to_string() };
     ui.data_mut(|d| d.insert_temp(picker_id(), Picker { target, kind: Some(kind), at }));
+}
+
+/// Open the picker at `at` to bind a string (face name) or number (weight) variable to the weight of
+/// the shared text style `style`.
+pub fn open_style_weight(ui: &Ui, style: &str, at: Pos2) {
+    let target = Target::StyleWeight { style: style.to_string() };
+    ui.data_mut(|d| d.insert_temp(picker_id(), Picker { target, kind: None, at }));
 }
 
 /// Where the open picker is on screen (clicks in it don't close what opened it).
@@ -397,8 +407,8 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
     // variables never lead back to this file's).
     let (scope, own) = match &p.target {
         Target::Bind { ids, field } => (ids.first().and_then(|id| figcraft_engine::cmd::variables::field_scope(&doc, *id, field)), None),
-        Target::Alias { variable, .. } => (None, doc.variables.get(variable)),
-        Target::Proto(_) | Target::Style { .. } => (None, None),
+        Target::Alias { variable, .. } => (None, doc.variables.get_by_id(variable)),
+        Target::Proto(_) | Target::Style { .. } | Target::StyleWeight { .. } => (None, None),
     };
     // A style's fields offer variables scoped to one of the properties the field sets.
     let style_scopes = match &p.target {
@@ -406,7 +416,8 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
         _ => None,
     };
     // Prototypes and styles use this file's variables.
-    let local_only = matches!(p.target, Target::Proto(_) | Target::Style { .. });
+    let local_only = matches!(p.target, Target::Proto(_) | Target::Style { .. } | Target::StyleWeight { .. });
+    let weight_target = matches!(p.target, Target::StyleWeight { .. });
     let field = match &p.target {
         Target::Bind { field, .. } => Some(field.as_str()),
         _ => None,
@@ -417,12 +428,21 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
             && (q.is_empty() || v.name.to_lowercase().contains(&q))
             && scope.is_none_or(|s| v.in_scope(s))
             && style_scopes.is_none_or(|list| list.iter().any(|s| v.in_scope(s)))
+            && (!weight_target
+                || match v.kind {
+                    VariableType::String => v.in_scope("FONT_STYLE"),
+                    VariableType::Number => v.in_scope("FONT_WEIGHT"),
+                    _ => false,
+                })
             && (lib.is_some() || own.is_none_or(|o| figcraft_engine::cmd::variables::alias_target(&doc.variables, o, &v.id).is_ok()))
     };
     let groups = groups(&doc, &libs, keep);
     let mut chosen: Option<Pick> = None;
     let mut close = false;
     let area = egui::Area::new(Id::unique("variable_picker_area")).order(egui::Order::Foreground).fixed_pos(p.at + vec2(0.0, 4.0)).show(ctx, |ui| {
+        // The whole screen's height, not last frame's, so the list grows back after a search (#2043);
+        // egui keeps the area on the screen.
+        ui.set_max_height(crate::popover::max_height(ctx.content_rect()));
         egui::Frame::NONE.fill(t.menu).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
             ui.set_width(240.0);
             ui.horizontal(|ui| {
@@ -490,6 +510,11 @@ pub fn picker(app: &mut FigApp, ctx: &egui::Context) {
             }
             (Target::Proto(slot), _) => crate::proto_editor::pick_variable(app, slot, &pick.id),
             (Target::Style { style, field }, _) => {
+                app.run("style.bind", json!({"style": style, "field": field, "variable": pick.id}));
+            }
+            (Target::StyleWeight { style }, _) => {
+                let number = app.session.ds().is_ok_and(|d| d.doc.variables.get_by_id(&pick.id).is_some_and(|v| v.kind == VariableType::Number));
+                let field = if number { "fontWeight" } else { "fontStyle" };
                 app.run("style.bind", json!({"style": style, "field": field, "variable": pick.id}));
             }
         }

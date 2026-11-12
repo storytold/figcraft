@@ -17,6 +17,10 @@
 mod auto_layout_sizing_tests;
 #[cfg(test)]
 mod connector_label_tests;
+#[cfg(test)]
+mod deep_import_tests;
+#[cfg(test)]
+mod expansion_cost_tests;
 mod export;
 #[cfg(test)]
 mod export_tests;
@@ -26,9 +30,15 @@ pub mod kiwi;
 #[cfg(test)]
 mod layer_cap_tests;
 mod map;
+#[cfg(test)]
+mod missing_image_tests;
 mod network;
 #[cfg(test)]
+mod paste_style_tests;
+#[cfg(test)]
 mod prop_value_tests;
+#[cfg(test)]
+mod scale_factor_tests;
 #[cfg(test)]
 mod slot_tests;
 #[cfg(test)]
@@ -44,11 +54,19 @@ mod text_path_tests;
 mod text_skip_ink_tests;
 #[cfg(test)]
 mod text_style_tests;
+#[cfg(test)]
+mod text_wrap_tests;
+#[cfg(test)]
+mod value_budget_tests;
+#[cfg(test)]
+mod vector_scale_tests;
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::io::Read;
+use std::sync::Arc;
 
-use figcraft_doc::Document;
+use figcraft_doc::{Document, FileKind};
 
 pub use export::export;
 
@@ -58,8 +76,21 @@ use kiwi::{Kv, Schema};
 /// Largest `canvas.fig` member read, and largest decompressed chunk.
 const MAX_CANVAS: u64 = 256 * 1024 * 1024;
 const MAX_CHUNK: u64 = 512 * 1024 * 1024;
+/// Largest decompressed schema chunk: Figma's schema unpacks to well under 1 MB, so a schema that
+/// inflates past this is refused before its definitions are decoded.
+const MAX_SCHEMA: u64 = 16 * 1024 * 1024;
+/// Longest image hash (bytes) an image is found by: `images/` names and embedded images both
+/// stop at 64 bytes (128 hex digits).
+pub(crate) const MAX_IMAGE_HASH: usize = 64;
 /// Largest image member read.
-const MAX_IMAGE: u64 = 256 * 1024 * 1024;
+const MAX_IMAGE: u64 = figcraft_doc::ImageData::MAX_BYTES;
+/// Total decompressed ZIP image bytes read per import: the native image budget (`IMAGE_BUDGET`) on
+/// 64-bit targets, lower on 32-bit targets to leave address space for the canvas, layers and
+/// decoded pixels.
+#[cfg(not(target_pointer_width = "32"))]
+const MAX_IMAGE_BYTES: u64 = crate::IMAGE_BUDGET.bytes;
+#[cfg(target_pointer_width = "32")]
+const MAX_IMAGE_BYTES: u64 = 1024 * 1024 * 1024;
 /// Most chunks read from `canvas.fig`.
 const MAX_CHUNKS: usize = 16;
 /// Most layers imported from a `.fig` file: one per [`PACKED_BYTES_PER_LAYER`] bytes of its
@@ -78,6 +109,9 @@ pub(crate) fn layer_budget(packed: usize) -> usize {
     (packed / PACKED_BYTES_PER_LAYER).clamp(crate::rest::MAX_NODES, MAX_FIG_NODES)
 }
 
+/// The canvas header of a FigJam whiteboard (a `.jam`); a `.fig` has `fig-kiwi`.
+pub const JAM_HEADER: &[u8] = b"fig-jam.";
+
 /// Whether `bytes` look like a `.fig` file: a zip holding `canvas.fig`, or a bare canvas.
 pub fn is_fig(bytes: &[u8]) -> bool {
     bytes.starts_with(b"fig-") || (bytes.starts_with(b"PK") && zip_has_canvas(bytes))
@@ -95,10 +129,17 @@ pub fn try_import(bytes: &[u8], name: &str) -> Option<Result<(Document, Vec<Stri
 /// Build a document from a `.fig` file. Returns it with the warnings about what was skipped or
 /// approximated. `name`: the document name when the file doesn't carry one.
 pub fn import(bytes: &[u8], name: &str) -> Result<(Document, Vec<String>), FormatError> {
+    import_with_image_limit(bytes, name, MAX_IMAGE_BYTES)
+}
+
+fn import_with_image_limit(bytes: &[u8], name: &str, image_limit: u64) -> Result<(Document, Vec<String>), FormatError> {
     let mut archive = Archive::open(bytes)?;
+    archive.image_budget.remaining.set(image_limit);
     // The budgets follow the compressed canvas, which the file itself bounds (its zip member may
     // inflate too).
     let packed = archive.canvas.len().min(bytes.len());
+    // FigJam writes its whiteboards with this header: they open as boards.
+    let board = archive.canvas.starts_with(JAM_HEADER);
     // Each stage's input is dropped as soon as the next one is built: in a large file every one
     // of them takes gigabytes, and holding them all at once runs out of memory.
     let (schema, message) = decode_canvas(&std::mem::take(&mut archive.canvas))?;
@@ -107,12 +148,23 @@ pub fn import(bytes: &[u8], name: &str) -> Result<(Document, Vec<String>), Forma
     let max_nodes = layer_budget(packed);
     drop(message);
     let file_name = archive.file_name.as_deref().filter(|n| !n.trim().is_empty()).unwrap_or(name);
-    let (json, mut warnings, networks) = map::to_rest(&msg, file_name, max_nodes);
+    let (mut json, mut warnings, networks) = map::to_rest_for(&msg, file_name, max_nodes, board);
     // The message goes before the layers are built, so the images it carries are copied out first.
-    let embedded: BTreeMap<String, Vec<u8>> = embedded_images(&msg).into_iter().map(|(hash, bytes)| (hash, bytes.to_vec())).collect();
+    let embedded = embedded_copies(&msg);
     drop(msg);
-    let images = |r: &str| archive.image(r).or_else(|| embedded.get(r).cloned());
-    let (doc, more) = crate::rest::import_with_networks(&json, &images, networks, max_nodes)?;
+    let aliases = embedded_aliases(&embedded, |hash| archive.has_image(hash));
+    if !aliases.is_empty() {
+        canonical_image_refs(&mut json, &aliases);
+    }
+    let images = |r: &str| archive.image(r).or_else(|| embedded.get(r).map(|b| b.to_vec()));
+    let (mut doc, more) = crate::rest::import_with_networks(&json, &images, networks, max_nodes)?;
+    let skipped = archive.image_budget.skipped.get();
+    if skipped > 0 {
+        warnings.push(format!("{skipped} ZIP image(s) skipped by the total ZIP image byte budget ({image_limit} bytes)"));
+    }
+    if board {
+        doc.kind = FileKind::Board;
+    }
     // Both stages stop at the same cap and say so in the same words: one note (#981).
     for w in more.into_iter().filter_map(map::adapt_warning) {
         let base = w.rsplit_once(" (×").map_or(w.as_str(), |(b, _)| b);
@@ -151,17 +203,17 @@ fn corrupt(msg: impl Into<String>) -> FormatError {
 /// Image bytes that travel inside the message, by image hash (lowercase hex): a paint's
 /// `image.dataBlob` indexes the message's `blobs`. Copies written by plugins and other tools embed
 /// their images this way, and a bare canvas (what the clipboard carries) has no `images/`. The
-/// walk is iterative (no recursion on nested data) and skips blobs larger than [`MAX_IMAGE`]. The
-/// bytes stay borrowed from the message.
-fn embedded_images<'m>(msg: &'m Kv) -> BTreeMap<String, &'m [u8]> {
+/// walk is iterative (no recursion on nested data) and skips blobs larger than [`MAX_IMAGE`].
+/// Returns the index of each hash's blob.
+fn embedded_images(msg: &Kv) -> BTreeMap<String, usize> {
     let blobs = msg.get("blobs").map(Kv::list).unwrap_or_default();
     let mut found = BTreeMap::new();
     let mut pending = vec![msg];
     while let Some(value) = pending.pop() {
         match value {
             Kv::Object(fields) => {
-                if let Some((hash, bytes)) = value.get("image").and_then(|image| embedded_image(image, blobs)) {
-                    found.entry(hash).or_insert(bytes);
+                if let Some((hash, index)) = value.get("image").and_then(|image| embedded_image(image, blobs)) {
+                    found.entry(hash).or_insert(index);
                 }
                 pending.extend(fields.iter().filter(|(name, _)| *name != "blobs").map(|(_, field)| field));
             }
@@ -172,15 +224,86 @@ fn embedded_images<'m>(msg: &'m Kv) -> BTreeMap<String, &'m [u8]> {
     found
 }
 
-/// The hash and bytes of an `Image` value whose `dataBlob` points at a usable blob.
-fn embedded_image<'k>(image: &Kv, blobs: &'k [Kv]) -> Option<(String, &'k [u8])> {
-    let hash = image.get("hash").and_then(Kv::bytes).filter(|h| !h.is_empty() && h.len() <= 64)?;
+/// The images that travel inside the message ([`embedded_images`]), copied out of it once per
+/// blob: every hash naming the same blob shares its copy. A file can point any number of hashes
+/// at one large blob, and a copy for each would multiply it (#1059).
+fn embedded_copies(msg: &Kv) -> BTreeMap<String, Arc<[u8]>> {
+    let blobs = msg.get("blobs").map(Kv::list).unwrap_or_default();
+    let mut copies: BTreeMap<usize, Arc<[u8]>> = BTreeMap::new();
+    let mut out = BTreeMap::new();
+    for (hash, index) in embedded_images(msg) {
+        let Some(bytes) = blob(blobs, index) else { continue };
+        out.insert(hash, Arc::clone(copies.entry(index).or_insert_with(|| Arc::from(bytes))));
+    }
+    out
+}
+
+/// Embedded images ([`embedded_copies`]) whose blob an earlier hash already names, each with that
+/// hash. Hashes that also have an `images/` member keep their own name: the member is read first.
+/// Pointing every alias at one name has the import copy and hash each blob once, however many
+/// hashes a file points at it.
+fn embedded_aliases(embedded: &BTreeMap<String, Arc<[u8]>>, in_zip: impl Fn(&str) -> bool) -> BTreeMap<String, String> {
+    let mut first: BTreeMap<usize, &String> = BTreeMap::new();
+    let mut out = BTreeMap::new();
+    for (hash, bytes) in embedded {
+        if in_zip(hash) {
+            continue;
+        }
+        // Hashes naming one blob share its copy, so the copy's address tells the blob.
+        let canonical = *first.entry(bytes.as_ptr() as usize).or_insert(hash);
+        if canonical != hash {
+            out.insert(hash.clone(), canonical.clone());
+        }
+    }
+    out
+}
+
+/// Rename every `imageRef` in REST `json` found in `aliases` to the name it maps to.
+fn canonical_image_refs(json: &mut serde_json::Value, aliases: &BTreeMap<String, String>) {
+    use serde_json::Value;
+    let mut pending = vec![json];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Object(fields) => {
+                for (key, field) in fields.iter_mut() {
+                    match field {
+                        Value::String(r) if key == "imageRef" => {
+                            if let Some(canonical) = aliases.get(r.as_str()) {
+                                r.clone_from(canonical);
+                            }
+                        }
+                        _ => pending.push(field),
+                    }
+                }
+            }
+            Value::Array(items) => pending.extend(items.iter_mut()),
+            _ => {}
+        }
+    }
+}
+
+/// The hash and blob index of an `Image` value whose `dataBlob` points at a usable blob.
+fn embedded_image(image: &Kv, blobs: &[Kv]) -> Option<(String, usize)> {
+    let hash = image.get("hash").and_then(Kv::bytes).filter(|h| !h.is_empty() && h.len() <= MAX_IMAGE_HASH)?;
     let Some(Kv::Uint(index)) = image.get("dataBlob") else { return None };
-    let bytes = blobs.get(usize::try_from(*index).ok()?)?.get("bytes").and_then(Kv::bytes)?;
+    let index = usize::try_from(*index).ok()?;
+    let bytes = blob(blobs, index)?;
     if bytes.is_empty() || bytes.len() as u64 > MAX_IMAGE {
         return None;
     }
-    Some((hash.iter().map(|b| format!("{b:02x}")).collect(), bytes))
+    Some((hash.iter().map(|b| format!("{b:02x}")).collect(), index))
+}
+
+/// The bytes of blob `index`.
+fn blob<'k>(blobs: &'k [Kv], index: usize) -> Option<&'k [u8]> {
+    blobs.get(index)?.get("bytes").and_then(Kv::bytes)
+}
+
+/// Bytes left for ZIP image reads, including damaged images. The REST resolver caches references,
+/// including failures, so each referenced member is read or counted as skipped only once.
+struct ZipImageBudget {
+    remaining: Cell<u64>,
+    skipped: Cell<usize>,
 }
 
 /// The parts of a `.fig` archive the import reads.
@@ -189,12 +312,14 @@ struct Archive<'b> {
     file_name: Option<String>,
     /// `images/<hash>` members (or nothing for a bare canvas).
     zip: Option<zip::ZipArchive<std::io::Cursor<&'b [u8]>>>,
+    image_budget: ZipImageBudget,
 }
 
 impl<'b> Archive<'b> {
     fn open(bytes: &'b [u8]) -> Result<Self, FormatError> {
+        let image_budget = ZipImageBudget { remaining: Cell::new(MAX_IMAGE_BYTES), skipped: Cell::new(0) };
         if bytes.starts_with(b"fig-") {
-            return Ok(Archive { canvas: bytes.to_vec(), file_name: None, zip: None });
+            return Ok(Archive { canvas: bytes.to_vec(), file_name: None, zip: None, image_budget });
         }
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| corrupt(e.to_string()))?;
         let canvas = crate::read_member(&mut z, "canvas.fig", MAX_CANVAS)?;
@@ -202,17 +327,56 @@ impl<'b> Archive<'b> {
             .ok()
             .and_then(|m| serde_json::from_slice::<serde_json::Value>(&m).ok())
             .and_then(|m| m.get("file_name").and_then(serde_json::Value::as_str).map(str::to_string));
-        Ok(Archive { canvas, file_name, zip: Some(z) })
+        Ok(Archive { canvas, file_name, zip: Some(z), image_budget })
+    }
+
+    /// Whether `images/` has a member for image `hash`.
+    fn has_image(&self, hash: &str) -> bool {
+        self.zip.as_ref().is_some_and(|z| z.index_for_name(&format!("images/{hash}")).is_some())
     }
 
     /// Bytes of image `hash` (lowercase hex) from `images/`.
     fn image(&self, hash: &str) -> Option<Vec<u8>> {
-        if hash.is_empty() || hash.len() > 128 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let budget = &self.image_budget;
+        if hash.is_empty() || hash.len() > 2 * MAX_IMAGE_HASH || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
         // A clone shares the parsed directory and the bytes; the resolver only has shared access.
         let mut z = self.zip.clone()?;
-        crate::read_member(&mut z, &format!("images/{hash}"), MAX_IMAGE).ok()
+        let f = z.by_name(&format!("images/{hash}")).ok()?;
+        let size = f.size();
+        if size > MAX_IMAGE {
+            return None;
+        }
+        let remaining = budget.remaining.get();
+        if size > remaining {
+            budget.skipped.set(budget.skipped.get() + 1);
+            return None;
+        }
+        let checksum = f.crc32();
+        let mut data = Vec::new();
+        // Probe past the per-image cap only when the total budget has room. Even a dishonest
+        // size cannot make the read exceed the remaining total; failed reads keep their charge.
+        let limit = remaining.min(MAX_IMAGE + 1);
+        let read = f.take(limit).read_to_end(&mut data);
+        let used = data.len() as u64;
+        budget.remaining.set(remaining - used);
+        if used > size && used == remaining {
+            budget.skipped.set(budget.skipped.get() + 1);
+        }
+        if read.is_err() || used != size {
+            return None;
+        }
+        // `take` can stop exactly at the budget without asking ZIP for EOF (where it checks CRC).
+        // Check it here too, without spending an extra byte on an overflow probe.
+        if used == limit {
+            let mut crc = flate2::Crc::new();
+            crc.update(&data);
+            if crc.sum() != checksum {
+                return None;
+            }
+        }
+        Some(data)
     }
 }
 
@@ -223,7 +387,7 @@ fn decode_canvas(canvas: &[u8]) -> Result<(Schema, Vec<u8>), FormatError> {
     let (Some(schema), Some(message)) = (it.next(), it.next()) else {
         return Err(corrupt("canvas.fig needs a schema and a message chunk"));
     };
-    let schema = Schema::decode(&inflate(schema)?).map_err(|e| corrupt(e.to_string()))?;
+    let schema = Schema::decode(&inflate_within(schema, MAX_SCHEMA)?).map_err(|e| corrupt(e.to_string()))?;
     Ok((schema, inflate(message)?))
 }
 
@@ -246,18 +410,23 @@ fn chunks(canvas: &[u8]) -> Result<Vec<&[u8]>, FormatError> {
 
 /// Decompress a chunk: zstd (by its magic number), else raw deflate, else zlib.
 fn inflate(data: &[u8]) -> Result<Vec<u8>, FormatError> {
-    fn capped(r: impl Read) -> Option<Vec<u8>> {
+    inflate_within(data, MAX_CHUNK)
+}
+
+/// [`inflate`] refusing a chunk that unpacks to more than `max` bytes.
+fn inflate_within(data: &[u8], max: u64) -> Result<Vec<u8>, FormatError> {
+    let capped = |r: &mut dyn Read| -> Option<Vec<u8>> {
         let mut out = Vec::new();
-        r.take(MAX_CHUNK + 1).read_to_end(&mut out).ok()?;
-        (out.len() as u64 <= MAX_CHUNK).then_some(out)
-    }
+        r.take(max.saturating_add(1)).read_to_end(&mut out).ok()?;
+        (out.len() as u64 <= max).then_some(out)
+    };
     if data.starts_with(&[0x28, 0xB5, 0x2F, 0xFD]) {
         let mut src = data;
-        let dec = ruzstd::decoding::StreamingDecoder::new(&mut src).map_err(|e| corrupt(format!("zstd: {e}")))?;
-        return capped(dec).ok_or_else(|| corrupt("damaged or oversized zstd chunk"));
+        let mut dec = ruzstd::decoding::StreamingDecoder::new(&mut src).map_err(|e| corrupt(format!("zstd: {e}")))?;
+        return capped(&mut dec).ok_or_else(|| corrupt("damaged or oversized zstd chunk"));
     }
-    capped(flate2::read::DeflateDecoder::new(data))
-        .or_else(|| capped(flate2::read::ZlibDecoder::new(data)))
+    capped(&mut flate2::read::DeflateDecoder::new(data))
+        .or_else(|| capped(&mut flate2::read::ZlibDecoder::new(data)))
         .ok_or_else(|| corrupt("damaged or oversized deflate chunk"))
 }
 

@@ -74,6 +74,8 @@ fn a_kicked_connection_with_a_full_queue_is_shut() {
     let out = Line {
         tx,
         queued: Arc::default(),
+        waiting: Arc::default(),
+        max_presence: 32,
         block: Arc::new(AtomicUsize::new(0)),
         all: Arc::new(AtomicUsize::new(0)),
         max: 1 << 20,
@@ -85,7 +87,7 @@ fn a_kicked_connection_with_a_full_queue_is_shut() {
         in_flight: InFlight(Default::default()),
         backend: Closes,
         rooms: HashMap::new(),
-        conns: HashMap::from([(1, Conn { out, sock: server_side, kind: Kind::Managing, ip })]),
+        conns: HashMap::from([(1, Conn { out, sock: server_side, kind: Kind::Managing { comments: true }, ip })]),
         local: None,
         outbox: Vec::new(),
         barred: HashMap::new(),

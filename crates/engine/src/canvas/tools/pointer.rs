@@ -1,5 +1,8 @@
 use super::handles::{handle_at, label_at, locked_in, on_corner_square, resize_cursor, selected_end_at};
-use super::*;
+use super::{
+    Cursor, Document, Gesture, NodeId, NodeKind, Overlay, PenCursor, Point, PointerEvent, PointerKind, Rect, Result, Session, ToolId, at_45_degrees,
+    frame_at, json, select_target,
+};
 
 impl Session {
     /// The pointer left the canvas: what hovering there showed goes (the distances Alt or Dev Mode
@@ -8,8 +11,27 @@ impl Session {
         if !self.tool.busy() {
             self.tool.overlay.guides.clear();
             self.tool.overlay.measure_box = None;
+            self.tool.overlay.stamp_target = None;
         }
         self.vector_pointer_left();
+        self.follow_widget_hover(Vec::new());
+    }
+
+    /// Show the hover styles of the widget layers `ids` the pointer is over (none: end them), unless
+    /// another live preview (a hovered font, say) is showing.
+    fn follow_widget_hover(&mut self, ids: Vec<NodeId>) {
+        let ours = !self.tool.widget_hover.is_empty() && crate::textpreview::active(self);
+        if ids.is_empty() {
+            if ours {
+                crate::textpreview::end(self);
+            }
+            self.tool.widget_hover.clear();
+            return;
+        }
+        if ours && self.tool.widget_hover == ids || !ours && crate::textpreview::active(self) {
+            return;
+        }
+        self.tool.widget_hover = if self.widget_hover(&ids).unwrap_or(false) { ids } else { Vec::new() };
     }
 
     /// What a marquee starting at page point `p` selects inside: the top-level frame it starts in
@@ -25,16 +47,23 @@ impl Session {
     /// the layers it touches (`deep`: nested ones too); `additive` (Shift) toggles them.
     pub(crate) fn marquee_selection(&self, r: Rect, within: Option<NodeId>, deep: bool, base: &[NodeId], additive: bool) -> Result<Vec<NodeId>> {
         let (doc, page) = (self.doc()?, self.page()?);
-        let mut hits =
-            if deep { figcraft_doc::geometry::marquee_deep(doc, page, r) } else { figcraft_doc::geometry::marquee_select(doc, page, r, within) };
-        if let Some(f) = self.ds()?.focused() {
+        let focused = self.ds()?.focused();
+        let mut hits = match (deep, focused) {
+            (true, _) => figcraft_doc::geometry::marquee_deep(doc, page, r),
+            (false, Some(f)) => figcraft_doc::geometry::marquee(doc, page, r, Some(f)),
+            (false, None) => figcraft_doc::geometry::marquee_select(doc, page, r, within),
+        };
+        if let Some(f) = focused {
             hits.retain(|h| *h != f && doc.is_ancestor(f, *h));
         }
-        // A marquee over a frame from outside selects the frame only when it covers it fully.
-        if within.is_none() && !deep {
+        // A widget's layers are part of the widget: a marquee from outside never opens one.
+        if !deep {
             hits.retain(|h| {
-                let full = doc.world_bounds(*h).is_some_and(|b| r.contains(b.origin()) && r.contains(Point::new(b.x1, b.y1)));
-                full || !doc.node(*h).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }))
+                doc.node(*h)
+                    .and_then(|n| n.parent)
+                    .filter(|p| Some(*p) != within)
+                    .and_then(|p| doc.node(p))
+                    .is_none_or(|p| !crate::widgets::is_widget(p))
             });
         }
         // Shift toggles: what was selected and is touched again comes out.
@@ -53,6 +82,10 @@ impl Session {
         }
         if !matches!(t, ToolId::Move | ToolId::Scale | ToolId::Hand) && self.ds().is_ok_and(|d| d.vector_edit.is_some()) {
             let _ = crate::vectoredit::end(self);
+        }
+        // The placement crosshair goes with a change of tool, not with the same tool chosen again.
+        if self.tool.tool != t {
+            self.tool.place_at = None;
         }
         self.tool.tool = t;
         self.tool.gesture = Gesture::None;
@@ -77,7 +110,7 @@ impl Session {
     /// The tool pointer events go to: in Dev Mode every tool but the hand and comments selects.
     fn acting_tool(&self) -> ToolId {
         match self.tool.tool {
-            t if self.tool.dev_mode && !matches!(t, ToolId::Hand | ToolId::Comment) => ToolId::Move,
+            t if self.tool.dev_mode && !t.works_in_dev_mode() => ToolId::Move,
             t => t,
         }
     }
@@ -134,6 +167,8 @@ impl Session {
                 ToolId::TextOnPath => self.text_on_path_down(ev),
                 ToolId::Pen => self.pen_down(ev),
                 ToolId::Pencil => {
+                    // The preview draws in the colour the stroke will have (#1741).
+                    self.tool.overlay.pen_color = self.pencil_color_at(ev.p()).ok();
                     self.tool.gesture = Gesture::Pencil { points: vec![ev.p()], pressure: vec![ev.pressure] };
                     Ok(())
                 }
@@ -141,6 +176,7 @@ impl Session {
                     self.request_ui("comment.new", json!({"x": ev.x, "y": ev.y}));
                     Ok(())
                 }
+                ToolId::Annotation => self.annotation_down(ev),
                 ToolId::Eyedropper => self.eyedrop(ev),
                 t if t.on_boards() => self.board_down(ev),
                 t if t.draws_shape() => self.draw_down(ev),
@@ -171,6 +207,19 @@ impl Session {
         Ok(true)
     }
 
+    /// The Annotation tool's press: the layer under the pointer is selected and the UI is asked
+    /// for its note (the engine writes nothing; the note is typed in the Inspect tab). A press on
+    /// empty canvas does nothing.
+    fn annotation_down(&mut self, ev: &PointerEvent) -> Result<()> {
+        let ds = self.ds()?;
+        let (doc, page) = (ds.doc.clone(), ds.page);
+        // The same reach as the Move tool's pick (`ev.tol() * 2.0`); never the page itself.
+        let Some(id) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0).filter(|i| doc.node(*i).is_some_and(|n| !n.is_page())) else { return Ok(()) };
+        self.set_selection(vec![id]);
+        self.request_ui("annotation.new", json!({"id": id}));
+        Ok(())
+    }
+
     pub(super) fn hover(&mut self, ev: &PointerEvent) -> Result<()> {
         let tool = self.acting_tool();
         let ds = self.ds()?;
@@ -191,6 +240,7 @@ impl Session {
             cursor = Cursor::Text;
         }
         let mut hover = None;
+        let mut widget_hover = Vec::new();
         let mut guides = Vec::new();
         let mut measure_box = None;
         let arc_hover = if self.arc_handles_shown() { crate::arc_handles::hit(&doc, &sel, ev.p(), ev.zoom).map(|(_, h)| h) } else { None };
@@ -211,6 +261,7 @@ impl Session {
                 if leaf.and_then(|l| crate::widgets::target_at(&doc, l, ev.p())).is_some() {
                     cursor = Cursor::Pointer;
                 }
+                widget_hover = leaf.map(|l| crate::widgets::hovered_at(&doc, l, ev.p())).unwrap_or_default();
                 hover = label_at(&doc, page, &self.tool.labels, ev.p()).or_else(|| leaf.map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
                 // Alt over a selected layer: a drag from here duplicates it.
                 if ev.alt && !self.tool.dev_mode && tool == ToolId::Move && hover.is_some_and(|h| sel.contains(&h) && !locked_in(&doc, h)) {
@@ -236,7 +287,9 @@ impl Session {
                 }
             }
         }
-        if tool == ToolId::Move && !self.tool.dev_mode && crate::board::end_handle_at(&doc, &sel, ev.p(), ev.zoom).is_some() {
+        let on_handle =
+            crate::board::end_handle_at(&doc, &sel, ev.p(), ev.zoom).is_some() || crate::board::path_handle_at(&doc, &sel, ev.p(), ev.zoom).is_some();
+        if tool == ToolId::Move && !self.tool.dev_mode && on_handle {
             cursor = Cursor::Grab;
         }
         self.tool.overlay.measure_box = measure_box;
@@ -254,6 +307,13 @@ impl Session {
             }
         }
         self.tool.overlay.guides = guides;
+        if tool == ToolId::Connector {
+            self.connector_hover(ev);
+        }
+        // The stamp tool: the object a click would stick the stamp to (as `board.stamp` finds it).
+        self.tool.overlay.stamp_target =
+            (tool == ToolId::Stamp && crate::board::is_board(&doc)).then(|| crate::board::stamp_target(&doc, page, ev.p(), None)).flatten();
+        self.follow_widget_hover(widget_hover);
         let ds = self.ds_mut()?;
         if ds.hover != hover {
             ds.hover = hover;

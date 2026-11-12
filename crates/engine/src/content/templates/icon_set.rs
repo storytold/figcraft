@@ -6,7 +6,7 @@ use figcraft_doc::NodeId;
 use serde_json::json;
 
 use super::glyphs;
-use super::kit::*;
+use super::kit::{BORDER, CARD, H, ICON, INK, Kit, MUTED, PAGE, V, merged};
 use crate::Result;
 
 const STROKE: &str = "Icon/Stroke";

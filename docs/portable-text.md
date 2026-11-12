@@ -87,3 +87,54 @@ resize test measures eager capture versus deferred previews and verifies commit/
 On the local Windows optimized test build, 16 steps took 335.8 ms with eager capture versus
 2.9 ms for deferred previews and 21.7 ms including commit. This synthetic measurement isolates
 outline-capture overhead; it is not an end-to-end canvas or network benchmark.
+
+
+## Reproducible text-heavy storage benchmark
+
+Run `cargo xtask bench text 1000,10000` with the normal `CRAFT_FONTS_DIR` build input.
+This is a separate storage workload, not the mixed shapes/text canvas benchmark. It uses
+unique 117-character paragraphs, two embedded Inter faces (Regular/Bold) at two sizes,
+fixed text boxes, and no images, version history or external font dependency. System font
+scanning is disabled by the xtask command. No private document or font binary is a fixture.
+
+Each size runs one warm-up followed by five measured samples; the table reports medians.
+`prepare` times session initialization of a document without appearances (including initial
+capture on this branch), separately from saving. `first snapshot` then times `file_bytes`
+(thumbnail and native ZIP encoding). `repeat snapshot` is the same save path after reopening
+those bytes, so valid appearances are already present. `reopen` times native ZIP/JSON loading
+and session initialization, not GUI startup, canvas rendering, networking or filesystem reads. The saved
+byte count includes the thumbnail. These are memory-I/O measurements without disk flushes;
+"first" does not mean a cold process or cold filesystem cache. Text layer counts are checked
+after every load; the portable-layer column counts stored appearances, and must match the
+text count on this branch (zero on unmodified main).
+
+For a before/after comparison apply only the CLI/xtask benchmark harness to the chosen main
+revision, use the same release profile, fonts and machine, and run the two variants sequentially.
+Keep the exact revisions and results together: capture and serialization costs depend on the
+text/font workload, and a resize microbenchmark does not answer the load/save question.
+
+
+### Windows before/after, 2026-11-12
+
+Base: `0d6ce1124c03c8efc3807db5689fee7f8ec94756` (main), with only this benchmark harness applied.
+Feature: portable-text integrated with that same main, measured with the harness in this change.
+Windows x64, Intel Core Ultra 9 285H, 32 GiB RAM; Rust 1.99.1; repository-default release
+profile (thin LTO, four codegen units), four Cargo build jobs. The same craft-fonts input
+(`37827adc41fd165f9a9234ac40f94dbad353aa69`) was used for both builds. They ran sequentially.
+All times below are medians in milliseconds; sizes are exact ZIP byte counts.
+
+| Text layers | Variant | Prepare ms | First save ms | Repeat save ms | Reopen ms | Saved bytes | Stored appearances |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1,000 | main | 0.267 | 108.054 | 102.384 | 4.759 | 127,908 | 0 |
+| 1,000 | portable text | 720.823 | 1802.479 | 1748.249 | 520.258 | 29,457,300 | 1,000 |
+| 10,000 | main | 3.337 | 1677.961 | 1683.007 | 58.113 | 265,376 | 0 |
+| 10,000 | portable text | 8380.447 | 19743.431 | 20262.586 | 5891.669 | 294,632,582 | 10,000 |
+
+The 10,000-layer document contains 1,170,000 characters. All text layers survived every load;
+the feature stored an appearance for every layer (main stored none). The current representation
+is **not within the requested 10% overhead target**: at 10,000 layers, repeat save is **12.04×**, reopen **101.38×**, and ZIP size **1110.25×** main.
+The roughly 294.6 MB archive is a text-only synthetic case; it is not a measurement of a user's
+image-heavy file. These results expose the cost of per-positioned-glyph SVG strings in native
+serialization. Shared in-memory geometry and deferred gesture capture do not remove that file
+size or load/save cost. Further storage-representation work or a different capture policy is
+needed before claiming the performance criterion is satisfied.

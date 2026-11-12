@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Affine, BTreeMap, BTreeSet, Document, EngineError, ImageData, Node, NodeId, NodeKind, Result, Session, Value, bad, delete, get, id, json, num,
+    ok, req_targets, roots, string, targets, vector_clipboard, z_sorted,
+};
 
 /// The copied form of the selection.
 pub fn copy_to_clipboard(s: &mut Session, cmd: &str, ids: &[NodeId]) -> Result<()> {
@@ -9,6 +12,18 @@ pub fn copy_to_clipboard(s: &mut Session, cmd: &str, ids: &[NodeId]) -> Result<(
         return Err(EngineError::Disabled(cmd.into(), "pages can't be copied; use page.duplicate".into()));
     }
     let (nodes, images, bounds) = copied(&ds.doc, &layers);
+    store_clipboard(s, cmd, nodes, images, bounds)
+}
+
+/// Make `nodes` (the copied layers, each root's transform in page space) the clipboard's layers.
+pub(super) fn store_clipboard(
+    s: &mut Session,
+    cmd: &str,
+    nodes: Vec<(NodeId, Vec<Node>)>,
+    images: BTreeMap<String, ImageData>,
+    bounds: Option<figcraft_geom::Rect>,
+) -> Result<()> {
+    let ds = s.ds()?;
     let (source, source_path, uid) = (ds.doc.clone(), ds.path.clone(), ds.uid);
     s.clipboard.source = Some(source);
     s.clipboard.source_path = source_path;
@@ -40,19 +55,24 @@ fn copied(doc: &Document, ids: &[NodeId]) -> Copied {
         if let Some(r) = sub.first_mut() {
             r.transform = world;
         }
-        for n in &sub {
-            for p in n.fills.iter().chain(n.strokes.iter()) {
-                if let figcraft_color::PaintKind::Image(img) = &p.kind
-                    && let Some(d) = doc.images.get(&img.image)
-                {
-                    images.insert(img.image.clone(), d.clone());
-                }
-            }
-        }
+        collect_images(doc, &sub, &mut images);
         nodes.push((*i, sub));
     }
     let bounds = doc.bounds_of(&ids);
     (nodes, images, bounds)
+}
+
+/// The images the paints of `nodes` use, taken from `doc` into `images`.
+pub(super) fn collect_images(doc: &Document, nodes: &[Node], images: &mut BTreeMap<String, ImageData>) {
+    for n in nodes {
+        for p in n.fills.iter().chain(n.strokes.iter()) {
+            if let figcraft_color::PaintKind::Image(img) = &p.kind
+                && let Some(d) = doc.images.get(&img.image)
+            {
+                images.insert(img.image.clone(), d.clone());
+            }
+        }
+    }
 }
 
 /// The markers around the copied layers in the clipboard's HTML, spelt as that format spells them.
@@ -109,6 +129,8 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let props = s.clipboard.props.take();
     let paint = s.clipboard.paint.take();
     let stroke = s.clipboard.stroke.take();
+    let paint_images = std::mem::take(&mut s.clipboard.paint_images);
+    let paint_source_doc = s.clipboard.paint_source_doc;
     let effect = s.clipboard.effect.take();
     // No open file has id 0. So paste treats this copy as a copy from a different file.
     let layers_generation = s.clipboard.layers_generation.wrapping_add(1);
@@ -118,6 +140,8 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
         props,
         paint,
         stroke,
+        paint_images,
+        paint_source_doc,
         effect,
         bounds,
         source_doc: 0,
@@ -127,19 +151,67 @@ pub(super) fn paste_design_layers(s: &mut Session, p: &Value) -> Result<Value> {
         layers_generation,
     };
     let mut out = paste(s, p)?;
+    let pasted: Vec<NodeId> = out["ids"].as_array().map(|a| a.iter().filter_map(crate::params::id_of).collect()).unwrap_or_default();
+    let missing = layers_missing_images(s.doc()?, &pasted);
+    if !missing.is_empty() {
+        out["missingImages"] = json!(missing);
+    }
     if !other.issues.is_empty() {
         out["warnings"] = json!(other.issues);
     }
     Ok(out)
 }
 
+/// The most layers [`layers_missing_images`] names.
+const MAX_MISSING_NAMED: usize = 20;
+
+/// The names of the layers under `ids` with an image fill or stroke whose image the paste didn't
+/// carry (#1646): it shows the importer's missing-image placeholder, or nothing at all.
+fn layers_missing_images(doc: &figcraft_doc::Document, ids: &[NodeId]) -> Vec<String> {
+    let missing = |p: &figcraft_color::Paint| match &p.kind {
+        figcraft_color::PaintKind::Image(img) => doc.images.get(&img.image).is_none_or(figcraft_format::rest::is_missing_image),
+        _ => false,
+    };
+    let mut names: Vec<String> = Vec::new();
+    for n in ids.iter().flat_map(|i| doc.subtree(*i)).filter_map(|i| doc.node(i)) {
+        if n.fills.iter().chain(&n.strokes).any(missing) && !names.contains(&n.name) {
+            names.push(n.name.clone());
+            if names.len() == MAX_MISSING_NAMED {
+                break;
+            }
+        }
+    }
+    names
+}
+
+/// Whether the command names its layers (`ids` / `id`): it then acts on them even in vector edit mode.
+fn names_layers(p: &Value) -> bool {
+    get(p, "ids").is_some() || get(p, "id").is_some()
+}
+
 pub(super) fn copy(s: &mut Session, p: &Value) -> Result<Value> {
+    // In vector edit mode with points or segments selected, Copy takes just those (#1875).
+    if !names_layers(p)
+        && let Some(sel) = vector_clipboard::edit_selection(s)
+        && sel.any
+    {
+        // Only lone points selected: nothing to copy, and not the whole layer either.
+        return vector_clipboard::copy_selection(s, "edit.copy", sel);
+    }
     let ids = req_targets("edit.copy", s, p)?;
     copy_to_clipboard(s, "edit.copy", &ids)?;
     Ok(json!({"copied": s.clipboard.nodes.len()}))
 }
 
 pub(super) fn cut(s: &mut Session, p: &Value) -> Result<Value> {
+    // In vector edit mode with points or segments selected, Cut takes just those and stays in edit mode (#1875).
+    if !names_layers(p)
+        && let Some(sel) = vector_clipboard::edit_selection(s)
+        && sel.any
+    {
+        // Lone points with nothing to copy: `cut_selection` refuses, as Copy does.
+        return vector_clipboard::cut_selection(s, sel);
+    }
     let ids = req_targets("edit.cut", s, p)?;
     copy_to_clipboard(s, "edit.cut", &ids)?;
     let doc = s.doc()?;
@@ -199,10 +271,15 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
     if let Some(src) = foreign {
         crate::library::adopt_pasted(doc, src, clip.source_path.as_deref(), &all)?;
     }
+    crate::library::count_inserted(doc, &out);
     Ok(out)
 }
 
 pub(super) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
+    // While editing a vector, the copied layers join its network (#1875); `parent` asks for layers.
+    if id(p, "parent").is_none() && s.ds()?.vector_edit.is_some() {
+        return vector_clipboard::paste_into_vector(s, p);
+    }
     let page = s.page()?;
     // Figma pastes into the selected frame (if one is selected), at the same position when it fits,
     // else in the frame's centre; otherwise in place on the page (or the viewport centre).
@@ -291,9 +368,19 @@ pub(super) fn copy_props_of(doc: &Document, id: NodeId) -> Value {
     let Some(n) = doc.node(id) else { return Value::Null };
     let mut v = json!({
         "fills": n.fills, "strokes": n.strokes, "strokeWeight": n.stroke.weight, "strokeAlign": n.stroke.align,
-        "effects": n.effects, "opacity": n.opacity, "blend": n.blend, "cornerRadius": n.corners.radii,
-        "cornerSmoothing": n.corners.smoothing,
+        "strokeSides": n.stroke.sides, "startCap": n.stroke.cap_start, "endCap": n.stroke.cap_end,
+        "strokeJoin": n.stroke.join, "miterLimit": n.stroke.miter_limit, "dashes": n.stroke.dashes,
+        "dashCap": n.stroke.dash_cap,
+        "widthProfile": super::super::props::width_points_json(n.stroke.width_profile.as_ref()), "brush": n.stroke.brush,
+        "effects": n.effects, "opacity": n.opacity, "blend": n.blend,
     });
+    // A vector rounds each anchor on its own (`vector.edit.cornerRadius` keeps the radii in the
+    // network's vertices, its layer corners stay empty): there is no style radius to carry, and
+    // pasting the empty one would flatten every anchor's radius.
+    if !matches!(n.kind, NodeKind::Vector { .. }) {
+        v["cornerRadius"] = json!(n.corners.radii);
+        v["cornerSmoothing"] = json!(n.corners.smoothing);
+    }
     if let NodeKind::Text(t) = &n.kind {
         v["fontFamily"] = json!(t.style.font_family);
         v["fontStyle"] = json!(t.style.font_style);
@@ -312,21 +399,27 @@ pub(super) fn copy_props(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(v)
 }
 
+/// Give layer `id` the properties [`copy_props_of`] copied (`props`), those it can take: the text
+/// properties only to text, the corners only to a layer with corners.
+pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, props: &Value) -> Result<()> {
+    let mut m = props.as_object().cloned().unwrap_or_default();
+    let is_text = matches!(doc.get(id)?.kind, NodeKind::Text(_));
+    if !is_text {
+        m.retain(|k, _| !k.starts_with("font") && k != "lineHeight" && k != "letterSpacing");
+    }
+    if !doc.get(id)?.kind.has_corner_radius() {
+        m.remove("cornerRadius");
+        m.remove("cornerSmoothing");
+    }
+    crate::cmd::props::apply(cmd, doc, id, &m)
+}
+
 pub(super) fn paste_props(s: &mut Session, p: &Value) -> Result<Value> {
     let props = s.clipboard.props.clone().ok_or_else(|| EngineError::Disabled("edit.pasteProperties".into(), "no copied properties".into()))?;
     let ids = req_targets("edit.pasteProperties", s, p)?;
     let doc = s.doc_mut()?;
     for i in ids {
-        let mut m = props.as_object().cloned().unwrap_or_default();
-        let is_text = matches!(doc.get(i)?.kind, NodeKind::Text(_));
-        if !is_text {
-            m.retain(|k, _| !k.starts_with("font") && k != "lineHeight" && k != "letterSpacing");
-        }
-        if !doc.get(i)?.kind.has_corner_radius() {
-            m.remove("cornerRadius");
-            m.remove("cornerSmoothing");
-        }
-        crate::cmd::props::apply("edit.pasteProperties", doc, i, &m)?;
+        apply_copied_props("edit.pasteProperties", doc, i, &props)?;
     }
     ok()
 }

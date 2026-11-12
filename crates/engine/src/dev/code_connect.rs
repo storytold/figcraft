@@ -10,14 +10,14 @@
 //! keeps JSX's braces: `size={size}` → `size="Large"`, `{label}` → `{"Buy"}`), and
 //! `{prop ? "a" : "b"}` picks one of two strings. Any other `{…}` stays as written.
 
-use figcraft_doc::*;
+use figcraft_doc::{CodeLink, Document, NodeId, NodeKind};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::codegen::{CodeLang, Ctx};
 use crate::component_codegen::{Component, Param, ParamKind, describe, instance_values, js_string, main_of, value_expr};
 use crate::components::{slots_of, variant_set};
-use crate::params::*;
+use crate::params::{get, id_of, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 /// Longest template (chars).
@@ -37,8 +37,9 @@ const MAX_WARNINGS: usize = 50;
 
 /// The languages a component can be connected in.
 pub fn language(s: &str) -> Option<CodeLang> {
-    CodeLang::from_id(s)
-        .filter(|l| matches!(l, CodeLang::React | CodeLang::Leptos | CodeLang::Vue | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::ArkUi))
+    CodeLang::from_id(s).filter(|l| {
+        matches!(l, CodeLang::React | CodeLang::Leptos | CodeLang::Vue | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::ArkUi | CodeLang::Flutter)
+    })
 }
 
 /// The layer `id`'s links are stored on: its component set, else its component (an instance's
@@ -69,6 +70,7 @@ pub fn import_line(link: &CodeLink, lang: CodeLang) -> String {
         CodeLang::Leptos => format!("use {path}::{};", link.name.split('.').next().unwrap_or_default()),
         // A single-file component is a default export.
         CodeLang::Vue => format!("import {} from {};", link.name.split('.').next().unwrap_or_default(), js_string(path)),
+        CodeLang::Flutter => format!("import '{}';", path.replace(['\'', '\\'], "")),
         _ => format!("import {path}"),
     }
 }
@@ -273,6 +275,7 @@ fn expr(doc: &Document, c: &Component, p: &Param, v: &Value, lang: CodeLang) -> 
         (Some(l), CodeLang::Vue) => l.name.clone(),
         (Some(l), CodeLang::SwiftUi) => format!("{}()", l.name),
         (Some(l), CodeLang::ArkUi) => format!("() => {{ {}() }}", l.name),
+        (Some(l), CodeLang::Flutter) => format!("{}()", l.name),
         (Some(l), _) => format!("{{ {}() }}", l.name),
         (None, _) => value_expr(doc, c, p, v, lang),
     }
@@ -285,41 +288,45 @@ fn pieces(t: &str) -> Vec<Piece<'_>> {
     checkable.then(|| parse(t).ok()).flatten().unwrap_or_else(|| vec![Piece::Text(t)])
 }
 
-/// Whether `s` ends inside an unclosed opening tag (no `>` outside quotes since the last `<`).
-fn inside_open_tag(s: &str) -> bool {
+/// Whether `s` ends inside an unclosed opening tag (no `>` outside quotes since the last `<`), and
+/// the quote (with its byte offset) still open there.
+fn tag_state(s: &str) -> (bool, Option<(char, usize)>) {
     let mut in_tag = false;
     let mut quote = None;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
         match quote {
-            Some(q) => {
+            Some((q, _)) => {
                 if c == q {
                     quote = None;
                 }
             }
             None => match c {
-                '<' if !in_tag && chars.peek().is_some_and(|ch| ch.is_ascii_alphabetic() || matches!(*ch, '/' | '!' | '?')) => {
+                '<' if !in_tag && chars.peek().is_some_and(|(_, ch)| ch.is_ascii_alphabetic() || matches!(*ch, '/' | '!' | '?')) => {
                     in_tag = true;
                 }
                 '>' if in_tag => in_tag = false,
-                '"' | '\'' if in_tag => quote = Some(c),
+                '"' | '\'' if in_tag => quote = Some((c, i)),
                 _ => {}
             },
         }
     }
-    in_tag
+    (in_tag, quote)
 }
 
 /// Where a placeholder sits in a Vue template: whether the attribute is bound, and the quote the
 /// template already opened (if any). `None` when it isn't in an attribute at all.
 fn vue_attribute(out: &str) -> Option<(bool, Option<char>)> {
     let end = out.trim_end();
-    if !inside_open_tag(end) {
+    let (in_tag, open) = tag_state(out);
+    if !in_tag {
         return None;
     }
-    let (after, quote) = match end.chars().last() {
-        Some(q @ ('"' | '\'')) => (&end[..end.len() - q.len_utf8()], Some(q)),
-        _ => (end, None),
+    // A quote still open, with literal text after it (`title="Buy {x}"`), puts the placeholder in
+    // that attribute's value as much as one directly after the quote does.
+    let (after, quote) = match open {
+        Some((q, at)) => (&out[..at], Some(q)),
+        None => (end, None),
     };
     let after = after.trim_end();
     let eq = after.rfind('=')?;
@@ -456,7 +463,7 @@ fn default_template(c: &Component, lang: CodeLang, name: &str) -> String {
             format!("<{name}{} />", params.iter().map(|p| format!(" {}={{{p}}}", crate::component_codegen::rust_ident(p))).collect::<String>())
         }
         CodeLang::Vue => format!("<{name}{} />", params.iter().map(|p| format!(" :{p}={{{p}}}")).collect::<String>()),
-        CodeLang::SwiftUi => format!("{name}({})", params.iter().map(|p| format!("{p}: {{{p}}}")).collect::<Vec<_>>().join(", ")),
+        CodeLang::SwiftUi | CodeLang::Flutter => format!("{name}({})", params.iter().map(|p| format!("{p}: {{{p}}}")).collect::<Vec<_>>().join(", ")),
         CodeLang::ArkUi => format!("{name}({{ {} }})", params.iter().map(|p| format!("{p}: {{{p}}}")).collect::<Vec<_>>().join(", ")),
         _ => format!("{name}({})", params.iter().map(|p| format!("{p} = {{{p}}}")).collect::<Vec<_>>().join(", ")),
     }
@@ -478,6 +485,7 @@ pub fn check(c: &Component, link: &CodeLink, lang: CodeLang) -> std::result::Res
         CodeLang::React | CodeLang::ArkUi => !path.chars().any(|ch| ch.is_control() || ch == '"' || ch == '\\'),
         CodeLang::Leptos => path.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'),
         CodeLang::Vue => path.chars().all(|ch| ch.is_ascii_alphanumeric() || "_./@-".contains(ch)),
+        CodeLang::Flutter => path.chars().all(|ch| ch.is_ascii_alphanumeric() || "_./:-".contains(ch)),
         _ => path.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'),
     };
     if path.chars().count() > MAX_IMPORT || !path_ok {
@@ -486,6 +494,9 @@ pub fn check(c: &Component, link: &CodeLink, lang: CodeLang) -> std::result::Res
             CodeLang::ArkUi => format!("importPath: a module path without quotes, up to {MAX_IMPORT} characters"),
             CodeLang::Leptos => format!("importPath: a Rust module path (letters, digits, _ and ::), up to {MAX_IMPORT} characters"),
             CodeLang::Vue => format!("importPath: a module path (letters, digits, _ . / @ and -), up to {MAX_IMPORT} characters"),
+            CodeLang::Flutter => {
+                format!("importPath: a Dart import (package:acme/card.dart; letters, digits, _ . / : and -), up to {MAX_IMPORT} characters")
+            }
             _ => format!("importPath: a module or package name (letters, digits, _ and .), up to {MAX_IMPORT} characters"),
         });
     }
@@ -521,7 +532,7 @@ fn text(cmd: &str, p: &Value, key: &str) -> Result<Option<String>> {
 /// The `language` parameter (default React).
 fn lang_param(cmd: &str, p: &Value) -> Result<CodeLang> {
     match text(cmd, p, "language")? {
-        Some(l) => language(&l).ok_or_else(|| bad(cmd, "language: react|leptos|vue|swiftui|compose|arkui")),
+        Some(l) => language(&l).ok_or_else(|| bad(cmd, "language: react|leptos|vue|swiftui|compose|arkui|flutter")),
         None => Ok(CodeLang::React),
     }
 }
@@ -551,7 +562,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "codeConnect.set",
             "Connect to code",
-            "{id? (component, set or instance; default the selection), language?: react|leptos|vue|swiftui|compose|arkui (default react), importPath?, name? (default the generated name), template? (default a call passing every property)}  links the component (its set, for a variant) to its code component; fields left out keep their current value. Placeholders: {property} (its name or parameter name) and {property ? \"a\" : \"b\"}; other {…} stay as written  → {component, language, code (the snippet for the layer), unknown (placeholder names that aren't properties)}",
+            "{id? (component, set or instance; default the selection), language?: react|leptos|vue|swiftui|compose|arkui|flutter (default react), importPath?, name? (default the generated name), template? (default a call passing every property)}  links the component (its set, for a variant) to its code component; fields left out keep their current value. Placeholders: {property} (its name or parameter name) and {property ? \"a\" : \"b\"}; other {…} stay as written  → {component, language, code (the snippet for the layer), unknown (placeholder names that aren't properties)}",
             true,
             |s, p| {
                 let cmd = "codeConnect.set";
@@ -658,7 +669,12 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let doc = s.doc()?;
     // Components and sets by name (variants are linked through their set).
-    let owners: Vec<(String, NodeId)> = doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).map(|n| (n.name.clone(), n.id)).collect();
+    let mut owners: std::collections::HashMap<&str, Vec<NodeId>> = std::collections::HashMap::new();
+    for n in doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)) {
+        owners.entry(n.name.as_str()).or_default().push(n.id);
+    }
+    // What each component looks like, worked out once however many entries name it.
+    let mut described: std::collections::HashMap<NodeId, Option<Component>> = std::collections::HashMap::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut apply: Vec<(NodeId, CodeLink)> = Vec::new();
     for (i, e) in entries.iter().enumerate() {
@@ -666,7 +682,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         let (Some(component), Some(lang), Some(name), Some(template)) =
             (field("component"), field("language").and_then(language), field("name"), e.get("template").and_then(Value::as_str))
         else {
-            warnings.push(format!("link {}: needs component, language (react|leptos|vue|swiftui|compose|arkui), name and template strings", i + 1));
+            warnings.push(format!(
+                "link {}: needs component, language (react|leptos|vue|swiftui|compose|arkui|flutter), name and template strings",
+                i + 1
+            ));
             continue;
         };
         let link = CodeLink {
@@ -675,13 +694,13 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             name: name.into(),
             template: template.into(),
         };
-        let matches: Vec<NodeId> = owners.iter().filter(|(n, _)| n == component).map(|(_, id)| *id).collect();
+        let matches = owners.get(component).cloned().unwrap_or_default();
         if matches.is_empty() {
             warnings.push(format!("link {}: no component named {component:?}", i + 1));
         }
         for id in matches {
-            let Some(c) = main_of(doc, id).and_then(|m| describe(doc, m)) else { continue };
-            match check(&c, &link, lang) {
+            let Some(c) = described.entry(id).or_insert_with(|| main_of(doc, id).and_then(|m| describe(doc, m))).as_ref() else { continue };
+            match check(c, &link, lang) {
                 Ok(_) => apply.push((id, link.clone())),
                 Err(err) => warnings.push(format!("link {} ({component}): {err}", i + 1)),
             }

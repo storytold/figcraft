@@ -65,37 +65,47 @@ fn connected_instances_show_the_real_snippet() {
     );
     assert_eq!(code(&mut s, i, "swiftui"), "import AcmeUI\n\nCard(title: \"Say \\\"hi\\\"\", style: .plain)\n");
     assert!(code(&mut s, i, "compose").contains("@Composable"), "other languages stay generated");
+    let screen = leptos_arkui_and_trees(&mut s, c, i);
+    rejects_bad_links(&mut s, c, screen);
+    disconnect_then_undo(&mut s, c, i);
+}
+
+fn leptos_arkui_and_trees(s: &mut Session, c: NodeId, i: NodeId) -> NodeId {
     // Leptos: a `use` line and `view!` markup (strings with escapes in braces).
     ex(
-        &mut s,
+        s,
         "codeConnect.set",
         json!({"id": c, "language": "leptos", "importPath": "crate::ui", "template": "<Card title={title} dotted={Show dot} />"}),
     );
-    assert_eq!(code(&mut s, i, "leptos"), "use crate::ui::Card;\n\n<Card title={\"Say \\\"hi\\\"\"} dotted={false} />\n");
+    assert_eq!(code(s, i, "leptos"), "use crate::ui::Card;\n\n<Card title={\"Say \\\"hi\\\"\"} dotted={false} />\n");
     // ArkUI: an ArkTS import and an object-literal call.
     ex(
-        &mut s,
+        s,
         "codeConnect.set",
         json!({"id": c, "language": "arkui", "importPath": "@acme/arkui", "template": "Card({ title: {title}, dotted: {Show dot} })"}),
     );
-    assert_eq!(code(&mut s, i, "arkui"), "import { Card } from \"@acme/arkui\";\n\nCard({ title: \"Say \\\"hi\\\"\", dotted: false })\n");
-    let v = ex(&mut s, "inspect.componentCode", json!({"id": i, "language": "arkui"}));
+    assert_eq!(code(s, i, "arkui"), "import { Card } from \"@acme/arkui\";\n\nCard({ title: \"Say \\\"hi\\\"\", dotted: false })\n");
+    let v = ex(s, "inspect.componentCode", json!({"id": i, "language": "arkui"}));
     assert_eq!(v["usage"], "Card({ title: \"Say \\\"hi\\\"\", dotted: false })\n");
     assert_eq!(v["connected"]["import"], "import { Card } from \"@acme/arkui\";");
     assert!(s.execute("codeConnect.set", &json!({"id": c, "language": "leptos", "importPath": "crate/ui"})).is_err(), "a Rust path");
-    ex(&mut s, "codeConnect.remove", json!({"id": c, "language": "leptos"}));
+    ex(s, "codeConnect.remove", json!({"id": c, "language": "leptos"}));
     // inspect.componentCode: the snippet as the usage, and the link.
-    let v = ex(&mut s, "inspect.componentCode", json!({"id": i, "language": "swiftui"}));
+    let v = ex(s, "inspect.componentCode", json!({"id": i, "language": "swiftui"}));
     assert_eq!(v["usage"], "Card(title: \"Say \\\"hi\\\"\", style: .plain)\n");
     assert_eq!(v["connected"]["import"], "import AcmeUI");
-    assert_eq!(ex(&mut s, "inspect.componentCode", json!({"id": i, "language": "compose"}))["connected"], Value::Null);
+    assert_eq!(ex(s, "inspect.componentCode", json!({"id": i, "language": "compose"}))["connected"], Value::Null);
     // Inside a generated layer tree, connected instances are their snippet.
-    let screen = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 500, "width": 400, "height": 300, "name": "Screen"})));
-    ex(&mut s, "instance.create", json!({"component": c, "x": 20, "y": 30, "parent": screen}));
-    assert!(code(&mut s, screen, "react").contains("<Card title=\"Hello\" dot={true} onClick={onClick}>•</Card>\n"));
+    let screen = idv(&ex(s, "frame.create", json!({"x": 0, "y": 500, "width": 400, "height": 300, "name": "Screen"})));
+    ex(s, "instance.create", json!({"component": c, "x": 20, "y": 30, "parent": screen}));
+    assert!(code(s, screen, "react").contains("<Card title=\"Hello\" dot={true} onClick={onClick}>•</Card>\n"));
     // Literal braces stay; fields left out keep their value.
-    ex(&mut s, "codeConnect.set", json!({"id": c, "template": "<Card style={{gap: 4}} label={title} />"}));
-    assert_eq!(code(&mut s, c, "react"), "import { Card } from \"@acme/ui\";\n\n<Card style={{gap: 4}} label=\"Hello\" />\n");
+    ex(s, "codeConnect.set", json!({"id": c, "template": "<Card style={{gap: 4}} label={title} />"}));
+    assert_eq!(code(s, c, "react"), "import { Card } from \"@acme/ui\";\n\n<Card style={{gap: 4}} label=\"Hello\" />\n");
+    screen
+}
+
+fn rejects_bad_links(s: &mut Session, c: NodeId, screen: NodeId) {
     // Validation.
     for bad in [
         json!({"id": c, "template": "{title ? \"a\"}"}),
@@ -109,13 +119,16 @@ fn connected_instances_show_the_real_snippet() {
     ] {
         assert!(s.execute("codeConnect.set", &bad).is_err(), "{bad}");
     }
+}
+
+fn disconnect_then_undo(s: &mut Session, c: NodeId, i: NodeId) {
     // Disconnect one language; undo brings it back.
-    ex(&mut s, "codeConnect.remove", json!({"id": i, "language": "react"}));
-    assert!(code(&mut s, i, "react").contains("export function Card({"));
-    assert!(code(&mut s, i, "swiftui").starts_with("import AcmeUI"));
-    ex(&mut s, "edit.undo", json!({}));
-    assert!(code(&mut s, i, "react").starts_with("import { Card }"));
-    assert_eq!(ex(&mut s, "codeConnect.remove", json!({"id": c}))["removed"], 3);
+    ex(s, "codeConnect.remove", json!({"id": i, "language": "react"}));
+    assert!(code(s, i, "react").contains("export function Card({"));
+    assert!(code(s, i, "swiftui").starts_with("import AcmeUI"));
+    ex(s, "edit.undo", json!({}));
+    assert!(code(s, i, "react").starts_with("import { Card }"));
+    assert_eq!(ex(s, "codeConnect.remove", json!({"id": c}))["removed"], 3);
     assert!(s.execute("codeConnect.remove", &json!({"id": c})).is_err(), "nothing left");
 }
 
@@ -247,6 +260,9 @@ fn vue_links_are_a_default_import_with_quoted_bindings() {
     ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Say \"hi\""}}));
     ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<Card title=\"{title} {title}\" />"}));
     assert_eq!(code(&mut s, i, "vue"), "import Card from \"./Card.vue\";\n\n<Card title=\"Say &quot;hi&quot; Say &quot;hi&quot;\" />\n");
+    // Literal text before the first placeholder keeps it inside the attribute value.
+    ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<Card title=\"Say: {title}\" />"}));
+    assert_eq!(code(&mut s, i, "vue"), "import Card from \"./Card.vue\";\n\n<Card title=\"Say: Say &quot;hi&quot;\" />\n");
     // Text after a completed tag is text, even when it contains `=`.
     ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"Title": "Buy"}}));
     ex(&mut s, "codeConnect.set", json!({"id": i, "language": "vue", "template": "<p>Total = {title}</p>"}));
@@ -268,4 +284,17 @@ fn vue_layer_trees_import_connected_components_in_script_setup() {
     let want = "<script setup lang=\"ts\">\n\nimport Card from \"./Card.vue\";\n\n</script>\n\n<template>\n";
     assert!(code.starts_with(want), "{code}");
     assert_eq!(code.matches("import Card").count(), 1, "{code}");
+}
+
+#[test]
+fn many_entries_for_one_component_each_link() {
+    let mut s = Session::new();
+    let (_, hover) = button(&mut s);
+    let links: Vec<Value> = (0..crate::code_connect::MAX_FILE_LINKS)
+        .map(|i| json!({"component": "Button", "language": if i % 2 == 0 { "react" } else { "vue" }, "name": "Button", "template": "<Button />"}))
+        .collect();
+    let r = ex(&mut s, "codeConnect.import", json!({"json": {"version": 1, "links": links}}));
+    assert_eq!(r["linked"], crate::code_connect::MAX_FILE_LINKS, "{r}");
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": hover, "x": 0, "y": 500})));
+    assert_eq!(code(&mut s, i, "react"), "<Button />\n");
 }

@@ -1,12 +1,13 @@
-use super::paint::{paint, style_link};
-use super::*;
+use super::paint::paint;
+use super::{Kv, Mapper, Obj, Value, View, copy_len, copy_str, json, network, num, scaled};
 
 /// The value from the last override layer holding a valid one for an optional text setting; invalid instance rows fall through.
-fn text_num(v: &View, key: &str) -> Option<f64> {
-    v.layers.iter().rev().find_map(|layer| {
+/// `length`: the setting is a length, at the scale of the layer that has it.
+fn text_num(v: &View, key: &str, length: bool) -> Option<f64> {
+    v.layers.iter().zip(&v.scales).rev().find_map(|(layer, k)| {
         layer.get(key).and_then(|value| match value {
             Kv::Bool(_) => None,
-            _ => value.f64(),
+            _ => scaled(value.f64()?, if length { *k } else { 1.0 }),
         })
     })
 }
@@ -16,7 +17,7 @@ fn text_flag(v: &View, key: &str) -> Option<bool> {
 }
 
 fn insert_text_options(style: &mut Obj, v: &View) {
-    if let Some(value) = text_num(v, "listSpacing") {
+    if let Some(value) = text_num(v, "listSpacing", true) {
         style.insert("listSpacing".into(), json!(value));
     }
     for k in ["hangingList", "hangingPunctuation"] {
@@ -36,14 +37,57 @@ fn leading_trim<'a>(v: &View<'a>) -> Option<&'a str> {
     })
 }
 
+/// The chars that start a wrapped line in the layout the file saved with the text
+/// (`derivedTextData`'s `baselines`, each line's `firstCharacter` in UTF-16 units), when that layout
+/// is for these characters; lines after a hard break are left out (empty: it wraps nowhere). None
+/// when the saved layout is missing, for other text or inconsistent.
+fn saved_line_starts(v: &View, chars: &str) -> Option<Vec<usize>> {
+    // Derived data from below the layer that set the characters was laid out for other text.
+    let top = |k: &str| v.layers.iter().rposition(|l| l.get(k).is_some());
+    if top("derivedTextData")? < top("textData")? {
+        return None;
+    }
+    let baselines = v.get("derivedTextData")?.get("baselines")?.list();
+    // UTF-16 offset of each char, and of the end.
+    let mut offsets: Vec<usize> = Vec::with_capacity(chars.len() + 1);
+    let mut unit = 0;
+    for c in chars.chars() {
+        offsets.push(unit);
+        unit += c.len_utf16();
+    }
+    offsets.push(unit);
+    let list: Vec<char> = chars.chars().collect();
+    let mut starts = Vec::new();
+    let mut prev = None;
+    for b in baselines {
+        let u = num(b, "firstCharacter").filter(|u| *u >= 0.0 && u.fract() == 0.0 && *u < unit as f64)? as usize;
+        let c = offsets.binary_search(&u).ok()?;
+        // Lines start at the first char, then further on each time.
+        if !prev.map_or(c == 0, |p| c > p) {
+            return None;
+        }
+        prev = Some(c);
+        if c > 0 && !list.get(c - 1).is_some_and(|ch| matches!(ch, '\n' | '\u{2028}')) {
+            starts.push(c);
+        }
+    }
+    prev.map(|_| starts)
+}
+
 impl<'a> Mapper<'a> {
     pub(super) fn text(&mut self, o: &mut Obj, v: &View<'a>) {
-        let style_node = style_link(v, "styleIdForText", "inheritTextStyleID").and_then(|s| self.nodes.get(&s).copied());
-        // Instance overrides beat the shared style; the style beats the layer's own copy.
-        let sv = v.styled(style_node.filter(|s| s.get("styleType").and_then(Kv::str) == Some("TEXT")));
-        let td = v.get("textData");
+        let (key, legacy) = ("styleIdForText", "inheritTextStyleID");
+        let style_node = self.style_link(v, key, legacy).and_then(|s| self.nodes.get(&s).copied());
+        // Overrides above the one that links the style beat it; it beats the copies below.
+        let sv = v.styled(style_node.filter(|s| s.get("styleType").and_then(Kv::str) == Some("TEXT")), key, legacy);
+        let found = v.find("textData");
+        let (td, td_scale) = (found.map(|f| f.0), found.map_or(1.0, |f| f.1));
         let chars = td.and_then(|t| t.get("characters")).and_then(Kv::str).unwrap_or("");
         o.insert("characters".into(), json!(chars));
+        // Where the file's own layout wrapped the lines (not a REST field).
+        if let Some(starts) = saved_line_starts(v, chars) {
+            o.insert("_figLineStarts".into(), json!(starts));
+        }
         let mut style = text_style(&sv, None);
         // The style's typography beats the layer's own copy of it (the copy is stale when the style
         // changed). The file cannot tell a stale copy of these four values from a deliberate local
@@ -63,19 +107,19 @@ impl<'a> Mapper<'a> {
         }
         // Paragraph settings belong to the effective text layer, including explicit zero clears.
         for k in ["paragraphSpacing", "paragraphIndent"] {
-            copy_num(&mut style, v, k, k);
+            copy_len(&mut style, v, k, k);
         }
         insert_text_options(&mut style, v);
         if let Some(n) = v.num("maxLines").filter(|n| *n >= 1.0) {
             style.insert("maxLines".into(), json!(n));
         }
-        let size = sv.num("fontSize");
+        let size = sv.len("fontSize");
         if let Some(b) = o.get_mut("style").and_then(|s| s.get_mut("boundVariables")).map(Value::take) {
             style.insert("boundVariables".into(), b);
         }
         o.insert("style".into(), Value::Object(style));
         let Some(td) = td else { return };
-        char_styles(o, td, size, &mut |w| self.warn(w));
+        char_styles(o, td, td_scale, size, &mut |w| self.warn(w));
         let raw = td.get("lines").map(Kv::list).unwrap_or_default();
         let lines: Vec<&str> = raw
             .iter()
@@ -87,6 +131,18 @@ impl<'a> Mapper<'a> {
             .collect();
         if lines.iter().any(|l| *l != "NONE") {
             o.insert("lineTypes".into(), json!(lines));
+        }
+        // A forced base direction per paragraph (`sourceDirectionality`; not a REST field).
+        let dirs: Vec<&str> = raw
+            .iter()
+            .map(|l| match l.get("sourceDirectionality").and_then(Kv::str) {
+                Some("LTR") => "LTR",
+                Some("RTL") => "RTL",
+                _ => "AUTO",
+            })
+            .collect();
+        if dirs.iter().any(|d| *d != "AUTO") {
+            o.insert("lineDirections".into(), json!(dirs));
         }
         // Where a numbered list starts counting, less one (not a REST field).
         let starts: Vec<u32> =
@@ -130,11 +186,7 @@ impl<'a> Mapper<'a> {
             fail(self, "has invalid normalized size");
             return;
         };
-        let Some(size) = v.get("size") else {
-            fail(self, "has invalid dimensions");
-            return;
-        };
-        let (Some(nx), Some(ny), Some(w), Some(h)) = (num(norm, "x"), num(norm, "y"), num(size, "x"), num(size, "y")) else {
+        let (Some(nx), Some(ny), Some((w, h))) = (num(norm, "x"), num(norm, "y"), v.size()) else {
             fail(self, "has invalid dimensions");
             return;
         };
@@ -184,8 +236,9 @@ impl<'a> Mapper<'a> {
 }
 
 /// Per-character styles of text data `td` (`characterStyleIDs` + `styleOverrideTable`) as REST
-/// `characterStyleOverrides` + `styleOverrideTable`; `size`: the base font size.
-pub(super) fn char_styles(o: &mut Obj, td: &Kv, size: Option<f64>, warn: &mut dyn FnMut(String)) {
+/// `characterStyleOverrides` + `styleOverrideTable`; `scale`: the factor the lengths of `td` take
+/// (a scaled instance's layer); `size`: the base font size.
+pub(super) fn char_styles(o: &mut Obj, td: &Kv, scale: f64, size: Option<f64>, warn: &mut dyn FnMut(String)) {
     let ids: Vec<u64> = td.get("characterStyleIDs").map(Kv::list).unwrap_or_default().iter().filter_map(Kv::f64).map(|i| i as u64).collect();
     if ids.iter().all(|i| *i == 0) {
         return;
@@ -193,7 +246,7 @@ pub(super) fn char_styles(o: &mut Obj, td: &Kv, size: Option<f64>, warn: &mut dy
     let mut table = Obj::new();
     for e in td.get("styleOverrideTable").map(Kv::list).unwrap_or_default() {
         let Some(sid) = num(e, "styleID") else { continue };
-        let mut s = text_style(&View::of(e), size);
+        let mut s = text_style(&View::of_scaled(e, scale), size);
         if let Some(fills) = e.get("fillPaints") {
             s.insert("fills".into(), Value::Array(fills.list().iter().filter_map(|p| paint(p, warn)).collect()));
         }
@@ -215,9 +268,9 @@ fn text_style(v: &View, size: Option<f64>) -> Obj {
             }
         }
     }
-    copy_num(&mut s, v, "fontSize", "fontSize");
-    copy_num(&mut s, v, "paragraphSpacing", "paragraphSpacing");
-    copy_num(&mut s, v, "paragraphIndent", "paragraphIndent");
+    copy_len(&mut s, v, "fontSize", "fontSize");
+    copy_len(&mut s, v, "paragraphSpacing", "paragraphSpacing");
+    copy_len(&mut s, v, "paragraphIndent", "paragraphIndent");
     insert_text_options(&mut s, v);
     copy_str(&mut s, v, "textCase", "textCase");
     copy_str(&mut s, v, "textDecoration", "textDecoration");
@@ -225,11 +278,11 @@ fn text_style(v: &View, size: Option<f64>) -> Obj {
         s.insert("textDecorationSkipInk".into(), json!(skip_ink));
     }
     copy_str(&mut s, v, "leadingTrim", "leadingTrim");
-    let font_size = v.num("fontSize").or(size).unwrap_or(12.0);
-    if let Some(ls) = v.get("letterSpacing") {
+    let font_size = v.len("fontSize").or(size).unwrap_or(12.0);
+    if let Some((ls, k)) = v.find("letterSpacing") {
         let val = num(ls, "value").unwrap_or(0.0);
         let px = match ls.get("units").and_then(Kv::str) {
-            Some("PIXELS") => val,
+            Some("PIXELS") => scaled(val, k).unwrap_or(val),
             Some("PERCENT") => {
                 // Private (read by `rest/text.rs`): REST spacing is in pixels; keep the percent.
                 s.insert("_letterSpacingPercent".into(), json!(val));
@@ -239,12 +292,12 @@ fn text_style(v: &View, size: Option<f64>) -> Obj {
         };
         s.insert("letterSpacing".into(), json!(px));
     }
-    if let Some(lh) = v.get("lineHeight") {
+    if let Some((lh, k)) = v.find("lineHeight") {
         let val = num(lh, "value").unwrap_or(100.0);
         match lh.get("units").and_then(Kv::str) {
             Some("PIXELS") => {
                 s.insert("lineHeightUnit".into(), json!("PIXELS"));
-                s.insert("lineHeightPx".into(), json!(val));
+                s.insert("lineHeightPx".into(), json!(scaled(val, k).unwrap_or(val)));
             }
             // shortcut: percent units count from the font's own line height (100 % is "auto"), which
             // the document can only say for 100 %; other values read as % of the font size. Upgrade

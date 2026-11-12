@@ -6,7 +6,7 @@ use figcraft_doc::NodeId;
 use serde_json::json;
 
 use super::glyphs;
-use super::kit::*;
+use super::kit::{ACCENT, DEEP, H, INK, Kit, ON_BRAND, V};
 use crate::Result;
 
 /// (name, width, height, x, y) on the canvas.

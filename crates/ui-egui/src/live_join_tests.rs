@@ -3,7 +3,7 @@
 //! (it joins but can't host).
 
 use egui::{Event, Key};
-use figcraft_engine::live::{Event as LiveEvent, HostOptions, LiveLink, Presence, SessionInfo, Status};
+use figcraft_engine::live::{Event as LiveEvent, HostOptions, LiveLink, Presence, PublishOptions, SessionInfo, Status};
 use serde_json::json;
 
 use crate::live_tests::{Harness, has_text, text_center};
@@ -58,7 +58,8 @@ fn opening_the_app_with_an_invite_link_asks_before_joining() {
     assert_eq!(h.app.session.live().status, Status::Off, "nothing is joined until the person confirms");
 }
 
-/// The browser's link: joins, can't host; joining fails here to show the dialog path.
+/// The browser's link: joins and publishes, can't host; joining fails here to show the dialog
+/// path.
 struct Browser;
 
 impl LiveLink for Browser {
@@ -70,6 +71,9 @@ impl LiveLink for Browser {
     }
     fn join(&mut self, _: u64, _: &str, _: &str) -> Result<(), String> {
         Err("that's not a live session invite".into())
+    }
+    fn publish(&mut self, _: u64, _: PublishOptions) -> Result<(), String> {
+        Ok(())
     }
     fn leave(&mut self, _: u64) {}
     fn presence(&mut self, _: u64, _: &Presence) {}
@@ -91,20 +95,33 @@ fn a_link_that_cant_be_used_opens_the_dialog_with_it() {
 }
 
 #[test]
-fn the_browser_joins_but_does_not_host() {
+fn the_browser_shares_through_a_server_but_does_not_host() {
     let (mut h, _) = Harness::new();
     h.app.session.live.install(Box::new(Browser));
     assert!(!h.app.session.live.can_host());
     assert_eq!(h.app.session.execute("collab.peers", &json!({})).unwrap()["canHost"], false);
+    // Without a server there is nothing to share through: the join field is right there, with
+    // what the browser can reach.
+    h.app.session.execute("pref.publishServer", &json!({"url": ""})).unwrap();
     let shapes = h.frames(3);
     h.click(text_center(&shapes, "Share"));
     let shapes = h.frames(2);
-    assert!(has_text(&shapes, "Sharing a file needs the desktop app; here you can join one."));
+    assert!(has_text(&shapes, "Online sharing is off: no server is set in Preferences. Here you can join a shared file."));
     assert!(!has_text(&shapes, "Start sharing") && !has_text(&shapes, "Local network"));
-    // The join field is right there, with what the browser can reach.
     assert!(has_text(&shapes, "Join with a code") && has_text(&shapes, "Join"));
     assert!(has_text(
         &shapes,
         "In the browser you can join sessions the desktop app hosts and files on a FigCraft server. A page opened over https reaches other computers only through wss:// links (a server behind TLS)."
     ));
+    // With one, it shares online only (the local network needs a page that can listen).
+    h.app.session.execute("pref.publishServer", &json!({"url": "ws://127.0.0.1:47910/"})).unwrap();
+    let shapes = h.frames(2);
+    assert!(!has_text(&shapes, "Local network") && !has_text(&shapes, "Online"));
+    h.click(text_center(&shapes, "Start sharing"));
+    h.frames(1);
+    let live = h.app.session.live();
+    assert_eq!((live.status.clone(), live.server.as_str()), (Status::Connecting, "ws://127.0.0.1:47910/"), "publishing to the server");
+    // Publish to server… opens its dialog here too.
+    crate::menus::invoke(&mut h.app, "collab.publish");
+    assert!(h.app.ui.live.publish.is_some());
 }

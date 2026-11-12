@@ -1,3 +1,4 @@
+use super::import_ids::Renames;
 use super::load::{ext, file_stem, import_summary, load_path, load_with, read, rest_images, sibling_variables, variables_param};
 use super::*;
 
@@ -29,8 +30,9 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
             allow(&path, Access::Read)?;
             Some(path)
         }
-        (None, Some(i)) => {
-            Some(s.prefs.recent_files.iter().filter(|r| listed(r)).nth(i.max(0.0) as usize).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?)
+        (None, Some(_)) => {
+            let i = req_index(CMD, p, "index")?;
+            Some(s.prefs.recent_files.iter().filter(|r| listed(r)).nth(i).cloned().ok_or_else(|| bad(CMD, "no such recent file"))?)
         }
         _ => None,
     };
@@ -54,7 +56,7 @@ pub(super) fn open_recent(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
-pub(super) fn open(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     let variables = variables_param("file.open", p)?;
     if string(p, "path").is_none()
         && let Some(d) = string(p, "data")
@@ -62,20 +64,35 @@ pub(super) fn open(s: &mut Session, p: &Value) -> Result<Value> {
         return open_data(s, &d, p, variables.as_ref());
     }
     let path = req_string("file.open", p, "path")?;
-    // Already open: switch to it.
+    // Already open: switch to it, and say when the file changed on disk since this tab read or
+    // saved it (`stale`), or read it again (`reload`).
     if let Some(i) = s.docs.iter().position(|d| d.path.as_deref() == Some(path.as_str())) {
         s.active = i;
         remember(s, &path);
-        return Ok(json!({"index": i}));
+        let stale = s.ds()?.on_disk.as_ref().is_some_and(|read| crate::library::stat(&path).ok().as_ref() != Some(read));
+        if !boolean(p, "reload").unwrap_or(false) {
+            return Ok(if stale { json!({"index": i, "stale": true}) } else { json!({"index": i}) });
+        }
+        if s.ds()?.is_dirty() {
+            return Err(EngineError::Disabled(
+                "file.open".into(),
+                "the open copy has unsaved changes: save them, or Revert to saved to drop them".into(),
+            ));
+        }
+        if s.live().doc_uid.is_some() {
+            return Err(EngineError::Disabled("file.open".into(), "leave the live session before reading the file again".into()));
+        }
+        revert(s)?;
+        return Ok(json!({"index": i, "reloaded": true}));
     }
     // Stamped before reading: a change made during the read makes the next save refuse.
     let on_disk = crate::library::stat(&path).ok();
     let (loaded, rest) = load_path(&path, variables.as_ref())?;
     remember(s, &path);
     let native = !rest && matches!(ext(&path).as_str(), "figcraft" | "json");
-    let warnings = rest || ext(&path) == "svg";
+    let warnings = rest || matches!(ext(&path).as_str(), "svg" | "penpot");
     // A native file that lost something (a damaged image, say): the app says so, not only the result.
-    if native && !loaded.issues.is_empty() {
+    if (native || warnings) && !loaded.issues.is_empty() {
         s.message = Some(match loaded.issues.as_slice() {
             [one] => format!("{}: {one}", file_stem(&path)),
             more => format!("{}: {} problems were repaired or left out while opening it, e.g. {}", file_stem(&path), more.len(), more[0]),
@@ -95,6 +112,26 @@ pub(super) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// Replace the active tab's document with its file as saved (`file.revert`, `file.open {reload}`).
+pub(super) fn revert(s: &mut Session) -> Result<()> {
+    let path = s.ds()?.path.clone().ok_or_else(|| EngineError::Disabled("file.revert".into(), "the file was never saved".into()))?;
+    // Stamped before reading: a change made during the read makes the next save refuse.
+    let on_disk = crate::library::stat(&path).ok();
+    let (loaded, _) = load_path(&path, None)?;
+    let i = s.active;
+    let uid = s.ds()?.uid;
+    if let Some(slot) = s.docs.get_mut(i) {
+        *slot = DocState::new(loaded.doc, Some(path.clone()))
+            .with_versions(loaded.versions)
+            .with_branches(loaded.branches)
+            .with_images_left_in_file(&path, loaded.images_past_budget);
+        slot.on_disk = on_disk;
+    }
+    // Edits on its branch tabs are reverted too.
+    crate::branches::close_tabs(s, uid, None);
+    Ok(())
+}
+
 /// [`open`] for a file given as base64 `data` (a file dropped without a path on disk): `name` tells
 /// the format. It opens as a new document with no path, so the first save asks where to put it.
 fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) -> Result<Value> {
@@ -102,7 +139,7 @@ fn open_data(s: &mut Session, data: &str, p: &Value, variables: Option<&Value>) 
     let data = data.split_once(',').map_or(data, |(_, b)| b);
     let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| bad("file.open", e.to_string()))?;
     let (loaded, rest) = load_with(&bytes, &name, variables, &figcraft_format::rest::no_images)?;
-    let warnings = rest || ext(&name) == "svg";
+    let warnings = rest || matches!(ext(&name).as_str(), "svg" | "penpot");
     let summary = import_summary(&loaded.doc);
     s.docs.push(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches));
     s.active = s.docs.len() - 1;
@@ -148,7 +185,7 @@ pub(super) fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(out)
         }
-        "figcraft" | "json" | "fig" | "sketch" => {
+        "figcraft" | "json" | "fig" | "jam" | "sketch" | "penpot" => {
             let resolver = path.as_deref().map(rest_images);
             let images: figcraft_format::rest::ImageResolver = match &resolver {
                 Some(r) => r,
@@ -158,8 +195,14 @@ pub(super) fn import(s: &mut Session, p: &Value) -> Result<Value> {
             let (other, rest) = load_with(&bytes, &name, variables.as_ref().or(sibling.as_ref()), images)?;
             let summary = import_summary(&other.doc);
             let pages = append_pages(s.doc_mut()?, &other.doc)?;
+            if !other.issues.is_empty() {
+                s.message = Some(match other.issues.as_slice() {
+                    [one] => format!("{}: {one}", file_stem(&name)),
+                    more => format!("{}: {} import warnings; first: {}", file_stem(&name), more.len(), more[0]),
+                });
+            }
             let mut out = json!({"pages": pages, "summary": summary});
-            if rest {
+            if rest || !other.issues.is_empty() {
                 out["warnings"] = json!(other.issues);
             }
             Ok(out)
@@ -177,8 +220,18 @@ pub(super) fn import(s: &mut Session, p: &Value) -> Result<Value> {
 /// Append `other`'s pages (with their settings and flows, its images, styles and variables) to
 /// `doc`. Ids are remapped across all pages at once, so instances keep their main, instance layers
 /// their source and interactions and flows their targets wherever those are. Styles, variables and
-/// collections whose id the document already has are kept as they are.
+/// collections the document already has (the same under the same id, as when a file comes in
+/// again) and library copies are shared; others whose id the document uses for something else get
+/// new ids, and what comes in names them by those ([`Renames`]).
 pub(super) fn append_pages(doc: &mut Document, other: &Document) -> Result<Vec<NodeId>> {
+    let renames = Renames::new(doc, other);
+    let renamed;
+    let other = if renames.is_empty() {
+        other
+    } else {
+        renamed = renames.applied(other);
+        &renamed
+    };
     for (k, v) in &other.images {
         doc.images.entry(k.clone()).or_insert_with(|| v.clone());
     }

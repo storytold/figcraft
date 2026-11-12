@@ -1,4 +1,4 @@
-use super::*;
+use super::{Affine, BTreeMap, Cursor, Document, Handle, NodeId, NodeKind, Point, ShapeHandle, ShapeHint, roots};
 
 /// The frame whose name label (see [`ToolState::labels`]) is under `p` on `page`: the topmost
 /// one drawn, if it can be selected (still there, on the page, visible and unlocked).
@@ -36,16 +36,33 @@ pub fn anchor_name(a: (u8, u8)) -> &'static str {
     ANCHORS.get(usize::from(a.1.min(2)) * 3 + usize::from(a.0.min(2))).copied().unwrap_or("tl")
 }
 
+/// Whether what is drawn in `parent` sits on a dark background: the nearest layer from `parent`
+/// out whose top visible fill is a mostly opaque (alpha 0.5 or more) solid colour, else the page
+/// (#362); a frame without such a fill is looked through to what is behind it. Dark means white
+/// reads better on it than black (`Color::is_dark`: `#757575` is dark, `#767676` is light).
+pub(crate) fn on_dark_background(doc: &Document, parent: NodeId) -> bool {
+    std::iter::once(parent)
+        .chain(doc.ancestors(parent))
+        .filter_map(|id| doc.node(id))
+        .find_map(|n| match &n.kind {
+            NodeKind::Page { background, .. } => Some(background.is_dark()),
+            _ => n.fills.iter().rev().find(|p| p.visible).and_then(|p| p.solid_color()).filter(|c| c.a >= 0.5).map(|c| c.is_dark()),
+        })
+        .unwrap_or(false)
+}
+
 /// The fill new text takes to be readable where it is drawn, in `parent`: white on a dark
-/// background (None: the model's default, black). The background is the nearest layer from `parent`
-/// out whose top visible fill is a mostly opaque solid colour, else the page (#362). For text made
-/// in the app: by the Text tool, or by a command that names no fill while the interface is up.
+/// background (None: the model's default, black). For text made in the app: by the Text tool, or
+/// by a command that names no fill while the interface is up.
 pub(crate) fn readable_text_fills(doc: &Document, parent: NodeId) -> Option<Vec<figcraft_color::Paint>> {
-    let dark = std::iter::once(parent).chain(doc.ancestors(parent)).filter_map(|id| doc.node(id)).find_map(|n| match &n.kind {
-        NodeKind::Page { background, .. } => Some(background.is_dark()),
-        _ => n.fills.iter().rev().find(|p| p.visible).and_then(|p| p.solid_color()).filter(|c| c.a >= 0.5).map(|c| c.is_dark()),
-    });
-    dark.unwrap_or(false).then(|| vec![figcraft_color::Paint::solid(figcraft_color::Color::WHITE)])
+    on_dark_background(doc, parent).then(|| vec![figcraft_color::Paint::solid(figcraft_color::Color::WHITE)])
+}
+
+/// The colour the Pencil draws with in `parent`: [`PENCIL_STROKE`]'s black, or white on a dark
+/// background by the rule text follows (#1741; "in black, unless you're sketching on a dark canvas
+/// or frame").
+pub(crate) fn pencil_color(doc: &Document, parent: NodeId) -> figcraft_color::Color {
+    if on_dark_background(doc, parent) { figcraft_color::Color::WHITE } else { PENCIL_STROKE.0 }
 }
 
 const ANCHORS: [&str; 9] = ["tl", "t", "tr", "l", "c", "r", "bl", "b", "br"];
@@ -113,6 +130,14 @@ pub fn selection_frame(doc: &Document, sel: &[NodeId]) -> Option<(Affine, f64, f
         .filter_map(|i| Some(figcraft_geom::transform_rect_bbox(inv * doc.world_transform(*i), doc.node(*i)?.local_rect())))
         .reduce(|a, b| a.union(b))?;
     Some((rot * Affine::translate((b.x0, b.y0)), b.width(), b.height()))
+}
+
+/// The rotation `ids` share on the page (degrees, counter-clockwise positive), else 0 (the handle
+/// box is page-aligned then). Figma's rotation field shows this page rotation, also for a layer
+/// inside a rotated frame or group, and Shift lands it on multiples of 15 degrees. Axis-aligned
+/// layers give 0, which is the same as 90, 180 and 270 for stepping in 15 degrees.
+pub fn shared_rotation_degrees(doc: &Document, ids: &[NodeId]) -> f64 {
+    shared_rotation(doc, ids).map_or(0.0, |a| -a.to_degrees())
 }
 
 /// The rotation (radians) every layer in `ids` shares, unless it's a multiple of 90 degrees (the

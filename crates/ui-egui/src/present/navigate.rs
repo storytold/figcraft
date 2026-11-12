@@ -1,5 +1,5 @@
 use super::scroll::{apply_scroll, clamp_scroll, fit_viewport, page_settings, raise_fixed, viewport};
-use super::*;
+use super::{Anim, Arc, Document, Easing, NodeId, Presenter, Scroller, Snapshot, Transition, Trigger, Value, Visit, json};
 
 impl Presenter {
     /// Close the top overlay; it animates out with its opening transition reversed.
@@ -130,6 +130,7 @@ impl Presenter {
             "waiting": self.waiting.len(),
             "inspect": self.view.inspect,
             "inspected": self.inspected,
+            "hideUi": self.view.hide_ui,
             "deviceColor": doc.and_then(|d| page_settings(d, self.current).device_color()).map(|c| c.name),
             "responsive": self.fit.map(|f| [f.0, f.1]),
             "frameSize": doc.and_then(|d| d.node(self.current)).map(|n| [n.width, n.height]),
@@ -138,7 +139,7 @@ impl Presenter {
             "zoom": self.zoom,
             "flinging": self.fling.is_some(),
             "gamepad": self.uses_pads,
-            "linkNotice": self.link_notice.as_ref().map(|(url, _)| url),
+            "linkNotice": self.link_notice.as_ref().map(|(url, ..)| url),
         })
     }
 

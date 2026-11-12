@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Include xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- Choose scope before launch checks and directory costing. Never move an existing copy. -->
+  <!-- Only for me leaves ALLUSERS unset. Publishing ALLUSERS=2 here makes FindRelatedProducts treat the run as
+       per-machine and skip the existing per-user copy, so an interactive upgrade installs beside it
+       (two registered products, and uninstall leaves files behind). Checked with real msiexec runs. -->
+  <Property Id="INSTALLFOLDER" Secure="yes" />
+  <Property Id="CRAFT_SCOPE" Value="user" Secure="yes" />
+  <Property Id="CRAFT_U_DIR" Secure="yes"><RegistrySearch Id="CRAFT_U_DIRSearch" Root="HKCU" Key="Software\FigCraft" Name="InstallDir" Type="raw" /></Property>
+  <SetProperty Id="CRAFT_USER_DIR" Action="CraftUFromDIR" Value="[CRAFT_U_DIR]" After="AppSearch" Sequence="both" Condition="NOT CRAFT_USER_DIR AND CRAFT_U_DIR" />
+  <Property Id="CRAFT_U_FOLDER" Secure="yes"><RegistrySearch Id="CRAFT_U_FOLDERSearch" Root="HKCU" Key="Software\FigCraft" Name="InstallFolder" Type="raw" /></Property>
+  <SetProperty Id="CRAFT_USER_DIR" Action="CraftUFromFOLDER" Value="[CRAFT_U_FOLDER]" After="CraftUFromDIR" Sequence="both" Condition="NOT CRAFT_USER_DIR AND CRAFT_U_FOLDER" />
+  <Property Id="CRAFT_U_PATH" Secure="yes"><RegistrySearch Id="CRAFT_U_PATHSearch" Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\figcraft.exe" Name="Path" Type="raw" /></Property>
+  <SetProperty Id="CRAFT_USER_DIR" Action="CraftUFromPATH" Value="[CRAFT_U_PATH]" After="CraftUFromFOLDER" Sequence="both" Condition="NOT CRAFT_USER_DIR AND CRAFT_U_PATH" />
+  <Property Id="CRAFT_U_EXEFOLDER" Secure="yes"><RegistrySearch Id="CRAFT_ULegacyFolder" Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\figcraft.exe" Type="file" /></Property>
+  <Property Id="CRAFT_U_EXE" Secure="yes"><RegistrySearch Id="CRAFT_ULegacyExe" Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\figcraft.exe" Type="file"><FileSearch Id="CRAFT_ULegacyFile" Name="figcraft.exe" /></RegistrySearch></Property>
+  <SetProperty Id="CRAFT_USER_DIR" Action="CraftUFromLegacyExe" Value="[CRAFT_U_EXEFOLDER]" After="CraftUFromPATH" Sequence="both" Condition="NOT CRAFT_USER_DIR AND CRAFT_U_EXEFOLDER AND CRAFT_U_EXE" />
+  <Property Id="CRAFT_USER_DIR" Secure="yes" />
+  <Property Id="CRAFT_M_DIR" Secure="yes"><RegistrySearch Id="CRAFT_M_DIRSearch" Root="HKLM" Key="Software\FigCraft" Name="InstallDir" Type="raw" /></Property>
+  <SetProperty Id="CRAFT_MACHINE_DIR" Action="CraftMFromDIR" Value="[CRAFT_M_DIR]" After="CraftUFromLegacyExe" Sequence="both" Condition="NOT CRAFT_MACHINE_DIR AND CRAFT_M_DIR" />
+  <Property Id="CRAFT_M_FOLDER" Secure="yes"><RegistrySearch Id="CRAFT_M_FOLDERSearch" Root="HKLM" Key="Software\FigCraft" Name="InstallFolder" Type="raw" /></Property>
+  <SetProperty Id="CRAFT_MACHINE_DIR" Action="CraftMFromFOLDER" Value="[CRAFT_M_FOLDER]" After="CraftMFromDIR" Sequence="both" Condition="NOT CRAFT_MACHINE_DIR AND CRAFT_M_FOLDER" />
+  <Property Id="CRAFT_M_PATH" Secure="yes"><RegistrySearch Id="CRAFT_M_PATHSearch" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\figcraft.exe" Name="Path" Type="raw" /></Property>
+  <SetProperty Id="CRAFT_MACHINE_DIR" Action="CraftMFromPATH" Value="[CRAFT_M_PATH]" After="CraftMFromFOLDER" Sequence="both" Condition="NOT CRAFT_MACHINE_DIR AND CRAFT_M_PATH" />
+  <Property Id="CRAFT_M_EXEFOLDER" Secure="yes"><RegistrySearch Id="CRAFT_MLegacyFolder" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\figcraft.exe" Type="file" /></Property>
+  <Property Id="CRAFT_M_EXE" Secure="yes"><RegistrySearch Id="CRAFT_MLegacyExe" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\figcraft.exe" Type="file"><FileSearch Id="CRAFT_MLegacyFile" Name="figcraft.exe" /></RegistrySearch></Property>
+  <SetProperty Id="CRAFT_MACHINE_DIR" Action="CraftMFromLegacyExe" Value="[CRAFT_M_EXEFOLDER]" After="CraftMFromPATH" Sequence="both" Condition="NOT CRAFT_MACHINE_DIR AND CRAFT_M_EXEFOLDER AND CRAFT_M_EXE" />
+  <Property Id="CRAFT_MACHINE_DIR" Secure="yes" />
+  <SetProperty Id="CRAFT_SCOPE" Action="CraftPreferMachineScope" Value="machine" After="CraftMFromLegacyExe" Sequence="ui" Condition="ALLUSERS = 1 OR (CRAFT_MACHINE_DIR AND NOT CRAFT_USER_DIR)" />
+  <SetProperty Id="INSTALLFOLDER" Action="CraftRestoreUserFolder" Value="[CRAFT_USER_DIR]" Before="CostInitialize" Sequence="both" Condition="NOT INSTALLFOLDER AND ALLUSERS &lt;&gt; 1 AND CRAFT_USER_DIR" />
+  <!-- The wizard can change the context after Windows Installer has already resolved Program Files for the first one.
+       Give the new-install folder explicitly so Everyone never lands in the profile and Only for me never lands in Program Files. -->
+  <?if $(sys.BUILDARCH) = x86 ?>
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultMachineFolder" Value="[%ProgramFiles(x86)]\ArtCraft\FigCraft\" After="CraftRestoreUserFolder" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS = 1 AND VersionNT64" />
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultMachineFolder32" Value="[%ProgramFiles]\ArtCraft\FigCraft\" After="CraftDefaultMachineFolder" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS = 1 AND NOT VersionNT64" />
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultUserFolder" Value="[LocalAppDataFolder]Programs\ArtCraft\FigCraft\" After="CraftDefaultMachineFolder32" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS &lt;&gt; 1" />
+  <?else?>
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultMachineFolder" Value="[%ProgramW6432]\ArtCraft\FigCraft\" After="CraftRestoreUserFolder" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS = 1" />
+  <SetProperty Id="INSTALLFOLDER" Action="CraftDefaultUserFolder" Value="[LocalAppDataFolder]Programs\ArtCraft\FigCraft\" After="CraftDefaultMachineFolder" Sequence="ui" Condition="NOT INSTALLFOLDER AND ALLUSERS &lt;&gt; 1" />
+  <?endif?>
+  <SetProperty Id="INSTALLFOLDER" Action="CraftRestoreMachineFolder" Value="[CRAFT_MACHINE_DIR]" Before="CraftRestoreUserFolder" Sequence="both" Condition="NOT INSTALLFOLDER AND ALLUSERS = 1 AND CRAFT_MACHINE_DIR" />
+  <Launch Condition="Installed OR ALLUSERS &lt;&gt; 1 OR NOT CRAFT_USER_DIR" Message="This app is already installed for your account. Choose Only for me to update it, or uninstall that copy before changing who it is installed for." />
+  <Launch Condition="Installed OR ALLUSERS = 1 OR NOT CRAFT_MACHINE_DIR" Message="This app is already installed for everyone. Choose Everyone to update it, or pass ALLUSERS=1 to msiexec. Uninstall that copy before changing who it is installed for." />
+  <UI>
+    <TextStyle Id="CraftScopeText" FaceName="Segoe UI" Size="9" />
+    <TextStyle Id="CraftScopeTitle" FaceName="Segoe UI" Size="12" Bold="yes" />
+    <Dialog Id="CraftScopeDlg" Width="370" Height="220" Title="[ProductName] Setup" NoMinimize="yes">
+      <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="30" Text="{\CraftScopeTitle}Who should use [ProductName]?" />
+      <Control Id="Info" Type="Text" X="20" Y="50" Width="330" Height="30" Text="{\CraftScopeText}An update keeps the existing folder. New copies use the ArtCraft folder under Programs." />
+      <Control Id="Scope" Type="RadioButtonGroup" X="20" Y="88" Width="330" Height="60" Property="CRAFT_SCOPE">
+        <RadioButtonGroup Property="CRAFT_SCOPE">
+          <RadioButton Value="user" X="0" Y="0" Width="330" Height="20" Text="Only for me (no administrator permission needed)" />
+          <RadioButton Value="machine" X="0" Y="30" Width="330" Height="20" Text="Everyone on this computer (asks an administrator)" />
+        </RadioButtonGroup>
+      </Control>
+      <Control Id="Next" Type="PushButton" X="214" Y="182" Width="66" Height="20" Default="yes" Text="Next">
+        <Publish Property="ALLUSERS" Value="1" Order="1" Condition="CRAFT_SCOPE = &quot;machine&quot;" />
+        <Publish Property="ALLUSERS" Value="{}" Order="2" Condition="CRAFT_SCOPE = &quot;user&quot;" />
+        <Publish Property="MSIINSTALLPERUSER" Value="{}" Order="3" Condition="CRAFT_SCOPE = &quot;machine&quot;" />
+        <Publish Property="MSIINSTALLPERUSER" Value="1" Order="4" Condition="CRAFT_SCOPE = &quot;user&quot;" />
+        <Publish Event="EndDialog" Value="Return" Order="5" />
+      </Control>
+      <Control Id="Cancel" Type="PushButton" X="290" Y="182" Width="60" Height="20" Cancel="yes" Text="Cancel"><Publish Event="EndDialog" Value="Exit" /></Control>
+    </Dialog>
+  </UI>
+  <InstallUISequence>
+    <Show Dialog="CraftScopeDlg" After="CraftPreferMachineScope" Condition="NOT Installed AND NOT REMOVE AND UILevel = 5" />
+    <!-- Related-product discovery runs once, so full UI must choose its context first. -->
+    <FindRelatedProducts After="CraftScopeDlg" />
+  </InstallUISequence>
+</Include>

@@ -6,7 +6,7 @@
 use figcraft_doc::NodeId;
 use serde_json::{Value, json};
 
-use super::kit::*;
+use super::kit::{H, Kit, TYPE, V, merged};
 use crate::Result;
 
 const THEME: &str = "Theme";

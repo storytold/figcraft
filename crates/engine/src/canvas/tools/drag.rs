@@ -1,8 +1,12 @@
 use super::handles::{
     SNAP_PX, handle_at, in_quad, label_at, locked_in, on_corner_square, paints_below, resized_box, scale_factor, selection_box, selection_frame,
-    shape_hint,
+    shape_hint, shared_rotation_degrees,
 };
-use super::*;
+use super::{
+    Affine, ArcHandle, ArcHint, Cursor, Document, Gesture, Guide, Handle, ImageScaleMode, LayoutMode, NodeId, NodeKind, PaintKind, Point,
+    PointerEvent, Rect, ResizeStart, Result, ScaleHint, Session, Sizing, Targets, TextAutoResize, ToolId, Vec2, move_world, roots, select_target,
+    textedit, within_slop,
+};
 
 impl Session {
     pub(super) fn move_down(&mut self, ev: &PointerEvent) -> Result<()> {
@@ -22,6 +26,9 @@ impl Session {
         if edits && let Some((id, from)) = crate::board::end_handle_at(&doc, &sel, ev.p(), ev.zoom) {
             self.tool.gesture = Gesture::Reattach { id, from, start: ev.p() };
             return Ok(());
+        }
+        if edits && let Some((id, portion)) = crate::board::path_handle_at(&doc, &sel, ev.p(), ev.zoom) {
+            return self.reshape_down(id, portion, ev.p());
         }
         if self.arc_handles_shown()
             && let Some((id, handle)) = crate::arc_handles::hit(&doc, &sel, ev.p(), ev.zoom)
@@ -51,7 +58,8 @@ impl Session {
                     .moved_origin()
                     .unwrap_or_else(|| Point::new(b.iter().map(|c| c.x).sum::<f64>() / 4.0, b.iter().map(|c| c.y).sum::<f64>() / 4.0));
                 self.begin_interaction("Rotate")?;
-                self.tool.gesture = Gesture::Rotate { center, start_angle: (ev.p() - center).atan2(), ids };
+                self.tool.gesture =
+                    Gesture::Rotate { center, start_angle: (ev.p() - center).atan2(), base: shared_rotation_degrees(&doc, &ids), ids };
                 return Ok(());
             }
             let nodes: Vec<(NodeId, Affine, f64, f64)> =
@@ -90,6 +98,10 @@ impl Session {
         let behind_sel = |t: Option<NodeId>| {
             t.is_none_or(|t| sel.iter().any(|s| *s != t && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s)))))
         };
+        // What the press hit (a label or a painted layer): a click that doesn't become a drag
+        // selects just it. A press that reaches nothing above the selection uses the selection as
+        // its drag target instead; that fallback is not a clicked layer.
+        let clicked = target;
         let target = match sel.iter().copied().find(|s| !locked_in(&doc, *s)) {
             Some(first) if label.is_none() && !ev.shift && behind_sel(target) && selection_box(&doc, &sel).is_some_and(|q| in_quad(&q, ev.p())) => {
                 Some(first)
@@ -98,13 +110,18 @@ impl Session {
         };
         match target {
             Some(target) => {
-                // Clicking inside the current selection's box keeps it (drag them all).
+                // Clicking inside the current selection's box keeps it (drag them all); a click
+                // that doesn't become a drag narrows it to the clicked layer.
                 let in_sel_box = sel.len() > 1 && doc.bounds_of(&sel).is_some_and(|b| b.contains(ev.p())) && !ev.shift;
                 // Shift on a selected layer takes it out on release if the press doesn't become a
                 // drag; a drag moves the selection with it. Where no drag can start, it goes now.
                 let deselect = (ev.shift && sel.contains(&target)).then_some(target);
                 let without_target = || sel.iter().copied().filter(|x| *x != target).collect::<Vec<_>>();
-                let new_sel = if in_sel_box && (sel.contains(&target) || sel.iter().any(|s| doc.is_ancestor(*s, target))) {
+                // A release without a drag narrows the selection to the layer the press hit. A
+                // selected frame's name label sits outside the selection bounds, so it counts too.
+                let keep = clicked
+                    .filter(|c| (label.is_some() || in_sel_box) && !ev.cmd && (sel.contains(c) || sel.iter().any(|s| doc.is_ancestor(*s, *c))));
+                let new_sel = if keep.is_some() {
                     sel.clone()
                 } else if ev.shift && deselect.is_none() {
                     let mut s2 = sel.clone();
@@ -116,10 +133,13 @@ impl Session {
                     vec![target]
                 };
                 self.set_selection(new_sel.clone());
-                // Dev Mode only selects (Shift-click still deselects): nothing moves.
+                // Dev Mode only selects (Shift-click still deselects): nothing moves. No move
+                // gesture starts, so a click selects the layer it hit now instead of on release.
                 if !edits {
                     if deselect.is_some() {
                         self.set_selection(without_target());
+                    } else if let Some(k) = keep.filter(|_| sel.len() > 1) {
+                        self.set_selection(vec![k]);
                     }
                     return Ok(());
                 }
@@ -128,6 +148,9 @@ impl Session {
                 if new_sel.is_empty() || doc.node(target).is_some_and(|n| n.locked) || ids.is_empty() {
                     if deselect.is_some() {
                         self.set_selection(without_target());
+                    } else if let Some(k) = keep {
+                        // No drag can start here, so the click narrows the selection now.
+                        self.set_selection(vec![k]);
                     }
                     return Ok(());
                 }
@@ -144,7 +167,7 @@ impl Session {
                     }
                     return Err(e);
                 }
-                self.tool.gesture = Gesture::Move { start: ev.p(), ids, targets, duplicate: ev.alt, moved: false, deselect };
+                self.tool.gesture = Gesture::Move { start: ev.p(), ids, targets, duplicate: ev.alt, moved: false, deselect, keep };
                 self.tool.overlay.cursor = if ev.alt { Cursor::Copy } else { Cursor::Default };
             }
             None => {
@@ -159,7 +182,20 @@ impl Session {
     }
 
     pub(super) fn drag(&mut self, ev: &PointerEvent) -> Result<()> {
-        let g = std::mem::take(&mut self.tool.gesture);
+        let mut g = std::mem::take(&mut self.tool.gesture);
+        // Alt makes a move a copy whenever it goes down, before the drag or during it, and letting
+        // go of it moves the original again; a copy snaps to the layers it came from too.
+        if let Gesture::Move { targets, duplicate, .. } = &mut g
+            && *duplicate != ev.alt
+        {
+            *duplicate = ev.alt;
+            if let Some(b) = targets.moving {
+                if ev.alt { targets.add_box(b) } else { targets.remove_box(b) }
+            }
+            if let Some(it) = self.ds_mut().ok().and_then(|ds| ds.interaction.as_mut()) {
+                it.label = if ev.alt { "Duplicate" } else { "Move" }.into();
+            }
+        }
         let res = match &g {
             Gesture::None => return self.hover(ev),
             Gesture::Marquee { start, additive, base, within } => {
@@ -181,16 +217,19 @@ impl Session {
                     }
                 }
                 // Cmd/Ctrl (and Control on macOS) held while dragging suspends snapping.
+                // The pointer's own drag, before snapping: a reorder in auto layout follows it.
+                let raw = d;
                 let snap_on = self.ds().map(|ds| ds.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl;
                 let mut guides = Vec::new();
+                if self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
+                    // Keep the box's origin on whole pixels (a rotated parent frame's, inside one);
+                    // snapping to layers comes after, so it wins on the axes it snaps.
+                    d = targets.round_move(d);
+                }
                 if snap_on {
                     let (c, g2) = targets.snap_move(d, SNAP_PX / ev.zoom.max(1e-6));
                     d += c;
                     guides = g2;
-                }
-                if self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
-                    // Keep the box's origin on whole pixels (a rotated parent frame's, inside one).
-                    d = targets.round_move(d);
                 }
                 let ids = ids.clone();
                 let dup = *duplicate;
@@ -200,6 +239,8 @@ impl Session {
                 let mut in_flow = false;
                 // Placed in a row or column: (is it a column, its gap) for the insertion line.
                 let mut slot_axis: Option<(bool, f64)> = None;
+                // Only the selected layers moved, each by `d` (see `Interaction::moved_by`).
+                let mut shifted = !dup;
                 self.preview(|doc, sel| {
                     let mut moving = ids.clone();
                     if dup {
@@ -209,6 +250,7 @@ impl Session {
                             let idx = doc.index_in_parent(*i).map(|x| x + 1);
                             copies.push(crate::components::copy_in_file(doc, *i, parent, idx)?);
                         }
+                        crate::library::count_inserted(doc, &copies);
                         // Connectors copied with what they join join the copies.
                         let map = crate::board::copy_map(doc, &ids, &copies);
                         crate::board::rejoin(doc, &crate::board::copied_items(doc, &map), &map, false);
@@ -229,8 +271,18 @@ impl Session {
                         // cell) under the pointer, as the frame shows it now. A frame other than the
                         // one they come from is outlined too.
                         let cell = if mode == LayoutMode::Grid { crate::drop::grid_cell_at(doc, target, p) } else { None };
-                        let idx =
-                            if mode == LayoutMode::Grid { 0 } else { crate::drop::auto_layout_slot(doc, target, p, &moving).map_or(0, |(i, _)| i) };
+                        // Within the frame they came from, the slot follows the leading edge of the
+                        // box they would fill (their combined start bounds moved by the drag), not
+                        // the pointer. The preview starts from the document as the drag began.
+                        let within = moving.iter().all(|m| doc.node(*m).is_some_and(|n| n.parent == Some(target)));
+                        let idx = if mode == LayoutMode::Grid {
+                            0
+                        } else if let (true, Some(b)) = (within, doc.bounds_of(&moving)) {
+                            let moved = Rect::new(b.x0 + raw.x, b.y0 + raw.y, b.x1 + raw.x, b.y1 + raw.y);
+                            crate::drop::auto_layout_slot_within(doc, target, p, &moving, moved, Point::new(raw.x, raw.y)).map_or(0, |(i, _)| i)
+                        } else {
+                            crate::drop::auto_layout_slot(doc, target, p, &moving).map_or(0, |(i, _)| i)
+                        };
                         for m in &moving {
                             if doc.get(*m)?.parent != Some(target) {
                                 doc.reparent(*m, target, None)?;
@@ -256,6 +308,7 @@ impl Session {
                     }
                     // A free move. Layers dragged out of an auto layout flow leave it (onto the page
                     // while dragging; the drop puts them in the frame under the pointer).
+                    shifted &= only_shifted(doc, &moving);
                     for m in &moving {
                         let in_al = doc.node(*m).and_then(|n| n.parent).and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some());
                         if flow && in_al {
@@ -266,6 +319,9 @@ impl Session {
                     drop_target = (flow && target != page).then_some(target);
                     Ok(())
                 })?;
+                if let Some(it) = self.ds_mut()?.interaction.as_mut() {
+                    it.moved_by = (shifted && !in_flow).then_some((d.x, d.y));
+                }
                 let placed = if dup { self.selection() } else { ids };
                 // Snapping guides mean nothing while the layout places the layers; with Alt held,
                 // live distances to the neighbours replace them.
@@ -285,6 +341,7 @@ impl Session {
                 });
                 self.tool.overlay.drop_cell = drop_cell;
                 self.tool.overlay.drop_target = drop_target;
+                self.tool.overlay.stamp_target = self.dragged_stamp_target(&placed, page);
                 self.tool.overlay.cursor = if self.refused(&placed, true) {
                     Cursor::NotAllowed
                 } else if dup {
@@ -306,10 +363,11 @@ impl Session {
                 }
                 return res;
             }
-            Gesture::Rotate { center, start_angle, ids } => {
+            Gesture::Rotate { center, start_angle, base, ids } => {
                 let mut a = ((ev.p() - *center).atan2() - start_angle).to_degrees();
                 if ev.shift {
-                    a = (a / 15.0).round() * 15.0;
+                    // The panel rotation is base - a; Shift lands it on a multiple of 15 degrees.
+                    a = base - ((base - a) / 15.0).round() * 15.0;
                 }
                 let (c, ids) = (*center, ids.clone());
                 self.preview(|doc, _| {
@@ -390,6 +448,11 @@ impl Session {
                 self.reattach_drag(ev, id, from, start);
                 return Ok(());
             }
+            Gesture::Reshape { id, portion, start } => {
+                let (id, portion, start) = (*id, *portion, *start);
+                self.reshape_drag(ev, id, portion, start);
+                return Ok(());
+            }
             Gesture::PenDrag { anchor } => {
                 // A click's wobble pulls out no handle.
                 let out = if within_slop(ev, *anchor) { Vec2::ZERO } else { ev.p() - *anchor };
@@ -427,19 +490,20 @@ impl Session {
         let targets = if snap { Some(Targets::gather(self.doc()?, page, &ids)) } else { None };
         let mut p = ev.p();
         let mut guides = Vec::new();
+        let _ = start;
+        // In the handle box's own axes (one layer: its local space).
+        let (frame, w0, h0) = r.frame;
+        // The pixel grid: an upright box's dragged sides land on whole pixels (the Scale tool
+        // scales by the factor as dragged). Snapping to layers comes after, so it wins on the axes
+        // it snaps.
+        if !scale_tool && self.ds().map(|d| d.view.snap_pixel).unwrap_or(true) && crate::guides::axis_aligned(frame) {
+            p = Point::new(p.x.round(), p.y.round());
+        }
         if let Some(t) = &targets {
             let (dx, dy, g) = t.snap_point(p.x, p.y, SNAP_PX / ev.zoom.max(1e-6));
             p.x += dx;
             p.y += dy;
             guides = g;
-        }
-        let _ = start;
-        // In the handle box's own axes (one layer: its local space).
-        let (frame, w0, h0) = r.frame;
-        // The pixel grid: an upright box's dragged sides land on whole pixels (the Scale tool
-        // scales by the factor as dragged).
-        if !scale_tool && self.ds().map(|d| d.view.snap_pixel).unwrap_or(true) && crate::guides::axis_aligned(frame) {
-            p = Point::new(p.x.round(), p.y.round());
         }
         let q = frame.inverse() * p;
         let is_line = r.single && ids.first().and_then(|i| self.doc().ok()?.node(*i).map(|n| matches!(n.kind, NodeKind::Line))).unwrap_or(false);
@@ -514,15 +578,8 @@ impl Session {
                         }
                         let Some(data) = doc.images.get(&img.image) else { continue };
                         let (iw, ih) = (f64::from(data.width), f64::from(data.height));
-                        let crop = if img.scale_mode == ImageScaleMode::Crop {
-                            img.effective_crop(iw, ih, w, h)
-                        } else {
-                            let (rw, rh) = img.rotated_size(iw.max(1.0), ih.max(1.0));
-                            let s = if img.scale_mode == ImageScaleMode::Fit { (w / rw).min(h / rh) } else { (w / rw).max(h / rh) };
-                            [w / (rw * s), 0.0, 0.0, h / (rh * s), (rw * s - w) / (2.0 * rw * s), (rh * s - h) / (2.0 * rh * s)]
-                        };
                         // A degenerate (zero-scale) layer has no inverse: its image keeps its placement.
-                        let crop = (Affine::new(crop) * to_old).as_coeffs();
+                        let crop = (Affine::new(img.placement_crop(iw, ih, w, h)) * to_old).as_coeffs();
                         if !crop.iter().all(|c| c.is_finite()) {
                             continue;
                         }
@@ -602,4 +659,22 @@ impl Session {
         self.tool.overlay.guides = guides;
         Ok(())
     }
+}
+
+/// Moving `moving` by the same offset moves nothing else and changes nothing about them but where
+/// they are: none is inside another (it would move twice) or placed by its parent's auto layout
+/// (the layout would put it back, or close the gap it leaves).
+fn only_shifted(doc: &Document, moving: &[NodeId]) -> bool {
+    let set: std::collections::HashSet<NodeId> = moving.iter().copied().collect();
+    moving.iter().all(|m| {
+        let Some(n) = doc.node(*m) else { return false };
+        let in_flow = n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some()) && !n.child_layout.absolute;
+        let mut up = n.parent;
+        let mut nested = false;
+        while let Some(p) = up {
+            nested |= set.contains(&p);
+            up = doc.node(p).and_then(|x| x.parent);
+        }
+        !in_flow && !nested
+    })
 }

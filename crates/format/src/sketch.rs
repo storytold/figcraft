@@ -56,17 +56,22 @@ pub const NEWEST_TESTED_VERSION: u64 = 139;
 pub const TOO_OLD: &str = "saved by a Sketch older than 48; open it in a newer Sketch and save it again";
 /// Largest JSON member read (a real page of a few thousand layers takes 33 MB).
 const MAX_JSON_MEMBER: u64 = 512 * 1024 * 1024;
-/// Most bytes JSON members may unpack to, per compressed byte (real files pack 5–20 times; a
-/// zero-filled array a thousand times), with a floor for small members.
-const MAX_JSON_RATIO: u64 = 100;
-const MIN_JSON_ALLOWANCE: u64 = 16 * 1024 * 1024;
+/// Most bytes a member may unpack to, per compressed byte (real JSON packs 5–20 times and images
+/// barely; a zero-filled member a thousand times), with a floor for small members.
+const MAX_RATIO: u64 = 100;
+const MIN_ALLOWANCE: u64 = 16 * 1024 * 1024;
 /// Most JSON read from one file in all.
 #[cfg(not(target_pointer_width = "32"))]
 const MAX_JSON_TOTAL: u64 = 2 * 1024 * 1024 * 1024;
 #[cfg(target_pointer_width = "32")]
 const MAX_JSON_TOTAL: u64 = 512 * 1024 * 1024;
 /// Largest image member read.
-const MAX_IMAGE: u64 = 256 * 1024 * 1024;
+const MAX_IMAGE: u64 = figcraft_doc::ImageData::MAX_BYTES;
+/// Most image bytes read from one file in all.
+#[cfg(not(target_pointer_width = "32"))]
+const MAX_IMAGE_TOTAL: u64 = 1024 * 1024 * 1024;
+#[cfg(target_pointer_width = "32")]
+const MAX_IMAGE_TOTAL: u64 = 256 * 1024 * 1024;
 /// Most pages read from one file.
 const MAX_PAGES: usize = 1000;
 
@@ -182,6 +187,8 @@ pub(crate) struct Archive<'b> {
     /// Problems met while reading (pages skipped).
     pub warnings: Vec<String>,
     zip: zip::ZipArchive<std::io::Cursor<&'b [u8]>>,
+    /// Image bytes read so far.
+    image_total: std::cell::Cell<u64>,
 }
 
 impl<'b> Archive<'b> {
@@ -219,11 +226,16 @@ impl<'b> Archive<'b> {
         };
         let refs = document.get("pages").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
         let mut pages = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for r in refs.iter().take(MAX_PAGES) {
             let Some(id) = r.get("_ref").and_then(Value::as_str).and_then(|s| s.strip_prefix("pages/")).filter(|id| valid_id(id)) else {
                 warnings.push("pages the document lists without a valid reference were skipped".into());
                 continue;
             };
+            // A page listed twice is read once: a repeated reference must not repeat the unpacking.
+            if !seen.insert(id) {
+                continue;
+            }
             match json_member(&mut z, &format!("pages/{id}.json"), max_member, &mut total) {
                 Ok(page) if page.is_object() => pages.push((id.to_string(), page)),
                 Ok(_) => warnings.push("pages that aren't JSON objects were skipped".into()),
@@ -234,7 +246,7 @@ impl<'b> Archive<'b> {
             warnings.push(format!("the file has more than {MAX_PAGES} pages; the rest were skipped"));
         }
         let version = meta.get("version").and_then(Value::as_u64).unwrap_or(0);
-        Ok(Archive { document, version, pages, warnings, zip: z })
+        Ok(Archive { document, version, pages, warnings, zip: z, image_total: std::cell::Cell::new(0) })
     }
 
     /// The bytes of the image a layer references (`images/<name>`).
@@ -245,24 +257,41 @@ impl<'b> Archive<'b> {
         }
         // A clone shares the parsed directory and the bytes; the resolver only has shared access.
         let mut z = self.zip.clone();
-        crate::read_member(&mut z, &format!("images/{name}"), MAX_IMAGE).ok()
+        let mut total = self.image_total.get();
+        let data = capped_member(&mut z, &format!("images/{name}"), MAX_IMAGE, &mut total, MAX_IMAGE_TOTAL).ok();
+        self.image_total.set(total);
+        data
     }
 }
 
-/// JSON member `name`, refused before unpacking when it would be larger than `limit`, than
-/// [`MAX_JSON_RATIO`] times what it takes in the archive (past a floor), or than what is left of
-/// the file's [`MAX_JSON_TOTAL`] (`total`: read so far).
-fn json_member(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, name: &str, limit: u64, total: &mut u64) -> Result<Value, FormatError> {
+/// Member `name`, refused before unpacking when it would be larger than `limit`, than
+/// [`MAX_RATIO`] times what it takes in the archive (past a floor), or than what is left of
+/// `max_total` (`total`: read so far, counted up).
+fn capped_member(
+    z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>,
+    name: &str,
+    limit: u64,
+    total: &mut u64,
+    max_total: u64,
+) -> Result<Vec<u8>, FormatError> {
     let (size, packed) = {
         let f = z.by_name(name).map_err(|e| corrupt(format!("{name}: {e}")))?;
         (f.size(), f.compressed_size())
     };
-    let allowed = limit.min(packed.saturating_mul(MAX_JSON_RATIO).max(MIN_JSON_ALLOWANCE)).min(MAX_JSON_TOTAL.saturating_sub(*total));
+    let allowed = limit.min(packed.saturating_mul(MAX_RATIO).max(MIN_ALLOWANCE)).min(max_total.saturating_sub(*total));
     if size > allowed {
         return Err(corrupt(format!("{name} is too large")));
     }
-    let data = crate::read_member(z, name, allowed)?;
-    *total += data.len() as u64;
+    let data = crate::read_member(z, name, allowed);
+    // A failed read (a bad checksum at the end, say) unpacked all the same: charged in full, so
+    // a page list naming the member again can't repeat it within the budget.
+    *total += data.as_ref().map_or(size, |d| d.len() as u64);
+    data
+}
+
+/// JSON member `name`, read by [`capped_member`] within the file's [`MAX_JSON_TOTAL`].
+fn json_member(z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, name: &str, limit: u64, total: &mut u64) -> Result<Value, FormatError> {
+    let data = capped_member(z, name, limit, total, MAX_JSON_TOTAL)?;
     serde_json::from_slice(&data).map_err(|e| corrupt(format!("{name}: {e}")))
 }
 

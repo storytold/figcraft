@@ -1,4 +1,4 @@
-use super::*;
+use super::{Context, FigApp, NodeId, RichText, Tokens, json, tr, trn, window};
 
 /// The Rename layers dialog's fields.
 #[derive(Clone, Debug, Default, PartialEq)]

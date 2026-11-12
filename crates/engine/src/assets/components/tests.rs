@@ -144,7 +144,6 @@ fn instances_refuse_structure_edits() {
     let before = s.doc().unwrap().clone();
     let undo = s.ds().unwrap().history.undo.len();
     let refused = [
-        ("edit.delete", json!({"ids": [ibg]})),
         ("shape.rectangle", json!({"x": 0, "y": 0, "width": 5, "height": 5, "parent": i})),
         ("node.reorder", json!({"id": idot, "index": 0})),
         ("object.group", json!({"ids": [ibg, idot]})),
@@ -158,6 +157,11 @@ fn instances_refuse_structure_edits() {
         assert_eq!(*s.doc().unwrap(), before, "{cmd} rolled back");
     }
     assert_eq!(s.ds().unwrap().history.undo.len(), undo);
+    // Delete on a layer inside hides it instead (an override), as the reference tool does.
+    ex(&mut s, "edit.delete", json!({"ids": [ibg]}));
+    assert!(s.doc().unwrap().node(ibg).is_some_and(|n| !n.visible), "hidden, not removed");
+    assert_eq!(s.doc().unwrap().node(i).unwrap().children, before.node(i).unwrap().children, "the structure is intact");
+    healthy(&s);
     // Deleting the whole instance is fine.
     ex(&mut s, "edit.delete", json!({"ids": [i]}));
     healthy(&s);
@@ -383,6 +387,25 @@ fn resized_instances_follow_constraints_and_auto_layout() {
     healthy(&s);
 }
 
+/// The tail of `component_properties_apply_to_instances`: unbind, delete, then a variant property.
+fn unbind_delete_and_vary(s: &mut Session, c: NodeId, i: NodeId, title: NodeId, dot: NodeId) {
+    // Unbind and delete.
+    ex(s, "component.bindProperty", json!({"layer": dot, "property": null, "field": "visible"}));
+    assert!(node(s, copy_of(s, i, dot)).visible);
+    ex(s, "component.deleteProperty", json!({"id": c, "name": "Heading"}));
+    assert!(node(s, title).prop_refs.is_empty());
+    assert!(matches!(&node(s, i).kind, NodeKind::Instance { props, .. } if !props.contains_key("Heading")));
+    // "Show dot" is still defined but no layer reads it any more: the main lists it, the instance doesn't (#2022).
+    let desc = ex(s, "component.properties", json!({"id": c}));
+    assert_eq!(desc["properties"].as_array().unwrap().len(), 1);
+    let desc = ex(s, "component.properties", json!({"id": i}));
+    assert!(desc["properties"].as_array().unwrap().is_empty());
+    // A variant property on a lone component makes it a component set.
+    let set = idv(&ex(s, "component.addProperty", json!({"id": c, "name": "Theme", "type": "variant", "default": "Light"})));
+    assert!(matches!(node(s, set).kind, NodeKind::ComponentSet { .. }));
+    assert_eq!(node(s, c).name, "Theme=Light");
+}
+
 #[test]
 fn component_properties_apply_to_instances() {
     let mut s = Session::new();
@@ -414,18 +437,7 @@ fn component_properties_apply_to_instances() {
     assert!(s.execute("component.bindProperty", &json!({"layer": dot, "property": "Heading"})).is_err());
     assert!(s.execute("component.bindProperty", &json!({"layer": ititle, "property": "Heading"})).is_err());
     assert!(s.execute("component.addProperty", &json!({"id": c, "name": "Heading", "type": "text"})).is_err());
-    // Unbind and delete.
-    ex(&mut s, "component.bindProperty", json!({"layer": dot, "property": null, "field": "visible"}));
-    assert!(node(&s, copy_of(&s, i, dot)).visible);
-    ex(&mut s, "component.deleteProperty", json!({"id": c, "name": "Heading"}));
-    assert!(node(&s, title).prop_refs.is_empty());
-    assert!(matches!(&node(&s, i).kind, NodeKind::Instance { props, .. } if !props.contains_key("Heading")));
-    let desc = ex(&mut s, "component.properties", json!({"id": i}));
-    assert_eq!(desc["properties"].as_array().unwrap().len(), 1);
-    // A variant property on a lone component makes it a component set.
-    let set = idv(&ex(&mut s, "component.addProperty", json!({"id": c, "name": "Theme", "type": "variant", "default": "Light"})));
-    assert!(matches!(node(&s, set).kind, NodeKind::ComponentSet { .. }));
-    assert_eq!(node(&s, c).name, "Theme=Light");
+    unbind_delete_and_vary(&mut s, c, i, title, dot);
     healthy(&s);
 }
 

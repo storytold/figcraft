@@ -5,7 +5,7 @@
 //! and the marks design files and boards get.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2};
-use figcraft_doc::{BoardItem, BoardShape, FileKind, NodeId, Routing, Stamp, StrokeCap, board_color};
+use figcraft_doc::{BoardItem, BoardShape, FileKind, NodeId, Routing, Stamp, board_color};
 use figcraft_engine::Session;
 use figcraft_engine::tools::ToolId;
 use serde_json::{Value, json};
@@ -39,19 +39,21 @@ fn pill(u: &Ui) -> Rect {
 }
 
 /// The left edge of board toolbar group `i` (button 32 wide, a 16-wide caret 2 after it on the
-/// groups with flyouts, 4 between): move, ink, sticky, shapes, connector, text, section, stamp,
+/// groups with flyouts, 8 between): move, ink, sticky, shapes, connector, text, section, stamp,
 /// comment.
 fn group_x(u: &Ui, i: usize) -> f32 {
-    const WIDTHS: [f32; 9] = [54.0, 54.0, 54.0, 54.0, 36.0, 36.0, 36.0, 54.0, 36.0];
+    const WIDTHS: [f32; 9] = [58.0, 58.0, 58.0, 58.0, 40.0, 40.0, 40.0, 58.0, 40.0];
     pill(u).min.x + 8.0 + WIDTHS.iter().take(i).sum::<f32>()
 }
 
 /// Open group `i`'s flyout from its caret and click option `n` in it (a row of 32-wide cells, 4
 /// apart, 8 in from the flyout's edge, the flyout's bottom 8 above the pill).
-fn pick_option(u: &mut Ui, i: usize, n: usize) {
+fn pick_option(u: &mut Ui, i: usize, n: usize, of: usize) {
     let caret = pos2(group_x(u, i) + 42.0, pill(u).center().y);
     click(u, caret);
-    let at = pos2(group_x(u, i) + 8.0 + n as f32 * 36.0 + 16.0, pill(u).min.y - 8.0 - 24.0);
+    // Rows of up to eight, the last one just above the toolbar.
+    let (row, col, rows) = (n / 8, n % 8, of.div_ceil(8));
+    let at = pos2(group_x(u, i) + 8.0 + col as f32 * 36.0 + 16.0, pill(u).min.y - 8.0 - 24.0 - (rows - 1 - row) as f32 * 36.0);
     click(u, at);
 }
 
@@ -68,12 +70,16 @@ fn bar(u: &Ui) -> Option<Rect> {
 #[test]
 fn the_board_toolbar_picks_tools_with_their_colours_shapes_and_stamps() {
     let mut u = board();
-    pick_option(&mut u, 2, 5);
+    pick_option(&mut u, 2, 5, figcraft_doc::BOARD_COLORS.len());
     assert_eq!(u.app.session.tool.tool, ToolId::Sticky);
     assert_eq!(Some(u.app.session.tool.board.sticky), board_color("blue"));
-    pick_option(&mut u, 3, 3);
+    pick_option(&mut u, 3, 3, BoardShape::ALL.len());
     assert_eq!((u.app.session.tool.tool, u.app.session.tool.board.shape), (ToolId::BoardShape, BoardShape::Diamond));
-    pick_option(&mut u, 7, 1);
+    // The shapes wrap into rows: one from the second.
+    let star = BoardShape::ALL.iter().position(|b| *b == BoardShape::Star).unwrap();
+    pick_option(&mut u, 3, star, BoardShape::ALL.len());
+    assert_eq!(u.app.session.tool.board.shape, BoardShape::Star);
+    pick_option(&mut u, 7, 1, Stamp::ALL.len());
     assert_eq!((u.app.session.tool.tool, u.app.session.tool.board.stamp), (ToolId::Stamp, Stamp::Heart));
     // The connector's button picks it; the ink group's flyout lists the marker's siblings.
     let connector = pos2(group_x(&u, 4) + 16.0, pill(&u).center().y);
@@ -125,11 +131,16 @@ fn the_selection_bar_recolours_reshapes_and_restyles() {
     click(&mut u, pos2(r.min.x + 208.0 + 52.0 + 2.0 * 30.0 + 14.0, cy));
     let text = figcraft_engine::board::text_of(u.app.session.doc().unwrap(), shape).unwrap();
     assert_eq!(u.app.session.doc().unwrap().node(text).unwrap().kind.text().unwrap().style.font_size, 24.0);
-    // The shape menu lists the outlines.
+    // The shape menu is a grid of the outlines, named for hover and screen readers.
+    u.ctx.enable_accesskit();
     let r = bar(&u).unwrap();
     click(&mut u, pos2(r.min.x + 208.0 + 20.0, cy));
-    let shapes = flat(&u.frame_output(vec![]).shapes);
-    click(&mut u, text_center(&shapes, "Ellipse"));
+    let nodes = u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes;
+    for b in BoardShape::ALL {
+        assert!(nodes.iter().any(|(_, n)| n.label() == Some(b.label())), "{} in the menu", b.label());
+    }
+    let cell = nodes.iter().find(|(_, n)| n.label() == Some("Ellipse")).and_then(|(_, n)| n.bounds()).unwrap();
+    click(&mut u, pos2(((cell.x0 + cell.x1) / 2.0) as f32, ((cell.y0 + cell.y1) / 2.0) as f32));
     assert_eq!(u.app.session.doc().unwrap().node(shape).unwrap().board, Some(BoardItem::Shape { shape: BoardShape::Ellipse }));
 }
 
@@ -143,19 +154,16 @@ fn the_selection_bar_sets_a_connectors_style_and_offers_nothing_for_a_stamp() {
     u.frame(vec![]);
     let r = bar(&u).expect("the bar shows for a connector");
     let cy = r.center().y;
-    // After the colours (208): Straight, Elbow, Curved, the end's arrow, 30 apart.
-    click(&mut u, pos2(r.min.x + 208.0 + 14.0, cy));
+    // After the colours and the colour wheel (232): Straight, Elbow, Curved, 30 apart.
+    click(&mut u, pos2(r.min.x + 232.0 + 14.0, cy));
     let routing = |u: &Ui| match &u.app.session.doc().unwrap().node(c).unwrap().board {
         Some(BoardItem::Connector(k)) => k.routing,
         _ => panic!("not a connector"),
     };
     assert_eq!(routing(&u), Routing::Straight);
     let r = bar(&u).unwrap();
-    click(&mut u, pos2(r.min.x + 208.0 + 60.0 + 14.0, cy));
+    click(&mut u, pos2(r.min.x + 232.0 + 60.0 + 14.0, cy));
     assert_eq!(routing(&u), Routing::Curved);
-    let r = bar(&u).unwrap();
-    click(&mut u, pos2(r.min.x + 208.0 + 90.0 + 14.0, cy));
-    assert_eq!(u.app.session.doc().unwrap().node(c).unwrap().stroke.cap_end, StrokeCap::None);
     // Nothing is offered while a stamp alone is selected: it takes neither colour nor style.
     let st = id(&u.app.session.execute("board.stamp", &json!({"x": 900, "y": 0, "stamp": "star"})).unwrap());
     u.app.session.execute("select.set", &json!({"ids": [st]})).unwrap();
@@ -216,6 +224,23 @@ fn the_next_sticky_from_the_keyboard_goes_on_typing() {
 }
 
 #[test]
+fn the_next_shape_from_the_keyboard_comes_connected_and_goes_on_typing() {
+    let mut u = board();
+    let a = id(&u.app.run("board.shape", json!({"shape": "diamond", "x": 0, "y": 0, "width": 200, "height": 120})).unwrap());
+    // Shift+Cmd/Ctrl+Enter on a shape: the next shape, joined to it (#1597).
+    crate::menus::invoke(&mut u.app, "board.nextSticky");
+    let doc = u.app.session.doc().unwrap();
+    let te = u.app.session.ds().unwrap().text_edit.clone().expect("typing in the new shape");
+    let b = figcraft_engine::board::owner_of_text(doc, te.id).unwrap();
+    assert!(matches!(doc.node(b).unwrap().board, Some(BoardItem::Shape { shape: BoardShape::Diamond })));
+    let joined = doc.nodes().any(|n| {
+        matches!(&n.board, Some(BoardItem::Connector(k)) if k.from == figcraft_doc::End::Node { node: a, side: figcraft_doc::Side::Right, at: None }
+            && k.to == figcraft_doc::End::Node { node: b, side: figcraft_doc::Side::Left, at: None })
+    });
+    assert!(joined, "a connector from the first shape's right side to the new one's left");
+}
+
+#[test]
 fn a_board_page_has_a_dot_grid_under_its_layers_thinned_out_zoomed_out() {
     let mut u = board();
     let sticky = id(&u.app.session.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap());
@@ -242,7 +267,7 @@ fn a_board_page_has_a_dot_grid_under_its_layers_thinned_out_zoomed_out() {
     let fill = u.app.session.doc().unwrap().node(sticky).unwrap().fills[0].solid_color().unwrap().to_rgba8();
     assert_eq!(at(2.0 * step, 2.0 * step), [fill[0], fill[1], fill[2]], "the sticky covers the dot under it");
     // Zoomed out, the dots space out: every second, fourth… stays, the next to go fading.
-    use crate::board_bar::dot_spacing;
+    let dot_spacing = |z: f64| crate::board_bar::grid_spacing(z, 24.0, 2, 14.0);
     assert_eq!(dot_spacing(1.0), Some((24.0, ((24.0 - 14.0) / 14.0) as f32)));
     assert_eq!(dot_spacing(0.25).map(|d| d.0), Some(96.0));
     assert_eq!(dot_spacing(4.0), Some((24.0, 1.0)));
@@ -265,9 +290,111 @@ fn a_selected_connector_shows_its_ends_as_handles() {
     let b = u.app.session.execute("board.sticky", &json!({"x": 400, "y": 0})).unwrap()["id"].clone();
     u.app.session.execute("board.connector", &json!({"from": a, "to": b, "style": "straight"})).unwrap();
     let shapes = flat(&u.frame_output(vec![]).shapes);
-    let ends = [u.app.to_screen(200.0, 100.0), u.app.to_screen(400.0, 100.0)];
+    let ends = [u.app.to_screen(204.0, 100.0), u.app.to_screen(396.0, 100.0)];
     for end in ends {
         let ring = shapes.iter().any(|s| matches!(s, egui::Shape::Circle(c) if (c.center - end).length() < 0.5 && c.radius == 5.0));
         assert!(ring, "a handle at {end:?}");
     }
+}
+
+#[test]
+fn the_board_grid_follows_its_settings() {
+    let mut u = board();
+    u.app.session.execute("view.zoom100", &json!({})).unwrap();
+    u.frame(vec![]);
+    let t = crate::theme::Tokens::get(&u.ctx);
+    let bg = egui::Color32::from_rgb(240, 240, 240);
+    let usual = crate::board_bar::dots(&u.app, bg, &t).unwrap();
+    assert!(!usual.lines && usual.major == 2);
+    // Lines, as fine at any zoom.
+    u.app.run("board.grid", json!({"style": "lines"}));
+    let lines = crate::board_bar::dots(&u.app, bg, &t).unwrap();
+    assert!(lines.lines && lines.major == 2 && lines.color.a < usual.color.a, "lines start fainter than dots");
+    // Graph paper: a strong line every 5 cells of 8, the cells in between fainter even zoomed in.
+    u.app.run("board.grid", json!({"style": "graph", "spacing": 8, "major": 5}));
+    u.app.session.ds_mut().unwrap().view.zoom = 4.0;
+    let graph = crate::board_bar::dots(&u.app, bg, &t).unwrap();
+    assert_eq!((graph.lines, graph.major, graph.step), (true, 5, 8.0));
+    assert!(graph.faded.a < graph.color.a);
+    // Zoomed out, the fine cells go and the strong lines stay: the step grows by fives.
+    u.app.session.ds_mut().unwrap().view.zoom = 0.25;
+    let far = crate::board_bar::dots(&u.app, bg, &t).unwrap();
+    assert_eq!(far.step, 8.0 * 5.0, "40 × 0.25 = 10 points apart, the closest lines come");
+    assert_eq!(far.faded.a, 0.0, "the cells the next step drops have faded out");
+    // More contrast: stronger marks; larger: larger.
+    u.app.run("board.grid", json!({"style": "dots", "contrast": 3, "size": 2}));
+    let strong = crate::board_bar::dots(&u.app, bg, &t).unwrap();
+    assert!(strong.color.a > usual.color.a * 2.5 && strong.size > usual.size * 0.25 * 1.5, "{strong:?}");
+    // None: no grid.
+    u.app.run("board.grid", json!({"style": "none"}));
+    assert!(crate::board_bar::dots(&u.app, bg, &t).is_none());
+    use crate::board_bar::grid_spacing;
+    assert_eq!(grid_spacing(1.0, 24.0, 5, 0.0), None);
+    assert_eq!(grid_spacing(1e-320, 512.0, 2, 14.0), None, "no finite step that far out");
+    assert!(grid_spacing(1e-300, 4.0, 12, 10.0).is_some_and(|(step, _)| step.is_finite()));
+}
+
+#[test]
+fn preferences_set_the_board_grid_and_the_default_dots_keep_their_size() {
+    let mut u = board();
+    let bg = egui::Color32::from_rgb(240, 240, 240);
+    // The default grid: dots a point and a half across at 100 %, one to three points on screen.
+    for (zoom, on_screen) in [(1.0, 1.5), (0.25, 1.0), (4.0, 3.0)] {
+        u.app.session.ds_mut().unwrap().view.zoom = zoom;
+        let t = crate::theme::Tokens::get(&u.ctx);
+        let size = crate::board_bar::dots(&u.app, bg, &t).unwrap().size;
+        assert!((size * zoom - on_screen).abs() < 1e-9, "at {zoom}: {size}");
+    }
+    u.app.session.ds_mut().unwrap().view.zoom = 1.0;
+    u.app.ui.preferences = true;
+    u.frame(vec![]);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "Board grid") && has_text(&shapes, "Spacing"));
+    assert!(!has_text(&shapes, "Strong line every") && !has_text(&shapes, "Reset grid"), "dots, as usual");
+    click(&mut u, text_center(&shapes, "Graph paper"));
+    assert_eq!(u.app.session.prefs.board_grid.style, figcraft_engine::board_grid::GridStyle::Graph);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "Strong line every"), "graph paper's cells per strong line");
+    click(&mut u, text_center(&shapes, "Reset grid"));
+    assert_eq!(u.app.session.prefs.board_grid, Default::default());
+    // No grid: nothing to set but the style.
+    u.app.run("board.grid", json!({"style": "none"}));
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "Board grid") && !has_text(&shapes, "Spacing"));
+}
+
+/// Moving a selected connector's end with the mouse: it snaps to a side, and with Cmd/Ctrl held it
+/// goes where the pointer is on the object.
+#[test]
+fn cmd_while_moving_a_connector_end_places_it_on_the_object() {
+    let mut u = board();
+    let a = id(&u.app.run("board.shape", json!({"shape": "rectangle", "x": 0, "y": 0, "width": 200, "height": 100})).unwrap());
+    let b = id(&u.app.run("board.shape", json!({"shape": "rectangle", "x": 400, "y": 0, "width": 200, "height": 100})).unwrap());
+    let k = id(&u.app.run("board.connector", json!({"from": a, "to": b, "style": "straight"})).unwrap());
+    u.app.run("select.set", json!({"ids": [k]}));
+    u.frame(vec![]);
+    u.frame(vec![]);
+    let end = |u: &Ui| match &u.app.session.doc().unwrap().node(k).unwrap().board {
+        Some(BoardItem::Connector(c)) => c.to,
+        other => panic!("{other:?}"),
+    };
+    let drag = |u: &mut Ui, mods: Modifiers| {
+        let from = u.app.to_screen(400.0, 50.0);
+        let to = u.app.to_screen(550.0, 25.0);
+        u.frame_with(vec![Event::PointerMoved(from)], mods);
+        let press = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: mods };
+        u.frame_with(vec![press(from, true)], mods);
+        for t in 1..=8 {
+            u.frame_with(vec![Event::PointerMoved(from + (to - from) * (t as f32 / 8.0))], mods);
+        }
+        u.frame_with(vec![press(to, false)], mods);
+        u.frame_with(vec![], mods);
+    };
+    drag(&mut u, Modifiers::COMMAND);
+    assert_eq!(end(&u), figcraft_doc::End::Node { node: b, side: figcraft_doc::Side::Auto, at: Some([0.75, 0.25]) });
+    u.app.run("edit.undo", json!({}));
+    u.app.run("select.set", json!({"ids": [k]}));
+    u.frame(vec![]);
+    drag(&mut u, Modifiers::NONE);
+    assert!(matches!(end(&u), figcraft_doc::End::Node { at: None, side: figcraft_doc::Side::Right, .. }), "{:?}", end(&u));
 }

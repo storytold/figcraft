@@ -1,7 +1,10 @@
 use super::diff::geometry_derived;
 use super::rebase::rebase_instance;
 use super::variants::instance_issues;
-use super::*;
+use super::{
+    ContentAlign, CrossAlign, Document, MainAlign, Node, NodeId, NodeKind, SLOT, Sizing, enclosing_instance, inside_instance, is_instance,
+    owning_instance, structure_locked,
+};
 
 /// Slot `slot` (inside an instance) takes the instance's own content: the layers it shows (the
 /// main's default content until now) stop mirroring the main, and instances among them stand

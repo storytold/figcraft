@@ -1,4 +1,4 @@
-use super::*;
+use super::{BTreeMap, Document, MAX_DEPTH, Node, NodeId, NodeKind, holds_content, inside_instance};
 
 /// A set's default variant: the one in its top-left corner (nearest to it, then the top-most, then
 /// the left-most).

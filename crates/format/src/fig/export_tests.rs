@@ -410,7 +410,7 @@ impl Gen {
     /// A component with a boolean and a text property, a component set, and instances of both
     /// (with property values and overrides), and one nested two levels deep.
     fn components(&mut self, page: NodeId) {
-        let comp = self.node(page, NodeKind::Component { description: "A button".into(), props: BTreeMap::new() }, "Button");
+        let comp = self.node(page, NodeKind::Component { description: "A button".into(), props: BTreeMap::new(), prop_order: Vec::new() }, "Button");
         let icon = self.node(comp, NodeKind::Rectangle, "Icon");
         let label = self.node(comp, NodeKind::Text(TextData::new("Label")), "Label");
         {
@@ -449,7 +449,7 @@ impl Gen {
         }
         // A card holding an instance of the button, and an instance of the card overriding a layer of
         // the nested button.
-        let card = self.node(page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Card");
+        let card = self.node(page, NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() }, "Card");
         // A grid whose second cell holds the nested button.
         self.doc.node_mut(card).unwrap().layout = Some(AutoLayout { mode: LayoutMode::Grid, grid_columns: 2, grid_rows: 1, ..AutoLayout::default() });
         let nested = self.instance(comp, card, BTreeMap::new());
@@ -465,7 +465,7 @@ impl Gen {
         let set = self.node(page, NodeKind::ComponentSet { description: "States".into() }, "Toggle");
         let mut variants = Vec::new();
         for name in ["State=Off", "State=On"] {
-            let v = self.node(set, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, name);
+            let v = self.node(set, NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() }, name);
             self.node(v, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Knob");
             variants.push(v);
         }
@@ -519,7 +519,7 @@ impl Gen {
                 4 => Action::ChangeTo { dest },
                 5 => Action::Back,
                 6 => Action::CloseOverlay,
-                _ => Action::OpenUrl { url: "https://example.com".into() },
+                _ => Action::OpenUrl { url: "https://example.com".into(), new_tab: true },
             };
             let d = self.r.pick(&[Direction::Left, Direction::Right, Direction::Top, Direction::Bottom]);
             let transition = self.r.pick(&[
@@ -812,6 +812,21 @@ fn generated_documents_round_trip() {
 }
 
 #[test]
+fn a_boolean_groups_corner_radius_round_trips() {
+    let mut doc = Document::new("t");
+    let page = doc.first_page().unwrap();
+    let g = doc.create(page, NodeKind::BooleanOp { op: BoolOp::Union }, "G", 0.0, 0.0, 0.0, 0.0).unwrap();
+    doc.create(g, NodeKind::Rectangle, "A", 0.0, 0.0, 200.0, 100.0).unwrap();
+    doc.create(g, NodeKind::Rectangle, "B", 150.0, 0.0, 100.0, 200.0).unwrap();
+    doc.fit_to_children(g).unwrap();
+    doc.get_mut(g).unwrap().corners = Corners { radii: [20.0; 4], smoothing: 0.6 };
+    let (back, _) = round_trip(&doc, "boolean radius");
+    let n = back.nodes().find(|n| matches!(n.kind, NodeKind::BooleanOp { .. })).unwrap();
+    assert!(n.corners.radii.iter().all(|r| (r - 20.0).abs() < 1e-4), "{:?}", n.corners);
+    assert!((n.corners.smoothing - 0.6).abs() < 1e-4, "{:?}", n.corners);
+}
+
+#[test]
 fn round_trip_keeps_the_details() {
     let doc = generate(3);
     let (back, warnings) = round_trip(&doc, "seed 3");
@@ -825,6 +840,51 @@ fn round_trip_keeps_the_details() {
     assert_eq!(props.get("Label"), Some(&Value::String("Hi".into())));
     let label = inst.children.iter().filter_map(|c| back.node(*c)).find_map(|c| c.kind.text()).unwrap();
     assert_eq!(label.characters, "Hi");
+}
+
+#[test]
+fn fig_export_warns_when_region_paints_are_left_out() {
+    let mut doc = generate(3);
+    let Some(id) = doc.nodes().find_map(|node| match &node.kind {
+        NodeKind::Vector { network } if !network.regions.is_empty() => Some(node.id),
+        _ => None,
+    }) else {
+        panic!("generated document has no filled vector");
+    };
+    let node = doc.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    let region = network.regions.first_mut().unwrap();
+    region.fills = Some(Vec::new());
+
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+}
+
+#[test]
+fn fig_export_warns_when_inherited_region_paints_have_a_paint_frame() {
+    let mut doc = generate(3);
+    let id = doc
+        .nodes()
+        .find_map(|node| match &node.kind {
+            NodeKind::Vector { network } if !network.regions.is_empty() => Some(node.id),
+            _ => None,
+        })
+        .unwrap();
+    let node = doc.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    let region = network.regions.first_mut().unwrap();
+    region.fills = None;
+    region.paint_space = Some(RegionPaintSpace { width: 20.0, height: 10.0, transform: Affine::translate((4.0, 8.0)) });
+
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
+
+    let mut plain = doc;
+    let node = plain.node_mut(id).unwrap();
+    let NodeKind::Vector { network } = &mut node.kind else { panic!("expected vector fixture") };
+    network.regions[0].paint_space = None;
+    let (_, warnings) = export(&plain, None).unwrap();
+    assert!(!warnings.iter().any(|warning| warning == "vector region paints were left out of the .fig export"), "{warnings:?}");
 }
 
 #[test]
@@ -865,6 +925,68 @@ fn written_files_decode_and_list_parents_first() {
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
         assert!(crate::read_member(&mut z, "thumbnail.png", 1 << 20).is_ok());
     }
+}
+
+#[test]
+fn closed_vector_geometry_is_written_with_its_corner_smoothing() {
+    // A closed vector with rounded points: its written fill and stroke outlines take the layer's
+    // corner smoothing, and the smoothing and each point's radius come back on import.
+    let mut doc = Document::new("smoothing");
+    let page = doc.first_page().unwrap();
+    let mut network = VectorNetwork::from_points(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y)), true);
+    for (v, r) in network.vertices.iter_mut().zip([20.0, 0.0, 10.0, 0.0]) {
+        v.radius = r;
+    }
+    let id = doc.create(page, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.node_mut(id).unwrap().strokes = vec![Paint::solid(Color::BLACK)];
+    // The vector's written fill and stroke outlines.
+    let outlines = |doc: &Document| -> Vec<Vec<u8>> {
+        let (bytes, _) = export(doc, None).unwrap();
+        let archive = Archive::open(&bytes).unwrap();
+        let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+        let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+        let blobs = msg.get("blobs").unwrap().list();
+        let changes = msg.get("nodeChanges").unwrap().list();
+        let nc = changes.iter().find(|nc| nc.get("type").and_then(Kv::str) == Some("VECTOR")).unwrap();
+        ["fillGeometry", "strokeGeometry"]
+            .iter()
+            .map(|key| {
+                let paths = nc.get(key).map(Kv::list).unwrap_or_default();
+                let blob = paths.first().unwrap_or_else(|| panic!("{key} is written")).get("commandsBlob").unwrap().f64().unwrap() as usize;
+                blobs[blob].get("bytes").and_then(Kv::bytes).unwrap().to_vec()
+            })
+            .collect()
+    };
+    let plain = outlines(&doc);
+    doc.node_mut(id).unwrap().corners.smoothing = 0.6;
+    let smoothed = outlines(&doc);
+    assert_ne!(smoothed[0], plain[0], "the fill outline takes the smoothing");
+    assert_ne!(smoothed[1], plain[1], "the stroke outline takes the smoothing");
+    let (back, _) = round_trip(&doc, "smoothed vector");
+    let v = back.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).unwrap();
+    assert!((v.corners.smoothing - 0.6).abs() < 1e-6, "smoothing comes back: {}", v.corners.smoothing);
+    let NodeKind::Vector { network } = &v.kind else { panic!("vector") };
+    let radii: Vec<f64> = network.vertices.iter().map(|x| x.radius).collect();
+    assert_eq!(radii, vec![20.0, 0.0, 10.0, 0.0], "each point keeps its own radius");
+}
+
+#[test]
+fn sharp_points_on_a_rounded_vector_stay_sharp() {
+    // A point without a radius takes the layer's when read, so a sharp point on a vector with a
+    // layer radius is written with its own zero.
+    let mut doc = Document::new("sharp point");
+    let page = doc.first_page().unwrap();
+    let mut network = VectorNetwork::from_points(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y)), true);
+    for (v, r) in network.vertices.iter_mut().zip([8.0, 0.0, 8.0, 0.0]) {
+        v.radius = r;
+    }
+    let id = doc.create(page, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.node_mut(id).unwrap().corners.radii = [8.0; 4];
+    let (back, _) = round_trip(&doc, "sharp point");
+    let v = back.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).unwrap();
+    let NodeKind::Vector { network } = &v.kind else { panic!("vector") };
+    let radii: Vec<f64> = network.vertices.iter().map(|x| x.radius).collect();
+    assert_eq!(radii, vec![8.0, 0.0, 8.0, 0.0]);
 }
 
 #[test]
@@ -1075,7 +1197,17 @@ fn grid_track_sizes_round_trip() {
 fn instance_grid_tracks_clear_the_mains_sizes() {
     let mut doc = Document::new("File");
     let page = doc.first_page().unwrap();
-    let main = doc.create(page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Main", 0.0, 0.0, 400.0, 200.0).unwrap();
+    let main = doc
+        .create(
+            page,
+            NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+            "Main",
+            0.0,
+            0.0,
+            400.0,
+            200.0,
+        )
+        .unwrap();
     let grid = doc.create(main, NodeKind::Frame, "Grid", 0.0, 0.0, 400.0, 200.0).unwrap();
     let layout = AutoLayout {
         mode: LayoutMode::Grid,
@@ -1189,6 +1321,25 @@ fn local_samples_round_trip() {
 }
 
 #[test]
+fn a_glass_frost_is_written_as_it_draws() {
+    // A frost saved before the 0–100 range (or not a number) is written at what it draws: 100, or
+    // the default.
+    for (frost, written) in [(12.0, 12.0), (500.0, Glass::MAX_FROST), (f64::NAN, Glass::default().frost)] {
+        let mut doc = Document::new("glass");
+        let page = doc.first_page().unwrap();
+        let r = doc.create(page, NodeKind::Rectangle, "Pane", 0.0, 0.0, 24.0, 24.0).unwrap();
+        doc.get_mut(r).unwrap().effects = vec![Effect { kind: EffectKind::Glass(Glass { frost, ..Glass::default() }), visible: true }];
+        let (bytes, _) = export(&doc, None).unwrap();
+        let archive = Archive::open(&bytes).unwrap();
+        let (schema, message) = decode_canvas(&archive.canvas).unwrap();
+        let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
+        let pane = msg.get("nodeChanges").unwrap().list().iter().find(|nc| nc.get("name").and_then(Kv::str) == Some("Pane")).unwrap();
+        let radius = pane.get("effects").unwrap().list()[0].get("radius").and_then(Kv::f64).unwrap();
+        assert_eq!(radius, written, "frost {frost}");
+    }
+}
+
+#[test]
 fn a_vector_drawable_export_setting_is_written_as_svg_with_a_warning() {
     let mut doc = Document::new("vd");
     let page = doc.first_page().unwrap();
@@ -1282,8 +1433,17 @@ fn set_with_properties() -> (Document, NodeId) {
     }
     let mut doc = Document::new("File");
     let page = doc.first_page().unwrap();
-    let glyph =
-        doc.create(page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Glyph", 400.0, 0.0, 16.0, 16.0).unwrap();
+    let glyph = doc
+        .create(
+            page,
+            NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+            "Glyph",
+            400.0,
+            0.0,
+            16.0,
+            16.0,
+        )
+        .unwrap();
     doc.create(glyph, NodeKind::Rectangle, "Shape", 0.0, 0.0, 16.0, 16.0).unwrap();
     let set = doc.create(page, NodeKind::ComponentSet { description: String::new() }, "Button", 0.0, 0.0, 300.0, 120.0).unwrap();
     let mut variants = Vec::new();
@@ -1292,7 +1452,9 @@ fn set_with_properties() -> (Document, NodeId) {
             ("Label".to_string(), PropDef::Text { default: "Button".into() }),
             ("Show icon".to_string(), PropDef::Boolean { default: true }),
         ]);
-        let v = doc.create(set, NodeKind::Component { description: String::new(), props }, name, 0.0, 60.0 * i as f64, 120.0, 40.0).unwrap();
+        let v = doc
+            .create(set, NodeKind::Component { description: String::new(), props, prop_order: Vec::new() }, name, 0.0, 60.0 * i as f64, 120.0, 40.0)
+            .unwrap();
         let label = doc.create(v, NodeKind::Text(TextData::new("Button")), "Label", 0.0, 0.0, 60.0, 20.0).unwrap();
         doc.node_mut(label).unwrap().prop_refs.insert("characters".into(), "Label".into());
         // The icon is an instance placed in the variant: like the editor's, its `source` is its
@@ -1421,7 +1583,17 @@ fn set_properties_round_trip() {
 fn an_instance_without_its_mains_maximum_size_overrides_it_with_infinity() {
     let mut doc = Document::new("File");
     let page = doc.first_page().unwrap();
-    let main = doc.create(page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Box", 0.0, 0.0, 100.0, 40.0).unwrap();
+    let main = doc
+        .create(
+            page,
+            NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+            "Box",
+            0.0,
+            0.0,
+            100.0,
+            40.0,
+        )
+        .unwrap();
     doc.node_mut(main).unwrap().child_layout.max_w = Some(300.0);
     doc.create(page, NodeKind::Instance { component: main, props: BTreeMap::new() }, "Box", 0.0, 100.0, 100.0, 40.0).unwrap();
     let (bytes, _) = export(&doc, None).unwrap();
@@ -1513,6 +1685,65 @@ fn a_name_used_with_two_types_in_a_set_writes_both_definitions() {
     for v in changes.iter().filter(|n| n.get("variantPropSpecs").is_some()) {
         for d in v.get("componentPropDefs").unwrap().list() {
             assert!(written.contains(&key(d.get("parentPropDefId").unwrap())));
+        }
+    }
+}
+
+/// A whole ellipse that starts anywhere round comes back whole: the file holds its start and end
+/// angles as 32-bit floats, and their difference falls a hair short of a turn as often as not.
+#[test]
+fn a_whole_ellipse_starting_anywhere_comes_back_whole() {
+    let tau = std::f64::consts::TAU;
+    for start in [0.3, 2.0, -std::f64::consts::FRAC_PI_2, std::f64::consts::PI, 100.25] {
+        for sweep in [tau, -tau] {
+            let mut doc = Document::new("whole");
+            let page = doc.first_page().unwrap();
+            doc.create(page, NodeKind::Ellipse { start, sweep, inner: 0.0 }, "Ellipse", 0.0, 0.0, 100.0, 100.0).unwrap();
+            let (bytes, _) = export(&doc, None).unwrap();
+            let (back, _) = import(&bytes, "x").unwrap();
+            let kinds: Vec<NodeKind> =
+                back.ids().filter_map(|id| back.node(id)).map(|n| n.kind.clone()).filter(|k| matches!(k, NodeKind::Ellipse { .. })).collect();
+            assert!(matches!(kinds.as_slice(), [NodeKind::Ellipse { sweep: s, .. }] if *s == sweep), "start {start}, sweep {sweep}: {kinds:?}");
+        }
+    }
+}
+
+#[test]
+fn text_with_thousands_of_distinct_styles_exports_in_linear_time() {
+    // The style table used to be searched end to end for every span (quadratic in distinct styles).
+    let mut doc = Document::new("styles");
+    let p = doc.first_page().unwrap();
+    let mut td = TextData::new("x".repeat(20_000));
+    td.runs = (0..20_000)
+        .map(|i| StyleRun { start: i, end: i + 1, style: TextStyle { font_size: 8.0 + i as f64 / 100.0, ..TextStyle::default() } })
+        .collect();
+    doc.create(p, NodeKind::Text(td), "T", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let start = std::time::Instant::now();
+    let (bytes, _) = export(&doc, None).unwrap();
+    assert!(!bytes.is_empty());
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+}
+
+/// An ellipse whose start has gone round many times (a start typed in degrees past a few hundred
+/// turns) comes back drawn the same: the same sweep, and a start the same way round.
+#[test]
+fn an_ellipse_starting_many_turns_round_comes_back_the_same() {
+    let tau = std::f64::consts::TAU;
+    // Not all of them hold exactly as 32-bit floats, the way a start typed in degrees doesn't.
+    for start in [999.0, 1500.0, -5000.0, 1e6, 1e6 + 0.1, 1234.567] {
+        for sweep in [tau, -tau, 1.0, -2.5, 1.3, tau - 0.1] {
+            let mut doc = Document::new("turns");
+            let page = doc.first_page().unwrap();
+            doc.create(page, NodeKind::Ellipse { start, sweep, inner: 0.0 }, "Ellipse", 0.0, 0.0, 100.0, 100.0).unwrap();
+            let (bytes, _) = export(&doc, None).unwrap();
+            let (back, _) = import(&bytes, "x").unwrap();
+            let kinds: Vec<NodeKind> =
+                back.ids().filter_map(|id| back.node(id)).map(|n| n.kind.clone()).filter(|k| matches!(k, NodeKind::Ellipse { .. })).collect();
+            let Some(NodeKind::Ellipse { start: s, sweep: w, .. }) = kinds.first() else { panic!("start {start}: no ellipse") };
+            // Where the arc starts, the same way round (as close as a 32-bit angle holds it).
+            let off = (s - start).rem_euclid(tau);
+            assert!(off.min(tau - off) < 1e-5, "start {start}, sweep {sweep}: came back starting at {s}");
+            assert!((w - sweep).abs() < 1e-5, "start {start}, sweep {sweep}: came back sweeping {w}");
         }
     }
 }

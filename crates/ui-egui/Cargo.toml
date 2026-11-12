@@ -9,6 +9,7 @@ description = "FigCraft egui frontend (the Figma-style UI: canvas, toolbar, laye
 workspace = true
 
 [dependencies]
+craft-ui = { workspace = true }
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }

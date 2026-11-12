@@ -29,6 +29,7 @@ mod graphics;
 mod recovery;
 mod services;
 mod startup;
+mod window_frame;
 
 #[cfg(all(test, target_os = "macos"))]
 mod apple_events_tests;
@@ -42,6 +43,8 @@ mod recovery_online_tests;
 mod recovery_tests;
 #[cfg(test)]
 mod services_tests;
+#[cfg(test)]
+mod settings_dir_tests;
 #[cfg(test)]
 mod startup_tests;
 
@@ -61,6 +64,8 @@ struct App {
     title: String,
     /// Shared with the services, which write the copies after a panic.
     recovery: recovery::Shared,
+    /// Keeps the custom title bar's undecorated windows borderless (Windows, #1343).
+    window_frame: window_frame::WindowFrame,
     /// Documents and quit requests from Finder, the Dock and Open With.
     #[cfg(target_os = "macos")]
     apple_events: fmv_macos_events::Inbox,
@@ -109,6 +114,9 @@ impl eframe::App for App {
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // winit gives an undecorated window its caption back when it changes the window's flags
+        // (maximize, restore, ...): take it off again before the frame is laid out (#1343).
+        self.window_frame.run();
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
         if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
@@ -124,7 +132,12 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         // With the app out of reach (busy), its recovery copies stay for the next start.
         let copies = recovery::lock(&self.recovery).take();
-        with_app(|fig| services::shutdown(fig, services::config_dir().as_deref(), copies));
+        with_app(|fig| {
+            services::shutdown(fig, services::config_dir().as_deref(), copies);
+            // An update that waits for the app to close installs now: the app lives in a
+            // thread-local, and the process can end without dropping it.
+            fig.start_pending_update();
+        });
         // Everything is kept: end before the windows' teardown, where AppKit's Touch Bar support
         // throws on the content view AccessKit restores (craft-libs#3, #781).
         #[cfg(target_os = "macos")]
@@ -135,7 +148,7 @@ impl eframe::App for App {
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&craft_update::suite::FIGCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(result) = craft_update::self_update::finish(&figcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -187,9 +200,13 @@ fn main() -> eframe::Result {
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
     session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
+    // A file that won't open is said in the window too: it may have been double-clicked.
+    let mut failed_open = None;
     for f in &args.files {
         if let Err(e) = session.execute("file.open", &json!({"path": f})) {
             log::error!("{f}: {e}");
+            let name = std::path::Path::new(f).file_name().map_or_else(|| f.into(), |n| n.to_string_lossy());
+            failed_open = Some(format!("{name}: {e}"));
         }
     }
     let opened: Vec<u64> = session.docs.iter().map(|d| d.uid).collect();
@@ -229,12 +246,15 @@ fn main() -> eframe::Result {
     // Files named on the command line are the user's too: their missing fonts are listed.
     fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
+    if let Some(message) = failed_open {
+        fig.show_error(message);
+    }
     if let Some(link) = &args.join {
         figcraft_ui_egui::live::open_invite(&mut fig, link);
     }
     let queue: Arc<Mutex<Vec<ControlRequest>>> = Arc::new(Mutex::new(Vec::new()));
     if let Some(p) = port {
-        control_server::start(p, queue.clone(), ctx_slot.clone());
+        control_server::start(p, graphics::port_wait(), queue.clone(), ctx_slot.clone(), fig.session.events.clone());
     }
     let icon = services::window_icon();
     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
@@ -254,11 +274,14 @@ fn main() -> eframe::Result {
     // the old bespoke xdg-decoration probe that always drew FigCraft's custom title bar on KDE.
     fig.ui.title_bar = desktop_title_bar();
     viewport = window_chrome(viewport, fig.ui.title_bar);
+    let custom_titlebar = fig.ui.title_bar == figcraft_ui_egui::TitleBar::Custom;
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
-    graphics::configure(&mut options.wgpu_options);
+    let graphics = graphics::Plan::configure(&mut options.wgpu_options);
+    // Counts the frames drawn, which tells a window that failed starting up from one that ran.
+    let window = ctx_slot.clone();
     figcraft_ui_egui::windows::install(fig);
     // Registered before the event loop starts, so it catches the Finder event that launched the app
     // as well as later ones. Lives until the event loop returns; the app creator only borrows it.
@@ -269,23 +292,37 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "FigCraft",
         options,
-        Box::new(move |cc| {
+        Box::new(|cc| {
+            if let Some(state) = &cc.wgpu_render_state {
+                graphics.opened(&state.adapter.get_info());
+            }
             with_app(|fig| fig.services.set_egui_context(&cc.egui_ctx));
+            // winit's own Quit (⌘Q) ends the process through `terminate:` without ever asking the
+            // app, so unsaved changes are lost with no warning (issue #857). This menu's Quit
+            // sends the root window a close request instead, and the unsaved-changes question
+            // asks just as it does for the close button. Failure keeps winit's menu: the app
+            // runs, but ⌘Q ends it without asking.
+            #[cfg(target_os = "macos")]
+            if let Err(e) = craft_menu::mac::install_app_menu(&cc.egui_ctx, "FigCraft") {
+                log::warn!("app menu: kept winit's Quit, which ends the app without asking: {e}");
+            }
             Ok(Box::new(App {
                 queue,
                 ctx_slot,
                 title: String::new(),
                 recovery,
+                // The custom title bar's undecorated window must stay borderless, or its caption
+                // and border offset the content and the pointer on some Windows systems (#1343).
+                window_frame: window_frame::WindowFrame::new(custom_titlebar),
                 #[cfg(target_os = "macos")]
                 apple_events: apple_events.connect(&cc.egui_ctx),
             }))
         }),
     );
-    // Say why instead of quitting silently: release builds on Windows have no console.
-    if let Err(e) = &result {
-        startup::failed(e, port.is_some());
-    }
-    result
+    let frames = window.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map_or(0, egui::Context::cumulative_frame_nr);
+    // Start again on other graphics, or say why instead of quitting silently: release builds on
+    // Windows have no console.
+    graphics.finish(result, frames, port.is_some())
 }
 
 /// With nothing to open, whether the window starts in a new file rather than on the home screen.

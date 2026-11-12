@@ -1,8 +1,9 @@
 //! Vector networks: vertices joined by curved segments, any number of segments per vertex, plus
 //! filled regions made of closed loops.
 
+use figcraft_color::Paint;
 use figcraft_geom::kurbo::{CubicBez, ParamCurve, ParamCurveArclen, ParamCurveDeriv};
-use figcraft_geom::{BezPath, Point, Vec2};
+use figcraft_geom::{Affine, BezPath, Point, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::{StrokeCap, StrokeJoin};
@@ -88,17 +89,50 @@ pub enum WindingRule {
     EvenOdd,
 }
 
+/// The paint coordinate frame retained when a region moves or its vector is refit.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RegionPaintSpace {
+    /// Width of the box that defines paint coordinates.
+    pub width: f64,
+    /// Height of the box that defines paint coordinates.
+    pub height: f64,
+    /// Maps paint-local coordinates into this network's local coordinates.
+    pub transform: Affine,
+}
+
 /// A filled region: loops of segment indices.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Region {
     pub loops: Vec<Vec<usize>>,
     #[serde(default)]
     pub winding: WindingRule,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fills: Option<Vec<Paint>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint_space: Option<RegionPaintSpace>,
 }
 
-/// A rounded point as drawn: point `v` moves to `a` (on segment `s1`), segment `s2` starts again
-/// at `b`, and an arc with handles `ta`/`tb` joins them. `cut1`/`cut2`: where each segment is cut,
-/// in its own parameter (curved segments keep the rest of their curve).
+impl Region {
+    /// Paint box and transform, falling back to the current node box for old or invalid metadata.
+    pub fn paint_frame(&self, width: f64, height: f64) -> (f64, f64, Affine) {
+        let Some(frame) = self.paint_space else { return (width, height, Affine::IDENTITY) };
+        let coefficients = frame.transform.as_coeffs();
+        let valid = frame.width.is_finite()
+            && frame.height.is_finite()
+            && frame.width > 0.0
+            && frame.height > 0.0
+            && coefficients.iter().all(|value| value.is_finite())
+            && frame.transform.determinant().is_finite()
+            && frame.transform.determinant() != 0.0
+            && frame.transform.inverse().as_coeffs().iter().all(|value| value.is_finite());
+        if valid { (frame.width, frame.height, frame.transform) } else { (width, height, Affine::IDENTITY) }
+    }
+}
+
+/// A rounded point as drawn: point `v` moves to `a` (on segment `s1`), and the curves of `chain`
+/// lead from there to where segment `s2` starts again (one arc, or a smoothed corner's easing
+/// curves and arc). `cut1`/`cut2`: where each segment is cut, in its own parameter (curved
+/// segments keep the rest of their curve).
 struct Corner {
     v: usize,
     s1: usize,
@@ -106,11 +140,17 @@ struct Corner {
     s2: usize,
     s2_at_a: bool,
     a: Point,
-    b: Point,
-    ta: (f64, f64),
-    tb: (f64, f64),
+    chain: Vec<CornerCurve>,
     cut1: f64,
     cut2: f64,
+}
+
+/// One curve of a rounded point: its handles at its start (`ta`) and its end (`tb`), relative to
+/// those ends, and the point it ends at.
+struct CornerCurve {
+    ta: (f64, f64),
+    tb: (f64, f64),
+    end: Point,
 }
 
 /// Accuracy of arc lengths along curved segments (local units).
@@ -144,6 +184,13 @@ fn redirect_last_segment(net: &mut VectorNetwork, loop_segs: &[usize], from: usi
     }
 }
 
+/// Which segments are in a loop, and which segments join each pair of points: the lookups
+/// [`VectorNetwork::closing_segment`] reads, built once per pass by [`VectorNetwork::loop_index`].
+pub struct LoopIndex {
+    in_loop: Vec<bool>,
+    by_ends: std::collections::BTreeMap<(usize, usize), Vec<usize>>,
+}
+
 impl VectorNetwork {
     /// A network from a polyline / polygon.
     pub fn from_points(points: &[Point], closed: bool) -> Self {
@@ -153,7 +200,7 @@ impl VectorNetwork {
         let mut regions = Vec::new();
         if closed && n > 2 {
             segments.push(Segment::line(n - 1, 0));
-            regions.push(Region { loops: vec![(0..segments.len()).collect()], winding: WindingRule::NonZero });
+            regions.push(Region { loops: vec![(0..segments.len()).collect()], winding: WindingRule::NonZero, fills: None, paint_space: None });
         }
         Self { vertices, segments, regions }
     }
@@ -242,7 +289,7 @@ impl VectorNetwork {
         }
         close_open(&mut net, &mut loop_segs, &mut all_loops, first_v, cur_v);
         if !all_loops.is_empty() {
-            net.regions.push(Region { loops: all_loops, winding: WindingRule::NonZero });
+            net.regions.push(Region { loops: all_loops, winding: WindingRule::NonZero, fills: None, paint_space: None });
         }
         net
     }
@@ -349,9 +396,19 @@ impl VectorNetwork {
     /// the rest of its curve, the arc leaving along its direction there. `None` when no point is
     /// rounded.
     pub fn rounded(&self) -> Option<VectorNetwork> {
+        self.rounded_smoothed(0.0)
+    }
+
+    /// [`Self::rounded`] with the layer's corner smoothing (0..=1): a rounded point between two
+    /// straight segments that both belong to a region's loops gets a smoothed corner, drawn with
+    /// the profile of a smoothed polygon's corners (`figcraft_geom::smoothed_corner`). Other
+    /// rounded points (on open branches, or next to a curved segment) keep the plain arc, and a
+    /// point without a radius stays sharp. Without smoothing this is [`Self::rounded`].
+    pub fn rounded_smoothed(&self, smoothing: f64) -> Option<VectorNetwork> {
         if !self.vertices.iter().any(|v| v.radius > 0.0) {
             return None;
         }
+        let smoothing = if smoothing.is_finite() { smoothing.clamp(0.0, 1.0) } else { 0.0 };
         let mut incident: Vec<Vec<(usize, bool)>> = vec![Vec::new(); self.vertices.len()];
         for (i, s) in self.segments.iter().enumerate() {
             for (v, at_a) in [(s.a, true), (s.b, false)] {
@@ -360,7 +417,14 @@ impl VectorNetwork {
                 }
             }
         }
-        let corners: Vec<Corner> = (0..self.vertices.len()).filter_map(|v| self.corner(v, incident.get(v)?)).collect();
+        // The segments that bound a closed region, where corners take smoothing.
+        let mut on_loop = vec![false; if smoothing > 0.0 { self.segments.len() } else { 0 }];
+        for &i in self.regions.iter().flat_map(|r| r.loops.iter().flatten()) {
+            if let Some(x) = on_loop.get_mut(i) {
+                *x = true;
+            }
+        }
+        let corners: Vec<Corner> = (0..self.vertices.len()).filter_map(|v| self.corner(v, incident.get(v)?, smoothing, &on_loop)).collect();
         let mut out = self.clone();
         for v in &mut out.vertices {
             v.radius = 0.0;
@@ -387,41 +451,52 @@ impl VectorNetwork {
             s.ta = (q.p1.x - q.p0.x, q.p1.y - q.p0.y);
             s.tb = (q.p2.x - q.p3.x, q.p2.y - q.p3.y);
         }
-        let mut by_vertex: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        // Each rounded point's curves in order from `s1`'s side, by point.
+        let mut by_vertex: std::collections::BTreeMap<usize, (usize, Vec<usize>)> = std::collections::BTreeMap::new();
         for c in corners {
             if let Some(v) = out.vertices.get_mut(c.v) {
                 (v.x, v.y) = (c.a.x, c.a.y);
             }
-            out.vertices.push(Vertex::new(c.b.x, c.b.y));
-            let nb = out.vertices.len() - 1;
+            let mut from = c.v;
+            let mut arcs = Vec::with_capacity(c.chain.len());
+            for CornerCurve { ta, tb, end } in c.chain {
+                out.vertices.push(Vertex::new(end.x, end.y));
+                let to = out.vertices.len() - 1;
+                out.segments.push(Segment { a: from, b: to, ta, tb });
+                arcs.push(out.segments.len() - 1);
+                from = to;
+            }
             if let Some(s) = out.segments.get_mut(c.s2) {
                 if c.s2_at_a {
-                    s.a = nb;
+                    s.a = from;
                 } else {
-                    s.b = nb;
+                    s.b = from;
                 }
             }
-            out.segments.push(Segment { a: c.v, b: nb, ta: c.ta, tb: c.tb });
-            let arc = out.segments.len() - 1;
-            by_vertex.insert(c.v, arc);
+            by_vertex.insert(c.v, (c.s1, arcs));
         }
-        // The arc goes between the two segments wherever a loop walks through the point. Each loop
-        // is rebuilt in one pass, so a polygon with many rounded corners isn't quadratic.
+        // The curves go between the two segments wherever a loop walks through the point, in the
+        // order the loop meets them. Each loop is rebuilt in one pass, so a polygon with many
+        // rounded corners isn't quadratic.
+        let index = self.loop_index();
         for lp in out.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
-            let Some(&first_idx) = lp.first() else { continue };
-            let start_v = match (self.segments.get(first_idx), lp.get(1).and_then(|&i| self.segments.get(i))) {
-                (Some(first), Some(second)) if first.a == second.a || first.a == second.b => first.b,
-                (Some(first), _) => first.a,
-                _ => 0,
-            };
-            let mut rebuilt = Vec::with_capacity(lp.len() + by_vertex.len().min(lp.len()));
+            if lp.is_empty() {
+                continue;
+            }
+            let start_v = self.loop_start(lp).unwrap_or(0);
+            let mut rebuilt = Vec::with_capacity(lp.len() + by_vertex.len().min(lp.len()) + 1);
             let mut cur = start_v;
-            for &x in lp.iter() {
+            let closing = self.closing_segment(lp, &index);
+            for &x in lp.iter().chain(closing.iter()) {
                 rebuilt.push(x);
                 let Some(s) = self.segments.get(x) else { continue };
                 cur = if s.a == cur { s.b } else { s.a };
-                if let Some(&arc) = by_vertex.get(&cur) {
-                    rebuilt.push(arc);
+                if let Some((s1, arcs)) = by_vertex.get(&cur) {
+                    if x == *s1 {
+                        rebuilt.extend(arcs.iter().copied());
+                    } else {
+                        rebuilt.extend(arcs.iter().rev().copied());
+                    }
                 }
             }
             *lp = rebuilt;
@@ -429,9 +504,64 @@ impl VectorNetwork {
         Some(out)
     }
 
+    /// The point loop `lp` is walked from: the end of its first segment that its second does not
+    /// share.
+    fn loop_start(&self, lp: &[usize]) -> Option<usize> {
+        let first = self.segments.get(*lp.first()?)?;
+        match lp.get(1).and_then(|&i| self.segments.get(i)) {
+            Some(second) if first.a == second.a || first.a == second.b => Some(first.b),
+            _ => Some(first.a),
+        }
+    }
+
+    /// The lookups [`Self::closing_segment`] needs, built once for a pass over every loop.
+    pub fn loop_index(&self) -> LoopIndex {
+        let mut in_loop = vec![false; self.segments.len()];
+        for &x in self.regions.iter().flat_map(|r| r.loops.iter().flatten()) {
+            if let Some(f) = in_loop.get_mut(x) {
+                *f = true;
+            }
+        }
+        let mut by_ends: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
+        for (i, s) in self.segments.iter().enumerate() {
+            by_ends.entry((s.a.min(s.b), s.a.max(s.b))).or_default().push(i);
+        }
+        LoopIndex { in_loop, by_ends }
+    }
+
+    /// The segment that joins the two ends of an open loop `lp` when it is in no loop of its own
+    /// (and the only such segment): a corner cut off by a segment drawn before the corner point was
+    /// deleted leaves the loop open there, and the stroke follows that segment. Only a loop that
+    /// walks in order as one continuous chain has one. Rounding walks it as the loop's last
+    /// segment, so the points at the loop's ends are cut by arcs as the stroke's are, and deleting
+    /// points or segments puts it into the loop (#1951). `index` is this network's [`Self::loop_index`],
+    /// shared by every loop of one pass.
+    pub fn closing_segment(&self, lp: &[usize], index: &LoopIndex) -> Option<usize> {
+        let start_v = self.loop_start(lp)?;
+        let mut cur = start_v;
+        for &x in lp {
+            let s = self.segments.get(x)?;
+            cur = if s.a == cur {
+                s.b
+            } else if s.b == cur {
+                s.a
+            } else {
+                return None;
+            };
+        }
+        if cur == start_v {
+            return None;
+        }
+        let mut joining =
+            index.by_ends.get(&(cur.min(start_v), cur.max(start_v)))?.iter().copied().filter(|&i| !index.in_loop.get(i).copied().unwrap_or(false));
+        let first = joining.next()?;
+        joining.next().is_none().then_some(first)
+    }
+
     /// How point `v` (its `incident` segments) is rounded, if it is: not where the two segments
-    /// run on smoothly or fold back.
-    fn corner(&self, v: usize, incident: &[(usize, bool)]) -> Option<Corner> {
+    /// run on smoothly or fold back. With `smoothing`, a point between two straight segments that
+    /// are both `on_loop` gets a smoothed corner.
+    fn corner(&self, v: usize, incident: &[(usize, bool)], smoothing: f64, on_loop: &[bool]) -> Option<Corner> {
         let r = self.vertices.get(v)?.radius;
         let [(s1, a1), (s2, a2)] = *incident else { return None };
         if !(r > 0.0 && r.is_finite()) || s1 == s2 {
@@ -447,6 +577,24 @@ impl VectorNetwork {
         if !(l1 > 1e-9 && l2 > 1e-9) {
             return None;
         }
+        let own = |at_a: bool, t: f64| if at_a { t } else { 1.0 - t };
+        let closed = |s: usize| on_loop.get(s).copied().unwrap_or(false);
+        if smoothing > 0.0
+            && is_line(&c1)
+            && is_line(&c2)
+            && closed(s1)
+            && closed(s2)
+            && let Some(curves) = figcraft_geom::smoothed_corner(c1.p0, u1, u2, l1.min(l2) / 2.0, r, smoothing)
+            && let (Some(first), Some(last)) = (curves.first(), curves.last())
+        {
+            let (a, b) = (first.p0, last.p3);
+            let chain = curves
+                .iter()
+                .map(|q| CornerCurve { ta: (q.p1.x - q.p0.x, q.p1.y - q.p0.y), tb: (q.p2.x - q.p3.x, q.p2.y - q.p3.y), end: q.p3 })
+                .collect();
+            let (cut1, cut2) = ((a - c1.p0).hypot() / l1, (b - c2.p0).hypot() / l2);
+            return Some(Corner { v, s1, s1_at_a: a1, s2, s2_at_a: a2, a, chain, cut1: own(a1, cut1), cut2: own(a2, cut2) });
+        }
         let t = (r / (angle / 2.0).tan()).min(l1.min(l2) / 2.0);
         let ((a, d1, k1), (b, d2, k2)) = (trim(&c1, t, l1), trim(&c2, t, l2));
         // A cubic arc: handles of 4/3·tan(φ/4)·ρ along each end's direction, φ the turn between
@@ -457,7 +605,6 @@ impl VectorNetwork {
         if !(k.is_finite() && a.x.is_finite() && a.y.is_finite() && b.x.is_finite() && b.y.is_finite()) {
             return None;
         }
-        let own = |at_a: bool, t: f64| if at_a { t } else { 1.0 - t };
         Some(Corner {
             v,
             s1,
@@ -465,9 +612,7 @@ impl VectorNetwork {
             s2,
             s2_at_a: a2,
             a,
-            b,
-            ta: (d1.x * k, d1.y * k),
-            tb: (d2.x * k, d2.y * k),
+            chain: vec![CornerCurve { ta: (d1.x * k, d1.y * k), tb: (d2.x * k, d2.y * k), end: b }],
             cut1: own(a1, k1),
             cut2: own(a2, k2),
         })
@@ -637,12 +782,24 @@ impl VectorNetwork {
             s.ta = (s.ta.0 * sx, s.ta.1 * sy);
             s.tb = (s.tb.0 * sx, s.tb.1 * sy);
         }
+        let scale = Affine::scale_non_uniform(sx, sy);
+        for region in &mut self.regions {
+            if let Some(frame) = &mut region.paint_space {
+                frame.transform = scale * frame.transform;
+            }
+        }
     }
 
     pub fn translate(&mut self, dx: f64, dy: f64) {
         for v in &mut self.vertices {
             v.x += dx;
             v.y += dy;
+        }
+        let translate = Affine::translate((dx, dy));
+        for region in &mut self.regions {
+            if let Some(frame) = &mut region.paint_space {
+                frame.transform = translate * frame.transform;
+            }
         }
     }
 

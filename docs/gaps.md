@@ -1,6 +1,6 @@
 # Where FigCraft falls short of Figma
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (gap 17: branches in live sessions, branch history entries, the list-merge rows brought up to date; gap 6: plugin widgets take text input and a property menu (plugin API 4); gap 24: board templates and tables; gap 24: a shared timer and voting sessions; gap 24: the board dot grid, connector ends dragged to re-attach, curved connectors; egui/eframe 0.37 verified for gap 18; known gaps from the #1311 review in gaps 4, 14, 15 and 16; gap 16: measurements kept on the canvas, a read-only layers panel in Dev Mode; gap 24: boards and their tail; Dev Mode tail: import lines in layer trees, compare with versions, an inspect-only canvas; gap 5: reviewed Turkish, Czech and Indonesian drafts, the Japanese draft completed; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail; the 2026-10-17 landings: `.fig` import fidelity, budgets for large files, the import report, a `.fig` copy from Save as and paste from another design app (gap 1); menus, the Actions palette, editor fixes, Selection colors and smart-selection spacing (gap 4); catalog counts re-measured (gap 5); bounded canvas pan overscan; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail) · **Target:** Figma Design (desktop app 126.10.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (gap 13: a boolean group's corner radius (#2222); gap 24: mind maps, first step: a first node with three children on curved branches, laid out again after every edit (`board.mindMap`, `board.mindMapAdd`, #2226); gap 10: library analytics list how many layers and files use each style and variable; the Controller menu names each button as PlayStation and Switch controllers do; gap 6: widgets draw lines and SVG pictures (plugin API 6); gap 7: text reads only the fallback fonts it draws with; a board connector's path can be reshaped by dragging its path handles (#1710); gap 10: library analytics count insertions and show insertions and detachments over time; gap 6: a widget opens its plugin's panel (plugin API 5), whose callbacks redraw it; the keyboard's Menu key opens the context menu, as Shift+F10 does; gap 14: a collection of this file extends, following its edits at once; colour picker review fixes for text undo, fitted sidebars, moving controls and gradient variables; gap 6: plugin widgets have hover styles; gap 7: the browser draws a zoom's full render a band at a time; `.fig` import keeps the file's saved line breaks while the text and its box are unedited (#1236); FigJam outer shape outlines and sticky body fallback beside author text (#1341, #1397); Arabic draft catalog; gap 7: the browser refines a zoom's preview once the zoom has paused; gap 17: branches in live sessions, branch history entries, the list-merge rows brought up to date; gap 6: plugin widgets take text input and a property menu (plugin API 4); gap 24: board templates and tables; gap 24: a shared timer and voting sessions; gap 24: the board dot grid, connector ends dragged to re-attach, curved connectors; egui/eframe 0.37 verified for gap 18; known gaps from the #1311 review in gaps 4, 14, 15 and 16; gap 16: measurements kept on the canvas, a read-only layers panel in Dev Mode; gap 24: boards and their tail; Dev Mode tail: import lines in layer trees, compare with versions, an inspect-only canvas; gap 5: reviewed Turkish, Czech and Indonesian drafts, the Japanese draft completed; reviewed Russian catalog and integer plurals; `.fig` export: instance sizes, variables with modes, shared styles, variable-width strokes; sharing with a join code; text box sizes measured against documents re-saved by other software; live sessions per document; .fig export checked by opening written files in other software; experimental .fig export; keyboard shortcut parity suite and bindings; Simplified Chinese draft catalog; Latin American Spanish overlay; prototyping tail: gamepad triggers, widgets in prototypes, mode lookups; plugin directory on figcraft-server; Japanese and Korean draft catalogs and CJK UI fonts; plugin widgets and the plugin panel tail; French, German and Brazilian Portuguese draft catalogs; cursor chat and spotlight in live sessions; layers and assets panels behaviour suite and fixes; vector multi-edit and edit tail; dev resources links; extended collections tail; branch version history and finer list merges; comments and version history behaviour suite and fixes; canvas navigation, guides and grids behaviour suite and fixes; `.fig` import: editable vector networks, more layer kinds, variable prototype actions; `.fig` import, best effort: gap 1 down to its tail; Windows QA pass: everyday workflows on Windows 11, eight fixes incl. unsaved work kept after a crash or a forced quit; Display P3: gamut warning and soft-proof (true P3 blocked upstream); several windows; localization layer with a draft Spanish catalog; hosting figcraft-server: wss in the desktop app, server releases, deployment guide; plugin panels and settings; canvas fixes: boolean hit testing on the result, group drags, frame outlines and slices; code connect; stretch and scatter brushes, pen pressure; text on a path and pattern fills; team libraries on the server and swap library; branches: create, update from main, review and merge; animated GIF fills and TIFF images; Open recent, outlines for the selection and mask outlines: menu breadth 100%; extended collections, variables import/export, gradient stop and variant bindings: gap 14 down to its tail; the 2026-10-17 landings: `.fig` import fidelity, budgets for large files, the import report, a `.fig` copy from Save as and paste from another design app (gap 1); menus, the Actions palette, editor fixes, Selection colors and smart-selection spacing (gap 4); catalog counts re-measured (gap 5); bounded canvas pan overscan) · **Target:** Figma Design (desktop app 126.10.7)
 
 Every known shortfall against Figma, one entry each, ranked by how much it stops a Figma user from
 doing real work in FigCraft. Agents: pick work from the top unless the owner says otherwise. The
@@ -16,20 +16,20 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 |---|---|---|---|---|
 | 1 | `.fig` files: best-effort import with editable vector networks and stand-ins for non-design layers landed, then (2026-10-17) more fidelity on synthetic files, budgets for large files, an import report and paste from another design app; an experimental export, also as a copy from Save as (round trips through our own importer; written files opened in other software, where layers, fills, gradients, strokes, shadows, vectors, components and text draw as in FigCraft, instances keep their size and variables with modes and colour styles come across); real-file checks and the small tail left (**beta blocker** until checked on real files, gap 3) | File format | 5–10 | [file-format-parity](file-format-parity.md) |
 | 2 | Multiplayer and sharing are a preview, without accounts (**beta blocker**) | Feature | 42–84 | [collaboration-parity](collaboration-parity.md) |
-| 3 | Nothing checked against real Figma files | Fidelity | 15–30 | [target-app-parity](target-app-parity.md) |
+| 3 | No representative corpus checked against real Figma files | Fidelity | 15–30 | [target-app-parity](target-app-parity.md) |
 | 4 | Interaction fidelity not compared tool by tool | UI/UX | 40–60 | [ui-parity](ui-parity.md) |
-| 5 | Localization: English, reviewed Russian and Turkish, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian and Czech drafts; Turkish and Swedish catalogs | Localization | 29–51 | [localization-parity](localization-parity.md) |
-| 6 | Plugins: widgets without hover or timers, a self-hosted directory but no public catalogue; Figma's plugins don't run | Ecosystem | 6–22 | [target-app-parity](target-app-parity.md) |
+| 5 | Localization: English, reviewed Russian and Turkish, plus unreviewed Spanish (and Latin American Spanish), French, German, Brazilian Portuguese, Japanese, Korean, Simplified Chinese, Indonesian and Czech drafts; Turkish and Swedish catalogs; Arabic draft: 2,508 entries, native review and mirrored panel rows pending (the window mirrors) | Localization | 29–51 | [localization-parity](localization-parity.md) |
+| 6 | Plugins: widgets without timers, a self-hosted directory but no public catalogue; Figma's plugins don't run | Ecosystem | 6–22 | [target-app-parity](target-app-parity.md) |
 | 7 | CPU canvas where Figma uses the GPU | Hardware/performance | 30–60 | [hardware-parity](hardware-parity.md) |
 | 8 | Platform QA: Linux and the browser left (Windows pass done 2026-10-11) | Stability/platforms | 10–20 | [hardware-parity](hardware-parity.md) |
 | 9 | Figma Draw: pen pressure on macOS/Linux tablets (multi-edit, brushes, pressure, text on a path and pattern fills landed) | Feature | 1–3 | [target-app-parity](target-app-parity.md) |
-| 10 | Team libraries: no team-wide lists or accounts; analytics are counts | Feature | 4–8 | [components-parity](components-parity.md) |
+| 10 | Team libraries: no team-wide lists or accounts; analytics count insertions for components only | Feature | 4–8 | [components-parity](components-parity.md) |
 | 11 | Spell check | Feature | 4–8 | [target-app-parity](target-app-parity.md) |
 | 12 | Video fills; HEIC images | File format | 5–10 | [file-format-parity](file-format-parity.md) |
 | 13 | Vector tail: none left (boolean hit testing on the result landed 2026-10-11) | Feature | — | [target-app-parity](target-app-parity.md) |
 | 14 | Variables: extended collections checked on real libraries (the tail landed 2026-10-12) | Feature | 0–1 | [components-parity](components-parity.md) |
 | 15 | Prototyping: media triggers and actions; controllers on macOS, Linux and FreeBSD (controller buttons on key/gamepad triggers, widgets in prototypes landed) | Feature | 2–5 | [prototyping-parity](prototyping-parity.md) |
-| 16 | Dev Mode: publishing mappings from the code repository; the editor extension is left to the MCP server (measurements kept on the canvas and a read-only layers panel landed 2026-10-24) | Feature | 1–2 | [dev-mode-parity](dev-mode-parity.md) |
+| 16 | Dev Mode: renaming the file in Dev Mode to check; the editor extension is left to the MCP server (publishing mappings from the code repository landed 2026-10-30) | Feature | 1–2 | [dev-mode-parity](dev-mode-parity.md) |
 | 17 | Branching: text runs merged whole, branches only their author sees in a live session (branches in live sessions, export settings and guides item by item, and history entries for creation and updates landed 2026-10-24) | Feature | 1–2 | [collaboration-parity](collaboration-parity.md) |
 | 18 | Display P3 on screen: blocked upstream (egui-wgpu picks an 8-bit sRGB surface); gamut warning and soft-proof sRGB landed, as did several windows | Hardware | 4–8 | [hardware-parity](hardware-parity.md) |
 | 19 | AI features | AI | 30–60 | [target-app-parity](target-app-parity.md) |
@@ -37,7 +37,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 21 | Menu items without a command: none left (landed 2026-10-11) | Feature | — | [parity-checklist](parity-checklist.md) |
 | 22 | Screen readers never run; browser has no accessibility tree | UI/UX | 4–8 | [ui-parity](ui-parity.md) |
 | 23 | CMYK output intent for print PDFs | File format | 2–4 | [file-format-parity](file-format-parity.md) |
-| 24 | Boards: the whiteboard tail (widgets, mind maps, waypoints…) | Feature | 20–44 | [boards-parity](boards-parity.md) |
+| 24 | Boards: the whiteboard tail (widgets, mind maps…) | Feature | 20–44 | [boards-parity](boards-parity.md) |
 
 ## Entries
 
@@ -79,11 +79,34 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   `.figcraft` path. Layers copied from another design app paste (`edit.pasteDesignLayers`, and
   Cmd/Ctrl+V when the clipboard's HTML holds a `.fig` canvas): read like a `.fig` file, with its
   warnings, size-checked (256 MB) before decoding.
-- **Missing:** elbowed or curved connectors without a saved path (drawn straight), labels of
-  connectors without a saved snapshot, table cells beyond their own layers, filled areas of a
-  vector with their own fills (#634, held for an owner decision on the document model), variables
+- **Fixed (2026-10-26, #1341):** generated FigJam sticky notes and shapes with text keep their
+  background, text, typography, text paint and saved child bounds, including sticky author lines,
+  as editable frame children. Synthetic fixtures cover generated records, missing bounds,
+  unsupported versions, saved vector networks without geometry paths, outer fill/stroke outlines
+  when generated geometry is damaged, outer body-text fallback beside a surviving author and
+  layer budgets; the issue sample was checked locally only. Native
+  board metadata and direct `.jam` opening (#1342) remain separate work.
+- **Landed (2026-10-26):** `.fig` import reads vector-region fill stacks; vector editing and path
+  operations retain them with their source paint coordinates. `.fig` export still warns and drops
+  region fills. Evidence: `crates/format/src/fig/tail_tests.rs`, `crates/engine/src/shapebuilder_region_paints_tests.rs`.
+- **Fixed (2026-10-29, #1236):** imported text keeps the line breaks the file saved with it
+  (`derivedTextData`), so a font whose advances differ slightly from the file's (another build
+  of the family, a stand-in) no longer wraps a word early or splits one in a narrow box. The
+  breaks hold only while the box width and everything that moves a break (characters, fonts,
+  sizes, spacing, case, axes, features, lists, paragraph settings) are as saved, and are given up
+  where a line would come out more than 3% (+1 px) wider than its box. The line breaker itself
+  was checked and left as is: trailing spaces and the letter spacing after a line's last glyph
+  already stay out of the fit test, box widths aren't rounded and the fit tolerance is 1e-6 px,
+  so the differences come from the fonts' advances. Evidence:
+  `crates/text/src/saved_breaks_tests.rs`, `crates/format/src/fig/text_wrap_tests.rs`; not
+  checked on real files.
+- **Missing:** the background of connector labels without a saved snapshot (the label is kept,
+  centred on its line), table cells beyond their own layers, live region
+  style/variable links, variables
   bound to fields the editor can't bind and video fills aren't read; text lays out again with
-  local fonts. Nothing has been checked against real-world files yet (gap 3): the 2026-10-17
+  local fonts (an unedited text keeps the file's line breaks, but glyph positions, line widths
+  and heights come from the fonts at hand, and an edited one wraps by them), and the saved breaks
+  were never compared with real files. Beyond the local FigJam regression check for #1341, there is no real-world corpus (gap 3): the 2026-10-17
   changes were tested on files built in code, and paste from another design app on clipboard HTML
   made from our own export, never on a real clipboard. The export was checked in other software
   on our example documents and small test files only.
@@ -127,7 +150,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Estimate:** 42–84 h: accounts, teams and per-person permissions, shared comments and versions
   (numbers from before the server landed; re-measured next).
 
-### 3. Nothing checked against real Figma files
+### 3. No representative corpus checked against real Figma files
 - **Missing:** a corpus of real documents (design systems, app screens, prototypes) imported and
   compared with Figma's own PNG/SVG/PDF exports.
 - **Evidence:** every corpus in the repo is synthetic (`crates/svg/tests/corpus`, the synthetic
@@ -136,6 +159,9 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Impact:** unknown fidelity in auto layout sizing, text metrics, effects and component
   resolution on real files; the numbers in this repo can't be trusted beyond "estimated" until it
   exists.
+- **Local regression check (2026-10-26):** the public FigJam issue sample in #1341 was read
+  locally to check its generated backgrounds, text and author lines. It is not committed and
+  does not establish representative design-file fidelity.
 - **Measured so far:** text box sizes and auto layout results of our own example documents,
   against the same documents re-saved by other software (which lays text out again). Three text
   rules explained every difference and are applied (whole-pixel line heights, advances on a
@@ -147,8 +173,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   still unmeasured (`crates/text/src/metrics_tests.rs`, and a local check over such documents in
   `crates/engine/src/text_metrics_local_tests.rs`).
 - **Estimate:** 15–30 h once `.fig` or REST import of real files is available; needs files whose
-  licence allows use (owner to supply or approve; never committed if not redistributable, see
-  craftrules `standards/test-corpora.md`).
+  licence allows use (owner to supply or approve; never committed if not redistributable).
 
 ### 4. Interaction fidelity not compared tool by tool
 - **Missing:** a side-by-side pass of every tool and panel: cursors, modifier keys while dragging,
@@ -160,7 +185,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   mode and measuring, then (2026-10-12) comments and version history, and the layers and Assets
   panels (`crates/engine/src/*_behaviour_tests.rs`, `crates/ui-egui/src/layers_behaviour_tests.rs`),
   each with its fixes; then keyboard shortcuts per platform (`shortcut_parity_tests.rs`: 129
-  documented rows, 126 bound, 1 moved off a documented conflict, 2 missing, 48 undocumented
+  documented rows, now 128 bound, 1 moved off a documented conflict, none missing, 57 undocumented
   bindings pinned), with 16 rows newly bound, Control suspending snapping on macOS and shifted
   symbols on other keyboard layouts; then the everyday partials of
   [`ui-parity.md`](ui-parity.md): number fields, outline mode's options, Hide when publishing, a
@@ -175,7 +200,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   or stroke; Shift-drag on a selected layer moves the selection; a double-click near a thin stroke
   enters vector edit; points dropped on a point merge; a draggable divider between Pages and
   Layers; Paste over and Paste properties from the keyboard; then (#753) Selection colors for mixed
-  selections and smart-selection spacing fields and canvas handles (no reorder rings). Each was checked in the app (on
+  selections and smart-selection spacing fields, canvas handles and reorder rings. Each was checked in the app (on
   Windows; the submenus by their author), none side by side with Figma, none on macOS.
 - **Evidence:** ROADMAP item 7 ("Left: tool by tool, panel by panel against the incumbent").
 - **Impact:** Figma users notice the feel within minutes; it decides whether they stay.
@@ -184,15 +209,20 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 ### 5. Localization: English, reviewed Russian and Turkish, plus unreviewed drafts
 - **Missing:** native reviews of the Spanish, French, German, Brazilian Portuguese, Japanese,
   Korean, Simplified Chinese, Indonesian and Czech drafts and the Latin American Spanish
-  overlay, the strings added since each catalog was drafted (1–5% of each), Hindi, Arabic and
+  overlay, the strings added since each catalog was drafted (1–5% of each), the Arabic draft's native review and mirrored rows inside the panels (the window mirrors since 2026-10-31), Hindi and
   Vietnamese, localized engine messages and number formatting; CJK UI text on the web without the
   craft-fonts CJK build.
+  Korean, Simplified Chinese, Traditional Chinese, Indonesian and Czech drafts and the Latin
+  American Spanish overlay, the strings added since each catalog was drafted (1–5% of each), the
+  Arabic draft's native review and panel mirroring, Hindi and Vietnamese, localized engine
+  messages and number formatting; CJK UI text on the web without the craft-fonts CJK build.
 - **Evidence (measured from source):** the layer landed 2026-10-11: catalogs in
-  `crates/ui-egui/locales/` (measured 2026-10-17: 1,680 UI keys plus 561 command labels and 31
-  menu wordings, 2,272 entries), Preferences ▸ Language, `pref.language`; `en.toml` is complete,
+  `crates/ui-egui/locales/` (measured 2026-11-03: 1,975 UI keys plus 641 command labels and 31
+  menu wordings, 2,647 entries), Preferences ▸ Language, `pref.language`; `en.toml` is complete,
   Spanish is held to completeness by the check, and the French, German, Brazilian Portuguese,
-  Japanese, Korean and Simplified Chinese machine drafts cover 95–99% (strings added since they
-  were drafted show English), with `es-419.toml` a Latin American overlay listing only what
+  Japanese, Korean, Simplified Chinese and Traditional Chinese machine drafts cover 95–100%
+  (the Traditional Chinese draft covers all 2,647 entries; strings added since the other drafts
+  were written show English), with `es-419.toml` a Latin American overlay listing only what
   differs from Spanish. Russian (reviewed and approved by VanTan, one/few/many integer plurals)
   covers 98.8%; Indonesian and Czech drafts, a Turkish catalog whose header says a native speaker
   reviewed it, and a Swedish catalog (with its command labels since 2026-10-17) cover 98.7–99.6% ([localization-parity](localization-parity.md#languages)).
@@ -207,7 +237,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   [`localization-parity.md`](localization-parity.md); how to add one in
   [`translating.md`](translating.md).
 
-### 6. Plugins: widgets without hover or timers, a self-hosted directory but no public catalogue; Figma's plugins don't run
+### 6. Plugins: widgets without timers, a self-hosted directory but no public catalogue; Figma's plugins don't run
 - **Landed (#101):** sandboxed WebAssembly plugins (wasmi, metered, memory cap, no WASI, also in
   the browser) acting through the command registry, one undo step per run, manifest permissions,
   Plugins menu, Run last plugin, Manage plugins, `plugin.*` commands, a Rust SDK and two examples
@@ -229,11 +259,22 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   (the value, cleaned and capped, goes into the widget's state and the plugin redraws; one undo
   step), and a widget can carry a property menu of actions, toggles and colour choices, shown in a
   small bar while it's selected and driven with `widget.menu`; the Counter example uses both.
+  Widget hover styles (2026-10-30): a widget layer's `hover` (fill, stroke, opacity, a text's
+  colour) shows while the pointer is over it on the canvas, as a live preview that is never saved
+  or synced and that any command ends (`widget.hover` for agents); the Counter's buttons darken.
+  Sliders (2026-10-30): a panel control or command parameter of type `slider` (a number between
+  its `min` and `max`) is drawn as a slider with its value beside it; the plugin is called back
+  once, when the drag ends.
+  Panel images (2026-10-30): an `image` control shows a picture the plugin carries (base64, at most
+  256 KB and 4,096 pixels on a side), as wide as a field at most, named by its label.
+  Widgets open panels (plugin API 5, 2026-10-30): a widget's callback can show its plugin's panel,
+  whose callbacks get the widget's id and state and redraw it, one undo step each.
+  Lines and SVG (plugin API 6, 2026-10-31): a widget layer can be a `line` or an `svg`, whose
+  picture comes in as locked layers, scaled to fit a size.
 - **Missing:** a public catalogue and Community files, publisher accounts and signatures, ratings
-  and install counts, background update checks, the directory in the browser build; widgets have no hover or
-  timers, can't open a panel and draw only frames, text, shapes and images;
-  no images or sliders in panels. Figma's own plugins are JavaScript against Figma's plugin API and
-  don't run.
+  and install counts, background update checks, the directory in the browser build; widgets have no
+  timers. Figma's own plugins are JavaScript against
+  Figma's plugin API and don't run.
 - **Impact:** teams that depend on specific Figma plugins (icons, content, accessibility checks)
   can't bring them. FigCraft's CLI, control channel and MCP server cover agent automation better
   than Figma does.
@@ -247,6 +288,29 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   sixteenth of the pixels first, then refined. With no measure to go by (the first render, another
   page, a zoom after quick renders), a watchdog thread previews any such render still running
   after 12 ms (desktop only; the browser renders inline).
+- **Landed (2026-10-29):** the browser draws a zoom's full render a band at a time (`Retained::begin`,
+  `Steps`; at least a band a frame and at most eight bands, so a frame draws a part of the render
+  where it drew the whole of it: 0.7–1.4 s where the render took 3.7–4.0 s in the measurement of
+  #1496), so input is handled while it draws: a pan or an edit meanwhile is patched into
+  the render once drawn (or it is drawn again, the first shown till then), a zoom drops it. Bands
+  overlap by what background blurs read, as the desktop's parallel bands do, and the bands together
+  take longer than one render (each repeats its overlap and some per-band work).
+- **Landed (2026-10-30):** text reads only the fallback fonts it draws with. Each fallback family
+  (`FALLBACK_FAMILIES`, for the characters a run's own font lacks) reads the face nearest the
+  run's style, not every face it has; families naming the faces of one file (Noto Sans CJK SC and
+  KR) share its bytes; and the faces are worked out once per style until fonts change, not for
+  every text laid out. On a Linux machine with Noto Sans CJK, DejaVu Sans and Inter installed, the
+  first text laid out read 41 font files (265 MiB, kept in memory) and parsed 41 faces; it now
+  reads 3 files (20 MiB) and parses 4 (6 files and 8 faces with a bold run too): 150–190 ms less
+  file reading there. Looking up the fallbacks for each text laid out, under the font database's
+  write lock, went from about 45 µs to 0.2 µs (the lookup logic timed alone). The faces drawn are
+  those drawn before, except where two are equally near the run's style (the one read already is
+  kept) and for Hiragino's W3-style names (read as their weight).
+- **Landed (2026-10-28):** the browser refines a zoom's preview only once no newer request has
+  come for 120 ms (`SETTLE_MS`), or for as long as its last full render took when that is shorter:
+  its full renders run on the UI thread, and one between every two wheel steps held the page up
+  for seconds. Pans and edits (no preview) are refined at once; the desktop, with its render
+  thread, is unchanged.
 - **Landed (2026-10-15):** a bounded render margin is reused during panning and refilled before
   the visible view reaches its edge. The extra rendered area is capped at 1.6× visible pixels;
   this reduces blank strips without changing the CPU renderer.
@@ -291,11 +355,12 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Impact:** illustration-flavoured work moved into Figma Draw in 2025.
 - **Estimate:** 1–3 h once winit (or a platform tablet API behind it) reports pressure there.
 
-### 10. Team libraries: no team-wide lists or accounts; analytics are counts
+### 10. Team libraries: no team-wide lists or accounts; analytics count insertions for components only
 - **Missing:** libraries listed for a whole team or organization (each file enables a library by
-  its link), accounts and per-person library permissions, analytics beyond instance counts per
-  component and file (insertions and detaches over time), update notices pushed by the server
-  (apps ask every 30 seconds while the Assets panel shows).
+  its link), accounts and per-person library permissions, insertions, detachments and mode counts for
+  styles and variables (they count layers and files using them; a component's instances,
+  insertions and detachments are counted, the last two week by week),
+  update notices pushed by the server (apps ask every 30 seconds while the Assets panel shows).
 - **Evidence:** a file's library is published to `figcraft-server` under the file and enabled in
   other files by a share link, with per-asset versions, updates with overrides kept, usage counts
   and swapping a whole library by names ([`server.md`](server.md#team-libraries),
@@ -318,14 +383,16 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Estimate:** 5–10 h (video playback in the presenter is most of it; it can reuse the GIF clock).
 
 ### 13. Vector tail: none left
+- **Landed (2026-11-10):** a boolean group takes a corner radius (and smoothing) that rounds every sharp
+  corner of its result, convex and concave, with the children's own radii kept and a radius larger
+  than the edges allow shrinking to fit (#2222; `crates/pathops/src/round_tests.rs`).
 - **Landed (2026-10-22):** the transform box around points selected in several layers at once, in
   the page's axes: its corners and edges scale them, outside a corner rotates them and inside drags
   them, each in its own layer and one undo step for all (`transform_tests`).
 - **Landed (2026-10-12):** several Bezier handles selected with Shift-click and dragged together,
   sharp points beside curved segments rounded, a stroke cap and join per point (canvas, PNG, SVG,
   PDF, outline stroke), the Pen outside edit mode connecting to its own points and continuing a
-  selected open path. Left: corner smoothing on vectors, corner radius and smoothing on boolean
-  groups that contain rectangles, per-point caps and joins on dashed, variable-width and brush
+  selected open path. Left: per-point caps and joins on dashed, variable-width and brush
   strokes.
 - **Landed (2026-10-11):** boolean groups are clicked where their result is (a click in a
   subtracted hole reaches what's behind; with the group or an operand selected its operands are
@@ -350,9 +417,13 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   copy) and arrive inheriting when accepted; a library collection that is itself an extended
   collection (a brand theme extending a core one) can be extended again, its values flowing down
   the chain as each file accepts updates, every level's overrides kept.
-- **Missing:** checked with synthetic files only; extending a collection of the same file isn't
-  offered (extending takes library collections). A paint style's color offers variables scoped to
+- **Landed (2026-10-30):** a collection of this file extends too, as the help center shows (Extend
+  collection on its row in the Variables editor, `variable.extendCollection`), following its edits
+  at once; an extended collection of this file extends again.
+- **Missing:** checked with synthetic files only. A paint style's color offers variables scoped to
   any fill or stroke: FigCraft's own rule, since the help center doesn't say which scopes it takes.
+  The help center says an extended collection takes no variables or modes of its own; FigCraft's
+  takes variables of its own (modes are refused), kept for now.
 - **Estimate:** 0–1 h.
 
 ### 15. Prototyping: media triggers and actions, controllers off Windows
@@ -366,15 +437,12 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Missing:** video triggers (on media hit/end) and play/pause/mute/seek actions (the REST
   importer warns and skips them, `crates/format/src/rest/proto.rs`); controllers on macOS, Linux
   and FreeBSD (the usual Rust controller library links libudev on Linux; a pure-Rust reader per
-  platform, or an owner decision on that dependency); PlayStation and Switch button labels.
-  `proto.linkNotice` from the Actions palette or the control channel changes the preference in
-  memory only; it reaches the preferences file with the next preferences save (the notice's own
-  "Don't show this again" saves at once).
+  platform, or an owner decision on that dependency).
 - **Estimate:** 2–5 h, the media part after video fills (gap 12).
 
 ### 16. Dev Mode: the tail after dev resources
 - **Landed (2026-10-11):** code connect: a component or set links to its code component per
-  language (React, Leptos, Vue, SwiftUI, Compose, ArkUI): an import path, the name and a template whose `{property}`
+  language (React, Leptos, Vue, SwiftUI, Compose, ArkUI, Flutter): an import path, the name and a template whose `{property}`
   and `{property ? "a" : "b"}` placeholders take the instance's values, escaped per language and
   never executed. `inspect.code`, `inspect.componentCode` and the Inspect panel show that snippet
   instead of generated code (inside generated layer trees too); the panel's Connect to code edits
@@ -409,10 +477,13 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Landed (2026-10-24):** files dropped on the canvas, the Pages list and the Assets panel no
   longer edit the design in Dev Mode (a dropped document still opens as a file of its own, and
   the Pages list only opens pages).
-- **Missing:** publishing mappings from the code repository with a CLI. An editor extension is out
-  of scope: the MCP server already serves design data, code and the connected snippets to agents
-  and editors. The file name field in the left panel still renames the file in Dev Mode
-  (`file.rename`); whether Figma allows that in Dev Mode needs checking before it changes.
+- **Landed (2026-10-30):** `figcraft-cli connect publish <file.figcraft> [--mappings
+  figcraft.connect.json] [--dry-run]` publishes a code repository's mappings to a design file, so
+  code owners keep them with the code and publish them from CI ([cli.md](cli.md)).
+- **Missing:** the file name field in the left panel still renames the file in Dev Mode
+  (`file.rename`); whether Figma allows that in Dev Mode needs checking before it changes. An
+  editor extension is out of scope: the MCP server already serves design data, code and the
+  connected snippets to agents and editors.
 - **Estimate:** 1–2 h.
 
 ### 17. Branching and merging
@@ -469,6 +540,11 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Estimate:** 4–8 h.
 
 ### 19. AI features
+- **Landed (2026-10-27, narrow slice without a model):** MCP agent feedback — comments as the task
+  queue (`comment.prompt`, **Copy for AI**, `fix_comments` / `watch_comments`,
+  `figcraft://comments`), a bounded in-memory event log, `events.poll` and `wait_for_changes` for
+  live feedback. Any MCP client can drive a headless file or an attached app; no in-app model and no
+  network dependency.
 - **Missing:** Figma AI (first draft, rename layers, remove background, image generation and
   editing, visual search, Make).
 - **Estimate:** 30–60 h with openly licensed local models. **Owner decision needed.**
@@ -508,8 +584,8 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   connector's ends drag onto another object or empty canvas (`board.reattach`); curved connectors;
   elbows that go around the objects they join.
 - **Missing:** timer music, board widgets, saving your own templates, table column resizing and
-  cell colours, mind maps, washi tape, code blocks, audio and huddles, quick-create handles,
-  connector waypoints placed by hand, stamps sticking to the objects they land on, `.jam` files
+  cell colours, the mind maps' toolbar entry, shortcuts, drag to re-parent and import, washi tape, code blocks, audio and huddles, quick-create handles,
+  the stamp wheel, emotes and stickers, `.jam` files
   ([`boards-parity.md`](boards-parity.md)).
 - **User impact:** boards cover a brainstorm, a retrospective, a flow sketch and a timed, voted
   workshop round.
@@ -519,6 +595,36 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Gap 13: a boolean group's corner radius rounds every sharp corner of its result (#2222); the boolean clause leaves the 2026-10-12 "Left" list |
+| 2026-11-10 | minor | Gap 24: mind maps, first step (`board.mindMap`, `board.mindMapAdd`; the map lays itself out again after every edit, #2226); the toolbar entry, shortcuts, drag to re-parent and `.jam` import are what is missing of them. |
+| 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`) draft catalog: 1,975 UI strings, 641 command labels and 31 menu wordings, clean-room from the English source; zh-TW, zh-HK, zh-MO and zh-Hant read it, explicit Hans stays Simplified; Noto Sans CJK TC then Taiwan system faces; no bundled font; native review pending. Numbers unchanged |
+| 2026-10-31 | minor | Gap 10: library analytics list the layers and files using each style and variable; their insertions, detachments and modes stay on the missing list. |
+| 2026-10-31 | minor | Gap 15: the Controller menu names buttons as PlayStation and Switch controllers do; that item leaves the missing list. Estimate unchanged. Test: `present::tail_tests`. |
+| 2026-10-30 | minor | Gap 7: text reads only the fallback fonts it draws with: a face per fallback family and style, a file's bytes shared between families, the faces worked out once per style (first text laid out: 41 font files and 265 MiB read down to 3 files and 20 MiB on a Linux machine with Noto Sans CJK). Numbers unchanged |
+| 2026-10-31 | minor | Gap 6: widgets draw lines and SVG pictures (plugin API 6), so that item leaves the missing list. |
+| 2026-10-31 | minor | Gap 24: connector paths can be reshaped by hand (path handles and `board.reshape`), so that item leaves the missing list. Estimate unchanged. Tests: `board_reshape_tests`, `board_line_tests`. |
+| 2026-10-31 | minor | Gap 10: library analytics count insertions, and insertions and detachments week by week for a year (Show usage: the past 30 days, 90 days or year; `library.usage {days}`). Styles and variables aren't counted. Estimate unchanged. Tests: `library_actions_tests`, `inserting_library_instances_counts_them` |
+| 2026-10-30 | minor | Gap 6: a widget opens its plugin's panel (plugin API 5), whose callbacks get the widget and redraw it; the Counter example sets its count from a panel. The entry's duplicated Missing text is merged. Estimate unchanged |
+| 2026-10-30 | minor | Gap 4: the keyboard's Menu key opens the context menu, as Shift+F10 does (at the focused layer row or below the canvas selection, with the keyboard in the menu). egui already reported the key; FigCraft's keymap had no name or binding for it. `view.contextMenu` now takes `Menu` too, and the Context menus row is done (`layers_keyboard_tests`). Stale rows corrected: smart-selection spacing has had reorder rings since the "M1: smart-selection drag reordering" landing (the row is still partial: irregular grids and several marked layers aren't covered), and gap 4 and the parity summary quoted shortcut counts from before the last bindings (now 128 bound, none missing, 57 undocumented pinned, as `shortcut_parity_tests` counts). |
+| 2026-10-30 | minor | Gap 14: a collection of this file extends (Extend collection on its row, `variable.extendCollection`), following its edits at once; extensions of this file extend again. The help center's rule that an extension takes no variables of its own is noted, not applied. Estimate unchanged |
+| 2026-10-30 | minor | Gap 24: stamps stick to the objects they land on and move with them; that item leaves the missing list (the stamp wheel, emotes and stickers stay). Estimate unchanged. Test: `board_tests::stamps_stick_to_what_they_land_on` |
+| 2026-10-30 | minor | Gap 10: library analytics count detached instances per component and file (reported by the file that detached them, kept by the server beside its usage, shown in Show usage and `library.usage`); insertions and counts over time remain. Estimate unchanged. Tests: `library_detach_tests` (server), `codec_tests::older_library_messages_keep_their_encoding`, `assets::library::tests::add_place_and_update_keep_overrides`, `detach_report_tests` |
+| 2026-10-30 | patch | Gap 15: `proto.linkNotice` (the Actions palette, the control channel, MCP) is saved with the preferences at once, as the notice's own "Don't show this again" is, instead of only when the app quits; that note leaves the missing list. Estimate unchanged. Test: `present_links_tests::skipping_the_notice_by_command_is_saved_at_once` |
+| 2026-10-30 | minor | Gap 6: plugin panels show pictures: an `image` control (`data` base64, at most 256 KB and 4,096 px a side; panel specs up to 1 MB) drawn at its size up to a field's width, named by its label, which shows instead when the picture can't be decoded. "Images" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::panel_images_show_named_or_fall_back_to_their_label` |
+| 2026-10-30 | minor | Gap 1: labels of connectors without a saved snapshot are kept, centred on their line (without their background), instead of skipped. Not checked on real files; estimate unchanged. Test: `fig::tests::tail::a_labelled_connector_without_a_snapshot_keeps_its_label` |
+| 2026-10-30 | minor | Gap 6: widget hover styles landed (a layer's `hover` fill, stroke, opacity or text colour shown while the pointer is over it, as a live preview; `widget.hover`); the entry no longer lists hover. Estimate unchanged. |
+| 2026-10-30 | minor | Gap 1: elbowed and curved connectors without a saved path no longer import as straight lines; they are routed as board connectors are (the shared `figcraft_doc::route_points`). Not checked on real files; estimate unchanged. Tests: `fig::tests::tail::connectors_without_a_saved_path_follow_their_line_style` |
+| 2026-10-30 | minor | Gap 6: plugin panels and command forms take a `slider` control (a number between a required `min` and `max`), drawn as a slider with its value field beside it; the plugin is called back once when a drag ends, one undo step. "Sliders" leaves the missing list; estimate unchanged. Tests: `v2_tests::panels_are_validated_and_keep_entered_values`, `plugin_panel_tests::a_slider_calls_the_plugin_back_once_when_let_go` |
+| 2026-10-30 | minor | Gap 16: `figcraft-cli connect publish` publishes a repository's `figcraft.connect.json` to a design file (links by component name, warnings for links that don't fit, `--dry-run`, exit 1 when nothing links). The CLI part leaves the missing list; the Dev Mode file-rename check remains; estimate unchanged. Tests: `files::tests::connect_publish_links_components_and_saves_the_file`, the CLI argument tests |
+| 2026-10-29 | minor | Colour picker review follow-up: opening the first picker preserves a text undo interaction; placement follows the rendered sidebar; opening controls track their widget ids while moving; linked selection-colour names toggle closed; gradient variable-picker presses keep the parent open. Regression tests cover each case; estimates unchanged. |
+| 2026-10-29 | minor | Colour pickers dismiss on presses outside their card, including the sidebar, and open 8 pt beside the sidebar aligned to their control (lifted to fit the screen); switching targets resets a dragged position and commits pending edits. Eyedropper sampling stays open. UI regression tests cover added fills/strokes and page colours; headline estimates unchanged. |
+| 2026-10-29 | minor | Gap 7: the browser draws a zoom's full render a band at a time (eight at most), so a deep zoom no longer holds the page for the whole render; pans and edits meanwhile are patched in once it is drawn. Numbers unchanged |
+| 2026-10-28 | minor | Arabic draft: 1,857 UI strings, 620 command labels, 31 menu wordings; count-neutral plurals and web font gate. Native review and panel mirroring remain open; grade and estimates unchanged. Evidence: `locales/ar.toml`, i18n catalog tests and [translation notes](translating.md#arabic-draft) |
+| 2026-10-28 | minor | Gap 7: the browser refines a zoom's preview only once the zoom has paused for 120 ms, so a wheel zoom no longer runs a blocking full render between every two steps. Numbers unchanged |
+| 2026-10-27 | minor | M12: the MCP agent feedback workflow landed (comments as tasks, `comment.prompt`, Copy for AI, `fix_comments` / `watch_comments`, `figcraft://comments`, a bounded event log, `events.poll` and `wait_for_changes`). Figma AI features and local models are still not started, so gap 19's missing list and estimate stand |
+| 2026-10-27 | minor | M6, #1397: damaged generated FigJam shape geometry falls back to usable outer fill or stroke outlines before a rectangle; a surviving sticky author no longer suppresses the outer body-text fallback. Synthetic regressions cover both outlines, missing/invalid/blank bodies, author retention and layer budgets. Numbers unchanged. |
+| 2026-10-26 | minor | M6, #1397: generated FigJam backgrounds read saved vector networks before rectangle fallback; missing or invalid generated text uses the outer text without discarding successful children or exceeding the layer budget. Regression tests cover both paths. Numbers unchanged. |
+| 2026-10-26 | minor | FigJam generated sticky notes and shapes with text (#1341): backgrounds, text with its typography and paints, saved bounds and sticky author lines import as editable frame children; synthetic regressions and a local check of the report sample; native board metadata and direct `.jam` opening remain outside this fix. Numbers unchanged. |
 | 2026-10-25 | minor | egui/eframe 0.37 verified for gap 18: the remaining limitations are unchanged. egui-wgpu 0.37 still picks an 8-bit sRGB surface with no colour-space option, so P3 colours outside sRGB still clip on screen; eframe 0.37 still gives only the main window an AccessKit adapter, so other windows have no screen-reader tree. Numbers unchanged |
 | 2026-10-25 | minor | Known gaps from the #1311 review: gap 4, the export preview follows a slice's first export setting; gap 14, the scopes a paint style's color takes are FigCraft's own rule; gap 15, `proto.linkNotice` from the palette or control channel isn't saved until the next preferences save; gap 16, the file name field still renames in Dev Mode (to check against Figma first). Ranking and hours unchanged |
 | 2026-10-24 | minor | Gap 24: the dot grid on board pages, dragging a connector's end to re-attach it, curved connectors and elbows around the objects they join landed; connector waypoints placed by hand stay missing. 30–60 h → 28–56 h; the ranking is unchanged |

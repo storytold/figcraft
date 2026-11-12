@@ -71,9 +71,9 @@ pub(crate) use host::{clean_shared, share_answer};
 pub(crate) use join::start_join;
 pub use join::{can_remove_people, specs};
 pub use types::{
-    Bind, DEFAULT_SERVER, Event, HostOptions, LiveLink, MAX_NAME, MAX_SELECTION, NO_HOSTING, NO_SESSION, NetReply, NetRequest, ONLINE_OFF, PEOPLE,
-    PageInfo, PublishOptions, Published, Role, SessionId, SessionInfo, Share, Shared, SharedLink, Status, TOO_LARGE_TO_JOIN, Via, join_target,
-    parse_color,
+    Bind, DEFAULT_SERVER, Event, HostOptions, LiveLink, MAX_NAME, MAX_PEERS, MAX_SELECTION, NO_HOSTING, NO_SESSION, NetReply, NetRequest, ONLINE_OFF,
+    PEOPLE, PageInfo, PublishOptions, Published, Role, SessionId, SessionInfo, Share, Shared, SharedLink, Status, TOO_LARGE_TO_JOIN, Via, WayIn,
+    join_target, parse_color,
 };
 
 /// The view a follow last applied: any other view means the user moved.
@@ -140,11 +140,37 @@ pub struct Live {
     /// The branches of the session's file made or last updated from main in this session: every
     /// layer of their base was in it (see [`crate::branches`]).
     branch_bases: BTreeSet<String>,
+    /// You were in this session and aren't now: what joining it again takes (`collab.reconnect`).
+    stranded: Option<Stranded>,
+}
+
+/// What's kept of a session you joined once it can't go on by itself. The tab stays yours to work
+/// in, and says so.
+#[derive(Clone)]
+struct Stranded {
+    /// The invite link you joined with (it holds the token: never shown).
+    link: String,
+    /// The server's state when it stopped: what's different from it in the tab is your own work.
+    confirmed: Box<figcraft_collab::Replica>,
+    /// Who you were: the layers you made are in that client's id space.
+    resume: Resume,
 }
 
 impl Live {
     pub fn role(&self) -> Option<Role> {
         self.info.as_ref().map(|i| i.role)
+    }
+
+    /// The session's invite link and WebSocket URL as `collab.peers` gives them. A file shared
+    /// on the local network gives the ones that go with the code shown: the session's own link
+    /// and URL are the edit way in, and a view-only share must not hand them out. Otherwise the
+    /// session's own (online, the owner's: `share` has the links for others).
+    pub fn invite(&self) -> (Option<&str>, Option<&str>) {
+        let info = self.info.as_ref();
+        match &self.share {
+            Some(sh) if sh.via == Via::Local => info.and_then(|i| i.way_in(sh.access)).unzip(),
+            _ => (info.map(|i| i.link.as_str()), info.map(|i| i.url.as_str())),
+        }
     }
 
     /// Stop following. False when you weren't following anyone.
@@ -156,6 +182,43 @@ impl Live {
     /// Back to no session, still shown on its tab (a failure's reason stays there).
     fn reset(&mut self) {
         *self = Live { id: self.id, tab: self.tab, ..Live::default() };
+    }
+
+    /// Remember what joining this session again takes, if it is one you joined (see [`Stranded`]).
+    fn hold(&mut self) {
+        let joined = self.info.as_ref().filter(|i| i.role == Role::Guest && !i.link.is_empty());
+        if let (None, Some(client), Some(info)) = (&self.stranded, &self.client, joined) {
+            self.stranded = Some(Stranded { link: info.link.clone(), confirmed: Box::new(client.confirmed().clone()), resume: client.resume() });
+        }
+    }
+
+    /// Keep this session on its tab for joining again: a session you joined, or one that already
+    /// is; any other goes back to no session.
+    fn strand(&mut self) {
+        self.hold();
+        let Some(held) = self.stranded.take() else { return self.reset() };
+        *self = Live {
+            id: self.id,
+            tab: self.tab,
+            doc_uid: self.doc_uid,
+            info: self.info.take(),
+            server: std::mem::take(&mut self.server),
+            published: self.published.take(),
+            share: self.share.take(),
+            stranded: Some(held),
+            ..Live::default()
+        };
+    }
+
+    /// You were in this session and aren't now: the connection dropped and it is trying again, or
+    /// it can't go on by itself. What you do in its tab isn't reaching anyone.
+    pub fn disconnected(&self) -> bool {
+        matches!(self.status, Status::Reconnecting { .. }) || self.stranded.is_some()
+    }
+
+    /// The session can be joined again in its tab (`collab.reconnect`).
+    pub fn rejoinable(&self) -> bool {
+        self.stranded.is_some() && !self.status.active()
     }
 
     /// The document sync client (once the welcome arrived): peers, pending batches, the user's
@@ -196,11 +259,14 @@ pub struct Lives {
     /// Registers the app as the opener of `figcraft://` invite links (the desktop app on Windows
     /// installs one; see [`crate::invite_links`]).
     pub links: Option<Box<dyn crate::invite_links::LinkRegistrar>>,
-    /// The recorded online files changed since the app last saved the preferences (it saves them
-    /// at once: a crash must not lose an owner token).
+    /// The recorded online files or your team libraries changed since the app last saved the
+    /// preferences (it saves them at once: a crash must not lose an owner token).
     pub unsaved: bool,
     /// Servers that couldn't say what became of your files at the last `collab.files {refresh}`.
     pub servers: crate::online::Problems,
+    /// The team list of the server in Preferences, as it answered at the last `collab.files
+    /// {refresh}` ([`crate::team`]).
+    pub team: Option<crate::team::Team>,
     /// Recovery copies of your online files waiting for their file to arrive from its server
     /// (`collab.recoverFile`).
     pub(crate) recovering: Vec<crate::online::Recovering>,
@@ -271,6 +337,9 @@ impl Lives {
     /// session's id, which comes back with what it returned.
     fn start<T>(&mut self, cmd: &str, start: impl FnOnce(&mut dyn LiveLink, SessionId) -> Result<T>) -> Result<(SessionId, T)> {
         let link = self.link.as_deref_mut().ok_or_else(|| unavailable(cmd))?;
+        if let Some(why) = crate::file_access::network_refused() {
+            return Err(EngineError::Disabled(cmd.to_string(), why));
+        }
         let id = self.last.saturating_add(1);
         let out = start(link, id)?;
         self.last = id;
@@ -343,9 +412,16 @@ pub fn display_name(prefs: &crate::Prefs) -> String {
     if n == crate::cmd::comment::DEFAULT_AUTHOR { String::new() } else { n.chars().filter(|c| !c.is_control()).take(MAX_NAME).collect() }
 }
 
-/// Initials for an avatar ("Ada Lovelace" → "AL"; "?" for none).
+/// Initials for an avatar ("Ada Lovelace" → "AL"; "Claude (agent)" → "C": words that start with a
+/// letter or digit, when there are any; "?" for none).
 pub fn initials(name: &str) -> String {
-    let mut out: String = name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect();
+    let firsts = |alnum: bool| -> String {
+        name.split_whitespace().filter_map(|w| w.chars().next()).filter(|c| !alnum || c.is_alphanumeric()).take(2).collect()
+    };
+    let mut out = firsts(true);
+    if out.is_empty() {
+        out = firsts(false);
+    }
     if out.is_empty() {
         out.push('?');
     }
@@ -379,6 +455,24 @@ pub const NO_TEAM_LIBRARIES: &str = "team libraries on a server need the desktop
 
 /// Why an edit of a server file you joined with a view link is refused.
 pub const VIEW_ONLY: &str = "View only: the link you joined with lets you see this file, not change it";
+/// Why an edit other than to comment threads of a server file you joined with a comment link is
+/// refused.
+pub const COMMENT_ONLY: &str = "Can comment: the link you joined with lets you see this file and comment on it, not change it";
+
+/// Why a session document can't be edited with `access` (`None`: it can).
+pub(crate) fn limited_by(access: Access) -> Option<&'static str> {
+    match access {
+        Access::Edit => None,
+        Access::View => Some(VIEW_ONLY),
+        Access::Comment => Some(COMMENT_ONLY),
+    }
+}
+
+/// Whether `tool` is one a file you can't edit now leaves you (`why`: what
+/// [`Session::live_read_only`] says): moving around and, with a comment link, commenting.
+pub fn tool_left(why: &str, tool: ToolId) -> bool {
+    matches!(tool, ToolId::Move | ToolId::Hand) || (why == COMMENT_ONLY && tool == ToolId::Comment)
+}
 /// Why an edit of a file on its way to a server is refused.
 pub const PUBLISHING: &str = "The file is being published: you can edit it again once it is on the server";
 

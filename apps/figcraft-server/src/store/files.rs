@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    Access, Action, AdminReply, BLOCKED, Change, Entry, FILES, FileInfo, FileRow, HostInfo, Instant, IpAddr, KEY_ONLY, LINKS, LOG, LOG_HEADER,
+    MAX_BLOCKED, MAX_OWNED, MAX_PARKED, MAX_PARKED_BYTES, MAX_REPORTS, META, Meta, NewLink, OpenFile, OwnedFile, PARK_FOR, Parked, REPORTS, Replica,
+    ReportInfo, SNAPSHOT, SWEEP_EVERY, Server, Store, TOUCH_EVERY, clean_name, clean_reason, disk, fs, hash, ip_blocks, ip_key, new_link, now,
+    same_secret, token, write_json,
+};
 
 impl Store {
     /// Keep a document (its snapshot) as a new file with an edit link and a view link.
@@ -42,7 +47,7 @@ impl Store {
         if !open {
             return Err(KEY_ONLY.into());
         }
-        if !self.abuse.allow(ip, Action::Publish, Instant::now()) {
+        if !self.abuse.allow(ip, Action::Publish, self.clock()) {
             return Err("too many files published from your address lately: try again in an hour".into());
         }
         let blocks = self.per_block(&ip.to_string());
@@ -90,8 +95,9 @@ impl Store {
             return Err(format!("the file has more than {} layers", self.cfg.core.max_nodes));
         }
         let mut doc = replica.document().clone();
+        // The name the file keeps, whichever one it comes from, is cleaned.
         let name = match clean_name(name) {
-            n if n.is_empty() => doc.name.clone(),
+            n if n.is_empty() => clean_name(&doc.name),
             n => n,
         };
         doc.name = name.clone();
@@ -129,7 +135,9 @@ impl Store {
             let _ = fs::remove_dir_all(&dir);
             return Err(format!("couldn't keep the file: {e}"));
         }
-        let entry = Entry { meta, links: vec![edit.clone(), view.clone()], log: None, bytes: (bytes.len() + LOG_HEADER) as u64, forced: 0 };
+        let opened_written = meta.opened;
+        let (links, bytes_kept) = (vec![edit.clone(), view.clone()], (bytes.len() + LOG_HEADER) as u64);
+        let entry = Entry { meta, links, log: None, bytes: bytes_kept, forced: 0, parked: None, opened_written };
         self.files.insert(id.clone(), entry);
         let info = self.files.get(&id).map(|e| self.info(&id, e, None)).ok_or("the file vanished")?;
         match ip {
@@ -195,6 +203,12 @@ impl Store {
     pub fn sweep(&mut self) -> Vec<String> {
         let t = now();
         self.next_sweep = t.saturating_add(SWEEP_EVERY);
+        // Files kept loaded after everyone left let go once their time is up.
+        for e in self.files.values_mut() {
+            if e.parked.as_ref().is_some_and(|p| p.at.elapsed() > PARK_FOR) {
+                e.parked = None;
+            }
+        }
         let due: Vec<String> =
             self.files.iter().filter(|(_, e)| e.log.is_none() && self.expires(&e.meta).is_some_and(|x| x <= t)).map(|(id, _)| id.clone()).collect();
         for id in &due {
@@ -213,6 +227,7 @@ impl Store {
         if let Some(e) = self.files.get_mut(file) {
             let m = &mut e.meta;
             (m.created, m.updated, m.opened) = (m.created.saturating_sub(secs), m.updated.saturating_sub(secs), m.opened.saturating_sub(secs));
+            e.opened_written = m.opened;
             let _ = write_json(&path, m);
         }
     }
@@ -222,21 +237,69 @@ impl Store {
     pub fn break_log(&mut self, file: &str) {
         let path = self.dir(file).join(LOG);
         if let Some(log) = self.files.get_mut(file).and_then(|e| e.log.as_mut())
-            && let Ok(f) = File::open(path)
+            && let Ok(f) = std::fs::File::open(path)
         {
             log.file = f;
         }
     }
 
-    /// Note that a file was opened now (it is used: it doesn't expire).
+    /// Note that a file was opened now (it is used: it doesn't expire). Expiry counts in days, so
+    /// `meta.json` gets the time at most every [`TOUCH_EVERY`] seconds (and when the server stops),
+    /// not at every join and leave (#1074).
     pub(super) fn touch(&mut self, file: &str) {
+        let t = now();
+        let due = self.files.get_mut(file).is_some_and(|e| {
+            e.meta.opened = t;
+            t >= e.opened_written.saturating_add(TOUCH_EVERY)
+        });
+        if due {
+            self.write_opened(file);
+        }
+    }
+
+    /// Write `file`'s `opened` time to its `meta.json`.
+    pub(super) fn write_opened(&mut self, file: &str) {
         let path = self.dir(file).join(META);
         if let Some(e) = self.files.get_mut(file) {
-            e.meta.opened = now();
-            if let Err(err) = write_json(&path, &e.meta) {
-                log::warn!("file {file}: couldn't update {META}: {err}");
+            match write_json(&path, &e.meta) {
+                Ok(()) => e.opened_written = e.meta.opened,
+                Err(err) => log::warn!("file {file}: couldn't update {META}: {err}"),
             }
         }
+    }
+
+    /// Keep `file`'s session loaded for a while after everyone left ([`PARK_FOR`]), at most
+    /// [`MAX_PARKED`] files of at most [`MAX_PARKED_BYTES`] together (the ones parked longest let
+    /// go first; a file larger than that isn't kept).
+    pub(super) fn park(&mut self, file: &str, server: Server, log: super::Log) {
+        let size = self.bytes(file);
+        if size > MAX_PARKED_BYTES {
+            return;
+        }
+        let mut parked: Vec<(String, Instant, u64)> =
+            self.files.iter().filter_map(|(id, e)| e.parked.as_ref().map(|p| (id.clone(), p.at, e.bytes))).collect();
+        parked.sort_by_key(|(_, at, _)| *at);
+        let mut held: u64 = parked.iter().map(|(_, _, b)| b).sum();
+        let mut n = parked.len();
+        for (id, _, b) in &parked {
+            if n < MAX_PARKED && held.saturating_add(size) <= MAX_PARKED_BYTES {
+                break;
+            }
+            if let Some(e) = self.files.get_mut(id) {
+                e.parked = None;
+            }
+            n -= 1;
+            held = held.saturating_sub(*b);
+        }
+        if let Some(e) = self.files.get_mut(file) {
+            e.parked = Some(Parked { server, log, at: Instant::now() });
+        }
+    }
+
+    /// `file`'s session as it was left, while it is still kept loaded ([`PARK_FOR`]).
+    pub(super) fn unpark(&mut self, file: &str) -> Option<(Server, super::Log)> {
+        let p = self.files.get_mut(file)?.parked.take()?;
+        (p.at.elapsed() <= PARK_FOR).then_some((p.server, p.log))
     }
 
     /// What the server says about its hosting (with `file`'s expiry).
@@ -278,7 +341,7 @@ impl Store {
             return Err("say what is wrong with the file".into());
         }
         let name = self.entry(file)?.meta.name.clone();
-        if !self.abuse.allow(ip, Action::Report, Instant::now()) {
+        if !self.abuse.allow(ip, Action::Report, self.clock()) {
             return Err("too many reports from your address lately: try again in an hour".into());
         }
         self.reports.push(ReportInfo {

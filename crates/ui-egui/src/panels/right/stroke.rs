@@ -1,5 +1,8 @@
 use super::menu::{menu_item, menu_item_with, menu_popup, row};
-use super::*;
+use super::{
+    Brush, Color32, Document, FigApp, Icon, Id, Lead, NodeId, NodeKind, PAD, Pos2, Rect, Stroke, StrokeAlign, StrokeCap, StrokeJoin, StrokeProps,
+    Tokens, Ui, Value, WidthPoint, WidthPreset, WidthProfile, a11y, common, icons, json, pos2, tr, widgets,
+};
 
 /// A width profile drawn as a filled band across `rect` (thickest point = full height); `None`
 /// draws a uniform stroke.
@@ -36,7 +39,7 @@ pub(crate) fn profile_art(painter: &egui::Painter, rect: Rect, profile: Option<&
 }
 
 /// Stroke settings ▸ Width profile: the presets (each with its shape) and a flip.
-fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Option<Option<WidthProfile>>, half: f32) {
+fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Option<Option<WidthProfile>>) {
     let t = Tokens::get(ui.ctx());
     widgets::sublabels(ui, tr("Width profile"), None);
     row(ui, 32.0, |ui| {
@@ -45,7 +48,7 @@ fn width_profile_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], profile: Opt
             Some(None) => tr(WidthPreset::Uniform.label()),
             Some(Some(p)) => p.preset().map_or(tr("Custom"), |w| tr(w.label())),
         };
-        let resp = widgets::dropdown(ui, label, half * 2.0 + 8.0 - 32.0, None);
+        let resp = widgets::dropdown(ui, label, ui.available_width() - 32.0, None);
         if let Some(p) = &profile {
             let r = resp.rect;
             let art = Rect::from_min_max(pos2(r.max.x - 22.0 - 56.0, r.center().y - 5.0), pos2(r.max.x - 22.0, r.center().y + 5.0));
@@ -98,7 +101,7 @@ pub(crate) fn brush_art(painter: &egui::Painter, rect: Rect, preset: &str, col: 
 }
 
 /// Stroke settings ▸ Brush: a plain stroke, a stretch brush or a scatter brush, each with its look.
-fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option<Brush>>, width: f32) {
+fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option<Brush>>, panel_w: f32) {
     use figcraft_pathops::brush::{PRESETS, preset};
     let t = Tokens::get(ui.ctx());
     widgets::sublabels(ui, tr("Brush"), None);
@@ -107,7 +110,8 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
             None => tr("Mixed"),
             Some(b) => b.as_ref().and_then(|b| preset(&b.preset)).map_or(tr("None"), |p| tr(p.label)),
         };
-        let resp = widgets::dropdown(ui, label, width, None);
+        // The row's own interior: the section's width less its two margins.
+        let resp = widgets::dropdown(ui, label, panel_w - PAD - widgets::PAD_RIGHT, None);
         a11y::combo(&resp, tr("Brush"), label, a11y::menu_open(&resp));
         if let Some(Some(b)) = &brush {
             let r = resp.rect;
@@ -145,7 +149,7 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
     else {
         return;
     };
-    let half = (width - 8.0) / 2.0;
+    let half = widgets::col_width(panel_w);
     let with = |f: &dyn Fn(&mut Brush)| {
         let mut nb = b.clone();
         f(&mut nb);
@@ -183,40 +187,132 @@ fn brush_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], brush: Option<Option
     });
 }
 
-/// Advanced stroke settings: dash pattern, width profile, join and the end points of open paths.
-pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
-    let ids = sel.to_vec();
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
-    let st = common(doc, sel, |n| n.stroke.clone());
-    let dashes = st.as_ref().map(|s| s.dashes.clone());
-    let weight = st.as_ref().map(|s| s.weight).unwrap_or(1.0).max(1.0);
+/// Dash pattern `dashes` with its first dash (`i` 0) or first gap (`i` 1) set to `v`. A lone value
+/// is both (`figcraft_pathops::width::dash_pattern` draws odd lengths repeated), so `[5]` is
+/// written out as `[5, 5]` first and only the edited entry changes.
+fn set_dash(dashes: &[f64], i: usize, v: f64) -> Vec<f64> {
+    let mut d = if dashes.is_empty() { vec![4.0] } else { dashes.to_vec() };
+    if d.len() % 2 == 1 {
+        d = d.repeat(2);
+    }
+    if let Some(x) = d.get_mut(i) {
+        *x = v.max(0.0);
+    }
+    d
+}
+
+/// The first dash and gap of a pattern (a lone value is both).
+fn first_pair(dashes: &[f64]) -> [f64; 2] {
+    let dash = dashes.first().copied().unwrap_or(4.0);
+    [dash, dashes.get(1).copied().unwrap_or(dash)]
+}
+
+/// The Dashes field's text as a pattern: numbers of 0 or more separated by commas (`10, 20, 10`).
+/// `None` for anything else, or nothing at all.
+fn parse_dashes(text: &str) -> Option<Vec<f64>> {
+    let number = |s: &str| s.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0);
+    let values = text.split(',').map(str::trim).filter(|s| !s.is_empty()).map(number).collect::<Option<Vec<f64>>>()?;
+    (!values.is_empty()).then_some(values)
+}
+
+/// The Stroke style menu and the fields of the style it shows: Dash and Gap, or a Custom list of
+/// Dashes (`dash, gap, dash, gap…`). The file keeps only the pattern, so one longer than a pair
+/// shows as Custom; a shorter one does only while Custom was what the selection `ids` last chose.
+fn dash_settings(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], dashes: Option<&[f64]>, weight: f64) {
+    let half = widgets::col_width(ui.available_width());
+    let chosen = Id::unique("stroke_dashes_custom");
+    let pattern = dashes.filter(|d| !d.is_empty());
+    let custom = pattern.is_some_and(|d| d.len() > 2 || ui.data(|m| m.get_temp::<Vec<NodeId>>(chosen)).as_deref() == Some(ids));
+    let a_pair = pattern.map_or([weight * 4.0; 2], first_pair);
     widgets::sublabels(ui, tr("Stroke style"), None);
     row(ui, 32.0, |ui| {
-        let dashed = dashes.as_ref().is_some_and(|d| !d.is_empty());
-        let resp = widgets::dropdown(ui, if dashed { tr("Dash") } else { tr("Solid") }, half, None);
+        let style = match (pattern, custom) {
+            (None, _) => tr("Solid"),
+            (_, true) => tr("Custom"),
+            (_, false) => tr("Dash"),
+        };
+        let resp = widgets::dropdown(ui, style, half, None);
         menu_popup(&resp).show(|ui| {
             if menu_item(ui, tr("Solid"), "") {
-                app.set_props(&ids, json!({"dashes": []}));
+                app.set_props(ids, json!({"dashes": []}));
                 ui.close();
             }
             if menu_item(ui, tr("Dash"), "") {
-                app.set_props(&ids, json!({"dashes": [weight * 4.0, weight * 4.0]}));
+                ui.data_mut(|m| m.remove::<Vec<NodeId>>(chosen));
+                app.set_props(ids, json!({"dashes": a_pair}));
+                ui.close();
+            }
+            if menu_item(ui, tr("Custom"), "") {
+                ui.data_mut(|m| m.insert_temp(chosen, ids.to_vec()));
+                if pattern.is_none() {
+                    app.set_props(ids, json!({"dashes": a_pair}));
+                }
                 ui.close();
             }
         });
     });
-    if let Some(d) = dashes.filter(|d| !d.is_empty()) {
-        let (dash, gap) = (d.first().copied().unwrap_or(4.0), d.get(1).copied().unwrap_or_else(|| d.first().copied().unwrap_or(4.0)));
+    let Some(d) = pattern else { return };
+    if custom {
+        widgets::sublabels(ui, tr("Dashes"), None);
+        let text = d.iter().map(|v| widgets::fmt_num(*v)).collect::<Vec<_>>().join(", ");
+        row(ui, 32.0, |ui| {
+            let Some(typed) = widgets::text_field(ui, Id::unique("stroke_dashes"), &text, ui.available_width(), "").filter(|t| *t != text) else {
+                return;
+            };
+            match parse_dashes(&typed) {
+                Some(list) => {
+                    // It stays a list even if what's typed is a single pair.
+                    ui.data_mut(|m| m.insert_temp(chosen, ids.to_vec()));
+                    app.set_props(ids, json!({"dashes": list}));
+                }
+                None => app.toast(tr("Dashes take numbers separated by commas")),
+            }
+        });
+    } else {
+        let [dash, gap] = first_pair(d);
         widgets::sublabels(ui, tr("Dash"), Some(tr("Gap")));
         row(ui, 32.0, |ui| {
             let e = widgets::number_field(ui, Id::unique("stroke_dash"), Lead::None, Some(dash), "", half, 1.0);
-            app.field(&ids, "dashes", e, |v| json!([v.max(0.0), gap]));
+            app.field(ids, "dashes", e, |v| json!(set_dash(d, 0, v)));
             let e = widgets::number_field(ui, Id::unique("stroke_gap"), Lead::None, Some(gap), "", half, 1.0);
-            app.field(&ids, "dashes", e, |v| json!([dash, v.max(0.0)]));
+            app.field(ids, "dashes", e, |v| json!(set_dash(d, 1, v)));
         });
     }
-    width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()), half);
-    brush_row(app, ui, &ids, st.as_ref().map(|s| s.brush.clone()), half * 2.0 + 8.0);
+}
+
+/// A dropdown of `caps` setting the prop `key`, showing `shown` (`None`: mixed).
+fn cap_dropdown(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], key: &str, shown: Option<StrokeCap>, caps: &[StrokeCap], width: f32) {
+    let resp = widgets::dropdown(ui, shown.map(|c| tr(c.label())).unwrap_or(tr("Mixed")), width, None);
+    menu_popup(&resp).show(|ui| {
+        for &c in caps {
+            if menu_item_with(ui, tr(c.label()), "", CAP_ART_W, |p, r, col| cap_art(p, r, col, c, key == "startCap")) {
+                app.set_props(ids, json!({key: format!("{c:?}")}));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// The cap of a dashed stroke's dashes. Unset, dashes take the end point caps: it shows those.
+fn dash_cap_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], stroke: &StrokeProps) {
+    let [start, end] = stroke.band_caps().map(StrokeCap::shape);
+    widgets::sublabels(ui, tr("Dash cap"), None);
+    let half = widgets::col_width(ui.available_width());
+    row(ui, 32.0, |ui| cap_dropdown(app, ui, ids, "dashCap", (start == end).then_some(start), &StrokeCap::DASH, half));
+}
+
+/// Advanced stroke settings: dash pattern, width profile, join and the end points of open paths.
+pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+    let ids = sel.to_vec();
+    let half = widgets::col_width(ui.available_width());
+    let st = common(doc, sel, |n| n.stroke.clone());
+    let weight = st.as_ref().map(|s| s.weight).unwrap_or(1.0).max(1.0);
+    dash_settings(app, ui, &ids, st.as_ref().map(|s| s.dashes.as_slice()), weight);
+    if let Some(s) = st.as_ref().filter(|s| !s.dashes.is_empty()) {
+        dash_cap_row(app, ui, &ids, s);
+    }
+    width_profile_row(app, ui, &ids, st.as_ref().map(|s| s.profile().cloned()));
+    brush_row(app, ui, &ids, st.as_ref().map(|s| s.brush.clone()), ui.available_width());
     let join = st.as_ref().map(|s| s.join);
     widgets::sublabels(ui, tr("Join|stroke"), (join == Some(StrokeJoin::Miter)).then_some(tr("Miter angle")));
     row(ui, 32.0, |ui| {
@@ -236,20 +332,12 @@ pub(super) fn stroke_settings(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel
         }
     });
     // End points only mean something on open paths.
-    let open_paths = sel.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. })));
+    let open_paths = crate::selection_cache::every(doc, sel, |n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. }));
     if open_paths {
         widgets::sublabels(ui, tr("Start point"), Some(tr("End point")));
         row(ui, 32.0, |ui| {
             for (key, cap) in [("startCap", st.as_ref().map(|s| s.cap_start)), ("endCap", st.as_ref().map(|s| s.cap_end))] {
-                let resp = widgets::dropdown(ui, cap.map(|c| tr(c.label())).unwrap_or(tr("Mixed")), half, None);
-                menu_popup(&resp).show(|ui| {
-                    for c in StrokeCap::ALL {
-                        if menu_item_with(ui, tr(c.label()), "", CAP_ART_W, |p, r, col| cap_art(p, r, col, c, key == "startCap")) {
-                            app.set_props(&ids, json!({key: format!("{c:?}")}));
-                            ui.close();
-                        }
-                    }
-                });
+                cap_dropdown(app, ui, &ids, key, cap, &StrokeCap::ALL, half);
             }
         });
     }

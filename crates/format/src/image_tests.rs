@@ -112,3 +112,51 @@ fn image_members_with_path_like_names_are_dropped_and_not_saved_back() {
     assert!(z.file_names().all(|n| !n.contains("..") && n.matches('/').count() <= 1), "{:?}", z.file_names().collect::<Vec<_>>());
     let _ = hash;
 }
+
+/// An unresolved `imageRef` from a hostile REST file never becomes the image's own key: the
+/// save writer names archive members after keys, so `../../evil` would inject an
+/// `images/../../evil` member into the next save. Such refs store the shared placeholder
+/// under its own key instead.
+#[test]
+fn a_path_like_rest_image_ref_never_names_an_archive_member() {
+    let rect = json!({"id": "X", "name": "X", "type": "RECTANGLE", "relativeTransform": [[1, 0, 0], [0, 1, 0]], "size": {"x": 10, "y": 10},
+        "fills": [{"type": "IMAGE", "imageRef": "../../evil", "scaleMode": "FIT"}]});
+    let file = json!({"name": "Hostile", "schemaVersion": 0, "document": {"id": "0:0", "name": "Document", "type": "DOCUMENT",
+        "children": [{"id": "0:Page", "name": "Page", "type": "CANVAS", "backgroundColor": {"r": 0.0, "g": 0.0, "b": 0.0, "a": 1.0}, "children": [rect]}]}});
+    let (doc, _warnings) = crate::rest::import(&file, &crate::rest::no_images).unwrap();
+    assert!(!doc.images.contains_key("../../evil"), "the raw imageRef must not name an image: {:?}", doc.images.keys().collect::<Vec<_>>());
+    assert!(doc.images.contains_key("rest-image-missing"), "the shared placeholder stores it instead: {:?}", doc.images.keys().collect::<Vec<_>>());
+    let bytes = save_bytes(&doc, None).unwrap();
+    let z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    assert!(z.file_names().all(|n| !n.contains("..") && n.matches('/').count() <= 1), "{:?}", z.file_names().collect::<Vec<_>>());
+    assert!(
+        z.file_names().any(|n| n == "images/rest-image-missing"),
+        "the placeholder is saved under its own name: {:?}",
+        z.file_names().collect::<Vec<_>>()
+    );
+}
+
+/// A key with `-` or `_` is a plain archive member name too: the REST importer's placeholder
+/// (`rest-image-missing`) comes back after a save and load instead of being dropped as damaged.
+#[test]
+fn an_image_keyed_with_dashes_comes_back_after_a_save() {
+    let mut d = Document::new("t");
+    d.images.insert("rest-image-missing".into(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(png()), width: 2, height: 2 });
+    let loaded = load_bytes_with_versions(&save_bytes(&d, None).unwrap()).unwrap();
+    assert!(loaded.doc.images.contains_key("rest-image-missing"), "{:?}", loaded.issues);
+}
+
+/// An unresolved `imageRef` shaped like a content hash would claim the placeholder's bytes hash
+/// to it, which they don't: a live session would refuse that image. It shares the placeholder
+/// instead.
+#[test]
+fn a_hash_shaped_rest_image_ref_never_names_its_placeholder() {
+    for image_ref in ["ab".repeat(32), "A".repeat(64)] {
+        let rect = json!({"id": "X", "name": "X", "type": "RECTANGLE", "relativeTransform": [[1, 0, 0], [0, 1, 0]], "size": {"x": 10, "y": 10},
+            "fills": [{"type": "IMAGE", "imageRef": image_ref, "scaleMode": "FIT"}]});
+        let file = json!({"name": "F", "schemaVersion": 0, "document": {"id": "0:0", "name": "Document", "type": "DOCUMENT",
+            "children": [{"id": "0:Page", "name": "Page", "type": "CANVAS", "backgroundColor": {"r": 0.0, "g": 0.0, "b": 0.0, "a": 1.0}, "children": [rect]}]}});
+        let (doc, _) = crate::rest::import(&file, &crate::rest::no_images).unwrap();
+        assert_eq!(doc.images.keys().collect::<Vec<_>>(), ["rest-image-missing"], "{image_ref}");
+    }
+}

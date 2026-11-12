@@ -1,6 +1,6 @@
 use super::paint::color;
 use super::variables::variable_data;
-use super::*;
+use super::{Kv, MAX_ACTION_DEPTH, Mapper, Obj, Value, View, copy_str, guid, json, num, ref_guid};
 
 impl<'a> Mapper<'a> {
     pub(super) fn prototype(&mut self, o: &mut Obj, v: &View<'a>) {

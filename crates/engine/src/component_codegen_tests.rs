@@ -106,6 +106,17 @@ fn components_take_their_properties_as_parameters() {
     ] {
         assert!(leptos.contains(want), "Leptos has {want:?}:\n{leptos}");
     }
+    let dart = code(&mut s, c, "flutter");
+    for want in [
+        "import 'package:flutter/material.dart';\n\nclass Card extends StatelessWidget {\n",
+        "  const Card({\n    super.key,\n    this.showDot = true,\n    this.title = \"Hello\",\n  });\n",
+        "  final bool showDot;\n  final String title;\n",
+        "  Widget build(BuildContext context) {\n    return Container(",
+        "if (showDot)\n",
+        "Text(\n              title,",
+    ] {
+        assert!(dart.contains(want), "Flutter has {want:?}:\n{dart}");
+    }
     // The command describes the properties.
     let v = component_code(&mut s, c, "react");
     assert_eq!(v["name"], "Card");
@@ -140,6 +151,7 @@ fn instances_are_calls_passing_the_values_they_set() {
     assert!(react.contains("export function Card({"));
     assert_eq!(component_code(&mut s, i, "swiftui")["usage"], "Card(showDot: false, title: \"Buy\")\n");
     assert_eq!(component_code(&mut s, i, "compose")["usage"], "Card(showDot = false, title = \"Buy\")\n");
+    assert_eq!(component_code(&mut s, i, "flutter")["usage"], "Card(showDot: false, title: \"Buy\")\n");
     assert_eq!(component_code(&mut s, i, "arkui")["usage"], "Card({ showDot: false, title: \"Buy\" })\n");
     assert_eq!(component_code(&mut s, i, "leptos")["usage"], "<Card show_dot={false} title=\"Buy\" />\n");
     // Text that needs escaping is an expression in JSX and escaped per language.
@@ -147,6 +159,7 @@ fn instances_are_calls_passing_the_values_they_set() {
     assert_eq!(component_code(&mut s, i, "react")["usage"], "<Card showDot={false} title={\"Say \\\"hi\\\" $5\\nnow\"} />\n");
     assert_eq!(component_code(&mut s, i, "swiftui")["usage"], "Card(showDot: false, title: \"Say \\\"hi\\\" $5\\nnow\")\n");
     assert_eq!(component_code(&mut s, i, "compose")["usage"], "Card(showDot = false, title = \"Say \\\"hi\\\" \\$5\\nnow\")\n");
+    assert_eq!(component_code(&mut s, i, "flutter")["usage"], "Card(showDot: false, title: \"Say \\\"hi\\\" \\$5\\nnow\")\n");
     assert_eq!(component_code(&mut s, i, "arkui")["usage"], "Card({ showDot: false, title: \"Say \\\"hi\\\" $5\\nnow\" })\n");
     assert_eq!(component_code(&mut s, i, "leptos")["usage"], "<Card show_dot={false} title={\"Say \\\"hi\\\" $5\\nnow\"} />\n");
     // A quoted title becomes a binding whose attribute value is escaped: the expression itself
@@ -175,6 +188,8 @@ fn nested_instances_in_a_layer_tree_are_calls() {
     assert!(!react.contains("Hello"), "the instance's layers aren't spelled out: {react}");
     assert!(code(&mut s, screen, "swiftui").contains("Card(title: \"Inbox\")"));
     assert!(code(&mut s, screen, "compose").contains("Card(title = \"Inbox\")"));
+    let dart = code(&mut s, screen, "flutter");
+    assert!(dart.contains("Card(title: \"Inbox\")") && !dart.contains("Hello"), "{dart}");
     let leptos = code(&mut s, screen, "leptos");
     assert!(leptos.contains("pub fn HomeScreen() -> impl IntoView {") && leptos.contains("<Card title=\"Inbox\" />"), "{leptos}");
     assert!(!leptos.contains("Hello"), "{leptos}");
@@ -233,6 +248,19 @@ fn variant_sets_share_one_definition() {
 }
 
 #[test]
+fn flutter_variant_sets_share_one_enum() {
+    let mut s = Session::new();
+    let (set, _, _) = button_set(&mut s);
+    let dart = code(&mut s, set, "flutter");
+    assert!(dart.contains("enum ButtonState { defaultValue, hover }\n"), "{dart}");
+    assert!(dart.contains("    this.state = ButtonState.defaultValue,\n"), "{dart}");
+    assert!(dart.contains("  final ButtonState state;\n"), "{dart}");
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": set, "x": 0, "y": 600})));
+    ex(&mut s, "instance.setProperties", json!({"ids": [i], "properties": {"State": "Hover"}}));
+    assert_eq!(component_code(&mut s, i, "flutter")["usage"], "Button(state: ButtonState.hover)\n");
+}
+
+#[test]
 fn instance_swap_properties_take_views() {
     let mut s = Session::new();
     let icon = |s: &mut Session, name: &str, x: f64| {
@@ -252,6 +280,10 @@ fn instance_swap_properties_take_views() {
     assert!(swift.contains("    var icon: AnyView = AnyView(HeartIcon())"), "{swift}");
     let kt = code(&mut s, chip, "compose");
     assert!(kt.contains("    icon: @Composable () -> Unit = { HeartIcon() },") && kt.contains("icon()"), "{kt}");
+    let dart = code(&mut s, chip, "flutter");
+    assert!(dart.contains("  final Widget icon;\n") && dart.contains("    this.icon = const HeartIcon(),\n"), "{dart}");
+    assert!(dart.contains("child: icon\n"), "the nested instance is the parameter: {dart}");
+    assert!(!dart.contains("child: Container("), "the swap's widget tree isn't spelled out: {dart}");
     let ark = code(&mut s, chip, "arkui");
     for want in [
         "    @BuilderParam icon: () => void = this.defaultIconBuilder",
@@ -272,6 +304,7 @@ fn instance_swap_properties_take_views() {
     assert_eq!(component_code(&mut s, i, "react")["usage"], "<Chip icon={<StarIcon />} />\n");
     assert_eq!(component_code(&mut s, i, "swiftui")["usage"], "Chip(icon: AnyView(StarIcon()))\n");
     assert_eq!(component_code(&mut s, i, "compose")["usage"], "Chip(icon = { StarIcon() })\n");
+    assert_eq!(component_code(&mut s, i, "flutter")["usage"], "Chip(icon: StarIcon())\n");
     assert_eq!(component_code(&mut s, i, "arkui")["usage"], "Chip({ icon: () => { StarIcon() } })\n");
     assert_eq!(component_code(&mut s, i, "leptos")["usage"], "<Chip icon={|| view! { <StarIcon /> }} />\n");
     assert_eq!(component_code(&mut s, i, "vue")["usage"], "<Chip :icon=\"StarIcon\" />\n");
@@ -289,6 +322,9 @@ fn slots_take_optional_content() {
     assert!(react.contains("  content?: React.ReactNode;") && react.contains("{content ?? ("), "{react}");
     assert!(code(&mut s, panel, "swiftui").contains("var content: AnyView? = nil"));
     assert!(code(&mut s, panel, "compose").contains("content: (@Composable () -> Unit)? = null,"));
+    let dart = code(&mut s, panel, "flutter");
+    assert!(dart.contains("  final List<Widget>? content;\n") && dart.contains("    this.content,\n"), "{dart}");
+    assert!(dart.contains("...?content,\n") && dart.contains("if (content == null) ...[\n"), "{dart}");
     let ark = code(&mut s, panel, "arkui");
     for want in [
         "    @BuilderParam content: () => void = this.defaultContentBuilder",
@@ -305,11 +341,14 @@ fn slots_take_optional_content() {
     let badge = idv(&ex(&mut s, "component.create", json!({"ids": [g]})));
     let i = idv(&ex(&mut s, "instance.create", json!({"component": panel, "x": 400, "y": 0})));
     assert_eq!(component_code(&mut s, i, "react")["usage"], "<Panel />\n", "the main's content isn't passed");
+    assert_eq!(component_code(&mut s, i, "flutter")["usage"], "Panel()\n", "the main's content isn't passed");
     ex(&mut s, "instance.slotInsert", json!({"id": i, "slot": "Content", "component": badge, "replace": true}));
     let usage = component_code(&mut s, i, "react")["usage"].as_str().unwrap_or_default().to_string();
     assert!(usage.starts_with("<Panel content={(\n") && usage.contains("<Badge />"), "{usage}");
     let usage = component_code(&mut s, i, "leptos")["usage"].as_str().unwrap_or_default().to_string();
     assert!(usage.starts_with("<Panel content={|| view! {\n") && usage.contains("<Badge />") && usage.ends_with("}} />\n"), "{usage}");
+    let usage = component_code(&mut s, i, "flutter")["usage"].as_str().unwrap_or_default().to_string();
+    assert!(usage.starts_with("Panel(content: [\n") && usage.contains("Badge()"), "{usage}");
     let usage = component_code(&mut s, i, "arkui")["usage"].as_str().unwrap_or_default().to_string();
     assert!(usage.starts_with("Panel({ content: () => {\n") && usage.contains("Badge()") && usage.ends_with("} })\n"), "{usage}");
 }
@@ -359,10 +398,22 @@ fn identifiers_are_escaped_and_unique() {
     ] {
         assert!(leptos.contains(want), "Leptos has {want:?}:\n{leptos}");
     }
+    // Dart: lowerCamel members, keywords suffixed, never a type the widget tree names.
+    let dart = code_for(doc, c, CodeLang::Flutter);
+    for want in [
+        "class TextComponent extends StatelessWidget {",
+        "enum TextComponentColorVariant { red }\n",
+        "    this.defaultValue = false,",
+        "    this.p2Columns = false,",
+        "  final String type;",
+    ] {
+        assert!(dart.contains(want), "Flutter has {want:?}:\n{dart}");
+    }
     // Errors.
     let r = idv(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})));
     assert!(s.execute("inspect.componentCode", &json!({"id": r})).is_err(), "not a component");
     assert!(s.execute("inspect.componentCode", &json!({"id": c, "language": "html"})).is_err());
+    assert!(s.execute("inspect.componentCode", &json!({"id": c, "language": "flutter"})).is_ok());
     assert!(s.execute("inspect.componentCode", &json!({"id": 999_999})).is_err());
 }
 

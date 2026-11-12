@@ -1,23 +1,23 @@
 use super::paint::{bound, color};
-use super::*;
+use super::{BTreeMap, BTreeSet, Kv, MAX_GRID_TRACK_VALUE, MAX_GRID_TRACKS, Mapper, Obj, Value, View, copy_len, guid, json, num, scaled};
 
 impl<'a> Mapper<'a> {
     pub(super) fn auto_layout(&mut self, o: &mut Obj, v: &View<'a>) {
         let Some(mode) = v.str("stackMode").filter(|m| matches!(*m, "HORIZONTAL" | "VERTICAL" | "GRID")) else { return };
         o.insert("layoutMode".into(), json!(mode));
-        copy_num(o, v, "stackSpacing", "itemSpacing");
-        copy_num(o, v, "stackCounterSpacing", "counterAxisSpacing");
+        copy_len(o, v, "stackSpacing", "itemSpacing");
+        copy_len(o, v, "stackCounterSpacing", "counterAxisSpacing");
         if v.str("stackWrap") == Some("WRAP") {
             o.insert("layoutWrap".into(), json!("WRAP"));
         }
         if v.str("stackCounterAlignContent") == Some("SPACE_BETWEEN") {
             o.insert("counterAxisAlignContent".into(), json!("SPACE_BETWEEN"));
         }
-        let (h, vert) = (v.num("stackHorizontalPadding").unwrap_or(0.0), v.num("stackVerticalPadding").unwrap_or(0.0));
+        let (h, vert) = (v.len("stackHorizontalPadding").unwrap_or(0.0), v.len("stackVerticalPadding").unwrap_or(0.0));
         o.insert("paddingLeft".into(), json!(h));
         o.insert("paddingTop".into(), json!(vert));
-        o.insert("paddingRight".into(), json!(v.num("stackPaddingRight").unwrap_or(h)));
-        o.insert("paddingBottom".into(), json!(v.num("stackPaddingBottom").unwrap_or(vert)));
+        o.insert("paddingRight".into(), json!(v.len("stackPaddingRight").unwrap_or(h)));
+        o.insert("paddingBottom".into(), json!(v.len("stackPaddingBottom").unwrap_or(vert)));
         let main = match v.str("stackPrimaryAlignItems").or_else(|| v.str("stackJustify")) {
             Some("CENTER") => "CENTER",
             Some("MAX") => "MAX",
@@ -48,8 +48,8 @@ impl<'a> Mapper<'a> {
             o.insert("itemReverseZIndex".into(), json!(b));
         }
         if mode == "GRID" {
-            copy_num(o, v, "gridColumnGap", "gridColumnGap");
-            copy_num(o, v, "gridRowGap", "gridRowGap");
+            copy_len(o, v, "gridColumnGap", "gridColumnGap");
+            copy_len(o, v, "gridRowGap", "gridRowGap");
             o.insert("gridColumnCount".into(), json!(tracks(v, "gridColumns").len()));
             o.insert("gridRowCount".into(), json!(tracks(v, "gridRows").len()));
             let track_data = [("columnTracks", "gridColumns", "gridColumnsSizing"), ("rowTracks", "gridRows", "gridRowsSizing")]
@@ -162,7 +162,8 @@ fn grid_track_sizing(size: Option<&Kv<'_>>) -> Option<Value> {
     }
 }
 
-pub(super) fn layout_grid(g: &Kv) -> Value {
+/// A layout grid; `k`: the factor its lengths take (a scaled instance's layer).
+pub(super) fn layout_grid(g: &Kv, k: f64) -> Value {
     let pattern = match (g.get("pattern").and_then(Kv::str), g.get("axis").and_then(Kv::str)) {
         (Some("GRID"), _) => "GRID",
         (_, Some("Y")) => "ROWS",
@@ -170,7 +171,8 @@ pub(super) fn layout_grid(g: &Kv) -> Value {
     };
     let mut o = json!({"pattern": pattern, "alignment": g.get("type").and_then(Kv::str).unwrap_or("STRETCH")});
     for (from, to) in [("sectionSize", "sectionSize"), ("numSections", "count"), ("gutterSize", "gutterSize"), ("offset", "offset")] {
-        if let Some(x) = num(g, from) {
+        let length = from != "numSections";
+        if let Some(x) = num(g, from).and_then(|x| scaled(x, if length { k } else { 1.0 })) {
             o[to] = json!(x);
         }
     }

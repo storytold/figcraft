@@ -28,8 +28,11 @@ impl Fonts {
     fn load() -> Self {
         Fonts(figcraft_text::fontdb::family_names().into_iter().map(|f| f.to_lowercase()).collect())
     }
+    /// Installed under this name, or under the family it names (`system-ui` on a Mac is its
+    /// System Font, see `fontdb::apple_alias`).
     fn has(&self, family: &str) -> bool {
-        self.0.contains(&family.to_lowercase())
+        let key = family.to_lowercase();
+        self.0.contains(&key) || figcraft_text::fontdb::apple_alias(&key).is_some_and(|target| self.0.contains(target))
     }
 }
 
@@ -67,8 +70,9 @@ fn generic(name: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-/// The family to use: the first the SVG lists that's installed, else the first it names, else the
-/// default.
+/// The family to use: the first the SVG lists that's installed (a generic family as the first of
+/// its installed stand-ins, unless a font answers to its name: `system-ui` on a Mac), else the
+/// first it names, else the default.
 fn family(list: &[FontFamily], fonts: &Fonts) -> String {
     let name = |f: &FontFamily| match f {
         FontFamily::Serif => "serif".to_string(),
@@ -80,14 +84,11 @@ fn family(list: &[FontFamily], fonts: &Fonts) -> String {
     };
     for f in list {
         let n = name(f);
-        match generic(&n) {
-            Some(cands) => {
-                if let Some(c) = cands.iter().find(|c| fonts.has(c)) {
-                    return (*c).to_string();
-                }
-            }
-            None if fonts.has(&n) => return n,
-            None => {}
+        if fonts.has(&n) {
+            return n;
+        }
+        if let Some(c) = generic(&n).and_then(|cands| cands.iter().find(|c| fonts.has(c))) {
+            return (*c).to_string();
         }
     }
     list.iter().map(name).find(|n| generic(n).is_none() && !n.is_empty()).unwrap_or_else(|| TextStyle::default().font_family)
@@ -194,7 +195,7 @@ pub(crate) fn text(cx: &mut Ctx, t: &usvg::Text, parent: NodeId, base: Affine, d
         let x = chunk.x().map_or(pen_x, f64::from) + d(t.dx());
         let y = chunk.y().map_or(pen_y, f64::from) + d(t.dy());
         char_at += count;
-        let ci = |b: usize| text.get(..b).map_or(count, |p| p.chars().count());
+        let ci = char_index(text, chunk.spans().iter().flat_map(|sp| [sp.start(), sp.end()]));
         let spans: Vec<_> = chunk.spans().iter().map(|sp| (ci(sp.start()), ci(sp.end()), sp, span_style(sp, s, fonts))).collect();
         if spans.is_empty() {
             continue;
@@ -226,6 +227,32 @@ pub(crate) fn text(cx: &mut Ctx, t: &usvg::Text, parent: NodeId, base: Affine, d
         }
         i = j;
     }
+}
+
+/// The characters of `text` before each of the byte `offsets` (all of them for an offset that is
+/// past the end or inside a character): one pass over the text, whatever the number of spans.
+fn char_index(text: &str, offsets: impl IntoIterator<Item = usize>) -> impl Fn(usize) -> usize {
+    let mut want: Vec<usize> = offsets.into_iter().collect();
+    want.sort_unstable();
+    want.dedup();
+    let mut found: Vec<(usize, usize)> = Vec::with_capacity(want.len());
+    let mut wanted = want.into_iter().peekable();
+    let mut count = 0;
+    for (i, _) in text.char_indices() {
+        while let Some(&o) = wanted.peek() {
+            match o.cmp(&i) {
+                std::cmp::Ordering::Equal => found.push((o, count)),
+                std::cmp::Ordering::Greater => break,
+                std::cmp::Ordering::Less => {}
+            }
+            wanted.next();
+        }
+        count += 1;
+    }
+    if wanted.any(|o| o == text.len()) {
+        found.push((text.len(), count));
+    }
+    move |b| found.binary_search_by_key(&b, |f| f.0).ok().and_then(|k| found.get(k)).map_or(count, |f| f.1)
 }
 
 /// The text of `lines` (one per line, stacked at their pitch; `s`: their scale): characters, the
@@ -261,8 +288,7 @@ fn on_path(cx: &mut Ctx, t: &usvg::Text, world: Affine, parent: NodeId) -> bool 
     let Some(len) = figcraft_geom::measure::polylines(&path).and_then(|l| l.first().map(|l| l.length())).filter(|l| *l > 1e-9) else { return false };
     let fonts = cx.fonts.get_or_insert_with(Fonts::load);
     let text = chunk.text();
-    let count = text.chars().count();
-    let ci = |b: usize| text.get(..b).map_or(count, |p| p.chars().count());
+    let ci = char_index(text, chunk.spans().iter().flat_map(|sp| [sp.start(), sp.end()]));
     let spans: Vec<_> = chunk.spans().iter().map(|sp| (ci(sp.start()), ci(sp.end()), sp, span_style(sp, 1.0, fonts))).collect();
     let line = Line { x: 0.0, y: 0.0, anchor: chunk.anchor(), text: text.to_string(), spans };
     let mut td = text_data(std::slice::from_ref(&line), 1.0);
@@ -271,7 +297,10 @@ fn on_path(cx: &mut Ctx, t: &usvg::Text, world: Affine, parent: NodeId) -> bool 
     local.apply_affine(Affine::translate((-bb.x0, -bb.y0)));
     td.path = Some(Box::new(figcraft_doc::TextPath { start: f64::from(tp.start_offset()) / len, ..figcraft_doc::TextPath::new(&local) }));
     let transform = world * Affine::translate((bb.x0, bb.y0));
-    add_layer(cx, t, &[line], td, transform, (bb.width().max(1.0), bb.height().max(1.0)), world, 1.0, parent);
+    add_layer(
+        cx,
+        TextLayer { source: t, block: &[line], data: td, transform, size: (bb.width().max(1.0), bb.height().max(1.0)), world, scale: 1.0, parent },
+    );
     true
 }
 
@@ -293,23 +322,24 @@ fn layer(cx: &mut Ctx, t: &usvg::Text, block: &[Line], m: Affine, s: f64, world:
     let (w, h) = (lay.width.ceil().max(1.0), lay.height.max(1.0));
     let baseline = lay.lines.first().map_or(0.0, |l| l.baseline);
     let transform = m * Affine::translate((s * first.x - anchor_k(first.anchor) * w, s * first.y - baseline));
-    add_layer(cx, t, block, td, transform, (w, h), world, s, parent);
+    add_layer(cx, TextLayer { source: t, block, data: td, transform, size: (w, h), world, scale: s, parent });
+}
+
+struct TextLayer<'text, 'block, 'span> {
+    source: &'text usvg::Text,
+    block: &'block [Line<'span>],
+    data: TextData,
+    transform: Affine,
+    size: (f64, f64),
+    world: Affine,
+    scale: f64,
+    parent: NodeId,
 }
 
 /// Add text layer `td` of `block` at `transform` with box `(w, h)`, with the spans' fills and the
 /// first span's stroke (`world`: the SVG text's space; `s`: the scale folded into font sizes).
-#[allow(clippy::too_many_arguments)]
-fn add_layer(
-    cx: &mut Ctx,
-    t: &usvg::Text,
-    block: &[Line],
-    mut td: TextData,
-    transform: Affine,
-    (w, h): (f64, f64),
-    world: Affine,
-    s: f64,
-    parent: NodeId,
-) {
+fn add_layer(cx: &mut Ctx, layer: TextLayer<'_, '_, '_>) {
+    let TextLayer { source: t, block, data: mut td, transform, size: (w, h), world, scale: s, parent } = layer;
     let Some(first) = block.first() else { return };
     let spans: Vec<&usvg::TextSpan> = block.iter().flat_map(|l| l.spans.iter().map(|sp| sp.2)).collect();
     if spans.iter().all(|sp| !sp.is_visible()) {
@@ -335,7 +365,11 @@ fn add_layer(
     n.fills = base_fill;
     if let Some(st) = spans.first().and_then(|sp| sp.stroke()) {
         n.strokes = paint(cx, st.paint(), st.opacity().get(), target).into_iter().collect();
-        n.stroke = super::stroke_props(st, s);
+        n.stroke = super::stroke_props(st, s, true);
     }
     cx.add(n, parent);
 }
+
+#[cfg(test)]
+#[path = "text_tests.rs"]
+mod tests;

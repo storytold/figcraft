@@ -1,4 +1,6 @@
-use super::*;
+use super::{Arc, FigApp, Future, PathBuf, Pin, Session, Value, Wake, i18n, json};
+
+pub const MAX_CLIPBOARD_PNG_BYTES: usize = 256 * 1024 * 1024;
 
 /// Platform services the app crate provides (file dialogs, clipboard, URLs).
 pub trait Services {
@@ -22,6 +24,11 @@ pub trait Services {
     fn download(&mut self, _name: &str, _bytes: &[u8]) -> bool {
         false
     }
+    /// The document file a host page opened, where the app runs inside one (the browser's host
+    /// mode): a Save of that document keeps this name instead of the document's own.
+    fn host_file(&self) -> Option<String> {
+        None
+    }
     /// A folder to write several files into.
     fn pick_folder(&mut self, _title: &str) -> DialogFuture {
         Box::pin(std::future::ready(None))
@@ -40,7 +47,15 @@ pub trait Services {
     fn clipboard_get_image(&mut self) -> Option<(u32, u32, Vec<u8>)> {
         None
     }
+    fn clipboard_get_png(&mut self) -> Option<Vec<u8>> {
+        None
+    }
     fn open_url(&mut self, _url: &str) {}
+    /// Open `url` in place of the app where the platform has a place for it (a browser's own tab:
+    /// the prototype is left); elsewhere as [`open_url`](Self::open_url) does.
+    fn open_url_here(&mut self, url: &str) {
+        self.open_url(url);
+    }
     /// Show the file at `path` in the platform's file manager (Finder, Explorer), selected where the
     /// platform can.
     fn reveal_path(&mut self, _path: &std::path::Path) {}
@@ -68,6 +83,14 @@ pub trait Services {
     fn gamepad_held(&mut self) -> u32 {
         0
     }
+    /// The fonts installed on this computer can be asked for and haven't been (the browser's Local
+    /// Font Access; the desktop app sees them anyway).
+    fn can_ask_for_local_fonts(&self) -> bool {
+        false
+    }
+    /// Ask for them (the browser asks the person): they join the font list by name, each read when
+    /// text uses it.
+    fn ask_for_local_fonts(&mut self) {}
 }
 
 pub type DialogFuture = Pin<Box<dyn Future<Output = Option<PathBuf>>>>;
@@ -109,6 +132,21 @@ impl Picked {
 /// What the user is told about a file whose contents couldn't be read.
 pub fn unreadable(name: &str) -> String {
     i18n::trf("Couldn't read {name}.", &[("name", &name)])
+}
+
+/// What the page says once the browser build stopped on an internal error (in the browser a panic
+/// ends the page): `unsaved` files had unsaved changes and `kept` of them fitted in its storage.
+pub fn browser_stopped(unsaved: usize, kept: usize) -> String {
+    let next = if unsaved == 0 {
+        i18n::tr("Reload the page to start again.")
+    } else if kept >= unsaved {
+        i18n::tr("Reload the page to get your unsaved files back.")
+    } else if kept == 0 {
+        i18n::tr("Your unsaved files were too large for the browser to keep.")
+    } else {
+        i18n::tr("Reload the page to get back the unsaved files the browser had room for.")
+    };
+    format!("{} {next}", i18n::tr("FigCraft stopped because of an internal error."))
 }
 
 /// The largest file read in the browser: wasm has at most 4 GiB of memory, and a file's contents

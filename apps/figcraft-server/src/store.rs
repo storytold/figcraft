@@ -7,12 +7,14 @@
 //! <data>/server.key              the server key: managing files (publish, links, removal)
 //! <data>/files/<id>/meta.json    name, created, updated, sequence number
 //! <data>/files/<id>/links.json   share links: id, access, label, created, SHA-256 of the token,
-//!                                and a join code's hash and wrapped token (see `codes`)
+//!                                a join code's hash and wrapped token (see `codes`), and a team
+//!                                link's token (see `team`)
 //! <data>/files/<id>/snapshot.bin the session state at the last compaction
 //! <data>/files/<id>/log.bin      what changed since (see `disk`)
 //! <data>/files/<id>/library-<version>.bin  its team library, when one was published (a `.figcraft`
 //!                                archive; `library.bin` from servers before versioned names)
 //! <data>/files/<id>/usage.json   how other files use that library, as their apps report it
+//! <data>/files/<id>/actions.json its components' insertions and detachments week by week
 //! <data>/plugins/                the plugin directory (see `directory`)
 //! <data>/blocked.json            addresses the operator blocked
 //! <data>/reports.json            reports people sent about files
@@ -30,7 +32,7 @@
 //! hashes and compared in constant time. Whatever is damaged at startup is skipped and reported,
 //! never deleted.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{Cursor, Write};
 use std::net::IpAddr;
@@ -38,10 +40,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use figcraft_collab::message::{
-    Access, Admin, AdminReply, ClientMsg, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply, LibraryReq, LinkInfo, MAX_OWNED, NewLink, OwnedFile,
-    PluginReply, PluginReq, ReportInfo, Usage,
+    Access, Admin, AdminReply, AssetUsage, ClientMsg, Detached, FileDetached, FileInfo, FileRow, FileUsage, HostInfo, LibraryReply, LibraryReq,
+    LinkInfo, MAX_OWNED, NewLink, OwnedFile, PluginReply, PluginReq, ReportInfo, Usage, WeekActions,
 };
-use figcraft_collab::{Change, Replica, Server, same_secret};
+use figcraft_collab::{Change, NodeId, Replica, Server, same_secret};
 use figcraft_collab_net::hub::{Admission, Backend, Closing, Handled, OpenFile, ip_blocks, ip_key};
 use figcraft_collab_net::token;
 use serde::{Deserialize, Serialize};
@@ -50,13 +52,14 @@ use sha2::{Digest, Sha256};
 use crate::abuse::{Abuse, AbuseConfig, Action};
 use crate::codes::{self, Sealed};
 use crate::directory::{Directory, DirectoryConfig};
-use crate::disk::{self, LIBRARY, LINKS, LOG, LOG_HEADER, META, SNAPSHOT, USAGE};
+use crate::disk::{self, ACTIONS, LIBRARY, LINKS, LOG, LOG_HEADER, META, SNAPSHOT, USAGE};
 
 mod backend;
 mod files;
 mod journal;
 mod library;
 mod links;
+pub(crate) mod team;
 
 pub use library::library_name;
 
@@ -88,6 +91,9 @@ const MAX_PROBLEMS: usize = 200;
 /// Why a download is turned away (an address's share, or everyone's, is used up for now).
 pub const BUSY_DOWNLOADS: &str = "too many downloads from your address or from everyone right now: try again in a minute";
 
+/// Why a request that changes the server's files is turned away (the address's share is used up).
+pub const BUSY_ADMIN: &str = "too many changes to this server's files from your address: wait a minute and try again";
+
 /// Why publishing without the key is refused on a server that isn't open to the public.
 pub const KEY_ONLY: &str = "this server takes files only from people who have its key: add ?key=… to the address (its operator has the key)";
 
@@ -99,8 +105,12 @@ pub const NO_PUBLIC_LIBRARY: &str = "on this public server only files published 
 /// components one file's report keeps.
 const MAX_USERS: usize = 200;
 const MAX_REPORTED: usize = 1_000;
-/// Largest `usage.json` read.
-const MAX_USAGE_FILE: u64 = 4 << 20;
+/// Largest `usage.json` (and `actions.json`) read.
+const MAX_USAGE_FILE: u64 = 16 << 20;
+/// Weeks of a library's insertions and detachments kept (a year and the current week), and most
+/// rows (a component in a week) kept in all.
+const MAX_WEEKS: u64 = 53;
+const MAX_WEEK_ROWS: usize = 20_000;
 /// A library's usage reports are kept in memory and written at most this often (seconds), and
 /// when the server stops.
 const USAGE_WRITE_EVERY: u64 = 60;
@@ -142,6 +152,10 @@ pub struct HostingConfig {
     pub max_files_per_ip: usize,
     pub max_bytes_per_ip: u64,
     pub abuse: AbuseConfig,
+    /// The team list (`team_files`): what its links let people do; `None`: no team list.
+    pub team: Option<Access>,
+    /// Where the browser build is served (`web_url`; empty: not said).
+    pub web: String,
 }
 
 impl Default for HostingConfig {
@@ -156,6 +170,8 @@ impl Default for HostingConfig {
             max_files_per_ip: usize::MAX,
             max_bytes_per_ip: u64::MAX,
             abuse: AbuseConfig { open: false, connects_per_minute: 30, publishes_per_hour: 10, messages_per_second: 200 },
+            team: None,
+            web: String::new(),
         }
     }
 }
@@ -196,7 +212,8 @@ struct LibraryMeta {
     version: u64,
 }
 
-/// A share link (`links.json`): the token itself is never stored.
+/// A share link (`links.json`): the token itself is never stored, except a team link's (the server
+/// hands it to whoever asks the team list for it).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Link {
     id: String,
@@ -208,6 +225,20 @@ struct Link {
     /// Its join code, when one was handed out (never the code itself).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     code: Option<Sealed>,
+    /// A team link's token: the server made the link for its team list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    team: Option<TeamToken>,
+}
+
+/// A team link's token, kept so the team list can hand it out; never shown in debug output.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+struct TeamToken(String);
+
+impl std::fmt::Debug for TeamToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TeamToken(..)")
+    }
 }
 
 impl Link {
@@ -238,13 +269,62 @@ struct Entry {
     bytes: u64,
     /// When it was last compacted to make room (seconds since 1970).
     forced: u64,
+    /// Closed lately: its session kept loaded ([`PARK_FOR`]).
+    parked: Option<Parked>,
+    /// The `opened` time `meta.json` holds ([`TOUCH_EVERY`]).
+    opened_written: u64,
 }
+
+/// A file everyone left lately, kept loaded so a join soon after neither reads it nor rewrites it
+/// (#1074): its session and its log (synced, its state compacted as on any close).
+struct Parked {
+    server: Server,
+    log: Log,
+    at: Instant,
+}
+
+/// How long a file everyone left stays loaded.
+const PARK_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+/// Most files kept loaded after everyone left (the one parked longest goes first).
+const MAX_PARKED: usize = 16;
+/// Most bytes (on disk) of the files kept loaded after everyone left.
+const MAX_PARKED_BYTES: u64 = 256 << 20;
+/// How often, at most, a file's `opened` time is written while it keeps being opened (seconds):
+/// expiry counts in days, so it needn't be written at every join and leave.
+const TOUCH_EVERY: u64 = 3600;
 
 /// A library's usage reports in memory, and whether (and when) they were written.
 struct UsageCache {
-    list: Vec<FileUsage>,
+    list: Vec<UsageEntry>,
+    /// Insertions and detachments week by week, over every file (kept in `actions.json`).
+    weeks: Vec<WeekActions>,
     dirty: bool,
     written: u64,
+}
+
+/// What one file reports about a library, as kept in `usage.json`: its last usage report (the
+/// same JSON as a [`FileUsage`]; `updated` 0: none yet), its last detach report, and the highest
+/// insertion and detach totals it reported per component (`peaks`: what counts in a week is what
+/// a total grows past them, so an undo and a redo count once).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct UsageEntry {
+    usage: Usage,
+    #[serde(default)]
+    updated: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    detached: Vec<(NodeId, u32)>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    detached_updated: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    peaks: Vec<(NodeId, u32, u32)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    styles: Vec<(String, u32)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    variables: Vec<(String, u32)>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// The data directory in use (it holds the directory's lock until dropped).
@@ -261,6 +341,9 @@ pub struct Store {
     abuse: Abuse,
     /// Team library bytes served, everyone together.
     served: figcraft_collab_net::net::Bucket,
+    /// Tests: the time the rate limits read, held still (`None`: the clock).
+    #[cfg(test)]
+    pub(crate) frozen: Option<Instant>,
     /// Usage reports by library file.
     usage: BTreeMap<String, UsageCache>,
     blocked: BTreeSet<IpAddr>,
@@ -270,6 +353,9 @@ pub struct Store {
     // shortcut: in memory only, so after a restart such a code reads as unknown; keep them in the
     // data directory if people ask why their code "never existed".
     gone_codes: VecDeque<String>,
+    /// The files whose links hold each join code, by the code's hash ([`Sealed::hash`]): a typed
+    /// code is looked up here instead of against every link.
+    codes: HashMap<String, BTreeSet<String>>,
     /// When idle files are looked for next (seconds since 1970).
     next_sweep: u64,
     /// Compactions so far (tests count them).
@@ -363,11 +449,21 @@ fn write_key(root: &Path) -> Result<String, String> {
 const MAX_FIRST_LIBRARY_VERSION: u64 = 1 << 32;
 
 impl Store {
+    /// The time the rate limits are measured at: the clock, or in tests the time they hold it at.
+    pub(crate) fn clock(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(t) = self.frozen {
+            return t;
+        }
+        Instant::now()
+    }
+
     /// Use the data directory `root` (made if missing). Fails when another server or command holds
     /// it. Files that can't be read are skipped and listed in [`problems`](Self::problems).
     pub fn open(root: &Path, cfg: StoreConfig) -> Result<Store, String> {
         let mut store = Self::try_open(root, cfg)?.ok_or_else(|| format!("another figcraft-server (or a command) is using {}", root.display()))?;
         store.sweep();
+        store.drop_stale_team_links();
         Ok(store)
     }
 
@@ -392,10 +488,13 @@ impl Store {
             directory,
             abuse,
             served: figcraft_collab_net::net::Bucket::new(LIBRARY_RATE, LIBRARY_BURST),
+            #[cfg(test)]
+            frozen: None,
             usage: BTreeMap::new(),
             blocked: BTreeSet::new(),
             reports: Vec::new(),
             gone_codes: VecDeque::new(),
+            codes: HashMap::new(),
             next_sweep: 0,
             compactions: 0,
             cut_short: Vec::new(),
@@ -448,6 +547,9 @@ impl Store {
             }
             match self.check(&path) {
                 Ok(entry) => {
+                    for c in entry.links.iter().filter_map(|l| l.code.as_ref()) {
+                        self.codes.entry(c.hash.clone()).or_default().insert(id.clone());
+                    }
                     self.files.insert(id, entry);
                 }
                 Err(why) => self.note(format!("skipped file {id}: {why}")),
@@ -458,7 +560,7 @@ impl Store {
     /// A file folder's description and links, after checking its snapshot and log. Leftover
     /// temporary files (writes cut short) are removed.
     fn check(&self, path: &Path) -> Result<Entry, String> {
-        for name in [SNAPSHOT, LOG, META, LINKS, USAGE] {
+        for name in [SNAPSHOT, LOG, META, LINKS, USAGE, ACTIONS] {
             let tmp = disk::temp_of(&path.join(name));
             if tmp.exists() {
                 let _ = fs::remove_file(&tmp);
@@ -484,7 +586,8 @@ impl Store {
             log::info!("file at {}: its log isn't of its snapshot's generation; it is replayed over it when the file opens", path.display());
         }
         let bytes = [SNAPSHOT, LOG].iter().filter_map(|n| fs::metadata(path.join(n)).ok()).map(|m| m.len()).sum();
-        Ok(Entry { meta, links, log: None, bytes, forced: 0 })
+        let opened_written = meta.opened;
+        Ok(Entry { meta, links, log: None, bytes, forced: 0, parked: None, opened_written })
     }
 
     /// The server key (for managing files).
@@ -566,5 +669,5 @@ fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), Strin
 /// A new link and its token.
 fn new_link(access: Access, label: &str, created: u64) -> Result<(Link, String), String> {
     let token = token::secret()?;
-    Ok((Link { id: token::file_id()?, access, label: label.to_string(), created, hash: hash(&token), code: None }, token))
+    Ok((Link { id: token::file_id()?, access, label: label.to_string(), created, hash: hash(&token), code: None, team: None }, token))
 }

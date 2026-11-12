@@ -73,11 +73,6 @@ pub fn tip(label: &'static str, id: &str) -> &'static str {
     cached_tip(label, shortcut(id))
 }
 
-/// A tooltip naming a key ("Resources  ⇧I").
-pub fn key_tip(label: &'static str, key: &'static str) -> &'static str {
-    cached_tip(label, Some(key))
-}
-
 /// Panels ask for their tooltips every frame: each (label, key, platform) is built once.
 fn cached_tip(label: &'static str, key: Option<&'static str>) -> &'static str {
     type Entry = (Platform, &'static str, &'static str, &'static str);
@@ -96,11 +91,11 @@ fn cached_tip(label: &'static str, key: Option<&'static str>) -> &'static str {
 
 /// Run the shortcuts this frame's keys press. `typing`: a field had the keyboard when the frame
 /// began.
-/// `swallowed`: what this frame's Cmd/Ctrl+V chords the shell swallowed ask for ([`swallowed_paste`]).
-pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, swallowed: Swallowed) {
+/// `paste`: what this frame's paste events ask for ([`paste_events`]).
+pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, paste: PasteEvents) {
     let ime_input = ImeInputBaseline::capture(app);
     let field_save = prepare_field_save(app, ctx);
-    handle_input(app, ctx, typing, swallowed, ime_input, field_save);
+    handle_input(app, ctx, typing, paste, ime_input, field_save);
 }
 
 /// The viewport frame binds its IME batch before pointer/control handling.
@@ -108,7 +103,7 @@ pub(crate) fn handle_input(
     app: &mut FigApp,
     ctx: &Context,
     typing: bool,
-    swallowed: Swallowed,
+    paste: PasteEvents,
     ime_input: Option<ImeInputBaseline>,
     field_save: Option<AfterFieldSave>,
 ) {
@@ -167,21 +162,24 @@ pub(crate) fn handle_input(
     if events.is_empty() {
         return;
     }
-    // An image-only clipboard brings no paste event: paste from the key then. The browser sends
-    // the press; the desktop shell swallows it and sends only the release.
+    // An image-only clipboard brings no paste event with text: the desktop shell sends an image
+    // paste event instead, and in the browser it's the key press that pastes.
     let paste_event = events.iter().any(|e| matches!(e, Event::Paste(_)));
     let paste_key = events.iter().any(|e| matches!(e, Event::Key { key: Key::V, pressed: true, repeat: false, modifiers, .. } if modifiers.command && v_binding(*modifiers) == Some("edit.paste")));
-    match swallowed.run.or((paste_key && !paste_event).then_some("edit.paste")) {
-        Some("edit.paste") => crate::menus::paste(app, None, None),
-        Some(id) => run_binding(app, id),
-        None => {}
+    if paste.image || (paste_key && !paste_event) {
+        crate::menus::paste(app, None, None);
     }
     let now = ctx.input(|i| i.time);
     for ev in &events {
         match ev {
-            Event::Copy => crate::menus::invoke(app, "edit.copy"),
-            Event::Cut => cut(app),
-            Event::Paste(text) if !swallowed.drop_text => crate::menus::paste(app, Some(text), None),
+            // egui-winit sends Cmd/Ctrl+C as a copy event whatever Alt does, so Copy properties
+            // (Alt+Cmd/Ctrl+C) arrives here and never as a key.
+            Event::Copy => {
+                let props = ctx.input(|i| i.modifiers.alt);
+                crate::menus::invoke(app, if props { "edit.copyProperties" } else { "edit.copy" });
+            }
+            Event::Cut => cut(app, ctx.input(|i| i.modifiers)),
+            Event::Paste(text) if !paste.drop_text => crate::menus::paste(app, Some(text), None),
             Event::Key { key, physical_key, pressed: true, modifiers, repeat }
                 if key_event(app, *key, *physical_key, *modifiers, *repeat, now, ctx) =>
             {
@@ -194,13 +192,18 @@ pub(crate) fn handle_input(
 
 /// Cut: usually the layers. Windows sends Shift+Delete (remove the points and heal the path)
 /// as a cut command and never as a key, so in vector edit mode the selection is points: they are
-/// removed, a heal joining the path through them.
-fn cut(app: &mut FigApp) {
+/// removed, a heal joining the path through them. Ctrl/Cmd+X is the real Cut: with points or
+/// segments selected the engine copies them and removes them, staying in edit mode (#1875).
+fn cut(app: &mut FigApp, modifiers: egui::Modifiers) {
     let Some(ve) = app.session.ds().ok().and_then(|d| d.vector_edit.clone()) else {
         crate::menus::invoke(app, "edit.cut");
         return;
     };
-    if ve.parts().iter().any(|p| !p.vertices.is_empty()) {
+    if modifiers.command {
+        if ve.parts().iter().any(|p| !p.vertices.is_empty() || !p.segments.is_empty()) {
+            crate::menus::invoke(app, "edit.cut");
+        }
+    } else if ve.parts().iter().any(|p| !p.vertices.is_empty()) {
         app.run("vector.deleteHeal", json!({}));
     } else if ve.parts().iter().any(|p| !p.segments.is_empty()) {
         app.run("vector.edit.delete", json!({}));
@@ -349,68 +352,39 @@ pub(crate) fn release_field_for_save(response: &egui::Response) {
 }
 
 /// The command Cmd/Ctrl+V runs with `m` held too: `edit.paste`, `edit.pasteOver` (Shift),
-/// `edit.pasteProperties` (Alt), or `None` for a chord nothing is bound to. The keymap decides,
-/// whether the key press arrived (browser) or only a paste event and the release (desktop).
+/// `edit.pasteProperties` (Alt), or `None` for a chord nothing is bound to. The keymap decides.
 fn v_binding(m: Modifiers) -> Option<&'static str> {
     lookup(keymap::Context::Canvas, Key::V, Some(Key::V), Modifiers { command: true, ..m }).map(|b| b.id)
 }
 
-/// What this frame's Cmd/Ctrl+V chords ask for when the desktop shell swallowed their press
-/// ([`swallowed_paste`]).
+/// What this frame's paste events ask for ([`paste_events`]).
 #[derive(Clone, Copy, Default)]
-pub struct Swallowed {
-    /// The command to run ([`v_binding`]).
-    pub run: Option<&'static str>,
+pub struct PasteEvents {
+    /// The clipboard holds an image and no text: paste it.
+    pub image: bool,
     /// This frame's paste event belongs to another command or an unbound chord: its text isn't
     /// pasted.
     pub drop_text: bool,
 }
 
-/// egui-winit swallows every Cmd/Ctrl+V press, Shift or Alt held or not, and sends a paste event
-/// only when the clipboard holds text. So a chord brings a paste event (text) or just its release
-/// (an image, or nothing). The browser sends the press as well, which runs the command itself.
+/// egui-winit swallows a plain Cmd/Ctrl+V, press and release, and sends a paste event for text or
+/// an image paste event for an image; with Shift or Alt held the keys arrive as any others do. The
+/// browser sends the keys as well as a paste event, whatever is held, and that event's text has no
+/// place in a chord bound to another command.
 /// Call at the start of every frame: it reads the raw events, which keys consumed by panels or the
 /// presenter still carry.
-pub fn swallowed_paste(app: &mut FigApp, ctx: &Context) -> Swallowed {
-    let ui = &mut app.ui;
-    let mut out = Swallowed::default();
+pub fn paste_events(app: &mut FigApp, ctx: &Context) -> PasteEvents {
+    let held = &mut app.ui.held;
+    let mut out = PasteEvents::default();
     ctx.input(|i| {
         for ev in &i.raw.events {
             match ev {
-                Event::ModifiersChanged(m) => ui.held = *m,
+                Event::ModifiersChanged(m) => *held = *m,
                 // Without Cmd/Ctrl held it's another paste key (Shift+Insert, a Paste key).
-                Event::Paste(_) if ui.held.command => {
-                    let id = v_binding(ui.held);
-                    if id != Some("edit.paste") {
-                        out.drop_text = true;
-                        // Held down, the chord repeats its paste event: run once, as keys do.
-                        if !ui.v_pressed && !ui.paste_event {
-                            out.run = out.run.or(id);
-                        }
-                    }
-                    ui.paste_event = true;
-                }
-                Event::Paste(_) => ui.paste_event = true,
-                Event::Key { key: Key::V, pressed: true, .. } => ui.v_pressed = true,
-                Event::Key { key: Key::V, pressed: false, modifiers, .. } => {
-                    // Cmd was down when V went down, maybe let go first. A V held while the window
-                    // was away comes back as a release alone: without Cmd held, that's no paste.
-                    if !ui.v_pressed && !ui.paste_event && (modifiers.command || !ui.refocused) {
-                        out.run = out.run.or(v_binding(*modifiers));
-                    }
-                    ui.v_pressed = false;
-                    ui.paste_event = false;
-                    ui.refocused = false;
-                }
-                // The other keys that paste (Shift+Insert, a Paste key) end their paste event.
-                Event::Key { key: Key::Insert | Key::Paste, pressed: false, .. } => ui.paste_event = false,
+                Event::Paste(_) if held.command => out.drop_text |= v_binding(*held) != Some("edit.paste"),
+                Event::PasteImage(_) => out.image = true,
                 // Keys let go in another window never come back as releases.
-                Event::WindowFocused(false) => {
-                    ui.v_pressed = false;
-                    ui.paste_event = false;
-                    ui.held = Modifiers::NONE;
-                }
-                Event::WindowFocused(true) => ui.refocused = true,
+                Event::WindowFocused(false) => *held = Modifiers::NONE,
                 _ => {}
             }
         }
@@ -454,7 +428,21 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if key == Key::Escape && crate::selection_spacing::cancel(app, ctx) {
         return true;
     }
-    if key_box(app, key, m) {
+    // The colour picker open: Escape closes it here, before the binding deselects — unless one of
+    // its own dropdowns is open, which takes this Escape.
+    if key == Key::Escape && !egui::Popup::is_any_open(ctx) && crate::colorpicker::close_if_open(app) {
+        return true;
+    }
+    // A fill, stroke or effect row highlighted in the Design panel: Escape lets it go, before the
+    // binding deselects the layers.
+    if key == Key::Escape && m.is_none() && !egui::Popup::is_any_open(ctx) && crate::property_rows::escape(app) {
+        return true;
+    }
+    if key_pick(app, key, m) || key_box(app, key, m) {
+        return true;
+    }
+    // Enter or Escape finishes crop mode (the crop is already applied).
+    if matches!(key, Key::Enter | Key::Escape) && m.is_none() && app.ui.crop.take().is_some() {
         return true;
     }
     // A gradient open in the colour picker: Delete removes its selected stop.
@@ -502,10 +490,29 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
         _ => (0.0, 0.0),
     };
     if (dx, dy) != (0.0, 0.0) {
-        if app.session.selection().is_empty() {
+        if app.session.selection().is_empty() && app.session.tool.tool.draws_shape() && !app.session.tool.dev_mode && !m.command && !m.alt {
+            // A shape or frame tool chosen: the arrows show the placement crosshair in the middle
+            // of the view and move it; Enter places there (Accessibility at Figma).
+            app.run("tool.crosshair", json!({"dx": dx, "dy": dy, "big": m.shift}));
+        } else if app.session.selection().is_empty() {
             app.run("view.pan", json!({"dx": dx, "dy": dy, "big": m.shift}));
         } else if crate::menus::dev_mode_refuses(app, "transform.nudge") {
             // Dev Mode: said so, nothing moves.
+        } else if m.command && m.alt {
+            // Cmd/Ctrl+Alt+arrows rotate a degree at a time, 15 with Shift (Accessibility at
+            // Figma); down and right turn clockwise, up and left back (the documentation doesn't
+            // say which way). Not while points are being edited: the layer must not turn under
+            // the editor, and no key rotates points. About the selection's rotation origin (the
+            // moved one, else the centre of the rotated selection box), so repeated turns stay put.
+            if app.session.ds().is_ok_and(|d| d.vector_edit.is_some()) {
+                return true;
+            }
+            let step = if m.shift { 15.0 } else { 1.0 };
+            let origin = app.session.ds().ok().and_then(|d| d.origin_point());
+            app.run(
+                "transform.rotate",
+                json!({"degrees": if dx + dy < 0.0 { -step } else { step }, "cx": origin.map(|o| o.x), "cy": origin.map(|o| o.y)}),
+            );
         } else if m.command {
             // Cmd/Ctrl+arrows resize: right/down grow, left/up shrink.
             app.run("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}));
@@ -517,11 +524,6 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if m.is_none() && !repeat && opacity_digit(app, key, now) {
         return true;
     }
-    // Enter while the pen is drawing ends the path as Escape does.
-    if key == Key::Enter && app.session.tool.pen.is_some() {
-        let _ = app.session.pen_end();
-        return true;
-    }
     false
 }
 
@@ -529,8 +531,14 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
 /// F8): the arrows move it, Cmd/Ctrl+arrows or Shift+arrows move its far corner, sizing it (Shift
 /// with Cmd/Ctrl: five times as far), by 10 screen pixels; Enter selects what it covers like a
 /// marquee (Shift toggles, Cmd/Ctrl takes nested layers), Escape drops it.
-fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
+pub(crate) fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
     let Some(mut b) = app.ui.key_box else { return false };
+    // Tab: the box becomes the pick cursor.
+    if key == Key::Tab && m.is_none() {
+        app.ui.key_box = None;
+        app.start_pick_select();
+        return true;
+    }
     let size = m.shift || m.command;
     let step = if m.shift && m.command { 50.0 } else { 10.0 } / app.session.ds().map_or(1.0, |d| d.view.zoom.max(1e-6));
     let (dx, dy) = match key {
@@ -565,9 +573,86 @@ fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
     }
 }
 
+/// The sibling `dir` rows away from layer `id` in the Layers panel (down for 1, up for -1,
+/// wrapping), as `select.next` and `select.previous` walk: the list shows the last child on top.
+fn pick_sibling(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, dir: i64) -> Option<figcraft_doc::NodeId> {
+    let siblings = &doc.node(doc.node(id)?.parent?)?.children;
+    let n = i64::try_from(siblings.len()).ok()?;
+    let idx = i64::try_from(siblings.iter().position(|c| *c == id)?).ok()?;
+    siblings.get(usize::try_from((idx - dir).rem_euclid(n)).ok()?).copied()
+}
+
+/// Keys while the pick cursor shows ([`FigApp::start_pick_select`]): Tab and Shift+Tab move it between
+/// sibling layers in Layers-panel order, Enter into the top child of a frame or group, Shift+Enter
+/// out to the parent (never the page), Space selects the layer under it, Escape or a click on the canvas drops it (#1836).
+pub(crate) fn key_pick(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
+    if app.ui.pick.is_none() {
+        return false;
+    }
+    // Picked in another document (one switched away from or closed since) or deleted: gone.
+    let Some(at) = app.picked() else {
+        app.ui.pick = None;
+        return false;
+    };
+    let Ok(uid) = app.session.ds().map(|d| d.uid) else { return false };
+    let Ok(doc) = app.session.doc() else { return false };
+    let Some(node) = doc.node(at) else { return false };
+    let plain = !m.command && !m.alt && !m.ctrl;
+    let next = match key {
+        Key::Tab if plain => pick_sibling(doc, at, if m.shift { -1 } else { 1 }),
+        Key::Enter if plain && m.shift => node.parent.filter(|p| doc.node(*p).is_some_and(|n| !n.is_page())),
+        Key::Enter if plain => node.children.last().copied(),
+        Key::Space if m.is_none() => {
+            app.ui.pick = None;
+            app.run("select.set", json!({"ids": [at]}));
+            return true;
+        }
+        Key::Escape => {
+            app.ui.pick = None;
+            return true;
+        }
+        _ => return false,
+    };
+    if let Some(n) = next {
+        app.ui.pick = Some((uid, n));
+    }
+    true
+}
+
 impl FigApp {
+    /// The layer the pick cursor is on, while its document is the one in front and the layer is
+    /// still there, on the page shown (#1836).
+    pub(crate) fn picked(&self) -> Option<figcraft_doc::NodeId> {
+        let (uid, id) = self.ui.pick?;
+        let ds = self.session.ds().ok()?;
+        (ds.uid == uid && ds.doc.page_of(id) == Some(ds.page)).then_some(id)
+    }
+
+    /// Pick select: the pink outline on the first selected layer, or on the page's top layer when
+    /// nothing is selected; the keys walk the
+    /// layer tree from there ([`key_pick`]).
+    pub(crate) fn start_pick_select(&mut self) {
+        let Ok(ds) = self.session.ds() else { return };
+        let top = self.session.page().ok().and_then(|p| ds.doc.node(p)).and_then(|n| n.children.last().copied());
+        let Some(at) = ds.selection.first().copied().or(top) else {
+            self.toast(crate::i18n::tr("Nothing to pick: the page is empty"));
+            return;
+        };
+        self.ui.pick = Some((ds.uid, at));
+        self.toast(crate::i18n::tr(
+            "Pick select: Tab and Shift+Tab move between layers, Enter goes into one, Shift+Enter out, Space selects, Escape cancels",
+        ));
+    }
+
     /// Show a selection box for the keyboard: around the selection, else in the middle of the view.
+    /// The chord again while the box shows switches to pick select, and while the pick cursor
+    /// shows brings the box back.
     pub(crate) fn start_key_box(&mut self) {
+        if self.ui.key_box.take().is_some() {
+            self.start_pick_select();
+            return;
+        }
+        self.ui.pick = None;
         let Ok(ds) = self.session.ds() else { return };
         let zoom = ds.view.zoom.max(1e-6);
         let around = ds.selection.iter().filter_map(|i| ds.doc.world_bounds(*i)).reduce(|a, b| a.union(b));

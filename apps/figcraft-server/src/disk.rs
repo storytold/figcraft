@@ -27,6 +27,7 @@ pub const META: &str = "meta.json";
 pub const LINKS: &str = "links.json";
 pub const LIBRARY: &str = "library.bin";
 pub const USAGE: &str = "usage.json";
+pub const ACTIONS: &str = "actions.json";
 
 const SNAP_MAGIC: &[u8; 4] = b"FCSN";
 const LOG_MAGIC: &[u8; 4] = b"FCLG";
@@ -78,6 +79,7 @@ fn write_atomic_as(path: &Path, bytes: &[u8], private: bool) -> io::Result<()> {
         #[cfg(not(unix))]
         let _ = private;
         let mut f = o.open(&tmp)?;
+        counted(true);
         f.write_all(bytes)?;
         f.sync_all()?;
     }
@@ -101,6 +103,7 @@ pub fn sync_dir(dir: Option<&Path>) {
 /// Read a file of at most `max` bytes (a longer one is refused without being read).
 pub fn read_capped(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     let f = File::open(path).map_err(|e| format!("can't open {}: {e}", name(path)))?;
+    counted(false);
     let len = f.metadata().map_err(|e| e.to_string())?.len();
     if len > max {
         return Err(format!("{} is {} bytes, over the {max}-byte cap", name(path), len));
@@ -108,6 +111,29 @@ pub fn read_capped(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
     f.take(max).read_to_end(&mut bytes).map_err(|e| format!("can't read {}: {e}", name(path)))?;
     Ok(bytes)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Files read and written on this thread (tests: what an action costs, #1074).
+    static IO: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Count a file read or write (a log append counts as a write).
+pub(crate) fn counted(write: bool) {
+    #[cfg(test)]
+    IO.with(|io| {
+        let (r, w) = io.get();
+        io.set(if write { (r, w + 1) } else { (r + 1, w) });
+    });
+    #[cfg(not(test))]
+    let _ = write;
+}
+
+/// The files read and written on this thread since the last call: `(reads, writes)`.
+#[cfg(test)]
+pub(crate) fn take_io() -> (u32, u32) {
+    IO.with(|io| io.replace((0, 0)))
 }
 
 fn name(path: &Path) -> String {

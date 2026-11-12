@@ -1,6 +1,6 @@
 use super::outline::stroke;
 use super::overlays::accent;
-use super::*;
+use super::{Align2, Color32, CornerRadius, Document, FigApp, NodeId, NodeKind, Pos2, Rect, Tokens, pos2, regular, semibold, tr, vec2};
 
 /// The layers that get canvas labels and layout grids, in z-order: the page's visible top-level
 /// layers and, inside sections whose contents show, their visible children (sections nest). A

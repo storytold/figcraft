@@ -22,7 +22,7 @@ its rounded corners, like the other Crafting Apps.
 ## Provenance
 
 The owner's original engraving-style drawing (1500 px, keyed to the palette), supplied for
-FigCraft and vectorised with craftrules `assets/logo-options/_tools/vectorize_tile.py`. The source
+FigCraft and vectorised. The source
 image is not kept in this repo. License: see `LICENSE.txt`.
 
 ## Files

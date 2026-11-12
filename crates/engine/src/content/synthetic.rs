@@ -82,8 +82,15 @@ pub fn large_document(layers: usize) -> DocResult<(Document, NodeId)> {
     let page = doc.first_page().ok_or(figcraft_doc::DocError::Invalid("new document has no page".into()))?;
     let layers = layers.clamp(10, 2_000_000);
     // The shared button component (3 layers), above the screens.
-    let button =
-        doc.create(page, NodeKind::Component { description: String::new(), props: Default::default() }, "Button", 0.0, -120.0, 96.0, 32.0)?;
+    let button = doc.create(
+        page,
+        NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() },
+        "Button",
+        0.0,
+        -120.0,
+        96.0,
+        32.0,
+    )?;
     let bg = doc.create(button, NodeKind::Rectangle, "Background", 0.0, 0.0, 96.0, 32.0)?;
     fill(&mut doc, bg, Color::from_rgb8_const(0x0D, 0x99, 0xFF));
     if let Some(n) = doc.node_mut(bg) {

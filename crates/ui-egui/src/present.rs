@@ -216,11 +216,14 @@ pub struct PresentView {
     pub hotspot_hints: bool,
     /// A panel beside the prototype shows the Inspect properties of the layer under the pointer.
     pub inspect: bool,
+    /// Hide UI: the bar above the prototype and the navigation bar under it are gone, so the
+    /// prototype shows alone (Cmd/Ctrl+\, the editor's Show/Hide UI key, brings them back).
+    pub hide_ui: bool,
 }
 
 impl Default for PresentView {
     fn default() -> Self {
-        Self { scale: PresentScale::Fit, device_frame: true, comments: false, hotspot_hints: true, inspect: false }
+        Self { scale: PresentScale::Fit, device_frame: true, comments: false, hotspot_hints: true, inspect: false, hide_ui: false }
     }
 }
 
@@ -299,10 +302,15 @@ pub struct Presenter {
     clock: f64,
     /// The layer the Inspect panel shows (the last one under the pointer).
     inspected: Option<NodeId>,
-    urls: Vec<String>,
-    /// A link to a website waiting for the viewer to open it ([`link_notice`]), and whether "Don't
-    /// show this again" is ticked.
-    link_notice: Option<(String, bool)>,
+    /// The links the last frame's actions opened, whether the viewer's own click, press, drag or
+    /// key fired each, and whether it opens in a new tab; the frame-end queues them behind the
+    /// notice, but for one the viewer fired while choosing to skip the notice (#1096).
+    urls: Vec<(String, bool, bool)>,
+    /// A link waiting for the viewer to open it ([`link_notice`]), whether "Don't show this
+    /// again" is ticked (`None` when the notice doesn't offer it: the viewer didn't fire the link,
+    /// so skipping the notice wouldn't cover it, or they skip it already), and whether it opens in
+    /// a new tab.
+    link_notice: Option<(String, Option<bool>, bool)>,
     /// The editor's document as last copied (the player copies it again when it changes).
     source: Option<Arc<Document>>,
     /// Scrolling by dragging: what it scrolls and its offset when the drag began.

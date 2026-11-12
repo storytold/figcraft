@@ -2,13 +2,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, Node, NodeId, NodeKind, PropDef, VariableType, VariableValue};
 use serde_json::{Value, json};
 
 use super::edit::{roots, z_sorted};
 use super::{CommandSpec, ok};
-use crate::components::*;
-use crate::params::*;
+use crate::components::{
+    OVERRIDE_GROUPS, PROP_BINDING, SLOT, copy_group, create_instance, create_instance_at, default_props, default_variant, exposed_copies,
+    find_variant, inside_instance, instances_of, is_slot, keep_text_overrides, owning_component, owning_instance, prop_default_value,
+    rebase_instance, root_instance, set_boolean_default, slot_edited, slot_name, slots_of, takes_value, unlink_layers, variant_conflicts,
+    variant_name, variant_options, variant_props, variant_set,
+};
+use crate::params::{boolean, get, id, id_of, num, req_id, req_num, req_string, req_targets, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 mod instance;
@@ -19,8 +24,8 @@ use instance::{detach, make_slot, push_changes, remove_slot, reset_instance, res
 pub(crate) use instance::{swap_at, swap_instance};
 use props::{add_prop, bind_prop, delete_prop, edit_prop, set_props};
 pub(crate) use props::{apply_prop_bindings, check_prop_binding, describe_props};
-use variants::{add_variant, combine};
-pub use variants::{can_add_variant, can_combine_variants};
+use variants::{add_variant, combine, create_set};
+pub use variants::{can_add_variant, can_combine_variants, can_create_set};
 
 /// `component.hideWhenPublishing`: the leading `.` of the names of this file's components and
 /// sets (those `ids` are or are in), put on or taken off.
@@ -68,6 +73,13 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"ids": out}))
         }),
         spec!(
+            "component.createSet",
+            "Create component set",
+            "{ids? (layers, not components, sets or instances)}  (each becomes a component, wrapped in place in a component set: variants \"Property 1=<name>\" left to right, 20 px around)",
+            true,
+            create_set
+        ),
+        spec!(
             "component.combineVariants",
             "Combine as variants",
             "{ids? (main components; none already a variant, a library copy or inside an instance)}  (wraps them in a new component set; names without `=` become \"Property 1=Default\", \"Property 1=VariantN\")",
@@ -93,6 +105,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 _ => doc.world_bounds(c).map(|b| (b.x1 + 40.0, b.y0)).unwrap_or((0.0, 0.0)),
             };
             let i = create_instance(doc, c, parent, x, y)?;
+            crate::library::count_inserted(doc, &[i]);
             s.set_selection(vec![i]);
             Ok(json!({"id": i}))
         }),
@@ -180,28 +193,42 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             reset_override
         ),
-        spec!("component.goToMain", "Go to main component", "{id?}", false, |s, p| {
-            let cmd = "component.goToMain";
-            let i = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select an instance"))?;
-            let doc = s.doc()?;
-            let inst = owning_instance(doc, i).ok_or_else(|| bad(cmd, "not an instance"))?;
-            let Some(NodeKind::Instance { component, .. }) = doc.node(inst).map(|n| n.kind.clone()) else {
-                return Err(bad(cmd, "not an instance"));
-            };
-            if !doc.contains(component) {
-                return Err(EngineError::Disabled(cmd.into(), "the main component was deleted (use component.restoreMain)".into()));
+        spec!(
+            "component.goToMain",
+            "Go to main component",
+            "{id?}  selects the instance's main component; a library component's main is in its library file, which opens in a tab (or comes to the front) with the main selected. Returns {id} (the main in the file now shown), and `index` (the tab) when it went to a library file",
+            false,
+            |s, p| {
+                let cmd = "component.goToMain";
+                let i = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select an instance"))?;
+                let doc = s.doc()?;
+                let inst = owning_instance(doc, i).ok_or_else(|| bad(cmd, "not an instance"))?;
+                let Some(NodeKind::Instance { component, .. }) = doc.node(inst).map(|n| n.kind.clone()) else {
+                    return Err(bad(cmd, "not an instance"));
+                };
+                if !doc.contains(component) {
+                    return Err(EngineError::Disabled(cmd.into(), "the main component was deleted (use component.restoreMain)".into()));
+                }
+                if let Some((library, key)) = crate::library::library_source(doc, component) {
+                    let name = crate::library::library_name(doc, library).to_string();
+                    let library = library.to_string();
+                    return go_to_library_main(s, &library, &name, key);
+                }
+                if doc.is_remote(component) {
+                    return Err(EngineError::Disabled(
+                        cmd.into(),
+                        "the main component is a library copy with no link to its library (it came with an imported file): enable that library to reach it"
+                            .into(),
+                    ));
+                }
+                super::edit::select_and_page(s, vec![component])?;
+                let ds = s.ds_mut()?;
+                if let Some(b) = ds.doc.world_bounds(component) {
+                    ds.view.fit(b, 2.0);
+                }
+                Ok(json!({"id": component}))
             }
-            if let Some(lib) = crate::library::library_of(doc, component) {
-                let name = crate::library::library_name(doc, lib);
-                return Err(EngineError::Disabled(cmd.into(), format!("the main component is in the library \"{name}\": open that file to edit it")));
-            }
-            super::edit::select_and_page(s, vec![component])?;
-            let ds = s.ds_mut()?;
-            if let Some(b) = ds.doc.world_bounds(component) {
-                ds.view.fit(b, 2.0);
-            }
-            Ok(json!({"id": component}))
-        }),
+        ),
         spec!("component.pushChanges", "Push changes to main component", "{id?}", true, push_changes),
         spec!(
             "component.restoreMain",
@@ -277,6 +304,43 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+fn go_to_library_main(s: &mut Session, library: &str, name: &str, key: NodeId) -> Result<Value> {
+    let cmd = "component.goToMain";
+    let refuse = |why: String| EngineError::Disabled(cmd.into(), why);
+    let path = s
+        .doc()?
+        .libraries
+        .link(library)
+        .map(|l| l.path.clone())
+        .ok_or_else(|| refuse(format!("the library \"{name}\" was removed from this file")))?;
+    if crate::library_server::is_server_link(&path) {
+        return Err(refuse(format!("the main component is in the team library \"{name}\": open its file from the server to edit it")));
+    }
+    if !craft_docpath::is_local(&path) {
+        return Err(refuse(format!("{path}: a library is opened only from this computer")));
+    }
+    if !crate::file_access::exists(&path) {
+        return Err(refuse(format!("the library file of \"{name}\" isn't at {path} any more")));
+    }
+    let viewport = s.ds().map(|d| (d.view.vw, d.view.vh))?;
+    let opened = super::file::open(s, &json!({"path": path}))?;
+    let ds = s.ds_mut()?;
+    (ds.view.vw, ds.view.vh) = viewport;
+    let doc = &ds.doc;
+    let same_library = doc.published.as_ref().is_some_and(|p| p.manifest.id == library);
+    let main = doc.node(key).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }));
+    if !same_library || !main || doc.is_remote(key) {
+        s.message = Some(format!("{name}: the main component isn't in this file any more"));
+        return Ok(json!({"id": null, "index": opened["index"]}));
+    }
+    super::edit::select_and_page(s, vec![key])?;
+    let ds = s.ds_mut()?;
+    if let Some(b) = ds.doc.world_bounds(key) {
+        ds.view.fit(b, 2.0);
+    }
+    Ok(json!({"id": key, "index": opened["index"]}))
+}
+
 /// Place an instance of `component` centred on page point (`x`, `y`), in the frame or auto layout
 /// slot under it (`instance.place`).
 pub(crate) fn place(s: &mut Session, p: &Value) -> Result<Value> {
@@ -287,13 +351,14 @@ pub(crate) fn place(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc_mut()?;
     let c = main_of(doc, c).ok_or_else(|| bad(cmd, "`component` must be a component or component set"))?;
     let mut slot = crate::drop::slot(doc, page, pt);
-    // Never inside its own main component (or a copy of it).
-    if doc.is_ancestor(c, slot.parent) || slot.parent == c {
+    // Never inside its own main component, or one it contains (directly or through others).
+    if crate::components::would_contain_itself(doc, c, slot.parent) {
         slot = crate::drop::DropSlot { parent: page, index: None, line: None };
     }
     let (w, h) = doc.node(c).map(|n| (n.width, n.height)).unwrap_or((0.0, 0.0));
     let local = doc.world_transform(slot.parent).inverse() * figcraft_geom::Point::new(pt.x - w / 2.0, pt.y - h / 2.0);
     let i = crate::components::create_instance_at(doc, c, slot.parent, local.x, local.y, slot.index)?;
+    crate::library::count_inserted(doc, &[i]);
     s.set_selection(vec![i]);
     Ok(json!({"id": i, "parent": slot.parent}))
 }
@@ -337,7 +402,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc_mut()?;
     let n = doc.get_mut(target)?;
     let was_group = matches!(n.kind, NodeKind::Group);
-    n.kind = NodeKind::Component { description: String::new(), props: Default::default() };
+    n.kind = NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() };
     if was_group {
         n.fills.clear();
         n.clip = false;

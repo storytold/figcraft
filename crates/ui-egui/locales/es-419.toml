@@ -10,6 +10,7 @@ name = "Español (Latinoamérica)"
 status = "draft — needs native review"
 
 [ui]
+"Use fonts installed on this computer…" = "Usar las fuentes instaladas en esta computadora…"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "Una colección de este archivo con estos modos y variables: modifica sus valores por modo y agrega variables propias"
 "A spring plays until it settles: its mass, stiffness and damping set how long" = "Un resorte se reproduce hasta que se asienta: su masa, rigidez y amortiguación fijan cuánto dura"
 "Add a category" = "Agregar una categoría"

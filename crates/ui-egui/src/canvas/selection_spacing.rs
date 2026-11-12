@@ -28,13 +28,16 @@ struct LayoutCache {
 /// refreshing next frame after an edit and reusing an unchanged document snapshot.
 fn layout(app: &FigApp, ctx: &egui::Context, ids: &[NodeId]) -> Arc<SelectionSpacing> {
     let Ok(ds) = app.session.ds() else { return Arc::new(SelectionSpacing::default()) };
+    // The gaps between layers moved together stay as they were: while a gesture only moves the
+    // selection, they come from where it started.
+    let doc = crate::selection_cache::moved(ds).filter(|_| ds.selection == ids).map_or_else(|| ds.doc.clone(), |(b, _)| b);
     let key = Id::unique("selection_spacing_layout");
     let frame = ctx.cumulative_frame_nr();
     if let Some(mut cache) = ctx.data(|d| d.get_temp::<LayoutCache>(key))
         && cache.document == ds.uid
         && cache.page == ds.page
         && cache.ids == ids
-        && (cache.frame == frame || Arc::ptr_eq(&cache.doc, &ds.doc))
+        && (cache.frame == frame || Arc::ptr_eq(&cache.doc, &doc))
     {
         if cache.frame != frame {
             cache.frame = frame;
@@ -44,13 +47,10 @@ fn layout(app: &FigApp, ctx: &egui::Context, ids: &[NodeId]) -> Arc<SelectionSpa
     }
     // Panel, input and drawing share one calculation per frame. If a command changes the
     // document during this frame, refresh next frame; unchanged snapshots also reuse it then.
-    let layout = Arc::new(selection_spacing(&ds.doc, ids));
-    let reorder = ReorderLayout::new(&ds.doc, ids).map(Arc::new);
+    let layout = Arc::new(selection_spacing(&doc, ids));
+    let reorder = ReorderLayout::new(&doc, ids).map(Arc::new);
     ctx.data_mut(|d| {
-        d.insert_temp(
-            key,
-            LayoutCache { document: ds.uid, page: ds.page, doc: ds.doc.clone(), ids: ids.to_vec(), frame, layout: layout.clone(), reorder },
-        );
+        d.insert_temp(key, LayoutCache { document: ds.uid, page: ds.page, doc, ids: ids.to_vec(), frame, layout: layout.clone(), reorder });
     });
     layout
 }
@@ -88,6 +88,9 @@ struct Drag {
     uid: u64,
     page: NodeId,
     moved: bool,
+    /// The modifiers at the press: a release is a click only if it was a plain press, however the
+    /// modifiers stand when the button comes up.
+    plain: bool,
 }
 
 fn start_drag(app: &mut FigApp, ctx: &egui::Context, ids: Vec<NodeId>, p: Pos2, action: Action) {
@@ -95,10 +98,11 @@ fn start_drag(app: &mut FigApp, ctx: &egui::Context, ids: Vec<NodeId>, p: Pos2, 
         Action::Spacing { .. } => tr("Spacing"),
         Action::Reorder { .. } => tr("Reorder selection"),
     };
+    let plain = ctx.input(|i| !(i.modifiers.shift || i.modifiers.alt || i.modifiers.command || i.modifiers.ctrl));
     if app.session.begin_interaction(label).is_ok()
         && let Ok(ds) = app.session.ds()
     {
-        let drag = Drag { ids, action, start: p, uid: ds.uid, page: ds.page, moved: false };
+        let drag = Drag { ids, action, start: p, uid: ds.uid, page: ds.page, moved: false, plain };
         app.ui.layers_focus = false;
         app.ui.pages_focus = None;
         app.ui.key_box = None;
@@ -280,8 +284,20 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Option<Pos2>, hovered: 
             Action::Reorder { .. } => CursorIcon::Grabbing,
         });
         if !down {
+            // A plain press on a reorder ring that didn't become a drag is a click on that layer:
+            // the selection narrows to it, as a click on the canvas would. The press's modifiers
+            // decide (letting Shift go before the release doesn't make it a plain click), and a
+            // release away from where it pressed (outside the canvas, say) ends a drag, not a click.
+            let released = pos.is_some_and(|p| app.canvas.rect.contains(p) && p.distance(drag.start) < 3.0);
+            let clicked = match &drag.action {
+                Action::Reorder { source, .. } if drag.plain && !drag.moved && released => Some(*source),
+                _ => None,
+            };
             let _ = app.session.commit_interaction();
             ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+            if let Some(id) = clicked {
+                app.session.set_selection(vec![id]);
+            }
         } else {
             ctx.data_mut(|d| d.insert_temp(drag_id(), drag));
         }

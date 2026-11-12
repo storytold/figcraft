@@ -16,7 +16,7 @@ fn id(v: serde_json::Value) -> NodeId {
 
 /// A selected "Button" component whose instance-swap property "Icon" defaults to "Heart", then 80
 /// more components, the last "Zebra". Returns (ui, button, zebra).
-fn setup() -> (Ui, NodeId, NodeId) {
+pub(crate) fn setup() -> (Ui, NodeId, NodeId) {
     let mut s = Session::new();
     let mut icon = |name: &str, k: usize| {
         let f =
@@ -38,16 +38,16 @@ fn setup() -> (Ui, NodeId, NodeId) {
     (u, button, zebra)
 }
 
-fn tree(u: &mut Ui) -> Vec<Node> {
+pub(crate) fn tree(u: &mut Ui) -> Vec<Node> {
     u.frame_output(vec![]).platform_output.accesskit_update.unwrap().nodes.into_iter().map(|(_, n)| n).collect()
 }
 
-fn centre(n: &Node) -> Pos2 {
+pub(crate) fn centre(n: &Node) -> Pos2 {
     let b = n.bounds().unwrap();
     pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
 }
 
-fn click(u: &mut Ui, at: Pos2) {
+pub(crate) fn click(u: &mut Ui, at: Pos2) {
     u.button(at, true);
     u.button(at, false);
 }
@@ -78,7 +78,7 @@ fn swap_default(u: &Ui, button: NodeId) -> Option<NodeId> {
 }
 
 /// The default's dropdown on the "Icon" property row, scrolled into view in the Design panel.
-fn default_combo(u: &mut Ui) -> Option<Node> {
+pub(crate) fn default_combo(u: &mut Ui) -> Option<Node> {
     for _ in 0..20 {
         let combo = tree(u).into_iter().find(|n| n.role() == Role::ComboBox && n.label() == Some("Icon"))?;
         if centre(&combo).y < 860.0 {

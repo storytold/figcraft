@@ -1,6 +1,8 @@
 use super::handles::SNAP_PX;
 use super::pen::take_enclosed;
-use super::*;
+use super::{
+    Affine, Cursor, Gesture, Node, NodeId, NodeKind, Point, PointerEvent, Rect, Result, Session, StrokeCap, Targets, ToolId, Vec2, frame_at, textedit,
+};
 
 impl Session {
     pub(super) fn draw_down(&mut self, ev: &PointerEvent) -> Result<()> {
@@ -27,20 +29,30 @@ impl Session {
         let tool = self.tool.tool;
         let mut p = ev.p();
         let mut guides = Vec::new();
+        let pixel = self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
+        // The pixel grid first: snapping to layers comes after, so it wins on the axes it snaps.
+        if pixel {
+            p = Point::new(p.x.round(), p.y.round());
+        }
         if self.ds().map(|d| d.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl {
             let (dx, dy, g) = targets.snap_point(p.x, p.y, SNAP_PX / ev.zoom.max(1e-6));
             p.x += dx;
             p.y += dy;
             guides = g;
         }
-        let pixel = self.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
         let mut created = id;
         let page = self.page()?;
+        // Edit ▸ Set default properties: what new shapes take (not frames, sections, slices, lines
+        // or arrows, which keep their own look).
+        let defaults = if matches!(tool, ToolId::Rectangle | ToolId::Ellipse | ToolId::Polygon | ToolId::Star) {
+            self.default_props.shape.clone()
+        } else {
+            None
+        };
         self.preview(|doc, sel| {
-            let (mut a, mut b) = (start, p);
+            let (mut a, b) = (start, p);
             if pixel {
                 a = Point::new(a.x.round(), a.y.round());
-                b = Point::new(b.x.round(), b.y.round());
             }
             let pw = doc.world_transform(parent);
             let (kind, base) = match tool {
@@ -87,6 +99,10 @@ impl Session {
                 n.transform = pw.inverse() * Affine::translate((r.x0, r.y0));
             }
             doc.insert(n, parent, None)?;
+            if let Some(d) = &defaults {
+                // Best effort: a default the shape can't take leaves it as drawn.
+                let _ = crate::cmd::edit::apply_copied_props("edit.setDefaultProperties", doc, nid, d);
+            }
             *sel = vec![nid];
             created = Some(nid);
             let _ = page;
@@ -98,6 +114,10 @@ impl Session {
     }
 
     pub(super) fn up(&mut self, ev: &PointerEvent) -> Result<()> {
+        // Alt went down or up since the last move: the drop is a copy or a move as the release has it.
+        if matches!(&self.tool.gesture, Gesture::Move { moved: true, duplicate, .. } if *duplicate != ev.alt) {
+            self.drag(ev)?;
+        }
         let g = std::mem::take(&mut self.tool.gesture);
         self.tool.overlay.marquee = None;
         self.tool.overlay.guides.clear();
@@ -107,9 +127,10 @@ impl Session {
         self.tool.overlay.measure_box = None;
         self.tool.overlay.insert_line = None;
         self.tool.overlay.drop_cell = None;
+        self.tool.overlay.stamp_target = None;
         let drop_target = self.tool.overlay.drop_target.take();
         match g {
-            Gesture::Move { ids, moved, duplicate, start, deselect, .. } => {
+            Gesture::Move { ids, moved, duplicate, start, deselect, keep, .. } => {
                 if moved {
                     // A free move lands in the frame under the pointer (or the page) where it was
                     // dropped; layers in an auto layout frame already sit in their slot.
@@ -154,6 +175,13 @@ impl Session {
                     if let Some(d) = deselect {
                         let sel = self.selection().into_iter().filter(|x| *x != d).collect();
                         self.set_selection(sel);
+                    } else if let Some(k) = keep {
+                        // A click (not a drag) on one layer of a multi-selection selects just it.
+                        let doc = self.doc()?.clone();
+                        let sel = self.selection();
+                        if sel.len() > 1 && (sel.contains(&k) || sel.iter().any(|s| doc.is_ancestor(*s, k))) {
+                            self.set_selection(vec![k]);
+                        }
                     }
                     if deselect.is_none() && !(ev.shift || ev.cmd || duplicate) {
                         self.widget_click(start, ev.tol() * 2.0)?;
@@ -195,6 +223,8 @@ impl Session {
                     crate::normalize(ds.doc_mut(), &before);
                 }
                 self.commit_interaction()?;
+                // A placement by the pointer takes the placement crosshair with it, as Enter does.
+                self.tool.place_at = None;
                 if !self.prefs.keep_tool {
                     self.set_tool(ToolId::Move);
                 }
@@ -207,6 +237,7 @@ impl Session {
             }
             Gesture::Pencil { mut points, mut pressure } => {
                 self.tool.overlay.pen.clear();
+                self.tool.overlay.pen_color = None;
                 // The stroke ends where the button came up, even without a move to get there.
                 if points.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
                     points.push(ev.p());
@@ -217,6 +248,7 @@ impl Session {
             Gesture::Connect { from, start } => self.connect_up(ev, from, start)?,
             Gesture::Erase { .. } => self.erase_up()?,
             Gesture::Reattach { id, from, start } => self.reattach_up(ev, id, from, start)?,
+            Gesture::Reshape { id, portion, start } => self.reshape_up(ev, id, portion, start)?,
             Gesture::TextSelect { .. } | Gesture::TextBox { .. } | Gesture::Marquee { .. } | Gesture::None => {}
             Gesture::PenDrag { .. } | Gesture::ShapeBuild { .. } | Gesture::Origin => {}
             Gesture::Vector(_) => self.commit_interaction()?,

@@ -1,7 +1,7 @@
-//! Frame statistics for spotting wasted redraws: how many frames the UI drew and what asked for
-//! them (the `file:line` of each repaint request), read through `ui.inspect` (`framesDrawn`,
-//! `repaintCauses`) and reset with `ui.set {resetFrameStats: true}`. An idle window should draw
-//! no frames at all.
+//! Frame statistics for spotting wasted redraws: how many frames the UI drew, what asked for
+//! them (the `file:line` of each repaint request) and how long building them took, read through
+//! `ui.inspect` (`framesDrawn`, `repaintCauses`, `frameTimes`) and reset with
+//! `ui.set {resetFrameStats: true}`. An idle window should draw no frames at all.
 
 use std::collections::BTreeMap;
 
@@ -16,6 +16,10 @@ pub struct FrameStats {
     pub frames: u64,
     /// Repaint requests by call site, counted once per frame they asked for.
     causes: BTreeMap<(&'static str, u32), u64>,
+    /// The frames timed ([`Self::timed`]), their milliseconds together and the longest.
+    timed: u64,
+    total_ms: f64,
+    max_ms: f64,
 }
 
 impl FrameStats {
@@ -25,6 +29,19 @@ impl FrameStats {
         for c in ctx.repaint_causes() {
             *self.causes.entry((c.file, c.line)).or_default() += 1;
         }
+    }
+
+    /// A frame took `ms` to build (the UI pass, before it is painted).
+    pub fn timed(&mut self, ms: f64) {
+        self.timed += 1;
+        self.total_ms += ms;
+        self.max_ms = self.max_ms.max(ms);
+    }
+
+    /// The frames timed since the last reset: `{frames, meanMs, maxMs}`.
+    pub fn times(&self) -> Value {
+        let mean = if self.timed == 0 { 0.0 } else { self.total_ms / self.timed as f64 };
+        json!({"frames": self.timed, "meanMs": mean, "maxMs": self.max_ms})
     }
 
     pub fn reset(&mut self) {

@@ -125,6 +125,8 @@ fn clicking_selects_by_the_documented_rules() {
         ((90.0, 30.0), NONE, vec![k.a], vec![k.b], "with a layer selected, its siblings select at its level"),
         ((520.0, 20.0), SHIFT, vec![k.c], vec![k.c, k.r], "Shift-click adds to the selection"),
         ((30.0, 130.0), SHIFT, vec![k.c, k.r], vec![k.r], "Shift-click on a selected layer removes it"),
+        ((520.0, 20.0), NONE, vec![k.r, k.empty], vec![k.r], "a click on one of several selected layers selects just it"),
+        ((520.0, 20.0), CMD, vec![k.r, k.empty], vec![k.r, k.empty], "silent: Cmd/Ctrl-click on a selected layer keeps the whole selection (pinned)"),
         ((520.0, 120.0), NONE, vec![], vec![k.r2], "a locked layer can't be selected on the canvas: the click goes to what is under it"),
         ((520.0, 220.0), NONE, vec![k.r], vec![], "a hidden layer can't be selected on the canvas (empty canvas deselects)"),
         ((390.0, 290.0), NONE, vec![k.r], vec![], "the background of a top-level frame with layers is like the canvas: a click deselects"),
@@ -212,8 +214,8 @@ fn marquee_selects_what_it_touches() {
             (450.0, 40.0),
             NONE,
             vec![],
-            vec![],
-            "from the canvas, a top-level frame is selected only when the marquee covers all of it",
+            vec![k.g, k.n],
+            "from the canvas, a partly covered top-level frame gives the layers in it the marquee touches (measured); the nested frame comes whole",
         ),
         ((-10.0, -10.0), (450.0, 310.0), NONE, vec![], vec![k.f], "a marquee covering a top-level frame selects the frame"),
         (
@@ -269,14 +271,26 @@ fn keyboard_selection() {
         ex(&mut s, cmd, json!({}));
         assert_eq!(sorted(s.selection()), sorted(after), "{why}");
     }
-    // Esc steps out to the parent, then deselects.
+    // Esc clears the selection at once, whatever the nesting (measured in Figma).
     ex(&mut s, "select.set", json!({"ids": [k.a]}));
     s.escape().unwrap();
-    assert_eq!(s.selection(), vec![k.g], "Esc selects the parent");
+    assert_eq!(s.selection(), Vec::<NodeId>::new(), "Esc from a nested layer selects nothing, not the parent");
     s.escape().unwrap();
-    assert_eq!(s.selection(), vec![k.f]);
-    s.escape().unwrap();
-    assert_eq!(s.selection(), Vec::<NodeId>::new(), "Esc on a top-level layer deselects");
+    assert_eq!(s.selection(), Vec::<NodeId>::new());
+    // A top-level layer, and several layers, nested or not: one Esc selects nothing.
+    let cases: Vec<(Vec<NodeId>, &str)> = vec![
+        (vec![k.f], "a top-level frame"),
+        (vec![k.r], "a top-level layer"),
+        (vec![k.a, k.b], "two layers in one group (not their group)"),
+        (vec![k.a, k.d], "layers in different parents (not the parents)"),
+        (vec![k.a, k.r], "a nested layer and a top-level one"),
+    ];
+    for (ids, why) in cases {
+        ex(&mut s, "select.set", json!({"ids": ids}));
+        assert_eq!(sorted(s.selection()), sorted(ids.clone()), "{why}: selected");
+        s.escape().unwrap();
+        assert_eq!(s.selection(), Vec::<NodeId>::new(), "Esc on {why} selects nothing");
+    }
 }
 
 #[test]
@@ -298,6 +312,18 @@ fn locked_layers_selected_in_the_layers_panel_stay_put() {
     // Layers inside a locked layer are locked too.
     ex(&mut s, "object.toggleLock", json!({"ids": [k.g], "locked": true}));
     assert_eq!(handle_at(s.doc().unwrap(), &[k.a], Point::new(60.0, 60.0), 1.0), None);
+}
+
+#[test]
+fn dragging_one_of_several_selected_layers_moves_them_all() {
+    let mut s = Session::new();
+    let k = scene(&mut s);
+    let at = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap().origin();
+    ex(&mut s, "select.set", json!({"ids": [k.r, k.empty]}));
+    drag(&mut s, (520.0, 20.0), (540.0, 20.0), NONE);
+    assert_eq!(sorted(s.selection()), sorted(vec![k.r, k.empty]), "a drag on one of several selected layers keeps them all selected");
+    assert_eq!(at(&s, k.r), Point::new(520.0, 0.0), "the dragged layer moves");
+    assert_eq!(at(&s, k.empty), Point::new(620.0, 0.0), "and so do the others");
 }
 
 #[test]
@@ -440,6 +466,21 @@ fn a_layer_stacked_below_the_selection_doesnt_take_a_drag_from_inside_it() {
     drag(&mut s, (750.0, 450.0), (760.0, 460.0), NONE);
     assert_eq!(s.selection(), vec![gap], "a layer in the gap between selected layers takes the press");
     assert_eq!(at(&s, gap), Point::new(home.x + 10.0, home.y + 10.0));
+}
+
+#[test]
+fn a_click_where_nothing_is_hit_inside_a_multiple_selection_keeps_it() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 100.0, 300.0, None);
+    let b = rect(&mut s, 220.0, 300.0, None);
+    for i in [a, b] {
+        ex(&mut s, "node.set", json!({"ids": [i], "props": {"fills": [], "strokes": ["#000000"], "strokeWeight": 1}}));
+    }
+    ex(&mut s, "select.set", json!({"ids": [a, b]}));
+    // The press is inside `a` but its unfilled inside hits nothing: `a` is only the drag fallback,
+    // not a clicked layer, so a click keeps the selection.
+    click(&mut s, 120.0, 320.0, NONE);
+    assert_eq!(sorted(s.selection()), sorted(vec![a, b]));
 }
 
 #[test]

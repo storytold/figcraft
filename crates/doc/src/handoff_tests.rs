@@ -85,3 +85,23 @@ fn validate_is_linear_in_a_wide_parent() {
     doc.get_mut(page).unwrap().children.retain(|c| *c != kid);
     assert!(doc.validate().iter().any(|m| m.contains("not listed in parent")));
 }
+
+/// Repair lists every unlisted page once, by set lookups rather than a scan of the page list per
+/// page (#1078: a file with many pages made repair quadratic).
+#[test]
+fn repair_relists_many_unlisted_pages_once_each() {
+    let mut doc = Document::new("d");
+    for i in 0..5_000 {
+        doc.add_page(&format!("P{i}"));
+    }
+    let all: Vec<_> = doc.pages.clone();
+    // Half the pages fall off the list.
+    doc.pages.retain(|p| p.0 % 2 == 0);
+    doc.repair();
+    let mut listed = doc.pages.clone();
+    listed.sort_unstable();
+    let mut want = all;
+    want.sort_unstable();
+    assert_eq!(listed, want, "every page is listed again, once");
+    assert!(doc.validate().is_empty());
+}

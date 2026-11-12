@@ -39,6 +39,10 @@ pub fn nested<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
 /// the pixmap, the cell and the pixmap's pixels per unit on each axis (whole pixels per cell, so
 /// the repeat lines up exactly).
 pub fn cell_pixmap(doc: &Document, pt: &PatternPaint, w: f64, h: f64, scale: f64, time: f64) -> Option<(Pixmap, PatternCell, (f64, f64))> {
+    // Past the nesting limit nothing is drawn, so don't allocate a cell first.
+    if DEPTH.with(Cell::get) >= MAX_DEPTH {
+        return None;
+    }
     let src = doc.node(NodeId(pt.source)).filter(|n| !n.is_page())?;
     let cell = pt.cell(src.width, src.height, w, h)?;
     let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
@@ -55,16 +59,19 @@ pub fn cell_pixmap(doc: &Document, pt: &PatternPaint, w: f64, h: f64, scale: f64
         outlined: &[],
         skip: &[],
         lod: false,
+        preview: false,
         magnified_image_pixels: false,
         under: None,
         time,
         bounds: &bounds,
     };
     let unrotated = src.transform.inverse();
+    // The source is one level below the layer it fills, not a fresh render (#1082).
+    let depth = crate::draw::layer_depth() + 1;
     nested(|| {
         for (tx, ty) in &cell.tiles {
             let xf = Affine::scale_non_uniform(kx, ky) * Affine::translate((*tx, *ty)) * Affine::scale(cell.scale) * unrotated;
-            draw_node(&ctx, &mut pix, src.id, xf, 0);
+            draw_node(&ctx, &mut pix, src.id, xf, depth);
         }
         Some(())
     })?;

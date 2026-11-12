@@ -1,4 +1,5 @@
-//! The page's URL: the invite link its fragment names, and the flags its query sets.
+//! The page's URL: the invite link its fragment names, and the flags its query sets; and the server
+//! the page names for itself.
 
 /// The invite link in `#join=<link>` (`fragment` is `location.hash`, with or without its `#`), still
 /// escaped. The fragment, unlike the query, never leaves the browser, so the link's secret stays out
@@ -12,6 +13,16 @@ pub fn join_link(fragment: &str) -> Option<&str> {
     let fragment = fragment.strip_prefix('#').unwrap_or(fragment);
     let start = if fragment.starts_with("join=") { 0 } else { fragment.find("&join=")? + 1 };
     fragment.get(start + "join=".len()..).filter(|link| !link.is_empty() && link.len() <= MAX)
+}
+
+/// The server a page names for itself in `<meta name="figcraft-server" content="wss://…/">` (a
+/// host serving the browser build beside its own `figcraft-server`): the page's default for online
+/// sharing, join codes and the team list. Only a `ws://` or `wss://` address without a query (no
+/// key can ride in it), at most 512 characters; anything else is ignored.
+pub fn page_server(content: &str) -> Option<String> {
+    let c = content.trim();
+    let scheme = c.starts_with("wss://") || c.starts_with("ws://");
+    (scheme && c.len() <= 512 && !c.contains(|ch: char| ch.is_whitespace() || ch.is_control() || ch == '?' || ch == '#')).then(|| c.to_string())
 }
 
 /// Whether `search` (`location.search`, with or without its `?`) has a `control` entry (`?control`,

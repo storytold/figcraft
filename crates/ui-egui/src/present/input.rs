@@ -1,20 +1,174 @@
 use super::actions::find_trigger;
 use super::chrome::layer_at;
-use super::layout::{Layout, hotspots};
+use super::layout::{Layout, Place, hotspots};
 use super::navigate::next_delay;
 use super::scroll::{COAST_MIN, DECAY_DRAG, DECAY_WHEEL, RUBBER_PTS, clamp_scroll, page_settings, rubber_band, scrollers_at, units_per_point};
 use super::transition::{direction_vec, lerp};
-use super::*;
+use super::{Document, Easing, FLASH_SECS, Fling, KeyMods, NodeId, Pos2, Presenter, Rect, Scroller, Transition, Trigger, Vec2, vec2};
 
 /// Keep a key the prototype used from reaching the editor's shortcuts.
 fn consume_key(ctx: &egui::Context, key: egui::Key) {
     ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { key: k, .. } if *k == key)));
 }
 
+/// A transition a drag started follows the pointer while it stays down, then plays on from there.
+fn follow_drag(p: &mut Presenter, pos: Option<egui::Pos2>, down: bool, now: f64) {
+    if let Some(a) = p.anim.as_mut()
+        && let Some((from, dir, len)) = a.follow
+    {
+        match pos.filter(|_| down) {
+            Some(q) => a.start = now - f64::from(((q - from).dot(dir) / len).clamp(0.0, 1.0)) * a.dur,
+            None => a.follow = None,
+        }
+    }
+}
+
+/// A drag that scrolled lets go: it carries on at the pointer's speed (and springs back from
+/// past the ends).
+fn release_drag_scroll(p: &mut Presenter, l: &Layout, down: bool, velocity: Vec2, now: f64) {
+    if !down && let Some((t, _)) = p.drag_scroll.take() {
+        let u = units_per_point(t, l.scale);
+        let r = p.doc.as_ref().map_or((0.0, 0.0), |b| p.limits(b, t));
+        let along = |v: f32, r: f64| if r > 0.0 { -f64::from(v) * u } else { 0.0 };
+        p.fling = Some(Fling { target: t, vel: (along(velocity.x, r.0), along(velocity.y, r.1)), decay: DECAY_DRAG, bounce: true, at: now });
+    }
+}
+
+/// Scrolls the first of `targets` the wheel can still move, and smooths the wheel's speed over
+/// ~50 ms whatever the frame rate.
+fn wheel_scroll(p: &mut Presenter, l: &Layout, base: &Document, targets: Vec<Scroller>, wheel: Vec2, dt: f64) {
+    let mut moved = None;
+    for t in targets {
+        let u = units_per_point(t, l.scale);
+        let cur = p.offset(t);
+        let next = clamp_scroll((cur.0 - f64::from(wheel.x) * u, cur.1 - f64::from(wheel.y) * u), p.limits(base, t));
+        if (next.0 - cur.0).abs() > 1e-6 || (next.1 - cur.1).abs() > 1e-6 {
+            p.set_offset(t, next);
+            p.scroll_anim = None;
+            p.fling = None;
+            moved = Some((t, ((next.0 - cur.0) / dt, (next.1 - cur.1) / dt)));
+            break;
+        }
+    }
+    // The wheel's speed, smoothed over ~50 ms whatever the frame rate.
+    p.wheel = moved.map(|(t, inst)| {
+        let prev = p.wheel.filter(|w| w.0 == t).map_or(inst, |w| w.1);
+        let a = 1.0 - (-dt / 0.05).exp();
+        (t, (lerp(prev.0, inst.0, a), lerp(prev.1, inst.1, a)))
+    });
+}
+
+/// A drag begun inside a mobile screen moves its content, even if the pointer leaves the
+/// screen. The device body stays in place even when the drag begins outside its screen.
+/// Panning the whole view remains available only without a mobile device.
+fn begin_drag_scroll(p: &mut Presenter, doc: &Document, root: NodeId, place: &Place, start: Pos2, d: Vec2) {
+    if let Some(base) = p.doc.clone() {
+        let horizontal = d.x.abs() >= d.y.abs();
+        let scrolls = scrollers_at(p, &base, doc, root, place, start);
+        let on_axis = |range: (f64, f64)| if horizontal { range.0 > 0.0 } else { range.1 > 0.0 };
+        let mobile = page_settings(&base, root).device().is_some_and(|device| device.rotates);
+        let target = scrolls
+            .iter()
+            .copied()
+            .find(|f| on_axis(p.range(&base, *f)))
+            .or_else(|| scrolls.first().copied())
+            .map(Scroller::Frame)
+            .or((!mobile && p.pan_range != (0.0, 0.0)).then_some(Scroller::View));
+        if let Some(t) = target {
+            p.fling = None;
+            p.drag_scroll = Some((t, clamp_scroll(p.offset(t), p.limits(&base, t))));
+        }
+    }
+}
+
+/// Dragging scrolls with the pointer; past the ends it stretches.
+fn drag_scrolls(p: &mut Presenter, ctx: &egui::Context, l: &Layout, down: bool, pos: Option<Pos2>) {
+    if down
+        && let (Some((t, from)), Some(start), Some(q)) = (p.drag_scroll, p.press, pos)
+        && let Some(base) = p.doc.as_ref()
+    {
+        let (d, u) = (q - start, units_per_point(t, l.scale));
+        let r = p.limits(base, t);
+        let limit = RUBBER_PTS * u;
+        let to = (rubber_band(from.0 - f64::from(d.x) * u, r.0, limit), rubber_band(from.1 - f64::from(d.y) * u, r.1, limit));
+        p.set_offset(t, to);
+        p.scroll_anim = None;
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+}
+
+/// The player's own keys, when the prototype doesn't use them: R restarts, Z cycles the
+/// full-window presenter's size options. True when `key` was used.
+fn player_key(p: &mut Presenter, ctx: &egui::Context, l: &Layout, key: &egui::Key, mods: &egui::Modifiers, pane: bool, now: f64) -> bool {
+    if mods.is_none() {
+        match key {
+            egui::Key::R => {
+                p.restart(p.start, now);
+                consume_key(ctx, *key);
+                return true;
+            }
+            // (A responsive frame filling the window has no size options.)
+            egui::Key::Z if !pane && (l.device.is_some() || p.fit.is_none()) => {
+                p.set_scale(p.view.scale.next(l.device.is_some()));
+                consume_key(ctx, *key);
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The arrows (and Space or N forward) step through top-level frames when nothing else uses
+/// them. True when `key` stepped.
+fn step_frames(p: &mut Presenter, ctx: &egui::Context, key: &egui::Key, mods: &egui::Modifiers, now: f64) -> bool {
+    let forward = match key {
+        egui::Key::ArrowRight => Some(true),
+        egui::Key::Space | egui::Key::N if mods.is_none() => Some(true),
+        egui::Key::ArrowLeft => Some(false),
+        _ => None,
+    };
+    if let Some(forward) = forward
+        && p.overlays.is_empty()
+        && let Some(base) = p.doc.as_ref()
+    {
+        let frames = base.top_frames(base.page_of(p.current).unwrap_or(p.current));
+        if let Some(i) = frames.iter().position(|f| *f == p.current) {
+            let next = if forward { frames.get(i + 1) } else { i.checked_sub(1).and_then(|j| frames.get(j)) };
+            if let Some(n) = next.copied() {
+                p.go(n, Transition::Instant, 0.0, Easing::Linear, now, true, false);
+                consume_key(ctx, *key);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Controller buttons: pressed alone, anywhere on the screen, like keys. True when one fired.
+fn fire_pads(p: &mut Presenter, doc: &Document, root: NodeId, pads: &[String], now: f64) -> bool {
+    for name in pads {
+        let found = doc.subtree(root).into_iter().find_map(|id| find_trigger(doc, id, |t| t.fires_on_key(name, KeyMods::default())).map(|k| (id, k)));
+        if let Some((id, k)) = found
+            && p.fire(id, k, None, now)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Pointer, wheel, keys and timers. `over_area`: the pointer is over the player; `keys_on`: the
 /// player takes the keyboard; `pane`: it plays in the preview pane (which always fits).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_area: bool, keys_on: bool, pane: bool, now: f64) {
+pub(super) struct InputMode {
+    pub over_area: bool,
+    pub keys_on: bool,
+    pub pane: bool,
+    pub now: f64,
+}
+
+pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, mode: InputMode) {
+    let InputMode { over_area, keys_on, pane, now } = mode;
     let (pos, pressed, released, down, wheel, velocity, dt, keys) = ctx.input(|i| {
         let keys: Vec<(egui::Key, egui::Modifiers)> = i
             .events
@@ -39,24 +193,9 @@ pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_are
     // Controller buttons pressed while a link notice shows are dropped, as keys are.
     let pads = std::mem::take(&mut p.pads);
     let pads = if p.link_notice.is_none() { pads } else { Vec::new() };
-    // A transition a drag started follows the pointer while it stays down, then plays on from there.
-    if let Some(a) = p.anim.as_mut()
-        && let Some((from, dir, len)) = a.follow
-    {
-        match pos.filter(|_| down) {
-            Some(q) => a.start = now - f64::from(((q - from).dot(dir) / len).clamp(0.0, 1.0)) * a.dur,
-            None => a.follow = None,
-        }
-    }
+    follow_drag(p, pos, down, now);
     let pos = pos.filter(|_| over_area || p.press.is_some());
-    // A drag that scrolled lets go: it carries on at the pointer's speed (and springs back from
-    // past the ends).
-    if !down && let Some((t, _)) = p.drag_scroll.take() {
-        let u = units_per_point(t, l.scale);
-        let r = p.doc.as_ref().map_or((0.0, 0.0), |b| p.limits(b, t));
-        let along = |v: f32, r: f64| if r > 0.0 { -f64::from(v) * u } else { 0.0 };
-        p.fling = Some(Fling { target: t, vel: (along(velocity.x, r.0), along(velocity.y, r.1)), decay: DECAY_DRAG, bounce: true, at: now });
-    }
+    release_drag_scroll(p, l, down, velocity, now);
     // The active layer: the top overlay, else the frame.
     let (root, place, clip) = l.active(p.current);
     let doc = &l.disp;
@@ -83,25 +222,7 @@ pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_are
         if p.pan_range != (0.0, 0.0) {
             targets.push(Scroller::View);
         }
-        let mut moved = None;
-        for t in targets {
-            let u = units_per_point(t, l.scale);
-            let cur = p.offset(t);
-            let next = clamp_scroll((cur.0 - f64::from(wheel.x) * u, cur.1 - f64::from(wheel.y) * u), p.limits(&base, t));
-            if (next.0 - cur.0).abs() > 1e-6 || (next.1 - cur.1).abs() > 1e-6 {
-                p.set_offset(t, next);
-                p.scroll_anim = None;
-                p.fling = None;
-                moved = Some((t, ((next.0 - cur.0) / dt, (next.1 - cur.1) / dt)));
-                break;
-            }
-        }
-        // The wheel's speed, smoothed over ~50 ms whatever the frame rate.
-        p.wheel = moved.map(|(t, inst)| {
-            let prev = p.wheel.filter(|w| w.0 == t).map_or(inst, |w| w.1);
-            let a = 1.0 - (-dt / 0.05).exp();
-            (t, (lerp(prev.0, inst.0, a), lerp(prev.1, inst.1, a)))
-        });
+        wheel_scroll(p, l, &base, targets, wheel, dt);
     } else if wheel == Vec2::ZERO
         && let Some((t, v)) = p.wheel.take()
         && v.0.hypot(v.1) > COAST_MIN * units_per_point(t, l.scale)
@@ -202,37 +323,10 @@ pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_are
         // A drag begun inside a mobile screen moves its content, even if the pointer leaves the
         // screen. The device body stays in place even when the drag begins outside its screen.
         // Panning the whole view remains available only without a mobile device.
-        if let Some(base) = p.doc.clone() {
-            let horizontal = d.x.abs() >= d.y.abs();
-            let scrolls = scrollers_at(p, &base, doc, root, &place, start);
-            let on_axis = |range: (f64, f64)| if horizontal { range.0 > 0.0 } else { range.1 > 0.0 };
-            let mobile = page_settings(&base, root).device().is_some_and(|device| device.rotates);
-            let target = scrolls
-                .iter()
-                .copied()
-                .find(|f| on_axis(p.range(&base, *f)))
-                .or_else(|| scrolls.first().copied())
-                .map(Scroller::Frame)
-                .or((!mobile && p.pan_range != (0.0, 0.0)).then_some(Scroller::View));
-            if let Some(t) = target {
-                p.fling = None;
-                p.drag_scroll = Some((t, clamp_scroll(p.offset(t), p.limits(&base, t))));
-            }
-        }
+        begin_drag_scroll(p, doc, root, &place, start, d);
     }
     // Dragging scrolls with the pointer; past the ends it stretches.
-    if down
-        && let (Some((t, from)), Some(start), Some(q)) = (p.drag_scroll, p.press, pos)
-        && let Some(base) = p.doc.as_ref()
-    {
-        let (d, u) = (q - start, units_per_point(t, l.scale));
-        let r = p.limits(base, t);
-        let limit = RUBBER_PTS * u;
-        let to = (rubber_band(from.0 - f64::from(d.x) * u, r.0, limit), rubber_band(from.1 - f64::from(d.y) * u, r.1, limit));
-        p.set_offset(t, to);
-        p.scroll_anim = None;
-        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-    }
+    drag_scrolls(p, ctx, l, down, pos);
     if released && p.press.is_some() {
         let dragged = p.dragged;
         p.press = None;
@@ -262,14 +356,8 @@ pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_are
             }
         }
     }
-    // Controller buttons: pressed alone, anywhere on the screen, like keys.
-    for name in &pads {
-        let found = doc.subtree(root).into_iter().find_map(|id| find_trigger(doc, id, |t| t.fires_on_key(name, KeyMods::default())).map(|k| (id, k)));
-        if let Some((id, k)) = found
-            && p.fire(id, k, None, now)
-        {
-            return;
-        }
+    if fire_pads(p, doc, root, &pads, now) {
+        return;
     }
     // Keys.
     for (key, mods) in &keys {
@@ -282,45 +370,8 @@ pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, over_are
             }
             continue;
         }
-        // The player's own keys, when the prototype doesn't use them: R restarts, Z cycles the
-        // full-window presenter's size options.
-        if mods.is_none() {
-            match key {
-                egui::Key::R => {
-                    p.restart(p.start, now);
-                    consume_key(ctx, *key);
-                    return;
-                }
-                // (A responsive frame filling the window has no size options.)
-                egui::Key::Z if !pane && (l.device.is_some() || p.fit.is_none()) => {
-                    p.set_scale(p.view.scale.next(l.device.is_some()));
-                    consume_key(ctx, *key);
-                    return;
-                }
-                _ => {}
-            }
-        }
-        // The arrows (and Space or N forward) step through top-level frames when nothing else
-        // uses them.
-        let forward = match key {
-            egui::Key::ArrowRight => Some(true),
-            egui::Key::Space | egui::Key::N if mods.is_none() => Some(true),
-            egui::Key::ArrowLeft => Some(false),
-            _ => None,
-        };
-        if let Some(forward) = forward
-            && p.overlays.is_empty()
-            && let Some(base) = p.doc.as_ref()
-        {
-            let frames = base.top_frames(base.page_of(p.current).unwrap_or(p.current));
-            if let Some(i) = frames.iter().position(|f| *f == p.current) {
-                let next = if forward { frames.get(i + 1) } else { i.checked_sub(1).and_then(|j| frames.get(j)) };
-                if let Some(n) = next.copied() {
-                    p.go(n, Transition::Instant, 0.0, Easing::Linear, now, true, false);
-                    consume_key(ctx, *key);
-                    return;
-                }
-            }
+        if player_key(p, ctx, l, key, mods, pane, now) || step_frames(p, ctx, key, mods, now) {
+            return;
         }
     }
     // After delay (timers start when the frame appears; not while animating).

@@ -1,11 +1,14 @@
 //! Text menu and text editing commands.
 
-use figcraft_doc::*;
+use figcraft_doc::{
+    LetterSpacing, LineHeight, ListStyle, NodeId, NodeKind, TextAlignH, TextAutoResize, TextCase, TextData, TextDecoration, TextDirection, TextPath,
+    TextStyle, VariableId,
+};
 use serde_json::{Map, Value, json};
 
 use super::props::{styled_name, weight_name};
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{boolean, get, id, num, req_id, req_num, req_string, req_targets, string, targets};
 use crate::{Result, Session, bad, spec, textedit};
 
 fn finite(v: f64) -> f64 {
@@ -88,6 +91,22 @@ fn set_list(s: &mut Session, p: &Value, l: ListStyle, toggle: bool) -> Result<Va
     para_range(s, p, |t, a, b| t.set_para_lists(a, b, |pl| pl.list = l))
 }
 
+/// The base direction of the targeted paragraphs: the edited ones while editing, else every
+/// paragraph of the targeted texts ("controls are available to override text direction per
+/// paragraph", Add right-to-left text, #1830).
+fn set_direction(s: &mut Session, p: &Value, d: TextDirection) -> Result<Value> {
+    para_range(s, p, |t, a, b| t.set_para_lists(a, b, |pl| pl.direction = d))
+}
+
+/// The wrap style of the targeted texts: the edited paragraphs while editing (the paragraph
+/// level), else the whole layer (the layer level: every paragraph, overrides included).
+fn set_wrap_style(s: &mut Session, p: &Value, w: figcraft_doc::WrapStyle) -> Result<Value> {
+    match textedit::selected_range(s) {
+        Some((_, a, b)) => para(s, p, |t| t.set_para_wrap_styles(a, b, w)),
+        None => para(s, p, |t| t.set_wrap_style(w)),
+    }
+}
+
 /// Whether every targeted char has `pred` (to decide toggle direction).
 fn all_have(s: &Session, p: &Value, pred: impl Fn(&TextStyle) -> bool) -> bool {
     let Ok(doc) = s.doc() else { return false };
@@ -98,7 +117,9 @@ fn all_have(s: &Session, p: &Value, pred: impl Fn(&TextStyle) -> bool) -> bool {
         }
         return false;
     }
-    targets(s, p).iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(t)) if t.spans().iter().all(|(_, _, st)| pred(st))))
+    // The texts `style` restyles: the targets and the texts inside them.
+    let texts: Vec<&TextData> = targets(s, p).iter().flat_map(|i| doc.subtree(*i)).filter_map(|d| doc.node(d).and_then(|n| n.kind.text())).collect();
+    !texts.is_empty() && texts.iter().all(|t| t.spans().iter().all(|(_, _, st)| pred(st)))
 }
 
 fn toggle_bold(s: &mut Session, p: &Value) -> Result<Value> {
@@ -117,11 +138,138 @@ fn toggle_italic(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Hiragino's weight names: "W3" is 300.
+fn w_number(word: &str) -> Option<u16> {
+    let n = word.strip_prefix('w')?.parse::<u16>().ok()?;
+    (1..=9).contains(&n).then_some(n * 100)
+}
+
+/// A weight number as some families name styles ("Condensed 600"). Below 100 it is something else
+/// (a width grade, an optical size: "Condensed 2", "Caption 12").
+fn number_weight(word: &str) -> Option<u16> {
+    let n = word.parse::<u16>().ok().filter(|_| word.bytes().all(|b| b.is_ascii_digit()))?;
+    (100..=1000).contains(&n).then_some(n)
+}
+
+/// Style-name words that give a weight or a slant.
+const WEIGHT_WORDS: [&str; 25] = [
+    "thin",
+    "hairline",
+    "extralight",
+    "ultralight",
+    "light",
+    "semilight",
+    "demilight",
+    "regular",
+    "normal",
+    "roman",
+    "book",
+    "medium",
+    "semibold",
+    "demibold",
+    "bold",
+    "extrabold",
+    "ultrabold",
+    "black",
+    "extrablack",
+    "ultrablack",
+    "heavy",
+    "italic",
+    "oblique",
+    "plain",
+    "standard",
+];
+
+/// Words that grade the weight word after them ("Extra Bold") but a width otherwise ("Extra Condensed").
+const GRADES: [&str; 4] = ["extra", "ultra", "semi", "demi"];
+
+/// The width a Univers number leading a style name gives, as Univers, Frutiger and Helvetica Neue
+/// LT name styles ("45 Light", "55 Roman", "57 Condensed", "67 Bold Condensed"): the first digit
+/// grades the weight, the second the width (3 or 4 extended, 5 or 6 normal, 7 or 8 condensed, 9
+/// ultra condensed; even is italic, which the name says too). Only before weight, slant and width
+/// words, so another leading number ("12 Regular", "55 Rounded") stays part of the width.
+fn univers_width(words: &[&str]) -> Option<u8> {
+    const WIDTHS: [&str; 6] = ["condensed", "compressed", "narrow", "extended", "expanded", "wide"];
+    let (code, rest) = words.split_first()?;
+    let &[b'1'..=b'9', d @ b'3'..=b'9'] = code.as_bytes() else { return None };
+    let known = |w: &&str| WEIGHT_WORDS.contains(w) || GRADES.contains(w) || WIDTHS.contains(w);
+    (!rest.is_empty() && rest.iter().all(known)).then_some((d - b'1') / 2)
+}
+
+/// What a style name says besides its weight and slant ("Narrow Bold Italic" → "narrow",
+/// "Extra Condensed Bold" → "extra condensed", "67 Bold Condensed" → its Univers width and "condensed").
+fn style_rest(style: &str) -> String {
+    let s = style.to_ascii_lowercase().replace('-', " ");
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let weight = |w: &str| WEIGHT_WORDS.contains(&w) || w_number(w).or_else(|| number_weight(w)).is_some();
+    let rest = words.iter().enumerate().filter(|(i, w)| {
+        let graded = GRADES.contains(w) && words.get(i + 1).is_some_and(|next| weight(next) && !matches!(*next, "italic" | "oblique"));
+        !weight(w) && !graded
+    });
+    let univers = univers_width(&words).map(|d| format!("univers width {d}"));
+    // The Univers number (the first word kept) gives way to its width.
+    let rest = rest.map(|(_, w)| *w).skip(usize::from(univers.is_some()));
+    univers.as_deref().into_iter().chain(rest).collect::<Vec<_>>().join(" ")
+}
+
+/// A style name that slants: italic, or oblique as some families name it.
+fn slanted(style: &str) -> bool {
+    let s = style.to_ascii_lowercase();
+    s.contains("italic") || s.contains("oblique")
+}
+
+/// The weight a style name says ("W3", "W6 Italic", "Condensed W7", "Condensed 600" and "45 Light" too).
+pub(crate) fn name_weight(style: &str) -> u16 {
+    let s = style.to_ascii_lowercase().replace('-', " ");
+    let words: Vec<&str> = s.split_whitespace().collect();
+    // A Univers number's weight digit has no fixed CSS weight ("65" is Medium in Helvetica Neue,
+    // Bold in Univers): the words after it say it.
+    if let Some((_, rest)) = words.split_first().filter(|_| univers_width(&words).is_some()) {
+        return figcraft_doc::style_weight(&rest.join(" "));
+    }
+    words.iter().find_map(|w| w_number(w).or_else(|| number_weight(w))).unwrap_or_else(|| figcraft_doc::style_weight(style))
+}
+
+/// The next heavier (`up`) or lighter style of `styles` (a family's with the weight each is listed
+/// by, lightest first, as the style menu lists them) after the chars' style, with the same slant
+/// and width. The chars' style is found in the list by name and its neighbour taken; a style the
+/// family doesn't have, or a custom weight axis value, goes to the listed style of nearest weight
+/// that way. None when the family has nothing further.
+pub(crate) fn next_style(styles: &[(String, u16)], st: &TextStyle, up: bool) -> Option<String> {
+    let italic = st.italic() || slanted(&st.font_style);
+    let rest = style_rest(&st.font_style);
+    let mut same: Vec<&(String, u16)> = styles.iter().filter(|(x, _)| slanted(x) == italic && style_rest(x) == rest).collect();
+    let norm = |s: &str| s.to_lowercase().replace([' ', '-', '_'], "");
+    let here = same.iter().position(|(x, _)| norm(x) == norm(&st.font_style));
+    let axis = st.variations.contains_key("wght");
+    if let Some(i) = here.filter(|_| !axis) {
+        let next = if up { i.checked_add(1) } else { i.checked_sub(1) };
+        return next.and_then(|n| same.get(n)).map(|(x, _)| x.clone());
+    }
+    let w = i32::from(if axis { st.weight() } else { name_weight(&st.font_style) });
+    // Of equal weights, the one nearest in the family's order: the first going up, the last going down.
+    if !up {
+        same.reverse();
+    }
+    same.into_iter()
+        .map(|(x, xw)| (i32::from(*xw) - w, x))
+        .filter(|(d, _)| if up { *d > 0 } else { *d < 0 })
+        .min_by_key(|(d, _)| d.abs())
+        .map(|(_, x)| x.clone())
+}
+
+/// `text.weightUp` / `text.weightDown`: each targeted run moves to the next style of its family.
 fn step_weight(s: &mut Session, p: &Value, up: bool) -> Result<Value> {
     style(s, p, |st| {
-        let w = (i32::from(st.weight()) + if up { 100 } else { -100 }).clamp(100, 900) as u16;
-        let italic = st.italic();
-        st.set_font_style(styled_name(weight_name(w), italic));
+        let styles = figcraft_text::family_style_weights(&st.font_family);
+        if styles.is_empty() {
+            // A family that isn't installed: step the weight by 100 under its canonical name.
+            let w = (i32::from(st.weight()) + if up { 100 } else { -100 }).clamp(100, 900) as u16;
+            let italic = st.italic();
+            st.set_font_style(styled_name(weight_name(w), italic));
+        } else if let Some(next) = next_style(&styles, st, up) {
+            st.set_font_style(next);
+        }
     })
 }
 
@@ -214,10 +362,24 @@ pub fn specs() -> Vec<CommandSpec> {
             let on = all_have(s, p, |st| st.decoration == TextDecoration::Strikethrough);
             style(s, p, |st| st.decoration = if on { TextDecoration::None } else { TextDecoration::Strikethrough })
         }),
-        spec!("text.link", "Create link", "{url, ids?}", true, |s, p| {
-            let url = req_string("text.link", p, "url")?;
-            style(s, p, |st| st.link = Some(url.clone()))
-        }),
+        spec!(
+            "text.link",
+            "Create link",
+            "{url, ids?}  linked text is underlined unless it has a decoration of its own (Underline takes it off again)",
+            true,
+            |s, p| {
+                let url = req_string("text.link", p, "url")?;
+                style(s, p, |st| {
+                    // "Links are styled with an underline by default" (Add links to text); Underline
+                    // (Cmd/Ctrl+U) removes it, as documented there, and changing the URL of a link
+                    // leaves its decoration as it is.
+                    if st.link.is_none() && st.decoration == TextDecoration::None {
+                        st.decoration = TextDecoration::Underline;
+                    }
+                    st.link = Some(url.clone());
+                })
+            }
+        ),
         spec!("text.bulletList", "Bulleted list", "{ids?}  while editing: the selected paragraphs", true, |s, p| set_list(
             s,
             p,
@@ -276,12 +438,49 @@ pub fn specs() -> Vec<CommandSpec> {
                 .ok_or_else(|| bad("text.decoration", "`decoration`: none|underline|strikethrough"))?;
             style(s, p, |st| st.decoration = d)
         }),
-        spec!("text.listStyle", "List style", "{style: none|bulleted|numbered, ids?}  while editing: the selected paragraphs", true, |s, p| {
-            let l: ListStyle = get(p, "style")
-                .or_else(|| get(p, "list"))
-                .and_then(super::props::enum_of)
-                .ok_or_else(|| bad("text.listStyle", "`style`: none|bulleted|numbered"))?;
-            set_list(s, p, l, false)
+        spec!(
+            "text.listStyle",
+            "List style",
+            "{style | list: none|bulleted|numbered, ids?}  while editing: the selected paragraphs",
+            true,
+            |s, p| {
+                let l: ListStyle = get(p, "style")
+                    .or_else(|| get(p, "list"))
+                    .and_then(super::props::enum_of)
+                    .ok_or_else(|| bad("text.listStyle", "`style`: none|bulleted|numbered"))?;
+                set_list(s, p, l, false)
+            }
+        ),
+        spec!(
+            "text.wrapStyle",
+            "Wrap style",
+            "{style: auto|balance|pretty, ids?}  where lines break when the text wraps (while editing: the selected paragraphs; else the whole layer): Auto fits as many words as fit on each line, Balance makes the lines close to the same length, Pretty keeps lines full but leaves no one word alone on the last",
+            true,
+            |s, p| {
+                let w: figcraft_doc::WrapStyle =
+                    get(p, "style").and_then(super::props::enum_of).ok_or_else(|| bad("text.wrapStyle", "`style`: auto|balance|pretty"))?;
+                set_wrap_style(s, p, w)
+            }
+        ),
+        spec!(
+            "text.direction",
+            "Text direction",
+            "{direction: auto|ltr|rtl, ids?}  the base direction of the paragraphs (while editing: the selected ones): auto goes by the first letter with a direction, ltr runs them left to right and rtl right to left whatever their letters (Text ▸ Text direction)",
+            true,
+            |s, p| {
+                let d: TextDirection =
+                    get(p, "direction").and_then(super::props::enum_of).ok_or_else(|| bad("text.direction", "`direction`: auto|ltr|rtl"))?;
+                set_direction(s, p, d)
+            }
+        ),
+        spec!("text.directionAuto", "Text direction: auto", "{ids?}  while editing: the selected paragraphs", true, |s, p| {
+            set_direction(s, p, TextDirection::Auto)
+        }),
+        spec!("text.directionLtr", "Text direction: left to right", "{ids?}  while editing: the selected paragraphs", true, |s, p| {
+            set_direction(s, p, TextDirection::Ltr)
+        }),
+        spec!("text.directionRtl", "Text direction: right to left", "{ids?}  while editing: the selected paragraphs", true, |s, p| {
+            set_direction(s, p, TextDirection::Rtl)
         }),
         spec!("text.paragraphIndent", "Paragraph indent", "{indent (px), ids?}", true, |s, p| {
             let v = finite(req_num("text.paragraphIndent", p, "indent")?).clamp(0.0, 10_000.0);
@@ -294,16 +493,34 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.maxLines",
             "Max lines",
-            "{lines (0 = no limit; truncates: auto-height text hugs up to that many lines, other text becomes a truncating box), ids?}",
+            "{lines (0 = no limit; truncates: auto-height and auto-width text hug up to that many lines, fixed-size text becomes a truncating box), ids?}",
             true,
             |s, p| {
                 let v = finite(req_num("text.maxLines", p, "lines")?).clamp(0.0, 10_000.0) as u32;
-                para(s, p, |t| {
+                let r = para(s, p, |t| {
                     t.max_lines = v;
-                    if v > 0 && t.auto_resize != TextAutoResize::Height {
+                    if v > 0 && !matches!(t.auto_resize, TextAutoResize::Height | TextAutoResize::WidthAndHeight) {
                         t.auto_resize = TextAutoResize::Truncate;
                     }
-                })
+                })?;
+                // A text has a max height or a number of max lines, not both (Guide to auto layout).
+                if v > 0 {
+                    let ids = match textedit::selected_range(s) {
+                        Some((id, _, _)) => vec![id],
+                        None => targets(s, p),
+                    };
+                    let doc = s.doc_mut()?;
+                    for i in ids {
+                        for d in doc.subtree(i) {
+                            if let Some(n) = doc.node_mut(d)
+                                && n.kind.text().is_some()
+                            {
+                                n.child_layout.max_h = None;
+                            }
+                        }
+                    }
+                }
+                Ok(r)
             }
         ),
         spec!(
@@ -358,8 +575,8 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "text.preview",
-            "Preview text change",
-            "{command: style.apply|library.applyStyle|text.setVariations|text.style, params}  shows what the command would do on the canvas without an undo step (a hovered font family or style, text style or named instance, a dragged axis slider), in place of an earlier preview; text.endPreview or any other command ends it, so running the command for real commits it as one undo step",
+            "Preview a change",
+            "{command: style.apply|library.applyStyle|text.setVariations|text.style|node.set|fill.set|stroke.set|selection.setPaint|style.update, params}  shows what the command would do on the canvas without an undo step (a hovered font family or style, text style, named instance, blend mode, or a dragged axis slider), in place of an earlier preview; text.endPreview or any other command ends it, so running the command for real commits it as one undo step",
             false,
             |s, p| {
                 let c = req_string("text.preview", p, "command")?;
@@ -371,7 +588,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("text.endPreview", "End text preview", "{}  puts the document back as it was before text.preview → {ended}", false, |s, _| {
             Ok(json!({"ended": crate::textpreview::end(s)}))
         }),
-        spec!("text.set", "Set text", "{id?, characters}", true, |s, p| {
+        spec!("text.set", "Set text", "{id?, characters | text}", true, |s, p| {
             let c = string(p, "characters").or_else(|| string(p, "text")).ok_or_else(|| bad("text.set", "`characters` required"))?;
             let ids = req_targets("text.set", s, p)?;
             let doc = s.doc_mut()?;
@@ -387,7 +604,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.style",
             "Style text range",
-            "{id?, start?, end?, fontFamily?, fontStyle?, fontWeight?, fontSize?, lineHeight?, letterSpacing?, textDecoration?, textCase?, hyperlink?, textFills?}",
+            "{id?, start?, end?, fontFamily?, fontStyle?, fontWeight?, fontVariations? | variationSettings?, fontSize?, lineHeight?, letterSpacing?, textDecoration?, textDecorationStyle?, textDecorationThickness?, textDecorationOffset?, textDecorationSkipInk?, textDecorationColor?, textCase?, hyperlink?, textFills?}",
             true,
             |s, p| {
                 let ids = req_targets("text.style", s, p)?;
@@ -478,6 +695,32 @@ pub fn specs() -> Vec<CommandSpec> {
             textedit::end(s)?;
             ok()
         }),
+        spec!(
+            "text.openLink",
+            "Open link",
+            "{}  while editing: the link at the caret (the selection's start) goes to the UI to open, as Alt+Enter does (\"press Option Return / Alt Enter to activate a focused link\"); only a web or mail link opens → {url} ({url: null}: no link there)",
+            false,
+            |s, _| {
+                let Some(te) = s.ds()?.text_edit.clone() else { return Err(bad("text.openLink", "no text is being edited")) };
+                let doc = s.doc()?;
+                let t = doc.node(te.id).and_then(|n| n.kind.text()).ok_or_else(|| bad("text.openLink", format!("{} is not text", te.id)))?;
+                let n = t.char_count();
+                let at = te.caret.min(te.anchor);
+                // The caret sits between two chars: the link of the one after it, else before it.
+                let link = (at < n)
+                    .then(|| t.style_at(at).link.clone())
+                    .flatten()
+                    .or_else(|| (at > 0 && at <= n).then(|| t.style_at(at - 1).link.clone()).flatten());
+                match link {
+                    Some(url) if crate::doc_urls::openable(&url) => {
+                        s.request_ui("open.url", json!({"url": url}));
+                        Ok(json!({"url": url}))
+                    }
+                    Some(url) => Err(bad("text.openLink", format!("`{url}` is not a web or mail link"))),
+                    None => Ok(json!({"url": Value::Null})),
+                }
+            }
+        ),
         spec!(
             "text.fonts",
             "List fonts",

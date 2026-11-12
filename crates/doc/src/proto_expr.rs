@@ -12,6 +12,8 @@ use crate::{CollectionId, ModeId, VariableValue, Variables};
 pub const MAX_EXPR_DEPTH: usize = 32;
 /// Longest string an expression builds (characters).
 const MAX_STRING: usize = 10_000;
+/// The most string bytes one operation's operands may hold together (generous: results cap at `MAX_STRING`).
+const MAX_OPERAND_BYTES: usize = 1 << 20;
 
 /// An expression over variables.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -103,17 +105,31 @@ impl Expr {
             Expr::Value(VariableValue::Alias(id)) => return vars.resolve(id, modes),
             Expr::Value(VariableValue::Number(n)) => return n.is_finite().then_some(VariableValue::Number(*n)),
             Expr::Value(v) => return Some(v.clone()),
-            Expr::Mode { collection } => return vars.collection(collection)?.current_mode(modes).map(|m| VariableValue::String(m.name.clone())),
+            Expr::Mode { collection } => {
+                return vars.collection_by_id(collection)?.current_mode(modes).map(|m| VariableValue::String(m.name.clone()));
+            }
             Expr::InMode { variable, mode } => {
-                let v = vars.get(variable)?;
-                let c = vars.collection(&v.collection)?;
+                let v = vars.get_by_id(variable)?;
+                let c = vars.collection_by_id(&v.collection)?;
                 let mut at = modes.clone();
-                at.insert(c.id.clone(), c.find_mode(mode)?.id.clone());
+                at.insert(c.id.clone(), c.mode_by_id(mode)?.id.clone());
                 return vars.resolve(&v.id, &at);
             }
             Expr::Op { op, args } => (*op, args),
         };
-        let vals: Vec<VariableValue> = args.iter().map(|a| a.eval_at(vars, modes, depth + 1)).collect::<Option<_>>()?;
+        // Retained operands are bounded by bytes, so repeated references to one long string can't multiply it.
+        let mut text_bytes = 0usize;
+        let mut vals = Vec::with_capacity(args.len());
+        for a in args {
+            let v = a.eval_at(vars, modes, depth + 1)?;
+            if let VariableValue::String(s) = &v {
+                text_bytes = text_bytes.saturating_add(s.len());
+                if text_bytes > MAX_OPERAND_BYTES {
+                    return None;
+                }
+            }
+            vals.push(v);
+        }
         apply(op, &vals)
     }
 
@@ -143,20 +159,22 @@ impl Expr {
             return "…".into();
         }
         match self {
-            Expr::Value(VariableValue::Alias(id)) => vars.get(id).map_or_else(|| "(missing variable)".into(), |v| var_ref(vars, v)),
+            Expr::Value(VariableValue::Alias(id)) => vars.get_by_id(id).map_or_else(|| "(missing variable)".into(), |v| var_ref(vars, v)),
             Expr::Value(VariableValue::String(s)) => quote(s),
             // Exact numbers and `#` colours, so the text reads back as the same expression.
             Expr::Value(VariableValue::Number(n)) => format!("{n}"),
             Expr::Value(VariableValue::Color(c)) => c.to_css_hex(),
             Expr::Value(v) => v.display(),
             Expr::Mode { collection } => {
-                let name = vars.collection(collection).map_or("(missing collection)", |c| c.name.as_str());
+                let name = vars.collection_by_id(collection).map_or("(missing collection)", |c| c.name.as_str());
                 format!("mode({})", name_arg(name))
             }
             Expr::InMode { variable, mode } => {
-                let var = vars.get(variable);
-                let mode =
-                    var.and_then(|v| vars.collection(&v.collection)).and_then(|c| c.find_mode(mode)).map_or("(missing mode)", |m| m.name.as_str());
+                let var = vars.get_by_id(variable);
+                let mode = var
+                    .and_then(|v| vars.collection_by_id(&v.collection))
+                    .and_then(|c| c.mode_by_id(mode))
+                    .map_or("(missing mode)", |m| m.name.as_str());
                 format!("{}[{}]", Expr::var(variable.clone()).display_at(vars, depth + 1), name_arg(mode))
             }
             Expr::Op { op, args } => {
@@ -230,7 +248,7 @@ fn as_text(v: &VariableValue) -> Option<String> {
     match v {
         VariableValue::String(s) => Some(s.clone()),
         VariableValue::Number(_) | VariableValue::Boolean(_) => Some(v.display()),
-        VariableValue::Color(_) | VariableValue::Alias(_) => None,
+        VariableValue::Color(_) | VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => None,
     }
 }
 
@@ -255,10 +273,18 @@ fn apply(op: ExprOp, vals: &[VariableValue]) -> Option<VariableValue> {
     match op {
         Add if vals.iter().any(|v| matches!(v, VariableValue::String(_))) => {
             let mut s = String::new();
+            let mut chars = 0;
             for v in vals {
-                s.push_str(&as_text(v)?);
+                // Every operand is checked (a colour makes the whole expression None); only the
+                // characters it adds are counted, and appending stops at the cap.
+                let t = as_text(v)?;
+                if chars < MAX_STRING {
+                    let before = s.len();
+                    s.extend(t.chars().take(MAX_STRING - chars));
+                    chars += s[before..].chars().count();
+                }
             }
-            Some(VariableValue::String(s.chars().take(MAX_STRING).collect()))
+            Some(VariableValue::String(s))
         }
         Add => fold(|a, b| Some(a + b)),
         Subtract => fold(|a, b| Some(a - b)),

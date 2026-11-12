@@ -1,5 +1,8 @@
 use super::handles::{PATH_REACH_PX, label_at, locked_in, path_candidates, readable_text_fills};
-use super::*;
+use super::{
+    Affine, Document, Gesture, Node, NodeId, NodeKind, Point, PointerEvent, Rect, Result, Session, Sizing, TextAutoResize, TextData, TextPath,
+    ToolId, frame_at, json, select_target, textedit, within_slop,
+};
 
 impl Session {
     /// Handle a double-click gesture: finish a pen path, rename or click labels/widgets,
@@ -19,11 +22,34 @@ impl Session {
         }
     }
 
+    /// A double-click on an edge handle of the one selected layer auto layout sizes: Hug contents
+    /// on that axis for an auto layout frame, Fill container with Alt for a child of one (a
+    /// vertical edge sizes the width, a horizontal one the height). Whether it applied: on any
+    /// other layer, or off the edges, the double-click goes on as before.
+    fn edge_double_click(&mut self, doc: &Document, sel: &[NodeId], ev: &PointerEvent) -> Result<bool> {
+        let [id] = sel[..] else { return Ok(false) };
+        let Some(super::Handle::Edge(edge)) = super::handles::handle_at(doc, sel, ev.p(), ev.zoom) else { return Ok(false) };
+        let Some(n) = doc.node(id) else { return Ok(false) };
+        let applies = if ev.alt {
+            !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+        } else {
+            n.layout.is_some()
+        };
+        if !applies {
+            return Ok(false);
+        }
+        // Edges run top, right, bottom, left: the odd ones are vertical and size the width.
+        let mut props = serde_json::Map::new();
+        props.insert(if edge % 2 == 1 { "sizingH" } else { "sizingV" }.to_string(), json!(if ev.alt { "fill" } else { "hug" }));
+        self.execute("node.set", &json!({"id": id, "props": props}))?;
+        Ok(true)
+    }
+
     pub(super) fn double_click(&mut self, ev: &PointerEvent) -> Result<()> {
         let ds = self.ds()?;
         let (doc, sel, page) = (ds.doc.clone(), ds.selection.clone(), ds.page);
         if self.tool.tool == ToolId::Pen {
-            return self.pen_finish();
+            return self.pen_double_click(ev);
         }
         let edits = !self.tool.dev_mode;
         // A frame's or section's name label: rename it there (the canvas puts a field over it).
@@ -57,6 +83,14 @@ impl Session {
             self.tool.gesture = Gesture::None;
             self.tool.overlay.marquee = None;
             self.cancel_interaction()?;
+        }
+        // An edge of an auto layout object's bounding box: Hug contents on that axis, with Alt
+        // Fill container ("Tip: Double-click the vertical or horizontal edge of an auto layout
+        // object's bounding box to set it to Hug contents." and "Hold ⌥ Option or Alt and
+        // double-click the vertical or horizontal edge of an auto layout object's bounding box to
+        // set it to Fill container.", Guide to auto layout).
+        if edits && matches!(self.tool.tool, ToolId::Move | ToolId::Scale) && !(ev.shift || ev.cmd) && self.edge_double_click(&doc, &sel, ev)? {
+            return Ok(());
         }
         let hit_here = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
         // A double-click anywhere on the one selected shape edits its points, like Enter: also
@@ -159,6 +193,7 @@ impl Session {
         }
         // New text at the click (Figma puts the baseline-ish top-left there).
         let parent = frame_at(&doc, page, ev.p(), &[]).unwrap_or(page);
+        let defaults = self.default_props.text.clone();
         let ds = self.ds_mut()?;
         let d = ds.doc_mut();
         let id = d.alloc_id();
@@ -170,12 +205,18 @@ impl Session {
         if let Some(fills) = readable_text_fills(d, parent) {
             n.fills = fills;
         }
-        if let Some((w, h)) = figcraft_text::auto_size(&n) {
-            n.width = w.max(1.0);
-            n.height = h;
-        }
-        let line = n.height;
         d.insert(n, parent, None)?;
+        // Edit ▸ Set default properties from a text layer: its fills and font (best effort).
+        if let Some(defaults) = &defaults {
+            let _ = crate::cmd::edit::apply_copied_props("edit.setDefaultProperties", d, id, defaults);
+        }
+        let line = d.node_mut(id).map_or(14.0, |n| {
+            if let Some((w, h)) = figcraft_text::auto_size(n) {
+                n.width = w.max(1.0);
+                n.height = h;
+            }
+            n.height
+        });
         ds.selection = vec![id];
         textedit::begin(self, id, Some(0), true)?;
         self.tool.gesture = Gesture::TextBox { id, start: ev.p(), line };
@@ -319,8 +360,13 @@ impl Session {
     pub(super) fn eyedrop(&mut self, ev: &PointerEvent) -> Result<()> {
         let ds = self.ds()?;
         let doc = ds.doc.clone();
-        let view = figcraft_render::View { origin: (ev.x, ev.y), scale: ev.zoom.max(0.01), width: 1, height: 1 };
-        let Some(pix) = figcraft_render::render_view(&doc, ds.page, &view, &Default::default()) else { return Ok(()) };
+        // One screen pixel centred on the pointer (its top left half a pixel up and to the left).
+        let scale = ev.zoom.max(0.01);
+        let view = figcraft_render::View { origin: (ev.x - 0.5 / scale, ev.y - 0.5 / scale), scale, width: 1, height: 1 };
+        // As the canvas draws it: an image magnified past 2x shows its pixels, so the colour picked
+        // is the pixel under the pointer, not a blend with its neighbours (#2189).
+        let opts = figcraft_render::Options { magnified_image_pixels: true, ..Default::default() };
+        let Some(pix) = figcraft_render::render_view(&doc, ds.page, &view, &opts) else { return Ok(()) };
         let rgba = figcraft_render::to_rgba8(&pix);
         let c = figcraft_color::Color::from_rgba8(
             rgba.first().copied().unwrap_or(0),
@@ -331,6 +377,10 @@ impl Session {
         let sel = ds.selection.clone();
         if self.tool.pick_only {
             self.tool.picked = Some(c);
+        } else if ev.cmd && ev.shift {
+            // Cmd/Ctrl+Shift: make a colour style or variable of it instead (the UI asks which
+            // and what to call it; nothing is applied).
+            self.request_ui("dialog.createFromColor", json!({"color": c.to_css_hex()}));
         } else if !sel.is_empty() {
             self.execute("node.set", &json!({"ids": sel, "props": {"fill": c.to_css_hex()}}))?;
         }

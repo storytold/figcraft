@@ -1,4 +1,11 @@
-use super::*;
+use std::collections::{HashMap, HashSet};
+
+use figcraft_doc::VariableId;
+
+use super::{
+    ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, PADDING, PaintKind,
+    TextAlignH, TextCase, TextDecoration, Variable, css_borders, num,
+};
 
 // ------------------------------------------------------------------ CSS
 
@@ -10,13 +17,18 @@ pub(crate) struct Tokens {
     pub tailwind: bool,
     /// The file's theme names (computed on first use).
     theme: Option<crate::tailwind::Theme>,
+    /// The file's CSS names (computed on first use).
+    names: Option<CssNames>,
 }
 
 impl Tokens {
     /// `var(--name, value)`, remembering the variable.
     fn var(&mut self, doc: &Document, variable: &Variable, value: String) -> String {
-        let name =
-            if self.tailwind { self.theme.get_or_insert_with(|| crate::tailwind::Theme::new(doc)).name(variable) } else { css_var_of(variable) };
+        let name = if self.tailwind {
+            self.theme.get_or_insert_with(|| crate::tailwind::Theme::new(doc)).name(variable)
+        } else {
+            self.names.get_or_insert_with(|| CssNames::new(doc)).name(variable)
+        };
         let out = format!("var({name}, {value})");
         if !self.vars.iter().any(|(n, _)| *n == name) {
             self.vars.push((name, value));
@@ -57,6 +69,45 @@ pub fn css_var_of(v: &Variable) -> String {
     if valid { inner.chars().take(80).collect() } else { css_var_name(inner) }
 }
 
+/// The file's variables' CSS custom properties, unique in the file: [`css_var_of`], and where an
+/// earlier variable already has that name, the name with a numeric suffix (`--brand-primary-2`).
+pub struct CssNames {
+    names: HashMap<VariableId, String>,
+}
+
+impl CssNames {
+    pub fn new(doc: &Document) -> Self {
+        let vars = &doc.variables.variables;
+        let mut names = HashMap::with_capacity(vars.len());
+        // Every plain name is reserved first, so a suffixed name never takes another's plain one;
+        // the next suffix per base keeps this linear.
+        let plain: Vec<String> = vars.iter().map(css_var_of).collect();
+        let mut taken: HashSet<String> = HashSet::with_capacity(vars.len());
+        let all: HashSet<&str> = plain.iter().map(String::as_str).collect();
+        let mut next: HashMap<&str, usize> = HashMap::new();
+        for (v, base) in vars.iter().zip(&plain) {
+            let mut name = base.clone();
+            if !taken.insert(name.clone()) {
+                let k = next.entry(base.as_str()).or_insert(1);
+                loop {
+                    *k += 1;
+                    name = format!("{base}-{k}");
+                    if !all.contains(name.as_str()) && taken.insert(name.clone()) {
+                        break;
+                    }
+                }
+            }
+            names.insert(v.id.clone(), name);
+        }
+        CssNames { names }
+    }
+
+    /// The custom property for `v` (its [`css_var_of`] name for a variable not in the file).
+    pub fn name(&self, v: &Variable) -> String {
+        self.names.get(&v.id).cloned().unwrap_or_else(|| css_var_of(v))
+    }
+}
+
 /// `value`, or a reference to the variable bound to the first of `fields` that has one.
 pub(super) fn tok(doc: &Document, n: &Node, fields: &[&str], value: String, t: &mut Tokens) -> String {
     match fields.iter().find_map(|f| crate::devinspect::bound_variable(doc, n, f)) {
@@ -85,51 +136,7 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
         put("height", tok(doc, n, &["height"], px(n.height), t));
     }
     if let Some(l) = &n.layout {
-        put("display", "flex".into());
-        put("flex-direction", if l.mode == LayoutMode::Vertical { "column" } else { "row" }.into());
-        if l.wrap {
-            put("flex-wrap", "wrap".into());
-        }
-        put("gap", tok(doc, n, &["gap"], px(l.gap), t));
-        let [pt, pr, pb, pl] = l.padding;
-        let sides = [
-            tok(doc, n, &["paddingTop", "paddingVertical", "padding"], px(pt), t),
-            tok(doc, n, &["paddingRight", "paddingHorizontal", "padding"], px(pr), t),
-            tok(doc, n, &["paddingBottom", "paddingVertical", "padding"], px(pb), t),
-            tok(doc, n, &["paddingLeft", "paddingHorizontal", "padding"], px(pl), t),
-        ];
-        put("padding", sides.join(" "));
-        let justify = match l.main_align {
-            MainAlign::Min => "flex-start",
-            MainAlign::Center => "center",
-            MainAlign::Max => "flex-end",
-            MainAlign::SpaceBetween => "space-between",
-            MainAlign::SpaceAround => "space-around",
-            MainAlign::SpaceEvenly => "space-evenly",
-        };
-        put("justify-content", justify.into());
-        let align = match l.cross_align {
-            CrossAlign::Min => "flex-start",
-            CrossAlign::Center => "center",
-            CrossAlign::Max => "flex-end",
-            CrossAlign::Baseline => "baseline",
-        };
-        put("align-items", align.into());
-        if l.wrap {
-            // The lines: spread, or packed where the items align (baseline: at the start).
-            let spread = l.content_align == ContentAlign::SpaceBetween;
-            put(
-                "align-content",
-                if spread {
-                    "space-between"
-                } else if align == "baseline" {
-                    "flex-start"
-                } else {
-                    align
-                }
-                .into(),
-            );
-        }
+        layout_decls(doc, n, l, t, &mut put);
     }
     if matches!(n.kind, NodeKind::Ellipse { .. }) {
         put("border-radius", "50%".into());
@@ -161,7 +168,7 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
                 // A variable binds the first paint's colour.
                 put(key, if i == 0 { tok(doc, n, &["fill"], c, t) } else { c });
             }
-            PaintKind::Gradient(g) => put("background", css_gradient(g, n.width, n.height)),
+            PaintKind::Gradient(g) => put("background", css_gradient(g, n.width, n.height, p.opacity)),
             PaintKind::Image(_) => put("background", "url(image.png) center / cover".into()),
             PaintKind::Pattern(_) => put("background", "url(pattern.png) repeat".into()),
         }
@@ -169,6 +176,65 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
     for (key, value) in css_borders(doc, n, t) {
         put(&key, value);
     }
+    effect_decls(n, &mut put);
+    if let NodeKind::Text(tx) = &n.kind {
+        text_decls(doc, n, tx, t, &mut put);
+    }
+    out
+}
+
+/// The flex declarations of auto layout `l` on `n`.
+fn layout_decls(doc: &Document, n: &Node, l: &figcraft_doc::AutoLayout, t: &mut Tokens, put: &mut impl FnMut(&str, String)) {
+    let px = |v: f64| format!("{}px", num(v));
+    put("display", "flex".into());
+    put("flex-direction", if l.mode == LayoutMode::Vertical { "column" } else { "row" }.into());
+    if l.wrap {
+        put("flex-wrap", "wrap".into());
+    }
+    put("gap", tok(doc, n, &["gap"], px(l.gap), t));
+    let [pt, pr, pb, pl] = l.padding;
+    let sides = [
+        tok(doc, n, &PADDING[0], px(pt), t),
+        tok(doc, n, &PADDING[1], px(pr), t),
+        tok(doc, n, &PADDING[2], px(pb), t),
+        tok(doc, n, &PADDING[3], px(pl), t),
+    ];
+    put("padding", sides.join(" "));
+    let justify = match l.main_align {
+        MainAlign::Min => "flex-start",
+        MainAlign::Center => "center",
+        MainAlign::Max => "flex-end",
+        MainAlign::SpaceBetween => "space-between",
+        MainAlign::SpaceAround => "space-around",
+        MainAlign::SpaceEvenly => "space-evenly",
+    };
+    put("justify-content", justify.into());
+    let align = match l.cross_align {
+        CrossAlign::Min => "flex-start",
+        CrossAlign::Center => "center",
+        CrossAlign::Max => "flex-end",
+        CrossAlign::Baseline => "baseline",
+    };
+    put("align-items", align.into());
+    if l.wrap {
+        // The lines: spread, or packed where the items align (baseline: at the start).
+        let spread = l.content_align == ContentAlign::SpaceBetween;
+        put(
+            "align-content",
+            if spread {
+                "space-between"
+            } else if align == "baseline" {
+                "flex-start"
+            } else {
+                align
+            }
+            .into(),
+        );
+    }
+}
+
+/// Shadows and blurs of `n`.
+fn effect_decls(n: &Node, put: &mut impl FnMut(&str, String)) {
     let shadows: Vec<String> = n
         .effects
         .iter()
@@ -196,82 +262,126 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
             _ => {}
         }
     }
-    if let NodeKind::Text(tx) = &n.kind {
-        let s = &tx.style;
-        put("font-family", tok(doc, n, &["fontFamily"], format!("\"{}\"", s.font_family.replace('"', "'")), t));
-        put("font-size", tok(doc, n, &["fontSize"], px(s.font_size), t));
-        put("font-weight", s.weight().to_string());
-        if s.italic() {
-            put("font-style", "italic".into());
-        }
-        match s.line_height {
-            LineHeight::Pixels(v) => put("line-height", tok(doc, n, &["lineHeight"], px(v), t)),
-            LineHeight::Percent(p) => put("line-height", format!("{}%", num(p))),
-            LineHeight::Auto => {}
-        }
-        match s.letter_spacing {
-            LetterSpacing::Pixels(v) if v != 0.0 => put("letter-spacing", tok(doc, n, &["letterSpacing"], px(v), t)),
-            LetterSpacing::Percent(p) if p != 0.0 => put("letter-spacing", format!("{}em", num(p / 100.0))),
-            _ => {}
-        }
-        match tx.align_h {
-            TextAlignH::Left => {}
-            TextAlignH::Center => put("text-align", "center".into()),
-            TextAlignH::Right => put("text-align", "right".into()),
-            TextAlignH::Justified => put("text-align", "justify".into()),
-        }
-        match s.case {
-            TextCase::Original => {}
-            TextCase::Upper => put("text-transform", "uppercase".into()),
-            TextCase::Lower => put("text-transform", "lowercase".into()),
-            TextCase::Title => put("text-transform", "capitalize".into()),
-            TextCase::SmallCaps => put("font-variant", "small-caps".into()),
-        }
-        match s.decoration {
-            TextDecoration::None => {}
-            TextDecoration::Underline => put("text-decoration", "underline".into()),
-            TextDecoration::Strikethrough => put("text-decoration", "line-through".into()),
-        }
-        if s.decoration != TextDecoration::None {
-            let l = s.look();
-            let len = |m: LineHeight| match m {
-                LineHeight::Auto => None,
-                LineHeight::Pixels(v) => Some(px(v)),
-                LineHeight::Percent(p) => Some(format!("{}%", num(p))),
-            };
-            match l.style {
-                figcraft_doc::DecorationStyle::Solid => {}
-                figcraft_doc::DecorationStyle::Dotted => put("text-decoration-style", "dotted".into()),
-                figcraft_doc::DecorationStyle::Wavy => put("text-decoration-style", "wavy".into()),
-            }
-            if let Some(v) = len(l.thickness) {
-                put("text-decoration-thickness", v);
-            }
-            if let Some(c) = l.color {
-                put("text-decoration-color", c.to_css());
-            }
-            if s.decoration == TextDecoration::Underline {
-                if let Some(v) = len(l.offset) {
-                    put("text-underline-offset", v);
-                }
-                // Browsers skip ink by default; the canvas only when asked.
-                if !l.skip_ink {
-                    put("text-decoration-skip-ink", "none".into());
-                }
+}
+
+/// The type declarations of text layer `n`.
+fn text_decls(doc: &Document, n: &Node, tx: &figcraft_doc::TextData, t: &mut Tokens, put: &mut impl FnMut(&str, String)) {
+    let px = |v: f64| format!("{}px", num(v));
+    let s = &tx.style;
+    put(
+        "font-family",
+        tok(
+            doc,
+            n,
+            &["fontFamily"],
+            format!(
+                "\"{}\"",
+                s.font_family.replace('\\', "\\\\").replace('"', "\\\"").replace('<', "\\3C ").replace("\r\n", "\\A ").replace(['\n', '\r'], "\\A ")
+            ),
+            t,
+        ),
+    );
+    put("font-size", tok(doc, n, &["fontSize"], px(s.font_size), t));
+    put("font-weight", s.weight().to_string());
+    if s.italic() {
+        put("font-style", "italic".into());
+    }
+    match s.line_height {
+        LineHeight::Pixels(v) => put("line-height", tok(doc, n, &["lineHeight"], px(v), t)),
+        LineHeight::Percent(p) => put("line-height", format!("{}%", num(p))),
+        LineHeight::Auto => {}
+    }
+    match s.letter_spacing {
+        LetterSpacing::Pixels(v) if v != 0.0 => put("letter-spacing", tok(doc, n, &["letterSpacing"], px(v), t)),
+        LetterSpacing::Percent(p) if p != 0.0 => put("letter-spacing", format!("{}em", num(p / 100.0))),
+        _ => {}
+    }
+    match tx.align_h {
+        TextAlignH::Left => {}
+        TextAlignH::Center => put("text-align", "center".into()),
+        TextAlignH::Right => put("text-align", "right".into()),
+        TextAlignH::Justified => put("text-align", "justify".into()),
+    }
+    // CSS has one `text-wrap` per element: written when every paragraph has the same one.
+    let wrap = (0..tx.paragraph_count()).map(|p| tx.para_wrap_style(p)).collect::<Vec<_>>();
+    match wrap.first().copied().filter(|w| wrap.iter().all(|x| x == w)) {
+        Some(figcraft_doc::WrapStyle::Balance) => put("text-wrap", "balance".into()),
+        Some(figcraft_doc::WrapStyle::Pretty) => put("text-wrap", "pretty".into()),
+        _ => {}
+    }
+    // A base direction forced on every paragraph (CSS has one per element).
+    let dir = tx.paragraphs.first().map(|p| p.direction).filter(|d| tx.paragraphs.iter().all(|p| p.direction == *d));
+    match dir {
+        Some(figcraft_doc::TextDirection::Ltr) => put("direction", "ltr".into()),
+        Some(figcraft_doc::TextDirection::Rtl) => {
+            put("direction", "rtl".into());
+            // Left alignment is absolute on the canvas; `start` would be the right edge here.
+            if tx.align_h == TextAlignH::Left {
+                put("text-align", "left".into());
             }
         }
-        if tx.leading_trim == figcraft_doc::LeadingTrim::CapHeight {
-            put("text-box", "trim-both cap alphabetic".into());
+        _ => {}
+    }
+    match s.case {
+        TextCase::Original => {}
+        TextCase::Upper => put("text-transform", "uppercase".into()),
+        TextCase::Lower => put("text-transform", "lowercase".into()),
+        TextCase::Title => put("text-transform", "capitalize".into()),
+        TextCase::SmallCaps => put("font-variant", "small-caps".into()),
+    }
+    match s.decoration {
+        TextDecoration::None => {}
+        TextDecoration::Underline => put("text-decoration", "underline".into()),
+        TextDecoration::Strikethrough => put("text-decoration", "line-through".into()),
+    }
+    decoration_decls(s, put);
+    if tx.leading_trim == figcraft_doc::LeadingTrim::CapHeight {
+        put("text-box", "trim-both cap alphabetic".into());
+    }
+}
+
+fn decoration_decls(s: &figcraft_doc::TextStyle, put: &mut impl FnMut(&str, String)) {
+    let px = |v: f64| format!("{}px", num(v));
+    if s.decoration != TextDecoration::None {
+        let l = s.look();
+        let len = |m: LineHeight| match m {
+            LineHeight::Auto => None,
+            LineHeight::Pixels(v) => Some(px(v)),
+            LineHeight::Percent(p) => Some(format!("{}%", num(p))),
+        };
+        match l.style {
+            figcraft_doc::DecorationStyle::Solid => {}
+            figcraft_doc::DecorationStyle::Dotted => put("text-decoration-style", "dotted".into()),
+            figcraft_doc::DecorationStyle::Wavy => put("text-decoration-style", "wavy".into()),
+        }
+        if let Some(v) = len(l.thickness) {
+            put("text-decoration-thickness", v);
+        }
+        if let Some(c) = l.color {
+            put("text-decoration-color", c.to_css());
+        }
+        if s.decoration == TextDecoration::Underline {
+            if let Some(v) = len(l.offset) {
+                put("text-underline-offset", v);
+            }
+            // Browsers skip ink by default; the canvas only when asked.
+            if !l.skip_ink {
+                put("text-decoration-skip-ink", "none".into());
+            }
         }
     }
-    out
 }
 
 /// A gradient fill on a `w`×`h` box as a CSS background: linear along its handles' direction
 /// (CSS angles: 0deg up, 90deg right), radial with its handles' radii, angular as a conic
 /// gradient from its start direction.
-fn css_gradient(g: &figcraft_color::Gradient, w: f64, h: f64) -> String {
-    let stops = g.sorted_stops().iter().map(|s| format!("{} {}%", s.color.to_css(), (s.position * 100.0).round())).collect::<Vec<_>>().join(", ");
+fn css_gradient(g: &figcraft_color::Gradient, w: f64, h: f64, opacity: f32) -> String {
+    let stops = g
+        .sorted_stops()
+        .iter()
+        .map(|s| format!("{} {}%", s.color.with_alpha(s.color.a * opacity).to_css(), (s.position * 100.0).round()))
+        .collect::<Vec<_>>()
+        .join(", ");
     let (dx, dy) = ((g.to.0 - g.from.0) * w, (g.to.1 - g.from.1) * h);
     let angle = if dx == 0.0 && dy == 0.0 { 180.0 } else { dx.atan2(-dy).to_degrees().rem_euclid(360.0) };
     let pct = |v: f64| format!("{}%", num(v * 100.0));

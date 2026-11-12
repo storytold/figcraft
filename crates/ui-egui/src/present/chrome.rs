@@ -1,7 +1,10 @@
 use super::layout::{Chrome, FULL, Place};
 use super::player::player;
 use super::scroll::page_settings;
-use super::*;
+use super::{
+    Align2, Color32, CornerRadius, Document, Easing, FigApp, HashSet, Icon, Id, NodeId, Pos2, PresentScale, Presenter, PrototypeSettings, Rect,
+    Sense, Stroke, Tokens, Transition, Ui, icons, json, pos2, regular, tr, vec2, widgets,
+};
 
 /// What the player's top bar asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +21,8 @@ pub(super) enum BarAction {
     Comments,
     /// Show or hide the Inspect panel.
     Inspect,
+    /// Hide UI: hide or show the bars (the Options menu, Cmd/Ctrl+\).
+    HideUi,
 }
 
 pub struct PresentTab {
@@ -50,6 +55,10 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::C)) {
         action = Some(BarAction::Comments);
     }
+    // Cmd/Ctrl+\ hides and shows the bars, as it hides and shows the editor's UI.
+    if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Backslash)) {
+        action = Some(BarAction::HideUi);
+    }
     if pres.view.inspect {
         let t = Tokens::get(&ctx);
         egui::Panel::right("present_inspect")
@@ -61,7 +70,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         action = player(&mut pres, ui, ui.max_rect(), now, Chrome { keys: !typing, ..FULL }).or(action);
     });
-    let picked_device = navigation_bar(&mut pres, &ctx, now);
+    let picked_device = if pres.view.hide_ui { None } else { navigation_bar(&mut pres, &ctx, now) };
     // Keys the prototype left alone: C shows the comments, F fills the screen.
     if !typing {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::C)) {
@@ -75,6 +84,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     match action {
         Some(BarAction::Comments) => pres.view.comments = !pres.view.comments,
         Some(BarAction::Inspect) => pres.view.inspect = !pres.view.inspect,
+        Some(BarAction::HideUi) => {
+            pres.view.hide_ui = !pres.view.hide_ui;
+            // As the reference tool does, say how the bars come back.
+            if pres.view.hide_ui {
+                let shortcut = crate::toolbar::pretty_shortcut("Cmd+\\");
+                app.toast(crate::i18n::trf("The bars are hidden. {shortcut} shows them again", &[("shortcut", &shortcut)]));
+            }
+        }
         _ => {}
     }
     if live
@@ -236,15 +253,23 @@ fn poll_pads(app: &mut FigApp, p: &mut Presenter, ctx: &egui::Context) {
     crate::repaint_in(ctx, PAD_POLL_SECS);
 }
 
-/// After a player's frame: the links it opens and the widget clicks it took. A link to a website
-/// waits in [`link_notice`] unless the viewer chose to skip the notice; a second link to a website
-/// that fires while the notice shows is dropped.
+/// After a player's frame: the links it opens and the widget clicks it took. Every link waits in
+/// [`link_notice`] — to a website or to the mail app (#1096). Skipping the notice opens at once
+/// only a link the viewer's own click, press, drag or key fired, one per frame, and never while a
+/// notice shows: a delay or the pointer passing over a layer never opens anything unasked. A
+/// further link that fires while the notice shows is dropped, whatever fired it.
 fn finish(app: &mut FigApp, p: &mut Presenter) {
-    for u in p.urls.drain(..) {
-        if app.session.prefs.link_notice_skipped || !goes_to_a_website(&u) {
-            app.services.open_url(&u);
+    let skipped = app.session.prefs.link_notice_skipped;
+    let mut opened = false;
+    for (u, asked, new_tab) in p.urls.drain(..) {
+        if skipped && asked && !opened && p.link_notice.is_none() {
+            open_link(app, &u, new_tab);
+            opened = true;
         } else if p.link_notice.is_none() {
-            p.link_notice = Some((u, false));
+            p.link_notice = Some((u, (asked && !skipped).then_some(false), new_tab));
+            // A press under way ends here: its release would otherwise reach the prototype
+            // behind the notice, which takes no input while it shows.
+            p.press = None;
         }
     }
     if let Some(e) = p.click_widgets(&app.session) {
@@ -252,24 +277,42 @@ fn finish(app: &mut FigApp, p: &mut Presenter) {
     }
 }
 
-/// Whether `url` is an `http` or `https` link (a `mailto:` link opens the mail app instead).
+/// Open `url` as its Open link action says: in a new tab, or in place of the prototype where the
+/// platform can send the viewer elsewhere (the web build's own tab).
+fn open_link(app: &mut FigApp, url: &str, new_tab: bool) {
+    if new_tab {
+        app.services.open_url(url);
+    } else {
+        app.services.open_url_here(url);
+    }
+}
+
+/// Whether `url` is an `http` or `https` link (of the openable URLs, the others are `mailto:`;
+/// [`figcraft_engine::doc_urls`]).
 fn goes_to_a_website(url: &str) -> bool {
     url.trim().split_once(':').is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
 }
 
-/// The notice before a link leaves the prototype for a website: the link, "Don't show this
-/// again" (saved with the preferences when Open link is pressed), Open link and Cancel. Escape or
-/// the close button cancels.
+/// The notice before a link leaves the prototype — for a website, or for the mail app: the link,
+/// "Don't show this again" for a link the viewer fired (saved with the preferences when Open link
+/// is pressed), Open link and Cancel. Escape or the close button cancels.
 fn link_notice(app: &mut FigApp, p: &mut Presenter, ctx: &egui::Context, id: Id) {
-    let Some((url, skip)) = p.link_notice.as_mut() else { return };
+    let Some((url, skip, _)) = p.link_notice.as_mut() else { return };
     let t = Tokens::get(ctx);
     let (mut open, mut go, mut cancel) = (true, false, false);
     crate::dialogs::window(tr("Leaving the prototype"), ctx).id(id).open(&mut open).show(ctx, |ui| {
         ui.set_width(340.0);
-        widgets::label(ui, tr("This link opens a website outside the prototype:"), t.text);
+        let what = if goes_to_a_website(url) {
+            tr("This link opens a website outside the prototype:")
+        } else {
+            tr("This link opens your mail app to write a message:")
+        };
+        widgets::label(ui, what, t.text);
         ui.add(egui::Label::new(egui::RichText::new(url.as_str()).font(regular(11.0)).color(t.text_secondary)).wrap());
         ui.add_space(8.0);
-        if widgets::checkbox(ui, *skip, tr("Don't show this again")) {
+        if let Some(skip) = skip.as_mut()
+            && widgets::checkbox(ui, *skip, tr("Don't show this again"))
+        {
             *skip = !*skip;
         }
         ui.add_space(12.0);
@@ -280,12 +323,11 @@ fn link_notice(app: &mut FigApp, p: &mut Presenter, ctx: &egui::Context, id: Id)
     });
     cancel |= !open || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if go {
-        let Some((url, skip)) = p.link_notice.take() else { return };
-        if skip {
+        let Some((url, skip, new_tab)) = p.link_notice.take() else { return };
+        if skip == Some(true) {
             app.run("proto.linkNotice", json!({"show": false}));
-            app.services.save_prefs(&app.session.prefs);
         }
-        app.services.open_url(&url);
+        open_link(app, &url, new_tab);
     } else if cancel {
         p.link_notice = None;
     }

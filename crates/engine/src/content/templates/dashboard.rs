@@ -6,7 +6,7 @@ use figcraft_doc::NodeId;
 use serde_json::{Value, json};
 
 use super::glyphs::{self, Glyph};
-use super::kit::*;
+use super::kit::{ACCENT, BORDER, BOTTOM_EDGE, CARD, H, ICON, INK, Kit, MUTED, ON_BRAND, PAGE, PRIMARY, RIGHT_EDGE, SOFT, V, merged};
 use crate::Result;
 
 const NAV: [(&str, Glyph); 6] = [

@@ -183,15 +183,15 @@ fn dropped(app: &mut FigApp, ctx: &egui::Context) {
     let files = ctx.input(|i| i.raw.dropped_files.clone());
     for f in files {
         if !crate::opens(f.path()) {
-            app.toast(tr("Drop a .figcraft, .fig, .sketch, .json, .svg or image file."));
+            app.toast(tr("Drop a .figcraft, .fig, .jam, .sketch, .json, .svg or image file."));
             continue;
         }
         crate::pending_open::open_dropped(app, &f);
     }
 }
 
-/// Draw the Home sidebar: app icon and wordmark, file/template search (Escape clears it)
-/// and section tabs; choosing a section clears the file query.
+/// Draw the Home sidebar: app icon and wordmark, file/template search (Escape clears it), section
+/// tabs (choosing one clears the file query) and Preferences at the bottom.
 fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
     let mut y = left.min.y + 20.0;
     crate::theme::paint_app_icon(ui, Rect::from_min_size(pos2(left.min.x + 12.0, y - 4.0), vec2(32.0, 32.0)));
@@ -228,6 +228,26 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
             app.ui.home_view.file_query.clear();
         }
         y += 34.0;
+    }
+    let pref_y = (left.max.y - 44.0).max(y + 12.0);
+    if pref_y > y + 12.0 {
+        ui.painter().line_segment([pos2(left.min.x + 12.0, pref_y - 6.0), pos2(left.max.x - 12.0, pref_y - 6.0)], Stroke::new(1.0, t.border));
+    }
+    let r = Rect::from_min_size(pos2(left.min.x + 8.0, pref_y), vec2(SIDEBAR - 16.0, 32.0));
+    let mut resp = ui.interact(r, ui.scope_id().with("home_preferences"), Sense::click());
+    let current = app.ui.preferences;
+    a11y::button(&resp, tr("Preferences"));
+    if current || resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), if current { t.selected_row } else { t.hover });
+    }
+    focus_ring(ui, t, r, &resp, 5);
+    icons::paint(ui.painter(), Rect::from_min_size(pos2(r.min.x + 10.0, r.center().y - 8.0), vec2(16.0, 16.0)), Icon::Adjust, t.icon);
+    ui.painter().text(pos2(r.min.x + 36.0, r.center().y), Align2::LEFT_CENTER, tr("Preferences"), regular(12.0), t.text);
+    let key_label = figcraft_engine::keymap::display("Cmd+,", crate::shortcuts::platform());
+    ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, &key_label, regular(11.0), t.text_secondary);
+    resp = resp.on_hover_text(format!("{} ({})", tr("Preferences"), key_label));
+    if resp.clicked() {
+        app.ui.preferences = !app.ui.preferences;
     }
 }
 
@@ -343,16 +363,11 @@ fn recents(app: &mut FigApp, ui: &mut Ui, t: &Tokens) {
     if open {
         app.open_dialog();
     }
-    // Join a file someone shared: the join field, and what the join is doing.
+    // Join a file someone shared (the Join dialog shows what the join is doing).
     subheading(ui, t, tr("Join with a code"));
     ui.scope(|ui| {
         ui.set_max_width(540.0);
-        if let Some(session) = crate::live::join_row(app, ui, 260.0) {
-            app.ui.live.home_join = Some(session);
-        }
-        if let Some(session) = app.ui.live.home_join {
-            crate::live::join_status(app, ui, t, session);
-        }
+        crate::live::join_row(app, ui, 260.0);
     });
     opened_join(app);
     if !app.session.prefs.getting_started_dismissed {

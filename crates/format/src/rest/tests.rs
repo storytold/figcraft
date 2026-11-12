@@ -290,6 +290,8 @@ fn vectors_ellipses_stars_and_booleans() {
     counted["pointCount"] = json!(6);
     let mut boolean = base("Bool", "BOOLEAN_OPERATION");
     boolean["booleanOperation"] = json!("SUBTRACT");
+    boolean["cornerRadius"] = json!(12);
+    boolean["cornerSmoothing"] = json!(0.6);
     boolean["children"] =
         json!([base("A", "RECTANGLE"), {"id": "B", "name": "B", "type": "ELLIPSE", "relativeTransform": at(5.0, 5.0), "size": {"x": 10, "y": 10}}]);
     let (doc, warnings) = one(json!([tri, wire, empty, arc, star, plain_star, counted, boolean]));
@@ -311,6 +313,8 @@ fn vectors_ellipses_stars_and_booleans() {
     assert!(matches!(b.kind, NodeKind::BooleanOp { op: BoolOp::Subtract }));
     assert_eq!(b.children.len(), 2);
     assert!(close(b.width, 15.0), "booleans wrap their children");
+    assert_eq!(b.corners.radii, [12.0; 4], "a boolean group keeps its corner radius");
+    assert!(close(b.corners.smoothing, 0.6));
 }
 
 #[test]
@@ -469,7 +473,7 @@ fn components_sets_instances_and_properties() {
     assert_eq!(set.stroke.dashes, vec![10.0, 5.0]);
     let def = named(&doc, "State=Default");
     let icon = named(&doc, "Icon");
-    let NodeKind::Component { description, props } = &def.kind else { panic!() };
+    let NodeKind::Component { description, props, .. } = &def.kind else { panic!() };
     assert_eq!(description, "Primary button");
     assert_eq!(props.get("Label"), Some(&PropDef::Text { default: "OK".into() }), "{props:?}");
     assert_eq!(props.get("Icon"), Some(&PropDef::InstanceSwap { default: icon.id, preferred: Vec::new() }));
@@ -477,7 +481,7 @@ fn components_sets_instances_and_properties() {
     let NodeKind::Component { props: hover_props, .. } = &named(&doc, "State=Hover").kind else { panic!() };
     assert!(hover_props.contains_key("Label"), "variants share the set's definitions");
     assert!(
-        matches!(&icon.kind, NodeKind::Component { description, props } if description == "An icon" && props.get("Show") == Some(&PropDef::Boolean { default: true }))
+        matches!(&icon.kind, NodeKind::Component { description, props, .. } if description == "An icon" && props.get("Show") == Some(&PropDef::Boolean { default: true }))
     );
     let label = doc.node(def.children[0]).unwrap();
     assert_eq!(label.prop_refs.get("characters").map(String::as_str), Some("Label"));
@@ -530,7 +534,7 @@ fn shared_styles_link_with_metadata_names() {
     let fill = doc.style("S:1").unwrap();
     assert_eq!((fill.name.as_str(), fill.description.as_str()), ("Brand/Primary", "Main"));
     assert!(matches!(&fill.kind, StyleKind::Paint { paints } if paints.len() == 1));
-    assert!(matches!(&doc.style("S:2").unwrap().kind, StyleKind::Text { style } if style.font_size == 32.0));
+    assert!(matches!(&doc.style("S:2").unwrap().kind, StyleKind::Text { style, .. } if style.font_size == 32.0));
     assert!(matches!(&doc.style("Soft").unwrap().kind, StyleKind::Effect { effects } if effects.len() == 1));
     let r = named(&doc, "R");
     assert_eq!((r.styles.fill.as_deref(), r.styles.effect.as_deref()), (Some("S:1"), Some("S:4")));
@@ -755,4 +759,45 @@ fn the_fig_import_sets_its_own_layer_cap() {
     let (doc, warnings) = import_with_networks(&file(json!([page("Page", Value::Array(few))])), &no_images, Vec::new(), 4).unwrap();
     assert_eq!(doc.node_count(), 5);
     assert!(warnings.iter().any(|w| w.contains("more than 4 layers")), "{warnings:?}");
+}
+
+/// Angles written many turns round keep the arc they draw: the sweep is the difference as
+/// written, and the start comes within a turn of zero, the same way round.
+#[test]
+fn an_arc_written_many_turns_round_keeps_its_sweep() {
+    let tau = std::f64::consts::TAU;
+    for (start, end) in [
+        (999.0, 999.0 + tau),
+        (1500.0, 1501.0),
+        (-5000.0, -5000.0 - 2.5),
+        (1e6, 1e6 + tau),
+        (1e6, 1e6 + 5.9),
+        (1e6, 1e6 + 6.1),
+        (3e7, 3e7),
+        (-4e5, -4e5 + tau - 0.01),
+        (-182.212373908208, -182.212373908208 + tau),
+    ] {
+        let mut arc = json!({"id": "Arc", "name": "Arc", "type": "ELLIPSE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}});
+        arc["arcData"] = json!({"startingAngle": start, "endingAngle": end, "innerRadius": 0});
+        let (doc, _) = one(json!([arc]));
+        let NodeKind::Ellipse { start: s, sweep, .. } = named(&doc, "Arc").kind else { panic!("{start}: not an ellipse") };
+        let want = end - start;
+        let want = if (want.abs() - tau).abs() < 1e-6 { tau.copysign(want) } else { want };
+        assert!((sweep - want).abs() < 1e-9, "{start}..{end}: sweep {sweep}, not {want}");
+        assert!(s.abs() < tau, "{start}: start {s} left past a turn");
+        let off = (s - start).rem_euclid(tau);
+        assert!(off.min(tau - off) < 1e-6, "{start}: start {s} isn't the same way round");
+    }
+}
+
+/// An arc with a start but no end goes all the way round, however far out the start is.
+#[test]
+fn an_arc_without_an_end_is_whole_wherever_it_starts() {
+    for start in [0.0, 2.0, -5000.0, 1e8, 1e15] {
+        let mut arc = json!({"id": "Arc", "name": "Arc", "type": "ELLIPSE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}});
+        arc["arcData"] = json!({"startingAngle": start, "innerRadius": 0});
+        let (doc, _) = one(json!([arc]));
+        let NodeKind::Ellipse { sweep, .. } = named(&doc, "Arc").kind else { panic!("{start}: not an ellipse") };
+        assert_eq!(sweep, std::f64::consts::TAU, "start {start}");
+    }
 }

@@ -6,7 +6,7 @@ use figcraft_doc::NodeId;
 use serde_json::{Value, json};
 
 use super::glyphs;
-use super::kit::*;
+use super::kit::{ACCENT, BORDER, BOTTOM_EDGE, CARD, DEEP, H, INK, Kit, MUTED, ON_BRAND, PAGE, PRIMARY, TOP_EDGE, V, merged};
 use crate::Result;
 
 const W: f64 = 1920.0;

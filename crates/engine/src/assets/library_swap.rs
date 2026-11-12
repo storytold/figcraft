@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, ImportedComponent, ImportedRecord, LibraryManifest, NodeId, NodeKind, PublishedLibrary, VariableValue};
 use serde_json::Value;
 
 use crate::cmd::component::{main_of, swap_instance};
@@ -41,6 +41,35 @@ fn b_main(doc: &Document, a_main: NodeId, a_root: NodeId, b_root: NodeId) -> Opt
     }
 }
 
+/// Local style id → the library's style id, matched by name and type (the rest go to `out.unmatched`).
+fn match_styles(doc: &Document, recs: &[ImportedRecord], m: &LibraryManifest, out: &mut Swapped) -> BTreeMap<String, String> {
+    let mut keys = BTreeMap::new();
+    for r in recs {
+        let Some(st) = doc.style(&r.local) else { continue };
+        let kind = st.kind.type_name();
+        match m.styles.iter().find(|x| x.published && x.name == st.name && x.kind == kind) {
+            Some(x) => {
+                keys.insert(r.local.clone(), x.id.clone());
+            }
+            None => out.unmatched.push(format!("style {}", st.name)),
+        }
+    }
+    keys
+}
+
+/// (local component root, the library's component id) by name; the rest go to `out.unmatched`.
+fn match_components(doc: &Document, records: &[ImportedComponent], m: &LibraryManifest, out: &mut Swapped) -> Vec<(NodeId, NodeId)> {
+    let mut pairs = Vec::new();
+    for r in records {
+        let name = doc.node(r.root).map(|n| n.name.clone()).unwrap_or_default();
+        match m.components.iter().find(|a| a.published && a.name == name) {
+            Some(a) => pairs.push((r.root, a.id)),
+            None => out.unmatched.push(format!("component {name}")),
+        }
+    }
+    pairs
+}
+
 /// Swap the copies of library `from` in `doc` to library `to` by names (see the module docs).
 pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Result<Swapped> {
     let m = &to.manifest;
@@ -64,14 +93,7 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
         })
         .collect();
     let records: Vec<ImportedComponent> = doc.libraries.components.iter().filter(|r| r.library == from && shown.contains(&r.root)).cloned().collect();
-    let mut pairs = Vec::new();
-    for r in &records {
-        let name = doc.node(r.root).map(|n| n.name.clone()).unwrap_or_default();
-        match m.components.iter().find(|a| a.published && a.name == name) {
-            Some(a) => pairs.push((r.root, a.id)),
-            None => out.unmatched.push(format!("component {name}")),
-        }
-    }
+    let pairs = match_components(doc, &records, m, &mut out);
     let keys: Vec<NodeId> = pairs.iter().map(|(_, k)| *k).collect();
     let map = if keys.is_empty() { BTreeMap::new() } else { import(doc, to, &keys, false)? };
     // A's mains (each variant) and roots → B's.
@@ -121,35 +143,28 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
     // Styles the document's own layers link to: by name and type.
     let linked: BTreeSet<String> = doc.nodes().filter(|n| outside(doc, n.id)).flat_map(|n| style_links(n).cloned()).collect();
     let style_recs: Vec<ImportedRecord> = doc.libraries.styles.iter().filter(|r| r.library == from && linked.contains(&r.local)).cloned().collect();
-    let mut style_keys: BTreeMap<String, String> = BTreeMap::new();
-    for r in &style_recs {
-        let Some(st) = doc.style(&r.local) else { continue };
-        let kind = st.kind.type_name();
-        match m.styles.iter().find(|x| x.published && x.name == st.name && x.kind == kind) {
-            Some(x) => {
-                style_keys.insert(r.local.clone(), x.id.clone());
-            }
-            None => out.unmatched.push(format!("style {}", st.name)),
-        }
-    }
+    let style_keys = match_styles(doc, &style_recs, m, &mut out);
     let imported = import_styles(doc, to, &style_keys.values().cloned().collect(), false);
     let styles: BTreeMap<String, String> = style_keys.iter().filter_map(|(a, k)| imported.get(k).map(|b| (a.clone(), b.clone()))).collect();
     out.styles = styles.len();
 
     // Variables: by collection and variable name and type; collections and modes by name.
-    let coll_name = |d: &Document, id: &str| d.variables.collection(id).map(|c| c.name.clone()).unwrap_or_default();
-    // Variables the document's own layers bind or its own variables alias.
+    let coll_name = |d: &Document, id: &str| d.variables.collection_by_id(id).map(|c| c.name.clone()).unwrap_or_default();
+    // Variables the document's own layers bind or its own variables alias or calculate from.
     let remote: BTreeSet<String> = doc.libraries.variables.iter().map(|r| r.local.clone()).collect();
-    let aliases = doc.variables.variables.iter().filter(|v| !remote.contains(&v.id)).flat_map(|v| v.values.values()).filter_map(|x| match x {
-        VariableValue::Alias(a) => Some(a.clone()),
-        _ => None,
-    });
+    let aliases = doc
+        .variables
+        .variables
+        .iter()
+        .filter(|v| !remote.contains(&v.id))
+        .flat_map(|v| v.values.values())
+        .flat_map(|x| x.references().into_iter().cloned());
     let used: BTreeSet<String> = doc.nodes().filter(|n| outside(doc, n.id)).flat_map(|n| n.bound.values().cloned()).chain(aliases).collect();
     let var_recs: Vec<ImportedRecord> = doc.libraries.variables.iter().filter(|r| r.library == from && used.contains(&r.local)).cloned().collect();
     let lib_coll = |name: &str| to.doc.variables.collections.iter().find(|c| c.name == name && m.collection(&c.id).is_some_and(|x| x.published));
     let mut var_keys: BTreeMap<String, String> = BTreeMap::new();
     for r in &var_recs {
-        let Some(v) = doc.variables.get(&r.local) else { continue };
+        let Some(v) = doc.variables.get_by_id(&r.local) else { continue };
         let cname = coll_name(doc, &v.collection);
         let found = lib_coll(&cname).and_then(|c| {
             to.doc
@@ -177,10 +192,10 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
     // A's collection → (B's, A's mode id → B's mode of the same name).
     let mut colls: BTreeMap<String, (String, BTreeMap<String, String>)> = BTreeMap::new();
     for (a, k) in &coll_keys {
-        let (Some(b), Some(ac)) = (vmap.collections.get(k), doc.variables.collection(a)) else { continue };
+        let (Some(b), Some(ac)) = (vmap.collections.get(k), doc.variables.collection_by_id(a)) else { continue };
         let modes = doc
             .variables
-            .collection(b)
+            .collection_by_id(b)
             .map(|bc| {
                 ac.modes.iter().filter_map(|am| bc.modes.iter().find(|bm| bm.name == am.name).map(|bm| (am.id.clone(), bm.id.clone()))).collect()
             })
@@ -221,11 +236,9 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
             .collect();
     }
     for v in doc.variables.variables.iter_mut().filter(|v| !remote.contains(&v.id)) {
-        for val in v.values.values_mut() {
-            if let VariableValue::Alias(a) = val
-                && let Some(b) = vars.get(a)
-            {
-                *a = b.clone();
+        for r in v.values.values_mut().flat_map(VariableValue::references_mut) {
+            if let Some(b) = vars.get(r.as_str()) {
+                *r = b.clone();
             }
         }
     }

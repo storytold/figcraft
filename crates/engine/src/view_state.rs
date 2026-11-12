@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Serialize};
 
 /// The canvas view of a document: what's at the centre of the viewport and the zoom.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -38,6 +38,9 @@ pub struct ViewState {
     pub snap_objects: bool,
     pub snap_pixel: bool,
     pub ui_hidden: bool,
+    /// Minimized interface (Shift+Cmd/Ctrl+\): the navigation bar and both sidebars are collapsed
+    /// and the toolbar stays; the right sidebar shows while something is selected.
+    pub ui_minimized: bool,
 }
 
 impl Default for ViewState {
@@ -67,6 +70,7 @@ impl Default for ViewState {
             snap_objects: true,
             snap_pixel: true,
             ui_hidden: false,
+            ui_minimized: false,
         }
     }
 }

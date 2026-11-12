@@ -27,8 +27,8 @@ use figcraft_doc::proto::{
 use figcraft_doc::{
     AutoLayout, BoolOp, ContentAlign, CrossAlign, Document, EffectKind, ExportSize, GridAlign, GridKind, GridTrack, HConstraint, LayoutMode,
     LetterSpacing, LineHeight, ListStyle, MainAlign, MaskType, Node, NodeId, NodeKind, NoiseMode, PropDef, Sizing, StrokeAlign, StrokeCap,
-    StrokeJoin, StyleKind, TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, VConstraint, VariableType,
-    VariableValue, VectorNetwork, WindingRule,
+    StrokeJoin, StyleKind, TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextDirection, TextStyle, VConstraint,
+    VariableType, VariableValue, VectorNetwork, WindingRule,
 };
 use serde_json::Value;
 use sha1::Digest;
@@ -43,6 +43,7 @@ mod component;
 mod layer;
 mod paint;
 mod prototype;
+mod scale;
 mod shape;
 
 /// Most layers written, and deepest nesting followed (the import's limits).
@@ -216,7 +217,7 @@ fn too_large() -> FormatError {
 }
 
 /// `canvas.fig`: the magic, the version and the two deflated chunks, each after its length.
-fn canvas(schema: &[u8], message: &[u8]) -> Result<Vec<u8>, FormatError> {
+pub(super) fn canvas(schema: &[u8], message: &[u8]) -> Result<Vec<u8>, FormatError> {
     let mut out = b"fig-kiwi".to_vec();
     out.extend_from_slice(&VERSION.to_le_bytes());
     for chunk in [schema, message] {

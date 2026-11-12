@@ -7,14 +7,17 @@
 use std::time::Duration;
 
 use figcraft_collab::message::{
-    self, Access, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, NewLink, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL,
-    PluginReply, PluginReq, Resolve, ServerMsg,
+    self, Admin, AdminReply, ClientMsg, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL, PluginReply,
+    PluginReq, ServerMsg,
 };
-use figcraft_engine::live::{Shared, SharedLink};
+use figcraft_engine::live::Shared;
 use tungstenite::{Bytes, Message, WebSocket};
 
-use crate::invite::{Endpoint, Invite};
+use crate::invite::{Endpoint, Invite, Lookup};
+use crate::join::ask;
 use crate::net::{Duplex, NetLimits, config, open};
+pub(crate) use crate::requests::REFUSED;
+use crate::requests::{code_requests, comment_request, hosting_error, link_requests, made_comment, made_links, shared};
 
 type Ws = WebSocket<Duplex>;
 
@@ -26,7 +29,7 @@ pub fn request(server: &Endpoint, key: &str, requests: Vec<Admin>, limits: &NetL
         ServerMsg::Admin(r) => Some(*r),
         _ => None,
     };
-    let manage = Manage { protocol: PROTOCOL, key: key.to_string(), client_version: env!("CARGO_PKG_VERSION").to_string() };
+    let manage = Manage { protocol: PROTOCOL, key: key.to_string(), client_version: message::client_version() };
     let mut ws = connect(server, limits, timeout)?;
     send(&mut ws, &ClientMsg::Manage(manage))?;
     match reply(&mut ws, limits, admin)? {
@@ -62,16 +65,11 @@ pub fn hosting(
     let open = OpenHosting { protocol: PROTOCOL, client_version: message::client_version(), file: file.to_string(), owner: owner.to_string() };
     let mut ws = connect(server, limits, timeout)?;
     send(&mut ws, &ClientMsg::OpenHosting(open))?;
-    let info = match reply(&mut ws, limits, |m| match m {
+    let info = reply(&mut ws, limits, |m| match m {
         ServerMsg::Hosting(i) => Some(*i),
         _ => None,
-    }) {
-        Ok(i) => i,
-        Err(e) if e.contains("couldn't be read") => {
-            return Err(format!("{} takes files only with its key (it is older than this app): add ?key=… to the address", server.display()));
-        }
-        Err(e) => return Err(e),
-    };
+    })
+    .map_err(|e| hosting_error(server, e))?;
     let mut replies = Vec::with_capacity(requests.len());
     for r in requests {
         send(&mut ws, &ClientMsg::Admin(r))?;
@@ -81,14 +79,15 @@ pub fn hosting(
     Ok((info, replies))
 }
 
-/// Ask the server at `server` which file join code `code` opens: the file's id and its link's
-/// token. Fails with the server's own words when it knows no such code (or the address tried too
-/// many: the error starts with [`REFUSED`]); a server older than join codes can't read the
+/// Ask `invite`'s server what `lookup` stands for: which file a join code opens, or the team link
+/// of `invite.file`; the file's id and the link's token. Fails with the server's own words when it
+/// knows no such code or keeps no such file on its team list (or the address tried too many: the
+/// error starts with [`REFUSED`]); a server older than join codes (or team lists) can't read the
 /// question ("couldn't be read").
-pub fn resolve(server: &Endpoint, code: &str, limits: &NetLimits, timeout: Duration) -> Result<(String, String), String> {
-    let ask = Resolve { protocol: PROTOCOL, client_version: message::client_version(), code: code.to_string() };
-    let mut ws = connect(server, limits, timeout)?;
-    send(&mut ws, &ClientMsg::Resolve(ask))?;
+pub fn resolve(invite: &Invite, lookup: &Lookup, limits: &NetLimits, timeout: Duration) -> Result<(String, String), String> {
+    let ask = ask(invite, lookup);
+    let mut ws = connect(&invite.server, limits, timeout)?;
+    send(&mut ws, &ask)?;
     let answer = reply(&mut ws, limits, |m| match m {
         ServerMsg::Resolved { file, token } => Some((file, token)),
         _ => None,
@@ -100,8 +99,9 @@ pub fn resolve(server: &Endpoint, code: &str, limits: &NetLimits, timeout: Durat
 /// Change who else gets into `file`, as whoever manages it (with the server's `key`, else with the
 /// file's `owner` token): revoke the links with the ids in `revoke` (whoever joined with them is
 /// disconnected, and their join codes stop working; one already gone is fine), then, to `create`,
-/// make a new edit link and a new view link and ask for their join codes: what others join with.
-/// A server older than join codes makes the links without codes.
+/// make a new edit link, a new view link and a new comment link and ask for their join codes: what
+/// others join with. A server older than join codes makes the links without codes, and one older
+/// than comment links makes no comment link.
 pub fn share(
     server: &Endpoint,
     key: Option<&str>,
@@ -116,37 +116,16 @@ pub fn share(
         Some(key) => request(server, key, requests, limits, timeout),
         None => hosting(server, file, owner, requests, limits, timeout).map(|(_, replies)| replies),
     };
-    let link = |access: Access| Admin::CreateLink { file: file.to_string(), access, label: format!("Shared ({})", access.id()) };
-    let mut requests: Vec<Admin> = revoke.iter().map(|id| Admin::Revoke { file: file.to_string(), link: id.clone() }).collect();
-    requests.extend(create.then(|| [link(Access::Edit), link(Access::View)]).into_iter().flatten());
-    let mut made = Vec::new();
-    for reply in ask(requests)? {
-        match reply {
-            AdminReply::Link(l) => made.push(l),
-            // A link that is gone already is as revoked as it gets.
-            AdminReply::Failed { reason } if made.is_empty() && reason.contains("no such link") => {}
-            AdminReply::Failed { reason } => return Err(reason),
-            _ => {}
-        }
-    }
-    let (Some(view), Some(edit)) = (made.pop(), made.pop()) else {
-        return if create { Err("the server didn't make the links".into()) } else { Ok(None) };
-    };
+    let Some(mut links) = made_links(ask(link_requests(file, revoke, create))?, create)? else { return Ok(None) };
+    // The comment link on a connection of its own: a server from before comment links can't read
+    // the request and closes it (the file is shared without one then).
+    let comment = ask(comment_request(file)).map_err(|e| log::info!("live session: no comment link from {}: {e}", server.display()));
+    links.comment = made_comment(comment.unwrap_or_default());
     // Their codes, on a connection of its own: a server from before join codes can't read the
     // request and closes it (the links are shared without codes then).
-    let code = |token: &str| Admin::Code { file: file.to_string(), token: token.to_string() };
-    let mut codes = ask(vec![code(&edit.token), code(&view.token)])
-        .map_err(|e| log::info!("live session: no join codes from {}: {e}", server.display()))
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| if let AdminReply::Code { code } = r { Some(code) } else { None });
-    let mut shared = |l: NewLink| SharedLink {
-        link: Invite { server: server.clone(), file: file.to_string(), token: l.token }.link(),
-        id: l.link.id,
-        code: codes.next().flatten(),
-    };
-    let edit = shared(edit);
-    Ok(Some(Shared { edit, view: Some(shared(view)) }))
+    let codes =
+        ask(code_requests(file, &links)).map_err(|e| log::info!("live session: no join codes from {}: {e}", server.display())).unwrap_or_default();
+    Ok(Some(shared(server, file, links, codes)))
 }
 
 /// Send one library request about the file behind share link `link`; the reply. Fails when the
@@ -158,7 +137,7 @@ pub fn library(link: &str, req: LibraryReq, limits: &NetLimits, timeout: Duratio
         _ => None,
     };
     let invite = Invite::parse(link)?;
-    let open = OpenLibrary { protocol: PROTOCOL, file: invite.file, token: invite.token, client_version: env!("CARGO_PKG_VERSION").to_string() };
+    let open = OpenLibrary { protocol: PROTOCOL, file: invite.file, token: invite.token, client_version: message::client_version() };
     let mut ws = connect(&invite.server, limits, timeout)?;
     send(&mut ws, &ClientMsg::OpenLibrary(open))?;
     match reply(&mut ws, limits, lib)? {
@@ -225,12 +204,19 @@ fn send(ws: &mut Ws, msg: &ClientMsg) -> Result<(), String> {
     ws.send(Message::Binary(Bytes::from(bytes))).map_err(|e| format!("the connection to the server dropped ({e})"))
 }
 
-/// How an error starts when the server said no (then its reason), rather than not answering.
-pub(crate) const REFUSED: &str = "the server refused: ";
-
 /// The next answer `pick` takes, or why there is none.
 fn reply<T>(ws: &mut Ws, limits: &NetLimits, pick: impl Fn(ServerMsg) -> Option<T>) -> Result<T, String> {
+    // One deadline for the whole answer: pings, pongs and a message trickling in each renew the
+    // read timeout, so without it a server could keep a request (and the refresh permit the
+    // caller holds) waiting for as long as it liked.
+    // The request-reply bound, not the session idle one: a publish uploads a whole file and can
+    // legitimately take minutes to be answered (see `connect`).
+    let until = std::time::Instant::now() + limits.request_reply_timeout;
+    ws.get_mut().read_until(Some(until));
     loop {
+        if std::time::Instant::now() >= until {
+            return Err("no answer from the server (it took too long)".into());
+        }
         return match ws.read() {
             Ok(Message::Binary(b)) => match message::decode::<ServerMsg>(&b, limits.max_server_message) {
                 Ok(ServerMsg::Refused { reason }) => Err(format!("{REFUSED}{reason}")),
@@ -273,6 +259,27 @@ mod tests {
             let _ = tx.send(());
         });
         rx.recv_timeout(Duration::from_secs(3)).is_ok()
+    }
+
+    /// A server that keeps pinging and never answers ends the wait at the request-reply bound.
+    #[test]
+    fn reply_gives_up_at_the_request_reply_deadline_against_a_pinging_server() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            if let Ok(mut ws) = tungstenite::accept(s) {
+                while ws.send(Message::Ping(Bytes::new())).is_ok() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        });
+        let limits = NetLimits { request_reply_timeout: Duration::from_millis(400), ..NetLimits::default() };
+        let server = Endpoint { host: addr.to_string(), path: "/".into(), secure: false };
+        let mut ws = connect(&server, &limits, Duration::from_secs(2)).unwrap();
+        let started = std::time::Instant::now();
+        assert!(reply::<()>(&mut ws, &limits, |_| None).is_err());
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
     }
 
     /// A server that keeps pinging and never answers the close must not pin `close` forever.

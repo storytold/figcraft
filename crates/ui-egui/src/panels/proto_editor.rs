@@ -165,7 +165,7 @@ pub fn action_list(app: &mut FigApp, ui: &mut Ui, cx: &Cx, list: &[Action], pref
     for (i, a) in list.iter().enumerate() {
         let path = [prefix, &[i]].concat();
         let is_open = single || open.starts_with(&path);
-        let (header, extent) = action_item(app, ui, cx, a, path, list.len(), is_open, single);
+        let (header, extent) = action_item(app, ui, ActionItem { context: cx, action: a, path, count: list.len(), open: is_open, single });
         if let Some(d) = &mut drag {
             d.row(ui, i, header, extent, || action_summary(cx.doc, a));
         }
@@ -222,8 +222,17 @@ fn add_action_row(app: &mut FigApp, ui: &mut Ui, cx: &Cx, path: Vec<usize>) {
 
 /// One action: its kind (open) or a summary (closed) with a menu to move or remove it, and when
 /// open its settings below. Returns its row and the area it covers with its settings.
-#[allow(clippy::too_many_arguments)]
-fn action_item(app: &mut FigApp, ui: &mut Ui, cx: &Cx, a: &Action, path: Vec<usize>, count: usize, open: bool, single: bool) -> (Rect, Rect) {
+struct ActionItem<'context, 'document> {
+    context: &'context Cx<'document>,
+    action: &'context Action,
+    path: Vec<usize>,
+    count: usize,
+    open: bool,
+    single: bool,
+}
+
+fn action_item(app: &mut FigApp, ui: &mut Ui, item: ActionItem<'_, '_>) -> (Rect, Rect) {
+    let ActionItem { context: cx, action: a, path, count, open, single } = item;
     let t = Tokens::get(ui.ctx());
     let i = path.last().copied().unwrap_or(0);
     let removable = path.len() > 1 || count > 1;
@@ -436,7 +445,7 @@ pub fn ops_for(kind: Option<VariableType>) -> &'static [ExprOp] {
 fn with_op(s: &Simple, op: ExprOp, vars: &Variables) -> Simple {
     let rhs = match (op, &s.rhs) {
         (ExprOp::Not, _) => Rhs::Nothing,
-        (_, Rhs::Nothing) => Rhs::Value(vars.get(&s.var).map_or(VariableValue::Boolean(true), |v| start_value(vars, v))),
+        (_, Rhs::Nothing) => Rhs::Value(vars.get_by_id(&s.var).map_or(VariableValue::Boolean(true), |v| start_value(vars, v))),
         (_, r) => r.clone(),
     };
     Simple { var: s.var.clone(), op, rhs }
@@ -451,7 +460,17 @@ fn condition_editor(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, b: usiz
         Some(s) => builder_row(app, ui, cx, slot, b, &s),
         None => {
             let id = slot.id("proto_cond_expr").with(b);
-            if let Some(e) = expr_field(ui, id, vars, Some(c), tr("e.g. count >= 3 and not done"), |e| e.check_condition(vars), None::<fn(&mut Ui)>) {
+            if let Some(e) = expr_field(
+                ui,
+                ExprInput {
+                    id,
+                    variables: vars,
+                    current: Some(c),
+                    placeholder: tr("e.g. count >= 3 and not done"),
+                    check: |e: &Expr| e.check_condition(vars),
+                    trailing: None::<fn(&mut Ui)>,
+                },
+            ) {
                 set_condition(app, slot, b, &e);
             }
         }
@@ -460,7 +479,7 @@ fn condition_editor(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, b: usiz
 
 fn builder_row(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, b: usize, s: &Simple) {
     let vars = &cx.doc.variables;
-    let var = vars.get(&s.var);
+    let var = vars.get_by_id(&s.var);
     let kind = var.map(|v| v.kind);
     row(ui, 32.0, |ui| {
         let w = ui.available_width();
@@ -488,7 +507,7 @@ fn builder_row(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, b: usize, s:
             Rhs::Nothing => {}
             Rhs::Variable(other) => {
                 let (rect, _) = ui.allocate_exact_size(vec2(side, FIELD_H), Sense::hover());
-                let name = vars.get(other).map_or(tr("Missing variable"), |v| v.name.as_str());
+                let name = vars.get_by_id(other).map_or(tr("Missing variable"), |v| v.name.as_str());
                 match widgets::bound_field(ui, slot.id("proto_cond_rhs_var").with(b), Lead::None, rect, name) {
                     Some(BindEvent::Open(at)) => crate::variable_ui::open_proto(ui, VarSlot { slot: slot.clone(), part: VarPart::Rhs(b) }, kind, at),
                     Some(BindEvent::Detach) => {
@@ -541,7 +560,8 @@ fn literal_field(ui: &mut Ui, id: Id, cur: &VariableValue, w: f32) -> Option<Var
                 .map(VariableValue::Color)
         }
         VariableValue::String(s) => widgets::text_field(ui, id, s, w, tr("Text")).filter(|n| n != s).map(VariableValue::String),
-        VariableValue::Alias(_) => None,
+        // References are picked, not typed; calculations can't be expression values.
+        VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => None,
     }
 }
 
@@ -549,7 +569,7 @@ fn literal_field(ui: &mut Ui, id: Id, cur: &VariableValue, w: f32) -> Option<Var
 /// computed by an expression when the action runs (`count + 1`, `"Hi " + name`).
 fn set_variable_fields(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, variable: &str, value: &Value, expr: Option<&Expr>) {
     let vars = &cx.doc.variables;
-    let var = vars.get(variable);
+    let var = vars.get_by_id(variable);
     widgets::sublabels(ui, tr("Variable"), None);
     row(ui, 32.0, |ui| {
         let name = var.map_or(tr("Choose variable"), |v| v.name.as_str());
@@ -575,14 +595,16 @@ fn set_variable_fields(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, vari
         Some(e) => {
             let edited = expr_field(
                 ui,
-                slot.id("proto_set_expr"),
-                vars,
-                Some(e),
-                tr("e.g. count + 1"),
-                |e| e.check_value(vars, var.kind),
-                Some(|ui: &mut Ui| {
-                    toggled = toggle(ui);
-                }),
+                ExprInput {
+                    id: slot.id("proto_set_expr"),
+                    variables: vars,
+                    current: Some(e),
+                    placeholder: tr("e.g. count + 1"),
+                    check: |e: &Expr| e.check_value(vars, var.kind),
+                    trailing: Some(|ui: &mut Ui| {
+                        toggled = toggle(ui);
+                    }),
+                },
             );
             if let Some(e) = edited {
                 set(app, value.clone(), Some(e));
@@ -616,16 +638,21 @@ fn set_variable_fields(app: &mut FigApp, ui: &mut Ui, cx: &Cx, slot: &Slot, vari
 
 /// An expression typed as text in a row (with a `trailing` button after the field): what `check`
 /// accepts is returned when committed; otherwise the text stays and why shows under it.
-#[allow(clippy::too_many_arguments)]
-fn expr_field(
-    ui: &mut Ui,
+struct ExprInput<'a, Check, Trailing> {
     id: Id,
-    vars: &Variables,
-    cur: Option<&Expr>,
-    placeholder: &str,
-    check: impl Fn(&Expr) -> Result<(), String>,
-    trailing: Option<impl FnOnce(&mut Ui)>,
-) -> Option<Expr> {
+    variables: &'a Variables,
+    current: Option<&'a Expr>,
+    placeholder: &'a str,
+    check: Check,
+    trailing: Option<Trailing>,
+}
+
+fn expr_field<Check, Trailing>(ui: &mut Ui, input: ExprInput<'_, Check, Trailing>) -> Option<Expr>
+where
+    Check: Fn(&Expr) -> Result<(), String>,
+    Trailing: FnOnce(&mut Ui),
+{
+    let ExprInput { id, variables: vars, current: cur, placeholder, check, trailing } = input;
     let t = Tokens::get(ui.ctx());
     let shown = cur.map(|e| e.display(vars)).unwrap_or_default();
     let key = id.with("draft");
@@ -667,19 +694,19 @@ fn expr_field(
 pub fn pick_variable(app: &mut FigApp, vs: &VarSlot, id: &str) {
     let Ok(doc) = app.session.ds().map(|d| d.doc.clone()) else { return };
     let vars = &doc.variables;
-    let Some(picked) = vars.get(id) else { return };
+    let Some(picked) = vars.get_by_id(id) else { return };
     let current = doc.node(vs.slot.node).and_then(|n| n.interactions.get(vs.slot.k)).and_then(|it| action_at(&it.actions, &vs.slot.path));
     match (vs.part, current) {
         (VarPart::SetVariable, Some(Action::SetVariable { variable, value, expr })) => {
             // Another type starts from the new variable's value.
-            let same = vars.get(variable).is_some_and(|v| v.kind == picked.kind);
+            let same = vars.get_by_id(variable).is_some_and(|v| v.kind == picked.kind);
             let (value, expr) = if same { (value.clone(), expr.clone()) } else { (value_json(&start_value(vars, picked)), None) };
             set_action(app, &vs.slot, Action::SetVariable { variable: picked.id.clone(), value, expr });
         }
         (VarPart::Lhs(b), Some(Action::Conditional { blocks })) => {
             let cur = blocks.get(b).and_then(|x| x.condition.as_ref()).and_then(simple);
             let next = match cur {
-                Some(s) if vars.get(&s.var).is_some_and(|v| v.kind == picked.kind) => Simple { var: picked.id.clone(), ..s },
+                Some(s) if vars.get_by_id(&s.var).is_some_and(|v| v.kind == picked.kind) => Simple { var: picked.id.clone(), ..s },
                 _ => Simple { var: picked.id.clone(), op: ExprOp::Equals, rhs: Rhs::Value(start_value(vars, picked)) },
             };
             set_condition(app, &vs.slot, b, &next.expr());

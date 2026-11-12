@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, CanvasState, Done, FigApp, Job, NodeId, Worker};
 
 #[derive(Clone, PartialEq)]
 pub(super) struct JobKey {

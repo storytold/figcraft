@@ -6,16 +6,26 @@
 //! Everything here reads untrusted bytes: reads are bounds-checked, nesting is capped, array
 //! counts can't exceed the bytes left, and the total number of decoded values is capped.
 
+use std::collections::HashMap;
 use std::fmt;
 
 /// Deepest struct/message nesting decoded.
 const MAX_DEPTH: usize = 64;
 /// Most values decoded from one message (every scalar, array element and field counts): at least
-/// [`MIN_VALUES`], and one per byte of the file's compressed canvas up to [`MAX_VALUES`], so a
-/// large real file decodes while a small one can't expand into a huge tree, however far its
-/// chunks inflate. 32-bit targets (wasm32) have a 4 GB address space in all, so their ceiling is
-/// lower: past it the file is refused cleanly instead of running out of memory.
+/// [`MIN_VALUES`], and [`VALUES_PER_PACKED_BYTE`] per byte of the file's compressed canvas up to
+/// [`MAX_VALUES`], so a large real file decodes while a small one can't expand into a huge tree,
+/// however far its chunks inflate. 32-bit targets (wasm32) have a 4 GB address space in all, so
+/// their ceiling is lower: past it the file is refused cleanly instead of running out of memory.
 const MIN_VALUES: usize = 20_000_000;
+/// Value budget per compressed canvas byte. The real files measured in
+/// `large_files_get_a_larger_value_budget` hold up to 0.75 values per compressed byte without their
+/// single scalar fields; counting those too adds 15–43% on the generated files in
+/// `value_budget_tests` and up to 3.2 times on a rectangle carrying only geometry and paint, so a
+/// dense file may reach about 2.4 per byte. Four leaves two-thirds more room than that. The
+/// trade-off: from 32 MiB of canvas (8 MiB on 32-bit targets) a file gets all of [`MAX_VALUES`],
+/// and above the floor it may decode four values for every byte it carries; [`MIN_VALUES`] and
+/// [`MAX_VALUES`] still bound every file.
+const VALUES_PER_PACKED_BYTE: usize = 4;
 #[cfg(not(target_pointer_width = "32"))]
 const MAX_VALUES: usize = 128 << 20;
 #[cfg(target_pointer_width = "32")]
@@ -23,6 +33,9 @@ const MAX_VALUES: usize = 32 << 20;
 /// Most definitions in a schema, and fields in one definition.
 const MAX_DEFS: usize = 10_000;
 const MAX_FIELDS: usize = 10_000;
+/// Most fields in a schema, every definition together: Figma's own schema has a few thousand, and
+/// without a total a schema of [`MAX_DEFS`] wide definitions could hold 100 million field records.
+const MAX_SCHEMA_FIELDS: usize = 200_000;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct KiwiError(pub String);
@@ -178,9 +191,13 @@ impl<'b> Reader<'b> {
         let mut shift = 0;
         loop {
             let b = self.byte()?;
-            value |= u32::from(b & 127).checked_shl(shift).unwrap_or(0);
+            let part = b & 127;
+            if shift == 28 && (part > 0x0f || b & 128 != 0) {
+                return err("u32 varint overflow");
+            }
+            value |= u32::from(part) << shift;
             shift += 7;
-            if b & 128 == 0 || shift >= 35 {
+            if b & 128 == 0 {
                 return Ok(value);
             }
         }
@@ -243,6 +260,7 @@ impl Schema {
         }
         let mut defs = Vec::with_capacity(count);
         let mut raw_types = Vec::new();
+        let mut total_fields = 0usize;
         for _ in 0..count {
             let name = r.string()?;
             let kind = match r.byte()? {
@@ -252,7 +270,8 @@ impl Schema {
                 k => return err(format!("schema: unknown definition kind {k}")),
             };
             let n = r.var_uint()? as usize;
-            if n > MAX_FIELDS || n > r.left() {
+            total_fields = total_fields.saturating_add(n);
+            if n > MAX_FIELDS || n > r.left() || total_fields > MAX_SCHEMA_FIELDS {
                 return err("schema: too many fields");
             }
             let mut fields = Vec::with_capacity(n);
@@ -261,6 +280,9 @@ impl Schema {
                 let ty = r.var_int()?;
                 let array = r.byte()? & 1 != 0;
                 let value = r.var_uint()?;
+                if kind == Kind::Message && fields.iter().any(|f: &Field| f.value == value) {
+                    return err(format!("schema: duplicate field id {value} in {name}"));
+                }
                 raw_types.push(ty);
                 fields.push(Field { name: fname, ty: None, array, value });
             }
@@ -299,26 +321,43 @@ impl Schema {
 
     /// [`Self::decode_message`] within `budget` values (see [`value_budget`]).
     pub fn decode_message_within<'s>(&'s self, root: usize, data: &[u8], budget: usize) -> Result<Kv<'s>, KiwiError> {
-        let mut d = Decoder { schema: self, r: Reader { data, pos: 0 }, budget };
+        let mut d = Decoder { schema: self, r: Reader { data, pos: 0 }, budget, ids: vec![None; self.defs.len()] };
         d.def(root, 0)
     }
 }
 
 /// Most values decoded from a file whose compressed canvas is `packed` bytes.
 pub(crate) fn value_budget(packed: usize) -> usize {
-    packed.clamp(MIN_VALUES, MAX_VALUES)
+    packed.saturating_mul(VALUES_PER_PACKED_BYTE).clamp(MIN_VALUES, MAX_VALUES)
 }
 
 struct Decoder<'s, 'b> {
     schema: &'s Schema,
     r: Reader<'b>,
     budget: usize,
+    /// Per definition, the index of the first field with each id (message field ids, enum
+    /// values), built the first time the definition is decoded: a message can carry many tags
+    /// against a wide definition, and a scan per tag would multiply the two.
+    ids: Vec<Option<HashMap<u32, usize>>>,
 }
 
 impl<'s> Decoder<'s, '_> {
     fn spend(&mut self, n: usize) -> Result<(), KiwiError> {
         self.budget = self.budget.checked_sub(n).ok_or_else(|| KiwiError("message: too many values".into()))?;
         Ok(())
+    }
+
+    /// The first field of definition `i` with id (or enum value) `id`.
+    fn field_by_id(&mut self, i: usize, id: u32) -> Option<&'s Field> {
+        let fields = &self.schema.defs.get(i)?.fields;
+        let ids = self.ids.get_mut(i)?.get_or_insert_with(|| {
+            let mut m = HashMap::with_capacity(fields.len());
+            for (j, f) in fields.iter().enumerate() {
+                m.entry(f.value).or_insert(j);
+            }
+            m
+        });
+        fields.get(*ids.get(&id)?)
     }
 
     fn def(&mut self, i: usize, depth: usize) -> Result<Kv<'s>, KiwiError> {
@@ -331,7 +370,7 @@ impl<'s> Decoder<'s, '_> {
         match d.kind {
             Kind::Enum => {
                 let v = self.r.var_uint()?;
-                Ok(d.fields.iter().find(|f| f.value == v).map_or(Kv::Uint(u64::from(v)), |f| Kv::Enum(f.name.as_str())))
+                Ok(self.field_by_id(i, v).map_or(Kv::Uint(u64::from(v)), |f| Kv::Enum(f.name.as_str())))
             }
             Kind::Struct => {
                 let mut out = Vec::with_capacity(d.fields.len());
@@ -349,7 +388,7 @@ impl<'s> Decoder<'s, '_> {
                         out.shrink_to_fit();
                         return Ok(Kv::Object(out));
                     }
-                    let f = d.fields.iter().find(|f| f.value == id).ok_or_else(|| KiwiError(format!("message: {} has no field {id}", d.name)))?;
+                    let f = self.field_by_id(i, id).ok_or_else(|| KiwiError(format!("message: {} has no field {id}", d.name)))?;
                     out.push((f.name.as_str(), self.field(f, depth)?));
                 }
             }
@@ -370,8 +409,9 @@ impl<'s> Decoder<'s, '_> {
         if n > self.r.left() {
             return err("message: array longer than the data");
         }
+        // The field itself counts, so empty arrays can't pile up for free.
+        self.spend(1)?;
         if ty == Type::Byte {
-            self.spend(1)?;
             return Ok(Kv::Bytes(self.r.take(n)?.to_vec()));
         }
         self.spend(n)?;
@@ -400,7 +440,7 @@ impl<'s> Decoder<'s, '_> {
 /// An encoder for the same format: the `.fig` export writes its schema and message with it (and
 /// test fixtures are built with it). Values are checked against the schema; it never panics.
 pub mod encode {
-    use super::*;
+    use super::{BUILTINS, Field, Kind, KiwiError, Kv, MAX_DEPTH, Schema, Type, err};
 
     #[derive(Default)]
     pub struct Writer(pub Vec<u8>);
@@ -612,6 +652,9 @@ impl Schema {
                         }
                         .ok_or_else(|| KiwiError(format!("schema text: unknown type {base}")))?;
                         let (name, value) = numbered(n.trim(), id)?;
+                        if *kind == "message" && fields.iter().any(|f: &Field| f.value == value) {
+                            return err(format!("schema text: duplicate field id {value} in {name}"));
+                        }
                         fields.push(Field { name, ty: Some(ty), array: t.ends_with("[]"), value });
                     }
                     (if *kind == "struct" { Kind::Struct } else { Kind::Message }, fields)
@@ -629,5 +672,19 @@ fn numbered(token: &str, default: u32) -> Result<(String, u32), KiwiError> {
     match token.split_once('=') {
         None => Ok((token.to_string(), default)),
         Some((name, n)) => Ok((name.to_string(), n.parse().map_err(|_| KiwiError(format!("schema text: bad number in `{token}`")))?)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Reader;
+
+    #[test]
+    fn overflowing_u32_varint_is_rejected() {
+        let mut boundary = Reader { data: &[0xff, 0xff, 0xff, 0xff, 0x0f], pos: 0 };
+        assert_eq!(boundary.var_uint(), Ok(u32::MAX));
+
+        let mut overflowing = Reader { data: &[0xff, 0xff, 0xff, 0xff, 0x7f], pos: 0 };
+        assert!(overflowing.var_uint().is_err(), "overflowing u32 varint was accepted");
     }
 }

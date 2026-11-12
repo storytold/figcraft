@@ -1,14 +1,27 @@
-use super::*;
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::{DocState, Document, EngineError, LineHeight, NodeId, NodeKind, Result, StyleKind, TextStyle, Value, bad, get, json};
 
 /// The recovery copy at `path` as a document with unsaved changes and no path.
 pub(crate) fn recovered(path: &str) -> Result<DocState> {
-    let loaded = read(path).and_then(|b| figcraft_format::load_bytes_with_versions(&b).map_err(|e| EngineError::Other(e.to_string())))?;
+    recovered_from(&read(path)?)
+}
+
+/// A recovery copy's bytes as a document with unsaved changes and no path (the browser keeps its
+/// copies in the page's storage, not in files).
+pub(crate) fn recovered_from(bytes: &[u8]) -> Result<DocState> {
+    let loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
     Ok(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches).unsaved())
 }
 
+/// The largest file opened or imported as a document. A `.figcraft` file keeps its images as
+/// they are, so a real one can be far larger than it unpacks to (#1313's took 7.4 GB); twice that
+/// opens, while a device, a pipe or an absurd file is refused before it is read (#1114).
+pub const MAX_DOCUMENT_FILE: u64 = 16 << 30;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn read(path: &str) -> Result<Vec<u8>> {
-    crate::file_access::read(path)
+    crate::file_access::read_capped(path, MAX_DOCUMENT_FILE)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -68,7 +81,20 @@ pub fn load_path(path: &str, variables: Option<&Value>) -> Result<(figcraft_form
 /// Load from bytes. Returns the document with its notes (repairs of a native file, or import
 /// warnings) and version history, and whether it was imported from REST API file JSON or a `.fig`
 /// file (such a file is never saved over). `variables`: the local variables JSON for a REST API file JSON.
+/// Components containing each other's instances are broken apart, with a note.
 pub(super) fn load_with(
+    bytes: &[u8],
+    name_hint: &str,
+    variables: Option<&Value>,
+    images: figcraft_format::rest::ImageResolver,
+) -> Result<(figcraft_format::Loaded, bool)> {
+    let (mut loaded, rest) = load_any(bytes, name_hint, variables, images)?;
+    let notes = crate::components::break_component_cycles(&mut loaded.doc);
+    loaded.issues.extend(notes);
+    Ok((loaded, rest))
+}
+
+fn load_any(
     bytes: &[u8],
     name_hint: &str,
     variables: Option<&Value>,
@@ -83,10 +109,23 @@ pub(super) fn load_with(
                 .notes;
             Ok((figcraft_format::Loaded { issues: notes, ..doc.into() }, false))
         }
+        "penpot" => {
+            let (mut doc, mut notes) = figcraft_format::penpot::import(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
+            expand_penpot_raw_svgs(&mut doc, &mut notes);
+            // Penpot imports stay offline: referenced fonts must be installed locally.
+            // The format reader stays platform-agnostic. Font availability is checked here,
+            // where FigCraft's system/embedded font registry is accessible. Never replace
+            // the original family in the document: it can resolve after installation.
+            figcraft_text::scan_system_fonts();
+            let families = figcraft_text::family_names();
+            let mut font_notes = missing_penpot_font_warnings(&doc, &families);
+            font_notes.append(&mut notes); // Show missing-font details first in the UI toast.
+            Ok((figcraft_format::Loaded { issues: font_notes, ..doc.into() }, true))
+        }
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" => {
             let mut doc = Document::new(file_stem(name_hint));
             let page = doc.first_page().ok_or(EngineError::NoDocument)?;
-            let (hash, w, h) = figcraft_format::add_image(&mut doc, bytes.to_vec()).map_err(|e| EngineError::Other(e.to_string()))?;
+            let (hash, w, h) = crate::cmd::create::add_readable_image(&mut doc, bytes.to_vec()).map_err(EngineError::Other)?;
             let id = doc.create(page, NodeKind::Rectangle, &file_stem(name_hint), 0.0, 0.0, f64::from(w), f64::from(h))?;
             doc.get_mut(id)?.fills = vec![figcraft_color::Paint::image(hash, figcraft_color::ImageScaleMode::Fill)];
             Ok((doc.into(), false))
@@ -101,6 +140,7 @@ pub(super) fn load_with(
             if let Some(r) = figcraft_format::rest::try_import_with(bytes, variables, images) {
                 let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
                 link_instances(&mut doc);
+                installed_fonts_first();
                 return Ok((figcraft_format::Loaded { issues: warnings, ..doc.into() }, true));
             }
             let mut loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
@@ -165,7 +205,23 @@ fn reflow_overridden_text(doc: &mut Document) {
     }
     for id in changed {
         if let Some((w, h)) = doc.node(id).and_then(figcraft_text::auto_size) {
+            // Sketch grows auto-width text from its aligned edge: a centred one stays centred, a
+            // right-aligned one keeps its right edge.
+            let shift = doc.node(id).map_or(0.0, |n| match &n.kind {
+                NodeKind::Text(t) if t.auto_resize == figcraft_doc::TextAutoResize::WidthAndHeight => match t.align_h {
+                    figcraft_doc::TextAlignH::Center => (n.width - w) / 2.0,
+                    figcraft_doc::TextAlignH::Right => n.width - w,
+                    _ => 0.0,
+                },
+                _ => 0.0,
+            });
             figcraft_layout::set_size(doc, id, w, h);
+            if shift.is_finite()
+                && shift != 0.0
+                && let Some(n) = doc.node_mut(id)
+            {
+                n.transform *= figcraft_doc::geom::Affine::translate((shift, 0.0));
+            }
         }
         figcraft_layout::layout_up(doc, id, &m);
     }
@@ -194,7 +250,7 @@ fn match_font_families(doc: &mut Document) {
     }
     // Shared text styles too, so they stay like the layers linked to them.
     for st in &mut doc.styles {
-        if let StyleKind::Text { style } = &mut st.kind {
+        if let StyleKind::Text { style, .. } = &mut st.kind {
             fix(style);
         }
     }
@@ -238,7 +294,7 @@ fn platform_tracking(doc: &mut Document) {
         }
     }
     for st in &mut doc.styles {
-        if let StyleKind::Text { style } = &mut st.kind {
+        if let StyleKind::Text { style, .. } = &mut st.kind {
             track(style);
         }
     }
@@ -309,7 +365,7 @@ fn sketch_line_heights(doc: &mut Document) {
         }
     }
     for st in &mut doc.styles {
-        if let StyleKind::Text { style } = &mut st.kind {
+        if let StyleKind::Text { style, .. } = &mut st.kind {
             set(style);
         }
     }
@@ -326,13 +382,311 @@ pub(crate) fn installed_family(family: &str, installed: &[String]) -> Option<Str
     installed.iter().find(|f| key(f) == want).cloned()
 }
 
+/// An imported file names its fonts by family: the installed ones must be known before its text is
+/// laid out, or it is measured (and reported missing) in a fallback font while the desktop's
+/// background scan is still running (#1292).
+fn installed_fonts_first() {
+    figcraft_text::scan_system_fonts();
+}
+
 /// Gives `None` when `bytes` are not a `.fig` file. Then other readers can try.
 pub(crate) fn load_fig(bytes: &[u8], name: &str) -> Option<Result<figcraft_format::Loaded>> {
     let r = figcraft_format::fig::try_import(bytes, name)?;
     Some(r.map_err(|e| EngineError::Other(e.to_string())).map(|(mut doc, warnings)| {
         link_instances(&mut doc);
+        installed_fonts_first();
         figcraft_format::Loaded { issues: warnings, ..doc.into() }
     }))
+}
+
+/// The most layers all of a Penpot file's raw SVG placeholders may expand to together.
+const MAX_PENPOT_SVG_LAYERS: usize = 100_000;
+
+/// Turn Penpot raw SVG placeholders into editable FigCraft SVG content, using the
+/// normal SVG importer. The parser (figcraft-format) only stores bounded XML so it
+/// does not need to depend on the SVG crate; the engine does this second pass.
+/// Any failure leaves the original placeholder and XML data intact for later use.
+fn expand_penpot_raw_svgs(doc: &mut Document, notes: &mut Vec<String>) {
+    expand_penpot_raw_svgs_within(doc, notes, MAX_PENPOT_SVG_LAYERS);
+}
+
+/// [`expand_penpot_raw_svgs`] with at most `room` layers made in all.
+fn expand_penpot_raw_svgs_within(doc: &mut Document, notes: &mut Vec<String>, mut room: usize) {
+    let layers = doc
+        .nodes()
+        .filter_map(|node| {
+            let xml = node.plugin_data.get("penpot.svgRawXml")?;
+            (node.plugin_data.get("penpot.svgRawStatus").map(String::as_str) == Some("pending"))
+                .then(|| (node.id, node.name.clone(), node.width, node.height, xml.clone(), node.children.is_empty()))
+        })
+        .collect::<Vec<_>>();
+    let mut ok_count = 0usize;
+    // The SVG importer caps its own layers per file; `room` is the cap over all of a file's placeholders.
+    for (id, name, width, height, xml, empty) in layers {
+        if room == 0 {
+            if let Some(n) = doc.node_mut(id) {
+                n.plugin_data.insert("penpot.svgRawStatus".into(), "not-expanded".into());
+            }
+            if notes.len() < 100 {
+                notes.push(format!("Penpot SVG '{name}': not converted, the file's SVG layers are over the limit; the original markup is preserved"));
+            }
+            continue;
+        }
+        if !empty {
+            notes.push(format!("Penpot SVG '{name}': has separate child layers; the original tree was preserved to prevent duplicate rendering"));
+            continue;
+        }
+        let before = doc.node_count();
+        let imported = figcraft_svg::import_svg_with_notes(doc, xml.as_bytes(), id, 0.0, 0.0, &name);
+        match imported {
+            Ok(imported) => {
+                // An SVG can be syntactically valid yet contain no supported drawable
+                // elements. Do not claim success or leave an empty extra frame.
+                if doc.node(imported.frame).is_none_or(|n| n.children.is_empty()) {
+                    let _ = doc.remove(imported.frame);
+                    if let Some(n) = doc.node_mut(id) {
+                        n.plugin_data.insert("penpot.svgRawStatus".into(), "not-expanded".into());
+                    }
+                    if notes.len() < 100 {
+                        notes.push(format!("Penpot SVG '{name}' has no supported drawable elements; the original markup is preserved"));
+                    }
+                    continue;
+                }
+                // Charged once the empty ones are gone; one that doesn't fit is taken out again.
+                let added = doc.node_count().saturating_sub(before);
+                if added > room {
+                    let _ = doc.remove(imported.frame);
+                    if let Some(n) = doc.node_mut(id) {
+                        n.plugin_data.insert("penpot.svgRawStatus".into(), "not-expanded".into());
+                    }
+                    if notes.len() < 100 {
+                        notes.push(format!(
+                            "Penpot SVG '{name}': not converted, the file's SVG layers are over the limit; the original markup is preserved"
+                        ));
+                    }
+                    continue;
+                }
+                room -= added;
+                let size = doc.node(imported.frame).map(|n| (n.width, n.height));
+                if let Some((svg_w, svg_h)) = size
+                    && svg_w.is_finite()
+                    && svg_h.is_finite()
+                    && svg_w > 0.0
+                    && svg_h > 0.0
+                {
+                    let sx = (width / svg_w).clamp(0.0001, 10_000.0);
+                    let sy = (height / svg_h).clamp(0.0001, 10_000.0);
+                    if let Some(n) = doc.node_mut(imported.frame) {
+                        n.transform = figcraft_geom::Affine::scale_non_uniform(sx, sy);
+                    }
+                }
+                if let Some(n) = doc.node_mut(id) {
+                    n.plugin_data.insert("penpot.svgRawStatus".into(), "expanded".into());
+                }
+                for issue in imported.notes {
+                    if notes.len() < 100 {
+                        notes.push(format!("Penpot SVG '{name}': {issue}"));
+                    }
+                }
+                ok_count += 1;
+            }
+            Err(err) => {
+                if let Some(n) = doc.node_mut(id) {
+                    n.plugin_data.insert("penpot.svgRawStatus".into(), "not-expanded".into());
+                }
+                if notes.len() < 100 {
+                    notes.push(format!("Penpot SVG '{name}' could not be imported: {err}; its original markup is preserved"));
+                }
+            }
+        }
+    }
+    if ok_count > 0 && notes.len() < 100 {
+        notes.push(format!("Penpot: {ok_count} raw SVG layer(s) converted to editable SVG content"));
+    }
+}
+
+/// Whether some of the first `len` characters are in none of `runs`. Where runs start and stop
+/// covering is summed once, so runs overlapping any number of times cost no more than their count.
+fn has_uncovered(len: usize, runs: &[figcraft_doc::StyleRun]) -> bool {
+    let mut change = vec![0i64; len + 1];
+    for run in runs {
+        let (start, end) = (run.start.min(len), run.end.min(len));
+        if start < end {
+            if let Some(c) = change.get_mut(start) {
+                *c += 1;
+            }
+            if let Some(c) = change.get_mut(end) {
+                *c -= 1;
+            }
+        }
+    }
+    let mut open = 0i64;
+    change.iter().take(len).any(|c| {
+        open += c;
+        open <= 0
+    })
+}
+
+/// Non-destructive font diagnostic for the action palette, CLI and control API.
+/// Includes styled runs, not just the default typeface of each text layer.
+pub(super) fn font_report(doc: &Document) -> Value {
+    figcraft_text::scan_system_fonts();
+    font_report_with_families(doc, &figcraft_text::family_names())
+}
+
+fn font_report_with_families(doc: &Document, installed: &[String]) -> Value {
+    let known: BTreeSet<String> = installed.iter().map(|s| s.trim().to_lowercase()).collect();
+    let mut families: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for node in doc.nodes() {
+        let NodeKind::Text(text) = &node.kind else { continue };
+        if text.characters.is_empty() {
+            continue;
+        }
+        let len = text.characters.chars().count().min(100_000);
+        let mut used = BTreeSet::new();
+        for run in &text.runs {
+            if run.start.min(len) < run.end.min(len) && !run.style.font_family.trim().is_empty() {
+                used.insert(run.style.font_family.clone());
+            }
+        }
+        let uncovered = has_uncovered(len, &text.runs);
+        if uncovered {
+            used.insert(text.style.font_family.clone());
+        }
+        for family in used {
+            let family = family.trim();
+            if family.is_empty() {
+                continue;
+            }
+            if families.len() >= 256 && !families.contains_key(family) {
+                continue;
+            }
+            let layer_name = node.name.chars().filter(|c| !c.is_control()).take(120).collect::<String>();
+            let layers = families.entry(family.chars().filter(|c| !c.is_control()).take(160).collect()).or_default();
+            if layers.len() < 25 {
+                layers.insert(layer_name);
+            }
+        }
+    }
+    // Explain WHERE a Penpot family comes from. `custom-*` references are
+    // stored in Penpot's font service, not necessarily in its design archive.
+    // Keep the id for diagnostics; never treat it as a download URL.
+    let mut external: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for node in doc.nodes() {
+        for key in ["penpot.googleFontRefs", "penpot.customFontRefs", "penpot.customLibraryFontRefs"] {
+            let Some(raw) = node.plugin_data.get(key) else {
+                continue;
+            };
+            let Ok(Value::Array(items)) = serde_json::from_str::<Value>(raw) else {
+                continue;
+            };
+            for item in items.iter().take(128) {
+                let Some(id) = item.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(family) = item.get("family").and_then(Value::as_str) else {
+                    continue;
+                };
+                if id.len() > 128 || family.len() > 128 || external.len() >= 256 {
+                    continue;
+                }
+                let key = (id.to_owned(), family.to_owned());
+                external.entry(key).or_default().insert(node.name.chars().take(80).collect());
+            }
+        }
+    }
+    let external_fonts: Vec<Value> = external
+        .into_iter()
+        .map(|((id, family), layers)| {
+            json!({
+                "source": if id.starts_with("custom-") { "penpot-custom" } else { "google-fonts" },
+                "referenceKind": if id.starts_with("custom-") { "custom-original-unverified" } else { "google-fonts-reference" },
+                "originNote": if id.starts_with("custom-") {
+                    "Penpot-managed font: a matching installed/downloaded family is not proof of the original font file"
+                } else {
+                    "Google Fonts provider reference; availability is reported separately"
+                },
+                "id": id, "family": family, "layers": layers.into_iter().collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    let entries = families
+        .into_iter()
+        .map(|(family, layers)| {
+            let lower = family.to_lowercase();
+            let generic = matches!(lower.as_str(), "sans-serif" | "serif" | "monospace" | "system-ui");
+            // No registered families can mean an uninitialised/no-font runtime; it is
+            // not evidence that all names are absent from the user's computer.
+            let available = if generic {
+                Some(true)
+            } else if known.is_empty() {
+                None
+            } else {
+                // Also under the other name its fonts give the family ("Economia Medium").
+                Some(known.contains(&lower) || figcraft_text::has_family(&family))
+            };
+            json!({"family":family,"available":available,"layers":layers.into_iter().collect::<Vec<_>>()})
+        })
+        .collect::<Vec<_>>();
+    let missing = entries.iter().filter(|v| v.get("available") == Some(&Value::Bool(false))).count();
+    json!({"total": entries.len(), "missing": missing, "embeddedFontFiles": 0,
+        "fontLicenseNotices": 0, "fonts": entries,
+        "externalPenpotFontRefs": external_fonts})
+}
+
+/// Describe fonts unavailable on this machine, while keeping their original family names
+/// editable in the document. The detected families are provided separately for testability
+/// and to avoid a dependency from the format parser to the font renderer.
+fn missing_penpot_font_warnings(doc: &Document, families: &[String]) -> Vec<String> {
+    // An uninitialised font registry cannot prove a family is unavailable.
+    if families.is_empty() {
+        return Vec::new();
+    }
+    let available: BTreeSet<String> = families.iter().map(|s| s.trim().to_lowercase()).collect();
+    let mut missing: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for node in doc.nodes() {
+        let NodeKind::Text(text) = &node.kind else { continue };
+        let text_len = text.characters.chars().count();
+        if text_len == 0 {
+            continue;
+        }
+        let len = text_len.min(100_000);
+        let mut used = BTreeSet::new();
+        for run in &text.runs {
+            if run.start.min(len) < run.end.min(len) {
+                used.insert(run.style.font_family.clone());
+            }
+        }
+        if has_uncovered(len, &text.runs) {
+            used.insert(text.style.font_family.clone());
+        }
+        for family in used {
+            let family = family.trim();
+            let lower = family.to_lowercase();
+            if family.is_empty() || matches!(lower.as_str(), "sans-serif" | "serif" | "monospace" | "system-ui") || available.contains(&lower) {
+                continue;
+            }
+            let display_family: String = family.chars().filter(|c| !c.is_control()).take(160).collect();
+            let display_layer: String = node.name.chars().filter(|c| !c.is_control()).take(80).collect();
+            missing.entry(display_family).or_default().insert(display_layer);
+        }
+    }
+    // A single warning remains readable even for documents with hundreds of
+    // type layers and does not push out more urgent Penpot import diagnostics.
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    let count = missing.len();
+    let names = missing
+        .into_iter()
+        .take(8)
+        .map(|(family, layers)| format!("'{family}' (e.g. '{}')", layers.iter().next().map(String::as_str).unwrap_or("text")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let extra = if count > 8 { format!(" and {} more", count - 8) } else { String::new() };
+    vec![format!(
+        "Penpot: {count} font family/families are not installed or embedded: {names}{extra}. FigCraft uses fallback fonts for display, but preserves the original family names; install the licensed fonts and reopen the file to restore text metrics."
+    )]
 }
 
 /// Link imported instances to their mains (layer sources, overrides found by comparing values),
@@ -344,14 +698,16 @@ fn link_instances(doc: &mut Document) {
     let mut insts: Vec<(usize, NodeId)> =
         doc.nodes().filter(|n| matches!(n.kind, NodeKind::Instance { .. })).map(|n| (doc.ancestors(n.id).len(), n.id)).collect();
     insts.sort_by_key(|a| std::cmp::Reverse(a.0));
+    // Rebasing leaves the mains alone, so each main's layer paths are worked out once.
+    let mut mains = crate::components::MainPaths::new();
     for (_, i) in insts {
-        crate::components::rebase_instance(doc, i);
+        crate::components::rebase_instance_with(doc, i, &mut mains);
     }
 }
 
 /// Largest image file read for a REST API file JSON import.
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_IMAGE_FILE: u64 = 256 * 1024 * 1024;
+const MAX_IMAGE_FILE: u64 = figcraft_doc::ImageData::MAX_BYTES;
 
 /// Image bytes for a REST API file JSON's `imageRef`: `images/<imageRef>[.png|.jpg|…]` next to
 /// the file.
@@ -406,6 +762,10 @@ pub(crate) fn variables_param(cmd: &str, p: &Value) -> Result<Option<Value>> {
         None | Some(Value::Null) => return Ok(None),
         Some(v @ Value::Object(_)) => v.clone(),
         Some(Value::String(s)) if s.trim_start().starts_with('{') => parse(s.as_bytes())?,
+        // Capped like the sibling file; the browser has no file system, which `read` says.
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(Value::String(path)) => parse(&read_capped(path, MAX_VARIABLES_FILE)?)?,
+        #[cfg(target_arch = "wasm32")]
         Some(Value::String(path)) => parse(&read(path)?)?,
         Some(_) => return Err(bad(cmd, "variables: the local variables JSON (an object, JSON text or a path)")),
     };
@@ -413,4 +773,156 @@ pub(crate) fn variables_param(cmd: &str, p: &Value) -> Result<Option<Value>> {
         return Err(bad(cmd, "variables: expected the local variables JSON (`meta.variableCollections` and `meta.variables`)"));
     }
     Ok(Some(v))
+}
+
+#[cfg(test)]
+mod penpot_font_warning_tests {
+    use super::*;
+    use figcraft_doc::{StyleRun, TextData};
+
+    #[test]
+    fn font_report_explains_custom_and_google_provenance() {
+        let mut doc = Document::new("External font refs");
+        let page = doc.first_page().unwrap();
+        let text = TextData::new("Playball");
+        let id = doc.create(page, NodeKind::Text(text), "Custom caption", 0., 0., 120., 30.).unwrap();
+        doc.node_mut(id).unwrap().plugin_data.insert(
+            "penpot.customFontRefs".into(),
+            r#"[{"id":"custom-123abc","family":"Playball","variants":[{"weight":400,"italic":false}]}]"#.into(),
+        );
+        let report = font_report_with_families(&doc, &[]);
+        assert_eq!(report["externalPenpotFontRefs"][0]["source"], "penpot-custom");
+        assert_eq!(report["externalPenpotFontRefs"][0]["family"], "Playball");
+        assert_eq!(report["externalPenpotFontRefs"][0]["referenceKind"], "custom-original-unverified");
+        assert!(report["externalPenpotFontRefs"][0]["originNote"].as_str().unwrap().contains("not proof"));
+    }
+
+    #[test]
+    fn reports_only_missing_families_without_modifying_original_text() {
+        let mut doc = Document::new("Penpot fonts");
+        let page = doc.first_page().unwrap();
+        let mut text = TextData::new("hello world");
+        text.style.font_family = "Rare Licensed Family".into();
+        doc.create(page, NodeKind::Text(text), "Headline", 0.0, 0.0, 200.0, 30.0).unwrap();
+        let warnings = missing_penpot_font_warnings(&doc, &["Inter".into(), "Source Sans Pro".into()]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("Rare Licensed Family"));
+        assert!(warnings[0].contains("Headline"));
+        assert_eq!(
+            doc.nodes().find(|n| n.name == "Headline").and_then(|n| match &n.kind {
+                NodeKind::Text(t) => Some(t.style.font_family.as_str()),
+                _ => None,
+            }),
+            Some("Rare Licensed Family")
+        );
+        assert!(missing_penpot_font_warnings(&doc, &["RARE LICENSED FAMILY".into()]).is_empty());
+        assert!(missing_penpot_font_warnings(&doc, &[]).is_empty());
+    }
+
+    #[test]
+    fn completely_styled_text_does_not_report_an_unused_base_font() {
+        let mut doc = Document::new("Run fonts");
+        let page = doc.first_page().unwrap();
+        let mut t = TextData::new("AB");
+        t.style.font_family = "Unused Base".into();
+        let mut run = t.style.clone();
+        run.font_family = "Available Font".into();
+        t.runs.push(StyleRun { start: 0, end: 2, style: run });
+        doc.create(page, NodeKind::Text(t), "Full run", 0.0, 0.0, 100.0, 30.0).unwrap();
+        assert!(missing_penpot_font_warnings(&doc, &["Available Font".into()]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod penpot_svg_v10_tests {
+    use super::*;
+    use figcraft_doc::TextData;
+
+    #[test]
+    fn placeholders_share_one_layer_allowance() {
+        let mut doc = Document::new("Two SVGs");
+        let page = doc.first_page().unwrap();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="5" height="5" fill="red"/><rect x="5" width="5" height="5" fill="blue"/></svg>"#;
+        let ids: Vec<NodeId> = (0..2)
+            .map(|i| {
+                let id = doc.create(page, NodeKind::Frame, &format!("S{i}"), 0.0, 0.0, 10.0, 10.0).unwrap();
+                let layer = doc.node_mut(id).unwrap();
+                layer.plugin_data.insert("penpot.svgRawXml".into(), svg.into());
+                layer.plugin_data.insert("penpot.svgRawStatus".into(), "pending".into());
+                id
+            })
+            .collect();
+        let mut warnings = Vec::new();
+        let nodes = doc.node_count();
+        expand_penpot_raw_svgs_within(&mut doc, &mut warnings, 4);
+        assert!(doc.node_count() - nodes <= 4, "never more layers than the allowance");
+        let status = |i: usize| doc.node(ids[i]).unwrap().plugin_data.get("penpot.svgRawStatus").cloned();
+        assert_eq!(status(0).as_deref(), Some("expanded"), "the first uses the allowance");
+        assert_eq!(status(1).as_deref(), Some("not-expanded"));
+        assert!(doc.node(ids[1]).unwrap().children.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("over the limit")), "{warnings:?}");
+    }
+
+    #[test]
+    fn many_overlapping_style_runs_are_summed_once() {
+        use figcraft_doc::StyleRun;
+        let mut doc = Document::new("Runs");
+        let page = doc.first_page().unwrap();
+        let mut t = TextData::new("x".repeat(100_000));
+        t.style.font_family = "Unused Base".into();
+        let mut run = t.style.clone();
+        run.font_family = "Run Font".into();
+        t.runs = (0..50_000).map(|_| StyleRun { start: 0, end: 100_000, style: run.clone() }).collect();
+        doc.create(page, NodeKind::Text(t), "Long", 0.0, 0.0, 100.0, 30.0).unwrap();
+        let report = font_report_with_families(&doc, &[]);
+        assert_eq!(report["fonts"].as_array().map(Vec::len), Some(1), "{report}");
+        assert_eq!(report["fonts"][0]["family"], "Run Font");
+    }
+
+    #[test]
+    fn expands_inline_svg_into_editable_shapes_without_discarding_source() {
+        let mut doc = Document::new("SVG fixture");
+        let page = doc.first_page().unwrap();
+        let id = doc.create(page, NodeKind::Frame, "SVG ornament", 10.0, 20.0, 100.0, 50.0).unwrap();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect x="10" y="10" width="20" height="20" fill="red"/></svg>"#;
+        let layer = doc.node_mut(id).unwrap();
+        layer.plugin_data.insert("penpot.svgRawXml".into(), svg.into());
+        layer.plugin_data.insert("penpot.svgRawStatus".into(), "pending".into());
+        let mut warnings = Vec::new();
+        expand_penpot_raw_svgs(&mut doc, &mut warnings);
+        let layer = doc.node(id).unwrap();
+        assert_eq!(layer.plugin_data.get("penpot.svgRawStatus").map(String::as_str), Some("expanded"));
+        assert!(!layer.children.is_empty());
+        assert!(doc.nodes().any(|node| matches!(&node.kind, NodeKind::Rectangle | NodeKind::Vector { .. })));
+        assert_eq!(layer.plugin_data.get("penpot.svgRawXml").map(String::as_str), Some(svg));
+    }
+
+    #[test]
+    fn invalid_raw_svg_keeps_placeholder_and_markup() {
+        let mut doc = Document::new("Invalid SVG fixture");
+        let page = doc.first_page().unwrap();
+        let id = doc.create(page, NodeKind::Frame, "Broken", 0.0, 0.0, 80.0, 30.0).unwrap();
+        let layer = doc.node_mut(id).unwrap();
+        layer.plugin_data.insert("penpot.svgRawXml".into(), "<svg><broken".into());
+        layer.plugin_data.insert("penpot.svgRawStatus".into(), "pending".into());
+        let mut warnings = Vec::new();
+        expand_penpot_raw_svgs(&mut doc, &mut warnings);
+        let layer = doc.node(id).unwrap();
+        assert!(layer.children.is_empty());
+        assert_eq!(layer.plugin_data.get("penpot.svgRawStatus").map(String::as_str), Some("not-expanded"));
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn font_inventory_reports_missing_families_without_rewriting_text() {
+        let mut doc = Document::new("Font inventory");
+        let page = doc.first_page().unwrap();
+        let mut text = TextData::new("Example");
+        text.style.font_family = "Definitely Never Installed V10 Font Q7".into();
+        doc.create(page, NodeKind::Text(text), "Caption", 0.0, 0.0, 100.0, 24.0).unwrap();
+        let report = font_report_with_families(&doc, &["Inter".into()]);
+        assert_eq!(report["missing"], 1);
+        assert_eq!(report["fonts"][0]["family"], "Definitely Never Installed V10 Font Q7");
+        assert_eq!(report["fonts"][0]["layers"][0], "Caption");
+    }
 }

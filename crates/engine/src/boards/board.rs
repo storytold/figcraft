@@ -13,7 +13,7 @@ use figcraft_doc::{
     TextAlignH, TextAutoResize, TextData, VConstraint, VectorNetwork, board_color,
 };
 use figcraft_geom::kurbo::PathEl;
-use figcraft_geom::{Affine, BezPath, Point, Rect, Shape, Vec2};
+use figcraft_geom::{Affine, BezPath, Point, Rect, Shape};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
@@ -25,24 +25,60 @@ mod connectors;
 mod derived;
 mod edit;
 mod items;
+mod mindmap;
+mod reshape;
 mod tools;
 
 pub(crate) use connectors::end_handle_at;
 pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
 pub use derived::route;
-pub(crate) use derived::{settle_routes, settle_text};
+pub(crate) use derived::{settle_routes, settle_stamps, settle_text, stamp_target};
+
+/// The topmost sticky or shape at `p` on `page`, other than `except`, sections and frames looked
+/// into: what a "+" handle dragged onto it joins (#1919).
+pub fn sticky_or_shape_at(doc: &Document, page: NodeId, p: Point, except: Option<NodeId>) -> Option<NodeId> {
+    fn find(doc: &Document, id: NodeId, p: Point, except: Option<NodeId>, depth: usize) -> Option<NodeId> {
+        let n = doc.node(id)?;
+        for c in n.children.iter().rev() {
+            let Some(k) = doc.node(*c) else { continue };
+            if !k.visible {
+                continue;
+            }
+            match k.board {
+                Some(BoardItem::Sticky { .. } | BoardItem::Shape { .. }) => {
+                    if Some(*c) != except && doc.world_bounds(*c).is_some_and(|b| b.contains(p)) {
+                        return Some(*c);
+                    }
+                }
+                // Not a board object of its own (a section, a frame): what is inside it may be.
+                None if depth < 32 => {
+                    if let Some(hit) = find(doc, *c, p, except, depth + 1) {
+                        return Some(hit);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    find(doc, page, p, except, 0)
+}
 pub use edit::label_of;
 pub(crate) use edit::{copied_items, copy_map, rejoin};
 use edit::{label_cmd, set_color, set_style};
 pub(crate) use items::add_text;
-pub use items::{edit_text, owner_of_text, sticky_font_size, text_of};
-use items::{ink_cmd, next_sticky, shape_cmd, stamp_cmd, sticky_cmd};
+pub use items::{CONNECTED_GAP, connected_place};
+pub use items::{STICKY_TEXT_SIZE, edit_text, owner_of_text, text_of};
+use items::{add_connected, ink_cmd, next_sticky, shape_cmd, stamp_cmd, sticky_cmd};
+pub(crate) use mindmap::settle_mind_maps;
+pub(crate) use reshape::path_handle_at;
+pub use reshape::selected_connector_handles;
 
 /// Why a board command refuses on a design file.
 pub const NEEDS_BOARD: &str = "this is for boards: make one with File ▸ New board";
 /// Why prototyping and Dev Mode refuse on a board.
-pub const NOT_ON_BOARDS: &str = "boards have no prototypes or Dev Mode: use a design file for those";
+pub const NOT_ON_BOARDS: &str = "boards have no prototypes or Developer Mode: use a design file for those";
 
 /// A sticky note's side (it grows taller for long notes).
 pub const STICKY: f64 = 200.0;
@@ -103,30 +139,58 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.nextSticky",
             "Next sticky note",
-            "{id? (a sticky; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text}  a sticky of the same colour beside it",
+            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector?}  a sticky of the same colour beside a sticky; after a shape, the next shape joined to it by a connector, as board.addConnected",
             true,
             next_sticky
         ),
         spec!(
+            "board.addConnected",
+            "Add connected shape",
+            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), at? ([x, y] on the page: the next one's centre, anywhere, instead of its place on that side; the connector then leaves by `side` and arrives by the side facing it), edit? (start typing in it; default false)} → {id, text, connector}  the next one of the same kind, size and colour on that side, joined by a connector",
+            true,
+            add_connected
+        ),
+        spec!(
             "board.shape",
             "Shape with text",
-            "{shape: rectangle|roundedRectangle|ellipse|diamond|triangle|speechBubble|chevron, x, y, width?, height? (default 160), text?, color?, parent?} → {id, text}",
+            "{shape: rectangle|roundedRectangle|ellipse|diamond|triangle|triangleDown|parallelogramRight|parallelogramLeft|trapezoid|pentagon|hexagon|octagon|star|plus|arrowLeft|arrowRight|chevron|speechBubble|database|document|predefinedProcess|manualInput|internalStorage, x, y, width?, height? (default 160), text?, color?, parent?} → {id, text}",
             true,
             shape_cmd
         ),
         spec!(
             "board.connector",
             "Connector",
-            "{from, to (each a layer id or {x, y} on the page), fromSide?, toSide? (auto|top|right|bottom|left), style?: straight|elbow|curved, startCap?, endCap? (none|lineArrow|triangleArrow|circleFilled|diamondFilled…; default an arrow at the end), label?} → {id, label?}  a line that follows the layers it joins",
+            "{from, to (each a layer id or {x, y} on the page), fromSide?, toSide? (auto|top|right|bottom|left), fromAt?, toAt? ([x, y] on the layer, fractions of its box), style?: straight|elbow|curved, startCap?, endCap? (none|lineArrow|triangleArrow|circleFilled|diamondFilled…; default an arrow at the end), label?} → {id, label?}  a line that follows the layers it joins",
             true,
             connector_cmd
         ),
         spec!(
             "board.reattach",
             "Reattach connector",
-            "{id? (a connector; default the selection), end: from|to, target (a layer id, or {x, y} on the page to leave the end free), side? (auto|top|right|bottom|left)} → {id}  moves one end of a connector",
+            "{id? (a connector; default the selection), end: from|to, target (a layer id, or {x, y} on the page to leave the end free), side? (auto|top|right|bottom|left), at? ([x, y] on the layer, fractions of its box)} → {id}  moves one end of a connector",
             true,
             reattach
+        ),
+        spec!(
+            "board.reshape",
+            "Reshape connector",
+            "{id? (a connector; default the selection), portion (0 is the first run of an elbow, or a curve's middle), x, y (where it moves to on the page; a first or last run gets an extra run to stay on its end)} → {id}",
+            true,
+            reshape::reshape
+        ),
+        spec!(
+            "board.mindMap",
+            "Mind map",
+            "{x?, y? (the first node's top-left in the parent; default the middle of the view), text? (default Topic), children? (their texts, at most 20; default Idea 1, Idea 2, Idea 3), parent?, edit? (start typing in the first node; default false)} → {id, text, children: [{id, text, connector}...]}  a first node with children on its right, joined by branches; the map lays itself out",
+            true,
+            mindmap::mind_map_cmd
+        ),
+        spec!(
+            "board.mindMapAdd",
+            "Add mind map node",
+            "{id? (a mind map node; default the selected or edited one), relation?: child|sibling (default child), text?, edit? (start typing in it; default false)} → {id, text, connector}  a child below the node's other children, or a sibling right after it; the map lays itself out again",
+            true,
+            mindmap::mind_map_add
         ),
         spec!("board.label", "Connector label", "{id (a connector; default the selection), text (empty removes it)} → {id, label}", true, label_cmd),
         spec!(
@@ -222,8 +286,10 @@ fn board_tool(s: &mut Session, t: ToolId) -> Result<Value> {
 }
 
 fn shape_of(cmd: &str, v: &str) -> Result<BoardShape> {
-    BoardShape::from_id(v)
-        .ok_or_else(|| bad(cmd, format!("unknown shape `{v}` (rectangle|roundedRectangle|ellipse|diamond|triangle|speechBubble|chevron)")))
+    BoardShape::from_id(v).ok_or_else(|| {
+        let known: Vec<&str> = BoardShape::ALL.iter().map(|b| b.id()).collect();
+        bad(cmd, format!("unknown shape `{v}` ({})", known.join("|")))
+    })
 }
 
 fn stamp_of(cmd: &str, v: &str) -> Result<Stamp> {

@@ -33,6 +33,12 @@ deunicode = { workspace = true }
 same-file = { workspace = true }
 web-time = "1.1.0"
 
+# Downloading a missing font (desktop only; the web keeps its built-in fonts). The bundled index
+# (~620 KB) lets the Missing fonts window tell which fonts can be downloaded without a request.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-font-store = { workspace = true, features = ["bundled-index"] }
+craft-font-catalog = { workspace = true }
+
 [dev-dependencies]
 zip = { workspace = true }
 wat = { workspace = true }

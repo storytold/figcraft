@@ -29,7 +29,10 @@ pub use draw::{paint, paint_outlines};
 
 icons! {
     Move,
+    /// Select layers using a colour: selection corners around a colour swatch.
+    SelectColor,
     Scale,
+    FitContents,
     Hand,
     Frame,
     Section,
@@ -66,6 +69,7 @@ icons! {
     PaintBucket,
     Lasso,
     Cut,
+    Crop,
     Boolean,
     Page,
     Check,
@@ -88,6 +92,8 @@ icons! {
     FlipH,
     FlipV,
     CornerRadius,
+    /// A smooth corner with its two tangent endpoints.
+    CornerSmoothing,
     /// Individual corners: the rounded corner each field sets.
     CornerTopLeft,
     CornerTopRight,
@@ -201,6 +207,8 @@ icons! {
     Online,
     /// In a live session others get into: a point sending waves to both sides.
     LiveShared,
+    /// Disconnected from a live session: the point and its waves, struck through.
+    LiveDisconnected,
     /// A file of yours on a server that only you get into: a point inside a closed ring.
     LivePrivate,
     /// A design file: a pen nib leaning to the left, its grip filled.
@@ -371,6 +379,30 @@ mod tests {
                 .flatten()
                 .collect();
             assert!(alphas.contains(&255) && alphas.contains(&0), "{icon:?} fades from opaque to clear: {alphas:?}");
+        }
+    }
+
+    /// The four boolean operation icons each paint shapes and no two paint the same ones, so the
+    /// buttons can be told apart (#2003).
+    #[test]
+    fn the_boolean_operation_icons_paint_and_differ() {
+        let ctx = egui::Context::default();
+        let ops = [Icon::Union, Icon::Subtract, Icon::Intersect, Icon::Exclude];
+        let painted: Vec<String> = ops
+            .iter()
+            .map(|&icon| {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, Vec2::splat(16.0)), icon, Color32::WHITE);
+                });
+                out.textures_delta.clear();
+                assert!(!out.shapes.is_empty(), "{icon:?} paints at least one shape");
+                format!("{:?}", out.shapes.iter().map(|c| &c.shape).collect::<Vec<_>>())
+            })
+            .collect();
+        for i in 0..ops.len() {
+            for j in (i + 1)..ops.len() {
+                assert_ne!(painted[i], painted[j], "{:?} and {:?} paint different shapes", ops[i], ops[j]);
+            }
         }
     }
 

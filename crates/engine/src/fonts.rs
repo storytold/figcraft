@@ -19,6 +19,8 @@ pub struct Missing {
     pub family: String,
     /// Text layers that use it (0: only a text style or a variable names it).
     pub layers: usize,
+    /// The font store source it can be downloaded from (`Google Fonts`, `Noto`; desktop only).
+    pub source: Option<String>,
 }
 
 /// The families `doc` names that the font database doesn't have, by name. On the desktop the
@@ -52,7 +54,7 @@ pub fn missing(doc: &Document) -> Vec<Missing> {
         }
     }
     for st in &doc.styles {
-        if let StyleKind::Text { style } = &st.kind {
+        if let StyleKind::Text { style, .. } = &st.kind {
             add(&style.font_family, false);
         }
         if let Some(var) = st.bound.get("fontFamily") {
@@ -61,8 +63,44 @@ pub fn missing(doc: &Document) -> Vec<Missing> {
             }
         }
     }
-    used.into_values().filter(|(family, _)| !figcraft_text::has_family(family)).map(|(family, layers)| Missing { family, layers }).collect()
+    used.into_values()
+        .filter(|(family, _)| !figcraft_text::has_family(family))
+        .map(|(family, layers)| Missing { source: source(&family), family, layers })
+        .collect()
 }
+
+/// A family's download ([`downloads`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Download {
+    /// Bytes downloaded of all its files.
+    Running { done: u64, total: u64 },
+    /// Installed and scanned: the next `font.download` of it fits the open document's text.
+    Installed,
+    /// Why it failed (nothing was installed).
+    Failed(String),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use download::{allow_downloads, downloads, downloads_allowed, source};
+
+/// The browser keeps its built-in fonts: nothing is downloaded there.
+#[cfg(target_arch = "wasm32")]
+mod no_download {
+    pub fn source(_: &str) -> Option<String> {
+        None
+    }
+    pub fn downloads() -> Vec<(String, super::Download)> {
+        Vec::new()
+    }
+    pub fn downloads_allowed() -> bool {
+        false
+    }
+    pub fn allow_downloads() -> std::result::Result<(), String> {
+        Err("fonts aren't downloaded in the browser".into())
+    }
+}
+#[cfg(target_arch = "wasm32")]
+pub use no_download::{allow_downloads, downloads, downloads_allowed, source};
 
 /// Every string value of variable `id` in any mode, following aliases (each variable once).
 fn string_values(vars: &Variables, id: &str) -> Vec<String> {
@@ -73,7 +111,7 @@ fn string_values(vars: &Variables, id: &str) -> Vec<String> {
         if !seen.insert(id.clone()) {
             continue;
         }
-        let Some(var) = vars.get(&id) else { continue };
+        let Some(var) = vars.get_by_id(&id) else { continue };
         for v in var.values.values() {
             match v {
                 VariableValue::String(s) => out.push(s.clone()),
@@ -134,7 +172,7 @@ fn refit_text(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn missing_fonts(s: &mut Session, _: &Value) -> Result<Value> {
-    let families: Vec<Value> = missing(s.doc()?).into_iter().map(|m| json!({"family": m.family, "layers": m.layers})).collect();
+    let families: Vec<Value> = missing(s.doc()?).into_iter().map(|m| json!({"family": m.family, "layers": m.layers, "source": m.source})).collect();
     s.request_ui("dialog.missingFonts", json!({}));
     Ok(json!({"families": families}))
 }
@@ -148,9 +186,10 @@ fn preserve_appearance(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({"captured": captured}))
 }
 
-/// The font commands: `text.missingFonts` and `text.refit`.
+/// The font commands: `text.missingFonts`, `text.refit`, and on the desktop [`download`]'s.
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
+    #[allow(unused_mut)]
+    let mut list = vec![
         spec!(
             "text.preserveAppearance",
             "Preserve text appearance",
@@ -161,7 +200,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.missingFonts",
             "Missing fonts",
-            "{}  fonts the open document names that aren't installed (text layers, styled ranges, text styles, font family variables); the app shows them → {families: [{family, layers}]}",
+            "{}  fonts the open document names that aren't installed (text layers, styled ranges, text styles, font family variables); the app shows them → {families: [{family, layers, source (the font store source font.download gets it from, or null)}]}",
             false,
             missing_fonts
         ),
@@ -172,8 +211,14 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             refit_text
         ),
-    ]
+    ];
+    #[cfg(not(target_arch = "wasm32"))]
+    list.extend(download::specs());
+    list
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod download;
 
 #[cfg(test)]
 mod tests;

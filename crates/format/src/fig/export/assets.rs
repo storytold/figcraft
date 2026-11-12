@@ -1,5 +1,8 @@
 use super::common::{layout_grid, node_field, prop_type, resolved_type, scope_name, variant_pairs};
-use super::*;
+use super::{
+    AUX, Action, Affine, Bound, Color, Exporter, Fields, Kv, LAYERS, MAX_NODES, Node, NodeId, NodeKind, Overlay, OverlayPosition, Paint, StyleKind,
+    TextData, VariableValue, arr, b, color, e, fl, guid, matrix, o, position, root_fields, s, u, xy,
+};
 
 impl<'d> Exporter<'d> {
     /// GUIDs for every layer (pages first, then depth-first), component property definitions,
@@ -156,7 +159,7 @@ impl<'d> Exporter<'d> {
                 Bound::default()
             } else {
                 let mut sample = Node::new(NodeId(0), NodeKind::Rectangle, "", 0.0, 0.0);
-                if let StyleKind::Text { style } = &st.kind {
+                if let StyleKind::Text { style, .. } = &st.kind {
                     sample.kind = NodeKind::Text(TextData { style: style.as_text_style(), ..TextData::new("Ag") });
                 }
                 sample.bound.clone_from(&st.bound);
@@ -176,8 +179,9 @@ impl<'d> Exporter<'d> {
                     let list = grids.iter().enumerate().map(|(i, g)| layout_grid(g, i, &none)).collect();
                     f.extend([("fillPaints", arr(Vec::new())), ("layoutGrids", arr(list))]);
                 }
-                StyleKind::Text { style } => {
-                    let td = TextData { style: style.as_text_style(), ..TextData::new("Ag") };
+                StyleKind::Text { style, paragraph } => {
+                    let mut td = TextData { style: style.as_text_style(), ..TextData::new("Ag") };
+                    td.take_paragraph_style(paragraph);
                     let fills = [Paint::solid(Color::BLACK)];
                     f.push(("fillPaints", self.paints(style.fills.as_deref().unwrap_or(&fills), true, &none)));
                     self.text(&td, &fills, &mut f);
@@ -208,7 +212,13 @@ impl<'d> Exporter<'d> {
             let mut values = Vec::new();
             for m in &c.modes {
                 let (Some(mode), Some(val)) = (self.mode_ids.get(&(c.id.as_str(), m.id.as_str())), v.values.get(&m.id)) else { continue };
-                let (ty, value) = match val {
+                // The Figma binary has no encoding FigCraft writes for calculations: the colour
+                // they show in this mode goes out as a plain colour value.
+                let Some(val) = doc.variables.flattened(v, &m.id, val) else {
+                    self.warn(crate::CALCULATIONS_LEFT_OUT);
+                    continue;
+                };
+                let (ty, value) = match &val {
                     VariableValue::Color(x) => ("COLOR", ("colorValue", color(*x))),
                     VariableValue::Number(x) => ("FLOAT", ("floatValue", fl(*x))),
                     // NULs can't be stored in a string.
@@ -221,6 +231,8 @@ impl<'d> Exporter<'d> {
                             continue;
                         }
                     },
+                    // `flattened` leaves none: this format has no shape for a calculation.
+                    VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => continue,
                 };
                 let data = o(vec![("value", o(vec![value])), ("dataType", e(ty)), ("resolvedDataType", e(resolved))]);
                 values.push(o(vec![("modeID", guid(AUX, *mode)), ("variableData", data)]));
@@ -248,9 +260,9 @@ impl<'d> Exporter<'d> {
         }
     }
 
-    /// A reference to variable `var` (its id or name) as variable data.
+    /// A reference to variable `var` (a stored id: no name stands in for it, #1613) as variable data.
     fn alias(&mut self, var: &str) -> Option<Kv<'static>> {
-        let found = self.doc.variables.get(var).and_then(|v| Some((v.kind, *self.var_ids.get(v.id.as_str())?)));
+        let found = self.doc.variables.get_by_id(var).and_then(|v| Some((v.kind, *self.var_ids.get(v.id.as_str())?)));
         let Some((kind, local)) = found else {
             self.warn("bindings to variables that aren't in the document were written as their values");
             return None;

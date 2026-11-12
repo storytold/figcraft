@@ -4,8 +4,10 @@
 //! alignment in its cell, and clip content. Everything goes through `node.set` props or `layout.*`
 //! commands.
 
+use std::sync::Arc;
+
 use egui::{Align2, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use figcraft_doc::*;
+use figcraft_doc::{AutoLayout, CellAlign, ContentAlign, CrossAlign, Document, LayoutMode, MainAlign, Node, NodeId, NodeKind, Sizing};
 use serde_json::json;
 
 use crate::FigApp;
@@ -14,7 +16,7 @@ use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
 use crate::right::{block, common, menu_item, menu_popup, row};
 use crate::theme::{ACCENT, Tokens, regular};
-use crate::widgets::{self, FIELD_H, Lead};
+use crate::widgets::{self, FIELD_H, FieldEdit, Lead};
 
 /// Most tracks listed in the panel (the rest are still laid out; edit them through commands).
 const MAX_TRACK_ROWS: usize = 24;
@@ -23,19 +25,23 @@ fn parent_of(doc: &Document, id: NodeId) -> Option<&Node> {
     doc.node(id).and_then(|n| n.parent).and_then(|p| doc.node(p))
 }
 
-pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+/// Show selection sizing and layout controls; offer Add only when every selected container has
+/// no auto layout and the selection is editable outside an instance.
+pub fn layout_section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let ids = sel.to_vec();
-    let frames = sel.iter().all(|i| doc.node(*i).is_some_and(|n| n.kind.is_frame_like()));
+    let frames = crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like());
+    let layout_containers = crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Group));
+    let no_al = !sel.is_empty() && crate::selection_cache::every(doc, sel, |n| n.layout.is_none());
     let al = common(doc, sel, |n| n.layout.clone());
     let has_al = matches!(al, Some(Some(_)));
     let title = if has_al { tr("Auto layout") } else { tr("Layout") };
     // An instance's auto layout is its main's (only padding, gap and alignment are its own); the
     // layers inside it override their size and resizing, not their place in the layout.
-    let in_instance = sel.iter().any(|i| figcraft_engine::components::owning_instance(doc, *i).is_some());
-    let nested = sel.iter().any(|i| figcraft_engine::components::inside_instance(doc, *i));
+    let facts = crate::right::in_instance(ui.ctx(), doc, sel);
+    let (in_instance, nested) = (facts.any, facts.nested);
     let btns: Vec<(Icon, &str)> = if in_instance {
         vec![]
-    } else if frames && !has_al {
+    } else if layout_containers && no_al {
         vec![(Icon::Plus, crate::shortcuts::tip(tr("Add auto layout"), "layout.add"))]
     } else if has_al {
         vec![(Icon::Minus, crate::shortcuts::tip(tr("Remove auto layout"), "layout.remove"))]
@@ -85,7 +91,11 @@ fn direction(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             LayoutMode::Horizontal => 1,
             LayoutMode::Grid => 2,
         };
-        if let Some(i) = widgets::segmented(ui, &items, Some(active), 32.0) {
+        // The switch fills the row: its three cells share what the wrap button leaves, so the last
+        // cell and the button end at the panel's margin.
+        let wrap = if l.mode != LayoutMode::Grid { 24.0 + widgets::GUTTER } else { 0.0 };
+        let cell = (ui.available_width() - wrap) / items.len() as f32;
+        if let Some(i) = widgets::segmented(ui, &items, Some(active), cell) {
             // Wrap carries over between the flows: rows of a horizontal one, columns of a vertical one.
             let mode = ["vertical", "horizontal", "grid"].get(i).copied().unwrap_or("grid");
             app.set_props(ids, json!({"layout": mode}));
@@ -177,7 +187,7 @@ fn dimensions(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], has
         return;
     }
     // Min/max apply to auto layout frames and their children; absolute children neither fill nor limit.
-    let can_fill = parent_al && sel.iter().all(|i| doc.node(*i).is_some_and(|n| !n.child_layout.absolute));
+    let can_fill = parent_al && crate::selection_cache::every(doc, sel, |n| !n.child_layout.absolute);
     let can_limit = has_al || can_fill;
     let first = sel.first().and_then(|i| doc.node(*i));
     row(ui, 32.0, |ui| {
@@ -333,6 +343,9 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             }
         }
         ui.vertical(|ui| {
+            // The alignment picker on the left, the gap and its mode stacked to its right, both
+            // ending where the panel's fields do (the button column at a row's end stays free).
+            let w = (ui.available_width() - 32.0).max(40.0);
             if grid_mode {
                 // Grid: gap between columns and between rows.
                 let e = crate::variable_ui::number_field(
@@ -344,7 +357,7 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                     Lead::Icon(Icon::Gap, tr("Column gap")),
                     Some(l.gap),
                     "",
-                    96.0,
+                    w,
                 );
                 app.field(ids, "columnGap", e, |v| json!(v.max(0.0)));
                 ui.add_space(8.0);
@@ -357,7 +370,7 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                     Lead::Icon(Icon::DistributeV, tr("Row gap")),
                     Some(l.cross_gap),
                     "",
-                    96.0,
+                    w,
                 );
                 app.field(ids, "rowGap", e, |v| json!(v.max(0.0)));
                 return;
@@ -365,7 +378,7 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
             let auto = l.main_align.is_auto_gap();
             let gap_icon = if l.mode == LayoutMode::Vertical { Icon::DistributeV } else { Icon::Gap };
             let (shown, lead) = ((!auto).then_some(l.gap), Lead::Icon(gap_icon, tr("Gap between items")));
-            let e = crate::variable_ui::number_field_or(app, ui, ids, "gap", Id::unique("al_gap"), shown, 96.0, tr("Auto"), lead, "");
+            let e = crate::variable_ui::number_field_or(app, ui, ids, "gap", Id::unique("al_gap"), shown, w, tr("Auto"), lead, "");
             app.field(ids, "gap", e, |v| json!(v));
             ui.add_space(8.0);
             let label = match l.main_align {
@@ -374,7 +387,7 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 MainAlign::SpaceEvenly => tr("Space evenly"),
                 _ => tr("Fixed gap"),
             };
-            let resp = widgets::dropdown(ui, label, 96.0, None);
+            let resp = widgets::dropdown(ui, label, w, None);
             crate::a11y::combo(&resp, tr("Auto gap"), label, crate::a11y::menu_open(&resp));
             menu_popup(&resp).show(|ui| {
                 let modes = [
@@ -403,6 +416,15 @@ fn alignment(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
     }
 }
 
+/// Commit a padding field's edit: a value typed after a Cmd/Ctrl-click goes to all four sides
+/// (Guide to auto layout); otherwise to the field's own side or axis.
+fn padding_field(app: &mut FigApp, ui: &Ui, ids: &[NodeId], key: &str, id: Id, e: Option<FieldEdit>) {
+    match e {
+        Some(FieldEdit::Set(v)) if widgets::edit_began_with_command(ui, id) => app.set_props(ids, json!({"padding": v.max(0.0)})),
+        e => app.field(ids, key, e, |v| json!(v.max(0.0))),
+    }
+}
+
 /// The Spacing row: the H/V padding pair, or, with Individual padding on, two rows of one field
 /// per side (like Individual corners).
 fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
@@ -426,9 +448,9 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
         for (r, pair) in sides.chunks(2).enumerate() {
             row(ui, 32.0, |ui| {
                 for (key, name, icon, v, k) in pair {
-                    let e =
-                        crate::variable_ui::number_field(app, ui, ids, key, Id::unique(("padding", *k)), Lead::Icon(*icon, name), Some(*v), "", col);
-                    app.field(ids, key, e, |v| json!(v.max(0.0)));
+                    let id = Id::unique(("padding", *k));
+                    let e = crate::variable_ui::number_field(app, ui, ids, key, id, Lead::Icon(*icon, name), Some(*v), "", col);
+                    padding_field(app, ui, ids, key, id, e);
                 }
                 if r == 0 {
                     toggle(ui);
@@ -448,7 +470,7 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 "",
                 col,
             );
-            app.field(ids, "paddingHorizontal", e, |v| json!(v.max(0.0)));
+            padding_field(app, ui, ids, "paddingHorizontal", Id::unique("al_padh"), e);
             let e = crate::variable_ui::number_field(
                 app,
                 ui,
@@ -460,7 +482,7 @@ fn spacing(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], l: &AutoLayout) {
                 "",
                 col,
             );
-            app.field(ids, "paddingVertical", e, |v| json!(v.max(0.0)));
+            padding_field(app, ui, ids, "paddingVertical", Id::unique("al_padv"), e);
             toggle(ui);
         });
     }

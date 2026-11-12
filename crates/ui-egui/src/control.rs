@@ -27,13 +27,15 @@
 //! - `app.quit {}`
 //!
 //! Any method takes `window` (an id from `window.list`) to run in that window, with its tabs and
-//! panels; without it, requests go to the window last in front.
+//! panels; without it, requests go to the window last in front. `engine.execute`,
+//! `document.inspect`, `node.get` and `ui.render` also take `document` (an `id` from `doc.list`,
+//! or an open file's path) to act on that file without bringing its tab to the front.
 
 use std::sync::{Arc, Mutex};
 
 use egui::Context;
 use figcraft_engine::cmd::comment::{Filter, Sort};
-use figcraft_engine::{PointerEvent, PointerKind};
+use figcraft_engine::{PointerEvent, PointerKind, Session};
 use serde_json::{Value, json};
 
 use crate::FigApp;
@@ -46,8 +48,8 @@ pub struct ControlReply {
 /// Which side has finished a control request.
 ///
 /// The transport and the UI race to settle one request: while it is `Open`, either may cancel it
-/// (the transport's timeout) or commit it (the UI's final reply). Once settled, neither side may
-/// change it.
+/// (the transport's timeout) or commit it (the UI's final reply) or, for a request the UI answers
+/// at once, start it (`Running`). Once settled or started, the transport can't cancel it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RequestState {
     #[default]
@@ -56,6 +58,9 @@ pub enum RequestState {
     Cancelled,
     /// The UI wrote the file (if any) and queued the reply before releasing the gate.
     Replied,
+    /// The UI started a request it answers at once (an edit, an inspection); the transport can no
+    /// longer cancel it, so a timeout now means "still running, it will take effect" (#1673).
+    Running,
 }
 
 /// The gate the transport's timeout and the UI's final reply share for one request.
@@ -100,6 +105,17 @@ impl RequestGate {
         *state
     }
 
+    /// Start a request the UI answers at once, unless the transport already gave up on it: then
+    /// it must not run at all. `false` when it was cancelled (or already settled).
+    pub fn start(&self) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *state != RequestState::Open {
+            return false;
+        }
+        *state = RequestState::Running;
+        true
+    }
+
     /// Run the final commit (file write and reply enqueue) only while the request is still open,
     /// then mark it replied before releasing the gate. `None` means the transport cancelled it or
     /// it was already committed; the closure must not have run then.
@@ -128,6 +144,13 @@ impl ControlRequest {
     /// Whether this request's gate is `Cancelled`.
     pub fn is_cancelled(&self) -> bool {
         self.state.is_cancelled()
+    }
+
+    /// Mark the request started just before the UI runs it; `false` when the transport timed out
+    /// first, and then it must not run. `ui.input` is acknowledged by a later frame, so it stays
+    /// open (cancellable) like a screenshot.
+    fn begin(&self) -> bool {
+        self.method == "ui.input" || self.state.start()
     }
 }
 
@@ -356,6 +379,12 @@ fn admit(app: &mut FigApp, r: ControlRequest, window: u64, now: f64) {
     }
     let path = params.get("path").and_then(Value::as_str).map(str::to_string);
     let (document, presentation) = app.windows.presentation(&app.session, window);
+    if let Err(e) = front_only(&app.session, Some(document), "ui.screenshot", &params) {
+        if !canceled {
+            let _ = tx.send(ControlReply { id, result: Err(e) });
+        }
+        return;
+    }
     app.capture.shots.push(ShotRequest {
         id,
         path,
@@ -425,6 +454,24 @@ fn hidden(ctx: &Context, id: u64) -> bool {
     visibility(ctx, id) == Some(false)
 }
 
+/// How long, in seconds, a window may draw no frame while a control request waits for it before
+/// [`background`] answers the request as it answers one for a hidden window. eframe runs the app's
+/// logic for a window whose redraw is 0.25 s overdue, so the second such pass answers.
+pub const NOT_DRAWING_AFTER: f64 = 0.2;
+
+/// Whether window `id` has drawn no frame for [`NOT_DRAWING_AFTER`] while a request waited for it.
+/// The platform may still call it visible: under Wayland an app can't tell that its window is
+/// minimised, and the compositor then stops asking it to draw. The wait starts again whenever the
+/// window draws.
+fn stopped_drawing(app: &mut FigApp, ctx: &Context, id: u64, now: f64) -> bool {
+    let pass = ctx.cumulative_pass_nr_for(crate::windows::viewport(id));
+    let wait = app.control_waits.entry(id).or_insert((pass, now));
+    if wait.0 != pass {
+        *wait = (pass, now);
+    }
+    now - wait.1 >= NOT_DRAWING_AFTER
+}
+
 /// Send `RequestPaintWhileHidden` for work that needs a real UI pass (a queued capture or
 /// synthetic input), and schedule a wakeup for the next capture deadline. Native eframe honours
 /// this command; the shared web runner does not implement it yet, so a hidden browser tab remains
@@ -482,7 +529,7 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             let _ = r.reply.send(ControlReply { id: r.id, result: Err(format!("no window {target}")) });
             continue;
         }
-        let is_hidden = hidden(ctx, target);
+        let is_hidden = hidden(ctx, target) || stopped_drawing(app, ctx, target, now);
         if r.method == "ui.screenshot" && visibility(ctx, target) != Some(true) {
             // Hidden, minimised, or with visibility the platform has not reported: admit it now
             // so the request gets its deadline and a forced paint. Waiting for a frame that may
@@ -511,8 +558,12 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             let _ = r.reply.send(ControlReply { id: r.id, result: Err(error) });
             continue;
         }
+        if !r.begin() {
+            continue;
+        }
         // Outside a frame, so outside the frame's guard: within the window's swap, a panic still
         // ends in recovery copies and leaves every window its own state.
+        let prefs = app.session.prefs.clone();
         let res = crate::windows::as_window(app, target, |app| {
             let mut res = Err("internal error".to_string());
             // Every control-channel gesture is fenced from the user's system clipboard.
@@ -522,7 +573,22 @@ pub fn background(app: &mut FigApp, ctx: &Context) {
             app.control_synthetic = before;
             res
         });
+        // A preference the command changed (the interface size, the theme) applies as each
+        // window's next frame begins; no frame's end-of-frame check ran here, so ask every window.
+        if app.session.prefs != prefs {
+            for id in std::iter::once(0).chain(app.windows.list.iter().map(|w| w.id)) {
+                ctx.request_repaint_of(crate::windows::viewport(id));
+            }
+        }
         let _ = r.reply.send(ControlReply { id: r.id, result: res.unwrap_or_else(|| Err(format!("no window {target}"))) });
+    }
+    // A window a request still waits for is checked again soon: if it draws, its frame answers;
+    // if it doesn't (minimised under Wayland), the next logic pass does.
+    let waiting: std::collections::BTreeSet<u64> =
+        app.control_queue.iter().map(|r| r.params.get("window").and_then(Value::as_u64).unwrap_or(app.windows.focused)).collect();
+    app.control_waits.retain(|id, _| waiting.contains(id));
+    if !waiting.is_empty() {
+        crate::repaint_in(ctx, NOT_DRAWING_AFTER);
     }
     request_paint(app, ctx);
 }
@@ -709,6 +775,9 @@ fn route_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now
     }
     if r.method == "ui.screenshot" {
         admit(app, r, target, now);
+        return;
+    }
+    if !r.begin() {
         return;
     }
     // Every control-channel gesture is fenced from the user's system clipboard (the flag is
@@ -924,14 +993,483 @@ fn b(p: &Value, k: &str) -> bool {
     p.get(k).and_then(Value::as_bool).unwrap_or(false)
 }
 
+fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
+    let key = p.get("key").and_then(Value::as_str).ok_or("`key` required")?;
+    let m = figcraft_engine::keymap::Mods { shift: b(p, "shift"), alt: b(p, "alt"), cmd: b(p, "cmd"), ctrl: b(p, "ctrl") };
+    let platform = crate::shortcuts::platform();
+    use figcraft_engine::keymap::{Context, lookup, normalize};
+    // Text editing keys go to the editor (after the shortcuts live while editing).
+    if app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
+        if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
+            crate::menus::invoke(app, bd.id);
+            return Ok(json!({"command": bd.id}));
+        }
+        let (word, line) = figcraft_engine::keymap::text_motion(platform, key, m);
+        figcraft_engine::textedit::key(&mut app.session, key, m.shift, word, line).map_err(|e| e.to_string())?;
+        return Ok(json!({"ok": true}));
+    }
+    // The keyboard selection box and pick select take their keys first, as on the keyboard.
+    if let Some(k) = normalize(key).and_then(|(name, _)| egui::Key::from_name(name)) {
+        let mods = egui::Modifiers { alt: m.alt, ctrl: m.ctrl, shift: m.shift, mac_cmd: false, command: m.cmd || m.ctrl };
+        if crate::shortcuts::key_pick(app, k, mods) || crate::shortcuts::key_box(app, k, mods) {
+            return Ok(json!({"ok": true}));
+        }
+    }
+    // Vector edit mode and shape builder keys (tools, nudging points, delete, join, Enter).
+    if app.session.tool_key(key, m.shift, m.alt, m.cmd).map_err(|e| e.to_string())? {
+        return Ok(json!({"ok": true}));
+    }
+    // The Comment tool's arrows step through the comment threads.
+    if app.session.tool.tool == figcraft_engine::ToolId::Comment && m.is_none() && matches!(key, "ArrowUp" | "ArrowDown" | "Up" | "Down") {
+        let r = crate::comments::step(app, ctx, if matches!(key, "ArrowUp" | "Up") { -1 } else { 1 });
+        return Ok(json!({"comment": r.and_then(|v| v.get("id").cloned())}));
+    }
+    if let Some(bd) = lookup(platform, Context::Canvas, key, m) {
+        crate::shortcuts::run_binding(app, bd.id);
+        return Ok(json!({"command": bd.id}));
+    }
+    let (name, _) = normalize(key).ok_or_else(|| format!("unknown key `{key}`"))?;
+    match name {
+        "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" => {
+            let (dx, dy) = match name {
+                "ArrowLeft" => (-1, 0),
+                "ArrowRight" => (1, 0),
+                "ArrowUp" => (0, -1),
+                _ => (0, 1),
+            };
+            // A shape or frame tool chosen and nothing selected: the arrows show and move the
+            // placement crosshair, as the window's key path does.
+            if app.session.selection().is_empty() && app.session.tool.tool.draws_shape() && !app.session.tool.dev_mode && !(m.cmd || m.ctrl || m.alt)
+            {
+                return app.session.execute("tool.crosshair", &json!({"dx": dx, "dy": dy, "big": m.shift})).map_err(|e| e.to_string());
+            }
+            // Otherwise, with nothing selected the arrows pan the view, as the window's own key path does.
+            let (cmd, params) = if app.session.selection().is_empty() {
+                ("view.pan", json!({"dx": dx, "dy": dy, "big": m.shift}))
+            } else if (m.cmd || m.ctrl) && m.alt {
+                // Rotate a degree, 15 with Shift: down and right clockwise, up and left back, about
+                // the selection's rotation origin; nothing while points are being edited.
+                if app.session.ds().is_ok_and(|d| d.vector_edit.is_some()) {
+                    return Ok(json!({}));
+                }
+                let step = if m.shift { 15.0 } else { 1.0 };
+                let origin = app.session.ds().ok().and_then(|d| d.origin_point());
+                ("transform.rotate", json!({"degrees": if dx + dy < 0 { -step } else { step }, "cx": origin.map(|o| o.x), "cy": origin.map(|o| o.y)}))
+            } else if m.cmd || m.ctrl {
+                ("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}))
+            } else {
+                ("transform.nudge", json!({"dx": dx, "dy": dy, "big": m.shift}))
+            };
+            // Dev Mode only inspects, as the window's key path says.
+            if crate::menus::dev_mode_refuses(app, cmd) {
+                return Err("Developer Mode only inspects: switch to Design to edit".into());
+            }
+            app.session.execute(cmd, &params).map_err(|e| e.to_string())
+        }
+        _ => {
+            // Number keys: opacity (two in quick succession make an exact percentage). A
+            // hidden window's logic tick has a stale `ctx.input(i.time)`.
+            let now = app.clock.now();
+            match egui::Key::from_name(name) {
+                Some(k) if m.is_none() && crate::shortcuts::opacity_digit(app, k, now) => Ok(json!({"opacity": true})),
+                _ => Err(format!("no shortcut `{key}`")),
+            }
+        }
+    }
+}
+
+fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
+    let list = p
+        .get("events")
+        .and_then(Value::as_array)
+        .ok_or("`events` required: [{move|down|up: [x, y]} | {key, shift?, alt?, cmd?} | {text} | {leave: true}]")?;
+    let pos = |v: &Value| -> Option<egui::Pos2> {
+        let a = v.as_array()?;
+        let p = egui::pos2(a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32);
+        p.is_finite().then_some(p)
+    };
+    let mut events = Vec::new();
+    let mut pads = Vec::new();
+    for e in list.iter().take(256) {
+        let button =
+            if e.get("button").and_then(Value::as_str) == Some("secondary") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
+        let command = b(e, "cmd") || b(e, "ctrl");
+        let mods = egui::Modifiers { alt: b(e, "alt"), ctrl: command, shift: b(e, "shift"), mac_cmd: false, command };
+        if let Some(p) = e.get("move").and_then(pos) {
+            events.push(egui::Event::PointerMoved(p));
+        } else if let Some((p, pressed)) = e.get("down").and_then(pos).map(|p| (p, true)).or_else(|| e.get("up").and_then(pos).map(|p| (p, false))) {
+            events.push(egui::Event::PointerMoved(p));
+            events.push(egui::Event::PointerButton { pos: p, button, pressed, modifiers: mods });
+        } else if let Some(k) = e.get("key").and_then(Value::as_str) {
+            let key = egui::Key::from_name(k).ok_or_else(|| format!("unknown key `{k}`"))?;
+            for pressed in [true, false] {
+                events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods });
+            }
+        } else if let Some(t) = e.get("text").and_then(Value::as_str) {
+            events.push(egui::Event::Text(t.to_string()));
+        } else if let Some(d) = e.get("scroll").and_then(pos) {
+            // Content moves by `d` points (negative y scrolls down, like a wheel turned towards you).
+            events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                source: egui::MouseWheelSource::Wheel,
+                delta: d.to_vec2(),
+                phase: egui::TouchPhase::Move,
+                modifiers: mods,
+            });
+        } else if let Some(g) = e.get("gamepad") {
+            let names = figcraft_doc::proto::GAMEPAD_BUTTONS.join(", ");
+            pads.push(pad_name(g).ok_or_else(|| format!("unknown controller button {g} (an index 0-16 or one of {names})"))?.to_string());
+        } else if b(e, "leave") {
+            events.push(egui::Event::PointerGone);
+        } else if let Some(h) = e.get("hold") {
+            let held = egui::Modifiers {
+                alt: b(h, "alt"),
+                ctrl: b(h, "cmd") || b(h, "ctrl"),
+                shift: b(h, "shift"),
+                mac_cmd: false,
+                command: b(h, "cmd") || b(h, "ctrl"),
+            };
+            events.push(egui::Event::ModifiersChanged(held));
+        } else {
+            return Err(format!("unknown input event {e}"));
+        }
+    }
+    // Controller buttons go straight to the prototype playing (its next frame takes them).
+    if !pads.is_empty() {
+        match (app.ui.present.as_mut(), app.ui.preview.as_mut()) {
+            (Some(p), _) => p.pads.extend(pads),
+            (None, Some(pane)) => pane.player.pads.extend(pads),
+            (None, None) => return Err("controller buttons go to a prototype that is playing: run proto.present or proto.preview".into()),
+        }
+    }
+    app.control_input_queued = app.push_control_input(events);
+    ctx.request_repaint();
+    Ok(json!({"queued": list.len().min(256)}))
+}
+
+fn ui_set_view(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String> {
+    if let Some(t) = p.get("rightTab").and_then(Value::as_str) {
+        app.ui.right_tab = match t {
+            "prototype" => crate::RightTab::Prototype,
+            "inspect" => crate::RightTab::Inspect,
+            _ => crate::RightTab::Design,
+        };
+    }
+    if let Some(t) = p.get("leftTab").and_then(Value::as_str) {
+        app.ui.left_tab = if t == "assets" { crate::LeftTab::Assets } else { crate::LeftTab::File };
+    }
+    if let Some(t) = p.get("theme").and_then(Value::as_str) {
+        app.session.prefs.theme = t.to_string();
+    }
+    if let Some(h) = p.get("home").and_then(Value::as_bool) {
+        app.ui.home = h;
+    }
+    if let Some(section) = p.get("homeSection").and_then(Value::as_str).and_then(crate::home::Section::parse) {
+        app.ui.home_view.section = section;
+    }
+    if let Some(query) = p.get("homeSearch").and_then(Value::as_str) {
+        app.ui.home_view.file_query = query.chars().take(256).collect();
+    }
+    if let Some(view) = p.get("homeRecentsView").and_then(Value::as_str).and_then(crate::home_recents::View::parse) {
+        view.store(&mut app.session.prefs);
+    }
+    if let Some(key) = p.get("homeRecentsSort").and_then(Value::as_str).and_then(crate::home_recents::SortKey::parse) {
+        crate::home_recents::Sort::by(key).store(&mut app.session.prefs);
+    }
+    if let Some(order) = p.get("homeRecentsOrder").and_then(Value::as_str).filter(|o| matches!(*o, "asc" | "desc")) {
+        let sort = crate::home_recents::Sort::of(&app.session.prefs);
+        crate::home_recents::Sort { descending: order == "desc", ..sort }.store(&mut app.session.prefs);
+    }
+    if let Some(h) = p.get("palette").and_then(Value::as_bool) {
+        crate::menus::set_palette(&mut app.ui, h);
+    }
+    // true / false, or a top-level menu to open it at ("Plugins").
+    match p.get("mainMenu") {
+        Some(Value::Bool(h)) => app.ui.main_menu = *h,
+        Some(Value::String(top)) => {
+            app.ui.main_menu = true;
+            crate::menus::open_main_menu(ctx, top);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn ui_set_plugins(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String> {
+    if let Some(h) = p.get("pluginsWindow").and_then(Value::as_bool) {
+        app.ui.plugins_window = h;
+    }
+    // The Plugins window's tab ("installed", "browse"), and the plugin of the listed
+    // directory whose install asks for confirmation (null: none).
+    if let Some(tab) = p.get("pluginsTab").and_then(Value::as_str) {
+        app.ui.plugins_manage.tab = if tab == "browse" { crate::plugins_ui::PluginsTab::Browse } else { crate::plugins_ui::PluginsTab::Installed };
+    }
+    match p.get("pluginConfirm") {
+        Some(Value::String(id)) => app.ui.plugins_manage.confirm = Some(id.clone()),
+        Some(Value::Null) => app.ui.plugins_manage.confirm = None,
+        _ => {}
+    }
+    // A plugin command's parameters form: {id, command?}; null closes it.
+    match p.get("pluginForm") {
+        Some(Value::Null) => app.ui.plugin_form = None,
+        Some(v @ Value::Object(_)) => {
+            let id = v.get("id").and_then(Value::as_str).ok_or("pluginForm: {id, command?}")?;
+            let command = v.get("command").and_then(Value::as_str).unwrap_or_default();
+            crate::plugins_ui::start(app, id, command);
+        }
+        _ => {}
+    }
+    // Give a region the keyboard as F6 would: toolbar, layers, canvas or properties.
+    if let Some(r) = p.get("focusRegion").and_then(Value::as_str) {
+        app.ui.nav.go(crate::a11y::Region::parse(r).ok_or_else(|| format!("unknown region `{r}`"))?);
+    }
+    // A right-click on the canvas at screen [sx, sy] (null closes the menu);
+    // `contextSelectLayer` opens its Select layer submenu.
+    match p.get("contextMenu") {
+        Some(Value::Array(at)) => {
+            let (x, y) = (at.first().and_then(Value::as_f64).unwrap_or(0.0), at.get(1).and_then(Value::as_f64).unwrap_or(0.0));
+            crate::canvas::open_context_menu(app, egui::pos2(x as f32, y as f32), b(p, "cmd"));
+        }
+        Some(Value::Null) => app.ui.context_menu = None,
+        _ => {}
+    }
+    if let Some(v) = p.get("contextSelectLayer").and_then(Value::as_bool) {
+        crate::menus::open_select_layer(ctx, v);
+    }
+    if let Some(h) = p.get("iconGallery").and_then(Value::as_bool) {
+        app.ui.icon_gallery = h;
+    }
+    Ok(())
+}
+
+fn ui_set_comments(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String> {
+    // Comment thread popover: an id opens it, null closes it.
+    if let Some(v) = p.get("commentOpen") {
+        match v.as_u64() {
+            Some(id) => {
+                // Pins are drawn for the current page only: reveal the thread's page first.
+                let page = app.session.doc().ok().and_then(|d| d.comment(id)).map(|c| c.page);
+                if let Some(page) = page.filter(|p| app.session.page().is_ok_and(|cur| cur != *p)) {
+                    app.session.execute("page.select", &json!({"id": page.0})).map_err(|e| e.to_string())?;
+                }
+                app.ui.comments.show(id);
+            }
+            None => app.ui.comments.close(),
+        }
+    }
+    if let Some(v) = p.get("commentDraft") {
+        match (v.get("x").and_then(Value::as_f64), v.get("y").and_then(Value::as_f64)) {
+            (Some(x), Some(y)) => crate::comments::start_draft(app, x, y),
+            _ => app.ui.comments.draft = None,
+        }
+    }
+    if let Some(v) = p.get("showResolvedComments").and_then(Value::as_bool) {
+        app.ui.comments.filter = if v { Filter::All } else { Filter::Open };
+    }
+    if let Some(v) = p.get("commentFilter").and_then(Value::as_str) {
+        app.ui.comments.filter = Filter::parse(v).ok_or("commentFilter: open|resolved|mine|unread|all")?;
+    }
+    if let Some(v) = p.get("commentSort").and_then(Value::as_str) {
+        app.ui.comments.sort = Sort::parse(v).ok_or("commentSort: date|page")?;
+    }
+    if let Some(v) = p.get("commentSearch").and_then(Value::as_str) {
+        app.ui.comments.search = v.to_string();
+    }
+    // The open thread's reply field, with the cursor at its end (an `@` there offers names).
+    if let Some(v) = p.get("commentReply").and_then(Value::as_str) {
+        app.ui.comments.reply = v.to_string();
+        if let Some(id) = app.ui.comments.open {
+            crate::comments::focus_reply(ctx, id, v.chars().count());
+        }
+    }
+    // Edit a message of the open thread: its index (0: the first message); null stops.
+    if let Some(v) = p.get("commentEdit") {
+        app.ui.comments.editing = match (app.ui.comments.open, v.as_u64()) {
+            (Some(id), Some(i)) => {
+                let text = app.session.doc().ok().and_then(|d| d.comment(id)).and_then(|c| c.message(i as usize)).map(|m| m.text.clone());
+                Some((id, i as usize, text.ok_or("commentEdit: no such message")?))
+            }
+            _ => None,
+        };
+    }
+    if let Some(v) = p.get("presentComments").and_then(Value::as_bool) {
+        app.ui.present_view.comments = v;
+        if let Some(pres) = app.ui.present.as_mut() {
+            pres.view.comments = v;
+        }
+    }
+    Ok(())
+}
+
+fn ui_set_panels(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<(), String> {
+    // Colour picker on the selection's paint `{fills?, index?}`; null closes it.
+    if let Some(v) = p.get("colorPicker") {
+        app.ui.picker = v.is_object().then(|| crate::colorpicker::PickerTarget::Paint {
+            fills: v.get("fills").and_then(Value::as_bool).unwrap_or(true),
+            index: v.get("index").and_then(Value::as_u64).unwrap_or(0).min(1000) as usize,
+            ids: app.session.selection(),
+        });
+    }
+    // The Variables editor: true / a collection (id or name) / {library, collection?} (an
+    // enabled library's, by id or name) opens it, false closes it.
+    match p.get("variables") {
+        Some(Value::Bool(open)) => app.ui.variables = open.then(Default::default),
+        Some(Value::String(c)) => app.ui.variables = Some(crate::variables_panel::Editor::on(Some(c.clone()))),
+        Some(v @ Value::Object(_)) => {
+            let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+            app.ui.variables = Some(match text("library") {
+                Some(lib) => crate::variables_panel::Editor::in_library(lib, text("collection")),
+                None => crate::variables_panel::Editor::on(text("collection")),
+            });
+        }
+        _ => {}
+    }
+    // Layers panel search: a string opens it with that filter, null closes it.
+    if let Some(v) = p.get("layerFilter") {
+        app.ui.layer_search = v.is_string();
+        app.ui.layer_filter = v.as_str().unwrap_or_default().chars().take(200).collect();
+    }
+    if p.get("collapseLayers").and_then(Value::as_bool) == Some(true) {
+        app.ui.expanded.clear();
+    }
+    // The interaction editor popover in the Prototype panel: [layer id, index]; null closes it.
+    match p.get("protoEditor") {
+        Some(Value::Null) => crate::proto_panel::open_editor(ctx, None),
+        Some(Value::Array(a)) => {
+            let id = a.first().and_then(Value::as_u64).ok_or("protoEditor: [layer id, interaction index]")?;
+            let k = a.get(1).and_then(Value::as_u64).unwrap_or(0) as usize;
+            crate::proto_panel::open_editor(ctx, Some((figcraft_doc::NodeId(id), k)));
+        }
+        _ => {}
+    }
+    // The prototype preview pane: true / a frame id opens it, false or null closes it.
+    match p.get("preview") {
+        Some(Value::Bool(false) | Value::Null) => app.ui.preview = None,
+        Some(v @ (Value::Bool(true) | Value::Number(_))) => {
+            let params = if v.is_number() { json!({"start": v}) } else { json!({}) };
+            app.session.execute("proto.preview", &params).map_err(|e| e.to_string())?;
+            app.handle_ui_requests();
+        }
+        _ => {}
+    }
+    // Scroll the presented screen (the full-window player, else the preview pane) to [x, y].
+    if let Some(s) = p.get("presentScroll").and_then(Value::as_array) {
+        let at = |i: usize| s.get(i).and_then(Value::as_f64).unwrap_or(0.0);
+        let player = match (app.ui.present.as_mut(), app.ui.preview.as_mut()) {
+            (Some(p), _) => Some(p),
+            (None, Some(pane)) => Some(&mut pane.player),
+            _ => None,
+        };
+        player.ok_or("nothing is presented")?.scroll_to(at(0), at(1));
+    }
+    Ok(())
+}
+
+fn ui_set_styles(app: &mut FigApp, p: &Value) -> Result<(), String> {
+    // The style picker: a slot (fill, stroke, effect, grid, text) opens it for the selection, null
+    // closes it; `stylePickerEdit` (a style id or name) opens its editor; `stylePickerView`
+    // is `list` or `grid`.
+    if let Some(v) = p.get("stylePicker") {
+        match v.as_str().and_then(crate::style_picker::StyleSlot::parse) {
+            Some(slot) => crate::style_picker::open_for_selection(app, slot, p.get("stylePickerEdit").and_then(Value::as_str)),
+            None => app.ui.style_picker = None,
+        }
+    }
+    if let Some(v) = p.get("stylePickerView").and_then(Value::as_str) {
+        app.ui.style_grid = v == "grid";
+    }
+    // The Color profile dialog: a profile id opens it with that profile chosen, null closes it.
+    if let Some(v) = p.get("colorProfileDialog") {
+        app.ui.color_profile = v.as_str().and_then(figcraft_color::ColorProfile::parse);
+    }
+    if let Some(v) = p.get("exportPreview").and_then(Value::as_bool) {
+        app.ui.export_thumb = v;
+    }
+    // Dev Mode's compare view: a frame or section opens it, null closes it; `devCompareVersion`
+    // the saved version it compares with (null: when it was marked ready for dev),
+    // `devCompareMode` is sideBySide or overlay, `devCompareSplit` the overlay slider (0–1).
+    if let Some(v) = p.get("devCompare") {
+        app.ui.dev.compare = figcraft_engine::params::id_of(v).map(|id| crate::dev_compare::CompareView::new(id, None));
+    }
+    if let Some(c) = app.ui.dev.compare.as_mut() {
+        if let Some(v) = p.get("devCompareVersion") {
+            c.version = v.as_str().map(str::to_string);
+        }
+        match p.get("devCompareMode").and_then(Value::as_str) {
+            Some("overlay") => c.mode = crate::dev_compare::Mode::Overlay,
+            Some("sideBySide") => c.mode = crate::dev_compare::Mode::SideBySide,
+            Some(_) => return Err("devCompareMode: sideBySide|overlay".into()),
+            None => {}
+        }
+        if let Some(x) = p.get("devCompareSplit").and_then(Value::as_f64).filter(|x| x.is_finite()) {
+            c.split = x.clamp(0.0, 1.0) as f32;
+        }
+    }
+    // The branch review dialog: a branch id opens it, null closes it; `branchReviewPicks`
+    // chooses sides ({<conflict key>: "branch" | "main"}).
+    if let Some(v) = p.get("branchReview") {
+        match v.as_str() {
+            Some(id) => crate::branch_ui::open(app, Some(id)),
+            None => app.ui.branch_review = None,
+        }
+    }
+    if let (Some(r), Some(picks)) = (app.ui.branch_review.as_mut(), p.get("branchReviewPicks").and_then(Value::as_object)) {
+        for (k, v) in picks {
+            let side = v.as_str().and_then(figcraft_engine::branches::Side::parse).ok_or("branchReviewPicks: \"branch\" or \"main\"")?;
+            r.picks.insert(k.clone(), side);
+        }
+    }
+    // Which annotations the canvas shows: all, none (uncategorised) or a category.
+    if let Some(v) = p.get("annotationFilter").and_then(Value::as_str) {
+        let doc = app.session.doc().map_err(|e| e.to_string())?;
+        app.ui.dev.categories = crate::dev_mode::CategoryFilter::parse(doc, v).ok_or("annotationFilter: all|none|a category id or name")?;
+    }
+    if b(p, "resetFrameStats") {
+        app.frame_stats.reset();
+    }
+    Ok(())
+}
+
+/// The methods whose `document` may name a file behind the tab in front.
+const DOCUMENT_METHODS: &[&str] = &["engine.execute", "document.inspect", "node.get", "ui.render"];
+
+/// The request's `document` (an `id` from `doc.list`, or an open file's path), when it names one.
+fn document_of(p: &Value) -> Option<&Value> {
+    p.get("document").filter(|d| !d.is_null())
+}
+
+/// Run `f` with the request's `document` in front and the user's tab back afterwards, else on the
+/// tab in front (the same swap a command run in the background makes).
+fn in_document<T>(app: &mut FigApp, p: &Value, f: impl FnOnce(&mut Session) -> Result<T, String>) -> Result<T, String> {
+    let Some(target) = document_of(p) else { return f(&mut app.session) };
+    let forward = app.session.bring_forward(target).map_err(|e| e.to_string())?;
+    let r = f(&mut app.session);
+    app.session.put_back(forward);
+    r
+}
+
+/// A method that acts on the tab in front (`front`, a document uid) refuses a `document` naming
+/// another file instead of quietly acting on the wrong one.
+fn front_only(session: &Session, front: Option<u64>, method: &str, p: &Value) -> Result<(), String> {
+    let Some(target) = document_of(p) else { return Ok(()) };
+    if Some(session.document_uid(target).map_err(|e| e.to_string())?) == front {
+        return Ok(());
+    }
+    Err(format!("`{method}` acts on the tab in front: `document` can name another open file only for {}", DOCUMENT_METHODS.join(", ")))
+}
+
 /// Handle one control method (also used by tests and the headless snapshot tool).
 pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
+    if !DOCUMENT_METHODS.contains(&method) {
+        front_only(&app.session, app.session.ds().ok().map(|d| d.uid), method, p)?;
+    }
     match method {
         "engine.execute" => {
             let cmd = p.get("command").and_then(Value::as_str).ok_or("`command` required")?;
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let layers_generation = app.session.clipboard.layers_generation;
-            let r = app.session.execute(cmd, &params).map_err(|e| e.to_string());
+            let agent = p.get("agent").and_then(Value::as_str);
+            let r = in_document(app, p, |s| s.execute_as(agent, cmd, &params).map_err(|e| e.to_string()));
             app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             app.invalidate_synthetic_copy(layers_generation);
             // Programmatic calls never open dialogs.
@@ -950,12 +1488,16 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
         )),
         "document.inspect" => {
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
-            Ok(figcraft_engine::inspect::document(&app.session, depth, b(p, "allPages")))
+            let options = figcraft_engine::inspect::InspectOptions::parse(p)?;
+            in_document(app, p, |s| Ok(figcraft_engine::inspect::document_with_options(s, depth, b(p, "allPages"), &options)))
         }
         "node.get" => {
             let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required")?;
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(1) as usize;
-            app.session.doc().map(|d| figcraft_engine::inspect::node_json(d, id, depth)).map_err(|e| e.to_string())
+            let options = figcraft_engine::inspect::InspectOptions::parse(p)?;
+            in_document(app, p, |s| {
+                s.doc().map(|d| figcraft_engine::inspect::node_json_with_options(d, id, depth, &options)).map_err(|e| e.to_string())
+            })
         }
         "window.new" => {
             let index = p.get("index").and_then(Value::as_u64).map(|i| i as usize);
@@ -972,134 +1514,8 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             Ok(v)
         }
         "ui.pointer" => pointer(app, p),
-        "ui.key" => {
-            let key = p.get("key").and_then(Value::as_str).ok_or("`key` required")?;
-            let m = figcraft_engine::keymap::Mods { shift: b(p, "shift"), alt: b(p, "alt"), cmd: b(p, "cmd"), ctrl: b(p, "ctrl") };
-            let platform = crate::shortcuts::platform();
-            use figcraft_engine::keymap::{Context, lookup, normalize};
-            // Text editing keys go to the editor (after the shortcuts live while editing).
-            if app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
-                if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
-                    crate::menus::invoke(app, bd.id);
-                    return Ok(json!({"command": bd.id}));
-                }
-                let (word, line) = figcraft_engine::keymap::text_motion(platform, key, m);
-                figcraft_engine::textedit::key(&mut app.session, key, m.shift, word, line).map_err(|e| e.to_string())?;
-                return Ok(json!({"ok": true}));
-            }
-            // Vector edit mode and shape builder keys (tools, nudging points, delete, join, Enter).
-            if app.session.tool_key(key, m.shift, m.alt, m.cmd).map_err(|e| e.to_string())? {
-                return Ok(json!({"ok": true}));
-            }
-            // The Comment tool's arrows step through the comment threads.
-            if app.session.tool.tool == figcraft_engine::ToolId::Comment && m.is_none() && matches!(key, "ArrowUp" | "ArrowDown" | "Up" | "Down") {
-                let r = crate::comments::step(app, ctx, if matches!(key, "ArrowUp" | "Up") { -1 } else { 1 });
-                return Ok(json!({"comment": r.and_then(|v| v.get("id").cloned())}));
-            }
-            if let Some(bd) = lookup(platform, Context::Canvas, key, m) {
-                crate::shortcuts::run_binding(app, bd.id);
-                return Ok(json!({"command": bd.id}));
-            }
-            let (name, _) = normalize(key).ok_or_else(|| format!("unknown key `{key}`"))?;
-            match name {
-                "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" => {
-                    let (dx, dy) = match name {
-                        "ArrowLeft" => (-1, 0),
-                        "ArrowRight" => (1, 0),
-                        "ArrowUp" => (0, -1),
-                        _ => (0, 1),
-                    };
-                    let (cmd, params) = if m.cmd || m.ctrl {
-                        ("transform.nudgeSize", json!({"dw": dx, "dh": dy, "big": m.shift}))
-                    } else {
-                        ("transform.nudge", json!({"dx": dx, "dy": dy, "big": m.shift}))
-                    };
-                    app.session.execute(cmd, &params).map_err(|e| e.to_string())
-                }
-                _ => {
-                    // Number keys: opacity (two in quick succession make an exact percentage). A
-                    // hidden window's logic tick has a stale `ctx.input(i.time)`.
-                    let now = app.clock.now();
-                    match egui::Key::from_name(name) {
-                        Some(k) if m.is_none() && crate::shortcuts::opacity_digit(app, k, now) => Ok(json!({"opacity": true})),
-                        _ => Err(format!("no shortcut `{key}`")),
-                    }
-                }
-            }
-        }
-        "ui.input" => {
-            let list = p
-                .get("events")
-                .and_then(Value::as_array)
-                .ok_or("`events` required: [{move|down|up: [x, y]} | {key, shift?, alt?, cmd?} | {text} | {leave: true}]")?;
-            let pos = |v: &Value| -> Option<egui::Pos2> {
-                let a = v.as_array()?;
-                let p = egui::pos2(a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32);
-                p.is_finite().then_some(p)
-            };
-            let mut events = Vec::new();
-            let mut pads = Vec::new();
-            for e in list.iter().take(256) {
-                let button = if e.get("button").and_then(Value::as_str) == Some("secondary") {
-                    egui::PointerButton::Secondary
-                } else {
-                    egui::PointerButton::Primary
-                };
-                let command = b(e, "cmd") || b(e, "ctrl");
-                let mods = egui::Modifiers { alt: b(e, "alt"), ctrl: command, shift: b(e, "shift"), mac_cmd: false, command };
-                if let Some(p) = e.get("move").and_then(pos) {
-                    events.push(egui::Event::PointerMoved(p));
-                } else if let Some((p, pressed)) =
-                    e.get("down").and_then(pos).map(|p| (p, true)).or_else(|| e.get("up").and_then(pos).map(|p| (p, false)))
-                {
-                    events.push(egui::Event::PointerMoved(p));
-                    events.push(egui::Event::PointerButton { pos: p, button, pressed, modifiers: mods });
-                } else if let Some(k) = e.get("key").and_then(Value::as_str) {
-                    let key = egui::Key::from_name(k).ok_or_else(|| format!("unknown key `{k}`"))?;
-                    for pressed in [true, false] {
-                        events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods });
-                    }
-                } else if let Some(t) = e.get("text").and_then(Value::as_str) {
-                    events.push(egui::Event::Text(t.to_string()));
-                } else if let Some(d) = e.get("scroll").and_then(pos) {
-                    // Content moves by `d` points (negative y scrolls down, like a wheel turned towards you).
-                    events.push(egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        source: egui::MouseWheelSource::Wheel,
-                        delta: d.to_vec2(),
-                        phase: egui::TouchPhase::Move,
-                        modifiers: mods,
-                    });
-                } else if let Some(g) = e.get("gamepad") {
-                    let names = figcraft_doc::proto::GAMEPAD_BUTTONS.join(", ");
-                    pads.push(pad_name(g).ok_or_else(|| format!("unknown controller button {g} (an index 0-16 or one of {names})"))?.to_string());
-                } else if b(e, "leave") {
-                    events.push(egui::Event::PointerGone);
-                } else if let Some(h) = e.get("hold") {
-                    let held = egui::Modifiers {
-                        alt: b(h, "alt"),
-                        ctrl: b(h, "cmd") || b(h, "ctrl"),
-                        shift: b(h, "shift"),
-                        mac_cmd: false,
-                        command: b(h, "cmd") || b(h, "ctrl"),
-                    };
-                    events.push(egui::Event::ModifiersChanged(held));
-                } else {
-                    return Err(format!("unknown input event {e}"));
-                }
-            }
-            // Controller buttons go straight to the prototype playing (its next frame takes them).
-            if !pads.is_empty() {
-                match (app.ui.present.as_mut(), app.ui.preview.as_mut()) {
-                    (Some(p), _) => p.pads.extend(pads),
-                    (None, Some(pane)) => pane.player.pads.extend(pads),
-                    (None, None) => return Err("controller buttons go to a prototype that is playing: run proto.present or proto.preview".into()),
-                }
-            }
-            app.control_input_queued = app.push_control_input(events);
-            ctx.request_repaint();
-            Ok(json!({"queued": list.len().min(256)}))
-        }
+        "ui.key" => ui_key(app, ctx, p),
+        "ui.input" => ui_input(app, ctx, p),
         "ui.type" => {
             let text = p.get("text").and_then(Value::as_str).ok_or("`text` required")?;
             figcraft_engine::textedit::insert(&mut app.session, text).map_err(|e| e.to_string())?;
@@ -1111,270 +1527,11 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             Ok(json!({"ok": true, "lastError": app.ui.last_error}))
         }
         "ui.set" => {
-            if let Some(t) = p.get("rightTab").and_then(Value::as_str) {
-                app.ui.right_tab = match t {
-                    "prototype" => crate::RightTab::Prototype,
-                    "inspect" => crate::RightTab::Inspect,
-                    _ => crate::RightTab::Design,
-                };
-            }
-            if let Some(t) = p.get("leftTab").and_then(Value::as_str) {
-                app.ui.left_tab = if t == "assets" { crate::LeftTab::Assets } else { crate::LeftTab::File };
-            }
-            if let Some(t) = p.get("theme").and_then(Value::as_str) {
-                app.session.prefs.theme = t.to_string();
-            }
-            if let Some(h) = p.get("home").and_then(Value::as_bool) {
-                app.ui.home = h;
-            }
-            if let Some(section) = p.get("homeSection").and_then(Value::as_str).and_then(crate::home::Section::parse) {
-                app.ui.home_view.section = section;
-            }
-            if let Some(query) = p.get("homeSearch").and_then(Value::as_str) {
-                app.ui.home_view.file_query = query.chars().take(256).collect();
-            }
-            if let Some(view) = p.get("homeRecentsView").and_then(Value::as_str).and_then(crate::home_recents::View::parse) {
-                view.store(&mut app.session.prefs);
-            }
-            if let Some(key) = p.get("homeRecentsSort").and_then(Value::as_str).and_then(crate::home_recents::SortKey::parse) {
-                crate::home_recents::Sort::by(key).store(&mut app.session.prefs);
-            }
-            if let Some(order) = p.get("homeRecentsOrder").and_then(Value::as_str).filter(|o| matches!(*o, "asc" | "desc")) {
-                let sort = crate::home_recents::Sort::of(&app.session.prefs);
-                crate::home_recents::Sort { descending: order == "desc", ..sort }.store(&mut app.session.prefs);
-            }
-            if let Some(h) = p.get("palette").and_then(Value::as_bool) {
-                crate::menus::set_palette(&mut app.ui, h);
-            }
-            // true / false, or a top-level menu to open it at ("Plugins").
-            match p.get("mainMenu") {
-                Some(Value::Bool(h)) => app.ui.main_menu = *h,
-                Some(Value::String(top)) => {
-                    app.ui.main_menu = true;
-                    crate::menus::open_main_menu(ctx, top);
-                }
-                _ => {}
-            }
-            if let Some(h) = p.get("pluginsWindow").and_then(Value::as_bool) {
-                app.ui.plugins_window = h;
-            }
-            // The Plugins window's tab ("installed", "browse"), and the plugin of the listed
-            // directory whose install asks for confirmation (null: none).
-            if let Some(tab) = p.get("pluginsTab").and_then(Value::as_str) {
-                app.ui.plugins_manage.tab =
-                    if tab == "browse" { crate::plugins_ui::PluginsTab::Browse } else { crate::plugins_ui::PluginsTab::Installed };
-            }
-            match p.get("pluginConfirm") {
-                Some(Value::String(id)) => app.ui.plugins_manage.confirm = Some(id.clone()),
-                Some(Value::Null) => app.ui.plugins_manage.confirm = None,
-                _ => {}
-            }
-            // A plugin command's parameters form: {id, command?}; null closes it.
-            match p.get("pluginForm") {
-                Some(Value::Null) => app.ui.plugin_form = None,
-                Some(v @ Value::Object(_)) => {
-                    let id = v.get("id").and_then(Value::as_str).ok_or("pluginForm: {id, command?}")?;
-                    let command = v.get("command").and_then(Value::as_str).unwrap_or_default();
-                    crate::plugins_ui::start(app, id, command);
-                }
-                _ => {}
-            }
-            // Give a region the keyboard as F6 would: toolbar, layers, canvas or properties.
-            if let Some(r) = p.get("focusRegion").and_then(Value::as_str) {
-                app.ui.nav.go(crate::a11y::Region::parse(r).ok_or_else(|| format!("unknown region `{r}`"))?);
-            }
-            // A right-click on the canvas at screen [sx, sy] (null closes the menu);
-            // `contextSelectLayer` opens its Select layer submenu.
-            match p.get("contextMenu") {
-                Some(Value::Array(at)) => {
-                    let (x, y) = (at.first().and_then(Value::as_f64).unwrap_or(0.0), at.get(1).and_then(Value::as_f64).unwrap_or(0.0));
-                    crate::canvas::open_context_menu(app, egui::pos2(x as f32, y as f32), b(p, "cmd"));
-                }
-                Some(Value::Null) => app.ui.context_menu = None,
-                _ => {}
-            }
-            if let Some(v) = p.get("contextSelectLayer").and_then(Value::as_bool) {
-                crate::menus::open_select_layer(ctx, v);
-            }
-            if let Some(h) = p.get("iconGallery").and_then(Value::as_bool) {
-                app.ui.icon_gallery = h;
-            }
-            // Comment thread popover: an id opens it, null closes it.
-            if let Some(v) = p.get("commentOpen") {
-                match v.as_u64() {
-                    Some(id) => {
-                        // Pins are drawn for the current page only: reveal the thread's page first.
-                        let page = app.session.doc().ok().and_then(|d| d.comment(id)).map(|c| c.page);
-                        if let Some(page) = page.filter(|p| app.session.page().is_ok_and(|cur| cur != *p)) {
-                            app.session.execute("page.select", &json!({"id": page.0})).map_err(|e| e.to_string())?;
-                        }
-                        app.ui.comments.show(id);
-                    }
-                    None => app.ui.comments.close(),
-                }
-            }
-            if let Some(v) = p.get("commentDraft") {
-                match (v.get("x").and_then(Value::as_f64), v.get("y").and_then(Value::as_f64)) {
-                    (Some(x), Some(y)) => crate::comments::start_draft(app, x, y),
-                    _ => app.ui.comments.draft = None,
-                }
-            }
-            if let Some(v) = p.get("showResolvedComments").and_then(Value::as_bool) {
-                app.ui.comments.filter = if v { Filter::All } else { Filter::Open };
-            }
-            if let Some(v) = p.get("commentFilter").and_then(Value::as_str) {
-                app.ui.comments.filter = Filter::parse(v).ok_or("commentFilter: open|resolved|mine|unread|all")?;
-            }
-            if let Some(v) = p.get("commentSort").and_then(Value::as_str) {
-                app.ui.comments.sort = Sort::parse(v).ok_or("commentSort: date|page")?;
-            }
-            if let Some(v) = p.get("commentSearch").and_then(Value::as_str) {
-                app.ui.comments.search = v.to_string();
-            }
-            // The open thread's reply field, with the cursor at its end (an `@` there offers names).
-            if let Some(v) = p.get("commentReply").and_then(Value::as_str) {
-                app.ui.comments.reply = v.to_string();
-                if let Some(id) = app.ui.comments.open {
-                    crate::comments::focus_reply(ctx, id, v.chars().count());
-                }
-            }
-            // Edit a message of the open thread: its index (0: the first message); null stops.
-            if let Some(v) = p.get("commentEdit") {
-                app.ui.comments.editing = match (app.ui.comments.open, v.as_u64()) {
-                    (Some(id), Some(i)) => {
-                        let text = app.session.doc().ok().and_then(|d| d.comment(id)).and_then(|c| c.message(i as usize)).map(|m| m.text.clone());
-                        Some((id, i as usize, text.ok_or("commentEdit: no such message")?))
-                    }
-                    _ => None,
-                };
-            }
-            if let Some(v) = p.get("presentComments").and_then(Value::as_bool) {
-                app.ui.present_view.comments = v;
-                if let Some(pres) = app.ui.present.as_mut() {
-                    pres.view.comments = v;
-                }
-            }
-            // Colour picker on the selection's paint `{fills?, index?}`; null closes it.
-            if let Some(v) = p.get("colorPicker") {
-                app.ui.picker = v.is_object().then(|| crate::colorpicker::PickerTarget::Paint {
-                    fills: v.get("fills").and_then(Value::as_bool).unwrap_or(true),
-                    index: v.get("index").and_then(Value::as_u64).unwrap_or(0).min(1000) as usize,
-                    ids: app.session.selection(),
-                });
-            }
-            // The Variables editor: true / a collection (id or name) / {library, collection?} (an
-            // enabled library's, by id or name) opens it, false closes it.
-            match p.get("variables") {
-                Some(Value::Bool(open)) => app.ui.variables = open.then(Default::default),
-                Some(Value::String(c)) => app.ui.variables = Some(crate::variables_panel::Editor::on(Some(c.clone()))),
-                Some(v @ Value::Object(_)) => {
-                    let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
-                    app.ui.variables = Some(match text("library") {
-                        Some(lib) => crate::variables_panel::Editor::in_library(lib, text("collection")),
-                        None => crate::variables_panel::Editor::on(text("collection")),
-                    });
-                }
-                _ => {}
-            }
-            // Layers panel search: a string opens it with that filter, null closes it.
-            if let Some(v) = p.get("layerFilter") {
-                app.ui.layer_search = v.is_string();
-                app.ui.layer_filter = v.as_str().unwrap_or_default().chars().take(200).collect();
-            }
-            if p.get("collapseLayers").and_then(Value::as_bool) == Some(true) {
-                app.ui.expanded.clear();
-            }
-            // The interaction editor popover in the Prototype panel: [layer id, index]; null closes it.
-            match p.get("protoEditor") {
-                Some(Value::Null) => crate::proto_panel::open_editor(ctx, None),
-                Some(Value::Array(a)) => {
-                    let id = a.first().and_then(Value::as_u64).ok_or("protoEditor: [layer id, interaction index]")?;
-                    let k = a.get(1).and_then(Value::as_u64).unwrap_or(0) as usize;
-                    crate::proto_panel::open_editor(ctx, Some((figcraft_doc::NodeId(id), k)));
-                }
-                _ => {}
-            }
-            // The prototype preview pane: true / a frame id opens it, false or null closes it.
-            match p.get("preview") {
-                Some(Value::Bool(false) | Value::Null) => app.ui.preview = None,
-                Some(v @ (Value::Bool(true) | Value::Number(_))) => {
-                    let params = if v.is_number() { json!({"start": v}) } else { json!({}) };
-                    app.session.execute("proto.preview", &params).map_err(|e| e.to_string())?;
-                    app.handle_ui_requests();
-                }
-                _ => {}
-            }
-            // Scroll the presented screen (the full-window player, else the preview pane) to [x, y].
-            if let Some(s) = p.get("presentScroll").and_then(Value::as_array) {
-                let at = |i: usize| s.get(i).and_then(Value::as_f64).unwrap_or(0.0);
-                let player = match (app.ui.present.as_mut(), app.ui.preview.as_mut()) {
-                    (Some(p), _) => Some(p),
-                    (None, Some(pane)) => Some(&mut pane.player),
-                    _ => None,
-                };
-                player.ok_or("nothing is presented")?.scroll_to(at(0), at(1));
-            }
-            // The style picker: a slot (fill, stroke, effect, grid, text) opens it for the selection, null
-            // closes it; `stylePickerEdit` (a style id or name) opens its editor; `stylePickerView`
-            // is `list` or `grid`.
-            if let Some(v) = p.get("stylePicker") {
-                match v.as_str().and_then(crate::style_picker::StyleSlot::parse) {
-                    Some(slot) => crate::style_picker::open_for_selection(app, slot, p.get("stylePickerEdit").and_then(Value::as_str)),
-                    None => app.ui.style_picker = None,
-                }
-            }
-            if let Some(v) = p.get("stylePickerView").and_then(Value::as_str) {
-                app.ui.style_grid = v == "grid";
-            }
-            // The Color profile dialog: a profile id opens it with that profile chosen, null closes it.
-            if let Some(v) = p.get("colorProfileDialog") {
-                app.ui.color_profile = v.as_str().and_then(figcraft_color::ColorProfile::parse);
-            }
-            if let Some(v) = p.get("exportPreview").and_then(Value::as_bool) {
-                app.ui.export_thumb = v;
-            }
-            // Dev Mode's compare view: a frame or section opens it, null closes it; `devCompareVersion`
-            // the saved version it compares with (null: when it was marked ready for dev),
-            // `devCompareMode` is sideBySide or overlay, `devCompareSplit` the overlay slider (0–1).
-            if let Some(v) = p.get("devCompare") {
-                app.ui.dev.compare = figcraft_engine::params::id_of(v).map(|id| crate::dev_compare::CompareView::new(id, None));
-            }
-            if let Some(c) = app.ui.dev.compare.as_mut() {
-                if let Some(v) = p.get("devCompareVersion") {
-                    c.version = v.as_str().map(str::to_string);
-                }
-                match p.get("devCompareMode").and_then(Value::as_str) {
-                    Some("overlay") => c.mode = crate::dev_compare::Mode::Overlay,
-                    Some("sideBySide") => c.mode = crate::dev_compare::Mode::SideBySide,
-                    Some(_) => return Err("devCompareMode: sideBySide|overlay".into()),
-                    None => {}
-                }
-                if let Some(x) = p.get("devCompareSplit").and_then(Value::as_f64).filter(|x| x.is_finite()) {
-                    c.split = x.clamp(0.0, 1.0) as f32;
-                }
-            }
-            // The branch review dialog: a branch id opens it, null closes it; `branchReviewPicks`
-            // chooses sides ({<conflict key>: "branch" | "main"}).
-            if let Some(v) = p.get("branchReview") {
-                match v.as_str() {
-                    Some(id) => crate::branch_ui::open(app, Some(id)),
-                    None => app.ui.branch_review = None,
-                }
-            }
-            if let (Some(r), Some(picks)) = (app.ui.branch_review.as_mut(), p.get("branchReviewPicks").and_then(Value::as_object)) {
-                for (k, v) in picks {
-                    let side = v.as_str().and_then(figcraft_engine::branches::Side::parse).ok_or("branchReviewPicks: \"branch\" or \"main\"")?;
-                    r.picks.insert(k.clone(), side);
-                }
-            }
-            // Which annotations the canvas shows: all, none (uncategorised) or a category.
-            if let Some(v) = p.get("annotationFilter").and_then(Value::as_str) {
-                let doc = app.session.doc().map_err(|e| e.to_string())?;
-                app.ui.dev.categories = crate::dev_mode::CategoryFilter::parse(doc, v).ok_or("annotationFilter: all|none|a category id or name")?;
-            }
-            if b(p, "resetFrameStats") {
-                app.frame_stats.reset();
-            }
+            ui_set_view(app, ctx, p)?;
+            ui_set_plugins(app, ctx, p)?;
+            ui_set_comments(app, ctx, p)?;
+            ui_set_panels(app, ctx, p)?;
+            ui_set_styles(app, p)?;
             Ok(app.inspect())
         }
         "ui.render" => {
@@ -1388,7 +1545,7 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             if !ids.is_empty() {
                 params["ids"] = json!(ids);
             }
-            app.session.execute("file.export", &params).map_err(|e| e.to_string())
+            in_document(app, p, |s| s.execute("file.export", &params).map_err(|e| e.to_string()))
         }
         "app.quit" => {
             app.ui.quit = true;
@@ -1465,3 +1622,6 @@ mod roots_tests;
 
 #[cfg(test)]
 mod capture_tests;
+
+#[cfg(test)]
+mod document_tests;

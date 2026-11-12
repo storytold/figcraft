@@ -43,6 +43,24 @@ fn stroke_only_vector_shared_stroke_style_keeps_paints() {
 }
 
 #[test]
+fn public_rest_ignores_region_fills_and_private_fig_handoff() {
+    let network = json!({
+        "vertices": [{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 10, "y": 10}],
+        "segments": [{"a": 0, "b": 1}, {"a": 1, "b": 2}, {"a": 2, "b": 0}],
+        "regions": [{"loops": [[0, 1, 2]], "winding": "nonZero", "fills": [{"type": "solid", "color": {"r": 0, "g": 1, "b": 0}}],
+                     "paint_space": {"width": 10, "height": 10, "transform": [1, 0, 0, 1, 5, 5]},
+                     "_figRegionFills": [{"type": "SOLID", "color": {"r": 1, "g": 0, "b": 0}}]}]
+    });
+    let node = json!({"id": "1:1", "name": "Vector", "type": "VECTOR", "relativeTransform": at(0.0, 0.0),
+                      "size": {"x": 10, "y": 10}, "vectorNetwork": network});
+    let (doc, _) = import(&file(json!([node])), &no_images).unwrap();
+    let vector = named(&doc, "Vector");
+    let NodeKind::Vector { network } = &vector.kind else { panic!("{:#?}", vector.kind) };
+    assert!(network.regions[0].fills.is_none());
+    assert!(network.regions[0].paint_space.is_none());
+}
+
+#[test]
 fn stroke_colour_variable_on_outlined_vector_is_kept() {
     let stroke = json!({"type": "SOLID", "color": {"r": 1, "g": 0, "b": 0, "a": 1}, "boundVariables": {"color": alias(BRAND)}});
     let mut node = stroke_only_vector("1:1", "Icon", stroke);
@@ -56,4 +74,48 @@ fn stroke_colour_variable_on_outlined_vector_is_kept() {
         "colour variable bound on the outlined stroke was dropped; bound={:?} warnings={warnings:?}",
         icon.bound
     );
+}
+
+#[test]
+fn thousands_of_distinct_style_references_import_in_linear_time() {
+    // Each reference used to search every style imported so far (quadratic in their number).
+    let fill = json!({"type": "SOLID", "color": {"r": 1, "g": 0, "b": 0, "a": 1}});
+    let n = 20_000;
+    let children: Vec<Value> = (0..n)
+        .map(|i| {
+            json!({"id": format!("1:{i}"), "name": "R", "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10},
+                   "fills": [fill], "styles": {"fill": format!("S:{i}")}})
+        })
+        .collect();
+    let v = file(Value::Array(children));
+    let start = std::time::Instant::now();
+    let (doc, _) = import(&v, &no_images).unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    assert_eq!(doc.styles.len(), n);
+}
+
+#[test]
+fn a_board_field_becomes_the_nodes_board_item() {
+    let frame = json!({"id": "1:1", "name": "Note", "type": "FRAME", "relativeTransform": at(0.0, 0.0), "size": {"x": 200, "y": 200},
+                       "board": {"type": "sticky", "author": "A\u{7}"}});
+    let (doc, warnings) = import(&file(json!([frame])), &no_images).unwrap();
+    assert_eq!(named(&doc, "Note").board, Some(figcraft_doc::BoardItem::Sticky { author: "A".into() }));
+    assert!(!warnings.iter().any(|w| w.contains("board item")), "{warnings:?}");
+}
+
+#[test]
+fn junk_board_fields_are_ignored_with_a_warning() {
+    for junk in [json!(5), json!({"type": "nope"}), json!({"type": "shape", "shape": "blob"}), json!({"type": "connector"})] {
+        let frame =
+            json!({"id": "1:1", "name": "Junk", "type": "FRAME", "relativeTransform": at(0.0, 0.0), "size": {"x": 20, "y": 20}, "board": junk});
+        let (doc, warnings) = import(&file(json!([frame])), &no_images).unwrap();
+        assert!(named(&doc, "Junk").board.is_none(), "{junk}");
+        assert!(warnings.iter().any(|w| w.contains("unknown board item on Junk was ignored")), "{junk}: {warnings:?}");
+    }
+    // A sticky is a frame holding its layers: on a rectangle the item is ignored.
+    let rect = json!({"id": "1:2", "name": "Rect", "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 20, "y": 20},
+                      "board": {"type": "sticky", "author": "A"}});
+    let (doc, warnings) = import(&file(json!([rect])), &no_images).unwrap();
+    assert!(named(&doc, "Rect").board.is_none());
+    assert!(warnings.iter().any(|w| w.contains("unknown board item on Rect was ignored")), "{warnings:?}");
 }

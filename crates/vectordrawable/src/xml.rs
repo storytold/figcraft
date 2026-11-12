@@ -19,6 +19,9 @@ pub(crate) fn num(v: f64) -> String {
     if !v.is_finite() {
         return "0".into();
     }
+    // Android reads these as 32-bit floats, so clamp to that range; this also keeps the scaling
+    // below from overflowing to infinity.
+    let v = v.clamp(-f64::from(f32::MAX), f64::from(f32::MAX));
     let r = (v * 1000.0).round() / 1000.0;
     let s = format!("{r}");
     if s == "-0" { "0".into() } else { s }

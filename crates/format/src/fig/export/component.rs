@@ -1,7 +1,34 @@
+use super::super::map::{MAX_SCALE_FACTOR, MIN_SCALE_FACTOR};
 use super::common::{
-    bool_data, changed, prop_type, resolved_alike, scaled, sort_position, symbol_data, text_data, text_value, var_data, variant_pairs,
+    bool_data, changed, layout_grid, prop_type, resolved_alike, scaled, sort_position, symbol_data, text_data, text_value, var_data, variant_pairs,
 };
-use super::*;
+use super::scale::main_equal_lengths;
+use super::{AUX, BTreeMap, Bound, Exporter, Fields, Kv, MAX_NODES, Node, NodeId, NodeKind, PropDef, StyleKind, Value, arr, b, e, fl, guid, o, s};
+
+/// A changed effect/grid style, and a payload only when it differs from that style's values.
+struct ListStyleOverride {
+    link: &'static str,
+    field: &'static str,
+    value: Option<Kv<'static>>,
+}
+
+/// Keep a changed style link below its deliberate payload. Putting both on one row makes the
+/// style beat the payload as a stale copy. Values equal to the new style need no override.
+fn separate_style_rows(of: &mut Fields, df: &mut Fields, styles: Vec<ListStyleOverride>) -> Fields {
+    let Some(path) = of.iter().find(|(k, _)| *k == "guidPath").cloned() else { return Vec::new() };
+    let mut links = vec![path];
+    for style in styles {
+        let Some(link) = of.iter().find(|(k, _)| *k == style.link).cloned() else { continue };
+        of.retain(|(k, _)| *k != style.field);
+        df.retain(|(k, _)| *k != style.field);
+        if let Some(value) = style.value {
+            of.retain(|(k, _)| *k != style.link);
+            links.push(link);
+            of.push((style.field, value));
+        }
+    }
+    links
+}
 
 impl<'d> Exporter<'d> {
     /// A component property definition of `owner` (a component, or a set), `index`-th in its list.
@@ -76,8 +103,8 @@ impl<'d> Exporter<'d> {
         // A name used with two types is two properties (their definitions have their own ids).
         let mut seen: BTreeMap<(String, &'static str), PropDef> = BTreeMap::new();
         for v in &variants {
-            let NodeKind::Component { props, .. } = &v.kind else { continue };
-            for (name, d) in props {
+            let NodeKind::Component { props, prop_order, .. } = &v.kind else { continue };
+            for (name, d) in figcraft_doc::ordered_props(props, prop_order) {
                 let Some(ty) = prop_type(d) else { continue };
                 match seen.get(&(name.clone(), ty)) {
                     Some(first) if first != d => self.warn("variants with different defaults for one property were written with the first variant's"),
@@ -142,12 +169,17 @@ impl<'d> Exporter<'d> {
         let set = m.parent.and_then(|p| doc.node(p)).filter(|p| matches!(p.kind, NodeKind::ComponentSet { .. }));
         let named = set.is_none_or(|s| s.name != n.name);
         let root_mine: Fields = f.iter().filter(|(k, _)| !OWN.contains(k) && (named || *k != "name")).cloned().collect();
+        let scale_candidate = Some(n.width / m.width)
+            .filter(|k| (MIN_SCALE_FACTOR..=MAX_SCALE_FACTOR).contains(k) && (k - 1.0).abs() > 1e-6)
+            .filter(|k| (n.height / m.height - k).abs() <= 1e-6 * k.max(1.0));
         // Each layer below: its id path, the fields that differ from the main's layer, that layer's
         // fields, whether its size is its own (a nested instance, a size override) and the
         // component a nested instance was swapped for.
         struct Row {
             path: Kv<'static>,
             changed: Fields,
+            main_equal_lengths: Fields,
+            styles: Vec<ListStyleOverride>,
             theirs: Fields,
             sized: bool,
             swap: Option<Kv<'static>>,
@@ -178,21 +210,27 @@ impl<'d> Exporter<'d> {
                 _ => None,
             };
             let sized = matches!(d.kind, NodeKind::Instance { .. }) || d.overrides.contains("size");
-            rows.push(Row { path: o(vec![("guids", arr(guids))]), changed: changed(mine, &theirs), theirs, sized, swap });
+            rows.push(Row {
+                path: o(vec![("guids", arr(guids))]),
+                main_equal_lengths: if scale_candidate.is_some() { main_equal_lengths(&mine, &theirs) } else { Vec::new() },
+                styles: self.changed_list_styles(d, &mine, &theirs),
+                changed: changed(mine, &theirs),
+                theirs,
+                sized,
+                swap,
+            });
         }
         // An instance scaled as a whole (the Scale tool) is `factor` times its main in every length:
         // sizes, places and stroke weights, its own and its layers'. A resized one keeps its weights.
         let field = |fields: &Fields, key: &str| fields.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
-        let factor = Some(n.width / m.width).filter(|k| k.is_finite() && *k > 0.0 && (k - 1.0).abs() > 1e-6).filter(|k| {
+        let factor = scale_candidate.filter(|k| {
             let grown = |mine: &Fields, theirs: &Fields| {
                 let weight = field(theirs, "strokeWeight").and_then(|w| w.f64()).unwrap_or(0.0);
                 (weight == 0.0 || field(mine, "strokeWeight").is_some_and(|w| scaled(&w, &fl(weight), *k, 0.0)))
                     && field(mine, "size").zip(field(theirs, "size")).is_some_and(|(a, b)| scaled(&a, &b, *k, 1.0))
                     && field(mine, "transform").zip(field(theirs, "transform")).is_none_or(|(a, b)| scaled(&a, &b, *k, 1.0))
             };
-            (n.height / m.height - k).abs() <= 1e-6 * k.max(1.0)
-                && grown(&changed(root_mine.clone(), &root_theirs), &root_theirs)
-                && rows.iter().all(|r| grown(&r.changed, &r.theirs))
+            grown(&changed(root_mine.clone(), &root_theirs), &root_theirs) && rows.iter().all(|r| grown(&r.changed, &r.theirs))
         });
         // What follows from the overrides goes with the derived data: a layer's size, place and
         // outline (a vector's network is the main's, drawn at the layer's size), the colours its
@@ -205,12 +243,20 @@ impl<'d> Exporter<'d> {
         let mut overrides = Vec::new();
         let mut derived = Vec::new();
         let mut of: Fields = vec![("guidPath", o(vec![("guids", arr(vec![symbol.clone()]))]))];
+        // A main-equal length is an override of the scaled main, not a derived scaled value.
+        // Keep it out of `follows`, whose permissive equality also accepts dimensionless numbers.
+        if factor.is_some() {
+            of.extend(main_equal_lengths(&root_mine, &root_theirs));
+        }
         of.extend(changed(root_mine, &root_theirs).into_iter().filter(|(k, v)| *k == "size" || !follows(k, v, &root_theirs)));
         if of.len() > 1 {
             overrides.push(o(of));
         }
         for r in rows {
             let (mut of, mut df): (Fields, Fields) = (vec![("guidPath", r.path.clone())], vec![("guidPath", r.path)]);
+            if factor.is_some() {
+                of.extend(r.main_equal_lengths);
+            }
             for (k, v) in r.changed {
                 let follows = follows(k, &v, &r.theirs);
                 // A nested instance's size is its own to set, as is a size the layer overrides.
@@ -218,6 +264,10 @@ impl<'d> Exporter<'d> {
                     of.push((k, v.clone()));
                 }
                 if follows { &mut df } else { &mut of }.push((k, v));
+            }
+            let links = separate_style_rows(&mut of, &mut df, r.styles);
+            if links.len() > 1 {
+                overrides.push(o(links));
             }
             if df.len() > 1 {
                 derived.push(o(df));
@@ -254,6 +304,38 @@ impl<'d> Exporter<'d> {
         if n.children.iter().filter_map(|c| doc.node(*c)).any(|c| c.source.is_none()) {
             self.warn("instance layers that don't come from their main component were left out");
         }
+    }
+
+    /// A changed list-style link is at the instance row's scale (1), not the inherited main's.
+    /// Compare with the same payload and bindings the asset writer emits. Preserve differing
+    /// effective values, including empty clears, but do not freeze values supplied by the style.
+    fn changed_list_styles(&mut self, n: &Node, mine: &Fields, theirs: &Fields) -> Vec<ListStyleOverride> {
+        let mut out = Vec::new();
+        let doc = self.doc;
+        for (link, field, id) in
+            [("styleIdForEffect", "effects", n.styles.effect.as_deref()), ("styleIdForGrid", "layoutGrids", n.styles.grid.as_deref())]
+        {
+            let current_link = mine.iter().find(|(k, _)| *k == link).map(|(_, v)| v);
+            if current_link.is_none() || current_link == theirs.iter().find(|(k, _)| *k == link).map(|(_, v)| v) {
+                continue;
+            }
+            let Some(style) = id.and_then(|id| doc.styles.iter().find(|style| style.id == id)) else { continue };
+            let bound = if style.bound.is_empty() {
+                Bound::default()
+            } else {
+                let mut sample = Node::new(NodeId(0), NodeKind::Rectangle, "", 0.0, 0.0);
+                sample.bound.clone_from(&style.bound);
+                self.bound(&sample)
+            };
+            let target = match (&style.kind, field) {
+                (StyleKind::Effect { effects }, "effects") => arr(effects.iter().enumerate().map(|(i, e)| self.effect(e, i, &bound)).collect()),
+                (StyleKind::Grid { grids }, "layoutGrids") => arr(grids.iter().enumerate().map(|(i, g)| layout_grid(g, i, &bound)).collect()),
+                _ => continue,
+            };
+            let current = mine.iter().find(|(k, _)| *k == field).map_or_else(|| arr(Vec::new()), |(_, v)| v.clone());
+            out.push(ListStyleOverride { link, field, value: (current != target).then_some(current) });
+        }
+        out
     }
 
     /// The main component layer an instance or instance layer mirrors (through nested instances),

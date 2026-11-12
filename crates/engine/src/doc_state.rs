@@ -1,5 +1,5 @@
 use super::view_state::ViewState;
-use super::*;
+use super::{Arc, BTreeSet, Deserialize, Document, NodeId, Serialize, cmd, components, file_access, guides, library, rotation_origin, vectoredit};
 
 /// One undo step.
 #[derive(Clone, Debug)]
@@ -15,6 +15,9 @@ pub struct History {
     pub undo: Vec<HistoryEntry>,
     pub redo: Vec<HistoryEntry>,
     pub limit: usize,
+    /// Inside a group, the undo depth just after the step the group pushed: the group's later
+    /// edits add to that step instead of keeping a snapshot each (#1099).
+    pub(crate) group_step: Option<usize>,
 }
 
 /// An in-progress gesture: the document before it started, so previews re-apply from scratch.
@@ -23,6 +26,10 @@ pub struct Interaction {
     pub label: String,
     pub doc: Arc<Document>,
     pub selection: Vec<NodeId>,
+    /// The gesture so far only moved the selected layers by this much (page units) from `doc`:
+    /// their outlines, box and everything else that doesn't depend on where they are can follow
+    /// by shifting what was worked out from `doc` (#1571). `None` for any other change.
+    pub moved_by: Option<(f64, f64)>,
 }
 
 /// The text being edited on the canvas.

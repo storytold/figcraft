@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Align2, Color32, CornerRadius, FigApp, Id, MENU, Rect, SEP, Sense, Stroke, StrokeKind, Tokens, Ui, available, i18n, invoke, json, pos2,
+    pretty_shortcut, record_recent, regular, tr, vec2,
+};
 
 /// The Actions palette's tab.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -238,6 +241,19 @@ fn draw_row(ui: &mut Ui, t: &Tokens, row: &ActionRow, highlighted: bool) -> egui
     resp
 }
 
+/// The text a search reads besides the label in the UI's language: the English label, the id, and
+/// a name the feature had before it was renamed ([`figcraft_engine::catalog::SEARCH_ALIASES`]).
+fn search_text(english: &str, id: &str) -> String {
+    let mut text = format!("{english} {id}");
+    for (alias_id, alias) in figcraft_engine::catalog::SEARCH_ALIASES {
+        if *alias_id == id {
+            text.push(' ');
+            text.push_str(alias);
+        }
+    }
+    text
+}
+
 /// Whether `label` (or `extra`) matches the query, in any case.
 fn matches(q: &str, label: &str, extra: &str) -> bool {
     q.is_empty() || label.to_lowercase().contains(q) || extra.to_lowercase().contains(q)
@@ -253,9 +269,10 @@ const MAX_HITS: usize = 60;
 
 /// Commands grouped by top-level menu, filtered by the query. Without one, the menus' items in
 /// catalog order; a search covers every command (the engine's and the UI's own, "Other" for those
-/// no menu lists), best matches first (labels starting with the query, then the shortest), each
-/// group placed by its best row. Labels match in the UI language and in English. The Plugins
-/// menu's items come with the plugins ([`plugin_rows`]).
+/// no menu lists, except those that need parameters or read like a menu item), best matches first
+/// (labels starting with the query, then the shortest), each group placed by its best row. Labels
+/// match in the UI language and in English. The Plugins menu's items come with the plugins
+/// ([`plugin_rows`]).
 pub(crate) fn command_sections(q: &str) -> Vec<(String, Vec<ActionRow>)> {
     let ql = q.trim().to_lowercase();
     let mut menu_of = std::collections::HashMap::new();
@@ -263,9 +280,13 @@ pub(crate) fn command_sections(q: &str) -> Vec<(String, Vec<ActionRow>)> {
         menu_of.entry(m.id).or_insert(m);
     }
     let menu_items = MENU.iter().filter(|m| m.label != SEP).map(|m| (m.id, m.label));
-    let engine = figcraft_engine::all_commands().iter().map(|c| (c.id, c.label));
+    // A row runs its command without parameters (as its menu item does, dialogs included): one
+    // that needs them is offered only through a menu item.
+    let engine = figcraft_engine::all_commands().iter().filter(|c| !figcraft_engine::cmd::needs_params(c.id)).map(|c| (c.id, c.label));
     let candidates: Box<dyn Iterator<Item = (&str, &str)>> = if ql.is_empty() { Box::new(menu_items) } else { Box::new(menu_items.chain(engine)) };
     let mut seen = std::collections::HashSet::new();
+    // The labels menu items show: a command no menu lists that reads the same is left out.
+    let mut menu_labels = std::collections::HashSet::new();
     // By top-level menu; `None`: no menu lists it.
     let mut hits: Vec<(Option<&str>, ActionRow)> = Vec::new();
     for (id, english) in candidates {
@@ -281,7 +302,13 @@ pub(crate) fn command_sections(q: &str) -> Vec<(String, Vec<ActionRow>)> {
             Some(m) => i18n::menu_item(id, m.label),
             None => i18n::command(id, english),
         };
-        if matches(&ql, &label, &format!("{english} {id}")) {
+        let same = same_label(&label);
+        if menu.is_some() {
+            menu_labels.insert(same);
+        } else if menu_labels.contains(&same) {
+            continue;
+        }
+        if matches(&ql, &label, &search_text(english, id)) {
             hits.push((group, command_row(id, label.into_owned())));
         }
     }
@@ -298,6 +325,11 @@ pub(crate) fn command_sections(q: &str) -> Vec<(String, Vec<ActionRow>)> {
         }
     }
     groups
+}
+
+/// `label` as two rows that read the same compare: any case, without a trailing ellipsis.
+fn same_label(label: &str) -> String {
+    label.trim().trim_end_matches(['…', '.']).trim_end().to_lowercase()
 }
 
 /// Installed plugins' commands, filtered by the query.

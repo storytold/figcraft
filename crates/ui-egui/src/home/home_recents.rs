@@ -813,7 +813,7 @@ fn grid(ui: &mut Ui, t: &Tokens, recents: &mut Recents, files: &[Shown], now: u6
             };
             let alpha = picture.as_ref().map_or(1.0, |(_, _, a)| if reduce_motion { 1.0 } else { *a });
             fading |= alpha < 1.0;
-            card(ui, t, rect, picture_h, &resp, selected, file, stat, picture, alpha, now);
+            card(CardPaint { ui, tokens: t, rect, picture_h, response: &resp, selected, file, stat, picture, alpha, now });
         }
         ui.add_space(GAP);
     }
@@ -837,20 +837,22 @@ fn skeleton(ui: &Ui, t: &Tokens, rect: Rect, picture_h: f32) {
     p.rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, t.border), StrokeKind::Inside);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn card(
-    ui: &Ui,
-    t: &Tokens,
+struct CardPaint<'a> {
+    ui: &'a Ui,
+    tokens: &'a Tokens,
     rect: Rect,
     picture_h: f32,
-    resp: &Response,
+    response: &'a Response,
     selected: bool,
-    file: &Shown,
+    file: &'a Shown,
     stat: Stat,
     picture: Option<(Option<Color32>, Option<egui::TextureHandle>, f32)>,
     alpha: f32,
     now: u64,
-) {
+}
+
+fn card(paint: CardPaint<'_>) {
+    let CardPaint { ui, tokens: t, rect, picture_h, response: resp, selected, file, stat, picture, alpha, now } = paint;
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(8), if resp.hovered() { t.hover } else { t.panel });
     let area = Rect::from_min_size(rect.min, vec2(rect.width(), picture_h)).shrink(1.0);

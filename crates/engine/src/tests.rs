@@ -404,6 +404,11 @@ fn every_command_survives_junk_params() {
         json!({"variations": {"wght": 1e308, "": "x", "slnt": null}, "props": {"fontVariations": [1], "variationSettings": {"wdth": "-1e9"}}, "text": 7, "cursor": -3}),
         json!({"style": 3, "props": {"listStyle": 5, "indentation": 1e308, "listSpacing": "NaN", "hangingList": "yes", "start": -5, "end": 1e12,
                "textDecorationThickness": {"unit": "pixels", "value": "x"}, "textDecorationOffset": -1e308, "textDecorationColor": [1]}}),
+        // Paint variable props: malformed wrappers, unsupported fields and mixed references.
+        json!({"id": 2, "type": "rectangle", "props": {"fill": {"$var": null}, "stroke": {"$var": 7}}}),
+        json!({"id": 2, "type": "rectangle", "props": {"fill": {"$var": ""}, "stroke": {"$var": []}}}),
+        json!({"id": 2, "type": "rectangle", "props": {"fill": {"$var": "x", "extra": true}, "width": {"$var": "x"}}}),
+        json!({"id": 2, "type": "rectangle", "props": {"fill": {"$var": {"$ref": "x"}}, "stroke": {"$var": "x", "$ref": "x"}}}),
         // Templates and the Getting started tips as junk.
         json!({"template": {"id": 1}, "name": [1e308], "show": "yes"}),
         // Links (dev resources) and indexes as junk.
@@ -454,11 +459,24 @@ fn every_command_survives_junk_params() {
         // would write to it.)
         json!({"ids": [2, 3], "type": "vector", "path": [5], "width": -1e308, "props": {"path": "M0 0 L1e308 0 L-1e308 1e308", "height": "NaN", "x": 1e308}}),
         json!({"id": 2, "type": "vector", "path": {"d": 1}, "props": {"path": "M NaN 0 Z", "width": 1e-308}}),
+        // Compact inspection: fields and outline with malformed types and unknown keys.
+        json!({"id": 2, "fields": "name", "outline": true}),
+        json!({"id": 2, "fields": ["name", 5]}),
+        json!({"id": 2, "fields": ["Name", "noSuchField"]}),
+        json!({"id": 2, "fields": null, "outline": []}),
+        json!({"id": 2, "outline": "yes"}),
+        // Layer search roots, filters and limits as junk.
+        json!({"root": {"id": 2}, "name": [1], "type": "nope", "text": true, "component": [], "limit": -1}),
+        json!({"root": 999999, "limit": 1e308}),
         // Batch step names and reference paths as junk.
         json!({"commands": [{"command": "select.none", "as": "a"}, {"command": "select.none", "as": [1]}, {"command": "select.none", "as": "a"}]}),
         json!({"commands": [{"command": "select.all", "as": "\u{0}"}, {"command": "node.set", "params": {"ids": [
             {"$ref": "\u{0}", "field": "ids/18446744073709551616/x"}, {"$ref": {"x": 1}}, {"$step": 0, "field": "//"}, {"$ref": "\u{0}", "field": "/"}],
             "props": {"name": {"$ref": "nope", "field": 5}}}}]}),
+        // Font downloads: family names as junk and as paths (a family is only ever looked up in
+        // the font index, never used as a path).
+        json!({"family": "../../\u{0}Lato"}),
+        json!({"family": ["Lato"], "style": 1e308}),
     ];
     for spec in all_commands() {
         if matches!(
@@ -478,11 +496,19 @@ fn every_command_survives_junk_params() {
             continue;
         }
         for j in &junk {
-            let mut s = sess();
-            let _ = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10}));
-            let _ = s.execute("text.create", &json!({"text": "t"}));
-            if let Err(EngineError::Internal { cmd, msg }) = s.execute(spec.id, j) {
-                panic!("{cmd} panicked on {j}: {msg}");
+            // Each junk object as given (names the command doesn't take are refused) and cut down
+            // to the names it takes, so the junk values still reach its parsers.
+            let mut taken = j.clone();
+            if let (Some(names), Some(o)) = (crate::cmd::param_names(spec.id), taken.as_object_mut()) {
+                o.retain(|k, _| matches!(k.as_str(), "ids" | "id") || names.contains(&k.as_str()));
+            }
+            for params in if taken == *j { vec![j] } else { vec![j, &taken] } {
+                let mut s = sess();
+                let _ = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10}));
+                let _ = s.execute("text.create", &json!({"text": "t"}));
+                if let Err(EngineError::Internal { cmd, msg }) = s.execute(spec.id, params) {
+                    panic!("{cmd} panicked on {params}: {msg}");
+                }
             }
         }
     }
@@ -616,13 +642,11 @@ fn document_colors_are_counted_per_page() {
     assert!(v["colors"].as_array().unwrap().is_empty());
 }
 
+/// `guide.add`, `guide.move` and `guide.remove` edit the current page's guides by index.
 #[test]
 fn guides_add_move_remove() {
     let mut s = sess();
-    let guides = |s: &Session| match &s.doc().unwrap().node(s.page().unwrap()).unwrap().kind {
-        NodeKind::Page { guides, .. } => guides.clone(),
-        _ => vec![],
-    };
+    let guides = |s: &Session| s.doc().unwrap().node(s.page().unwrap()).unwrap().guides.clone();
     let r = s.execute("guide.add", &json!({"vertical": true, "offset": 120})).unwrap();
     assert_eq!(r["index"], json!(0));
     s.execute("guide.add", &json!({"vertical": false, "offset": 40.5})).unwrap();

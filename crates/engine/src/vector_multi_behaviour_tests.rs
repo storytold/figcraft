@@ -95,6 +95,14 @@ fn selected_in(s: &Session, id: NodeId) -> Vec<usize> {
 
 #[test]
 fn editing_several_vectors_at_once() {
+    several_vectors_enter_edit_mode();
+    let (mut s, a, b, atl, btl) = points_across_both_layers();
+    arrows_and_drags_move_every_layer(&mut s, a, b, atl, btl);
+    corner_radius_mirroring_and_delete(&mut s, a, b, atl, btl);
+    bend_select_all_pen_and_clicks(&mut s, a, b);
+}
+
+fn several_vectors_enter_edit_mode() {
     // (how edit mode is entered with two shapes selected, derivation)
     let rows: Vec<(&str, &str)> = vec![
         ("command", "the edit command takes every selected shape"),
@@ -135,8 +143,9 @@ fn editing_several_vectors_at_once() {
         crate::vectoredit::enter_targets(s.doc().unwrap(), &[a, f]).is_none(),
         "silent: a frame in the selection leaves Enter to select its children (pinned)"
     );
+}
 
-    // Points across both layers.
+fn points_across_both_layers() -> (Session, NodeId, NodeId, usize, usize) {
     let mut s = Session::new();
     let (a, b) = (rect(&mut s, 0.0), rect(&mut s, 200.0));
     ex(&mut s, "vector.edit.begin", json!({"ids": [a, b]}));
@@ -161,64 +170,74 @@ fn editing_several_vectors_at_once() {
         sb.sort_unstable();
         assert_eq!((editing(&s).unwrap().id, selected_in(&s, a), selected_in(&s, b)), (active, sa, sb), "{why}");
     }
+    (s, a, b, atl, btl)
+}
+
+fn arrows_and_drags_move_every_layer(s: &mut Session, a: NodeId, b: NodeId, atl: usize, btl: usize) {
     // Arrows nudge every selected point, one undo step for all layers.
-    ex(&mut s, "vector.edit.select", json!({"vertices": [atl]}));
-    ex(&mut s, "vector.edit.select", json!({"id": b, "vertices": [btl], "add": true}));
-    assert_eq!((selected_in(&s, a), selected_in(&s, b)), (vec![atl], vec![btl]), "the select command picks points in a named layer");
+    ex(s, "vector.edit.select", json!({"vertices": [atl]}));
+    ex(s, "vector.edit.select", json!({"id": b, "vertices": [btl], "add": true}));
+    assert_eq!((selected_in(s, a), selected_in(s, b)), (vec![atl], vec![btl]), "the select command picks points in a named layer");
     assert!(s.tool_key("Right", false, false, false).unwrap());
-    assert!(near(page_pos(&s, a, atl), (1.0, 0.0)) && near(page_pos(&s, b, btl), (201.0, 0.0)), "an arrow nudges the points in every layer");
+    assert!(near(page_pos(s, a, atl), (1.0, 0.0)) && near(page_pos(s, b, btl), (201.0, 0.0)), "an arrow nudges the points in every layer");
     s.undo().unwrap();
-    assert!(near(page_pos(&s, a, atl), (0.0, 0.0)) && near(page_pos(&s, b, btl), (200.0, 0.0)), "one undo step for every layer");
+    assert!(near(page_pos(s, a, atl), (0.0, 0.0)) && near(page_pos(s, b, btl), (200.0, 0.0)), "one undo step for every layer");
     // Dragging one selected point drags them all (one on the transform box's edge: its corners
     // scale, as with points of one layer).
-    let atr = point_at(&s, a, (100.0, 0.0));
-    ex(&mut s, "vector.edit.select", json!({"id": a, "vertices": [atr], "add": true}));
-    drag(&mut s, (100.0, 0.0), (110.0, 20.0), NONE);
+    let atr = point_at(s, a, (100.0, 0.0));
+    ex(s, "vector.edit.select", json!({"id": a, "vertices": [atr], "add": true}));
+    drag(s, (100.0, 0.0), (110.0, 20.0), NONE);
     assert!(
-        near(page_pos(&s, a, atl), (10.0, 20.0)) && near(page_pos(&s, a, atr), (110.0, 20.0)) && near(page_pos(&s, b, btl), (210.0, 20.0)),
+        near(page_pos(s, a, atl), (10.0, 20.0)) && near(page_pos(s, a, atr), (110.0, 20.0)) && near(page_pos(s, b, btl), (210.0, 20.0)),
         "dragging one selected point moves them all"
     );
     s.undo().unwrap();
-    assert!(near(page_pos(&s, a, atl), (0.0, 0.0)) && near(page_pos(&s, b, btl), (200.0, 0.0)), "the drag is one undo step");
-    ex(&mut s, "vector.edit.select", json!({"vertices": [atl]}));
-    ex(&mut s, "vector.edit.select", json!({"id": b, "vertices": [btl], "add": true}));
+    assert!(near(page_pos(s, a, atl), (0.0, 0.0)) && near(page_pos(s, b, btl), (200.0, 0.0)), "the drag is one undo step");
+    ex(s, "vector.edit.select", json!({"vertices": [atl]}));
+    ex(s, "vector.edit.select", json!({"id": b, "vertices": [btl], "add": true}));
+}
+
+fn corner_radius_mirroring_and_delete(s: &mut Session, a: NodeId, b: NodeId, atl: usize, btl: usize) {
     // Corner radius, mirroring and deleting reach every layer's selected points.
-    ex(&mut s, "vector.edit.cornerRadius", json!({"radius": 10}));
-    assert!(net(&s, a).vertices[atl].radius == 10.0 && net(&s, b).vertices[btl].radius == 10.0, "the corner radius applies to every layer");
-    ex(&mut s, "vector.edit.mirroring", json!({"mode": "angle"}));
+    ex(s, "vector.edit.cornerRadius", json!({"radius": 10}));
+    assert!(net(s, a).vertices[atl].radius == 10.0 && net(s, b).vertices[btl].radius == 10.0, "the corner radius applies to every layer");
+    ex(s, "vector.edit.mirroring", json!({"mode": "angle"}));
     assert!(
-        net(&s, a).vertices[atl].mirror == Some(figcraft_doc::HandleMirroring::Angle)
-            && net(&s, b).vertices[btl].mirror == Some(figcraft_doc::HandleMirroring::Angle),
+        net(s, a).vertices[atl].mirror == Some(figcraft_doc::HandleMirroring::Angle)
+            && net(s, b).vertices[btl].mirror == Some(figcraft_doc::HandleMirroring::Angle),
         "mirroring applies to every layer"
     );
     assert!(s.tool_key("Delete", false, false, false).unwrap());
-    assert_eq!((net(&s, a).vertices.len(), net(&s, b).vertices.len()), (3, 3), "Delete removes the selected point in every layer");
+    assert_eq!((net(s, a).vertices.len(), net(s, b).vertices.len()), (3, 3), "Delete removes the selected point in every layer");
     s.undo().unwrap();
-    assert_eq!((net(&s, a).vertices.len(), net(&s, b).vertices.len()), (4, 4), "one undo step");
+    assert_eq!((net(s, a).vertices.len(), net(s, b).vertices.len()), (4, 4), "one undo step");
+}
+
+fn bend_select_all_pen_and_clicks(s: &mut Session, a: NodeId, b: NodeId) {
     // The Bend tool (held with Cmd/Ctrl) bends the segment under the pointer, in its own layer.
-    drag(&mut s, (250.0, 100.0), (250.0, 130.0), CMD);
-    assert!(net(&s, b).segments.iter().any(|sg| !sg.is_straight()), "the bend lands on the layer under the pointer");
-    assert!(net(&s, a).segments.iter().all(|sg| sg.is_straight()), "other layers keep their segments");
+    drag(s, (250.0, 100.0), (250.0, 130.0), CMD);
+    assert!(net(s, b).segments.iter().any(|sg| !sg.is_straight()), "the bend lands on the layer under the pointer");
+    assert!(net(s, a).segments.iter().all(|sg| sg.is_straight()), "other layers keep their segments");
     // Select all takes every edited layer's points.
-    let r = ex(&mut s, "vector.edit.selectAll", json!({}));
+    let r = ex(s, "vector.edit.selectAll", json!({}));
     assert_eq!(r["count"], json!(8), "silent: select all takes the points of every edited layer (pinned)");
     // The pen draws in the active layer only.
-    ex(&mut s, "vector.edit.select", json!({"id": a, "vertices": []}));
-    ex(&mut s, "vector.edit.tool", json!({"tool": "pen"}));
-    click(&mut s, (50.0, 300.0), NONE);
-    assert_eq!((net(&s, a).vertices.len(), net(&s, b).vertices.len()), (5, 4), "silent: the pen adds to the active layer (pinned)");
-    ex(&mut s, "vector.edit.penEnd", json!({}));
-    ex(&mut s, "vector.edit.tool", json!({"tool": "move"}));
+    ex(s, "vector.edit.select", json!({"id": a, "vertices": []}));
+    ex(s, "vector.edit.tool", json!({"tool": "pen"}));
+    click(s, (50.0, 300.0), NONE);
+    assert_eq!((net(s, a).vertices.len(), net(s, b).vertices.len()), (5, 4), "silent: the pen adds to the active layer (pinned)");
+    ex(s, "vector.edit.penEnd", json!({}));
+    ex(s, "vector.edit.tool", json!({"tool": "move"}));
     // A click on empty canvas inside an edited layer's area keeps edit mode; so does one far
     // away, which only clears the points (a double-click or Escape leaves).
-    click(&mut s, (250.0, 50.0), NONE);
-    assert!(editing(&s).is_some(), "a click inside an edited layer clears the points and stays");
-    let st = ex(&mut s, "vector.edit.state", json!({}));
+    click(s, (250.0, 50.0), NONE);
+    assert!(editing(s).is_some(), "a click inside an edited layer clears the points and stays");
+    let st = ex(s, "vector.edit.state", json!({}));
     assert_eq!(st["layers"].as_array().map(Vec::len), Some(2), "the state lists every edited layer");
-    click(&mut s, (900.0, 900.0), NONE);
-    assert!(editing(&s).is_some(), "a click away from every edited layer keeps edit mode");
+    click(s, (900.0, 900.0), NONE);
+    assert!(editing(s).is_some(), "a click away from every edited layer keeps edit mode");
     s.pointer(&ev(PointerKind::DoubleClick, (900.0, 900.0), NONE)).unwrap();
-    assert!(editing(&s).is_none(), "a double-click away from every edited layer leaves edit mode");
+    assert!(editing(s).is_none(), "a double-click away from every edited layer leaves edit mode");
 }
 
 #[test]

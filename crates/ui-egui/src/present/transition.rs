@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Affine, BTreeMap, Direction, Document, HashMap, HashSet, Node, NodeId, OverlayPosition, Paint, PaintKind, Point, Rect, Transition, Vec2,
+    VecDeque, pos2,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Pure prototype logic (tested below).

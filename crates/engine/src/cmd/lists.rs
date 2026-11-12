@@ -6,16 +6,16 @@
 //! Every list is stored bottom first: index 0 paints (or applies) first, the last one is on top;
 //! the Design panel shows them in reverse, the topmost row first.
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, LayoutGrid, Node, NodeId, NodeKind};
 use serde_json::Value;
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{req_index, req_targets};
 use crate::{Result, Session, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        spec!("fill.move", "Move fill", "{ids?, from, to} (indices in the fill list, bottom first)", true, |s, p| {
+        spec!("fill.move", "Move fill", "{ids?, from, to, regions?} (indices in the fill list, bottom first)", true, |s, p| {
             move_item(s, p, "fill.move", BoundList::Fills)
         }),
         spec!("stroke.move", "Move stroke", "{ids?, from, to} (indices in the stroke list, bottom first)", true, |s, p| {
@@ -189,6 +189,52 @@ fn paint_field_kept(old: &figcraft_color::Paint, new: &figcraft_color::Paint, fi
     }
 }
 
+/// The fills a text's characters show when every character shows the same list: the layer's
+/// fills, or the one list that styling all of them while editing left on them. None when the
+/// characters differ, as the layer's fill is then mixed ("Text nodes can have multiple sets of
+/// fills if some characters are colored differently than others", the developer documentation's
+/// `fills`). Any other layer: its fills.
+pub fn character_fills(n: &Node) -> Option<Vec<figcraft_color::Paint>> {
+    let NodeKind::Text(t) = &n.kind else { return Some(n.fills.clone()) };
+    let mut spans = t.spans().into_iter().map(|(_, _, st)| st.fills.as_ref().unwrap_or(&n.fills));
+    let first = spans.next().unwrap_or(&n.fills).clone();
+    spans.all(|f| *f == first).then_some(first)
+}
+
+/// Whether any character of a text carries fills of its own (on its base style or a run).
+pub(crate) fn has_character_fills(n: &Node) -> bool {
+    match &n.kind {
+        NodeKind::Text(t) => t.style.fills.is_some() || t.runs.iter().any(|r| r.style.fills.is_some()),
+        _ => false,
+    }
+}
+
+/// Before a layer-level edit of a text's fills (the Fill section, `fill.*`, `node.set`): the
+/// characters' own fills go, so the edit shows on every one of them. One list they all shared
+/// becomes the layer's first, so the edit starts from what the characters showed; characters
+/// that differed fall back to the layer's fills, which the edit then replaces ("Click + to
+/// replace mixed content"). Not a text, or no character with fills of its own: nothing changes.
+pub(crate) fn take_character_fills(n: &mut Node) {
+    if !has_character_fills(n) {
+        return;
+    }
+    if let Some(shared) = character_fills(n)
+        && shared != n.fills
+    {
+        let old = std::mem::replace(&mut n.fills, shared);
+        for (i, p) in old.iter().enumerate() {
+            rebind_edited_paint(n, true, i, p);
+        }
+    }
+    if let NodeKind::Text(t) = &mut n.kind {
+        t.style.fills = None;
+        for r in &mut t.runs {
+            r.style.fills = None;
+        }
+        t.normalize();
+    }
+}
+
 /// Where item `k` lands when the item at `from` moves to `to`.
 pub fn moved_index(k: usize, from: usize, to: usize) -> usize {
     if k == from {
@@ -249,12 +295,33 @@ fn reorder<T>(v: &mut Vec<T>, from: usize, to: usize) -> bool {
 fn move_item(s: &mut Session, p: &Value, cmd: &str, list: BoundList) -> Result<Value> {
     let from = req_index(cmd, p, "from")?;
     let to = req_index(cmd, p, "to")?;
-    for id in req_targets(cmd, s, p)? {
-        let len = s.doc()?.node(id).map(|n| list.len(n)).unwrap_or(0);
+    let ids = req_targets(cmd, s, p)?;
+    // Fills of the regions selected (or named) in a vector: their own stacks move (#1875).
+    if matches!(list, BoundList::Fills)
+        && let Some((id, regions)) = crate::cmd::edit::fill_regions(s, cmd, p, &ids)?
+    {
+        crate::cmd::edit::edit_region_fills(s.doc_mut()?, id, &regions, |fills| {
+            if from < fills.len() && to < fills.len() {
+                reorder(fills, from, to);
+            }
+            Ok(())
+        })?;
+        return ok();
+    }
+    for id in ids {
+        // A text's characters' shared fills are the list the Design panel shows and reorders.
+        let len = s
+            .doc()?
+            .node(id)
+            .map(|n| if list == BoundList::Fills { character_fills(n).map_or(n.fills.len(), |f| f.len()) } else { list.len(n) })
+            .unwrap_or(0);
         if from >= len || to >= len || from == to {
             continue;
         }
         let n = s.doc_mut()?.get_mut(id)?;
+        if list == BoundList::Fills {
+            take_character_fills(n);
+        }
         let moved = match list {
             BoundList::Fills => reorder(&mut n.fills, from, to),
             BoundList::Strokes => reorder(&mut n.strokes, from, to),

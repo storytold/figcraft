@@ -1,4 +1,4 @@
-use super::*;
+use super::FigApp;
 
 impl FigApp {
     /// Put `text` on the system clipboard. Input injected through the control channel never

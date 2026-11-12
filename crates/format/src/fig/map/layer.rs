@@ -1,8 +1,11 @@
 use super::component::{Entry, Inst, OverrideRow, prop_ref};
-use super::connector::connector_has_saved_label;
+use super::connector::{ConnectorShape, connector_has_saved_label};
 use super::layout::{layout_grid, tracks};
-use super::paint::{effect, export_setting, paint, paint_bound, stroke};
-use super::*;
+use super::paint::{effect, export_setting, has_bound_variables, paint, paint_bound, stroke};
+use super::{
+    Affine, BTreeMap, BTreeSet, Kv, MAX_COMMANDS, MAX_DEPTH, Mapper, Obj, Value, View, copy_len, copy_num, copy_str, generated_record, guid, json,
+    matrix, network, num, rows, scaled, size,
+};
 
 /// How the layers of a resized container follow it when the file gives no derived layout for
 /// them: a frame's by their constraints, from its main's size to its own; a group's scale with it.
@@ -61,6 +64,22 @@ impl Fit {
     }
 }
 
+struct LayerChildren<'s, 'a> {
+    id: &'s str,
+    inst: Option<&'s Inst<'a>>,
+    base: &'s Kv<'a>,
+    child_space: Affine,
+    view: &'s View<'a>,
+    object: &'s mut Obj,
+    ty: &'s str,
+    rest_id: &'s str,
+    connector_snapshot: bool,
+    connector_terminal: bool,
+    depth: usize,
+    included: Option<&'s BTreeSet<String>>,
+    slot_content: Option<String>,
+}
+
 impl<'a> Mapper<'a> {
     /// Layer `id` (inside instance `inst` when expanding one) and its subtree. `space`: from the
     /// parent's coordinates to the enclosing frame's (groups and booleans place their children in
@@ -107,23 +126,39 @@ impl<'a> Mapper<'a> {
             (Some(i), Some(p)) => i.overrides.get(p).map(Vec::as_slice).unwrap_or_default(),
             _ => &[],
         };
-        let mut view = View::of(base).with(entries.iter().map(|e| e.row));
+        // Inside a scaled instance the main's lengths are the factor times as long; the rows of
+        // the instance are at its scale already (#2091).
+        let scale = inst.map_or(1.0, |i| i.scale);
+        let mut view = View::of_scaled(base, scale).with(entries.iter().map(|e| (e.row, e.scale)));
         // A layer of a resized instance the file gives no derived layout for follows its
         // constraints from the main's geometry, then takes the size and place overridden on it
         // (auto layout places the others, as in the editor).
         let derived = entries.iter().any(|e| e.entry == Entry::Derived && (e.row.get("size").is_some() || e.row.get("transform").is_some()));
         let stacked = parent.and_then(|p| p.str("stackMode")).is_some_and(|m| matches!(m, "HORIZONTAL" | "VERTICAL" | "GRID"))
             && view.str("stackPositioning") != Some("ABSOLUTE");
-        let main = View::of(base);
-        let set = |k: &str| entries.iter().rev().filter(|e| e.entry != Entry::Stale).find_map(|e| e.row.get(k));
+        let main = View::of_scaled(base, scale);
+        // The size and place a row gives, at the scale of the row (a nested instance's own rows
+        // are at its enclosing main's scale).
+        let set = |k: &str| entries.iter().rev().filter(|e| e.entry != Entry::Stale).find_map(|e| e.row.get(k).map(|r| (r, e.scale)));
+        let set_size = || {
+            let (r, k) = set("size")?;
+            let (x, y) = size(r)?;
+            Some((scaled(x, k)?, scaled(y, k)?))
+        };
+        let set_transform = || {
+            let (r, k) = set("transform")?;
+            let m = matrix(r)?;
+            let [a, b, c, d, e, f] = m.as_coeffs();
+            Some(Affine::new([a, b, c, d, scaled(e, k)?, scaled(f, k)?]))
+        };
         if let (Some(f), false, false, Some((w, h))) = (fit, derived, stacked, main.size()) {
             let t = main.transform().unwrap_or_default();
             let (fw, ft) = f.apply(w, h, t, view.str("horizontalConstraint"), view.str("verticalConstraint"));
-            view.fitted = Some((set("size").and_then(size).unwrap_or(fw), set("transform").and_then(matrix).unwrap_or(ft)));
+            view.fitted = Some((set_size().unwrap_or(fw), set_transform().unwrap_or(ft)));
         } else if entries.iter().any(|e| e.entry == Entry::Stale && (e.row.get("size").is_some() || e.row.get("transform").is_some()))
-            && let Some(s) = set("size").and_then(size).or_else(|| main.size())
+            && let Some(s) = set_size().or_else(|| main.size())
         {
-            view.fitted = Some((s, set("transform").and_then(matrix).or_else(|| main.transform()).unwrap_or_default()));
+            view.fitted = Some((s, set_transform().or_else(|| main.transform()).unwrap_or_default()));
         }
         let rest_id = match (inst, &path) {
             (Some(i), Some(p)) => format!("I{};{}", i.root, p.join(";")),
@@ -136,17 +171,12 @@ impl<'a> Mapper<'a> {
             connector_snapshot && (!connector_has_saved_label(&view) || depth >= MAX_DEPTH || self.count.saturating_add(1) >= self.budget());
         // A supported connector snapshot has its own note below instead of the generic stand-in one.
         let stand = stand_in(own).filter(|_| !connector_snapshot);
-        let ty = match own {
-            "ROUNDED_RECTANGLE" => "RECTANGLE",
-            "SYMBOL" => "COMPONENT",
-            "FRAME" if view.flag("isStateGroup") == Some(true) => "COMPONENT_SET",
-            "FRAME" if view.flag("resizeToFit") == Some(true) => "GROUP",
-            "VARIABLE" | "VARIABLE_SET" => return None,
-            "CONNECTOR" if connector_snapshot && connector_terminal => "VECTOR",
-            "CONNECTOR" if connector_snapshot => "FRAME",
-            t => stand.map_or(t, |s| s.0),
-        };
-        if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH") {
+        // A label without a snapshot: the connector becomes a frame holding its line and its label.
+        let connector_label = own == "CONNECTOR" && !connector_snapshot && self.connector_label_fits(&view, depth);
+        let ty = if connector_label { "FRAME" } else { Self::mapped_type(own, &view, connector_snapshot, connector_terminal, stand)? };
+        // A whiteboard's sticky says it imports as a frame only when it can't be a native one.
+        let native_sticky = self.board && own == "STICKY";
+        if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH" && !native_sticky) {
             self.warn(format!("{} layers import as {what}", own.to_ascii_lowercase().replace('_', " ")));
         }
         if connector_snapshot {
@@ -196,20 +226,12 @@ impl<'a> Mapper<'a> {
             }
             _ => {}
         }
-        if own == "CONNECTOR" && connector_snapshot {
-            if connector_terminal {
-                self.connector_snapshot_flatten(&mut o, &view, &rest_id, space);
-            } else {
-                o.insert("fills".into(), json!([]));
-                o.insert("strokes".into(), json!([]));
-                for key in ["styles", "strokeWeight", "strokeAlign", "strokeJoin", "strokeDashes", "strokeCap"] {
-                    o.remove(key);
-                }
-                o.insert("clipsContent".into(), json!(false));
-            }
-        } else if own == "CONNECTOR" {
-            self.connector(&mut o, &view, space);
-        }
+        let connector_kids = if own == "CONNECTOR" {
+            let shape = ConnectorShape { snapshot: connector_snapshot, terminal: connector_terminal, label: connector_label };
+            self.connector_layer(&mut o, &view, &rest_id, space, shape)
+        } else {
+            Vec::new()
+        };
         if ty == "COMPONENT" || ty == "COMPONENT_SET" {
             self.component(&mut o, &view, &rest_id);
         }
@@ -225,18 +247,76 @@ impl<'a> Mapper<'a> {
             source.insert("slotOverride".into(), json!(true));
         }
         let child_space = if matches!(ty, "GROUP" | "BOOLEAN_OPERATION") { space * view.transform().unwrap_or_default() } else { Affine::IDENTITY };
-        let mut kids = if connector_snapshot && !connector_terminal { self.connector_snapshot_children(&view, &rest_id) } else { Vec::new() };
+        let mut kids = self.map_layer_children(LayerChildren {
+            id,
+            inst,
+            base,
+            child_space,
+            view: &view,
+            object: &mut o,
+            ty,
+            rest_id: &rest_id,
+            connector_snapshot,
+            connector_terminal,
+            depth,
+            included,
+            slot_content,
+        });
+        kids.splice(0..0, connector_kids);
+        if stand.is_some_and(|s| s.0 == "FRAME") {
+            let native = if native_sticky { self.native_sticky(&mut o, &view, &rest_id, depth) } else { None };
+            if let Some(native) = native {
+                kids.splice(0..0, native);
+            } else if let Some(snapshot) = self.board_snapshot(&mut o, &view, own, &rest_id, depth) {
+                kids.splice(0..0, snapshot);
+            } else {
+                kids.splice(0..0, self.shape_with_text(&mut o, &view, own, &rest_id));
+                kids.extend(self.inner_text(&o, &view, &rest_id, own == "STICKY"));
+            }
+            if native_sticky && !o.contains_key("board") {
+                self.warn("sticky layers import as frames with their text");
+            }
+        }
+        if !kids.is_empty() {
+            o.insert("children".into(), Value::Array(kids));
+        }
+        Some(Value::Object(o))
+    }
+
+    fn map_layer_children(&mut self, context: LayerChildren<'_, 'a>) -> Vec<Value> {
+        let LayerChildren {
+            id,
+            inst,
+            base,
+            child_space,
+            view,
+            object: o,
+            ty,
+            rest_id,
+            connector_snapshot,
+            connector_terminal,
+            depth,
+            included,
+            slot_content,
+        } = context;
+        let mut kids = if connector_snapshot && !connector_terminal { self.connector_snapshot_children(view, rest_id) } else { Vec::new() };
         if connector_terminal {
             // The saved vector is flattened into the connector node when no child slot remains.
         } else if ty == "INSTANCE" {
-            if let Some((sub, sym)) = self.instance(&mut o, &view, id, inst, &rest_id) {
-                let main = self.nodes.get(&sym).map(|m| View::of(m));
-                let fit = Fit::frame(main.as_ref().and_then(View::size), view.size());
+            if let Some((sub, sym)) = self.instance(o, view, id, inst, rest_id) {
+                let main = self.nodes.get(&sym).map(|m| View::of_scaled(m, sub.scale));
+                // A scaled main's size is the factor's product, rounded to a float: it matches an
+                // instance of that size without a fit that would round the layers again.
+                let near = |a: f64, b: f64| (a - b).abs() <= 1e-4 * a.abs().max(b.abs()).max(1.0);
+                let fit = match (main.as_ref().and_then(View::size), view.size()) {
+                    (Some(a), Some(b)) if sub.scale != 1.0 && near(a.0, b.0) && near(a.1, b.1) => None,
+                    (a, b) => Fit::frame(a, b),
+                };
                 // An instance that records no auto layout of its own has its main's.
                 let view = match main {
                     Some(m) if view.get("stackMode").is_none() && m.get("stackMode").is_some() => {
-                        let layered = View { fitted: view.fitted, ..m.with(view.layers.iter().copied()) };
-                        self.auto_layout(&mut o, &layered);
+                        let layered = m.over(view);
+                        self.auto_layout(o, &layered);
                         layered
                     }
                     _ => view.clone(),
@@ -252,28 +332,119 @@ impl<'a> Mapper<'a> {
                 content_inst.slot_content = true;
             }
             for c in self.children(&content) {
-                kids.extend(self.layer_filtered(&c, content_inst.as_ref(), child_space, Some(&view), None, depth + 1, included));
+                kids.extend(self.layer_filtered(&c, content_inst.as_ref(), child_space, Some(view), None, depth + 1, included));
             }
         } else {
             // Inside an instance a layer's children are its main's: they follow it from the main's
             // size to its own.
             let fit = match (inst, ty) {
                 (None, _) => None,
-                (Some(_), "GROUP" | "BOOLEAN_OPERATION") => Fit::scale(View::of(base).size(), view.size()),
-                (Some(_), _) => Fit::frame(View::of(base).size(), view.size()),
+                (Some(i), "GROUP" | "BOOLEAN_OPERATION") => Fit::scale(View::of_scaled(base, i.scale).size(), view.size()),
+                (Some(i), _) => Fit::frame(View::of_scaled(base, i.scale).size(), view.size()),
             };
             for c in self.children(id) {
-                kids.extend(self.layer_filtered(&c, inst, child_space, Some(&view), fit, depth + 1, included));
+                kids.extend(self.layer_filtered(&c, inst, child_space, Some(view), fit, depth + 1, included));
             }
         }
-        if stand.is_some_and(|s| s.0 == "FRAME") {
-            kids.splice(0..0, self.shape_with_text(&mut o, &view, own, &rest_id));
-            kids.extend(self.inner_text(&o, &view, &rest_id, own == "STICKY"));
+        kids
+    }
+
+    fn mapped_type<'s>(
+        own: &'s str,
+        view: &View<'a>,
+        connector_snapshot: bool,
+        connector_terminal: bool,
+        stand: Option<(&'static str, &'static str)>,
+    ) -> Option<&'s str> {
+        match own {
+            "ROUNDED_RECTANGLE" => Some("RECTANGLE"),
+            "SYMBOL" => Some("COMPONENT"),
+            "FRAME" if view.flag("isStateGroup") == Some(true) => Some("COMPONENT_SET"),
+            "FRAME" if view.flag("resizeToFit") == Some(true) => Some("GROUP"),
+            "VARIABLE" | "VARIABLE_SET" => None,
+            "CONNECTOR" if connector_snapshot && connector_terminal => Some("VECTOR"),
+            "CONNECTOR" if connector_snapshot => Some("FRAME"),
+            t => Some(stand.map_or(t, |s| s.0)),
         }
-        if !kids.is_empty() {
-            o.insert("children".into(), Value::Array(kids));
+    }
+
+    /// FigJam notes and shapes keep their paints and text on generated template children,
+    /// not on the outer node. Keep the saved layout as ordinary editable layers (including a
+    /// note's author), without applying the background's opacity or transform to the wrapper.
+    /// When no generated body survives, retain usable outer text alongside successful children.
+    fn board_snapshot(&mut self, o: &mut Obj, v: &View<'a>, own: &str, rest_id: &str, depth: usize) -> Option<Vec<Value>> {
+        if !matches!(own, "STICKY" | "SHAPE_WITH_TEXT") || v.get("nodeGenerationData").is_none() {
+            return None;
         }
-        Some(Value::Object(o))
+        if v.get("derivedImmutableFrameData").and_then(|d| num(d, "version")) != Some(1.0) {
+            self.warn("note or shape generated layout is missing or unsupported; using its outer frame");
+            return None;
+        }
+        let mut children = Vec::new();
+        let mut has_body = false;
+        for local_id in 0..if own == "STICKY" { 3 } else { 2 } {
+            let style = generated_record(v, "nodeGenerationData", local_id);
+            let bounds = generated_record(v, "derivedImmutableFrameData", local_id);
+            let (Some(style), Some(bounds)) = (style, bounds) else {
+                if style.is_some() || bounds.is_some() {
+                    self.warn("note or shape generated child is missing its style or bounds; child skipped");
+                }
+                continue;
+            };
+            let child = View::of(style).with([(bounds, 1.0)]);
+            let chars = own_text(&child);
+            if local_id != 0 && chars.is_none() {
+                continue;
+            }
+            if valid_size(child.get("size")).is_none() || child.transform().is_none() {
+                self.warn("note or shape generated child has invalid bounds; child skipped");
+                continue;
+            }
+            if self.count >= self.budget() || depth >= MAX_DEPTH {
+                self.warn("note or shape generated children exceed the layer or nesting limit; remaining children skipped");
+                break;
+            }
+            let mut layer = Obj::new();
+            let ty = if local_id == 0 { "RECTANGLE" } else { "TEXT" };
+            layer.insert("id".into(), json!(format!("{rest_id};generated{local_id}")));
+            layer.insert("type".into(), json!(ty));
+            layer.insert("name".into(), json!(chars.map_or_else(|| "Background".into(), |c| c.chars().take(40).collect::<String>())));
+            self.common(&mut layer, &child, ty, Affine::IDENTITY, None);
+            if local_id == 0 {
+                // Network decoding is only enabled for vectors; choose that type before
+                // geometry sees a saved network, then restore the rectangle if it is unusable.
+                if child.get("vectorData").is_some() {
+                    layer.insert("type".into(), json!("VECTOR"));
+                }
+                self.geometry(&mut layer, &child);
+                let outlined = |layer: &Obj| ["fillGeometry", "strokeGeometry", "vectorNetworkRef"].iter().any(|key| layer.contains_key(*key));
+                if own == "SHAPE_WITH_TEXT" && !outlined(&layer) {
+                    self.geometry(&mut layer, v);
+                }
+                if outlined(&layer) {
+                    layer.insert("type".into(), json!("VECTOR"));
+                } else {
+                    layer.insert("type".into(), json!("RECTANGLE"));
+                    if own == "SHAPE_WITH_TEXT" && !matches!(v.str("shapeWithTextType"), None | Some("SQUARE" | "ROUNDED_RECTANGLE")) {
+                        self.warn("shape generated outline is missing or damaged; using its rectangle");
+                    }
+                }
+                o.insert("fills".into(), json!([]));
+                o.insert("strokes".into(), json!([]));
+            } else {
+                self.text(&mut layer, &child);
+                if let Some(Value::Object(style)) = layer.get_mut("style") {
+                    style.insert("textAutoResize".into(), json!("NONE"));
+                }
+            }
+            self.count += 1;
+            has_body |= local_id == 1;
+            children.push(Value::Object(layer));
+        }
+        if depth < MAX_DEPTH && !has_body {
+            children.extend(self.inner_text(o, v, rest_id, own == "STICKY"));
+        }
+        Some(children)
     }
 
     /// A non-rectangular shape-with-text's shape, as a vector under its frame (which gives up its
@@ -368,14 +539,16 @@ impl<'a> Mapper<'a> {
             .unwrap_or_else(|| stroke_style.map_or_else(|| v.list("strokePaints"), |s| s.get("fillPaints").map(Kv::list).unwrap_or_default()));
         o.insert("strokes".into(), Value::Array(strokes.iter().filter_map(|p| paint(p, &mut |w| self.warn(w))).collect()));
         let effect_style = self.style(v, "styleIdForEffect", "inheritEffectStyleID", "effect", &mut styles);
-        let effects = effect_style.map_or_else(|| v.list("effects"), |s| s.get("effects").map(Kv::list).unwrap_or_default());
+        let (effects, effects_scale) =
+            effect_style.map_or_else(|| v.list_scaled("effects"), |s| v.styled_list(s, "effects", "styleIdForEffect", "inheritEffectStyleID"));
         if !effects.is_empty() {
-            o.insert("effects".into(), Value::Array(effects.iter().filter_map(effect).collect()));
+            o.insert("effects".into(), Value::Array(effects.iter().filter_map(|e| effect(e, effects_scale)).collect()));
         }
         let grid_style = self.style(v, "styleIdForGrid", "inheritGridStyleID", "grid", &mut styles);
-        let grids = grid_style.map_or_else(|| v.list("layoutGrids"), |s| s.get("layoutGrids").map(Kv::list).unwrap_or_default());
+        let (grids, grids_scale) =
+            grid_style.map_or_else(|| v.list_scaled("layoutGrids"), |s| v.styled_list(s, "layoutGrids", "styleIdForGrid", "inheritGridStyleID"));
         if !grids.is_empty() {
-            o.insert("layoutGrids".into(), Value::Array(grids.iter().map(layout_grid).collect()));
+            o.insert("layoutGrids".into(), Value::Array(grids.iter().map(|g| layout_grid(g, grids_scale)).collect()));
         }
         if ty == "TEXT" {
             self.style(v, "styleIdForText", "inheritTextStyleID", "text", &mut styles);
@@ -384,10 +557,10 @@ impl<'a> Mapper<'a> {
             o.insert("styles".into(), Value::Object(styles));
         }
         stroke(o, v);
-        copy_num(o, v, "cornerRadius", "cornerRadius");
+        copy_len(o, v, "cornerRadius", "cornerRadius");
         copy_num(o, v, "cornerSmoothing", "cornerSmoothing");
         if v.flag("rectangleCornerRadiiIndependent") == Some(true) {
-            let r = |k: &str| v.num(k).unwrap_or(0.0);
+            let r = |k: &str| v.len(k).unwrap_or(0.0);
             o.insert(
                 "rectangleCornerRadii".into(),
                 json!([
@@ -463,7 +636,7 @@ impl<'a> Mapper<'a> {
     /// scaled to the layer's size, with per-point corner radii, handle mirroring and end caps.
     /// False when there's none or it's damaged (the outlines stand in).
     fn network(&mut self, o: &mut Obj, v: &View<'a>) -> bool {
-        let Some(vd) = v.get("vectorData") else { return false };
+        let Some((vd, radius_scale)) = v.find("vectorData") else { return false };
         let Some(blob_id) = num(vd, "vectorNetworkBlob").map(|i| i as usize) else { return false };
         let Some(blob) = self.blobs.get(blob_id).copied() else { return false };
         let Some(net) = network::decode(blob) else {
@@ -503,6 +676,89 @@ impl<'a> Mapper<'a> {
             size.zip(norm).filter(|(s, n)| s.is_finite() && *n > 1e-9).map_or(1.0, |(s, n)| s / n)
         };
         let (sx, sy) = (scale("x"), scale("y"));
+        // A point whose style doesn't set a radius takes the layer's, as the editor draws it.
+        let layer_radius = v.len("cornerRadius");
+        let vertices: Vec<Value> = net
+            .vertices
+            .iter()
+            .map(|p| {
+                let mut out = json!({"x": p.x * sx, "y": p.y * sy});
+                let st = style(p.style);
+                // Point radii are lengths in this row's space, unlike the normalized positions.
+                // An override/derived row already carries the instance's scale.
+                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).and_then(|r| scaled(r, radius_scale)).or(layer_radius).filter(|r| *r > 0.0) {
+                    out["radius"] = json!(r);
+                }
+                match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
+                    Some("ANGLE") => out["mirror"] = json!("angle"),
+                    Some("ANGLE_AND_LENGTH") => out["mirror"] = json!("angleAndLength"),
+                    Some("NONE") => out["mirror"] = json!("none"),
+                    _ => {}
+                }
+                if let Some(join @ ("MITER" | "BEVEL" | "ROUND")) = st.and_then(|s| s.get("strokeJoin")).and_then(Kv::str) {
+                    out["join"] = json!(join.to_ascii_lowercase());
+                }
+                out
+            })
+            .collect();
+        let segments: Vec<Value> =
+            net.segments.iter().map(|s| json!({"a": s.a, "b": s.b, "ta": [s.ta.0 * sx, s.ta.1 * sy], "tb": [s.tb.0 * sx, s.tb.1 * sy]})).collect();
+        let regions: Vec<Value> = net
+            .regions
+            .iter()
+            .map(|r| {
+                let mut region = json!({"loops": r.loops, "winding": if r.non_zero { "nonZero" } else { "evenOdd" }});
+                if r.style != 0 {
+                    match style(r.style) {
+                        Some(s) => {
+                            let fills = s.get("fillPaints").and_then(|own_fills| {
+                                if own_fills.list().iter().any(paint_bound) {
+                                    return Some(own_fills);
+                                }
+                                let linked_style = self
+                                    .style_link(&View::of(s), "styleIdForFill", "inheritFillStyleID")
+                                    .and_then(|id| self.nodes.get(&id).copied())
+                                    .filter(|style| style.get("styleType").and_then(Kv::str) == Some("FILL"));
+                                match linked_style {
+                                    Some(style) => style.get("fillPaints"),
+                                    None => Some(own_fills),
+                                }
+                            });
+                            if let Some(fills) = fills {
+                                if let Kv::Array(source_paints) = fills {
+                                    let paint_cost = source_paints.iter().fold(source_paints.len(), |cost, paint| {
+                                        cost.saturating_add(paint.get("stops").map(Kv::list).unwrap_or_default().len())
+                                    });
+                                    let oversized_stops =
+                                        source_paints.iter().any(|paint| paint.get("stops").map(Kv::list).unwrap_or_default().len() > 256);
+                                    if source_paints.len() > 256 || oversized_stops || self.region_paint_elements.saturating_add(paint_cost) > 200_000
+                                    {
+                                        self.warn("vector region paint data exceeded import limits and was skipped");
+                                        return region;
+                                    }
+                                    self.region_paint_elements += paint_cost;
+                                    let paints: Vec<Value> = source_paints.iter().filter_map(|p| paint(p, &mut |w| self.warn(w))).collect();
+                                    if paints.len() != source_paints.len() {
+                                        self.warn("invalid vector region paints were skipped");
+                                    }
+                                    if paints.iter().any(has_bound_variables) {
+                                        self.warn("variable-bound vector region paints keep resolved appearance; live bindings were left out");
+                                    }
+                                    if s.get("styleIdForFill").is_some() {
+                                        self.warn("linked vector region fill styles keep resolved appearance; live style links were left out");
+                                    }
+                                    region["_figRegionFills"] = Value::Array(paints);
+                                } else {
+                                    self.warn("invalid vector region fill paint list; layer fill used");
+                                }
+                            }
+                        }
+                        None => self.warn("vector region references a missing fill style; layer fill used"),
+                    }
+                }
+                region
+            })
+            .collect();
         // An absent layer join is the source default.
         let layer_join = v.str("strokeJoin").unwrap_or("MITER");
         let point_join = |p: &network::Vertex| style(p.style).and_then(|s| s.get("strokeJoin"));
@@ -510,9 +766,6 @@ impl<'a> Mapper<'a> {
         let unresolved_style = net.vertices.iter().any(|p| p.style != 0 && style(p.style).is_none());
         let unknown_join = net.vertices.iter().any(|p| point_join(p).is_some_and(|j| !j.str().is_some_and(known)));
         let unsupported_join = net.vertices.iter().any(|p| point_join(p).and_then(Kv::str).is_some_and(|j| known(j) && j != layer_join));
-        if net.regions.iter().any(|r| style(r.style).is_some_and(|s| s.get("fillPaints").is_some())) {
-            self.warn("filled areas of a vector with their own fill use the layer's fill");
-        }
         if unresolved_style {
             self.warn("some vector points refer to point settings missing from the file; they use the layer's joins and plain corners");
         }
@@ -541,42 +794,20 @@ impl<'a> Mapper<'a> {
             o.insert("strokeCapEnd".into(), json!(cap_name(last.unwrap_or(node))));
         }
         // Every instance of a main shows the same network: it is written once and shared.
-        let key = (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize);
+        let mut entry = json!({});
+        entry["vertices"] = Value::Array(vertices);
+        entry["segments"] = Value::Array(segments);
+        entry["regions"] = Value::Array(regions.clone());
+        if regions.iter().any(|r| r.get("_figRegionFills").is_some()) {
+            o.insert("vectorNetwork".into(), entry);
+            return true;
+        }
+        // A resized instance and a K-scaled one can have the same box but different radii.
+        let key =
+            (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize, radius_scale.to_bits(), layer_radius.unwrap_or(0.0).to_bits());
         let id = match self.network_ids.get(&key) {
             Some(id) => *id,
             None => {
-                let vertices: Vec<Value> = net
-                    .vertices
-                    .iter()
-                    .map(|p| {
-                        let mut out = json!({"x": p.x * sx, "y": p.y * sy});
-                        let st = style(p.style);
-                        if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).filter(|r| *r > 0.0) {
-                            out["radius"] = json!(r);
-                        }
-                        match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
-                            Some("ANGLE") => out["mirror"] = json!("angle"),
-                            Some("ANGLE_AND_LENGTH") => out["mirror"] = json!("angleAndLength"),
-                            Some("NONE") => out["mirror"] = json!("none"),
-                            _ => {}
-                        }
-                        if let Some(join @ ("MITER" | "BEVEL" | "ROUND")) = st.and_then(|s| s.get("strokeJoin")).and_then(Kv::str) {
-                            out["join"] = json!(join.to_ascii_lowercase());
-                        }
-                        out
-                    })
-                    .collect();
-                let segments: Vec<Value> = net
-                    .segments
-                    .iter()
-                    .map(|s| json!({"a": s.a, "b": s.b, "ta": [s.ta.0 * sx, s.ta.1 * sy], "tb": [s.tb.0 * sx, s.tb.1 * sy]}))
-                    .collect();
-                let regions: Vec<Value> =
-                    net.regions.iter().map(|r| json!({"loops": r.loops, "winding": if r.non_zero { "nonZero" } else { "evenOdd" }})).collect();
-                let mut entry = json!({});
-                entry["vertices"] = Value::Array(vertices);
-                entry["segments"] = Value::Array(segments);
-                entry["regions"] = Value::Array(regions);
                 self.networks.push(crate::rest::network(&entry));
                 self.network_ids.insert(key, self.networks.len() - 1);
                 self.networks.len() - 1
@@ -641,9 +872,9 @@ fn child_layout(o: &mut Obj, v: &View, parent: Option<&View>) {
         o.insert("layoutPositioning".into(), json!("ABSOLUTE"));
     }
     for (k, w, h) in [("minSize", "minWidth", "minHeight"), ("maxSize", "maxWidth", "maxHeight")] {
-        if let Some(val) = v.get(k).and_then(|s| s.get("value")) {
+        if let Some((val, scale)) = v.find(k).and_then(|(s, scale)| Some((s.get("value")?, scale))) {
             for (axis, to) in [("x", w), ("y", h)] {
-                if let Some(x) = num(val, axis).filter(|x| *x > 0.0 && *x < 1e9) {
+                if let Some(x) = num(val, axis).and_then(|x| scaled(x, scale)).filter(|x| *x > 0.0 && *x < 1e9) {
                     o.insert(to.into(), json!(x));
                 }
             }

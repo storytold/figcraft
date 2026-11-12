@@ -2,7 +2,7 @@
 //! the title bar: its empty space drags the window (double-click maximises), and it carries the
 //! window buttons; the window's edges resize it.
 
-use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use figcraft_doc::NodeId;
 use serde_json::json;
 
@@ -16,6 +16,16 @@ use crate::{FigApp, TitleBar};
 pub const HEIGHT: f32 = 40.0;
 const MIN_TAB_WIDTH: f32 = 96.0;
 const OVERFLOW_WIDTH: f32 = 32.0;
+/// Size of the Home, new tab and theme icons, and of a tab's file, live and play marks and the
+/// overflow chevron. 20 pt is drawn at 20 pt at 100 % and 200 % display scale (`icons::paint`
+/// steps the 16 pt grid by quarters).
+const BAR_ICON: f32 = 20.0;
+/// Size of the new tab and theme buttons that hold their icons.
+const BAR_BUTTON: f32 = 32.0;
+/// Size of a tab's close cross.
+const CLOSE_ICON: f32 = 12.0;
+/// Room kept for a tab's live mark.
+const LIVE_MARK_WIDTH: f32 = 26.0;
 const OPEN_TIME: f64 = 0.18;
 
 /// Which tabs were open last frame and when the newly opened ones appeared. It is updated in place
@@ -105,22 +115,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         let rect = ui.max_rect();
         let buttons_w = if app.ui.title_bar == TitleBar::Custom { window_buttons(app, ui, rect) } else { 0.0 };
         let mut x = rect.min.x + if app.ui.title_bar == TitleBar::Inset { 76.0 } else { 8.0 };
-        // Home.
-        let hr = Rect::from_min_size(pos2(x, rect.min.y), vec2(44.0, HEIGHT));
-        let hresp = ui.interact(hr, ui.scope_id().with("home"), Sense::click()).tip(tr("Home"));
-        let home_active = (app.ui.home || !app.has_files()) && app.ui.present.is_none();
-        crate::a11y::tab(&hresp, tr("Home"), home_active);
-        if home_active {
-            ui.painter().rect_filled(hr, CornerRadius::ZERO, t.tab_active);
-        } else if hresp.hovered() {
-            ui.painter().rect_filled(hr, CornerRadius::ZERO, t.hover);
-        }
-        icons::paint(ui.painter(), Rect::from_center_size(hr.center(), vec2(16.0, 16.0)), Icon::Home, t.icon);
-        if hresp.clicked() {
-            pause_present(app);
-            app.ui.home = true;
-        }
-        x += 44.0;
+        x += home_tab(app, ui, &t, x, rect);
         ui.painter().line_segment([pos2(x, rect.min.y), pos2(x, rect.max.y)], Stroke::new(1.0, t.border));
         let document_tabs: Vec<usize> = app.session.docs.iter().enumerate().filter_map(|(i, d)| app.shows(d.uid).then_some(i)).collect();
         let now = ui.input(|input| input.time);
@@ -133,15 +128,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             motion.begin_frame(current_uids, now, reduce_motion);
             motion.opening.clone()
         });
-        let preferred: Vec<f32> = document_tabs
-            .iter()
-            .map(|&i| {
-                let d = &app.session.docs[i];
-                let mark_w = if live_mark(app, d.uid).is_some() { 18.0 } else { 0.0 };
-                let dot_w = if d.is_dirty() && mark_w > 0.0 { 12.0 } else { 0.0 };
-                (regular(12.0).size * 0.6 * d.doc.name.chars().count() as f32 + 64.0 + mark_w + dot_w).clamp(120.0, 220.0)
-            })
-            .collect();
+        let preferred: Vec<f32> = document_tabs.iter().map(|&i| preferred_width(app, i)).collect();
         // Leave the new-tab button, theme toggle, window controls and a draggable gap free.
         let room = (rect.max.x - buttons_w - 70.0 - x - 34.0).max(0.0);
         let present_pref: Vec<f32> = app.ui.presents.iter().map(present_tab_width).collect();
@@ -172,80 +159,44 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             let name = &d.doc.name;
             // In a live session: a mark after the name says whether others get in.
             let live = live_mark(app, d.uid);
-            let mark_w = if live.is_some() { 18.0 } else { 0.0 };
+            let lost = live_lost(app, d.uid);
             let dirty = d.is_dirty();
             let r = tab_rects[slot];
             let body_r = Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y));
             let close_r = Rect::from_min_max(body_r.right_top(), r.max);
             let resp = ui.interact(body_r, ui.scope_id().with(("tab", d.uid)), Sense::click_and_drag());
             let cresp = ui.interact(close_r, ui.scope_id().with(("tabclose", d.uid)), Sense::click()).tip(tr("Close tab"));
-            if (resp.dragged() || resp.drag_stopped())
-                && let Some(p) = ui.input(|inp| inp.pointer.latest_pos())
-            {
-                if resp.drag_stopped() {
-                    if several && (p.y - rect.center().y).abs() > HEIGHT * 2.0 {
-                        detach = Some((i, Some(p)));
-                    } else if (rect.min.y - 12.0..=rect.max.y + 12.0).contains(&p.y) {
-                        dropped = Some((i, p.x));
-                    }
-                } else {
-                    dragging = Some((i, p));
-                }
+            match tab_gesture(ui, &resp, rect, several) {
+                Some(TabGesture::Detach(p)) => detach = Some((i, Some(p))),
+                Some(TabGesture::Drop(x)) => dropped = Some((i, x)),
+                Some(TabGesture::Drag(p)) => dragging = Some((i, p)),
+                None => {}
             }
             if several {
-                resp.context_menu(|ui| {
-                    ui.set_width(200.0);
-                    if crate::menus::item(ui, tr("Open in new window"), "", true, false, &t) {
+                // The tab strip's own menu takes the theme like its overflow menus (the in-app
+                // menus stay dark, #843): its rows read on the white popup of the light theme.
+                crate::right::context_popup(&resp).show(|ui| {
+                    if crate::right::menu_item(ui, tr("Open in new window"), "") {
                         detach = Some((i, None));
                         ui.close();
                     }
                 });
             }
-            let label = match live {
-                Some(true) => trf("{name}, in a live session", &[("name", name)]),
-                Some(false) => trf("{name}, online, open only to you", &[("name", name)]),
-                None => name.clone(),
-            };
-            let resp = if live.is_some() { resp.on_hover_text(&label) } else { resp };
+            let label = if lost { trf("{name}, disconnected from its live session", &[("name", name)]) } else { tab_label(name, live) };
+            let resp = if live.is_some() || lost { resp.on_hover_text(&label) } else { resp };
             crate::a11y::tab(&resp, &label, active);
             let progress = open_progress(&opening, d.uid, now);
-            let paint_r = r.translate(vec2(-28.0 * (1.0 - progress).powi(2), 0.0));
-            let painter = ui.painter().with_clip_rect(r);
-            if active {
-                painter.rect_filled(paint_r, CornerRadius::ZERO, t.tab_active.linear_multiply(progress));
-            } else if resp.hovered() || cresp.hovered() {
-                painter.rect_filled(paint_r, CornerRadius::ZERO, t.hover.linear_multiply(progress));
-            }
-            icons::paint(
-                &painter,
-                Rect::from_center_size(pos2(paint_r.min.x + 18.0, paint_r.center().y), vec2(14.0, 14.0)),
-                icons::file_mark(d.doc.kind),
-                crate::theme::ACCENT.linear_multiply(progress),
-            );
-            // The unsaved-changes dot follows the name on screen, whichever way the name reads.
-            let shown = crate::bidi::paint_name(
-                &painter,
-                pos2(paint_r.min.x + 32.0, paint_r.center().y),
+            let tab = TabPaint {
                 name,
-                regular(12.0),
-                t.text.linear_multiply(progress),
-                (w - mark_w - if dirty { 72.0 } else { 60.0 }).max(0.0),
-            );
-            if let Some(shared) = live {
-                let at = Rect::from_center_size(pos2(paint_r.max.x - 38.0, paint_r.center().y), vec2(14.0, 14.0));
-                icons::paint(&painter, at, crate::online::mark(shared), if shared { t.success } else { t.icon_secondary }.linear_multiply(progress));
-            }
-            if dirty {
-                painter.text(pos2(shown.max.x + 4.0, paint_r.center().y), Align2::LEFT_CENTER, "•", regular(12.0), t.text.linear_multiply(progress));
-            }
-            let cr = Rect::from_center_size(close_r.center() + vec2(paint_r.min.x - r.min.x, 0.0), vec2(18.0, 18.0));
-            // The close target never overlaps the draggable body, including on inactive tabs.
-            if resp.hovered() || cresp.hovered() || active {
-                if cresp.hovered() {
-                    painter.rect_filled(cr, CornerRadius::same(4), t.pressed.linear_multiply(progress));
-                }
-                icons::paint(&painter, cr.shrink(4.0), Icon::Close, t.icon_secondary.linear_multiply(progress));
-            }
+                kind: d.doc.kind,
+                rects: [r, close_r],
+                width: w,
+                state: [active, resp.hovered(), cresp.hovered(), dirty],
+                live,
+                lost,
+                progress,
+            };
+            paint_tab(ui, &t, &tab);
             if cresp.clicked() {
                 close = Some(i);
             }
@@ -267,26 +218,8 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         }
         let reorder = dropped.and_then(|(from, at)| tab_drop_position(&visible, from, at).map(|(to, _)| (from, to)));
         if layout.overflow {
-            let r = Rect::from_min_size(pos2(x, rect.min.y), vec2(OVERFLOW_WIDTH, HEIGHT));
-            let resp = ui.interact(r, ui.scope_id().with("tab_overflow"), Sense::click()).tip(tr("Open files"));
-            crate::a11y::menu_button(&resp, tr("Open files"), crate::a11y::menu_open(&resp));
-            if resp.hovered() {
-                ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
-            }
-            icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), Icon::Chevron, t.icon);
-            crate::right::menu_popup(&resp).show(|ui| {
-                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                    for &i in &document_tabs {
-                        let Some(d) = app.session.docs.get(i) else { continue };
-                        let on = i == app.session.active && !app.ui.home && app.ui.present.is_none();
-                        let label = if d.is_dirty() { format!("{} •", d.doc.name) } else { d.doc.name.clone() };
-                        if crate::right::menu_check(ui, on, &label, "") {
-                            switch = Some(i);
-                            ui.close();
-                        }
-                    }
-                });
-            });
+            let resp = overflow_button(ui, &t, pos2(x, rect.min.y), "tab_overflow", tr("Open files"));
+            switch = doc_overflow_menu(app, &resp, &document_tabs).or(switch);
             x += OVERFLOW_WIDTH;
         }
         // Presentations live in their own tabs. Switching back to the design keeps the player
@@ -306,62 +239,25 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             ui.painter().line_segment([pos2(x, rect.min.y + 10.0), pos2(x, rect.max.y - 10.0)], Stroke::new(1.0, t.border));
         }
         if present_layout.overflow {
-            let r = Rect::from_min_size(pos2(x, rect.min.y), vec2(OVERFLOW_WIDTH, HEIGHT));
-            let resp = ui.interact(r, ui.scope_id().with("present_overflow"), Sense::click()).tip(tr("Open presentations"));
-            crate::a11y::menu_button(&resp, tr("Open presentations"), crate::a11y::menu_open(&resp));
-            if resp.hovered() {
-                ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
-            }
-            icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), Icon::Chevron, t.icon);
-            crate::right::menu_popup(&resp).show(|ui| {
-                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                    for tab in &app.ui.presents {
-                        let on = present_on == Some(tab.id);
-                        if crate::right::menu_check(ui, on, &present_tab_name(tab), "") {
-                            if !on {
-                                to_present = Some(tab.id);
-                            }
-                            ui.close();
-                        }
-                    }
-                });
-            });
+            let resp = overflow_button(ui, &t, pos2(x, rect.min.y), "present_overflow", tr("Open presentations"));
+            to_present = present_overflow_menu(app, &resp, present_on).or(to_present);
             x += OVERFLOW_WIDTH;
         }
         // New tab.
-        let nr = Rect::from_center_size(pos2(x + 20.0, rect.center().y), vec2(28.0, 28.0));
+        let nr = Rect::from_center_size(pos2(x + 22.0, rect.center().y), Vec2::splat(BAR_BUTTON));
         let nresp = ui.interact(nr, ui.scope_id().with("newtab"), Sense::click()).tip(crate::shortcuts::tip(tr("New design file"), "file.new"));
         if nresp.hovered() {
             ui.painter().rect_filled(nr, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), nr.shrink(7.0), Icon::Plus, t.icon);
+        icons::paint(ui.painter(), Rect::from_center_size(nr.center(), Vec2::splat(BAR_ICON)), Icon::Plus, t.icon);
         if nresp.clicked() {
             pause_present(app);
             app.run("file.new", json!({}));
             app.ui.home = false;
         }
-        // Right side: theme toggle (left of the window buttons).
-        let theme_r = Rect::from_center_size(pos2(rect.max.x - buttons_w - 24.0, rect.center().y), vec2(28.0, 28.0));
-        let tresp = ui.interact(theme_r, ui.scope_id().with("theme"), Sense::click()).tip(tr("Toggle light/dark theme"));
-        if tresp.hovered() {
-            ui.painter().rect_filled(theme_r, CornerRadius::same(5), t.hover);
-        }
-        icons::paint(ui.painter(), theme_r.shrink(7.0), if app.ui.dark { Icon::Sun } else { Icon::Moon }, t.icon);
-        if tresp.clicked() {
-            let cmd = if app.ui.dark { "view.themeLight" } else { "view.themeDark" };
-            app.run(cmd, json!({}));
-        }
-        // Only the free space drags the window. A full-bar drag target steals tab drags.
-        if app.ui.title_bar != TitleBar::Native && x + 34.0 < theme_r.min.x {
-            let free = Rect::from_min_max(pos2(x + 34.0, rect.min.y), pos2(theme_r.min.x, rect.max.y));
-            let drag = ui.interact(free, ui.scope_id().with("titlebar_drag"), Sense::click_and_drag());
-            if drag.drag_started() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
-            if drag.double_clicked() {
-                let max = ui.input(|i| i.viewport().maximized.unwrap_or(false));
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
-            }
+        let theme_r = theme_toggle(app, ui, &t, rect, buttons_w);
+        if app.ui.title_bar != TitleBar::Native {
+            drag_free_space(ui, rect, nr.max.x, theme_r.min.x);
         }
         if let Some(i) = switch {
             pause_present(app);
@@ -374,11 +270,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             show_present(app, id);
         }
         if let Some((i, at)) = detach {
-            // Where the pointer let go, on the screen.
-            let at = at.and_then(|p| ui.input(|inp| inp.viewport().inner_rect).map(|r| r.min + p.to_vec2() - vec2(60.0, HEIGHT / 2.0)));
-            if let Err(e) = crate::windows::open(app, ui.ctx(), Some(i), None, at) {
-                app.toast(e);
-            }
+            detach_tab(app, ui, i, at);
         }
         if let Some((from, to)) = reorder
             && from != to
@@ -386,25 +278,248 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             app.run("file.moveTab", json!({"from": from, "to": to}));
         }
         if let Some(i) = close {
-            // A branch tab's edits live on in its main file: closing it loses nothing.
-            let dirty = app.session.docs.get(i).is_some_and(|d| d.is_dirty() && d.branch_of.is_none());
-            if dirty {
-                app.ui.find = None;
-                app.toast(trf(
-                    "Unsaved changes: save first, or close again with {key} to discard",
-                    &[("key", &crate::toolbar::pretty_shortcut("Alt"))],
-                ));
-                if ui.input(|inp| inp.modifiers.alt) {
-                    app.run("file.close", json!({"index": i, "force": true}));
-                }
-            } else {
-                app.run("file.close", json!({"index": i}));
-            }
+            close_tab(app, ui, i);
         }
         if !opening.is_empty() {
             ui.ctx().request_repaint();
         }
     });
+}
+
+/// The chevron button at `at` that opens a menu of the tabs that did not fit.
+fn overflow_button(ui: &mut Ui, t: &Tokens, at: egui::Pos2, salt: &str, label: &'static str) -> egui::Response {
+    let r = Rect::from_min_size(at, vec2(OVERFLOW_WIDTH, HEIGHT));
+    let resp = ui.interact(r, ui.scope_id().with(salt), Sense::click()).tip(label);
+    crate::a11y::menu_button(&resp, label, crate::a11y::menu_open(&resp));
+    if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(BAR_ICON)), Icon::Chevron, t.icon);
+    resp
+}
+
+/// Only the free space between `from_x` and `to_x` drags the window (a full-bar drag target would
+/// steal tab drags); double click maximizes.
+fn drag_free_space(ui: &mut Ui, rect: Rect, from_x: f32, to_x: f32) {
+    if from_x >= to_x {
+        return;
+    }
+    let free = Rect::from_min_max(pos2(from_x, rect.min.y), pos2(to_x, rect.max.y));
+    let drag = ui.interact(free, ui.scope_id().with("titlebar_drag"), Sense::click_and_drag());
+    if drag.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+    if drag.double_clicked() {
+        let max = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+    }
+}
+
+/// Closes tab `i`: with unsaved changes it asks first (Don't Save / Cancel / Save), and Alt held
+/// drops them without asking.
+fn close_tab(app: &mut FigApp, ui: &Ui, i: usize) {
+    // A branch tab's edits live on in its main file: closing it loses nothing.
+    let dirty = app.session.docs.get(i).is_some_and(|d| d.is_dirty() && d.branch_of.is_none());
+    if dirty && ui.input(|inp| inp.modifiers.alt) {
+        app.run("file.close", json!({"index": i, "force": true}));
+    } else {
+        crate::windows::ask_close_tab(app, i);
+    }
+}
+
+/// The Home tab at `x`; returns its width. Without inset window buttons its divider continues the
+/// icon rail's edge below (a mirrored window has the rail on the right: no edge to continue).
+fn home_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens, x: f32, rect: Rect) -> f32 {
+    let w = if app.ui.title_bar == TitleBar::Inset || app.ui.mirrored { 44.0 } else { rect.min.x + crate::layers::RAIL_WIDTH - x };
+    let hr = Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT));
+    let hresp = ui.interact(hr, ui.scope_id().with("home"), Sense::click()).tip(tr("Home"));
+    let home_active = (app.ui.home || !app.has_files()) && app.ui.present.is_none();
+    crate::a11y::tab(&hresp, tr("Home"), home_active);
+    if home_active {
+        ui.painter().rect_filled(hr, CornerRadius::ZERO, t.tab_active);
+    } else if hresp.hovered() {
+        ui.painter().rect_filled(hr, CornerRadius::ZERO, t.hover);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(hr.center(), Vec2::splat(BAR_ICON)), Icon::Home, t.icon);
+    if hresp.clicked() {
+        pause_present(app);
+        app.ui.home = true;
+    }
+    w
+}
+
+/// The theme toggle, left of the window buttons; returns its rect.
+fn theme_toggle(app: &mut FigApp, ui: &mut Ui, t: &Tokens, rect: Rect, buttons_w: f32) -> Rect {
+    let theme_r = Rect::from_center_size(pos2(rect.max.x - buttons_w - 26.0, rect.center().y), Vec2::splat(BAR_BUTTON));
+    let tresp = ui.interact(theme_r, ui.scope_id().with("theme"), Sense::click()).tip(tr("Toggle light/dark theme"));
+    if tresp.hovered() {
+        ui.painter().rect_filled(theme_r, CornerRadius::same(5), t.hover);
+    }
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(theme_r.center(), Vec2::splat(BAR_ICON)),
+        if app.ui.dark { Icon::Sun } else { Icon::Moon },
+        t.icon,
+    );
+    if tresp.clicked() {
+        let cmd = if app.ui.dark { "view.themeLight" } else { "view.themeDark" };
+        app.run(cmd, json!({}));
+    }
+    theme_r
+}
+
+/// What a drag on a document tab is doing.
+enum TabGesture {
+    /// Released far off the strip: the tab moves to a window of its own, at this point.
+    Detach(egui::Pos2),
+    /// Released on the strip, at this x.
+    Drop(f32),
+    /// Still dragging, at this point.
+    Drag(egui::Pos2),
+}
+
+/// The drag on a tab body `resp` in the tab bar `rect`, if any.
+fn tab_gesture(ui: &Ui, resp: &egui::Response, rect: Rect, several: bool) -> Option<TabGesture> {
+    if !(resp.dragged() || resp.drag_stopped()) {
+        return None;
+    }
+    let p = ui.input(|inp| inp.pointer.latest_pos())?;
+    if !resp.drag_stopped() {
+        return Some(TabGesture::Drag(p));
+    }
+    if several && (p.y - rect.center().y).abs() > HEIGHT * 2.0 {
+        Some(TabGesture::Detach(p))
+    } else if (rect.min.y - 12.0..=rect.max.y + 12.0).contains(&p.y) {
+        Some(TabGesture::Drop(p.x))
+    } else {
+        None
+    }
+}
+
+/// The menu of document tabs that did not fit: the one picked.
+fn doc_overflow_menu(app: &FigApp, resp: &egui::Response, document_tabs: &[usize]) -> Option<usize> {
+    let mut switch = None;
+    crate::right::menu_popup(resp).show(|ui| {
+        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+            for &i in document_tabs {
+                let Some(d) = app.session.docs.get(i) else { continue };
+                let on = i == app.session.active && !app.ui.home && app.ui.present.is_none();
+                let label = if d.is_dirty() { format!("{} •", d.doc.name) } else { d.doc.name.clone() };
+                if crate::right::menu_check(ui, on, &label, "") {
+                    switch = Some(i);
+                    ui.close();
+                }
+            }
+        });
+    });
+    switch
+}
+
+/// The menu of presentation tabs that did not fit: the one picked (not the one already shown).
+fn present_overflow_menu(app: &FigApp, resp: &egui::Response, present_on: Option<u64>) -> Option<u64> {
+    let mut to_present = None;
+    crate::right::menu_popup(resp).show(|ui| {
+        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+            for tab in &app.ui.presents {
+                let on = present_on == Some(tab.id);
+                if crate::right::menu_check(ui, on, &present_tab_name(tab), "") {
+                    if !on {
+                        to_present = Some(tab.id);
+                    }
+                    ui.close();
+                }
+            }
+        });
+    });
+    to_present
+}
+
+/// Moves tab `i` to a window of its own; `at` is where the pointer let go, in the tab bar.
+fn detach_tab(app: &mut FigApp, ui: &Ui, i: usize, at: Option<egui::Pos2>) {
+    // Where the pointer let go, on the screen.
+    let at = at.and_then(|p| ui.input(|inp| inp.viewport().inner_rect).map(|r| r.min + p.to_vec2() - vec2(60.0, HEIGHT / 2.0)));
+    if let Err(e) = crate::windows::open(app, ui.ctx(), Some(i), None, at) {
+        app.toast(e);
+    }
+}
+
+/// How wide document tab `i` wants to be: its name, the live mark and the unsaved dot.
+fn preferred_width(app: &FigApp, i: usize) -> f32 {
+    let d = &app.session.docs[i];
+    let mark_w = if live_mark(app, d.uid).is_some() || live_lost(app, d.uid) { LIVE_MARK_WIDTH } else { 0.0 };
+    let dot_w = if d.is_dirty() && mark_w > 0.0 { 12.0 } else { 0.0 };
+    (regular(12.0).size * 0.6 * d.doc.name.chars().count() as f32 + 64.0 + mark_w + dot_w).clamp(120.0, 220.0)
+}
+
+/// A tab's accessible name: `name`, and in a live session whether others get in.
+fn tab_label(name: &str, live: Option<bool>) -> String {
+    match live {
+        Some(true) => trf("{name}, in a live session", &[("name", &name)]),
+        Some(false) => trf("{name}, online, open only to you", &[("name", &name)]),
+        None => name.to_string(),
+    }
+}
+
+/// What to draw for one document tab.
+struct TabPaint<'a> {
+    name: &'a str,
+    kind: figcraft_doc::FileKind,
+    /// The tab, and its close target.
+    rects: [Rect; 2],
+    width: f32,
+    /// [active, body hovered, close hovered, unsaved changes].
+    state: [bool; 4],
+    /// In a live session: whether others get in.
+    live: Option<bool>,
+    /// Disconnected from its live session.
+    lost: bool,
+    /// How far the opening animation is (0..=1).
+    progress: f32,
+}
+
+/// Draws a document tab: background, icon, name, live mark, unsaved dot and close button.
+fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
+    let TabPaint { name, kind, rects: [r, close_r], width: w, state: [active, hovered, close_hovered, dirty], live, lost, progress } = *tab;
+    let mark_w = if live.is_some() || lost { LIVE_MARK_WIDTH } else { 0.0 };
+    let paint_r = r.translate(vec2(-28.0 * (1.0 - progress).powi(2), 0.0));
+    let painter = ui.painter().with_clip_rect(r);
+    if active {
+        painter.rect_filled(paint_r, CornerRadius::ZERO, t.tab_active.linear_multiply(progress));
+    } else if hovered || close_hovered {
+        painter.rect_filled(paint_r, CornerRadius::ZERO, t.hover.linear_multiply(progress));
+    }
+    icons::paint(
+        &painter,
+        Rect::from_center_size(pos2(paint_r.min.x + 17.0, paint_r.center().y), Vec2::splat(BAR_ICON)),
+        icons::file_mark(kind),
+        crate::theme::ACCENT.linear_multiply(progress),
+    );
+    // The unsaved-changes dot follows the name on screen, whichever way the name reads.
+    let shown = crate::bidi::paint_name(
+        &painter,
+        pos2(paint_r.min.x + 32.0, paint_r.center().y),
+        name,
+        regular(12.0),
+        t.text.linear_multiply(progress),
+        (w - mark_w - if dirty { 72.0 } else { 60.0 }).max(0.0),
+    );
+    let at = Rect::from_center_size(pos2(paint_r.max.x - 42.0, paint_r.center().y), Vec2::splat(BAR_ICON));
+    if lost {
+        icons::paint(&painter, at, Icon::LiveDisconnected, t.danger.linear_multiply(progress));
+    } else if let Some(shared) = live {
+        icons::paint(&painter, at, crate::online::mark(shared), if shared { t.success } else { t.icon_secondary }.linear_multiply(progress));
+    }
+    if dirty {
+        painter.text(pos2(shown.max.x + 4.0, paint_r.center().y), Align2::LEFT_CENTER, "•", regular(12.0), t.text.linear_multiply(progress));
+    }
+    let cr = Rect::from_center_size(close_r.center() + vec2(paint_r.min.x - r.min.x, 0.0), Vec2::splat(20.0));
+    // The close target never overlaps the draggable body, including on inactive tabs.
+    if hovered || close_hovered || active {
+        if close_hovered {
+            painter.rect_filled(cr, CornerRadius::same(4), t.pressed.linear_multiply(progress));
+        }
+        icons::paint(&painter, Rect::from_center_size(cr.center(), Vec2::splat(CLOSE_ICON)), Icon::Close, t.icon_secondary.linear_multiply(progress));
+    }
 }
 
 /// One presentation tab in `r`: whether it was clicked and whether it was closed (its X or a
@@ -422,14 +537,14 @@ fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool)
     } else if hovered {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 19.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, t.icon);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 19.0, r.center().y), Vec2::splat(BAR_ICON)), Icon::Play, t.icon);
     crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 34.0, r.center().y), &label, regular(12.0), t.text, r.width() - 62.0);
     if hovered || active {
-        let cr = Rect::from_center_size(close_r.center(), vec2(18.0, 18.0));
+        let cr = Rect::from_center_size(close_r.center(), Vec2::splat(20.0));
         if cresp.hovered() {
             ui.painter().rect_filled(cr, CornerRadius::same(4), t.pressed);
         }
-        icons::paint(ui.painter(), cr.shrink(4.0), Icon::Close, t.icon_secondary);
+        icons::paint(ui.painter(), Rect::from_center_size(cr.center(), Vec2::splat(CLOSE_ICON)), Icon::Close, t.icon_secondary);
     }
     let closed = cresp.clicked() || resp.middle_clicked() || cresp.middle_clicked();
     (resp.clicked(), closed)
@@ -573,6 +688,12 @@ pub fn relink_presents(app: &mut FigApp) {
 pub fn live_mark(app: &FigApp, uid: u64) -> Option<bool> {
     let live = app.session.live_of(uid);
     live.shared().filter(|_| live.doc_uid == Some(uid))
+}
+
+/// Document `uid` is a live session's whose connection is gone: what happens in it reaches no one.
+pub fn live_lost(app: &FigApp, uid: u64) -> bool {
+    let live = app.session.live_of(uid);
+    live.disconnected() && live.doc_uid == Some(uid)
 }
 
 /// Minimise, maximise/restore and close at the right end of the title bar; returns their width.

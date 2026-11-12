@@ -229,6 +229,45 @@ fn reorder_ring_drag_inserts_across_grid_rows_as_one_undo_step() {
 }
 
 #[test]
+fn a_click_on_one_of_several_selected_layers_selects_it() {
+    let (mut u, ids) = scene(false);
+    // The reorder ring sits at the layer's centre and takes the press; a click (no drag) on it is
+    // a click on the layer, which then has the selection to itself.
+    let p = u.app.to_screen(125., 130.);
+    u.frame(vec![Event::PointerMoved(p)]);
+    u.button(p, true);
+    u.button(p, false);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), vec![ids[0]], "the click selects the layer whose ring it hit");
+}
+
+#[test]
+fn the_press_modifiers_decide_whether_a_ring_release_is_a_click() {
+    let (mut u, ids) = scene(false);
+    let p = u.app.to_screen(125., 130.);
+    let shift = Modifiers::SHIFT;
+    // Shift is down at the press and let go before the release: the ring keeps its Shift meaning.
+    u.frame_with(vec![Event::PointerMoved(p)], shift);
+    u.frame_with(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: shift }], shift);
+    u.frame(vec![Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), ids, "letting Shift go before the release doesn't make it a plain click");
+}
+
+#[test]
+fn releasing_a_ring_outside_the_canvas_ends_a_drag_even_without_motion() {
+    let (mut u, ids) = scene(false);
+    let p = u.app.to_screen(125., 130.);
+    u.frame(vec![Event::PointerMoved(p)]);
+    u.button(p, true);
+    // The pointer leaves before any in-canvas motion is seen, so `moved` stays false.
+    u.frame(vec![Event::PointerGone]);
+    u.button(Pos2::new(-1., -1.), false);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), ids, "a release away from the press ends a drag, not a click");
+}
+
+#[test]
 fn reorder_ring_escape_click_and_returning_home_make_no_undo_step() {
     for action in [0, 1, 2] {
         let (mut u, ids) = scene(false);
@@ -252,7 +291,12 @@ fn reorder_ring_escape_click_and_returning_home_make_no_undo_step() {
         u.frame(vec![]);
         assert_eq!(u.app.session.doc().unwrap(), &before);
         assert_eq!(u.app.session.undo_depth().0, history);
-        assert_eq!(u.app.session.selection(), ids);
+        if action == 0 {
+            // The press on a ring that doesn't drag is a click on that layer.
+            assert_eq!(u.app.session.selection(), vec![ids[0]], "a click on a ring selects its layer");
+        } else {
+            assert_eq!(u.app.session.selection(), ids);
+        }
         assert!(u.app.session.ds().unwrap().interaction.is_none());
     }
 }

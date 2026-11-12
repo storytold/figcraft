@@ -201,6 +201,22 @@ fn reparent_index_is_the_final_position_in_auto_layout_and_across_parents() {
 }
 
 #[test]
+fn reparent_rejects_a_negative_or_fractional_index() {
+    let mut s = Session::new();
+    let frame = id(&ex(&mut s, "node.create", json!({"type": "frame", "name": "F"})));
+    let rect = |s: &mut Session, n: &str, parent: NodeId| id(&ex(s, "node.create", json!({"type": "rectangle", "name": n, "parent": parent})));
+    let (a, b) = (rect(&mut s, "a", frame), rect(&mut s, "b", frame));
+    let free = id(&ex(&mut s, "node.create", json!({"type": "rectangle", "name": "free"})));
+    for bad in [json!(-1), json!(1.5), json!("x")] {
+        let r = s.execute("node.reparent", &json!({"ids": [free], "parent": frame, "index": bad}));
+        assert!(r.is_err(), "index {bad} accepted");
+        assert_eq!(kids(&s, frame), [a, b], "the tree is unchanged for index {bad}");
+    }
+    ex(&mut s, "node.reparent", json!({"ids": [free], "parent": frame, "index": 0}));
+    assert_eq!(kids(&s, frame), [free, a, b]);
+}
+
+#[test]
 fn renaming_several_layers_by_the_documented_codes() {
     // Three layers named `names`, bottom to top; (names, params, new names, derivation).
     let rows: Vec<([&str; 3], Value, [&str; 3], &str)> = vec![
@@ -277,6 +293,11 @@ fn renaming_several_layers_by_the_documented_codes() {
     assert_eq!(r(None, "$n", Some(1e30), "a"), "1000000000000");
     assert_eq!(r(None, "$n", Some(f64::NAN), "a"), "1");
     assert_eq!(r(Some("é"), "e", None, "café é"), "cafe e");
+    // A template is expanded once per match, so its length is capped (1,000 characters).
+    let long = "$nn".repeat(400);
+    assert!(crate::rename::BatchRename::new(Some("a"), false, &long, None, None).is_err());
+    assert!(crate::rename::BatchRename::new(None, false, "x", Some(&long), None).is_err_and(|e| e.contains("pattern")));
+    assert!(crate::rename::BatchRename::new(Some("a"), false, &"$nn".repeat(300), None, None).is_ok());
 }
 
 #[test]
@@ -394,6 +415,20 @@ fn page_select_and_doc_switch_refuse_negative_or_fractional_indexes() {
 }
 
 #[test]
+fn page_move_refuses_negative_or_fractional_indexes() {
+    let mut s = Session::new();
+    ex(&mut s, "page.add", json!({}));
+    let p3 = id(&ex(&mut s, "page.add", json!({})));
+    let before = pages(&mut s);
+    for bad_index in [json!(-1), json!(1.5)] {
+        assert!(s.execute("page.move", &json!({"id": p3, "index": bad_index})).is_err(), "page.move index {bad_index} must fail");
+        assert_eq!(pages(&mut s), before, "page.move index {bad_index} leaves the order alone");
+    }
+    ex(&mut s, "page.move", json!({"id": p3, "index": 0}));
+    assert_eq!(pages(&mut s)[0]["id"], json!(p3), "a valid index still moves the page");
+}
+
+#[test]
 fn assets_panel_lists_files_and_drops_by_the_documented_rules() {
     let mut s = Session::new();
     let page = s.page().unwrap();
@@ -474,4 +509,30 @@ fn page_navigation_skips_dividers() {
     assert_eq!(s.page().unwrap(), later, "Next page crosses a divider");
     ex(&mut s, "view.nextPage", json!({}));
     assert_eq!(s.page().unwrap(), later, "Next page stops on the last page");
+}
+
+#[test]
+fn opacity_percent_strings_always_divide_by_100() {
+    let mut s = Session::new();
+    let r = rect(&mut s, "R", 0.0, 0.0, None);
+    for (v, want) in [(json!("1%"), 0.01), (json!("0.5%"), 0.005), (json!("50%"), 0.5), (json!(1), 1.0), (json!(50), 0.5), (json!(0.25), 0.25)] {
+        ex(&mut s, "node.set", json!({"id": r, "props": {"opacity": v.clone()}}));
+        let o = s.doc().unwrap().node(r).unwrap().opacity;
+        assert!((o - want).abs() < 1e-6, "opacity {v} gave {o}, want {want}");
+    }
+}
+
+#[test]
+fn fill_opacity_star_ratio_and_arc_ratio_read_a_percent_suffix() {
+    let mut s = Session::new();
+    let r = rect(&mut s, "R", 0.0, 0.0, None);
+    ex(&mut s, "fill.set", json!({"ids": [r], "color": "#ff0000", "opacity": "1%"}));
+    let fill = s.doc().unwrap().node(r).unwrap().fills[0].opacity;
+    assert!((fill - 0.01).abs() < 1e-6, "fill opacity \"1%\" gave {fill}");
+    let star = id(&ex(&mut s, "shape.star", json!({"x": 0, "y": 0, "width": 100, "height": 100, "props": {"innerRadius": "1%"}})));
+    let figcraft_doc::NodeKind::Star { inner_ratio, .. } = s.doc().unwrap().node(star).unwrap().kind else { panic!("star") };
+    assert!((inner_ratio - 0.01).abs() < 1e-9, "innerRadius \"1%\" gave {inner_ratio}");
+    let arc = id(&ex(&mut s, "shape.ellipse", json!({"x": 0, "y": 0, "width": 100, "height": 100, "props": {"arcInner": "1%"}})));
+    let figcraft_doc::NodeKind::Ellipse { inner, .. } = s.doc().unwrap().node(arc).unwrap().kind else { panic!("ellipse") };
+    assert!((inner - 0.01).abs() < 1e-9, "arcInner \"1%\" gave {inner}");
 }

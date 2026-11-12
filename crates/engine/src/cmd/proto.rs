@@ -1,11 +1,14 @@
 //! Prototype commands: interactions, flows, settings, presenting.
 
-use figcraft_doc::proto::*;
-use figcraft_doc::*;
+use figcraft_doc::proto::{
+    Action, DeviceRotation, Easing, Expr, Flow, Interaction, MAX_DELAY_MS, MAX_EXPR_DEPTH, OverlayPosition, PrototypeSettings, Transition, Trigger,
+    walk_mut,
+};
+use figcraft_doc::{Document, NodeId, NodeKind, VariableValue, Variables};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{boolean, color, f64_of, get, id, num, parse, req_id, req_num, req_targets, string};
 use crate::{Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -13,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.interaction.add",
             "Add interaction",
-            "{id?, trigger? {type: onClick|onHover|onPress|onDrag|mouseEnter|mouseLeave|mouseDown|mouseUp|afterDelay {ms}|keyPress {key (a key or a combination: Shift+K, Ctrl+Alt+Delete; or a controller button: Gamepad A|B|X|Y|LB|RB|LT|RT|View|Menu|LS|RS|Up|Down|Left|Right|Home)}}, action {type: navigate {preserveScroll?}|back|scrollTo {offset? [x, y] (where the layer ends up from the top-left)}|openOverlay {position?, anchor? screen|triggerInside|triggerOutside (default screen; the trigger ones measure the position preset on the layer that opens the overlay: outside puts top presets above it and bottom presets below it, edges lined up), offset? [x, y] (position manual: the overlay's top-left from the top-left of the layer that opens it; without it, right below that layer), close_on_outside? (default true), background?}|swapOverlay|closeOverlay|openUrl {url}|changeTo|setVariable {variable, value | expression (text, e.g. \"count + 1\")}|setVariableMode {collection, mode}|conditional {blocks [{condition? | expression? (text, e.g. \"count >= 3\"), actions}]}, dest?}, actions? [..], transition? {type: instant|dissolve|smartAnimate|moveIn|moveOut|push|slideIn|slideOut, direction?: left|right|top|bottom}, durationMs?, easing? linear|easeIn|easeOut|easeInOut|easeInBack|easeOutBack|easeInOutBack|gentle|quick|bouncy|slow|{customBezier {x1, y1, x2, y2}}|{customSpring {mass, stiffness, damping}}}, delayMs? (mouse enter, leave, down and up: how long after the gesture the actions run, up to 600000)} — or {id, dest} for a click-navigate. Returns {index}",
+            "{id?, trigger? {type: onClick|onHover|onPress|onDrag|mouseEnter|mouseLeave|mouseDown|mouseUp|afterDelay {ms}|keyPress {key (a key or a combination: Shift+K, Ctrl+Alt+Delete; or a controller button: Gamepad A|B|X|Y|LB|RB|LT|RT|View|Menu|LS|RS|Up|Down|Left|Right|Home)}}, action {type: navigate {preserveScroll?}|back|scrollTo {offset? [x, y] (where the layer ends up from the top-left)}|openOverlay {position?, anchor? screen|triggerInside|triggerOutside (default screen; the trigger ones measure the position preset on the layer that opens the overlay: outside puts top presets above it and bottom presets below it, edges lined up), offset? [x, y] (position manual: the overlay's top-left from the top-left of the layer that opens it; without it, right below that layer), close_on_outside? (default true), background?}|swapOverlay|closeOverlay|openUrl {url, openInNewTab? (default true; false opens it in place of the prototype where the viewer's tab can go there: the web build)}|changeTo|setVariable {variable, value | expression (text, e.g. \"count + 1\")}|setVariableMode {collection, mode}|conditional {blocks [{condition? | expression? (text, e.g. \"count >= 3\"), actions}]}, dest?}, actions? [..], dest? (without action: a click-navigate to it), transition? {type: instant|dissolve|smartAnimate|moveIn|moveOut|push|slideIn|slideOut, direction?: left|right|top|bottom}, durationMs? | duration_ms?, easing? linear|easeIn|easeOut|easeInOut|easeInBack|easeOutBack|easeInOutBack|gentle|quick|bouncy|slow|{customBezier {x1, y1, x2, y2}}|{customSpring {mass, stiffness, damping}}, delayMs? | delay_ms? (mouse enter, leave, down and up: how long after the gesture the actions run, up to 600000)} — or {id, dest} for a click-navigate. Returns {index}",
             true,
             add
         ),
@@ -28,8 +31,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("proto.interaction.remove", "Remove interaction", "{id?, index}", true, |s, p| {
             let cmd = "proto.interaction.remove";
             let k = req_num(cmd, p, "index")?;
-            if k < 0.0 {
-                return Err(bad(cmd, "`index` must be ≥ 0"));
+            if !(0.0..1e9).contains(&k) || k.fract() != 0.0 {
+                return Err(bad(cmd, "`index` must be a whole number in 0..1e9"));
             }
             let k = k as usize;
             let mut hit = false;
@@ -48,7 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.interaction.set",
             "Edit interaction",
-            "{id?, index, interaction {..}} replaces it; or patch fields: {id?, index, trigger?, action? (first action), actions?, transition?, durationMs?, easing?, delayMs?}",
+            "{id?, index, interaction? {..} (replaces it whole), trigger?, action? (first action), actions?, transition?, durationMs? | duration_ms?, easing?, delayMs? | delay_ms?}  patch fields on top of the current interaction (or of interaction)",
             true,
             set
         ),
@@ -109,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.settings",
             "Prototype settings",
-            "{device? (a device name, \"Custom size\" or \"None\"), background?, rotation? portrait|landscape (or 0|90; phones and tablets turn), color? (one of the device's colours by name), width?, height? (the custom size's screen, 1–10000 points; picks \"Custom size\"), responsive? bool (frames resize to the screen and their constraints and auto layout respond)}",
+            "{device? (a device name, \"Custom size\" or \"None\"; any case; another name is refused with the list), background?, rotation? portrait|landscape (or 0|90; phones and tablets turn), color? (one of the device's colours by name), width?, height? (the custom size's screen, 1–10000 points; picks \"Custom size\"), responsive? bool (frames resize to the screen and their constraints and auto layout respond)} → the page's settings after the call (none given: reads them)",
             true,
             settings
         ),
@@ -134,7 +137,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.presentOptions",
             "Presentation options",
-            "{scale? fit|fitWidth|fill|actual, deviceFrame? bool, hotspotHints? bool, inspect? bool}  how the presenter sizes the prototype (Fit scales down to fit, Fit width fills the width, Fill covers the window, Actual shows it at 100%), whether it draws the device, whether a click where nothing reacts flashes the hotspots (on by default) and whether the Inspect panel shows the properties of the layer under the pointer; kept for later presentations",
+            "{scale? fit|fitWidth|fill|actual, deviceFrame? bool, hotspotHints? bool, inspect? bool, hideUi? bool}  how the presenter sizes the prototype (Fit scales down to fit, Fit width fills the width, Fill covers the window, Actual shows it at 100%), whether it draws the device, whether a click where nothing reacts flashes the hotspots (on by default), whether the Inspect panel shows the properties of the layer under the pointer, and whether the bars are hidden (Hide UI: the prototype alone; Cmd/Ctrl+\\ shows them again); kept for later presentations",
             false,
             |s, p| {
                 let cmd = "proto.presentOptions";
@@ -143,13 +146,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     let scale = v.as_str().filter(|x| PRESENT_SCALES.contains(x)).ok_or_else(|| bad(cmd, "scale: fit|fitWidth|fill|actual"))?;
                     data.insert("scale".into(), json!(scale));
                 }
-                for key in ["deviceFrame", "hotspotHints", "inspect"] {
+                for key in ["deviceFrame", "hotspotHints", "inspect", "hideUi"] {
                     if let Some(v) = p.get(key).filter(|v| !v.is_null()) {
                         data.insert(key.into(), json!(v.as_bool().ok_or_else(|| bad(cmd, format!("{key}: true|false")))?));
                     }
                 }
                 if data.is_empty() {
-                    return Err(bad(cmd, "nothing to set: scale, deviceFrame, hotspotHints or inspect"));
+                    return Err(bad(cmd, "nothing to set: scale, deviceFrame, hotspotHints, inspect or hideUi"));
                 }
                 s.request_ui("present.options", Value::Object(data));
                 ok()
@@ -158,23 +161,63 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.linkNotice",
             "Notice before leaving for a link",
-            "{show? (default true; false skips it)}  whether a presented prototype's Open link to a website first says that it leaves the prototype, with Open link and Cancel; kept with the preferences → {shown}",
+            "{show? (default true; false skips it)}  whether a presented prototype's Open link the viewer clicked (or fired by a key) first says that it leaves the prototype, with Open link and Cancel (a link a delay or hover fired always does); kept with the preferences → {shown}",
             false,
             |s, p| {
                 let show = boolean(p, "show").unwrap_or(true);
                 s.prefs.link_notice_skipped = !show;
+                s.prefs_unsaved = true;
                 Ok(json!({"shown": show}))
             }
         ),
     ]
 }
 
-/// `proto.settings`: everything is checked before anything changes.
+/// The device setting `name` stands for, as the device picker names it: "None", "Custom size" or a
+/// model of [`PrototypeSettings::DEVICES`], whatever its case and the spaces around it.
+fn known_device(name: &str) -> Option<&'static str> {
+    let name = name.trim();
+    ["None", PrototypeSettings::CUSTOM_DEVICE]
+        .into_iter()
+        .chain(PrototypeSettings::DEVICES.iter().map(|d| d.name))
+        .find(|d| d.eq_ignore_ascii_case(name))
+}
+
+/// What `proto.settings` answers: the page's prototype settings (the device as the picker names it,
+/// the colour shown, the screen as presented, `null` without a device).
+fn settings_json(ps: &PrototypeSettings) -> Value {
+    let screen = ps.device().map(|d| json!({"width": d.width, "height": d.height}));
+    json!({
+        "ok": true,
+        "device": ps.device,
+        "background": format!("#{}", ps.background.to_hex()),
+        "rotation": ps.rotation,
+        "color": ps.device_color().map(|c| c.name),
+        "screen": screen,
+        "customSize": {"width": ps.custom_size[0], "height": ps.custom_size[1]},
+        "responsive": ps.responsive,
+    })
+}
+
+/// `proto.settings`: everything is checked before anything changes; an unknown device is refused
+/// with the devices to pick from, as an unknown colour is. Answers the settings as they are after
+/// the call, so a call without parameters reads them.
 fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "proto.settings";
     let page = s.page()?;
     let bg = color(p, "background");
-    let dev = string(p, "device");
+    let dev = match p.get("device") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let name = v.as_str().unwrap_or_default();
+            let found = known_device(name).ok_or_else(|| {
+                let names: Vec<&str> =
+                    ["None", PrototypeSettings::CUSTOM_DEVICE].into_iter().chain(PrototypeSettings::DEVICES.iter().map(|d| d.name)).collect();
+                bad(cmd, format!("unknown device {}: device is one of {}", figcraft_format::clip(&v.to_string(), 60), names.join("|")))
+            })?;
+            Some(found.to_string())
+        }
+    };
     let rot = match p.get("rotation") {
         None | Some(Value::Null) => None,
         Some(v) => Some(rotation_of(v).ok_or_else(|| bad(cmd, "rotation: portrait|landscape"))?),
@@ -227,12 +270,13 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
         None if !colors.iter().any(|x| x.name == next.color) => next.color.clear(),
         None => {}
     }
+    let answer = settings_json(&next);
     if next != *prototype
         && let NodeKind::Page { prototype, .. } = &mut s.doc_mut()?.get_mut(page)?.kind
     {
         *prototype = next;
     }
-    ok()
+    Ok(answer)
 }
 
 /// Resize top-level `frame` to a screen of `(w, h)` as a responsive prototype does: its children
@@ -305,40 +349,6 @@ pub(crate) fn check_action_dests(cmd: &str, doc: &Document, actions: &[Action]) 
     Ok(())
 }
 
-/// Variables, collections and modes that actions name by name, stored by id.
-fn canonical_ids(doc: &Document, it: &mut Interaction) {
-    canonical_actions(&doc.variables, &mut it.actions);
-}
-
-/// Variables (also those expressions read), collections and modes that `actions` name by name,
-/// stored by id.
-pub(crate) fn canonical_actions(vars: &Variables, actions: &mut [Action]) {
-    walk_mut(actions, &mut |a| match a {
-        Action::SetVariable { variable, expr, .. } => {
-            if let Some(v) = vars.get(variable) {
-                *variable = v.id.clone();
-            }
-            if let Some(e) = expr {
-                canonical_expr(vars, e, 0);
-            }
-        }
-        Action::SetVariableMode { collection, mode } => {
-            if let Some(c) = vars.collection(collection) {
-                if let Some(m) = c.find_mode(mode) {
-                    *mode = m.id.clone();
-                }
-                *collection = c.id.clone();
-            }
-        }
-        Action::Conditional { blocks } => {
-            for e in blocks.iter_mut().filter_map(|b| b.condition.as_mut()) {
-                canonical_expr(vars, e, 0);
-            }
-        }
-        _ => {}
-    });
-}
-
 /// Variables, collections and modes an expression names by name, stored by id.
 pub(crate) fn canonical_expr(vars: &Variables, e: &mut Expr, depth: usize) {
     match e {
@@ -354,7 +364,7 @@ pub(crate) fn canonical_expr(vars: &Variables, e: &mut Expr, depth: usize) {
         }
         Expr::InMode { variable, mode } => {
             if let Some(v) = vars.get(variable) {
-                if let Some(m) = vars.collection(&v.collection).and_then(|c| c.find_mode(mode)) {
+                if let Some(m) = vars.collection_by_id(&v.collection).and_then(|c| c.find_mode(mode)) {
                     *mode = m.id.clone();
                 }
                 *variable = v.id.clone();
@@ -422,7 +432,6 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let mut it = it;
     it.delay_ms = delay(cmd, p)?.unwrap_or(0);
     settle(&mut it);
-    canonical_ids(s.doc()?, &mut it);
     check_dests(cmd, s, &it)?;
     let mut index = 0;
     for i in req_targets(cmd, s, p)? {
@@ -437,8 +446,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "proto.interaction.set";
     let p = &super::proto_actions::with_expressions(cmd, &s.doc()?.variables, p)?;
     let k = req_num(cmd, p, "index")?;
-    if k < 0.0 {
-        return Err(bad(cmd, "`index` must be ≥ 0"));
+    if !(0.0..1e9).contains(&k) || k.fract() != 0.0 {
+        return Err(bad(cmd, "`index` must be a whole number in 0..1e9"));
     }
     let k = k as usize;
     let whole: Option<Interaction> = parse(cmd, p, "interaction")?;
@@ -481,7 +490,6 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         if it.actions.is_empty() {
             return Err(bad(cmd, "an interaction needs an action"));
         }
-        canonical_ids(s.doc()?, &mut it);
         check_dests(cmd, s, &it)?;
         if let Some(slot) = s.doc_mut()?.get_mut(i)?.interactions.get_mut(k) {
             *slot = it;
@@ -498,6 +506,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::params::id_of;
+    use figcraft_doc::proto::{Direction, Overflow, ScrollPosition};
 
     fn frame(s: &mut Session, x: f64) -> NodeId {
         let r = s.execute("node.create", &json!({"type": "frame", "x": x, "y": 0, "width": 100, "height": 200})).unwrap();
@@ -565,6 +574,20 @@ mod tests {
         assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 1);
         assert!(s.undo().unwrap());
         assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 2);
+    }
+
+    #[test]
+    fn fractional_index_is_rejected() {
+        let mut s = Session::new();
+        let a = frame(&mut s, 0.0);
+        let b = frame(&mut s, 200.0);
+        s.execute("proto.interaction.add", &json!({"id": a, "dest": b})).unwrap();
+        s.execute("proto.interaction.add", &json!({"id": a, "dest": b})).unwrap();
+        assert!(s.execute("proto.interaction.remove", &json!({"id": a, "index": 0.5})).is_err());
+        assert_eq!(s.doc().unwrap().node(a).unwrap().interactions.len(), 2);
+        let before = s.doc().unwrap().node(a).unwrap().interactions[0].clone();
+        assert!(s.execute("proto.interaction.set", &json!({"id": a, "index": 0.5, "easing": "linear"})).is_err());
+        assert_eq!(s.doc().unwrap().node(a).unwrap().interactions[0], before);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use figcraft_doc::NodeId;
 use serde_json::{Value, json};
 
 use super::glyphs;
-use super::kit::*;
+use super::kit::{BOTTOM_EDGE, H, Kit, TOP_EDGE, TYPE, V, merged};
 use crate::Result;
 
 const WIRE_INK: &str = "Wire/Ink";

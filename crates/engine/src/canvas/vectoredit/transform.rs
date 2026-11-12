@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::{VHit, VTool, VectorEdit, default_points, edit, editing, indices, network, ops, selected_points, selection_position};
 use crate::cmd::CommandSpec;
-use crate::params::*;
+use crate::params::{boolean, f64_of, get, num, num_or, req_num};
 use crate::tools::{Handle, handle_at_corners};
 use crate::{Result, Session, bad, spec};
 

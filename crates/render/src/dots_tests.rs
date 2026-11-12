@@ -10,7 +10,7 @@ use figcraft_doc::{Document, NodeKind};
 use crate::{Dots, Options, Retained, View, render_view, render_view_single};
 
 fn dots() -> Dots {
-    Dots { step: 24.0, size: 2.0, color: Color::new(0.0, 0.0, 0.0, 0.5), faded: Color::new(0.0, 0.0, 0.0, 0.25) }
+    Dots { step: 24.0, size: 2.0, color: Color::new(0.0, 0.0, 0.0, 0.5), faded: Color::new(0.0, 0.0, 0.0, 0.25), lines: false, major: 2 }
 }
 
 fn page_with_square() -> (Document, figcraft_doc::NodeId) {
@@ -85,4 +85,152 @@ fn dots_it_cant_draw_draw_nothing() {
     }
     let far = View { origin: (f64::MAX / 2.0, -f64::MAX / 2.0), scale: 1e10, width: 16, height: 16 };
     let _ = render_view_single(&d, page, &far, &Options { dots: Some(dots()), ..Default::default() });
+    for major in [0, 1, u32::MAX] {
+        for lines in [false, true] {
+            let opts = Options { dots: Some(Dots { major, lines, ..dots() }), ..Default::default() };
+            let _ = render_view_single(&d, page, &view, &opts);
+            let _ = render_view_single(&d, page, &far, &opts);
+        }
+    }
+}
+
+#[test]
+fn lines_run_both_ways_with_crossings_blended_once() {
+    let (d, page) = page_with_square();
+    let view = View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
+    let lines = Dots { lines: true, size: 1.0, ..dots() };
+    let pix = render_view_single(&d, page, &view, &Options { dots: Some(lines), ..Default::default() }).unwrap();
+    let plain = render_view_single(&d, page, &view, &Options::default()).unwrap();
+    // Line 0 is strong, line 1 (at 24) faded, line 2 (at 48) strong again; between them, the page.
+    let (strong, faded, empty) = (rgba(&pix, 0, 12), rgba(&pix, 24, 12), rgba(&pix, 12, 12));
+    assert_eq!(empty, rgba(&plain, 12, 12));
+    assert!(strong[0] < faded[0] && faded[0] < empty[0], "{strong:?} {faded:?} {empty:?}");
+    assert_eq!(rgba(&pix, 12, 0), strong, "a horizontal line as strong as a vertical one");
+    // A crossing is no darker than the stronger of its lines.
+    assert_eq!(rgba(&pix, 0, 0), strong);
+    assert_eq!(rgba(&pix, 24, 0), strong, "a faded line crossing a strong one");
+    assert_eq!(rgba(&pix, 24, 24), faded);
+    // The square covers the lines under it.
+    assert_eq!(rgba(&pix, 72, 72), rgba(&plain, 72, 72));
+    // Banded or not, the same pixels.
+    let wide = View { origin: (-212.0, -140.0), scale: 1.5, width: 900, height: 700 };
+    let opts = Options { dots: Some(lines), ..Default::default() };
+    assert_eq!(render_view_single(&d, page, &wide, &opts).unwrap().data(), render_view(&d, page, &wide, &opts).unwrap().data());
+}
+
+#[test]
+fn graph_paper_is_strong_every_major_line() {
+    let (d, page) = page_with_square();
+    let view = View { origin: (-200.0, -200.0), scale: 1.0, width: 160, height: 160 };
+    let graph = Dots { lines: true, size: 1.0, major: 5, step: 10.0, ..dots() };
+    let pix = render_view_single(&d, page, &view, &Options { dots: Some(graph), ..Default::default() }).unwrap();
+    let at = |x: i32, y: i32| rgba(&pix, (x + 200) as u32, (y + 200) as u32);
+    let strong = at(-150, -195);
+    for x in [-190, -180, -170, -160, -140, -130, -120, -110] {
+        assert_ne!(at(x, -195), strong, "a faded line at {x}");
+        assert_eq!(at(x, -195), at(-190, -195));
+    }
+    for x in [-200, -100, -50] {
+        assert_eq!(at(x, -195), strong, "a strong line at {x}");
+    }
+}
+
+/// At a zoom of 1.0625, a step of 24 is 25.5 pixels: every second dot falls halfway between two
+/// pixels. A view a whole number of pixels on (a pan, a band, a patch) has to put it on the same
+/// one, on whichever side of that view's origin it is.
+#[test]
+fn dots_halfway_between_pixels_stay_put() {
+    let (d, page) = page_with_square();
+    for lines in [false, true] {
+        let opts = Options { dots: Some(Dots { lines, ..dots() }), ..Default::default() };
+        let s = 1.0625;
+        let full = View { origin: (0.0, 0.0), scale: s, width: 400, height: 300 };
+        let a = render_view_single(&d, page, &full, &opts).unwrap();
+        for dx in 1..100u32 {
+            let dy = (dx * 37) % 100;
+            let v = View { origin: (f64::from(dx) / s, f64::from(dy) / s), scale: s, width: 250, height: 180 };
+            let b = render_view_single(&d, page, &v, &opts).unwrap();
+            for y in 0..180 {
+                for x in 0..250 {
+                    assert_eq!(rgba(&b, x, y), rgba(&a, x + dx, y + dy), "lines {lines}, a pan by ({dx}, {dy}), at {x}, {y}");
+                }
+            }
+        }
+    }
+}
+
+/// A mark that rounds to a half step of 1/65536 px goes the same way on both sides of a view's
+/// origin too: at a step of 25.5 − 2⁻¹⁷ px, the first mark is where 1/65536 px rounds up.
+#[test]
+fn dots_on_the_rounding_step_stay_put() {
+    let (d, page) = page_with_square();
+    let step = 25.5 - 2f64.powi(-17);
+    for lines in [false, true] {
+        let opts = Options { dots: Some(Dots { step, lines, ..dots() }), ..Default::default() };
+        let full = View { origin: (0.0, 0.0), scale: 1.0, width: 300, height: 200 };
+        let a = render_view_single(&d, page, &full, &opts).unwrap();
+        for pan in 1..60u32 {
+            let v = View { origin: (f64::from(pan), f64::from(pan)), scale: 1.0, width: 200, height: 120 };
+            let b = render_view_single(&d, page, &v, &opts).unwrap();
+            for y in 0..120 {
+                for x in 0..200 {
+                    assert_eq!(rgba(&b, x, y), rgba(&a, x + pan, y + pan), "lines {lines}, a pan by {pan}, at {x}, {y}");
+                }
+            }
+        }
+    }
+}
+
+/// The view's origin is quantized apart from the marks: converted to pixels, a whole-pixel origin
+/// comes back a hair off, and taken together with a mark one step short of a half it would push the
+/// mark across.
+#[test]
+fn dots_one_rounding_step_short_of_a_half_stay_put() {
+    let (d, page) = page_with_square();
+    let s = (75.5 - 2f64.powi(-17)) / 24.0;
+    for lines in [false, true] {
+        let opts = Options { dots: Some(Dots { lines, ..dots() }), ..Default::default() };
+        let a = render_view_single(&d, page, &View { origin: (0.0, 0.0), scale: s, width: 300, height: 200 }, &opts).unwrap();
+        for pan in 1..100u32 {
+            let v = View { origin: (f64::from(pan) / s, f64::from(pan) / s), scale: s, width: 200, height: 100 };
+            let b = render_view_single(&d, page, &v, &opts).unwrap();
+            for y in 0..100 {
+                for x in 0..200 {
+                    assert_eq!(rgba(&b, x, y), rgba(&a, x + pan, y + pan), "lines {lines}, a pan by {pan}, at {x}, {y}");
+                }
+            }
+        }
+    }
+}
+
+/// Far out (some 4 × 10¹⁰ pixels), a whole-pixel origin comes back from page units exactly half a
+/// rounding step off: rounded up, it would move the marks that fall halfway between pixels.
+#[test]
+fn far_out_dots_stay_put() {
+    let (d, page) = page_with_square();
+    let s = 0.3;
+    let at = 42_536_140_695.0;
+    let opts = Options { dots: Some(Dots { step: 5.0, ..dots() }), ..Default::default() };
+    let a = render_view_single(&d, page, &View { origin: (at / s, 0.0), scale: s, width: 420, height: 40 }, &opts).unwrap();
+    for dx in 1..200u32 {
+        let v = View { origin: ((at + f64::from(dx)) / s, 0.0), scale: s, width: 200, height: 40 };
+        let b = render_view_single(&d, page, &v, &opts).unwrap();
+        for y in 0..40 {
+            for x in 0..200 {
+                assert_eq!(rgba(&b, x, y), rgba(&a, x + dx, y), "a pan by {dx}, at {x}, {y}");
+            }
+        }
+    }
+}
+
+/// Positions too far out to quantize draw nothing rather than a mark at the corner.
+#[test]
+fn dots_out_past_any_page_draw_nothing() {
+    let (d, page) = page_with_square();
+    let plain = render_view_single(&d, page, &View { origin: (1e304, 0.0), scale: 1.0, width: 40, height: 40 }, &Options::default()).unwrap();
+    for (step, x) in [(1e290, 1e304), (1e299, 1e305), (3e303, 1.5e308)] {
+        let opts = Options { dots: Some(Dots { step, ..dots() }), ..Default::default() };
+        let p = render_view_single(&d, page, &View { origin: (x, 0.0), scale: 1.0, width: 40, height: 40 }, &opts).unwrap();
+        assert_eq!(p.data(), plain.data(), "a step of {step} at {x}");
+    }
 }

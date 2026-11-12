@@ -3,19 +3,38 @@ use super::load::{ext, file_stem, write};
 use super::open::remember;
 use super::*;
 
-/// Thumbnail PNG of the first page's content (for file browsers / the home screen).
+/// Thumbnail PNG of the chosen frame, or the first page's content (file browsers / home screen).
 pub fn thumbnail(doc: &Document) -> Option<Vec<u8>> {
-    let page = doc.first_page()?;
-    let b = doc.page_content_bounds(page)?;
-    let scale = (400.0 / b.width().max(b.height()).max(1.0)).min(2.0);
-    let view = figcraft_render::View {
-        origin: (b.x0, b.y0),
-        scale,
-        width: (b.width() * scale).ceil().max(1.0) as u32,
-        height: (b.height() * scale).ceil().max(1.0) as u32,
+    let render = |page, b: figcraft_geom::Rect, solo| {
+        let scale = (400.0 / b.width().max(b.height()).max(1.0)).min(2.0);
+        let view = figcraft_render::View {
+            origin: (b.x0, b.y0),
+            scale,
+            width: (b.width() * scale).ceil().max(1.0) as u32,
+            height: (b.height() * scale).ceil().max(1.0) as u32,
+        };
+        let opts = figcraft_render::Options { solo, ..Default::default() };
+        let pix = figcraft_render::render_view(doc, page, &view, &opts)?;
+        figcraft_render::encode_png(&pix).ok()
     };
-    let pix = figcraft_render::render_view(doc, page, &view, &Default::default())?;
-    figcraft_render::encode_png(&pix).ok()
+    doc.ids()
+        .find_map(|id| {
+            let n = doc.node(id)?;
+            if !n.kind.is_frame_like() || n.plugin_data.get("figcraft.thumbnail").map(String::as_str) != Some("true") {
+                return None;
+            }
+            // Hidden library-store pages are not document pages.
+            let page = doc.page_of(id).filter(|p| doc.pages.contains(p))?;
+            let b = figcraft_render::export_bounds(doc, id)?;
+            if ![b.x0, b.y0, b.x1, b.y1, b.width(), b.height()].into_iter().all(f64::is_finite) || b.width() <= 0.0 || b.height() <= 0.0 {
+                return None;
+            }
+            render(page, b, Some(id))
+        })
+        .or_else(|| {
+            let page = doc.first_page()?;
+            render(page, doc.page_content_bounds(page)?, None)
+        })
 }
 
 /// The `.figcraft` file for a document: content, thumbnail and version history.

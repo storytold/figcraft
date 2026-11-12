@@ -64,6 +64,15 @@ fn id_schema(desc: &str) -> Value {
 fn ids_schema(desc: &str) -> Value {
     json!({"type": "array", "description": desc, "items": {"anyOf": [{"type": "integer"}, {"type": "string"}]}})
 }
+fn fields_schema() -> Value {
+    json!({"type": "array", "items": {"type": "string", "enum": figcraft_engine::inspect::NODE_KEYS},
+        "description": "Exact, case-sensitive top-level node keys to include at every level, pages too (e.g. name, type, x, fills, characters, pluginData). Omit for all properties; [] keeps only ids and structure. id, children, childCount and the transport's truncated marker are always kept. Selecting visible emits an explicit boolean for every node. Unknown keys are an error."})
+}
+fn outline_schema() -> Value {
+    boolean(
+        "Compact tree: id, name, type, characters (first 120 characters, then ... only if longer), mainComponentName and explicit visible booleans, plus structure. Cannot combine true with fields; false permits fields.",
+    )
+}
 fn obj(props: Value, required: &[&str]) -> Value {
     let mut o = json!({"type": "object", "properties": props});
     if !required.is_empty() {
@@ -102,10 +111,42 @@ pub const TOOL_NAMES: &[&str] = &[
     "key",
     "type_text",
     "inspect_ui",
+    "wait_for_changes",
+];
+
+/// The tools that take `document`: they act on the file it names instead of the one in front.
+const DOCUMENT_TOOLS: &[&str] = &[
+    "run_command",
+    "batch",
+    "create_node",
+    "set_properties",
+    "inspect_document",
+    "get_node",
+    "select",
+    "export",
+    "screenshot",
+    "save_file",
+    "undo",
+    "redo",
 ];
 
 /// All tools, in `tools/list` order.
 pub fn tool_definitions() -> Vec<Value> {
+    let mut tools = tools();
+    let document = id_schema(
+        "The open file to act on: its `id` (from run_command doc.list, or the `document` open_file and inspect_document return) or its path. Default: the file in front. The tab in front stays in front; with an attached app, a screenshot of the window needs the file in front",
+    );
+    for t in &mut tools {
+        if t.get("name").and_then(Value::as_str).is_some_and(|n| DOCUMENT_TOOLS.contains(&n))
+            && let Some(props) = t.pointer_mut("/inputSchema/properties").and_then(Value::as_object_mut)
+        {
+            props.insert("document".into(), document.clone());
+        }
+    }
+    tools
+}
+
+fn tools() -> Vec<Value> {
     let empty = || obj(json!({}), &[]);
     vec![
         tool(
@@ -128,11 +169,12 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "batch",
             "Run commands as one step",
-            "Run several commands in order as ONE undo step (engine `command.batch`). If any command fails, everything is rolled back and the error names the failing step. Returns an array of the results in order. A later step can use what an earlier step returned: name a step with \"as\": \"card\", then anywhere in a later step's params {\"$ref\": \"card\"} stands for the `id` in its result ({\"$step\": n} does the same by zero-based position). Add \"field\" for another part of the result: a key or a slash path, e.g. {\"$ref\": \"copy\", \"field\": \"ids/0\"} for the first id edit.duplicate returned. Any object with a `$ref` or `$step` key is a reference. Example: [{\"command\":\"node.create\",\"as\":\"card\",\"params\":{\"type\":\"frame\"}}, {\"command\":\"node.create\",\"params\":{\"type\":\"text\",\"text\":\"Hi\",\"parent\":{\"$ref\":\"card\"}}}] builds a frame and a text inside it in one call.",
+            "Run several commands in order as ONE undo step (engine `command.batch`). By default (onError: \"abort\"), if any command fails, everything is rolled back and the error names the failing step; success returns an array of the results in order. With onError: \"continue\", a failed step is rolled back on its own, the later steps still run, the call is not an error, and the array instead holds one {step, command, ok, result} or {step, command, ok, error} object per step; a reference to a failed step fails that step too. A later step can use what an earlier step returned: name a step with \"as\": \"card\", then anywhere in a later step's params {\"$ref\": \"card\"} stands for the `id` in its result ({\"$step\": n} does the same by zero-based position). Add \"field\" for another part of the result: a key or a slash path, e.g. {\"$ref\": \"copy\", \"field\": \"ids/0\"} for the first id edit.duplicate returned (with \"map\": true it also returns `map`, each original id → its copy, so \"field\": \"map/3\" is the copy of layer 3). Any object with a `$ref` or `$step` key is a reference. Example: [{\"command\":\"node.create\",\"as\":\"card\",\"params\":{\"type\":\"frame\"}}, {\"command\":\"node.create\",\"params\":{\"type\":\"text\",\"text\":\"Hi\",\"parent\":{\"$ref\":\"card\"}}}] builds a frame and a text inside it in one call.",
             obj(
                 json!({
                     "commands": {"type": "array", "minItems": 1, "description": "Steps to run", "items": obj(json!({"command": string("Command id"), "params": {"type": "object"}, "as": string("Name for this step, unique in the batch; later steps use its result with {\"$ref\": name}")}), &["command"])},
                     "label": string("Undo history label (default \"Batch\")"),
+                    "onError": {"type": "string", "enum": ["abort", "continue"], "description": "abort (default) rolls back the whole batch on the first failure; continue rolls back only the failed step, runs the rest and returns one {step, command, ok, result|error} object per step"},
                 }),
                 &["commands"],
             ),
@@ -145,15 +187,18 @@ pub fn tool_definitions() -> Vec<Value> {
             obj(
                 json!({
                     "type": {"type": "string", "enum": ["frame", "rectangle", "ellipse", "polygon", "star", "line", "arrow", "text", "vector", "section", "component", "slice"], "description": "Layer type"},
-                    "x": num("Left, relative to the parent frame (default 0)"),
-                    "y": num("Top, relative to the parent frame (default 0)"),
+                    "x": num("Left, relative to the parent frame (default 0). For a vector with `path` or `points`, x/y move their own origin instead: data whose box starts at (30, 0) makes a layer whose left is x + 30. Start the path at 0,0 to place its left edge at x, or set x afterwards with set_properties (which moves the left edge)"),
+                    "y": num("Top, relative to the parent frame (default 0). For a vector with `path` or `points`, their own top is added, as for x"),
                     "width": num("Width (default 100; text hugs its content unless width is set, which makes it wrap; for a vector with path, width/height scale the path, one alone keeping its proportion, and without them the path's own box is used)"),
                     "height": num("Height (default 100; ignored for lines/arrows and auto-height text)"),
                     "parent": id_schema("Parent frame/group/component id (default: the current page)"),
                     "index": int("Z-index among the parent's children (default: on top)"),
                     "name": string("Layer name"),
                     "text": string("Characters, for type text"),
-                    "path": string("SVG path data, for type vector (e.g. \"M0 0 L100 0 L50 80 Z\")"),
+                    "path": string("SVG path data, for type vector (e.g. \"M0 0 L100 0 L50 80 Z\"); its coordinates are kept relative to x/y, so a path that doesn't start at 0,0 is offset by its own box"),
+                    "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}, "description": "For type vector, instead of path: the points [[x, y], ...]"},
+                    "closed": boolean("For type vector: close the path"),
+                    "select": boolean("Select the new layer (default true)"),
                     "props": {"type": "object", "description": "Any set_properties keys applied at creation, e.g. {\"fill\":\"#3366FF\",\"cornerRadius\":12,\"fontSize\":24,\"layout\":\"vertical\",\"gap\":8,\"padding\":16}"},
                 }),
                 &["type"],
@@ -163,7 +208,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "set_properties",
             "Set properties",
-            "Set properties on one or more layers as one undo step (engine `node.set`). Keys: name, visible, locked, opacity (0-1), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), fill (colour) / fills (array of paints: \"#hex\" or {\"type\":\"solid\",\"color\":\"#hex\"} or {\"type\":\"linearGradient\",\"stops\":[\"#hex\",\"#hex\"]} or stops [{\"position\":0..1,\"color\":\"#hex\"}], optional from/to handles in the unit box; radialGradient too), stroke / strokes, strokeWeight, strokeAlign (inside|center|outside), cornerRadius (n or [tl,tr,br,bl]), effects (array, e.g. {\"type\":\"dropShadow\",\"color\":\"#00000040\",\"offset\":[0,4],\"radius\":8}), clip, layout (null|horizontal|vertical|grid), gap, padding (n or [t,r,b,l]), mainAlign (min|center|max|spaceBetween|spaceAround|spaceEvenly), crossAlign, wrap, contentAlign (auto|spaceBetween: wrapped lines), sizingH / sizingV (fixed|hug|fill), constraints {horizontal, vertical}, characters, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing, textAlign, textAutoResize. Auto layout keys (gap, padding, mainAlign, crossAlign, wrap, …) apply to frames, components and instances only: other layers among the ids are skipped and named in `warnings`, and with none that can take them the call is an error. A fontStyle draws in the family's nearest face; `warnings` says when that face has another weight or slant than the name asks for. Run list_commands with filter \"node.set\" for the full list. Unknown keys are an error. Returns the updated layers.",
+            "Set properties on one or more layers as one undo step (engine `node.set`). Keys: name, visible, locked, opacity (0-1), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), absoluteRotation (degrees on the page), fill (colour) / fills (array of paints: \"#hex\" or {\"type\":\"solid\",\"color\":\"#hex\"} or {\"type\":\"linearGradient\",\"stops\":[\"#hex\",\"#hex\"]} or stops [{\"position\":0..1,\"color\":\"#hex\"}], optional from/to handles in the unit box; radialGradient too), stroke / strokes, strokeWeight, strokeAlign (inside|center|outside), cornerRadius (n or [tl,tr,br,bl]), effects (array, e.g. {\"type\":\"dropShadow\",\"color\":\"#00000040\",\"offset\":[0,4],\"radius\":8}), clip, layout (null|horizontal|vertical|grid), gap, padding (n or [t,r,b,l]), mainAlign (min|center|max|spaceBetween|spaceAround|spaceEvenly), crossAlign, wrap, contentAlign (auto|spaceBetween: wrapped lines), sizingH / sizingV (fixed|hug|fill), constraints {horizontal, vertical}, characters, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing, textAlign, textAutoResize. Auto layout keys (gap, padding, mainAlign, crossAlign, wrap, …) apply to frames, components and instances only: other layers among the ids are skipped and named in `warnings`, and with none that can take them the call is an error. A fontStyle draws in the family's nearest face; `warnings` says when that face has another weight or slant than the name asks for. Run list_commands with filter \"node.set\" for the full list. Unknown keys are an error. Returns the updated layers.",
             obj(
                 json!({"ids": ids_schema("Layer ids (default: the selection)"), "props": {"type": "object", "description": "Property values to set"}}),
                 &["props"],
@@ -177,6 +222,8 @@ pub fn tool_definitions() -> Vec<Value> {
             obj(
                 json!({
                     "depth": int("Tree depth for the current page (default 4)"),
+                    "fields": fields_schema(),
+                    "outline": outline_schema(),
                     "allPages": boolean("Expand every page, not only the current one"),
                     "maxBytes": int(
                         "Largest response to send, in bytes of the whole JSON-RPC message (default 8388608, which fits the usual 10 MiB client buffer); 1024 of it is kept for the envelope and the request id"
@@ -194,6 +241,8 @@ pub fn tool_definitions() -> Vec<Value> {
                 json!({
                     "id": id_schema("Layer id"),
                     "depth": int("Child depth (default 1)"),
+                    "fields": fields_schema(),
+                    "outline": outline_schema(),
                     "offset": int("First child to report (default 0), for reading a node with more children than fit in one message"),
                     "maxBytes": int(
                         "Largest response to send, in bytes of the whole JSON-RPC message (default 8388608, which fits the usual 10 MiB client buffer); 1024 of it is kept for the envelope and the request id"
@@ -213,7 +262,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "export",
             "Export",
-            "Export layers (default: the selection, else every top-level layer of the current page) as png, jpg, svg, webp, pdf or xml (an Android Vector Drawable, with `warnings` for what it changed or left out, per `vdCompat`) at `scale`, or the whole file as `fig` (experimental: written from public format knowledge, with `warnings` for what was left out; other apps may not open every file) (PDF: with `bleed`, `cropMarks`, `bleedMarks` and `cmyk` for print; options `contentsOnly`, `includeBoundingBox`, and for SVG `svgOutlineText`, `svgIdAttribute`, `svgSimplifyStroke`; for XML `svgIdAttribute` and `vdCompat`). With `path` the file is written there (absolute path recommended) and the result says where. Without `path`: png/jpg/webp come back as an image content block, svg as text, xml as text followed by `{format, warnings}`, other formats as base64 `data`.",
+            "Export layers (default: the selection, else every top-level layer of the current page) as png, jpg, svg, webp, pdf or xml (an Android Vector Drawable, with `warnings` for what it changed or left out, per `vdCompat`) at `scale`, or the whole file as `fig` (experimental: written from public format knowledge, with `warnings` for what was left out; other apps may not open every file) (PDF: with `bleed`, `cropMarks`, `bleedMarks` and `cmyk` for print; options `contentsOnly`, `includeBoundingBox`, and for SVG `svgOutlineText`, `svgIdAttribute`, `svgSimplifyStroke`; for XML `svgIdAttribute` and `vdCompat`; for png, jpg and webp `colorProfile`). With `path` the file is written there (absolute path recommended) and the result says where. Without `path`: png/jpg/webp come back as an image content block, svg as text, xml as text followed by `{format, warnings}`, other formats as base64 `data`.",
             obj(
                 json!({
                     "ids": ids_schema("Layers to export (several are composited into one image)"),
@@ -231,6 +280,8 @@ pub fn tool_definitions() -> Vec<Value> {
                     "svgIdAttribute": boolean("SVG: layer names as unique `id` attributes (default false)"),
                     "svgSimplifyStroke": boolean("SVG: strokes as `stroke` attributes where exact (default true); false writes outlines"),
                     "vdCompat": {"type": "string", "enum": ["bestEffort", "exact", "ignore"], "description": "XML: what a Vector Drawable can't draw exactly is approximated with a warning (bestEffort, default), left out with a warning (exact), or written as far as it maps without warnings (ignore: overlapping layer opacity dropped, even-odd fills kept as fillType=evenOdd, diamond gradients left out)"},
+                    "colorProfile": {"type": "string", "enum": ["sameAsFile", "srgb", "displayP3"], "description": "PNG, JPG and WebP: the color profile of the file (default sameAsFile: the document's); colors are converted and out-of-gamut ones clip. SVG, XML and RGB PDF output are always sRGB; PDF with cmyk is DeviceCMYK"},
+                    "quality": {"type": "integer", "minimum": 1, "maximum": 100, "description": "JPG: the encoder's quality, 1 (smallest file) to 100; default 90"},
                 }),
                 &[],
             ),
@@ -259,6 +310,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 json!({
                     "path": string("File path"),
                     "variables": {"description": "REST API file JSON only: the local variables JSON (`GET /v1/files/:key/variables/local`) as a path or the JSON object. Default: `<name>.variables.json` or `variables.json` next to the file."},
+                    "reload": boolean("A file that is already open: read it again from disk into its tab (refused while the tab has unsaved changes). Without it, the result says `stale: true` when the file changed on disk since the tab read or saved it"),
                 }),
                 &["path"],
             ),
@@ -284,10 +336,11 @@ pub fn tool_definitions() -> Vec<Value> {
                     "y": num("Page y"),
                     "to": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "Drag end [x, y] (page)"},
                     "steps": int("Intermediate move events for drag (default 8)"),
-                    "tool": {"type": "string", "description": "Tool to choose first: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment"},
+                    "tool": {"type": "string", "description": "Tool to choose first: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|annotation"},
                     "shift": boolean("Shift held"),
                     "alt": boolean("Alt/Option held"),
                     "cmd": boolean("Cmd (macOS) / Ctrl held"),
+                    "ctrl": boolean("Ctrl held (the Control key on macOS)"),
                     "pressure": num("Pen pressure 0-1 (the Pencil records it as the stroke's width profile; a drag starts with it)"),
                     "pressureTo": num("Pen pressure 0-1 at a drag's end (interpolated along it)"),
                 }),
@@ -300,7 +353,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "Press key",
             "Press a key or shortcut as if typed on the canvas: a menu shortcut (e.g. {\"key\":\"G\",\"cmd\":true} groups, {\"key\":\"A\",\"alt\":true,\"shift\":false} …), a tool key (R, O, T, F, V…), Escape, Delete, Enter, arrows (nudge; shift = big nudge). While editing text, keys go to the text editor (Backspace, Delete, Left, Right, Home, End, Enter, Escape, SelectAll).",
             obj(
-                json!({"key": string("Key name: a letter/digit, Escape, Delete, Backspace, Enter, ArrowLeft…"), "shift": boolean("Shift"), "alt": boolean("Alt/Option"), "cmd": boolean("Cmd/Ctrl")}),
+                json!({"key": string("Key name: a letter/digit, Escape, Delete, Backspace, Enter, ArrowLeft…"), "shift": boolean("Shift"), "alt": boolean("Alt/Option"), "cmd": boolean("Cmd/Ctrl"), "ctrl": boolean("Ctrl (the Control key on macOS)")}),
                 &["key"],
             ),
             false,
@@ -319,13 +372,55 @@ pub fn tool_definitions() -> Vec<Value> {
             empty(),
             true,
         ),
+        tool(
+            "wait_for_changes",
+            "Wait for changes",
+            "Wait for new comment events in the attached FigCraft app. Returns pending events immediately; otherwise waits up to `timeoutMs` (default 20000, max 25000). Call it again with the returned `cursor` to keep watching. Headless returns immediately (no other writer). Events carry a sequence number, kind, document and a small payload (for comments, the thread id).",
+            obj(
+                json!({
+                    "after": int("Return events after this cursor (default 0)"),
+                    "timeoutMs": int("Longest wait in milliseconds (default 20000, max 25000)"),
+                    "topics": {"type": "array", "items": {"type": "string", "enum": ["comments", "document", "all"]}, "description": "Event topics (default [\"comments\"]; document events are not emitted yet)"},
+                    "limit": int("Most events to return (default 100, max 1000)")
+                }),
+                &[],
+            ),
+            true,
+        ),
     ]
 }
 
 // ---------- helpers ----------
 
+/// A backend whose every call names `document` (a tool's `document` argument).
+struct InDocument<'a> {
+    inner: &'a mut dyn Backend,
+    document: Value,
+}
+
+impl Backend for InDocument<'_> {
+    fn call(&mut self, method: &str, mut params: Value) -> Result<Value, String> {
+        if let Some(o) = params.as_object_mut() {
+            o.insert("document".into(), self.document.clone());
+        }
+        self.inner.call(method, params)
+    }
+
+    fn has_ui(&self) -> bool {
+        self.inner.has_ui()
+    }
+
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+}
+
 fn exec(b: &mut dyn Backend, cmd: &str, params: Value) -> Result<Value, String> {
     b.call("engine.execute", json!({"command": cmd, "params": params}))
+}
+
+fn wait_for_changes(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    b.call("events.poll", Value::Object(a.clone())).map(|v| ToolResult::json(&v))
 }
 
 fn args_obj(args: &Value) -> Result<Map<String, Value>, String> {
@@ -414,11 +509,52 @@ fn friendly_params(p: &mut Value) {
 
 // ---------- dispatch ----------
 
+/// Refuse argument names `schema` doesn't list, at the top and in the objects it describes inside
+/// (a batch's steps); objects it leaves open (`params`) take any. `path` leads the names in the
+/// error (`commands[0].`).
+fn refuse_unknown_args(schema: &Value, args: &Value, path: &str) -> Result<(), String> {
+    if let (Some(props), Some(given)) = (schema.get("properties").and_then(Value::as_object), args.as_object()) {
+        let unknown: Vec<String> = given.keys().filter(|k| !props.contains_key(*k)).map(|k| format!("`{path}{k}`")).collect();
+        if !unknown.is_empty() {
+            let s = if unknown.len() == 1 { "" } else { "s" };
+            let takes: Vec<&str> = props.keys().map(String::as_str).collect();
+            let takes = if takes.is_empty() { "none".to_string() } else { takes.join(", ") };
+            return Err(format!("unknown argument{s} {} (it takes {takes})", unknown.join(", ")));
+        }
+        for (k, v) in given {
+            if let Some(inner) = props.get(k) {
+                refuse_unknown_args(inner, v, &format!("{path}{k}."))?;
+            }
+        }
+    }
+    if let (Some(items), Some(list)) = (schema.get("items"), args.as_array()) {
+        for (i, v) in list.iter().enumerate() {
+            refuse_unknown_args(items, v, &format!("{}[{i}].", path.trim_end_matches('.')))?;
+        }
+    }
+    Ok(())
+}
+
 /// Run one tool. Every failure becomes an `isError` result (never a panic).
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
-    let a = match args_obj(args) {
+    let mut a = match args_obj(args) {
         Ok(a) => a,
         Err(e) => return ToolResult::error(e),
+    };
+    // Built once: the catalogue is the same on every call.
+    static TOOLS: std::sync::LazyLock<Vec<Value>> = std::sync::LazyLock::new(tool_definitions);
+    if let Some(schema) = TOOLS.iter().find(|t| t.get("name").and_then(Value::as_str) == Some(name)).and_then(|t| t.get("inputSchema"))
+        && let Err(e) = refuse_unknown_args(schema, &Value::Object(a.clone()), "")
+    {
+        return ToolResult::error(e);
+    }
+    let mut targeted;
+    let b: &mut dyn Backend = match a.remove("document").filter(|d| !d.is_null()) {
+        Some(document) => {
+            targeted = InDocument { inner: b, document };
+            &mut targeted
+        }
+        None => b,
     };
     let r = match name {
         "list_commands" => list_commands(b, &a),
@@ -439,6 +575,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "key" => key(b, &a),
         "type_text" => type_text(b, &a),
         "inspect_ui" => b.call("ui.inspect", json!({})).map(|v| ToolResult::json(&v)),
+        "wait_for_changes" => wait_for_changes(b, &a),
         other => Err(format!("unknown tool `{other}` (tools/list has: {})", TOOL_NAMES.join(", "))),
     };
     r.unwrap_or_else(ToolResult::error)
@@ -521,7 +658,11 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Stri
         steps.push(step);
     }
     let label = s_arg(a, "label")?.unwrap_or("Batch");
-    exec(b, "command.batch", json!({"label": label, "commands": steps})).map(|v| ToolResult::json(&v))
+    let mut params = json!({"label": label, "commands": steps});
+    if let Some(mode) = a.get("onError") {
+        params["onError"] = mode.clone();
+    }
+    exec(b, "command.batch", params).map(|v| ToolResult::json(&v))
 }
 
 fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
@@ -625,17 +766,29 @@ fn wire_size(value: &Value) -> usize {
 
 /// The document at `depth`, and what its text block would take on the wire. The tree is sent as a
 /// text block, so it is measured pretty-printed *and* escaped -- escaping adds about a tenth.
-fn inspect_at(b: &mut dyn Backend, depth: u64, all: bool) -> Result<(Value, usize), String> {
-    let value = b.call("document.inspect", json!({"depth": depth, "allPages": all}))?;
+fn inspect_at(b: &mut dyn Backend, depth: u64, all: bool, options: &Value) -> Result<(Value, usize), String> {
+    let mut params = options.clone();
+    params["depth"] = json!(depth);
+    params["allPages"] = json!(all);
+    let value = b.call("document.inspect", params)?;
     let wire = wire_size(&value);
     Ok((value, wire))
 }
 
 /// One layer's subtree at `depth`, and what its text block would take on the wire.
-fn node_at(b: &mut dyn Backend, id: u64, depth: u64) -> Result<(Value, usize), String> {
-    let value = b.call("node.get", json!({"id": id, "depth": depth}))?;
+fn node_at(b: &mut dyn Backend, id: u64, depth: u64, options: &Value) -> Result<(Value, usize), String> {
+    let mut params = options.clone();
+    params["id"] = json!(id);
+    params["depth"] = json!(depth);
+    let value = b.call("node.get", params)?;
     let wire = wire_size(&value);
     Ok((value, wire))
+}
+
+fn inspection_options(a: &Map<String, Value>) -> Result<Value, String> {
+    let options = Value::Object(a.iter().filter(|(k, _)| matches!(k.as_str(), "fields" | "outline")).map(|(k, v)| (k.clone(), v.clone())).collect());
+    figcraft_engine::inspect::InspectOptions::parse(&options)?;
+    Ok(options)
 }
 
 fn inspect_document(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
@@ -645,9 +798,10 @@ fn inspect_document(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolR
         Some(Value::Bool(x)) => *x,
         Some(_) => return Err("`allPages` must be a boolean".into()),
     };
+    let options = inspection_options(a)?;
     let (max_bytes, budget) = budget(a)?;
 
-    let (value, wire) = inspect_at(b, depth, all)?;
+    let (value, wire) = inspect_at(b, depth, all, &options)?;
     if wire <= budget {
         return Ok(ToolResult::json(&value));
     }
@@ -665,7 +819,7 @@ fn inspect_document(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolR
         let mut best: Option<(u64, Value, usize)> = None;
         while lo <= hi {
             let mid = lo + (hi - lo) / 2;
-            let (v, w) = inspect_at(b, mid, all)?;
+            let (v, w) = inspect_at(b, mid, all, &options)?;
             if w + MARKER_RESERVE <= budget {
                 best = Some((mid, v, w));
                 if mid == hi {
@@ -714,9 +868,10 @@ fn get_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, S
     let id = id_arg(a.get("id").ok_or("`id` is required")?)?;
     let depth = n_arg(a, "depth")?.unwrap_or(1.0).clamp(0.0, 64.0) as u64;
     let offset = n_arg(a, "offset")?.unwrap_or(0.0).max(0.0).min(u32::MAX as f64) as usize;
+    let options = inspection_options(a)?;
     let (max_bytes, budget) = budget(a)?;
 
-    let (value, wire) = node_at(b, id, depth)?;
+    let (value, wire) = node_at(b, id, depth, &options)?;
     if value.is_null() {
         return Err(format!("no such layer {id}"));
     }
@@ -732,7 +887,7 @@ fn get_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, S
         let (mut lo, mut hi) = (1u64, depth - 1);
         while lo <= hi {
             let mid = lo + (hi - lo) / 2;
-            let (v, w) = node_at(b, id, mid)?;
+            let (v, w) = node_at(b, id, mid, &options)?;
             if w + MARKER_RESERVE <= budget {
                 (used, value, used_wire) = (mid, v, w);
                 if mid == hi {
@@ -906,6 +1061,8 @@ fn export(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, Str
         "svgIdAttribute",
         "svgSimplifyStroke",
         "vdCompat",
+        "colorProfile",
+        "quality",
     ] {
         if let Some(v) = a.get(k).filter(|v| !v.is_null()) {
             params.insert(k.into(), v.clone());
@@ -991,6 +1148,9 @@ fn open_file(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, 
         None | Some(Value::Null) => {}
         Some(v @ (Value::String(_) | Value::Object(_))) => params["variables"] = v.clone(),
         Some(_) => return Err("`variables` must be a path or the local variables JSON object".into()),
+    }
+    if let Some(reload) = a.get("reload").filter(|v| !v.is_null()) {
+        params["reload"] = reload.clone();
     }
     let r = exec(b, "file.open", params)?;
     let doc = b.call("document.inspect", json!({"depth": 1}))?;

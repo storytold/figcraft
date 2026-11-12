@@ -229,3 +229,18 @@ fn a_programmatic_copy_does_not_let_a_stale_mirror_hide_the_users_paste() {
     assert_eq!(texts.iter().filter(|t| t.as_str() == "hello").count(), 2, "the user's text was pasted");
     assert_eq!(texts.iter().filter(|t| t.as_str() == "other").count(), 1, "the programmatic selection was not pasted");
 }
+
+#[test]
+fn a_synthetic_copy_for_ai_keeps_the_clipboard_then_a_user_copy_writes() {
+    let mut s = Session::new();
+    s.execute("comment.add", &json!({"x": 10, "y": 10, "text": "Fix the padding", "author": "You"})).unwrap();
+    let mut w = Win::with_session(s);
+    w.app.control_synthetic = true;
+    crate::comments::copy_for_ai(&mut w.app, None);
+    assert_eq!(w.writes(), (0, 0), "synthetic input must not replace the user's clipboard");
+    w.app.control_synthetic = false;
+    crate::comments::copy_for_ai(&mut w.app, None);
+    assert_eq!(w.writes(), (1, 0), "the user's copy writes once");
+    let recorded = w.recorded.lock().unwrap();
+    assert!(recorded.last_text.as_deref().is_some_and(|t| t.contains("Fix the padding")), "{:?}", recorded.last_text);
+}

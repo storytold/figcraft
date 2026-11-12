@@ -1,7 +1,8 @@
 //! The hub's send queues (no writers: nothing is ever sent, so what is queued stays queued): a
 //! broadcast counts once against the server's budget however many copies are queued, a block of
 //! addresses can't take more than its share, and when the server's budget is used up the
-//! connection holding the most is shed, not the next client that needs a little.
+//! connection holding the most is shed, not the next client that needs a little. Presence stays out
+//! of a busy queue.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, TcpListener, TcpStream};
@@ -16,7 +17,20 @@ use super::{BlockUse, Blocks, Charges, Conn, Kind, Line, Out, Push, deliver};
 /// A line with its own queue counter, the given block counter and the server's.
 fn line(block: &Arc<AtomicUsize>, all: &Arc<AtomicUsize>, max_block: usize, max_all: usize) -> (Line, Receiver<Out>) {
     let (tx, rx) = sync_channel(64);
-    (Line { tx, queued: Arc::default(), block: block.clone(), all: all.clone(), max: 1 << 20, max_block, max_all }, rx)
+    (
+        Line {
+            tx,
+            queued: Arc::default(),
+            waiting: Arc::default(),
+            max_presence: 32,
+            block: block.clone(),
+            all: all.clone(),
+            max: 1 << 20,
+            max_block,
+            max_all,
+        },
+        rx,
+    )
 }
 
 fn socket() -> TcpStream {
@@ -65,7 +79,7 @@ fn the_biggest_consumer_is_shed_when_the_budget_runs_out() {
     for id in 1..=3u64 {
         let (l, rx) = line(&Arc::default(), &all, usize::MAX, 10_000);
         receivers.push(rx);
-        conns.insert(id, Conn { out: l, sock: socket(), kind: Kind::Managing, ip });
+        conns.insert(id, Conn { out: l, sock: socket(), kind: Kind::Managing { comments: true }, ip });
     }
     // Connection 1 doesn't read: it holds most of the budget.
     let big = Bytes::from(vec![0u8; 9_000]);
@@ -119,4 +133,26 @@ fn blocks_nobody_uses_are_forgotten() {
     // The next connection prunes the block whose connections are all gone.
     let _c = blocks.get("203.0.113.3".parse().unwrap());
     assert_eq!(blocks.len(), 2, "203.0.113.1 went");
+}
+
+#[test]
+fn a_busy_queue_leaves_presence_out_and_keeps_room_for_edits() {
+    let (l, rx) = line(&Arc::default(), &Arc::default(), usize::MAX, usize::MAX);
+    let msg = Bytes::from_static(b"x");
+    for _ in 0..32 {
+        assert!(l.takes_presence());
+        l.push(&msg, &mut Charges::default(), false).unwrap();
+    }
+    assert!(!l.takes_presence(), "half full");
+    // Edits still fit in the half kept for them.
+    for _ in 0..32 {
+        l.push(&msg, &mut Charges::default(), false).unwrap();
+    }
+    assert_eq!(l.push(&msg, &mut Charges::default(), false), Err(Push::Full), "a client that takes in nothing still ends");
+    // It catches up: presence goes in again.
+    for _ in 0..33 {
+        drop(rx.recv().unwrap());
+    }
+    assert!(l.takes_presence());
+    assert_eq!(l.waiting.load(Ordering::Relaxed), 31);
 }

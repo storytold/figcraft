@@ -1,6 +1,6 @@
 use super::diff::{diff_groups, variable_groups};
 use super::instances::{field_group, path_map};
-use super::*;
+use super::{BTreeMap, BTreeSet, Document, MAX_DEPTH, Node, NodeId, NodeKind, default_instance_name, holds_content};
 
 /// Bounded source and parent lookups while a rebase reads an unchanged document.
 pub(super) struct RebaseSources<'a> {
@@ -165,10 +165,28 @@ impl<'a> RebaseSources<'a> {
 /// values (after detaching an outer instance, restoring a main, or copying a nested instance out):
 /// the look is kept exactly. Values a component property sets aren't overrides.
 pub fn rebase_instance(doc: &mut Document, inst: NodeId) {
+    rebase_instance_with(doc, inst, &mut MainPaths::new());
+}
+
+/// The layers of mains by path, kept across several [`rebase_instance_with`] calls. Rebasing only
+/// writes instances' `source` and `overrides`, never a main's layers or names, so a main's paths
+/// stay right for as long as the caller changes nothing else.
+pub type MainPaths = BTreeMap<NodeId, std::rc::Rc<BTreeMap<String, NodeId>>>;
+
+/// [`rebase_instance`], taking each main's path map from `mains` (and adding it there).
+pub fn rebase_instance_with(doc: &mut Document, inst: NodeId, mains: &mut MainPaths) {
     let Some(NodeKind::Instance { component, .. }) = doc.node(inst).map(|n| n.kind.clone()) else { return };
     let mine = path_map(doc, inst, true);
-    let theirs: BTreeMap<String, NodeId> =
-        if doc.contains(component) { path_map(doc, component, false).into_iter().map(|(k, v)| (v, k)).collect() } else { BTreeMap::new() };
+    let theirs = mains
+        .entry(component)
+        .or_insert_with(|| {
+            std::rc::Rc::new(if doc.contains(component) {
+                path_map(doc, component, false).into_iter().map(|(k, v)| (v, k)).collect()
+            } else {
+                BTreeMap::new()
+            })
+        })
+        .clone();
     let value_groups = |a: &Node, b: &Node| -> Vec<String> {
         diff_groups(a, b).into_iter().filter(|g| !matches!(*g, "size" | "position")).map(str::to_string).collect()
     };

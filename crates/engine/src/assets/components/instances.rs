@@ -1,6 +1,10 @@
+use super::cycles::{contains_itself_error, would_contain_itself};
 use super::diff::{binding_group, bindings_of};
 use super::sync::{insert_linked, sync_instance_depth};
-use super::*;
+use super::{
+    Affine, BTreeMap, ChildLayout, DocError, Document, Node, NodeId, NodeKind, Value, default_instance_name, default_props, holds_content, is_slot,
+    slot_edited,
+};
 
 /// Create an instance of `component` under `parent` at `(x, y)` (parent space).
 pub fn create_instance(doc: &mut Document, component: NodeId, parent: NodeId, x: f64, y: f64) -> Result<NodeId, DocError> {
@@ -13,8 +17,8 @@ pub fn create_instance_at(doc: &mut Document, component: NodeId, parent: NodeId,
     if !matches!(comp.kind, NodeKind::Component { .. }) {
         return Err(DocError::Invalid(format!("{component} is not a component")));
     }
-    if doc.is_ancestor(component, parent) {
-        return Err(DocError::Invalid("an instance can't be placed inside its own main component".into()));
+    if would_contain_itself(doc, component, parent) {
+        return Err(DocError::Invalid(contains_itself_error(doc, component)));
     }
     let id = doc.alloc_id();
     let mut root = comp.clone();
@@ -156,6 +160,7 @@ pub(crate) fn copy_group(from: &Node, to: &mut Node, g: &str) {
                 b.hanging_list = a.hanging_list;
                 b.max_lines = a.max_lines;
                 b.features = a.features.clone();
+                b.wrap_style = a.wrap_style;
             }
             to.styles.text = from.styles.text.clone();
         }

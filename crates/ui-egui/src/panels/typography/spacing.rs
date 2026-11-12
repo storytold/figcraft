@@ -1,5 +1,8 @@
 use super::glyphs::{LeadGlyph, paint_lead};
-use super::*;
+use super::{
+    Align2, CornerRadius, FIELD_H, FieldEdit, FigApp, Id, LetterSpacing, LineHeight, MIXED, NodeId, Rect, Sense, Stroke, StrokeKind, Tokens, Ui,
+    Value, VariableType, commit_text, json, live, pos2, regular, tr, trim_num, vec2, widgets,
+};
 
 /// Line height, letter spacing or paragraph spacing: property, field id, glyph and tooltip.
 pub(super) struct SpacingField {
@@ -55,7 +58,7 @@ pub(super) fn spacing_input(ui: &mut Ui, field: &SpacingField, value: &str, widt
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
     let numeric = value.trim_end_matches('%').parse::<f64>().ok();
-    match widgets::scrub(ui, field.id, &response, numeric, 1.0) {
+    match widgets::scrub(ui, field.id, &response, numeric, 1.0, true) {
         Some(FieldEdit::Scrub(v, done)) => Some(SpacingEdit::Scrub(v, done)),
         _ => typed.map(SpacingEdit::Typed),
     }
@@ -85,6 +88,8 @@ pub(super) fn spacing_field(
     out
 }
 
+/// A spacing value beside its scrub icon, centered in the same field while idle and editing.
+/// Commits typed text on Enter or focus loss; Escape cancels the draft.
 fn lead_field(ui: &mut Ui, id: Id, glyph: LeadGlyph, value: &str, width: f32, tip: &str) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
@@ -109,12 +114,13 @@ fn lead_field(ui: &mut Ui, id: Id, glyph: LeadGlyph, value: &str, width: f32, ti
     let mut out = None;
     match editing {
         Some(mut text) => {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect.shrink2(vec2(2.0, 4.0))));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect.shrink2(vec2(2.0, 0.0))));
             let r = child.add(
                 egui::TextEdit::singleline(&mut text)
                     .id(id.with("te"))
                     .frame(egui::Frame::NONE)
                     .font(regular(11.0))
+                    .align(Align2::LEFT_CENTER)
                     .desired_width(text_rect.width() - 6.0),
             );
             crate::a11y::own_focus(&r);
@@ -158,7 +164,11 @@ pub(crate) fn parse_line_height(s: &str, cur: Option<LineHeight>) -> Option<Valu
         return widgets::eval(p.trim(), cur_pct).filter(|v| v.is_finite()).map(|v| json!(format!("{}%", trim_num(v.max(0.0)))));
     }
     if let Some(px) = s.strip_suffix("px") {
-        return widgets::eval(px.trim(), None).filter(|v| v.is_finite()).map(|v| json!(v.max(0.0)));
+        let cur_px = match cur {
+            Some(LineHeight::Pixels(p)) => Some(p),
+            _ => None,
+        };
+        return widgets::eval(px.trim(), cur_px).filter(|v| v.is_finite()).map(|v| json!(v.max(0.0)));
     }
     match cur {
         Some(LineHeight::Percent(p)) => widgets::eval(s, Some(p)).filter(|v| v.is_finite()).map(|v| json!(format!("{}%", trim_num(v.max(0.0))))),
@@ -172,10 +182,18 @@ pub(crate) fn parse_line_height(s: &str, cur: Option<LineHeight>) -> Option<Valu
 pub(crate) fn parse_letter_spacing(s: &str, cur: Option<LetterSpacing>) -> Option<Value> {
     let s = s.trim();
     if let Some(p) = s.strip_suffix('%') {
-        return widgets::eval(p.trim(), None).filter(|v| v.is_finite()).map(|v| json!(format!("{}%", trim_num(v))));
+        let cur_pct = match cur {
+            Some(LetterSpacing::Percent(p)) => Some(p),
+            _ => None,
+        };
+        return widgets::eval(p.trim(), cur_pct).filter(|v| v.is_finite()).map(|v| json!(format!("{}%", trim_num(v))));
     }
     if let Some(p) = s.strip_suffix("px") {
-        return widgets::eval(p.trim(), None).filter(|v| v.is_finite()).map(|v| json!(v));
+        let cur_px = match cur {
+            Some(LetterSpacing::Pixels(p)) => Some(p),
+            _ => None,
+        };
+        return widgets::eval(p.trim(), cur_px).filter(|v| v.is_finite()).map(|v| json!(v));
     }
     match cur {
         Some(LetterSpacing::Pixels(px)) => widgets::eval(s, Some(px)).filter(|v| v.is_finite()).map(|v| json!(v)),
@@ -198,5 +216,23 @@ pub(crate) fn letter_spacing_of(v: &Value) -> Option<LetterSpacing> {
     match v {
         Value::String(s) => s.strip_suffix('%')?.trim().parse().ok().filter(|p: &f64| p.is_finite()).map(LetterSpacing::Percent),
         other => other.as_f64().filter(|v| v.is_finite()).map(LetterSpacing::Pixels),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_edit_with_unit_suffix_adds_to_current() {
+        let lh = Some(LineHeight::Pixels(10.0));
+        assert_eq!(parse_line_height("+2", lh), Some(json!(12.0)));
+        assert_eq!(parse_line_height("+2px", lh), Some(json!(12.0)));
+        let ls = Some(LetterSpacing::Pixels(10.0));
+        assert_eq!(parse_letter_spacing("+1", ls), Some(json!(11.0)));
+        assert_eq!(parse_letter_spacing("+1px", ls), Some(json!(11.0)));
+        let pct = Some(LetterSpacing::Percent(10.0));
+        assert_eq!(parse_letter_spacing("+1%", pct), parse_letter_spacing("+1", pct));
+        assert_eq!(parse_letter_spacing("+1%", pct), Some(json!("11%")));
     }
 }

@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use figcraft_collab::message::{
     self, Access, Admin, AdminReply, ClientMsg, Hello, HostInfo, LibraryReply, LibraryReq, Manage, OpenHosting, OpenLibrary, OpenPlugins, PROTOCOL,
-    PluginReply, PluginReq, Presence, Resolve, ServerMsg, reads_hosting,
+    PluginReply, PluginReq, Presence, Resolve, ResolveTeam, ServerMsg, reads_hosting,
 };
 use figcraft_collab::{Outgoing, Server};
 use figcraft_engine::live::{Event, MAX_NAME, PEOPLE, sanitize};
@@ -71,14 +71,15 @@ const BURST: usize = 256;
 enum Kind {
     /// In `file`'s session as client `id`, through link `link`.
     Joined { file: String, id: u32, link: Option<String> },
-    /// Managing the server's files.
-    Managing,
+    /// Managing the server's files; `comments`: its client reads comment links.
+    Managing { comments: bool },
     /// Using `file`'s team library through link `link` of `access` (revoking it disconnects).
     Library { file: String, access: Access, link: Option<String> },
     /// Using the plugin directory; `publisher`: with the server's key.
     Plugins { publisher: bool },
-    /// Publishing without the key, or managing the file `owns` with its owner token.
-    Hosting { owns: Option<String> },
+    /// Publishing without the key, or managing the file `owns` with its owner token; `comments`:
+    /// its client reads comment links.
+    Hosting { owns: Option<String>, comments: bool },
 }
 
 /// A connection whose first message the hub is looking at.
@@ -226,6 +227,7 @@ impl<B: Backend> Hub<B> {
                     ClientMsg::OpenPlugins(o) => self.open_plugins(conn, &o, c),
                     ClientMsg::OpenHosting(o) => self.open_hosting(conn, &o, c),
                     ClientMsg::Resolve(r) => self.resolve(&r, &c),
+                    ClientMsg::ResolveTeam(r) => self.resolve_team(&r, &c),
                     _ => refuse(&c.out, "say hello first"),
                 }
             }
@@ -234,7 +236,7 @@ impl<B: Backend> Hub<B> {
                 let Some(c) = self.conns.get(&conn) else { return };
                 let ip = c.ip;
                 // The operator (with the server key) isn't held to the limits on addresses.
-                if !matches!(c.kind, Kind::Managing) && !self.backend.message(ip, &msg) {
+                if !matches!(c.kind, Kind::Managing { .. }) && !self.backend.message(ip, &msg) {
                     log::info!("event=refused ip={ip} reason=messages_per_address");
                     return self.kick(&[conn], "too many messages from your address: wait a minute and try again");
                 }
@@ -281,7 +283,7 @@ impl<B: Backend> Hub<B> {
                 let (file, id) = (file.clone(), *id);
                 self.client_message(&file, id, msg, Some(bytes));
             }
-            Some(Kind::Hosting { owns }) => match msg {
+            Some(Kind::Hosting { owns, .. }) => match msg {
                 ClientMsg::Admin(Admin::RemovePeer { file, client }) => {
                     let reply = if owns.as_deref() == Some(file.as_str()) {
                         self.removed_reply(&file, client)
@@ -300,12 +302,12 @@ impl<B: Backend> Hub<B> {
                 ClientMsg::Ping => self.answer(conn, &ServerMsg::Pong),
                 _ => self.kick(&[conn], "only publishing and managing your own files are spoken on this connection"),
             },
-            Some(Kind::Managing) => match msg {
+            Some(Kind::Managing { .. }) => match msg {
                 ClientMsg::Admin(Admin::RemovePeer { file, client }) => {
                     let reply = self.removed_reply(&file, client);
                     self.answer(conn, &ServerMsg::Admin(Box::new(reply)));
                 }
-                ClientMsg::Admin(req) => self.admin(conn, req),
+                ClientMsg::Admin(req) => self.admin(conn, ip, req),
                 ClientMsg::Ping => self.answer(conn, &ServerMsg::Pong),
                 _ => self.kick(&[conn], "only requests to manage files are spoken on this connection"),
             },
@@ -372,6 +374,7 @@ impl<B: Backend> Hub<B> {
             return refuse(&c.out, BARRED);
         }
         let hosting = reads_hosting(&hello.client_version);
+        let packed = message::reads_packed(&hello.client_version);
         // The backend checked the secret: the sessions don't keep it.
         hello.token.clear();
         let file = hello.file.clone();
@@ -403,7 +406,7 @@ impl<B: Backend> Hub<B> {
                 let old = room.ids.insert(id, conn).filter(|old| *old != conn);
                 self.backend.changed(&file, &mut room.server);
                 // The newcomer learns how it is shown, then where everyone is.
-                let mut more = outs;
+                let mut more = if packed { packed_welcome(outs) } else { outs };
                 if let Some(me) = room.server.peers().find(|p| p.client_id == id) {
                     more.push(Outgoing::To(id, ServerMsg::PeerJoined(me.clone())));
                 }
@@ -475,7 +478,8 @@ impl<B: Backend> Hub<B> {
             return refuse(&c.out, &why);
         }
         log::info!("live session: connection {conn} manages files");
-        self.take_in(conn, c, Kind::Managing, &ServerMsg::Admin(Box::new(AdminReply::Ready)));
+        let comments = message::reads_comments(&m.client_version);
+        self.take_in(conn, c, Kind::Managing { comments }, &ServerMsg::Admin(Box::new(AdminReply::Ready)));
     }
 
     fn open_library(&mut self, conn: u64, o: OpenLibrary, c: Pending) {
@@ -483,7 +487,7 @@ impl<B: Backend> Hub<B> {
             return refuse(&c.out, &unsupported(o.protocol));
         }
         let (access, link) = match self.backend.admit(&o.file, &o.token) {
-            Ok(a) => (a.access, a.link),
+            Ok(a) => (a.access.for_reader(message::reads_comments(&o.client_version)), a.link),
             Err(why) => return refuse(&c.out, &why),
         };
         self.take_in(conn, c, Kind::Library { file: o.file, access, link }, &ServerMsg::Library(Box::new(LibraryReply::Ready { access })));
@@ -515,7 +519,8 @@ impl<B: Backend> Hub<B> {
             }
         };
         let owns = (!o.owner.is_empty()).then(|| o.file.clone());
-        self.take_in(conn, c, Kind::Hosting { owns }, &ServerMsg::Hosting(Box::new(info)));
+        let comments = message::reads_comments(&o.client_version);
+        self.take_in(conn, c, Kind::Hosting { owns, comments }, &ServerMsg::Hosting(Box::new(info)));
     }
 
     /// A join code: the file it opens and the token to join it with, then the connection closes
@@ -538,17 +543,40 @@ impl<B: Backend> Hub<B> {
         }
     }
 
-    fn admin(&mut self, conn: u64, req: Admin) {
+    /// A file of the team list: its id and the token of its team link, then the connection closes
+    /// (it was never taken in).
+    fn resolve_team(&mut self, r: &ResolveTeam, c: &Pending) {
+        if r.protocol != PROTOCOL {
+            return refuse(&c.out, &unsupported(r.protocol));
+        }
+        match self.backend.resolve_team(c.ip, &r.file) {
+            Ok(token) => {
+                if let Some(b) = encode(&ServerMsg::Resolved { file: r.file.clone(), token }) {
+                    let _ = c.out.tx.try_send(Out::Bytes(b, None));
+                }
+                let _ = c.out.tx.try_send(Out::Close(CloseCode::Normal, String::new()));
+            }
+            Err(why) => {
+                log::info!("event=team_refused ip={} reason={why:?}", c.ip);
+                refuse(&c.out, &why);
+            }
+        }
+    }
+
+    fn admin(&mut self, conn: u64, ip: IpAddr, req: Admin) {
         let rooms = &self.rooms;
         let open = |file: &str| rooms.get(file).map(Room::info);
-        let handled = self.backend.admin(req, &open);
+        let handled = self.backend.admin(ip, req, &open);
         self.handled(conn, handled);
     }
 
-    /// Answer a managing or hosting request, and disconnect whoever it affects.
+    /// Answer a managing or hosting request (as its client reads it), and disconnect whoever it
+    /// affects.
     fn handled(&mut self, conn: u64, handled: Handled) {
-        self.answer(conn, &ServerMsg::Admin(Box::new(handled.reply)));
-        if let Some((file, link)) = handled.revoked {
+        let comments =
+            self.conns.get(&conn).is_some_and(|c| matches!(c.kind, Kind::Managing { comments: true } | Kind::Hosting { comments: true, .. }));
+        self.answer(conn, &ServerMsg::Admin(Box::new(handled.reply.for_reader(comments))));
+        for (file, link) in handled.revoked {
             let with = |joined: bool| -> Vec<u64> {
                 let uses = |c: &Conn| match &c.kind {
                     Kind::Joined { file: f, link: Some(l), .. } => joined && *f == file && *l == link,
@@ -709,6 +737,9 @@ impl<B: Backend> Hub<B> {
                         continue;
                     }
                     let Some(&conn) = room.ids.get(&id) else { continue };
+                    if matches!(msg, ServerMsg::Presence { .. }) && self.conns.get(&conn).is_some_and(|c| !c.out.takes_presence()) {
+                        continue;
+                    }
                     let Some(b) = bytes.get_or_insert_with(|| encode(&msg)).clone() else { continue };
                     if !deliver(&self.conns, conn, &b, &mut held, &mut stuck) {
                         stuck.push(conn);
@@ -718,6 +749,19 @@ impl<B: Backend> Hub<B> {
             self.drop_conns(stuck);
         }
     }
+}
+
+/// A joining client's messages with the document in its welcome compressed (its hello announced
+/// that it reads that). Should compressing fail, the welcome goes as it was.
+fn packed_welcome(mut outs: Vec<Outgoing>) -> Vec<Outgoing> {
+    for o in &mut outs {
+        if let Outgoing::To(_, msg) = o
+            && let Err(e) = message::pack(msg)
+        {
+            log::warn!("event=pack_failed error={e}");
+        }
+    }
+    outs
 }
 
 /// Queue `b` for connection `conn`: false when it must be dropped (it can't keep up, or it is

@@ -1,5 +1,5 @@
 use super::instances::PROP_BINDING;
-use super::*;
+use super::{Document, Node, NodeId, NodeKind, PropDef, Sizing, TextAutoResize, TextData, inside_instance, owning_component, variant_set};
 
 /// The property groups whose value layer `n` takes from the same variables as its main layer
 /// `src` (they differ only where the two resolve in different variable modes).
@@ -132,6 +132,7 @@ fn text_style_differs(x: &TextData, y: &TextData) -> bool {
         || x.hanging_list != y.hanging_list
         || x.max_lines != y.max_lines
         || x.features != y.features
+        || x.wrap_style != y.wrap_style
 }
 
 /// Whether a geometry change of `id` comes from layout rather than the user: an ancestor was

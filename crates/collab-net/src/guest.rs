@@ -1,7 +1,8 @@
 //! Joining a session: the client end of the transport, with reconnect.
 //!
 //! A supervisor thread connects, says hello, then writes (presence throttled to about 30 a
-//! second, latest wins; a ping when quiet) while a reader thread takes in what the host sends.
+//! second, latest wins; a ping every keep-alive interval) while a reader thread takes in what the
+//! host sends.
 //! When the connection drops after having been live, it reconnects with growing pauses; a
 //! refusal or the host ending the session is final.
 //!
@@ -15,8 +16,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel}
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use figcraft_collab::Replica;
-use figcraft_collab::message::{self, Admin, AdminReply, ClientMsg, HostInfo, Presence, ServerMsg};
+use figcraft_collab::message::{self, ClientMsg, HostInfo, Presence, ServerMsg};
 use figcraft_doc::Document;
 use figcraft_engine::live::{Event, Published, Status};
 use tungstenite::protocol::frame::coding::CloseCode;
@@ -29,19 +29,9 @@ pub use crate::join::GuestConfig;
 use crate::join::{Next, Outcome, Resuming, Seen, Taken, after, closed, hello, resolved, take, too_large, unresolved};
 use crate::manage;
 use crate::net::{Duplex, NetLimits, config, open, shutdown};
-use crate::throttle::{PRESENCE_INTERVAL, Throttle, earliest};
-
-/// What [`Guest::publish`] uploads, and where.
-pub struct Publish {
-    pub server: Endpoint,
-    /// The server's key (`None`: publish as anyone may, on a server open to the public).
-    pub key: Option<String>,
-    /// The file's name on the server.
-    pub name: String,
-    pub doc: Arc<Document>,
-    /// Share the file once it is there: links and join codes for others ([`Event::Shared`]).
-    pub share: bool,
-}
+use crate::requests;
+pub use crate::requests::Publish;
+use crate::throttle::{PRESENCE_INTERVAL, Paced, Throttle, earliest};
 
 /// A joined (or joining) session. Dropping it leaves.
 pub struct Guest {
@@ -54,6 +44,8 @@ enum Cmd {
     /// For the server, in order (document changes).
     Send(ClientMsg),
     Leave,
+    /// Try now rather than after the pause under way (reconnecting).
+    Retry,
     /// The reader of connection `epoch` got its welcome.
     Welcomed(u64),
     /// Connection `epoch` ended.
@@ -66,17 +58,18 @@ impl Guest {
         let (tx, rx) = channel();
         let me = tx.clone();
         let thread = std::thread::Builder::new().name("live-guest".into()).spawn(move || {
-            // A join code: the server says which file it opens, then the join goes on as with a link.
-            if let Some(code) = cfg.code.clone() {
+            // A join code (or a file of the team list): the server says which file and token, then
+            // the join goes on as with a link.
+            if let Some(lookup) = cfg.lookup.clone() {
                 inbox.push(Event::Status(Status::Connecting));
                 let asked =
-                    manage::resolve(&cfg.invite.server, &code, &cfg.limits, cfg.connect_timeout).map_err(|e| match e.strip_prefix(manage::REFUSED) {
+                    manage::resolve(&cfg.invite, &lookup, &cfg.limits, cfg.connect_timeout).map_err(|e| match e.strip_prefix(manage::REFUSED) {
                         Some(why) => Outcome::Refused(why.to_string()),
                         None => Outcome::Retry(e),
                     });
                 if let Err(o) = asked.and_then(|(file, token)| resolved(&mut cfg, file, token)) {
                     if let Next::Stop(Some(e)) = after(unresolved(&cfg, o), &cfg, false, &mut 0, &inbox) {
-                        inbox.push(e);
+                        inbox.push(*e);
                     }
                     return;
                 }
@@ -142,6 +135,11 @@ impl Guest {
         let _ = self.cmd.send(Cmd::Send(msg));
     }
 
+    /// Reconnect now, if it is waiting to.
+    pub fn retry(&self) {
+        let _ = self.cmd.send(Cmd::Retry);
+    }
+
     /// Leave (returns at once: a connection attempt in progress ends on its own).
     pub fn leave(&mut self) {
         let _ = self.cmd.send(Cmd::Leave);
@@ -164,6 +162,9 @@ impl Drop for Guest {
     }
 }
 
+/// How long leaving keeps sending what was waiting its turn.
+const LEAVE_DRAIN: Duration = Duration::from_secs(10);
+
 /// A connected socket: reader and writer ends.
 struct Conn {
     reader: WebSocket<Duplex>,
@@ -182,8 +183,7 @@ pub(crate) fn upload_file(
     limits: &NetLimits,
     timeout: Duration,
 ) -> Result<(Invite, Published, Option<HostInfo>), String> {
-    let snapshot = Replica::new(doc.clone()).snapshot().map_err(|e| e.to_string())?;
-    let publish = vec![Admin::Publish { name: name.to_string(), snapshot }];
+    let publish = vec![requests::upload(name, doc)?];
     let (replies, hosting) = match key {
         Some(key) => (manage::request(server, key, publish, limits, timeout)?, None),
         None => {
@@ -191,16 +191,7 @@ pub(crate) fn upload_file(
             (replies, Some(info))
         }
     };
-    let (file, edit, view, owner, expires) = match replies.into_iter().next() {
-        Some(AdminReply::Published { file, edit, view }) => (file, edit, view, None, None),
-        Some(AdminReply::Hosted { file, edit, view, owner, expires }) => (file, edit, view, Some(owner), expires),
-        Some(AdminReply::Failed { reason }) => return Err(reason),
-        _ => return Err("the server didn't say where the file is".into()),
-    };
-    let link = |token: String| Invite { server: server.clone(), file: file.id.clone(), token };
-    let (edit, view) = (link(edit.token), link(view.token));
-    let published =
-        Published { server: server.display(), file: file.id.clone(), name: file.name, edit: edit.link(), view: view.link(), owner, expires };
+    let (edit, published) = requests::uploaded(server, replies.into_iter().next())?;
     Ok((edit, published, hosting))
 }
 
@@ -236,7 +227,7 @@ fn supervise(cfg: &GuestConfig, inbox: &Inbox, rx: &Receiver<Cmd>, me: &Sender<C
         match after(outcome, cfg, was_live, &mut attempt, inbox) {
             Next::Stop(e) => {
                 if let Some(e) = e {
-                    inbox.push(e);
+                    inbox.push(*e);
                 }
                 return;
             }
@@ -246,6 +237,11 @@ fn supervise(cfg: &GuestConfig, inbox: &Inbox, rx: &Receiver<Cmd>, me: &Sender<C
                     match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
                         Ok(Cmd::Leave) | Err(RecvTimeoutError::Disconnected) => return,
                         Ok(Cmd::Presence(p)) => pending = Some(p),
+                        // A fresh start: the pauses grow from the beginning again.
+                        Ok(Cmd::Retry) => {
+                            attempt = 0;
+                            break;
+                        }
                         // From the old connection's client: the next welcome starts over.
                         Ok(_) => {}
                         Err(RecvTimeoutError::Timeout) => break,
@@ -280,18 +276,21 @@ fn session(
             }
         }
     };
-    let mut last_sent = Instant::now();
+    // A ping every keep-alive interval, whatever else is sent: presence gets no answer, and the
+    // reader counts only what the host sends.
+    let mut last_ping = Instant::now();
     let hello = hello(cfg, resume);
     let mut welcomed = false;
     let mut throttle = Throttle::new(PRESENCE_INTERVAL);
-    let outcome = if send(&mut writer, &hello, &mut last_sent) {
+    // Sync messages waiting their turn (a long queue from while offline).
+    let mut paced: Paced<ClientMsg> = Paced::new(Instant::now());
+    let outcome = if send(&mut writer, &hello) {
         loop {
-            let ping_at = last_sent + cfg.limits.keepalive;
-            let wake = earliest([throttle.due(), Some(ping_at)]).unwrap_or(ping_at);
+            let ping_at = last_ping + cfg.limits.keepalive;
+            let wake = earliest([throttle.due(), Some(ping_at), paced.due()]).unwrap_or(ping_at);
             let mut out = None;
-            let mut now_send = Vec::new();
             match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
-                Ok(Cmd::Send(m)) if welcomed => now_send.push(m),
+                Ok(Cmd::Send(m)) if welcomed => paced.push(m),
                 // Made for the previous connection (the sync client sends again what the server
                 // didn't get once it has caught up with this connection's welcome).
                 Ok(Cmd::Send(_)) => {}
@@ -305,23 +304,29 @@ fn session(
                 }
                 Ok(Cmd::Lost(e, o)) if e == epoch => break o,
                 Ok(Cmd::Leave) | Err(RecvTimeoutError::Disconnected) => {
+                    leave_paced(&mut writer, &mut paced);
                     let _ = writer.close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }));
                     break Outcome::Left;
                 }
                 // From an earlier connection.
-                Ok(Cmd::Welcomed(_) | Cmd::Lost(..)) => {}
+                Ok(Cmd::Welcomed(_) | Cmd::Lost(..) | Cmd::Retry) => {}
                 Err(RecvTimeoutError::Timeout) => {}
             }
-            if !now_send.iter().all(|m| send(&mut writer, m, &mut last_sent)) {
+            let now = Instant::now();
+            let mut sent = true;
+            while sent && let Some(m) = paced.take_due(now) {
+                sent = send(&mut writer, &m);
+            }
+            if !sent {
                 break Outcome::Retry("the connection dropped".into());
             }
-            let now = Instant::now();
             let out = out.or_else(|| throttle.take_due(now));
-            let ok = match out {
-                Some(p) => send(&mut writer, &ClientMsg::Presence(p), &mut last_sent),
-                None if now >= last_sent + cfg.limits.keepalive => send(&mut writer, &ClientMsg::Ping, &mut last_sent),
-                None => true,
-            };
+            let ok = out.is_none_or(|p| send(&mut writer, &ClientMsg::Presence(p)));
+            let ok = ok
+                && (now < last_ping + cfg.limits.keepalive || {
+                    last_ping = now;
+                    send(&mut writer, &ClientMsg::Ping)
+                });
             if !ok {
                 break Outcome::Retry("the connection dropped".into());
             }
@@ -334,9 +339,30 @@ fn session(
     outcome
 }
 
+/// Send what was waiting its turn before leaving, at its pace, for at most [`LEAVE_DRAIN`]: nothing
+/// waits for this thread (the app has moved on), and going faster would get the rest refused. What
+/// doesn't go is left to the sync client, which says so when you leave.
+fn leave_paced(writer: &mut WebSocket<Duplex>, paced: &mut Paced<ClientMsg>) {
+    let give_up = Instant::now() + LEAVE_DRAIN;
+    loop {
+        let now = Instant::now();
+        if now >= give_up {
+            return;
+        }
+        if let Some(m) = paced.take_due(now) {
+            if !send(writer, &m) {
+                return;
+            }
+        } else if let Some(at) = paced.due().filter(|at| *at < give_up) {
+            std::thread::sleep(at.saturating_duration_since(now));
+        } else {
+            return;
+        }
+    }
+}
+
 /// Send one message; false when the connection is gone.
-fn send(ws: &mut WebSocket<Duplex>, msg: &ClientMsg, last_sent: &mut Instant) -> bool {
-    *last_sent = Instant::now();
+fn send(ws: &mut WebSocket<Duplex>, msg: &ClientMsg) -> bool {
     message::encode(msg).is_ok_and(|b| ws.send(Message::Binary(Bytes::from(b))).is_ok())
 }
 

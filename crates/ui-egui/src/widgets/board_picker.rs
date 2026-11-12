@@ -25,7 +25,8 @@ const GAP: f32 = 8.0;
 const TITLE_H: f32 = 26.0;
 
 /// The templates button at `at` (its left edge, the toolbar's middle) and, while open, its picker
-/// above the toolbar (whose top is `top`). Where the next button starts.
+/// above the toolbar (whose top is `top`). The button's right edge: the toolbar puts the next
+/// button a GAP after it.
 pub(crate) fn button(app: &mut FigApp, ui: &mut Ui, at: Pos2, top: f32, t: &Tokens) -> f32 {
     let r = Rect::from_min_size(pos2(at.x, at.y - 16.0), vec2(32.0, 32.0));
     let open = app.ui.tool_flyout == Some(KEY);
@@ -39,7 +40,7 @@ pub(crate) fn button(app: &mut FigApp, ui: &mut Ui, at: Pos2, top: f32, t: &Toke
     if app.ui.tool_flyout == Some(KEY) {
         picker(app, ui, r, top - 8.0, t);
     }
-    r.max.x + 4.0
+    r.max.x
 }
 
 fn area_id() -> egui::Id {

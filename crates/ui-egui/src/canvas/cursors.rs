@@ -1,7 +1,7 @@
 //! The pointer on the canvas: each engine cursor ([`figcraft_engine::tools::Cursor`]) as one of
 //! the system's cursors, or as a small glyph FigCraft draws at the pointer with the system's
 //! hidden (a rotate cursor turned to its corner, the pen's states, the eyedropper, the comment
-//! pin). The glyphs are original, drawn from lines and the code-drawn icons: no cursor images.
+//! pin, the crosshair of the shape and Text tools). The glyphs are original, drawn from lines and the code-drawn icons: no cursor images.
 
 use egui::{Color32, CursorIcon, Painter, Pos2, Shape, Stroke, pos2, vec2};
 use figcraft_engine::tools::{Cursor, PenCursor};
@@ -17,6 +17,9 @@ pub enum Glyph {
     Pen(PenCursor),
     Eyedropper,
     Comment,
+    /// A plus open at the centre, for the shape and Text tools (the system's follows the
+    /// system's pointer colour, and a white one is lost on a white frame).
+    Crosshair,
 }
 
 /// What the pointer shows.
@@ -46,7 +49,7 @@ pub fn of(cursor: Cursor) -> Shown {
     use Shown::{Drawn, System};
     match cursor {
         Cursor::Default => System(CursorIcon::Default),
-        Cursor::Crosshair => System(CursorIcon::Crosshair),
+        Cursor::Crosshair => Drawn(Glyph::Crosshair),
         Cursor::Move => System(CursorIcon::Move),
         Cursor::Resize(a) if a.is_finite() => System(resize_icon(a)),
         Cursor::Resize(_) => System(CursorIcon::Default),
@@ -85,7 +88,7 @@ impl Shown {
 
     /// A name for it (`ui.inspect`): the CSS cursor names where there is one ("default",
     /// "nwse-resize", "copy"), and "rotate" (with its angle), "pen", "pen-close", "pen-add",
-    /// "pen-bend", "eyedropper" and "comment" for the drawn ones.
+    /// "pen-bend", "eyedropper", "comment" and "crosshair" for the drawn ones.
     pub fn name(self) -> String {
         match self {
             Shown::System(i) => match i {
@@ -114,6 +117,7 @@ impl Shown {
             Shown::Drawn(Glyph::Pen(PenCursor::Bend)) => "pen-bend".into(),
             Shown::Drawn(Glyph::Eyedropper) => "eyedropper".into(),
             Shown::Drawn(Glyph::Comment) => "comment".into(),
+            Shown::Drawn(Glyph::Crosshair) => "crosshair".into(),
         }
     }
 
@@ -127,7 +131,7 @@ impl Shown {
 }
 
 /// Dark lines over a light edge: readable on any page and artwork.
-const INK: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x1E);
+pub(crate) const INK: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x1E);
 const EDGE: Color32 = Color32::WHITE;
 
 /// A line through `pts` with the light edge under it.
@@ -165,6 +169,22 @@ pub fn paint(painter: &Painter, at: Pos2, glyph: Glyph) {
                 let t = vec2(-end.sin(), end.cos()) * sign;
                 let n = vec2(end.cos(), end.sin());
                 line(painter, &[tip - t * 4.5 + n * 3.5, tip + t * 1.0, tip - t * 4.5 - n * 3.5]);
+            }
+        }
+        Glyph::Crosshair => {
+            // A plus centred on the pointer, open at the centre so its pixel stays visible; the
+            // light edge goes under both arms of each line first, then the dark line on top.
+            let arms = [
+                (vec2(-8.0, 0.0), vec2(-2.0, 0.0)),
+                (vec2(2.0, 0.0), vec2(8.0, 0.0)),
+                (vec2(0.0, -8.0), vec2(0.0, -2.0)),
+                (vec2(0.0, 2.0), vec2(0.0, 8.0)),
+            ];
+            for (a, b) in arms {
+                painter.add(Shape::line_segment([at + a, at + b], Stroke::new(3.0, EDGE)));
+            }
+            for (a, b) in arms {
+                painter.add(Shape::line_segment([at + a, at + b], Stroke::new(1.0, INK)));
             }
         }
         Glyph::Pen(state) => {

@@ -1,5 +1,8 @@
 use super::swift::one_line;
-use super::*;
+use super::{
+    CodeLang, Color, Ctx, LayoutMode, Node, NodeId, NodeKind, PADDING, drop_shadow, first_fill, indent, literal, named, num, radius, stroke_color,
+};
+use figcraft_doc::Document;
 
 // ------------------------------------------------------------------ Jetpack Compose
 
@@ -9,25 +12,40 @@ pub(crate) fn kotlin_color(c: Color) -> String {
     format!("Color(0x{a:02X}{r:02X}{g:02X}{b:02X})")
 }
 
+/// A bound variable's Android code syntax, else `value`.
+fn bound(doc: &Document, n: &Node, fields: &[&str], value: String) -> String {
+    named(doc, n, "ANDROID", fields, value)
+}
+
+/// [`bound`] for a length: `value` in `dp`.
+fn bound_dp(doc: &Document, n: &Node, fields: &[&str], value: f64) -> String {
+    bound(doc, n, fields, format!("{}.dp", num(value)))
+}
+
 /// The Modifier chain for a layer (size, shadow, background, border, alpha, padding).
-fn modifier(n: &Node, shape: &str, padding: bool) -> String {
-    let mut m = format!("Modifier.size({}.dp, {}.dp)", num(n.width), num(n.height));
+fn modifier(doc: &Document, n: &Node, shape: &str, padding: bool) -> String {
+    let mut m = format!("Modifier.size({}, {})", bound_dp(doc, n, &["width"], n.width), bound_dp(doc, n, &["height"], n.height));
     if let Some(s) = drop_shadow(n) {
         m.push_str(&format!(".shadow({}.dp, {shape})", num(s.radius / 2.0)));
     }
     if let Some(c) = first_fill(n) {
-        m.push_str(&format!(".background({}, {shape})", kotlin_color(c)));
+        m.push_str(&format!(".background({}, {shape})", bound(doc, n, &["fill"], kotlin_color(c))));
     }
     if let Some(c) = stroke_color(n) {
-        m.push_str(&format!(".border({}.dp, {}, {shape})", num(n.stroke.weight), kotlin_color(c)));
+        m.push_str(&format!(
+            ".border({}, {}, {shape})",
+            bound_dp(doc, n, &["strokeWeight"], n.stroke.weight),
+            bound(doc, n, &["stroke"], kotlin_color(c))
+        ));
     }
     if n.opacity < 1.0 {
-        m.push_str(&format!(".alpha({}f)", num(f64::from(n.opacity))));
+        m.push_str(&format!(".alpha({})", bound(doc, n, &["opacity"], format!("{}f", num(f64::from(n.opacity))))));
     }
     if padding && let Some(l) = &n.layout {
         let [t, r, b, lft] = l.padding;
         if [t, r, b, lft].iter().any(|v| *v > 0.0) {
-            m.push_str(&format!(".padding(start = {}.dp, top = {}.dp, end = {}.dp, bottom = {}.dp)", num(lft), num(t), num(r), num(b)));
+            let side = |at: usize, v: f64| bound_dp(doc, n, &PADDING[at], v);
+            m.push_str(&format!(".padding(start = {}, top = {}, end = {}, bottom = {})", side(3, lft), side(0, t), side(1, r), side(2, b)));
         }
     }
     m
@@ -65,33 +83,37 @@ fn compose_layer(ctx: &Ctx, n: &Node, depth: usize, out: &mut String) {
         out.push_str(&call);
         return;
     }
-    let shape = if radius(n) > 0.0 { format!("RoundedCornerShape({}.dp)", num(radius(n))) } else { "RectangleShape".to_string() };
+    let shape = if radius(n) > 0.0 {
+        format!("RoundedCornerShape({})", bound_dp(doc, n, &["cornerRadius"], radius(n)))
+    } else {
+        "RectangleShape".to_string()
+    };
     match &n.kind {
         NodeKind::Text(t) => {
-            let color = first_fill(n).map(kotlin_color).unwrap_or_else(|| "Color.Unspecified".into());
-            let text = ctx.param(n, "characters").map_or_else(|| literal(&t.characters, true), |p| p.ident.clone());
+            let color = first_fill(n).map_or_else(|| "Color.Unspecified".into(), |c| bound(doc, n, &["fill"], kotlin_color(c)));
+            let text = ctx.param(n, "characters").map_or_else(|| bound(doc, n, &["characters"], literal(&t.characters, true)), |p| p.ident.clone());
             out.push_str(&format!(
-                "{pad}Text(\n{pad}    text = {text},\n{pad}    fontSize = {}.sp,\n{pad}    fontWeight = FontWeight.W{},\n{pad}    color = {color},\n{pad})\n",
-                num(t.style.font_size),
+                "{pad}Text(\n{pad}    text = {text},\n{pad}    fontSize = {},\n{pad}    fontWeight = FontWeight.W{},\n{pad}    color = {color},\n{pad})\n",
+                bound(doc, n, &["fontSize"], format!("{}.sp", num(t.style.font_size))),
                 (t.style.weight().clamp(100, 900) / 100) * 100
             ));
         }
-        NodeKind::Ellipse { .. } => out.push_str(&format!("{pad}Box(modifier = {})\n", modifier(n, "CircleShape", false))),
-        NodeKind::Rectangle => out.push_str(&format!("{pad}Box(modifier = {})\n", modifier(n, &shape, false))),
+        NodeKind::Ellipse { .. } => out.push_str(&format!("{pad}Box(modifier = {})\n", modifier(doc, n, "CircleShape", false))),
+        NodeKind::Rectangle => out.push_str(&format!("{pad}Box(modifier = {})\n", modifier(doc, n, &shape, false))),
         k if k.is_frame_like() || matches!(k, NodeKind::Group) => {
             let children = ctx.kids(n);
             let open = match n.layout.as_ref().map(|l| (l.mode, l)) {
                 Some((LayoutMode::Vertical, l)) => format!(
-                    "Column(\n{pad}    modifier = {},\n{pad}    verticalArrangement = Arrangement.spacedBy({}.dp),\n{pad}) {{",
-                    modifier(n, &shape, true),
-                    num(l.gap)
+                    "Column(\n{pad}    modifier = {},\n{pad}    verticalArrangement = Arrangement.spacedBy({}),\n{pad}) {{",
+                    modifier(doc, n, &shape, true),
+                    bound_dp(doc, n, &["gap"], l.gap)
                 ),
                 Some((_, l)) => format!(
-                    "Row(\n{pad}    modifier = {},\n{pad}    horizontalArrangement = Arrangement.spacedBy({}.dp),\n{pad}    verticalAlignment = Alignment.CenterVertically,\n{pad}) {{",
-                    modifier(n, &shape, true),
-                    num(l.gap)
+                    "Row(\n{pad}    modifier = {},\n{pad}    horizontalArrangement = Arrangement.spacedBy({}),\n{pad}    verticalAlignment = Alignment.CenterVertically,\n{pad}) {{",
+                    modifier(doc, n, &shape, true),
+                    bound_dp(doc, n, &["gap"], l.gap)
                 ),
-                None => format!("Box(modifier = {}) {{", modifier(n, &shape, false)),
+                None => format!("Box(modifier = {}) {{", modifier(doc, n, &shape, false)),
             };
             out.push_str(&format!("{pad}{open}\n"));
             // A slot shows the instance's content, or else the main's.

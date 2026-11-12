@@ -8,7 +8,10 @@
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use figcraft_doc::*;
+use figcraft_doc::{
+    DecorationLength, Document, LeadingTrim, LetterSpacing, LineHeight, ListStyle, NodeId, NodeKind, TextAlignH, TextAlignV, TextAutoResize,
+    TextCase, TextData, TextDecoration, TextDirection, TextStyle, VariableType, trim_num,
+};
 use serde_json::{Value, json};
 
 use crate::FigApp;
@@ -16,7 +19,7 @@ use crate::i18n::{tr, tr_noop, trf};
 use crate::icons::{self, Icon};
 use crate::right::{common, menu_item, menu_popup, row};
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{self, FIELD_H, FieldEdit, Lead, PAD};
+use crate::widgets::{self, FIELD_H, FieldEdit, Lead};
 
 mod axes;
 mod fields;
@@ -155,10 +158,11 @@ fn path_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], ids: 
 }
 
 /// Set character `props` on the selected chars of the text being edited, else on whole layers
-/// (through `node.set`, which records overrides inside instances).
-fn commit_text(app: &mut FigApp, ids: &[NodeId], range: Option<(NodeId, usize, usize)>, props: Value) {
+/// (through `node.set`, which records overrides inside instances). Paragraph spacing is always
+/// the whole layer's: `text.style` doesn't take it.
+pub(crate) fn commit_text(app: &mut FigApp, ids: &[NodeId], range: Option<(NodeId, usize, usize)>, props: Value) {
     match range {
-        Some((_, a, b)) if a != b => {
+        Some((_, a, b)) if a != b && props.get("paragraphSpacing").is_none() => {
             app.run("text.style", text_style_params(ids, range, props));
         }
         _ => app.set_props(ids, props),
@@ -167,7 +171,7 @@ fn commit_text(app: &mut FigApp, ids: &[NodeId], range: Option<(NodeId, usize, u
 
 /// `text.style` params for `props` on the selected chars of the text being edited, else on the
 /// whole of every layer in `ids` (previews; commits go through [`commit_text`]).
-fn text_style_params(ids: &[NodeId], range: Option<(NodeId, usize, usize)>, mut props: Value) -> Value {
+pub(crate) fn text_style_params(ids: &[NodeId], range: Option<(NodeId, usize, usize)>, mut props: Value) -> Value {
     match range {
         Some((id, a, b)) if a != b => {
             props["id"] = json!(id);
@@ -206,6 +210,7 @@ pub(crate) fn field_row<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui, f
 #[cfg(test)]
 mod variable_tests {
     use egui::{Event, Modifiers, PointerButton, Pos2, RawInput};
+    use figcraft_doc::WrapStyle;
     use figcraft_engine::Session;
 
     use super::*;
@@ -219,6 +224,8 @@ mod variable_tests {
         ctx: egui::Context,
         time: f64,
         text: NodeId,
+        /// The AccessKit nodes of the last frame.
+        nodes: Vec<egui::accesskit::Node>,
     }
 
     impl Panel {
@@ -232,7 +239,8 @@ mod variable_tests {
                 s.execute("variable.create", &json!({"collection": "Type", "name": name, "type": ty, "values": {"Base": value}})).unwrap();
             }
             s.execute("select.set", &json!({ "ids": [text] })).unwrap();
-            let mut p = Self { app: FigApp::new(s, Box::new(NoServices)), ctx: egui::Context::default(), time: 0.0, text };
+            let mut p = Self { app: FigApp::new(s, Box::new(NoServices)), ctx: egui::Context::default(), time: 0.0, text, nodes: Vec::new() };
+            p.ctx.enable_accesskit();
             crate::theme::install_fonts(&p.ctx, false, 0);
             crate::theme::apply(&p.ctx, Tokens::light());
             for _ in 0..3 {
@@ -265,6 +273,9 @@ mod variable_tests {
                 crate::variable_ui::picker(&mut self.app, ui.ctx());
             });
             out.textures_delta.clear();
+            if let Some(update) = out.platform_output.accesskit_update.take() {
+                self.nodes = update.nodes.into_iter().map(|(_, n)| n).collect();
+            }
             let mut texts = Vec::new();
             for c in out.shapes {
                 walk(&c.shape, &mut texts);
@@ -284,7 +295,7 @@ mod variable_tests {
         /// The name of the variable `field` of the text layer is bound to.
         fn bound_to(&self, field: &str) -> Option<String> {
             let doc = self.app.session.doc().unwrap();
-            doc.node(self.text).unwrap().bound.get(field).and_then(|v| doc.variables.get(v)).map(|v| v.name.clone())
+            doc.node(self.text).unwrap().bound.get(field).and_then(|v| doc.variables.get_by_id(v)).map(|v| v.name.clone())
         }
     }
 
@@ -346,5 +357,76 @@ mod variable_tests {
         let texts = p.frame(vec![]);
         assert!(shows(&texts, "Inter") && shows(&texts, "Bold"), "the dropdowns show the last values");
         assert!(p.app.ui.last_error.is_none(), "{:?}", p.app.ui.last_error);
+    }
+
+    /// The centre of the AccessKit node labelled `label` (a button, say).
+    fn node_center(p: &Panel, label: &str) -> Pos2 {
+        let n = p.nodes.iter().find(|n| n.label() == Some(label)).unwrap_or_else(|| panic!("no node {label:?}"));
+        let r = n.bounds().expect("bounds");
+        Pos2::new(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32)
+    }
+
+    const WRAP: [&str; 3] = [
+        "Auto: as many words as fit on each line",
+        "Balance: every line close to the same length",
+        "Pretty: full lines, no one word alone on the last",
+    ];
+
+    /// The Wrap style buttons that are on, by short name.
+    fn wrap_on(p: &Panel) -> Vec<&'static str> {
+        let on = |label: &str| p.nodes.iter().find(|n| n.label() == Some(label)).unwrap_or_else(|| panic!("no node {label:?}")).toggled();
+        ["Auto", "Balance", "Pretty"].into_iter().zip(WRAP).filter(|(_, l)| on(l) == Some(egui::accesskit::Toggled::True)).map(|(n, _)| n).collect()
+    }
+
+    /// The panel with the Type settings popover open, over two paragraphs.
+    fn settings_panel() -> Panel {
+        let mut p = Panel::new();
+        p.app.session.execute("node.set", &json!({"id": p.text, "props": {"characters": "one\ntwo"}})).unwrap();
+        p.frame(vec![]);
+        let at = node_center(&p, "Type settings");
+        p.click(at);
+        p.frame(vec![]);
+        p
+    }
+
+    #[test]
+    fn wrap_style_control_follows_the_caret_paragraph() {
+        // #1827: with the caret in one paragraph the control shows and sets that paragraph's style.
+        let mut p = settings_panel();
+        assert_eq!(wrap_on(&p), ["Auto"], "the layer's style when not editing");
+        figcraft_engine::textedit::begin(&mut p.app.session, p.text, Some(5), false).unwrap();
+        p.frame(vec![]);
+        assert_eq!(wrap_on(&p), ["Auto"]);
+        let at = node_center(&p, WRAP[1]);
+        p.click(at);
+        let td = |p: &Panel| p.app.session.doc().unwrap().node(p.text).unwrap().kind.text().unwrap().clone();
+        assert_eq!((td(&p).para_wrap_style(0), td(&p).para_wrap_style(1)), (WrapStyle::Auto, WrapStyle::Balance), "only the caret's paragraph");
+        assert_eq!(td(&p).wrap_style, WrapStyle::Auto);
+        assert_eq!(wrap_on(&p), ["Balance"], "the control shows the paragraph's value");
+        figcraft_engine::textedit::set_caret(&mut p.app.session, 1, false).unwrap();
+        p.frame(vec![]);
+        assert_eq!(wrap_on(&p), ["Auto"], "another paragraph shows its own");
+        assert!(p.app.ui.last_error.is_none(), "{:?}", p.app.ui.last_error);
+    }
+
+    #[test]
+    fn wrap_style_control_has_nothing_active_for_mixed_paragraphs() {
+        let mut p = settings_panel();
+        figcraft_engine::textedit::begin(&mut p.app.session, p.text, Some(5), false).unwrap();
+        p.frame(vec![]);
+        let at = node_center(&p, WRAP[2]);
+        p.click(at);
+        assert_eq!(wrap_on(&p), ["Pretty"]);
+        // A selection across both paragraphs, which differ: none is on.
+        figcraft_engine::textedit::set_caret(&mut p.app.session, 1, false).unwrap();
+        figcraft_engine::textedit::set_caret(&mut p.app.session, 6, true).unwrap();
+        p.frame(vec![]);
+        assert!(wrap_on(&p).is_empty(), "{:?}", wrap_on(&p));
+        // Choosing one sets both paragraphs.
+        let at = node_center(&p, WRAP[1]);
+        p.click(at);
+        assert_eq!(wrap_on(&p), ["Balance"]);
+        let t = p.app.session.doc().unwrap().node(p.text).unwrap().kind.text().unwrap().clone();
+        assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1)), (WrapStyle::Balance, WrapStyle::Balance));
     }
 }

@@ -233,3 +233,20 @@ fn open_operands_of_booleans_are_closed() {
     let NodeKind::Vector { network } = &node(&doc, "Snout").kind else { panic!("not a vector") };
     assert_eq!(network.regions.len(), 1);
 }
+
+/// Sketch draws a shape group in the group's style only: its operands' own borders go, so a
+/// FigCraft operand gives its area to the operation, not a stroke's band.
+#[test]
+fn shape_group_operands_lose_their_borders() {
+    let border = json!([{"_class": "border", "isEnabled": true, "fillType": 0, "color": color(0.0, 0.0, 0.0, 1.0), "position": 0, "thickness": 8}]);
+    let outer = styled(with_op(rect("Outer", 0.0, 0.0, 100.0, 100.0), 1), "borders", border.clone());
+    let hole = styled(with_op(rect("Hole", 25.0, 25.0, 50.0, 50.0), 1), "borders", border);
+    let g = styled(shape_group("Pin", 0.0, 0.0, 100.0, 100.0, vec![outer, hole]), "fills", json!([solid_fill(0.0, 0.0, 1.0, 1.0)]));
+    let doc = open(vec![g]);
+    let pin = node(&doc, "Pin");
+    assert!(matches!(pin.kind, NodeKind::BooleanOp { op: BoolOp::Subtract }), "{:?}", pin.kind);
+    assert_eq!(pin.fills.len(), 1);
+    for name in ["Outer", "Hole"] {
+        assert!(node(&doc, name).strokes.is_empty(), "{name}: {:?}", node(&doc, name).strokes);
+    }
+}

@@ -17,18 +17,33 @@ The server lives in `crates/mcp` (`figcraft-mcp`) and is started by the CLI:
 | `figcraft-cli mcp` | **Headless**: an in-process engine session with one untitled document. No window; renders with the CPU renderer. |
 | `figcraft-cli mcp --attach <port>` | **Attached**: drives a running FigCraft app through its control channel (`figcraft --control <port>`). The user sees every change live. |
 
-`--attach` also takes `host:port`. The control channel only listens on 127.0.0.1.
+`--attach` also takes `host:port`. The control channel only listens on 127.0.0.1. The app takes up
+to 60 s over each request; `--timeout SECONDS` (1–600) raises that for a client that sends big
+batches: `figcraft-cli mcp --attach 7979 --timeout 300`. Headless has no such limit.
+
+While an attached agent works, the app shows where, as it shows a person in a live session: its
+avatar, in a colour of its own and named as its comments are signed ("Claude (agent)", see
+Comments), joins the people row at the top of the right panel, and the canvas outlines the layers
+its last edit changed, or that it last selected, with its name. Both go 8 seconds after its last
+command, and only the file it works in shows them. This is display only: no undo step, nothing
+saved, nothing sent to a live session's other people, and nothing changes in what the agent may
+do.
 
 Attached calls are never automatically replayed after a transport failure: the app may have
 applied the request before its reply was lost. The error reports that the operation may have
 completed; inspect the document before retrying an edit. The next explicit call reconnects.
 If that connection cannot be established, the error says the request was not sent.
+A reply from the app is read up to **512 MiB before the newline** (the largest window capture is
+256 MiB as base64). The backend stops reading a longer reply at the first byte past the limit and
+treats it like a lost reply: the connection is closed, the operation may have completed, and the
+next call reconnects. For larger exports, give `export` a `path` or lower the scale.
 A connection the app closed while it sat idle is noticed before the next request is written and
 replaced then, so a pause between calls is not an error.
 
 The app keeps answering while its window is minimised or covered by other windows (see
 `docs/control-protocol.md`): edits, inspection (`inspect_ui` too), pointer, key and text input and
-renders work as usual (minimised, each request to the app takes up to about 0.1 s). Only a capture
+renders work as usual (minimised, each request to the app takes up to about 0.1 s; under Wayland,
+which can't report a minimised window, about half a second). Only a capture
 of the window itself (`screenshot` with `window`) needs it on screen: it is then an error at once;
 `screenshot` without `window` renders the document instead.
 
@@ -81,6 +96,16 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   compared by whole names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
   inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
   and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+- **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
+  document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
+  `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
+  refuses, and `library.updates` / `library.list` report the refusal for each instead of the last
+  version fetched) and plugin directories are refused with `automation roots are set: commands
+  don't reach the network …`. The app started with the flags confines its own window too, so its
+  sharing is off as well. One exception: a root on a network share (a UNC path such as
+  `\\server\share\…`, or a mounted network drive) is still a root, so reading and writing inside
+  it reaches that file server, and saving there sends the document to it. Give only roots you would
+  let the agent's files go to.
 - Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
   plugins installed from a plugin directory, the system fonts).
 - `--attach` with either flag is a usage error: the app runs the commands, so only the app can
@@ -147,6 +172,7 @@ Or in a project's `.mcp.json`:
 - `create_node` and `set_properties` take `x`/`y` **relative to the parent frame** (the page when
   there is none, so they are page coordinates then). Groups and boolean groups have no coordinate
   space of their own: a layer in a group is placed in the frame (or on the page) the group is in.
+  `rotation` is the layer's angle to its parent (Figma's plugin API `rotation` is the same); `absoluteRotation` sets its rotation on the page, what the Design panel's field shows; a call takes one of the two.
   `inspect_document` reports `x`/`y` the same way, plus `absoluteBounds` in page coordinates.
   In `props`, `fill` and `stroke` also accept `"none"` (either case) or `null` as no paint, the
   same as an empty `fills`/`strokes` list, so an outline-only shape can be made in one call.
@@ -157,7 +183,9 @@ Or in a project's `.mcp.json`:
   ignored); a layer a mask hides can't be clicked there, and a mask group's box and exports are
   the mask's (plus any layers under the mask).
 - Children of an auto-layout frame are positioned by the layout: set `layout`, `gap`, `padding`,
-  `mainAlign`, `crossAlign`, `sizingH`/`sizingV` instead of x/y. More auto layout props:
+  `mainAlign`, `crossAlign`, `sizingH`/`sizingV` instead of x/y. In one call, `layout` applies
+  before the keys that tune it, so `{"layout": {"mode": "vertical"}, "gap": 8}` keeps the gap;
+  auto layout keys beside a `layout` of `null` or `"none"` are refused. More auto layout props:
   - `sizingH` / `sizingV`: `fixed`, `hug` (auto layout frames and text) or `fill` (children in an
     auto layout flow). A child can't fill an axis its parent hugs: setting `fill` turns the parent
     `fixed` on that axis, and a parent set to `hug` turns the children that filled it `fixed`. A
@@ -223,12 +251,13 @@ Or in a project's `.mcp.json`:
 - **Colour profile**: colour values are in the file's profile, sRGB (default) or Display P3
   (`inspect_document` reports `colorProfile`). `file.colorProfile {profile: srgb|displayP3,
   convert?}` changes it: `convert` (default true) converts every colour value so colours keep their
-  appearance; `false` keeps the values and reinterprets them. Images are converted from their own colour
+  appearance (a colour calculation's mix keeps its ends exact; its colours in between move
+  slightly); `false` keeps the values and reinterprets them. Images are converted from their own colour
   profile into the file's space: an embedded ICC profile (PNG, JPG, WebP, TIFF; RGB or grey), a PNG's
   `sRGB` / `gAMA` / `cHRM` chunks, else sRGB (also for CMYK or damaged profiles); `image.place` reports
   the profile's name as `imageProfile` (`null`: none usable, taken as sRGB). PNG exports are tagged (`sRGB` chunk, or a Display P3 ICC profile plus
-  `cICP`), Display P3 JPG and WebP embed the ICC profile, and SVG and PDF export Display P3 files
-  converted to sRGB (out-of-gamut colours clip). The app's canvas shows sRGB (P3 colours outside sRGB clip on screen):
+  `cICP`), JPG embeds the ICC profile for sRGB and for Display P3, WebP embeds it for Display P3 only (sRGB WebP is untagged), and SVG and RGB PDF export Display P3 files
+  converted to sRGB (out-of-gamut colours clip). PDF with `cmyk` converts them to sRGB the same way and then to DeviceCMYK. The app's canvas shows sRGB (P3 colours outside sRGB clip on screen):
   `view.proofSrgb {on?}` (View ▸ Soft-proof sRGB) stripes those pixels so `screenshot {window:
   true}` shows where they are (after the next canvas render), and the colour picker says Outside
   sRGB for such a colour.
@@ -236,8 +265,14 @@ Or in a project's `.mcp.json`:
   tint, highlights, shadows; each -1..1). `image.adjust {ids?, target?: fill|stroke, index?,
   preset?, filters?}` applies a built-in preset (`vivid`, `muted`, `warm`, `cool`, `blackAndWhite`,
   `fade`, `reset`) or one saved in the file, with any `filters` values on top.
+  `image.replace {ids?, target?: fill|stroke, index?, data | path}` puts another image in a paint
+  (by default each layer's top image paint), keeping its fill mode, crop, position and adjustments;
+  a paint at `index` that isn't an image becomes one, filling the layer.
   `image.savePreset {name, filters?}` saves the current (or given) adjustments in the file,
   `image.deletePreset {name}` removes one and `image.presets` lists both kinds.
+  `image.crop {ids?, index?}` (one layer) switches its top visible image fill (or fill `index`) to
+  Crop, keeping the picture where it was, and returns `{id, index}`; the app also enters crop mode
+  on the canvas. The crop itself is the paint's `crop` transform (`fill.set`).
 - Text props (`fontFamily`, `fontStyle`, `fontSize`, `lineHeight`, `letterSpacing`, `textDecoration`,
   `textCase`, `textFills`, `fontVariations`…) apply to the whole layer, or to chars `start`..`end`
   when given (`text.style {id, start, end, …}` does the same). Styled ranges come back as
@@ -246,7 +281,14 @@ Or in a project's `.mcp.json`:
   `text.setVariations {variations, replace?}` merges instead. `text.fonts {family, style?, axes: true}`
   lists a font's axes and named instances (named instances are also valid `fontStyle` values).
   `text.missingFonts` lists the families the document names that aren't installed
-  (`{families: [{family, layers}]}`); their text draws in a fallback font. Fonts are indexed once
+  (`{families: [{family, layers, source}]}`); their text draws in a fallback font. On the desktop,
+  `font.download {family}` installs a family whose `source` isn't null (Google Fonts, Noto) from
+  the font store, in the background: pinned, checksum-verified files into the Craft apps' shared
+  font folder. It works only while the user has allowed downloading fonts, which only the user can
+  do, in the app's Missing fonts window; otherwise it is refused. Call it again for its progress
+  (`{state: downloading, done, total}`); once installed, the call fits the open document's text to
+  the font (`{state: installed, refitted}`). `font.downloads` lists the downloads and whether
+  downloading is allowed (`{allowed, downloads: [{family, state, error?}]}`). Fonts are indexed once
   per process: after installing one, `text.rescanFonts` picks it up (`{added: [families]}`), and
   `text.loadFont {path | data (base64)}` adds a font file without installing it (`{families}`).
   Text boxes keep the size they were measured at: both refit the open document's auto-sizing text
@@ -257,6 +299,11 @@ Or in a project's `.mcp.json`:
   `textDecorationOffset` (`auto`, px, or `"10%"` of the font size; the offset runs from the baseline
   down to an underline's top edge), `textDecorationSkipInk` (underlines break around descenders) and
   `textDecorationColor` (a colour, or `auto` for the text's) are character props too.
+- **Wrap style** (`auto`, `balance`, `pretty`) works at three levels: `wrapStyle` on `node.set`
+  sets the layer (every paragraph); with `start`/`end` it sets the paragraphs those chars touch,
+  and a paragraph's own style beats the layer's. `text.wrapStyle` sets the selected paragraphs while
+  text is edited. `get_node` reports one `wrapStyle`, or `lineWrapStyles` per paragraph when they
+  differ.
 - **Lists** are per paragraph: `listStyle` (`none`, `bulleted`, `numbered`) and `indentation` (the
   nesting level, 0–8) apply to the paragraphs chars `start`..`end` touch (all of them without a
   range); `get_node` reports one `listStyle` for the layer, or `lineTypes` and `lineIndentations`
@@ -272,16 +319,29 @@ Or in a project's `.mcp.json`:
   `style.detach {which: "text", start?, end?}` unlinks them (values stay). A layer's `styles.text` is
   the style all its chars share (none when they differ); `get_node` lists the linked chars as
   `textStyleRanges` (`[start, end, style id]`).
+  A text style also carries paragraph spacing and indent, the list style, the wrap style and the
+  OpenType features (`paragraph` beside `style` in `style.list`; a `value` takes `wrapStyle`):
+  applying it sets them (on a range, the list and wrap style go to the paragraphs touched; the rest
+  is the layer's), `style.update` moves them too, and a `.fig` file keeps them with the style
+  (not the wrap style yet).
   Changing what a text style sets (font, size, line height, letter spacing, decoration, case, axis
-  values) on linked chars unlinks them; `style.update` moves every linked char. `style.create
-  {type: "text", name}` takes the selected chars while editing; a `value` may use the `node.set`
-  spellings (`{"fontSize": 32, "lineHeight": "120%", "letterSpacing": "2%"}`).
+  values; at the paragraph level the spacing, indent, list and features) on linked chars unlinks
+  them; `style.update` moves every linked char. `style.create {type: "text", name}` takes the
+  selected chars while editing; a `value` may use the `node.set` spellings (`{"fontSize": 32,
+  "lineHeight": "120%", "letterSpacing": "2%", "paragraphSpacing": 12, "listStyle": "bulleted",
+  "features": {"liga": false}}`).
 - **Styles stay true to their layers**: editing a styled fill, stroke, effect or layout grid list
   (`node.set`, `fill.set`, `fill.add`, a bound variable…) unlinks that style (`styles.fill` etc. go
   `null`), so a later `style.update` doesn't overwrite the edit; `style.apply` replaces variables
   bound to what the style sets; a text style goes on text layers only. In one call, a style link
   (`fillStyle`, `textStyle`…) wins over values it sets; set a deviation in a later call, which
-  unlinks it. Names are trimmed per `/` folder part. `style.move {styles, before?, folder?}`
+  unlinks it. Names are trimmed per `/` folder part. A `fill` or `stroke` can also bind a variable:
+  `node.create {type: "rectangle", props: {fill: {"$var": "Theme/surface"}}}` creates and binds in
+  one undo step, and `node.set` takes the same wrapper. `$var` takes an exact variable id first,
+  else an unambiguous exact name or `Collection/name` (names can contain `/`); unknown or ambiguous
+  names are errors. The wrapper is applied after literal values and style links, and clears that
+  paint's style link even when the colour is unchanged. Only `fill` and `stroke` take variables in
+  props; use `variable.bind` for other fields. `style.move {styles, before?, folder?}`
   reorders (and with `folder`, renames into it), `style.duplicate {style}` adds "<name> copy" right
   below, `style.renameFolder {folder, name}`.
 - **Variables**: `variable.bind` refuses a variable of a type the field doesn't take (a colour on
@@ -293,7 +353,8 @@ Or in a project's `.mcp.json`:
   left as they were stay bound.
   `variable.addMode {from}` duplicates a mode, `variable.moveMode {collection, mode, to}` reorders
   (index 0 is the default mode, which layers on Auto follow). `variable.update {codeSyntax: {WEB?,
-  iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one.
+  iOS?, ANDROID?}}` sets code names (`""` clears); generated CSS uses the Web one, SwiftUI the iOS one and
+  Compose the Android one (a variable without one keeps its value there).
 - **Live previews**: `text.preview {command, params}` shows what `style.apply`,
   `library.applyStyle`, `text.setVariations` or `text.style` would do on the canvas without an undo
   step (in place of an earlier preview); `text.endPreview` puts the document back. Any other command
@@ -303,26 +364,60 @@ Or in a project's `.mcp.json`:
 - Programmatic calls never open dialogs.
 - Verify your work: `inspect_document` / `get_node` for numbers, `screenshot` for pixels.
 
+To find layers without changing the selection, use `run_command` with `node.find`, for example
+`{"command": "node.find", "params": {"root": 12, "type": "TEXT", "text": "hello", "limit": 20}}`.
+It searches strict descendants of `root`, or the current page without one, in stored child order
+(depth-first, parent before children), including hidden and locked layers and instance children.
+`name`, `text` (text layers only) and `component` (instances by their main component's name) are
+case-insensitive literal substrings; `type` is a canonical layer type, case-insensitive. All
+filters must match. The result is `{"ids": [...], "total": N}`: at most `limit` ids (default 100,
+0 to 10000), with every match counted in `total`; `limit: 0` counts only. A root on another page
+works without switching pages. Unknown roots or types and invalid limits are errors. In a batch,
+a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
+
 ## Tools
 
 | Tool | What it does |
 |---|---|
 | `list_commands {filter?}` | Every command: id, label, menu, shortcut, undoable, params doc. |
-| `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, Leptos, Vue, SwiftUI, Jetpack Compose or ArkUI for a layer; components take their properties as parameters and instances are calls, see Dev Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML, React, Leptos and Vue, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}`, `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Dev Mode below)). |
-| `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: name it with `"as": "card"` and `{"$ref": "card"}` anywhere in a later step's params becomes the `id` in its result (`{"$step": n}` does the same by zero-based position); `"field"` takes another key or a slash path such as `ids/0` (see Step references below). |
+| `run_command {command, params}` | Run any command (e.g. `align.left`, `layout.add`, `component.create`, `instance.place` (drop an instance at a page point into the frame or auto layout slot under it), `component.exposeInstance` / `instance.exposed` (nested instance properties on instances), `component.makeSlot` / `instance.slotInsert` / `instance.resetSlot` (slots, below), `inspect.code` (CSS, HTML + CSS for a whole frame, React, Leptos, Vue, SwiftUI, Jetpack Compose, ArkUI or Flutter for a layer; components take their properties as parameters and instances are calls, see Developer Mode below), `inspect.properties` (layout, auto layout, typography, fills, strokes and effects with their style and variable names; `colorFormat`: hex, rgb, css, hsl or hsb), `inspect.assets` (layers under the selection with export settings, icons and images, each with its `kind`), `inspect.code` takes `unit: rem` and `rootFontSize` for CSS, HTML, React, Leptos and Vue, `style.create`, `variable.bind`, `variable.update` (rename, describe, scope), `variable.set` with `{alias}` or a colour calculation (`{alpha}`, `{mix}`), `variable.renameMode` / `variable.removeMode`, `variable.deleteCollection`, `proto.interaction.add`, `codeConnect.set` (components linked to real code, see Developer Mode below)). |
+| `batch {commands: [{command, params}], label?}` | Several commands as one undo step (`command.batch`), which keeps one copy of the document however many steps there are (an `edit.undo` step undoes the batch's edits so far together); all-or-nothing for open documents and their document state. Failed inner commands are removed from the journal; preferences, clipboard, tool state and UI requests are not rolled back. A step can use what an earlier step returned: name it with `"as": "card"` and `{"$ref": "card"}` anywhere in a later step's params becomes the `id` in its result (`{"$step": n}` does the same by zero-based position); `"field"` takes another key or a slash path such as `ids/0` (see Step references below). |
 | `create_node {type, x, y, width, height, parent, index, name, text, path, props}` | Create a frame, rectangle, ellipse, polygon, star, line, arrow, text, vector, section, component or slice; returns `{id, node}`. |
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
-| `inspect_document {depth, allPages}` | The document as JSON (layer tree, styles, selection, history). |
-| `get_node {id, depth}` | One layer as JSON; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
+| `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
+| `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `select {ids}` | Replace the selection (`[]` deselects). |
-| `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`. The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline. The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
+| `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (PNG: `sRGB` chunk, or ICC and `cICP` for Display P3; JPG: ICC profile; WebP: ICC profile for Display P3, none for sRGB) (SVG, XML and RGB PDF output are always sRGB; PDF with `cmyk` is DeviceCMYK). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
-| `open_file {path, variables?}` / `save_file {path?}` | Open `.figcraft`, `.json` (FigCraft JSON or REST API file JSON with its variables, see below), `.fig` (best effort, see below), `.sketch` (Sketch 48 and newer, best effort), `.svg` (see Importing SVG below) or an image; save as `.figcraft`. `open_file` returns `opened` (for a file opened anew, a `summary` of `name`, `pages`, `layers` and `images`, and `warnings` or `repairs`; a file that was already open just gives its `index`) and the document's `document` outline. |
+| `open_file {path, variables?, reload?}` / `save_file {path?}` | Open `.figcraft`, `.json` (FigCraft JSON or REST API file JSON with its variables, see below), `.fig` or FigJam `.jam` (best effort, see below), `.sketch` (Sketch 48 and newer, best effort), `.svg` (see Importing SVG below) or an image; save as `.figcraft`. `open_file` returns `opened` (for a file opened anew, a `summary` of `name`, `pages`, `layers` and `images`, and `warnings` or `repairs`; a file that was already open gives its `index`, with `stale: true` when the file changed on disk since that tab read or saved it; `reload: true` reads it again into the tab, refused while the tab has unsaved changes) and the document's `document` outline. |
 | `undo` / `redo` | Step through history. |
 | `pointer {kind, x, y, to?, steps?, tool?, shift, alt, cmd, pressure?, pressureTo?}` | Mouse gestures in page coordinates with the current tool: `click`, `double`, `drag`, `down`, `move`, `up`, `hover`. A dragged layer drops into the frame or auto layout slot under the pointer, except one inside a group, a boolean group or an instance (outside its slots), which only moves. `pressure` (0–1) is pen pressure; a drag goes from `pressure` to `pressureTo` (see Brushes and pen pressure). |
 | `key {key, shift, alt, cmd}` | A shortcut or key as if typed on the canvas (every default shortcut, tool keys, Escape, Delete, arrows, number keys for opacity, arrows that pan the view when nothing is selected; while editing text, the text shortcuts and then text editing keys). Keys are names like `A`, `0`, `Enter`, `ArrowLeft`, `=`, `/`, or egui's (`Plus`, `Questionmark`); `cmd` is Cmd on macOS and Ctrl elsewhere. |
 | `type_text {text, id?}` | Type into the text being edited, or replace the contents of text layer `id`. |
 | `inspect_ui {}` | Tool, view and status (and panels, timings and the app's `windows` when attached). |
+| `wait_for_changes {after?, timeoutMs?, topics?, limit?}` | Wait for new comment events in the attached app; returns pending events at once, else waits up to `timeoutMs` (default 20 s, max 25 s). Pass the returned `cursor` back to keep watching. Headless returns immediately. |
+
+### Compact layer trees
+
+`inspect_document` and `get_node` accept `fields`, an array of exact, case-sensitive top-level node
+keys, applied to every layer and page. For example, `fields: ["name", "type", "width", "height"]`
+leaves out paints and text properties; `fields: []` keeps only ids and structure. `id`, `children`,
+depth-boundary `childCount` and the transport's `truncated` marker are always kept (`truncated` is
+not a selectable field). An unknown key is an error that lists the valid keys; a `fields` that is
+not an array of strings, or an `outline` that is not a boolean, is an error too. Document metadata
+stays unchanged.
+
+`outline: true` selects `id`, `name`, `type`, `characters`, `mainComponentName` and `visible`, plus
+structure. `characters` is cut after 120 characters (Unicode scalars), with ASCII `...` appended
+only when longer. Selecting `visible`, explicitly or through outline, reports a boolean even for
+visible layers and pages;
+without these options the output stays sparse. `outline: true` cannot be combined with `fields`;
+`outline: false` can. Both options keep the existing depth and response-size limits.
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inspect_document","arguments":{"depth":6,"outline":true}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_node","arguments":{"id":3,"depth":2,"fields":["name","width","height"]}}}
+```
 
 ### Starter templates
 
@@ -382,7 +477,8 @@ Returns `{fitted: [{id, fontSize, lines, fits, orphan}]}`. Use case: a carousel 
 
 A board is a file of its own kind for thinking together: `file.newBoard {name?}` opens one (its
 page is light; `inspect_document` says `kind: "board"`). Board objects are ordinary layers with a
-`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink, …}`), so the usual
+`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode, …}`; a connector may say
+`branch: true`), so the usual
 commands move, resize, recolour, copy, delete and undo them. On a design file the board commands
 refuse; on a board `proto.*`, `dev.*`, `view.prototype` and `view.devMode` refuse. Each of these is
 one undo step and returns the ids it made:
@@ -393,20 +489,50 @@ one undo step and returns the ids it made:
   defaults to your name (`pref.userName`, or the one a live session gave you; `false` for none).
 - `board.nextSticky {id?, side?: right|below|left|above, edit?}` → `{id, text}`: a sticky of the
   same colour beside the selected (or edited) one; with `edit: true` the app goes on typing in it
-  (`Shift+Cmd/Ctrl+Enter` in the app does both).
+  (`Shift+Cmd/Ctrl+Enter` in the app does both). On a shape it does what `board.addConnected` does:
+  the next shape, joined to it by a connector (`{id, text, connector}`).
+- `board.addConnected {id?, side?: right|below|left|above, edit?}` → `{id, text, connector}`: the
+  next sticky or shape of the same kind, size and colour on that side of the selected (or edited)
+  one, 80 units away, joined to it by a connector the way the Connector tool makes one; one undo
+  step. With `edit: true` the app goes on typing in it (the "+" beside a selected sticky or shape
+  in the app does both).
+- `board.mindMap {x?, y?, text?, children?, parent?, edit?}` → `{id, text, children: [{id, text, connector}]}`:
+  a mind map: a first node (`mindNode`, bold 24, no box; `text` defaults to `Topic`, `x`/`y` to the
+  middle of the view) with up to 20 `children` (texts; default `Idea 1`, `Idea 2`, `Idea 3`)
+  on its right, each joined to it by a curved branch (a connector with `branch: true`: stroke 4,
+  `#757575`, round caps). The map lays itself out: children stand in one column 88 units right of
+  the widest node of their parent's column, 48 apart, centred on their parent; a node is its text,
+  sized to it. One undo step. A map's shape is read from its branches alone: the parent of a node
+  is the layer a branch arrives from. After every edit (a command, typing, a gesture, undo, a live
+  session's change) a touched map is laid out again from its first node, so moving the first node
+  moves the map, a child moved by hand goes back (or swaps with the sibling whose middle it
+  passed), and a deleted node's children stay where they are, without their branch.
+- `board.mindMapAdd {id?, relation?: child|sibling, text?, edit?}` → `{id, text, connector}`: a node
+  of the map that the given (or selected, or edited) one belongs to: a child below its other
+  children, or a sibling right after it (the first node has none); the map lays itself out again.
+  One undo step. With `edit: true` the app goes on typing in it.
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
-  wrapping text: `rectangle roundedRectangle ellipse diamond triangle speechBubble chevron`.
-- `board.connector {from, to, fromSide?, toSide?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
+  wrapping text: `rectangle roundedRectangle ellipse diamond triangle triangleDown parallelogramRight parallelogramLeft trapezoid pentagon hexagon octagon star plus arrowLeft arrowRight chevron speechBubble database document predefinedProcess manualInput internalStorage`.
+- `board.connector {from, to, fromSide?, toSide?, fromAt?, toAt?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
   → `{id, label?}`: `from`/`to` are layer ids or `{x, y}` page points; sides are `auto` (the side
-  facing the other end) or `top right bottom left`; caps are stroke caps (default an arrow at the
+  facing the other end) or `top right bottom left`; `fromAt`/`toAt` are `[x, y]` fractions of the
+  layer's box that put the end on that part of it (it leaves by `side`); caps are stroke caps (default an arrow at the
   end). An elbow goes around the objects it joins when the short way would cross them; a curved
   one leaves and arrives along the sides. The connector re-routes itself whenever what it joins
   moves or resizes, also when someone else in a live session moves it; a deleted end stays where it
   was as a point. `board.label {id, text}` sets its label (empty removes it).
-- `board.reattach {id?, end: from|to, target, side?}` → `{id}`: moves one end of a connector
+- `board.reattach {id?, end: from|to, target, side?, at?}` → `{id}`: moves one end of a connector
   (default the selected one; its label stands for it) onto `target`, a layer id or an `{x, y}`
   page point where the end stays free. Refused when both ends would be on one layer or the target
-  is a connector. Dragging a selected connector's end handle in the app does the same.
+  is a connector. Dragging a selected connector's end handle in the app does the same; with Cmd/Ctrl
+  held the end goes where the pointer is on the object (`at`, as in `board.connector`). A path
+  reshaped by hand goes back to routing itself.
+- `board.reshape {id?, portion, x, y}` → `{id}`: moves one portion of a connector's path to that
+  page point, as dragging a path handle in the app does: run `portion` of an elbow (a first or last
+  run gains an extra run to stay on its end), or a curve's middle (`portion` 0). The sides its ends
+  leave by are kept from then on, and the shape travels with what it joins. Refused for a straight
+  connector, a portion it doesn't have and a path of more than 64 runs. `board.setStyle {style}`
+  to another style goes back to routing itself.
 - `board.stamp {x, y, stamp: thumbsUp|heart|plusOne|star|question|check}` → `{id}`: a round badge
   centred there, with your name on it for hover.
 - `board.ink {path | points, highlighter?, color?, select? (default true)}` → `{id}`: a marker (or
@@ -452,20 +578,25 @@ design file they refuse.
   client counts down on its own clock. `board.timerState {}` reads it: `state` is `off`,
   `running`, `paused` or `done` (it ran out: 0:00 until someone stops it), `left` milliseconds,
   `text` as `m:ss` (or `h:mm:ss`).
-- `board.vote {action: start|cast|retract|end|clear, …}` → the vote as `board.voteResults` gives
+- `board.vote {action: start|cast|retract|end|clear|delete, …}` → the vote as `board.voteResults` gives
   it. One vote at a time: `start {votes? (per person, 1–99, default 3), on?: all|stickies|selection
   (default all), ids? (with selection; default the selected layers)}` (a vote that ended may be
   replaced; one still running is refused), `cast {id}` puts one of your votes on an object (several
   on the same object are fine; once yours are used up it refuses), `retract {id}` takes one back,
-  `end` shows everyone's votes, `clear` removes the vote and its results. `voter` (any action)
+  `end` shows everyone's votes and keeps the results in the file (the last 20 votes'), `clear` takes the vote and its
+  results off the board (kept results stay), `delete {index}` removes kept results (0 the oldest). `voter` (any action)
   votes as someone else, for scripts and tests; by default you are your live-session client, or
   your name (`pref.userName`) when the file isn't shared. In the app a click on an object votes
   while a vote runs, and a click on your badge (or an Alt-click) takes the vote back.
 - `board.voteResults {voter?}` → `{state: off|running|ended, votesPerPerson, on, by, left, mine:
-  [{id, votes}], voters, results?}`: while it runs you see your own votes only (`mine`, `left`) and
-  how many have voted; once it ends `results` lists `[{id, name, votes, rank}]`, most votes first
-  (ties share a rank), with `name` the sticky's text or the layer's name. Votes on deleted objects
-  don't count.
+  [{id, votes}], voters, results?, sessions}` (off: `{state, sessions}`): while it runs you see your own votes only (`mine`, `left`) and
+  how many have voted; once it ends `results` lists `[{id, name, votes, rank, voters}]`, most votes
+  first (ties share a rank), with `name` the sticky's text or the layer's name and `voters` who
+  voted for it: `[{voter, name, votes}]`, `voter` as the ballots key it (a live-session client as
+  `peer <id>`, else a name) and `name` what they go by (`null` for someone no longer in the live
+  session). `sessions` lists every ended vote's results, newest first:
+  `[{index (in the kept results, 0 the oldest; null for a vote that ended before results were kept), onBoard, ended (ms
+  since 1970), votesPerPerson, on, by, results}]`. Votes on deleted objects don't count.
 
 ```json
 {"command": "board.timer", "params": {"action": "start", "minutes": 10}}
@@ -514,7 +645,7 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky). Keys no design-file
   shortcut uses; on a design file they refuse.
 - `view.pan {dx, dy, big?}`: the arrow keys with nothing selected (`key ArrowRight` does the same)
-  pan the view by 20 screen pixels a step, 200 with `big` (Shift).
+  pan the view by 64 screen pixels a step, 320 with `big` (Shift).
 - `view.multiplayerCursors {on?}` (`Alt+Cmd+\`): show or hide others' cursors in a live session.
 - `view.outlinesHiddenLayers {on?}` and `view.outlinesObjectBounds {on?}`: what outline mode
   (`view.outlines`, `view.outlinesSelection`) draws besides the shapes: hidden layers, and the box
@@ -567,8 +698,11 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   panel has the keyboard (after F6 or a click on a row), else on the canvas below the selection; the
   menu takes the keyboard and gives it back when it closes (no-op headless).
 - `select.area {x, y, width, height, add?, deep?}`: select what a marquee from `x, y` over that box
-  (page units) would: top-level layers, a frame only when the box covers it, the children of the
-  top-level frame the box starts in; `add` toggles like a Shift marquee, `deep` takes nested layers
+  (page units) would: the top-level layers it touches (a rotated shape by its outline); an empty
+  frame on touch; any other frame or section only when the box covers it, otherwise the layers in it
+  the box touches, except that once the box takes a frame whole, a partly covered frame comes whole
+  too, and the frame the box starts in is selected only then (when the box also takes another
+  top-level frame); `add` toggles like a Shift marquee, `deep` takes nested layers
   like Cmd/Ctrl. Returns `{selection}`. Without a box (`F8` in the app) it draws one for the
   keyboard around the selection (or in the middle of the view): the arrows move it, Shift+arrows
   move its far corner (10 screen pixels a press), Enter selects (Shift+Enter adds, Cmd/Ctrl+Enter
@@ -585,7 +719,7 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
 - `pref.startOnHome {on?}`: the desktop app starts on the Home screen instead of in a new file
   (off by default; files named on the command line still open, and `--control` starts in a new
   file anyway, so control callers have a document).
-- `pref.language {language: system|en|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|sv|vi|zh-Hans|…}`: the app's interface language, applied live ("system":
+- `pref.language {language: system|en|bs|cs|ru|es|es-419|fr|de|pt-BR|ja|ka|ko|sv|vi|zh-Hans|zh-Hant|…}`: the app's interface language, applied live ("system":
   the OS or browser language; a language without a catalog shows English). Command ids, labels and
   every result stay English.
 
@@ -622,7 +756,11 @@ made active), add?}`, `vector.edit.selectAll` (every edited layer's points), `ve
 `vector.edit.addVertex`, `vector.edit.connect {a, b}`, `vector.edit.pen {x, y, dx?, dy?}` (continues
 from the pen's open end; clicking a point connects or branches), `vector.edit.penEnd`,
 `vector.edit.paint {x, y} | {points}` (paint bucket: fills or unfills the closed area under a page
-point; with `points`, the areas under the rest go the way the first went, like a drag),
+point; with `points`, the areas under the rest go the way the first went, like a drag), `fill.set`,
+`fill.add`, `fill.remove`, `fill.move` and `fill.paste` on the edited layer while regions are
+selected (`vector.edit.select {regions}`), which edit those regions' own fills and leave the
+layer's (`regions: [index, ...]` names them on any vector layer; `fill.copy` copies the selected
+regions' paint),
 `vector.edit.cut {segment, t} | {vertex} | {from: [x, y], to: [x, y]}` (the last cuts every path the
 page line crosses; parts that come apart move to layers of their own above, listed in `layers`),
 `vector.edit.erase {points, radius?}` (the eraser),
@@ -630,7 +768,7 @@ page line crosses; parts that come apart move to layers of their own above, list
 `vector.deleteHeal`, `vector.join` / `vector.smoothJoin` (join the selected points while editing),
 `vector.edit.cornerRadius` (rounds the selected sharp points, next to straight or curved segments: a
 curve is cut where the arc meets it and keeps the rest of its shape; drawn and exported;
-`node.set {cornerRadius}` on a vector rounds every point), `vector.edit.strokeCap {cap, vertices?}`
+`node.set {cornerRadius}` on a vector rounds every point, and on a boolean group every sharp corner of its result, while its layers keep their own radius), `vector.edit.strokeCap {cap, vertices?}`
 and `vector.edit.strokeJoin {join, vertices?}` (the stroke's cap where it ends at these points and
 its join where it turns there, `null` for the layer's; drawn, exported and outlined),
 `vector.edit.moveHandles {dx, dy, handles?}` (moves the selected handles by a page offset),
@@ -664,6 +802,9 @@ While points are selected, `object.flipH` / `object.flipV` and the 90°/180° ro
 On the canvas (`pointer`), dragging points, handles and pen clicks snap to other points and segment
 midpoints (this vector's and other vectors'), the usual layer targets and the pixel grid; `cmd`
 held while dragging turns the object snapping off.
+
+Dash caps: `node.set {dashCap}` takes `none`, `round` or `square` for both ends of every dash of a
+dashed stroke, and `null` clears it (dashes then take `startCap` and `endCap`, the default).
 
 Variable width strokes: `stroke.widthProfile {ids?, preset?: uniform|wedge|taper|eye|rounded|pinch,
 points?: [[t, scale], ...]}` (also `node.set {widthProfile}`; `t` runs 0–1 along each subpath by
@@ -743,11 +884,15 @@ removes the whole conditional). Every one is an undo step and applies to all `id
 with the same interactions). Flows `proto.flow.add` / `rename` / `remove`,
 and the device, its rotation and the background `proto.settings {device?, background?,
 rotation?, color?, width?, height?, responsive?}` (`None`, `iPhone 16`, `iPhone 16 Pro Max`,
-`Android Compact`, `iPad mini`, `MacBook Air`, `Desktop` or `Custom size`; `rotation` `portrait` or
+`Android Compact`, `iPad mini`, `MacBook Air`, `Desktop` or `Custom size`, in any case; another
+name is an error that lists the devices, and nothing changes; `rotation` `portrait` or
 `landscape`, which turns phones and tablets; `color` one of the device's colours by name, e.g.
 `Black`, `White`, `Pink`, `Teal`, `Blue` for the iPhone 16 (an error lists them), `""` for the
 default; `width` / `height` set the custom size's screen, 1–10000 points, and pick `Custom size`,
-which is a bare screen without a body). On a device the presented frame is sized to the device's
+which is a bare screen without a body). Every call answers the page's settings as they are after
+it, so `proto.settings {}` reads them: `{device, background, rotation, color (the colour shown, null
+without a body), screen ({width, height} as presented, null without a device), customSize,
+responsive}`. On a device the presented frame is sized to the device's
 screen: a frame bigger than the screen scrolls through its whole size whatever its `overflow`, content
 past the frame's own edges scrolls only as its `overflow` allows (else it's clipped), and `fixed`
 layers stay on screen (pinned to the edges their constraints name). With `responsive: true` (saved
@@ -755,7 +900,7 @@ in the file) the presented frame is instead resized to the device's screen, or w
 the presenter's window at 100%, and its constraints and auto layout respond as when it is resized
 in the editor (an axis it hugs keeps hugging its content); the file's frames don't change. `proto.present {start?}` plays the prototype full-window and `proto.preview
 {start?}` in a resizable pane over the canvas that follows edits live; `proto.closePreview` closes
-it. `proto.presentOptions {scale?, deviceFrame?, hotspotHints?, inspect?}` sets how the
+it. `proto.presentOptions {scale?, deviceFrame?, hotspotHints?, inspect?, hideUi?}` sets how the
 full-window presenter sizes the prototype (`fit` scales it down to fit, `fitWidth` fills the width,
 `fill` covers the window, `actual` shows it at 100%; what overflows pans), whether it draws the
 device, whether a click where nothing reacts briefly flashes the screen's hotspots (the layers with
@@ -763,7 +908,9 @@ interactions, on by default; also in the presenter's Options menu) and whether i
 shows the size, colours and typography of the layer under the pointer (also the Inspect button in
 its bar); the options are kept for later presentations (in the presenter Z cycles them and R
 restarts). An Open link to an `http` or `https` address first shows a notice that the link leaves
-the prototype, with Open link, Cancel and "Don't show this again"; `proto.linkNotice {show?}`
+the prototype, with Open link, Cancel and "Don't show this again" (an `openUrl` action with
+`openInNewTab: false` then opens in the web build's own tab, leaving the prototype; the desktop app
+opens the browser either way); `proto.linkNotice {show?}`
 turns the notice on (the default) or off, kept with the desktop app's preferences (the web build
 keeps it until the page reloads). The player's state is
 in `inspect_ui` (`presenter`, `preview`: screen, scroll, `scale`, `zoom`, `pan`, the screen's
@@ -823,8 +970,11 @@ name and sets them this way);
   variables. A variable the library adds to the extended collection is an update of its own
   (`library.updates` lists it without an `id`, it has no copy yet). A library collection that is
   itself an extended collection can be extended again: the chain follows as each file accepts
-  its library's updates. The Variables editor offers Extend collection on a library collection and marks
-  overridden values, with a reset button.
+  its library's updates. A collection of this file extends too:
+  `variable.extendCollection {collection, name?}` → `{id}` does the same with a collection of this
+  file (an extended one included), and the extension follows its edits at once (values, new
+  variables and modes, renames). The Variables editor offers Extend collection on a collection's
+  row (this file's or a library's) and marks overridden values, with a reset button.
 - **Update**: `library.updates` lists the components, styles, variable collections and variables
   with a newer published version; `library.acceptUpdates {ids? (library ids)}` pulls them in,
   keeping instance overrides; bound layers, aliases and explicit modes follow the updated values.
@@ -850,11 +1000,20 @@ most when it can't be reached).
 - `library.add {path: <share link>}` enables it (a view link is enough); then `library.place`,
   `library.applyStyle`, `library.bindVariable`… work as for library files. `library.list` and
   `library.updates` ask the server for a newer version first (`"server": true` in the listing);
-  `library.acceptUpdates` takes it, overrides kept.
-- `library.usage {library?}` → `{id, name, instances, files: [{name, updated, instances}],
-  components: [{id, name, instances, files}]}`: what the files using it reported (each fetch
-  reports the asking document's name and its instances per component). `library` is an enabled
-  team library; omit it for the active document's own library on its server.
+  `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
+  team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
+  so opening a file that names another one contacts nothing (#1097).
+- `library.usage {library?, days?}` → `{id, name, assetsKnown, styles [{id, name, type, layers, files}], variables [{id, name, collection, layers, files}], instances, detached, detachesKnown, days,
+  insertions, detachments, actionsKnown, weeks: [{week, insertions, detachments}], files: [{name,
+  updated, instances, detached}], components: [{id, name, instances, files, detached, insertions,
+  detachments}]}`: what the files using it reported (each fetch reports the asking document's name
+  and its instances per component; then its detached and inserted instances per component;
+  `detached` adds up every detach, `detachesKnown` is false from a server that doesn't keep them).
+  `insertions` and `detachments` count the weeks that overlap the last `days` (1–365, default 30;
+  `week` is the week's Monday, seconds since 1970 UTC, and a week is listed only when something
+  happened in it); an insertion is an instance placed, pasted or duplicated, not one nested in
+  another instance. `actionsKnown` is false from a server that doesn't keep weeks. `library` is an
+  enabled team library; omit it for the active document's own library on its server.
 - `library.swap {from, to}` (any two enabled libraries, files or team) re-points every instance,
   style and variable copied from `from` to the published asset of the same name in `to` (variants
   by name in their set, styles by name and type, variables by collection, name and type, modes by
@@ -916,7 +1075,9 @@ remove and reorder layers there, unlike the rest of an instance). It is a compon
 `value: {layer, edited, layers}`).
 
 - **Define** (on the main): `component.makeSlot {id (a frame inside a main component), name?,
-  preferred? [component or set ids]}` (the property is named after the frame by default);
+  preferred? [component or set ids]}` (the property is named after the frame by default; a new
+  property goes last, as `component.properties` lists them in the order they were made, a rename
+  keeping the place);
   `component.editProperty {name, preferred}`; `component.removeSlot {id}` (instances lose their own
   content in it). `component.addProperty {type: "slot", layer}` and `component.bindProperty {field:
   "slot"}` work too (one frame per component for a slot).
@@ -1044,7 +1205,7 @@ import uses: the layer tree, geometry, paints with image bytes, strokes, effects
 runs, vector networks, auto layout, constraints, components, sets, instances with their overrides
 and property values, variable collections with their modes, variables and bindings, shared styles
 with their layer links, and prototype interactions. `warnings` lists what was left out (comments,
-Dev Mode data, some bindings and settings and the like). Round trips through FigCraft's own
+Developer Mode data, some bindings and settings and the like). Round trips through FigCraft's own
 importer are tested, and the example documents and small test files were opened in other software
 (`docs/file-format-parity.md` says what was checked); other apps may not open every file. Without
 `path` the file comes back as base64 `data`. Check one by opening it again:
@@ -1087,8 +1248,10 @@ frame back to Auto, inheriting its parent's mode).
 
 The same JSON carries variables between FigCraft files: `variable.export {collections?, format?,
 path?}` writes this file's collections (default: all but library copies) as a local variables
-response (`format: "json"`, the default) or as CSS custom properties (`format: "css"`: the default
-mode on `:root`, each other mode on `[data-<collection>="<mode>"]`, aliases as `var(--name)`, numbers
+response (`format: "json"`, the default; colour calculations as the colour they show in each mode,
+other collections in their default modes) or as CSS custom properties (`format: "css"`: the default
+mode on `:root`, each other mode on `[data-<collection>="<mode>"]`, aliases as `var(--name)`, colour
+calculations as the colour they show in that mode (other collections in their default modes), numbers
 in px unless the layers bound to them, their scopes or the variables aliasing them make them an
 opacity or a font weight, so `border-radius: var(--radius)` reads `12px`) or as
 Dart constants for Flutter (`format: "dart"`: an `abstract final class` per collection and mode, the
@@ -1096,7 +1259,8 @@ default mode's named after the collection and the others after the collection an
 `static const` `Color`, `double`, `String` or `bool` per variable; names become camelCase Dart
 identifiers kept apart, aliases are resolved to their value in that mode), and
 returns `{text}` (or writes `path` and returns `{path}`). `variable.import {variables}` (an object,
-JSON text or a path; `variableCollections` and `variables` under `meta` or at the top level) reads
+JSON text or a path to a regular file of at most 256 MiB;
+`variableCollections` and `variables` under `meta` or at the top level) reads
 one back: a collection joins this file's collection of the same name
 (values matched by mode name, new modes and variables added, a same-named variable of another type
 skipped with a warning; library copies and extended collections are never targets), others are
@@ -1129,20 +1293,60 @@ pin stays where it was, on the nearest surviving parent. Driven with `run_comman
 first one, or `reply`: an index into its replies; deleting the first message deletes the thread),
 `comment.react {id, emoji, reply?, on?}` (toggles your reaction), `comment.resolve {id, resolved?}`,
 `comment.move {id, x, y, anchor?}` (pins it to the frame under the new point unless `anchor: false`).
-Everyone acts as the name from Preferences (`pref.userName {name}`, default "You") unless `author`
-says otherwise; only a message's author can edit or delete it. `@Name` in a message mentions
-someone (`comment.people` lists the names used in the file).
+An agent comments under its own name, never the user's: every command an MCP client runs acts as
+that client's name from `initialize` (`clientInfo.title`, else `clientInfo.name`) with " (agent)"
+after it, e.g. "Claude (agent)", or "AI agent" when the client gave none. Its messages, reactions
+and read state are its own, it can edit and delete only its own messages, and its messages carry
+`"agent": true` in `comment.list` (the app shows an **Agent** label by the name); the user's name in
+Preferences is unchanged. It is set once per connection, so no command needs `author`; an `author`
+param still wins. In the app, comments act as the name from Preferences (`pref.userName {name}`,
+default "You"); only a message's author can edit or delete it. `@Name` in a message mentions
+someone (`comment.people` lists the names used in the file: everyone who wrote or reacted, and
+every name a message @mentions, once each in any case; and, as `you`, who is acting).
 
 Read state is kept per name: a new message is unread for everyone but its author;
 `comment.markRead {id? | link?, read?}` marks one thread (or, without `id`, all of them) read or
 unread (not an undo step). `comment.list {page? | "all", filter? (all|open|resolved|mine|unread),
-sort? (date|page), query?, frame?}` returns the threads with their position, `frame`/`frameName`,
-`pageName`, `unread`, `link` and replies (with `edited` times and `reactions`). Links are
+sort? (date|page), query?, frame?, mentions?}` returns the threads with their position, `frame`/`frameName`,
+`pageName`, `unread`, `link` and replies (with `edited` times and `reactions`). Each message, the
+first and every reply, has `mentions`: the names it @mentions by the rule the app highlights them
+with, `{name, known, you}` each. `known` means the file's people (`comment.people`, or you) have
+the name, spelt as they spell it; `you` means it names you (or `author`). `@Name` counts at the
+start of the text or after a character that isn't a letter or digit, so `a@b.com` mentions nobody;
+an unknown name is the letters and digits after the `@`. `mentions: "<name>"` (any case; a leading
+`@` is fine) lists only the threads where a message, the first or a reply, mentions that name as
+those `mentions` report it, combined with the other filters: `{"mentions": "Claude", "filter":
+"unread"}` is the unread threads that tag Claude. `@Ada Lovelace` mentions "Ada Lovelace", not
+"Ada", when the file knows Ada Lovelace; a name nobody in the file has can still be several words
+(`"Zoe Smith"` finds `@Zoe Smith`). Links are
 `figcraft://comment/<id>`: `comment.link {id}` returns one, `comment.open {id | link, view?}` goes
 to its page, zooms to its frame (`fit`, the default; `center` keeps the zoom; `keep` doesn't move)
-and opens it in the app, and `comment.next {id?, dir?, …list params}` steps to the next or previous
-thread of a list the same way. `comment.zoom {ids}` zooms in on a group of pins. Comment ids made in
+and opens it in the app, and `comment.next {id?, dir?, …list params}` (`mentions` too) steps to the
+next or previous thread of a list the same way. Both return the thread as `comment.list` lists it,
+with each message's `mentions`. `comment.zoom {ids}` zooms in on a group of pins. Comment ids made in
 a live session are large numbers (their creator's id space): pass them back as given.
+
+An agent can read every open thread as one resource (`figcraft://comments`) or call
+`comment.list`; `comment.prompt {ids?, page? (default "all"), filter? (default open), sort?,
+query?, includeResolved?}` returns `{count, truncated, text, comments}`, where `text` is a Markdown
+task brief with the document, each thread's page, frame, anchor, point, messages, replies and link,
+and the instructions to fix, reply and resolve. `comments` is bounded metadata for at most 200 of
+the selected threads (id, page, frame, anchor, status, link, author, preview, reply count and
+`mentions`: the names the whole thread @mentions, as `comment.list` reports them per message, at most
+32 with names cut to 80 characters), not the full threads: use `comment.list` for those. The Comments panel's **Copy for AI** action uses
+it. The `fix_comments` prompt runs the review loop: inspect the anchored layer, make the
+smallest change (one `batch` per thread), reply with what changed, verify with a screenshot, then
+resolve. Reply before resolving: `comment.reply` reopens a thread, so resolving first and replying
+after leaves it open again. `auto_resolve: "no"` makes the agent reply and leave the thread for the
+user. Comments are the feedback queue for any MCP client.
+
+While attached, `wait_for_changes` long-polls the app's event log: `comment.added`, `comment.replied`,
+`comment.edited`, `comment.reacted`, `comment.resolved`, `comment.moved` and `comment.deleted` carry
+`{command, commentId, reply}`. Read the thread with `comment.list` after an event. A `batch` that
+rolls back reports none of its steps' events. The log keeps the newest 1024 events; `reset: true`
+means the cursor is ahead (the app restarted), and `dropped` counts events older than the retained
+window. Headless returns immediately; the control method behind it is `events.poll` (see
+[control-protocol.md](control-protocol.md)).
 
 ### Version history
 
@@ -1187,10 +1391,13 @@ branches). Driven with `run_command`:
   changes formatted like Inspect (`fill #2563EB → #DC2626`); `document` lists styles, variables,
   comments and file settings. A conflict is the same property changed on both sides to different
   values (key `<layer id>/<property>`, e.g. `4/fills`; fills, strokes, effects, layout grids,
-  export settings, guides, prototype interactions, annotations and Dev Mode resources compare item
+  export settings, guides, prototype interactions, annotations and Developer Mode resources compare item
   by item, so changing different items of one list on each side, or adding items at its end on one
   side, merges without a conflict; other lists, such as code links, compare whole; a layer's parent
-  and position are one property, `parent`), a layer deleted on one side while the other edited it or what's inside it
+  and position are one property, `parent`; auto layout settings, `layout` and `childLayout`, compare
+  field by field, each field changed both ways its own conflict, `<layer id>/layout.padding`; sizes and
+  places auto layout works out, and values a layer in an instance takes from its main, are never
+  conflicts: the merged file works them out again), a layer deleted on one side while the other edited it or what's inside it
   (`<layer id>/layer`, with `deletedBy`), or a document-level entry or setting changed on both sides
   (`style/<id>`, `variable/<id>`, `comment/<id>`, `doc/<property>`…).
 - `branch.merge {id?, resolutions?}` merges the branch into the main file as one undo step,
@@ -1239,6 +1446,20 @@ opens one (a new file, the file at `path`, or open file `index` moved out of its
 focus a window before working on its files, and pass its id to `screenshot {window}` to see it.
 Headless (one session, no windows) and in the browser the two commands do nothing.
 
+### Naming the document
+
+Tools act on the file in front, so with an attached app a tab the user clicks mid-task would
+change where the next edit lands. `run_command`, `batch`, `create_node`, `set_properties`,
+`inspect_document`, `get_node`, `select`, `export`, `screenshot`, `save_file`, `undo` and `redo`
+take an optional `document`: the file's `id` (in `run_command {command: "doc.list"}`, and the `id`
+of the `document` outline `open_file` and `inspect_document` return) or the path of an open file.
+The call acts on that file and the tab in front stays in front, unless the command itself opens or
+switches to another file (`file.open`, `file.new`, `doc.switch`), as it would without `document`. A
+file that isn't open is an error. `doc.list` gives an agent each open file's `id`, name and state, not`nwhere it is on disk (#1117). `screenshot {window}` captures what the window shows, so it
+needs the file in front. Over the control channel, `engine.execute`, `document.inspect`,
+`node.get` and `ui.render` take the same `document`; other methods refuse one naming a file behind
+the tab in front. Headless sessions take it too.
+
 ### Live sessions
 
 People (and agents) edit one file together and see each other's cursors, selections and
@@ -1248,7 +1469,8 @@ joined file opens as a new document).
 
 Sessions are per document: every open document has its own session or none, and several run at
 once (host one document, join another, publish a third). They keep syncing while another document
-is active; there your presence is empty (no cursor, selection or view). The `collab.*` commands
+is active; there your presence is empty (no cursor, selection or view). An attached agent's own
+presence in the app (above) is never part of a live session's presence. The `collab.*` commands
 and `collab.peers` are about the **active document's** session (`doc.switch {index}` changes which
 one that is), and `sessions` in `collab.peers` lists them all. Closing a document ends its session
 only: a host stops hosting it, a guest leaves it.
@@ -1259,10 +1481,12 @@ only: a host stops hosting it, a guest leaves it.
   FigCraft server unless changed; `{url: ""}` turns online sharing off, `{}` goes back to the
   built-in one; `server` names another for this call, with `?key=…` when it needs its key) and
   returns `status: "connecting"`; once `collab.peers` says `"live"`, `code` is the code to give
-  others (`K7M-2QX-9TD`) and `share` is `{via, access, shared, editCode, viewCode, editLink,
-  viewLink}`: links and codes made for others (`published.edit` / `published.view` and `link` are
+  others (`K7M-2QX-9TD`) and `share` is `{via, access, shared, editCode, viewCode, commentCode, editLink,
+  viewLink, commentLink}`: links and codes made for others (`published.edit` / `published.view` and `link` are
   your own way in; keep them). `access: "view"` (or calling again with it while shared) makes
-  `code` the view-only one. A server older than join codes leaves `code` null: give
+  `code` the view-only one, and `access: "comment"` the one for viewing and commenting (whoever
+  joins with it adds, replies to, reacts to and resolves comments but can't change the design;
+  `commentCode` is null from a server older than comment links, and asking for it then fails). A server older than join codes leaves `code` null: give
   `share.editLink` / `share.viewLink` instead. `via: "local"`
   hosts the document for people on the same network and returns at once with a longer `code`
   (20 symbols, carrying this machine's IPv4 address, the port and the session's secret; `bind:
@@ -1297,7 +1521,11 @@ only: a host stops hosting it, a guest leaves it.
   session, a revoked link, an unreachable host, a `wss://` server whose certificate isn't trusted:
   see `FIGCRAFT_CA_FILE` in [`server.md`](server.md#behind-a-reverse-proxy-tls)). `collab.leave {}`
   leaves the active document's session (or ends a join started from it that is still on its way
-  or failed); the synced document stays open as your copy.
+  or failed), and `collab.leave {session}` the session with that id (from `sessions`), whichever
+  document is active; the synced document stays open as your copy. `collab.reconnect {}` acts on
+  the active document's lost session: a reconnect that is waiting tries now, and a session you
+  joined that couldn't go on is joined again in its tab. A dropped connection keeps reconnecting
+  until you leave (see *Reconnect* in [`collab-protocol.md`](collab-protocol.md)).
 - `collab.publish {server, name?, key?}` puts the active document on a `figcraft-server`
   ([`server.md`](server.md)) and syncs it from there (as that document's session; others go on): `server` is the address
   `figcraft-server key` prints (`ws://host:47900/?key=…`; or give `key` separately), `name` the
@@ -1306,6 +1534,8 @@ only: a host stops hosting it, a guest leaves it.
   file, name, edit, view}` with the file's first edit link and view link (they carry their
   tokens: share them like passwords). Someone joining with the view link gets `access: "view"`:
   every edit on the synced document is refused with "View only: …" (the server refuses them too).
+  With a comment link (`access: "comment"`) the comment commands work and sync, and every other edit
+  is refused with "Can comment: …".
   On a server open to the public ([`server.md`](server.md#running-a-public-server)) `server` needs no
   key (`wss://figcraft.example.com/`): `published` then also has `owner` (the owner token, shown this
   once: keep it) and `expires` (when the server deletes the file unless someone opens it, seconds
@@ -1366,10 +1596,11 @@ only: a host stops hosting it, a guest leaves it.
   and the rest is null or empty), status
   (off|connecting|live|reconnecting|failed), reason?,
   attempt?, role (host|guest), me, name, color, fileName, pages, link, url, address, network,
-  access (edit|view), readOnly (the active document can't be edited now: view only, or being
-  published), published (a file you published: {server, file, name, edit, view, owner, expires}),
+  access (edit|view|comment), readOnly (the active document can't be edited now: view only,
+  comment only, or being published), published (a file you published: {server, file, name, edit, view, owner, expires}),
   code (the join code to give others when the document was shared with `collab.share`, else
-  null), share ({via: online|local, access, shared, editCode, viewCode, editLink, viewLink}, or
+  null), share ({via: online|local, access, shared, editCode, viewCode, commentCode, editLink, viewLink,
+  commentLink}, or
   null; `shared: false`: your file on a server, not shared now),
   hosting (what the server of the file you're in says: {open, operator, terms, idleDays, maxFileMb,
   expires}, or null),
@@ -1458,7 +1689,9 @@ API 4 a widget can have editable text fields and a property menu (both listed wi
 and `menu`): `widget.setText {id, field, value}` sets a field as typing in it would (the value,
 at most 1,000 characters, goes into the state under the field's name and the plugin redraws; one
 undo step), and `widget.menu {id, item, value?}` uses a menu item (a toggle's `value` is `true` or
-`false`, by default the opposite of now; a colour's is one of its options). A widget's state is
+`false`, by default the opposite of now; a colour's is one of its options). With API 5 a widget's
+callback can open its plugin's panel: `plugin.ui` shows it (`command` is `widget`) and
+`plugin.event` uses it, the plugin redrawing the widget in the same undo step. A widget's state is
 layer data, so it is saved, undone and synced with the file.
 
 ```json
@@ -1483,7 +1716,7 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
 {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"plugin.directory.install","params":{"id":"org.figcraft.examples.swatch-grid","confirm":true}}}}
 ```
 
-### Dev Mode
+### Developer Mode
 
 - **Pages as React + Tailwind:** `inspect.code {id, language: "tailwind"}` writes a layer tree as a
   React function component styled with Tailwind CSS v4 utilities and no stylesheet. Auto layout
@@ -1501,16 +1734,16 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   same layer names, mobile layout) the code is mobile first: the mobile frame's classes, the
   desktop frame's that differ behind `lg:`, and layers only on desktop `hidden` plus `lg:flex`
   (auto layout frames) or `lg:block` (other layers).
-- **Component code:** `inspect.code {id, language: react|leptos|vue|swiftui|compose|arkui}` on a component,
+- **Component code:** `inspect.code {id, language: react|leptos|vue|swiftui|compose|arkui|flutter}` on a component,
   a component set or a variant writes the component as a reusable unit: React (TSX) with a props
   interface, Leptos with a `#[component]` function (`#[prop]` defaults, `view!` markup), Vue as a
   single-file component (`<template>`, a `<script setup>` with `defineProps` and its defaults, a
   `<style scoped>`; a slot layer is Vue's own `<slot>`, so it takes no prop), SwiftUI
   with a `View` struct, Compose with a `@Composable` function, ArkUI with a `@Component` ArkTS
-  struct (`@Prop` parameters, `@BuilderParam` for swaps and slots). Its component properties are the
+  struct (`@Prop` parameters, `@BuilderParam` for swaps and slots), Flutter with a `StatelessWidget`. Its component properties are the
   parameters, with their defaults: variant properties become string unions (React, Vue) or enums,
   booleans become flags around the layers they show, text properties strings, instance swaps views
-  (`React.ReactNode`, Leptos `ViewFn`, `AnyView`, a composable lambda, an ArkUI builder) and slots
+  (`React.ReactNode`, Leptos `ViewFn`, `AnyView`, a composable lambda, an ArkUI builder, a `Widget`) and slots
   optional content.
   Every variant of a set shares one definition; in React, Vue and Leptos the other variants'
   differences become CSS rules on `data-*` attributes. A Vue template holds no arbitrary
@@ -1521,13 +1754,13 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   state="Hover" label="Buy" />`, `<Button state=ButtonState::Hover label="Buy" />`,
   `<Button state="Hover" />`, `Button(state:
   .hover, label: "Buy")`, `Button(state = ButtonState.Hover, label = "Buy")`, `Button({ state:
-  ButtonState.Hover, label: "Buy" })`. Names are escaped and
+  ButtonState.Hover, label: "Buy" })`, `Button(state: ButtonState.hover, label: "Buy")`. Names are escaped and
   unique (keywords get a suffix, `default` → `defaultValue`, Rust's `type` → `type_`; Leptos names
-  are snake_case; names that would shadow framework types get one too, `Text` → `TextComponent`). `inspect.componentCode
+  are snake_case, Dart enum members lowerCamel; names that would shadow framework types get one too, `Text` → `TextComponent`). `inspect.componentCode
   {id?, language?}` returns the parts: `{component, name, set, properties: [{name, param, type,
   default, value? (instances)}], definition, usage? (instances)}`.
 - **Code connect:** link a component (a variant links its set) to the code component it is built
-  as, per language (`react`, `leptos`, `vue`, `swiftui`, `compose`, `arkui`): `codeConnect.set {id?, language?, importPath?,
+  as, per language (`react`, `leptos`, `vue`, `swiftui`, `compose`, `arkui`, `flutter`): `codeConnect.set {id?, language?, importPath?,
   name?, template?}` (undoable; fields left out keep their value; the defaults are the generated
   name and a call passing every property) → `{component, language, code, unknown}`. Templates are
   text, never executed: `{property}` (its name or parameter name) is the instance's value escaped
@@ -1584,11 +1817,11 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   saved with the file and synced; the same two layers are measured once (either way round), a
   layer starts at most 64. One whose other layer was deleted or moved to another page isn't listed
   or drawn (an undo brings it back); a copy keeps the side measurements and those to layers copied
-  with it. In the app, Dev Mode draws them with the hover redlines, and the Inspect tab lists them
+  with it. In the app, Developer Mode draws them with the hover redlines, and the Inspect tab lists them
   (with nothing selected, every one on the page), selects a measurement's layer on a click, removes
   one with −, and places new ones from its Add measurement menu.
 - **Annotations:** notes for developers on any layer, each with optional pinned properties that
-  Dev Mode shows with their current values (and the style or variable behind them).
+  Developer Mode shows with their current values (and the style or variable behind them).
   `annotation.add {id?, label?, properties?}` (a note, pinned properties or both; returns `{id,
   index}`), `annotation.edit {id?, index, label?, properties?}` (`properties` replaces the list),
   `annotation.remove {id?, index?}` (no index: all of the layer's), all undoable, and
@@ -1620,9 +1853,9 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   (`changed`: ready for dev and edited since). The Inspect tab sets the status of the selected
   frames and, with nothing selected, lists them with a status filter (Ready for dev, Changed,
   Completed, Any status; changed ones carry a Changed badge; click one to go to it, or its focus
-  button to open it in the focus view). In the app's Dev Mode the canvas only inspects: presses
+  button to open it in the focus view). In the app's Developer Mode the canvas only inspects: presses
   select (and pan, and comment), never move, resize, draw or edit text and vectors, and the menus
-  and shortcuts refuse commands that edit the design (Dev Mode's own annotations, statuses, dev
+  and shortcuts refuse commands that edit the design (Developer Mode's own annotations, statuses, dev
   resources, measurements, code connections and comments still work); choosing a drawing tool in
   the toolbar goes back to the design, and the layers panel only selects and expands. Commands sent over MCP or the control channel aren't affected.
 - **Compare changes:** when a layer marked Ready for dev first changes (it turns "Changed"), the
@@ -1660,7 +1893,9 @@ properties with their values, its code and, with `path`, a PNG of it. The docume
 unbinds): `fill` or `fills/<i>/color` and `fills/<i>/stops/<j>/color` on a paint style,
 `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` on an effect style,
 `layoutGrids/<i>/<size|count|gutter|offset>` on a grid style, `fontSize`, `lineHeight`,
-`letterSpacing`, `fontFamily`, `fontStyle` on a text style. Each layer using the style shows the
+`letterSpacing`, `fontWeight` (numbers; a weight picks the family's face nearest it and sets the
+`wght` axis of a variable font), `fontFamily`, `fontStyle` (strings; a bound weight and a bound style
+name replace each other) on a text style. Each layer using the style shows the
 field in its own modes and stays linked; `style.list` gives a style's `bound` map.
 
 `effect.add {ids?, type? | effect?}` adds an effect (`dropShadow`, `innerShadow`, `layerBlur`,
@@ -1852,7 +2087,7 @@ turned off 0°.
   / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab). With `pointer`, `cmd: true`
   clicks select the nested layer, `cmd` drags from empty canvas select the nested layers they touch,
   and `shift` drags toggle what they touch. A press on the background of a top-level frame with
-  layers in it (the frame not selected) starts a marquee inside it, as on the canvas; an empty frame
+  layers in it (the frame not selected) starts a marquee, as on the canvas; an empty frame
   is picked and dragged. Locked layers (selectable with `select.set`) get no handles and stay put
   when the rest of the selection is dragged. `select.all` / `select.inverse` skip hidden and locked
   layers.
@@ -1866,6 +2101,10 @@ turned off 0°.
 
 Tool failures come back as results with `isError: true` and a message; protocol problems (unknown
 tool, malformed JSON, wrong parameter types) are JSON-RPC errors. Nothing crashes the server.
+A name a tool or command doesn't take (`run_command {args}` for `params`, a step key other than
+`command`, `params` and `as`, or a parameter its `list_commands` entry doesn't list, such as
+`comment.list {filterr}`) is an error that lists the names it does take, never ignored; `ids` and
+`id` are taken by every command.
 
 ## Resources
 
@@ -1873,6 +2112,7 @@ tool, malformed JSON, wrong parameter types) are JSON-RPC errors. Nothing crashe
 |---|---|
 | `figcraft://document` | The active document (like `inspect_document` at depth 8). |
 | `figcraft://commands` | The command catalog. |
+| `figcraft://comments` | Every open comment thread on every page, as JSON. |
 | `figcraft://node/{id}` (template) | One layer with children to depth 2. |
 | `figcraft://command/{id}` (template) | One command's docs, e.g. `figcraft://command/layout.add`. |
 
@@ -1884,6 +2124,8 @@ tool, malformed JSON, wrong parameter types) are JSON-RPC errors. Nothing crashe
 | `design_system` | `name`, `primary` |
 | `landing_page` | `product` (required), `width` (default 1440), `accent` |
 | `prototype_flow` | `screens` (comma-separated), `transition` |
+| `fix_comments` | `page` (default "all"), `auto_resolve` (default "yes"), `author` (default "AI") |
+| `watch_comments` | `minutes` (default 5) |
 
 Each returns a step-by-step plan naming the exact tools and commands to use and how to verify.
 
@@ -1931,6 +2173,26 @@ Align and distribute as one undo step:
   {"command":"distribute.horizontal","params":{"ids":[3,4,5]}}]}}}
 ```
 
+By default (`"onError": "abort"`) the first failure rolls back the whole batch, and success
+returns the raw results in order. With `"onError": "continue"` next to `commands`, a failed step's
+document edits are rolled back on their own, the later steps still run, and the result is instead
+one object per step:
+
+```json
+[
+  {"step": 0, "command": "text.set", "ok": true, "result": {"ok": true}},
+  {"step": 1, "command": "text.set", "ok": false, "error": "invalid parameters for `text.set`: step 1: node 2 is not text"},
+  {"step": 2, "command": "page.rename", "ok": true, "result": {"ok": true}}
+]
+```
+
+The tool call is not an error (`isError` is false) even when some steps fail. Successful document
+edits form one undo step; if every step fails, none is added. Unknown commands, bad params and bad
+references fail only their step, but a malformed `commands` list, an invalid `onError` or two steps
+with the same `as` still reject the whole batch before any step runs. A step that has to wait for
+background work makes the whole call wait, as without `onError`. A nested batch has its own
+`onError`.
+
 ### Step references
 
 A step in a `batch` can use what an earlier step returned. Give the step a name with `"as"` (next to
@@ -1960,6 +2222,20 @@ the two can be mixed. Names are any non-empty string and must be unique within t
   {"command":"node.set","params":{"ids":[{"$ref":"copy","field":"ids/0"}],"props":{"name":"Card copy"}}}]}}}
 ```
 
+To edit inside a copy, pass `"map": true`: `edit.duplicate` then also returns `map`, each original
+layer's id (as a string, since JSON keys are strings), descendants included, paired with its copy's
+id, e.g. `{"ids": [8], "map": {"5": 8, "6": 9, "7": 10}}`. Nested frames, groups and instances (and
+their sublayers) are in it; a main component's copy is an instance of it, so its sublayers pair with
+the instance's. So `"field": "map/6"` is the copy of layer 6:
+
+```json
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"batch","arguments":{"label":"Copy","commands":[
+  {"command":"edit.duplicate","as":"copy","params":{"ids":[5],"map":true}},
+  {"command":"node.set","params":{"ids":[{"$ref":"copy","field":"map/6"}],"props":{"text":"Copy title"}}}]}}}
+```
+
+Without `map` the result is `{"ids": [...]}` as before.
+
 A path may start with `/`, as in JSON Pointer (`/ids/0`). A key that itself holds `/` is matched as
 written before it is read as a path. A path ends at whatever value it reaches, so `"field": "ids"` is
 the whole list.
@@ -1968,7 +2244,10 @@ These fail the whole batch, which is rolled back, with an error naming the step:
 same `as` (before any step runs); a `$ref` to a name no step has (the error lists the names there
 are) or to the same or a later step; a `$step` to the same or a later step, or that is negative or
 not an integer; a `field` the result doesn't have (the error names the full path and, for a list,
-how many items it has); any key next to `$ref` or `$step` other than `field`. Only an object holding
+how many items it has); any key next to `$ref` or `$step` other than `field`. With `"onError":
+"continue"` all but the duplicate names fail only their step, and so does a reference to a step that
+failed (the error names both). Steps keep their positions, and references read the raw results. Only
+an object holding
 a `$ref` or `$step` key is a reference: text such as `"$ref card"` is left as written. Both keys are
 reserved in step params: an object holding either anywhere (in plugin data or a variable value too)
 is read as a reference. A step that is itself a `command.batch` is passed on as written, so the

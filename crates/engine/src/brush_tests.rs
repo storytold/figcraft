@@ -8,6 +8,7 @@ use crate::params::id_of;
 use crate::tools::{PointerEvent, PointerKind, pressure_profile};
 use figcraft_doc::{NodeId, NodeKind};
 use figcraft_geom::Point;
+use figcraft_geom::kurbo::PathEl;
 
 fn id(v: Value) -> NodeId {
     id_of(&v["id"]).unwrap()
@@ -106,4 +107,111 @@ fn the_pencil_records_pressure_and_its_brush() {
     assert_eq!(doc.nodes().count(), before + 1);
     let last = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Vector { .. })).max_by_key(|n| n.id).unwrap();
     assert!(last.stroke.profile().is_none() && last.stroke.brush.is_none());
+}
+
+/// The Pencil draws black on a light page and white on a dark page or inside a dark frame, the
+/// rule new text follows (#1741; Figma: "in black, unless you're sketching on a dark canvas or
+/// frame"), and the stroke in progress previews in that colour.
+#[test]
+fn the_pencil_draws_white_on_a_dark_background() {
+    use figcraft_color::Color;
+    let mut s = Session::new();
+    s.execute("tool.set", &json!({"tool": "pencil"})).unwrap();
+    // A stroke from (x, y); its colour, and the preview colour the overlay carried while drawing.
+    let stroke = |s: &mut Session, x: f64, y: f64| {
+        s.pointer(&PointerEvent::at(PointerKind::Down, x, y, 1.0)).unwrap();
+        s.pointer(&PointerEvent::at(PointerKind::Move, x + 40.0, y + 10.0, 1.0)).unwrap();
+        let preview = s.tool.overlay.pen_color;
+        s.pointer(&PointerEvent::at(PointerKind::Move, x + 80.0, y, 1.0)).unwrap();
+        s.pointer(&PointerEvent::at(PointerKind::Up, x + 80.0, y, 1.0)).unwrap();
+        assert!(s.tool.overlay.pen_color.is_none(), "no preview colour after the stroke");
+        let doc = s.doc().unwrap();
+        let last = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Vector { .. })).max_by_key(|n| n.id).unwrap();
+        (last.strokes.first().and_then(|p| p.solid_color()).unwrap(), preview)
+    };
+    assert_eq!(stroke(&mut s, 0.0, 0.0), (Color::BLACK, Some(Color::BLACK)), "a light page");
+    s.execute("page.setBackground", &json!({"color": "#1E1E1E"})).unwrap();
+    assert_eq!(stroke(&mut s, 0.0, 100.0), (Color::WHITE, Some(Color::WHITE)), "a dark page");
+    // A dark frame on a light page, and a light frame on a dark page.
+    s.execute("page.setBackground", &json!({"color": "#F5F5F5"})).unwrap();
+    s.execute("node.create", &json!({"type": "frame", "x": 300, "y": 300, "width": 200, "height": 200, "props": {"fills": ["#202020"]}})).unwrap();
+    assert_eq!(stroke(&mut s, 320.0, 320.0), (Color::WHITE, Some(Color::WHITE)), "inside a dark frame");
+    s.execute("page.setBackground", &json!({"color": "#1E1E1E"})).unwrap();
+    s.execute("node.create", &json!({"type": "frame", "x": 600, "y": 300, "width": 200, "height": 200, "props": {"fills": ["#FFFFFF"]}})).unwrap();
+    assert_eq!(stroke(&mut s, 620.0, 320.0), (Color::BLACK, Some(Color::BLACK)), "inside a light frame on a dark page");
+    // A frame without a fill, or with a see-through one, is looked through to what is behind it.
+    s.execute("node.create", &json!({"type": "frame", "x": 900, "y": 300, "width": 200, "height": 200, "props": {"fills": []}})).unwrap();
+    assert_eq!(stroke(&mut s, 920.0, 320.0), (Color::WHITE, Some(Color::WHITE)), "a frame without a fill on a dark page");
+    s.execute("node.create", &json!({"type": "frame", "x": 1200, "y": 300, "width": 200, "height": 200, "props": {"fills": ["#FFFFFF40"]}})).unwrap();
+    assert_eq!(stroke(&mut s, 1220.0, 320.0), (Color::WHITE, Some(Color::WHITE)), "a mostly transparent light frame on a dark page");
+    // The threshold is Color::is_dark: white reads better than black from #757575 down.
+    for (bg, want) in [("#767676", Color::BLACK), ("#757575", Color::WHITE)] {
+        s.execute("page.setBackground", &json!({"color": bg})).unwrap();
+        assert_eq!(stroke(&mut s, 0.0, 600.0).0, want, "on {bg}");
+    }
+}
+
+/// A Pencil stroke stays where it was drawn: the fitted curve shot far off the stroke, a spike
+/// (#1741, its second point), where the stroke went out and back to the very point it left and
+/// where samples ran on nearly straight. Pointer pixels become fractional page points, so going
+/// back to a pixel lands on exactly the same point. Both sample runs are ones kurbo's fit took
+/// hundreds of units off.
+///
+/// Each stroke is drawn in a fresh session, with the Pencil and with the Marker and Highlighter
+/// of a board, whose ink comes from the same fit. Every point along the stroke drawn must lie
+/// within 1.5 (twice the fit's accuracy) of the polyline through the samples.
+#[test]
+fn the_pencil_keeps_its_stroke_where_it_was_drawn() {
+    let (p, q) = ((86.043_565_719_086_97, -173.744_402_349_100_94), (87.851_850_739_335_35, -179.202_846_445_954_52));
+    let back = [(80.0, -160.0), p, q, p, (95.0, -185.0)];
+    let straight = [
+        (204.0, -198.0),
+        (209.598_690_794_015_5, -204.909_328_119_739_88),
+        (211.277_914_263_870_97, -207.190_974_020_753_4),
+        (214.246_506_828_720_84, -211.228_827_590_623_24),
+        (218.0, -214.0),
+    ];
+    for tool in ["pencil", "marker", "highlighter"] {
+        for (what, samples) in [("out and back", &back[..]), ("nearly straight", &straight[..])] {
+            let what = format!("{tool}, {what}");
+            let mut s = if tool == "pencil" { Session::new() } else { crate::board_tests::board() };
+            s.execute("tool.set", &json!({"tool": tool})).unwrap();
+            let before: Vec<NodeId> = s.doc().unwrap().nodes().map(|n| n.id).collect();
+            let (first, last) = (samples[0], samples[samples.len() - 1]);
+            s.pointer(&PointerEvent::at(PointerKind::Down, first.0, first.1, 1.0)).unwrap();
+            for (x, y) in &samples[1..] {
+                s.pointer(&PointerEvent::at(PointerKind::Move, *x, *y, 1.0)).unwrap();
+            }
+            s.pointer(&PointerEvent::at(PointerKind::Up, last.0, last.1, 1.0)).unwrap();
+            // The layer the stroke made, and only it.
+            let doc = s.doc().unwrap();
+            let made: Vec<&figcraft_doc::Node> =
+                doc.nodes().filter(|n| !before.contains(&n.id) && matches!(n.kind, NodeKind::Vector { .. })).collect();
+            let [n] = made[..] else { panic!("{what}: {} vectors made", made.len()) };
+            let NodeKind::Vector { network } = &n.kind else { panic!("{what}: not a vector") };
+            let drawn = doc.world_transform(n.id) * network.stroke_path();
+            let polyline = figcraft_geom::BezPath::from_vec(
+                samples
+                    .iter()
+                    .enumerate()
+                    .map(|(k, (x, y))| if k == 0 { PathEl::MoveTo(Point::new(*x, *y)) } else { PathEl::LineTo(Point::new(*x, *y)) })
+                    .collect(),
+            );
+            let d = crate::vector_behaviour_tests::strays(&drawn, &polyline);
+            assert!(d <= 1.5, "{what}: the stroke strays {d} from the samples: {}", drawn.to_svg());
+            let samples_box = figcraft_geom::points_bounds(samples.iter().map(|(x, y)| Point::new(*x, *y))).unwrap();
+            let node_box = doc.world_bounds(n.id).unwrap();
+            if tool == "pencil" {
+                assert!(samples_box.inflate(1.5, 1.5).contains_rect(node_box), "{what}: the layer {node_box:?}, the samples {samples_box:?}");
+            }
+            // The turn is a point of the stroke, where it was drawn.
+            if samples == back {
+                let xf = doc.world_transform(n.id);
+                assert!(
+                    network.vertices.iter().any(|v| (xf * Point::new(v.x, v.y) - Point::new(q.0, q.1)).hypot() < 1e-6),
+                    "{what}: no point at the turn"
+                );
+            }
+        }
+    }
 }

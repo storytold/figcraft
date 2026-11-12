@@ -15,8 +15,17 @@ use super::*;
 fn large(screens: usize) -> Document {
     let mut d = Document::new("Large");
     let page = d.first_page().unwrap();
-    let button =
-        d.create(page, NodeKind::Component { description: "A button".into(), props: Default::default() }, "Button", 0.0, -80.0, 96.0, 32.0).unwrap();
+    let button = d
+        .create(
+            page,
+            NodeKind::Component { description: "A button".into(), props: Default::default(), prop_order: Vec::new() },
+            "Button",
+            0.0,
+            -80.0,
+            96.0,
+            32.0,
+        )
+        .unwrap();
     let label = d.create(button, NodeKind::Text(TextData::new("OK")), "Label", 8.0, 8.0, 40.0, 16.0).unwrap();
     d.get_mut(label).unwrap().plugin_data.insert("agent".into(), "note".into());
     for s in 0..screens {

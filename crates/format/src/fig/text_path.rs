@@ -298,8 +298,9 @@ mod tests {
         };
         assert_eq!(from_network(&many_lines, 1.0, 1.0, 0.5, true), Err("cannot be measured by text renderer"));
 
+        // Past the cap the builders hold their sizes to (`figcraft_geom::MAX_COORD`, inclusive).
         let huge = Network {
-            vertices: vec![vertex(0.0, 0.0), vertex(1e9, 0.0)],
+            vertices: vec![vertex(0.0, 0.0), vertex(2e9, 0.0)],
             segments: vec![segment(START_SEGMENT_STYLE, 0, 1, (0.0, 0.0), (0.0, 0.0))],
             ..Network::default()
         };

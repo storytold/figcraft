@@ -50,6 +50,21 @@ fn query_filters_to_matches() {
     assert!(crate::menus::command_sections("zzz-no-such-action").iter().all(|(_, r)| r.is_empty()));
 }
 
+/// The handoff mode is "Developer Mode", and the name it had before is still a search term: a
+/// person who knows "Dev Mode" finds the command, and its row reads the new name.
+#[test]
+fn the_old_name_still_finds_the_mode() {
+    let rows: Vec<(String, String)> =
+        crate::menus::command_sections("dev mode").iter().flat_map(|(_, rows)| rows.iter().map(|r| (r.key.clone(), r.label.clone()))).collect();
+    assert!(rows.iter().any(|(key, _)| key == "command:view.devMode"), "'dev mode' finds the mode: {rows:?}");
+    assert!(
+        rows.iter().filter(|(key, _)| key == "command:view.devMode").all(|(_, label)| label == "Developer Mode"),
+        "and reads the new name: {rows:?}"
+    );
+    // Without the alias the words don't match the label or the id.
+    assert!(!rows.iter().any(|(key, label)| key != "command:view.devMode" && label.contains("Developer Mode")), "only that row: {rows:?}");
+}
+
 #[test]
 fn gone_entries_drop_out_of_recents() {
     let u = Ui::new(Session::new());
@@ -113,7 +128,10 @@ fn rows(groups: &[(String, Vec<crate::menus::ActionRow>)]) -> Vec<&crate::menus:
 #[test]
 fn search_covers_every_command() {
     let menu = figcraft_engine::catalog::MENU;
-    let spec = figcraft_engine::all_commands().iter().find(|c| !menu.iter().any(|m| m.id == c.id)).expect("a command no menu lists");
+    let spec = figcraft_engine::all_commands()
+        .iter()
+        .find(|c| !menu.iter().any(|m| m.id == c.id) && !figcraft_engine::cmd::needs_params(c.id))
+        .expect("a command no menu lists that runs without parameters");
     let groups = crate::menus::command_sections(spec.id);
     let key = format!("command:{}", spec.id);
     let group = groups.iter().find(|(_, rows)| rows.iter().any(|r| r.key == key)).map(|(g, _)| g.as_str());
@@ -183,4 +201,33 @@ fn context_menu_survives_a_same_frame_tap() {
     u.button(far, true);
     u.button(far, false);
     assert!(u.app.ui.context_menu.is_none(), "a later outside press closes the menu");
+}
+
+/// Every row a search for `q` offers: (key, label).
+fn offered(q: &str) -> Vec<(String, String)> {
+    crate::menus::command_sections(q).into_iter().flat_map(|(_, rows)| rows.into_iter().map(|r| (r.key, r.label))).collect()
+}
+
+#[test]
+fn a_search_offers_only_what_runs_and_one_row_per_label() {
+    // Place image runs what the menu item does (the file dialog); the command that needs the
+    // image's data or path isn't offered on its own (#1574).
+    let found = offered("place image");
+    assert!(found.iter().any(|(k, _)| k == "command:file.placeImage"), "{found:?}");
+    assert!(!found.iter().any(|(k, _)| k == "command:image.place"), "{found:?}");
+    // Generally: no row needs parameters a palette run can't give unless a menu item runs it, and
+    // a row no menu item gives doesn't read like another row.
+    for q in ["place", "image", "comment", "tool", "export", "page", "a"] {
+        let found = offered(q);
+        let same = |l: &str| l.trim().trim_end_matches(['…', '.']).trim_end().to_lowercase();
+        for (key, label) in &found {
+            let id = key.trim_start_matches("command:");
+            if figcraft_engine::catalog::MENU.iter().any(|m| m.id == id) {
+                continue;
+            }
+            assert!(!figcraft_engine::cmd::needs_params(id), "{q:?} offers {id}, which needs parameters");
+            let twins = found.iter().filter(|(_, l)| same(l) == same(label)).count();
+            assert_eq!(twins, 1, "{q:?} offers {label:?} twice: {found:?}");
+        }
+    }
 }

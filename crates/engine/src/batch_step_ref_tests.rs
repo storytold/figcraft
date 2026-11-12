@@ -280,3 +280,375 @@ fn a_failing_command_names_its_step_and_rolls_back() {
     assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, name);
     assert_eq!(s.ds().unwrap().history.undo.len(), undo);
 }
+
+#[test]
+fn a_continue_batch_can_undo_then_redo_between_steps() {
+    for mode in ["abort", "continue"] {
+        let mut s = Session::new();
+        let rect = id(&s.execute("node.create", &json!({"type": "rectangle"})).unwrap());
+        let before = s.doc().unwrap().clone();
+        let results =
+            s.execute("command.batch", &json!({"onError": mode, "commands": [{"command": "edit.undo"}, {"command": "edit.redo"}]})).unwrap();
+        let undo = if mode == "continue" { &results[0]["result"] } else { &results[0] };
+        let redo = if mode == "continue" { &results[1]["result"] } else { &results[1] };
+        assert_eq!(undo["undone"], true, "{mode}: {results}");
+        assert_eq!(redo["redone"], true, "{mode}: {results}");
+        assert!(s.doc().unwrap().contains(rect));
+        assert_eq!(s.doc().unwrap(), &before);
+    }
+}
+
+#[test]
+fn a_continue_batch_can_open_a_document_after_closing_the_last_tab() {
+    let mut s = Session::new();
+    let uid = s.ds().unwrap().uid;
+    let results = s
+        .execute(
+            "command.batch",
+            &json!({"onError": "continue", "commands": [
+                {"command": "file.close", "params": {"force": true}},
+                {"command": "file.new"},
+                {"command": "page.rename", "params": {"name": "New page"}}
+            ]}),
+        )
+        .unwrap();
+    assert!(results.as_array().unwrap().iter().all(|r| r["ok"] == true), "{results}");
+    assert_eq!(s.docs.len(), 1);
+    assert_ne!(s.ds().unwrap().uid, uid);
+    assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, "New page");
+    assert!(s.closed_in_group.is_empty());
+}
+
+#[test]
+fn a_continue_batch_repeats_the_last_successful_command_after_a_failed_step() {
+    let mut s = Session::new();
+    s.execute("node.create", &json!({"type": "rectangle"})).unwrap();
+    let last = s.last_command.clone();
+    let results = s
+        .execute(
+            "command.batch",
+            &json!({"onError": "continue", "commands": [
+                {"command": "command.batch", "params": {"commands": [
+                    {"command": "node.create", "params": {"type": "text", "text": "Rolled back"}},
+                    {"command": "no.such.command"}
+                ]}},
+                {"command": "edit.repeat"}
+            ]}),
+        )
+        .unwrap();
+    assert_eq!(results[0]["ok"], false);
+    assert_eq!(results[1]["ok"], true);
+    let repeated = s.doc().unwrap().node(id(&results[1]["result"])).unwrap();
+    assert!(matches!(repeated.kind, figcraft_doc::NodeKind::Rectangle), "{repeated:?}");
+    assert_eq!(s.last_command, last);
+    assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().children.len(), 2);
+}
+
+#[test]
+fn a_continue_batch_keeps_successful_steps_as_one_undo_entry() {
+    let mut s = Session::new();
+    let frame = id(&s.execute("node.create", &json!({"type": "frame", "width": 50, "height": 50})).unwrap());
+    let text = id(&s.execute("node.create", &json!({"type": "text", "text": "orig"})).unwrap());
+    assert_eq!((frame.0, text.0), (2, 3));
+    let undo = s.undo_depth().0;
+    let name = s.doc().unwrap().node(s.page().unwrap()).unwrap().name.clone();
+    let results = s
+        .execute(
+            "command.batch",
+            &json!({"label": "Continue", "onError": "continue", "commands": [
+                {"command": "text.set", "params": {"ids": [3], "text": "novo"}},
+                {"command": "text.set", "params": {"ids": [2], "text": "erro"}},
+                {"command": "page.rename", "params": {"name": "Depois do erro"}}
+            ]}),
+        )
+        .unwrap();
+    assert_eq!(results.as_array().unwrap().len(), 3);
+    assert_eq!(results[0], json!({"step": 0, "command": "text.set", "ok": true, "result": {"ok": true}}));
+    assert_eq!(results[2], json!({"step": 2, "command": "page.rename", "ok": true, "result": {"ok": true}}));
+    assert_eq!(results[1]["step"], 1);
+    assert_eq!(results[1]["command"], "text.set");
+    assert_eq!(results[1]["ok"], false);
+    let error = results[1]["error"].as_str().unwrap();
+    assert!(error.contains("step 1:") && error.contains("is not text"), "{error}");
+    assert!(results[1].get("result").is_none());
+    undo_and_redo_the_continued_batch(&mut s, frame, text, &name, undo);
+}
+
+/// The successful steps of the batch above undo and redo as one step.
+fn undo_and_redo_the_continued_batch(s: &mut Session, frame: figcraft_doc::NodeId, text: figcraft_doc::NodeId, name: &str, undo: usize) {
+    assert!(matches!(&s.doc().unwrap().node(text).unwrap().kind, figcraft_doc::NodeKind::Text(t) if t.characters == "novo"));
+    assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, "Depois do erro");
+    assert_eq!(s.undo_depth(), (undo + 1, 0));
+    assert_eq!(s.undo_labels(1), ["Continue"]);
+    assert!(s.undo().unwrap());
+    assert!(matches!(&s.doc().unwrap().node(text).unwrap().kind, figcraft_doc::NodeKind::Text(t) if t.characters == "orig"));
+    assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, name);
+    assert!(s.doc().unwrap().contains(frame), "undo leaves earlier edits alone");
+    assert_eq!(s.undo_depth(), (undo, 1));
+    assert!(s.redo().unwrap());
+    assert!(matches!(&s.doc().unwrap().node(text).unwrap().kind, figcraft_doc::NodeKind::Text(t) if t.characters == "novo"));
+    assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, "Depois do erro");
+    assert_eq!(s.undo_depth(), (undo + 1, 0));
+}
+
+#[test]
+fn a_continue_batch_rolls_back_partial_steps_and_keeps_reference_positions() {
+    let mut s = Session::new();
+    let text = id(&s.execute("node.create", &json!({"type": "text", "text": "orig"})).unwrap());
+    let frame = id(&s.execute("node.create", &json!({"type": "frame"})).unwrap());
+    let results = s
+        .execute(
+            "command.batch",
+            &json!({"onError": "continue", "commands": [
+                {"command": "text.set", "as": "bad", "params": {"ids": [text.0, frame.0], "text": "partial"}},
+                {"command": "node.create", "as": "card", "params": {"type": "frame"}},
+                {"command": "node.create", "params": {"type": "text", "parent": {"$step": 0}}},
+                {"command": "node.create", "params": {"type": "text", "parent": {"$ref": "bad"}}},
+                {"command": "node.create", "params": {"type": "text", "parent": {"$step": 1}}},
+                {"command": "node.create", "params": {"type": "text", "parent": {"$ref": "card"}}},
+                {"command": "node.set", "params": {"ids": [{"$step": 4}], "props": {"name": "Child"}}}
+            ]}),
+        )
+        .unwrap();
+    assert_eq!(results.as_array().unwrap().len(), 7);
+    for (i, result) in results.as_array().unwrap().iter().enumerate() {
+        assert_eq!(result["step"], i);
+        assert_eq!(result["ok"], ![0, 2, 3].contains(&i));
+    }
+    assert!(results[2]["error"].as_str().unwrap().contains("step 2: references step 0, which failed"));
+    assert!(results[3]["error"].as_str().unwrap().contains("step 3: references step 0 (\"bad\"), which failed"));
+    assert!(
+        matches!(&s.doc().unwrap().node(text).unwrap().kind, figcraft_doc::NodeKind::Text(t) if t.characters == "orig"),
+        "the failed step's partial edit was rolled back"
+    );
+    let card = id(&results[1]["result"]);
+    for i in [4, 5] {
+        assert_eq!(s.doc().unwrap().node(id(&results[i]["result"])).unwrap().parent, Some(card), "references use raw results, not outcomes");
+    }
+    assert_eq!(s.doc().unwrap().node(id(&results[4]["result"])).unwrap().name, "Child");
+}
+
+#[test]
+fn invalid_batch_policies_run_nothing() {
+    for mode in [json!("skip"), json!(""), json!(true), json!(3), json!(["continue"]), json!({})] {
+        let mut s = Session::new();
+        let before = s.doc().unwrap().clone();
+        let journal = s.journal.clone();
+        let error = s
+            .execute("command.batch", &json!({"onError": mode, "commands": [{"command": "page.rename", "params": {"name": "Changed"}}]}))
+            .unwrap_err();
+        assert!(matches!(error, EngineError::BadParams { .. }));
+        assert!(error.to_string().contains("`onError` must be \"abort\" or \"continue\""), "{error}");
+        assert_eq!(s.doc().unwrap(), &before);
+        assert_eq!(s.journal, journal);
+        assert_eq!(s.undo_depth(), (0, 0));
+    }
+}
+
+#[test]
+fn invalid_batch_structure_runs_nothing_in_either_mode() {
+    let rename = json!({"command": "page.rename", "params": {"name": "Changed"}});
+    for mode in ["abort", "continue"] {
+        for commands in [
+            json!(null),
+            json!({}),
+            json!([rename, null]),
+            json!([rename, {}]),
+            json!([rename, {"command": 3}]),
+            json!([rename, {"command": "page.rename", "as": ""}]),
+            json!([rename, {"command": "page.rename", "as": 3}]),
+            json!([{"command": "page.rename", "as": "same", "params": {"name": "Changed"}}, {"command": "select.none", "as": "same"}]),
+        ] {
+            let mut s = Session::new();
+            let before = s.doc().unwrap().clone();
+            let journal = s.journal.clone();
+            let result = s.execute("command.batch", &json!({"onError": mode, "commands": commands}));
+            assert!(matches!(result, Err(EngineError::BadParams { .. })), "{mode}: {result:?}");
+            assert_eq!(s.doc().unwrap(), &before);
+            assert_eq!(s.journal, journal);
+            assert_eq!(s.undo_depth(), (0, 0));
+        }
+    }
+}
+
+#[test]
+fn an_explicit_abort_batch_keeps_the_default_results_and_errors() {
+    let commands = json!([
+        {"command": "node.create", "params": {"type": "frame"}},
+        {"command": "node.create", "params": {"type": "text", "text": "orig"}}
+    ]);
+    let mut default = Session::new();
+    let mut abort = Session::new();
+    let raw = default.execute("command.batch", &json!({"commands": commands})).unwrap();
+    assert_eq!(abort.execute("command.batch", &json!({"onError": "abort", "commands": commands})).unwrap(), raw);
+    assert!(raw[0].get("id").is_some() && raw[0].get("ok").is_none(), "still raw results");
+    let commands = json!([
+        {"command": "text.set", "params": {"ids": [3], "text": "novo"}},
+        {"command": "text.set", "params": {"ids": [2], "text": "erro"}},
+        {"command": "page.rename", "params": {"name": "Depois do erro"}}
+    ]);
+    let before = abort.doc().unwrap().clone();
+    let undo = abort.undo_depth();
+    let error = default.execute("command.batch", &json!({"commands": commands})).unwrap_err();
+    let explicit = abort.execute("command.batch", &json!({"onError": "abort", "commands": commands})).unwrap_err();
+    assert_eq!(explicit.to_string(), error.to_string());
+    assert!(matches!(explicit, EngineError::BadParams { .. }));
+    assert_eq!(abort.doc().unwrap(), &before);
+    assert_eq!(abort.undo_depth(), undo);
+}
+
+#[test]
+fn nested_batch_error_policies_are_local() {
+    for outer in ["abort", "continue"] {
+        let mut s = Session::new();
+        let results = s
+            .execute(
+                "command.batch",
+                &json!({"onError": outer, "commands": [
+                    {"command": "command.batch", "as": "inner", "params": {"onError": "continue", "commands": [
+                        {"command": "node.create", "as": "card", "params": {"type": "frame"}},
+                        {"command": "no.such.command"},
+                        {"command": "node.create", "params": {"type": "text", "parent": {"$ref": "card"}}}
+                    ]}},
+                    {"command": "node.set", "params": {"ids": [{"$ref": "inner", "field": "2/result/id"}], "props": {"name": "Inner child"}}}
+                ]}),
+            )
+            .unwrap();
+        let inner = if outer == "continue" { &results[0]["result"] } else { &results[0] };
+        assert_eq!(inner[1]["ok"], false);
+        let child = s.doc().unwrap().node(id(&inner[2]["result"])).unwrap();
+        assert_eq!(child.name, "Inner child");
+        assert_eq!(child.parent, Some(id(&inner[0]["result"])));
+        assert_eq!(s.undo_depth(), (1, 0));
+        assert!(s.undo().unwrap());
+        assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().children.len(), 0);
+        assert!(s.redo().unwrap());
+        assert!(s.doc().unwrap().contains(id(&inner[2]["result"])));
+    }
+}
+
+#[test]
+fn an_outer_continue_batch_rolls_back_a_failed_inner_abort_batch() {
+    for explicit in [false, true] {
+        let mut s = Session::new();
+        let mut inner = json!({"commands": [
+            {"command": "file.close", "params": {"force": true}},
+            {"command": "file.new", "params": {"name": "Temporary"}},
+            {"command": "node.create", "params": {"type": "frame"}},
+            {"command": "no.such.command"}
+        ]});
+        if explicit {
+            inner["onError"] = json!("abort");
+        }
+        let uid = s.ds().unwrap().uid;
+        let results = s
+            .execute(
+                "command.batch",
+                &json!({"onError": "continue", "commands": [
+                    {"command": "page.rename", "params": {"name": "Before"}},
+                    {"command": "command.batch", "params": inner},
+                    {"command": "page.rename", "params": {"name": "After"}}
+                ]}),
+            )
+            .unwrap();
+        assert_eq!(results[1]["ok"], false);
+        assert!(results[1]["error"].as_str().unwrap().contains("unknown command"));
+        assert_eq!(results[2]["ok"], true);
+        assert_eq!(s.docs.len(), 1);
+        assert_eq!(s.ds().unwrap().uid, uid);
+        assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, "After");
+        assert!(s.doc().unwrap().node(s.page().unwrap()).unwrap().children.is_empty());
+        assert!(s.closed_in_group.is_empty());
+        assert_eq!(s.undo_depth(), (1, 0));
+    }
+}
+
+#[test]
+fn an_outer_abort_batch_rolls_back_successes_of_an_inner_continue_batch() {
+    let mut s = Session::new();
+    let before = s.doc().unwrap().clone();
+    let result = s.execute(
+        "command.batch",
+        &json!({"commands": [
+            {"command": "command.batch", "params": {"onError": "continue", "commands": [
+                {"command": "node.create", "params": {"type": "frame"}},
+                {"command": "no.such.command"}
+            ]}},
+            {"command": "no.such.command"}
+        ]}),
+    );
+    assert!(matches!(result, Err(EngineError::UnknownCommand(_))));
+    assert_eq!(s.doc().unwrap(), &before);
+    assert_eq!(s.undo_depth(), (0, 0));
+}
+
+#[test]
+fn an_all_failed_continue_batch_adds_no_undo_and_keeps_redo() {
+    let mut s = Session::new();
+    let frame = id(&s.execute("node.create", &json!({"type": "frame"})).unwrap());
+    s.execute("page.rename", &json!({"name": "Redo name"})).unwrap();
+    assert!(s.undo().unwrap());
+    let depth = s.undo_depth();
+    let before = s.doc().unwrap().clone();
+    let results = s
+        .execute(
+            "command.batch",
+            &json!({"onError": "continue", "commands": [
+                {"command": "node.set", "params": {"ids": [frame.0, 999999], "props": {"name": "Partial"}}},
+                {"command": "no.such.command"},
+                {"command": "node.create", "params": {"type": "text", "parent": {"$step": 0}}}
+            ]}),
+        )
+        .unwrap();
+    assert!(results.as_array().unwrap().iter().all(|r| r["ok"] == false));
+    assert_eq!(s.doc().unwrap(), &before);
+    assert_eq!(s.undo_depth(), depth);
+    assert!(s.redo().unwrap());
+    assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, "Redo name");
+}
+
+#[test]
+fn an_empty_continue_batch_returns_an_empty_array_without_undo() {
+    let mut s = Session::new();
+    assert_eq!(s.execute("command.batch", &json!({"onError": "continue", "commands": []})).unwrap(), json!([]));
+    assert_eq!(s.undo_depth(), (0, 0));
+}
+
+#[test]
+fn a_null_batch_result_is_not_a_failed_slot() {
+    let mut scope = crate::BatchScope::default();
+    scope.push(serde_json::Value::Null);
+    scope.push_failed();
+    let null = scope.resolve(&json!({"$step": 0})).unwrap_err().to_string();
+    assert!(null.contains("step 0's result has no `id`") && !null.contains("which failed"), "{null}");
+    let failed = scope.resolve(&json!({"$step": 1})).unwrap_err().to_string();
+    assert!(failed.contains("step 2: references step 1, which failed"), "{failed}");
+    assert_eq!(scope.next_step(), 2);
+}
+
+#[test]
+fn a_continue_batch_reports_runtime_errors_and_runs_later_steps() {
+    let mut s = Session::new();
+    let results = s
+        .execute(
+            "command.batch",
+            &json!({"onError": "continue", "commands": [
+                {"command": "no.such.command"},
+                {"command": "node.create", "params": {"type": "no-such-type"}},
+                {"command": "node.create", "params": {"type": "text", "parent": {"$ref": "missing"}}},
+                {"command": "node.create", "params": {"type": "text", "parent": {"$step": 99}}},
+                {"command": "node.create", "params": {"type": "frame"}},
+                {"command": "node.set", "params": {"ids": [{"$step": 4, "field": "missing"}], "props": {"name": "No"}}},
+                {"command": "page.rename", "params": {"name": "Done"}}
+            ]}),
+        )
+        .unwrap();
+    assert_eq!(results.as_array().unwrap().len(), 7);
+    for (i, needle) in [(0, "unknown command"), (1, "unknown type"), (2, "names no step"), (3, "earlier step"), (5, "has no `missing`")] {
+        assert_eq!(results[i]["ok"], false);
+        assert!(results[i]["error"].as_str().unwrap().contains(needle), "{}", results[i]);
+    }
+    assert_eq!(results[4]["ok"], true);
+    assert_eq!(results[6]["ok"], true);
+    assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, "Done");
+}

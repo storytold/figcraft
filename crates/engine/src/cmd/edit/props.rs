@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BTreeMap, Effect, EngineError, Map, Node, NodeId, NodeKind, Result, Session, Value, bad, blend, boolean, color, fraction_of, get, json, num, ok,
+    opt_index, paint_of, parse, req_id, req_index, req_string, req_targets, roots, string, targets, z_sorted,
+};
 
 pub(super) fn batch_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "object.batchRename";
@@ -104,11 +107,18 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if props.is_empty() {
         return Err(bad("node.set", "no properties given"));
     }
+    for (k, v) in &props {
+        crate::cmd::props::variable_prop("node.set", k, v)?;
+    }
     // A new rotation for the selection turns it about its moved rotation origin: each layer's
     // point under the origin stays put.
     let ds = s.ds()?;
-    let pivot =
-        ds.moved_origin().filter(|_| props.contains_key("rotation") && !props.contains_key("x") && !props.contains_key("y") && ds.selection == ids);
+    let pivot = ds.moved_origin().filter(|_| {
+        (props.contains_key("rotation") || props.contains_key("absoluteRotation"))
+            && !props.contains_key("x")
+            && !props.contains_key("y")
+            && ds.selection == ids
+    });
     let pinned: Vec<(NodeId, figcraft_geom::Point)> = match pivot {
         Some(o) => roots(&ds.doc, &ids)
             .into_iter()
@@ -155,6 +165,11 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let doc = s.doc_mut()?;
     let before = crate::cmd::styles::bound_before(doc, &ids);
+    let mut ids = ids;
+    if props.contains_key("absoluteRotation") {
+        // A page angle depends on the parents': turn a selected parent before the layers in it.
+        ids.sort_by_key(|i| doc.ancestors(*i).len());
+    }
     for i in ids {
         crate::cmd::props::apply("node.set", doc, i, skipped.get(&i).unwrap_or(&props))?;
     }
@@ -239,7 +254,7 @@ pub(super) fn stroke_brush(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn reparent(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("node.reparent", s, p)?;
     let parent = req_id("node.reparent", p, "parent")?;
-    let index = num(p, "index").map(|i| i.max(0.0) as usize);
+    let index = opt_index("node.reparent", p, "index")?;
     let doc = s.doc_mut()?;
     let ids = z_sorted(doc, &roots(doc, &ids));
     // `index` is where the first moved layer ends up among the parent's children (bottom first),
@@ -254,13 +269,107 @@ pub(super) fn reparent(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+/// The regions of a vector whose own fill stacks a fill command edits instead of the layer's: the
+/// `regions` named (with one target, a vector; indices into its network's regions), else the
+/// regions selected in vector edit mode when the one target is the layer being edited (#1875).
+/// None: the layer's.
+pub(crate) fn fill_regions(s: &Session, cmd: &str, p: &Value, ids: &[NodeId]) -> Result<Option<(NodeId, Vec<usize>)>> {
+    let doc = s.doc()?;
+    let region_count = |id: NodeId| match doc.node(id).map(|n| &n.kind) {
+        Some(NodeKind::Vector { network }) => Some(network.regions.len()),
+        _ => None,
+    };
+    if let Some(list) = get(p, "regions") {
+        let [id] = ids else { return Err(bad(cmd, "`regions` goes with one vector layer")) };
+        let Some(count) = region_count(*id) else { return Err(bad(cmd, "`regions` goes with a vector layer")) };
+        let mut regions = list
+            .as_array()
+            .ok_or_else(|| bad(cmd, "regions: [index, ...]"))?
+            .iter()
+            .map(|v| {
+                v.as_u64()
+                    .and_then(|i| usize::try_from(i).ok())
+                    .filter(|i| *i < count)
+                    .ok_or_else(|| bad(cmd, format!("regions: indices below {count}")))
+            })
+            .collect::<Result<Vec<usize>>>()?;
+        // A region named twice is edited once.
+        regions.sort_unstable();
+        regions.dedup();
+        if regions.is_empty() {
+            return Err(bad(cmd, "regions: at least one"));
+        }
+        return Ok(Some((*id, regions)));
+    }
+    let [id] = ids else { return Ok(None) };
+    let Some(ve) = s.ds()?.vector_edit.as_ref().filter(|ve| ve.id == *id && !ve.regions.is_empty()) else { return Ok(None) };
+    let count = region_count(*id).unwrap_or(0);
+    let mut regions: Vec<usize> = ve.regions.iter().copied().filter(|r| *r < count).collect();
+    regions.sort_unstable();
+    regions.dedup();
+    Ok((!regions.is_empty()).then_some((*id, regions)))
+}
+
+/// Runs `f` on the own fill stack of each of `regions` of vector `id` (a region without one
+/// starts from the layer's fills, which stay as they are). A region that inherits the layer's
+/// fills keeps inheriting when `f` leaves the stack as it was, so later edits of the layer's
+/// fills still reach it; a region's own stack is only replaced once `f` succeeds.
+pub(crate) fn edit_region_fills(
+    doc: &mut figcraft_doc::Document,
+    id: NodeId,
+    regions: &[usize],
+    mut f: impl FnMut(&mut Vec<figcraft_color::Paint>) -> Result<()>,
+) -> Result<()> {
+    let inherited = doc.get(id)?.fills.clone();
+    let NodeKind::Vector { network } = &mut doc.get_mut(id)?.kind else { return Err(bad("fill", "not a vector layer")) };
+    for &r in regions {
+        let Some(region) = network.regions.get_mut(r) else { continue };
+        let mut list = region.fills.clone().unwrap_or_else(|| inherited.clone());
+        f(&mut list)?;
+        if region.fills.is_some() || list != inherited {
+            region.fills = Some(list);
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> Result<Value> {
     let cmd = if fills { "fill" } else { "stroke" };
     let ids = req_targets(cmd, s, p)?;
     let index = if add || get(p, "index").is_none() { None } else { Some(req_index(cmd, p, "index")?) };
+    if let Some((id, regions)) = fill_regions(s, cmd, p, &ids)?.filter(|_| fills) {
+        let paint = match get(p, "paint").or_else(|| get(p, "color")) {
+            Some(v) => Some(paint_of(v).ok_or_else(|| bad(cmd, "invalid paint"))?),
+            None => None,
+        };
+        edit_region_fills(s.doc_mut()?, id, &regions, |list| {
+            if add {
+                list.push(paint.clone().unwrap_or_else(|| figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE)));
+            } else {
+                let idx = index.unwrap_or(list.len().saturating_sub(1));
+                if idx < list.len() {
+                    let _ = list.remove(idx);
+                }
+            }
+            Ok(())
+        })?;
+        return ok();
+    }
     let doc = s.doc_mut()?;
     for i in ids {
         let n = doc.get_mut(i)?;
+        // A removal that names no paint among the rows shown changes nothing, the characters' own
+        // fills included; characters coloured differently show no rows at all ("Click + to
+        // replace mixed content").
+        if !add {
+            let shown = if fills { crate::cmd::lists::character_fills(n).map_or(0, |f| f.len()) } else { n.strokes.len() };
+            if index.unwrap_or(shown.saturating_sub(1)) >= shown {
+                continue;
+            }
+        }
+        if fills {
+            crate::cmd::lists::take_character_fills(n);
+        }
         let frameish = n.kind.is_frame_like();
         let list = if fills { &mut n.fills } else { &mut n.strokes };
         if add {
@@ -281,6 +390,12 @@ pub(super) fn paint_list(s: &mut Session, p: &Value, fills: bool, add: bool) -> 
 }
 
 pub(super) fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value> {
+    paint_set_in(s, p, fills, true)
+}
+
+/// [`paint_set`]; `to_regions`: whether the regions selected (or named) on a vector take the
+/// edit in their own fills (#1875), as for `fill.set`; `fill.pattern` always sets the layer's.
+fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Result<Value> {
     let cmd = if fills { "fill.set" } else { "stroke.set" };
     let ids = req_targets(cmd, s, p)?;
     let idx = opt_index(cmd, p, "index")?;
@@ -289,16 +404,8 @@ pub(super) fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value
         None => None,
     };
     let col = color(p, "color");
-    let doc = s.doc_mut()?;
-    for i in ids {
-        let n = doc.get_mut(i)?;
-        let list = if fills { &mut n.fills } else { &mut n.strokes };
-        let at = idx.unwrap_or(list.len().saturating_sub(1));
-        if list.is_empty() {
-            list.push(figcraft_color::Paint::solid(if fills { figcraft_color::Color::DEFAULT_SHAPE } else { figcraft_color::Color::BLACK }));
-        }
-        let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
-        let old = slot.clone();
+    // The edit of one paint slot, the same for a layer's list and a region's.
+    let edit_slot = |slot: &mut figcraft_color::Paint| {
         if let Some(np) = &new_paint {
             *slot = np.clone();
         }
@@ -309,8 +416,8 @@ pub(super) fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value
                 slot.color_alpha = c.a;
             }
         }
-        if let Some(o) = num(p, "opacity") {
-            slot.opacity = (if o > 1.0 { o / 100.0 } else { o }).clamp(0.0, 1.0) as f32;
+        if let Some(o) = get(p, "opacity").and_then(fraction_of) {
+            slot.opacity = o.clamp(0.0, 1.0) as f32;
             slot.color_alpha = 1.0;
         }
         if let Some(v) = boolean(p, "visible") {
@@ -319,6 +426,33 @@ pub(super) fn paint_set(s: &mut Session, p: &Value, fills: bool) -> Result<Value
         if let Some(b) = blend(p, "blend") {
             slot.blend = b;
         }
+    };
+    if let Some((id, regions)) = fill_regions(s, cmd, p, &ids)?.filter(|_| fills && to_regions) {
+        edit_region_fills(s.doc_mut()?, id, &regions, |list| {
+            if list.is_empty() {
+                list.push(figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE));
+            }
+            let at = idx.unwrap_or(list.len().saturating_sub(1));
+            let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
+            edit_slot(slot);
+            Ok(())
+        })?;
+        return ok();
+    }
+    let doc = s.doc_mut()?;
+    for i in ids {
+        let n = doc.get_mut(i)?;
+        if fills {
+            crate::cmd::lists::take_character_fills(n);
+        }
+        let list = if fills { &mut n.fills } else { &mut n.strokes };
+        let at = idx.unwrap_or(list.len().saturating_sub(1));
+        if list.is_empty() {
+            list.push(figcraft_color::Paint::solid(if fills { figcraft_color::Color::DEFAULT_SHAPE } else { figcraft_color::Color::BLACK }));
+        }
+        let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
+        let old = slot.clone();
+        edit_slot(slot);
         crate::cmd::lists::rebind_edited_paint(n, fills, at, &old);
         if fills {
             n.styles.fill = None;
@@ -338,11 +472,29 @@ pub(super) fn paint_copy(s: &mut Session, p: &Value, fills: bool) -> Result<Valu
     let (paint, stroke) = {
         let doc = s.doc()?;
         let n = doc.get(id)?;
-        let list = if fills { &n.fills } else { &n.strokes };
+        // Regions selected in vector edit mode: their own fills, as the Fill section lists them
+        // (#1875); a text's fills are what its characters show (#1856).
+        let regions = if fills { crate::vectoredit::selected_region_fills(s, id) } else { None };
+        let list: Vec<figcraft_color::Paint> = match regions {
+            Some(Some(list)) => list,
+            Some(None) => return Err(bad(cmd, "the selected regions' fills differ")),
+            None if fills => crate::cmd::lists::character_fills(n).unwrap_or_default(),
+            None => n.strokes.clone(),
+        };
         let at = at.unwrap_or(list.len().saturating_sub(1));
         let paint = list.get(at).cloned().ok_or_else(|| bad(cmd, format!("no {} at index {at}", if fills { "fill" } else { "stroke" })))?;
         (paint, (!fills).then(|| n.stroke.clone()))
     };
+    // An image paint names its data by key: take the data along, so a paste into another file has
+    // it too. A pattern names a layer in this file, so the file is recorded with the copy.
+    let mut images = std::collections::BTreeMap::new();
+    if let figcraft_color::PaintKind::Image(img) = &paint.kind
+        && let Some(d) = s.doc()?.images.get(&img.image)
+    {
+        images.insert(img.image.clone(), d.clone());
+    }
+    s.clipboard.paint_images = images;
+    s.clipboard.paint_source_doc = s.ds()?.uid;
     s.clipboard.paint = Some((fills, paint.clone()));
     s.clipboard.stroke = stroke;
     serde_json::to_value(&paint).map_err(|e| bad(cmd, e.to_string()))
@@ -352,7 +504,7 @@ pub(super) fn paint_copy(s: &mut Session, p: &Value, fills: bool) -> Result<Valu
 /// stroke's copied settings go onto each target too.
 pub(super) fn paint_paste(s: &mut Session, p: &Value, fills: bool) -> Result<Value> {
     let cmd = if fills { "fill.paste" } else { "stroke.paste" };
-    let Some((copied_fills, paint)) = s.clipboard.paint.clone() else {
+    let Some((copied_fills, mut paint)) = s.clipboard.paint.clone() else {
         return Err(EngineError::Disabled(cmd.into(), "no copied fill or stroke".into()));
     };
     if copied_fills != fills {
@@ -361,14 +513,45 @@ pub(super) fn paint_paste(s: &mut Session, p: &Value, fills: bool) -> Result<Val
     }
     let ids = req_targets(cmd, s, p)?;
     // A copied pattern pointing at a target or a layer inside it would make the layer pattern
-    // itself; `fill.pattern` refuses the same, and the renderer would drop the pattern.
+    // itself; `fill.pattern` refuses the same, and the renderer would drop the pattern. Its node id
+    // only names something in the file it was copied from, where it may be an unrelated layer.
     if let figcraft_color::PaintKind::Pattern(pt) = &paint.kind {
+        if s.ds()?.uid != s.clipboard.paint_source_doc {
+            return Err(bad(cmd, "a pattern can't be pasted into another file"));
+        }
         let doc = s.doc()?;
         if ids.iter().any(|t| doc.is_ancestor(*t, NodeId(pt.source))) {
             return Err(bad(cmd, "a layer can't be filled with itself or a layer inside it"));
         }
     }
+    // An image paint names its data by key; a copy from another file brings the data with it.
+    if let figcraft_color::PaintKind::Image(img) = &mut paint.kind {
+        let copied = img.image.clone();
+        if let Some(d) = s.clipboard.paint_images.get(&copied).cloned() {
+            let doc = s.doc_mut()?;
+            // The destination may already use that key for different data (other layers keep
+            // that image): the pasted paint takes the copied data's content hash instead. That key
+            // can be taken too — images are usually keyed by their hash, so the copied key often
+            // is that hash — and then a numbered variant of it. Image keys become archive member
+            // names, which keep only letters and digits, so the number is appended plainly.
+            let base = if doc.images.get(&copied).is_some_and(|existing| existing != &d) { figcraft_format::image_hash(&d.bytes) } else { copied };
+            let mut key = base.clone();
+            let mut n = 0u32;
+            while doc.images.get(&key).is_some_and(|existing| existing != &d) {
+                n = n.saturating_add(1);
+                if n > 999 {
+                    return Err(bad(cmd, "no free image key for the copied image"));
+                }
+                key = format!("{base}{n}");
+            }
+            doc.images.entry(key.clone()).or_insert(d);
+            img.image = key;
+        }
+    }
     let mut q = json!({"ids": ids, "paint": serde_json::to_value(paint).map_err(|e| bad(cmd, e.to_string()))?});
+    if let Some(regions) = get(p, "regions") {
+        q["regions"] = regions.clone();
+    }
     let out = match opt_index(cmd, p, "index")? {
         Some(at) => {
             q["index"] = json!(at);
@@ -404,7 +587,7 @@ pub(super) fn pattern_fill(s: &mut Session, p: &Value) -> Result<Value> {
     q["paint"] =
         serde_json::to_value(figcraft_color::Paint { kind: figcraft_color::PaintKind::Pattern(pt), ..figcraft_color::Paint::pattern(src.0) })
             .map_err(|e| bad(CMD, e.to_string()))?;
-    paint_set(s, &q, true)
+    paint_set_in(s, &q, true, false)
 }
 
 pub(super) fn effect_add(s: &mut Session, p: &Value) -> Result<Value> {

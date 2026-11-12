@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::live::{
     Access, Bind, DEFAULT_SERVER, Event, HostOptions, LiveLink, Presence, PublishOptions, Published, Role, SessionInfo, Shared, SharedLink, Status,
-    join_target,
+    WayIn, join_target,
 };
 use crate::{EngineError, Session};
 
@@ -36,13 +36,23 @@ struct Link(Arc<Mutex<Script>>);
 
 /// Where the scripted host listens, and its session's secret.
 const HOST: Local = Local { ip: Ipv4Addr::new(192, 168, 1, 20), port: 47_900, secret: 0x123_4567_89AB };
+/// The same session's view-only secret.
+const VIEW: Local = Local { secret: 0xBA9_8765_4321, ..HOST };
+
+/// The WebSocket URL the scripted link gives with an invite `link` (the same secret).
+fn mock_url(link: &str) -> String {
+    link.replace("figcraft://join?host=", "ws://")
+}
 
 impl LiveLink for Link {
+    /// Host as the network link does: a code's short secret when shared with a code, and the
+    /// view-only link when asked for one.
     fn host(&mut self, session: u64, opts: HostOptions) -> Result<SessionInfo, String> {
         let mut s = self.0.lock().unwrap();
         s.session = session;
         // As the network link does: a short secret when the session is shared with a code.
         let link = if opts.short { HOST.link() } else { "figcraft://join?host=192.168.1.20:47900&file=f&token=AbCdEfGhIjKlMnOpQrStUv".to_string() };
+        let view = opts.view.then(|| WayIn { link: VIEW.link(), url: mock_url(&VIEW.link()) });
         s.hosted.push(opts);
         Ok(SessionInfo {
             role: Role::Host,
@@ -51,11 +61,12 @@ impl LiveLink for Link {
             color: "#0D99FF".into(),
             file_name: "Shared".into(),
             pages: vec![],
-            url: link.replace("figcraft://join?host=", "ws://"),
+            url: mock_url(&link),
             link,
             address: "192.168.1.20:47900".into(),
             network: true,
             access: Access::Edit,
+            view,
         })
     }
     fn join(&mut self, session: u64, link: &str, _: &str) -> Result<(), String> {
@@ -118,7 +129,7 @@ fn links(n: usize, codes: Option<(&str, &str)>) -> Shared {
         link: format!("figcraft://join?server=wss://share.example:443/&file=f1&token=Share{what}Share{what}0{n}"),
         code: code.map(str::to_string),
     };
-    Shared { edit: link("edit", codes.map(|c| c.0)), view: Some(link("view", codes.map(|c| c.1))) }
+    Shared { edit: link("edit", codes.map(|c| c.0)), view: Some(link("view", codes.map(|c| c.1))), comment: None }
 }
 
 /// The file is on the server and joined: its owner's links, and what others join with (codes
@@ -146,6 +157,7 @@ fn on_the_server(s: &mut Session, script: &Arc<Mutex<Script>>, codes: Option<(&s
         address: "wss://share.example:443/".into(),
         network: true,
         access: Access::Edit,
+        view: None,
     };
     let events = vec![Event::Published(published), Event::Shared(Ok(links(0, codes))), Event::Welcome { info, peers: vec![] }];
     script.lock().unwrap().events.extend(events);
@@ -185,6 +197,38 @@ fn the_built_in_server_is_the_default_and_can_be_changed_or_turned_off() {
     assert_eq!(old.publish_server, DEFAULT_SERVER);
 }
 
+/// The middle of the online-sharing test: re-asking switches codes, and an offline stop stops nothing.
+fn asking_again_and_offline_stop(s: &mut Session, script: &Arc<Mutex<Script>>) {
+    // Asking again only switches which code is the one to give out.
+    let r = ex(s, "collab.share", json!({"access": "view"}));
+    assert_eq!((&r["code"], &r["share"]["access"]), (&json!("4FH-J8R-2WN"), &json!("view")));
+    assert_eq!(ex(s, "collab.share", json!({"via": "online"}))["code"], "4FH-J8R-2WN", "nothing new starts");
+    assert_eq!(ex(s, "collab.share", json!({"access": "edit"}))["code"], "K7M-2QX-9TD");
+    assert_eq!(script.lock().unwrap().published.len(), 1);
+    assert!(err(s, "collab.share", json!({"via": "local"})).contains("stop sharing it first"));
+    assert!(err(s, "collab.share", json!({"access": "admin"})).contains("`access` must be"));
+    // Stopping while the server can't be reached stops nothing, and says so.
+    script.lock().unwrap().offline = true;
+    assert!(err(s, "collab.stop", json!({})).contains("couldn't stop sharing"));
+    assert_eq!(ex(s, "collab.peers", json!({}))["code"], "K7M-2QX-9TD");
+    script.lock().unwrap().offline = false;
+}
+
+/// The sharing-again step of the online-sharing test: new links and codes, nothing published twice.
+fn sharing_again(s: &mut Session, script: &Arc<Mutex<Script>>) {
+    // Sharing again: new links and codes for the same file, nothing published twice.
+    let r = ex(s, "collab.share", json!({}));
+    assert_eq!((&r["code"], &r["share"]["shared"], &r["share"]["viewCode"]), (&json!("NEW-ED1-T01"), &json!(true), &json!("NEW-V1E-W01")));
+    assert!(r["share"]["editLink"].as_str().unwrap().contains("ShareeditShareedit01"));
+    {
+        let sc = script.lock().unwrap();
+        assert_eq!(sc.published.len(), 1);
+        assert_eq!(sc.asked[1], ("wss://share.example/".to_string(), "f1".to_string(), "OwnerOwnerOwnerOwner00".to_string(), vec![], true));
+    }
+    assert_eq!(ex(s, "collab.share", json!({}))["code"], "NEW-ED1-T01", "shared already: nothing more is asked");
+    assert_eq!(script.lock().unwrap().asked.len(), 2);
+}
+
 #[test]
 fn sharing_online_publishes_to_the_server_in_preferences_and_shows_its_code() {
     let (mut s, script) = session();
@@ -212,19 +256,7 @@ fn sharing_online_publishes_to_the_server_in_preferences_and_shows_its_code() {
     let (edit_link, own) = (r["share"]["editLink"].as_str().unwrap(), r["published"]["edit"].as_str().unwrap());
     assert!(edit_link.contains("ShareeditShareedit00") && edit_link != own && r["link"] == own, "{edit_link}");
     assert!(s.message.is_none(), "the popover shows the code: no toast about publishing");
-    // Asking again only switches which code is the one to give out.
-    let r = ex(&mut s, "collab.share", json!({"access": "view"}));
-    assert_eq!((&r["code"], &r["share"]["access"]), (&json!("4FH-J8R-2WN"), &json!("view")));
-    assert_eq!(ex(&mut s, "collab.share", json!({"via": "online"}))["code"], "4FH-J8R-2WN", "nothing new starts");
-    assert_eq!(ex(&mut s, "collab.share", json!({"access": "edit"}))["code"], "K7M-2QX-9TD");
-    assert_eq!(script.lock().unwrap().published.len(), 1);
-    assert!(err(&mut s, "collab.share", json!({"via": "local"})).contains("stop sharing it first"));
-    assert!(err(&mut s, "collab.share", json!({"access": "admin"})).contains("`access` must be"));
-    // Stopping while the server can't be reached stops nothing, and says so.
-    script.lock().unwrap().offline = true;
-    assert!(err(&mut s, "collab.stop", json!({})).contains("couldn't stop sharing"));
-    assert_eq!(ex(&mut s, "collab.peers", json!({}))["code"], "K7M-2QX-9TD");
-    script.lock().unwrap().offline = false;
+    asking_again_and_offline_stop(&mut s, &script);
     // Stopping: the server is asked, as the file's owner, to revoke the others' links. The file
     // stays there and its owner stays in it: nothing is left, nothing is removed.
     assert_eq!(ex(&mut s, "collab.stop", json!({})), json!({"ended": false, "shared": false}));
@@ -244,21 +276,11 @@ fn sharing_online_publishes_to_the_server_in_preferences_and_shows_its_code() {
     assert_eq!((&r["status"], &r["syncing"].is_boolean(), &r["code"]), (&json!("live"), &true, &Value::Null));
     assert_eq!(
         r["share"],
-        json!({"via": "online", "access": "edit", "shared": false, "editCode": null, "viewCode": null, "editLink": null, "viewLink": null})
+        json!({"via": "online", "access": "edit", "shared": false, "editCode": null, "viewCode": null, "commentCode": null, "editLink": null, "viewLink": null, "commentLink": null})
     );
     assert!(r["published"]["owner"].is_string(), "still the owner's file on the server");
     assert!(s.message.as_deref().unwrap_or_default().contains("stays on the server"));
-    // Sharing again: new links and codes for the same file, nothing published twice.
-    let r = ex(&mut s, "collab.share", json!({}));
-    assert_eq!((&r["code"], &r["share"]["shared"], &r["share"]["viewCode"]), (&json!("NEW-ED1-T01"), &json!(true), &json!("NEW-V1E-W01")));
-    assert!(r["share"]["editLink"].as_str().unwrap().contains("ShareeditShareedit01"));
-    {
-        let sc = script.lock().unwrap();
-        assert_eq!(sc.published.len(), 1);
-        assert_eq!(sc.asked[1], ("wss://share.example/".to_string(), "f1".to_string(), "OwnerOwnerOwnerOwner00".to_string(), vec![], true));
-    }
-    assert_eq!(ex(&mut s, "collab.share", json!({}))["code"], "NEW-ED1-T01", "shared already: nothing more is asked");
-    assert_eq!(script.lock().unwrap().asked.len(), 2);
+    sharing_again(&mut s, &script);
     // Stopping again revokes the new ones; then `collab.stop` on a file that isn't shared leaves
     // its session like any other (the file stays on the server).
     ex(&mut s, "collab.stop", json!({}));
@@ -342,6 +364,8 @@ fn online_sharing_is_off_without_a_server() {
     assert!(matches!(bare.execute("collab.join", &json!({"code": HOST.code()})), Err(EngineError::Disabled(..))));
 }
 
+/// A local network share shows the code that carries the host's address, has a view-only code
+/// for the same session, switches which shows without hosting again, and listens where told.
 #[test]
 fn sharing_on_the_local_network_shows_a_code_that_carries_the_address() {
     let (mut s, script) = session();
@@ -350,30 +374,48 @@ fn sharing_on_the_local_network_shows_a_code_that_carries_the_address() {
     let shown = r["code"].as_str().unwrap();
     assert_eq!(code::parse(shown), Ok(code::Code::Local(HOST)), "{shown}");
     assert_eq!(shown, code::grouped(&HOST.code()));
-    assert_eq!((&r["link"], &r["share"]["viewCode"]), (&json!(HOST.link()), &Value::Null));
+    assert_eq!(r["link"], json!(HOST.link()));
+    // A view-only code too, for the same session with its own secret; no comment code.
+    let view = code::grouped(&VIEW.code());
+    assert_eq!((&r["share"]["viewCode"], &r["share"]["viewLink"]), (&json!(view), &json!(VIEW.link())));
+    assert_eq!((&r["share"]["editLink"], &r["share"]["commentCode"]), (&json!(HOST.link()), &Value::Null));
     {
         let sc = script.lock().unwrap();
         let [h] = sc.hosted.as_slice() else { panic!("hosted {}", sc.hosted.len()) };
-        assert!(h.short && h.bind == Bind::Lan && h.port.is_none(), "the local network unless told otherwise");
+        assert!(h.short && h.view && h.bind == Bind::Lan && h.port.is_none(), "the local network unless told otherwise");
     }
-    // Everyone edits there.
-    assert!(err(&mut s, "collab.share", json!({"access": "view"})).contains("share it online"));
+    // Which code shows: the view code, then the edit code again (nothing is hosted twice).
+    // The link goes with the code: a view-only code's link doesn't edit.
+    let r = ex(&mut s, "collab.share", json!({"access": "view"}));
+    assert_eq!((&r["code"], &r["share"]["access"]), (&json!(view), &json!("view")));
+    assert_eq!((&r["link"], &r["url"], &r["sessions"][0]["link"]), (&json!(VIEW.link()), &json!(mock_url(&VIEW.link())), &json!(VIEW.link())));
+    let r = ex(&mut s, "collab.share", json!({"access": "edit"}));
+    assert_eq!((&r["code"], &r["link"], &r["url"]), (&json!(code::grouped(&HOST.code())), &json!(HOST.link()), &json!(mock_url(&HOST.link()))));
+    assert!(err(&mut s, "collab.share", json!({"access": "comment"})).contains("share it online"));
+    assert_eq!(script.lock().unwrap().hosted.len(), 1);
     assert_eq!(ex(&mut s, "collab.stop", json!({}))["ended"], true);
     assert!(script.lock().unwrap().asked.is_empty(), "no server to tell");
-    assert!(err(&mut s, "collab.share", json!({"via": "local", "access": "view"})).contains("share it online"));
+    // Shared for looking only from the start: the edit code isn't the one shown.
+    let r = ex(&mut s, "collab.share", json!({"via": "local", "access": "view"}));
+    assert_eq!((&r["code"], &r["share"]["access"]), (&json!(view), &json!("view")));
+    assert_eq!((&r["link"], &r["url"]), (&json!(VIEW.link()), &json!(mock_url(&VIEW.link()))), "the edit link and URL aren't handed out");
+    assert_eq!(r["sessions"][0]["link"], json!(VIEW.link()));
+    ex(&mut s, "collab.stop", json!({}));
+    assert!(err(&mut s, "collab.share", json!({"via": "local", "access": "comment"})).contains("share it online"));
     // Where to listen is the advanced part.
     ex(&mut s, "collab.share", json!({"via": "local", "bind": "local", "port": 5000}));
     let sc = script.lock().unwrap();
-    assert!(sc.hosted[1].bind == Bind::Local && sc.hosted[1].port == Some(5000));
+    assert!(sc.hosted[2].bind == Bind::Local && sc.hosted[2].port == Some(5000));
     drop(sc);
     ex(&mut s, "collab.stop", json!({}));
     for bad in [json!({"via": "post"}), json!({"via": "local", "port": 70000}), json!({"via": "local", "bind": "everywhere"})] {
         assert!(matches!(s.execute("collab.share", &bad), Err(EngineError::BadParams { .. })), "{bad}");
     }
-    // A plain `collab.host` session has an invite link, not a code.
+    // A plain `collab.host` session has an invite link, not a code, and everyone in it edits.
     let r = ex(&mut s, "collab.host", json!({}));
     assert_eq!((&r["code"], &r["share"]), (&Value::Null, &Value::Null));
-    assert!(!script.lock().unwrap().hosted[2].short);
+    let h = &script.lock().unwrap().hosted[3];
+    assert!(!h.short && !h.view);
 }
 
 #[test]

@@ -4,11 +4,12 @@
 //! guide lines (with spacing labels) for the canvas to draw in red. Vector points also snap to
 //! other points (see `vectoredit::snap`); landing on one shows a marker (a zero-length guide).
 
-use figcraft_doc::{Document, NodeId};
+use figcraft_doc::{BoardItem, Document, NodeId};
 use figcraft_geom::{Affine, Point, Rect, Vec2, transform_rect_bbox};
 use serde::Serialize;
 
 use crate::guides;
+use crate::tools::SNAP_PX;
 
 /// A guide line to draw: from (x0, y0) to (x1, y1) in page coordinates, with an optional label
 /// (a distance) at its middle; `dashed` marks a measurement's extension line.
@@ -93,10 +94,23 @@ impl Targets {
                 t.ys.push((y, b.x0, b.x1));
             }
         }
-        // Siblings and, at the top level, all top-level layers.
+        // Siblings and, at the top level, all top-level layers. A board connector joined to a
+        // moving layer, or to one inside it (a section carries its stickies), re-routes with it, as
+        // does its label: no snapping to where its own route starts (#1916).
+        let carried = |e: NodeId| moving.contains(&e) || doc.ancestors(e).iter().any(|a| moving.contains(a));
+        let follows = |id: NodeId| match doc.node(id).and_then(|n| n.board.as_ref()) {
+            Some(BoardItem::Connector(k)) => [k.from.node(), k.to.node()].into_iter().flatten().any(carried),
+            _ => false,
+        };
         if let Some(p) = doc.node(parent) {
             for c in &p.children {
-                if moving.contains(c) || !doc.node(*c).is_some_and(|n| n.visible) {
+                let Some(n) = doc.node(*c).filter(|n| n.visible) else { continue };
+                let joined = match n.board.as_ref() {
+                    Some(BoardItem::Connector(_)) => follows(*c),
+                    Some(BoardItem::Label { connector }) => follows(*connector),
+                    _ => false,
+                };
+                if moving.contains(c) || joined {
                     continue;
                 }
                 if let Some(b) = bbox(*c) {
@@ -127,6 +141,56 @@ impl Targets {
         t
     }
 
+    /// Snap lines for a guide on `owner` (a page or a top-level frame): a page's top-level layers,
+    /// or a frame's own box, layout grids and descendants, in the owner's own space so a rotated
+    /// frame's guide snaps along its axes.
+    pub fn gather_for_guide(doc: &Document, page: NodeId, owner: NodeId) -> Targets {
+        let space = if owner == page { Affine::IDENTITY } else { doc.world_transform(owner) };
+        let to = space.inverse();
+        let bbox = |id: NodeId| doc.node(id).map(|n| transform_rect_bbox(to * doc.world_transform(id), n.local_rect())).filter(|b| b.is_finite());
+        let mut t = Targets { space, ..Default::default() };
+        if owner == page {
+            if let Some(p) = doc.node(page) {
+                for c in &p.children {
+                    if doc.node(*c).is_some_and(|n| n.visible)
+                        && let Some(b) = bbox(*c)
+                    {
+                        t.add_box(b);
+                    }
+                }
+            }
+            return t;
+        }
+        // The frame's own box and its layout grids.
+        if let Some(b) = bbox(owner) {
+            t.add_box(b);
+            let (gx, gy) = figcraft_layout::grid_snap_lines_in(doc, owner, to * doc.world_transform(owner));
+            for x in gx {
+                t.xs.push((x, b.y0, b.y1));
+            }
+            for y in gy {
+                t.ys.push((y, b.x0, b.x1));
+            }
+        }
+        // Everything in the frame. Nested layers count, so a guide over a group reaches its parts; a
+        // hidden layer hides its whole branch, so a visible child of a hidden group isn't a target.
+        let mut stack: Vec<(NodeId, bool)> = doc.node(owner).map(|n| n.children.iter().rev().map(|c| (*c, true)).collect()).unwrap_or_default();
+        let mut seen = 0;
+        while let Some((id, visible)) = stack.pop() {
+            seen += 1;
+            if seen > 5_000_000 {
+                break;
+            }
+            let Some(n) = doc.node(id) else { continue };
+            let visible = visible && n.visible;
+            if visible && let Some(b) = bbox(id) {
+                t.add_box(b);
+            }
+            stack.extend(n.children.iter().rev().map(|c| (*c, visible)));
+        }
+        t
+    }
+
     /// A box to snap to (in snap space): its edges and centre lines, and equal spacing with it.
     pub fn add_box(&mut self, r: Rect) {
         for x in [r.x0, r.center().x, r.x1] {
@@ -136,6 +200,24 @@ impl Targets {
             self.ys.push((y, r.x0, r.x1));
         }
         self.boxes.push(r);
+    }
+
+    /// Take back what [`Targets::add_box`] added for `r`.
+    pub fn remove_box(&mut self, r: Rect) {
+        let take = |v: &mut Vec<Span>, s: Span| {
+            if let Some(i) = v.iter().rposition(|x| *x == s) {
+                v.remove(i);
+            }
+        };
+        for x in [r.x0, r.center().x, r.x1] {
+            take(&mut self.xs, (x, r.y0, r.y1));
+        }
+        for y in [r.y0, r.center().y, r.y1] {
+            take(&mut self.ys, (y, r.x0, r.x1));
+        }
+        if let Some(i) = self.boxes.iter().rposition(|b| *b == r) {
+            self.boxes.remove(i);
+        }
     }
 
     /// A point to snap onto (a vector point, a segment midpoint): lines through it on both axes,
@@ -317,6 +399,16 @@ impl Targets {
         (dx, dy, self.guides_spans(&xs, &ys))
     }
 
+    /// The correction along one axis (x when `vertical`, else y) to the nearest target line within
+    /// `threshold`, in snap space. A guide moves on its own axis only, so the other is left alone.
+    pub fn snap_axis(&self, vertical: bool, offset: f64, threshold: f64) -> Option<f64> {
+        if !offset.is_finite() || !threshold.is_finite() || threshold < 0.0 {
+            return None;
+        }
+        let lines = if vertical { &self.xs } else { &self.ys };
+        lines.iter().map(|(v, _, _)| v - offset).filter(|d| d.is_finite() && d.abs() <= threshold).min_by(|a, b| a.abs().total_cmp(&b.abs()))
+    }
+
     /// Guide lines for edges of `r` that coincide with targets.
     pub fn guides_for(&self, r: Rect) -> Vec<Guide> {
         let (xs, ys) = rect_spans(r);
@@ -343,6 +435,18 @@ impl Targets {
         }
         out
     }
+}
+
+/// Snap a guide on `owner` (a page or a top-level frame) to the nearest layer edge or centre along
+/// its own axis, within `SNAP_PX` screen pixels at `zoom`. Returns the new offset in `owner`'s
+/// coordinates, or `None` when nothing is in reach.
+pub fn snap_guide(doc: &Document, page: NodeId, owner: NodeId, vertical: bool, offset: f64, zoom: f64) -> Option<f64> {
+    // The guide moves along the owner's own axis (x for a vertical guide, y for a horizontal one),
+    // which the owner's transform may scale: convert the screen-pixel reach into owner units.
+    let [a, b, c, d, _, _] = doc.world_transform(owner).as_coeffs();
+    let axis = if vertical { a.hypot(b) } else { c.hypot(d) };
+    let threshold = SNAP_PX / (zoom.max(1e-6) * axis.max(1e-6));
+    Targets::gather_for_guide(doc, page, owner).snap_axis(vertical, offset, threshold).map(|d| offset + d).filter(|v| v.is_finite())
 }
 
 /// The parent of the moving layers (the first one's), or the page.

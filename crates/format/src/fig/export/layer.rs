@@ -1,5 +1,9 @@
 use super::common::{export_setting, layout_grid, outlined, prop_type, variant_pairs};
-use super::*;
+use super::{
+    AUX, AutoLayout, BoolOp, Bound, ContentAlign, CrossAlign, Exporter, Fields, HConstraint, Kv, LAYERS, LayoutMode, MAX_DEPTH, MainAlign, MaskType,
+    Node, NodeId, NodeKind, PropDef, STASH, Sizing, TextData, TextStyle, VConstraint, WindingRule, arr, b, blend_name, color, e, fl, grid_sizing,
+    guid, int, matrix, o, position, root_fields, s, u, xy,
+};
 
 impl<'d> Exporter<'d> {
     /// Write layer `id` (child `index` of the layer with GUID `parent_guid`) and its subtree.
@@ -15,11 +19,11 @@ impl<'d> Exporter<'d> {
             ("phase", e("CREATED")),
             ("parentIndex", o(vec![("guid", parent_guid), ("position", s(&position(index)))])),
         ];
-        let children = if let NodeKind::Page { background, guides, prototype, .. } = &n.kind {
+        let children = if let NodeKind::Page { background, prototype, .. } = &n.kind {
             f.extend([("type", e("CANVAS")), ("name", s(&n.name))]);
             f.extend(root_fields());
             f.extend([("backgroundColor", color(*background)), ("backgroundOpacity", fl(background.a.into())), ("backgroundEnabled", b(true))]);
-            if !guides.is_empty() {
+            if !n.guides.is_empty() {
                 self.warn("ruler guides were left out");
             }
             if *prototype != Default::default() {
@@ -87,7 +91,10 @@ impl<'d> Exporter<'d> {
             NodeKind::Group => f.push(("resizeToFit", b(true))),
             NodeKind::Section { contents_hidden } => f.push(("sectionContentsHidden", b(*contents_hidden))),
             NodeKind::Ellipse { start, sweep, inner } => {
-                f.push(("arcData", o(vec![("startingAngle", fl(*start)), ("endingAngle", fl(start + sweep)), ("innerRadius", fl(*inner))])))
+                // Within a turn, where a 32-bit angle still holds the start and the sweep exactly
+                // enough; a start past a turn draws the same.
+                let start = crate::rest::start_within_a_turn(*start);
+                f.push(("arcData", o(vec![("startingAngle", fl(start)), ("endingAngle", fl(start + sweep)), ("innerRadius", fl(*inner))])))
             }
             NodeKind::Polygon { count } => f.push(("count", u(*count))),
             NodeKind::Star { count, inner_ratio } => f.extend([("count", u(*count)), ("starInnerScale", fl(*inner_ratio))]),
@@ -105,7 +112,7 @@ impl<'d> Exporter<'d> {
                     self.warn("boolean groups whose layers combine in different ways use the group's operation");
                 }
             }
-            NodeKind::Component { description, props } if !nested => {
+            NodeKind::Component { description, props, prop_order } if !nested => {
                 if let Some(set) = self.set_of(n.id) {
                     // A variant: its set holds the definitions; the variant has its own copy of
                     // each (pointing at the set's), and its values of the variant properties.
@@ -132,7 +139,11 @@ impl<'d> Exporter<'d> {
                         f.push(("variantPropSpecs", arr(specs)));
                     }
                 } else {
-                    let defs: Vec<Kv> = props.iter().enumerate().filter_map(|(i, (name, d))| self.prop_def(n.id, name, d, i)).collect();
+                    let defs: Vec<Kv> = figcraft_doc::ordered_props(props, prop_order)
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, (name, d))| self.prop_def(n.id, name, d, i))
+                        .collect();
                     if !defs.is_empty() {
                         f.push(("componentPropDefs", arr(defs)));
                     }
@@ -293,7 +304,7 @@ impl<'d> Exporter<'d> {
             || !n.measurements.is_empty()
             || !n.dev_status.is_none()
         {
-            self.warn("Dev Mode annotations, statuses, resources, measurements and code links were left out");
+            self.warn("Developer Mode annotations, statuses, resources, measurements and code links were left out");
         }
         if !n.plugin_data.is_empty() {
             self.warn("plugin data was left out");

@@ -59,6 +59,25 @@ fn properties_group_layout_auto_layout_paints_and_tokens() {
 }
 
 #[test]
+fn stored_variable_ids_keep_their_dev_inspect_token() {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    let shadow = s.execute("variable.create", &json!({"collection": "Theme", "name": "shadow", "type": "color", "value": "#FF0000"})).unwrap();
+    let surface = s.execute("variable.create", &json!({"collection": "Theme", "name": "surface", "type": "color", "value": "#0D99FF"})).unwrap();
+    let r = id(s.execute("node.create", &json!({"type": "rectangle", "props": {"fill": {"$var": surface["id"]}}})).unwrap());
+    s.execute("variable.update", &json!({"variable": "surface", "codeSyntax": {"WEB": "--real-surface"}})).unwrap();
+    s.execute("variable.update", &json!({"variable": shadow["id"], "name": surface["id"], "codeSyntax": {"WEB": "--shadow"}})).unwrap();
+
+    let code = s.execute("inspect.code", &json!({"id": r, "language": "css"})).unwrap();
+    assert!(code["code"].as_str().unwrap().contains("var(--real-surface"));
+    assert!(!code["code"].as_str().unwrap().contains("--shadow"));
+    let out = s.execute("inspect.properties", &json!({"id": r})).unwrap();
+    let fills = out["sections"].as_array().unwrap().iter().find(|s| s["title"] == "Fills").unwrap();
+    assert_eq!(fills["rows"][0]["color"], "#0D99FF");
+    assert_eq!(fills["rows"][0]["token"], "surface");
+}
+
+#[test]
 fn typography_section_for_text() {
     let mut s = Session::new();
     let t = id(s.execute("text.create", &json!({"text": "Hello", "x": 0, "y": 0})).unwrap());

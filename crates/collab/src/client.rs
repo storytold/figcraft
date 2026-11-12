@@ -229,6 +229,12 @@ impl Client {
         Ok(self.flush(&NoRecompute).pop())
     }
 
+    /// Whether `doc` differs from what this client shows only in comment threads (what a comment
+    /// link may send; nothing differing counts too).
+    pub fn changes_only_comments(&self, doc: &Document) -> bool {
+        diff(&self.view, doc).is_ok_and(|d| d.changes.iter().all(Change::is_comment))
+    }
+
     /// Undo the user's last step that still changes something: write back the values it replaced
     /// where nobody else wrote since (their later writes win), delete what it created (unless
     /// others put layers inside) and bring back what it deleted. Returns the batches to send now
@@ -554,6 +560,10 @@ impl Client {
         peers: Vec<Peer>,
         recompute: &dyn Recompute,
     ) -> Result<Vec<ClientMsg>, Error> {
+        // The transport unpacks a packed document first (`message::unpack`).
+        if matches!(catch_up, CatchUp::Packed(_)) {
+            return Err(Error::Protocol("expected the document unpacked".into()));
+        }
         let last_batch = processed.last_batch;
         // An undo or redo lost in flight is made again before it goes out, knowing what others did
         // meanwhile: its step conflicts with what they wrote while it was in flight, and with what
@@ -567,6 +577,7 @@ impl Client {
         self.presence.clear();
         let offline = || "it no longer applied when the connection came back".to_string();
         match catch_up {
+            CatchUp::Packed(_) => {}
             CatchUp::Delta(batches) => {
                 for acc in batches {
                     if acc.author == self.id {

@@ -70,6 +70,75 @@ fn ios_button_sets_corner_smoothing_to_60_percent() {
     assert_eq!(u.app.session.undo_depth().0, history + 1);
 }
 
+/// The visible smoothing icon uses the same scrub gesture, cursor and modifier rates as the
+/// other numeric fields; the whole drag is one undo step, including when clamped at either end.
+#[test]
+fn corner_smoothing_icon_scrubs_with_modifiers_and_one_undo_step() {
+    for (dx, modifiers, want) in
+        [(16.0, Modifiers::NONE, 0.66), (8.0, Modifiers::SHIFT, 1.0), (16.0, Modifiers::ALT, 0.516), (-80.0, Modifiers::NONE, 0.0)]
+    {
+        let (mut u, r) = scene();
+        u.app.run("node.set", json!({"ids": [r], "props": {"cornerSmoothing": 0.5}}));
+        let toggle = named_button(&mut u, "Individual corners");
+        click(&mut u, toggle);
+        let lead = u.ctx.read_response(Id::unique("smoothing").with("lead")).expect("smoothing icon").rect;
+        assert_eq!(lead.width(), 24.0, "the icon has the same drag target as other fields");
+        let from = lead.center();
+        let out = u.frame_output(vec![Event::PointerMoved(from)]);
+        assert_eq!(out.platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
+        let history = u.app.session.undo_depth().0;
+        u.frame_with(vec![Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers }], modifiers);
+        for step in 1..=4 {
+            u.frame_with(vec![Event::PointerMoved(pos2(from.x + dx * step as f32 / 4.0, from.y))], modifiers);
+        }
+        let smoothing = |u: &Ui| u.app.session.doc().unwrap().node(r).unwrap().corners.smoothing;
+        assert!((smoothing(&u) - want).abs() < 1e-9, "the drag updates the canvas before release");
+        u.frame_with(
+            vec![Event::PointerButton { pos: pos2(from.x + dx, from.y), button: egui::PointerButton::Primary, pressed: false, modifiers }],
+            modifiers,
+        );
+        u.frame(vec![]);
+        assert!((smoothing(&u) - want).abs() < 1e-9, "release keeps the scrubbed value");
+        assert_eq!(u.app.session.undo_depth().0, history + 1);
+        u.app.session.undo().unwrap();
+        assert_eq!(smoothing(&u), 0.5);
+        u.app.session.redo().unwrap();
+        assert!((smoothing(&u) - want).abs() < 1e-9);
+    }
+}
+
+/// Fine drags keep their fractional baseline across gestures, including a later plain drag.
+#[test]
+fn consecutive_smoothing_drags_preserve_fractional_percentages() {
+    let (mut u, r) = scene();
+    u.app.run("node.set", json!({"ids": [r], "props": {"cornerSmoothing": 0.5}}));
+    let toggle = named_button(&mut u, "Individual corners");
+    click(&mut u, toggle);
+    let history = u.app.session.undo_depth().0;
+    let smoothing = |u: &Ui| u.app.session.doc().unwrap().node(r).unwrap().corners.smoothing;
+    for (step, (dx, modifiers, want)) in
+        [(16.0, Modifiers::ALT, 0.516), (16.0, Modifiers::ALT, 0.532), (8.0, Modifiers::NONE, 0.612)].into_iter().enumerate()
+    {
+        let from = u.ctx.read_response(Id::unique("smoothing").with("lead")).unwrap().rect.center();
+        u.frame_with(vec![Event::PointerMoved(from)], modifiers);
+        u.frame_with(vec![Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers }], modifiers);
+        for k in 1..=4 {
+            u.frame_with(vec![Event::PointerMoved(pos2(from.x + dx * k as f32 / 4.0, from.y))], modifiers);
+        }
+        u.frame_with(
+            vec![Event::PointerButton { pos: pos2(from.x + dx, from.y), button: egui::PointerButton::Primary, pressed: false, modifiers }],
+            modifiers,
+        );
+        u.frame(vec![]);
+        assert!((smoothing(&u) - want).abs() < 1e-9, "gesture {step}: expected {want}, got {}", smoothing(&u));
+        assert_eq!(u.app.session.undo_depth().0, history + step + 1);
+    }
+    for want in [0.532, 0.516, 0.5] {
+        u.app.session.undo().unwrap();
+        assert!((smoothing(&u) - want).abs() < 1e-9, "undo restores the precise value");
+    }
+}
+
 /// The fields sit at their corners, and typing in the bottom right one sets only that corner in a
 /// single undo step (#1002: the bottom row showed bottom right on the left).
 #[test]
@@ -97,21 +166,71 @@ fn polygons_and_stars_take_corner_smoothing() {
     for cmd in ["shape.polygon", "shape.star"] {
         let mut s = Session::new();
         let id = NodeId(s.execute(cmd, &json!({"x": 0, "y": 0, "width": 120, "height": 120})).unwrap()["id"].as_u64().unwrap());
+        takes_corner_smoothing(s, id, cmd);
+    }
+}
+
+/// A boolean group has one radius for its whole result (#2222): like a polygon, its button opens
+/// corner smoothing, with no field per corner.
+#[test]
+fn a_boolean_group_opens_corner_smoothing_and_has_no_corner_fields() {
+    let mut s = Session::new();
+    let rect = |s: &mut Session, x: i32| s.execute("shape.rectangle", &json!({"x": x, "y": 0, "width": 100, "height": 100})).unwrap()["id"].clone();
+    let (a, b) = (rect(&mut s, 0), rect(&mut s, 60));
+    let g = NodeId(s.execute("bool.union", &json!({"ids": [a, b]})).unwrap()["id"].as_u64().unwrap());
+    takes_corner_smoothing(s, g, "bool.union");
+}
+
+/// With `id` rounded at 8 and selected: the panel's button is named Corner smoothing and opens
+/// the smoothing field with no field per corner, and typing 60 sets the smoothing in one undo step.
+fn takes_corner_smoothing(mut s: Session, id: NodeId, what: &str) {
+    s.execute("node.set", &json!({"ids": [id], "props": {"cornerRadius": 8}})).unwrap();
+    s.execute("select.set", &json!({"ids": [id]})).unwrap();
+    let mut u = Ui::new(s);
+    // With no corners of their own, the button is named for what it opens.
+    let t = named_button(&mut u, "Corner smoothing");
+    click(&mut u, t);
+    assert!((0..4).all(|k| u.ctx.read_response(Id::unique(("corner", k)).with("field")).is_none()), "{what}: one radius, no corner fields");
+    let smoothing = u.ctx.read_response(Id::unique("smoothing").with("field")).expect("the smoothing field shows").rect.center();
+    let history = u.app.session.undo_depth().0;
+    click(&mut u, smoothing);
+    u.frame(vec![Event::Text("60".into())]);
+    enter(&mut u);
+    u.frame(vec![]);
+    let n = u.app.session.doc().unwrap().node(id).unwrap().clone();
+    assert!((n.corners.smoothing - 0.6).abs() < 1e-9, "{what}: {}", n.corners.smoothing);
+    assert_eq!(u.app.session.undo_depth().0, history + 1, "{what}: one undo step");
+}
+
+/// A closed vector shows the same Corner smoothing control, and its iOS button sets 60% in one
+/// undo step; an open vector, which has no closed shape to smooth, shows no smoothing control.
+#[test]
+fn closed_vectors_take_corner_smoothing() {
+    let rows = [(true, json!([[0, 0], [120, 0], [120, 120], [0, 120]])), (false, json!([[0, 0], [120, 0], [120, 120]]))];
+    for (closed, points) in rows {
+        let mut s = Session::new();
+        let id = NodeId(s.execute("vector.create", &json!({"points": points, "closed": closed})).unwrap()["id"].as_u64().unwrap());
         s.execute("node.set", &json!({"ids": [id], "props": {"cornerRadius": 8}})).unwrap();
         s.execute("select.set", &json!({"ids": [id]})).unwrap();
         let mut u = Ui::new(s);
-        // With no corners of their own, the button is named for what it opens.
+        u.ctx.enable_accesskit();
+        u.frame(vec![]);
+        let out = u.frame_output(vec![]);
+        let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
+        let toggle = nodes.iter().any(|(_, n)| n.role() == Role::Button && n.label() == Some("Corner smoothing"));
+        assert_eq!(toggle, closed, "closed {closed}: the Corner smoothing button shows only for a closed vector");
+        if !closed {
+            continue;
+        }
         let t = named_button(&mut u, "Corner smoothing");
         click(&mut u, t);
-        assert!((0..4).all(|k| u.ctx.read_response(Id::unique(("corner", k)).with("field")).is_none()), "{cmd}: one radius, no corner fields");
-        let smoothing = u.ctx.read_response(Id::unique("smoothing").with("field")).expect("the smoothing field shows").rect.center();
+        assert!((0..4).all(|k| u.ctx.read_response(Id::unique(("corner", k)).with("field")).is_none()), "no field per corner");
+        assert!(u.ctx.read_response(Id::unique("smoothing").with("field")).is_some(), "the smoothing field shows");
         let history = u.app.session.undo_depth().0;
-        click(&mut u, smoothing);
-        u.frame(vec![Event::Text("60".into())]);
-        enter(&mut u);
-        u.frame(vec![]);
+        let ios = named_button(&mut u, "iOS");
+        click(&mut u, ios);
         let n = u.app.session.doc().unwrap().node(id).unwrap().clone();
-        assert!((n.corners.smoothing - 0.6).abs() < 1e-9, "{cmd}: {}", n.corners.smoothing);
-        assert_eq!(u.app.session.undo_depth().0, history + 1, "{cmd}: one undo step");
+        assert!((n.corners.smoothing - 0.6).abs() < 1e-9, "iOS sets 60%: {}", n.corners.smoothing);
+        assert_eq!(u.app.session.undo_depth().0, history + 1, "one undo step");
     }
 }

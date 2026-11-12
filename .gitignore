@@ -3,8 +3,11 @@ plan/
 plans/
 /target/
 /target-*/
+/plugins/target/
 /dist/
 /corpus/
 /log/
 .DS_Store
 *.profraw
+.cache/
+.vscode/

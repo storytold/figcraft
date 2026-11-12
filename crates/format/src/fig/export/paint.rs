@@ -1,5 +1,8 @@
 use super::common::one_sided;
-use super::*;
+use super::{
+    Affine, Bound, EffectKind, Exporter, Fields, GradientKind, ImageScaleMode, Kv, MAX_IMAGE, Node, NodeKind, NoiseMode, Paint, PaintKind,
+    StrokeAlign, StrokeCap, arr, b, blend_name, cap_name, color, e, fl, join_name, matrix, o, s, sha1_hex, xy,
+};
 
 impl<'d> Exporter<'d> {
     /// A paint list: a layer's fills (`fills`) or strokes with the variables `bound` to them.
@@ -231,7 +234,7 @@ impl<'d> Exporter<'d> {
             }
             EffectKind::Glass(g) => {
                 self.warn("glass effects keep only their frost");
-                f.extend([("type", e("GLASS")), ("radius", fl(g.frost))]);
+                f.extend([("type", e("GLASS")), ("radius", fl(g.sanitized().frost))]);
             }
         }
         o(f)

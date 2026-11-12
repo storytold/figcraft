@@ -1,6 +1,6 @@
 //! The keyboard alone, driven through egui headless: F2 renames the selected layer (from the
 //! canvas, a clicked row or a row with the keyboard, which gets it back afterwards), Shift+F10
-//! opens the context menu at the focused row or below the canvas selection and the menu takes the
+//! (or the Menu key) opens the context menu at the focused row or below the canvas selection and the menu takes the
 //! keyboard, and F8 draws a selection box the arrows move and size and Enter selects with.
 
 use egui::{Event, Key, Modifiers};
@@ -130,6 +130,33 @@ fn shift_f10_opens_the_context_menu_at_the_row_or_the_canvas_selection() {
     assert!(pos.x < u.app.canvas.rect.min.x && (pos.y - p.y).abs() < 40.0, "{pos:?} near {p:?}");
 }
 
+/// The keyboard's Menu key (between the right Alt and Ctrl on many PC keyboards) opens the same
+/// menu as Shift+F10, as it does in other apps.
+#[test]
+fn the_menu_key_opens_the_context_menu_too() {
+    let (mut u, a, _) = setup();
+    // On a layer row: at the row.
+    to_layers(&mut u);
+    press(&mut u, Key::Menu, Modifiers::NONE);
+    settle(&mut u);
+    let (pos, ids) = u.app.ui.context_menu.clone().expect("the menu opens at the row");
+    assert_eq!(ids, vec![a]);
+    assert!(pos.x < u.app.canvas.rect.min.x, "at the row in the layers panel: {pos:?}");
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    settle(&mut u);
+    assert!(u.app.ui.context_menu.is_none());
+    // On the canvas: below the selection, and the menu takes the keyboard.
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    assert_eq!(u.app.ui.nav.region, Region::Canvas);
+    press(&mut u, Key::Menu, Modifiers::NONE);
+    settle(&mut u);
+    let (pos, ids) = u.app.ui.context_menu.clone().expect("the menu opens on the canvas");
+    assert_eq!(ids, vec![a]);
+    let bottom = u.app.to_screen(0.0, 30.0).y;
+    assert!(u.app.canvas.rect.contains(pos) && pos.y > bottom, "below the selection: {pos:?}");
+    assert_ne!(focused_name(&u.ctx), "Canvas", "the menu has the keyboard");
+}
+
 #[test]
 fn f8_draws_a_selection_box_the_arrows_move_and_size() {
     let (mut u, a, b) = setup();
@@ -194,4 +221,109 @@ impl crate::FigApp {
     fn doc_x(&self, id: NodeId) -> f64 {
         self.session.doc().unwrap().node(id).unwrap().transform.translation().x
     }
+}
+
+/// Pick select (#1836): Tab turns the selection box into a pink outline on the selected layer (or
+/// the page's top layer); Tab walks siblings, Enter and Shift+Enter go down and up the tree, Space
+/// selects, and Esc or a click on the canvas leaves it.
+#[test]
+fn tab_switches_the_selection_box_to_pick_select() {
+    let (mut u, a, b) = setup();
+    // A frame with a child, on top of A and B in the layers list.
+    let f = NodeId(u.app.run("frame.create", json!({"x": 200, "y": 0, "width": 80, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    let c = NodeId(u.app.run("shape.rectangle", json!({"x": 210, "y": 10, "width": 20, "height": 20, "parent": f})).unwrap()["id"].as_u64().unwrap());
+    u.app.run("select.set", json!({"ids": [a]}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert!(u.app.ui.key_box.is_none(), "the box becomes the pick cursor");
+    assert_eq!(u.app.picked(), Some(a), "on the selected layer");
+    assert_eq!(u.app.session.selection(), vec![a], "nothing selected yet");
+    // Tab walks the siblings as the Layers panel lists them (the frame on top, then B, then A),
+    // wrapping; Shift+Tab goes the other way.
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(f), "below A comes the top of the list");
+    press(&mut u, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(u.app.picked(), Some(a));
+    press(&mut u, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(u.app.picked(), Some(b));
+    // Enter goes into a frame's top child, Shift+Enter back out; the page is never picked.
+    press(&mut u, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(u.app.picked(), Some(f));
+    press(&mut u, Key::Enter, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(c));
+    press(&mut u, Key::Enter, Modifiers::SHIFT);
+    press(&mut u, Key::Enter, Modifiers::SHIFT);
+    assert_eq!(u.app.picked(), Some(f));
+    assert_eq!(u.app.session.selection(), vec![a], "walking selects nothing");
+    // Space selects the picked layer and ends pick select.
+    press(&mut u, Key::Space, Modifiers::NONE);
+    assert_eq!(u.app.session.selection(), vec![f]);
+    assert!(u.app.picked().is_none());
+    // The chord again while the box shows switches too; Escape ends it, the selection kept.
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::F8, Modifiers::NONE);
+    assert!(u.app.ui.key_box.is_none());
+    assert_eq!(u.app.picked(), Some(f));
+    press(&mut u, Key::Escape, Modifiers::NONE);
+    assert!(u.app.picked().is_none());
+    assert_eq!(u.app.session.selection(), vec![f]);
+    // Nothing selected: the pick starts on the page's top layer; a press on the canvas ends it.
+    u.app.run("select.none", json!({}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(f));
+    let p = u.app.canvas.rect.center();
+    u.button(p, true);
+    u.button(p, false);
+    assert!(u.app.picked().is_none());
+    // Picked in one document, the cursor stays behind when another comes to the front, even where
+    // that one has a layer with the same id (each document numbers its layers from 1): Space
+    // there selects nothing, and the stale pick is dropped.
+    u.app.run("select.set", json!({"ids": [a]}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(a));
+    // On another page of the same document the cursor isn't there either: Space selects nothing.
+    let first_page = u.app.session.page().unwrap();
+    u.app.run("page.add", json!({}));
+    u.app.run("page.select", json!({"index": 1}));
+    assert_ne!(u.app.session.page().unwrap(), first_page);
+    assert_eq!(u.app.picked(), None);
+    press(&mut u, Key::Space, Modifiers::NONE);
+    assert!(u.app.session.selection().is_empty(), "nothing selected on the other page");
+    assert!(u.app.ui.pick.is_none());
+    u.app.run("page.select", json!({"index": 0}));
+    u.app.run("select.set", json!({"ids": [a]}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(a));
+    u.app.run("file.new", json!({}));
+    for _ in 0..3 {
+        u.app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10}));
+    }
+    u.app.run("select.none", json!({}));
+    assert!(u.app.session.doc().unwrap().node(a).is_some(), "the new document has a layer with the picked id");
+    assert_eq!(u.app.picked(), None);
+    press(&mut u, Key::Space, Modifiers::NONE);
+    assert!(u.app.session.selection().is_empty(), "nothing selected in the new document");
+    assert!(u.app.ui.pick.is_none());
+}
+
+/// A press on a prototype connection handle is a press on the canvas too: it ends pick select
+/// like any other canvas press, rather than leaving the pink outline up.
+#[test]
+fn a_prototype_handle_press_ends_pick_select() {
+    let (mut u, a, _) = setup();
+    u.app.run("select.set", json!({"ids": [a]}));
+    press(&mut u, Key::F8, Modifiers::NONE);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(u.app.picked(), Some(a));
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    u.frame(vec![]);
+    assert_eq!(u.app.picked(), Some(a), "still picking in the Prototype tab");
+    let b = u.app.session.doc().unwrap().world_bounds(a).unwrap();
+    let handle = u.app.to_screen(b.x1, (b.y0 + b.y1) / 2.0) + egui::vec2(11.0, 0.0);
+    u.button(handle, true);
+    u.button(handle, false);
+    assert!(u.app.ui.pick.is_none(), "the handle press ends pick select");
 }

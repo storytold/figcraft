@@ -2,7 +2,12 @@ use super::diff::{binding_group, bindings_of, diff_groups, follow_boolean_defaul
 use super::guard::{own_slot_content, relink_copy};
 use super::instances::{copy_group, field_group, sync_instance};
 use super::sync::insert_linked;
-use super::*;
+use super::{
+    BTreeMap, BTreeSet, Document, MAX_DEPTH, Node, NodeId, NodeKind, default_instance_name, holds_content, inside_instance, owning_component,
+    owning_instance, root_instance, scope, slot_edited, slot_scope,
+};
+
+type OverrideGroups = (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>);
 
 /// After an edit: record overrides inside instances, then rebuild instances whose main changed,
 /// whose properties or main were switched, or whose overrides were reset.
@@ -14,93 +19,9 @@ pub fn sync_after_edit(doc: &mut Document, before: &Document, changed: &[NodeId]
         }
     }
     let changed = changed.as_slice();
-    // 0. A slot whose layers were added, removed or reordered holds the instance's own content
-    //    from now on; copies of instance layers placed elsewhere stop mirroring their main.
-    for &id in changed {
-        let (Some(n), Some(b)) = (doc.node(id), before.node(id)) else { continue };
-        if n.children == b.children || owning_instance(doc, id).is_none() {
-            continue;
-        }
-        if let Some(slot) = slot_scope(doc, id)
-            && !slot_edited(doc, slot)
-        {
-            own_slot_content(doc, slot);
-        }
-    }
-    for &id in changed {
-        if !before.contains(id) {
-            relink_copy(doc, id);
-        }
-    }
+    adopt_slot_content(doc, before, changed);
     let mut resync: BTreeSet<NodeId> = BTreeSet::new();
-    // 1. Overrides for layers edited inside instances.
-    for &id in changed {
-        let (Some(n), Some(b)) = (doc.node(id), before.node(id)) else { continue };
-        let Some(inst) = owning_instance(doc, id) else { continue };
-        let top_root = inst == id && !inside_instance(doc, id);
-        if top_root
-            && let (NodeKind::Instance { component: c1, props: p1 }, NodeKind::Instance { component: c2, props: p2 }) = (&n.kind, &b.kind)
-            && (c1 != c2 || p1 != p2)
-        {
-            // Switching the main or a property value of an instance isn't an override.
-            resync.insert(id);
-        }
-        let raw = diff_groups(b, n);
-        let mut groups = raw.clone();
-        // An instance's own place, resizing, export settings, interactions and variable modes are
-        // its own, not overrides.
-        if top_root {
-            groups.retain(|g| !matches!(*g, "component" | "props" | "position" | "resizing" | "exports" | "interactions" | "modes"));
-        }
-        if groups.iter().any(|g| matches!(*g, "size" | "position")) {
-            groups.retain(|g| !matches!(*g, "size" | "position") || !geometry_derived(doc, before, id, g));
-        }
-        // A value equal to the main's isn't an override (setting it back clears the override).
-        let mut cleared = Vec::new();
-        if let Some(src) = n.source.and_then(|s| doc.node(s)) {
-            let mut differs = diff_groups(src, n);
-            if inst == id {
-                differs.retain(|g| *g != "name");
-                if n.name != default_instance_name(doc, src.id) {
-                    differs.push("name");
-                }
-            }
-            // A value from the same variable as the main's (resolved in this layer's modes) isn't an
-            // override either.
-            let from_variables = variable_groups(n, src);
-            groups.retain(|g| differs.contains(g) && !from_variables.contains(g));
-            // Binding another variable (or none) where the main binds one is an override.
-            for (k, _) in b.bound.iter().chain(n.bound.iter()) {
-                let Some(g) = binding_group(k) else { continue };
-                let rebound = b.bound.get(k) != n.bound.get(k) && !bindings_of(n, g).eq(bindings_of(src, g));
-                if rebound && !groups.contains(&g) {
-                    groups.push(g);
-                }
-            }
-            cleared =
-                raw.iter().filter(|g| !matches!(**g, "size" | "position") && !differs.contains(g) && n.overrides.contains(**g)).copied().collect();
-            if top_root {
-                cleared.retain(|g| !matches!(*g, "component" | "props"));
-            }
-        }
-        let lost = b.overrides.iter().any(|g| !n.overrides.contains(g));
-        let nested_switch = !top_root && raw.iter().any(|g| matches!(*g, "component" | "props"));
-        if (!groups.is_empty() || !cleared.is_empty())
-            && let Some(m) = doc.node_mut(id)
-        {
-            for g in groups {
-                m.overrides.insert(g.to_string());
-            }
-            for g in cleared {
-                m.overrides.remove(g);
-            }
-        }
-        if (lost || nested_switch)
-            && let Some(r) = root_instance(doc, id)
-        {
-            resync.insert(r);
-        }
-    }
+    record_overrides(doc, before, changed, &mut resync);
     // 2. Components whose layers changed, were added or removed. Value-only edits (paint, text,
     //    visibility, …) are carried to the copies directly; anything else rebuilds the instances.
     let mut comps: BTreeSet<NodeId> = BTreeSet::new();
@@ -170,6 +91,105 @@ pub fn sync_after_edit(doc: &mut Document, before: &Document, changed: &[NodeId]
     // 3. Instances of changed components follow; an instance inside another component makes that
     //    one change too.
     rebuild_instances(doc, &comps);
+}
+
+/// Slot content changes: layers added, removed or reordered in a slot become the instance's own.
+fn adopt_slot_content(doc: &mut Document, before: &Document, changed: &[NodeId]) {
+    // 0. A slot whose layers were added, removed or reordered holds the instance's own content
+    //    from now on; copies of instance layers placed elsewhere stop mirroring their main.
+    for &id in changed {
+        let (Some(n), Some(b)) = (doc.node(id), before.node(id)) else { continue };
+        if n.children == b.children || owning_instance(doc, id).is_none() {
+            continue;
+        }
+        if let Some(slot) = slot_scope(doc, id)
+            && !slot_edited(doc, slot)
+        {
+            own_slot_content(doc, slot);
+        }
+    }
+    for &id in changed {
+        if !before.contains(id) {
+            relink_copy(doc, id);
+        }
+    }
+}
+
+/// Overrides for layers edited inside instances; the instances to rebuild go into `resync`.
+fn record_overrides(doc: &mut Document, before: &Document, changed: &[NodeId], resync: &mut BTreeSet<NodeId>) {
+    for &id in changed {
+        let (Some(n), Some(b)) = (doc.node(id), before.node(id)) else { continue };
+        let Some(inst) = owning_instance(doc, id) else { continue };
+        let top_root = inst == id && !inside_instance(doc, id);
+        if top_root
+            && let (NodeKind::Instance { component: c1, props: p1 }, NodeKind::Instance { component: c2, props: p2 }) = (&n.kind, &b.kind)
+            && (c1 != c2 || p1 != p2)
+        {
+            // Switching the main or a property value of an instance isn't an override.
+            resync.insert(id);
+        }
+        let (raw, groups, cleared) = override_groups(doc, before, id, n, b, inst, top_root);
+        let lost = b.overrides.iter().any(|g| !n.overrides.contains(g));
+        let nested_switch = !top_root && raw.iter().any(|g| matches!(*g, "component" | "props"));
+        if (!groups.is_empty() || !cleared.is_empty())
+            && let Some(m) = doc.node_mut(id)
+        {
+            for g in groups {
+                m.overrides.insert(g.to_string());
+            }
+            for g in cleared {
+                m.overrides.remove(g);
+            }
+        }
+        if (lost || nested_switch)
+            && let Some(r) = root_instance(doc, id)
+        {
+            resync.insert(r);
+        }
+    }
+}
+
+/// `(raw, groups, cleared)` of layer `id` edited from `b` to `n`: the raw changed groups, the ones
+/// that are now overrides and the overrides that were set back to the main's value.
+fn override_groups(doc: &Document, before: &Document, id: NodeId, n: &Node, b: &Node, inst: NodeId, top_root: bool) -> OverrideGroups {
+    let raw = diff_groups(b, n);
+    let mut groups = raw.clone();
+    // An instance's own place, resizing, export settings, interactions and variable modes are
+    // its own, not overrides.
+    if top_root {
+        groups.retain(|g| !matches!(*g, "component" | "props" | "position" | "resizing" | "exports" | "interactions" | "modes"));
+    }
+    if groups.iter().any(|g| matches!(*g, "size" | "position")) {
+        groups.retain(|g| !matches!(*g, "size" | "position") || !geometry_derived(doc, before, id, g));
+    }
+    // A value equal to the main's isn't an override (setting it back clears the override).
+    let mut cleared = Vec::new();
+    if let Some(src) = n.source.and_then(|s| doc.node(s)) {
+        let mut differs = diff_groups(src, n);
+        if inst == id {
+            differs.retain(|g| *g != "name");
+            if n.name != default_instance_name(doc, src.id) {
+                differs.push("name");
+            }
+        }
+        // A value from the same variable as the main's (resolved in this layer's modes) isn't an
+        // override either.
+        let from_variables = variable_groups(n, src);
+        groups.retain(|g| differs.contains(g) && !from_variables.contains(g));
+        // Binding another variable (or none) where the main binds one is an override.
+        for (k, _) in b.bound.iter().chain(n.bound.iter()) {
+            let Some(g) = binding_group(k) else { continue };
+            let rebound = b.bound.get(k) != n.bound.get(k) && !bindings_of(n, g).eq(bindings_of(src, g));
+            if rebound && !groups.contains(&g) {
+                groups.push(g);
+            }
+        }
+        cleared = raw.iter().filter(|g| !matches!(**g, "size" | "position") && !differs.contains(g) && n.overrides.contains(**g)).copied().collect();
+        if top_root {
+            cleared.retain(|g| !matches!(*g, "component" | "props"));
+        }
+    }
+    (raw, groups, cleared)
 }
 
 #[cfg(test)]
@@ -480,7 +500,7 @@ fn sized_own(n: &Node) -> bool {
 
 /// Rebuild every instance of `comps` (and of the components that hold those instances, and so on
 /// outwards), each outermost instance once, inner components first.
-fn rebuild_instances(doc: &mut Document, comps: &BTreeSet<NodeId>) {
+pub(super) fn rebuild_instances(doc: &mut Document, comps: &BTreeSet<NodeId>) {
     if comps.is_empty() {
         return;
     }

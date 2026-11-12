@@ -56,6 +56,11 @@ pub struct PluginsWindow {
 
 /// Width of the plugin windows' fields.
 const FIELD_W: f32 = 220.0;
+/// Tallest a panel image is drawn, and the largest picture a panel shows (pixels on a side).
+const IMAGE_MAX_H: f32 = 240.0;
+const IMAGE_MAX_SIDE: u32 = 4096;
+/// The value field beside a slider.
+const SLIDER_VALUE_W: f32 = 56.0;
 /// How far apart plugin panels open, side by side (a panel and a gap).
 const PANEL_STEP: f32 = 372.0;
 
@@ -133,7 +138,7 @@ pub(crate) fn save_file(app: &mut FigApp, data: &Value) {
     let shown = name.clone();
     app.pick_save(tr("Save file"), &name, &exts, move |app, path| {
         let file = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(shown);
-        match std::fs::write(&path, &bytes) {
+        match figcraft_engine::file_access::write(&path, &bytes) {
             Ok(()) => app.toast(trf("Saved {name}", &[("name", &file)])),
             Err(_) => app.toast(tr("Couldn't save the file")),
         }
@@ -228,12 +233,12 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
 fn panel_windows(app: &mut FigApp, ctx: &Context) {
     let t = Tokens::get(ctx);
     let right = ctx.content_rect().right() - 252.0;
-    // (plugin, what was used; None: closed)
+    // (plugin, what was used, in order; None: closed)
     let mut actions: Vec<(String, Option<Used>)> = Vec::new();
     for (i, open) in app.session.plugins.panels.iter().enumerate() {
         let id = open.manifest.id.as_str();
         let mut keep = true;
-        let mut used = None;
+        let mut used = Vec::new();
         // Side by side leftwards from the properties panel, three to a row.
         let at = egui::pos2(right - PANEL_STEP * (i % 3) as f32, 52.0 + 28.0 * (i / 3) as f32);
         floating(open.title(), ctx).id(Id::unique(("plugin_panel", id))).pivot(Align2::RIGHT_TOP).default_pos(at).open(&mut keep).show(ctx, |ui| {
@@ -242,8 +247,8 @@ fn panel_windows(app: &mut FigApp, ctx: &Context) {
         });
         if !keep {
             actions.push((id.to_string(), None));
-        } else if used.is_some() {
-            actions.push((id.to_string(), used));
+        } else {
+            actions.extend(used.into_iter().map(|u| (id.to_string(), Some(u))));
         }
     }
     for (id, used) in actions {
@@ -252,7 +257,7 @@ fn panel_windows(app: &mut FigApp, ctx: &Context) {
                 app.run("plugin.close", json!({"id": id}));
             }
             Some(Used::Set(control, value)) => run(app, "plugin.event", json!({"id": id, "control": control, "value": value})),
-            Some(Used::Pick(control)) => app.ui.picker = Some(PickerTarget::PluginField { plugin: id, control, pending: None }),
+            Some(Used::Pick(control)) => app.open_picker(PickerTarget::PluginField { plugin: id, control, pending: None }, None),
         }
     }
 }
@@ -575,12 +580,13 @@ fn form_window(app: &mut FigApp, ctx: &Context) {
     let title = if label.contains(name.as_str()) { label.to_string() } else { format!("{name}: {label}") };
     window(&title, ctx).id(Id::unique("plugin_form")).open(&mut open).show(ctx, |ui| {
         ui.set_width(320.0);
-        match controls(ui, &format!("{}/{}", form.id, form.command), &command.params, &form.values, &t) {
-            Some(Used::Set(name, v)) => {
-                form.values.insert(name, v);
+        for used in controls(ui, &format!("{}/{}", form.id, form.command), &command.params, &form.values, &t) {
+            match used {
+                Used::Set(name, v) => {
+                    form.values.insert(name, v);
+                }
+                Used::Pick(control) => pick = Some(control),
             }
-            Some(Used::Pick(control)) => pick = Some(control),
-            None => {}
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -590,7 +596,7 @@ fn form_window(app: &mut FigApp, ctx: &Context) {
     });
     app.ui.plugin_form = (open && !submit && !cancel).then_some(form.clone());
     if let Some(control) = pick {
-        app.ui.picker = Some(PickerTarget::PluginField { plugin: form.id.clone(), control, pending: None });
+        app.open_picker(PickerTarget::PluginField { plugin: form.id.clone(), control, pending: None }, None);
     }
     if submit {
         run(app, "plugin.run", json!({"id": form.id, "command": form.command, "params": form.values}));
@@ -599,19 +605,22 @@ fn form_window(app: &mut FigApp, ctx: &Context) {
 
 /// Parameters or panel controls in two columns (label, field); buttons in a row share one line,
 /// the first button filled. Returns what the user did to which control.
-fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Value>, t: &Tokens) -> Option<Used> {
-    let mut changed = None;
+fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Value>, t: &Tokens) -> Vec<Used> {
+    // In order: a tap's press and release share a frame, so a field that loses the keyboard
+    // commits in the same frame as the button that took it.
+    let mut used = Vec::new();
     let mut first_button = true;
     egui::Grid::new(("plugin_controls", salt)).num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         for row in params.chunk_by(|a, b| a.kind == ParamKind::Button && b.kind == ParamKind::Button) {
             let Some(p) = row.first() else { continue };
             // Checkboxes and buttons carry their own label; a list's sits by its first item.
-            let caption = if matches!(p.kind, ParamKind::Boolean | ParamKind::Button | ParamKind::Note) { "" } else { p.title() };
-            let caption = RichText::new(caption).font(regular(11.0)).color(t.text_secondary);
+            let caption = if matches!(p.kind, ParamKind::Boolean | ParamKind::Button | ParamKind::Note | ParamKind::Image) { "" } else { p.title() };
+            // Unwrapped: the column is as wide as its widest caption ("Palette" wrapped otherwise).
+            let caption = egui::Label::new(RichText::new(caption).font(regular(11.0)).color(t.text_secondary)).extend();
             if p.kind == ParamKind::List {
-                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| ui.label(caption));
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| ui.add(caption));
             } else {
-                ui.label(caption);
+                ui.add(caption);
             }
             let hit = match p.kind {
                 ParamKind::Note => {
@@ -619,6 +628,10 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
                         ui.set_max_width(FIELD_W);
                         ui.add(egui::Label::new(RichText::new(&p.label).font(regular(11.0)).color(t.text)).wrap());
                     });
+                    None
+                }
+                ParamKind::Image => {
+                    image(ui, p, t);
                     None
                 }
                 ParamKind::Button => {
@@ -633,13 +646,59 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
                     field(ui, Id::unique(("plugin_control", salt, &p.name)), p, &current)
                 }
             };
-            if hit.is_some() {
-                changed = hit;
-            }
+            used.extend(hit);
             ui.end_row();
         }
     });
-    changed
+    used
+}
+
+/// Panel images decoded lately, by their `data` (None: it couldn't be shown); the oldest go past
+/// [`IMAGE_CACHE`], so a plugin that keeps changing its pictures doesn't keep every texture.
+type ImageCache = Vec<(Id, Option<egui::TextureHandle>)>;
+const IMAGE_CACHE: usize = 32;
+
+/// A panel's picture, at most as wide as a field and [`IMAGE_MAX_H`] tall (never scaled up), named
+/// for screen readers by its label; its label (or "Image") as text when it can't be shown.
+fn image(ui: &mut Ui, p: &Param, t: &Tokens) {
+    let (cache, key) = (Id::unique("plugin_images"), Id::unique(&p.data));
+    let cached = ui.data(|d| d.get_temp::<ImageCache>(cache).and_then(|c| c.into_iter().find(|(k, _)| *k == key)));
+    let tex = match cached {
+        Some((_, tex)) => tex,
+        None => {
+            let tex = decode_image(ui.ctx(), &p.data);
+            ui.data_mut(|d| {
+                let c = d.get_temp_mut_or_default::<ImageCache>(cache);
+                c.push((key, tex.clone()));
+                let over = c.len().saturating_sub(IMAGE_CACHE);
+                c.drain(..over);
+            });
+            tex
+        }
+    };
+    let Some(tex) = tex else {
+        let text: &str = if p.label.is_empty() { tr("Image") } else { &p.label };
+        ui.label(RichText::new(text).font(regular(11.0)).color(t.text_secondary));
+        return;
+    };
+    let size = tex.size_vec2();
+    let size = size * (FIELD_W / size.x).min(IMAGE_MAX_H / size.y).min(1.0);
+    let resp = ui.add(egui::Image::new(&tex).fit_to_exact_size(size));
+    crate::a11y::image(&resp, &p.label);
+}
+
+/// A panel image's texture: its base64 decoded, then the picture (at most [`IMAGE_MAX_SIDE`]
+/// pixels on a side, checked before it is decoded), scaled to twice the field's width.
+fn decode_image(ctx: &Context, data: &str) -> Option<egui::TextureHandle> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).ok()?;
+    let (w, h) = figcraft_render::images::dimensions(&bytes)?;
+    if w > IMAGE_MAX_SIDE || h > IMAGE_MAX_SIDE {
+        return None;
+    }
+    let pic = figcraft_format::thumbnail::decode_thumbnail(&bytes, (FIELD_W * 2.0) as u32)?;
+    let image = egui::ColorImage::from_rgba_unmultiplied([pic.width as usize, pic.height as usize], &pic.rgba);
+    Some(ctx.load_texture("plugin-panel-image", image, egui::TextureOptions::LINEAR))
 }
 
 /// One parameter's field, named for screen readers: its new value when it changed.
@@ -651,6 +710,33 @@ fn field(ui: &mut Ui, id: Id, p: &Param, current: &Value) -> Option<Used> {
             FieldEdit::Set(v) | FieldEdit::Scrub(v, true) => p.coerce(&json!(v)).ok(),
             FieldEdit::Scrub(_, false) => None,
         },
+        // A slider and its value: dragging shows the value live and calls the plugin back once,
+        // when let go (each call is an undo step).
+        ParamKind::Slider => {
+            let (min, max) = (p.min.unwrap_or(0.0), p.max.unwrap_or(1.0));
+            let live = id.with("live");
+            let shown = ui.data(|d| d.get_temp::<f64>(live)).or(current.as_f64());
+            let (slid, typed) = ui
+                .horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let slid = widgets::slider(ui, id.with("slider"), min..=max, None, shown, FIELD_W - SLIDER_VALUE_W - 6.0, name);
+                    (slid, widgets::number_field(ui, id, Lead::Named(name), shown, "", SLIDER_VALUE_W, (max - min) / 100.0))
+                })
+                .inner;
+            let done = match (slid, typed) {
+                (Some((Some(v), false)), _) => {
+                    ui.data_mut(|d| d.insert_temp(live, v));
+                    None
+                }
+                (Some((v, true)), _) => Some(v.map_or_else(|| p.default_value(), |v| json!(v))),
+                (_, Some(FieldEdit::Set(v) | FieldEdit::Scrub(v, true))) => Some(json!(v)),
+                _ => None,
+            };
+            if done.is_some() {
+                ui.data_mut(|d| d.remove::<f64>(live));
+            }
+            done.and_then(|v| p.coerce(&v).ok())
+        }
         ParamKind::Boolean => {
             let on = current.as_bool().unwrap_or(false);
             widgets::checkbox(ui, on, name).then_some(Value::Bool(!on))
@@ -697,7 +783,7 @@ fn field(ui: &mut Ui, id: Id, p: &Param, current: &Value) -> Option<Used> {
             }
             typed
         }
-        ParamKind::Button | ParamKind::Note => None,
+        ParamKind::Button | ParamKind::Note | ParamKind::Image => None,
     };
     v.map(|v| Used::Set(p.name.clone(), v))
 }

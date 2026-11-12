@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::*;
 use figcraft_color::{BlendMode, Color, Gradient, GradientKind, ImageScaleMode, Paint};
-use figcraft_doc::{BoolOp, Effect, EffectKind, ImageData, NodeKind, StrokeAlign, TextData};
+use figcraft_doc::{BoolOp, Effect, EffectKind, ImageData, NodeKind, Region, Segment, StrokeAlign, TextData, VectorNetwork, Vertex, WindingRule};
 
 pub(crate) fn page_count(pdf: &[u8]) -> usize {
     let s = String::from_utf8_lossy(pdf);
@@ -49,6 +49,58 @@ pub(crate) fn png(w: u32, h: u32) -> Vec<u8> {
 
 pub(crate) fn has_inter() -> bool {
     figcraft_text::find_face("Inter", "Regular").is_some()
+}
+
+#[test]
+fn pdf_vector_region_paints_emit_independent_colors() {
+    let mut d = Document::new("regions");
+    let p = d.first_page().unwrap();
+    let network = VectorNetwork {
+        vertices: [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)]
+            .into_iter()
+            .map(|(x, y)| Vertex::new(x, y))
+            .collect(),
+        segments: (0..8).map(|i| Segment::line(i, (i + 1) % 4 + (i / 4) * 4)).collect(),
+        regions: vec![
+            Region {
+                loops: vec![vec![0, 1, 2, 3]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]),
+                ..Default::default()
+            },
+            Region {
+                loops: vec![vec![4, 5, 6, 7]],
+                winding: WindingRule::NonZero,
+                fills: Some(vec![Paint::solid(Color::from_hex("0000FF").unwrap())]),
+                ..Default::default()
+            },
+            Region { loops: vec![vec![0, 1, 2, 3]], winding: WindingRule::NonZero, fills: Some(Vec::new()), ..Default::default() },
+        ],
+    };
+    let id = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 20.0, 10.0).unwrap();
+    let content = inflated(&export_pdf(&d, &[id], &PdfOptions::default()).unwrap());
+    assert!(content.contains("1 0 0 rg") && content.contains("0 0 1 rg"), "{content}");
+}
+
+#[test]
+fn pdf_vector_region_paints_draw_smoothed_corners() {
+    // A closed vector with rounded points and paints on its region: corner smoothing changes the
+    // exported outline, as on the canvas.
+    let corners = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| figcraft_geom::Point::new(x, y));
+    let mut network = VectorNetwork::from_points(&corners, true);
+    for v in &mut network.vertices {
+        v.radius = 20.0;
+    }
+    network.regions[0].fills = Some(vec![Paint::solid(Color::from_hex("FF0000").unwrap())]);
+    let mut d = Document::new("smoothing");
+    let p = d.first_page().unwrap();
+    let id = d.create(p, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let content = |d: &Document| inflated(&export_pdf(d, &[id], &PdfOptions::default()).unwrap());
+    let plain = content(&d);
+    d.get_mut(id).unwrap().corners.smoothing = 0.6;
+    let smoothed = content(&d);
+    assert!(smoothed.contains("1 0 0 rg"), "{smoothed}");
+    assert_ne!(smoothed, plain, "the region's outline takes the smoothing");
 }
 
 /// A page with two frames: shapes, gradients, an image, strokes, a mask, a boolean, effects, text.

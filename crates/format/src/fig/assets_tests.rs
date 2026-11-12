@@ -5,7 +5,7 @@
 //! laid out for it. Everything written reads back; what the format can't say is written as its
 //! value with a warning; damaged files never panic.
 
-use figcraft_doc::{Collection, Mode, Style, StyleKind, Variable, VariableType, VariableValue};
+use figcraft_doc::{Collection, ColorOperand, Mode, Style, StyleKind, Variable, VariableType, VariableValue};
 use serde_json::json;
 
 use super::*;
@@ -225,7 +225,7 @@ fn same_after_round_trip(doc: &Document, what: &str) -> Vec<String> {
                     normalize(&mut n, &|i| i);
                     *paints = n.fills;
                 }
-                StyleKind::Text { style } => {
+                StyleKind::Text { style, .. } => {
                     if let NodeKind::Text(td) = &mut n.kind {
                         td.style = style.clone();
                     }
@@ -274,19 +274,30 @@ fn variables_modes_and_bindings_round_trip() {
 #[test]
 fn variables_are_written_as_nodes_on_a_hidden_page() {
     let nodes = written(&themed());
-    let hidden = named(&nodes, "Internal Only Canvas");
+    assert_hidden_theme(&nodes);
+    assert_variable_values(&nodes);
+    assert_variable_bindings(&nodes);
+}
+
+fn assert_hidden_theme(nodes: &[Value]) {
+    let hidden = named(nodes, "Internal Only Canvas");
     assert_eq!((hidden["type"].as_str(), hidden["internalOnly"].as_bool(), hidden["visible"].as_bool()), (Some("CANVAS"), Some(true), Some(false)));
-    let set = named(&nodes, "Theme");
+    let set = named(nodes, "Theme");
     assert_eq!(set["type"], "VARIABLE_SET");
     assert_eq!(set["parentIndex"]["guid"], hidden["guid"]);
     let modes = set["variableSetModes"].as_array().unwrap();
     assert_eq!(modes.iter().map(|m| m["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Light", "Dark"]);
-    let bg = named(&nodes, "color/bg");
+}
+
+fn assert_variable_values(nodes: &[Value]) {
+    let set = named(nodes, "Theme");
+    let modes = set["variableSetModes"].as_array().unwrap();
+    let bg = named(nodes, "color/bg");
     assert_eq!((bg["type"].as_str(), bg["variableResolvedType"].as_str()), (Some("VARIABLE"), Some("COLOR")));
     assert_eq!(bg["variableSetID"]["guid"], set["guid"]);
     assert_eq!(bg["description"], "Behind everything");
     assert_eq!(bg["variableScopes"], json!(["FRAME_FILL", "SHAPE_FILL"]));
-    assert_eq!(named(&nodes, "color/fg")["variableScopes"], json!(["TEXT_FILL", "STROKE", "EFFECT_COLOR"]));
+    assert_eq!(named(nodes, "color/fg")["variableScopes"], json!(["TEXT_FILL", "STROKE", "EFFECT_COLOR"]));
     let values = bg["variableDataValues"]["entries"].as_array().unwrap();
     assert_eq!(values.len(), 2);
     assert_eq!(values[1]["modeID"], modes[1]["id"]);
@@ -295,19 +306,25 @@ fn variables_are_written_as_nodes_on_a_hidden_page() {
         (Some("COLOR"), Some(0.25))
     );
     // An alias names the variable's node; every value says the type it resolves to.
-    let accent = &named(&nodes, "color/accent")["variableDataValues"]["entries"];
+    let accent = &named(nodes, "color/accent")["variableDataValues"]["entries"];
     assert_eq!(accent[0]["variableData"]["dataType"], "ALIAS");
     assert_eq!(accent[0]["variableData"]["resolvedDataType"], "COLOR");
-    assert_eq!(accent[0]["variableData"]["value"]["alias"]["guid"], named(&nodes, "color/fg")["guid"]);
-    assert_eq!(named(&nodes, "title")["variableDataValues"]["entries"][1]["variableData"]["value"]["textValue"], "Grüße 😀");
-    assert_eq!(named(&nodes, "shown")["variableDataValues"]["entries"][1]["variableData"]["value"]["boolValue"], false);
-    assert_eq!(named(&nodes, "space/gap")["variableDataValues"]["entries"][0]["variableData"]["value"]["floatValue"], 8.0);
+    assert_eq!(accent[0]["variableData"]["value"]["alias"]["guid"], named(nodes, "color/fg")["guid"]);
+    assert_eq!(named(nodes, "title")["variableDataValues"]["entries"][1]["variableData"]["value"]["textValue"], "Grüße 😀");
+    assert_eq!(named(nodes, "shown")["variableDataValues"]["entries"][1]["variableData"]["value"]["boolValue"], false);
+    assert_eq!(named(nodes, "space/gap")["variableDataValues"]["entries"][0]["variableData"]["value"]["floatValue"], 8.0);
+}
+
+fn assert_variable_bindings(nodes: &[Value]) {
+    let bg = named(nodes, "color/bg");
+    let set = named(nodes, "Theme");
+    let modes = set["variableSetModes"].as_array().unwrap();
     // Bindings: on the paint, the gradient stop, the effect and the grid, and in the layer's map.
-    let card = named(&nodes, "Card");
+    let card = named(nodes, "Card");
     assert_eq!(card["fillPaints"][0]["colorVar"]["value"]["alias"]["guid"], bg["guid"]);
     assert_eq!(card["variableModeBySetMap"]["entries"][0]["variableSetID"]["guid"], set["guid"]);
     assert_eq!(card["variableModeBySetMap"]["entries"][0]["variableModeID"], modes[1]["id"]);
-    assert_eq!(card["layoutGrids"][0]["gutterSizeVar"]["value"]["alias"]["guid"], named(&nodes, "space/gap")["guid"]);
+    assert_eq!(card["layoutGrids"][0]["gutterSizeVar"]["value"]["alias"]["guid"], named(nodes, "space/gap")["guid"]);
     let fields: Vec<&str> =
         card["variableConsumptionMap"]["entries"].as_array().unwrap().iter().map(|e| e["variableField"].as_str().unwrap()).collect();
     for f in
@@ -315,7 +332,7 @@ fn variables_are_written_as_nodes_on_a_hidden_page() {
     {
         assert!(fields.contains(&f), "{f} in {fields:?}");
     }
-    let swatch = named(&nodes, "Swatch");
+    let swatch = named(nodes, "Swatch");
     assert!(swatch["fillPaints"][1]["stopsVar"][0].get("colorVar").is_none());
     assert_eq!(swatch["fillPaints"][1]["stopsVar"][1]["colorVar"]["value"]["alias"]["guid"], bg["guid"]);
     assert_eq!(swatch["fillPaints"][1]["stopsVar"].as_array().unwrap().len(), 2);
@@ -324,7 +341,7 @@ fn variables_are_written_as_nodes_on_a_hidden_page() {
         assert_eq!(swatch["effects"][0][key]["dataType"], "ALIAS", "{key}");
     }
     // The page sets a mode too.
-    assert_eq!(named(&nodes, "Page 1")["variableModeBySetMap"]["entries"][0]["variableSetID"]["guid"], named(&nodes, "Spacing")["guid"]);
+    assert_eq!(named(nodes, "Page 1")["variableModeBySetMap"]["entries"][0]["variableSetID"]["guid"], named(nodes, "Spacing")["guid"]);
 }
 
 #[test]
@@ -366,6 +383,36 @@ fn bindings_the_format_cant_say_keep_their_value_with_a_warning() {
     assert!(back.variables.get("lost").is_none());
 }
 
+/// A colour calculation has no encoding here: it is written as the colour it shows in each mode,
+/// and one that can't resolve is left out with a warning rather than written as something else.
+#[test]
+fn colour_calculations_are_written_as_the_colour_they_show() {
+    let mut doc = themed();
+    let fade = |source: &str| VariableValue::ColorAlpha { variable: source.into(), opacity: 0.5 };
+    let mix = VariableValue::ColorMix {
+        from: ColorOperand::Variable { variable: "v-fg".into() },
+        to: ColorOperand::Literal { literal: Color::new(1.0, 0.0, 0.0, 1.0) },
+        t: 0.5,
+    };
+    doc.variables.variables.push(var("v-veil", "color/veil", "c-theme", VariableType::Color, &[("m-light", fade("v-bg")), ("m-dark", mix)]));
+    doc.variables.variables.push(var("v-broken", "color/broken", "c-theme", VariableType::Color, &[("m-light", fade("v-gone"))]));
+    let (bytes, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|w| w == crate::CALCULATIONS_LEFT_OUT), "{warnings:?}");
+    let (back, _) = import(&bytes, "x").unwrap();
+    assert!(back.variables.get("color/broken").is_none_or(|v| v.values.is_empty()), "left out, not written as something else");
+    let theme = back.variables.collections.iter().find(|c| c.name == "Theme").unwrap();
+    let veil = back.variables.get("color/veil").unwrap();
+    let shown: Vec<String> = theme
+        .modes
+        .iter()
+        .map(|m| match veil.values.get(&m.id) {
+            Some(VariableValue::Color(c)) => c.to_css_hex(),
+            other => panic!("{}: {other:?}", m.name),
+        })
+        .collect();
+    assert_eq!(shown, ["#FFFFFF80", "#DF6060"]);
+}
+
 /// A style of each kind linked from a layer, and one that nothing uses.
 fn styled() -> Document {
     let mut doc = Document::new("Styled");
@@ -397,7 +444,7 @@ fn styled() -> Document {
         bound: Default::default(),
     };
     doc.styles = vec![
-        style("s-text", "Heading", StyleKind::Text { style: heading.clone() }),
+        style("s-text", "Heading", StyleKind::Text { style: heading.clone(), paragraph: Default::default() }),
         style("s-brand", "Brand/Primary", StyleKind::Paint { paints: vec![solid(0.25, 0.5, 1.0)] }),
         style("s-unused", "Brand/Unused", StyleKind::Paint { paints: vec![solid(1.0, 0.0, 0.0), solid(0.0, 1.0, 0.0)] }),
         style("s-shadow", "Elevation/1", StyleKind::Effect { effects: vec![shadow.clone()] }),
@@ -509,8 +556,15 @@ fn text_styles_on_part_of_a_text_are_written_as_values() {
 fn sized() -> (Document, [NodeId; 3]) {
     let mut doc = Document::new("Sized");
     let page = doc.first_page().unwrap();
-    let main =
-        add(&mut doc, page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Card", (0.0, 0.0), (100.0, 60.0), &|_| {});
+    let main = add(
+        &mut doc,
+        page,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Card",
+        (0.0, 0.0),
+        (100.0, 60.0),
+        &|_| {},
+    );
     add(&mut doc, main, NodeKind::Rectangle, "Box", (10.0, 10.0), (40.0, 40.0), &|n| {
         n.constraints = Constraints { horizontal: HConstraint::Scale, vertical: VConstraint::Scale };
     });
@@ -606,10 +660,17 @@ fn an_instance_named_after_its_set_has_no_name_of_its_own() {
 fn layers_bound_like_their_mains_are_no_overrides_in_another_mode() {
     let mut doc = themed();
     let page = doc.first_page().unwrap();
-    let main =
-        add(&mut doc, page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Chip", (0.0, 300.0), (80.0, 30.0), &|n| {
+    let main = add(
+        &mut doc,
+        page,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Chip",
+        (0.0, 300.0),
+        (80.0, 30.0),
+        &|n| {
             n.bound.insert("fill".into(), "v-bg".into());
-        });
+        },
+    );
     add(&mut doc, main, NodeKind::Text(TextData::new("Chip")), "Chip label", (8.0, 6.0), (40.0, 16.0), &|n| {
         n.fills = vec![solid(0.0, 0.0, 0.0)];
         n.bound.insert("fill".into(), "v-fg".into());
@@ -645,15 +706,22 @@ fn layers_of_a_swapped_nested_instance_keep_what_they_change() {
     let other = add(
         &mut doc,
         page,
-        NodeKind::Component { description: String::new(), props: BTreeMap::new() },
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
         "Other",
         (0.0, 400.0),
         (100.0, 60.0),
         &|_| {},
     );
     add(&mut doc, other, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Dot", (10.0, 10.0), (40.0, 40.0), &|_| {});
-    let row =
-        add(&mut doc, page, NodeKind::Component { description: String::new(), props: BTreeMap::new() }, "Row", (0.0, 500.0), (300.0, 80.0), &|_| {});
+    let row = add(
+        &mut doc,
+        page,
+        NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() },
+        "Row",
+        (0.0, 500.0),
+        (300.0, 80.0),
+        &|_| {},
+    );
     let mut g = Gen { r: Lcg(3), doc, image: String::new(), frames: Vec::new(), layers: Vec::new() };
     let thumb = g.instance(card, row, BTreeMap::new());
     g.doc.node_mut(thumb).unwrap().name = "Thumb".into();
@@ -965,5 +1033,215 @@ fn local_samples_keep_their_variables_and_styles() {
         assert_eq!(json!(a.variables), json!(b.variables), "{}", p.display());
         let styles = |d: &Document| d.styles.iter().map(|s| (s.name.clone(), s.kind.type_name())).collect::<Vec<_>>();
         assert_eq!(styles(&a), styles(&b), "{}", p.display());
+    }
+}
+
+/// #2091 item 1, round trip: the Scale tool's result (radius 10 -> 15) must survive export and import.
+#[test]
+fn a_scaled_instance_keeps_its_radius_through_a_round_trip() {
+    let (mut doc, insts) = sized();
+    let main_box = doc.nodes().find(|n| n.name == "Box" && n.parent.is_some_and(|p| doc.node(p).unwrap().name == "Card")).unwrap().id;
+    doc.node_mut(main_box).unwrap().corners.radii = [10.0; 4];
+    let kid = doc.node(insts[2]).unwrap().children[0];
+    doc.node_mut(kid).unwrap().corners.radii = [15.0; 4];
+    let (bytes, _) = export(&doc, None).unwrap();
+    let (back, _) = import(&bytes, "x").unwrap();
+    let inst = back.nodes().find(|n| n.name == "Scaled").unwrap();
+    let b = inst.children.iter().map(|c| back.node(*c).unwrap()).find(|n| n.name == "Box").unwrap();
+    // The 40 px box at the instance's 1.5 scale. The exporter writes every scaled value of a layer
+    // in a derived row, so there is no main-layer value left unwritten here to round-trip; the
+    // scaling of values with no row stays covered by `scale_factor_tests`.
+    assert_eq!((b.width, b.height), (60.0, 60.0));
+    assert_eq!(b.corners.radii, [15.0; 4]);
+}
+
+/// Factors outside the importer's range use explicit values, not an ignored scale factor.
+#[test]
+fn exported_instance_scale_factors_stay_within_the_importers_range() {
+    for (factor, written_factor) in [(0.0005, 1.0), (0.001, 0.001), (1.0, 1.0), (1000.0, 1000.0), (2000.0, 1.0)] {
+        let (mut doc, insts) = sized();
+        let ids: Vec<_> = std::iter::once(insts[2]).chain(doc.node(insts[2]).unwrap().children.clone()).collect();
+        for id in ids {
+            let n = doc.node(id).unwrap();
+            let source = match n.kind {
+                NodeKind::Instance { component, .. } => component,
+                _ => n.source.unwrap(),
+            };
+            let src = doc.node(source).unwrap().clone();
+            let n = doc.node_mut(id).unwrap();
+            (n.width, n.height) = (src.width * factor, src.height * factor);
+            n.stroke.weight = src.stroke.weight * factor;
+            n.corners.radii = [10.0 * factor; 4];
+            if id != insts[2] {
+                let t = src.transform.translation();
+                n.transform = Affine::translate((t.x * factor, t.y * factor));
+            }
+            if let NodeKind::Text(td) = &mut n.kind {
+                td.style.font_size = src.kind.text().unwrap().style.font_size * factor;
+            }
+        }
+        let nodes = written(&doc);
+        assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], f64::from(written_factor as f32), "factor {factor}");
+        let (bytes, _) = export(&doc, None).unwrap();
+        let (back, _) = import(&bytes, "scale range").unwrap();
+        let instance = back.nodes().find(|n| n.name == "Scaled").unwrap();
+        let child = back.node(instance.children[0]).unwrap();
+        assert!((child.width - 40.0 * factor).abs() < 1e-6 * factor.max(1.0), "factor {factor}: {}", child.width);
+        assert!((child.corners.radii[0] - 10.0 * factor).abs() < 1e-6 * factor.max(1.0), "factor {factor}: {:?}", child.corners.radii);
+    }
+}
+
+/// A scaled child may override its radius back to the unscaled main's value.
+#[test]
+fn a_scaled_instance_keeps_a_radius_reset_to_its_main_through_a_round_trip() {
+    let (mut doc, insts) = sized();
+    let main_box = doc.nodes().find(|n| n.name == "Box" && n.parent.is_some_and(|p| doc.node(p).unwrap().name == "Card")).unwrap().id;
+    doc.node_mut(main_box).unwrap().corners.radii = [10.0; 4];
+    let kid = doc.node(insts[2]).unwrap().children[0];
+    doc.node_mut(kid).unwrap().corners.radii = [10.0; 4];
+    let (bytes, _) = export(&doc, None).unwrap();
+    let (back, _) = import(&bytes, "x").unwrap();
+    let inst = back.nodes().find(|n| n.name == "Scaled").unwrap();
+    let b = inst.children.iter().map(|c| back.node(*c).unwrap()).find(|n| n.name == "Box").unwrap();
+    // Its geometry is still scaled; only the authored corner radius was reset.
+    assert_eq!((b.width, b.height), (60.0, 60.0));
+    assert_eq!(b.corners.radii, [10.0; 4]);
+}
+
+#[test]
+fn a_scaled_instance_keeps_main_equal_layout_and_grid_lengths() {
+    let (mut doc, insts) = sized();
+    let main = doc.nodes().find(|n| n.name == "Card").unwrap().id;
+    let boxes: Vec<_> = doc.nodes().filter(|n| n.name == "Box").map(|n| n.id).collect();
+    for id in [main, insts[0], insts[1], insts[2]].into_iter().chain(boxes) {
+        let n = doc.node_mut(id).unwrap();
+        if n.name == "Box" {
+            n.kind = NodeKind::Frame;
+        }
+        n.corners.radii = [4.0, 8.0, 12.0, 16.0];
+        n.layout = Some(AutoLayout { gap: 8.0, cross_gap: 6.0, padding: [2.0, 4.0, 6.0, 8.0], ..AutoLayout::default() });
+        n.grids = vec![LayoutGrid { kind: GridKind::Columns, count: 4, gutter: 8.0, ..LayoutGrid::default() }];
+        n.child_layout.min_w = Some(20.0);
+        n.child_layout.max_h = Some(200.0);
+    }
+    let nodes = written(&doc);
+    assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], 1.5);
+    same_after_round_trip(&doc, "scaled main-equal layout and grid lengths");
+}
+
+#[test]
+fn a_scaled_instance_keeps_main_equal_stroke_and_effect_lengths() {
+    let (mut doc, insts) = sized();
+    let child = doc.node(insts[2]).unwrap().children[0];
+    let source = doc.node(child).unwrap().source.unwrap();
+    for id in [source, child] {
+        let n = doc.node_mut(id).unwrap();
+        n.corners.radii = [2.0, 4.0, 6.0, 8.0];
+        n.stroke.dashes = vec![4.0, 2.0];
+        n.effects = vec![Effect {
+            kind: EffectKind::DropShadow(Shadow {
+                color: Color::new(0.0, 0.0, 0.0, 0.25),
+                offset: (2.0, 4.0),
+                radius: 8.0,
+                spread: 2.0,
+                blend: BlendMode::Normal,
+                show_behind: false,
+            }),
+            visible: true,
+        }];
+    }
+    let nodes = written(&doc);
+    assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], 1.5);
+    same_after_round_trip(&doc, "scaled main-equal stroke and effect lengths");
+}
+
+#[test]
+fn a_scaled_instance_keeps_main_equal_text_lengths_and_runs() {
+    let (mut doc, insts) = sized();
+    let child = doc.node(insts[2]).unwrap().children[1];
+    let source = doc.node(child).unwrap().source.unwrap();
+    for id in [source, child] {
+        let NodeKind::Text(td) = &mut doc.node_mut(id).unwrap().kind else { panic!("text fixture") };
+        td.style.font_size = 16.0;
+        td.style.line_height = LineHeight::Pixels(24.0);
+        td.style.letter_spacing = LetterSpacing::Pixels(2.0);
+        td.paragraph_spacing = 6.0;
+        td.paragraph_indent = 4.0;
+        td.runs = vec![StyleRun { start: 0, end: 2, style: TextStyle { font_size: 20.0, ..td.style.clone() } }];
+    }
+    let nodes = written(&doc);
+    assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], 1.5);
+    same_after_round_trip(&doc, "scaled main-equal text lengths and runs");
+}
+
+#[test]
+fn a_scaled_instance_keeps_a_main_equal_text_length_above_its_shared_style() {
+    let (mut doc, insts) = sized();
+    let child = doc.node(insts[2]).unwrap().children[1];
+    let source = doc.node(child).unwrap().source.unwrap();
+    let base = TextStyle { font_size: 12.0, line_height: LineHeight::Pixels(24.0), ..TextStyle::default() };
+    doc.styles.push(Style {
+        id: "label-style".into(),
+        name: "Label style".into(),
+        description: String::new(),
+        kind: StyleKind::Text { style: base.clone(), paragraph: Default::default() },
+        bound: Default::default(),
+    });
+    for id in [source, child] {
+        let n = doc.node_mut(id).unwrap();
+        n.styles.text = Some("label-style".into());
+        let NodeKind::Text(td) = &mut n.kind else { panic!("text fixture") };
+        td.style = base.clone();
+        if id == child {
+            td.style.line_height = LineHeight::Pixels(36.0);
+        }
+    }
+    let nodes = written(&doc);
+    assert_eq!(named(&nodes, "Scaled")["symbolData"]["uniformScaleFactor"], 1.5);
+    same_after_round_trip(&doc, "one text length reset above an inherited shared style");
+}
+
+#[test]
+fn a_scaled_instance_keeps_reset_lists_above_a_changed_style_link() {
+    for (scaled, value) in [false, true].into_iter().flat_map(|scaled| [Some(10.0), Some(20.0), Some(15.0), None].map(|value| (scaled, value))) {
+        let (mut doc, insts) = sized();
+        let inst = insts[if scaled { 2 } else { 0 }];
+        let child = doc.node(inst).unwrap().children[0];
+        let source = doc.node(child).unwrap().source.unwrap();
+        let boxes: Vec<_> = doc.nodes().filter(|n| n.name == "Box").map(|n| n.id).collect();
+        for id in boxes {
+            doc.node_mut(id).unwrap().kind = NodeKind::Frame;
+        }
+        let effects = |radius| vec![Effect { kind: EffectKind::DropShadow(Shadow { radius, ..Shadow::default() }), visible: true }];
+        let grids = |gutter| vec![LayoutGrid { kind: GridKind::Columns, count: 4, gutter, ..LayoutGrid::default() }];
+        for (id, kind) in [
+            ("effect-a", StyleKind::Effect { effects: effects(10.0) }),
+            ("effect-b", StyleKind::Effect { effects: effects(20.0) }),
+            ("grid-a", StyleKind::Grid { grids: grids(10.0) }),
+            ("grid-b", StyleKind::Grid { grids: grids(20.0) }),
+        ] {
+            doc.styles.push(Style { id: id.into(), name: id.into(), description: String::new(), kind, bound: Default::default() });
+        }
+        for id in [source, child] {
+            let n = doc.node_mut(id).unwrap();
+            let value = if id == source { Some(10.0) } else { value };
+            n.effects = value.map_or_else(Vec::new, effects);
+            n.grids = value.map_or_else(Vec::new, grids);
+            n.styles.effect = Some(if id == source { "effect-a" } else { "effect-b" }.into());
+            n.styles.grid = Some(if id == source { "grid-a" } else { "grid-b" }.into());
+        }
+        let nodes = written(&doc);
+        let name = if scaled { "Scaled" } else { "Same" };
+        assert_eq!(named(&nodes, name)["symbolData"]["uniformScaleFactor"], if scaled { 1.5 } else { 1.0 });
+        if value == Some(20.0) {
+            let inst = named(&nodes, name);
+            for rows in [&inst["symbolData"]["symbolOverrides"], &inst["derivedSymbolData"]] {
+                assert!(
+                    rows.as_array().into_iter().flatten().all(|row| row.get("effects").is_none() && row.get("layoutGrids").is_none()),
+                    "values supplied by the new style remain linked, not overridden"
+                );
+            }
+        }
+        same_after_round_trip(&doc, "explicit list values above a changed style link");
     }
 }

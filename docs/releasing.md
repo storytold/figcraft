@@ -7,9 +7,7 @@ Nobody sees a draft until a maintainer publishes it.
 
 This is FigCraft's copy of the shared [release playbook](release-playbook.md) (PhotoCraft is the
 reference implementation). User-facing names say **FigCraft**. Files, binaries and ids stay
-lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.figcraft`). The
-operational runbook (secrets, the `release` ruleset, runner group, promoting the draft) is
-craftrules `release/cut-a-release.md`.
+lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.figcraft`).
 
 ## FigCraft's names
 
@@ -123,8 +121,11 @@ a missing required face, style or asset fails the required web build. Excluded A
 are skipped before resolving their asset paths.
 Native builds retain the permitted Latin presentation faces. Source Sans 3 and Source Serif 4
 are filtered on every target under FigCraft's asset policy. The web build keeps its smaller
-allowlist: Inter, Noto Sans Georgian and Archivo SemiBold when supplied. Packages carry each
-embedded font's licence as `OFL-<family>.txt`
+allowlist: Inter, Noto Sans Georgian and Archivo SemiBold when supplied. A distribution whose
+users write another script adds the manifest families it needs, comma-separated, with
+`FIGCRAFT_WEB_FONTS` (`FIGCRAFT_WEB_FONTS="Noto Sans Thai" trunk build --release`); a named family
+the build doesn't embed gets a warning, and each one adds its size to the wasm, which must stay
+under the size gate in `packaging/web/package.sh`. Packages carry each embedded font's licence as `OFL-<family>.txt`
 (`copy_font_licences` in `packaging/env.sh`; `Contents/Resources/Licenses` in the macOS app).
 
 ### macOS
@@ -198,6 +199,8 @@ tar -xzf figcraft-<v>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
 `public_url = "./"`, output `dist/web`), fails if a `.wasm` exceeds 24 MiB, and zips the site
 with sample `_headers`/`.htaccess` and the hosting guide. The app uses WebGPU with a WebGL2
 fallback; `?webgl` forces WebGL2. 0.1.0: wasm 17.7 MiB raw, 6.7 MiB gzip, 4.4 MiB Brotli.
+`apps/figcraft-web/.cargo/config.toml` builds it with wasm SIMD (`+simd128`), which keeps the
+glyph rasterizer's scalar fallback out of the module.
 
 The wasm is built with the size-optimised `web-release` Cargo profile (`opt-level = "s"`, fat
 LTO, one codegen unit; `data-cargo-profile` in `apps/figcraft-web/index.html`) and then
@@ -214,7 +217,7 @@ never repo or org secrets. Names (identical in every app): `APPLE_CERTIFICATE`,
 `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
 `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE`.
 Each is optional: a missing one gives an unsigned artifact and a `::warning::`. An org admin
-provisions the environment, ruleset and secrets with craftrules `release/signing-setup.md`, and
+provisions the environment, ruleset and secrets, and
 adds the repo to the org's Default runner group so `macos-15-xlarge` can pick up the job.
 
 ## Checks

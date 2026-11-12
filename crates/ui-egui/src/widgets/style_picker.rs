@@ -10,7 +10,9 @@
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{Paint, PaintKind};
-use figcraft_doc::{Document, GridKind, Node, NodeId, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, trim_num};
+use figcraft_doc::{
+    Document, GridKind, ListStyle, Node, NodeId, ParagraphStyle, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, WrapStyle, trim_num,
+};
 use figcraft_engine::library;
 use serde_json::{Value, json};
 
@@ -19,11 +21,13 @@ use crate::a11y::Tip;
 use crate::colorpicker::PickerTarget;
 use crate::i18n::{tr, trf};
 use crate::icons::{self, Icon};
+use crate::popover::{Hold, Open, Popover, Surface};
 use crate::theme::{Tokens, regular, semibold};
 use crate::widgets;
 
-/// Content width of the popover.
-const W: f32 = 240.0;
+/// The slot's margin inside the shared popover, and the content width left of it.
+const PAD: f32 = 8.0;
+const W: f32 = 224.0;
 /// Height of a list row.
 const ROW_H: f32 = 26.0;
 /// Height of a text style's list row (its name in its own font).
@@ -167,6 +171,9 @@ impl Picker {
 /// Open the picker for `slot` of `ids`, level with the pointer.
 pub fn open(app: &mut FigApp, ui: &Ui, ids: &[NodeId], slot: StyleSlot) {
     let y = ui.input(|i| i.pointer.interact_pos()).map_or(140.0, |p| p.y - 12.0);
+    // Opening the style picker closes the colour picker (it would linger beside it).
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
     app.ui.style_picker = Some(Picker { slot, ids: ids.to_vec(), y, query: String::new(), edit: None });
 }
 
@@ -174,6 +181,8 @@ pub fn open(app: &mut FigApp, ui: &Ui, ids: &[NodeId], slot: StyleSlot) {
 pub fn open_for_selection(app: &mut FigApp, slot: StyleSlot, style: Option<&str>) {
     let ids = app.session.selection();
     let edit = style.and_then(|s| app.session.doc().ok()?.style(s).map(editing));
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
     app.ui.style_picker = Some(Picker { slot, ids, y: 140.0, query: String::new(), edit });
 }
 
@@ -326,7 +335,7 @@ fn leaf(name: &str) -> &str {
 }
 
 /// `base N` with the smallest N no style of the document is named.
-fn next_name(doc: &Document, base: &str) -> String {
+pub(crate) fn next_name(doc: &Document, base: &str) -> String {
     (1..).map(|n| format!("{base} {n}")).find(|n| doc.styles.iter().all(|s| &s.name != n)).unwrap_or_else(|| base.to_string())
 }
 
@@ -347,7 +356,7 @@ fn by_folder<'a>(styles: impl Iterator<Item = &'a Style>) -> Vec<(&'a str, Vec<&
 /// A text style's definition, if `s` is one.
 fn text_def(s: &Style) -> Option<&TextStyle> {
     match &s.kind {
-        StyleKind::Text { style } => Some(style),
+        StyleKind::Text { style, .. } => Some(style),
         _ => None,
     }
 }
@@ -516,9 +525,8 @@ fn listing(app: &FigApp, ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut 
     let link = link_of(app, doc, &p.ids, slot);
     let applied = link.clone().flatten().map(|id| Key::of_local(doc, &id));
     let grid = slot.has_grid() && app.ui.style_grid;
-    // Header: title, then view toggle, detach and create.
+    // The title is the popover's; this row keeps the view toggle, detach and create.
     let (hr, _) = ui.allocate_exact_size(vec2(W, 24.0), Sense::hover());
-    ui.painter().text(pos2(hr.min.x + 2.0, hr.center().y), Align2::LEFT_CENTER, slot.title(), semibold(11.0), t.menu_text);
     let mut x = hr.max.x - 24.0;
     let mut slot_rect = || {
         let r = Rect::from_min_size(pos2(x, hr.min.y), vec2(24.0, 24.0));
@@ -661,7 +669,7 @@ fn binding_cell(ui: &mut Ui, doc: &Document, style: &Style, field: &str, kind: f
     let t = Tokens::get(ui.ctx());
     let row = ui.min_rect();
     let row = Rect::from_min_max(pos2(row.min.x, row.max.y - ROW_H), row.max);
-    let Some(name) = style.bound.get(field).map(|v| doc.variables.get(v).map_or(v.as_str(), |x| x.name.as_str())) else {
+    let Some(name) = style.bound.get(field).map(|v| doc.variables.get_by_id(v).map_or(v.as_str(), |x| x.name.as_str())) else {
         let b = Rect::from_center_size(pos2(row.max.x - 13.0, row.center().y), vec2(20.0, 20.0));
         if ui.rect_contains_pointer(row) && menu_icon(ui, b, Icon::Variable, tr("Apply variable"), false).clicked() {
             crate::variable_ui::open_style(ui, &style.id, field, kind, row.left_bottom());
@@ -706,9 +714,20 @@ fn grid_label(g: &figcraft_doc::LayoutGrid) -> String {
 
 /// The chip in `rect` of the variable `name` bound to `field` of text style `style`. A click on it
 /// opens the variable picker to change it, and its detach button unbinds it.
-#[allow(clippy::too_many_arguments)]
-fn text_binding(ui: &mut Ui, style: &str, field: &str, kind: VariableType, rect: Rect, name: &str, lead: widgets::Lead, out: &mut Frame) {
+struct TextBinding<'a> {
+    style: &'a str,
+    field: &'a str,
+    kind: VariableType,
+    rect: Rect,
+    name: &'a str,
+    lead: widgets::Lead<'a>,
+}
+
+fn text_binding(ui: &mut Ui, binding: TextBinding<'_>, out: &mut Frame) {
+    let TextBinding { style, field, kind, rect, name, lead } = binding;
     match widgets::bound_field(ui, Id::unique(("ts_bound", style, field)), lead, rect, name) {
+        // The weight slot takes a face name or a number, so its chip opens the picker that offers both.
+        Some(widgets::BindEvent::Open(at)) if matches!(field, "fontWeight" | "fontStyle") => crate::variable_ui::open_style_weight(ui, style, at),
         Some(widgets::BindEvent::Open(at)) => crate::variable_ui::open_style(ui, style, field, kind, at),
         Some(widgets::BindEvent::Detach) => out.act = Some(Act::Unbind(style.to_string(), field.to_string())),
         None => {}
@@ -717,7 +736,7 @@ fn text_binding(ui: &mut Ui, style: &str, field: &str, kind: VariableType, rect:
 
 /// The text style's variable name for `field`, or None when the field is not bound.
 fn bound_name(doc: &Document, style: &Style, field: &str) -> Option<String> {
-    style.bound.get(field).map(|v| doc.variables.get(v).map_or_else(|| v.clone(), |x| x.name.clone()))
+    style.bound.get(field).map(|v| doc.variables.get_by_id(v).map_or_else(|| v.clone(), |x| x.name.clone()))
 }
 
 /// Redefines the text style `def` through `f`; the edit is queued only when it changes the style.
@@ -747,7 +766,18 @@ fn font_family_field(ui: &mut Ui, doc: &Document, style: &Style, def: &TextStyle
     match bound_name(doc, style, "fontFamily") {
         Some(name) => {
             let (r, _) = ui.allocate_exact_size(vec2(W, widgets::FIELD_H), Sense::hover());
-            text_binding(ui, id, "fontFamily", VariableType::String, r, &name, widgets::Lead::Named(tr("Font")), out);
+            text_binding(
+                ui,
+                TextBinding {
+                    style: id,
+                    field: "fontFamily",
+                    kind: VariableType::String,
+                    rect: r,
+                    name: &name,
+                    lead: widgets::Lead::Named(tr("Font")),
+                },
+                out,
+            );
             None
         }
         None => Some(widgets::dropdown(ui, &def.font_family, W, None).on_hover_text(tr("Font"))),
@@ -759,10 +789,22 @@ fn font_style_size_row(ui: &mut Ui, doc: &Document, style: &Style, def: &TextSty
     let id = style.id.as_str();
     let mut style_resp = None;
     ui.horizontal(|ui| {
-        match bound_name(doc, style, "fontStyle") {
+        let weight_field = if style.bound.contains_key("fontWeight") { "fontWeight" } else { "fontStyle" };
+        match bound_name(doc, style, weight_field) {
             Some(name) => {
                 let (r, _) = ui.allocate_exact_size(vec2(half, widgets::FIELD_H), Sense::hover());
-                text_binding(ui, id, "fontStyle", VariableType::String, r, &name, widgets::Lead::Named(tr("Font style")), out);
+                text_binding(
+                    ui,
+                    TextBinding {
+                        style: id,
+                        field: weight_field,
+                        kind: if weight_field == "fontWeight" { VariableType::Number } else { VariableType::String },
+                        rect: r,
+                        name: &name,
+                        lead: widgets::Lead::Named(tr("Font style")),
+                    },
+                    out,
+                );
             }
             None => style_resp = Some(widgets::dropdown(ui, &def.font_style, half, None).on_hover_text(tr("Font style"))),
         }
@@ -802,7 +844,18 @@ fn line_height_field(ui: &mut Ui, doc: &Document, style: &Style, def: &TextStyle
     match bound_name(doc, style, "lineHeight") {
         Some(name) => {
             let (r, _) = ui.allocate_exact_size(area.size(), Sense::hover());
-            text_binding(ui, id, "lineHeight", VariableType::Number, r, &name, widgets::Lead::Named(tr("Line height")), out);
+            text_binding(
+                ui,
+                TextBinding {
+                    style: id,
+                    field: "lineHeight",
+                    kind: VariableType::Number,
+                    rect: r,
+                    name: &name,
+                    lead: widgets::Lead::Named(tr("Line height")),
+                },
+                out,
+            );
         }
         None => {
             if let Some(v) = widgets::text_field(ui, Id::unique(("ts_lh", id)), &def.line_height.label(), half, tr("Line height"))
@@ -823,7 +876,18 @@ fn letter_spacing_field(ui: &mut Ui, doc: &Document, style: &Style, def: &TextSt
     match bound_name(doc, style, "letterSpacing") {
         Some(name) => {
             let (r, _) = ui.allocate_exact_size(area.size(), Sense::hover());
-            text_binding(ui, id, "letterSpacing", VariableType::Number, r, &name, widgets::Lead::Named(tr("Letter spacing")), out);
+            text_binding(
+                ui,
+                TextBinding {
+                    style: id,
+                    field: "letterSpacing",
+                    kind: VariableType::Number,
+                    rect: r,
+                    name: &name,
+                    lead: widgets::Lead::Named(tr("Letter spacing")),
+                },
+                out,
+            );
         }
         None => {
             if let Some(v) = widgets::text_field(ui, Id::unique(("ts_ls", id)), &def.letter_spacing.label(), half, tr("Letter spacing"))
@@ -857,32 +921,33 @@ fn text_property_fields(ui: &mut Ui, doc: &Document, style: &Style, def: &TextSt
 
 /// The font menu: Apply variable, then the installed fonts. Picking a font keeps its style when the
 /// family has one, else falls back to Regular or the first style.
-fn font_family_menu(id: &str, def: &TextStyle, family_resp: &Response, out: &mut Frame) {
-    crate::right::menu_popup(family_resp).width(260.0).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        if crate::right::menu_item(ui, tr("Apply variable"), "") {
+fn font_family_menu(ui: &Ui, id: &str, def: &TextStyle, family_resp: &Response, out: &mut Frame) {
+    let apply_variable = |ui: &mut Ui| {
+        let picked = crate::right::menu_item(ui, tr("Apply variable"), "");
+        if picked {
             crate::variable_ui::open_style(ui, id, "fontFamily", VariableType::String, family_resp.rect.left_bottom());
             ui.close();
-            return;
+        } else {
+            ui.separator();
         }
-        ui.separator();
-        if let Some(f) = crate::typography::font_picker(ui, Some(&def.font_family), family_resp.clicked()).picked {
-            set_text(def, id, out, |d| {
-                d.font_family = f.clone();
-                let styles = figcraft_text::family_styles(&f);
-                if !styles.is_empty() && !styles.contains(&d.font_style) {
-                    d.set_font_style(styles.iter().find(|s| s.eq_ignore_ascii_case("Regular")).or(styles.first()).cloned().unwrap_or_default());
-                }
-            });
-            ui.close();
-        }
-    });
+        picked
+    };
+    if let Some(f) = crate::typography::font_picker(ui, family_resp, Some(&def.font_family), 260.0, apply_variable).and_then(|p| p.picked) {
+        set_text(def, id, out, |d| {
+            d.font_family = f.clone();
+            let styles = figcraft_text::family_styles(&f);
+            if !styles.is_empty() && !styles.contains(&d.font_style) {
+                d.set_font_style(styles.iter().find(|s| s.eq_ignore_ascii_case("Regular")).or(styles.first()).cloned().unwrap_or_default());
+            }
+        });
+    }
 }
 
 /// The font style menu: Apply variable, then the styles of the current font, the current one checked.
 fn font_style_menu(id: &str, def: &TextStyle, style_resp: &Response, out: &mut Frame) {
     crate::right::menu_popup(style_resp).width(200.0).show(|ui| {
         if crate::right::menu_item(ui, tr("Apply variable"), "") {
-            crate::variable_ui::open_style(ui, id, "fontStyle", VariableType::String, style_resp.rect.left_bottom());
+            crate::variable_ui::open_style_weight(ui, id, style_resp.rect.left_bottom());
             ui.close();
             return;
         }
@@ -909,17 +974,54 @@ fn text_properties(ui: &mut Ui, doc: &Document, style: &Style, def: &TextStyle, 
     // The dropdowns' menus open outside the dark scope (they're regular popups).
     let (family_resp, style_resp) = crate::theme::on_dark(ui, |ui| text_property_fields(ui, doc, style, def, out));
     if let Some(family_resp) = family_resp {
-        font_family_menu(id, def, &family_resp, out);
+        font_family_menu(ui, id, def, &family_resp, out);
     }
     if let Some(sr) = style_resp {
         font_style_menu(id, def, &sr, out);
+    }
+    if let StyleKind::Text { paragraph, .. } = &style.kind {
+        paragraph_rows(ui, paragraph);
+    }
+}
+
+/// What a text style sets at the paragraph level (#1829), when it sets anything: the spacing,
+/// indent, list style and OpenType features (as `+tnum -liga`). A layer's Type settings edit
+/// them; Update from selection takes them into the style.
+fn paragraph_rows(ui: &mut Ui, ps: &ParagraphStyle) {
+    let mut rows: Vec<String> = Vec::new();
+    if ps.paragraph_spacing != 0.0 {
+        let label = tr("Paragraph spacing");
+        rows.push(format!("{label}: {}", trim_num(ps.paragraph_spacing)));
+    }
+    if ps.paragraph_indent != 0.0 {
+        let label = tr("Paragraph indent");
+        rows.push(format!("{label}: {}", trim_num(ps.paragraph_indent)));
+    }
+    match ps.list {
+        ListStyle::None => {}
+        ListStyle::Bulleted => rows.push(tr("Bulleted list").into()),
+        ListStyle::Numbered => rows.push(tr("Numbered list").into()),
+    }
+    match ps.wrap_style {
+        WrapStyle::Auto => {}
+        WrapStyle::Balance => rows.push(format!("{}: {}", tr("Wrap style"), tr("Balance"))),
+        WrapStyle::Pretty => rows.push(format!("{}: {}", tr("Wrap style"), tr("Pretty"))),
+    }
+    if !ps.features.is_empty() {
+        rows.push(ps.features.iter().map(|(tag, on)| format!("{}{tag}", if *on { '+' } else { '-' })).collect::<Vec<_>>().join(" "));
+    }
+    if rows.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    for row in rows {
+        caption(ui, &row);
     }
 }
 
 /// Editing one style: name, description, its values (paints open the colour picker; text styles
 /// have their typography), update from the selection, delete.
 fn editor(ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
-    let t = Tokens::get(ui.ctx());
     let slot = p.slot;
     let has_selection = !p.ids.is_empty();
     let Some(e) = p.edit.as_mut() else { return };
@@ -931,7 +1033,6 @@ fn editor(ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
     if menu_icon(ui, Rect::from_min_size(hr.min, vec2(24.0, 24.0)), Icon::ChevronLeft, tr("Back to styles"), false).clicked() {
         out.act = Some(Act::Back);
     }
-    ui.painter().text(pos2(hr.min.x + 30.0, hr.center().y), Align2::LEFT_CENTER, tr("Edit style"), semibold(11.0), t.menu_text);
     ui.add_space(6.0);
     caption(ui, tr("Name"));
     let r = ui.add(egui::TextEdit::singleline(&mut e.name).font(regular(11.0)).desired_width(W));
@@ -980,7 +1081,7 @@ fn editor(ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
                     binding_cell(ui, doc, &style, &format!("layoutGrids/{i}/size"), figcraft_doc::VariableType::Number, out);
                 }
             }
-            StyleKind::Text { style: def } => text_properties(ui, doc, &style, def, out),
+            StyleKind::Text { style: def, .. } => text_properties(ui, doc, &style, def, out),
         }
     });
     ui.add_space(8.0);
@@ -1020,45 +1121,41 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         if let Some(e) = &p.edit {
             commit_edit(app, &doc, e);
         }
+        app.ui.style_picker_popover = None;
         return;
     }
-    let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    // Left of the Design panel; further left while the colour picker (which sits there) is open.
-    let mut x = screen.max.x - app.ui.right_width - W - 32.0;
-    if app.ui.picker.is_some() {
-        x -= 260.0;
-    }
+    // Beside the Design panel, on its canvas side; further out while the colour picker (which
+    // sits there) is open.
+    let gap = if app.ui.picker.is_some() { 32.0 + 260.0 } else { 32.0 };
+    // Mirrored, the panel as drawn: a small window draws it narrower than asked, and a narrow one
+    // across the window, so the asked width would put the picker over it.
+    let panel = if app.ui.mirrored {
+        app.ui.right_panel_rect.map_or_else(|| egui::Rangef::new(screen.min.x, screen.min.x + app.ui.right_width), |r| r.x_range())
+    } else {
+        egui::Rangef::new(screen.max.x - app.ui.right_width, screen.max.x)
+    };
+    let x = crate::popover::beside_panel(panel, W, gap, app.ui.mirrored);
     let y = p.y.clamp(screen.min.y + 48.0, (screen.max.y - 460.0).max(screen.min.y + 48.0));
     let mut out = Frame { act: None, hover: None, budget: 4 };
-    let area = egui::Area::new(Id::unique("style_picker_area")).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ctx, |ui| {
-        egui::Frame::NONE.fill(t.menu).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-            ui.set_width(W);
-            if p.edit.is_some() {
-                editor(ui, &doc, &mut p, &mut out);
-            } else {
-                listing(app, ui, &doc, &mut p, &mut out);
-            }
-        });
-    });
-    let rect = area.response.rect;
-    ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("style_picker_border"))).rect_stroke(
-        rect,
-        CornerRadius::same(10),
-        Stroke::new(1.0, Color32::from_black_alpha(40)),
-        egui::StrokeKind::Inside,
-    );
-    // Clicks in the colour picker editing this picker's style, or in a menu the editor opened,
-    // keep it open.
+    // The title and the X are the shared popover's now; the list keeps its tools row.
+    let title = if p.edit.is_some() { tr("Edit style") } else { p.slot.title() };
+    let mut pop = app.ui.style_picker_popover.take().unwrap_or_else(|| Popover::new("style_picker_area", title).pad(PAD).surface(Surface::Menu));
+    pop.title = title.to_string();
+    // Clicks in the colour picker editing this picker's style, in the variable picker binding one
+    // of its fields, or in a menu the editor opened, keep it open.
     let picker_rect =
         app.ui.picker.as_ref().filter(|t| matches!(t, PickerTarget::Style { .. })).and(ctx.memory(|m| m.area_rect(crate::colorpicker::window_id())));
-    // So do clicks in the variable picker binding one of its fields (Escape closes that first).
     let variables = crate::variable_ui::picker_rect(ctx);
-    let in_popup = egui::Popup::is_any_open(ctx) || variables.is_some();
-    let outside = ctx.input(|i| {
-        i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|pos| !rect.contains(pos) && !picker_rect.is_some_and(|r| r.contains(pos)))
-    }) && !in_popup;
-    let mut close = outside || (ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !in_popup);
+    let holds: Vec<Rect> = picker_rect.into_iter().chain(variables).collect();
+    let closed = pop.show(ctx, Open::At(pos2(x, y)), Hold { rects: &holds, escape: variables.is_some() || picker_rect.is_some() }, |ui| {
+        if p.edit.is_some() {
+            editor(ui, &doc, &mut p, &mut out);
+        } else {
+            listing(app, ui, &doc, &mut p, &mut out);
+        }
+    });
+    let mut close = closed;
     let ids = p.ids.clone();
     let slot = p.slot;
     // The canvas shows the text style under the pointer on the selected text.
@@ -1101,7 +1198,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             if let Some(e) = &p.edit {
                 commit_edit(app, &doc, e);
             }
-            app.ui.picker = Some(PickerTarget::Style { id, index });
+            app.open_picker(PickerTarget::Style { id, index }, None);
         }
         Some(Act::Unbind(id, field)) => {
             app.run("style.bind", json!({"style": id, "field": field}));
@@ -1131,8 +1228,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         if matches!(app.ui.picker, Some(PickerTarget::Style { .. })) {
             app.ui.picker = None;
         }
+        app.ui.style_picker_popover = None;
     } else {
         app.ui.style_picker = Some(p);
+        app.ui.style_picker_popover = Some(pop);
     }
 }
 
@@ -1140,6 +1239,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
 fn edit_local(app: &mut FigApp, ui: &Ui, slot: StyleSlot, id: &str) {
     let y = ui.input(|i| i.pointer.interact_pos()).map_or(140.0, |p| p.y - 12.0);
     let edit = app.session.doc().ok().and_then(|d| d.style(id).map(editing));
+    crate::colorpicker::close(app);
+    app.ui.style_picker_popover = None;
     app.ui.style_picker = Some(Picker { slot, ids: app.session.selection(), y, query: String::new(), edit });
 }
 

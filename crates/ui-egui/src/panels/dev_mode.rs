@@ -92,6 +92,9 @@ impl CategoryFilter {
 /// revision), the page or the choice change.
 #[derive(Default)]
 pub struct DevUi {
+    /// The layer whose new-note field takes the keyboard focus once its section draws (the
+    /// Annotation tool asked for that layer's note).
+    pub focus_new_note: Option<NodeId>,
     pub filter: usize,
     pub categories: CategoryFilter,
     pub compare: Option<crate::dev_compare::CompareView>,
@@ -445,7 +448,7 @@ pub fn connect_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId
         let text = if connectable {
             tr("Link this component to its code component: instances then show your real snippet with their values.")
         } else {
-            tr("Choose React, Leptos, Vue, SwiftUI, Compose or ArkUI above to connect this component to its code.")
+            tr("Choose React, Leptos, Vue, SwiftUI, Compose, ArkUI or Flutter above to connect this component to its code.")
         };
         widgets::note(ui, text, t.text_secondary);
         return;
@@ -617,6 +620,11 @@ pub fn annotations_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: No
             }
         }
         ui.add_space(6.0);
+    }
+    // The Annotation tool asked for this layer's note: put the caret in the new-note field, once.
+    if app.ui.dev.focus_new_note == Some(id) {
+        app.ui.dev.focus_new_note = None;
+        ui.memory_mut(|m| m.request_focus(Id::unique(("annot_new", id)).with("te")));
     }
     // A new annotation starts as a note; properties are pinned to it afterwards.
     if n.annotations.len() < annotations::MAX_PER_LAYER

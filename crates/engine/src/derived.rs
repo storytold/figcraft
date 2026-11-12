@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, BTreeSet, Document, Node, NodeId, board, cmd, components, measure, style_vars};
 
 /// Nodes whose `Arc` differs from `before` (new or edited).
 pub fn changed_nodes(doc: &Document, before: &Document) -> Vec<NodeId> {
@@ -10,6 +10,24 @@ pub fn changed_nodes(doc: &Document, before: &Document) -> Vec<NodeId> {
         .collect()
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests: normalising panics, standing for a bug in it (a command's edit is rolled back).
+    pub(crate) static PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests: panic when [`PANIC`] is set, as a bug in normalising would.
+#[cfg(test)]
+fn test_panic() {
+    if PANIC.with(std::cell::Cell::get) {
+        panic!("normalize: test panic");
+    }
+}
+
+/// Shipped builds: nothing (the test hook compiles away).
+#[cfg(not(test))]
+fn test_panic() {}
+
 /// Keep derived state consistent after edits: text boxes resize to their content, groups wrap
 /// their children, instances follow their main components, auto layout re-flows.
 pub fn normalize(doc: &mut Document, before: &Document) {
@@ -18,16 +36,26 @@ pub fn normalize(doc: &mut Document, before: &Document) {
 
 /// Gesture previews are local and disposable; capture their final geometry at commit.
 pub(super) fn normalize_with_capture(doc: &mut Document, before: &Document, capture: bool) {
+    test_panic();
     // Only what was touched since the last normalisation (edited, added or removed).
     let mut touched: BTreeSet<NodeId> = doc.take_dirty();
     // A variable or style edit changes no layer directly, but bound and linked layers must follow it.
     if touched.is_empty() && doc.variables == before.variables && doc.styles == before.styles {
         return;
     }
+    let revalued = doc.variables != before.variables;
+    // Extended collections follow edits of the collections they extend in this file.
+    if revalued {
+        cmd::variables::sync_extensions(doc);
+    }
     let m = measure::TextMeasure;
+    let restyled = revalued || doc.styles != before.styles;
+    // Layers that only moved join from step 3 on: what sits around them may follow, they don't.
+    let moved = if restyled { BTreeSet::new() } else { only_moved_layers(doc, before, &touched) };
+    touched.retain(|id| !moved.contains(id));
     // 0. Variable bindings and style links feed node values.
     let scope = binding_scope(doc, before, &touched);
-    if doc.variables != before.variables || doc.styles != before.styles {
+    if restyled {
         style_vars::settle(doc);
     }
     cmd::styles::apply_bindings_to(doc, scope.as_ref());
@@ -59,7 +87,12 @@ pub(super) fn normalize_with_capture(doc: &mut Document, before: &Document, capt
         if let Some((w, h)) = figcraft_text::auto_size(n)
             && ((w - n.width).abs() > 1e-6 || (h - n.height).abs() > 1e-6)
         {
+            let dw = w - n.width;
+            let anchor_right = keeps_right_edge(doc, before, n);
             figcraft_layout::set_size(doc, id, w, h);
+            if anchor_right && let Some(n) = doc.node_mut(id) {
+                n.transform *= figcraft_geom::kurbo::Affine::translate((-dw, 0.0));
+            }
         }
     }
     touched.extend(doc.take_dirty());
@@ -74,6 +107,7 @@ pub(super) fn normalize_with_capture(doc: &mut Document, before: &Document, capt
         touched.extend(synced);
     }
     touched.extend(doc.take_dirty());
+    touched.extend(moved);
     // Parents of removed nodes (as they were before) count as touched.
     let removed_parents: Vec<NodeId> =
         touched.iter().filter(|i| !doc.contains(**i)).filter_map(|i| before.node(*i).and_then(|n| n.parent)).filter(|p| doc.contains(*p)).collect();
@@ -109,9 +143,10 @@ pub(super) fn normalize_with_capture(doc: &mut Document, before: &Document, capt
         if !doc.contains(id) {
             continue;
         }
-        let mut chain = vec![id];
-        chain.extend(doc.ancestors(id));
-        for c in chain {
+        // A frame that only moved (or turned) keeps its contents where they are: its own layout
+        // runs again only for a change that can move or resize them. Its parent's still runs.
+        let own = (!moved_only(before, doc, id)).then_some(id);
+        for c in own.into_iter().chain(doc.ancestors(id)) {
             if doc.node(c).is_some_and(|n| n.layout.is_some()) {
                 frames.insert(c);
             }
@@ -134,8 +169,12 @@ pub(super) fn normalize_with_capture(doc: &mut Document, before: &Document, capt
         }
     }
     touched.extend(doc.take_dirty());
-    // 4b. Board connectors follow the layers they join; their labels sit at their middles.
+    // 4b. Mind maps re-flow from their first nodes; then board connectors follow the layers they
+    // join and their labels sit at their middles.
+    board::settle_mind_maps(doc, before, &touched);
+    touched.extend(doc.take_dirty());
     board::settle_routes(doc, before, &touched);
+    board::settle_stamps(doc, before, &touched);
     touched.extend(doc.take_dirty());
     if capture {
         figcraft_text::appearance::capture(doc, Some(&touched.iter().copied().collect::<Vec<_>>()));
@@ -147,14 +186,73 @@ pub(super) fn normalize_with_capture(doc: &mut Document, before: &Document, capt
     cmd::comment::follow_anchors(doc, before);
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests: every touched layer goes through every step, to compare with the shortcut.
+    pub(crate) static NO_MOVE_SHORTCUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The layers of `touched` whose transform is all that changed since `before`, in no component or
+/// instance (whose copies and overrides follow moves). With variables and styles unchanged, their
+/// bindings (never a position), style links, sizing and text have nothing to follow (`before` is
+/// settled), so steps 0 to 2 skip them: a drag moving hundreds of layers re-runs only what sits
+/// around them (#1571).
+pub(crate) fn only_moved_layers(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+    #[cfg(test)]
+    if NO_MOVE_SHORTCUT.with(std::cell::Cell::get) {
+        return BTreeSet::new();
+    }
+    let mut out = BTreeSet::new();
+    for &id in touched {
+        let (Some(b), Some(n)) = (before.node_arc(id), doc.node_arc(id)) else { continue };
+        if Arc::ptr_eq(b, n) || b.transform == n.transform {
+            continue;
+        }
+        let copied = |n: &Node| matches!(n.kind, figcraft_doc::NodeKind::Component { .. } | figcraft_doc::NodeKind::Instance { .. });
+        if std::iter::successors(Some(&**n), |n| n.parent.and_then(|p| doc.node(p))).any(copied) {
+            continue;
+        }
+        // Compared with the old transform put back in place (no copy of the layer).
+        let Some(n) = doc.node_mut(id) else { continue };
+        let moved = std::mem::replace(&mut n.transform, b.transform);
+        let same = *n == **b;
+        n.transform = moved;
+        if same {
+            out.insert(id);
+        }
+    }
+    // `node_mut` marked them touched again: they are in `touched` already.
+    doc.take_dirty();
+    out
+}
+
+/// Whether auto-width text `n` keeps its right edge when its width changes: it was already
+/// right-aligned auto-width text before the edit and no auto layout flow places it.
+fn keeps_right_edge(doc: &Document, before: &Document, n: &Node) -> bool {
+    use figcraft_doc::{TextAlignH, TextAutoResize};
+    let right_auto = |n: &Node| n.kind.text().is_some_and(|t| t.align_h == TextAlignH::Right && t.auto_resize == TextAutoResize::WidthAndHeight);
+    let in_flow = !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some() && p.kind.is_frame_like());
+    right_auto(n) && before.node(n.id).is_some_and(right_auto) && !in_flow
+}
+
 /// Whether layer `id` changed (since `before`) in a way that can move or resize layers in an auto
 /// layout frame around it: new, resized, moved, shown or hidden, restructured, other text or
 /// layout settings.
 fn affects_layout(before: &Document, doc: &Document, id: NodeId) -> bool {
     let (Some(a), Some(b)) = (before.node(id), doc.node(id)) else { return true };
+    a.transform != b.transform || reshaped(a, b)
+}
+
+/// Whether layer `id` only moved (or turned) since `before`: its transform is all that changed of
+/// what [`affects_layout`] looks at, so the layers inside it stay where they are.
+fn moved_only(before: &Document, doc: &Document, id: NodeId) -> bool {
+    before.node(id).zip(doc.node(id)).is_some_and(|(a, b)| !reshaped(a, b))
+}
+
+/// What [`affects_layout`] looks at, but where the layer sits in its parent.
+fn reshaped(a: &Node, b: &Node) -> bool {
     a.width != b.width
         || a.height != b.height
-        || a.transform != b.transform
         || a.visible != b.visible
         || a.parent != b.parent
         || a.children != b.children

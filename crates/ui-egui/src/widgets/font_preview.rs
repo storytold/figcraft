@@ -53,6 +53,10 @@ pub fn texture(ctx: &egui::Context, style: &TextStyle, text: &str, budget: &mut 
 /// A family's name in its own regular style (None when the family doesn't draw itself: symbol
 /// fonts, or it resolves to another family).
 pub fn family(ctx: &egui::Context, family: &str, size: f64, budget: &mut usize) -> Option<egui::TextureHandle> {
+    // A font on this computer that the browser named is read when text uses it, not to preview it.
+    if figcraft_text::local_only(family) {
+        return None;
+    }
     let styles = figcraft_text::family_styles(family);
     let style = styles.iter().find(|s| s.eq_ignore_ascii_case("Regular")).or(styles.first())?.clone();
     let face = figcraft_text::find_face(family, &style)?;

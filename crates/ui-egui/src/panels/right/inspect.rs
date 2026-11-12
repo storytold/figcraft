@@ -1,5 +1,8 @@
 use super::menu::{menu_item, menu_popup, row};
-use super::*;
+use super::{
+    Align2, Color32, CornerRadius, Document, ExportFormat, ExportSetting, FigApp, Icon, Id, NodeId, PAD, Paint, Rect, Sense, Stroke, Tip, Tokens, Ui,
+    a11y, icons, pos2, regular, semibold, tr, trf, vec2, widgets,
+};
 
 /// One group of inspected properties: label, value (with a swatch for colours) and the style or
 /// variable it comes from. Clicking a row copies its value.
@@ -35,7 +38,7 @@ pub(crate) fn prop_row(app: &mut FigApp, ui: &mut Ui, p: &figcraft_engine::devin
         t.text_secondary,
     );
     // The style or variable, right-aligned as a chip.
-    let mut right = r.max.x - PAD;
+    let mut right = r.max.x - widgets::PAD_RIGHT;
     if let Some(token) = &p.token {
         let galley = painter.layout_no_wrap(token.clone(), regular(10.0), t.text_secondary);
         let chip =
@@ -103,7 +106,12 @@ fn inspect_assets(app: &mut FigApp, ui: &mut Ui, doc: &Document, assets: &[figcr
         let resp = resp.tip(trf("Export {name}", &[("name", &a.name)]));
         if resp.hovered() {
             ui.painter().rect_filled(r.shrink2(vec2(8.0, 1.0)), CornerRadius::same(6), t.hover);
-            icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - PAD - 6.0, r.center().y), vec2(12.0, 12.0)), Icon::Export, t.icon);
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(pos2(r.max.x - widgets::PAD_RIGHT - 6.0, r.center().y), vec2(12.0, 12.0)),
+                Icon::Export,
+                t.icon,
+            );
         }
         // The preview, as exporting it paints it (a slice shows the page under it). Rows scrolled
         // out of view draw nothing, so they don't pay for a thumbnail either.
@@ -125,7 +133,7 @@ fn inspect_assets(app: &mut FigApp, ui: &mut Ui, doc: &Document, assets: &[figcr
         ui.painter().rect_stroke(thumb, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
         // The name, and the format to export it as (its first export setting's, until chosen).
         let x = thumb.max.x + 10.0;
-        let name_r = Rect::from_min_max(pos2(x, r.min.y + 5.0), pos2(r.max.x - PAD, r.min.y + 27.0));
+        let name_r = Rect::from_min_max(pos2(x, r.min.y + 5.0), pos2(r.max.x - widgets::PAD_RIGHT, r.min.y + 27.0));
         let name = widgets::elide(ui, &a.name, name_r.width());
         ui.painter().with_clip_rect(name_r).text(pos2(name_r.min.x, name_r.center().y), Align2::LEFT_CENTER, &name, regular(11.0), t.text);
         let idx = state
@@ -187,8 +195,13 @@ pub(super) fn inspect(app: &mut FigApp, ui: &mut Ui) {
         crate::dev_mode::plugins_section(app, ui);
         return;
     };
-    let name = doc.node(first).map(|n| n.name.clone()).unwrap_or_default();
-    widgets::section_header(ui, &name, &[], false);
+    // The layer's name on one line: a long one ends with an ellipsis and shows in full on hover (#1650).
+    let name = doc.node(first).map(|n| n.name.replace(['\r', '\n'], " ")).unwrap_or_default();
+    let shown = widgets::elide_font(ui, &name, ui.available_width() - PAD - widgets::PAD_RIGHT, semibold(11.0));
+    let (_, header) = widgets::section_header_resp(ui, &shown, &[], false);
+    if shown != name {
+        header.on_hover_text(name);
+    }
     crate::dev_mode::status(app, ui, &doc, &sel);
     crate::dev_mode::annotations_section(app, ui, &doc, first);
     crate::dev_mode::dev_resources_section(app, ui, &doc, first);

@@ -15,17 +15,23 @@ path = "src/main.rs"
 
 [dependencies]
 figcraft-engine = { workspace = true }
+figcraft-format = { workspace = true }
 figcraft-ui-egui = { workspace = true }
 figcraft-collab-net = { workspace = true }
+figcraft-text = { workspace = true }
+# The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
+# The page command API (storytold/craft-libs#413): the request plumbing behind window.figcraft.
+craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
+craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
+base64 = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
 wasm-bindgen = "0.2"
-base64 = { workspace = true }
-serde_json = { workspace = true }
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement", "HtmlAnchorElement", "Node", "Blob", "BlobPropertyBag", "File", "FileList", "HtmlInputElement", "EventTarget", "Url", "Location", "MediaQueryList", "Navigator", "Gamepad", "GamepadButton", "GamepadMappingType"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement", "HtmlAnchorElement", "Node", "Blob", "BlobPropertyBag", "ClipboardEvent", "DataTransfer", "File", "FileList", "HtmlInputElement", "EventTarget", "Url", "Location", "MediaQueryList", "Navigator", "Gamepad", "GamepadButton", "GamepadMappingType", "Storage", "Event", "MessageEvent", "UrlSearchParams", "CustomEvent", "CustomEventInit"] }

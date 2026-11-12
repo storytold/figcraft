@@ -1,4 +1,4 @@
-use super::*;
+use super::NodeId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {

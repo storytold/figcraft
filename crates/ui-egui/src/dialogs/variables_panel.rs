@@ -2,10 +2,10 @@
 //! read-only under the library's name); the selected collection's variables on the right as a
 //! table with one value column per mode. Double-click a name to rename it, right-click for more; a
 //! value's variable button turns it into an alias of another variable (a library one too).
-//! A library collection can be extended: a collection of this file with its modes and variables,
-//! whose overridden values are marked (with a reset). Import and export read and write the
-//! variables JSON (or CSS). Everything goes through `variable.*` / `library.*` commands, so it's
-//! undoable and the same over MCP.
+//! A collection (this file's or a library's) can be extended: a collection of this file with its
+//! modes and variables, whose overridden values are marked (with a reset). Import and export read
+//! and write the variables JSON (or CSS). Everything goes through `variable.*` / `library.*`
+//! commands, so it's undoable and the same over MCP.
 
 use egui::{Align2, Context, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 use figcraft_doc::{Collection, Document, PublishedLibrary, Variable, VariableType, VariableValue, Variables, scopes_for};
@@ -53,6 +53,122 @@ pub struct Editor {
     details: Option<String>,
     /// The group the table shows ("space" or "color/brand"); None = every variable.
     group: Option<String>,
+    /// The selected variables' ids (this file's), kept to the rows the table shows.
+    pub(crate) selected: Vec<String>,
+    /// The row a Shift+click extends from.
+    pub(crate) anchor: Option<String>,
+    /// The variable ids the table shows now, in row order (the range a Shift+click covers).
+    pub(crate) order: Vec<String>,
+    /// The variables the compact "Edit variables" editor is open on (empty = closed).
+    bulk_edit: Vec<String>,
+    /// That editor's tab: 0 Details, 1 Scope.
+    bulk_tab: usize,
+}
+
+/// A click on row `id`: plain selects only it, Shift extends from the anchor to it through the
+/// rows shown (added to the selection with Cmd/Ctrl), Cmd/Ctrl (or Shift without an anchor) toggles it.
+pub(crate) fn select_clicked(st: &mut Editor, id: &str, m: egui::Modifiers) {
+    let pos = |x: &str| st.order.iter().position(|o| o == x);
+    let anchor = st.anchor.as_deref().filter(|a| st.selected.iter().any(|s| s == a)).and_then(pos);
+    if m.shift
+        && let (Some(ai), Some(bi)) = (anchor, pos(id))
+    {
+        let (lo, hi) = (ai.min(bi), ai.max(bi));
+        let mut s: Vec<String> = if m.command { st.selected.clone() } else { vec![] };
+        for x in st.order.get(lo..=hi).unwrap_or_default() {
+            if !s.contains(x) {
+                s.push(x.clone());
+            }
+        }
+        st.selected = s;
+    } else if m.shift || m.command {
+        match st.selected.iter().position(|x| x == id) {
+            Some(i) => {
+                st.selected.remove(i);
+            }
+            None => st.selected.push(id.to_string()),
+        }
+        st.anchor = Some(id.to_string());
+    } else {
+        st.selected = vec![id.to_string()];
+        st.anchor = Some(id.to_string());
+    }
+}
+
+/// The variables a row's menu acts on: the whole selection when the row is part of a selection of
+/// several (in table order, leaving out inherited ones, which are changed in their own collection),
+/// else None.
+fn bulk_ids<'a>(view: &View<'a>, st: &Editor, v: &Variable) -> Option<Vec<&'a Variable>> {
+    if !view.editable() || st.selected.len() < 2 || !st.selected.contains(&v.id) {
+        return None;
+    }
+    let list: Vec<&Variable> =
+        st.order.iter().filter(|id| st.selected.contains(id)).filter_map(|id| view.vars.get_by_id(id)).filter(|x| x.extends.is_none()).collect();
+    (list.len() > 1).then_some(list)
+}
+
+/// Run one `variable.*` command per variable as a single undo step.
+fn bulk_run(app: &mut FigApp, label: &str, vars: &[&Variable], step: impl Fn(&Variable) -> Option<(&'static str, Value)>) {
+    let steps: Vec<Value> = vars.iter().filter_map(|v| step(v)).map(|(command, params)| json!({"command": command, "params": params})).collect();
+    if !steps.is_empty() {
+        app.run("command.batch", json!({"label": label, "commands": steps}));
+    }
+}
+
+/// The context menu of a row that is part of a selection of several: delete, move to a group and
+/// scope act on all of them.
+fn bulk_menu(app: &mut FigApp, ui: &mut Ui, st: &mut Editor, coll_groups: &[String], vars: &[&Variable]) {
+    let n = vars.len();
+    if menu_item(ui, tr("Edit variables"), "") {
+        st.bulk_edit = vars.iter().map(|v| v.id.clone()).collect();
+        st.bulk_tab = 0;
+        ui.close();
+    }
+    if menu_item(ui, &trn("Delete {n} variables", n, &[]), "") {
+        bulk_run(app, "Delete variables", vars, |v| Some(("variable.delete", json!({"variable": v.id}))));
+        ui.close();
+    }
+    // Many groups make the menu taller than the window: the rows after Delete scroll.
+    let max_h = ui.ctx().content_rect().height() * 0.6;
+    egui::ScrollArea::vertical().id_salt("variables_bulk_menu_scroll").max_height(max_h).show(ui, |ui| {
+        let moves = std::iter::once(None).chain(coll_groups.iter().map(|g| Some(g.as_str())));
+        for g in moves {
+            let label = g.map_or_else(|| tr("Move out of any group").to_string(), |g| trf("Move to group {group}", &[("group", &g)]));
+            if menu_item(ui, &label, "") {
+                bulk_run(app, "Move variables", vars, |v| {
+                    let short = v.name.rsplit('/').next().unwrap_or(&v.name);
+                    let name = g.map_or_else(|| short.to_string(), |g| format!("{g}/{short}"));
+                    (name != v.name).then(|| ("variable.update", json!({"variable": v.id, "name": name})))
+                });
+                ui.close();
+            }
+        }
+        let mut scopes: Vec<(&'static str, &'static str)> = Vec::new();
+        for v in vars {
+            for s in scopes_for(v.kind) {
+                if !scopes.contains(s) {
+                    scopes.push(*s);
+                }
+            }
+        }
+        let set = |app: &mut FigApp, label: &str, value: Option<&'static str>, ui: &mut Ui| {
+            if menu_item(ui, label, "") {
+                bulk_run(app, "Change scope", vars, |v| match value {
+                    None => Some(("variable.update", json!({"variable": v.id, "scopes": Value::Null}))),
+                    Some("") => Some(("variable.update", json!({"variable": v.id, "scopes": []}))),
+                    Some(s) => {
+                        scopes_for(v.kind).iter().any(|(id, _)| *id == s).then(|| ("variable.update", json!({"variable": v.id, "scopes": [s]})))
+                    }
+                });
+                ui.close();
+            }
+        };
+        set(app, tr("Scope: all supported properties"), None, ui);
+        set(app, tr("Scope: hidden from pickers"), Some(""), ui);
+        for (id, label) in scopes {
+            set(app, &trf("Scope: only {scope}", &[("scope", &tr(label))]), Some(id), ui);
+        }
+    });
 }
 
 impl Editor {
@@ -170,6 +286,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             });
         });
     details(app, ctx, &doc.variables, &mut st);
+    bulk_details(app, ctx, &doc.variables, &mut st);
     app.ui.variables = open.then_some(st);
 }
 
@@ -181,6 +298,9 @@ fn header(app: &mut FigApp, ui: &mut Ui, open: &mut bool) {
     // Import and export, left of Close.
     let bar = Rect::from_min_max(pos2(r.max.x - 280.0, r.min.y + 10.0), pos2(r.max.x - 40.0, r.max.y - 10.0));
     let mut bar = ui.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    // The window lays itself out without item spacing (set by the caller); the buttons in this bar
+    // keep the same gap between them as the one between Export and the Close button (#1754).
+    bar.spacing_mut().item_spacing.x = 16.0;
     let export = widgets::button(&mut bar, tr("Export…"), false, true);
     crate::right::menu_popup(&export).show(|ui| {
         for (label, format) in [(tr("Variables JSON…"), "json"), (tr("CSS custom properties…"), "css"), (tr("Dart constants for Flutter…"), "dart")]
@@ -245,10 +365,13 @@ fn import_dialog(app: &mut FigApp) {
     });
 }
 
-/// Extend library `lib`'s collection `c` and show the new collection.
-fn extend(app: &mut FigApp, lib: &str, c: &str, st: &mut Editor) {
-    if let Some(id) = app.run("library.extendCollection", json!({"library": lib, "collection": c})).and_then(|r| r["id"].as_str().map(str::to_string))
-    {
+/// Extend collection `c` (of library `lib`, else of this file) and show the new collection.
+fn extend(app: &mut FigApp, lib: Option<&str>, c: &str, st: &mut Editor) {
+    let run = match lib {
+        Some(lib) => app.run("library.extendCollection", json!({"library": lib, "collection": c})),
+        None => app.run("variable.extendCollection", json!({"collection": c})),
+    };
+    if let Some(id) = run.and_then(|r| r["id"].as_str().map(str::to_string)) {
         st.library = None;
         st.collection = Some(id);
         st.group = None;
@@ -281,7 +404,7 @@ fn rename_field(ui: &mut Ui, st: &mut Editor, target: &Rename, value: &str, rect
 }
 
 /// The first of `base`, `base 2`, `base 3`… that `taken` doesn't hold.
-fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
+pub(crate) fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
     (1..10_000).map(|k| if k == 1 { base.to_string() } else { format!("{base} {k}") }).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
 }
 
@@ -357,28 +480,24 @@ fn collection_row(app: &mut FigApp, ui: &mut Ui, view: &View, c: &Collection, st
         st.library = view.id().map(str::to_string);
         st.collection = Some(c.id.clone());
     }
-    if view.editable() {
-        if resp.double_clicked() {
-            start_rename(st, target.clone());
-        }
-        crate::right::context_popup(&resp).show(|ui| {
-            if menu_item(ui, tr("Rename"), "") {
-                start_rename(st, target.clone());
-                ui.close();
-            }
-            if menu_item(ui, tr("Delete collection"), "") {
-                app.run("variable.deleteCollection", json!({"collection": c.id}));
-                ui.close();
-            }
-        });
-    } else if let Some(lib) = view.id() {
-        crate::right::context_popup(&resp).show(|ui| {
-            if menu_item(ui, tr("Extend collection"), "") {
-                extend(app, lib, &c.id, st);
-                ui.close();
-            }
-        });
+    if view.editable() && resp.double_clicked() {
+        start_rename(st, target.clone());
     }
+    // A library's collections only extend; this file's also rename and delete.
+    crate::right::context_popup(&resp).show(|ui| {
+        if view.editable() && menu_item(ui, tr("Rename"), "") {
+            start_rename(st, target.clone());
+            ui.close();
+        }
+        if menu_item(ui, tr("Extend collection"), "") {
+            extend(app, view.id(), &c.id, st);
+            ui.close();
+        }
+        if view.editable() && menu_item(ui, tr("Delete collection"), "") {
+            app.run("variable.deleteCollection", json!({"collection": c.id}));
+            ui.close();
+        }
+    });
     if selected {
         group_rows(app, ui, view, c, st);
     }
@@ -556,11 +675,11 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
     crate::widgets::select_all_on_focus(ui, &r, &st.query);
     let note = Rect::from_min_max(pos2(field.max.x + 16.0, sr.min.y + 8.0), pos2(sr.max.x - 16.0, sr.max.y - 8.0));
     let mut bar = ui.new_child(UiBuilder::new().max_rect(note).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    let text = match (view.library, coll.extends.as_deref().and_then(|p| view.vars.collection(p))) {
+    let text = match (view.library, coll.extends.as_deref().and_then(|p| view.vars.collection_by_id(p))) {
         (Some((lib, name)), _) => {
             let tip = tr("A collection of this file with these modes and variables: override their values per mode and add variables of its own");
             if widgets::button(&mut bar, tr("Extend collection"), false, true).on_hover_text(tip).clicked() {
-                extend(app, lib, &coll.id, st);
+                extend(app, Some(lib), &coll.id, st);
             }
             bar.add_space(8.0);
             Some(trf("From the library \"{name}\": read-only", &[("name", &name)]))
@@ -576,6 +695,17 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
     let mut list: Vec<&Variable> =
         view.in_collection(&coll.id).filter(|v| in_group(v) && (q.is_empty() || v.name.to_lowercase().contains(&q))).collect();
     list.sort_by(|a, b| group_of(&a.name).cmp(group_of(&b.name)));
+    st.order = list.iter().map(|v| v.id.clone()).collect();
+    let order = st.order.clone();
+    st.selected.retain(|id| order.contains(id));
+    // Escape clears the selection (unless a field has the keyboard).
+    if !st.selected.is_empty()
+        && st.rename.is_none()
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        st.selected.clear();
+    }
     let width = (NAME_W + coll.modes.len() as f32 * MODE_W + 40.0).max(ui.available_width());
     egui::ScrollArea::both().id_salt("vars_table").auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -598,6 +728,11 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
         }
         if view.editable() {
             create_row(app, ui, view, coll, st);
+            // A click on the empty space below the rows clears the selection.
+            let (_, empty) = ui.allocate_exact_size(vec2(width, ui.available_height().max(24.0)), Sense::click());
+            if empty.clicked() {
+                st.selected.clear();
+            }
         }
     });
 }
@@ -687,7 +822,10 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
     let t = Tokens::get(ui.ctx());
     let editable = view.editable();
     let (r, resp) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::click());
-    if resp.hovered() || (editable && st.details.as_deref() == Some(v.id.as_str())) {
+    let selected = editable && st.selected.contains(&v.id);
+    if selected {
+        ui.painter().rect_filled(r, CornerRadius::ZERO, t.selected_row);
+    } else if resp.hovered() || (editable && st.details.as_deref() == Some(v.id.as_str())) {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
     kind_glyph(ui, view.vars, v, coll, Rect::from_center_size(pos2(r.min.x + 24.0, r.center().y), vec2(14.0, 14.0)));
@@ -710,10 +848,19 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
         value_cell(app, ui, view, v, coll, &m.id, cell);
     }
     if editable {
+        if resp.clicked() {
+            let m = ui.input(|i| i.modifiers);
+            select_clicked(st, &v.id, m);
+        }
         if !inherited && resp.double_clicked() && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| p.x < name_r.max.x) {
             start_rename(st, target.clone());
         }
         crate::right::context_popup(&resp).show(|ui| {
+            if let Some(vars) = bulk_ids(view, st, v) {
+                let coll_groups = groups(view.in_collection(&coll.id).map(|x| x.name.as_str()));
+                bulk_menu(app, ui, st, &coll_groups, &vars);
+                return;
+            }
             if menu_item(ui, tr("Edit variable"), "") {
                 st.details = Some(v.id.clone());
                 ui.close();
@@ -762,14 +909,13 @@ fn kind_glyph(ui: &Ui, vars: &Variables, v: &Variable, coll: &Collection, rect: 
     }
 }
 
-/// `val` as a `variable.set` value.
-fn value_json(val: &VariableValue) -> Value {
-    match val {
-        VariableValue::Color(c) => json!(c.to_css_hex()),
-        VariableValue::Number(x) => json!(x),
-        VariableValue::String(s) => json!(s),
-        VariableValue::Boolean(b) => json!(b),
-        VariableValue::Alias(a) => json!({"alias": a}),
+/// The button that replaces the reference or calculation in `mode` with the value it shows now.
+fn detach(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &Collection, mode: &str, (key, at): (Id, Rect), label: &str) {
+    if widgets::icon_button_at(ui, key, at, Icon::Detach, label) {
+        let modes = [(coll.id.clone(), mode.to_string())].into_iter().collect();
+        if let Some(resolved) = view.vars.resolve(&v.id, &modes) {
+            set(app, v, mode, crate::panels::proto_panel::value_json(&resolved));
+        }
     }
 }
 
@@ -802,7 +948,7 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
         }
     }
     if let VariableValue::Alias(target) = val {
-        let full = view.vars.get(target).map(|x| x.name.as_str()).unwrap_or(tr("Missing variable"));
+        let full = view.vars.get_by_id(target).map(|x| x.name.as_str()).unwrap_or(tr("Missing variable"));
         let resp = ui.interact(body, id.with("alias"), if editable { Sense::click() } else { Sense::hover() });
         let resp = if editable { resp.on_hover_text(tr("Change alias")) } else { resp };
         ui.painter().rect_filled(body, CornerRadius::same(5), t.field);
@@ -821,12 +967,29 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
         if resp.clicked() {
             crate::variable_ui::open_alias(ui, &v.id, mode, v.kind, body.left_bottom());
         }
-        // Detach: keep the value it resolves to now.
-        if hovered && widgets::icon_button_at(ui, id.with("detach"), alias_btn, Icon::Detach, tr("Detach alias")) {
-            let modes = [(coll.id.clone(), mode.to_string())].into_iter().collect();
-            if let Some(resolved) = view.vars.resolve(&v.id, &modes) {
-                set(app, v, mode, value_json(&resolved));
-            }
+        if hovered {
+            detach(app, ui, view, v, coll, mode, (id.with("detach"), alias_btn), tr("Detach alias"));
+        }
+        return;
+    }
+    // A calculation shows what it resolves to and names its operands. It is set through the
+    // commands; here, like an alias, it can be swapped for an alias or detached to its colour.
+    if matches!(val, VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. }) {
+        let name = |id: &str| view.vars.get_by_id(id).map_or_else(|| tr("Missing variable").to_string(), |x| x.name.clone());
+        let formula = val.display_with(&name);
+        let resp = ui.interact(body, id.with("calc"), if editable { Sense::click() } else { Sense::hover() });
+        let resp = resp.tip(format!("{formula}\n{}", tr("Calculated from other variables; it follows them")));
+        let shown = match view.vars.flattened(v, mode, val) {
+            Some(VariableValue::Color(c)) => Some(c),
+            _ => None,
+        };
+        // The formula is the point of the cell: it keeps the width an alpha readout would take.
+        read_only_cell(ui, body, shown, formula, false);
+        if resp.clicked() {
+            crate::variable_ui::open_alias(ui, &v.id, mode, v.kind, body.left_bottom());
+        }
+        if hovered {
+            detach(app, ui, view, v, coll, mode, (id.with("detach"), alias_btn), tr("Detach calculation"));
         }
         return;
     }
@@ -839,9 +1002,8 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
             ui.painter().rect_filled(body, CornerRadius::same(5), t.field);
             let sw = Rect::from_center_size(pos2(body.min.x + 13.0, body.center().y), vec2(14.0, 14.0));
             widgets::paint_swatch(ui.painter(), sw, &figcraft_color::Paint::solid(*c));
-            if ui.interact(sw.expand(3.0), id.with("swatch"), Sense::click()).tip(tr("Edit colour")).clicked() {
-                app.ui.picker = Some(PickerTarget::Variable { id: v.id.clone(), mode: mode.to_string() });
-            }
+            let response = ui.interact(sw.expand(3.0), id.with("swatch"), Sense::click()).tip(tr("Edit colour"));
+            app.picker_control(PickerTarget::Variable { id: v.id.clone(), mode: mode.to_string() }, &response);
             let hex_r = Rect::from_min_max(pos2(sw.max.x + 8.0, body.min.y + 4.0), pos2(body.max.x - 44.0, body.max.y - 4.0));
             if let Some(h) = widgets::text_field_inline(ui, id.with("hex"), &c.to_hex(), hex_r, regular(11.0))
                 && let Some(nc) = figcraft_color::Color::from_hex_or_name(&h)
@@ -875,7 +1037,7 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
                 set(app, v, mode, json!(!b));
             }
         }
-        VariableValue::Alias(_) => {}
+        VariableValue::Alias(_) | VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => {}
     }
     if hovered && widgets::icon_button_at(ui, id.with("mkalias"), alias_btn, Icon::Variable, tr("Create alias")) {
         crate::variable_ui::open_alias(ui, &v.id, mode, v.kind, body.left_bottom());
@@ -891,20 +1053,33 @@ fn alpha_text(ui: &Ui, c: &figcraft_color::Color, body: Rect) {
 
 /// A value that only shows (a library's): its swatch and hex for colours, else its text.
 fn read_only_value(ui: &Ui, val: &VariableValue, body: Rect) {
-    let t = Tokens::get(ui.ctx());
-    ui.painter().rect_filled(body, CornerRadius::same(5), t.field);
-    let mut x = body.min.x + 8.0;
-    if let VariableValue::Color(c) = val {
-        let sw = Rect::from_center_size(pos2(body.min.x + 13.0, body.center().y), vec2(14.0, 14.0));
-        widgets::paint_swatch(ui.painter(), sw, &figcraft_color::Paint::solid(*c));
-        x = sw.max.x + 8.0;
-        alpha_text(ui, c, body);
-    }
+    let swatch = match val {
+        VariableValue::Color(c) => Some(*c),
+        _ => None,
+    };
     let text = match val {
         VariableValue::Boolean(b) => (if *b { tr("True") } else { tr("False") }).to_string(),
         other => other.display(),
     };
-    let text_r = Rect::from_min_max(pos2(x, body.min.y), pos2(body.max.x - 44.0, body.max.y));
+    read_only_cell(ui, body, swatch, text, true);
+}
+
+/// A cell that only shows: the colour's swatch (and its alpha at the right end when `alpha`), then
+/// `text`.
+fn read_only_cell(ui: &Ui, body: Rect, swatch: Option<figcraft_color::Color>, text: String, alpha: bool) {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_filled(body, CornerRadius::same(5), t.field);
+    let mut x = body.min.x + 8.0;
+    if let Some(c) = swatch {
+        let sw = Rect::from_center_size(pos2(body.min.x + 13.0, body.center().y), vec2(14.0, 14.0));
+        widgets::paint_swatch(ui.painter(), sw, &figcraft_color::Paint::solid(c));
+        x = sw.max.x + 8.0;
+        if alpha {
+            alpha_text(ui, &c, body);
+        }
+    }
+    let right = if alpha && swatch.is_some() { 44.0 } else { 4.0 };
+    let text_r = Rect::from_min_max(pos2(x, body.min.y), pos2(body.max.x - right, body.max.y));
     ui.painter().with_clip_rect(text_r).text(text_r.left_center(), Align2::LEFT_CENTER, text, regular(11.0), t.text);
 }
 
@@ -940,7 +1115,7 @@ fn create_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
 /// The details of one of this file's variables: name, description, where pickers offer it and
 /// whether publishing the file as a library leaves it out.
 fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
-    let Some(v) = st.details.as_ref().filter(|_| st.library.is_none()).and_then(|id| vars.get(id)).cloned() else {
+    let Some(v) = st.details.as_ref().filter(|_| st.library.is_none()).and_then(|id| vars.get_by_id(id)).cloned() else {
         st.details = None;
         return;
     };
@@ -1013,9 +1188,115 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
     }
 }
 
+/// Whether `f` holds for every variable (Some(true)), for none (Some(false)) or only some (None).
+/// With no variables nothing is on: Some(false), never a checked box for an empty list.
+fn tri<T>(vars: &[&T], f: impl Fn(&T) -> bool) -> Option<bool> {
+    if vars.is_empty() {
+        return Some(false);
+    }
+    let on = vars.iter().filter(|v| f(v)).count();
+    if on == vars.len() {
+        Some(true)
+    } else if on == 0 {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The compact editor of several selected variables: Details (only Hide from publishing) and Scope
+/// (the scopes every selected variable's type has), each box mixed where the selection differs; a
+/// click sets or clears it on all of them in one undo step.
+fn bulk_details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
+    if st.bulk_edit.is_empty() {
+        return;
+    }
+    let list: Vec<&Variable> = st.bulk_edit.iter().filter_map(|id| vars.get_by_id(id)).filter(|v| v.extends.is_none()).collect();
+    // The menu offers Edit variables only for two or more editable, non-inherited variables of a
+    // file collection (`bulk_ids`), so this closes only when they have since gone (deleted,
+    // undone) or a library was opened: there is nothing left to edit.
+    if list.is_empty() || st.library.is_some() {
+        st.bulk_edit.clear();
+        return;
+    }
+    let t = Tokens::get(ctx);
+    let mut open = true;
+    egui::Window::new(tr("Edit variables"))
+        .id(Id::unique("variables_bulk_details"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(280.0)
+        .frame(egui::Frame::window(&ctx.global_style()).fill(t.panel).inner_margin(egui::Margin::same(16)))
+        .show(ctx, |ui| {
+            ui.set_width(260.0);
+            if let Some(i) = widgets::segmented_text(ui, &[tr("Details"), tr("Scope")], st.bulk_tab) {
+                st.bulk_tab = i;
+            }
+            ui.add_space(8.0);
+            if st.bulk_tab == 0 {
+                let hidden = tri(&list, |v| v.hidden_from_publishing);
+                if widgets::checkbox_tri(ui, hidden, tr("Hide from publishing")) {
+                    let to = hidden != Some(true);
+                    bulk_run(app, "Edit variables", &list, |v| Some(("variable.update", json!({"variable": v.id, "hiddenFromPublishing": to}))));
+                }
+                return;
+            }
+            // The scopes every selected variable's type has.
+            let first = list.first().map_or(&[][..], |v| scopes_for(v.kind));
+            let common: Vec<(&'static str, &'static str)> =
+                first.iter().filter(|(id, _)| list.iter().all(|v| scopes_for(v.kind).iter().any(|(k, _)| k == id))).copied().collect();
+            if common.is_empty() {
+                widgets::label(ui, tr("No scope is shared by all the selected variables"), t.text_secondary);
+                return;
+            }
+            let all = tri(&list, |v| v.scopes.is_none());
+            if widgets::checkbox_tri(ui, all, tr("All supported properties")) {
+                let to_all = all != Some(true);
+                bulk_run(app, "Edit variables", &list, |v| {
+                    Some(("variable.update", json!({"variable": v.id, "scopes": if to_all { Value::Null } else { json!([]) }})))
+                });
+            }
+            for (sid, label) in common {
+                let state = tri(&list, |v| v.in_scope(sid));
+                let clicked = ui
+                    .horizontal(|ui| {
+                        ui.add_space(16.0);
+                        widgets::checkbox_tri(ui, state, tr(label))
+                    })
+                    .inner;
+                if clicked {
+                    let to = state != Some(true);
+                    bulk_run(app, "Edit variables", &list, |v| {
+                        let next: Vec<&str> =
+                            scopes_for(v.kind).iter().map(|(id, _)| *id).filter(|id| if *id == sid { to } else { v.in_scope(id) }).collect();
+                        Some(("variable.update", json!({"variable": v.id, "scopes": next})))
+                    });
+                }
+            }
+        });
+    if !open {
+        st.bulk_edit.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::groups;
+    use super::{groups, tri};
+
+    #[test]
+    fn tri_is_checked_empty_or_mixed() {
+        let (a, b) = (true, false);
+        assert_eq!(tri(&[&a, &a], |v| *v), Some(true));
+        assert_eq!(tri(&[&b, &b], |v| *v), Some(false));
+        assert_eq!(tri(&[&a, &b], |v| *v), None);
+    }
+
+    #[test]
+    fn tri_of_no_variables_is_not_checked() {
+        let none: [&bool; 0] = [];
+        assert_eq!(tri(&none, |v| *v), Some(false));
+    }
 
     #[test]
     fn groups_include_parents_once_and_sorted() {

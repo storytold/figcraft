@@ -180,6 +180,31 @@ pub fn current(s: &Session, uid: u64) -> Vec<Branch> {
     branches
 }
 
+/// The tabs showing branches of the file in tab `uid`.
+pub fn tabs(s: &Session, uid: u64) -> impl Iterator<Item = &DocState> {
+    s.docs.iter().filter(move |t| t.branch_of.as_ref().is_some_and(|(main, _)| *main == uid))
+}
+
+/// A file whose changes would be lost, so it needs a recovery copy: in its document, its history
+/// or one of its branch tabs (a branch tab's edits are saved with its main file, so the tab has no
+/// copy of its own).
+pub fn needs_copy(s: &Session, d: &DocState) -> bool {
+    d.branch_of.is_none() && (d.is_dirty() || tabs(s, d.uid).any(DocState::is_dirty))
+}
+
+/// What a recovery copy of `d` holds: the document itself (not a version or live text preview
+/// shown in its place: a crash during a preview must bring the file back, not the version),
+/// its version history and its branches as they are now ([`current`]).
+pub fn recovery_copy(s: &Session, d: &DocState) -> (Arc<Document>, Vec<figcraft_format::Version>, Vec<Branch>) {
+    (d.document_itself().clone(), d.versions.clone(), current(s, d.uid))
+}
+
+/// The revisions a recovery copy of `d` is of: its own and its branch tabs' (a branch tab's edits
+/// change only its own revision). A new copy is due when they change.
+pub fn stamp(s: &Session, d: &DocState) -> Vec<u64> {
+    std::iter::once(d.revision).chain(tabs(s, d.uid).map(|t| t.revision)).collect()
+}
+
 /// The tab a save writes: the main file's for a branch tab, else the active tab.
 pub fn file_tab(s: &Session) -> usize {
     s.ds().ok().and_then(|d| d.branch_of.as_ref()).and_then(|(m, _)| s.docs.iter().position(|d| d.uid == *m)).unwrap_or(s.active)
@@ -586,6 +611,21 @@ fn doc_change(plan: &Plan, c: &Change) -> Option<DocChange> {
     Some(DocChange { what, change: entry_change(plan, c) })
 }
 
+/// One side's value of an auto layout field in conflict, in words: `16`, `8, 8, 8, 8`, `min`,
+/// `on`, `none`.
+fn field_text(v: &Value) -> String {
+    match v {
+        Value::Null => "none".to_string(),
+        Value::Bool(on) => if *on { "on" } else { "off" }.to_string(),
+        Value::Number(n) => n.as_f64().map_or_else(|| n.to_string(), |x| x.to_string()),
+        Value::String(s) => words(s),
+        Value::Array(items) => items.iter().map(field_text).collect::<Vec<_>>().join(", "),
+        Value::Object(_) => v.to_string(),
+    }
+}
+
+/// The review's row for conflict `c`: the layer (or file entry) and property, and what each side
+/// changed it to.
 fn conflict_row(plan: &Plan, c: &Conflict, base: &Document, head: &Document, main: &Document) -> ConflictRow {
     let layer = |id: NodeId| main.node(id).or(head.node(id)).or(base.node(id)).map_or_else(|| id.to_string(), |n| n.name.clone());
     let text = |side: Side| match c.changes(side).first().and_then(|i| plan.changes(side).get(*i)) {
@@ -601,6 +641,11 @@ fn conflict_row(plan: &Plan, c: &Conflict, base: &Document, head: &Document, mai
             let (b, m) = if changes.is_empty() { ("changed".into(), "changed".into()) } else { (join(|pc| &pc.after), join(|pc| &pc.before)) };
             let property = if *prop == Prop::Parent { "place in layers".to_string() } else { words(prop) };
             (Some(*id), layer(*id), property, b, m)
+        }
+        Key::Field(id, prop, field) => {
+            let (b, m) = plan.field_values(&c.key).map_or_else(|| ("changed".into(), "changed".into()), |(b, m)| (field_text(b), field_text(m)));
+            let owner = if *prop == Prop::Layout { "auto layout".to_string() } else { words(prop) };
+            (Some(*id), layer(*id), format!("{owner} {}", field.replace('_', " ")), b, m)
         }
         Key::Layer(id) => {
             let (b, m) = if c.deleted_by == Some(Side::Branch) { ("deleted", "edited") } else { ("edited", "deleted") };

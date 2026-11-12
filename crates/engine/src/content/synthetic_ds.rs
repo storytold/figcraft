@@ -11,7 +11,10 @@
 use std::collections::BTreeMap;
 
 use figcraft_color::{Color, Paint};
-use figcraft_doc::*;
+use figcraft_doc::{
+    AutoLayout, Collection, CollectionId, CrossAlign, DocError, DocResult, Document, LayoutMode, Mode, ModeId, Node, NodeId, NodeKind, PropDef,
+    Sizing, Style, StyleKind, TextAutoResize, TextData, TextStyle, Variable, VariableType, VariableValue,
+};
 use serde_json::Value;
 
 use crate::components::{create_instance, sync_instance};
@@ -115,7 +118,7 @@ fn var_id(name: &str) -> String {
 }
 
 fn component() -> NodeKind {
-    NodeKind::Component { description: String::new(), props: BTreeMap::new() }
+    NodeKind::Component { description: String::new(), props: BTreeMap::new(), prop_order: Vec::new() }
 }
 
 fn text(chars: &str) -> NodeKind {
@@ -151,7 +154,7 @@ fn auto_layout(doc: &mut Document, id: NodeId, mode: LayoutMode, gap: f64, pad: 
 fn styled_text(doc: &mut Document, parent: NodeId, chars: &str, name: &str, style: &str) -> DocResult<NodeId> {
     let id = doc.create(parent, text(chars), name, 0.0, 0.0, 60.0, 16.0)?;
     let def = doc.styles.iter().find(|s| s.id == style).and_then(|s| match &s.kind {
-        StyleKind::Text { style } => Some(style.clone()),
+        StyleKind::Text { style, .. } => Some(style.clone()),
         _ => None,
     });
     set_node(doc, id, |n| {
@@ -239,7 +242,7 @@ fn foundations(doc: &mut Document) -> (CollectionId, ModeId, ModeId) {
             id: format!("ds:text:{name}"),
             name: name.into(),
             description: String::new(),
-            kind: StyleKind::Text { style },
+            kind: StyleKind::Text { style, paragraph: Default::default() },
             bound: Default::default(),
         });
     }

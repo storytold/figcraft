@@ -602,6 +602,7 @@ enum Act {
     Close,
     Run(&'static str, Value),
     CopyLink,
+    CopyForAi,
     MarkUnread,
     Edit(usize, String),
 }
@@ -627,6 +628,19 @@ fn hover_button(ui: &mut Ui, id: Id, icon: Icon, show: bool, tip: &str) -> egui:
     }
     icons::paint(ui.painter(), r.shrink(2.0), icon, t.icon_secondary);
     resp.on_hover_text(tip)
+}
+
+/// A message's author, with a small "Agent" label when an AI agent wrote it.
+fn author_name(ui: &mut Ui, t: &Tokens, m: &Message) {
+    ui.label(egui::RichText::new(&m.author).font(semibold(12.0)).color(t.text));
+    if !m.agent {
+        return;
+    }
+    let galley = ui.painter().layout_no_wrap(tr("Agent").to_string(), semibold(10.0), t.text_secondary);
+    let (r, resp) = ui.allocate_exact_size(galley.size() + vec2(8.0, 2.0), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tr("Agent")));
+    ui.painter().rect_filled(r, CornerRadius::same(4), t.hover);
+    ui.painter().galley(r.center() - galley.size() / 2.0, galley, t.text_secondary);
 }
 
 /// What every message of a thread needs to know.
@@ -658,7 +672,7 @@ fn message(
             let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
             avatar(ui.painter(), r.center(), 12.0, &m.author);
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(&m.author).font(semibold(12.0)).color(t.text));
+            author_name(ui, &t, m);
             let when = if m.edited > 0 { trf("{when} · edited", &[("when", &ago(m.created))]) } else { ago(m.created) };
             ui.label(egui::RichText::new(when).font(regular(11.0)).color(t.text_tertiary));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -897,6 +911,10 @@ pub fn thread(app: &mut FigApp, ctx: &egui::Context, id: u64, anchor: Pos2, boun
                             act = Some(Act::CopyLink);
                             ui.close();
                         }
+                        if crate::right::menu_item(ui, tr("Copy for AI"), "") {
+                            act = Some(Act::CopyForAi);
+                            ui.close();
+                        }
                         if crate::right::menu_item(ui, if c.resolved { tr("Mark as unresolved") } else { tr("Mark as resolved") }, "") {
                             act = Some(Act::Run("comment.resolve", json!({"id": id, "resolved": !c.resolved})));
                             ui.close();
@@ -938,6 +956,7 @@ pub fn thread(app: &mut FigApp, ctx: &egui::Context, id: u64, anchor: Pos2, boun
                 app.toast(tr("Link copied"));
             }
         }
+        Some(Act::CopyForAi) => copy_for_ai(app, Some(id)),
         // It closes: an open thread reads itself again.
         Some(Act::MarkUnread) => {
             if app.run("comment.markRead", json!({"id": id, "read": false})).is_some() {
@@ -1003,6 +1022,26 @@ pub fn keys(app: &mut FigApp, ctx: &egui::Context) {
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, key)) {
             step(app, ctx, dir);
         }
+    }
+}
+
+/// Copy the panel's current list (or one thread) as a task brief for an AI agent.
+pub(crate) fn copy_for_ai(app: &mut FigApp, id: Option<u64>) {
+    let params = match id {
+        Some(id) => json!({"ids": [id]}),
+        None => {
+            let cu = &app.ui.comments;
+            json!({"page": "all", "filter": cu.filter.id(), "sort": cu.sort.id(), "query": cu.search})
+        }
+    };
+    let Some(r) = app.run("comment.prompt", params) else { return };
+    if r.get("count").and_then(Value::as_u64).unwrap_or(0) == 0 {
+        app.toast(tr("No comments to copy"));
+        return;
+    }
+    if let Some(text) = r.get("text").and_then(Value::as_str) {
+        app.clipboard_set_text(text);
+        app.toast(tr("Copied comments for AI"));
     }
 }
 

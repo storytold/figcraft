@@ -1,4 +1,11 @@
-use super::*;
+use super::connectors::{CAPS, make};
+use super::{
+    AUTHOR_INK, Affine, AutoLayout, BlendMode, BoardItem, BoardShape, Color, Connector, Constraints, CrossAlign, Document, Effect, EffectKind, End,
+    EngineError, HConstraint, HIGHLIGHTER, INK, LayoutMode, MARKER, MainAlign, Node, NodeId, NodeKind, Paint, Result, SHAPE, STAMP_SIZE, STICKY,
+    STICKY_GAP, STICKY_PAD, Session, Shadow, Side, Sizing, StrokeAlign, StrokeCap, StrokeJoin, TextAlignH, TextAutoResize, TextData, VConstraint,
+    Value, VectorNetwork, author, bad, boolean, color_param, get, id, id_of, json, line_shade, num, num_or, parent_of, req_num, require, shape_of,
+    stamp_of, string, textedit,
+};
 
 /// A new layer at the top of `parent`, at `at` in it, made by `f`.
 pub(super) fn add(
@@ -50,18 +57,9 @@ pub(crate) fn add_text(doc: &mut Document, parent: NodeId, text: &str, size: f64
     Ok(id)
 }
 
-/// The text size a sticky's note gets: smaller the more it holds (by characters and lines, so
-/// every copy of the file picks the same size whatever fonts it has).
-pub fn sticky_font_size(text: &str) -> f64 {
-    let weight = text.chars().count() + 24 * text.matches('\n').count();
-    match weight {
-        0..=24 => 24.0,
-        25..=64 => 20.0,
-        65..=140 => 16.0,
-        141..=280 => 13.0,
-        _ => 11.0,
-    }
-}
+/// The text size of a new sticky's note, FigJam's "Small" default (measured in the web app,
+/// 2026-11-09): it never changes as the note fills, the note grows taller instead.
+pub const STICKY_TEXT_SIZE: f64 = 18.0;
 
 /// A sticky note's layers: the frame, the note and (when known) its author.
 fn make_sticky(doc: &mut Document, parent: NodeId, at: (f64, f64), text: &str, color: Color, author: &str) -> Result<(NodeId, NodeId)> {
@@ -82,7 +80,7 @@ fn make_sticky(doc: &mut Document, parent: NodeId, at: (f64, f64), text: &str, c
         n.board = Some(BoardItem::Sticky { author: author.to_string() });
     })?;
     let inner = STICKY - 2.0 * STICKY_PAD;
-    let note = add_text(doc, id, text, sticky_font_size(text), INK, TextAlignH::Left, inner)?;
+    let note = add_text(doc, id, text, STICKY_TEXT_SIZE, INK, TextAlignH::Left, inner)?;
     if !author.is_empty() {
         let a = add_text(doc, id, author, 10.0, AUTHOR_INK, TextAlignH::Left, inner)?;
         if let Some(n) = doc.node_mut(a) {
@@ -138,10 +136,14 @@ pub(super) fn next_sticky(s: &mut Session, p: &Value) -> Result<Value> {
     let from = id(p, "id")
         .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
         .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
-        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky first".into()))?;
+        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky or a shape first".into()))?;
     let n = doc.get(from)?;
+    if matches!(n.board, Some(BoardItem::Shape { .. })) {
+        // A shape gets the next one joined to it, as the "+" beside it makes (#1597).
+        return add_connected(s, p);
+    }
     if !matches!(n.board, Some(BoardItem::Sticky { .. })) {
-        return Err(bad(cmd, "that isn't a sticky"));
+        return Err(bad(cmd, "that isn't a sticky or a shape"));
     }
     let color = n.fills.iter().find_map(Paint::solid_color).unwrap_or(s.tool.board.sticky);
     let parent = n.parent.ok_or_else(|| bad(cmd, "that sticky has no parent"))?;
@@ -164,6 +166,99 @@ pub(super) fn next_sticky(s: &mut Session, p: &Value) -> Result<Value> {
         s.request_ui("board.editText", json!({"id": id}));
     }
     Ok(json!({"id": id, "text": note}))
+}
+
+/// The room between a board object and the next one `board.addConnected` makes, joined by a
+/// connector: enough for the arrow to read.
+pub const CONNECTED_GAP: f64 = 80.0;
+
+/// Where `board.addConnected` puts the next object on `side` of one at `at` sized `size`, `next`
+/// big (its top-left), and the sides the connector joins (from, to). `None`: not a side.
+pub fn connected_place(at: (f64, f64), size: (f64, f64), next: (f64, f64), side: &str) -> Option<((f64, f64), Side, Side)> {
+    let ((x, y), (w, h), (nw, nh)) = (at, size, next);
+    let (cx, cy) = (x + (w - nw) / 2.0, y + (h - nh) / 2.0);
+    Some(match side {
+        "right" => ((x + w + CONNECTED_GAP, cy), Side::Right, Side::Left),
+        "left" => ((x - CONNECTED_GAP - nw, cy), Side::Left, Side::Right),
+        "below" => ((cx, y + h + CONNECTED_GAP), Side::Bottom, Side::Top),
+        "above" => ((cx, y - CONNECTED_GAP - nh), Side::Top, Side::Bottom),
+        _ => return None,
+    })
+}
+
+/// `board.addConnected`: the next sticky or shape on a side of one, of the same kind, size and
+/// colour, joined to it by a connector the way the connector tool makes one; one undo step.
+pub(super) fn add_connected(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "board.addConnected";
+    require(s, cmd)?;
+    let editing = s.ds()?.text_edit.as_ref().map(|t| t.id);
+    let doc = s.doc()?;
+    let from = id(p, "id")
+        .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
+        .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
+        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky or a shape first".into()))?;
+    let n = doc.get(from)?;
+    let shape = match &n.board {
+        Some(BoardItem::Sticky { .. }) => None,
+        Some(BoardItem::Shape { shape }) => Some(*shape),
+        _ => return Err(bad(cmd, "that isn't a sticky or a shape")),
+    };
+    let side = string(p, "side").unwrap_or_else(|| "right".into());
+    let parent = n.parent.ok_or_else(|| bad(cmd, "that object has no parent"))?;
+    let at = n.transform.translation();
+    let colour_of = |n: &Node| n.fills.iter().find_map(Paint::solid_color);
+    let (next, color) = match shape {
+        None => ((STICKY, STICKY), colour_of(n)),
+        Some(_) => ((n.width, n.height), n.children.first().and_then(|c| doc.node(*c)).and_then(colour_of)),
+    };
+    let color = color.unwrap_or(s.tool.board.sticky);
+    let (to_at, from_side, to_side) = connected_place((at.x, at.y), (n.width, n.height), next, &side)
+        .ok_or_else(|| bad(cmd, format!("`side` is right, below, left or above, not `{side}`")))?;
+    // Dropped somewhere by hand ("drag the preview to any location on your board", #1919): the
+    // next one is centred on that point of the page (placed in the parent's coordinates), and the
+    // connector leaves by the handle's side and arrives by the side facing it.
+    let (to_at, from_side, to_side) = match drop_point(cmd, p)? {
+        Some((x, y)) => {
+            let local = doc.world_transform(parent).inverse() * figcraft_geom::Point::new(x, y);
+            if !(local.x.is_finite() && local.y.is_finite()) {
+                return Err(bad(cmd, "`at` can't be placed in that parent"));
+            }
+            ((local.x - next.0 / 2.0, local.y - next.1 / 2.0), from_side, Side::Auto)
+        }
+        None => (to_at, from_side, to_side),
+    };
+    let (routing, author, page) = (s.tool.board.routing, author(s), s.page()?);
+    if editing.is_some() {
+        textedit::end(s)?;
+    }
+    let doc = s.doc_mut()?;
+    let (id, text) = match shape {
+        None => make_sticky(doc, parent, to_at, "", color, &author)?,
+        Some(shape) => make_shape(doc, parent, to_at, next, shape, "", color)?,
+    };
+    let connector = Connector {
+        from: End::Node { node: from, side: from_side, at: None },
+        to: End::Node { node: id, side: to_side, at: None },
+        routing,
+        path: None,
+        branch: false,
+    };
+    let line = make(doc, page, connector, CAPS)?;
+    s.set_selection(vec![id]);
+    if boolean(p, "edit") == Some(true) {
+        s.request_ui("board.editText", json!({"id": id}));
+    }
+    Ok(json!({"id": id, "text": text, "connector": line}))
+}
+
+/// `at?` of `board.addConnected`: a point on the page, `[x, y]`, or none.
+fn drop_point(cmd: &str, p: &Value) -> Result<Option<(f64, f64)>> {
+    let Some(v) = get(p, "at") else { return Ok(None) };
+    let pair = v.as_array().filter(|a| a.len() == 2).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
+    match pair {
+        Some((x, y)) if x.is_finite() && y.is_finite() => Ok(Some((x, y))),
+        _ => Err(bad(cmd, "`at` is [x, y] on the page, two finite numbers")),
+    }
 }
 
 /// A shape with text's layers: the frame, its outline and its text.
@@ -240,12 +335,14 @@ pub(super) fn stamp_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let page = s.page()?;
     let half = STAMP_SIZE / 2.0;
     let doc = s.doc_mut()?;
+    // It sticks to the object it lands on (it moves with it).
+    let on = super::derived::stamp_target(doc, page, figcraft_geom::Point::new(x, y), None);
     let id = add(doc, page, NodeKind::Frame, stamp.label(), (x - half, y - half), (STAMP_SIZE, STAMP_SIZE), |n| {
         n.fills = vec![Paint::solid(stamp.color())];
         n.corners.radii = [half; 4];
         n.effects = vec![soft_shadow()];
         n.clip = false;
-        n.board = Some(BoardItem::Stamp { stamp, author });
+        n.board = Some(BoardItem::Stamp { stamp, author, on });
     })?;
     for part in stamp.mark() {
         let path = figcraft_geom::BezPath::from_svg(part.d).map_err(|e| EngineError::Other(format!("stamp mark: {e}")))?;

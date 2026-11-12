@@ -10,6 +10,8 @@
 pub mod ops;
 pub(crate) mod point_snap;
 mod pointer;
+#[cfg(test)]
+mod position_tests;
 pub mod regions;
 #[cfg(test)]
 mod regions_tests;
@@ -24,14 +26,14 @@ mod width_sides_tests;
 #[cfg(test)]
 mod width_tests;
 
-use figcraft_doc::*;
+use figcraft_doc::{Corners, Document, HandleMirroring, NodeId, NodeKind, StrokeAlign, StrokeCap, StrokeJoin, VectorNetwork, Vertex, WindingRule};
 use figcraft_geom::{Affine, Point, Rect, Vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::cmd::props::enum_of;
-use crate::params::*;
+use crate::params::{boolean, f64_of, get, id, num, num_or, req_num, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 pub(crate) use pointer::VGesture;
@@ -403,7 +405,9 @@ fn visible_handles(net: &VectorNetwork, ve: &VectorEdit) -> Vec<(usize, bool)> {
 }
 
 /// Hit test in page coordinates with a tolerance in page units. Visible handles win, then
-/// vertices, then segments.
+/// vertices, then segments; between a handle and a point both within reach, the nearer one on
+/// the page, the handle on a tie (the handles of a short segment end a few pixels from their
+/// point, and a click on the point is on the point, #1875).
 pub fn hit(doc: &Document, ve: &VectorEdit, p: Point, tol: f64) -> Option<VHit> {
     let net = network(doc, ve.id)?;
     let w = doc.world_transform(ve.id);
@@ -414,17 +418,31 @@ pub fn hit(doc: &Document, ve: &VectorEdit, p: Point, tol: f64) -> Option<VHit> 
     if !(lp.x.is_finite() && lp.y.is_finite()) {
         return None;
     }
-    for (si, start) in visible_handles(net, ve) {
-        let (Some(seg), Some(t)) = (net.segments.get(si), net.handle(si, start)) else { continue };
-        let Some(v) = net.vertices.get(if start { seg.a } else { seg.b }) else { continue };
-        if (Point::new(v.x + t.0, v.y + t.1) - lp).hypot() <= tl {
-            return Some(VHit::Handle { seg: si, start });
-        }
-    }
-    let nearest_vertex =
-        net.vertices.iter().enumerate().map(|(i, v)| (i, (v.point() - lp).hypot())).filter(|(_, d)| *d <= tl).min_by(|a, b| a.1.total_cmp(&b.1));
-    if let Some((index, _)) = nearest_vertex {
-        return Some(VHit::Vertex { index });
+    // Candidates are within the tolerance as before; the nearest is judged on the page, where a
+    // non-uniform scale doesn't distort it.
+    let on_page = |q: Point| (w * q - p).hypot();
+    let nearest_handle = visible_handles(net, ve)
+        .into_iter()
+        .filter_map(|(si, start)| {
+            let (seg, t) = (net.segments.get(si)?, net.handle(si, start)?);
+            let v = net.vertices.get(if start { seg.a } else { seg.b })?;
+            let end = Point::new(v.x + t.0, v.y + t.1);
+            ((end - lp).hypot() <= tl).then(|| ((si, start), on_page(end)))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    let nearest_vertex = net
+        .vertices
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| (v.point() - lp).hypot() <= tl)
+        .map(|(i, v)| (i, on_page(v.point())))
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    match (nearest_handle, nearest_vertex) {
+        // A tie (a handle's end on another point) goes to the handle, as handles always won before.
+        (Some(((seg, start), dh)), Some((_, dv))) if dh <= dv => return Some(VHit::Handle { seg, start }),
+        (Some(((seg, start), _)), None) => return Some(VHit::Handle { seg, start }),
+        (_, Some((index, _))) => return Some(VHit::Vertex { index }),
+        (None, None) => {}
     }
     use figcraft_geom::kurbo::ParamCurveNearest;
     let nearest_seg = (0..net.segments.len())
@@ -622,7 +640,7 @@ fn index(cmd: &str, p: &Value, key: &str) -> Result<usize> {
 }
 
 /// Delete the points and segments of `parts` (`heal` keeps paths through deleted points closed).
-fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool) -> Result<()> {
+pub(crate) fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool) -> Result<()> {
     let doc = s.doc_mut()?;
     for EditPart { id, vertices: verts, segments: segs } in parts {
         edit(doc, id, |net| {
@@ -690,7 +708,61 @@ fn handle_list(p: &Value, key: &str) -> Option<Vec<(usize, bool)>> {
     }
 }
 
-/// Selection bounds' top-left in the parent's coordinates (what the X/Y fields show).
+/// One axis of `vector.edit.position`: left alone, set, or relative to each point's own value.
+#[derive(Clone, Copy)]
+enum AxisEdit {
+    Keep,
+    Set(f64),
+    Add(f64),
+    Mul(f64),
+    Div(f64),
+}
+
+impl AxisEdit {
+    fn apply(self, cur: f64) -> Result<f64> {
+        let v = match self {
+            AxisEdit::Keep => cur,
+            AxisEdit::Set(v) => v,
+            AxisEdit::Add(n) => cur + n,
+            AxisEdit::Mul(n) => cur * n,
+            AxisEdit::Div(n) if n != 0.0 => cur / n,
+            AxisEdit::Div(_) => return Err(bad("vector.edit.position", "cannot divide by zero")),
+        };
+        if v.is_finite() { Ok(v) } else { Err(bad("vector.edit.position", "the result is not a number")) }
+    }
+}
+
+/// Parse `p[key]`: absent is `Keep`, a number is `Set`, `{add|mul|div: n}` is relative; anything else is refused.
+fn axis_edit(p: &Value, key: &str) -> Result<AxisEdit> {
+    let junk = || bad("vector.edit.position", format!("`{key}` must be a number or {{add|mul|div: number}}"));
+    match get(p, key) {
+        None => Ok(AxisEdit::Keep),
+        Some(Value::Object(o)) => {
+            let (Some((k, v)), 1) = (o.iter().next(), o.len()) else { return Err(junk()) };
+            let n = match v {
+                Value::Number(n) => n.as_f64().filter(|n| n.is_finite()),
+                _ => None,
+            }
+            .ok_or_else(junk)?;
+            match k.as_str() {
+                "add" => Ok(AxisEdit::Add(n)),
+                "mul" => Ok(AxisEdit::Mul(n)),
+                "div" if n != 0.0 => Ok(AxisEdit::Div(n)),
+                _ => Err(junk()),
+            }
+        }
+        Some(v) => f64_of(v).filter(|_| !v.is_boolean()).map(AxisEdit::Set).ok_or_else(junk),
+    }
+}
+
+/// The selected points in the parent's coordinates (what the X/Y fields show).
+pub fn selected_parent_points(doc: &Document, ve: &VectorEdit) -> Vec<Point> {
+    let Some(net) = network(doc, ve.id) else { return Vec::new() };
+    let t = doc.node(ve.id).map(|n| n.transform).unwrap_or_default();
+    selected_points(net, ve).into_iter().filter_map(|v| net.vertices.get(v)).map(|v| t * v.point()).collect()
+}
+
+/// Selection bounds' top-left in the parent's coordinates (the `x` and `y` of `vector.edit.bounds`).
 pub fn selection_position(doc: &Document, ve: &VectorEdit) -> Option<Point> {
     let net = network(doc, ve.id)?;
     let t = doc.node(ve.id)?.transform;
@@ -741,13 +813,10 @@ pub fn key(s: &mut Session, name: &str, shift: bool, alt: bool, cmd: bool) -> Re
     }
     match (name, shift, alt, cmd) {
         ("Escape", ..) => escape(s)?,
-        ("Enter", ..) => {
-            if ve.anchor.is_some() {
-                escape(s)?;
-            } else {
-                end(s)?;
-            }
-        }
+        // With the pen, Enter ends its path and goes on editing with the Move tool (#1430); the next
+        // Enter leaves edit mode.
+        ("Enter", ..) if ve.tool == VTool::Pen => set_tool(s, VTool::Move)?,
+        ("Enter", ..) => end(s)?,
         ("Backspace" | "Delete", false, false, false) if ve.tool == VTool::Width => {
             // The selected width point (nothing else is selected with the Variable width tool).
             if let Some(i) = ve.width_point {
@@ -922,18 +991,50 @@ pub fn specs() -> Vec<CommandSpec> {
             edit_sets(s, sets, |net, v, w| ops::move_vertices(net, v, local_offset(w, d)))?;
             Ok(json!({"ok": true}))
         }),
-        spec!("vector.edit.position", "Point position", "{x?, y?} (the selected points' top-left, in the parent's coordinates)", true, |s, p| {
-            let ve = editing(s)?;
-            let doc = s.doc()?;
-            let cur = selection_position(doc, &ve).ok_or_else(|| bad("vector.edit.position", "select points"))?;
-            let target = Point::new(num_or(p, "x", cur.x), num_or(p, "y", cur.y));
-            let t = doc.node(ve.id).map(|n| n.transform).unwrap_or_default();
-            let inv = t.inverse();
-            let d = inv * target - inv * cur;
-            let v = network(doc, ve.id).map(|n| selected_points(n, &ve)).unwrap_or_default();
-            edit(s.doc_mut()?, ve.id, |net| ops::move_vertices(net, &v, d))?;
-            Ok(json!({"ok": true}))
-        }),
+        spec!(
+            "vector.edit.position",
+            "Point position",
+            "{x?, y?}: each a number (every selected point's own coordinate becomes it) or {add: n}, {mul: n} or {div: n} (applied to each selected point's own coordinate); in the parent's coordinates",
+            true,
+            |s, p| {
+                let ve = editing(s)?;
+                let doc = s.doc()?;
+                let (ax, ay) = (axis_edit(p, "x")?, axis_edit(p, "y")?);
+                let t = doc.node(ve.id).map(|n| n.transform).unwrap_or_default();
+                let inv = t.inverse();
+                let net = network(doc, ve.id).ok_or_else(|| bad("vector.edit.position", "select points"))?;
+                let mut moves: Vec<(usize, Vec2)> = Vec::new();
+                for i in selected_points(net, &ve) {
+                    let Some(v) = net.vertices.get(i) else { continue };
+                    let cur = t * v.point();
+                    let target = Point::new(ax.apply(cur.x)?, ay.apply(cur.y)?);
+                    let d = inv * target - v.point();
+                    if !(d.x.is_finite() && d.y.is_finite()) {
+                        return Err(bad("vector.edit.position", "the result is not a number"));
+                    }
+                    moves.push((i, d));
+                }
+                if moves.is_empty() {
+                    return Err(bad("vector.edit.position", "select points"));
+                }
+                // Points that all share one offset move as one, so moving every point of a layer
+                // by one offset still carries the regions' paint frames, as a drag of all of them
+                // does. Otherwise no one move covers every point, so each point moves alone.
+                let d0 = moves[0].1;
+                let uniform = moves.iter().all(|(_, d)| (*d - d0).hypot() < 1e-9);
+                edit(s.doc_mut()?, ve.id, |net| {
+                    if uniform {
+                        let all: Vec<usize> = moves.iter().map(|(i, _)| *i).collect();
+                        ops::move_vertices(net, &all, d0);
+                    } else {
+                        for (i, d) in &moves {
+                            ops::move_vertices(net, &[*i], *d);
+                        }
+                    }
+                })?;
+                Ok(json!({"ok": true}))
+            }
+        ),
         spec!("vector.edit.setHandle", "Set handle", "{segment, start (bool), x, y (local), independent?}", true, |s, p| {
             let ve = editing(s)?;
             let seg = index("vector.edit.setHandle", p, "segment")?;
@@ -1219,19 +1320,47 @@ pub(crate) fn cut_across(s: &mut Session, a: Point, b: Point) -> Result<Vec<Node
 /// under it, the others get the same (points outside closed areas are skipped). A vector without
 /// fills gets the default fill so the painted area shows.
 pub fn paint_all(doc: &mut Document, id: NodeId, pts: &[Point]) -> Result<bool> {
+    let inherited = doc.get(id)?.fills.clone();
     let filled = edit(doc, id, |net| {
         let mut want = None;
         for p in pts {
-            want = net.paint_to(*p, want).or(want);
+            want = net.paint_to_with(*p, want, Some(&inherited)).or(want);
         }
         want
     })?
     .ok_or_else(|| bad("vector.edit.paint", "click inside a closed area"))?;
     let n = doc.get_mut(id)?;
     if filled && n.fills.iter().all(|f| !f.visible) {
-        n.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE)];
+        let default = figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE);
+        let targets: std::collections::BTreeSet<usize> = match &n.kind {
+            NodeKind::Vector { network } => pts.iter().filter_map(|point| network.region_at(*point)).collect(),
+            _ => std::collections::BTreeSet::new(),
+        };
+        if let NodeKind::Vector { network } = &mut n.kind {
+            for (index, region) in network.regions.iter_mut().enumerate() {
+                if region.fills.is_none() && !targets.contains(&index) {
+                    // Freeze an untouched inherited region before adding a node-wide default.
+                    region.fills = Some(Vec::new());
+                }
+            }
+        }
+        n.fills = vec![default];
     }
     Ok(filled)
+}
+
+/// The fills the Fill section shows for layer `id` while regions of it are selected in edit
+/// mode: the stack those regions share (their own, else the layer's), `Some(None)` when they
+/// differ (mixed), `None` when no region of that layer is selected (the layer's fills show). The
+/// fill commands edit the same regions then (#1875).
+pub fn selected_region_fills(s: &Session, id: NodeId) -> Option<Option<Vec<figcraft_color::Paint>>> {
+    let ve = s.ds().ok()?.vector_edit.as_ref().filter(|ve| ve.id == id && !ve.regions.is_empty())?;
+    let doc = s.doc().ok()?;
+    let node = doc.node(id)?;
+    let net = network(doc, id)?;
+    let mut stacks = ve.regions.iter().filter_map(|r| net.regions.get(*r)).map(|r| r.fills.clone().unwrap_or_else(|| node.fills.clone()));
+    let first = stacks.next()?;
+    Some(stacks.all(|st| st == first).then_some(first))
 }
 
 /// Add points `vs` of edited layer `id` to its selection.

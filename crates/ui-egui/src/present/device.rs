@@ -1,5 +1,5 @@
 use super::layout::{bezel, upright_w};
-use super::*;
+use super::{Color32, CornerRadius, DeviceColor, Rect, Stroke, StrokeKind, pos2, vec2};
 
 /// The black glass around a device's screen.
 const GLASS: Color32 = Color32::from_rgb(0x16, 0x16, 0x18);

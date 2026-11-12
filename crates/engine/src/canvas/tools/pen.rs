@@ -1,5 +1,9 @@
 use super::handles::{PENCIL_STROKE, selected_end_at};
-use super::*;
+use super::{
+    Affine, Document, Gesture, Guide, Node, NodeId, NodeKind, PenPath, Point, PointerEvent, Result, Session, StrokeAlign, ToolId, Vec2,
+    VectorNetwork, at_45_degrees, frame_at, json, pen_handles,
+};
+use crate::vectoredit::VTool;
 
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
 /// 32 points, medium pressure (0.5) at the stroke weight, from a tenth to twice it. `None` when no
@@ -81,7 +85,7 @@ impl Session {
         if self.tool.pen.is_none()
             && let Some((id, v)) = selected_end_at(&doc, &self.selection(), ev.p(), 8.0 / ev.zoom.max(1e-6))
         {
-            return self.pen_edit(id, Some(v));
+            return self.edit_vector_with(id, VTool::Pen, Some(v));
         }
         let pen = self.tool.pen.get_or_insert_with(PenPath::default);
         // Clicking the first anchor closes the path.
@@ -100,6 +104,10 @@ impl Session {
             self.pen_update()?;
             return self.pen_finish();
         }
+        // A press on the last anchor (a double-click's second press) adds no point on top of it.
+        if pen.points.last().is_some_and(|(q, _, _)| near(q)) {
+            return Ok(());
+        }
         if pen.parent.is_none() {
             pen.parent = Some(frame_at(&doc, page, p, &[]).unwrap_or(page));
         }
@@ -110,8 +118,45 @@ impl Session {
             p = at_45_degrees(*last, p);
         }
         pen.points.push((p, Vec2::ZERO, Vec2::ZERO));
+        pen.undone.clear();
         self.tool.gesture = Gesture::PenDrag { anchor: p };
         self.pen_update()
+    }
+
+    /// Undo while the pen draws (#1745): its last anchor goes (before two anchors, with the layer
+    /// they made; with the only one, the whole path). Returns whether there was a path.
+    pub(crate) fn pen_undo(&mut self) -> Result<bool> {
+        let Some(pen) = self.tool.pen.as_mut() else { return Ok(false) };
+        let Some(last) = pen.points.pop() else {
+            self.tool.pen = None;
+            return Ok(false);
+        };
+        pen.undone.push(last);
+        let drop_layer = pen.points.len() < 2 && pen.id.take().is_some();
+        let empty = pen.points.is_empty();
+        self.tool.gesture = Gesture::None;
+        self.tool.overlay.rubber = None;
+        self.tool.overlay.rubber_handle = None;
+        if drop_layer {
+            self.cancel_interaction()?;
+        }
+        if empty {
+            self.pen_finish()?;
+            return Ok(true);
+        }
+        self.pen_update()?;
+        Ok(true)
+    }
+
+    /// Redo while the pen draws: the last anchor undo took back returns. Returns whether there was
+    /// one.
+    pub(crate) fn pen_redo(&mut self) -> Result<bool> {
+        let Some(pen) = self.tool.pen.as_mut() else { return Ok(false) };
+        let Some(point) = pen.undone.pop() else { return Ok(false) };
+        pen.points.push(point);
+        self.tool.gesture = Gesture::None;
+        self.pen_update()?;
+        Ok(true)
     }
 
     /// Rebuild the pen's vector node from its anchors.
@@ -197,26 +242,56 @@ impl Session {
         Ok(())
     }
 
-    /// Edit `id` as a vector with the pen, going on from point `anchor` (or, without one, starting
-    /// a new path in the same layer at the next click).
-    fn pen_edit(&mut self, id: NodeId, anchor: Option<usize>) -> Result<()> {
+    /// Edit `id` as a vector with `tool` (the pen going on from point `anchor`, or, without one,
+    /// starting a new path in the same layer at the next click).
+    fn edit_vector_with(&mut self, id: NodeId, tool: VTool, anchor: Option<usize>) -> Result<()> {
         self.set_tool(ToolId::Move);
         crate::vectoredit::begin(self, id)?;
-        crate::vectoredit::set_tool(self, crate::vectoredit::VTool::Pen)?;
+        crate::vectoredit::set_tool(self, tool)?;
         crate::vectoredit::set_state(self, |e| {
             e.anchor = anchor;
             e.vertices = anchor.into_iter().collect();
         })
     }
 
-    /// Enter/Escape while the pen draws: the path ends but its layer stays in edit mode with the
-    /// pen, so the next path joins the same vector (another Escape leaves edit mode).
+    /// Escape while the pen draws: the path ends but its layer stays in edit mode with the pen, so
+    /// the next path joins the same vector (another Escape leaves edit mode).
     pub fn pen_end(&mut self) -> Result<()> {
+        self.end_pen_path(VTool::Pen)
+    }
+
+    /// Enter (or a double-click) while the pen draws: the path ends and its layer is edited with
+    /// the Move tool, its points and handles selectable.
+    pub fn pen_enter(&mut self) -> Result<()> {
+        self.end_pen_path(VTool::Move)
+    }
+
+    /// End the pen's path and edit its layer with `tool` (nothing to edit before a segment).
+    fn end_pen_path(&mut self, tool: VTool) -> Result<()> {
         let id = self.tool.pen.as_ref().and_then(|p| p.id);
         self.pen_finish()?;
         match id {
-            Some(id) if self.doc()?.contains(id) => self.pen_edit(id, None),
+            Some(id) if self.doc()?.contains(id) => self.edit_vector_with(id, tool, None),
             _ => Ok(()),
+        }
+    }
+
+    /// A double-click with the pen (#1430). While a path is drawn it ends there, as Enter does.
+    /// Otherwise the double-click only started a path (its second press adds nothing): that is
+    /// dropped, and the layer under the pointer is edited with the Move tool, as a double-click on
+    /// it with the Move tool would.
+    pub(super) fn pen_double_click(&mut self, ev: &PointerEvent) -> Result<()> {
+        if self.tool.pen.as_ref().is_some_and(|p| p.id.is_some()) {
+            return self.pen_enter();
+        }
+        self.pen_finish()?;
+        let (doc, page) = {
+            let ds = self.ds()?;
+            (ds.doc.clone(), ds.page)
+        };
+        match self.hit(&doc, page, ev.p(), ev.tol() * 2.0).filter(|id| crate::vectoredit::enter_targets(&doc, &[*id]).is_some()) {
+            Some(id) => self.edit_vector_with(id, VTool::Move, None),
+            None => Ok(()),
         }
     }
 
@@ -238,7 +313,8 @@ impl Session {
         if points.len() < 2 {
             return Ok(());
         }
-        // Smooth: fit a curve through the samples.
+        // Smooth: fit a curve through the samples, kept from shooting past them where the stroke
+        // turns back or runs nearly straight (#1741).
         let mut poly = figcraft_geom::BezPath::new();
         for (k, p) in points.iter().enumerate() {
             if k == 0 {
@@ -247,7 +323,7 @@ impl Session {
                 poly.line_to(*p);
             }
         }
-        let fitted = figcraft_geom::kurbo::simplify::simplify_bezpath(poly.iter(), 0.75, &Default::default());
+        let fitted = figcraft_geom::simplify_path(&poly, 0.75);
         let d = fitted.to_svg();
         if matches!(self.tool.tool, ToolId::Marker | ToolId::Highlighter) {
             return self.ink_finish(&d);
@@ -258,7 +334,9 @@ impl Session {
         let mut local = fitted.clone();
         local.apply_affine(pw.inverse());
         let _ = d;
-        let (color, weight) = PENCIL_STROKE;
+        // Black, or white on a dark page or frame (#1741).
+        let (_, weight) = PENCIL_STROKE;
+        let color = super::handles::pencil_color(self.doc()?, parent);
         let mut props = json!({"fills": [], "strokes": [color.to_css_hex()], "strokeWeight": weight, "strokeCap": "round", "strokeJoin": "round", "strokeAlign": "center"});
         // Pen pressure becomes the stroke's width profile (brushes follow it too).
         if let Some(points) = pressure_profile(points, pressure) {
@@ -272,5 +350,14 @@ impl Session {
             &json!({"type": "vector", "path": local.to_svg(), "closed": false, "parent": parent, "name": "Vector", "props": props}),
         )?;
         Ok(())
+    }
+
+    /// The colour a Pencil stroke starting at `p` will have: it goes into the frame under `p`
+    /// (else the page), and is white when that is dark (`pencil_color`).
+    pub(super) fn pencil_color_at(&self, p: figcraft_geom::Point) -> Result<figcraft_color::Color> {
+        let page = self.page()?;
+        let doc = self.doc()?;
+        let parent = frame_at(doc, page, p, &[]).unwrap_or(page);
+        Ok(super::handles::pencil_color(doc, parent))
     }
 }

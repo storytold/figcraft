@@ -159,12 +159,15 @@ fn swatches_bind_solid_fills_only() {
 }
 
 /// Sketch 2025+ masters keep their background, corners and stack in their style and layout, and
-/// their instances show the same.
+/// their instances show the same (the background when the master includes it in instances and
+/// exports).
 #[test]
 fn masters_and_instances_keep_frame_styles_and_stacks() {
     let mut m = master("M", "S", "Button", 120.0, 44.0, vec![rect("Icon", 0.0, 0.0, 20.0, 20.0), rect("Label", 0.0, 0.0, 60.0, 20.0)]);
     m["groupBehavior"] = json!(1);
     m["clippingBehavior"] = json!(2);
+    m["includeBackgroundColorInInstance"] = json!(true);
+    m["includeBackgroundColorInExport"] = json!(true);
     m["style"]["fills"] = json!([solid_fill(0.0, 0.0, 1.0, 1.0)]);
     m["style"]["corners"] = json!({"_class": "MSImmutableStyleCorners", "radii": [8], "style": 1, "smoothing": 0.6});
     let m = stack(m, 0, 1, 1, 10.0, [16.0, 12.0, 16.0, 12.0]);
@@ -292,6 +295,8 @@ fn layering_type_decides_tint_or_background() {
     bg["layeringType"] = json!(0);
     let mut btn = master("MC", "SC", "Btn", 100.0, 20.0, vec![]);
     btn["groupBehavior"] = json!(1);
+    btn["includeBackgroundColorInInstance"] = json!(true);
+    btn["includeBackgroundColorInExport"] = json!(true);
     btn["style"]["fills"] = json!([bg]);
     let doc = open_symbols(vec![instance("B", "SB", 0.0, 0.0, 100.0, 20.0, &[]), instance("C", "SC", 0.0, 50.0, 100.0, 20.0, &[])], vec![bar, btn]);
     let b = doc.nodes().find(|n| n.name == "B").unwrap();
@@ -357,7 +362,8 @@ fn glass_and_progressive_blurs() {
     assert!(matches!(node(&doc, "Glass").effects[0].kind, figcraft_doc::EffectKind::Glass(_)), "{warnings:?}");
     let figcraft_doc::EffectKind::BackgroundBlur(b) = &node(&doc, "Prog").effects[0].kind else { panic!("not a background blur") };
     assert_eq!(b.blur_type, figcraft_doc::BlurType::Progressive);
-    assert_eq!((b.start_radius, b.radius), (24.0, 0.0));
+    // Sketch's radius is the blur's standard deviation; FigCraft's twice it.
+    assert_eq!((b.start_radius, b.radius), (48.0, 0.0));
 }
 
 /// Angled (2), inside-square (3) and inside-arc (4) corners make the rectangle a path of that outline.
@@ -440,4 +446,38 @@ fn faded_stack_items_keep_their_sizing() {
     let row = node(&doc, "Row");
     let wrap = doc.node(row.children[0]).unwrap();
     assert_eq!(format!("{:?}", wrap.child_layout.sizing_h), "Fill", "{:?}", wrap.child_layout);
+}
+
+/// Tints came with Sketch 64 (format 124 and newer): before them a group's fill draws nothing, so
+/// its layers keep their own colours (seen on a Sketch 63 file's renders).
+#[test]
+fn group_fills_tint_only_from_sketch_64() {
+    let make = |version: u64| {
+        let white = styled(rect("Dot", 0.0, 0.0, 10.0, 10.0), "fills", json!([solid_fill(1.0, 1.0, 1.0, 1.0)]));
+        let g = styled(group("G", 0.0, 0.0, 10.0, 10.0, vec![white]), "fills", json!([solid_fill(0.0, 0.0, 0.0, 1.0)]));
+        let z = sketch_zip(if version > 123 { "64" } else { "63.1" }, version, document(&["P"]), &[page("P", "Page", vec![g])], &[]);
+        import(&z, "f").unwrap().0
+    };
+    assert_eq!(solid_of(node(&make(123), "Dot")), Some([1.0, 1.0, 1.0]));
+    assert_eq!(solid_of(node(&make(124), "Dot")), Some([0.0, 0.0, 0.0]));
+}
+
+/// A stretching stack (`alignItems` 3) fills its items across, fixed and hugging ones too.
+#[test]
+fn stretching_stacks_fill_items_across() {
+    let mut fixed = rect("Fixed", 0.0, 0.0, 60.0, 20.0);
+    fixed["horizontalSizing"] = json!(0);
+    let mut hug = frame_group("Hug", 0.0, 20.0, 60.0, 20.0, vec![]);
+    hug["horizontalSizing"] = json!(1);
+    let col = |name: &str, align: i64| stack(frame_group(name, 0.0, 0.0, 60.0, 40.0, vec![hug.clone(), fixed.clone()]), 1, 0, align, 0.0, [0.0; 4]);
+    let (doc, _) = open(vec![col("Start", 0), col("Stretch", 3)]);
+    let sizing = |parent: &str, name: &str| {
+        let p = node(&doc, parent);
+        let n = p.children.iter().filter_map(|c| doc.node(*c)).find(|n| n.name == name).unwrap();
+        n.child_layout.sizing_h
+    };
+    use figcraft_doc::Sizing as LayoutSizing;
+    assert_eq!(sizing("Start", "Fixed"), LayoutSizing::Fixed);
+    assert_eq!(sizing("Stretch", "Fixed"), LayoutSizing::Fill);
+    assert_eq!(sizing("Stretch", "Hug"), LayoutSizing::Fill);
 }

@@ -15,7 +15,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use figcraft_doc::proto::Action;
-use figcraft_doc::*;
+use figcraft_doc::{
+    Collection, CollectionId, Document, ImportedComponent, ImportedRecord, ImportedStyle, LibraryAsset, LibraryCollection, LibraryLink,
+    LibraryManifest, LibraryStyle, LibraryVariable, Node, NodeId, NodeKind, PropDef, PublishedLibrary, Style, StyleKind, Variable, VariableId,
+    Variables, node_images, paint_images, used_images,
+};
 use serde_json::Value;
 
 use crate::components::inside_instance;
@@ -77,6 +81,30 @@ pub fn asset_root(doc: &Document, id: NodeId) -> Option<NodeId> {
     let mut chain = vec![id];
     chain.extend(doc.ancestors(id));
     chain.into_iter().rfind(|c| doc.node(*c).is_some_and(is_asset))
+}
+
+/// Count the instances of library components among `roots` (new layers: placed, pasted or
+/// duplicated) and in what they hold as inserted, for the libraries' analytics. An instance inside
+/// another instance is part of it and isn't counted on its own.
+pub(crate) fn count_inserted(doc: &mut Document, roots: &[NodeId]) {
+    if doc.libraries.components.is_empty() {
+        return;
+    }
+    let mut found = Vec::new();
+    let mut stack = roots.to_vec();
+    while let Some(id) = stack.pop() {
+        let Some(n) = doc.node(id) else { continue };
+        match n.kind {
+            NodeKind::Instance { component, .. } => {
+                let root = asset_root(doc, component);
+                found.extend(doc.libraries.components.iter().find(|r| Some(r.root) == root).map(|r| (r.library.clone(), r.key)));
+            }
+            _ => stack.extend(n.children.iter().copied()),
+        }
+    }
+    for (library, key) in found {
+        doc.libraries_mut().count_insert(&library, key);
+    }
 }
 
 /// Components the layers of `root` use: mains of instances, instance swap defaults and values.
@@ -236,24 +264,35 @@ pub fn default_selection(doc: &Document, prev: Option<&LibraryManifest>) -> Sele
             .collections
             .into_iter()
             .filter(|c| {
-                pick(prev.and_then(|m| m.collection(c)).map(|x| (x.published, x.name.as_str())), doc.variables.collection(c).map(|x| x.name.as_str()))
+                pick(
+                    prev.and_then(|m| m.collection(c)).map(|x| (x.published, x.name.as_str())),
+                    doc.variables.collection_by_id(c).map(|x| x.name.as_str()),
+                )
             })
             .collect(),
     }
 }
 
-/// `seeds` (variable ids) and every variable they alias, transitively, by id.
+/// `seeds` (variable ids) and every variable they alias or calculate from, transitively, by id.
 fn alias_closure(vars: &Variables, seeds: impl IntoIterator<Item = VariableId>) -> BTreeSet<VariableId> {
     let mut out = BTreeSet::new();
     let mut stack: Vec<VariableId> = seeds.into_iter().collect();
+    if stack.is_empty() {
+        return out;
+    }
+    // Indexed once (the first of equal ids, as `get_by_id` finds it): a scan per step is quadratic on a long alias chain.
+    let mut by_id = std::collections::HashMap::new();
+    for v in &vars.variables {
+        by_id.entry(v.id.as_str()).or_insert(v);
+    }
     while let Some(cur) = stack.pop() {
-        let Some(v) = vars.get(&cur) else { continue };
+        let Some(v) = by_id.get(cur.as_str()).copied() else { continue };
         if out.len() >= MAX_ASSETS || !out.insert(v.id.clone()) {
             continue;
         }
         for val in v.values.values() {
-            if let VariableValue::Alias(a) = val {
-                stack.push(a.clone());
+            for r in val.references() {
+                stack.push(r.clone());
             }
         }
     }
@@ -698,7 +737,7 @@ pub fn import_variables(
 ) -> VariableMap {
     let (lid, m, src) = (lib.manifest.id.as_str(), &lib.manifest, &lib.doc.variables);
     let vars = alias_closure(src, keys.iter().cloned());
-    let colls: BTreeSet<&CollectionId> = collections.iter().chain(vars.iter().filter_map(|v| src.get(v)).map(|v| &v.collection)).collect();
+    let colls: BTreeSet<&CollectionId> = collections.iter().chain(vars.iter().filter_map(|v| src.get_by_id(v)).map(|v| &v.collection)).collect();
     let mut out = VariableMap::default();
     // Collections first: the variables name theirs.
     for key in colls {
@@ -751,15 +790,19 @@ pub fn import_variables(
         let Some(collection) = out.collections.get(&v.collection).cloned() else { continue };
         let mut values = BTreeMap::new();
         for (mode, val) in &v.values {
-            let val = match val {
-                // An alias to a variable the library doesn't have resolves to nothing: dropped
-                // (never pointed at a variable of this file).
-                VariableValue::Alias(a) => match src.get(a).and_then(|t| out.variables.get(&t.id)) {
-                    Some(l) => VariableValue::Alias(l.clone()),
-                    None => continue,
-                },
-                other => other.clone(),
-            };
+            // A value reading a variable the library doesn't have resolves to nothing: dropped
+            // (never pointed at a variable of this file), for aliases and calculations alike.
+            let mut val = val.clone();
+            let remapped = val.references_mut().into_iter().all(|r| match src.get_by_id(r.as_str()).and_then(|t| out.variables.get(&t.id)) {
+                Some(here) => {
+                    *r = here.clone();
+                    true
+                }
+                None => false,
+            });
+            if !remapped {
+                continue;
+            }
             values.insert(mode.clone(), val);
         }
         let copy = Variable { id: local.clone(), collection, values, extends: None, overrides: Default::default(), ..v.clone() };
@@ -951,7 +994,7 @@ pub fn pending(doc: &Document, lib: &PublishedLibrary) -> Pending {
         .filter(|r| r.library == m.id)
         .map(|r| r.key.as_str())
         .collect();
-    let copied = |key: &str| libs.variables.iter().any(|r| r.library == m.id && r.key == key && vars.get(&r.local).is_some());
+    let copied = |key: &str| libs.variables.iter().any(|r| r.library == m.id && r.key == key && vars.get_by_id(&r.local).is_some());
     variables.extend(published_variables(lib).filter(|v| extended.contains(v.collection.as_str()) && !copied(&v.id)).map(|v| ImportedRecord {
         library: m.id.clone(),
         key: v.id.clone(),
@@ -1037,10 +1080,14 @@ pub fn prune(doc: &mut Document, library: &str) -> Result<()> {
         .flat_map(|n| n.bound.values().map(String::as_str).chain(action_variables(n)))
         .chain(doc.variables.variables.iter().filter_map(|v| v.extends.as_deref()))
         .map(str::to_string)
-        .chain(doc.variables.variables.iter().filter(|v| !is_remote_variable(doc, &v.id)).flat_map(|v| v.values.values()).filter_map(|x| match x {
-            VariableValue::Alias(a) => Some(a.clone()),
-            _ => None,
-        }))
+        .chain(
+            doc.variables
+                .variables
+                .iter()
+                .filter(|v| !is_remote_variable(doc, &v.id))
+                .flat_map(|v| v.values.values())
+                .flat_map(|x| x.references().into_iter().cloned()),
+        )
         .collect::<Vec<_>>();
     let used = alias_closure(&doc.variables, seeds);
     let unused: BTreeSet<String> =
@@ -1303,6 +1350,15 @@ pub fn library_of(doc: &Document, id: NodeId) -> Option<&str> {
     }
     let root = asset_root(doc, id)?;
     doc.libraries.import_of(root).map(|r| r.library.as_str())
+}
+
+pub fn library_source(doc: &Document, id: NodeId) -> Option<(&str, NodeId)> {
+    if !doc.is_remote(id) {
+        return None;
+    }
+    let record = doc.libraries.import_of(asset_root(doc, id)?)?;
+    let key = record.ids.iter().find(|(_, local)| **local == id).map_or(record.key, |(key, _)| *key);
+    Some((record.library.as_str(), key))
 }
 
 /// The display name of library `id` in `doc` (its link's name, else the id).

@@ -1,7 +1,7 @@
 use super::actions::texture_scale;
 use super::layout::{Layout, Place, hotspots};
 use super::transition::{smart_interpolate, transition_frames};
-use super::*;
+use super::{ACCENT, Color32, CornerRadius, FLASH_SECS, NodeId, OverlayState, Presenter, Rect, Stroke, StrokeKind, Transition, pos2, vec2};
 
 pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Context, l: &Layout, now: f64) {
     let ppp = f64::from(ctx.pixels_per_point());

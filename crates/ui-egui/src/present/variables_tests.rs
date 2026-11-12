@@ -76,7 +76,10 @@ fn counter_then_conditional_navigation() {
 #[test]
 fn set_variable_mode_recolours_bound_layers() {
     let (mut doc, a, _, button) = setup();
-    on_click(&mut doc, button, vec![Action::SetVariableMode { collection: "Theme".into(), mode: "Dark".into() }]);
+    let theme = doc.variables.collection("Theme").unwrap().id.clone();
+    // Actions store mode ids (commands and imports turn names into them).
+    let dark = doc.variables.collection("Theme").unwrap().find_mode("Dark").unwrap().id.clone();
+    on_click(&mut doc, button, vec![Action::SetVariableMode { collection: theme.clone(), mode: dark }]);
     let hex = |p: &Presenter| p.doc.as_ref().and_then(|d| d.node(a)?.fills.first()?.solid_color()).map(|c| c.to_hex());
     let mut p = Presenter::new(a);
     p.sync(&Arc::new(doc), 0.0);
@@ -85,7 +88,7 @@ fn set_variable_mode_recolours_bound_layers() {
     assert_eq!(hex(&p).as_deref(), Some("000000"));
     // An unknown mode does nothing.
     let mut d2 = p.doc.clone().unwrap();
-    on_click(&mut d2, button, vec![Action::SetVariableMode { collection: "Theme".into(), mode: "Sepia".into() }]);
+    on_click(&mut d2, button, vec![Action::SetVariableMode { collection: theme, mode: "Sepia".into() }]);
     let mut p2 = Presenter::new(a);
     p2.sync(&Arc::new(d2), 0.0);
     assert!(!p2.fire(button, 1, None, 1.0));
@@ -103,4 +106,31 @@ fn deeply_nested_conditionals_stop() {
     p.sync(&Arc::new(doc), 0.0);
     assert!(!p.fire(button, 0, None, 1.0));
     assert_eq!(p.current, a);
+}
+
+#[test]
+fn stored_variable_ids_keep_player_collection_identity() {
+    for missing in [false, true] {
+        let (mut doc, a, _, button) = setup();
+        let theme = doc.variables.collections[0].clone();
+        let mut shadow = theme.clone();
+        shadow.id = "shadow".into();
+        shadow.name = theme.id.clone();
+        doc.variables.collections.insert(0, shadow);
+        if missing {
+            doc.variables.collections.retain(|c| c.id != theme.id);
+        }
+        let dark = theme.find_mode("Dark").unwrap().id.clone();
+        on_click(&mut doc, button, vec![Action::SetVariableMode { collection: theme.id.clone(), mode: dark }]);
+        let mut p = Presenter::new(a);
+        p.sync(&Arc::new(doc), 0.0);
+        assert_eq!(p.fire(button, 0, None, 1.0), !missing);
+        let played = p.doc.as_ref().unwrap();
+        let modes = &played.node(played.page_of(a).unwrap()).unwrap().var_modes;
+        assert!(!modes.contains_key("shadow"));
+        if !missing {
+            let fill = played.node(a).unwrap().fills[0].solid_color().unwrap();
+            assert_eq!(fill.to_hex(), "000000");
+        }
+    }
 }

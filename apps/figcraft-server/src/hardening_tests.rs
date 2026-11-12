@@ -25,27 +25,15 @@ use crate::abuse::{Abuse, AbuseConfig, Action, DOWNLOAD_BURST};
 use crate::config::Config;
 use crate::public_tests::via_proxy;
 use crate::store::{BUSY_DOWNLOADS, NO_PUBLIC_LIBRARY, Store};
-use crate::test_util::{Raw, TempDir, config};
+use crate::test_util::{Raw, TempDir, config, ip, snapshot};
 
 fn open(dir: &std::path::Path) -> Config {
     Config { open_publish: true, operator_contact: "abuse@example.com".into(), ..config(dir) }
 }
 
-fn snapshot(name: &str) -> Vec<figcraft_collab::Change> {
-    let mut d = Document::new(name);
-    let page = d.first_page().unwrap();
-    d.create(page, NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 60.0).unwrap();
-    d.repair();
-    Replica::new(d).snapshot().unwrap()
-}
-
-fn ip(s: &str) -> IpAddr {
-    s.parse().unwrap()
-}
-
 /// A team library archive as the app makes it; with `bomb` bytes of spaces as its snapshot
 /// (deflated: a few KiB) and `padding` incompressible bytes stored beside it.
-fn archive(bomb: usize, padding: usize) -> Vec<u8> {
+pub(crate) fn archive(bomb: usize, padding: usize) -> Vec<u8> {
     let mut s = Session::new();
     let f = s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 20, "name": "Button"})).unwrap()["id"].as_u64().unwrap();
     s.execute("component.create", &json!({"ids": [f]})).unwrap();
@@ -537,6 +525,9 @@ fn downloads_have_a_share_per_address() {
     // A team library is served within it, then refused, saying why; another address still gets it.
     let dir = TempDir::new("libshare");
     let mut store = Store::open(dir.path(), config(dir.path()).store()).unwrap();
+    // The clock held still: on a loaded machine the 40 fetches can take seconds, long enough for
+    // the address's share to refill one more.
+    store.frozen = Some(t);
     let (file, ..) = store.publish("Library", &snapshot("Library")).unwrap();
     store.publish_library(&file.id, &archive(0, 4 << 20)).unwrap();
     let fetch = |s: &mut Store, who: &str| s.library(ip(who), &file.id, Access::View, LibraryReq::Fetch { have: None, usage: None });

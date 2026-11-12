@@ -1,7 +1,11 @@
 use super::connectors::connector_of;
 use super::derived::ends_now;
 use super::items::{add, add_text, shape_padding, text_of};
-use super::*;
+use super::{
+    Affine, AutoLayout, BTreeMap, BoardItem, BoardShape, Color, Connector, DocError, Document, End, INK, NodeId, NodeKind, Paint, Result, Routing,
+    Session, Sizing, StrokeCap, TextAlignH, TextAutoResize, TextData, Value, VectorNetwork, bad, cap_of, color_param, json, line_shade, num,
+    req_string, req_targets, require, routing_of, shape_of, string,
+};
 
 /// The label of connector `id`, if it has one.
 pub fn label_of(doc: &Document, id: NodeId) -> Option<NodeId> {
@@ -80,7 +84,7 @@ pub(super) fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
                 n.strokes = vec![Paint::solid(line_shade(color))];
             }
             BoardItem::Connector(_) | BoardItem::Ink => doc.get_mut(id)?.strokes = vec![Paint::solid(line_shade(color))],
-            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table => continue,
+            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table | BoardItem::MindNode => continue,
         }
         changed.push(id);
     }
@@ -123,12 +127,12 @@ impl Restyle {
                 }
                 None => false,
             },
-            BoardItem::Connector(c) => self.restyle_connector(doc, id, c)?,
+            BoardItem::Connector(ref c) => self.restyle_connector(doc, id, c.clone())?,
             _ => false,
         };
         // Text sizes: shapes' and labels' text (stickies size theirs to fit).
         let sized = match (self.size, &item) {
-            (Some(size), BoardItem::Shape { .. } | BoardItem::Label { .. }) => resize_text(doc, id, size),
+            (Some(size), BoardItem::Shape { .. } | BoardItem::Label { .. } | BoardItem::MindNode) => resize_text(doc, id, size),
             _ => false,
         };
         Ok(changed || sized)
@@ -137,6 +141,8 @@ impl Restyle {
     fn restyle_connector(&self, doc: &mut Document, id: NodeId, mut c: Connector) -> Result<bool> {
         let n = doc.get_mut(id)?;
         if let Some(r) = self.routing {
+            // A path shaped by hand is for the style it was shaped in.
+            c.path = c.path.filter(|_| c.routing == r);
             c.routing = r;
             n.board = Some(BoardItem::Connector(c));
         }

@@ -4,7 +4,7 @@ use super::axes::round_axis;
 use super::picker::{FontPick, font_picker};
 #[cfg(test)]
 use super::spacing::{parse_letter_spacing, parse_line_height};
-use super::*;
+use super::{Align2, Arc, Color32, CornerRadius, FIELD_H, Icon, Id, Rect, Sense, Stroke, StrokeKind, Tokens, Ui, icons, pos2, regular, tr, vec2};
 
 pub(super) fn caption(ui: &mut Ui, s: &str) {
     let t = Tokens::get(ui.ctx());
@@ -147,6 +147,9 @@ pub(super) fn paint_lead(p: &egui::Painter, r: Rect, g: LeadGlyph, col: Color32)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panels::typography::{target_styles, uniform};
+    use figcraft_doc::{Document, LetterSpacing, LineHeight, Node, NodeKind, TextData, TextStyle};
+    use serde_json::json;
 
     #[test]
     fn small_caps_sample_draws_only_letters_the_ui_font_has() {
@@ -191,12 +194,33 @@ mod tests {
         assert_eq!(parse_letter_spacing("x", Some(LetterSpacing::Percent(0.0))), None);
     }
 
-    /// One frame of the font picker with `events`.
+    /// One frame of the font picker under a field, with `events`. `opened` clicks the field first
+    /// (a press frame, then the release frame this returns).
     fn pick(ctx: &egui::Context, current: &str, opened: bool, events: Vec<egui::Event>) -> FontPick {
-        let mut out = FontPick::default();
-        let mut shown = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| out = font_picker(ui, Some(current), opened));
-        shown.textures_delta.clear();
-        out
+        let field = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(200.0, 24.0));
+        let frame = |events: Vec<egui::Event>| {
+            let mut out = FontPick::default();
+            let mut shown = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                let resp = ui.interact(field, egui::Id::unique("font_field"), egui::Sense::click());
+                out = font_picker(ui, &resp, Some(current), 240.0, |_| false).unwrap_or_default();
+            });
+            shown.textures_delta.clear();
+            out
+        };
+        if opened {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: field.center(),
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            // The field is laid out once before the pointer can hit it.
+            frame(vec![]);
+            frame(vec![egui::Event::PointerMoved(field.center())]);
+            frame(vec![button(true)]);
+            return frame(vec![button(false)]);
+        }
+        frame(events)
     }
 
     fn key(key: egui::Key) -> egui::Event {

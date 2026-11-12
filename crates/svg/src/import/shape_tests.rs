@@ -107,3 +107,14 @@ fn layer_names_decode_id_escapes() {
     assert_eq!(layer_name("", "Group"), "Group");
     assert_eq!(layer_name("é_x41_", "Group"), "éA");
 }
+
+#[test]
+fn doctype_with_internal_subset_is_still_svg() {
+    let s = "<?xml version=\"1.0\"?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\" [\n\t<!ENTITY ns_svg \"http://www.w3.org/2000/svg\">\n]>\n<svg xmlns=\"&ns_svg;\" width=\"10\" height=\"10\"/>";
+    assert!(super::looks_like_svg(s));
+    let quoted = "<!DOCTYPE svg [ <!ENTITY a \"x>y]\"> ]><svg/>";
+    assert!(super::looks_like_svg(quoted));
+    let commented = "<!DOCTYPE svg [ <!-- don't ] > --> <!ENTITY a \"b\"> ]><svg/>";
+    assert!(super::looks_like_svg(commented));
+    assert!(!super::looks_like_svg("<!DOCTYPE html [ <svg/> ]><html/>"));
+}

@@ -43,6 +43,15 @@ fn a_miter_limit_other_than_four_is_written() {
 }
 
 #[test]
+fn a_huge_miter_limit_is_written_as_a_finite_number() {
+    let (mut d, r) = stroked(StrokeAlign::Center);
+    d.get_mut(r).unwrap().stroke.miter_limit = 1e306;
+    let out = export(&d, &[r], Compat::BestEffort);
+    let v = paths_of(&out.xml)[0].get("strokeMiterLimit").unwrap().to_string();
+    assert!(v.parse::<f32>().unwrap().is_finite(), "{v}");
+}
+
+#[test]
 fn a_uniform_scale_scales_the_stroke_width() {
     let (mut d, r) = stroked(StrokeAlign::Center);
     let n = d.get_mut(r).unwrap();

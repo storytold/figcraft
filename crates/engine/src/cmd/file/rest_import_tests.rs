@@ -31,7 +31,15 @@ fn cached_import() -> Document {
     let page = doc.first_page().unwrap();
     let store = doc.ensure_library_store();
     let main = doc
-        .create(store, NodeKind::Component { description: String::new(), props: Default::default() }, "Cached main", 0.0, 0.0, 20.0, 20.0)
+        .create(
+            store,
+            NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() },
+            "Cached main",
+            0.0,
+            0.0,
+            20.0,
+            20.0,
+        )
         .unwrap();
     let body = doc.create(main, NodeKind::Rectangle, "Body", 0.0, 0.0, 20.0, 20.0).unwrap();
     let inst = doc.create(page, NodeKind::Instance { component: main, props: Default::default() }, "Cached instance", 0.0, 0.0, 20.0, 20.0).unwrap();

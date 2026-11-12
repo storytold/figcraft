@@ -53,6 +53,25 @@ fn picker_closes_when_another_layer_is_selected() {
     assert!(u.app.ui.picker.is_none(), "selecting another layer closes the picker: {:?}", u.app.ui.picker);
 }
 
+#[test]
+fn clicking_the_swatch_again_closes_the_picker() {
+    let (mut u, a, _) = two();
+    u.app.run("fill.add", json!({"ids": [a], "color": "#00FF00"}));
+    let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![a] };
+    u.app.toggle_picker(target.clone(), Some(egui::Rect::from_min_size(egui::pos2(1250.0, 200.0), egui::vec2(16.0, 16.0))));
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "the swatch opens the picker");
+    u.app.toggle_picker(target.clone(), Some(egui::Rect::from_min_size(egui::pos2(1250.0, 200.0), egui::vec2(16.0, 16.0))));
+    u.frame(vec![]);
+    assert!(u.app.ui.picker.is_none(), "the same swatch toggles it shut");
+    // Another paint of the same layer opens the picker for that one.
+    let second = PickerTarget::Paint { fills: true, index: 1, ids: vec![a] };
+    u.app.toggle_picker(second.clone(), Some(egui::Rect::from_min_size(egui::pos2(1250.0, 200.0), egui::vec2(16.0, 16.0))));
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.picker, Some(second), "another paint opens the picker for it");
+}
+
 // Regression test for #237: the "On this page" swatches wrapped onto rows that started at the picker's
 // left edge (only the first row was indented) and ran past its right edge.
 #[test]
@@ -77,11 +96,9 @@ fn wrapped_page_colour_swatches_stay_inset_inside_the_picker() {
         u.frame(vec![]);
     }
     let out = u.frame_output(vec![]);
-    // The picker is the only floating window open.
-    let picker = u
-        .ctx
-        .memory(|m| m.areas().visible_layer_ids().into_iter().filter(|l| l.order == egui::Order::Middle).find_map(|l| m.area_rect(l.id)))
-        .expect("the picker is open");
+    // The picker is the only floating window open: its area is the picker's own id, which the style
+    // picker also looks up to tell a press in here from one outside.
+    let picker = u.ctx.memory(|m| m.area_rect(crate::colorpicker::window_id())).expect("the picker is open");
     // A swatch is a 14 pt square with a 1 pt outline.
     let swatches: Vec<egui::Rect> = out
         .shapes
@@ -101,5 +118,257 @@ fn wrapped_page_colour_swatches_stay_inset_inside_the_picker() {
             r.min.x >= picker.min.x + 16.0 - 0.5 && r.max.x <= picker.max.x - 16.0 + 0.5,
             "swatch {r:?} is not inset 16 pt from both sides of the picker {picker:?}"
         );
+    }
+}
+
+#[test]
+fn opening_the_first_picker_preserves_the_active_text_undo_interaction() {
+    let mut s = Session::new();
+    let text = NodeId(s.execute("text.create", &json!({"text": "Hi"})).unwrap()["id"].as_u64().unwrap());
+    let mut app = crate::FigApp::new(s, Box::new(crate::NoServices));
+    figcraft_engine::textedit::begin(&mut app.session, text, Some(2), false).unwrap();
+    figcraft_engine::textedit::insert(&mut app.session, "a").unwrap();
+    let depth = app.session.undo_depth();
+    app.open_picker(PickerTarget::TextRange { id: text, start: 0, end: 2 }, None);
+    assert!(app.session.ds().unwrap().interaction.is_some());
+    assert_eq!(app.session.undo_depth(), depth);
+    figcraft_engine::textedit::insert(&mut app.session, "b").unwrap();
+    figcraft_engine::textedit::end(&mut app.session).unwrap();
+    app.session.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(app.session.doc().unwrap().node(text).unwrap().kind.text().unwrap().characters, "Hi");
+}
+
+#[test]
+fn the_picker_uses_the_fitted_sidebar_edge() {
+    use egui::{Pos2, RawInput, Rect, vec2};
+    let (mut u, a, _) = two();
+    u.app.ui.right_width = 480.0;
+    u.app.open_picker(PickerTarget::Paint { fills: true, index: 0, ids: vec![a] }, None);
+    for _ in 0..6 {
+        u.frame_raw(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 900.0))), ..Default::default() });
+    }
+    let sidebar = u.app.ui.right_panel_rect.unwrap();
+    assert!(sidebar.width() < u.app.ui.right_width, "the requested width does not fit");
+    let pop = u.app.ui.picker_popover.as_ref().unwrap();
+    assert!((pop.rect.max.x - (sidebar.min.x - 8.0)).abs() < 1.0, "{:?} beside {sidebar:?}", pop.rect);
+}
+
+#[test]
+fn moved_page_effect_and_text_range_swatches_still_toggle_the_picker_closed() {
+    use egui::{Id, Pos2};
+    for kind in ["page", "effect", "text"] {
+        let (mut u, a, _) = two();
+        let target = match kind {
+            "page" => {
+                u.app.session.execute("select.none", &json!({})).unwrap();
+                PickerTarget::PageBackground
+            }
+            "effect" => {
+                u.app.session.execute("effect.add", &json!({"id":a,"type":"dropShadow"})).unwrap();
+                u.ctx.data_mut(|d| d.insert_temp(Id::unique(("fx_open", 0usize)), true));
+                PickerTarget::Effect { ids: vec![a], index: 0, secondary: false }
+            }
+            _ => {
+                let text = NodeId(u.app.session.execute("text.create", &json!({"text":"Hello"})).unwrap()["id"].as_u64().unwrap());
+                figcraft_engine::textedit::begin(&mut u.app.session, text, None, false).unwrap();
+                PickerTarget::TextRange { id: text, start: 0, end: 5 }
+            }
+        };
+        u.app.open_picker(target, None);
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        let before = u.app.ui.picker_button.expect(kind);
+        u.app.ui.right_width = 360.0;
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        let after = u.app.ui.picker_button.expect(kind);
+        assert!((after.min.x - before.min.x).abs() > 50.0, "{kind}: swatch moves");
+        u.button(after.center(), true);
+        u.button(after.center(), false);
+        u.frame(vec![egui::Event::PointerMoved(Pos2::new(1430.0, 890.0))]);
+        assert!(u.app.ui.picker.is_none(), "{kind}: the moved swatch closes it");
+    }
+}
+
+#[test]
+fn a_press_in_the_gradient_variable_picker_keeps_the_colour_picker_open() {
+    use egui::{Pos2, RawInput, Rect, pos2, vec2};
+    let (mut u, a, _) = two();
+    u.app.session.execute("fill.set", &json!({"id":a,"paint":{"type":"linearGradient","stops":["#ff0000","#0000ff"]}})).unwrap();
+    u.app.open_picker(PickerTarget::Paint { fills: true, index: 0, ids: vec![a] }, None);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    // Open the same child picker used by a gradient stop, away from the parent's card.
+    let _ = u.ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), ..Default::default() }, |ui| {
+        crate::variable_ui::open(ui, &[a], "fills/0/stops/0/color", figcraft_doc::VariableType::Color, pos2(500.0, 180.0));
+    });
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    let child = crate::variable_ui::picker_rect(&u.ctx).unwrap();
+    let at = child.min + vec2(30.0, 20.0);
+    assert!(!u.app.ui.picker_popover.as_ref().unwrap().rect.contains(at));
+    u.button(at, true);
+    assert!(u.app.ui.picker.is_some(), "the child variable picker is part of the interaction");
+    u.button(at, false);
+}
+
+#[test]
+fn dragging_a_gradient_handle_on_the_canvas_keeps_the_picker_open() {
+    // #1852: the handles belong to the picker, so the press that starts a drag is not a press
+    // outside it: the picker and the handles stay, the drag is one undo step, and a press elsewhere
+    // on the layer still closes it.
+    let mut s = Session::new();
+    let a = NodeId(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+    s.execute("fill.set", &json!({"id": a, "paint": {"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}})).unwrap();
+    s.execute("select.set", &json!({"ids": [a]})).unwrap();
+    let mut u = Ui::new(s);
+    let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![a] };
+    u.app.open_picker(target.clone(), None);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.ui.picker, Some(target.clone()));
+    let depth = u.app.session.undo_depth().0;
+    let from_handle = |u: &Ui| match &u.app.session.doc().unwrap().node(a).unwrap().fills[0].kind {
+        figcraft_color::PaintKind::Gradient(g) => g.from,
+        _ => panic!("the fill is a gradient"),
+    };
+    assert_eq!(from_handle(&u), (0.5, 0.0), "a linear gradient starts at the top middle");
+    // Drag the start handle from the top middle of the layer to its left middle.
+    let from = u.app.to_screen(200.0, 100.0);
+    let to = u.app.to_screen(100.0, 200.0);
+    u.button(from, true);
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "the press on the handle keeps the picker open");
+    for _ in 0..2 {
+        u.frame(vec![egui::Event::PointerMoved(to)]);
+    }
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "and so does the drag");
+    let (x, y) = from_handle(&u);
+    assert!(x.abs() < 0.02 && (y - 0.5).abs() < 0.02, "the handle followed the pointer: ({x}, {y})");
+    u.button(to, false);
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.picker, Some(target.clone()), "released, the picker is still open");
+    assert_eq!(u.app.session.undo_depth().0, depth + 1, "the drag is one undo step");
+    // A press on the layer away from its handles is still a press outside the picker.
+    let body = u.app.to_screen(250.0, 250.0);
+    u.button(body, true);
+    u.button(body, false);
+    u.frame(vec![]);
+    assert!(u.app.ui.picker.is_none(), "a plain canvas press closes it");
+}
+
+#[test]
+fn a_gradient_drag_released_off_the_canvas_ends_there() {
+    // A handle drag whose button goes up over the sidebar or over the picker itself ends there:
+    // the edit commits, the picker stays, and the next press on the canvas is a plain press (it
+    // closes the picker) rather than a move of the handle to wherever it landed.
+    for over in ["sidebar", "picker"] {
+        let mut s = Session::new();
+        let a = NodeId(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+        s.execute("fill.set", &json!({"id": a, "paint": {"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}})).unwrap();
+        s.execute("select.set", &json!({"ids": [a]})).unwrap();
+        let mut u = Ui::new(s);
+        let target = PickerTarget::Paint { fills: true, index: 0, ids: vec![a] };
+        u.app.open_picker(target.clone(), None);
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        let depth = u.app.session.undo_depth().0;
+        let from_handle = |u: &Ui| match &u.app.session.doc().unwrap().node(a).unwrap().fills[0].kind {
+            figcraft_color::PaintKind::Gradient(g) => g.from,
+            _ => panic!("the fill is a gradient"),
+        };
+        u.button(u.app.to_screen(200.0, 100.0), true);
+        u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0, 200.0))]);
+        assert!(crate::handles::gradient_dragging(&u.ctx), "{over}: the handle is being dragged");
+        let spot = match over {
+            "sidebar" => u.app.ui.right_panel_rect.unwrap().center(),
+            _ => u.app.ui.picker_popover.as_ref().unwrap().rect.center(),
+        };
+        if over == "picker" {
+            assert!(u.app.canvas.rect.contains(spot), "the picker lies over the canvas");
+        } else {
+            assert!(!u.app.canvas.rect.contains(spot), "the sidebar is off the canvas");
+        }
+        u.button(spot, false);
+        u.frame(vec![]);
+        assert!(!crate::handles::gradient_dragging(&u.ctx), "{over}: the release ended the drag");
+        assert_eq!(u.app.ui.picker, Some(target.clone()), "{over}: the picker is still open");
+        assert_eq!(u.app.session.undo_depth().0, depth + 1, "{over}: the drag is one undo step");
+        let moved = from_handle(&u);
+        assert!(moved.0.abs() < 0.02 && (moved.1 - 0.5).abs() < 0.02, "{over}: the handle stayed where it was dragged: {moved:?}");
+        // The next press on the layer is a plain one: the handle stays put and the picker closes.
+        let body = u.app.to_screen(250.0, 250.0);
+        u.button(body, true);
+        u.frame(vec![]);
+        assert_eq!(from_handle(&u), moved, "{over}: a later press doesn't move the handle");
+        assert!(u.app.ui.picker.is_none(), "{over}: a later press closes the picker as any outside press does");
+        u.button(body, false);
+    }
+}
+
+/// A rectangle with a linear gradient fill, selected, its picker open and the canvas settled; a
+/// second layer drawn after it leaves an undo step that isn't the gradient's. Rulers on or off.
+fn gradient_ui(rulers: bool) -> Ui {
+    let mut s = Session::new();
+    if rulers {
+        s.execute("view.rulers", &json!({"on": true})).unwrap();
+    }
+    let a = NodeId(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+    s.execute("fill.set", &json!({"id": a, "paint": {"type": "linearGradient", "stops": ["#ff0000", "#0000ff"]}})).unwrap();
+    s.execute("shape.rectangle", &json!({"x": 400, "y": 100, "width": 20, "height": 20})).unwrap();
+    s.execute("select.set", &json!({"ids": [a]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.open_picker(PickerTarget::Paint { fills: true, index: 0, ids: vec![a] }, None);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    u
+}
+
+#[test]
+fn a_gradient_drag_released_over_a_ruler_ends_there() {
+    // The rulers take the pointer on the canvas before the handles do: the release still ends the
+    // drag, as one undo step, instead of leaving it waiting for the next press.
+    let mut u = gradient_ui(true);
+    let depth = u.app.session.undo_depth().0;
+    u.button(u.app.to_screen(200.0, 100.0), true);
+    u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0, 200.0))]);
+    assert!(crate::handles::gradient_dragging(&u.ctx), "the handle is being dragged");
+    let r = u.app.canvas.rect;
+    let ruler = egui::Pos2::new(r.min.x + 5.0, r.center().y);
+    assert!(!u.app.ui.picker_popover.as_ref().unwrap().rect.contains(ruler), "the ruler is not under the picker");
+    u.button(ruler, false);
+    assert!(!crate::handles::gradient_dragging(&u.ctx), "the release over the ruler ended the drag");
+    assert_eq!(u.app.session.undo_depth().0, depth + 1, "the drag is one undo step");
+}
+
+#[test]
+fn a_gradient_drag_whose_gesture_closes_under_the_held_button_stops_editing() {
+    // Escape (the picker closes and commits) or Undo ends the gesture while the button is still
+    // down: moving on edits nothing more, rather than adding an undo step every frame.
+    for close in ["escape", "undo"] {
+        let mut u = gradient_ui(false);
+        u.button(u.app.to_screen(200.0, 100.0), true);
+        u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0, 200.0))]);
+        assert!(crate::handles::gradient_dragging(&u.ctx), "{close}: the handle is being dragged");
+        if close == "escape" {
+            crate::colorpicker::close(&mut u.app);
+        } else {
+            assert!(u.app.session.undo().unwrap(), "{close}: there is a step to undo");
+        }
+        let depth = u.app.session.undo_depth().0;
+        let doc = u.app.session.doc().unwrap().clone();
+        for k in 1..=4 {
+            u.frame(vec![egui::Event::PointerMoved(u.app.to_screen(100.0 + 20.0 * f64::from(k), 200.0))]);
+        }
+        assert!(!crate::handles::gradient_dragging(&u.ctx), "{close}: the drag is over");
+        assert_eq!(u.app.session.undo_depth().0, depth, "{close}: no undo step a frame");
+        assert!(*u.app.session.doc().unwrap() == doc, "{close}: the gradient stays where the gesture left it");
+        u.button(u.app.to_screen(180.0, 200.0), false);
     }
 }

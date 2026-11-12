@@ -2,18 +2,27 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, Effect, ExportSetting, ImageData, LayoutGrid, Node, NodeId, NodeKind};
 use figcraft_geom::Affine;
 use serde_json::{Map, Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{
+    blend, boolean, color, fraction_of, get, id, id_of, num, num_or, opt_id, opt_index, paint_of, parse, req_id, req_index, req_num, req_string,
+    req_targets, string, targets,
+};
 use crate::{BatchStep, EngineError, Result, Session, bad, spec};
 
 mod clipboard;
 mod props;
+pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;
+mod vector_clipboard;
+pub use vector_clipboard::clipboard_svg;
+#[cfg(test)]
+mod vector_clipboard_tests;
 
+pub(crate) use clipboard::apply_copied_props;
 pub use clipboard::{CLIP_CLOSE, CLIP_OPEN, copy_to_clipboard, design_clipboard_buffer, paste_into};
 use clipboard::{copy, copy_props, copy_props_of, cut, paste, paste_design_layers, paste_over, paste_props, paste_replace};
 use props::{
@@ -26,6 +35,80 @@ use select::{
     select_parent, select_same, select_sibling, toggle,
 };
 
+/// The layer types `node.find` takes, as `NodeKind::type_name` spells them.
+const LAYER_TYPES: [&str; 16] = [
+    "PAGE",
+    "FRAME",
+    "GROUP",
+    "SECTION",
+    "RECTANGLE",
+    "ELLIPSE",
+    "POLYGON",
+    "STAR",
+    "LINE",
+    "VECTOR",
+    "TEXT",
+    "BOOLEAN_OPERATION",
+    "COMPONENT",
+    "COMPONENT_SET",
+    "INSTANCE",
+    "SLICE",
+];
+
+/// Lowercase for `node.find`'s substring filters. Greek final sigma becomes σ on both sides, so a
+/// query lowercased on its own (`Σ` to `σ`) still matches a name ending in it (`ΟΣ` to `ος`).
+fn fold(s: &str) -> String {
+    s.to_lowercase().replace('ς', "σ")
+}
+
+fn node_find(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "node.find";
+    let filter = |key| -> Result<Option<String>> {
+        get(p, key).map(|v| v.as_str().map(fold).ok_or_else(|| bad(cmd, format!("`{key}` must be a string")))).transpose()
+    };
+    let name = filter("name")?;
+    let text = filter("text")?;
+    let component = filter("component")?;
+    let kind = filter("type")?;
+    if let Some(kind) = &kind
+        && !LAYER_TYPES.iter().any(|t| t.eq_ignore_ascii_case(kind))
+    {
+        return Err(bad(cmd, format!("unknown type; use one of {}", LAYER_TYPES.join(", "))));
+    }
+    let limit = match get(p, "limit") {
+        None => 100,
+        Some(v) => v.as_u64().filter(|n| *n <= 10000).ok_or_else(|| bad(cmd, "`limit` must be an integer from 0 to 10000"))? as usize,
+    };
+    let root = opt_id(cmd, p, "root")?.map_or_else(|| s.page(), Ok)?;
+    let doc = s.doc()?;
+    // Keep one child iterator per ancestor, not a materialised subtree or all pending siblings.
+    let mut stack = vec![doc.get(root)?.children.iter()];
+    let mut ids = Vec::new();
+    let mut total = 0usize;
+    while let Some(children) = stack.last_mut() {
+        let Some(&id) = children.next() else {
+            stack.pop();
+            continue;
+        };
+        let n = doc.get(id)?;
+        stack.push(n.children.iter());
+        if name.as_ref().is_some_and(|q| !fold(&n.name).contains(q))
+            || kind.as_ref().is_some_and(|q| !n.kind.type_name().eq_ignore_ascii_case(q))
+            || text.as_ref().is_some_and(|q| !matches!(&n.kind, NodeKind::Text(t) if fold(&t.characters).contains(q)))
+            || component.as_ref().is_some_and(
+                |q| !matches!(&n.kind, NodeKind::Instance { component, .. } if doc.node(*component).is_some_and(|c| fold(&c.name).contains(q))),
+            )
+        {
+            continue;
+        }
+        total += 1;
+        if ids.len() < limit {
+            ids.push(id);
+        }
+    }
+    Ok(json!({"ids": ids, "total": total}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("edit.undo", "Undo", "{}", false, |s, _| Ok(json!({"undone": s.undo()?}))),
@@ -34,23 +117,35 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.duplicate",
             "Duplicate",
-            "{ids?, dx?, dy? (page offset; default: the offset of the last duplicate when ids are its copies, still selected; else top-level frames to the right with a 100 gap, everything else in place)}  a main component's copy is an instance of it (a variant stays a new variant in its set)",
+            "{ids?, dx?, dy? (page offset; default: the offset of the last duplicate when ids are its copies, still selected; else top-level frames to the right with a 100 gap, everything else in place), map? (true: also return `map`, each original layer's id, descendants included, → its copy's id)}  a main component's copy is an instance of it (a variant stays a new variant in its set)",
             true,
             duplicate
         ),
-        spec!("edit.copy", "Copy", "{ids?}", false, copy),
-        spec!("edit.cut", "Cut", "{ids?}", true, cut),
+        spec!(
+            "edit.copy",
+            "Copy",
+            "{ids?}  in vector edit mode with points or segments selected (and no ids): just those, the segments touching a selected point, as a temporary vector on the clipboard (one per edited layer) with the edited layer's look, kept at its place on the page; points that touch no segment have nothing to copy, so Copy with only those is refused (Disabled). Returns {copied, segments}",
+            false,
+            copy
+        ),
+        spec!(
+            "edit.cut",
+            "Cut",
+            "{ids?}  in vector edit mode with points or segments selected (and no ids): copies them as Copy does, then removes them as Delete does; the path splits in the same layer and edit mode stays on. Returns {cut (layers), segments}. With only lone points (nothing to copy) it is refused (Disabled) and changes nothing, as Copy is; Delete removes lone points",
+            true,
+            cut
+        ),
         spec!(
             "edit.paste",
             "Paste",
-            "{parent?, x?, y? (page coordinates of the pasted top-left)}  a copied main component pastes as an instance of it within its file (cut ones, and pastes into other files, keep the component)",
+            "{parent?, x?, y? (page coordinates of the pasted top-left; give both or neither, one alone is refused)}  in vector edit mode (and no parent): the copied vectors' segments and the outlines of shapes, booleans and lines join the edited vector's network (at x/y when given, else in place), their points selected, as one undo step; layers with no outline (text, images, instances, frames, groups) are skipped and named in `skipped` (present only when some were), and when none has an outline the paste is refused (Disabled), as it is past 500,000 segments in one vector. Returns {ids: [] (always empty: no layer is created), edited (the vector's id), vertices (points added), skipped?}, unlike a paste outside edit mode, which returns the new layers' `ids`; a copied main component pastes as an instance of it within its file (cut ones, and pastes into other files, keep the component)",
             true,
             paste
         ),
         spec!(
             "edit.pasteDesignLayers",
             "Paste design layers",
-            "{html (the clipboard's HTML) | data (base64 of the clipboard's design data, at most 256 MB), parent?, x?, y?}  layers copied from another design app (a .fig canvas in the clipboard's HTML), read like a .fig file (best effort, with `warnings`), pasted as edit.paste pastes",
+            "{html (the clipboard's HTML) | data (base64 of the clipboard's design data, at most 256 MB), parent?, x?, y?}  layers copied from another design app (a .fig canvas in the clipboard's HTML), read like a .fig file (best effort, with `warnings`), pasted as edit.paste pastes; `missingImages`: the names of pasted layers whose image the clipboard didn't carry (they show the missing-image placeholder)",
             true,
             paste_design_layers
         ),
@@ -65,12 +160,26 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             find_replace
         ),
-        spec!("edit.setDefaultProperties", "Set default properties", "{id?}", false, |s, p| {
-            let id = targets(s, p).first().copied().ok_or_else(|| bad("edit.setDefaultProperties", "select a layer"))?;
-            let v = copy_props_of(s.doc()?, id);
-            s.clipboard.props = Some(v);
-            ok()
-        }),
+        spec!(
+            "edit.setDefaultProperties",
+            "Set default properties",
+            "{id?}  the layer's fills, strokes, effects, opacity and corners (a text layer's: also its font) become what new rectangles, ellipses, polygons and stars (or, from a text layer, new text) drawn with the tools take → {for: shapes|text, properties}",
+            false,
+            |s, p| {
+                let id = targets(s, p).first().copied().ok_or_else(|| bad("edit.setDefaultProperties", "select a layer"))?;
+                let doc = s.doc()?;
+                let text = matches!(doc.get(id)?.kind, NodeKind::Text(_));
+                let v = copy_props_of(doc, id);
+                let kind = if text {
+                    s.default_props.text = Some(v.clone());
+                    "text"
+                } else {
+                    s.default_props.shape = Some(v.clone());
+                    "shapes"
+                };
+                Ok(json!({"for": kind, "properties": v}))
+            }
+        ),
         spec!("select.set", "Select", "{ids: [..]}  (replace the selection)", false, |s, p| {
             let ids = match get(p, "ids") {
                 Some(Value::Array(a)) => a.iter().filter_map(id_of).collect(),
@@ -228,10 +337,18 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
         spec!("node.set", "Set properties", super::props::KEYS, true, set),
-        spec!("node.get", "Get layer", "{id}", false, |s, p| {
+        spec!("node.get", "Get layer", "{id, fields?: [node keys], outline?: bool (not with fields)}", false, |s, p| {
             let i = req_id("node.get", p, "id")?;
-            Ok(crate::inspect::node_json(s.doc()?, i, 1))
+            let options = crate::inspect::InspectOptions::parse(p).map_err(|e| bad("node.get", e))?;
+            Ok(crate::inspect::node_json_with_options(s.doc()?, i, 1, &options))
         }),
+        spec!(
+            "node.find",
+            "Find layers",
+            "{root? (strict descendants; default current page), name?, type? (canonical layer type), text?, component? (main component name), limit? (0-10000; default 100)}: every filter must match; name, text and component are case-insensitive substrings, type is exact (any case); returns {ids, total} and does not select",
+            false,
+            node_find
+        ),
         spec!(
             "node.reparent",
             "Move layer into",
@@ -241,18 +358,32 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("node.reorder", "Reorder layer", "{id, index}", true, |s, p| {
             let i = req_id("node.reorder", p, "id")?;
-            let idx = req_num("node.reorder", p, "index")?.max(0.0) as usize;
+            let idx = req_index("node.reorder", p, "index")?;
             s.doc_mut()?.reorder(i, idx)?;
             ok()
         }),
-        spec!("fill.add", "Add fill", "{ids?, paint? (default #D9D9D9 or white for frames)}", true, |s, p| paint_list(s, p, true, true)),
-        spec!("stroke.add", "Add stroke", "{ids?, paint? (default black)}", true, |s, p| paint_list(s, p, false, true)),
-        spec!("fill.remove", "Remove fill", "{ids?, index}", true, |s, p| paint_list(s, p, true, false)),
+        spec!(
+            "fill.add",
+            "Add fill",
+            "{ids?, paint? | color? (default #D9D9D9 or white for frames), regions? (a vector's regions by index: their own fills, as the regions selected in edit mode)}",
+            true,
+            |s, p| paint_list(s, p, true, true)
+        ),
+        spec!("stroke.add", "Add stroke", "{ids?, paint? | color? (default black)}", true, |s, p| paint_list(s, p, false, true)),
+        spec!("fill.remove", "Remove fill", "{ids?, index, regions?}", true, |s, p| paint_list(s, p, true, false)),
         spec!("stroke.remove", "Remove stroke", "{ids?, index}", true, |s, p| paint_list(s, p, false, false)),
-        spec!("fill.set", "Set fill", "{ids?, index?, paint | color, opacity?, visible?, blend?}", true, |s, p| paint_set(s, p, true)),
+        spec!(
+            "fill.set",
+            "Set fill",
+            "{ids?, index?, paint | color, opacity?, visible?, blend?, regions? (a vector's regions by index: their own fills, as the regions selected in edit mode)}",
+            true,
+            |s, p| paint_set(s, p, true)
+        ),
         spec!("stroke.set", "Set stroke", "{ids?, index?, paint | color, opacity?, visible?, blend?}", true, |s, p| paint_set(s, p, false)),
         spec!("fill.copy", "Copy fill", "{id?, index? (default the top fill)}", false, |s, p| paint_copy(s, p, true)),
-        spec!("fill.paste", "Paste fill", "{ids?, index? (replace the fill there; without: add one)}", true, |s, p| paint_paste(s, p, true)),
+        spec!("fill.paste", "Paste fill", "{ids?, index? (replace the fill there; without: add one), regions?}", true, |s, p| paint_paste(
+            s, p, true
+        )),
         spec!(
             "stroke.copy",
             "Copy stroke",
@@ -270,7 +401,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "fill.pattern",
             "Pattern fill",
-            "{source (layer id), ids?, index? (default the top fill), tile? (grid|horizontalHex|verticalHex), scale? (1 = the source's size), spacing? [x, y], align? (start|center|end), opacity?}  the source layer tiled; it updates as the source changes",
+            "{source (layer id), ids?, index? (default the top fill), tile? (grid|horizontalHex|verticalHex), scale? (1 = the source's size), spacing? [x, y], align? (start|center|end), opacity?, visible?, blend?}  the source layer tiled; it updates as the source changes",
             true,
             pattern_fill
         ),
@@ -333,7 +464,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "export.add",
             "Add export setting",
-            "{ids?, setting? {size: 2x|512w|512h|{by: scale|width|height, value}, suffix?, format?: png|jpg|svg|pdf|webp|xml (Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore)}} (without a setting: 1x, then one scale step up with an \"@2x\"-style suffix)",
+            "{ids?, setting? {size: 2x|512w|512h|{by: scale|width|height, value}, suffix?, format?: png|jpg|svg|pdf|webp|xml (Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), colorProfile? (PNG, JPG and WebP: sameAsFile|srgb|displayP3), quality? (JPG: 1-100, default 90)}} (without a setting: 1x, then one scale step up with an \"@2x\"-style suffix)",
             true,
             |s, p| {
                 let cmd = "export.add";
@@ -351,7 +482,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "export.update",
             "Edit export setting",
-            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp|xml: Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore)}",
+            "{ids?, index, size? (2x|512w|512h|{by, value}), suffix?, format? (png|jpg|svg|pdf|webp|xml: Android Vector Drawable), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), vdCompat? (XML: bestEffort|exact|ignore), colorProfile? (PNG, JPG and WebP: sameAsFile (the document's profile when it exports)|srgb|displayP3; kept when the format changes), quality? (JPG: 1-100), contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?}",
             true,
             |s, p| {
                 let cmd = "export.update";
@@ -376,7 +507,14 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
-        spec!("command.batch", "Run several commands", "{label?, commands: [{command, params, as?}]} (one undo step)", false, |s, p| {
+        spec!("command.batch", "Run several commands", "{label?, onError?, commands: [{command, params, as?}]} (one undo step)", false, |s, p| {
+            // `continue` rolls back only the failed steps and returns one outcome per step.
+            let continue_on_error = match get(p, "onError") {
+                None => false,
+                Some(Value::String(mode)) if mode == "abort" => false,
+                Some(Value::String(mode)) if mode == "continue" => true,
+                Some(_) => return Err(bad("command.batch", "`onError` must be \"abort\" or \"continue\"")),
+            };
             let label = string(p, "label").unwrap_or_else(|| "Batch".into());
             let cmds: Vec<BatchStep> = match get(p, "commands") {
                 Some(Value::Array(a)) => {
@@ -384,6 +522,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     for (i, c) in a.iter().enumerate() {
                         let cmd =
                             c.get("command").and_then(Value::as_str).ok_or_else(|| bad("command.batch", format!("step {i} has no `command`")))?;
+                        crate::batch::refuse_unknown_step_keys(i, c)?;
                         let params = c.get("params").cloned().unwrap_or(json!({}));
                         out.push(BatchStep { name: crate::batch::step_name(i, c)?, ..BatchStep::new(cmd, params) });
                     }
@@ -391,7 +530,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 _ => return Err(bad("command.batch", "`commands` must be an array")),
             };
-            Ok(Value::Array(s.batch(&label, &cmds)?))
+            Ok(Value::Array(if continue_on_error { s.batch_continue(&label, &cmds)? } else { s.batch(&label, &cmds)? }))
         }),
         spec!("edit.repeat", "Repeat last command", "{}", true, |s, _| {
             let Some((id, p)) = s.last_command.clone().filter(|(id, _)| id != "edit.repeat") else {
@@ -451,6 +590,15 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("edit.delete", s, p)?;
     let doc = s.doc_mut()?;
     let ids = roots(doc, &ids);
+    // A layer inside an instance can't be removed: Delete hides it instead, an override ("Figma
+    // will only toggle the layer's visibility instead of removing it", Guide to auto layout).
+    let (hidden, ids): (Vec<_>, Vec<_>) = ids.into_iter().partition(|i| crate::assets::components::inside_instance(doc, *i));
+    for i in &hidden {
+        doc.get_mut(*i)?.visible = false;
+    }
+    if ids.is_empty() {
+        return Ok(json!({"deleted": [], "hidden": hidden}));
+    }
     let mut parents = Vec::new();
     for i in &ids {
         if doc.node(*i).is_some_and(Node::is_page) {
@@ -463,7 +611,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Select the parent frame like Figma? Figma clears the selection.
     s.set_selection(vec![]);
-    Ok(json!({"deleted": ids}))
+    Ok(json!({"deleted": ids, "hidden": hidden}))
 }
 
 /// Layers duplicated last (Duplicate or Alt-drag) and their copies, in the same order. While the
@@ -535,11 +683,17 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out.push(nid);
     }
+    crate::library::count_inserted(doc, &out);
     // Board connectors copied with what they join join the copies.
     let map = crate::board::copy_map(doc, &ids, &out);
     crate::board::rejoin(doc, &crate::board::copied_items(doc, &map), &map, false);
     s.set_selection(out.clone());
     s.ds_mut()?.last_duplicate = Some(Duplicated { sources: ids, copies: out.clone() });
+    if boolean(p, "map") == Some(true) {
+        // JSON object keys are strings: each original layer's id → its copy's.
+        let map: Map<String, Value> = map.into_iter().map(|(o, c)| (o.to_string(), json!(c))).collect();
+        return Ok(json!({"ids": out, "map": map}));
+    }
     Ok(json!({"ids": out}))
 }
 

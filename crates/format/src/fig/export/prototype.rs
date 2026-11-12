@@ -1,5 +1,8 @@
 use super::common::key_codes;
-use super::*;
+use super::{
+    Action, Direction, Easing, Exporter, Fields, Interaction, Kv, Node, NodeId, Overflow, OverlayPosition, ScrollPosition, Transition, Trigger, arr,
+    b, color, e, fl, int, o, position, s,
+};
 
 impl<'d> Exporter<'d> {
     /// Interactions, scrolling, flow starts and the overlay settings this layer is opened with.
@@ -116,7 +119,7 @@ impl<'d> Exporter<'d> {
             }
             Action::Back => plain("BACK"),
             Action::CloseOverlay => plain("CLOSE"),
-            Action::OpenUrl { url } => Some(o(vec![("connectionType", e("URL")), ("connectionURL", s(url))])),
+            Action::OpenUrl { url, .. } => Some(o(vec![("connectionType", e("URL")), ("connectionURL", s(url))])),
             Action::SetVariable { .. } | Action::SetVariableMode { .. } | Action::Conditional { .. } => {
                 self.warn("variable and conditional prototype actions were left out");
                 None

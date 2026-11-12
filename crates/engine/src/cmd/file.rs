@@ -3,15 +3,19 @@
 use std::sync::Arc;
 
 use base64::Engine as _;
-use figcraft_doc::*;
+use figcraft_doc::{
+    BOARD_PAGE, Document, ExportColorProfile, ExportFormat, ExportSetting, ExportSize, FileKind, LineHeight, Node, NodeId, NodeKind, PrintSettings,
+    StyleKind, TextStyle, VdCompat,
+};
 use figcraft_format::Version;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{bool_of, boolean, get, id, num, num_or, req_index, req_string, string, targets};
 use crate::{DocState, EngineError, Result, Session, bad, spec};
 
 mod export;
+mod import_ids;
 mod load;
 mod open;
 mod save;
@@ -22,18 +26,20 @@ pub(crate) use export::FORBIDDEN_FILE_NAME_CHARS;
 use export::add_member;
 pub(super) use export::export_setting;
 pub use export::{
-    ExportJob, copy_png, drawn_layers, export_area, export_bytes, export_bytes_with, export_jobs, export_scale, exportable_layers, fig_bytes,
-    frames_pdf, jobs_for, safe_file_name,
+    ExportJob, backdrop_layers, copy_png, drawn_layers, export_area, export_bytes, export_bytes_with, export_jobs, export_scale, exportable_layers,
+    fig_bytes, frames_pdf, jobs_for, penpot_bytes, safe_file_name,
 };
 use export::{export, export_frames_pdf, export_layers, pdf_bytes};
+use load::font_report;
+pub use load::{MAX_DOCUMENT_FILE, load, load_bytes, load_path};
 #[cfg(test)]
 pub(crate) use load::{installed_family, sketch_line};
-pub use load::{load, load_bytes, load_path};
-pub(crate) use load::{load_fig, read_capped, recovered, variables_param, write};
+pub(crate) use load::{load_fig, read_capped, recovered, recovered_from, variables_param, write};
 pub use open::MAX_RECENT;
 #[cfg(test)]
 use open::append_pages;
-use open::{import, open, open_recent};
+pub(crate) use open::open;
+use open::{import, open_recent, revert};
 pub(crate) use save::save_ends_preview;
 pub use save::{FileSnapshot, file_bytes, thumbnail};
 use save::{color_profile, mark_saved, save, save_as};
@@ -72,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.open",
             "Open",
-            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .sketch (Sketch 48 or newer, best effort), .svg, .png, .jpg …); REST, .fig and .sketch imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open just returns its `index`)",
+            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file), reload? (a file already open: read it again into its tab, which must have no unsaved changes)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .penpot, .sketch (Sketch 48 or newer, best effort), .svg, .png, .jpg …); REST, .fig, .penpot and .sketch imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open returns its `index`, with `stale: true` when the file changed on disk since the tab read or saved it, or `reloaded: true` after `reload`)",
             false,
             open
         ),
@@ -82,6 +88,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{path? | index? (into the list), clear? (forget them all), remove? (a path: forget that one)}  opens a recent file; a file that no longer exists is dropped from the list. Returns the list, newest first: {files: [{path, name, exists}]} (opening returns what `file.open` does)",
             false,
             open_recent
+        ),
+        spec!(
+            "file.fontReport",
+            "Inspect document fonts",
+            "{}  list fonts used by text layers, which families are available, and sample layers; does not substitute or change the original family names",
+            false,
+            |s, _| Ok(font_report(s.doc()?))
         ),
         spec!(
             "file.save",
@@ -107,24 +120,30 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.export",
             "Export",
-            "{ids? (default selection, else the page), format? (png|jpg|svg|pdf|webp|xml (an Android Vector Drawable, with `warnings` for what it changed or left out), or fig: the whole file as .fig, experimental, with `warnings` for what was left out; other apps may not open every file), scale? (default 1) | size? (2x|512w|512h or {by: scale|width|height, value}: a scale, or a width or height in pixels), path? (else returns base64 `data`), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), svgIdAttribute? (SVG ids, XML android:name), vdCompat? (XML: bestEffort (default: approximate with a warning)|exact (leave out what can't be exact, with a warning)|ignore (no warnings))}",
+            "{ids? (default selection, else the page), format? (png|jpg|svg|pdf|webp|xml (an Android Vector Drawable, with `warnings` for what it changed or left out), or fig: the whole file as .fig, experimental, with `warnings` for what was left out; other apps may not open every file; or penpot: the whole file as a Penpot 2.x archive, with warnings for unsupported content), scale? (default 1) | size? (2x|512w|512h or {by: scale|width|height, value}: a scale, or a width or height in pixels), path? (else returns base64 `data`), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options), contentsOnly? (default true; false also draws the layers that show in their area), includeBoundingBox? (true: only the layers' own boxes, cutting off shadows and outside strokes), svgOutlineText? (default true), svgSimplifyStroke? (default true), svgIdAttribute? (SVG ids, XML android:name), vdCompat? (XML: bestEffort (default: approximate with a warning)|exact (leave out what can't be exact, with a warning)|ignore (no warnings)), colorProfile? (PNG, JPG and WebP: sameAsFile (default: the document's profile)|srgb|displayP3; colors convert, out-of-gamut ones clip; SVG, XML and RGB PDF output are always sRGB; PDF with cmyk is DeviceCMYK), quality? (JPG: 1-100, default 90)}",
             false,
             export
         ),
         spec!(
             "file.exportLayers",
             "Export layers",
-            "{ids? (default the selection, else every layer on the page with export settings), assets? (true: the Inspect tab's assets in and under them instead: layers with export settings, icons as SVG, images as PNG), dir? (folder to write into; else each file comes back as base64 `data`), zip? (no dir: the files come back together as one base64 zip `data` instead), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options): for every PDF instead of each setting's own, vdCompat? (bestEffort|exact|ignore: for every XML instead of each setting's own)}  every layer once per export setting, named `<layer><suffix>.<format>` (\"@2x\" when a scaled export has no suffix; repeats get \" 2\"; slashes in a layer name make folders). Returns {files: [{name, id, bytes, path | data, warnings (XML only)}], skipped (layers without settings), data? (zip)}",
+            "{ids? (default the selection, else every layer on the page with export settings), assets? (true: the Inspect tab's assets in and under them instead: layers with export settings, icons as SVG, images as PNG), dir? (folder to write into; else each file comes back as base64 `data`), zip? (no dir: the files come back together as one base64 zip `data` instead), bleed? (PDF: points, or with a unit: \"3mm\", \"0.125in\", \"9pt\"), cropMarks?, bleedMarks?, cmyk? (PDF print options): for every PDF instead of each setting's own, vdCompat? (bestEffort|exact|ignore: for every XML instead of each setting's own), colorProfile? (sameAsFile|srgb|displayP3: for every PNG, JPG and WebP instead of each setting's own)}  every layer once per export setting, named `<layer><suffix>.<format>` (\"@2x\" when a scaled export has no suffix; repeats get \" 2\"; slashes in a layer name make folders). Returns {files: [{name, id, bytes, path | data, warnings (XML only)}], skipped (layers without settings), data? (zip)}",
             false,
             export_layers
         ),
-        spec!("file.exportSvg", "Export selection as SVG", "{ids?, path?}", false, |s, p| {
-            let mut q = p.clone();
-            if let Some(o) = q.as_object_mut() {
-                o.insert("format".into(), json!("svg"));
+        spec!(
+            "file.exportSvg",
+            "Export selection as SVG",
+            "{ids?, path?, scale? | size?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke? (file.export's SVG options)}",
+            false,
+            |s, p| {
+                let mut q = p.clone();
+                if let Some(o) = q.as_object_mut() {
+                    o.insert("format".into(), json!("svg"));
+                }
+                export(s, &q)
             }
-            export(s, &q)
-        }),
+        ),
         spec!(
             "file.exportFramesPdf",
             "Export frames to PDF",
@@ -135,11 +154,17 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.import",
             "Import",
-            "{path | data (base64) + name, x?, y?, center? (SVG: centre it on x, y), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG becomes an editable frame (shapes, text, gradients, masks, effects; with `warnings` for what it left out), images become image layers, .figcraft, REST API file JSON, .fig and .sketch pages are appended with their variables and flows (REST, .fig and .sketch: with `warnings`; those return `summary` {name, pages, layers, images} of the file read)",
+            "{path | data (base64) + name, x?, y?, center? (SVG: centre it on x, y), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG becomes an editable frame (shapes, text, gradients, masks, effects; with `warnings` for what it left out), images become image layers, .figcraft, .penpot, REST API file JSON, .fig and .sketch pages are appended with their variables and flows (REST, .fig, .penpot and .sketch: with `warnings`; those return `summary` {name, pages, layers, images} of the file read)",
             true,
             import
         ),
-        spec!("file.placeImage", "Place image", "{path | data, x?, y?}", true, super::create::place_image),
+        spec!(
+            "file.placeImage",
+            "Place image",
+            "{path | data, x?, y?, width?, height?, parent?, name?, target?, mode? (as image.place)}",
+            true,
+            super::create::place_image
+        ),
         spec!("file.close", "Close tab", "{index?, force? (discard unsaved changes)}", false, close),
         spec!("file.moveTab", "Move tab", "{from, to} (indices among open documents)", false, |s, p| {
             let from = req_index("file.moveTab", p, "from")?;
@@ -158,11 +183,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.recover",
             "Recover file",
-            "{path}  open a recovery copy (written while the app runs, read back after a crash) as a document with unsaved changes and no path: saving asks where → {index}",
+            "{path | data (base64: the copy's bytes, as the browser keeps them)}  open a recovery copy (written while the app runs, read back after a crash) as a document with unsaved changes and no path: saving asks where → {index}",
             false,
             |s, p| {
-                let path = req_string("file.recover", p, "path")?;
-                s.docs.push(recovered(&path)?);
+                let ds = match string(p, "data") {
+                    Some(d) => recovered_from(
+                        &base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|e| bad("file.recover", format!("`data`: {e}")))?,
+                    )?,
+                    None => recovered(&req_string("file.recover", p, "path")?)?,
+                };
+                s.docs.push(ds);
                 s.active = s.docs.len() - 1;
                 Ok(json!({"index": s.active}))
             }
@@ -175,7 +205,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.colorProfile",
             "Color profile",
-            "{profile?: srgb|displayP3, convert? (default true: convert colour values so colours keep their appearance; false: keep the values and reinterpret them)}  without `profile`, returns the current one (and the app opens the dialog). Returns {profile, changed}",
+            "{profile?: srgb|displayP3, convert? (default true: convert colour values so colours keep their appearance — a colour calculation's mix keeps its ends exact and its colours in between move slightly; false: keep the values and reinterpret them)}  without `profile`, returns the current one (and the app opens the dialog). Returns {profile, changed}",
             true,
             color_profile
         ),
@@ -188,21 +218,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"index": s.active}))
         }),
         spec!("file.revert", "Revert to saved", "{}  leave the live session first, if any", false, |s, _| {
-            let path = s.ds()?.path.clone().ok_or_else(|| EngineError::Disabled("file.revert".into(), "the file was never saved".into()))?;
-            // Stamped before reading: a change made during the read makes the next save refuse.
-            let on_disk = crate::library::stat(&path).ok();
-            let (loaded, _) = load_path(&path, None)?;
-            let i = s.active;
-            let uid = s.ds()?.uid;
-            if let Some(slot) = s.docs.get_mut(i) {
-                *slot = DocState::new(loaded.doc, Some(path.clone()))
-                    .with_versions(loaded.versions)
-                    .with_branches(loaded.branches)
-                    .with_images_left_in_file(&path, loaded.images_past_budget);
-                slot.on_disk = on_disk;
-            }
-            // Edits on its branch tabs are reverted too.
-            crate::branches::close_tabs(s, uid, None);
+            revert(s)?;
             ok()
         }),
         spec!(
@@ -309,15 +325,29 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("doc.nextTab", "Next tab", "{}", false, |s, _| cycle_doc(s, 1)),
         spec!("doc.previousTab", "Previous tab", "{}", false, |s, _| cycle_doc(s, -1)),
-        spec!("doc.list", "List documents", "{}", false, |s, _| {
-            Ok(Value::Array(
-                s.docs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, d)| json!({"index": i, "name": d.doc.name, "path": d.path, "dirty": d.is_dirty(), "active": i == s.active}))
-                    .collect(),
-            ))
-        }),
+        spec!(
+            "doc.list",
+            "List documents",
+            "{}  → [{index, id, name, path?, dirty, active}]: `id` names the file in a control or MCP call's `document`; `path` only for the user's own scripts, not AI agents or plugins",
+            false,
+            |s, _| {
+                // Where the files are on disk is the user's: an agent gets their names (#1117).
+                let paths = s.agent.is_none();
+                Ok(Value::Array(
+                    s.docs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            let mut e = json!({"index": i, "id": d.uid, "name": d.doc.name, "dirty": d.is_dirty(), "active": i == s.active});
+                            if paths {
+                                e["path"] = json!(d.path);
+                            }
+                            e
+                        })
+                        .collect(),
+                ))
+            }
+        ),
         spec!("doc.home", "Home", "{}", false, |s, _| {
             s.request_ui("home", json!({}));
             ok()
@@ -342,7 +372,8 @@ pub fn export_file(doc: &Document, ids: &[NodeId], setting: &ExportSetting, scal
         && !setting.include_bounding_box
         && !ids.iter().any(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Slice)));
     match setting.format {
-        // SVG and PDF colours are sRGB: a Display P3 file exports converted (out-of-gamut colours clip).
+        // SVG and RGB PDF colors are sRGB: a Display P3 file exports converted (out-of-gamut colours clip).
+        // PDF with `cmyk` converts from those sRGB colors to DeviceCMYK.
         ExportFormat::Svg => {
             let opts = figcraft_svg::SvgOptions {
                 include_ids: setting.svg_id_attribute,
@@ -378,10 +409,38 @@ pub fn export_file(doc: &Document, ids: &[NodeId], setting: &ExportSetting, scal
             Ok((pdf_bytes(doc, &groups, &setting.print, (!own_area).then_some(area))?, Vec::new()))
         }
         _ => {
-            let pix = figcraft_render::render_area(doc, &drawn, area, scale)
+            // Layers exported on their own still read the page beneath them for a background blur
+            // or glass (#2213); a "contents only" off export already draws the whole page.
+            let page = if setting.contents_only { backdrop_layers(doc, ids) } else { Vec::new() };
+            let mut pix = figcraft_render::render_area_over(doc, &drawn, &page, area, scale)
                 .ok_or_else(|| EngineError::Other("render failed (empty or too large)".into()))?;
-            Ok((figcraft_render::encode_export(&pix, setting.format, doc.color_profile).map_err(EngineError::Other)?, Vec::new()))
+            // The render is in the document's profile; the setting's profile converts the pixels
+            // (out-of-gamut colors clip) and tags the file.
+            let profile = setting.color_profile.resolve(doc.color_profile);
+            let conversion = doc.color_profile.conversion_to(profile);
+            // JPG has no alpha: the render is flattened over white in the document's profile
+            // before the conversion, so translucent pixels match what the document shows.
+            if setting.format == ExportFormat::Jpg && !conversion.is_identity() {
+                for [r, g, b, a] in pix.data_mut().as_chunks_mut::<4>().0.iter_mut() {
+                    let under = 255 - *a;
+                    *r = r.saturating_add(under);
+                    *g = g.saturating_add(under);
+                    *b = b.saturating_add(under);
+                    *a = 255;
+                }
+            }
+            conversion.apply_pixels(pix.data_mut());
+            let bytes = figcraft_render::encode_export_with(&pix, setting.format, profile, setting.quality());
+            Ok((bytes.map_err(EngineError::Other)?, Vec::new()))
         }
+    }
+}
+
+/// The `colorProfile` `p` passes: sameAsFile, srgb or displayP3 (anything else is an error).
+fn color_profile_param(cmd: &str, p: &Value) -> Result<Option<ExportColorProfile>> {
+    match get(p, "colorProfile") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_str().and_then(ExportColorProfile::from_key).map(Some).ok_or_else(|| bad(cmd, "colorProfile: sameAsFile|srgb|displayP3")),
     }
 }
 
@@ -428,6 +487,9 @@ mod rest_import_tests;
 
 #[cfg(test)]
 mod staging_write_tests;
+
+#[cfg(test)]
+mod thumbnail_tests;
 
 #[cfg(test)]
 mod zip_cap_tests;

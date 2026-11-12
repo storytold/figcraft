@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, BTreeMap, Deserialize, Document, NodeId, Serialize, Value, cmd, live, online, plugins};
 
 /// The smallest and largest interface size, relative to the system's display scale (1.0 is the
 /// system's own size).
@@ -7,6 +7,10 @@ pub const UI_SCALE_MIN: f64 = 0.75;
 pub const UI_SCALE_MAX: f64 = 3.0;
 
 /// `scale` kept between [`UI_SCALE_MIN`] and [`UI_SCALE_MAX`]; not a finite number: `None`.
+/// The interface sizes Preferences offers, relative to the system's scale (the keys step through
+/// them; `pref.uiScale` takes any size up to [`UI_SCALE_MAX`]).
+pub const UI_SCALE_SIZES: [f64; 8] = [0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+
 pub fn clamp_ui_scale(scale: f64) -> Option<f64> {
     scale.is_finite().then(|| scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX))
 }
@@ -29,6 +33,12 @@ pub struct Prefs {
     pub highlight_on_hover: bool,
     pub number_keys_opacity: bool,
     pub show_dimensions: bool,
+    /// A mouse wheel zooms the canvas about the pointer, and Cmd/Ctrl+wheel scrolls it (off: the
+    /// other way round). Trackpads are unchanged.
+    pub scroll_wheel_zoom: bool,
+    /// Wheel zoom goes the other way: Cmd/Ctrl+wheel (and a plain mouse wheel with Scroll wheel
+    /// zoom on) zooms out where it would zoom in. A trackpad pinch is unchanged.
+    pub invert_zoom: bool,
     /// "system" by default; an explicit "light" or "dark" choice stays saved.
     pub theme: String,
     /// The widths of the main window's left and right panels (the interface keeps them within its
@@ -82,8 +92,10 @@ pub struct Prefs {
     /// The Getting started tips on the home screen were closed (Help ▸ Getting started shows them
     /// again).
     pub getting_started_dismissed: bool,
-    /// A prototype's Open link goes to a website without first telling the viewer that it leaves
-    /// the prototype (the notice's "Don't show this again"; `proto.linkNotice` shows it again).
+    /// A prototype's Open link — to a website or to the mail app — that the viewer's own click,
+    /// press, drag or key fired opens without first telling them that it leaves the prototype
+    /// (the notice's "Don't show this again"; `proto.linkNotice` shows it again). A link a delay
+    /// or the pointer passing over a layer fired still shows the notice (#1096).
     pub link_notice_skipped: bool,
     /// How each home screen section shows its files, by section id (`"recents"`): `"grid"` (cards
     /// with the picture each file carries) or `"list"` (a table). Missing: the grid.
@@ -97,11 +109,20 @@ pub struct Prefs {
     /// files opened or made later start with them. Missing: the toggle's default.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub view: BTreeMap<String, bool>,
+    /// The board canvas's background grid (`board.grid`).
+    #[serde(deserialize_with = "crate::board_grid::read")]
+    pub board_grid: crate::board_grid::BoardGrid,
     /// Recently run actions (the Actions palette's Recents), newest first, at most
     /// [`MAX_RECENT_ACTIONS`]. Entries are `command:<id>`, `plugin:<plugin>/<command>` or
     /// `widget:<plugin>`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recent_actions: Vec<String>,
+    /// The team libraries you added (`library.add`) or checked (`library.check`), as hashes of
+    /// their links (which carry tokens), newest first, at most
+    /// [`MAX_TEAM_LIBRARIES`](crate::library_server::MAX_TEAM_LIBRARIES): only these are checked
+    /// for updates by themselves. A file naming another one doesn't contact its server (#1097).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub team_libraries: Vec<String>,
 }
 
 /// Recently run actions kept for the Actions palette (newest first).
@@ -117,6 +138,8 @@ impl Default for Prefs {
             highlight_on_hover: true,
             number_keys_opacity: true,
             show_dimensions: true,
+            scroll_wheel_zoom: false,
+            invert_zoom: false,
             theme: "system".into(),
             panel_widths: (240.0, 240.0),
             pages_height: None,
@@ -139,7 +162,9 @@ impl Default for Prefs {
             home_sort: "modified".into(),
             home_order: "desc".into(),
             view: BTreeMap::new(),
+            board_grid: Default::default(),
             recent_actions: Vec::new(),
+            team_libraries: Vec::new(),
         }
     }
 }
@@ -150,6 +175,18 @@ impl Default for Prefs {
 pub struct UiRequest {
     pub kind: String,
     pub data: Value,
+}
+
+/// What Edit ▸ Set default properties keeps: the properties new layers drawn with the tools take,
+/// as Copy properties copies them (fills, strokes and their settings, effects, opacity, blend,
+/// corners; for text also the font, size, line height and letter spacing). One set for shapes
+/// (rectangles, ellipses, polygons and stars), set from any layer but text, and one for text.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DefaultProps {
+    /// For new rectangles, ellipses, polygons and stars.
+    pub shape: Option<Value>,
+    /// For new text.
+    pub text: Option<Value>,
 }
 
 /// Clipboard contents (internal; the UI mirrors to the system clipboard).
@@ -164,6 +201,10 @@ pub struct Clipboard {
     pub paint: Option<(bool, figcraft_color::Paint)>,
     /// The stroke settings (`weight`, alignment, sides…) copied with a stroke's paint.
     pub stroke: Option<figcraft_doc::StrokeProps>,
+    /// The image data the copied paint names, carried so a paste into another file has it.
+    pub paint_images: std::collections::BTreeMap<String, figcraft_doc::ImageData>,
+    /// The file the copied paint came from: a pattern's node id only means anything there.
+    pub paint_source_doc: u64,
     /// A copied effect row (`effect.copy`).
     pub effect: Option<figcraft_doc::Effect>,
     /// The page-space bounds of the copied selection.

@@ -2,7 +2,12 @@ use super::axes::variable_axes;
 use super::glyphs::{LeadGlyph, caption, feature_row, text_seg};
 use super::picker::{font_picker, remember_family};
 use super::spacing::{SpacingField, commit_spacing, parse_letter_spacing, parse_line_height, spacing_field, spacing_input};
-use super::*;
+use super::{
+    Arc, DecorationLength, Document, FEATURES, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, LeadingTrim, ListStyle, MIXED, NodeId, SIZES, Sense, TABS,
+    TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextDirection, TextStyle, Tokens, Ui, Value, VariableType, common,
+    field_row, icons, json, live, menu_item, menu_popup, regular, row, semibold, text_style_params, tr, tr_noop, trf, trim_num, uniform, vec2,
+    widgets,
+};
 
 /// The font rows: family, style and size, line height and letter spacing.
 pub(super) fn font_rows(
@@ -19,28 +24,11 @@ pub(super) fn font_rows(
     // Font family.
     let family = uniform(styles, |s| s.font_family.clone());
     let fstyle = uniform(styles, |s| s.font_style.clone());
-    row(ui, 32.0, |ui| {
-        let w = ui.available_width();
-        let resp = font_dropdown(app, ui, ids, "fontFamily", family.as_deref(), w, editing);
-        menu_popup(&resp).width(w.max(240.0)).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-            if !editing && apply_variable_item(ui, ids, "fontFamily", &resp) {
-                return;
-            }
-            let pick = font_picker(ui, family.as_deref(), resp.clicked());
-            if let Some(f) = pick.picked {
-                remember_family(ui.ctx(), &f);
-                apply_style(app, "fontFamily", json!(f));
-                ui.close();
-            } else if let Some(h) = pick.hovered.or(pick.highlighted) {
-                // The canvas shows the hovered family (or the one the arrow keys are on);
-                // closing without picking ends the preview.
-                app.preview_text(ui.ctx(), "text.style", text_style_params(ids, range, json!({"fontFamily": h})));
-            }
-        });
-    });
+    row(ui, 32.0, |ui| family_row(app, ui, ids, family.as_deref(), editing, apply_style));
 
     // Style + size.
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    // One of the two field columns of the section's grid.
+    let half = widgets::col_width(ui.available_width());
     row(ui, 32.0, |ui| {
         let resp = font_dropdown(app, ui, ids, "fontStyle", fstyle.as_deref(), half, editing);
         let fam = family.clone();
@@ -75,9 +63,9 @@ pub(super) fn font_rows(
         ui.spacing_mut().item_spacing.x = 0.0;
         // The whole layer's size can follow a variable; a selected range just takes a value.
         let e = if editing {
-            widgets::number_field(ui, Id::unique("ty_size"), Lead::None, size, "", half - 20.0, 1.0)
+            widgets::number_field(ui, Id::unique("ty_size"), Lead::None, size, "", ui.available_width() - 20.0, 1.0)
         } else {
-            crate::variable_ui::number_field(app, ui, ids, "fontSize", Id::unique("ty_size"), Lead::None, size, "", half - 20.0)
+            crate::variable_ui::number_field(app, ui, ids, "fontSize", Id::unique("ty_size"), Lead::None, size, "", ui.available_width() - 20.0)
         };
         match e {
             Some(FieldEdit::Set(v)) => apply_style(app, "fontSize", json!(v.clamp(1.0, 5000.0))),
@@ -132,7 +120,8 @@ pub(super) fn paragraph_rows(
     styles: &[TextStyle],
     apply_style: &dyn Fn(&mut FigApp, &str, Value),
 ) {
-    let half = (ui.available_width() - PAD * 2.0 - 8.0) / 2.0;
+    // One of the two field columns of the section's grid.
+    let half = widgets::col_width(ui.available_width());
     // Paragraph spacing + resizing.
     let ps = common(doc, ids, |n| n.kind.text().map(|t| t.paragraph_spacing.to_bits())).flatten().map(f64::from_bits);
     let resize = common(doc, ids, |n| n.kind.text().map(|t| t.auto_resize)).flatten();
@@ -224,6 +213,47 @@ fn apply_variable_item(ui: &mut Ui, ids: &[NodeId], field: &str, anchor: &egui::
     let picked = menu_item(ui, tr("Apply variable"), "");
     if picked {
         crate::variable_ui::open(ui, ids, field, VariableType::String, anchor.rect.left_bottom());
+        ui.close();
+    } else {
+        ui.separator();
+    }
+    picked
+}
+
+/// The font family field and its searchable menu (hovering a family previews it on the canvas).
+fn family_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], family: Option<&str>, editing: bool, apply_style: &dyn Fn(&mut FigApp, &str, Value)) {
+    let range = figcraft_engine::textedit::selected_range(&app.session);
+    let w = ui.available_width();
+    let resp = font_dropdown(app, ui, ids, "fontFamily", family, w, editing);
+    let offer = app.services.can_ask_for_local_fonts();
+    let mut ask = false;
+    let before_search = |ui: &mut Ui| {
+        if !editing && apply_variable_item(ui, ids, "fontFamily", &resp) {
+            return true;
+        }
+        ask = offer && local_fonts_item(ui);
+        ask
+    };
+    let pick = font_picker(ui, &resp, family, w.max(240.0), before_search);
+    if ask {
+        app.services.ask_for_local_fonts();
+    }
+    let Some(pick) = pick else { return };
+    if let Some(f) = pick.picked {
+        remember_family(ui.ctx(), &f);
+        apply_style(app, "fontFamily", json!(f));
+    } else if let Some(h) = pick.hovered.or(pick.highlighted) {
+        // The canvas shows the hovered family (or the one the arrow keys are on); closing without
+        // picking ends the preview.
+        app.preview_text(ui.ctx(), "text.style", text_style_params(ids, range, json!({"fontFamily": h})));
+    }
+}
+
+/// "Use fonts installed on this computer…" above the font search (where the browser can list
+/// them): true when clicked (the menu closes).
+fn local_fonts_item(ui: &mut Ui) -> bool {
+    let picked = menu_item(ui, tr("Use fonts installed on this computer…"), "");
+    if picked {
         ui.close();
     } else {
         ui.separator();
@@ -355,6 +385,50 @@ fn type_settings(
         let items = [(tr("Standard"), tr_noop("Standard")), ("Ag", tr_noop("Cap height to baseline"))];
         if let Some(i) = text_seg(ui, "trim", &items, trim, w) {
             app.set_props(ids, json!({"leadingTrim": if i == 1 { "capHeight" } else { "none" }}));
+        }
+        // Where lines break when the text wraps (Explore text properties).
+        caption(ui, tr("Wrap style"));
+        // Per paragraph, as the text direction: while editing, the selected paragraphs.
+        let wrap = common(doc, ids, |n| {
+            n.kind.text().and_then(|t| {
+                let (a, b) = range.filter(|r| r.0 == n.id).map_or((0, t.char_count()), |(_, a, b)| (a, b));
+                t.common_wrap_style(a, b).map(|w| w as usize)
+            })
+        })
+        .flatten();
+        let items = [
+            (tr("Auto"), tr_noop("Auto: as many words as fit on each line")),
+            (tr("Balance"), tr_noop("Balance: every line close to the same length")),
+            (tr("Pretty"), tr_noop("Pretty: full lines, no one word alone on the last")),
+        ];
+        if let Some(i) = text_seg(ui, "wrap", &items, wrap, w) {
+            let style = ["auto", "balance", "pretty"].get(i).copied().unwrap_or("auto");
+            app.run("text.wrapStyle", json!({"ids": ids, "style": style}));
+        }
+        // The paragraphs' base direction, once a right-to-left script is in the text or a direction
+        // is forced ("controls are available to override text direction per paragraph", Add
+        // right-to-left text). While editing: the selected paragraphs.
+        let has_direction =
+            |t: &TextData| figcraft_text::display::has_rtl(&t.characters) || t.paragraphs.iter().any(|p| p.direction != TextDirection::Auto);
+        if ids.iter().any(|i| doc.node(*i).and_then(|n| n.kind.text()).is_some_and(has_direction)) {
+            caption(ui, tr("Text direction"));
+            let dir = common(doc, ids, |n| {
+                n.kind.text().and_then(|t| {
+                    let (a, b) = range.filter(|r| r.0 == n.id).map_or((0, t.char_count()), |(_, a, b)| (a, b));
+                    let (p0, p1) = t.para_span(a, b);
+                    let first = t.para_list(p0).direction;
+                    (p0..=p1).all(|p| t.para_list(p).direction == first).then_some(first as usize)
+                })
+            })
+            .flatten();
+            let items = [
+                (tr("Auto"), tr_noop("Auto: by the first letter with a direction")),
+                ("→", tr_noop("Left to right")),
+                ("←", tr_noop("Right to left")),
+            ];
+            if let Some(i) = text_seg(ui, "direction", &items, dir, w) {
+                app.run("text.direction", json!({"ids": ids, "direction": (["auto", "ltr", "rtl"].get(i).copied().unwrap_or("auto"))}));
+            }
         }
         let resize = common(doc, ids, |n| n.kind.text().map(|t| t.auto_resize)).flatten();
         // Auto-height text with a line limit truncates too.

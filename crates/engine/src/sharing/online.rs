@@ -117,14 +117,17 @@ pub(crate) fn plain_server(server: &str) -> String {
 /// Two addresses name the same server (case, a closing slash and the scheme's own port aside).
 pub fn same_server(a: &str, b: &str) -> bool {
     let norm = |s: &str| {
-        let s = plain_server(s).to_ascii_lowercase();
+        let s = plain_server(s);
         let s = s.trim_end_matches('/');
-        let port = if s.starts_with("wss://") { ":443" } else { ":80" };
         let start = s.find("://").map_or(0, |i| i + 3);
         let end = s[start..].find('/').map_or(s.len(), |i| start + i);
-        match s[start..end].strip_suffix(port) {
-            Some(host) => format!("{}{}{}", &s[..start], host, &s[end..]),
-            None => s.to_string(),
+        // The scheme and host compare without case; the path routes (a proxy may send
+        // `/Team/` and `/team/` to different servers), so it keeps its case.
+        let head = s[..end].to_ascii_lowercase();
+        let port = if head.starts_with("wss://") { ":443" } else { ":80" };
+        match head[start..].strip_suffix(port) {
+            Some(host) => format!("{}{}{}", &head[..start], host, &s[end..]),
+            None => format!("{head}{}", &s[end..]),
         }
     };
     norm(a) == norm(b)
@@ -161,6 +164,7 @@ impl OnlineFile {
         let usable = |l: &SharedLink| link(&l.link) && l.id.len() <= 64 && !l.id.contains(char::is_control);
         self.shared = self.shared.take().filter(|s| usable(&s.edit)).map(|mut s| {
             s.view = s.view.take().filter(usable);
+            s.comment = s.comment.take().filter(usable);
             clean_shared(s)
         });
         Some(self)
@@ -384,9 +388,7 @@ impl Session {
         let Some(f) = self.prefs.online_files.get_mut(i) else { return };
         let before = (f.name.clone(), f.shared.is_some());
         // Links revoked from elsewhere no longer let anyone in.
-        let live = |f: &OnlineFile, o: &OwnedFile| {
-            f.shared.as_ref().is_some_and(|s| o.links.contains(&s.edit.id) && s.view.as_ref().is_none_or(|v| o.links.contains(&v.id)))
-        };
+        let live = |f: &OnlineFile, o: &OwnedFile| f.shared.as_ref().is_some_and(|s| s.all().all(|l| o.links.contains(&l.id)));
         let shared = match answer {
             Some(o) => {
                 f.state = FileState::Online;
@@ -429,6 +431,7 @@ impl Session {
                     "shared": f.shared.is_some(),
                     "code": code(f.shared.as_ref().map(|s| &s.edit)),
                     "viewCode": code(f.shared.as_ref().and_then(|s| s.view.as_ref())),
+                    "commentCode": code(f.shared.as_ref().and_then(|s| s.comment.as_ref())),
                     "state": f.state,
                     "expires": f.expires,
                     "session": session.map(|l| l.id),
@@ -446,7 +449,7 @@ impl Session {
                 ServerProblem::Unsupported => json!({"server": server, "host": server_host(server), "state": "unsupported", "reason": Value::Null}),
             })
             .collect();
-        json!({"files": files, "problems": servers, "max": MAX_ONLINE_FILES})
+        json!({"files": files, "problems": servers, "max": MAX_ONLINE_FILES, "team": self.team_json()})
     }
 }
 
@@ -454,7 +457,10 @@ fn files(s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("refresh") {
         None => {}
         Some(v) if v.as_bool() == Some(false) => {}
-        Some(v) if v.as_bool() == Some(true) => s.online_refresh()?,
+        Some(v) if v.as_bool() == Some(true) => {
+            s.online_refresh()?;
+            s.team_refresh()?;
+        }
         Some(_) => return Err(bad("collab.files", "`refresh` must be true or false")),
     }
     Ok(s.online_json())
@@ -590,14 +596,16 @@ pub(crate) fn removed(s: &mut Session, server: &str, file: &str) {
 pub(crate) fn set_shared(s: &mut Session, cmd: &str, server: &str, file: &str, owner: &str, on: bool) -> Result<Value> {
     let shared = s.online_index(server, file).and_then(|i| s.prefs.online_files.get(i)).and_then(|f| f.shared.clone());
     let result = |links: Option<&Shared>| {
-        let (edit, view) = (links.map(|l| &l.edit), links.and_then(|l| l.view.as_ref()));
+        let (edit, view, comment) = (links.map(|l| &l.edit), links.and_then(|l| l.view.as_ref()), links.and_then(|l| l.comment.as_ref()));
         let code = |l: Option<&SharedLink>| l.and_then(|l| l.code.as_deref()).map(code::grouped);
         json!({
             "shared": links.is_some(),
             "code": code(edit),
             "viewCode": code(view),
+            "commentCode": code(comment),
             "editLink": edit.map(|l| l.link.as_str()),
             "viewLink": view.map(|l| l.link.as_str()),
+            "commentLink": comment.map(|l| l.link.as_str()),
         })
     };
     // As asked already: nothing to tell the server.
@@ -607,7 +615,7 @@ pub(crate) fn set_shared(s: &mut Session, cmd: &str, server: &str, file: &str, o
     if !on && shared.is_none() {
         return Err(bad(cmd, "the links others got aren't recorded on this computer: revoke them by id (action: links, then revoke)"));
     }
-    let revoke: Vec<String> = shared.iter().flat_map(|l| [Some(&l.edit), l.view.as_ref()]).flatten().map(|l| l.id.clone()).collect();
+    let revoke: Vec<String> = shared.iter().flat_map(Shared::all).map(|l| l.id.clone()).collect();
     let req = NetRequest::Share { server: server.to_string(), file: file.to_string(), owner: owner.to_string(), revoke, create: on };
     let links = crate::live::share_answer(s, req)?.map(clean_shared);
     if on && links.is_none() {
@@ -622,7 +630,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "collab.files",
             "Your online files",
-            "{refresh? (true: ask each server once what became of its files; default false: no network)} → {files: [{server, host, file (its id), name, created, opened (seconds since 1970), shared (others get in with a code now), code, viewCode (the join codes, while shared), state: unknown | online | gone (the server no longer has it: removed or expired), expires, session, document (the session and open document it is in now, or null), hasOwnerToken: true}], problems: [{server, host, state: offline | unsupported (a server older than this request), reason}], max}: the files you published or shared without a server key, most recently opened first, as recorded on this computer with the preferences. Owner tokens and your own links are never in the result",
+            "{refresh? (true: ask each server once what became of its files, and the server in Preferences for its team list; default false: no network)} → {files: [{server, host, file (its id), name, created, opened (seconds since 1970), shared (others get in with a code now), code, viewCode, commentCode (the join codes, while shared; commentCode null from a server older than comment links), state: unknown | online | gone (the server no longer has it: removed or expired), expires, session, document (the session and open document it is in now, or null), hasOwnerToken: true}], problems: [{server, host, state: offline | unsupported (a server older than this request), reason}], max, team: {server, host, state: listed | none (the server keeps no team list) | offline, reason, web (where its browser build is, or null), files: [{file, name, updated, people, access, link (figcraft://join?server=…&file=…&team=1: joins it, no secret in it), webLink (the same in the browser build, or null)}]} or null (not asked yet)}: the files you published or shared without a server key, most recently opened first, as recorded on this computer with the preferences, and the files shared now on the server in Preferences when its operator keeps a team list (everyone who reaches it may open them; `collab.join {link}` does). Owner tokens and your own links are never in the result",
             false,
             files
         ),

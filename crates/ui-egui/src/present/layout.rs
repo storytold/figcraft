@@ -1,5 +1,8 @@
 use super::scroll::{clamp_scroll, page_settings};
-use super::*;
+use super::{
+    Device, DeviceColor, Document, NodeId, OverlayState, Point, Pos2, PresentScale, PresentView, Presenter, Rect, Scroller, Vec2,
+    anchored_overlay_rect, pos2, vec2,
+};
 
 /// Page → screen mapping for one presented frame.
 #[derive(Clone, Copy, Debug)]

@@ -1,5 +1,5 @@
-use super::tree::{indented_item, separator, submenu_at};
-use super::*;
+use super::tree::{SubmenuOptions, indented_item, separator, submenu_at};
+use super::{FigApp, Id, Tokens, Ui, json, tr};
 
 /// The context menu's Select layer submenu (its key in the context menu's tree).
 pub(super) const SELECT_LAYER: &str = "Select layer";
@@ -35,15 +35,19 @@ pub(super) fn select_layer_menu(app: &mut FigApp, ui: &mut Ui, pos: egui::Pos2, 
         return false;
     }
     let sel = ds.selection.clone();
-    let picked = submenu_at(ui, Id::unique("ctx_select_layer"), SELECT_LAYER, tr("Select layer"), 4.0, true, t, |ui| {
-        let mut picked = None;
-        for (id, depth, name) in &layers {
-            if indented_item(ui, name, "", true, sel.contains(id), 12.0 * (*depth).min(8) as f32, t) {
-                picked = Some(*id);
+    let picked = submenu_at(
+        ui,
+        SubmenuOptions { area: Id::unique("ctx_select_layer"), key: SELECT_LAYER, label: tr("Select layer"), gap: 4.0, constrain: true, tokens: t },
+        |ui| {
+            let mut picked = None;
+            for (id, depth, name) in &layers {
+                if indented_item(ui, name, "", true, sel.contains(id), 12.0 * (*depth).min(8) as f32, t) {
+                    picked = Some(*id);
+                }
             }
-        }
-        picked
-    });
+            picked
+        },
+    );
     separator(ui);
     match picked {
         Some(id) => {

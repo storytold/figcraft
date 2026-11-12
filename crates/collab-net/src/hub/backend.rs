@@ -1,12 +1,12 @@
 use super::limits::Admission;
-use super::*;
+use super::{Access, Admin, AdminReply, ClientMsg, HostInfo, IpAddr, LibraryReply, LibraryReq, PluginReply, PluginReq, Server};
 
 /// An admin request's reply, and what the hub must do about connections it affects.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Handled {
     pub reply: AdminReply,
-    /// A link was revoked: `(file, link)`; whoever joined with it is disconnected.
-    pub revoked: Option<(String, String)>,
+    /// Links that were revoked: `(file, link)`; whoever joined with one is disconnected.
+    pub revoked: Vec<(String, String)>,
     /// A file was removed: whoever is in it is disconnected and it is closed without saving.
     pub removed: Option<String>,
     /// An address was blocked ([`ip_key`]): its connections are dropped.
@@ -15,7 +15,7 @@ pub struct Handled {
 
 impl From<AdminReply> for Handled {
     fn from(reply: AdminReply) -> Self {
-        Self { reply, revoked: None, removed: None, blocked: None }
+        Self { reply, revoked: Vec::new(), removed: None, blocked: None }
     }
 }
 
@@ -76,8 +76,9 @@ pub trait Backend: Send + 'static {
         Err("this session is hosted by an app: it has no files to manage".into())
     }
 
-    /// A request on a managing connection; `open` tells about a file that is open.
-    fn admin(&mut self, _req: Admin, _open: &dyn Fn(&str) -> Option<OpenFile>) -> Handled {
+    /// A request on a managing connection from `ip` ([`ip_key`]); `open` tells about a file that
+    /// is open.
+    fn admin(&mut self, _ip: IpAddr, _req: Admin, _open: &dyn Fn(&str) -> Option<OpenFile>) -> Handled {
         AdminReply::Failed { reason: "nothing to manage here".into() }.into()
     }
 
@@ -131,6 +132,12 @@ pub trait Backend: Send + 'static {
     /// (shown to them; wrong codes are counted against the address).
     fn resolve(&mut self, _ip: IpAddr, _code: &str) -> Result<(String, String), String> {
         Err("this session is hosted by an app: join it with its own code or invite link".into())
+    }
+
+    /// The token of the team link of `file` on the server's team list, asked from `ip`, or why not
+    /// (shown to them).
+    fn resolve_team(&mut self, _ip: IpAddr, _file: &str) -> Result<String, String> {
+        Err("this session is hosted by an app: it has no team list".into())
     }
 
     /// What everyone is told when the hub stops.

@@ -1,5 +1,5 @@
 use super::css::{Tokens, css_decls};
-use super::*;
+use super::{CodeLang, Ctx, Document, LayoutMode, Node, NodeId, NodeKind, Param, Sizing, indent, num, with_v_if};
 
 // ------------------------------------------------------------------ HTML and React markup
 
@@ -30,7 +30,7 @@ fn kind_word(n: &Node) -> &str {
 /// `rogeuin-hwamyeon`, кнопка → `knopka`, über → `uber` (per-codepoint transliteration, the slug
 /// libraries' way); a name left with nothing (symbols only) takes `kind`, and one starting with a
 /// digit keeps the `layer-` prefix.
-pub(crate) fn class_name(name: &str, kind: &str, used: &mut Vec<String>) -> String {
+pub(crate) fn class_name(name: &str, kind: &str, used: &mut Names) -> String {
     let mut base = String::new();
     for c in deunicode::deunicode(name).chars().flat_map(char::to_lowercase) {
         if c.is_ascii_alphanumeric() {
@@ -57,9 +57,28 @@ pub(crate) fn class_name(name: &str, kind: &str, used: &mut Vec<String>) -> Stri
     } else {
         base.to_string()
     };
-    let name = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base}-{k}") }).find(|n| !used.contains(n)).unwrap_or(base);
-    used.push(name.clone());
+    let from = used.next.get(&base).copied().unwrap_or(1);
+    let (k, name) = (from..)
+        .map(|k| (k, if k == 1 { base.clone() } else { format!("{base}-{k}") }))
+        .find(|(_, n)| !used.used.contains(n))
+        .unwrap_or((from, base.clone()));
+    used.next.insert(base, k + 1);
+    used.insert(name.clone());
     name
+}
+
+/// The names [`class_name`] has given out, and the next suffix to try per base, so many layers
+/// sharing one name don't each retry every suffix from 2 (that was cubic in their number).
+#[derive(Default)]
+pub(crate) struct Names {
+    used: std::collections::BTreeSet<String>,
+    next: std::collections::BTreeMap<String, u64>,
+}
+
+impl Names {
+    pub fn insert(&mut self, name: String) {
+        self.used.insert(name);
+    }
 }
 
 fn html_escape(s: &str) -> String {
@@ -90,7 +109,10 @@ pub(super) fn html(doc: &Document, id: NodeId) -> String {
     let ctx = Ctx::new(doc, id);
     let mut out = Markup::new(&ctx, CodeLang::Html);
     out.node(id, None, 0, "");
-    format!("{}\n<style>\n{}{}</style>\n", out.markup, out.tokens.root_rule(), out.styles)
+    // Document text can reach the stylesheet through any property: `<\/` reads back as `</` inside a CSS
+    // string and can never close the element early.
+    let css = format!("{}{}", out.tokens.root_rule(), out.styles).replace("</", "<\\/");
+    format!("{}\n<style>\n{css}</style>\n", out.markup)
 }
 
 /// Markup being built for a layer tree: HTML (`class`), React JSX (`className`), Vue
@@ -101,7 +123,7 @@ pub(crate) struct Markup<'c, 'a> {
     ctx: &'c Ctx<'a>,
     /// Html, React, Vue or Leptos.
     lang: CodeLang,
-    used: Vec<String>,
+    used: Names,
     pub markup: String,
     pub styles: String,
     pub tokens: Tokens,
@@ -127,12 +149,38 @@ pub(crate) struct Markup<'c, 'a> {
     pub fluid_leaves: f64,
 }
 
+/// How `n` sits in its parent: in the flex flow, or placed at its position.
+fn placement_decls(n: &Node, parent: Option<&Node>, root: bool, in_flow: bool) -> String {
+    let mut decls = String::new();
+    if root {
+        decls.push_str("position: relative;\n");
+    } else if in_flow {
+        let vertical = parent.and_then(|p| p.layout.as_ref()).is_some_and(|l| l.mode == LayoutMode::Vertical);
+        let (main, cross) =
+            if vertical { (n.child_layout.sizing_v, n.child_layout.sizing_h) } else { (n.child_layout.sizing_h, n.child_layout.sizing_v) };
+        if main == Sizing::Fill {
+            decls.push_str("flex: 1 1 0;\n");
+        }
+        if cross == Sizing::Fill {
+            decls.push_str("align-self: stretch;\n");
+        }
+    } else {
+        let c = n.transform.as_coeffs();
+        decls.push_str(&format!("position: absolute;\nleft: {}px;\ntop: {}px;\n", num(c[4]), num(c[5])));
+        let rot = figcraft_geom::rotation_degrees(n.transform);
+        if rot.abs() > 0.01 {
+            decls.push_str(&format!("transform: rotate({}deg);\ntransform-origin: 0 0;\n", num(-rot)));
+        }
+    }
+    decls
+}
+
 impl<'c, 'a> Markup<'c, 'a> {
     pub fn new(ctx: &'c Ctx<'a>, lang: CodeLang) -> Self {
         Markup {
             ctx,
             lang,
-            used: Vec::new(),
+            used: Names::default(),
             markup: String::new(),
             styles: String::new(),
             tokens: Tokens::default(),
@@ -196,51 +244,11 @@ impl<'c, 'a> Markup<'c, 'a> {
         self.rules.push((path.to_string(), class.to_string(), decls));
     }
 
-    fn element(&mut self, n: &Node, parent: Option<&Node>, depth: usize, path: &str) {
-        let doc = self.ctx.doc;
-        let root = n.id == self.ctx.root;
-        let class = match self.root_class.take().filter(|_| root) {
-            Some(c) => {
-                self.used.push(c.clone());
-                c
-            }
-            None => {
-                let class = class_name(&n.name, kind_word(n), &mut self.used);
-                match &self.class_prefix {
-                    Some(prefix) => format!("{prefix}{class}"),
-                    None => class,
-                }
-            }
-        };
+    /// An instance as a call to its component (see `element`); true when it was written.
+    fn instance_call(&mut self, n: &Node, depth: usize, path: &str, class: &str, decls: &str, root: bool) -> bool {
         let pad = self.pad(depth);
         let attr = if self.lang == CodeLang::React { "className" } else { "class" };
-        // How it sits in its parent: in the flex flow, or placed at its position.
-        let mut decls = String::new();
-        let in_flow = parent.is_some_and(|p| p.layout.is_some()) && !n.child_layout.absolute;
-        if root {
-            decls.push_str("position: relative;\n");
-        } else if in_flow {
-            let vertical = parent.and_then(|p| p.layout.as_ref()).is_some_and(|l| l.mode == LayoutMode::Vertical);
-            let (main, cross) =
-                if vertical { (n.child_layout.sizing_v, n.child_layout.sizing_h) } else { (n.child_layout.sizing_h, n.child_layout.sizing_v) };
-            if main == Sizing::Fill {
-                decls.push_str("flex: 1 1 0;\n");
-            }
-            if cross == Sizing::Fill {
-                decls.push_str("align-self: stretch;\n");
-            }
-        } else {
-            let c = n.transform.as_coeffs();
-            decls.push_str(&format!("position: absolute;\nleft: {}px;\ntop: {}px;\n", num(c[4]), num(c[5])));
-            let rot = figcraft_geom::rotation_degrees(n.transform);
-            if rot.abs() > 0.01 {
-                decls.push_str(&format!("transform: rotate({}deg);\ntransform-origin: 0 0;\n", num(-rot)));
-            }
-        }
-        // Nested instances are calls (component code), in a wrapper that places them when needed.
-        // Page code inlines instances, except those connected to code (codeConnect.set): their
-        // snippet, e.g. a design-system `<Button>`.
-        let connected = self.inline && crate::code_connect::link(doc, n.id, CodeLang::React).is_some();
+        let connected = self.inline && crate::code_connect::link(self.ctx.doc, n.id, CodeLang::React).is_some();
         if self.code() && (!self.inline || connected) && !root && matches!(n.kind, NodeKind::Instance { .. }) {
             let at = depth + usize::from(!decls.is_empty());
             let run = if self.lang == CodeLang::Leptos { ".run()" } else { "" };
@@ -258,10 +266,56 @@ impl<'c, 'a> Markup<'c, 'a> {
                 } else {
                     let guard = guard.map(|g| format!(" v-if=\"{g}\"")).unwrap_or_default();
                     self.markup.push_str(&format!("{pad}<div {attr}=\"{class}\"{guard}>\n{inner}{pad}</div>\n"));
-                    self.rule(path, &class, decls);
+                    self.rule(path, class, decls.to_string());
                 }
-                return;
+                return true;
             }
+        }
+        false
+    }
+
+    fn text_body(&self, n: &Node, t: &figcraft_doc::TextData) -> String {
+        match (self.ctx.param(n, "characters").filter(|_| self.code()), self.lang) {
+            (Some(p), CodeLang::Leptos) => format!("{{{}.clone()}}", self.ident(p)),
+            (Some(p), CodeLang::Vue) => format!("{{{{ {} }}}}", self.ident(p)),
+            (Some(p), _) => format!("{{{}}}", p.ident),
+            (None, CodeLang::React) => jsx_text(&t.characters),
+            // `view!` takes text as string literals and void elements self-closed.
+            (None, CodeLang::Leptos) => {
+                t.characters.chars().take(10_000).collect::<String>().lines().map(|l| format!("{l:?}")).collect::<Vec<_>>().join("<br/>")
+            }
+            // A Vue template reads `{{ }}` as interpolation, so braces are escaped.
+            (None, CodeLang::Vue) => html_escape(&t.characters).replace('{', "&#123;").replace('}', "&#125;"),
+            (None, _) => html_escape(&t.characters),
+        }
+    }
+
+    fn element(&mut self, n: &Node, parent: Option<&Node>, depth: usize, path: &str) {
+        let doc = self.ctx.doc;
+        let root = n.id == self.ctx.root;
+        let class = match self.root_class.take().filter(|_| root) {
+            Some(c) => {
+                self.used.insert(c.clone());
+                c
+            }
+            None => {
+                let class = class_name(&n.name, kind_word(n), &mut self.used);
+                match &self.class_prefix {
+                    Some(prefix) => format!("{prefix}{class}"),
+                    None => class,
+                }
+            }
+        };
+        let pad = self.pad(depth);
+        let attr = if self.lang == CodeLang::React { "className" } else { "class" };
+        // How it sits in its parent: in the flex flow, or placed at its position.
+        let in_flow = parent.is_some_and(|p| p.layout.is_some()) && !n.child_layout.absolute;
+        let mut decls = placement_decls(n, parent, root, in_flow);
+        // Nested instances are calls (component code), in a wrapper that places them when needed.
+        // Page code inlines instances, except those connected to code (codeConnect.set): their
+        // snippet, e.g. a design-system `<Button>`.
+        if self.instance_call(n, depth, path, &class, &decls, root) {
+            return;
         }
         let hugs = n.layout.is_some() || matches!(n.kind, NodeKind::Text(_));
         let hug = (hugs && n.child_layout.sizing_h == Sizing::Hug, hugs && n.child_layout.sizing_v == Sizing::Hug);
@@ -286,19 +340,7 @@ impl<'c, 'a> Markup<'c, 'a> {
         let open = |tag: &str| format!("{pad}<{tag} {attr}=\"{class}\"{attrs}>");
         match &n.kind {
             NodeKind::Text(t) => {
-                let body = match (self.ctx.param(n, "characters").filter(|_| self.code()), self.lang) {
-                    (Some(p), CodeLang::Leptos) => format!("{{{}.clone()}}", self.ident(p)),
-                    (Some(p), CodeLang::Vue) => format!("{{{{ {} }}}}", self.ident(p)),
-                    (Some(p), _) => format!("{{{}}}", p.ident),
-                    (None, CodeLang::React) => jsx_text(&t.characters),
-                    // `view!` takes text as string literals and void elements self-closed.
-                    (None, CodeLang::Leptos) => {
-                        t.characters.chars().take(10_000).collect::<String>().lines().map(|l| format!("{l:?}")).collect::<Vec<_>>().join("<br/>")
-                    }
-                    // A Vue template reads `{{ }}` as interpolation, so braces are escaped.
-                    (None, CodeLang::Vue) => html_escape(&t.characters).replace('{', "&#123;").replace('}', "&#125;"),
-                    (None, _) => html_escape(&t.characters),
-                };
+                let body = self.text_body(n, t);
                 self.markup.push_str(&format!("{}{body}</p>\n", open("p")));
             }
             _ => {
@@ -309,7 +351,7 @@ impl<'c, 'a> Markup<'c, 'a> {
                 let open = open("div");
                 let slot_ident = slot.map(|p| match self.ctx.comp {
                     Some(c) => crate::component_codegen::slot_name(c, p),
-                    None => class_name(&p.ident, "slot", &mut Vec::new()),
+                    None => class_name(&p.ident, "slot", &mut Names::default()),
                 });
                 if let Some(p) = slot.filter(|_| kids.is_empty()) {
                     let content = if leptos {

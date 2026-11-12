@@ -1,6 +1,8 @@
 //! Ids of styles, variables, collections, modes and comments: unchanged outside a live session,
 //! from the client's own space during one.
 
+use std::collections::BTreeSet;
+
 use crate::ids::{COLLECTION_ID_PREFIX, id_number, id_space, mode_number, space_of};
 use crate::{Collection, Comment, Document, Message, Mode, NodeId, NodeKind, Style, StyleKind};
 
@@ -94,6 +96,20 @@ fn ids_of_the_space_already_in_the_document_stay_taken() {
 }
 
 #[test]
+fn new_ids_can_avoid_ids_about_to_come_in() {
+    let mut d = Document::new("a");
+    d.styles.push(style("S:1"));
+    let avoid: BTreeSet<String> = ["S:2", "S:3", "VariableID:4", "VariableCollectionId:2", "lib:VariableID:9"].map(String::from).into();
+    assert_eq!(d.new_style_id_avoiding(&avoid), "S:4");
+    assert_eq!(d.new_variable_id_avoiding(&avoid), "VariableID:5");
+    assert_eq!(d.new_collection_id_avoiding(&avoid), "VariableCollectionId:3");
+    // In a session the numbers come from the client's space, above those of it to avoid.
+    let avoid: BTreeSet<String> = [format!("VariableID:{}", C3 | 7)].into();
+    d.set_client_id(3);
+    assert_eq!(d.new_variable_id_avoiding(&avoid), format!("VariableID:{}", C3 | 8));
+}
+
+#[test]
 fn the_highest_space_counts_every_kind_of_id() {
     let mut d = Document::new("a");
     assert_eq!(d.highest_id_space(), 0);
@@ -103,10 +119,22 @@ fn the_highest_space_counts_every_kind_of_id() {
     assert_eq!(d.highest_id_space(), 9);
     d.comments.push(comment(11u64 << 32, d.first_page().unwrap()));
     assert_eq!(d.highest_id_space(), 11);
+    // Numbers past every client's space (they saturate to `u32::MAX`) are no session's.
+    d.styles.push(style(&format!("S:{}", u64::MAX)));
+    d.comments.push(comment(u64::from(u32::MAX) << 32, d.first_page().unwrap()));
+    assert_eq!(d.highest_id_space(), 11);
     // Other forms are space 0.
     assert_eq!(id_space("lib:S:99999999999", "S:"), 0);
     assert_eq!(id_space("S:+5", "S:"), 0);
     assert_eq!(id_space("S:", "S:"), 0);
     assert_eq!(id_space("S:99999999999999999999999", "S:"), 0, "too big for a number");
     assert_eq!(mode_number("1:0"), None);
+}
+
+#[test]
+fn nodeid_rejects_plus_sign() {
+    assert!("+12".parse::<crate::NodeId>().is_err());
+    assert!("0:+12".parse::<crate::NodeId>().is_err());
+    assert_eq!("12".parse::<crate::NodeId>(), Ok(crate::NodeId(12)));
+    assert_eq!("0:12".parse::<crate::NodeId>(), Ok(crate::NodeId(12)));
 }

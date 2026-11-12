@@ -251,6 +251,11 @@ fn the_interaction_editor_picks_a_controller_button() {
     };
     // The key field keeps recording keys; the menu beside it names the controller's buttons.
     at(&mut u, "Controller");
+    // Each with what PlayStation and Switch controllers call the same button.
+    let shown = crate::live_tests::flat(&u.frame_output(vec![]).shapes);
+    for names in ["✕ · B", "□ · Y", "L2 · ZL", "Options · +", "PS · Home"] {
+        assert!(crate::live_tests::has_text(&shown, names), "{names}");
+    }
     at(&mut u, "Gamepad Menu");
     let trigger = u.app.session.doc().unwrap().node(layer).unwrap().interactions[0].trigger.clone();
     assert_eq!(trigger, figcraft_doc::proto::Trigger::KeyPress { key: "Gamepad Menu".into() });

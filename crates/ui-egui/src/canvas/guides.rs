@@ -23,7 +23,8 @@ enum GuideDrag {
     /// Dragging a new guide out of a ruler.
     New { vertical: bool, frame: Option<NodeId> },
     /// Moving guide `index` of `owner` (a page or frame); `copy` (Alt at the press) drops a new one.
-    Move { owner: NodeId, index: usize, vertical: bool, copy: bool, frame: Option<NodeId> },
+    /// `from` is where it was pressed, so a click without movement only selects it.
+    Move { owner: NodeId, index: usize, vertical: bool, copy: bool, frame: Option<NodeId>, from: Pos2 },
 }
 
 impl GuideDrag {
@@ -97,23 +98,28 @@ fn place(doc: &Document, owner: NodeId, index: usize, vertical: bool, offset: f6
     Some(Placed { owner, index, vertical, offset, line: Some(guides::segment(doc, owner, vertical, offset)?) })
 }
 
-/// Guide `index` of `owner` (a page or frame) through page point `p`, its offset rounded to whole
-/// pixels with `snap` (else to hundredths).
-fn through(app: &FigApp, owner: NodeId, index: usize, vertical: bool, p: Point, snap: bool) -> Option<Placed> {
+/// Guide `index` of `owner` (a page or frame) through page point `p`. Its offset snaps to a nearby
+/// layer edge or centre when `object_zoom` is set (`None`: object snapping off), then to whole
+/// pixels with `pixel` (else to hundredths); a snapped offset keeps the edge exactly.
+fn through(app: &FigApp, owner: NodeId, index: usize, vertical: bool, p: Point, pixel: bool, object_zoom: Option<f64>) -> Option<Placed> {
     let ds = app.session.ds().ok()?;
     let v = guides::offset_at(&ds.doc, owner, vertical, p)?;
-    let offset = if snap { v.round() } else { (v * 100.0).round() / 100.0 };
+    let offset = match object_zoom.and_then(|zoom| figcraft_engine::snap::snap_guide(&ds.doc, ds.page, owner, vertical, v, zoom)) {
+        Some(snapped) => snapped,
+        None if pixel => v.round(),
+        None => (v * 100.0).round() / 100.0,
+    };
     if owner == ds.page { Some(Placed { owner, index, vertical, offset, line: None }) } else { place(&ds.doc, owner, index, vertical, offset) }
 }
 
 /// A guide dragged out of a ruler (`vertical`: the left one) and dropped at page point `p`: on the
 /// top-level frame under it, in the frame's coordinates and along its axis nearer the ruler's, or
 /// on the page.
-fn drop_target(app: &FigApp, p: Point, vertical: bool, snap: bool) -> Option<Placed> {
+fn drop_target(app: &FigApp, p: Point, vertical: bool, pixel: bool, object_zoom: Option<f64>) -> Option<Placed> {
     let ds = app.session.ds().ok()?;
     match guides::drop_owner(&ds.doc, ds.page, p) {
-        f if f != ds.page => through(app, f, usize::MAX, guides::frame_axis(&ds.doc, f, vertical), p, snap),
-        page => through(app, page, usize::MAX, vertical, p, snap),
+        f if f != ds.page => through(app, f, usize::MAX, guides::frame_axis(&ds.doc, f, vertical), p, pixel, object_zoom),
+        page => through(app, page, usize::MAX, vertical, p, pixel, object_zoom),
     }
 }
 
@@ -182,18 +188,28 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         return false;
     }
     let r = app.canvas.rect;
-    let (pressed, released, alt) = ctx.input(|i| {
-        (i.pointer.button_pressed(egui::PointerButton::Primary), i.pointer.button_released(egui::PointerButton::Primary), i.modifiers.alt)
+    let (pressed, released, alt, suspend) = ctx.input(|i| {
+        (
+            i.pointer.button_pressed(egui::PointerButton::Primary),
+            i.pointer.button_released(egui::PointerButton::Primary),
+            i.modifiers.alt,
+            i.modifiers.command || i.modifiers.ctrl,
+        )
     });
     if let Some(drag) = ctx.data(|d| d.get_temp::<GuideDrag>(drag_id())) {
         let vertical = match drag {
             GuideDrag::New { vertical, .. } | GuideDrag::Move { vertical, .. } => vertical,
         };
         let p = app.to_page(pos);
-        let snap = app.session.ds().map(|d| d.view.snap_pixel).unwrap_or(true);
+        let (pixel, object_zoom) =
+            app.session.ds().map(|d| (d.view.snap_pixel, (d.view.snap_objects && !suspend).then_some(d.view.zoom))).unwrap_or((true, None));
         let at = match drag {
-            GuideDrag::New { vertical, .. } => drop_target(app, p, vertical, snap),
-            GuideDrag::Move { owner, index, vertical, .. } => through(app, owner, index, vertical, p, snap),
+            GuideDrag::New { vertical, .. } => drop_target(app, p, vertical, pixel, object_zoom),
+            // A click only selects the guide: object snapping starts once the pointer moves.
+            GuideDrag::Move { owner, index, vertical, from, .. } => {
+                let moved = (pos - from).length() > 0.5;
+                through(app, owner, index, vertical, p, pixel, if moved { object_zoom } else { None })
+            }
         };
         // Alt: distances from the guide to the layers in the frame it crosses.
         let frame = drag.frame().or_else(|| at.map(|g| g.owner).filter(|o| app.session.ds().is_ok_and(|d| d.page != *o)));
@@ -272,7 +288,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
                 app.ui.context_menu_shown = false;
             } else {
                 ctx.data_mut(|d| {
-                    d.insert_temp(drag_id(), GuideDrag::Move { owner: g.owner, index: g.index, vertical: g.vertical, copy: alt, frame })
+                    d.insert_temp(drag_id(), GuideDrag::Move { owner: g.owner, index: g.index, vertical: g.vertical, copy: alt, frame, from: pos })
                 });
             }
         }

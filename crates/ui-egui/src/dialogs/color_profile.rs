@@ -1,4 +1,4 @@
-use super::*;
+use super::{ColorProfile, Context, FigApp, RichText, Tokens, json, regular, tr, trf, window};
 
 /// File ▸ Color profile: pick sRGB or Display P3, then keep the colours' appearance (convert the
 /// values) or keep the values (reinterpret them in the new space).
@@ -36,7 +36,7 @@ pub(super) fn color_profile_dialog(app: &mut FigApp, ctx: &Context) {
         if !chosen.is_srgb() {
             ui.add_space(4.0);
             ui.label(
-                RichText::new(tr("The canvas previews colors in sRGB; exported PNG, JPG and WebP files are tagged Display P3."))
+                RichText::new(tr("The canvas previews colors in sRGB; PNG, JPG and WebP exports that use the file's profile are tagged Display P3."))
                     .color(t.text_secondary)
                     .font(regular(11.0)),
             );

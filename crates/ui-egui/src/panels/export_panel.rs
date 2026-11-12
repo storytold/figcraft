@@ -4,9 +4,11 @@
 //! change runs an `export.*` or `file.export*` command.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use figcraft_doc::*;
+use figcraft_doc::color::ColorProfile;
+use figcraft_doc::{Document, ExportColorProfile, ExportFormat, ExportSetting, ExportSize, NodeId, NodeKind, PrintSettings, VdCompat};
 use figcraft_engine::cmd::file::export_jobs;
 use serde_json::{Value, json};
 
@@ -23,12 +25,39 @@ const PREVIEW_REFRESH: f64 = 0.3;
 const PREVIEW_H: f32 = 160.0;
 
 /// The Export section for the selected layers.
-pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+/// What the Export section shows of the selection, kept while the document and the selection
+/// stay the same ([`crate::selection_cache`]).
+#[derive(Clone)]
+struct Exports {
+    /// The settings every selected layer has (none when they differ: `mixed`).
+    list: Vec<ExportSetting>,
+    mixed: bool,
+    /// Every selected layer is a text layer.
+    text: bool,
+    /// The layers an export writes, the first one's preview, and the button's label.
+    layers: BTreeSet<NodeId>,
+    first: Option<NodeId>,
+    name: Option<String>,
+}
+
+fn exports(doc: &Document, sel: &[NodeId]) -> Exports {
+    let shared = common(doc, sel, |n| n.exports.clone());
+    let jobs = export_jobs(doc, sel);
+    let layers: BTreeSet<NodeId> = jobs.iter().map(|j| j.id).collect();
+    Exports {
+        mixed: shared.is_none() && sel.len() > 1,
+        list: shared.unwrap_or_default(),
+        text: sel.iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_)))),
+        first: jobs.first().map(|j| j.id),
+        name: layers.first().and_then(|i| doc.node(*i)).map(|n| n.name.clone()),
+        layers,
+    }
+}
+
+pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let t = Tokens::get(ui.ctx());
     let ids = sel.to_vec();
-    let shared = common(doc, sel, |n| n.exports.clone());
-    let mixed = shared.is_none() && sel.len() > 1;
-    let list = shared.unwrap_or_default();
+    let Exports { list, mixed, text, layers, first, name } = crate::selection_cache::cached(ui.ctx(), "exports", doc, sel, &[], || exports(doc, sel));
     let tip = if mixed { tr("Replace mixed export settings") } else { tr("Add export setting") };
     if widgets::section_header(ui, tr("Export"), &[(Icon::Plus, tip)], list.is_empty()).is_some() {
         if mixed {
@@ -40,20 +69,13 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     if mixed {
         widgets::note(ui, tr("Click + to replace mixed content"), t.text_secondary);
     }
-    let text = sel.iter().all(|i| matches!(doc.node(*i).map(|n| &n.kind), Some(NodeKind::Text(_))));
     for (i, e) in list.iter().enumerate() {
-        setting_row(app, ui, &ids, i, e, text);
+        setting_row(app, ui, &ids, i, e, text, doc.color_profile);
     }
-    let jobs = export_jobs(doc, sel);
-    if jobs.is_empty() {
-        return;
-    }
-    if let Some(first) = jobs.first().map(|j| j.id) {
-        preview(app, ui, doc, first);
-    }
-    let layers: BTreeSet<NodeId> = jobs.iter().map(|j| j.id).collect();
-    let label = match (layers.len(), layers.first().and_then(|i| doc.node(*i))) {
-        (1, Some(n)) => trf("Export {name}", &[("name", &n.name)]),
+    let Some(first) = first else { return };
+    preview(app, ui, doc, first);
+    let label = match (layers.len(), name) {
+        (1, Some(name)) => trf("Export {name}", &[("name", &name)]),
         (k, _) => trn("Export {n} layers", k, &[]),
     };
     if wide_button(ui, &label) {
@@ -63,8 +85,8 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
 
 /// One export setting: size (typed or picked; images only, SVG and PDF are vector), suffix,
 /// format, advanced options and remove; a PDF's print settings under it. `text`: every layer in
-/// `ids` is a text layer.
-fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &ExportSetting, text: bool) {
+/// `ids` is a text layer; `file`: the document's color profile.
+fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &ExportSetting, text: bool, file: ColorProfile) {
     row(ui, 32.0, |ui| {
         // Tighter spacing so the advanced options and remove buttons fit beside the fields.
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -108,7 +130,7 @@ fn setting_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, e: &Expo
             .width(216.0)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                if let Some(mut params) = advanced_options(ui, e, text) {
+                if let Some(mut params) = advanced_options(ui, e, text, file) {
                     params["ids"] = json!(ids);
                     params["index"] = json!(i);
                     app.run("export.update", params);
@@ -140,8 +162,9 @@ const VD_COMPAT: [(VdCompat, &str); 3] =
 /// A setting's advanced options: ignore overlapping layers (`contentsOnly`), include bounding box
 /// for text layers (and for any setting that has it on, so it can be turned off); for SVG outline
 /// text, the id attribute and simplified strokes; for XML (Android Vector Drawable) the id attribute
-/// (as `android:name`) and the compatibility mode. Returns the changed option as command params.
-fn advanced_options(ui: &mut Ui, e: &ExportSetting, text: bool) -> Option<Value> {
+/// (as `android:name`) and the compatibility mode; for PNG, JPG and WebP the color profile (`file`
+/// is the document's). Returns the changed option as command params.
+fn advanced_options(ui: &mut Ui, e: &ExportSetting, text: bool, file: ColorProfile) -> Option<Value> {
     let mut out = None;
     let mut option = |ui: &mut Ui, key: &str, on: bool, label: &str| {
         if widgets::checkbox(ui, on, label) {
@@ -168,7 +191,26 @@ fn advanced_options(ui: &mut Ui, e: &ExportSetting, text: bool) -> Option<Value>
             }
         }
     }
+    if e.format.is_raster() {
+        ui.add_space(4.0);
+        widgets::label(ui, tr("Color profile"), Tokens::get(ui.ctx()).text_secondary);
+        for p in ExportColorProfile::ALL {
+            let on = e.color_profile == p;
+            if widgets::radio(ui, on, &color_profile_label(p, file)) && !on {
+                out = Some(json!({"colorProfile": p.key()}));
+            }
+        }
+    }
     out
+}
+
+/// How the advanced options name an export color profile: "Same as file (Display P3)" names the
+/// profile of `file`, the document's.
+fn color_profile_label(p: ExportColorProfile, file: ColorProfile) -> String {
+    match p {
+        ExportColorProfile::SameAsFile => trf("Same as file ({profile})", &[("profile", &file.label())]),
+        p => p.resolve(file).label().to_string(),
+    }
 }
 
 /// A PDF setting's print settings: a summary row that opens them.
@@ -247,12 +289,12 @@ pub(crate) fn print_options(ui: &mut Ui, id: Id, p: &PrintSettings) -> Option<Pr
 }
 
 /// Print options as command params (`bleed`, `cropMarks`, `bleedMarks`, `cmyk`).
-fn print_params(p: &PrintSettings) -> Value {
+pub(crate) fn print_params(p: &PrintSettings) -> Value {
     json!({"bleed": p.bleed(), "cropMarks": p.crop_marks, "bleedMarks": p.bleed_marks, "cmyk": p.cmyk})
 }
 
 /// `file.export` params for `setting`: its size, format and options (PDF: its print options).
-fn setting_params(setting: &ExportSetting) -> Value {
+pub(crate) fn setting_params(setting: &ExportSetting) -> Value {
     let mut params = serde_json::to_value(setting).unwrap_or_else(|_| json!({}));
     if let Value::Object(m) = &mut params {
         m.remove("print");
@@ -317,7 +359,8 @@ fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
     };
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, PREVIEW_H + 8.0), Sense::hover());
-    let frame = Rect::from_min_max(pos2(r.min.x + widgets::PAD, r.min.y), pos2(r.max.x - widgets::PAD, r.max.y - 8.0));
+    // The section's margins: 16 in from the left, 8 from the right — not 16 on both sides.
+    let frame = Rect::from_min_max(pos2(r.min.x + widgets::PAD, r.min.y), pos2(r.max.x - widgets::PAD_RIGHT, r.max.y - 8.0));
     widgets::checker(&ui.painter().with_clip_rect(frame), frame, 8.0);
     ui.painter().rect_stroke(frame, CornerRadius::same(4), Stroke::new(1.0, t.border), StrokeKind::Inside);
     if let Some(tex) = tex {
@@ -340,8 +383,12 @@ pub(crate) fn wide_button(ui: &mut Ui, label: &str) -> bool {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
         ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
-        let galley = ui.painter().layout(label.to_string(), regular(11.0), t.text, w - 16.0);
+        // One line inside the button: a long layer name ends with an ellipsis and shows in full on
+        // hover (#1650).
+        let shown = widgets::elide(ui, &label.replace(['\r', '\n'], " "), w - 16.0);
+        let galley = ui.painter().layout_no_wrap(shown.clone(), regular(11.0), t.text);
         ui.painter().galley(r.center() - galley.size() / 2.0, galley, t.text);
+        let resp = if shown == label { resp } else { resp.on_hover_text(label) };
         clicked = resp.clicked();
     });
     clicked
