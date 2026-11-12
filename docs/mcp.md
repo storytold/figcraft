@@ -172,6 +172,7 @@ Or in a project's `.mcp.json`:
 - `create_node` and `set_properties` take `x`/`y` **relative to the parent frame** (the page when
   there is none, so they are page coordinates then). Groups and boolean groups have no coordinate
   space of their own: a layer in a group is placed in the frame (or on the page) the group is in.
+  `rotation` is the layer's angle to its parent (Figma's plugin API `rotation` is the same); `absoluteRotation` sets its rotation on the page, what the Design panel's field shows; a call takes one of the two.
   `inspect_document` reports `x`/`y` the same way, plus `absoluteBounds` in page coordinates.
   In `props`, `fill` and `stroke` also accept `"none"` (either case) or `null` as no paint, the
   same as an empty `fills`/`strokes` list, so an outline-only shape can be made in one call.
@@ -767,7 +768,7 @@ page line crosses; parts that come apart move to layers of their own above, list
 `vector.deleteHeal`, `vector.join` / `vector.smoothJoin` (join the selected points while editing),
 `vector.edit.cornerRadius` (rounds the selected sharp points, next to straight or curved segments: a
 curve is cut where the arc meets it and keeps the rest of its shape; drawn and exported;
-`node.set {cornerRadius}` on a vector rounds every point), `vector.edit.strokeCap {cap, vertices?}`
+`node.set {cornerRadius}` on a vector rounds every point, and on a boolean group every sharp corner of its result, while its layers keep their own radius), `vector.edit.strokeCap {cap, vertices?}`
 and `vector.edit.strokeJoin {join, vertices?}` (the stroke's cap where it ends at these points and
 its join where it turns there, `null` for the layer's; drawn, exported and outlined),
 `vector.edit.moveHandles {dx, dy, handles?}` (moves the selected handles by a page offset),
