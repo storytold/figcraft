@@ -640,7 +640,7 @@ fn index(cmd: &str, p: &Value, key: &str) -> Result<usize> {
 }
 
 /// Delete the points and segments of `parts` (`heal` keeps paths through deleted points closed).
-fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool) -> Result<()> {
+pub(crate) fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool) -> Result<()> {
     let doc = s.doc_mut()?;
     for EditPart { id, vertices: verts, segments: segs } in parts {
         edit(doc, id, |net| {
