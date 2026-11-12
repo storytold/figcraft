@@ -29,6 +29,20 @@ pub(crate) fn run(
 ) -> Value {
     let settings = Settings::new(doc, preset);
     let before = collect(doc, roots, anchor, anchor_path, scope, &settings, max_nodes);
+    // A truncated walk would repair only the visited prefix and stay silent about the rest: the
+    // caller would leave with a "fixed" file that never was whole. Say so instead of guessing.
+    if before.truncated {
+        return json!({
+            "scope": scope,
+            "dryRun": dry_run,
+            "changed": 0,
+            "skipped": 0,
+            "truncated": true,
+            "byRule": {},
+            "before": tally(&before, &settings),
+            "after": tally(&before, &settings),
+        });
+    }
     let targets: Vec<(NodeId, &'static str)> = before
         .findings
         .iter()
@@ -62,6 +76,7 @@ pub(crate) fn run(
         "dryRun": dry_run,
         "changed": changed,
         "skipped": skipped,
+        "truncated": false,
         "byRule": by_rule,
         "before": tally(&before, &settings),
         "after": tally(&after, &settings),

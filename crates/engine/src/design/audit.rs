@@ -191,6 +191,11 @@ pub(crate) struct Report {
     pub(crate) truncated: bool,
     /// The node cap this report was collected under (`limit`).
     pub(crate) limit: usize,
+    /// How many text layers the walk saw past the overflow-measure cap. They were counted but not
+    /// measured, so an assertion on `layout.text-overflow` cannot prove a pass.
+    pub(crate) text_unmeasured: usize,
+    /// How many clip-holding frames the walk saw past the clipping-measure cap, likewise.
+    pub(crate) frames_unmeasured: usize,
 }
 
 /// A colour token's default-mode value, for the hardcoded-value check.
@@ -272,6 +277,10 @@ struct Ctx<'a> {
     truncated: bool,
     /// The node cap this run stops at.
     max_nodes: usize,
+    /// Text layers seen past the overflow-measure cap.
+    text_unmeasured: usize,
+    /// Clip-holding frames seen past the clipping-measure cap.
+    frames_unmeasured: usize,
 }
 
 /// Walk `roots` and collect every finding. `design.audit` reports them; `design.fix` acts on the
@@ -300,12 +309,21 @@ pub(crate) fn collect(
         accents: BTreeMap::new(),
         truncated: false,
         max_nodes,
+        text_unmeasured: 0,
+        frames_unmeasured: 0,
     };
     for root in roots {
         ctx.walk(*root);
     }
     ctx.scope_rules(anchor, anchor_path, scope);
-    Report { findings: ctx.findings, nodes: ctx.visited, truncated: ctx.truncated, limit: max_nodes }
+    Report {
+        findings: ctx.findings,
+        nodes: ctx.visited,
+        truncated: ctx.truncated,
+        limit: max_nodes,
+        text_unmeasured: ctx.text_unmeasured,
+        frames_unmeasured: ctx.frames_unmeasured,
+    }
 }
 
 /// Audit `roots` (pages, frames or layers), labelled `scope` in the report. Aggregate findings
@@ -350,6 +368,13 @@ pub(crate) fn run(
         o.insert("limit".into(), json!(report.limit));
         o.insert("findings".into(), json!(findings));
         o.insert("truncated".into(), json!(report.truncated));
+        // Checks the walk capped before finishing: what they did not measure is unchecked.
+        if report.text_unmeasured > 0 {
+            o.insert("textUnmeasured".into(), json!(report.text_unmeasured));
+        }
+        if report.frames_unmeasured > 0 {
+            o.insert("framesUnmeasured".into(), json!(report.frames_unmeasured));
+        }
     }
     out
 }
@@ -358,13 +383,15 @@ impl Ctx<'_> {
     fn walk(&mut self, root: NodeId) {
         let mut stack = vec![(root, String::new())];
         while let Some((id, parent)) = stack.pop() {
-            if self.visited >= self.max_nodes {
-                self.truncated = true;
-                return;
-            }
             let Some(n) = self.doc.node(id) else { continue };
             if !n.visible || n.locked || n.opacity <= 0.001 {
                 continue;
+            }
+            // Past the limit what follows is unchecked: say so once a further auditable node
+            // exists, not for a hidden or missing node the walk would skip anyway.
+            if self.visited >= self.max_nodes {
+                self.truncated = true;
+                return;
             }
             self.visited += 1;
             let name = label(n);
@@ -431,7 +458,12 @@ impl Ctx<'_> {
     /// A fixed-size auto layout frame that clips children which overflow it: the rows exist but
     /// are invisible — the usual headless surprise. Hug frames grow, so they cannot clip.
     fn check_clipping(&mut self, n: &Node, path: &str) {
-        if self.measured_frames >= MAX_FRAMES_MEASURED || !n.clip || n.children.is_empty() || n.layout.is_none() {
+        if !n.clip || n.children.is_empty() || n.layout.is_none() {
+            return;
+        }
+        if self.measured_frames >= MAX_FRAMES_MEASURED {
+            // The frame was seen but not measured: an assertion on this rule cannot prove a pass.
+            self.frames_unmeasured += 1;
             return;
         }
         // An instance mirrors its main; the main is audited where it lives.
@@ -769,11 +801,12 @@ impl Ctx<'_> {
 
         // A fixed-width text box whose stored height is shorter than the laid-out text clips or
         // overlaps what follows it. Truncating boxes and auto-width boxes are intentional.
-        if !chars.is_empty()
-            && n.width > 0.0
-            && self.measured < MAX_TEXT_MEASURED
-            && matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Height)
-        {
+        if !chars.is_empty() && n.width > 0.0 && matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Height) {
+            if self.measured >= MAX_TEXT_MEASURED {
+                // The box was seen but not laid out: an assertion on this rule cannot prove a pass.
+                self.text_unmeasured += 1;
+                return;
+            }
             self.measured += 1;
             let needed = figcraft_text::layout_cached(t, Some(n.width), None).height;
             if needed.is_finite() && needed > n.height + 1.0 {

@@ -794,6 +794,94 @@ fn a_bad_limit_is_an_error() {
 }
 
 #[test]
+fn assert_refuses_a_scope_that_checks_nothing() {
+    let mut s = Session::new();
+    let f = id(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})));
+    // An empty id list and a missing id check nothing: a CI gate must not read that as a pass.
+    for ids in [json!([]), json!([999_999])] {
+        for cmd in ["design.audit", "design.assert", "design.fix"] {
+            let err = s.execute(cmd, &json!({"ids": ids})).unwrap_err().to_string();
+            assert!(err.contains("`ids`"), "{cmd}: {err}");
+        }
+    }
+    // The real layer still audits and gates as before.
+    let r = ex(&mut s, "design.audit", json!({"ids": [f]}));
+    assert_eq!(r["nodes"], 1, "{r}");
+    assert!(s.execute("design.assert", &json!({"ids": [f]})).is_ok());
+}
+
+#[test]
+fn a_limit_reached_by_hidden_nodes_is_not_truncation() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    {
+        let doc = s.doc_mut().unwrap();
+        for i in 0..10 {
+            let id = doc.create(page, NodeKind::Rectangle, &format!("Filler {i}"), 0.0, 0.0, 1.0, 1.0).unwrap();
+            doc.get_mut(id).unwrap().visible = false;
+        }
+    }
+    let badge = id(&ex(&mut s, "text.create", json!({"text": "0", "x": 0.0, "y": 0.0, "props": {"fill": "#FFFFFF"}})));
+    // Exactly limit visible nodes were audited; the stacked hidden ones are skips, not unchecked
+    // work, so the walk is whole and the badge's finding stands on its own.
+    let r = ex(&mut s, "design.audit", json!({"scope": "page", "limit": 1_001, "rules": ["color.contrast"]}));
+    assert_eq!(r["truncated"], false, "{r}");
+    assert!(has(&r, "color.contrast"), "{r}");
+}
+
+#[test]
+fn fix_refuses_to_repair_a_truncated_scope() {
+    let mut s = Session::new();
+    let page = s.page().unwrap();
+    let off_grid = id(&ex(
+        &mut s,
+        "node.create",
+        json!({"type": "frame", "name": "Off grid", "x": 0.0, "y": 0.0, "width": 100.0, "height": 40.0,
+               "props": {"layout": "vertical", "gap": 13}}),
+    ));
+    {
+        let doc = s.doc_mut().unwrap();
+        for i in 0..1_002 {
+            doc.create(page, NodeKind::Rectangle, &format!("Filler {i}"), 0.0, 0.0, 1.0, 1.0).unwrap();
+        }
+    }
+    // The off-grid frame sorts behind the fillers, so the capped walk never reaches it: the fix
+    // must say the scope was incomplete rather than repair a prefix and claim success.
+    let r = ex(&mut s, "design.fix", json!({"scope": "page", "limit": 1_000, "rules": ["spacing.off-grid"]}));
+    assert_eq!(r["truncated"], true, "{r}");
+    assert_eq!(r["changed"], 0, "{r}");
+    let gap = s.doc().unwrap().node(off_grid).unwrap().layout.as_ref().unwrap().gap;
+    assert_eq!(gap, 13.0, "nothing was repaired under truncation");
+    // With the walk whole the same request repairs.
+    let r = ex(&mut s, "design.fix", json!({"scope": "page", "limit": 2_000, "rules": ["spacing.off-grid"]}));
+    assert_eq!(r["truncated"], false, "{r}");
+    assert_eq!(r["changed"], 1, "{r}");
+}
+
+#[test]
+fn assert_refuses_a_scope_whose_measured_checks_were_capped() {
+    let mut s = Session::new();
+    // 2,001 fixed-width overflowing boxes: the overflow check measures the first 2,000, so a
+    // gate on that rule cannot prove a pass over this scope.
+    for i in 0..2_001 {
+        ex(
+            &mut s,
+            "text.create",
+            json!({"text": "Overflowing line of interface copy", "name": &format!("Box {i}"), "x": 0.0, "y": 0.0,
+                   "width": 60, "props": {"textAutoResize": "none"}}),
+        );
+    }
+    let only = json!(["layout.text-overflow"]);
+    let audit = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only}));
+    assert!(audit["textUnmeasured"].as_u64().unwrap_or(0) >= 1, "{audit}");
+    let err = s.execute("design.assert", &json!({"scope": "page", "rules": &only})).unwrap_err().to_string();
+    assert!(err.contains("did not measure all of layout.text-overflow"), "{err}");
+    // A gate that does not ask for the capped rule is unaffected.
+    let other = json!(["color.gradient"]);
+    assert!(s.execute("design.assert", &json!({"scope": "page", "rules": &other})).is_ok());
+}
+
+#[test]
 fn hardcoded_values_that_match_variables_are_reported() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "C"}));

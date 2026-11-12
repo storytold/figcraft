@@ -135,7 +135,21 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     if report["truncated"].as_bool() == Some(true) {
         let nodes = report["nodes"].as_u64().unwrap_or(0);
         return Err(EngineError::Other(format!(
-            "design review failed: the audit stopped at the {limit}-node limit after {nodes} nodes, so what it did not reach is unchecked; audit a smaller scope (selection, page or ids), filter the rules, or raise `limit`, then assert again"
+            "design review failed: the audit stopped at the {limit}-node limit after {nodes} nodes, so what it did not reach is unchecked; audit a smaller scope (selection, page or ids) or raise `limit`, then assert again"
+        )));
+    }
+    // The overflow and clipping checks cap how much they measure per run, independently of
+    // `limit`: boxes or frames past the cap were seen but not measured, so a gate that includes
+    // those rules cannot prove a pass on a scope that big.
+    let unchecked: Vec<String> = [("textUnmeasured", "layout.text-overflow"), ("framesUnmeasured", "layout.clipped")]
+        .into_iter()
+        .filter(|(key, rule)| report[*key].as_u64().unwrap_or(0) > 0 && filter.as_ref().is_none_or(|set| set.contains(*rule)))
+        .map(|(_, rule)| rule.to_string())
+        .collect();
+    if !unchecked.is_empty() {
+        return Err(EngineError::Other(format!(
+            "design review failed: the audit did not measure all of {} on this scope (past the per-run measure cap), so what it skipped is unchecked; audit a smaller scope, then assert again",
+            unchecked.join(", ")
         )));
     }
     if !failing.is_empty() || score < min_score {
@@ -314,7 +328,15 @@ fn ids_arg(cmd: &str, p: &Value) -> Result<Option<Vec<NodeId>>> {
 fn scope_of(s: &Session, cmd: &str, p: &Value) -> Result<(String, Vec<NodeId>, Option<NodeId>, String)> {
     let doc = s.doc()?;
     // `ids` names the layers directly (the review window fixes only the findings the user kept).
+    // An empty or unknown id checks nothing, which a CI gate must not mistake for a pass.
     if let Some(ids) = ids_arg(cmd, p)? {
+        if ids.is_empty() {
+            return Err(bad(cmd, "`ids` is empty: name at least one layer to audit, or drop `ids` for the selection, page or document"));
+        }
+        let missing: Vec<String> = ids.iter().filter(|id| doc.node(**id).is_none()).map(|id| id.to_string()).collect();
+        if !missing.is_empty() {
+            return Err(bad(cmd, format!("`ids` names layers that do not exist: {}", missing.join(", "))));
+        }
         let roots = top_most(doc, &ids);
         let anchor = roots.first().copied();
         let path = anchor.map(|id| node_label(doc, id)).unwrap_or_default();
