@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod board;
+mod board_mindmap;
 mod board_route;
 pub mod colors;
 pub mod comments;
@@ -28,6 +29,7 @@ pub mod vector_faces;
 pub mod vector_regions;
 
 pub use board::*;
+pub use board_mindmap::{MIND_GAP_X, MIND_GAP_Y, MIND_MAX_DEPTH, MIND_MAX_NODES, MindBox, mind_layout};
 pub use board_route::{END_GAP, MAX_RUNS, RouteEnd, attach_points, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
@@ -1319,6 +1321,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 
 #[cfg(test)]
 mod blur_tests;
+#[cfg(test)]
+mod board_mindmap_tests;
 #[cfg(test)]
 mod board_route_tests;
 #[cfg(test)]
