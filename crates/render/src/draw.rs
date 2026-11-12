@@ -196,15 +196,46 @@ pub(crate) fn hash_path(p: &BezPath, h: &mut impl Hasher) {
 fn side_strokes(n: &Node) -> Option<Arc<BezPath>> {
     let props = &n.stroke;
     let sides = props.sides?;
-    if !matches!(n.kind, NodeKind::Rectangle | NodeKind::Frame | NodeKind::Component { .. } | NodeKind::Instance { .. }) {
+    if !n.kind.has_independent_corners() {
         return None;
     }
     let c = &n.corners;
     Some(Arc::new(if c.uniform() == Some(0.0) {
         figcraft_pathops::rect_side_strokes(n.width, n.height, sides, props.align)
-    } else {
+    } else if c.style.is_round() {
         figcraft_pathops::rounded_side_strokes(n.width, n.height, c.radii, c.smoothing, sides, props.align)
+    } else {
+        cut_side_strokes(n, &figcraft_doc::geometry::shape_path(n)?, sides)
     }))
+}
+
+/// Stroke each side at its own weight, meeting its neighbours on the corner bisectors.
+fn cut_side_strokes(n: &Node, path: &BezPath, sides: [f64; 4]) -> BezPath {
+    let band = |weight| figcraft_pathops::stroke_outline(path, &figcraft_doc::StrokeProps { weight, sides: None, ..n.stroke.clone() }, true);
+    if sides.iter().all(|w| *w == sides[0]) {
+        return band(sides[0]);
+    }
+    let (w, h) = (n.width, n.height);
+    let mid = w.min(h) / 2.0;
+    let inner = [(mid, mid), (w - mid, mid), (w - mid, h - mid), (mid, h - mid)];
+    let mut out = BezPath::new();
+    for (i, weight) in sides.into_iter().enumerate().filter(|(_, weight)| *weight > 0.0) {
+        let stroke = band(weight);
+        let b = stroke.bounding_box();
+        let pad = 1.0 + (-b.x0).max(-b.y0).max(b.x1 - w).max(b.y1 - h).max(0.0);
+        let outer = [(-pad, -pad), (w + pad, -pad), (w + pad, h + pad), (-pad, h + pad)];
+        let next = (i + 1) % 4;
+        let mut side = BezPath::new();
+        side.move_to(outer[i]);
+        side.line_to(outer[next]);
+        side.line_to(inner[next]);
+        side.line_to(inner[i]);
+        side.close_path();
+        if let Ok(part) = figcraft_pathops::boolean_step(&stroke, &side, figcraft_doc::BoolOp::Intersect) {
+            out.extend(part.elements().iter().copied());
+        }
+    }
+    out
 }
 
 /// The stroke area of a node in local coordinates.
@@ -231,7 +262,7 @@ pub fn stroke_area(n: &Node, path: &BezPath, closed: bool) -> Arc<BezPath> {
                 | NodeKind::ComponentSet { .. }
                 | NodeKind::Instance { .. }
                 | NodeKind::Section { .. }
-                    if n.corners.smoothing == 0.0 =>
+                    if n.corners.style.is_round() && n.corners.smoothing == 0.0 =>
                 {
                     let radii = n.corners.radii.map(|r| if r > 0.0 { (r - inset).max(0.0) } else { 0.0 });
                     let mut p = figcraft_geom::rounded_rect(ww, hh, radii, 0.0);

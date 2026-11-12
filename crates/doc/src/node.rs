@@ -694,7 +694,7 @@ impl Node {
         let blend = if kind.is_container() { BlendMode::PassThrough } else { BlendMode::Normal };
         let clip = matches!(kind, NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
         let corners = match &kind {
-            NodeKind::ComponentSet { .. } => Corners { radii: [5.0; 4], smoothing: 0.0 },
+            NodeKind::ComponentSet { .. } => Corners { radii: [5.0; 4], ..Corners::default() },
             _ => Corners::default(),
         };
         Self {

@@ -139,10 +139,15 @@ fn fill_share(n: &Node) -> f32 {
         NodeKind::Polygon { .. } => 0.6,
         NodeKind::Star { .. } | NodeKind::Vector { .. } | NodeKind::BooleanOp { .. } => 0.5,
         _ => {
-            // Rounded corners cut (4 − π) r² from the box.
-            let r = (n.corners.radii.iter().sum::<f64>() / 4.0).clamp(0.0, w.min(h) / 2.0);
+            use figcraft_geom::CornerStyle;
+            let cut = match n.corners.style {
+                CornerStyle::Round => 1.0 - std::f64::consts::FRAC_PI_4,
+                CornerStyle::Chamfer => 0.5,
+                CornerStyle::Concave => std::f64::consts::FRAC_PI_4,
+            };
+            let squared_radii: f64 = n.corners.radii.iter().map(|r| r.clamp(0.0, w.min(h) / 2.0).powi(2)).sum();
             let area = w * h;
-            if area > 0.0 { (1.0 - (4.0 - std::f64::consts::PI) * r * r / area).clamp(0.0, 1.0) as f32 } else { 1.0 }
+            if area > 0.0 { (1.0 - cut * squared_radii / area).clamp(0.0, 1.0) as f32 } else { 1.0 }
         }
     }
 }

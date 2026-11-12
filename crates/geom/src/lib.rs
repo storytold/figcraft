@@ -18,6 +18,22 @@ pub use transform::*;
 /// Corner radii in clockwise order from the top-left: `[tl, tr, br, bl]`.
 pub type Radii = [f64; 4];
 
+/// How the outline joins two sides at a rectangle's corners.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CornerStyle {
+    #[default]
+    Round,
+    Chamfer,
+    Concave,
+}
+
+impl CornerStyle {
+    pub fn is_round(&self) -> bool {
+        *self == Self::Round
+    }
+}
+
 /// The largest magnitude a shape builder takes for a size, radius or angle. kurbo subdivides an
 /// arc in proportion to the sixth root of its radius, so an uncapped radius means an unbounded
 /// number of segments: 1e36 is about a million cubics and 1e60 never returns. Sizes come from
@@ -96,13 +112,18 @@ fn finite(v: f64) -> f64 {
 /// Radii are clamped so adjacent corners never overlap; when smoothing doesn't fit, it is reduced
 /// first, then the radius.
 pub fn rounded_rect(width: f64, height: f64, radii: Radii, smoothing: f64) -> BezPath {
+    styled_rect(width, height, radii, smoothing, CornerStyle::Round)
+}
+
+/// A rectangle with editable corner cuts. Smoothing applies to round corners.
+pub fn styled_rect(width: f64, height: f64, radii: Radii, smoothing: f64, style: CornerStyle) -> BezPath {
     let w = bounded(width).max(0.0);
     let h = bounded(height).max(0.0);
     let mut path = BezPath::new();
     if w <= 0.0 && h <= 0.0 {
         return path;
     }
-    let s = bounded(smoothing).clamp(0.0, 1.0);
+    let s = if style.is_round() { bounded(smoothing).clamp(0.0, 1.0) } else { 0.0 };
     let max_r = w.min(h) / 2.0;
     let radii = radii.map(|r| bounded(r).clamp(0.0, max_r));
     if radii.iter().all(|r| *r <= 0.0) {
@@ -124,8 +145,22 @@ pub fn rounded_rect(width: f64, height: f64, radii: Radii, smoothing: f64) -> Be
     // Start on the top edge just after the top-left corner.
     path.move_to((first.p, 0.0));
     for (c, din, dout, r) in corners {
-        let prof = corner_profile(r, s, max_r);
-        append_corner(&mut path, c, din, dout, &prof);
+        if style.is_round() {
+            append_corner(&mut path, c, din, dout, &corner_profile(r, s, max_r));
+        } else if r == 0.0 {
+            path.line_to(c);
+        } else {
+            let from = c - din * r;
+            let to = c + dout * r;
+            path.line_to(from);
+            if style == CornerStyle::Chamfer {
+                path.line_to(to);
+            } else {
+                // An inward quarter circle centred on the original corner.
+                let handle = 0.552_284_749_830_793_6 * r;
+                path.curve_to(from + dout * handle, to - din * handle, to);
+            }
+        }
     }
     path.close_path();
     path

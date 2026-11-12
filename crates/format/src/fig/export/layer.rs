@@ -170,6 +170,9 @@ impl<'d> Exporter<'d> {
             _ => {}
         }
         let boxy = n.kind.is_frame_like() || matches!(n.kind, NodeKind::Rectangle | NodeKind::Section { .. });
+        if boxy && !n.corners.style.is_round() {
+            self.warn("chamfered and concave corners use outline geometry; .fig has no editable corner style");
+        }
         if (boxy || matches!(n.kind, NodeKind::Ellipse { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. }))
             && let Some(p) = figcraft_doc::geometry::shape_path(n)
         {

@@ -339,6 +339,9 @@ pub(super) fn copy_props_of(doc: &Document, id: NodeId) -> Value {
         v["cornerRadius"] = json!(n.corners.radii);
         v["cornerSmoothing"] = json!(n.corners.smoothing);
     }
+    if n.kind.has_independent_corners() {
+        v["cornerStyle"] = json!(n.corners.style);
+    }
     if let NodeKind::Text(t) = &n.kind {
         v["fontFamily"] = json!(t.style.font_family);
         v["fontStyle"] = json!(t.style.font_style);
@@ -364,6 +367,9 @@ pub(crate) fn apply_copied_props(cmd: &str, doc: &mut Document, id: NodeId, prop
     let is_text = matches!(doc.get(id)?.kind, NodeKind::Text(_));
     if !is_text {
         m.retain(|k, _| !k.starts_with("font") && k != "lineHeight" && k != "letterSpacing");
+    }
+    if !doc.get(id)?.kind.has_independent_corners() {
+        m.remove("cornerStyle");
     }
     if !doc.get(id)?.kind.has_corner_radius() {
         m.remove("cornerRadius");

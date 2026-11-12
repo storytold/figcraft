@@ -296,7 +296,12 @@ impl<'d> Exporter<'d> {
             return;
         }
         let whole = matches!(n.kind, NodeKind::Ellipse { sweep, inner, .. } if inner == 0.0 && figcraft_doc::geom::full_sweep(sweep));
-        if boxy || whole {
+        if boxy && !n.corners.style.is_round() {
+            if let Some(path) = figcraft_doc::geometry::shape_path(n) {
+                let outline = figcraft_pathops::stroke_outline(&path, sp, true);
+                self.geometry("strokeGeometry", &outline, WindingRule::NonZero, f);
+            }
+        } else if boxy || whole {
             let (out, inset) = match sp.align {
                 StrokeAlign::Inside => (0.0, weight),
                 StrokeAlign::Center => (weight / 2.0, weight / 2.0),

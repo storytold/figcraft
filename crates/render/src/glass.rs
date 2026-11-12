@@ -790,7 +790,7 @@ impl RoundedRect {
                 | NodeKind::Section { .. }
         );
         let sized = n.width.is_finite() && n.height.is_finite() && n.width > 0.0 && n.height > 0.0;
-        (rect_like && sized && n.corners.smoothing == 0.0).then(|| {
+        (rect_like && sized && n.corners.style.is_round() && n.corners.smoothing == 0.0).then(|| {
             // Clamped as `rounded_rect` clamps them: each radius to half the shorter side.
             let most = n.width.min(n.height) / 2.0;
             let radii = n.corners.radii.map(|r| if r.is_finite() { r.clamp(0.0, most) } else { 0.0 });
