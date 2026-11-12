@@ -271,14 +271,26 @@ fn keyboard_selection() {
         ex(&mut s, cmd, json!({}));
         assert_eq!(sorted(s.selection()), sorted(after), "{why}");
     }
-    // Esc steps out to the parent, then deselects.
+    // Esc clears the selection at once, whatever the nesting (measured in Figma).
     ex(&mut s, "select.set", json!({"ids": [k.a]}));
     s.escape().unwrap();
-    assert_eq!(s.selection(), vec![k.g], "Esc selects the parent");
+    assert_eq!(s.selection(), Vec::<NodeId>::new(), "Esc from a nested layer selects nothing, not the parent");
     s.escape().unwrap();
-    assert_eq!(s.selection(), vec![k.f]);
-    s.escape().unwrap();
-    assert_eq!(s.selection(), Vec::<NodeId>::new(), "Esc on a top-level layer deselects");
+    assert_eq!(s.selection(), Vec::<NodeId>::new());
+    // A top-level layer, and several layers, nested or not: one Esc selects nothing.
+    let cases: Vec<(Vec<NodeId>, &str)> = vec![
+        (vec![k.f], "a top-level frame"),
+        (vec![k.r], "a top-level layer"),
+        (vec![k.a, k.b], "two layers in one group (not their group)"),
+        (vec![k.a, k.d], "layers in different parents (not the parents)"),
+        (vec![k.a, k.r], "a nested layer and a top-level one"),
+    ];
+    for (ids, why) in cases {
+        ex(&mut s, "select.set", json!({"ids": ids}));
+        assert_eq!(sorted(s.selection()), sorted(ids.clone()), "{why}: selected");
+        s.escape().unwrap();
+        assert_eq!(s.selection(), Vec::<NodeId>::new(), "Esc on {why} selects nothing");
+    }
 }
 
 #[test]
