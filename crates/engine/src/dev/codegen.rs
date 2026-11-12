@@ -676,6 +676,27 @@ mod tests {
     }
 
     #[test]
+    fn flutter_writes_no_spacing_for_the_space_distributions() {
+        // The space distributions spread the children themselves; a `spacing:` beside them would
+        // add the gap on top.
+        let mut s = Session::new();
+        let row = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 40})).unwrap()["id"]).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 60, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap();
+        s.execute("layout.add", &json!({"ids": [row], "direction": "horizontal"})).unwrap();
+        for (align, flutter) in [("spaceBetween", "spaceBetween"), ("spaceAround", "spaceAround"), ("spaceEvenly", "spaceEvenly")] {
+            s.execute("node.set", &json!({"id": row, "props": {"gap": 10, "mainAlign": align}})).unwrap();
+            let dart = code_for(s.doc().unwrap(), row, CodeLang::Flutter);
+            assert!(dart.contains(&format!("mainAxisAlignment: MainAxisAlignment.{flutter},")), "{dart}");
+            assert!(!dart.contains("spacing:"), "{align} spreads the children itself: {dart}");
+        }
+        // A packed line keeps its gap.
+        s.execute("node.set", &json!({"id": row, "props": {"gap": 10, "mainAlign": "center"}})).unwrap();
+        let dart = code_for(s.doc().unwrap(), row, CodeLang::Flutter);
+        assert!(dart.contains("spacing: 10,"), "{dart}");
+    }
+
+    #[test]
     fn flutter_expands_and_stretches_fill_children() {
         let mut s = Session::new();
         let row = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 40})).unwrap()["id"]).unwrap();
