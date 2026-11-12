@@ -1,6 +1,6 @@
 //! `select.area`: what a marquee over a box selects, without a pointer (keyboard box selection in
-//! the app, agents over MCP): top-level layers, a frame only when fully covered, the children of
-//! the frame the box starts in, Shift-like toggling, Cmd/Ctrl-like nested layers; no box asks the
+//! the app, agents over MCP): top-level layers, a frame only when fully covered (otherwise the
+//! layers in it the box touches), the children of the frame the box starts in, Shift-like toggling, Cmd/Ctrl-like nested layers; no box asks the
 //! app to draw one.
 
 use serde_json::{Value, json};
@@ -40,8 +40,8 @@ fn a_box_selects_like_a_marquee() {
     let inner = rect(&mut s, 20.0, 20.0, Some(frame));
     let a = rect(&mut s, 0.0, 0.0, None);
     let b = rect(&mut s, 100.0, 0.0, None);
-    // Top-level layers it touches; a frame only touched from outside isn't selected.
-    assert_eq!(area(&mut s, -10.0, -10.0, 340.0, 40.0, json!({})), sorted(vec![a, b]));
+    // Top-level layers it touches; a frame only touched from outside gives the layers in it the box touches.
+    assert_eq!(area(&mut s, -10.0, -10.0, 340.0, 40.0, json!({})), sorted(vec![a, b, inner]));
     // A negative size draws the box the other way.
     assert_eq!(area(&mut s, 130.0, 30.0, -140.0, -40.0, json!({})), sorted(vec![a, b]));
     // Covering the frame selects it.
