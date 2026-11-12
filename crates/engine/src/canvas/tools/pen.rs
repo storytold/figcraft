@@ -313,7 +313,8 @@ impl Session {
         if points.len() < 2 {
             return Ok(());
         }
-        // Smooth: fit a curve through the samples.
+        // Smooth: fit a curve through the samples, kept from shooting past them where the stroke
+        // turns back or runs nearly straight (#1741).
         let mut poly = figcraft_geom::BezPath::new();
         for (k, p) in points.iter().enumerate() {
             if k == 0 {
@@ -322,7 +323,7 @@ impl Session {
                 poly.line_to(*p);
             }
         }
-        let fitted = figcraft_geom::kurbo::simplify::simplify_bezpath(poly.iter(), 0.75, &Default::default());
+        let fitted = figcraft_geom::simplify_path(&poly, 0.75);
         let d = fitted.to_svg();
         if matches!(self.tool.tool, ToolId::Marker | ToolId::Highlighter) {
             return self.ink_finish(&d);
