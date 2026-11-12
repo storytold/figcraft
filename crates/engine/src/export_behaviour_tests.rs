@@ -384,3 +384,17 @@ fn copy_as_png_svg_and_code() {
     let css = crate::codegen::code_for(doc, a, crate::codegen::CodeLang::Css);
     assert!(css.contains("background: #FF0000;"), "Copy as CSS is the layer's CSS from Inspect");
 }
+
+#[test]
+fn export_rejects_an_invalid_layer_id_instead_of_exporting_the_page() {
+    let mut s = Session::new();
+    let r = rect(&mut s, 0.0, 0.0, 10.0, 10.0, "#ff0000", None);
+    ex(&mut s, "export.add", json!({"ids": [r]}));
+    for cmd in ["file.export", "file.exportLayers"] {
+        for p in [json!({"ids": ["abc"], "format": "svg"}), json!({"id": "abc", "format": "svg"}), json!({"ids": [], "id": "abc", "format": "svg"})] {
+            let res = s.execute(cmd, &p);
+            assert!(res.is_err(), "{cmd} {p} exported for an invalid id: {res:?}");
+        }
+    }
+    assert!(s.execute("file.export", &json!({"format": "svg"})).is_ok());
+}
