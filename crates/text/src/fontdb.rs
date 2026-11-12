@@ -92,6 +92,10 @@ pub struct Face {
     pub italic: bool,
     pub bytes: FontBytes,
     pub index: u32,
+    /// 0 for a built-in or installed face; else the order it was loaded in with `text.loadFont`
+    /// ([`FontDb::add_loaded`]). A loaded face wins over any other of its family and style, the
+    /// latest load over earlier ones (#2092).
+    pub loaded: u32,
     pub upem: f64,
     /// Ascent and descent in font units, both positive.
     pub ascent: f64,
@@ -207,6 +211,7 @@ impl Face {
             family,
             style,
             index,
+            loaded: 0,
             upem,
             ascent,
             descent,
@@ -620,6 +625,8 @@ pub struct FontDb {
     loaded_files: std::collections::BTreeSet<(std::path::PathBuf, u32)>,
     /// Font files added as bytes (hash and length → families), so loading one again adds nothing.
     loaded_bytes: std::collections::HashMap<(u64, usize), Vec<String>>,
+    /// Loads so far ([`Face::loaded`]).
+    load_seq: u32,
     system_scanned: bool,
     /// Browser fonts text asked for and not yet taken by the browser layer.
     wanted: Vec<usize>,
@@ -716,8 +723,20 @@ impl FontDb {
         face
     }
 
+    /// [`add`](Self::add) a face loaded explicitly (`text.loadFont`): it wins over the other faces
+    /// of its family and style, and over those loaded before it.
+    pub fn add_loaded(&mut self, mut face: Face) -> Arc<Face> {
+        self.load_seq += 1;
+        face.loaded = self.load_seq;
+        self.add(face)
+    }
+
     /// Add font file bytes (all faces of a collection). Returns the faces added.
     pub fn add_bytes(&mut self, bytes: Vec<u8>) -> Vec<Arc<Face>> {
+        self.add_bytes_with(bytes, false)
+    }
+
+    fn add_bytes_with(&mut self, bytes: Vec<u8>, loaded: bool) -> Vec<Arc<Face>> {
         let shared = Arc::new(bytes);
         let count = match FileRef::new(shared.as_slice()) {
             // A collection's header may name any number of faces, each a few bytes pointing at
@@ -727,7 +746,10 @@ impl FontDb {
             Ok(FileRef::Font(_)) => 1,
             Err(_) => 0,
         };
-        (0..count).filter_map(|i| Face::from_bytes(FontBytes::Shared(shared.clone()), i, None, None)).map(|f| self.add(f)).collect()
+        (0..count)
+            .filter_map(|i| Face::from_bytes(FontBytes::Shared(shared.clone()), i, None, None))
+            .map(|f| if loaded { self.add_loaded(f) } else { self.add(f) })
+            .collect()
     }
 
     /// The family and style of the face whose PostScript name is `ps` (ignoring case), loaded or
@@ -1035,7 +1057,9 @@ impl FontDb {
     /// The loaded face of `family` nearest `style`.
     fn best(&self, family: &str, style: &str) -> Option<Arc<Face>> {
         let (_, idx) = self.families.get(&self.key(family))?;
-        let faces: Vec<&Arc<Face>> = idx.iter().filter_map(|i| self.faces.get(*i)).collect();
+        let mut faces: Vec<&Arc<Face>> = idx.iter().filter_map(|i| self.faces.get(*i)).collect();
+        // A loaded font comes first (the latest load first): of faces as near, the first wins.
+        faces.sort_by_key(|f| std::cmp::Reverse(f.loaded));
         let want = norm_style(style);
         if let Some(f) = faces.iter().find(|f| norm_style(&f.style) == want).or_else(|| faces.iter().find(|f| has_style(f, style))) {
             return Some((*f).clone());
@@ -1595,7 +1619,7 @@ pub fn load_font_bytes(bytes: Vec<u8>) -> Vec<String> {
     if let Some(families) = db.loaded_bytes.get(&key) {
         return families.clone();
     }
-    let faces = db.add_bytes(bytes);
+    let faces = db.add_bytes_with(bytes, true);
     let mut families: Vec<String> = faces.iter().map(|f| f.family.clone()).collect();
     families.dedup();
     if !families.is_empty() {

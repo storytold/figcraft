@@ -326,6 +326,58 @@ fn ex_to_vector(doc: &mut figcraft_doc::Document, id: NodeId) {
     doc.get_mut(id).unwrap().kind = NodeKind::Vector { network };
 }
 
+/// How far `path` strays from `from`: the largest distance from a point sampled along `path` to
+/// the nearest segment of `from`.
+pub(crate) fn strays(path: &BezPath, from: &BezPath) -> f64 {
+    use figcraft_geom::kurbo::ParamCurveNearest;
+    let segs: Vec<_> = from.segments().collect();
+    path.segments()
+        .flat_map(|seg| (0..=32).map(move |i| seg.eval(f64::from(i) / 32.0)))
+        .map(|p| segs.iter().map(|s| s.nearest(p, 1e-6).distance_sq).fold(f64::INFINITY, f64::min).sqrt())
+        .fold(0.0, f64::max)
+}
+
+/// Simplify path keeps nearly collinear points, and a stroke that goes out and back, near where
+/// they were: kurbo's fit, which Simplify path and the Pencil share, ran a handle hundreds of units
+/// on along the line (#1741). That holds for each way the command simplifies a layer: an open
+/// stroke, a filled shape, a region with its own fill, and a stroke beside a filled shape.
+#[test]
+fn simplify_keeps_nearly_collinear_points_near_them() {
+    // The points exactly as sampled.
+    let straight = "M209.5986907940155 -204.90932811973988 L211.27791426387097 -207.1909740207534 L214.24650682872084 -211.22882759062324";
+    let back =
+        "M80 -160 L86.04356571908697 -173.74440234910094 L87.85185073933535 -179.20284644595452 L86.04356571908697 -173.74440234910094 L95 -185";
+    let shape = format!("{straight} L260 -150 Z");
+    let cases = [
+        ("an open stroke", straight.to_string(), false),
+        ("a filled shape", shape.clone(), false),
+        ("a region with its own fill", shape.clone(), true),
+        ("a stroke beside a filled shape", format!("{shape} {back}"), false),
+    ];
+    for (what, d, own_fill) in cases {
+        let mut s = Session::new();
+        let id = id_of(&ex(&mut s, "vector.create", json!({"path": "M0 0 L10 10"}))["id"]).unwrap();
+        // At the page origin, as given (`vector.create` would move the points).
+        let mut network = VectorNetwork::from_path(&BezPath::from_svg(&d).unwrap());
+        if own_fill {
+            network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("#FF0000").unwrap())]);
+        }
+        {
+            let n = s.doc_mut().unwrap().get_mut(id).unwrap();
+            n.transform = figcraft_geom::Affine::IDENTITY;
+            n.kind = NodeKind::Vector { network };
+        }
+        let before = net(&s, id);
+        ex(&mut s, "vector.simplify", json!({"ids": [id], "tolerance": 0.75}));
+        let after = s.doc().unwrap().world_transform(id) * net(&s, id).stroke_path();
+        let gone = strays(&after, &before.stroke_path());
+        assert!(gone <= 1.5, "{what}: strays {gone}: {}", after.to_svg());
+        let (b0, b1) = (before.stroke_path().bounding_box(), after.bounding_box());
+        assert!(b0.inflate(1.5, 1.5).contains_rect(b1), "{what}: {b1:?} past {b0:?}: {}", after.to_svg());
+        assert_eq!(net(&s, id).regions.len(), before.regions.len(), "{what}: the fill is kept");
+    }
+}
+
 fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
     s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"))
 }
