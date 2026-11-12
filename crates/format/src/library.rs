@@ -69,6 +69,7 @@ pub(crate) fn read<R: Read + Seek>(
     let text = String::from_utf8(unpacked.read(z, SNAPSHOT, MAX_MEMBER)?).map_err(corrupt)?;
     let mut budget = MAX_IMAGE_BYTES;
     let (mut doc, _) = from_json(&text)?;
+    unpacked.geometry(&doc)?;
     for hash in used_images(&doc) {
         if !ImageData::is_valid_key(&hash) {
             continue;

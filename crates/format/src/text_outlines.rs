@@ -47,39 +47,47 @@ pub(crate) fn pack(doc: &Document) -> (Cow<'_, Document>, Option<Pool>) {
     let mut output = Cow::Borrowed(doc);
     let mut ids: HashMap<Arc<str>, Arc<str>> = HashMap::new();
     let mut pool = Pool { version: 1, paths: Vec::new() };
+    // Source Arcs stay alive throughout packing. Hash each shared SVG allocation only once.
+    let mut pointers = std::collections::HashSet::new();
     let mut bytes = 0usize;
     for node in doc.nodes() {
         let Some(saved) = node.kind.text().and_then(|t| t.appearance.as_ref()) else { continue };
-        let mut replacement = None;
-        for (i, glyph) in saved.glyphs.iter().enumerate() {
+        for glyph in &saved.glyphs {
             // Inline short/empty shapes: their references would take more space than the path.
             if glyph.d.len() <= 16 {
                 continue;
             }
-            let id = if let Some(id) = ids.get(&glyph.d) {
-                id.clone()
-            } else {
-                // A document with many unique shapes remains saveable: pool what fits and keep
-                // the rest inline, instead of an unbounded global dictionary or discarded paths.
-                if pool.paths.len() >= MAX_ENTRIES || bytes.saturating_add(glyph.d.len()) > MAX_BYTES {
-                    continue;
-                }
-                let id: Arc<str> = format!("@{}", pool.paths.len()).into();
-                bytes += glyph.d.len();
-                pool.paths.push(glyph.d.clone());
-                ids.insert(glyph.d.clone(), id.clone());
-                id
-            };
-            let appearance = replacement.get_or_insert_with(|| (**saved).clone());
-            if let Some(g) = appearance.glyphs.get_mut(i) {
-                g.d = id;
+            let pointer = (glyph.d.as_ptr() as usize, glyph.d.len());
+            if pointers.contains(&pointer) {
+                continue;
             }
+            if pointers.len() < MAX_ENTRIES {
+                pointers.insert(pointer);
+            }
+            if ids.contains_key(&glyph.d) {
+                continue;
+            }
+            // Pool what fits; all remaining shapes stay inline, never discarded.
+            if pool.paths.len() >= MAX_ENTRIES || bytes.saturating_add(glyph.d.len()) > MAX_BYTES {
+                continue;
+            }
+            let id: Arc<str> = format!("@{}", pool.paths.len()).into();
+            bytes += glyph.d.len();
+            pool.paths.push(glyph.d.clone());
+            ids.insert(glyph.d.clone(), id);
         }
-        if let Some(appearance) = replacement
-            && let Some(n) = output.to_mut().node_mut(node.id)
-            && let NodeKind::Text(t) = &mut n.kind
-        {
-            t.appearance = Some(Arc::new(appearance));
+    }
+    if !pool.paths.is_empty() {
+        let references = Arc::new(figcraft_doc::TextOutlineReferences::from(ids));
+        for node in doc.nodes() {
+            let Some(saved) = node.kind.text().and_then(|t| t.appearance.as_ref()) else { continue };
+            let mut appearance = (**saved).clone();
+            appearance.glyphs = saved.glyphs.with_outline_references(references.clone());
+            if let Some(n) = output.to_mut().node_mut(node.id)
+                && let NodeKind::Text(t) = &mut n.kind
+            {
+                t.appearance = Some(Arc::new(appearance));
+            }
         }
     }
     let pool = (!pool.paths.is_empty()).then_some(pool);
@@ -168,7 +176,8 @@ mod tests {
                         style: 0,
                         rtl: false,
                     })
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
                 lines: vec![],
                 decorations: vec![],
                 styles: vec![text.style.clone()],
@@ -177,6 +186,34 @@ mod tests {
             doc.create(page, NodeKind::Text(text), "Text", 0.0, 0.0, 100.0, 20.0).unwrap();
         }
         doc
+    }
+
+    #[test]
+    fn automatically_loaded_snapshots_share_an_expanded_glyph_budget() {
+        let doc = document();
+        let bytes = 32 * std::mem::size_of::<TextGlyph>();
+        let mut budget = crate::Unpacked::new(crate::MAX_UNPACKED);
+        budget.glyphs_left = bytes * 2 - 1;
+        budget.geometry(&doc).unwrap();
+        assert!(budget.geometry(&doc).unwrap_err().to_string().contains("portable glyph memory limit"));
+    }
+
+    #[test]
+    fn native_encoding_shares_glyph_storage_and_mutation_detaches() {
+        let doc = document();
+        let id = doc.nodes().find(|n| n.kind.text().is_some()).unwrap().id;
+        let (mut snapshot, pool) = pack(&doc);
+        let source = doc.node(id).unwrap().kind.text().unwrap().appearance.as_ref().unwrap();
+        let packed = snapshot.node(id).unwrap().kind.text().unwrap().appearance.as_ref().unwrap();
+        assert!(std::ptr::eq(source.glyphs.as_ptr(), packed.glyphs.as_ptr()));
+        assert_eq!(source.glyphs[0].d, packed.glyphs[0].d);
+        assert_eq!(serde_json::to_value(packed).unwrap()["outlines"][0], "@0");
+        assert!(pool.is_some());
+        let NodeKind::Text(text) = &mut snapshot.to_mut().node_mut(id).unwrap().kind else { panic!() };
+        let appearance = Arc::make_mut(text.appearance.as_mut().unwrap());
+        appearance.glyphs[0].x = 99.0;
+        assert_eq!(source.glyphs[0].x, 0.0);
+        assert_ne!(serde_json::to_value(appearance).unwrap()["outlines"][0], "@0");
     }
 
     #[test]

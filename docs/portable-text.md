@@ -150,7 +150,7 @@ six affine coefficients. Null placement means an earlier, already-placed path. N
 rounding or lossy simplification is used. Capturing shares outline strings across layers for
 one capture operation, bounded to 20,000 entries and 16 MiB; restoration parses a repeated shape
 only once per layout. Version-one glyph tuples are read directly, without buffering a generic JSON tree.
-Current writers use encoding 2: the same outline table plus a lossless packed `glyphs` string
+Current writers use encoding 3: the same outline table plus a lossless packed `glyphs` string
 described below.
 
 Each text node remains independently transferable in collaboration, clipboard and history;
@@ -173,7 +173,8 @@ export still does not write portable appearances.
 
 Native `document.json` also carries `textOutlines: {version: 1, paths: [...]}`. During
 serialization only, its local appearance dictionaries use `@<index>` strings into that file
-table. The writer clones only affected text nodes in a temporary document; it does not change
+table. The writer clones only affected text nodes in a temporary document; their glyph lists remain
+shared and an explicitly scoped outline palette substitutes references during encoding. It does not change
 the live document, fingerprints, undo, or collaboration state. Loading resolves references
 before returning a document or validating its editable content. A saved version or branch
 snapshot has its own table. Plain in-memory/collaboration serialization stays self-contained.
@@ -185,16 +186,38 @@ document work limit (4 GiB on native 64-bit, 1 GiB on 32-bit). References are re
 not recursively. Existing archive member, compression-ratio and total unpacking caps remain.
 
 
-### Packed numeric records (encoding 2)
+### Packed numeric records (encodings 2 and 3)
 
-`glyphs` is standard padded base64 of little-endian columns, not an image. The first u32 is
+`glyphs` is standard padded base64, not an image. Encoding 3 first expands its bounded zero-run
+stream (described below); encoding 2 uses the base64-decoded bytes directly. In that inner
+column stream, the first u32 is
 record count. Four u32 columns follow (outline index, char start, char end, style), then four
 IEEE-754 f64 columns (x, y, font size, advance). Each column writes byte plane 0 for all rows,
 then plane 1, and so on. This preserves the exact bits while exposing repeated low/high bytes
 to ordinary ZIP compression, instead of repeatedly formatting/parsing decimal numbers.
+Encoding 3 keeps the same column layout, but the four numeric columns contain XOR residuals
+against a prediction (zero before the first row). For x the next prediction is the decoded x
+plus decoded advance; for y, size and advance it is the previous decoded value. Predictions
+which overflow are replaced by positive zero. XOR uses the complete 64-bit IEEE representation,
+including negative zero: no coordinate is rounded or reconstructed through subtraction.
+Character starts are XORed with the previous character end, ends with current start plus one
+(wrapping u32), and style indices with the previous style; the first previous values are zero.
+Placement payloads likewise XOR each component with that component's previous bits (zero before
+the first payload; absent placements do not update them). The same finite sanitization applies
+before forming all predictions. Arbitrary jumps, overlapping ranges, ligatures and affines remain
+exact residuals. Encoding 2 remains readable with its original unpredicted columns and payloads.
+
 Next are one RTL byte per row (0/1), one placement tag per row (0/1/2), and placement payloads
-in row order: none, one f64 scale, or six f64 affine coefficients. Payload numbers are ordinary
-little-endian f64s. No lossy quantization or font re-shaping is needed to decode them.
+in row order: none, one scale, or six affine coefficients. Encoding-2 payloads are ordinary
+little-endian f64s; encoding 3 uses the predicted bits described above. No lossy quantization or font re-shaping is needed to decode them.
+
+Encoding 3's outer run stream starts with the inner byte length as a little-endian u32. A
+high-bit tag appends `(tag & 127) + 1` zero bytes; other tags copy `tag + 1` following literal
+bytes. The writer only makes zero runs of at least three bytes (short runs remain in literals),
+so worst-case encoding is bounded by the inner size plus one tag per 128 bytes and the header.
+Expansion is refused beyond the normal 100,000-glyph byte budget, on a truncated literal,
+on a run crossing the declared size, or if the final size differs. Decode does not allocate
+based on an unbounded length claim or defer work until after the reopen measurement.
 
 The decoder bounds encoded/raw lengths, record count, every column/payload read and indices;
 it refuses invalid flags, non-finite values, truncation and trailing bytes. Writing applies
@@ -231,3 +254,65 @@ save is 1.39 times main, reopen 8.27 times, and ZIP size 31.18 times.
 These are local synthetic text-only measurements, not a guarantee about GUI/network latency
 or an image-heavy customer document. The earlier and fresh main timings also show normal
 run-to-run machine variation; no confidence interval or controlled cross-machine speedup is claimed.
+
+
+### Compression locality and decoding copies
+
+The node map serializes ordinary nodes in id order, followed by portable text nodes grouped by
+base font family/style, exact size/width bits and id. Layer stacking/page order remains in the
+unchanged `children`/`pages` arrays. This is deterministic and only portable nodes are sorted;
+a file without appearances retains its previous map order without a sorting allocation.
+Grouping lets adjacent similar packed layouts share Deflate's 32 KiB window. The native writer
+also memoizes shared outline allocation identities within the bounded packing operation, with
+content equality retained for separately allocated identical paths. Reading packed records
+constructs model glyphs directly from the decoder iterator without an intermediate legacy-enum
+vector, and borrows the byte planes instead of allocating eight transposed column vectors. These optimizations do not omit appearances, relax validation, or defer decoding out of
+the measured reopen path.
+
+Because compressed records can expand far beyond their input strings, document node decoding
+also charges estimated retained glyph structs and decoded path dictionaries per layer against a cumulative
+1 GiB budget on 64-bit targets (256 MiB on 32-bit). It refuses the next layer before retaining it
+past the limit, rather than waiting for the complete document to be materialized. Per-layer
+record/path limits still apply independently; at most one bounded layer is decoded before its
+aggregate charge is checked. Repeated references within one layer are not counted as duplicate
+path allocations; unused entries are conservatively charged. This count is obtained by the
+decoder, avoiding another glyph scan or pointer set while reading each node. Ordinary nodes do not consume this geometry budget. Native opens also share an expanded
+glyph-struct budget across the main document, eagerly parsed branches and published library;
+version-history JSON stays lazy. Additional snapshots past the budget are skipped with a reason,
+using the existing damaged-snapshot reporting path.
+
+
+Glyph lists use copy-on-write shared storage. A native encoding snapshot attaches one shared
+outline-reference palette; source nodes and positioned glyph lists are unchanged. Mutation
+detaches storage and removes that encoding palette. Pointer lookups only refer to allocations
+kept alive by owned path keys, with content-equality fallback for independently allocated paths.
+There is no global/thread-local serializer state. Native files, node updates and clipboard data
+retain the same wire content as before this sharing optimization.
+
+
+### Predicted records and shared snapshots, 2026-11-12
+
+Same synthetic corpus, Inter input, release profile and one warm-up/five measured medians.
+Main is the unchanged binary from `0d6ce1124c03c8efc3807db5689fee7f8ec94756`, run immediately
+after the current feature binary, without a concurrent build. The previously published compact
+implementation is `34d2f5183932f23b94eaa8cd5d89046d6c108c0c`. Reopen still includes full decoding
+and session initialization; no work was deferred beyond that measurement.
+
+| Text layers | Variant | Prepare ms | First save ms | Repeat save ms | Reopen ms | ZIP bytes | Appearances |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1,000 | main (fresh run) | 0.289 | 116.398 | 116.118 | 4.972 | 127,908 | 0 |
+| 1,000 | previous pooled/packed | 14.447 | 205.341 | 204.655 | 56.744 | 939,721 | 1,000 |
+| 1,000 | predicted/shared | 13.450 | 152.359 | 150.058 | 43.477 | 251,186 | 1,000 |
+| 10,000 | main (fresh run) | 3.135 | 1586.164 | 1596.029 | 56.433 | 265,376 | 0 |
+| 10,000 | previous pooled/packed | 975.043 | 3021.400 | 2860.561 | 528.367 | 8,275,682 | 10,000 |
+| 10,000 | predicted/shared | 784.513 | 1885.323 | 1874.355 | 429.437 | 1,343,321 | 10,000 |
+
+Compared with the previously published compact storage, the 10,000-layer file is
+**6.16 times smaller**, repeat save is **1.53 times faster** and reopen is
+**1.23 times faster** in these samples. Every appearance is retained.
+
+Versus fresh main, first save is **+18.9%**, repeat save **+17.4%**,
+reopen **7.61x**, and file size **5.06x** main. The approximately 10% review
+target is not met for all metrics. Saved geometry and per-layer fingerprints remain additional
+data that main does not store. These synthetic measurements do not guarantee GUI/network or
+image-heavy file performance. Normal machine variation applies to timing comparisons.

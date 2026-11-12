@@ -341,7 +341,8 @@ fn portable_text() -> figcraft_doc::TextData {
             char_end: 1,
             style: 0,
             rtl: false,
-        }],
+        }]
+        .into(),
         lines: vec![],
         decorations: vec![],
         styles: vec![],

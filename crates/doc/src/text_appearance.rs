@@ -45,13 +45,14 @@ impl Serialize for TextAppearance {
             .glyphs
             .iter()
             .map(|g| {
+                let path = self.glyphs.serialized_outline(&g.d);
                 let next = outlines.len();
-                let index = *indices.entry(g.d.as_ref()).or_insert_with(|| {
-                    outlines.push(g.d.as_ref());
+                let index = *indices.entry(path).or_insert_with(|| {
+                    outlines.push(path);
                     next
                 });
                 let placement = g.transform.map(|m| {
-                    if m[0] == m[3] && m[1] == 0.0 && m[2] == 0.0 && m[4] == g.x && m[5] == g.y {
+                    if m.map(f64::to_bits) == [m[0], 0.0, 0.0, m[0], g.x, g.y].map(f64::to_bits) {
                         Placement::Scale(m[0])
                     } else {
                         Placement::Matrix(m)
@@ -61,7 +62,7 @@ impl Serialize for TextAppearance {
             })
             .collect::<Vec<_>>();
         Saved {
-            encoding: 2,
+            encoding: 3,
             fingerprint: &self.fingerprint,
             box_width: self.box_width,
             box_height: self.box_height,
@@ -81,6 +82,28 @@ impl Serialize for TextAppearance {
 enum ReadGlyph {
     Compact(CompactGlyph),
     Legacy(TextGlyph),
+}
+
+// Decode a packed vector directly into model glyphs. Do not first allocate and copy a second
+// vector of the large legacy/compact enum for every text layer.
+enum GlyphIter {
+    Records(std::vec::IntoIter<ReadGlyph>),
+    Packed(std::vec::IntoIter<CompactGlyph>),
+}
+impl Iterator for GlyphIter {
+    type Item = ReadGlyph;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Records(v) => v.next(),
+            Self::Packed(v) => v.next().map(ReadGlyph::Compact),
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Records(v) => v.size_hint(),
+            Self::Packed(v) => v.size_hint(),
+        }
+    }
 }
 
 // Dispatch on sequence/map directly. An untagged enum buffers every number into serde's
@@ -185,19 +208,18 @@ fn read_glyphs<'de, D: Deserializer<'de>>(d: D) -> Result<ReadGlyphs, D::Error> 
 impl<'de> Deserialize<'de> for TextAppearance {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let wire = Read::deserialize(d)?;
-        if wire.encoding > 2 || wire.outlines.len() > MAX_GLYPHS {
+        if wire.encoding > 3 || wire.outlines.len() > MAX_GLYPHS {
             return Err(serde::de::Error::custom("unsupported portable geometry encoding or outline count"));
         }
         let records = match wire.glyphs {
-            ReadGlyphs::Records(records) if wire.encoding < 2 => records,
-            ReadGlyphs::Packed(text) if wire.encoding == 2 => {
-                crate::text_glyph_bytes::decode(&text).map_err(serde::de::Error::custom)?.into_iter().map(ReadGlyph::Compact).collect()
+            ReadGlyphs::Records(records) if wire.encoding < 2 => GlyphIter::Records(records.into_iter()),
+            ReadGlyphs::Packed(text) if matches!(wire.encoding, 2 | 3) => {
+                GlyphIter::Packed(crate::text_glyph_bytes::decode(&text, wire.encoding == 3).map_err(serde::de::Error::custom)?.into_iter())
             }
             _ => return Err(serde::de::Error::custom("glyph data does not match portable encoding")),
         };
         let mut bytes = 0usize;
         let glyphs = records
-            .into_iter()
             .map(|g| {
                 let g = match g {
                     ReadGlyph::Legacy(g) if wire.encoding == 0 => g,
@@ -224,7 +246,7 @@ impl<'de> Deserialize<'de> for TextAppearance {
             box_height: wire.box_height,
             width: wire.width,
             height: wire.height,
-            glyphs,
+            glyphs: crate::TextGlyphs::decoded(glyphs, if wire.encoding == 0 { bytes } else { wire.outlines.iter().map(|p| p.len()).sum() }),
             lines: wire.lines,
             decorations: wire.decorations,
             styles: wire.styles,
@@ -259,12 +281,122 @@ mod tests {
                     style: 0,
                     rtl: false,
                 })
-                .collect(),
+                .collect::<Vec<_>>()
+                .into(),
             lines: vec![],
             decorations: vec![],
             styles: vec![TextStyle::default()],
             truncated: false,
         }
+    }
+
+    #[test]
+    fn compact_scale_does_not_erase_signed_zero_affine_components() {
+        let mut a = appearance();
+        a.glyphs.truncate(1);
+        let matrix = [0.125, -0.0, 0.0, 0.125, -0.0, 15.0];
+        a.glyphs[0].transform = Some(matrix);
+        let back: TextAppearance = serde_json::from_slice(&serde_json::to_vec(&a).unwrap()).unwrap();
+        assert_eq!(back.glyphs[0].transform.unwrap().map(f64::to_bits), matrix.map(f64::to_bits));
+    }
+
+    #[test]
+    fn compressed_geometry_has_a_document_wide_memory_budget() {
+        use crate::{Document, NodeKind, TextData};
+        let mut doc = Document::new("Geometry budget");
+        let page = doc.first_page().unwrap();
+        let mut text = TextData::new("Synthetic");
+        let a = appearance();
+        let one = a.glyphs.len() * std::mem::size_of::<TextGlyph>() + a.glyphs[0].d.len();
+        text.appearance = Some(Arc::new(a));
+        for _ in 0..2 {
+            doc.create(page, NodeKind::Text(text.clone()), "Text", 0.0, 0.0, 100.0, 20.0).unwrap();
+        }
+        let encoded = serde_json::to_string(&doc.nodes).unwrap();
+        let mut d = serde_json::Deserializer::from_str(&encoded);
+        let back = crate::deserialize_nodes_limited(&mut d, one * 2).unwrap();
+        assert_eq!(back, doc.nodes);
+        let mut d = serde_json::Deserializer::from_str(&encoded);
+        let error = crate::deserialize_nodes_limited(&mut d, one * 2 - 1).unwrap_err();
+        assert!(error.to_string().contains("portable geometry exceeds memory limit"));
+    }
+
+    #[test]
+    fn appearance_encoding_two_remains_readable() {
+        let mut a = appearance();
+        a.glyphs.truncate(1);
+        let mut wire = serde_json::to_value(&a).unwrap();
+        wire["encoding"] = json!(2);
+        // Encoding-two's single glyph columns have the original, unpredicted IEEE bytes.
+        use base64::Engine as _;
+        let mut bytes = 1u32.to_le_bytes().to_vec();
+        for n in [0u32, 0, 1, 0] {
+            bytes.extend(n.to_le_bytes());
+        }
+        for n in [0.0f64, 15.0, 12.0, 5.0] {
+            bytes.extend(n.to_le_bytes());
+        }
+        bytes.extend([0, 1]);
+        bytes.extend(0.125f64.to_le_bytes());
+        wire["glyphs"] = json!(base64::engine::general_purpose::STANDARD.encode(bytes));
+        let read: TextAppearance = serde_json::from_value(wire).unwrap();
+        assert_eq!(read, a);
+    }
+
+    #[test]
+    fn grouping_serialized_nodes_preserves_layer_order_and_round_trip() {
+        use crate::{Document, NodeId, NodeKind, TextData};
+        #[derive(Deserialize)]
+        struct Order {
+            nodes: Keys,
+        }
+        struct Keys(Vec<NodeId>);
+        impl<'de> Deserialize<'de> for Keys {
+            fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                struct V;
+                impl<'de> serde::de::Visitor<'de> for V {
+                    type Value = Keys;
+                    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                        f.write_str("nodes map")
+                    }
+                    fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Keys, M::Error> {
+                        let mut keys = Vec::new();
+                        while let Some((k, _)) = map.next_entry::<NodeId, serde::de::IgnoredAny>()? {
+                            keys.push(k);
+                        }
+                        Ok(Keys(keys))
+                    }
+                }
+                d.deserialize_map(V)
+            }
+        }
+        let mut doc = Document::new("Synthetic grouping");
+        let page = doc.first_page().unwrap();
+        let mut ids = Vec::new();
+        for size in [20.0, 12.0, 20.0, 12.0] {
+            let mut text = TextData::new("Grouped");
+            text.style.font_size = size;
+            text.appearance = Some(Arc::new(appearance()));
+            ids.push(doc.create(page, NodeKind::Text(text), "Text", 0.0, 0.0, 100.0, 20.0).unwrap());
+        }
+        let encoded = serde_json::to_string(&doc).unwrap();
+        let order: Order = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(order.nodes.0, [page, ids[1], ids[3], ids[0], ids[2]]);
+        assert_eq!(encoded, serde_json::to_string(&doc).unwrap());
+        let back: Document = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(back, doc);
+        assert_eq!(back.node(page).unwrap().children, ids);
+        // A malformed node's embedded id must never replace its map key during encoding.
+        doc.node_mut(ids[0]).unwrap().id = NodeId(900);
+        let malformed: Document = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert_eq!(malformed, doc);
+        for id in ids {
+            if let NodeKind::Text(t) = &mut doc.node_mut(id).unwrap().kind {
+                t.appearance = None;
+            }
+        }
+        let order: Order = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert_eq!(order.nodes.0, doc.ids().collect::<Vec<_>>());
     }
 
     #[test]
@@ -306,7 +438,7 @@ mod tests {
         wire["glyphs"] = json!([[100, 0.0, 0.0, 12.0, 5.0, 0, 1, 0, false, null]]);
         assert!(serde_json::from_value::<TextAppearance>(wire.clone()).is_err());
         wire["glyphs"][0][0] = json!(0);
-        wire["encoding"] = json!(3);
+        wire["encoding"] = json!(4);
         assert!(serde_json::from_value::<TextAppearance>(wire.clone()).is_err());
         wire["encoding"] = json!(1);
         wire["outlines"] = json!(["x".repeat(MAX_PATH_BYTES / 2 + 1)]);

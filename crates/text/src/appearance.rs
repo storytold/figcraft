@@ -269,7 +269,7 @@ pub fn capture(doc: &mut Document, ids: Option<&[figcraft_doc::NodeId]>) -> usiz
             box_height: n.height,
             width: l.width,
             height: l.height,
-            glyphs,
+            glyphs: glyphs.into(),
             lines: l
                 .lines
                 .iter()
@@ -335,7 +335,8 @@ mod tests {
                 char_end: 1,
                 style: 0,
                 rtl: false,
-            }],
+            }]
+            .into(),
             lines: vec![TextLine {
                 glyph_start: 0,
                 glyph_end: 1,

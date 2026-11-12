@@ -1115,6 +1115,7 @@ discard the optional geometry when applying an update. Upgrade participating cli
 Compact appearance encoding 1 stores normalized outlines in a table local to that text node,
 with glyph tuples referencing shapes and retaining exact placement/metrics. It remains a
 self-contained kind update; no session-global table, message variant or property is added.
-Readers accept earlier object-shaped glyphs as encoding zero. Experimental builds before
-encoding 1 can reject the new tuples, so update the server and participating clients together.
+Current writers use encoding 3, with lossless bit-predicted numeric columns in a base64 string.
+Readers also accept encoding-2 raw numeric columns, encoding-1 tuples and earlier object-shaped glyphs as encoding zero. Experimental builds before
+encoding 3 can reject the new records, so update the server and participating clients together.
 See [portable-text.md](portable-text.md#compact-encoding-and-migration) for migration and limits.

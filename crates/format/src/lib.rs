@@ -688,11 +688,27 @@ pub(crate) fn read_member<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str
 pub(crate) struct Unpacked {
     left: u64,
     total: u64,
+    glyphs_left: usize,
 }
 
 impl Unpacked {
     pub(crate) fn new(total: u64) -> Self {
-        Self { left: total, total }
+        Self { left: total, total, glyphs_left: figcraft_doc::MAX_PORTABLE_MEMORY }
+    }
+
+    // Share the expanded glyph budget between the main document, parsed branch snapshots
+    // and published library. History JSON remains lazy, so opening a file cannot retain a
+    // fresh per-document allowance for every automatically decoded snapshot.
+    pub(crate) fn geometry(&mut self, doc: &Document) -> Result<(), FormatError> {
+        let bytes = doc
+            .nodes()
+            .filter_map(|n| n.kind.text()?.appearance.as_ref())
+            .fold(0usize, |sum, a| sum.saturating_add(a.glyphs.len().saturating_mul(std::mem::size_of::<figcraft_doc::TextGlyph>())));
+        if bytes > self.glyphs_left {
+            return Err(FormatError::Corrupt("file snapshots exceed portable glyph memory limit".into()));
+        }
+        self.glyphs_left -= bytes;
+        Ok(())
     }
 
     /// Why a member is left out once the total is spent.
@@ -763,6 +779,7 @@ pub(crate) fn load_limited(bytes: &[u8], budget: ImageBudget, total: u64) -> Res
     let mut unpacked = Unpacked::new(total);
     let text = String::from_utf8(unpacked.read(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
+    unpacked.geometry(&doc)?;
     let ImagesRead { images, unread, past_budget } = read_images(&mut z, own_images.as_ref(), budget, &mut unpacked);
     report_lost_images(&mut issues, &unread, &past_budget, own_images.as_ref(), &images);
     let images_past_budget = past_budget.len();
@@ -988,6 +1005,7 @@ fn read_branches<R: Read + Seek>(
             let json = unpacked.read(z, &format!("branches/{id}/{part}.json"), budget.min(MAX_MEMBER))?;
             budget = budget.saturating_sub(json.len() as u64);
             let (mut doc, _) = from_json(std::str::from_utf8(&json).map_err(|e| FormatError::Corrupt(e.to_string()))?)?;
+            unpacked.geometry(&doc)?;
             let hashes = e.get(list).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
             doc.images = hashes.filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone()))).collect();
             Ok(Arc::new(doc))

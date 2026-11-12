@@ -565,11 +565,95 @@ pub struct TextAppearance {
     pub box_height: f64,
     pub width: f64,
     pub height: f64,
-    pub glyphs: Vec<TextGlyph>,
+    pub glyphs: TextGlyphs,
     pub lines: Vec<TextLine>,
     pub decorations: Vec<TextDecorationPath>,
     pub styles: Vec<TextStyle>,
     pub truncated: bool,
+}
+
+/// Immutable glyph storage shared by appearance snapshots. Mutating a shared list copies it;
+/// native file encoding can substitute a palette without copying every positioned glyph.
+#[derive(Clone, Debug, Default)]
+pub struct TextGlyphs {
+    data: std::sync::Arc<Vec<TextGlyph>>,
+    references: Option<std::sync::Arc<TextOutlineReferences>>,
+    decoded_path_bytes: Option<usize>,
+}
+
+/// An explicitly scoped serialization palette. The owned path keys keep pointer fast-paths
+/// alive; separately allocated equal paths still resolve through content equality.
+#[derive(Debug)]
+pub struct TextOutlineReferences {
+    paths: std::collections::HashMap<std::sync::Arc<str>, std::sync::Arc<str>>,
+    pointers: std::collections::HashMap<(usize, usize), std::sync::Arc<str>>,
+}
+impl From<std::collections::HashMap<std::sync::Arc<str>, std::sync::Arc<str>>> for TextOutlineReferences {
+    fn from(paths: std::collections::HashMap<std::sync::Arc<str>, std::sync::Arc<str>>) -> Self {
+        let pointers = paths.iter().map(|(path, id)| ((path.as_ptr() as usize, path.len()), id.clone())).collect();
+        Self { paths, pointers }
+    }
+}
+impl TextGlyphs {
+    pub(crate) fn decoded(value: Vec<TextGlyph>, path_bytes: usize) -> Self {
+        Self { data: std::sync::Arc::new(value), references: None, decoded_path_bytes: Some(path_bytes) }
+    }
+    pub(crate) fn memory_bytes(&self) -> usize {
+        let paths = self.decoded_path_bytes.unwrap_or_else(|| self.data.iter().fold(0usize, |sum, g| sum.saturating_add(g.d.len())));
+        self.len().saturating_mul(std::mem::size_of::<TextGlyph>()).saturating_add(paths)
+    }
+    /// Used only on an encoding snapshot. The logical glyphs and the source remain unchanged.
+    pub fn with_outline_references(&self, references: std::sync::Arc<TextOutlineReferences>) -> Self {
+        Self { data: self.data.clone(), references: Some(references), decoded_path_bytes: self.decoded_path_bytes }
+    }
+    pub(crate) fn serialized_outline<'a>(&'a self, path: &'a std::sync::Arc<str>) -> &'a str {
+        self.references
+            .as_ref()
+            .and_then(|r| r.pointers.get(&(path.as_ptr() as usize, path.len())).or_else(|| r.paths.get(path)))
+            .map_or(path.as_ref(), |id| id.as_ref())
+    }
+}
+impl From<Vec<TextGlyph>> for TextGlyphs {
+    fn from(value: Vec<TextGlyph>) -> Self {
+        Self { data: std::sync::Arc::new(value), references: None, decoded_path_bytes: None }
+    }
+}
+impl PartialEq for TextGlyphs {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.data, &other.data) || self.data == other.data
+    }
+}
+impl std::ops::Deref for TextGlyphs {
+    type Target = Vec<TextGlyph>;
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+impl std::ops::DerefMut for TextGlyphs {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.references = None;
+        self.decoded_path_bytes = None;
+        std::sync::Arc::make_mut(&mut self.data)
+    }
+}
+impl<'a> IntoIterator for &'a TextGlyphs {
+    type Item = &'a TextGlyph;
+    type IntoIter = std::slice::Iter<'a, TextGlyph>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+impl<'a> IntoIterator for &'a mut TextGlyphs {
+    type Item = &'a mut TextGlyph;
+    type IntoIter = std::slice::IterMut<'a, TextGlyph>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+impl Serialize for TextGlyphs {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.data.serialize(s)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
