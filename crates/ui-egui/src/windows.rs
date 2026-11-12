@@ -499,9 +499,10 @@ pub enum TabClose {
     /// Save was answered: it saves next frame, once a panel field the click took the keyboard
     /// from has committed what was typed, then the tab closes.
     Save(u64),
-    /// Its Save as dialog (a file without a path, or a .fig) is open: the tab closes once the file
-    /// is saved, and stays open if the dialog is cancelled or the save fails.
-    AfterSaveAs(u64),
+    /// Wait for the provider save started by this close to settle.
+    SavingToProvider(u64),
+    /// Continue after a native Save As dialog or a durable provider acknowledgement.
+    AfterSave(u64),
 }
 
 /// Close tab `i` (its X, a middle click, File ▸ Close tab): at once when its file has no unsaved
@@ -543,10 +544,11 @@ fn tab_of(app: &FigApp, uid: u64) -> Option<usize> {
 
 /// The unsaved-changes question for a closing tab and what its answer starts: Don't Save closes
 /// the tab and drops the changes, Cancel keeps it, Save saves the file (Save as for one without a
-/// path or saved as .fig) and closes the tab once it is saved.
+/// path or saved as .fig) and closes the tab once it is saved. A provider Save waits for
+/// acknowledgement and keeps the tab open if there are later unsaved edits.
 pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
     let Some(step) = app.ui.close_tab else { return };
-    let (TabClose::Ask(uid) | TabClose::Save(uid) | TabClose::AfterSaveAs(uid)) = step;
+    let (TabClose::Ask(uid) | TabClose::Save(uid) | TabClose::SavingToProvider(uid) | TabClose::AfterSave(uid)) = step;
     let Some(i) = tab_of(app, uid) else {
         app.ui.close_tab = None;
         return;
@@ -568,11 +570,24 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
             app.ui.close_tab = None;
             // Saving acts on the file shown.
             app.session.active = i;
+            if app.file_providers.enabled() {
+                match crate::file_provider_app::save(app, false) {
+                    Ok(()) => app.ui.close_tab = Some(TabClose::SavingToProvider(uid)),
+                    Err(error) => app.toast(error),
+                }
+                ctx.request_repaint();
+                return;
+            }
+            if app.file_providers.owns_document(uid) {
+                // The ordinary Save guard explains why a paused provider file cannot be saved.
+                app.save();
+                return;
+            }
             let native = app.session.docs.get(i).and_then(|d| d.path.as_deref()).is_some_and(|p| {
                 !std::path::Path::new(p).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("fig"))
             });
             if !native {
-                app.ui.close_tab = Some(TabClose::AfterSaveAs(uid));
+                app.ui.close_tab = Some(TabClose::AfterSave(uid));
                 app.save_as_dialog();
                 if app.pending_dialog.is_none() {
                     // No dialog could start: the tab stays open.
@@ -587,8 +602,10 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
                 app.run("file.close", json!({"index": i}));
             }
         }
-        TabClose::AfterSaveAs(_) => {
-            if app.pending_dialog.is_some() {
+        TabClose::SavingToProvider(_) => {}
+        TabClose::AfterSave(_) => {
+            // Closing is refused while provider operations or their terminal delivery are pending.
+            if app.pending_dialog.is_some() || app.file_providers.busy() {
                 return;
             }
             app.ui.close_tab = None;

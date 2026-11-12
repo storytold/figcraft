@@ -14,9 +14,16 @@ object is unavailable. This keeps the two save destinations independent.
 ## Contract
 
 window.figcraftFileProviders has protocolVersion 1 and app figcraft. Events are dispatched on window
-as figcraft-file-provider CustomEvents; detail contains bounded metadata and, on save,
-a Uint8Array named bytes. The host subscribes before registering, and can discover an already-ready
-editor through the protocol object. The capability is independent of the optional control API.
+as `figcraft-file-provider` CustomEvents. The discriminator is `event.detail.type`.
+
+- `ready` announces the editor and its protocol version.
+- `saveDialog`, `save`, and `openRequested` ask the host to act.
+- `saved`, `downloaded`, `saveFailed`, `saveCancelled`, `opened`, `openFailed`, and
+  `openCancelled` report completion.
+
+The detail contains bounded metadata and the `save` event carries the native bytes in
+`event.detail.bytes` as a `Uint8Array`. The host subscribes before registering. An already-ready
+editor can be discovered through the protocol object. The capability is independent of the optional control API.
 
 | Method | Arguments / result |
 | --- | --- |
@@ -71,8 +78,9 @@ path for an external resource.
 Choosing device emits save with destination device and the capture. The host hands the bytes to the device using the
 browser's ordinary download mechanism, then returns download as the result. This is a terminal transfer
 result, **not durable provider confirmation**, and does not clear the document's saved checkpoint.
-Save Copy, Export and programmatic commands keep their existing local behavior. With the capability
-disabled or unregistered, the original browser/native save flow remains in use.
+Save Copy, Export and programmatic commands keep their existing local behavior. The original
+browser/native save flow applies before registration and after unregistering. While a registered
+provider is paused, that flow remains available for files with no binding or pending provider save.
 
 The production publisher catches recoverable JavaScript byte-copy and dispatch exceptions, logs
 the error and continues the taken batch. Recovery consumes only a still-owned request in the same
@@ -97,10 +105,11 @@ extension; changing a suffix cannot turn native bytes into PDF, SVG or another i
 The native archive includes image assets, version history and branches. Capture tracks the main
 document and open branch tabs; a later edit in any such tab is not acknowledged as saved.
 Acknowledgement updates the captured document checkpoint by UID even when a non-content command,
-such as opening another tab, increased its revision. Version/branch metadata is marked clean only
-when both the captured command revision and its independent metadata generation still match; otherwise
-its unsaved flag is retained conservatively. Closing first synchronizes branch-tab edits into their main
-file, including edits made after a provider capture.
+such as opening another tab, increased its revision. Version and branch metadata is marked clean
+when its independent generation still matches the capture. Closing first synchronizes branch-tab
+edits into their main file, including edits made after a provider capture. Saving to close a tab
+uses Save and keeps its existing resource binding. The tab closes after a durable acknowledgement
+only if it has no unsaved edits. A cancellation, failure, or device download leaves it open.
 Existing live collaboration/server publication is separate from this storage capability.
 
 Normal close/revert actions wait or refuse while provider work is unresolved. The browser can still
@@ -123,7 +132,6 @@ emitting opened or openFailed. Selecting an already-bound open resource focuses 
 without replacing unsaved edits. Unknown, duplicate or cancelled request replies are rejected.
 The host handles failed fetches using cancelOpen rather than leaving the operation pending forever.
 
-Completion events are saved, downloaded, saveFailed, saveCancelled, opened, openFailed and openCancelled.
 Events associated with an account include providerId, namespace and connectionId. Storage keys should
 use the provider/account/resource identities, never display names, and the backend should use versioning
 or conditional writes if it allows concurrent clients.

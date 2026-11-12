@@ -323,14 +323,14 @@ impl DocState {
     /// A durable writer saved this exact capture of the same document.
     /// Commands also bump revisions without changing content, so the saved document is the
     /// capture's checkpoint rather than the active tab or its current revision. Newer history
-    /// or branch changes stay unsaved unless both the command and metadata generations match.
+    /// or branch changes stay unsaved unless the independent metadata generation matches.
     pub fn mark_saved_capture(&mut self, captured: &Self) {
         if self.uid != captured.uid {
             return;
         }
         self.saved_doc = captured.document_itself().clone();
         let exact_metadata = self.metadata_generation.is_some() && self.metadata_generation == captured.metadata_generation;
-        if self.revision == captured.revision && exact_metadata {
+        if exact_metadata {
             self.versions_changed = false;
         }
     }

@@ -50,7 +50,11 @@ pub(crate) fn tick(app: &mut FigApp) {
         match action {
             Action::Save { request, capture, status, resource } => {
                 let alive = app.session.docs.iter().any(|d| d.uid == capture.doc);
-                if status == "saved" {
+                let saved = status == "saved";
+                if app.ui.close_tab == Some(crate::windows::TabClose::SavingToProvider(capture.doc)) {
+                    app.ui.close_tab = saved.then_some(crate::windows::TabClose::AfterSave(capture.doc));
+                }
+                if saved {
                     for alias in host.unbind_resource_aliases(capture.doc, &resource) {
                         let affected =
                             app.session.docs.iter_mut().filter(|d| d.uid == alias || d.branch_of.as_ref().is_some_and(|(main, _)| *main == alias));
@@ -308,6 +312,94 @@ mod tests {
         }
     }
 
+    fn confirm_tab_close(app: &mut FigApp) {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| crate::windows::confirm_close_tab(app, ui.ctx()));
+        output.textures_delta.clear();
+    }
+
+    fn start_tab_close_save(app: &mut FigApp, index: usize) -> String {
+        crate::windows::ask_close_tab(app, index);
+        crate::windows::answer_close_tab(app, &egui::Context::default(), crate::windows::CloseAnswer::Save);
+        confirm_tab_close(app);
+        let events = app.file_providers.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["type"], "saveDialog");
+        assert_eq!(events[0].metadata["intent"], "save");
+        assert_eq!(events[0].metadata["documentId"], app.session.docs[index].uid.to_string());
+        events[0].metadata["requestId"].as_str().unwrap().into()
+    }
+
+    #[test]
+    fn closing_a_bound_tab_saves_to_its_resource_and_waits_for_acknowledgement() {
+        let mut app = app();
+        let first = request(&mut app);
+        app.file_providers.resolve_dialog(&first, "provider", "saved.figcraft").unwrap();
+        app.file_providers.take_events();
+        app.file_providers.result(first, "saved".into(), "file-1".into()).unwrap();
+        tick(&mut app);
+        app.file_providers.take_events();
+        let uid = app.session.ds().unwrap().uid;
+        std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Tab to close".into();
+        app.session.execute("file.new", &json!({})).unwrap();
+        let other = app.session.ds().unwrap().uid;
+
+        let request = start_tab_close_save(&mut app, 0);
+        confirm_tab_close(&mut app);
+        assert_eq!(app.ui.close_tab, Some(crate::windows::TabClose::SavingToProvider(uid)));
+        app.file_providers.resolve_dialog(&request, "provider", "saved.figcraft").unwrap();
+        let event = app.file_providers.take_events().remove(0);
+        assert_eq!(event.metadata["type"], "save");
+        assert_eq!(event.metadata["resourceId"], "file-1");
+        app.session.active = 1;
+        confirm_tab_close(&mut app);
+        assert_eq!(app.session.docs.len(), 2);
+
+        app.file_providers.result(request, "saved".into(), "file-1".into()).unwrap();
+        tick(&mut app);
+        confirm_tab_close(&mut app);
+        assert_eq!(app.ui.close_tab, Some(crate::windows::TabClose::AfterSave(uid)));
+        assert_eq!(app.session.docs.len(), 2);
+        let event = app.file_providers.take_events().remove(0);
+        assert_eq!(event.metadata["type"], "saved");
+        confirm_tab_close(&mut app);
+        assert!(app.ui.close_tab.is_none());
+        assert_eq!(app.session.docs.len(), 1);
+        assert_eq!(app.session.ds().unwrap().uid, other);
+    }
+
+    #[test]
+    fn provider_tab_close_stops_after_nondurable_results_or_later_edits() {
+        for status in ["cancel-choice", "cancel", "failed", "download", "saved"] {
+            let mut app = app();
+            let clean = app.session.ds().unwrap().doc.clone();
+            std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Captured".into();
+            let request = start_tab_close_save(&mut app, 0);
+            if status == "saved" {
+                std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Later edit".into();
+            } else {
+                // Even if the user returns to the clean checkpoint while waiting, a cancelled
+                // or nondurable result must abandon this close.
+                app.session.ds_mut().unwrap().doc = clean;
+            }
+            if status == "cancel-choice" {
+                app.file_providers.resolve_dialog(&request, "cancel", "").unwrap();
+            } else {
+                let destination = if status == "download" { "device" } else { "provider" };
+                app.file_providers.resolve_dialog(&request, destination, "saved.figcraft").unwrap();
+                app.file_providers.take_events();
+                let resource = if status == "saved" { "file-1" } else { "" };
+                app.file_providers.result(request, status.into(), resource.into()).unwrap();
+            }
+            tick(&mut app);
+            app.file_providers.take_events();
+            confirm_tab_close(&mut app);
+            assert!(app.ui.close_tab.is_none(), "{status}");
+            assert_eq!(app.session.docs.len(), 1, "{status}");
+            assert_eq!(app.session.ds().unwrap().is_dirty(), status == "saved", "{status}");
+        }
+    }
+
     #[test]
     fn close_save_continuation_refuses_post_capture_branch_edits() {
         let (mut app, main, branch) = captured_file_with_a_later_unsynced_branch_edit();
@@ -335,9 +427,10 @@ mod tests {
         assert!(app.session.ds().unwrap().is_dirty());
     }
     #[test]
-    fn successful_ack_updates_the_captured_document_not_the_current_tab() {
+    fn successful_ack_clears_captured_metadata_after_switching_tabs() {
         let mut app = app();
-        std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Before capture".into();
+        app.session.execute("file.saveVersion", &json!({"name":"Captured version"})).unwrap();
+        assert!(app.session.ds().unwrap().is_dirty());
         let uid = app.session.ds().unwrap().uid;
         let request = request(&mut app);
         app.file_providers.resolve_dialog(&request, "provider", "saved.figcraft").unwrap();
