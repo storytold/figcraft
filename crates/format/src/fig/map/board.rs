@@ -135,6 +135,9 @@ impl<'a> Mapper<'a> {
         if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
             return None;
         }
+        // The REST reader caps every size; the outline is drawn at the capped size too, so it
+        // stays inside its frame.
+        let (w, h) = (w.min(crate::rest::props::MAX_SIZE), h.min(crate::rest::props::MAX_SIZE));
         // Everything is valid: build the outline from the record's paints, then the frame.
         let mut outline = Obj::new();
         outline.insert("id".into(), json!(format!("{rest_id};generated0")));

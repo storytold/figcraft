@@ -584,6 +584,21 @@ fn a_jam_diamond_is_a_native_shape_drawn_by_figcraft() {
     assert_eq!(label.align_h, figcraft_doc::TextAlignH::Center);
 }
 
+/// A shape past the importer's size cap is drawn at the capped size, so its outline stays inside
+/// its frame.
+#[test]
+fn a_jam_shape_past_the_size_cap_draws_its_outline_at_the_cap() {
+    let mut layer = shape_node("DIAMOND");
+    set(&mut layer, "size", xy(2_000_000.0, 2_000_000.0));
+    let (doc, warnings) = jam(layer);
+    let frame = named(&doc, "Board object");
+    assert_eq!(frame.board, Some(figcraft_doc::BoardItem::Shape { shape: figcraft_doc::BoardShape::Diamond }), "{warnings:?}");
+    assert_eq!((frame.width, frame.height), (1e6, 1e6));
+    let outline = doc.node(frame.children[0]).unwrap();
+    let NodeKind::Vector { network } = &outline.kind else { panic!("{:?}", outline.kind) };
+    assert_eq!(*network, figcraft_doc::VectorNetwork::from_path(&figcraft_doc::BoardShape::Diamond.path(1e6, 1e6)));
+}
+
 /// 23 of FigJam's 30 shape kinds have a FigCraft outline; the other 7 stay frames and say which.
 #[test]
 fn every_figjam_shape_kind_maps_or_stays_a_frame() {
