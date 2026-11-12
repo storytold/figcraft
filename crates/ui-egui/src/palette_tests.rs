@@ -50,6 +50,21 @@ fn query_filters_to_matches() {
     assert!(crate::menus::command_sections("zzz-no-such-action").iter().all(|(_, r)| r.is_empty()));
 }
 
+/// The handoff mode is "Developer Mode", and the name it had before is still a search term: a
+/// person who knows "Dev Mode" finds the command, and its row reads the new name.
+#[test]
+fn the_old_name_still_finds_the_mode() {
+    let rows: Vec<(String, String)> =
+        crate::menus::command_sections("dev mode").iter().flat_map(|(_, rows)| rows.iter().map(|r| (r.key.clone(), r.label.clone()))).collect();
+    assert!(rows.iter().any(|(key, _)| key == "command:view.devMode"), "'dev mode' finds the mode: {rows:?}");
+    assert!(
+        rows.iter().filter(|(key, _)| key == "command:view.devMode").all(|(_, label)| label == "Developer Mode"),
+        "and reads the new name: {rows:?}"
+    );
+    // Without the alias the words don't match the label or the id.
+    assert!(!rows.iter().any(|(key, label)| key != "command:view.devMode" && label.contains("Developer Mode")), "only that row: {rows:?}");
+}
+
 #[test]
 fn gone_entries_drop_out_of_recents() {
     let u = Ui::new(Session::new());

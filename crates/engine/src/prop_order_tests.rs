@@ -77,8 +77,9 @@ fn every_kind_of_property_keeps_its_place_on_rename() {
     let icon = idv(&ex(&mut s, "component.create", json!({"ids": [icon_f]})));
     let nested = idv(&ex(&mut s, "instance.create", json!({"component": icon, "x": 60, "y": 10, "parent": f})));
     let small = idv(&ex(&mut s, "component.create", json!({"ids": [f]})));
+    let zoom_layer = idv(&ex(&mut s, "shape.rectangle", json!({"x": 150, "y": 10, "width": 10, "height": 10, "parent": small})));
     // Made in an order that isn't by name: Zoom (boolean), Label (text), Glyph (instance swap), Body (slot).
-    ex(&mut s, "component.addProperty", json!({"id": small, "name": "Zoom", "type": "boolean"}));
+    ex(&mut s, "component.addProperty", json!({"id": small, "name": "Zoom", "type": "boolean", "layer": zoom_layer}));
     ex(&mut s, "component.addProperty", json!({"id": small, "name": "Label", "type": "text", "layer": label}));
     ex(&mut s, "component.addProperty", json!({"id": small, "name": "Glyph", "type": "instanceSwap", "layer": nested}));
     ex(&mut s, "component.makeSlot", json!({"id": body}));
@@ -132,4 +133,28 @@ fn make_slot_takes_the_name_typed() {
     let listed = by_name.clone();
     by_name.sort();
     assert_eq!(listed, by_name);
+}
+
+/// An instance lists the properties its own variant's layers use (#2022): in Figma's data a set
+/// has one text property per variant (and leftovers of deleted ones), measured: an instance of
+/// variant A lists `State` and `A label`, never `B label` or a property no layer reads.
+#[test]
+fn an_instance_lists_only_the_properties_its_variant_uses() {
+    let mut s = Session::new();
+    let mut variants = Vec::new();
+    let mut texts = Vec::new();
+    for (k, name) in ["Type=Flag, State=Default", "Type=Flag, State=Selected"].iter().enumerate() {
+        let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": k * 60, "width": 120, "height": 40, "name": name})));
+        texts.push(idv(&ex(&mut s, "text.create", json!({"text": "Label", "x": 4, "y": 4, "parent": f, "name": "Label"}))));
+        variants.push(idv(&ex(&mut s, "component.create", json!({"ids": [f]}))));
+    }
+    let set = idv(&ex(&mut s, "component.combineVariants", json!({"ids": variants})));
+    ex(&mut s, "component.addProperty", json!({"id": set, "name": "Default label", "type": "text", "layer": texts[0]}));
+    ex(&mut s, "component.addProperty", json!({"id": set, "name": "Selected label", "type": "text", "layer": texts[1]}));
+    ex(&mut s, "component.addProperty", json!({"id": set, "name": "Gone label", "type": "text"}));
+    assert_eq!(names(&mut s, set), ["Type", "State", "Default label", "Selected label", "Gone label"], "the set keeps every definition");
+    let inst = idv(&ex(&mut s, "instance.create", json!({"component": variants[0], "x": 400, "y": 0})));
+    assert_eq!(names(&mut s, inst), ["Type", "State", "Default label"]);
+    ex(&mut s, "instance.setProperties", json!({"ids": [inst], "properties": {"State": "Selected"}}));
+    assert_eq!(names(&mut s, inst), ["Type", "State", "Selected label"]);
 }

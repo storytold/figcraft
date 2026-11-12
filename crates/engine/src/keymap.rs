@@ -224,7 +224,7 @@ pub static KEYS: &[Binding] = &[
     k(View, "view.design", &["Alt+8"]).label("Design panel"),
     k(View, "view.prototype", &["Alt+9"]).label("Prototype panel"),
     k(View, "view.designPrototype", &["Shift+E"]),
-    k(View, "view.devMode", &["Shift+D"]).label("Dev Mode on/off"),
+    k(View, "view.devMode", &["Shift+D"]).label("Developer Mode on/off"),
     k(View, "view.minimize", &["Shift+Cmd+\\"]),
     k(View, "view.nextRegion", &["F6"]).win(&["F6", "Ctrl+F6"]).label("Focus the next region (toolbar, layers, canvas, properties)").both(),
     k(View, "view.previousRegion", &["Shift+F6"]).label("Focus the previous region").both(),
