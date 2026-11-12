@@ -76,8 +76,8 @@ impl<'d> Exporter<'d> {
                 if let (ImageScaleMode::Crop, Some(c)) = (img.scale_mode, img.crop) {
                     f.push(("transform", matrix(Affine::new(c))));
                 }
-                if !img.filters.is_identity() {
-                    let x = &img.filters;
+                let x = img.filters.sanitized();
+                if !x.is_identity() {
                     // The file's tint is positive towards magenta, ours towards green; `0.0 -` keeps zero positive.
                     f.push((
                         "paintFilter",

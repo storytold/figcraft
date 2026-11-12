@@ -110,12 +110,24 @@ fn warnings_naming_unknown_filter_fields_are_capped() {
 
 #[test]
 fn image_adjustments_survive_a_fig_export() {
-    let (doc, _) = import(&image_filter_fixture(), "ImageFilters.fig").unwrap();
+    let (mut doc, _) = import(&image_filter_fixture(), "ImageFilters.fig").unwrap();
     let filters_of = |doc: &figcraft_doc::Document, name: &str| {
         let node = doc.nodes().find(|node| node.name == name).unwrap();
         let figcraft_doc::color::PaintKind::Image(image) = &node.fills[0].kind else { panic!("{name} is not an image fill") };
         image.filters
     };
+    // Values a document can hold and the file can't: out of range, and not a number.
+    let ids: Vec<figcraft_doc::NodeId> = doc.ids().collect();
+    for id in ids {
+        let Some(node) = doc.node_mut(id) else { continue };
+        let name = node.name.clone();
+        let Some(figcraft_doc::color::PaintKind::Image(image)) = node.fills.first_mut().map(|p| &mut p.kind) else { continue };
+        match name.as_str() {
+            "Legacy" => image.filters.exposure = 5.0,
+            "Explicit neutral" => image.filters.contrast = f32::NAN,
+            _ => {}
+        }
+    }
     let (bytes, warnings) = export::export(&doc, None).unwrap();
     assert!(!warnings.iter().any(|w| w.contains("image adjustments")), "{warnings:?}");
     let (back, _) = import(&bytes, "Back.fig").unwrap();
@@ -150,6 +162,13 @@ fn image_adjustments_survive_a_fig_export() {
     assert!((written(&current, "tint").unwrap() - 1.0).abs() < 1e-6);
     assert!((written(&current, "shadows").unwrap() - 0.7).abs() < 1e-6);
     assert!(fill_of("Neutral").get("paintFilter").is_none());
+    assert!((written(&fill_of("Legacy"), "exposure").unwrap() - 1.0).abs() < 1e-6, "written within the file's range");
+    assert!(fill_of("Explicit neutral").get("paintFilter").is_none(), "not a number is no adjustment");
+    let partly = fill_of("Negative tint");
+    for field in ["exposure", "contrast", "vibrance", "temperature", "tint", "highlights", "shadows"] {
+        assert!(written(&partly, field).is_some(), "{field} is written");
+    }
+    assert!((written(&partly, "tint").unwrap() + 1.0).abs() < 1e-6);
 
     // The numbers the format uses.
     let s = Schema::parse(export::SCHEMA).unwrap();
