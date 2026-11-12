@@ -337,21 +337,22 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     let mut new_color: Option<(figcraft_color::Color, Option<bool>)> = None;
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
-        let sw = widgets::swatch(ui, &p, 16.0);
+        let (sw, opacity) =
+            widgets::paint_field(ui, Id::unique("pagebg_swatch"), Id::unique("pagebg_a"), &p, ui.available_width(), |child, text_r| {
+                // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
+                // (`FF000080`; `FF0000FF` asks for opaque).
+                if let Some(h) = widgets::text_field_inline(child, Id::unique("pagebg"), &bg.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
+                    && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+                {
+                    let digits = h.trim().trim_start_matches('#');
+                    let carries_alpha = matches!(digits.len(), 4 | 8) && digits.chars().all(|ch| ch.is_ascii_hexdigit());
+                    new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
+                }
+            });
         app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
-        // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
-        // (`FF000080`; `FF0000FF` asks for opaque).
-        if let Some(h) = widgets::text_field(ui, Id::unique("pagebg"), &bg.to_hex(), 96.0, "")
-            && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
-        {
-            let digits = h.trim().trim_start_matches('#');
-            let carries_alpha = matches!(digits.len(), 4 | 8) && digits.chars().all(|ch| ch.is_ascii_hexdigit());
-            new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
-        }
         // The opacity: a field like every other opacity field, not a label (#1748).
         let alpha = |v: f64| bg.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);
-        let shown = Some(f64::from((bg.a * 100.0).round()));
-        match widgets::number_field(ui, Id::unique("pagebg_a"), Lead::Named(tr("Opacity")), shown, "%", 56.0, 1.0) {
+        match opacity {
             Some(FieldEdit::Set(v)) => new_color = Some((alpha(v), None)),
             Some(FieldEdit::Scrub(v, done)) => new_color = Some((alpha(v), Some(done))),
             None => {}
