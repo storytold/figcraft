@@ -484,26 +484,27 @@ fn a_many_line_paste_clears_every_created_start() {
 }
 
 #[test]
-fn an_imported_list_split_in_the_middle_restarts_at_one() {
-    // #2273: a list started at 5 reaches us with 4 on every line; splitting off "b" must leave "c"
-    // reading 1., not 5.
-    let file = json!({"name": "File", "document": {"id": "0:0", "type": "DOCUMENT", "children": [{"id": "0:1", "name": "Page", "type": "CANVAS", "children": [
-        {"id": "1:2", "name": "List", "type": "TEXT", "relativeTransform": [[1, 0, 0], [0, 1, 0]], "size": {"x": 100, "y": 60}, "characters": "a\nb\nc",
-         "style": {"fontFamily": "Inter", "fontSize": 12},
-         "lineTypes": ["ORDERED", "ORDERED", "ORDERED"], "lineIndentations": [1, 1, 1], "listStartOffsets": [4, 4, 4]}]}]}});
-    let (imported, _) = figcraft_format::rest::import(&file, &figcraft_format::rest::no_images).unwrap();
-    let from = imported.nodes().find_map(|n| if let figcraft_doc::NodeKind::Text(td) = &n.kind { Some(td.clone()) } else { None }).unwrap();
-    assert_eq!(from.para_list(0).start_offset, 4);
-    assert_eq!((from.para_list(1).start_offset, from.para_list(2).start_offset), (0, 0), "the items that go on counting carry no start");
+fn a_list_back_from_a_fig_split_in_the_middle_restarts_at_one() {
+    // #2273's steps: type "5. a", Enter, "b", Enter, "c"; save a copy as .fig and open it;
+    // Backspace at the start of "b". The export writes the start on every line, as Figma does,
+    // and "c" must then read 1., not 5.
     let mut s = Session::new();
-    let t = text(&mut s, "x");
-    if let figcraft_doc::NodeKind::Text(td) = &mut s.doc_mut().unwrap().get_mut(t).unwrap().kind {
-        td.characters = from.characters.clone();
-        td.paragraphs = (0..from.paragraph_count()).map(|i| from.para_list(i)).collect();
-    }
+    three_typed_items(&mut s, "5. a");
+    crate::textedit::end(&mut s).unwrap();
+    let (bytes, _) = figcraft_format::fig::export(s.doc().unwrap(), None).unwrap();
+    let (back, _) = figcraft_format::fig::import(&bytes, "x").unwrap();
+    let t = back.nodes().find(|n| n.kind.text().is_some()).map(|n| n.id).unwrap();
+    let mut s = Session::with_document(back);
+    let d = data(&s, t);
+    assert_eq!(lists(&s, t), [(N, 0); 3]);
+    assert_eq!(
+        (d.para_list(0).start_offset, d.para_list(1).start_offset, d.para_list(2).start_offset),
+        (4, 0, 0),
+        "only the first item carries the start"
+    );
     begin(&mut s, t, Some(2), false).unwrap();
     key(&mut s, "Backspace", false, false, false).unwrap();
     let d = data(&s, t);
-    assert_eq!(lists(&s, t).iter().map(|l| l.0).collect::<Vec<_>>(), vec![N, P, N]);
+    assert_eq!(lists(&s, t), [(N, 0), (P, 0), (N, 0)]);
     assert_eq!((d.para_list(0).start_offset, d.para_list(2).start_offset), (4, 0), "c reads 1.");
 }

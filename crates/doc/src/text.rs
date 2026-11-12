@@ -276,7 +276,6 @@ pub enum TextDirection {
 /// Deepest list nesting (levels 0..=MAX_LIST_INDENT).
 pub const MAX_LIST_INDENT: u8 = 8;
 
-/// One paragraph's list settings and base direction.
 /// For each paragraph, whether it is an item where a list starts counting. Numbers count the items
 /// of one list at one level and restart after a plain paragraph, a shallower item or the other
 /// kind of list; the first item of such a run starts counting (and takes its own start number).
@@ -302,6 +301,7 @@ pub fn list_item_starts_counting(lists: &[ParaList]) -> Vec<bool> {
         .collect()
 }
 
+/// One paragraph's list settings and base direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ParaList {
@@ -971,7 +971,7 @@ impl TextData {
             return;
         }
         self.fill_paragraphs();
-        let starts = list_item_starts_counting(&(0..self.paragraph_count()).map(|i| self.para_list(i)).collect::<Vec<_>>());
+        let starts = list_item_starts_counting(&self.paragraphs);
         for (pl, starts) in self.paragraphs.iter_mut().zip(starts) {
             if !starts {
                 pl.start_offset = 0;
@@ -1293,6 +1293,41 @@ mod case_tests {
         t.clear_list_starts(5, 9);
         t.clear_list_starts(0, 0);
         assert_eq!(t.para_list(0).start_offset, 0);
+    }
+
+    #[test]
+    fn list_starts_stay_only_where_counting_starts() {
+        use ListStyle::{Bulleted as B, None as P, Numbered as N};
+        let pl = |list, indent, start_offset| ParaList { list, indent, start_offset, ..ParaList::default() };
+        // (paragraphs, the starts kept, derivation)
+        let cases: Vec<(Vec<ParaList>, Vec<u32>, &str)> = vec![
+            (vec![pl(N, 0, 4), pl(N, 0, 4), pl(N, 0, 4)], vec![4, 0, 0], "items that go on counting lose theirs"),
+            (vec![pl(N, 0, 4), pl(P, 0, 0), pl(N, 0, 6)], vec![4, 0, 6], "a list after a plain paragraph keeps its own"),
+            (vec![pl(N, 0, 4), pl(B, 0, 0), pl(N, 0, 6)], vec![4, 0, 6], "and one after a bullet item"),
+            (
+                vec![pl(N, 0, 4), pl(N, 1, 2), pl(N, 1, 2), pl(N, 0, 4)],
+                vec![4, 2, 0, 0],
+                "a nested level keeps its first item's; the outer count goes on",
+            ),
+            (vec![pl(N, 0, 1), pl(N, 1, 2), pl(N, 0, 9), pl(N, 1, 3)], vec![1, 2, 0, 3], "a shallower item starts the deeper count again"),
+            (vec![pl(N, 255, 4), pl(N, 9, 4), pl(N, 8, 4)], vec![4, 0, 0], "levels past the deepest count as the deepest"),
+        ];
+        for (paragraphs, want, why) in cases {
+            let characters = vec!["x"; paragraphs.len()].join("\n");
+            let mut t = TextData { characters, paragraphs, ..TextData::new("") };
+            t.keep_list_starts_where_counting_starts();
+            let got: Vec<u32> = (0..t.paragraph_count()).map(|p| t.para_list(p).start_offset).collect();
+            assert_eq!(got, want, "{why}");
+        }
+        // No start anywhere: nothing is spelled out.
+        let mut t = TextData { list: N, ..TextData::new("a\nb") };
+        t.keep_list_starts_where_counting_starts();
+        assert!(t.paragraphs.is_empty());
+        // More entries than paragraphs, and an empty last paragraph.
+        let mut t = TextData { paragraphs: vec![pl(N, 0, 4); 5], ..TextData::new("a\n") };
+        t.keep_list_starts_where_counting_starts();
+        assert_eq!((t.para_list(0).start_offset, t.para_list(1).start_offset), (4, 0));
+        assert!(list_item_starts_counting(&[]).is_empty());
     }
 }
 
