@@ -654,6 +654,11 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
     })
 }
 
+/// Whether the Design panel offers Tidy up for `sel` (three or more layers that don't overlap).
+pub(crate) fn tidy_available(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> bool {
+    crate::selection_cache::cached(ctx, "tidy", doc, sel, &[], || figcraft_engine::tidy::can_tidy(doc, sel))
+}
+
 /// Draw alignment and distribution, X/Y and rotation with flip/rotate controls, the
 /// absolute-position toggle and frame constraints.
 fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
@@ -695,12 +700,17 @@ fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col
         if sel.len() > 2 {
             let more = icons::button(ui, Icon::DistributeH, 24.0, false, tr("Distribute and tidy"));
             menu_popup(&more).show(|ui| {
-                for (l, c) in [
-                    (tr("Distribute horizontal spacing"), "distribute.horizontal"),
-                    (tr("Distribute vertical spacing"), "distribute.vertical"),
-                    (tr("Tidy up"), "arrange.tidy"),
+                let can_tidy = app.session.ds().is_ok_and(|ds| tidy_available(ui.ctx(), &ds.doc, &ids));
+                for (l, c, on) in [
+                    (tr("Distribute horizontal spacing"), "distribute.horizontal", true),
+                    (tr("Distribute vertical spacing"), "distribute.vertical", true),
+                    (tr("Tidy up"), "arrange.tidy", can_tidy),
                 ] {
-                    if menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")) {
+                    let item = ui.add_enabled_ui(on, |ui| menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")));
+                    if !on {
+                        item.response.on_disabled_hover_text(tr("Tidy up needs three or more layers that don't overlap"));
+                    }
+                    if item.inner {
                         app.run(c, json!({"ids": ids}));
                         ui.close();
                     }
