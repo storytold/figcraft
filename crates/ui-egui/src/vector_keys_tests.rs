@@ -50,6 +50,18 @@ fn a_cut_command_in_edit_mode_takes_the_selected_points_not_the_layer() {
 }
 
 #[test]
+fn ctrl_x_on_selected_segments_puts_them_on_the_clipboard_and_keeps_the_layer() {
+    let mut u = Ui::new(Session::new());
+    let path = abc(&mut u);
+    u.app.session.execute("vector.edit.select", &json!({"segments": [0]})).unwrap();
+    u.frame_with(vec![Event::Cut], Modifiers::COMMAND);
+    assert!(u.app.session.doc().unwrap().node(path).is_some(), "Ctrl+X keeps the layer");
+    assert_eq!(net(&u, path).segments.len(), 1, "the segment is gone");
+    assert_eq!(u.app.session.clipboard.nodes.len(), 1, "and on the clipboard");
+    assert!(u.app.session.ds().unwrap().vector_edit.is_some(), "edit mode stays on");
+}
+
+#[test]
 fn a_cut_command_in_edit_mode_with_nothing_selected_keeps_the_layer() {
     let mut u = Ui::new(Session::new());
     let path = abc(&mut u);

@@ -522,6 +522,96 @@ fn network_of<'d>(doc: &'d figcraft_doc::Document, name: &str) -> &'d figcraft_d
 }
 
 #[test]
+fn vector_points_without_a_radius_of_their_own_take_the_layers() {
+    // A vector rounded from the layer's corner radius: the editor rounds every point whose
+    // style doesn't set a radius (no style, or one without `cornerRadius`) with the layer's,
+    // while a point's own radius, zero included, wins.
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+    let Kv::Object(fields) = wave else { panic!() };
+    fields.push(("cornerRadius", f(6.0)));
+    let vector_data = field_mut(wave, "vectorData").unwrap();
+    let Kv::Array(styles) = field_mut(vector_data, "styleOverrideTable").unwrap() else { panic!() };
+    let Kv::Object(sharp) = styles.get_mut(2).unwrap() else { panic!() };
+    sharp.push(("cornerRadius", f(0.0)));
+    let (doc, _) = import(&canvas(&schema(), &message), "Rounded").unwrap();
+    let radii: Vec<f64> = network_of(&doc, "Wave").vertices.iter().map(|v| v.radius).collect();
+    assert_eq!(radii, [6.0, 4.0, 6.0, 0.0], "no style, own radius, style without one, own zero");
+    // Without a layer radius, the points without one of their own stay sharp.
+    let (doc, _) = import(&tail_canvas(), "Tail").unwrap();
+    let radii: Vec<f64> = network_of(&doc, "Wave").vertices.iter().map(|v| v.radius).collect();
+    assert_eq!(radii, [0.0, 4.0, 0.0, 0.0]);
+}
+
+#[test]
+fn an_instance_that_rounds_a_vector_keeps_its_own_points() {
+    // An instance's copy shares its main's vector data; overriding the layer's radius must not
+    // reuse the main's network, nor hand the instance's to the main.
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+    *field_mut(wave, "parentIndex").unwrap() = o(vec![("guid", g(50)), ("position", s("!"))]);
+    *field_mut(wave, "transform").unwrap() = at(0.0, 0.0);
+    let rounded = o(vec![("guidPath", o(vec![("guids", arr(vec![g(30)]))])), ("cornerRadius", f(6.0))]);
+    nodes.push(node(50, Some((1, "~")), "SYMBOL", "Mark", vec![("size", xy(200.0, 100.0)), ("transform", at(700.0, 0.0))]));
+    nodes.push(node(
+        51,
+        Some((1, "~!")),
+        "INSTANCE",
+        "Rounded mark",
+        vec![
+            ("size", xy(200.0, 100.0)),
+            ("transform", at(700.0, 400.0)),
+            ("symbolData", o(vec![("symbolID", g(50)), ("symbolOverrides", arr(vec![rounded]))])),
+        ],
+    ));
+    let (doc, _) = import(&canvas(&schema(), &message), "Instance").unwrap();
+    let radii_under = |parent: &str| -> Vec<f64> {
+        let p = named(&doc, parent);
+        let wave = p.children.iter().map(|c| doc.node(*c).unwrap()).find(|n| n.name == "Wave").unwrap();
+        let NodeKind::Vector { network } = &wave.kind else { panic!() };
+        network.vertices.iter().map(|v| v.radius).collect()
+    };
+    assert_eq!(radii_under("Mark"), [0.0, 4.0, 0.0, 0.0]);
+    assert_eq!(radii_under("Rounded mark"), [6.0, 4.0, 6.0, 6.0]);
+}
+
+#[test]
+fn a_scaled_instance_scales_its_vectors_point_radii() {
+    // Point radii are lengths: an instance scaled with the Scale tool draws its main's, from a
+    // point's own style or from the layer, times the factor (#2091).
+    let mut message = tail_message();
+    let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+    let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+    *field_mut(wave, "parentIndex").unwrap() = o(vec![("guid", g(50)), ("position", s("!"))]);
+    *field_mut(wave, "transform").unwrap() = at(0.0, 0.0);
+    let Kv::Object(fields) = wave else { panic!() };
+    fields.push(("cornerRadius", f(3.0)));
+    nodes.push(node(50, Some((1, "~")), "SYMBOL", "Mark", vec![("size", xy(200.0, 100.0)), ("transform", at(700.0, 0.0))]));
+    nodes.push(node(
+        51,
+        Some((1, "~!")),
+        "INSTANCE",
+        "Big mark",
+        vec![
+            ("size", xy(400.0, 200.0)),
+            ("transform", at(700.0, 400.0)),
+            ("symbolData", o(vec![("symbolID", g(50)), ("uniformScaleFactor", f(2.0))])),
+        ],
+    ));
+    let (doc, _) = import(&canvas(&schema(), &message), "Scaled").unwrap();
+    let radii_under = |parent: &str| -> Vec<f64> {
+        let p = named(&doc, parent);
+        let wave = p.children.iter().map(|c| doc.node(*c).unwrap()).find(|n| n.name == "Wave").unwrap();
+        let NodeKind::Vector { network } = &wave.kind else { panic!() };
+        network.vertices.iter().map(|v| v.radius).collect()
+    };
+    assert_eq!(radii_under("Mark"), [3.0, 4.0, 3.0, 3.0]);
+    assert_eq!(radii_under("Big mark"), [6.0, 8.0, 6.0, 6.0]);
+}
+
+#[test]
 fn vectors_import_as_editable_networks() {
     let (doc, warnings) = import(&tail_canvas(), "Tail").unwrap();
     // Scaled from the normalized size (100 × 50) to the layer's (200 × 100), corner and handles kept.
