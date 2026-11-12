@@ -90,7 +90,11 @@ pub(super) fn code_block_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         None if get(p, "language").is_none_or(Value::is_null) => CodeLanguage::default(),
         None => return Err(bad(cmd, "`language` is a language id")),
     };
-    let text = string(p, "text").unwrap_or_default();
+    let text = match get(p, "text") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(t)) => t.clone(),
+        Some(_) => return Err(bad(cmd, "`text` is a string")),
+    };
     if text.chars().count() > CODE_MAX_CHARS {
         return Err(bad(cmd, format!("`text` is at most {CODE_MAX_CHARS} characters")));
     }
@@ -209,11 +213,17 @@ pub(crate) fn settle_code(doc: &mut Document, touched: &BTreeSet<NodeId>) {
         }
     }
     for b in blocks {
-        // The frame's form is complete first: auto layout (or it cannot hug) and a width that
+        // The frame's form is complete first: its layout and minimums (or it cannot hug) and a width that
         // is not Hug (or its text cannot fill), else normalize puts them back every pass.
         if let Some(n) = doc.node_mut(b) {
-            if n.layout.is_none() {
+            if n.layout.as_ref() != Some(&block_layout()) {
                 n.layout = Some(block_layout());
+            }
+            if n.child_layout.min_h != Some(CODE_MIN_H) {
+                n.child_layout.min_h = Some(CODE_MIN_H);
+            }
+            if n.child_layout.min_w != Some(CODE_MIN_W) {
+                n.child_layout.min_w = Some(CODE_MIN_W);
             }
             if n.child_layout.sizing_h == Sizing::Hug {
                 n.child_layout.sizing_h = Sizing::Fixed;

@@ -478,3 +478,31 @@ fn code_blocks_survive_junk_commands() {
         }
     }
 }
+
+#[test]
+fn a_structured_text_is_refused_and_no_block_is_made() {
+    for text in [json!({"a": 1}), json!([1]), json!(7), json!(true)] {
+        let mut s = board();
+        let before = s.doc().unwrap().ids().count();
+        let err = s.execute("board.codeBlock", &json!({"x": 0, "y": 0, "text": text}));
+        assert!(matches!(err, Err(EngineError::BadParams { .. })), "{text}: {err:?}");
+        assert_eq!(s.doc().unwrap().ids().count(), before, "{text}");
+    }
+}
+
+#[test]
+fn the_pass_restores_padding_and_the_minimums() {
+    let mut s = board();
+    let (f, t) = block(&mut s, json!({"x": 0, "y": 0, "text": ten(6)}));
+    assert_eq!(bx(&s, f).height(), 176.0);
+    s.execute("node.set", &json!({"id": f, "props": {"padding": 0}})).unwrap();
+    s.execute("text.set", &json!({"id": t, "characters": ten(6)})).unwrap();
+    assert_eq!(node(&s, f).layout.unwrap().padding, [16.0, 16.0, 16.0, 64.0]);
+    assert_eq!(bx(&s, f).height(), 176.0);
+
+    let (f, t) = block(&mut s, json!({"x": 0, "y": 500}));
+    s.execute("node.set", &json!({"id": f, "props": {"minHeight": null}})).unwrap();
+    s.execute("text.set", &json!({"id": t, "characters": "a"})).unwrap();
+    assert_eq!(node(&s, f).child_layout.min_h, Some(128.0));
+    assert_eq!(bx(&s, f).height(), 128.0);
+}
