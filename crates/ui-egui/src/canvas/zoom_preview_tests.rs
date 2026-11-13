@@ -193,6 +193,27 @@ fn a_zoom_in_shows_the_kept_image_until_a_preview_would_be_sharper() {
     assert!(r.preview(&at(2.0 * PREVIEW_FACTOR)).is_none(), "measured from the image refined last");
 }
 
+#[test]
+fn a_zoom_in_after_an_unrefined_zoom_out_is_measured_from_the_preview_on_screen() {
+    let (s, _) = document();
+    let ds = s.ds().unwrap();
+    let at = |scale: f64| job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), scale, 400, 300));
+    let mut r = Renders::with_threshold(0.0);
+    r.refine(&at(1.0)).unwrap();
+    assert!(r.preview(&at(0.25)).is_some_and(|d| d.coarse), "a zoom out shows its preview");
+    assert!(r.preview(&at(2.0)).is_some(), "the preview on screen is coarser than this zoom's preview");
+    assert!(r.preview(&at(2.0)).is_none(), "the same zoom again: the preview on screen is as sharp as another");
+
+    let mut w = waiting(Duration::from_secs(3600));
+    w.submit(at(1.0));
+    assert!(refined(&mut w).is_some_and(|d| !d.coarse && d.view.scale == 1.0));
+    let now = Instant::now();
+    w.submit(at(0.25));
+    assert!(w.poll_at(now).is_some_and(|d| d.coarse), "the browser shows the zoom out's preview");
+    w.submit(at(2.0));
+    assert!(w.poll_at(now).is_some_and(|d| d.coarse && d.view.scale == 2.0 / PREVIEW_FACTOR), "and previews the zoom in that follows it");
+}
+
 /// Zoom, pan and edit with `r`; whether each step was previewed, and the pan's and the edit's
 /// images.
 fn zoom_pan_edit(r: &mut Renders) -> (Vec<bool>, Done, Done) {
@@ -261,7 +282,7 @@ fn previews_cover_the_view_for_any_zoom_and_density() {
     let (s, _) = document();
     let ds = s.ds().unwrap();
     let mut r = Renders::with_threshold(0.0);
-    r.refine(&job(&ds.doc, ds.page, ds.uid, view_at((0.0, 0.0), 0.37, 64, 64))).unwrap();
+    let kept = job(&ds.doc, ds.page, ds.uid, view_at((0.0, 0.0), 0.37, 64, 64));
     let mut n = 0;
     // Zooms from 2% to 6400% at 1x, 1.5x and 2x displays, odd sizes, centres off the pixel grid.
     for zoom in [0.02, 0.1, 0.333, 1.0, 2.5, 8.0, 64.0] {
@@ -270,6 +291,7 @@ fn previews_cover_the_view_for_any_zoom_and_density() {
                 let v = view_at((123.456, -78.9), zoom * ppp, w, h);
                 let c = coarse_view(&v);
                 assert!(covers(&c, &v), "coarse view of {v:?}");
+                r.refine(&kept).unwrap();
                 let p = r.preview(&job(&ds.doc, ds.page, ds.uid, v.clone())).expect("a preview");
                 assert!(covers(&p.view, &v), "preview of {v:?} shows {:?}", p.view);
                 n += 1;

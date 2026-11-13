@@ -235,9 +235,13 @@ impl Renders {
         }
     }
 
-    fn keep(&mut self, job: &Job) {
+    fn keep(&mut self, job: &Job, d: &Done) {
         self.last = Some((job.uid, job.page, job.view.scale));
-        self.last_shown = Some((job.uid, job.page, job.view.clone()));
+        self.handed_over(d);
+    }
+
+    fn handed_over(&mut self, d: &Done) {
+        self.last_shown = Some((d.uid, d.page, d.view.clone()));
     }
 
     fn kept_image_is_as_sharp_as_a_preview(&self, job: &Job) -> bool {
@@ -285,14 +289,18 @@ impl Renders {
         if !self.wants_preview(job) {
             return None;
         }
-        preview_with(job, &mut self.preview)
+        let done = preview_with(job, &mut self.preview);
+        if let Some(d) = &done {
+            self.handed_over(d);
+        }
+        done
     }
 
     /// The image of `job`'s view, built on the kept one where it can be.
     pub fn refine(&mut self, job: &Job) -> Option<Done> {
         let done = guarded(&mut self.full, |r| run(job, &job.view, r, false));
         if let Some(d) = &done {
-            self.keep(job);
+            self.keep(job, d);
             if d.work == Work::Full {
                 self.full_ms = d.ms;
             }
@@ -375,7 +383,10 @@ impl Renders {
                 // A pan or an edit at this zoom builds on this render: no preview for it.
                 self.last = Some((job.uid, job.page, job.view.scale));
                 self.steps = Some(Stepping { job: job.clone(), fonts: figcraft_text::layout_generation(), steps, spent: 0.0 });
-                drawn.map(Refined::Shown)
+                drawn.map(|d| {
+                    self.handed_over(&d);
+                    Refined::Shown(d)
+                })
             }
             Ok(Err(d)) => Some(Refined::Done(self.finished(job, *d))),
             Err(_) => {
@@ -388,7 +399,7 @@ impl Renders {
     /// Record a render done at once in [`Self::refine_for`].
     fn finished(&mut self, job: &Job, d: Option<Done>) -> Option<Done> {
         if let Some(d) = &d {
-            self.keep(job);
+            self.keep(job, d);
             if d.work == Work::Full {
                 self.full_ms = d.ms;
             }
