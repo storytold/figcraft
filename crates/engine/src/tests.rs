@@ -346,6 +346,24 @@ fn copy_paste_and_duplicate() {
 }
 
 #[test]
+fn paste_over_puts_the_copies_just_above_the_selected_layer() {
+    let mut s = sess();
+    let frame = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 200})).unwrap());
+    let layer =
+        |s: &mut Session, x: f64| id(&s.execute("shape.rectangle", &json!({"x": x, "y": 10, "width": 10, "height": 10, "parent": frame})).unwrap());
+    let (a, b, c) = (layer(&mut s, 10.0), layer(&mut s, 30.0), layer(&mut s, 50.0));
+    let kids = |s: &Session| s.doc().unwrap().node(frame).unwrap().children.clone();
+    assert_eq!(kids(&s), vec![a, b, c]);
+    s.execute("edit.copy", &json!({"ids": [b, c]})).unwrap();
+    s.set_selection(vec![a]);
+    let pasted: Vec<NodeId> = s.execute("edit.pasteOver", &json!({})).unwrap()["ids"].as_array().unwrap().iter().filter_map(params::id_of).collect();
+    assert_eq!(pasted.len(), 2);
+    assert_eq!(kids(&s), vec![a, pasted[0], pasted[1], b, c], "in the selected layer's frame, just above it, in the copied order");
+    assert_eq!(s.doc().unwrap().world_bounds(pasted[0]).unwrap().x0, 10.0, "at the selected layer's position");
+    assert_eq!(s.selection(), pasted);
+}
+
+#[test]
 fn boolean_and_flatten() {
     let mut s = sess();
     let a = id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap());
