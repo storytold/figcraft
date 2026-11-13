@@ -238,3 +238,39 @@ fn modifier_keys_highlight_linked_padding_bands_before_and_during_a_drag() {
     }
     u.button(center, false);
 }
+
+/// Hover over a grip must still update the layer under the pointer without editing the document.
+#[test]
+fn padding_grip_hover_preserves_canvas_hover_and_resize_cursor() {
+    let (mut u, f) = scene();
+    let other = id_of(&u.app.session.execute("shape.rectangle", &json!({"x": 500, "y": 100, "width": 40, "height": 40})).unwrap()["id"]).unwrap();
+    u.app.run("select.set", json!({"ids": [f]}));
+    let over_other = u.app.to_screen(520.0, 120.0);
+    u.frame(vec![Event::PointerMoved(over_other)]);
+    assert_eq!(u.app.session.ds().unwrap().hover, Some(other));
+    let history = u.app.session.undo_depth();
+    let grip = al_zones(&u.app).unwrap().bands[0].1.center();
+    let output = u.frame_output(vec![Event::PointerMoved(grip)]);
+    assert_eq!(u.app.session.ds().unwrap().hover, Some(f), "the previous layer must not stay hovered");
+    assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::ResizeVertical);
+    assert_eq!(u.app.session.undo_depth(), history);
+    assert!(u.ctx.data(|d| d.get_temp::<Drag>(drag_id())).is_none());
+}
+
+/// Right-click on any padding grip opens the ordinary canvas menu without starting a drag.
+#[test]
+fn padding_grips_preserve_secondary_click_context_menus() {
+    for side in 0..4 {
+        let (mut u, f) = scene();
+        let center = al_zones(&u.app).unwrap().bands[side].1.center();
+        let history = u.app.session.undo_depth();
+        u.frame(vec![Event::PointerMoved(center)]);
+        for pressed in [true, false] {
+            u.frame(vec![Event::PointerButton { pos: center, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() }]);
+        }
+        let (_, targets) = u.app.ui.context_menu.as_ref().expect("right-click on the grip opens the menu");
+        assert!(targets.contains(&f));
+        assert!(u.ctx.data(|d| d.get_temp::<Drag>(drag_id())).is_none());
+        assert_eq!(u.app.session.undo_depth(), history);
+    }
+}

@@ -591,8 +591,15 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
     let _ = Align2::CENTER_CENTER;
 }
 
-/// Pointer handling; returns true when a handle owns the pointer this frame.
-pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
+/// A handle may own only the cursor while ordinary canvas hover and secondary clicks continue.
+pub enum Input {
+    Ignored,
+    Hover(egui::CursorIcon),
+    Captured,
+}
+
+/// Consume active handle gestures, but report padding hover separately from captured input.
+pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> Input {
     let (pressed, down, released, modifiers) = ctx.input(|i| {
         (
             i.pointer.button_pressed(egui::PointerButton::Primary),
@@ -606,7 +613,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         // Escape or Undo closed the gesture under the held button: the drag is over.
         if !gesture_open(app) {
             ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
-            return true;
+            return Input::Captured;
         }
         if down {
             apply(app, &drag, pos, modifiers);
@@ -616,7 +623,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             let _ = app.session.commit_interaction();
             ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
         }
-        return true;
+        return Input::Captured;
     }
     // Hover cursors / press to start.
     if let Some((id, fills, index, g)) = gradient_target(app) {
@@ -633,16 +640,16 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
                     let _ = app.session.begin_interaction("Edit gradient");
                     ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gradient { id, fills, index, which }));
                 }
-                return true;
+                return Input::Captured;
             }
         }
         // Stops: select and slide them; a click elsewhere on the line adds one there.
-        let (Some(a), Some(b)) = (pts[0], pts[1]) else { return false };
+        let (Some(a), Some(b)) = (pts[0], pts[1]) else { return Input::Ignored };
         let stop_hit = g.stops.iter().position(|st| (a + (b - a) * st.position - pos).length() <= 8.0);
         let t = line_param(a, b, pos);
         let on_line = t.is_some_and(|(_, d)| d <= 5.0);
         if stop_hit.is_none() && !on_line {
-            return false;
+            return Input::Ignored;
         }
         ctx.set_cursor_icon(if stop_hit.is_some() { egui::CursorIcon::Grab } else { egui::CursorIcon::Copy });
         if pressed {
@@ -663,7 +670,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             ctx.data_mut(|d| d.insert_temp(crate::colorpicker::stop_id(), stop));
             ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gradient { id, fills, index, which: 3 + stop }));
         }
-        return true;
+        return Input::Captured;
     }
     if let Some((id, index, e)) = blur_target(app, ctx) {
         let hit = blur_points(app, id, &e).and_then(|pts| pts.iter().position(|p| (*p - pos).length() <= 8.0));
@@ -673,15 +680,15 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
                 let _ = app.session.begin_interaction("Edit progressive blur");
                 ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Blur { id, index, which }));
             }
-            return true;
+            return Input::Captured;
         }
     }
     if let Some((id, fills, index, _, rect)) = crop_target(app) {
         // Crop mode: the layer's own resize handles crop it (the pointer events carry Cmd/Ctrl).
         if app.ui.crop.is_some() && on_resize_handle(app, pos) {
-            return false;
+            return Input::Ignored;
         }
-        let Some(c) = crop_corners(app, id, rect) else { return false };
+        let Some(c) = crop_corners(app, id, rect) else { return Input::Ignored };
         let start = screen_to_unit(app, id, pos).unwrap_or((0.0, 0.0));
         let corner = c.iter().position(|p| (*p - pos).length() <= 8.0);
         let inside = start.0 >= rect.0.min(rect.2) && start.0 <= rect.0.max(rect.2) && start.1 >= rect.1.min(rect.3) && start.1 <= rect.1.max(rect.3);
@@ -693,7 +700,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
                 if pressed {
                     app.ui.crop = None;
                 }
-                return false;
+                return Input::Ignored;
             }
         };
         ctx.set_cursor_icon(if which == 4 {
@@ -707,20 +714,21 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             let _ = app.session.begin_interaction("Crop image");
             ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Crop { id, fills, index, which, start, rect }));
         }
-        return true;
+        return Input::Captured;
     }
     if app.session.tool.tool != figcraft_engine::ToolId::Move || app.session.tool.busy() {
-        return false;
+        return Input::Ignored;
     }
-    let Some(Zones { id, bands, gaps, .. }) = al_zones(app) else { return false };
+    let Some(Zones { id, bands, gaps, .. }) = al_zones(app) else { return Input::Ignored };
     if let Some((side, _, value)) = padding_at(&padding_handles(&bands), pos) {
-        ctx.set_cursor_icon(if side.is_multiple_of(2) { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
+        let cursor = if side.is_multiple_of(2) { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal };
+        ctx.set_cursor_icon(cursor);
         if pressed {
             let _ = app.session.begin_interaction("Padding");
             ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side, start: pos, value }));
+            return Input::Captured;
         }
-        // Hover owns the cursor too; otherwise the canvas tool replaces the resize arrows.
-        return true;
+        return Input::Hover(cursor);
     }
     for g in gaps {
         if g.rect.contains(pos) {
@@ -728,12 +736,12 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             if pressed {
                 let _ = app.session.begin_interaction("Gap");
                 ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gap { id, start: pos, value: g.value, vertical: g.vertical, key: g.key }));
-                return true;
+                return Input::Captured;
             }
-            return false;
+            return Input::Ignored;
         }
     }
-    false
+    Input::Ignored
 }
 
 fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, modifiers: egui::Modifiers) {
