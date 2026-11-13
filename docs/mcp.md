@@ -498,7 +498,7 @@ one undo step and returns the ids it made:
   in the app does both).
 - `board.mindMap {x?, y?, text?, children?, parent?, edit?}` → `{id, text, children: [{id, text, connector}]}`:
   a mind map: a first node (`mindNode`, bold 24, no box; `text` defaults to `Topic`, `x`/`y` to the
-  middle of the view) with up to 20 `children` (texts; default `Idea 1`, `Idea 2`, `Idea 3`)
+  view's centre, in the parent's coordinates) with up to 20 `children` (texts; default `Idea 1`, `Idea 2`, `Idea 3`)
   on its right, each joined to it by a curved branch (a connector with `branch: true`: stroke 4,
   `#757575`, round caps). The map lays itself out: children stand in one column 88 units right of
   the widest node of their parent's column, 48 apart, centred on their parent; a node is its text,
