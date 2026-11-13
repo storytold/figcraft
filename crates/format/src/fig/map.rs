@@ -17,6 +17,7 @@ use serde_json::{Map, Value, json};
 use super::kiwi::Kv;
 use super::network;
 
+mod board;
 mod component;
 mod connector;
 mod document;
@@ -26,6 +27,9 @@ mod paint;
 mod proto;
 mod text;
 mod variables;
+
+#[cfg(test)]
+pub(super) use board::board_shape;
 
 use component::OverrideScope;
 #[cfg(test)]
@@ -50,8 +54,16 @@ const MAX_ASSET_PART: usize = 256;
 
 /// The REST API file JSON for message `msg`, with the warnings about what was skipped and the
 /// vector networks its layers name by `vectorNetworkRef` (for [`crate::rest::import_with_networks`]).
+#[cfg(test)]
 pub(super) fn to_rest(msg: &Kv, name: &str, max_nodes: usize) -> (Value, Vec<String>, Vec<Option<VectorNetwork>>) {
+    to_rest_for(msg, name, max_nodes, false)
+}
+
+/// The REST JSON (as `to_rest`) for a FigJam whiteboard (`board`) or a design file: a
+/// whiteboard's stickies come out as native board items.
+pub(super) fn to_rest_for(msg: &Kv, name: &str, max_nodes: usize, board: bool) -> (Value, Vec<String>, Vec<Option<VectorNetwork>>) {
     let mut m = Mapper::new(msg, max_nodes);
+    m.board = board;
     let _canon = VarCanon::install(&m);
     let doc = m.document();
     // Large values are moved in, never passed through `json!`, which serialises its arguments:
@@ -356,11 +368,14 @@ struct Mapper<'a> {
     /// holding it) name it by `vectorNetworkRef`. Kept out of the JSON, where a large file's
     /// networks took gigabytes.
     networks: Vec<Option<VectorNetwork>>,
-    /// Index in `networks` by its blob, position scale, style table and point-radius scale.
-    network_ids: HashMap<(usize, u64, u64, usize, u64), usize>,
+    /// Index in `networks` by its blob, position scale, style table, point-radius scale and the
+    /// layer's corner radius (which points without one of their own take).
+    network_ids: HashMap<(usize, u64, u64, usize, u64, u64), usize>,
     /// Region paint elements (paints and gradient stops) read so far: one budget for the whole
     /// file, since layers with region paints don't share their network.
     region_paint_elements: usize,
+    /// The file is a FigJam whiteboard: its objects are built as native board items.
+    board: bool,
 }
 
 impl<'a> Mapper<'a> {
@@ -438,6 +453,7 @@ impl<'a> Mapper<'a> {
             max_nodes,
             reserved: 0,
             networks: Vec::new(),
+            board: false,
             network_ids: HashMap::new(),
             region_paint_elements: 0,
         }

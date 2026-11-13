@@ -8,9 +8,13 @@ pub(super) fn layers_at(s: &mut Session, p: &Value) -> Result<Value> {
     let zoom = s.ds()?.view.zoom.max(1e-6);
     let sel = s.selection();
     let result = crate::booleans::result_outline(doc, &sel);
-    let layers: Vec<Value> = figcraft_doc::geometry::layers_at(doc, s.page()?, figcraft_geom::Point::new(x, y), 2.0 / zoom, Some(&result))
+    let opts = figcraft_doc::geometry::HitOpts { locked: true };
+    let layers: Vec<Value> = figcraft_doc::geometry::layers_at_opts(doc, s.page()?, figcraft_geom::Point::new(x, y), 2.0 / zoom, Some(&result), opts)
         .into_iter()
-        .filter_map(|(id, depth)| doc.node(id).map(|n| json!({"id": id, "name": n.name, "type": n.kind.type_name(), "depth": depth})))
+        .filter_map(|(id, depth)| {
+            doc.node(id)
+                .map(|n| json!({"id": id, "name": n.name, "type": n.kind.type_name(), "depth": depth, "locked": crate::tools::locked_in(doc, id)}))
+        })
         .collect();
     Ok(json!({"layers": layers}))
 }
@@ -174,7 +178,8 @@ pub(super) fn nudge(s: &mut Session, p: &Value) -> Result<Value> {
     // no undo step.
     let mut work = s.doc()?.clone();
     let doc = &mut work;
-    let ids = roots(doc, &ids);
+    // A locked layer (or one in a locked layer) ignores the arrow keys.
+    let ids: Vec<NodeId> = roots(doc, &ids).into_iter().filter(|i| !crate::tools::locked_in(doc, *i)).collect();
     let mut changed = false;
     // Children in an auto layout flow move one place instead (see `al_keys`).
     for i in &ids {
@@ -209,6 +214,9 @@ pub(super) fn nudge_size(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("transform.nudgeSize", s, p)?;
     let ids = roots(s.doc()?, &ids);
     for i in ids {
+        if crate::tools::locked_in(s.doc()?, i) {
+            continue;
+        }
         let Some((w, h)) = s.doc()?.node(i).map(|n| (n.width, n.height)) else { continue };
         let mut q = serde_json::Map::new();
         q.insert("ids".into(), json!([i]));
@@ -231,9 +239,16 @@ pub(super) fn toggle(s: &mut Session, p: &Value, what: &str) -> Result<Value> {
     // Figma: if any is visible, hide all (and vice versa).
     let value = explicit.unwrap_or_else(|| match what {
         "visible" => !ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.visible)),
-        _ => !ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.locked)),
+        // A child of a locked layer counts as locked: its own flag can't be toggled while the
+        // parent is locked.
+        _ => !ids.iter().all(|i| crate::tools::locked_in(doc, *i)),
     });
-    for i in &ids {
+    // Lock/Unlock leaves a child of a locked layer alone, as its padlock does: its own flag must
+    // still hold once the parent is unlocked. An explicit `locked` (scripts) sets it anyway.
+    let under_lock = |i: NodeId| doc.ancestors(i).into_iter().any(|a| doc.node(a).is_some_and(|n| n.locked));
+    let skip: Vec<NodeId> =
+        if what == "locked" && explicit.is_none() { ids.iter().copied().filter(|i| under_lock(*i)).collect() } else { Vec::new() };
+    for i in ids.iter().filter(|i| !skip.contains(i)) {
         let n = doc.get_mut(*i)?;
         if what == "visible" {
             n.visible = value;

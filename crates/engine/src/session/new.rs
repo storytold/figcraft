@@ -17,7 +17,7 @@ impl Session {
             default_props: Default::default(),
             prefs: Prefs::default(),
             prefs_unsaved: false,
-            tool: tools::ToolState::default(),
+            tool: tools::ToolState { scale_anchor: (1, 1), ..tools::ToolState::default() },
             ui_requests: Vec::new(),
             ui_dark: None,
             journal: Vec::new(),

@@ -1,6 +1,6 @@
 //! What a file's number variables measure, so exported tokens carry the right unit: a radius,
 //! font size, spacing or other length is in pixels, opacity and font weight are bare numbers.
-//! A number's role comes from the layer fields bound to it, else its scopes, and an alias target
+//! A number's role comes from the layer fields bound to it (and a text style's weight), else its scopes, and an alias target
 //! with no role of its own takes the role of the variables that read it (the target of an opacity
 //! alias stays unitless). A number nothing tells about is a length: design tokens mostly are.
 
@@ -57,6 +57,13 @@ impl Roles {
             for (field, id) in &n.bound {
                 if let Some(r) = role_of_field(field) {
                     roles.entry(id.clone()).or_insert(r);
+                }
+            }
+        }
+        for st in &doc.styles {
+            for (field, id) in &st.bound {
+                if field == "fontWeight" {
+                    roles.entry(id.clone()).or_insert(NumberRole::Unitless);
                 }
             }
         }

@@ -408,6 +408,24 @@ fn mirroring_position_and_join_commands() {
 }
 
 #[test]
+fn mirror_mode_on_sharp_points_is_one_undo_step() {
+    // #2110: a mirror mode turns sharp points smooth; the whole command undoes in one step.
+    let mut s = Session::new();
+    let r = ex(&mut s, "vector.create", json!({"points": [[-250, -174], [117, -174], [-67, 194]], "closed": false}));
+    let id = crate::params::id_of(&r["id"]).unwrap();
+    ex(&mut s, "vector.edit.begin", json!({"id": id}));
+    ex(&mut s, "vector.edit.select", json!({"vertices": [1]}));
+    ex(&mut s, "vector.edit.mirroring", json!({"mode": "angleAndLength"}));
+    let n = net(&s, id);
+    let (i, o) = (n.segments[0].tb, n.segments[1].ta);
+    assert!((o.0 - 86.24).abs() < 0.1 && (o.1 - 114.47).abs() < 0.1, "{o:?}");
+    assert!((i.0 + o.0).abs() < 1e-9 && (i.1 + o.1).abs() < 1e-9, "{i:?}");
+    s.undo().unwrap();
+    let n = net(&s, id);
+    assert!(n.segments.iter().all(|x| x.is_straight()), "one undo restores the sharp point");
+}
+
+#[test]
 fn a_point_dropped_on_another_merges_into_it() {
     // #401: an open path's end dragged onto its start closes the path at that point.
     let mut s = Session::new();
@@ -657,6 +675,27 @@ fn a_rounded_chamfer_made_other_ways_fills_along_its_arcs() {
     assert_eq!((n.vertices.len(), n.segments.len(), n.regions.len()), (5, 5, 1), "closed by the pen");
     ex(&mut s, "vector.edit.cornerRadius", json!({"radius": 43, "vertices": [0, 1, 2, 3, 4]}));
     fill_traces_stroke(&s, id, "drawn with the pen");
+}
+
+/// The reporter's sequence (#1951): a bridge drawn between the two new points while the corner is
+/// still there (both have two segments, so the region keeps its ring), then the corner deleted with
+/// Delete. The region's loop must close through the bridge, so the rounded fill traces the stroke.
+#[test]
+fn deleting_the_corner_behind_a_pen_bridge_closes_the_loop_through_the_bridge() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    ex(&mut s, "vector.edit.addVertex", json!({"segment": 0, "t": 0.5}));
+    ex(&mut s, "vector.edit.addVertex", json!({"segment": 1, "t": 0.5}));
+    let n = net(&s, id);
+    let (top, right) = (vertex_at(&n, 50.0, 0.0), vertex_at(&n, 100.0, 50.0));
+    ex(&mut s, "vector.edit.connect", json!({"a": top, "b": right}));
+    let n = net(&s, id);
+    assert_eq!((n.segments.len(), n.regions[0].loops[0].len()), (7, 6), "bridged, the ring kept: {:?}", n.regions);
+    let corner = vertex_at(&n, 100.0, 0.0);
+    ex(&mut s, "vector.edit.select", json!({"vertices": [corner]}));
+    ex(&mut s, "vector.edit.delete", json!({}));
+    ex(&mut s, "vector.edit.cornerRadius", json!({"radius": 43, "vertices": [0, 1, 2, 3, 4]}));
+    fill_traces_stroke(&s, id, "bridged, then the corner deleted");
 }
 
 /// The rounded chamfered rectangle `id` (five points on the origin's 100×100 box, the top-right
