@@ -178,12 +178,35 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
     events
 }
 
-/// Whether a queued control request runs a command that can change which file is active.
+/// Whether a queued control request runs a command that can change which file is active. Commands
+/// that leave the active file alone (`file.versionHistory`, `file.save`) do not count.
 fn queue_changes_files(app: &FigApp) -> bool {
-    app.control_queue.iter().any(|r| {
-        r.method == "engine.execute"
-            && r.params.get("command").and_then(|c| c.as_str()).is_some_and(|c| matches!(c, "doc.switch" | "doc.close") || c.starts_with("file."))
-    })
+    const CHANGES_ACTIVE: &[&str] = &[
+        "doc.switch",
+        "doc.nextTab",
+        "doc.previousTab",
+        "file.new",
+        "file.newBoard",
+        "file.newFromTemplate",
+        "file.open",
+        "file.openRecent",
+        "file.import",
+        "doc.close",
+        "file.close",
+        "file.duplicate",
+        "file.recover",
+        "version.duplicate",
+        "branch.open",
+        "branch.create",
+        "branch.merge",
+        "branch.archive",
+        "collab.join",
+        "collab.openFile",
+        "collab.recoverFile",
+    ];
+    app.control_queue
+        .iter()
+        .any(|r| r.method == "engine.execute" && r.params.get("command").and_then(|c| c.as_str()).is_some_and(|c| CHANGES_ACTIVE.contains(&c)))
 }
 
 /// After this frame's control requests ran: the batch it took for one file never reaches another
