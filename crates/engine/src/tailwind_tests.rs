@@ -176,7 +176,11 @@ fn slashed_layer_names_and_phone_widths_merge_right() {
     for (name, width, dir, sizing) in [("Landing", 1440.0, "horizontal", "hug"), ("Landing mobile", 390.0, "vertical", "fill")] {
         let p = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": width, "height": 600, "name": name})));
         ex(&mut s, "layout.add", json!({"ids": [p], "direction": "vertical"}));
-        let ctas = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 342, "height": 120, "parent": p, "name": "CTAs"})));
+        let ctas = idv(&ex(
+            &mut s,
+            "frame.create",
+            json!({"x": 0, "y": 0, "width": if width > 1000.0 { 600.0 } else { 342.0 }, "height": 120, "parent": p, "name": "CTAs"}),
+        ));
         ex(&mut s, "layout.add", json!({"ids": [ctas], "direction": dir}));
         let b = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 48, "parent": ctas, "name": "Button/Primary"})));
         ex(&mut s, "layout.add", json!({"ids": [b], "direction": "horizontal"}));
@@ -190,7 +194,7 @@ fn slashed_layer_names_and_phone_widths_merge_right() {
     let button =
         out.lines().find(|l| l.contains("lg:") && l.contains("rounded") || l.contains("self-stretch") && l.contains("flex-row")).unwrap_or_default();
     assert!(button.contains("self-stretch") && button.contains("lg:self-auto"), "the slashed name keeps its mobile classes: {out}");
-    assert!(!out.contains("max-w-[342px] ") || out.contains("lg:max-w-[342px]"), "no phone-width cap below lg: {out}");
+    assert!(!out.contains("max-w-[342px]") && out.contains("lg:max-w-[600px]"), "no phone-width cap below lg: {out}");
     assert!(out.contains("Only in the mobile frame") && out.contains("Tag"), "{out}");
     let divider = out.lines().filter(|l| l.contains("<div") && (l.contains("h-[1px]") || l.contains("h-px"))).count();
     assert!(out.contains("w-full") && divider <= 2, "{out}");
@@ -339,4 +343,75 @@ fn per_corner_radii_with_a_variable_first_keep_every_corner() {
     let got: Vec<String> =
         classes("border-radius: var(--radius-a, 4px) 8px 8px 8px;\nborder-radius: var(--radius-card, 4px);\n").into_iter().map(|(_, c)| c).collect();
     assert_eq!(got, ["rounded-[var(--radius-a,_4px)_8px_8px_8px]", "rounded-card"]);
+}
+
+#[test]
+fn font_family_with_quote_and_bracket_stays_a_valid_class_token() {
+    let mut s = Session::new();
+    let t = idv(&ex(&mut s, "text.create", json!({"text": "hi", "x": 0, "y": 0, "props": {"fontFamily": "A\"B]C"}})));
+    let out = code(&mut s, t, json!({}));
+    let rest = out.split("className=\"").nth(1).unwrap_or_default();
+    let (attr, after) = rest.split_once('"').unwrap_or_default();
+    let family = attr.split(' ').find(|c| c.starts_with("font-[")).unwrap_or_default();
+    let inner = family.strip_prefix("font-[").and_then(|f| f.strip_suffix(']')).unwrap_or("\\");
+    assert!(after.starts_with('>') && !attr.contains('\\'), "{out}");
+    assert!(!inner.is_empty() && !inner.contains(['\\', '"', ']']), "{out}");
+}
+
+#[test]
+fn several_fills_are_one_layered_background_class() {
+    let mut s = Session::new();
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 120})));
+    let mut g =
+        figcraft_color::Paint::gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, figcraft_color::Color::BLACK));
+    g.opacity = 0.2;
+    let mut top = figcraft_color::Paint::solid(figcraft_color::Color::BLACK);
+    top.opacity = 0.5;
+    s.doc_mut().unwrap().get_mut(f).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::WHITE), g, top];
+    let out = code(&mut s, f, json!({}));
+    let class = out.split(['"', ' ']).find(|c| c.starts_with("[background:")).unwrap_or_default();
+    assert!(class.starts_with("[background:linear-gradient(0deg,_rgba(0,_0,_0,_0.50),_rgba(0,_0,_0,_0.50)),_linear-gradient(180deg"), "{out}");
+    assert!(class.ends_with(",_#FFFFFF]"), "{out}");
+}
+
+/// Issue #2272: a desktop `page` 1440 wide and a mobile one 390 wide, each holding a fixed 48 x 48
+/// `badge` and a `banner` that fills the page.
+fn badge_frames(s: &mut Session) -> (NodeId, NodeId) {
+    let mut frames = Vec::new();
+    for (width, padding, x) in [(1440.0, 80, 0), (390.0, 24, 1600)] {
+        let p = idv(&ex(
+            s,
+            "frame.create",
+            json!({"name": "page", "x": x, "y": 0, "width": width, "height": 400, "props": {"layout": "vertical", "padding": padding, "gap": 16}}),
+        ));
+        let badge_props = json!({"layout": "horizontal", "sizingH": "fixed", "sizingV": "fixed", "fill": "#E8EEF7"});
+        ex(s, "frame.create", json!({"name": "badge", "parent": p, "width": 48, "height": 48, "props": badge_props}));
+        let inner = width - 2.0 * f64::from(padding);
+        ex(
+            s,
+            "frame.create",
+            json!({"name": "banner", "parent": p, "width": inner, "height": 40, "props": {"layout": "horizontal", "fill": "#112233"}}),
+        );
+        frames.push(p);
+    }
+    (frames[0], frames[1])
+}
+
+#[test]
+fn a_max_width_both_frames_share_stays_unprefixed() {
+    let mut s = Session::new();
+    let (desk, mob) = badge_frames(&mut s);
+    let out = code(&mut s, desk, json!({"mobile": mob}));
+    let badge = out.lines().find(|l| l.contains("bg-[#E8EEF7]")).unwrap_or_default();
+    assert!(badge.contains("max-w-[48px]") && !badge.contains("lg:max-w-[48px]"), "the badge keeps its cap at every width: {out}");
+}
+
+#[test]
+fn a_max_width_that_differs_still_goes_fluid_on_mobile() {
+    let mut s = Session::new();
+    let (desk, mob) = badge_frames(&mut s);
+    let out = code(&mut s, desk, json!({"mobile": mob}));
+    let banner = out.lines().find(|l| l.contains("bg-[#112233]")).unwrap_or_default();
+    assert!(banner.contains("lg:max-w-[1280px]"), "the page-wide box is capped from lg: {banner}");
+    assert!(!banner.split_whitespace().any(|c| c == "max-w-[1280px]" || c == "max-w-[342px]"), "no phone-width cap below lg: {banner}");
 }

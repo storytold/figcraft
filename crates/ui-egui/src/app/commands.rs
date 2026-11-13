@@ -55,7 +55,8 @@ impl FigApp {
     /// Show command `id`'s error.
     pub(crate) fn failed(&mut self, id: &str, e: &figcraft_engine::EngineError) {
         let msg = e.to_string();
-        log::warn!("{id}: {msg}");
+        // A plugin's failure text may carry CR or terminal controls: log it escaped.
+        log::warn!("{id}: {}", msg.escape_debug());
         self.show_error(msg);
     }
 
@@ -263,6 +264,18 @@ impl FigApp {
                 "comment.open" => {
                     if let Some(id) = r.data.get("id").and_then(Value::as_u64) {
                         self.ui.comments.show(id);
+                    }
+                }
+                "annotation.new" => {
+                    // The Annotation tool: show the Inspect tab (never toggle it away) and put the
+                    // caret in the layer's new-note field.
+                    // Only a selected layer's field can show; a request for anything else would wait
+                    // and take the keyboard later.
+                    let shown =
+                        |id| self.session.selection().contains(&id) && self.session.doc().is_ok_and(|d| d.node(id).is_some_and(|n| !n.is_page()));
+                    if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of).filter(|id| shown(*id)) {
+                        self.ui.right_tab = RightTab::Inspect;
+                        self.ui.dev.focus_new_note = Some(id);
                     }
                 }
                 "comment.new" => {

@@ -14,6 +14,7 @@ use crate::i18n::{tr, trf, trn};
 use crate::render_worker::{Done, Job, Worker};
 use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 
+mod background;
 mod builder;
 mod input;
 mod outline;
@@ -57,6 +58,10 @@ pub struct CanvasState {
     pub tex_coarse: bool,
     /// The request the texture answers ([`crate::render_worker::Done::seq`]).
     tex_seq: u64,
+    /// Refined images of the files and pages shown before, newest first: switching back to one
+    /// shows its image at once while it renders again, instead of a blank canvas (and, where
+    /// renders are slow, a coarse preview).
+    kept: Vec<Kept>,
     submitted: Option<JobKey>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
@@ -98,6 +103,7 @@ impl Default for CanvasState {
             tex_of: None,
             tex_coarse: false,
             tex_seq: 0,
+            kept: Vec::new(),
             submitted: None,
             want_view: None,
             render_work: None,
@@ -116,6 +122,45 @@ impl Default for CanvasState {
             pressure: None,
             wheel_is_mouse: false,
         }
+    }
+}
+
+/// At most this many images of files and pages not shown are kept (each is a canvas-sized texture).
+const KEPT: usize = 4;
+
+/// A refined canvas image of a file and page not shown now ([`CanvasState::kept`]).
+struct Kept {
+    texture: egui::TextureHandle,
+    view: figcraft_render::View,
+    of: (u64, NodeId),
+    seq: u64,
+}
+
+impl CanvasState {
+    /// When the file or page shown is no longer the one the texture is of, set the texture aside
+    /// (if refined) and bring back the image kept for `shown`, if any. Images of files that are no
+    /// longer open (`open` says which are) are dropped every frame, not only on a switch: a
+    /// background tab can close while the file shown stays the same.
+    fn switch_texture(&mut self, shown: Option<(u64, NodeId)>, open: impl Fn(u64) -> bool) {
+        if shown.is_some() && self.tex_of != shown {
+            let back = self.kept.iter().position(|k| Some(k.of) == shown).map(|i| self.kept.remove(i));
+            let (texture, view, of) = (self.texture.take(), self.tex_view.take(), self.tex_of.take());
+            if let (Some(texture), Some(view), Some(of), false) = (texture, view, of, self.tex_coarse) {
+                self.kept.insert(0, Kept { texture, view, of, seq: self.tex_seq });
+            }
+            self.tex_coarse = false;
+            if let Some(k) = back {
+                (self.texture, self.tex_view, self.tex_of, self.tex_seq) = (Some(k.texture), Some(k.view), Some(k.of), k.seq);
+            }
+        }
+        self.drop_closed(open);
+        self.kept.truncate(KEPT);
+    }
+
+    /// Drop the kept images of files that are no longer open (`open` says which are). Home calls
+    /// this too: the canvas isn't shown there, and closing the last file leads to it.
+    pub(crate) fn drop_closed(&mut self, open: impl Fn(u64) -> bool) {
+        self.kept.retain(|k| open(k.of.0));
     }
 }
 
@@ -235,7 +280,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     let label = if documents {
         tr("Drop to open")
     } else if app.ui.right_tab == crate::RightTab::Inspect {
-        tr("Dev Mode only inspects: switch to Design (Shift+D) to edit")
+        tr("Developer Mode only inspects: switch to Design (Shift+D) to edit")
     } else {
         tr("Drop to import")
     };
@@ -264,6 +309,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     // Every finished render is shown, even when a newer one is already on its way: renders finish
     // in order, and an edit every frame (a drag) would otherwise never show until it stopped.
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
+    let docs = &app.session.docs;
+    app.canvas.switch_texture(shown, |uid| docs.iter().any(|d| d.uid == uid));
     if let Some(done) = worker.poll()
         && shows(&app.canvas, &done, shown)
     {
@@ -293,15 +340,20 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_seq = done.seq;
     }
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, bg);
     crate::theme::set_canvas_page(&ctx, bg);
-    if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
+    let image = if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
         // Re-project the last render onto the current view.
         let tl = app.to_screen(v.origin.0, v.origin.1);
         let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
         let pixel_preview = app.session.ds().ok().and_then(|ds| ds.view.pixel_preview_scale()) == Some(v.scale);
         let image_rect = presented_image_rect(tl, v, zoom, ppp, pixel_preview);
-        painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        Some((tex.id(), image_rect))
+    } else {
+        None
+    };
+    background::paint(&painter, rect, bg, image.map(|(_, r)| r));
+    if let Some((texture, image_rect)) = image {
+        painter.image(texture, image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     crate::dev_mode::refresh_measurements(app);
     app.session.tool.labels = overlays(app, &painter, &t);
@@ -408,3 +460,6 @@ mod wheel_zoom_tests;
 
 #[cfg(test)]
 mod zoom_preview_tests;
+
+#[cfg(test)]
+mod tab_switch_tests;

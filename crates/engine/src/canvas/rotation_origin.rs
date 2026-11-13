@@ -8,7 +8,7 @@ use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Point;
 
 use crate::cmd::edit::roots;
-use crate::tools::{SNAP_PX, selection_box};
+use crate::tools::{UNMEASURED_SNAP_PX, selection_box};
 use crate::{DocState, EngineError, Result, Session};
 
 /// How near (screen pixels) a press must be to grab the origin handle.
@@ -115,7 +115,7 @@ impl Session {
         let snapped = box_points(&ds.doc, &ds.selection).and_then(|b| {
             b.iter()
                 .enumerate()
-                .filter(|(_, q)| (**q - p).hypot() * zoom.max(1e-6) <= SNAP_PX)
+                .filter(|(_, q)| (**q - p).hypot() * zoom.max(1e-6) <= UNMEASURED_SNAP_PX)
                 .min_by(|x, y| (*x.1 - p).hypot().total_cmp(&(*y.1 - p).hypot()))
                 .map(|(i, q)| (i, *q))
         });

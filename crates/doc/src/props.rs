@@ -1,6 +1,6 @@
 //! Node property types: strokes, effects, corners, constraints, auto layout, grids, exports.
 
-use figcraft_color::{BlendMode, Color};
+use figcraft_color::{BlendMode, Color, ColorProfile};
 use serde::{Deserialize, Serialize};
 
 /// Where a stroke sits relative to the shape edge.
@@ -1399,6 +1399,10 @@ impl ExportSize {
             Some((i, c)) if c.is_ascii_alphabetic() => (s.get(..i)?.trim(), Some(c)),
             _ => (s.as_str(), None),
         };
+        // Plain decimal only: no sign, exponent, "inf" or "nan".
+        if !num.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+            return None;
+        }
         let value: f64 = num.parse().ok()?;
         match unit {
             None | Some('x') => ExportSize::Scale { value },
@@ -1449,8 +1453,10 @@ pub struct PrintSettings {
     /// is printed this far out, to be trimmed off.
     pub bleed: f64,
     /// Crop marks outside the bleed, at the trim's corners.
+    #[serde(alias = "crop_marks")]
     pub crop_marks: bool,
     /// Bleed marks outside the bleed, at the bleed's corners.
+    #[serde(alias = "bleed_marks")]
     pub bleed_marks: bool,
     /// CMYK colour (converted from RGB) instead of RGB.
     pub cmyk: bool,
@@ -1519,25 +1525,77 @@ pub struct ExportSetting {
     pub print: PrintSettings,
     /// Only the layer itself (on), or every layer that shows in its area (off).
     #[serde(skip_serializing_if = "is_true")]
+    #[serde(alias = "contents_only")]
     pub contents_only: bool,
     /// The layer's own box, cutting off what it paints outside it (shadows, outside strokes).
     #[serde(skip_serializing_if = "is_false")]
+    #[serde(alias = "include_bounding_box")]
     pub include_bounding_box: bool,
     /// SVG: text as outlines (on) or as `<text>` elements (off).
     #[serde(skip_serializing_if = "is_true")]
+    #[serde(alias = "svg_outline_text")]
     pub svg_outline_text: bool,
     /// SVG: layer names as `id` attributes.
     #[serde(skip_serializing_if = "is_false")]
+    #[serde(alias = "svg_id_attribute")]
     pub svg_id_attribute: bool,
     /// SVG: strokes as `stroke` attributes where that's exact (on), else as outlines.
     #[serde(skip_serializing_if = "is_true")]
+    #[serde(alias = "svg_simplify_stroke")]
     pub svg_simplify_stroke: bool,
     /// Android Vector Drawable: what to do with what a drawable can't hold exactly.
     #[serde(skip_serializing_if = "VdCompat::is_default")]
+    #[serde(alias = "vd_compat")]
     pub vd_compat: VdCompat,
+    /// PNG, JPG and WebP: the color profile the file is written in. SVG, PDF and XML are always
+    /// sRGB, whatever this says.
+    #[serde(skip_serializing_if = "ExportColorProfile::is_default")]
+    #[serde(alias = "color_profile")]
+    pub color_profile: ExportColorProfile,
     /// JPG: the encoder's quality, 1 (smallest file) to 100 (see [`ExportSetting::quality`]).
     #[serde(skip_serializing_if = "is_default_quality")]
     pub quality: u8,
+}
+
+/// The color profile an export setting writes PNG, JPG and WebP files in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportColorProfile {
+    /// The document's own profile at the time of the export.
+    #[default]
+    SameAsFile,
+    Srgb,
+    DisplayP3,
+}
+
+impl ExportColorProfile {
+    pub const ALL: [ExportColorProfile; 3] = [ExportColorProfile::SameAsFile, ExportColorProfile::Srgb, ExportColorProfile::DisplayP3];
+
+    fn is_default(&self) -> bool {
+        *self == ExportColorProfile::SameAsFile
+    }
+
+    /// The name commands and files use ("sameAsFile", "srgb", "displayP3").
+    pub fn key(self) -> &'static str {
+        match self {
+            ExportColorProfile::SameAsFile => "sameAsFile",
+            ExportColorProfile::Srgb => "srgb",
+            ExportColorProfile::DisplayP3 => "displayP3",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == s)
+    }
+
+    /// The profile the file is written in when the document is in `file`.
+    pub fn resolve(self, file: ColorProfile) -> ColorProfile {
+        match self {
+            ExportColorProfile::SameAsFile => file,
+            ExportColorProfile::Srgb => ColorProfile::Srgb,
+            ExportColorProfile::DisplayP3 => ColorProfile::DisplayP3,
+        }
+    }
 }
 
 /// How an Android Vector Drawable export handles what the format can't draw exactly (layer
@@ -1588,6 +1646,7 @@ impl Default for ExportSetting {
             svg_id_attribute: false,
             svg_simplify_stroke: true,
             vd_compat: VdCompat::BestEffort,
+            color_profile: ExportColorProfile::SameAsFile,
             quality: ExportSetting::DEFAULT_QUALITY,
         }
     }

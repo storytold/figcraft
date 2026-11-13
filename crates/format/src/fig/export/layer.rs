@@ -26,7 +26,15 @@ impl<'d> Exporter<'d> {
             if !n.guides.is_empty() {
                 self.warn("ruler guides were left out");
             }
-            if *prototype != Default::default() {
+            let defaults = figcraft_doc::proto::PrototypeSettings::default();
+            // Every page writes its colour, so Figma shows the same one (a page without the field shows Figma's own default).
+            // The colour is written opaque: the record measured has alpha 1, and the import reads the colour as opaque and
+            // an alpha of 0 as no background.
+            f.push(("prototypeBackgroundColor", color(prototype.background.with_alpha(1.0))));
+            if prototype.background.a < 1.0 {
+                self.warn("a prototype background's opacity was left out");
+            }
+            if (figcraft_doc::proto::PrototypeSettings { background: defaults.background, ..prototype.clone() }) != defaults {
                 self.warn("prototype device settings were left out");
             }
             self.modes(n, &mut f);
@@ -66,6 +74,11 @@ impl<'d> Exporter<'d> {
             }
             _ => None,
         };
+        // A text on a path is its own layer kind, written only when its path fields were built.
+        let on_path = match &n.kind {
+            NodeKind::Text(td) => self.text_path(n, td, nested),
+            _ => None,
+        };
         let ty = match &n.kind {
             NodeKind::Page { .. } | NodeKind::Frame | NodeKind::Group | NodeKind::ComponentSet { .. } => "FRAME",
             NodeKind::Instance { .. } if main.is_none() => "FRAME",
@@ -76,6 +89,7 @@ impl<'d> Exporter<'d> {
             NodeKind::Star { .. } => "STAR",
             NodeKind::Line => "LINE",
             NodeKind::Vector { .. } => "VECTOR",
+            NodeKind::Text(_) if on_path.is_some() => "TEXT_PATH",
             NodeKind::Text(_) => "TEXT",
             NodeKind::BooleanOp { .. } => "BOOLEAN_OPERATION",
             NodeKind::Component { .. } => "SYMBOL",
@@ -99,7 +113,16 @@ impl<'d> Exporter<'d> {
             NodeKind::Polygon { count } => f.push(("count", u(*count))),
             NodeKind::Star { count, inner_ratio } => f.extend([("count", u(*count)), ("starInnerScale", fl(*inner_ratio))]),
             NodeKind::Vector { network } => self.vector(n, network, f),
-            NodeKind::Text(td) => self.text(td, &n.fills, f),
+            NodeKind::Text(td) => {
+                self.text(td, &n.fills, f);
+                if let Some(path) = on_path {
+                    // Text on a path has no box to align in: it is written as top, which is how it draws.
+                    if let Some(entry) = f.iter_mut().find(|(k, _)| *k == "textAlignVertical") {
+                        entry.1 = e("TOP");
+                    }
+                    f.extend(path);
+                }
+            }
             NodeKind::BooleanOp { op } => {
                 let name = match op {
                     BoolOp::Union => "UNION",
@@ -304,7 +327,7 @@ impl<'d> Exporter<'d> {
             || !n.measurements.is_empty()
             || !n.dev_status.is_none()
         {
-            self.warn("Dev Mode annotations, statuses, resources, measurements and code links were left out");
+            self.warn("Developer Mode annotations, statuses, resources, measurements and code links were left out");
         }
         if !n.plugin_data.is_empty() {
             self.warn("plugin data was left out");

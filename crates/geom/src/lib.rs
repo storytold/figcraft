@@ -12,11 +12,25 @@ use kurbo::ParamCurve;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 pub mod measure;
+mod simplify;
 mod transform;
+pub use simplify::simplify_path;
 pub use transform::*;
 
 /// Corner radii in clockwise order from the top-left: `[tl, tr, br, bl]`.
 pub type Radii = [f64; 4];
+
+/// The largest magnitude a shape builder takes for a size, radius or angle. kurbo subdivides an
+/// arc in proportion to the sixth root of its radius, so an uncapped radius means an unbounded
+/// number of segments: 1e36 is about a million cubics and 1e60 never returns. Sizes come from
+/// files and commands, so they are capped here (the sanity bound `measure::finite_path` uses).
+pub const MAX_COORD: f64 = 1e9;
+
+/// `v` as a usable size, radius or angle: NaN and infinities are 0 and the magnitude is capped at
+/// [`MAX_COORD`].
+fn bounded(v: f64) -> f64 {
+    if v.is_finite() { v.clamp(-MAX_COORD, MAX_COORD) } else { 0.0 }
+}
 
 /// The tolerance an arc of radius `r` is turned into cubics with: a hundredth of a unit, or a
 /// millionth of the radius once that is more. kurbo's cubic count grows with radius ÷ tolerance,
@@ -49,7 +63,15 @@ fn number_past(d: &str, max: f64) -> bool {
         big
     }
     let (mut cur, mut dot, mut exp) = (String::new(), false, false);
+    // Whether the command is an arc, and how many numbers it has had: the 4th and 5th of each
+    // seven are flags, single `0`/`1` characters that may run into the next number unseparated.
+    let (mut arc, mut idx) = (false, 0usize);
     for c in d.chars() {
+        if cur.is_empty() && arc && matches!(idx % 7, 3 | 4) && matches!(c, '0' | '1') {
+            idx += 1;
+            (dot, exp) = (false, false);
+            continue;
+        }
         let continues = match c {
             '0'..='9' => true,
             '.' => !dot && !exp,
@@ -63,8 +85,12 @@ fn number_past(d: &str, max: f64) -> bool {
             cur.push(c);
             continue;
         }
+        idx += cur.chars().any(|c| c.is_ascii_digit()) as usize;
         if big(&mut cur, max) {
             return true;
+        }
+        if c.is_ascii_alphabetic() {
+            (arc, idx) = (matches!(c, 'A' | 'a'), 0);
         }
         (dot, exp) = (c == '.', false);
         if matches!(c, '+' | '-' | '.') {
@@ -84,15 +110,15 @@ fn finite(v: f64) -> f64 {
 /// Radii are clamped so adjacent corners never overlap; when smoothing doesn't fit, it is reduced
 /// first, then the radius.
 pub fn rounded_rect(width: f64, height: f64, radii: Radii, smoothing: f64) -> BezPath {
-    let w = finite(width).max(0.0);
-    let h = finite(height).max(0.0);
+    let w = bounded(width).max(0.0);
+    let h = bounded(height).max(0.0);
     let mut path = BezPath::new();
     if w <= 0.0 && h <= 0.0 {
         return path;
     }
-    let s = finite(smoothing).clamp(0.0, 1.0);
+    let s = bounded(smoothing).clamp(0.0, 1.0);
     let max_r = w.min(h) / 2.0;
-    let radii = radii.map(|r| finite(r).clamp(0.0, max_r));
+    let radii = radii.map(|r| bounded(r).clamp(0.0, max_r));
     if radii.iter().all(|r| *r <= 0.0) {
         path.move_to((0.0, 0.0));
         path.line_to((w, 0.0));
@@ -196,7 +222,7 @@ fn append_corner(path: &mut BezPath, corner: Point, din: Vec2, dout: Vec2, prof:
 /// first vertex at the top centre (Figma's polygon).
 pub fn polygon_points(width: f64, height: f64, count: u32) -> Vec<Point> {
     let n = count.clamp(3, 120);
-    let (rx, ry) = (finite(width) / 2.0, finite(height) / 2.0);
+    let (rx, ry) = (bounded(width) / 2.0, bounded(height) / 2.0);
     (0..n)
         .map(|i| {
             let t = -FRAC_PI_2 + TAU * f64::from(i) / f64::from(n);
@@ -208,8 +234,8 @@ pub fn polygon_points(width: f64, height: f64, count: u32) -> Vec<Point> {
 /// The vertices of a star with `count` points and `inner_ratio` (0..1) inner radius.
 pub fn star_points(width: f64, height: f64, count: u32, inner_ratio: f64) -> Vec<Point> {
     let n = count.clamp(3, 120);
-    let k = finite(inner_ratio).clamp(0.001, 1.0);
-    let (rx, ry) = (finite(width) / 2.0, finite(height) / 2.0);
+    let k = bounded(inner_ratio).clamp(0.001, 1.0);
+    let (rx, ry) = (bounded(width) / 2.0, bounded(height) / 2.0);
     (0..n * 2)
         .map(|i| {
             let t = -FRAC_PI_2 + PI * f64::from(i) / f64::from(n);
@@ -226,7 +252,7 @@ pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
     if n < 2 {
         return path;
     }
-    let radius = finite(radius).max(0.0);
+    let radius = bounded(radius).max(0.0);
     if radius <= 0.0 || n < 3 {
         for (i, p) in points.iter().enumerate() {
             if i == 0 {
@@ -292,8 +318,8 @@ pub fn rounded_polygon(points: &[Point], radius: f64) -> BezPath {
 /// [`rounded_rect`], when a smoothed corner doesn't fit in half of its shorter edge, smoothing is
 /// reduced first, then the radius. Without smoothing this is [`rounded_polygon`].
 pub fn smoothed_polygon(points: &[Point], radius: f64, smoothing: f64) -> BezPath {
-    let s = finite(smoothing).clamp(0.0, 1.0);
-    let radius = finite(radius).max(0.0);
+    let s = bounded(smoothing).clamp(0.0, 1.0);
+    let radius = bounded(radius).max(0.0);
     let n = points.len();
     if s <= 0.0 || radius <= 0.0 || n < 3 {
         return rounded_polygon(points, radius);
@@ -444,31 +470,45 @@ fn line_or_move(path: &mut BezPath, p: Point) {
 /// Whether an ellipse of this `sweep` (radians) goes all the way round: a whole ellipse or ring,
 /// without the sharp corners where an arc's ends meet its sides.
 pub fn full_sweep(sweep: f64) -> bool {
-    finite(sweep).abs() >= TAU - 1e-9
+    bounded(sweep).abs() >= TAU - 1e-9
 }
 
 /// An ellipse in the `width`×`height` box; with arc data, a pie/arc/ring: `start` and `sweep` in
 /// radians (clockwise from 3 o'clock, y-down) and `inner` radius ratio 0..1.
 pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> BezPath {
-    let (rx, ry) = (finite(width).max(0.0) / 2.0, finite(height).max(0.0) / 2.0);
+    let (rx, ry) = (bounded(width).max(0.0) / 2.0, bounded(height).max(0.0) / 2.0);
     let c = Point::new(rx, ry);
-    let sweep = finite(sweep).clamp(-TAU, TAU);
-    let start = finite(start);
-    let inner = finite(inner).clamp(0.0, 1.0);
+    let sweep = bounded(sweep).clamp(-TAU, TAU);
+    let start = bounded(start);
+    let inner = bounded(inner).clamp(0.0, 1.0);
     let full = full_sweep(sweep);
     let tol = arc_tolerance(rx.max(ry));
     let mut path = BezPath::new();
     // A whole turn as an arc with these radii: kurbo's `Ellipse` recovers its radii from an
     // affine map, which overflows to infinity for radii near f64's limit (and infinite cubics).
-    let whole = |rx: f64, ry: f64| kurbo::Arc::new(c, (rx, ry), 0.0, TAU, 0.0);
+    // Four cubics through the right, bottom, left and top extremes (clockwise from 3 o'clock),
+    // the same four anchors an ellipse has when edited as a vector; an arc subdivided by
+    // tolerance would give five or six.
+    let whole = |rx: f64, ry: f64| {
+        const K: f64 = 0.552_284_749_830_793_4;
+        let (kx, ky) = (rx * K, ry * K);
+        let mut p = BezPath::new();
+        p.move_to(c + Vec2::new(rx, 0.0));
+        p.curve_to(c + Vec2::new(rx, ky), c + Vec2::new(kx, ry), c + Vec2::new(0.0, ry));
+        p.curve_to(c + Vec2::new(-kx, ry), c + Vec2::new(-rx, ky), c + Vec2::new(-rx, 0.0));
+        p.curve_to(c + Vec2::new(-rx, -ky), c + Vec2::new(-kx, -ry), c + Vec2::new(0.0, -ry));
+        p.curve_to(c + Vec2::new(kx, -ry), c + Vec2::new(rx, -ky), c + Vec2::new(rx, 0.0));
+        p.close_path();
+        p
+    };
     if full && inner <= 0.0 {
-        return whole(rx, ry).to_path(tol);
+        return whole(rx, ry);
     }
     if full {
         // A ring: outer clockwise, inner counter-clockwise.
-        path.extend(whole(rx, ry).path_elements(tol));
-        let inner_path = whole(rx * inner, ry * inner).to_path(tol);
-        path.extend(inner_path.reverse_subpaths());
+        path.extend(whole(rx, ry).elements().iter().copied());
+        let inner_path = whole(rx * inner, ry * inner);
+        path.extend(inner_path.reverse_subpaths().elements().iter().copied());
         return path;
     }
     let outer = kurbo::Arc::new(c, (rx, ry), start, sweep, 0.0);

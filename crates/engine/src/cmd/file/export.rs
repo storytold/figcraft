@@ -1,7 +1,7 @@
 use super::load::{ext, write};
 use super::save::thumbnail;
 use super::*;
-use crate::params::f64_of;
+use crate::params::{f64_of, req_targets};
 
 /// Encode `ids` (or the page) in `format` at `scale`.
 pub fn export_bytes(doc: &Document, ids: &[NodeId], format: ExportFormat, scale: f64) -> Result<Vec<u8>> {
@@ -55,6 +55,12 @@ pub fn drawn_layers(doc: &Document, ids: &[NodeId], setting: &ExportSetting) -> 
     crate::cmd::edit::z_sorted(doc, &crate::cmd::edit::roots(doc, &own))
 }
 
+/// The top-level layers of the page of `ids`, bottom to top: what a background blur or glass in an
+/// export of `ids` reads from (empty when `ids` are on no page).
+pub fn backdrop_layers(doc: &Document, ids: &[NodeId]) -> Vec<NodeId> {
+    ids.first().and_then(|i| doc.page_of(*i)).and_then(|p| doc.node(p)).map(|p| p.children.clone()).unwrap_or_default()
+}
+
 /// The frame or group a slice sits in: None on the page or in a section.
 fn slice_container(doc: &Document, slice: NodeId) -> Option<NodeId> {
     let parent = doc.node(slice)?.parent?;
@@ -86,7 +92,7 @@ pub(super) fn export(s: &mut Session, p: &Value) -> Result<Value> {
         _ => {}
     }
     let doc = s.doc()?;
-    let mut ids = targets(s, p);
+    let mut ids = export_targets(cmd, s, p)?;
     if ids.is_empty() {
         ids = doc.get(s.page()?)?.children.clone();
     }
@@ -174,6 +180,9 @@ pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value)
     }
     if let Some(c) = vd_compat_param(cmd, p)? {
         e.vd_compat = c;
+    }
+    if let Some(c) = color_profile_param(cmd, p)? {
+        e.color_profile = c;
     }
     if let Some(q) = quality_param(cmd, p)? {
         e.quality = q;
@@ -322,11 +331,22 @@ pub fn exportable_layers(doc: &Document, page: NodeId) -> Vec<NodeId> {
     doc.subtree(page).into_iter().skip(1).filter(|i| doc.node(*i).is_some_and(|n| !n.exports.is_empty())).collect()
 }
 
+/// Named layers (`ids` / `id`), checked like other commands; empty when none are named, so the
+/// caller can fall back to its default instead of silently dropping a bad id.
+fn export_targets(cmd: &str, s: &Session, p: &Value) -> Result<Vec<NodeId>> {
+    let named = match get(p, "ids") {
+        Some(Value::Array(a)) if !a.is_empty() => true,
+        Some(Value::Array(_) | Value::Null) | None => get(p, "id").is_some_and(|v| !v.is_null()),
+        Some(_) => true,
+    };
+    if named { req_targets(cmd, s, p) } else { Ok(targets(s, p)) }
+}
+
 pub(super) fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.exportLayers";
     let doc = s.doc()?;
     let assets = boolean(p, "assets").unwrap_or(false);
-    let mut ids = targets(s, p);
+    let mut ids = export_targets(cmd, s, p)?;
     if ids.is_empty() {
         ids = if assets { vec![s.page()?] } else { exportable_layers(doc, s.page()?) };
     }
@@ -342,10 +362,16 @@ pub(super) fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let print = has_print_param(p).then(|| print_param(cmd, p, PrintSettings::default())).transpose()?;
     // And a compatibility mode for every Android Vector Drawable.
     let compat = vd_compat_param(cmd, p)?;
+    // And a color profile for every PNG, JPG and WebP.
+    let profile = color_profile_param(cmd, p)?;
     let mut files = Vec::with_capacity(jobs.len());
     for job in &jobs {
-        let setting =
-            ExportSetting { print: print.unwrap_or(job.setting.print), vd_compat: compat.unwrap_or(job.setting.vd_compat), ..job.setting.clone() };
+        let setting = ExportSetting {
+            print: print.unwrap_or(job.setting.print),
+            vd_compat: compat.unwrap_or(job.setting.vd_compat),
+            color_profile: profile.unwrap_or(job.setting.color_profile),
+            ..job.setting.clone()
+        };
         let scale = export_scale(doc, &[job.id], &setting);
         let (bytes, warnings) = export_file(doc, &[job.id], &setting, scale)?;
         let mut f = json!({"name": job.file, "id": job.id, "bytes": bytes.len()});

@@ -66,10 +66,10 @@ fn cmd_click_selects_the_nested_layer() {
 #[test]
 fn cmd_marquee_selects_nested_layers() {
     let mut s = Session::new();
-    let (f, _, [a, b, c], out) = scene(&mut s);
-    // From empty canvas, a plain marquee across the frame only touches top-level layers (and the
-    // frame isn't fully covered).
-    assert_eq!(marquee(&mut s, (-10.0, 10.0), (500.0, 70.0), false, false), vec![out]);
+    let (f, g, [a, b, c], out) = scene(&mut s);
+    // From empty canvas, a plain marquee across the frame (not fully covered) gives the layers in it
+    // it touches (the group whole), plus the top-level layer.
+    assert_eq!(sorted(marquee(&mut s, (-10.0, 10.0), (500.0, 70.0), false, false)), sorted(vec![g, out]));
     // Cmd/Ctrl: the innermost layers it touches, through the frame and the group.
     assert_eq!(sorted(marquee(&mut s, (-10.0, 10.0), (500.0, 70.0), false, true)), sorted(vec![a, b, out]));
     assert_eq!(sorted(marquee(&mut s, (-10.0, 10.0), (100.0, 190.0), false, true)), sorted(vec![a, b, c]));
@@ -118,8 +118,33 @@ fn layers_at_a_point_list_the_stack_front_most_first() {
     let got: Vec<(NodeId, u64)> =
         out["layers"].as_array().unwrap().iter().map(|l| (id_of(&l["id"]).unwrap(), l["depth"].as_u64().unwrap())).collect();
     assert_eq!(got, vec![(f, 0), (over, 1), (g, 1), (a, 2)]);
+    assert!(out["layers"].as_array().unwrap().iter().all(|l| l["locked"] == json!(false)), "none is locked");
     assert_eq!(out["layers"][0]["type"], json!("FRAME"));
     // Nothing under empty canvas; junk is refused.
     assert_eq!(ex(&mut s, "select.layersAt", json!({"x": 2000, "y": 2000}))["layers"], json!([]));
     assert!(s.execute("select.layersAt", &json!({"x": "left"})).is_err());
+}
+
+/// Measured in Figma's web app, 2026-11-10 (Select layer lists a locked layer, and picking it selects it).
+#[test]
+fn layers_at_a_point_list_locked_layers_with_a_flag_and_select_set_takes_them() {
+    let mut s = Session::new();
+    let (f, g, [a, ..], _) = scene(&mut s);
+    let over = rect_in(&mut s, 10.0, 10.0, Some(f));
+    let lk = rect_in(&mut s, 10.0, 10.0, Some(f));
+    ex(&mut s, "object.toggleLock", json!({"ids": [lk], "locked": true}));
+    let out = ex(&mut s, "select.layersAt", json!({"x": 30, "y": 30}));
+    let got: Vec<(NodeId, u64, bool)> = out["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| (id_of(&l["id"]).unwrap(), l["depth"].as_u64().unwrap(), l["locked"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(got, vec![(f, 0, false), (lk, 1, true), (over, 1, false), (g, 1, false), (a, 2, false)]);
+    ex(&mut s, "select.set", json!({"ids": [lk]}));
+    assert_eq!(s.selection(), vec![lk]);
+    ex(&mut s, "select.none", json!({}));
+    s.pointer(&ev(PointerKind::Down, 30.0, 30.0, false, false)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 30.0, 30.0, false, false)).unwrap();
+    assert_eq!(s.selection(), vec![over], "a click still skips the locked layer");
 }

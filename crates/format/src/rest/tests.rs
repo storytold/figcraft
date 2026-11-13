@@ -290,6 +290,8 @@ fn vectors_ellipses_stars_and_booleans() {
     counted["pointCount"] = json!(6);
     let mut boolean = base("Bool", "BOOLEAN_OPERATION");
     boolean["booleanOperation"] = json!("SUBTRACT");
+    boolean["cornerRadius"] = json!(12);
+    boolean["cornerSmoothing"] = json!(0.6);
     boolean["children"] =
         json!([base("A", "RECTANGLE"), {"id": "B", "name": "B", "type": "ELLIPSE", "relativeTransform": at(5.0, 5.0), "size": {"x": 10, "y": 10}}]);
     let (doc, warnings) = one(json!([tri, wire, empty, arc, star, plain_star, counted, boolean]));
@@ -311,6 +313,8 @@ fn vectors_ellipses_stars_and_booleans() {
     assert!(matches!(b.kind, NodeKind::BooleanOp { op: BoolOp::Subtract }));
     assert_eq!(b.children.len(), 2);
     assert!(close(b.width, 15.0), "booleans wrap their children");
+    assert_eq!(b.corners.radii, [12.0; 4], "a boolean group keeps its corner radius");
+    assert!(close(b.corners.smoothing, 0.6));
 }
 
 #[test]
@@ -671,7 +675,11 @@ fn kitchen_sink() -> Value {
          ]},
         {"id": "k9", "name": "Sec", "type": "SECTION", "sectionContentsHidden": true, "relativeTransform": at(0.0, 0.0), "size": {"x": 50, "y": 50},
          "children": [{"id": "k10", "name": "Use", "type": "INSTANCE", "componentId": "3:1", "relativeTransform": at(0.0, 0.0), "size": {"x": 24, "y": 24},
-                       "componentProperties": {"Show#4:1": {"type": "BOOLEAN", "value": false}}}]}
+                       "componentProperties": {"Show#4:1": {"type": "BOOLEAN", "value": false}}}]},
+        {"id": "k11", "name": "Listed", "type": "TEXT", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}, "characters": "a\nb\nc\nd\ne\n",
+         "style": {"fontFamily": "Inter", "fontSize": 12},
+         "lineTypes": ["ORDERED", "ORDERED", "ORDERED", "UNORDERED", "ORDERED", "ORDERED"], "lineIndentations": [0, 0, 1, 0, 300, 0],
+         "listStartOffsets": [4, 4, 3, 2, 7, 9]}
     ]);
     if let (Some(kids), Some(more)) = (v.pointer_mut("/document/children/0/children").and_then(Value::as_array_mut), extra.as_array()) {
         kids.extend(more.iter().cloned());
@@ -688,6 +696,9 @@ fn kitchen_sink_imports_cleanly() {
     assert!(matches!(named(&doc, "Sec").kind, NodeKind::Section { contents_hidden: true }));
     assert!(matches!(&named(&doc, "Use").kind, NodeKind::Instance { props, .. } if props.get("Show") == Some(&json!(false))));
     assert!(matches!(named(&doc, "Txt").kind, NodeKind::Text(ref t) if t.list == ListStyle::Numbered && t.runs.len() == 3));
+    let NodeKind::Text(l) = &named(&doc, "Listed").kind else { panic!("not text") };
+    let got: Vec<(u8, u32)> = (0..l.paragraph_count()).map(|p| (l.para_list(p).indent, l.para_list(p).start_offset)).collect();
+    assert_eq!(got, [(0, 4), (0, 0), (1, 3), (0, 0), (8, 7), (0, 9)], "starts stay where a count starts; the level is capped");
     assert!(warnings.iter().all(|w| !w.contains("panick")), "{warnings:?}");
 }
 
@@ -796,4 +807,16 @@ fn an_arc_without_an_end_is_whole_wherever_it_starts() {
         let NodeKind::Ellipse { sweep, .. } = named(&doc, "Arc").kind else { panic!("{start}: not an ellipse") };
         assert_eq!(sweep, std::f64::consts::TAU, "start {start}");
     }
+}
+
+#[test]
+fn a_start_on_every_line_counts_only_where_the_list_starts() {
+    let (doc, _) = one(json!([
+        {"id": "t1", "name": "Every", "type": "TEXT", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}, "characters": "a\nb\nc",
+         "style": {"fontFamily": "Inter", "fontSize": 12},
+         "lineTypes": ["ORDERED", "ORDERED", "ORDERED"], "listStartOffsets": [4, 4, 4]}
+    ]));
+    let figcraft_doc::NodeKind::Text(t) = &named(&doc, "Every").kind else { panic!("not text") };
+    let offsets: Vec<u32> = (0..t.paragraph_count()).map(|p| t.para_list(p).start_offset).collect();
+    assert_eq!(offsets, [4, 0, 0]);
 }

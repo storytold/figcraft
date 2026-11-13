@@ -253,6 +253,54 @@ fn sweeping_across_eyes_and_padlocks_sets_several_layers() {
 }
 
 #[test]
+fn the_padlock_of_a_layer_in_a_locked_frame_is_inert() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Locked frame"})).unwrap());
+    let child = rect(&mut s, "child", 0.0, Some(frame));
+    s.execute("select.none", &json!({})).unwrap();
+    s.execute("object.toggleLock", &json!({"ids": [frame], "locked": true})).unwrap();
+    let mut u = Ui::new(s);
+    // Selecting the child reveals its row; then the selection goes away.
+    u.app.run("select.set", json!({"ids": [child]}));
+    u.frame(vec![]);
+    u.app.run("select.none", json!({}));
+    u.frame(vec![]);
+    let steps = u.app.session.undo_depth();
+    let r = u.row_at(child);
+    // The padlock column (see the sweep test above).
+    click(&mut u, Pos2::new(250.0, r.y), Modifiers::NONE);
+    assert!(!u.app.session.doc().unwrap().node(child).unwrap().locked, "the child's padlock doesn't lock it");
+    assert_eq!(u.app.session.undo_depth(), steps, "and adds no undo step");
+}
+
+#[test]
+fn a_padlock_sweep_skips_the_children_of_a_locked_frame() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Locked frame"})).unwrap());
+    let c1 = rect(&mut s, "child 1", 0.0, Some(frame));
+    let c2 = rect(&mut s, "child 2", 20.0, Some(frame));
+    let sibling = rect(&mut s, "sibling", 40.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    s.execute("object.toggleLock", &json!({"ids": [frame], "locked": true})).unwrap();
+    let mut u = Ui::new(s);
+    // Selecting a child reveals the frame's rows; then the selection goes away.
+    u.app.run("select.set", json!({"ids": [c1]}));
+    u.frame(vec![]);
+    u.app.run("select.none", json!({}));
+    u.frame(vec![]);
+    let padlock = 250.0;
+    let (rs, rc) = (u.row_at(sibling), u.row_at(c1));
+    let from = Pos2::new(padlock, rs.y);
+    u.frame(vec![Event::PointerMoved(from)]);
+    u.drag_to(from, Pos2::new(padlock, rc.y));
+    u.button(Pos2::new(padlock, rc.y), false);
+    let doc = u.app.session.doc().unwrap();
+    assert!(doc.node(sibling).unwrap().locked, "the sibling is locked by the sweep");
+    assert!(!doc.node(c1).unwrap().locked, "a child of a locked frame keeps its own flag");
+    assert!(!doc.node(c2).unwrap().locked, "so does the other child");
+}
+
+#[test]
 fn renaming_several_layers_opens_the_rename_dialog() {
     let (mut u, [a, b, c, _d]) = four();
     // Cmd/Ctrl+R (F2, the context menu's Rename) with several layers selected.
@@ -836,4 +884,101 @@ fn search_fields_keep_their_text_in_the_middle() {
     u.app.ui.left_tab = crate::LeftTab::Assets;
     let off = off_centre(&mut u, "Search assets");
     assert!(off < 1.0, "Search assets is {off} points off the middle");
+}
+
+/// The centre of `id`'s icon, a top-level row: the row's left edge is the first point from the
+/// left at which the pointer is over it, and the icon's centre is 8 (margin) + 4 + 22 points
+/// further right.
+fn icon_of(u: &mut Ui, id: NodeId) -> Pos2 {
+    let y = u.row_at(id).y;
+    let mut left = None;
+    for x in 0..150 {
+        let p = Pos2::new(x as f32, y);
+        u.app.session.ds_mut().unwrap().hover = None;
+        u.frame(vec![Event::PointerMoved(p)]);
+        if u.app.session.ds().unwrap().hover == Some(id) {
+            left = Some(x as f32);
+            break;
+        }
+    }
+    Pos2::new(left.expect("the row has a left edge") + 34.0, y)
+}
+
+/// Measured in Figma's web app, 2026-11-12: a double-click on a layer's icon zooms the canvas to
+/// the layer and starts no rename (a double-click on the name renames, as before).
+#[test]
+fn a_double_click_on_a_layers_icon_zooms_to_it_instead_of_renaming() {
+    let mut s = Session::new();
+    rect(&mut s, "near", 0.0, None);
+    let far = rect(&mut s, "far", 3000.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let icon = icon_of(&mut u, far);
+    let view = |u: &Ui| {
+        let v = &u.app.session.ds().unwrap().view;
+        (v.cx, v.cy, v.zoom)
+    };
+    let before = view(&u);
+    for _ in 0..2 {
+        u.button(icon, true);
+        u.button(icon, false);
+    }
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.rename, None, "a double-click on the icon renames nothing");
+    assert_eq!(u.app.session.selection(), vec![far], "the layer is selected");
+    let after = view(&u);
+    assert_ne!(after, before, "the view moved");
+    u.app.session.execute("view.set", &json!({"cx": before.0, "cy": before.1, "zoom": before.2})).unwrap();
+    u.app.session.execute("view.zoomSelection", &json!({})).unwrap();
+    assert_eq!(after, view(&u), "the view frames the layer, as view.zoomSelection does");
+}
+
+/// A double-click's release is also a click on the row; with Ctrl held it must not toggle the layer
+/// back out of the selection the zoom just made, nor can Shift restore a range.
+#[test]
+fn an_icon_double_click_keeps_its_selection_when_a_modifier_is_held() {
+    let mut s = Session::new();
+    rect(&mut s, "near", 0.0, None);
+    let far = rect(&mut s, "far", 3000.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let icon = icon_of(&mut u, far);
+    let before = (u.app.session.ds().unwrap().view.cx, u.app.session.ds().unwrap().view.zoom);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: CMD };
+            u.frame_with(vec![Event::PointerMoved(icon), e], CMD);
+        }
+    }
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), vec![far], "the layer stays selected");
+    assert_eq!(u.app.ui.rename, None);
+    let v = &u.app.session.ds().unwrap().view;
+    assert_ne!((v.cx, v.zoom), before, "the view frames the layer");
+}
+
+/// A Shift-double-click on an icon leaves just that layer selected, and it becomes the anchor: the
+/// next Shift-click selects the range from it, not a toggle.
+#[test]
+fn an_icon_double_click_becomes_the_range_anchor() {
+    let (mut u, [a, b, c, d]) = four();
+    u.frame(vec![]);
+    let a_row = u.row_at(a);
+    click(&mut u, a_row, Modifiers::NONE);
+    let icon = icon_of(&mut u, b);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: SHIFT };
+            u.frame_with(vec![Event::PointerMoved(icon), e], SHIFT);
+        }
+    }
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.selection(), vec![b], "the icon's layer is all that is selected");
+    let d_row = u.row_at(d);
+    click(&mut u, d_row, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![b, c, d]), "the range from the icon's layer");
 }

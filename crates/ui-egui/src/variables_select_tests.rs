@@ -250,3 +250,238 @@ fn the_bulk_menu_scrolls_when_forty_groups_make_it_taller_than_the_window() {
     assert!(visible(&shapes), "scrolling the menu never brought {last:?} into view");
     assert!(screen.contains_rect(popup_rect(&u)));
 }
+
+/// A collection with a group `space` of two number variables with distinct values in two modes.
+fn grouped_window() -> Ui {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    for (n, light, dark) in [("space/sm", 4, 8), ("space/md", 16, 32)] {
+        s.execute("variable.create", &json!({"collection": "Theme", "name": n, "type": "number", "value": light})).unwrap();
+        s.execute("variable.set", &json!({"variable": n, "mode": "Dark", "value": dark})).unwrap();
+        s.execute("variable.update", &json!({"variable": n, "scopes": ["GAP"], "description": n})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    u
+}
+
+/// Three colour variables: bravo and charlie also have Stroke in their scopes, delta does not.
+fn colour_window() -> Ui {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    for (n, scopes) in
+        [("bravo", json!(["FRAME_FILL", "STROKE_COLOR"])), ("charlie", json!(["FRAME_FILL", "STROKE_COLOR"])), ("delta", json!(["FRAME_FILL"]))]
+    {
+        s.execute("variable.create", &json!({"collection": "Theme", "name": n, "type": "color", "value": "#ff0000"})).unwrap();
+        s.execute("variable.update", &json!({"variable": n, "scopes": scopes})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    u
+}
+
+/// Right-click the group row `name` and choose Duplicate group.
+fn duplicate_group(u: &mut Ui, name: &str) {
+    let p = row(u, name);
+    click(u, p, PointerButton::Secondary, Modifiers::NONE);
+    let menu = flat(&u.frame_output(vec![]).shapes);
+    click(u, text_center(&menu, "Duplicate group"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+#[test]
+fn duplicate_group_copies_every_variable_in_both_modes_in_one_undo_step() {
+    let mut u = grouped_window();
+    let before = u.app.session.undo_labels(100).len();
+    duplicate_group(&mut u, "space");
+    let doc = u.app.session.doc().unwrap();
+    let vars = &doc.variables;
+    for (leaf, light, dark) in [("sm", 4, 8), ("md", 16, 32)] {
+        let old = vars.variables.iter().find(|v| v.name == format!("space/{leaf}")).unwrap();
+        let new = vars.variables.iter().find(|v| v.name == format!("space 2/{leaf}")).unwrap_or_else(|| panic!("no space 2/{leaf}"));
+        assert_ne!(old.id, new.id);
+        assert_eq!(new.values, old.values, "{leaf}: values in both modes");
+        assert_eq!(new.scopes, old.scopes);
+        assert_eq!(new.description, old.description);
+        let _ = (light, dark);
+    }
+    assert_eq!(names(&u).len(), 4);
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    assert_eq!(u.app.session.undo_labels(1), ["Duplicate group"]);
+    // The new group is listed directly after the original.
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "space 2"));
+    assert!(text_center(&shapes, "space 2").y > text_center(&shapes, "space").y);
+    u.app.session.undo().unwrap();
+    assert_eq!(names(&u), ["space/sm", "space/md"]);
+}
+
+#[test]
+fn a_second_duplicate_group_takes_the_next_free_name() {
+    let mut u = grouped_window();
+    duplicate_group(&mut u, "space");
+    duplicate_group(&mut u, "space");
+    let n = names(&u);
+    assert!(n.contains(&"space 2/sm".to_string()) && n.contains(&"space 3/md".to_string()), "{n:?}");
+    assert_eq!(n.len(), 6);
+}
+
+fn open_edit_variables(u: &mut Ui) -> Vec<egui::Shape> {
+    let menu = select_three_and_open_menu(u);
+    assert!(has_text(&menu, "Edit variables"), "the bulk menu offers Edit variables");
+    click(u, text_center(&menu, "Edit variables"), PointerButton::Primary, Modifiers::NONE);
+    flat(&u.frame_output(vec![]).shapes)
+}
+
+fn flags(u: &Ui) -> Vec<(bool, bool)> {
+    let doc = u.app.session.doc().unwrap();
+    ["bravo", "charlie", "delta"]
+        .iter()
+        .map(|n| {
+            let v = doc.variables.variables.iter().find(|v| v.name == *n).unwrap();
+            (v.hidden_from_publishing, v.in_scope("STROKE_COLOR"))
+        })
+        .collect()
+}
+
+#[test]
+fn edit_variables_sets_stroke_on_all_selected_in_one_undo_step() {
+    let mut u = colour_window();
+    let shapes = open_edit_variables(&mut u);
+    assert!(has_text(&shapes, "Hide from publishing") && has_text(&shapes, "Scope"));
+    click(&mut u, text_center(&shapes, "Scope"), PointerButton::Primary, Modifiers::NONE);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "Stroke"));
+    assert_eq!(flags(&u), [(false, true), (false, true), (false, false)]);
+    let before = u.app.session.undo_labels(100).len();
+    click(&mut u, text_center(&shapes, "Stroke"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert_eq!(flags(&u), [(false, true), (false, true), (false, true)]);
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    u.app.session.undo().unwrap();
+    assert_eq!(flags(&u), [(false, true), (false, true), (false, false)]);
+}
+
+#[test]
+fn edit_variables_hides_all_selected_from_publishing_in_one_undo_step() {
+    let mut u = colour_window();
+    let shapes = open_edit_variables(&mut u);
+    let before = u.app.session.undo_labels(100).len();
+    click(&mut u, text_center(&shapes, "Hide from publishing"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert!(flags(&u).iter().all(|f| f.0), "all hidden");
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    u.app.session.undo().unwrap();
+    assert!(flags(&u).iter().all(|f| !f.0));
+}
+
+/// Bravo, charlie and delta of the given types (a value fitting each).
+fn typed_window(types: [&str; 3]) -> Ui {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    for (n, t) in ["bravo", "charlie", "delta"].into_iter().zip(types) {
+        let value = match t {
+            "number" => json!(1),
+            "boolean" => json!(true),
+            "string" => json!("x"),
+            _ => json!("#ff0000"),
+        };
+        s.execute("variable.create", &json!({"collection": "Theme", "name": n, "type": t, "value": value})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    u
+}
+
+fn scope_tab(u: &mut Ui) -> Vec<egui::Shape> {
+    let shapes = open_edit_variables(u);
+    click(u, text_center(&shapes, "Scope"), PointerButton::Primary, Modifiers::NONE);
+    flat(&u.frame_output(vec![]).shapes)
+}
+
+fn scopes(u: &Ui) -> Vec<Option<Vec<String>>> {
+    let doc = u.app.session.doc().unwrap();
+    ["bravo", "charlie", "delta"].iter().map(|n| doc.variables.variables.iter().find(|v| v.name == *n).unwrap().scopes.clone()).collect()
+}
+
+#[test]
+fn all_supported_properties_turns_on_for_every_selected_variable_and_off_again_one_undo_step_each() {
+    let mut u = colour_window();
+    let shapes = scope_tab(&mut u);
+    assert!(scopes(&u).iter().all(|s| s.is_some()), "each variable starts limited");
+    let before = u.app.session.undo_labels(100).len();
+    click(&mut u, text_center(&shapes, "All supported properties"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert!(scopes(&u).iter().all(|s| s.is_none()), "on: no variable is limited: {:?}", scopes(&u));
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    click(&mut u, text_center(&shapes, "All supported properties"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert!(scopes(&u).iter().all(|s| s.as_ref().is_some_and(|l| l.is_empty())), "off: hidden from pickers: {:?}", scopes(&u));
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 2, "one undo step each");
+}
+
+#[test]
+fn clicking_a_checked_scope_clears_it_on_every_selected_variable_in_one_undo_step() {
+    let mut u = colour_window();
+    let shapes = scope_tab(&mut u);
+    let before = u.app.session.undo_labels(100).len();
+    // Frame fill is on for all three: checked, so the click clears it.
+    click(&mut u, text_center(&shapes, "Frame fill"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    let doc = u.app.session.doc().unwrap();
+    assert!(["bravo", "charlie", "delta"].iter().all(|n| !doc.variables.variables.iter().find(|v| v.name == *n).unwrap().in_scope("FRAME_FILL")));
+    assert_eq!(flags(&u), [(false, true), (false, true), (false, false)], "the other scopes stay");
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    u.app.session.undo().unwrap();
+    assert!(scopes(&u).iter().all(|s| s.as_ref().is_some_and(|l| l.iter().any(|x| x == "FRAME_FILL"))));
+}
+
+#[test]
+fn booleans_share_no_scope_and_the_scope_tab_says_so() {
+    let mut u = typed_window(["boolean", "boolean", "boolean"]);
+    let shapes = scope_tab(&mut u);
+    assert!(has_text(&shapes, "No scope is shared by all the selected variables"));
+    assert!(!has_text(&shapes, "All supported properties"));
+}
+
+#[test]
+fn mixed_types_list_only_the_scopes_every_type_has() {
+    // Number and string share only Text content; a colour shares nothing with them.
+    let mut u = typed_window(["number", "number", "string"]);
+    let shapes = scope_tab(&mut u);
+    assert!(has_text(&shapes, "Text content"), "the shared scope is shown");
+    for other in ["Corner radius", "Font family", "Font size"] {
+        assert!(!has_text(&shapes, other), "{other} is not common");
+    }
+    assert!(!has_text(&shapes, "No scope is shared by all the selected variables"));
+    let mut u = typed_window(["number", "color", "string"]);
+    let shapes = scope_tab(&mut u);
+    assert!(has_text(&shapes, "No scope is shared by all the selected variables"));
+}
+
+#[test]
+fn edit_variables_is_not_offered_when_every_selected_variable_is_inherited() {
+    let mut u = window();
+    u.app.session.execute("variable.extendCollection", &json!({"collection": "Theme"})).unwrap();
+    u.app.ui.variables = Some(crate::dialogs::variables_panel::Editor::on(Some("Theme (extended)".into())));
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    click_row(&mut u, "bravo", Modifiers::NONE);
+    click_row(&mut u, "delta", SHIFT);
+    assert_eq!(selected(&u), ["bravo", "charlie", "delta"]);
+    let p = row(&mut u, "delta");
+    click(&mut u, p, PointerButton::Secondary, Modifiers::NONE);
+    let menu = flat(&u.frame_output(vec![]).shapes);
+    assert!(!has_text(&menu, "Edit variables"), "inherited variables are edited in their own collection");
+}

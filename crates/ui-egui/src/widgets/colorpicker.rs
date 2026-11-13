@@ -760,6 +760,21 @@ fn blend_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &mut P
     });
 }
 
+/// The layer and fill index to crop on the canvas (`image.crop`) when Crop is chosen for `target`:
+/// one layer's image fill as the Fill section shows it (a text's characters' shared fills
+/// included). Strokes, several layers at once and the regions selected in vector edit mode have
+/// no crop mode, so for them Crop only sets the paint's mode.
+pub(crate) fn crop_on_canvas(app: &FigApp, target: &PickerTarget) -> Option<(NodeId, usize)> {
+    let PickerTarget::Paint { fills: true, index, ids } = target else { return None };
+    let [id] = ids[..] else { return None };
+    if figcraft_engine::vectoredit::selected_region_fills(&app.session, id).is_some() {
+        return None;
+    }
+    let doc = app.session.doc().ok()?;
+    let shown = figcraft_engine::cmd::lists::character_fills(doc.node(id)?)?;
+    matches!(shown.get(*index)?.kind, PaintKind::Image(_)).then_some((id, *index))
+}
+
 /// The image paint's scale mode, rotation, colour profile, presets and filter sliders.
 fn image_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &mut Paint, mut img: ImagePaint, t: &Tokens) {
     ui.horizontal(|ui| {
@@ -773,9 +788,19 @@ fn image_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &
                 (tr("Tile"), ImageScaleMode::Tile),
             ] {
                 if crate::right::menu_item(ui, l, "") {
-                    img.scale_mode = m;
-                    paint.kind = PaintKind::Image(img.clone());
-                    write(app, target, paint, false);
+                    match crop_on_canvas(app, target).filter(|_| m == ImageScaleMode::Crop) {
+                        // Crop for a layer's own image fill is Crop image (#2150): the picture keeps
+                        // its place and crop mode takes the canvas, closing the picker, so its
+                        // handles crop it as they do when crop mode comes from the menu.
+                        Some((id, index)) => {
+                            app.run("image.crop", json!({"ids": [id], "index": index}));
+                        }
+                        None => {
+                            img.scale_mode = m;
+                            paint.kind = PaintKind::Image(img.clone());
+                            write(app, target, paint, false);
+                        }
+                    }
                     ui.close();
                 }
             }
@@ -994,8 +1019,18 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     };
     let open = beside.map(Open::At).unwrap_or_else(|| {
         let top = app.ui.picker_button.map_or(140.0, |r| r.min.y);
-        let edge = app.ui.right_panel_rect.map_or(screen.max.x - app.ui.right_width, |r| r.min.x);
-        Open::Anchor(pos2(edge - 8.0, top))
+        // Beside the Design panel, on its canvas side (its right in a mirrored window).
+        let panel = app.ui.right_panel_rect.map_or_else(
+            || {
+                if app.ui.mirrored {
+                    egui::Rangef::new(screen.min.x, screen.min.x + app.ui.right_width)
+                } else {
+                    egui::Rangef::new(screen.max.x - app.ui.right_width, screen.max.x)
+                }
+            },
+            |r| r.x_range(),
+        );
+        if app.ui.mirrored { Open::AnchorMirrored(pos2(panel.max + 8.0, top)) } else { Open::Anchor(pos2(panel.min - 8.0, top)) }
     });
     // The colour picker's own header — title 16 in, the X 8 in from the right — is the shared
     // popover's chrome now; the picker keeps its body. Its area id is [`window_id`], the one the
@@ -1006,7 +1041,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let picking = app.session.tool.pick_only || app.session.tool.picked.is_some();
     // Nor may a press on the open gradient's handles or stops on the canvas: they are this picker's
     // controls, and the canvas took the press before the picker drew (#1852).
-    let own = picking || crate::handles::gradient_dragging(ctx);
+    // Nor may one on the crop of an image paint held in Crop mode (#2307).
+    let own = picking || crate::handles::gradient_dragging(ctx) || crate::handles::crop_dragging(ctx);
     pop = pop.close_on_outside(!own);
     // Only the opening control is held out: any other sidebar or canvas press dismisses it.
     let mut held: Vec<Rect> = app.ui.picker_button.into_iter().collect();

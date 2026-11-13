@@ -78,7 +78,15 @@ fn panels_fit_the_window() {
         ((744.0, None, Some(480.0)), (0.0, 480.0), "with the left panel closed the right one has room"),
         ((300.0, Some(240.0), Some(240.0)), (l0, r0), "a window smaller than any layout: the least widths"),
         ((1384.0, Some(f32::NAN), Some(f32::INFINITY)), (PANEL_DEFAULT, PANEL_DEFAULT), "junk widths: the default"),
-        ((744.0, Some(480.0), None), (480.0, 0.0), "the right panel closed (a board's): the left one keeps its width"),
+        ((744.0, Some(480.0), None), (l1, 0.0), "the right panel closed (a board's): the left one keeps as much of its width as it may"),
+        ((744.0, Some(450.0), None), (450.0, 0.0), "the right panel closed: the left one at its most"),
+        ((1384.0, Some(200.0), Some(480.0)), (l0, 480.0), "a stored left width under 240 (the old limit was 200) is brought up to 240"),
+        ((1384.0, Some(470.0), Some(520.0)), (l1, r1), "stored widths over the limits (the old ones were 480) are brought down to 450 and 500"),
+        (
+            (744.0, Some(300.0), Some(500.0)),
+            (240.0, 344.0),
+            "the smallest window with the right panel at its most: the right gives way last, the left to its 240 floor",
+        ),
     ];
     for ((avail, left, right), want, why) in rows {
         assert_eq!(fit_panels(avail, left, right), want, "{why}");
@@ -122,14 +130,17 @@ fn dragging_an_edge_sizes_its_panel_within_its_limits_and_keeps_the_views_centre
     let (left, right) = edges(&u);
     drag(&mut u, pos2(left, 300.0), pos2(left + 700.0, 300.0));
     assert_eq!(widths(&u).0, *LEFT_PANEL.end());
+    assert_eq!(widths(&u).0, 450.0, "Figma's left sidebar stops at 450");
     let (left, _) = edges(&u);
     drag(&mut u, pos2(left, 300.0), pos2(20.0, 300.0));
     assert_eq!(widths(&u).0, *LEFT_PANEL.start());
+    assert_eq!(widths(&u).0, 240.0, "and at 240 the other way");
     drag(&mut u, pos2(right, 300.0), pos2(right + 500.0, 300.0));
     assert_eq!(widths(&u).1, *RIGHT_PANEL.start());
     let (_, right) = edges(&u);
     u.drag_to(pos2(right, 300.0), pos2(right - 900.0, 300.0));
     assert_eq!(widths(&u).1, *RIGHT_PANEL.end(), "at its most while the pointer is past it");
+    assert_eq!(widths(&u).1, 500.0, "Figma's right sidebar stops at 500");
     u.frame(vec![Event::PointerMoved(pos2(right - 100.0, 300.0))]);
     assert_eq!(widths(&u).1, *RIGHT_PANEL.start() + 100.0, "back with the pointer");
     u.button(pos2(right - 100.0, 300.0), false);
@@ -187,6 +198,17 @@ fn the_widths_come_back_with_the_preferences() {
     u.frame(vec![]);
     let (left, right) = edges(&u);
     assert_eq!((left, 1440.0 - right), (56.0 + *LEFT_PANEL.start(), PANEL_DEFAULT));
+    // Widths saved under the old limits (left 200 to 480, right up to 480) or over the new ones
+    // are clamped when loaded, not rejected.
+    for (stored, want) in
+        [((200.0, 240.0), (240.0, 240.0)), ((239.0, 500.0), (240.0, 500.0)), ((451.0, 480.0), (450.0, 480.0)), ((480.0, 600.0), (450.0, 500.0))]
+    {
+        let mut s = Session::new();
+        s.prefs.panel_widths = stored;
+        let mut u = Ui::new(s);
+        u.frame(vec![]);
+        assert_eq!(widths(&u), want, "stored {stored:?}");
+    }
 }
 
 #[test]
@@ -211,7 +233,7 @@ fn minimize_ui_hides_the_panels_and_keeps_their_widths() {
 }
 
 /// The middle of the accessible control with `role` and `label`, if one shows.
-fn control(u: &mut Ui, role: egui::accesskit::Role, label: &str) -> Option<Pos2> {
+pub(crate) fn control(u: &mut Ui, role: egui::accesskit::Role, label: &str) -> Option<Pos2> {
     u.ctx.enable_accesskit();
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
@@ -264,7 +286,7 @@ fn minimize_collapses_the_rail_and_both_sidebars_and_the_right_one_follows_the_s
 
 #[test]
 fn the_smallest_window_keeps_its_canvas_whatever_the_widths() {
-    for asked in [(240.0, 240.0), (480.0, 480.0), (480.0, 240.0), (200.0, 480.0)] {
+    for asked in [(240.0, 240.0), (450.0, 500.0), (450.0, 240.0), (240.0, 500.0)] {
         let mut s = Session::new();
         s.prefs.panel_widths = asked;
         let ctx = egui::Context::default();

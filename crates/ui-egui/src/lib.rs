@@ -88,6 +88,8 @@ mod context_menu_tests;
 #[cfg(test)]
 mod corner_individual_tests;
 #[cfg(test)]
+mod create_multiple_menu_tests;
+#[cfg(test)]
 mod crop_image_tests;
 #[cfg(test)]
 mod cursors_tests;
@@ -122,11 +124,15 @@ mod guide_release_tests;
 #[cfg(test)]
 mod guide_snap_tests;
 #[cfg(test)]
+mod header_icon_size_tests;
+#[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
 #[cfg(test)]
 mod host_save_tests;
+#[cfg(test)]
+mod icon_button_size_tests;
 #[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
@@ -137,6 +143,8 @@ mod import_report_tests;
 mod inspect_fields_tests;
 #[cfg(test)]
 mod layers_behaviour_tests;
+#[cfg(test)]
+mod layers_component_rows_tests;
 #[cfg(test)]
 mod layers_drag_tests;
 #[cfg(test)]
@@ -178,13 +186,21 @@ mod menu_contrast_tests;
 #[cfg(test)]
 mod menu_input_tests;
 #[cfg(test)]
+mod menu_overflow_tests;
+#[cfg(test)]
+mod mirror_tests;
+#[cfg(test)]
 mod missing_fonts_tests;
+#[cfg(test)]
+mod naming_tests;
 #[cfg(test)]
 mod online_tests;
 #[cfg(test)]
 mod open_issues_tests;
 #[cfg(test)]
 mod padding_individual_tests;
+#[cfg(test)]
+mod page_variable_modes_tests;
 #[cfg(test)]
 mod palette_tests;
 #[cfg(test)]
@@ -220,12 +236,17 @@ mod present_tests;
 mod present_view_tests;
 #[cfg(test)]
 mod property_menu_tests;
+mod property_rows;
+#[cfg(test)]
+mod property_rows_tests;
 #[cfg(test)]
 mod proto_editor_tests;
 #[cfg(test)]
 mod proto_reorder_tests;
 #[cfg(test)]
 mod proto_responsive_tests;
+#[cfg(test)]
+mod proto_variant_connect_tests;
 #[cfg(test)]
 mod region_fill_rows_tests;
 #[cfg(test)]
@@ -236,6 +257,8 @@ mod sampled_color_tests;
 mod save_as_tests;
 #[cfg(test)]
 mod select_all_tests;
+#[cfg(test)]
+mod selection_colors_tests;
 #[cfg(test)]
 mod shortcut_keys_tests;
 #[cfg(test)]
@@ -254,6 +277,8 @@ mod text_enter_tests;
 mod text_link_tests;
 #[cfg(test)]
 mod text_mixed_fill_tests;
+#[cfg(test)]
+mod tidy_tests;
 #[cfg(test)]
 mod titlebar_tests;
 #[cfg(test)]
@@ -274,6 +299,8 @@ mod variants_discovery_tests;
 mod vector_keys_tests;
 #[cfg(test)]
 mod vector_panel_tests;
+#[cfg(test)]
+mod vector_point_xy_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
 #[cfg(test)]
@@ -495,6 +522,11 @@ pub struct UiState {
     /// A selection box drawn from the keyboard (`select.area`), page `[x0, y0, x1, y1]` with the
     /// marquee's start at `x0, y0`.
     pub key_box: Option<[f64; 4]>,
+    /// Pick select (#1836): the layer the pink outline is on while the keys walk the layer tree
+    /// (Tab or the selection-box chord again while the box shows; Space selects it), with the uid
+    /// of its document: layer ids are only unique within a document, and the pick holds only on
+    /// the page shown ([`FigApp::picked`]).
+    pub pick: Option<(u64, NodeId)>,
     /// Layers panel search: open, the filter text, the shift-click range anchor and the selection
     /// the tree last revealed (ancestors expand and the row scrolls into view when it changes).
     pub layer_search: bool,
@@ -559,6 +591,9 @@ pub struct UiState {
     pub mobile_panel: Option<MobilePanel>,
     /// The window was narrow (one side panel at a time) at the last frame.
     pub narrow: bool,
+    /// The window is mirrored for a right-to-left UI language: the icon rail and the layers panel
+    /// on the right, the Design panel on the left, popovers beside it on its right.
+    pub mirrored: bool,
     pub comments: comments::CommentUi,
     pub versions: versions::VersionUi,
     /// The branch review dialog, while open.
@@ -575,6 +610,10 @@ pub struct UiState {
     /// copy changes the engine clipboard without writing the OS clipboard; the generation then
     /// no longer matches, so the stale mirror is not mistaken for the user's own copy.
     pub last_copy_generation: u64,
+    /// The fill, stroke or effect row highlighted in the Design panel: Cmd/Ctrl+C copies it.
+    pub property_row: Option<property_rows::Highlight>,
+    /// A paint or effect copied from its row: Cmd/Ctrl+V pastes it while it's the last copy.
+    pub property_copy: Option<property_rows::Copied>,
     /// A save shortcut pressed while a panel field had the keyboard: the field lets go (which
     /// commits what was typed) and the command runs next frame for that document/window.
     pub after_field: Option<shortcuts::AfterFieldSave>,
@@ -672,6 +711,7 @@ impl Default for UiState {
             context_menu: None,
             key_menu: false,
             key_box: None,
+            pick: None,
             layer_search: false,
             layer_filter: String::new(),
             layer_anchor: None,
@@ -709,6 +749,7 @@ impl Default for UiState {
             left_collapsed: false,
             mobile_panel: None,
             narrow: false,
+            mirrored: false,
             comments: comments::CommentUi::default(),
             versions: versions::VersionUi::default(),
             branch_review: None,
@@ -716,6 +757,8 @@ impl Default for UiState {
 
             last_copy: None,
             last_copy_generation: 0,
+            property_row: None,
+            property_copy: None,
             after_field: None,
             held: egui::Modifiers::NONE,
             next_autosave: 0.0,

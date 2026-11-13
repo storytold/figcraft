@@ -4,7 +4,7 @@
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, NodeId, NodeKind, Routing, Stamp, StrokeCap};
-use figcraft_engine::board::{BoardTool, TEXT_SIZES};
+use figcraft_engine::board::{BoardTool, STICKY_SIZES, TEXT_SIZES};
 use figcraft_engine::board_grid::GridStyle;
 use serde_json::{Value, json};
 
@@ -96,6 +96,9 @@ struct Has {
     color: bool,
     shape: Option<BoardShape>,
     text: bool,
+    /// The first selected sticky's text size: stickies take a size menu (not the S/M/L/XL cells)
+    /// when they are the only text-bearing objects selected.
+    sticky: Option<f64>,
     connector: Option<Line>,
     /// Every selected board object is a connector: the colour part offers any colour too.
     only_lines: bool,
@@ -121,7 +124,15 @@ fn has(app: &FigApp) -> Option<Has> {
     for n in ds.selection.iter().filter_map(|id| ds.doc.node(*id)) {
         others |= n.board.is_some() && !matches!(n.board, Some(BoardItem::Connector(_)));
         match &n.board {
-            Some(BoardItem::Sticky { .. } | BoardItem::Ink) => h.color = true,
+            Some(BoardItem::Sticky { .. }) => {
+                h.color = true;
+                let size = figcraft_engine::board::text_of(&ds.doc, n.id)
+                    .and_then(|t| ds.doc.node(t))
+                    .and_then(|t| t.kind.text())
+                    .map_or(figcraft_engine::board::STICKY_TEXT_SIZE, |t| t.style.font_size);
+                h.sticky.get_or_insert(size);
+            }
+            Some(BoardItem::Ink) => h.color = true,
             Some(BoardItem::Shape { shape }) => {
                 h.color = true;
                 h.text = true;
@@ -140,7 +151,7 @@ fn has(app: &FigApp) -> Option<Has> {
                 });
                 line.ids.push(n.id);
             }
-            Some(BoardItem::Label { .. }) => h.text = true,
+            Some(BoardItem::Label { .. } | BoardItem::MindNode) => h.text = true,
             Some(BoardItem::Table) => h.table = true,
             Some(BoardItem::Stamp { .. }) | None => {}
         }
@@ -154,6 +165,8 @@ const SWATCH: f32 = 20.0;
 const GAP: f32 = 4.0;
 /// The room each part takes after its controls (the divider and the gap around it).
 const PART_END: f32 = 8.0;
+/// The sticky size menu's width: its name ("Extra large") and the chevron.
+const STICKY_W: f32 = 96.0;
 
 impl Has {
     /// The bar's width for these parts.
@@ -167,6 +180,9 @@ impl Has {
         }
         if self.shape.is_some() {
             w += CELL + 12.0 + GAP + PART_END;
+        }
+        if self.sticky.is_some() && !self.text {
+            w += STICKY_W + PART_END;
         }
         if self.text {
             w += TEXT_SIZES.len() as f32 * (CELL + 2.0) + PART_END;
@@ -226,6 +242,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         }
         if h.text {
             x = size_part(app, ui, x, cy, &t);
+        } else if let Some(size) = h.sticky {
+            x = sticky_size_part(app, ui, size, pos2(x, cy), &t);
         }
         if h.table {
             x = crate::board_picker::table_part(app, ui, x, cy, &t);
@@ -336,6 +354,42 @@ fn size_part(app: &mut FigApp, ui: &mut Ui, mut x: f32, cy: f32, t: &Tokens) -> 
         x += CELL + 2.0;
     }
     divider(ui, t, x, cy)
+}
+
+/// A sticky size's name as the UI says it (`None` when no entry has that size).
+fn sticky_size_label(size: f64) -> Option<&'static str> {
+    STICKY_SIZES.iter().find(|(_, s)| (*s - size).abs() < 0.01).map(|(name, _)| match *name {
+        "Small" => tr_noop("Small"),
+        "Medium" => tr_noop("Medium"),
+        "Large" => tr_noop("Large"),
+        "Extra large" => tr_noop("Extra large"),
+        _ => tr_noop("Huge"),
+    })
+}
+
+/// The sticky text size menu at `at` (its left edge and middle), showing `size` by name, or as a
+/// number when no entry has it; `board.setStyle {fontSize}`; where the next part starts.
+fn sticky_size_part(app: &mut FigApp, ui: &mut Ui, size: f64, at: Pos2, t: &Tokens) -> f32 {
+    let r = Rect::from_min_size(pos2(at.x, at.y - CELL / 2.0), vec2(STICKY_W, CELL));
+    let tip = tr("Text size");
+    let resp = ui.interact(r, ui.scope_id().with("bb_sticky_size"), Sense::click()).on_hover_text(tip);
+    a11y::menu_button(&resp, tip, a11y::menu_open(&resp));
+    if resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
+    }
+    let name = sticky_size_label(size).map_or_else(|| format!("{}", (size * 100.0).round() / 100.0), |l| tr(l).to_string());
+    ui.painter().text(pos2(r.min.x + 8.0, at.y), egui::Align2::LEFT_CENTER, name, semibold(11.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 9.0, at.y), vec2(12.0, 12.0)), Icon::Chevron, t.icon_secondary);
+    crate::right::menu_popup(&resp).show(|ui| {
+        for (name, value) in STICKY_SIZES {
+            let label = sticky_size_label(value).unwrap_or(name);
+            if crate::right::menu_check(ui, (value - size).abs() < 0.01, tr(label), "") {
+                app.run("board.setStyle", json!({"fontSize": value}));
+                ui.close();
+            }
+        }
+    });
+    divider(ui, t, at.x + STICKY_W, at.y)
 }
 
 /// A start or end point menu's width: the end's picture and the menu's chevron.
