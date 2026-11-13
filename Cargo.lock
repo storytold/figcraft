@@ -1014,7 +1014,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e7464
 [[package]]
 name = "craft-fig"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26#e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
 dependencies = [
  "craft-figma-rest",
  "craft-kiwi",
@@ -1029,7 +1029,7 @@ dependencies = [
 [[package]]
 name = "craft-figma-rest"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26#e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
 dependencies = [
  "serde",
  "serde_json",
@@ -1104,7 +1104,7 @@ dependencies = [
 [[package]]
 name = "craft-kiwi"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26#e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
 
 [[package]]
 name = "craft-menu"
@@ -1219,7 +1219,7 @@ dependencies = [
 [[package]]
 name = "craft-zip"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26#e9d2af9ecdba63ced233e16fe4e3cfa5b3e5bf26"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
