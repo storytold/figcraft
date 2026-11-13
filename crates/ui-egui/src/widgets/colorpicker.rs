@@ -1041,7 +1041,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let picking = app.session.tool.pick_only || app.session.tool.picked.is_some();
     // Nor may a press on the open gradient's handles or stops on the canvas: they are this picker's
     // controls, and the canvas took the press before the picker drew (#1852).
-    let own = picking || crate::handles::gradient_dragging(ctx);
+    // Nor may one on the crop of an image paint held in Crop mode (#2307).
+    let own = picking || crate::handles::gradient_dragging(ctx) || crate::handles::crop_dragging(ctx);
     pop = pop.close_on_outside(!own);
     // Only the opening control is held out: any other sidebar or canvas press dismisses it.
     let mut held: Vec<Rect> = app.ui.picker_button.into_iter().collect();

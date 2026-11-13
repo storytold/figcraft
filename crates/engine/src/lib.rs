@@ -77,6 +77,7 @@ pub use selection::rename;
 pub use selection::selection_colors;
 pub use selection::selection_reorder;
 pub use selection::selection_spacing;
+pub use selection::tidy;
 pub use sharing::agent;
 pub use sharing::background;
 pub use sharing::branches;
@@ -610,6 +611,8 @@ mod text_weight_step_tests;
 mod textfit_tests;
 #[cfg(test)]
 mod theme_pages_tests;
+#[cfg(test)]
+mod tidy_tests;
 #[cfg(test)]
 mod tiff_tests;
 #[cfg(test)]
