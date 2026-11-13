@@ -283,25 +283,34 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.zoomSelection", "Zoom to selection", "{}", false, |s, _| {
             let ds = s.ds_mut()?;
             if let Some(b) = ds.doc.bounds_of(&ds.selection) {
-                ds.view.fit(b, 256.0);
+                ds.view.fit_selection(b, 256.0);
             }
             Ok(json!({"zoom": ds.view.zoom}))
         }),
-        spec!("view.set", "Set view", "{zoom?, cx?, cy? (page coordinate at the centre), vw?, vh? (viewport size)}", false, |s, p| {
-            let v = view(s)?;
-            if let Some(z) = num(p, "zoom") {
-                v.zoom = z.clamp(ViewState::MIN_ZOOM, ViewState::MAX_ZOOM);
+        spec!(
+            "view.set",
+            "Set view",
+            "{zoom?, cx?, cy? (page coordinate at the centre), vw?, vh? (viewport size), bottomInset? (height of the strip the bottom toolbar covers)}",
+            false,
+            |s, p| {
+                let v = view(s)?;
+                if let Some(z) = num(p, "zoom") {
+                    v.zoom = z.clamp(ViewState::MIN_ZOOM, ViewState::MAX_ZOOM);
+                }
+                v.cx = num_or(p, "cx", v.cx);
+                v.cy = num_or(p, "cy", v.cy);
+                if let Some(w) = num(p, "vw") {
+                    v.vw = w.clamp(10.0, 20000.0);
+                }
+                if let Some(h) = num(p, "vh") {
+                    v.vh = h.clamp(10.0, 20000.0);
+                }
+                if let Some(i) = num(p, "bottomInset") {
+                    v.bottom_inset = i.clamp(0.0, 20000.0);
+                }
+                Ok(serde_json::to_value(&*v).unwrap_or(Value::Null))
             }
-            v.cx = num_or(p, "cx", v.cx);
-            v.cy = num_or(p, "cy", v.cy);
-            if let Some(w) = num(p, "vw") {
-                v.vw = w.clamp(10.0, 20000.0);
-            }
-            if let Some(h) = num(p, "vh") {
-                v.vh = h.clamp(10.0, 20000.0);
-            }
-            Ok(serde_json::to_value(&*v).unwrap_or(Value::Null))
-        }),
+        ),
         spec!(
             "view.zoomAt",
             "Zoom tool",
@@ -641,7 +650,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.scaleAnchor",
             "Scale anchor",
-            "{anchor?: tl|t|tr|l|c|r|bl|b|br} (the point of the selection that stays put when the Scale tool scales; omit to read it)",
+            "{anchor?: tl|t|tr|l|c|r|bl|b|br} (the origin of the Scale tool's factor field: the point of the selection that stays put; defaults to c, handle drags pivot on the opposite handle whatever it is; omit to read it)",
             false,
             |s, p| {
                 if let Some(a) = string(p, "anchor") {
