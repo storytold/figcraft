@@ -197,7 +197,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.codeBlock",
             "Code block",
-            "{x?, y? (its top-left in the parent; default centred in the view), language? (bash|cpp|css|go|graphql|html|javascript|json|kotlin|plainText|python|ruby|rust|sql|swift|typescript; default typescript), text?, width? (210 to 100000; default 576), parent?, edit? (start typing in it; default false)} → {id, text, language}  a dark panel holding monospace text: as wide as it is made, as tall as its lines (four at least)",
+            "{x?, y? (its top-left in the parent; default a four-line block centred in the view), language? (bash|cpp|css|go|graphql|html|javascript|json|kotlin|plainText|python|ruby|rust|sql|swift|typescript; default typescript), text?, width? (210 to 100000; default 576), parent?, edit? (start typing in it; default false)} → {id, text, language}  a dark panel holding monospace text: as wide as it is made, as tall as its lines (four at least)",
             true,
             code::code_block_cmd
         ),

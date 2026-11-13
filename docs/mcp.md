@@ -517,7 +517,8 @@ one undo step and returns the ids it made:
   block (`codeBlock` with its `language`): a dark panel holding monospace text (Liberation Mono 16 on a
   24 line where it is embedded or installed). `language` is `bash cpp css go graphql html javascript json
   kotlin plainText python ruby rust sql swift typescript` (default `typescript`); `width` is 210 to 100000
-  (default 576); `x`/`y` default to the middle of the view. Its height is its lines: 32 + 24 a visual line,
+  (default 576); `x`/`y` are its top-left corner, by default the view's centre less half the width and less 64 (half the
+  smallest height, 128), so a block of more lines reaches further down. Its height is its lines: 32 + 24 a visual line,
   never under four lines, so only its width can be changed (a set or dragged height is not kept). In its
   text Tab types two spaces, Enter keeps the line's indent, and lists, links and styled ranges do not stick.
   One undo step.
