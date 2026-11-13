@@ -102,12 +102,16 @@ const HIGHLIGHTER: (f64, f32) = (20.0, 0.45);
 const ERASER_PX: f64 = 8.0;
 /// The text sizes the contextual bar offers.
 pub const TEXT_SIZES: [(&str, f64); 4] = [("S", 12.0), ("M", 16.0), ("L", 24.0), ("XL", 36.0)];
+/// The text sizes a sticky's menu offers (FigJam's, measured 2026-11-12): name and size.
+pub const STICKY_SIZES: [(&str, f64); 5] = [("Small", 16.0), ("Medium", 24.0), ("Large", 40.0), ("Extra large", 64.0), ("Huge", 96.0)];
 
 /// The board tools' choices: the colour new stickies get, the shape and stamp the tools place,
 /// how new connectors run and the marker's and highlighter's colours.
 #[derive(Clone, Debug)]
 pub struct BoardTool {
     pub sticky: Color,
+    /// The text size new stickies get (the last one chosen on a sticky).
+    pub sticky_size: f64,
     pub shape: BoardShape,
     pub stamp: Stamp,
     pub routing: Routing,
@@ -120,6 +124,7 @@ impl Default for BoardTool {
         let first = BOARD_COLORS.first().map_or(Color::WHITE, |c| c.1);
         Self {
             sticky: first,
+            sticky_size: STICKY_TEXT_SIZE,
             shape: BoardShape::Rectangle,
             stamp: Stamp::ThumbsUp,
             routing: Routing::Elbow,
@@ -134,7 +139,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.sticky",
             "Sticky note",
-            "{x, y (its top-left, in the parent), text?, color? (yellow|orange|red|pink|violet|blue|green|gray or hex; default the sticky tool's), author? (a name, or false for none; default yours), parent?} → {id, text}",
+            "{x, y (its top-left, in the parent), text?, color? (yellow|orange|red|pink|violet|blue|green|gray or hex; default the sticky tool's), fontSize? (1 to 1000; default the sticky tool's, 16 at first), author? (a name, or false for none; default yours), parent?} → {id, text}",
             true,
             sticky_cmd
         ),
@@ -233,7 +238,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.setStyle",
             "Board style",
-            "{ids?, shape? (shapes with text), fontSize? (their text), style?: straight|elbow|curved, startCap?, endCap? (connectors)}",
+            "{ids?, shape? (shapes with text), fontSize? (the text of stickies, shapes, labels and mind nodes; stickies remember it for new ones), style?: straight|elbow|curved, startCap?, endCap? (connectors)}",
             true,
             set_style
         ),

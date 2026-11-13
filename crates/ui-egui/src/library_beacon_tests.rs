@@ -13,7 +13,13 @@ const LINK: &str = "ws://tracker.example:9/?file=f&token=per-file-secret";
 #[test]
 fn the_assets_panel_checks_an_unknown_library_server_only_when_asked() {
     let mut s = Session::new();
-    s.doc_mut().unwrap().libraries_mut().enabled.push(LibraryLink { id: "lib".into(), name: "Kit".into(), path: LINK.into(), version: 1 });
+    s.doc_mut().unwrap().libraries_mut().enabled.push(LibraryLink {
+        id: "lib".into(),
+        name: "Kit".into(),
+        path: LINK.into(),
+        version: 1,
+        ..Default::default()
+    });
     let mut u = Ui::new(s);
     u.app.ui.left_tab = crate::LeftTab::Assets;
     u.app.ui.libraries = true;
