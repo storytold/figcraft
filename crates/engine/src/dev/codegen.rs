@@ -535,6 +535,44 @@ mod tests {
         assert!(!css.contains("#000000 0%"), "{css}");
     }
 
+    /// The measured frame: white at the bottom, a 20% gradient above it, 50% black on top.
+    fn layered_frame(s: &mut Session) -> figcraft_doc::NodeId {
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 120})).unwrap()["id"]).unwrap();
+        let mut g = figcraft_color::Paint::gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, Color::BLACK));
+        g.opacity = 0.2;
+        let mut top = figcraft_color::Paint::solid(Color::BLACK);
+        top.opacity = 0.5;
+        s.doc_mut().unwrap().get_mut(f).unwrap().fills = vec![figcraft_color::Paint::solid(Color::WHITE), g, top];
+        f
+    }
+
+    #[test]
+    fn several_fills_are_one_layered_background_top_first() {
+        let mut s = Session::new();
+        let f = layered_frame(&mut s);
+        let css = code_for(s.doc().unwrap(), f, CodeLang::Css);
+        let bg: Vec<&str> = css.lines().filter(|l| l.starts_with("background:")).collect();
+        assert_eq!(bg.len(), 1, "{css}");
+        let v = bg[0];
+        assert!(
+            v.starts_with(
+                "background: linear-gradient(0deg, rgba(0, 0, 0, 0.50), rgba(0, 0, 0, 0.50)), linear-gradient(180deg, rgba(0, 0, 0, 0.20) 0%, "
+            ),
+            "{v}"
+        );
+        assert!(v.ends_with(", #FFFFFF;"), "{v}");
+    }
+
+    #[test]
+    fn one_solid_fill_stays_a_plain_colour() {
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        s.doc_mut().unwrap().get_mut(f).unwrap().fills = vec![figcraft_color::Paint::solid(Color::WHITE)];
+        let css = code_for(s.doc().unwrap(), f, CodeLang::Css);
+        assert!(css.contains("background: #FFFFFF;\n"), "{css}");
+        assert!(!css.contains("gradient"), "{css}");
+    }
+
     #[test]
     fn swiftui_and_compose_for_an_auto_layout_card() {
         let mut s = Session::new();
@@ -702,6 +740,27 @@ mod tests {
         let dart = code_for(s.doc().unwrap(), root, CodeLang::Flutter);
         assert!(dart.contains("…"), "the depth is capped: {dart}");
         assert!(!dart.lines().any(|l| l.trim_start().starts_with("void main()")), "a name never leaves its comment: {dart}");
+    }
+
+    #[test]
+    fn flutter_writes_no_spacing_for_the_space_distributions() {
+        // The space distributions spread the children themselves; a `spacing:` beside them would
+        // add the gap on top.
+        let mut s = Session::new();
+        let row = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 40})).unwrap()["id"]).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 60, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap();
+        s.execute("layout.add", &json!({"ids": [row], "direction": "horizontal"})).unwrap();
+        for (align, flutter) in [("spaceBetween", "spaceBetween"), ("spaceAround", "spaceAround"), ("spaceEvenly", "spaceEvenly")] {
+            s.execute("node.set", &json!({"id": row, "props": {"gap": 10, "mainAlign": align}})).unwrap();
+            let dart = code_for(s.doc().unwrap(), row, CodeLang::Flutter);
+            assert!(dart.contains(&format!("mainAxisAlignment: MainAxisAlignment.{flutter},")), "{dart}");
+            assert!(!dart.contains("spacing:"), "{align} spreads the children itself: {dart}");
+        }
+        // A packed line keeps its gap.
+        s.execute("node.set", &json!({"id": row, "props": {"gap": 10, "mainAlign": "center"}})).unwrap();
+        let dart = code_for(s.doc().unwrap(), row, CodeLang::Flutter);
+        assert!(dart.contains("spacing: 10,"), "{dart}");
     }
 
     #[test]

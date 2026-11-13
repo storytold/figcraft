@@ -184,7 +184,10 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.duplicate";
     let v = req_string(cmd, p, "variable")?;
     let doc = s.doc_mut()?;
-    let pos = doc.variables.variables.iter().position(|x| x.id == v || x.name == v).ok_or_else(|| bad(cmd, "no such variable"))?;
+    // An exact id first, then a name: an earlier variable named like another's id must not be the
+    // one copied.
+    let vars = &doc.variables.variables;
+    let pos = vars.iter().position(|x| x.id == v).or_else(|| vars.iter().position(|x| x.name == v)).ok_or_else(|| bad(cmd, "no such variable"))?;
     let mut copy = doc.variables.variables.get(pos).cloned().ok_or_else(|| bad(cmd, "no such variable"))?;
     let taken = |n: &str| doc.variables.variables.iter().any(|x| x.collection == copy.collection && x.name == n);
     let name = (1..1000)
