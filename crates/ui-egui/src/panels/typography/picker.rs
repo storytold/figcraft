@@ -96,8 +96,7 @@ pub(crate) fn font_picker(
                     i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) as i64
                         - i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as i64
                 });
-                let search =
-                    ui.add(egui::TextEdit::singleline(&mut q).hint_text(tr("Search fonts")).desired_width(ui.available_width()).font(regular(11.5)));
+                let search = widgets::search_edit(ui, &mut q, tr("Search fonts"), regular(11.5));
                 crate::widgets::select_all_on_focus(ui, &search, &q);
                 if just_opened {
                     search.request_focus();

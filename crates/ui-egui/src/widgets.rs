@@ -1381,7 +1381,10 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
         Some(mut text) => {
             ui.painter().rect_filled(rect.expand(2.0), CornerRadius::same(4), t.panel);
             ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(4), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            // The editor is at least the theme's field height; centred on a shorter row it
+            // keeps its text on the row's middle line instead of hanging below it (#2318).
+            let edit = Rect::from_center_size(rect.center(), vec2(rect.width(), rect.height().max(FIELD_H)));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit));
             let r = crate::bidi::single_line(&mut child, te_id, &mut text, font, rect.width());
             a11y::own_focus(&r);
             keep_focus(&r, started);
@@ -1471,4 +1474,18 @@ pub fn sublabels(ui: &mut Ui, a: &str, b: Option<&str>) {
 /// Width of one of the two field columns in a panel `w` wide (leaving the icon column).
 pub fn col_width(w: f32) -> f32 {
     ((w - PAD - PAD_RIGHT - GUTTER * 2.0 - 24.0) / 2.0).max(40.0)
+}
+
+/// The search box of a menu (the font list's): one line, as wide as the menu, its hint and text
+/// centred in the box. [`egui::TextEdit`] puts the text at the top of a box taller than a line
+/// unless told otherwise (#2318).
+pub(crate) fn search_edit(ui: &mut Ui, text: &mut String, hint: &str, font: egui::FontId) -> Response {
+    ui.add(
+        egui::TextEdit::singleline(text)
+            .hint_text(hint)
+            .desired_width(ui.available_width())
+            .font(font)
+            .align(Align2::LEFT_CENTER)
+            .min_size(vec2(0.0, FIELD_H)),
+    )
 }
