@@ -14,6 +14,7 @@ use crate::i18n::{tr, trf, trn};
 use crate::render_worker::{Done, Job, Worker};
 use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 
+mod background;
 mod builder;
 mod drag_sprite;
 mod input;
@@ -388,15 +389,20 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         drag_sprite::arrived(&mut app.canvas, done_at, done.coarse);
     }
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, bg);
     crate::theme::set_canvas_page(&ctx, bg);
-    if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
+    let image = if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
         // Re-project the last render onto the current view.
         let tl = app.to_screen(v.origin.0, v.origin.1);
         let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
         let pixel_preview = app.session.ds().ok().and_then(|ds| ds.view.pixel_preview_scale()) == Some(v.scale);
         let image_rect = presented_image_rect(tl, v, zoom, ppp, pixel_preview);
-        painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        Some((tex.id(), image_rect))
+    } else {
+        None
+    };
+    background::paint(&painter, rect, bg, image.map(|(_, r)| r));
+    if let Some((texture, image_rect)) = image {
+        painter.image(texture, image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     drag_sprite::draw(app, &painter, ppp);
     crate::dev_mode::refresh_measurements(app);

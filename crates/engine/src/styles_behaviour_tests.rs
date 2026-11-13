@@ -419,6 +419,51 @@ fn text_styles_carry_paragraph_spacing_indent_lists_and_features() {
 }
 
 #[test]
+fn text_styles_carry_the_wrap_style() {
+    // Explore text properties: a wrap style can be set on the text layer, a paragraph or a text
+    // style. A style made from a text takes its wrap style, applying it sets it,
+    // editing it on a styled text unlinks it.
+    use figcraft_doc::WrapStyle::{Auto, Balance, Pretty};
+    let mut s = Session::new();
+    let td = |s: &Session, n: NodeId| -> TextData { node(s, n).kind.text().unwrap().clone() };
+    let t = text(&mut s, 0.0);
+    run(&mut s, "node.set", json!({"id": t, "props": {"characters": "One\nTwo", "wrapStyle": "balance"}}));
+    let st = sid(run(&mut s, "style.create", json!({"type": "text", "name": "Even", "from": t})));
+    let listed = run(&mut s, "style.list", json!({"type": "text"}));
+    let even = listed.as_array().unwrap().iter().find(|x| x["id"] == json!(st)).unwrap();
+    assert_eq!(even["paragraph"]["wrap_style"], json!("balance"), "{even}");
+    // Applying it sets the layer's wrap style, with no paragraph overrides, and links the layer.
+    let t2 = text(&mut s, 300.0);
+    run(&mut s, "node.set", json!({"id": t2, "props": {"characters": "A\nB"}}));
+    run(&mut s, "style.apply", json!({"ids": [t2], "style": st}));
+    let d = td(&s, t2);
+    assert_eq!(d.wrap_style, Balance);
+    assert!(d.paragraphs.iter().all(|p| p.wrap.is_none()), "{:?}", d.paragraphs);
+    assert_eq!(node(&s, t2).styles.text.as_deref(), Some(st.as_str()));
+    // Redefining the style moves the layer and keeps the link.
+    run(&mut s, "style.update", json!({"style": st, "value": {"wrapStyle": "pretty"}}));
+    let d = td(&s, t2);
+    assert_eq!((d.para_wrap_style(0), d.para_wrap_style(1)), (Pretty, Pretty));
+    assert_eq!(node(&s, t2).styles.text.as_deref(), Some(st.as_str()), "still linked after the update");
+    // Editing the wrap style on the styled text unlinks it.
+    run(&mut s, "node.set", json!({"id": t2, "props": {"wrapStyle": "auto"}}));
+    assert_eq!(td(&s, t2).wrap_style, Auto);
+    assert_eq!(node(&s, t2).styles.text, None, "wrap style edited: unlinked");
+    // On a range, the paragraphs touched take it as their own and the layer keeps its style.
+    let t3 = text(&mut s, 600.0);
+    run(&mut s, "node.set", json!({"id": t3, "props": {"characters": "A\nB"}}));
+    run(&mut s, "style.apply", json!({"ids": [t3], "style": st, "start": 0, "end": 1}));
+    let d = td(&s, t3);
+    assert_eq!((d.wrap_style, d.para_wrap_style(0), d.para_wrap_style(1)), (Auto, Pretty, Auto));
+    // A definition given as a value takes the node.set spellings; junk is refused.
+    let st2 = sid(run(&mut s, "style.create", json!({"type": "text", "name": "Note", "value": {"wrapStyle": "balance"}})));
+    let want = ParagraphStyle { wrap_style: Balance, ..Default::default() };
+    assert!(matches!(&s.doc().unwrap().style(&st2).unwrap().kind, StyleKind::Text { paragraph, .. } if **paragraph == want));
+    assert!(s.execute("style.create", &json!({"type": "text", "name": "Bad", "value": {"wrapStyle": "zigzag"}})).is_err());
+    assert!(s.execute("style.create", &json!({"type": "text", "name": "Bad", "value": {"textWrap": 3}})).is_err());
+}
+
+#[test]
 fn styles_are_organised_by_slash_names_order_and_duplicates() {
     // Documented: "/" in a name groups styles in folders; moving a style to another folder renames
     // it to match ("Brand/Teal" into Brand/Site → "Brand/Site/Teal"); dragging changes the
