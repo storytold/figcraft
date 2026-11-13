@@ -554,6 +554,7 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         return;
     }
     let Some(z) = al_zones(app) else { return };
+    let tokens = crate::theme::Tokens::get(painter.ctx());
     let handles = padding_handles(&z.bands);
     let active_side = match &dragging {
         Some(Drag::Padding { side, .. }) => Some(*side),
@@ -571,8 +572,13 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
             pink_label(painter, crate::canvas::fmt(*v), handle.center() + offset);
         }
         let grip = Rect::from_center_size(handle.center(), if side.is_multiple_of(2) { vec2(16.0, 4.0) } else { vec2(4.0, 16.0) });
-        painter.rect_filled(grip, CornerRadius::same(2), if linked { PINK } else { PINK.gamma_multiply(0.6) });
-        painter.rect_stroke(grip, CornerRadius::same(2), Stroke::new(if linked { 1.5 } else { 1.0 }, Color32::WHITE), StrokeKind::Outside);
+        painter.rect_filled(grip, CornerRadius::same(2), if linked { tokens.padding_grip } else { tokens.padding_grip.gamma_multiply(0.6) });
+        painter.rect_stroke(
+            grip,
+            CornerRadius::same(2),
+            Stroke::new(if linked { 1.5 } else { 1.0 }, tokens.padding_grip_border),
+            StrokeKind::Outside,
+        );
     }
     let drag_key = match &dragging {
         Some(Drag::Gap { key, .. }) => Some(*key),

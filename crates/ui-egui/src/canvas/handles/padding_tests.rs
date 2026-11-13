@@ -274,3 +274,32 @@ fn padding_grips_preserve_secondary_click_context_menus() {
         assert_eq!(u.app.session.undo_depth(), history);
     }
 }
+
+/// Custom light/dark palettes must control both grip states and their outlines.
+#[test]
+fn padding_grips_use_the_theme_fill_and_outline() {
+    for mut tokens in [crate::theme::Tokens::light(), crate::theme::Tokens::dark()] {
+        let (mut u, _) = scene();
+        let grips = painted_grips(&u.frame_output(vec![Event::PointerGone]));
+        assert_eq!(grips.len(), 4);
+        tokens.padding_grip = if tokens.dark { egui::Color32::from_rgb(20, 40, 60) } else { egui::Color32::from_rgb(120, 40, 60) };
+        tokens.padding_grip_border = egui::Color32::from_rgb(210, 180, 150);
+        for active in [false, true] {
+            let events = if active { vec![Event::PointerMoved(grips[0].center())] } else { vec![Event::PointerGone] };
+            let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, u.screen)), events, ..Default::default() };
+            let mut output = u.ctx.clone().run_ui(raw, |ui| {
+                crate::theme::apply(ui.ctx(), tokens);
+                super::draw(&mut u.app, ui.painter());
+            });
+            output.textures_delta.clear();
+            let shapes = crate::live_tests::flat(&output.shapes);
+            for (side, grip) in grips.iter().enumerate() {
+                let linked = active && side == 0;
+                let fill = if linked { tokens.padding_grip } else { tokens.padding_grip.gamma_multiply(0.6) };
+                assert!(shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(r) if r.rect == *grip && r.fill == fill)));
+                let width = if linked { 1.5 } else { 1.0 };
+                assert!(shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(r) if r.rect == *grip && r.stroke.color == tokens.padding_grip_border && r.stroke.width == width)));
+            }
+        }
+    }
+}
