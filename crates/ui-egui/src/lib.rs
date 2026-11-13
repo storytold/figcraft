@@ -134,6 +134,8 @@ mod home_tests;
 #[cfg(test)]
 mod host_save_tests;
 #[cfg(test)]
+mod icon_button_size_tests;
+#[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
 mod ime_tests;

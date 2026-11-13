@@ -251,6 +251,23 @@ fn the_bulk_menu_scrolls_when_forty_groups_make_it_taller_than_the_window() {
     assert!(screen.contains_rect(popup_rect(&u)));
 }
 
+/// A collection with a group `space` of two number variables with distinct values in two modes.
+fn grouped_window() -> Ui {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    for (n, light, dark) in [("space/sm", 4, 8), ("space/md", 16, 32)] {
+        s.execute("variable.create", &json!({"collection": "Theme", "name": n, "type": "number", "value": light})).unwrap();
+        s.execute("variable.set", &json!({"variable": n, "mode": "Dark", "value": dark})).unwrap();
+        s.execute("variable.update", &json!({"variable": n, "scopes": ["GAP"], "description": n})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    u
+}
+
 /// Three colour variables: bravo and charlie also have Stroke in their scopes, delta does not.
 fn colour_window() -> Ui {
     let mut s = Session::new();
@@ -267,6 +284,52 @@ fn colour_window() -> Ui {
         u.frame(vec![]);
     }
     u
+}
+
+/// Right-click the group row `name` and choose Duplicate group.
+fn duplicate_group(u: &mut Ui, name: &str) {
+    let p = row(u, name);
+    click(u, p, PointerButton::Secondary, Modifiers::NONE);
+    let menu = flat(&u.frame_output(vec![]).shapes);
+    click(u, text_center(&menu, "Duplicate group"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+#[test]
+fn duplicate_group_copies_every_variable_in_both_modes_in_one_undo_step() {
+    let mut u = grouped_window();
+    let before = u.app.session.undo_labels(100).len();
+    duplicate_group(&mut u, "space");
+    let doc = u.app.session.doc().unwrap();
+    let vars = &doc.variables;
+    for (leaf, light, dark) in [("sm", 4, 8), ("md", 16, 32)] {
+        let old = vars.variables.iter().find(|v| v.name == format!("space/{leaf}")).unwrap();
+        let new = vars.variables.iter().find(|v| v.name == format!("space 2/{leaf}")).unwrap_or_else(|| panic!("no space 2/{leaf}"));
+        assert_ne!(old.id, new.id);
+        assert_eq!(new.values, old.values, "{leaf}: values in both modes");
+        assert_eq!(new.scopes, old.scopes);
+        assert_eq!(new.description, old.description);
+        let _ = (light, dark);
+    }
+    assert_eq!(names(&u).len(), 4);
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    assert_eq!(u.app.session.undo_labels(1), ["Duplicate group"]);
+    // The new group is listed directly after the original.
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "space 2"));
+    assert!(text_center(&shapes, "space 2").y > text_center(&shapes, "space").y);
+    u.app.session.undo().unwrap();
+    assert_eq!(names(&u), ["space/sm", "space/md"]);
+}
+
+#[test]
+fn a_second_duplicate_group_takes_the_next_free_name() {
+    let mut u = grouped_window();
+    duplicate_group(&mut u, "space");
+    duplicate_group(&mut u, "space");
+    let n = names(&u);
+    assert!(n.contains(&"space 2/sm".to_string()) && n.contains(&"space 3/md".to_string()), "{n:?}");
+    assert_eq!(n.len(), 6);
 }
 
 fn open_edit_variables(u: &mut Ui) -> Vec<egui::Shape> {
