@@ -29,6 +29,9 @@ mod swap;
 mod text;
 mod variables;
 
+#[cfg(test)]
+pub(super) use board::board_shape;
+
 use component::OverrideScope;
 #[cfg(test)]
 use paint::paint;
