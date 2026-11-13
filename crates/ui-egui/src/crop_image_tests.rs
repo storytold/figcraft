@@ -194,6 +194,56 @@ fn crop_chosen_in_the_colour_picker_enters_crop_mode() {
     assert!((scaled[0] - after[0] * 5.0 / 6.0).abs() < 1e-6 && (scaled[3] - after[3] * 5.0 / 6.0).abs() < 1e-6, "{after:?} -> {scaled:?}");
 }
 
+/// The reporter's sequence (#2307): the colour picker open on an image fill held in Crop mode
+/// (Crop chosen in its mode dropdown, or reopened on a fill that already is), then a press on the
+/// layer and a drag. The drag moves the picture inside the layer (its crop), not the layer, the
+/// press doesn't close the picker under it, and no internal gesture message reaches the user.
+#[test]
+fn crop_from_the_colour_picker_then_a_drag_on_the_image_moves_the_crop_not_the_layer() {
+    let (mut u, layer, _) = setup();
+    u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![layer] });
+    for _ in 0..4 {
+        u.frame(vec![]);
+    }
+    choose_mode(&mut u, "Fill", "Crop");
+    // Crop mode on the canvas ended (a click away from the image); the picker opens on the Crop fill.
+    u.app.ui.crop = None;
+    u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![layer] });
+    for _ in 0..4 {
+        u.frame(vec![]);
+    }
+    let (_, Some(before)) = mode(&u, layer) else { panic!("a crop") };
+    let at = u.app.session.doc().unwrap().node(layer).unwrap().transform.as_coeffs();
+    let from = u.app.to_screen(100.0, 50.0);
+    u.drag_to(from, from + vec2(30.0, 10.0));
+    u.frame(vec![]);
+    u.button(from + vec2(30.0, 10.0), false);
+    let n = u.app.session.doc().unwrap().node(layer).unwrap().clone();
+    assert_eq!(n.transform.as_coeffs(), at, "the layer stays where it is");
+    assert_eq!((n.width, n.height), (200.0, 100.0), "and keeps its size");
+    let (m, Some(after)) = mode(&u, layer) else { panic!("a crop") };
+    assert_eq!(m, ImageScaleMode::Crop);
+    assert_ne!(after, before, "the drag moved the picture inside the layer");
+    assert_eq!(u.app.session.selection(), vec![layer]);
+    assert!(u.app.ui.toast.as_ref().is_none_or(|(t, _)| !t.contains("gesture")), "no internal gesture message: {:?}", u.app.ui.toast);
+}
+
+/// A drag the colour picker's close committed under the held button (a press on a layer closing
+/// the picker) leaves the rest of its drag with no gesture: that says nothing to the user.
+#[test]
+fn a_drag_whose_gesture_was_committed_under_the_button_shows_no_message() {
+    let (mut u, layer, _) = setup();
+    u.app.run("select.set", json!({"ids": [layer]}));
+    let from = u.app.to_screen(100.0, 50.0);
+    u.button(from, true);
+    u.app.session.commit_interaction().unwrap();
+    for k in 1..=10 {
+        u.frame(vec![Event::PointerMoved(from + vec2(3.0, 1.0) * k as f32)]);
+    }
+    u.button(from + vec2(30.0, 10.0), false);
+    assert!(u.app.ui.toast.is_none(), "no message: {:?}", u.app.ui.toast);
+}
+
 /// The first paint, an image, of `id`'s fills (`fills`) or strokes, or of region `region` of a vector.
 fn image_at(u: &Ui, id: NodeId, fills: bool, region: Option<usize>) -> figcraft_color::ImagePaint {
     let n = u.app.session.doc().unwrap().node(id).unwrap();
