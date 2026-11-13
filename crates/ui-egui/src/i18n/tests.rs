@@ -1037,3 +1037,58 @@ fn hebrew_native_export_and_pdf_print_controls_are_localized() {
         }
     }
 }
+
+/// Native variable pickers, style creation and library controls must render Hebrew,
+/// including empty states, rather than silently falling back to English.
+#[test]
+fn hebrew_native_variable_style_library_controls_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Apply variable to text",
+        "Apply variable to visibility",
+        "Change alias",
+        "Choose collection",
+        "Choose variable",
+        "Create a variable collection first",
+        "Create a variable first",
+        "Create alias",
+        "Create collection",
+        "Create component property",
+        "Create components, styles or variables to publish them as a library.",
+        "Create from color",
+        "Create property…",
+        "Create style",
+        "Create style from the selected text",
+        "Detach variable",
+        "Edit style",
+        "Edit variable",
+        "No boolean variables fit here.",
+        "No boolean variables yet. Create them in Local variables.",
+        "No category",
+        "No color styles",
+        "No colour variables fit here.",
+        "No colour variables yet. Create them in Local variables.",
+        "No matching styles",
+        "No matching variables",
+        "No number variables fit here.",
+        "No number variables yet. Create them in Local variables.",
+        "No string variables fit here.",
+        "No string variables yet. Create them in Local variables.",
+        "No styles yet.",
+        "No styles yet. Click + to create one from the selection.",
+        "No text styles yet. Click + to create one from the selected text.",
+        "No variables fit here.",
+        "No variables yet. Create them in Local variables.",
+        "Scope: all supported properties",
+        "Scope: hidden from pickers",
+        "Scope: only {scope}",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew variable/style translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)),
+                "{key:?} fell back to non-Hebrew UI");
+        assert_eq!(placeholders(key), placeholders(value),
+                   "variable/style placeholder parity: {key:?}");
+    }
+}
