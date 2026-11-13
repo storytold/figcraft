@@ -194,3 +194,24 @@ fn a_caller_can_put_it_where_it_likes() {
     draw(&ctx, &mut t, &mut p, at, Hold::default(), vec![]);
     assert!(near(p.rect.min, pos2(360.0, 300.0)), "dropped where the drag left it: {:?}", p.rect);
 }
+
+mod icon_size_tests {
+    use super::*;
+    use crate::header_icon_size_tests::paints_icon_at_button_size;
+    use crate::icons::Icon;
+
+    /// The header's 24 pt X paints its cross at 16 pt, like every other 24 pt icon button (#2238).
+    #[test]
+    fn the_close_button_paints_a_16pt_cross() {
+        let ctx = context();
+        let mut t = 0.0;
+        let mut p = Popover::new("popover_close_size", "Colour");
+        let shapes = settle(&ctx, &mut t, &mut p, Open::At(pos2(160.0, 100.0)));
+        let painted: Vec<Rect> = shapes
+            .iter()
+            .filter(|s| matches!(s, egui::Shape::Path(_) | egui::Shape::Mesh(_) | egui::Shape::LineSegment { .. } | egui::Shape::Circle(_)))
+            .map(|s| s.visual_bounding_rect())
+            .collect();
+        assert!(paints_icon_at_button_size(&painted, Icon::Close), "the popover's close cross is not 16 pt");
+    }
+}
