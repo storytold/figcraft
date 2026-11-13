@@ -641,3 +641,57 @@ fn a_file_stamp_from_the_moment_it_was_read_does_not_prove_it_unchanged() {
     assert!(entry(old).still_valid(&Stamp { len: 10, modified: Some(old) }));
     assert!(!entry(old).still_valid(&Stamp { len: 11, modified: Some(old) }));
 }
+
+/// Library `lid` is listed without an error, and `library.updates` reports no errors.
+fn link_found(s: &mut Session, lid: &str) {
+    let list = ex(s, "library.list", json!({}));
+    let l = list["libraries"].as_array().unwrap().iter().find(|l| l["id"] == lid).unwrap_or_else(|| panic!("{list}"));
+    assert!(l.get("error").is_none_or(Value::is_null), "{l}");
+    let u = ex(s, "library.updates", json!({}));
+    assert_eq!(u["errors"], json!([]), "{u}");
+}
+
+/// A library next to the documents that use it stays linked when their folder is moved or cloned;
+/// files from before relative links, and relative paths written by hand, keep working too.
+#[test]
+fn library_links_follow_a_moved_folder() {
+    let d = dir("moved-folder");
+    let (a, b) = (d.join("a"), d.join("b"));
+    std::fs::create_dir_all(a.join("lib")).unwrap();
+    std::fs::create_dir_all(a.join("pages")).unwrap();
+    let mut lib = Session::new();
+    kit(&mut lib);
+    let lid = publish_to(&mut lib, &path_str(&a.join("lib").join("kit.figcraft")));
+
+    let mut s = Session::new();
+    ex(&mut s, "file.saveAs", json!({"path": path_str(&a.join("pages").join("Page.figcraft"))}));
+    ex(&mut s, "library.add", json!({"path": path_str(&a.join("lib").join("kit.figcraft"))}));
+    ex(&mut s, "library.place", json!({"library": lid, "component": "Card", "x": 0, "y": 0}));
+    ex(&mut s, "file.save", json!({}));
+    // The folder moves (or is cloned elsewhere): the library keeps its place next to the page.
+    std::fs::rename(&a, &b).unwrap();
+    let mut moved = Session::empty();
+    ex(&mut moved, "file.open", json!({"path": path_str(&b.join("pages").join("Page.figcraft"))}));
+    link_found(&mut moved, &lid);
+
+    // A file from before relative links: the absolute path is followed.
+    let old = d.join("old");
+    std::fs::create_dir_all(&old).unwrap();
+    let mut doc = Document::new("Old");
+    let abs = path_str(&b.join("lib").join("kit.figcraft"));
+    doc.libraries_mut().enabled.push(LibraryLink { id: lid.clone(), name: "Kit".into(), path: abs, version: 1, ..Default::default() });
+    std::fs::write(old.join("Old.figcraft"), figcraft_format::save_bytes(&doc, None).unwrap()).unwrap();
+    let mut s = Session::empty();
+    ex(&mut s, "file.open", json!({"path": path_str(&old.join("Old.figcraft"))}));
+    link_found(&mut s, &lid);
+
+    // A relative path written by hand goes by the document's folder, not the working directory.
+    let mut doc = Document::new("Hand");
+    let rel = "../lib/kit.figcraft".to_string();
+    doc.libraries_mut().enabled.push(LibraryLink { id: lid.clone(), name: "Kit".into(), path: rel, version: 1, ..Default::default() });
+    std::fs::write(b.join("pages").join("Hand.figcraft"), figcraft_format::save_bytes(&doc, None).unwrap()).unwrap();
+    let mut s = Session::empty();
+    ex(&mut s, "file.open", json!({"path": path_str(&b.join("pages").join("Hand.figcraft"))}));
+    link_found(&mut s, &lid);
+    let _ = std::fs::remove_dir_all(&d);
+}
