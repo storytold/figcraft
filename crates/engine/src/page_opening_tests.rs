@@ -69,6 +69,7 @@ fn setting_the_page_that_already_opens_the_file_adds_no_undo_step() {
     let mut s = Session::new();
     let first = s.page().unwrap();
     assert_eq!(s.doc().unwrap().current_page, Some(first));
+    ex(&mut s, "page.setOpening", json!({"id": first}));
     let depth = s.undo_depth();
     ex(&mut s, "page.setOpening", json!({"id": first}));
     assert_eq!(s.undo_depth(), depth, "already the opening page: no step");
@@ -88,4 +89,87 @@ fn deleting_the_opening_page_falls_back_to_a_page_that_exists() {
     assert!(doc.pages.contains(&now) && now != cover, "a page that exists");
     assert_eq!(now, first);
     assert_eq!(Session::with_document(doc).page().unwrap(), first, "a reopened file lands on it");
+}
+
+/// The file written by a real save (the serializer, not a cloned document), opened again.
+fn saved_and_reopened(s: &Session) -> Session {
+    let bytes = crate::cmd::file::file_bytes(s.ds().unwrap()).unwrap();
+    let (doc, _) = figcraft_format::load_bytes(&bytes).unwrap();
+    Session::with_document(doc)
+}
+
+/// Saving writes the chosen opening page, not the page the saver was viewing.
+#[test]
+fn the_opening_page_survives_a_save_and_reopen_from_another_page() {
+    let mut s = Session::new();
+    let first = s.page().unwrap();
+    let cover = id_of(&ex(&mut s, "page.add", json!({"name": "Cover"})));
+    ex(&mut s, "page.select", json!({"id": first}));
+    ex(&mut s, "page.setOpening", json!({"id": cover}));
+    assert_eq!(s.page().unwrap(), first, "the saver stays on Page 1");
+    assert_eq!(saved_and_reopened(&s).page().unwrap(), cover);
+}
+
+/// With no opening page chosen, a file opens on the page it was saved on, as before.
+#[test]
+fn without_an_opening_page_a_file_reopens_on_the_page_it_was_saved_on() {
+    let mut s = Session::new();
+    let two = id_of(&ex(&mut s, "page.add", json!({"name": "Two"})));
+    assert_eq!(s.page().unwrap(), two);
+    assert_eq!(saved_and_reopened(&s).page().unwrap(), two);
+}
+
+/// A deleted opening page no longer decides: the file opens where it was saved.
+#[test]
+fn deleting_the_opening_page_falls_back_to_the_saver_s_page() {
+    let mut s = Session::new();
+    let cover = id_of(&ex(&mut s, "page.add", json!({"name": "Cover"})));
+    let two = id_of(&ex(&mut s, "page.add", json!({"name": "Two"})));
+    ex(&mut s, "page.setOpening", json!({"id": cover}));
+    ex(&mut s, "page.delete", json!({"id": cover}));
+    ex(&mut s, "page.select", json!({"id": two}));
+    assert_eq!(saved_and_reopened(&s).page().unwrap(), two);
+}
+
+/// Undoing the choice puts the saver's page back in charge.
+#[test]
+fn undoing_the_opening_page_then_saving_reopens_on_the_saver_s_page() {
+    let mut s = Session::new();
+    let cover = id_of(&ex(&mut s, "page.add", json!({"name": "Cover"})));
+    let two = id_of(&ex(&mut s, "page.add", json!({"name": "Two"})));
+    ex(&mut s, "page.setOpening", json!({"id": cover}));
+    ex(&mut s, "edit.undo", json!({}));
+    ex(&mut s, "page.select", json!({"id": two}));
+    assert_eq!(saved_and_reopened(&s).page().unwrap(), two);
+}
+
+/// Choosing another opening page takes the choice off the first.
+#[test]
+fn setting_another_opening_page_clears_the_first() {
+    let mut s = Session::new();
+    let a = id_of(&ex(&mut s, "page.add", json!({"name": "A"})));
+    let b = id_of(&ex(&mut s, "page.add", json!({"name": "B"})));
+    let c = id_of(&ex(&mut s, "page.add", json!({"name": "C"})));
+    ex(&mut s, "page.setOpening", json!({"id": a}));
+    ex(&mut s, "page.setOpening", json!({"id": b}));
+    let flagged: Vec<NodeId> = s.doc().unwrap().pages.iter().copied().filter(|&p| opening(&s, p)).collect();
+    assert_eq!(flagged, vec![b]);
+    ex(&mut s, "page.select", json!({"id": c}));
+    assert_eq!(saved_and_reopened(&s).page().unwrap(), b);
+}
+
+/// A copy of the opening page is just a page.
+#[test]
+fn a_duplicated_opening_page_is_not_an_opening_page() {
+    let mut s = Session::new();
+    let a = id_of(&ex(&mut s, "page.add", json!({"name": "A"})));
+    ex(&mut s, "page.setOpening", json!({"id": a}));
+    let copy = id_of(&ex(&mut s, "page.duplicate", json!({"id": a})));
+    assert_ne!(copy, a);
+    assert!(opening(&s, a));
+    assert!(!opening(&s, copy));
+}
+
+fn opening(s: &Session, p: NodeId) -> bool {
+    matches!(s.doc().unwrap().get(p).map(|n| &n.kind), Ok(figcraft_doc::NodeKind::Page { opening: true, .. }))
 }

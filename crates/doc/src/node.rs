@@ -91,6 +91,10 @@ pub enum NodeKind {
         flows: Vec<crate::proto::Flow>,
         #[serde(default)]
         prototype: crate::proto::PrototypeSettings,
+        /// The page chosen to open the file on for everyone (`page.setOpening`; at most one page):
+        /// saving writes it as the document's `current_page` instead of the page the saver was viewing.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        opening: bool,
     },
     Frame,
     Group,
