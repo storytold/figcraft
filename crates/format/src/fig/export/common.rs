@@ -195,6 +195,9 @@ fn unset(key: &str) -> Option<Kv<'static>> {
         "scrollBehavior" => e("SCROLLS"),
         "parameterConsumptionMap" => o(vec![("entries", arr(Vec::new()))]),
         "textTruncation" => e("DISABLED"),
+        "listSpacing" => fl(0.0),
+        "leadingTrim" => e("NONE"),
+        "hangingPunctuation" | "hangingList" => b(false),
         "hyperlink" => o(vec![("url", s(""))]),
         _ => return None,
     })
