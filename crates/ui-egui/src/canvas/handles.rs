@@ -206,6 +206,13 @@ pub fn gradient_dragging(ctx: &egui::Context) -> bool {
     matches!(ctx.data(|d| d.get_temp::<Drag>(drag_id())), Some(Drag::Gradient { .. }))
 }
 
+/// Whether the open image fill's crop (its handles, or a drag on the image) is being dragged, the
+/// press that starts it included: the open colour picker holds that paint in Crop mode, so the
+/// press is its own control, not one outside it that would close it and commit the drag (#2307).
+pub fn crop_dragging(ctx: &egui::Context) -> bool {
+    matches!(ctx.data(|d| d.get_temp::<Drag>(drag_id())), Some(Drag::Crop { .. }))
+}
+
 /// Whether the document has a gesture open: a handle drag edits only inside its own.
 fn gesture_open(app: &FigApp) -> bool {
     app.session.ds().is_ok_and(|d| d.interaction.is_some())
