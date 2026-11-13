@@ -32,10 +32,13 @@ pub(crate) fn pan(app: &mut FigApp, ctx: &Context, pos: Pos2) -> bool {
 }
 
 /// The drag under way pans at the edge: a primary drag of the Move or a drawing tool that
-/// [`figcraft_engine::tools::ToolState::autopans`] allows, with no text being edited.
+/// [`figcraft_engine::tools::ToolState::autopans`] allows, with no text being edited. Not while a
+/// manual pan (Space, or the middle button) is under way: that pan can carry the pointer off the
+/// canvas, where the view must follow the pointer, not the edge speed.
 pub(super) fn wanted(app: &FigApp, ctx: &Context) -> bool {
     let Ok(ds) = app.session.ds() else { return false };
     app.canvas.dragging
+        && app.canvas.middle_pan.is_none()
         && ds.text_edit.is_none()
         && ds.vector_edit.is_none()
         && ctx.input(|i| i.pointer.primary_down())
@@ -61,6 +64,26 @@ mod tests {
         });
         out.textures_delta.clear();
         out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.repaint_delay.is_zero())
+    }
+
+    #[test]
+    fn a_manual_pan_during_a_drag_does_not_autopan() {
+        let mut u = Ui::new(Session::new());
+        let id = figcraft_engine::params::id_of(
+            &u.app.session.execute("shape.rectangle", &serde_json::json!({"x": 0, "y": 0, "width": 100, "height": 50})).unwrap()["id"],
+        );
+        assert!(id.is_some());
+        u.frame(vec![]);
+        u.frame(vec![]);
+        let r = u.app.canvas.rect;
+        let p = u.app.to_screen(50.0, 25.0);
+        u.button(p, true);
+        u.frame(vec![egui::Event::PointerMoved(p + egui::vec2(12.0, 0.0))]);
+        let off = pos2(r.max.x + 30.0, p.y);
+        u.frame(vec![egui::Event::PointerMoved(off)]);
+        assert!(super::wanted(&u.app, &u.ctx), "a plain layer drag held off the canvas autopans");
+        u.app.canvas.middle_pan = Some((off, 0.0, 0.0));
+        assert!(!super::wanted(&u.app, &u.ctx), "a pan begun during the drag is the user's to steer");
     }
 
     #[test]
