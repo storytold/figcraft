@@ -111,12 +111,69 @@ fn encoded_fig_maps_paragraph_list_fields_through_native_round_trip() {
     assert!(!text.hanging_list);
     assert!(!text.hanging_punctuation);
     assert_eq!(text.leading_trim, figcraft_doc::LeadingTrim::CapHeight);
+}
 
-    let (_, export_warnings) = export(&inherited, None).unwrap();
-    assert!(
-        export_warnings.iter().any(|warning| warning.contains("list spacing, hanging punctuation, leading trim")),
-        "existing .fig export loss must remain visible: {export_warnings:?}"
-    );
+#[test]
+fn exported_paragraph_options_survive_a_fig_round_trip() {
+    let shared = vec![
+        ("listSpacing", Kv::Float(18.0)),
+        ("hangingList", Kv::Bool(false)),
+        ("hangingPunctuation", Kv::Bool(false)),
+        ("leadingTrim", Kv::Enum("CAP_HEIGHT")),
+    ];
+    let reset = vec![
+        ("listSpacing", Kv::Float(0.0)),
+        ("hangingList", Kv::Bool(false)),
+        ("hangingPunctuation", Kv::Bool(false)),
+        ("leadingTrim", Kv::Enum("NONE")),
+    ];
+    let (inherited, _) = import(&paragraph_fig(shared.clone(), vec![]), "Synthetic paragraph options").unwrap();
+    let (cleared, _) = import(&paragraph_fig(shared, reset), "Synthetic paragraph resets").unwrap();
+    // All four off their defaults: the export writes them and the import reads them back.
+    let mut styled = inherited.clone();
+    let id = styled.nodes().find(|node| node.name == "Label").unwrap().id;
+    if let Some(figcraft_doc::NodeKind::Text(td)) = styled.node_mut(id).map(|node| &mut node.kind) {
+        td.hanging_punctuation = true;
+        td.hanging_list = true;
+    }
+    let (bytes, export_warnings) = export(&styled, None).unwrap();
+    assert!(export_warnings.iter().all(|warning| !warning.contains("list spacing")), "{export_warnings:?}");
+    let (back, _) = import(&bytes, "Exported paragraph options").unwrap();
+    let text = back.nodes().find(|node| node.name == "Label").unwrap().kind.text().unwrap();
+    assert_eq!(text.list_spacing, 18.0);
+    assert!(text.hanging_list);
+    assert!(text.hanging_punctuation);
+    assert_eq!(text.leading_trim, figcraft_doc::LeadingTrim::CapHeight);
+
+    // Everything at its default: nothing is carried over.
+    let (bytes, export_warnings) = export(&cleared, None).unwrap();
+    assert!(export_warnings.iter().all(|warning| !warning.contains("list spacing")), "{export_warnings:?}");
+    let (back, _) = import(&bytes, "Exported paragraph defaults").unwrap();
+    let text = back.nodes().find(|node| node.name == "Label").unwrap().kind.text().unwrap();
+    assert_eq!(text.list_spacing, 0.0);
+    assert!(!text.hanging_list);
+    assert!(!text.hanging_punctuation);
+    assert_eq!(text.leading_trim, figcraft_doc::LeadingTrim::None);
+
+    // OpenType features are still left out, and only a text that has some warns.
+    let id = styled.nodes().find(|node| node.name == "Label").unwrap().id;
+    if let Some(figcraft_doc::NodeKind::Text(td)) = styled.node_mut(id).map(|node| &mut node.kind) {
+        td.features.insert("liga".into(), false);
+    }
+    let (_, with_features) = export(&styled, None).unwrap();
+    assert!(with_features.iter().any(|warning| warning.contains("OpenType features were left out")), "{with_features:?}");
+    let (_, without) = export(&cleared, None).unwrap();
+    assert!(without.iter().all(|warning| !warning.contains("OpenType")), "{without:?}");
+}
+
+#[test]
+fn the_schema_numbers_the_paragraph_options() {
+    let s = super::kiwi::Schema::parse(super::export::SCHEMA).unwrap();
+    let def = |n: &str| s.defs.iter().find(|d| d.name == n).unwrap();
+    let id = |f: &str| def("NodeChange").fields.iter().find(|x| x.name == f).unwrap().value;
+    assert_eq!((id("listSpacing"), id("leadingTrim"), id("hangingPunctuation"), id("hangingList")), (264, 322, 337, 339));
+    let values: Vec<_> = def("LeadingTrim").fields.iter().map(|x| (x.name.as_str(), x.value)).collect();
+    assert_eq!(values, [("NONE", 0), ("CAP_HEIGHT", 1)]);
 }
 
 fn instance_paragraph_fig(overrides: Vec<(&'static str, Kv<'static>)>, nonfinite_spacing: bool) -> Vec<u8> {
@@ -285,4 +342,26 @@ fn encoded_instance_paragraph_overrides_fall_back_only_when_invalid() {
     assert!(!text.hanging_list);
     assert!(!text.hanging_punctuation);
     assert_eq!(text.leading_trim, figcraft_doc::LeadingTrim::CapHeight);
+}
+
+#[test]
+fn an_instance_layer_set_back_to_the_defaults_survives_a_fig_round_trip() {
+    // The main's text has all four off their defaults (from its text style); the instance's copy sets them back.
+    let reset = vec![
+        ("listSpacing", Kv::Float(0.0)),
+        ("hangingList", Kv::Bool(false)),
+        ("hangingPunctuation", Kv::Bool(false)),
+        ("leadingTrim", Kv::Enum("NONE")),
+    ];
+    let (doc, _) = import(&instance_paragraph_fig(reset, false), "Synthetic instance paragraph resets").unwrap();
+    let (bytes, _) = export(&doc, None).unwrap();
+    let (back, _) = import(&bytes, "Exported instance paragraph resets").unwrap();
+    let options = |parent: &str| {
+        let parent = back.nodes().find(|node| node.name == parent).unwrap();
+        let text = back.node(*parent.children.first().unwrap()).unwrap().kind.text().unwrap();
+        (text.list_spacing, text.hanging_list, text.hanging_punctuation, text.leading_trim)
+    };
+    assert_eq!(options("Main"), (18.0, true, true, figcraft_doc::LeadingTrim::CapHeight));
+    // The override row clears each field; without it the instance's text takes the main's values again.
+    assert_eq!(options("Copy"), (0.0, false, false, figcraft_doc::LeadingTrim::None));
 }
