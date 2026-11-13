@@ -25,6 +25,8 @@ mod export;
 #[cfg(test)]
 mod export_tests;
 #[cfg(test)]
+mod guides_tests;
+#[cfg(test)]
 mod interop_tests;
 pub mod kiwi;
 #[cfg(test)]

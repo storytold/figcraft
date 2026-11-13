@@ -23,9 +23,7 @@ impl<'d> Exporter<'d> {
             f.extend([("type", e("CANVAS")), ("name", s(&n.name))]);
             f.extend(root_fields());
             f.extend([("backgroundColor", color(*background)), ("backgroundOpacity", fl(background.a.into())), ("backgroundEnabled", b(true))]);
-            if !n.guides.is_empty() {
-                self.warn("ruler guides were left out");
-            }
+            self.guides(&n.guides, &mut f);
             let defaults = figcraft_doc::proto::PrototypeSettings::default();
             // Every page writes its colour, so Figma shows the same one (a page without the field shows Figma's own default).
             // The colour is written opaque: the record measured has alpha 1, and the import reads the colour as opaque and
@@ -303,9 +301,7 @@ impl<'d> Exporter<'d> {
             f.push(("variableConsumptionMap", o(vec![("entries", arr(bound.entries))])));
         }
         self.modes(n, f);
-        if !n.guides.is_empty() {
-            self.warn("ruler guides were left out");
-        }
+        self.guides(&n.guides, f);
         if !n.annotations.is_empty()
             || !n.dev_resources.is_empty()
             || !n.code_links.is_empty()
