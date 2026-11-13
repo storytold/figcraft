@@ -187,5 +187,10 @@ krilla = { git = "https://github.com/storytold/craft-libs", rev = "e11f9d9aebea5
 
 # TODO(wgpu-hal > 30.0.1): remove after an upstream release supports non-stretch
 # DX12 HWND presentation, and FigCraft verifies it (gfx-rs/wgpu#10196).
-# Temporary fork pin until storytold/craft-libs#473 lands; then use its upstream rev.
-wgpu-hal = { git = "https://github.com/YarilaFox/craft-libs", rev = "9d699255838fb9e66e8cb1191db1227418cbad28" }
+# Depends on storytold/wgpu#1. Keep wgpu-hal's path dependencies on the same source
+# so registry and Git copies of their types cannot enter the graph together.
+wgpu-hal = { git = "https://github.com/storytold/wgpu", rev = "a2b0df8059c81f88c75323faab12f1822324a767" }
+wgpu-types = { git = "https://github.com/storytold/wgpu", rev = "a2b0df8059c81f88c75323faab12f1822324a767" }
+wgpu-naga-bridge = { git = "https://github.com/storytold/wgpu", rev = "a2b0df8059c81f88c75323faab12f1822324a767" }
+naga = { git = "https://github.com/storytold/wgpu", rev = "a2b0df8059c81f88c75323faab12f1822324a767" }
+naga-types = { git = "https://github.com/storytold/wgpu", rev = "a2b0df8059c81f88c75323faab12f1822324a767" }
