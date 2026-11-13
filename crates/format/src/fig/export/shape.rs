@@ -44,6 +44,20 @@ impl<'d> Exporter<'d> {
             ("textTracking", fl(0.0)),
             ("emojiImageSet", e("APPLE")),
         ]);
+        // Written only off their defaults: a text at the defaults carries none of these four in a design file saved by
+        // Figma. A text style holds none of them, so a layer at the defaults has no style value to take on import.
+        if td.list_spacing != 0.0 {
+            f.push(("listSpacing", fl(td.list_spacing)));
+        }
+        if td.hanging_punctuation {
+            f.push(("hangingPunctuation", b(true)));
+        }
+        if td.hanging_list {
+            f.push(("hangingList", b(true)));
+        }
+        if td.leading_trim == figcraft_doc::LeadingTrim::CapHeight {
+            f.push(("leadingTrim", e("CAP_HEIGHT")));
+        }
         if td.truncates() {
             f.push(("textTruncation", e("ENDING")));
         }
@@ -162,8 +176,8 @@ impl<'d> Exporter<'d> {
         if td.path.is_some() {
             self.warn("text on a path was written as plain text");
         }
-        if td.list_spacing != 0.0 || td.hanging_punctuation || td.hanging_list || td.leading_trim != Default::default() || !td.features.is_empty() {
-            self.warn("list spacing, hanging punctuation, leading trim and OpenType features were left out");
+        if !td.features.is_empty() {
+            self.warn("OpenType features were left out");
         }
     }
 
