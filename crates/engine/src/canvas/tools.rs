@@ -34,7 +34,7 @@ pub use handles::{
     PENCIL_STROKE, SMALL_BOX_PX, anchor_name, anchor_of, box_sides_px, handle_at, handle_at_corners, label_at, locked_in, scale_anchor_point,
     selection_box, selection_frame, shared_rotation_degrees,
 };
-pub(crate) use handles::{SNAP_PX, handle_cursor, readable_text_fills, resized_box};
+pub(crate) use handles::{SNAP_PX, UNMEASURED_SNAP_PX, handle_cursor, readable_text_fills, resized_box};
 #[cfg(test)]
 pub(crate) use pen::pressure_profile;
 

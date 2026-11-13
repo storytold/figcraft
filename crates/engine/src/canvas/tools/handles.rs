@@ -71,8 +71,13 @@ const HANDLE_PX: f64 = 5.0;
 
 const ROTATE_PX: f64 = 18.0;
 
-/// Snap distance in screen pixels.
-pub(crate) const SNAP_PX: f64 = 5.0;
+/// Object snap distance in screen pixels: measured in Figma, where an edge snaps at a gap of 4.4
+/// screen px and not at 4.6, at 100% and at 200% zoom.
+pub(crate) const SNAP_PX: f64 = 4.5;
+
+/// Snap distance in screen pixels for ruler guides and the rotation origin, not measured against
+/// Figma.
+pub(crate) const UNMEASURED_SNAP_PX: f64 = 5.0;
 
 /// Screen pixels the pointer travels after a press before a move or resize starts: a click or a
 /// double-click made with an unsteady hand doesn't drag what it lands on.
