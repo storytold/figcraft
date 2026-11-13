@@ -189,13 +189,26 @@ fn value<const N: usize>(column: &Column<'_, N>, row: usize) -> Result<[u8; N], 
         return Err("missing portable column value");
     }
     let mut out = [0; N];
-    for (plane, slot) in column.bytes.chunks_exact(column.count).zip(out.iter_mut()) {
-        *slot = *plane.get(row).ok_or("missing portable column value")?;
+    // count*N was checked by Reader::column and row<count above. Constant-size planes
+    // need indexed byte loads, not a new runtime chunks/division iterator per number.
+    for (plane, slot) in out.iter_mut().enumerate() {
+        *slot = *column.bytes.get(plane * column.count + row).ok_or("missing portable column value")?;
     }
     Ok(out)
 }
 
+#[cfg(test)]
 pub(crate) fn decode(text: &str, predicted: bool) -> Result<Vec<CompactGlyph>, &'static str> {
+    decode_map(text, predicted, Ok)
+}
+
+/// Validate and construct final records in one preallocated vector. Do not materialize a
+/// full temporary tuple/enum vector before building the document's positioned glyphs.
+pub(crate) fn decode_map<T>(
+    text: &str,
+    predicted: bool,
+    mut record: impl FnMut(CompactGlyph) -> Result<T, &'static str>,
+) -> Result<Vec<T>, &'static str> {
     if text.len() > MAX_ENCODED {
         return Err("portable glyph bytes exceed limit");
     }
@@ -259,7 +272,7 @@ pub(crate) fn decode(text: &str, predicted: bool) -> Result<Vec<CompactGlyph>, &
         let style = u32::from_le_bytes(value(&styles, row)?) ^ if predicted { previous_style } else { 0 };
         previous_end = end;
         previous_style = style;
-        glyphs.push((
+        glyphs.push(record((
             u32::from_le_bytes(value(&indices, row)?) as usize,
             numbers[0],
             numbers[1],
@@ -270,7 +283,7 @@ pub(crate) fn decode(text: &str, predicted: bool) -> Result<Vec<CompactGlyph>, &
             style as usize,
             direction,
             placement,
-        ));
+        ))?);
     }
     if reader.offset != bytes.len() {
         return Err("trailing portable glyph bytes");

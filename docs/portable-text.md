@@ -265,8 +265,8 @@ a file without appearances retains its previous map order without a sorting allo
 Grouping lets adjacent similar packed layouts share Deflate's 32 KiB window. The native writer
 also memoizes shared outline allocation identities within the bounded packing operation, with
 content equality retained for separately allocated identical paths. Reading packed records
-constructs model glyphs directly from the decoder iterator without an intermediate legacy-enum
-vector, and borrows the byte planes instead of allocating eight transposed column vectors. These optimizations do not omit appearances, relax validation, or defer decoding out of
+constructs final model glyphs directly in a preallocated vector without intermediate tuple/enum
+vectors, and loads byte planes by bounded indexing instead of allocating transposed columns. These optimizations do not omit appearances, relax validation, or defer decoding out of
 the measured reopen path.
 
 Because compressed records can expand far beyond their input strings, document node decoding
@@ -316,3 +316,53 @@ reopen **7.61x**, and file size **5.06x** main. The approximately 10% review
 target is not met for all metrics. Saved geometry and per-layer fingerprints remain additional
 data that main does not store. These synthetic measurements do not guarantee GUI/network or
 image-heavy file performance. Normal machine variation applies to timing comparisons.
+
+
+### Opening follow-up, 2026-11-13
+
+A diagnostic build of the previous revision instrumented native header parsing, document
+deserialization, appearance wire/number/model conversion, outline-pool expansion, validation
+and session initialization. At 10,000 layers it spent roughly 330–350 ms constructing the
+document, 14–15 ms on the header, 28–30 ms expanding the pool, 5–6 ms validating and 20–22 ms
+initializing the session; ZIP/other load work made up the remainder. The wire read (~50 ms),
+packed numeric decode (~60 ms) and conversion into model glyphs (~120 ms) are **nested inside**
+document construction, not extra stages to sum with it. These temporary timers were removed
+from the production code and the final benchmark.
+
+The packed decoder now validates and builds final model glyphs in one vector preallocated to
+the bounded record count, instead of first producing tuples and an enum iterator and growing
+another result vector. Numeric byte planes use direct bounded indexing instead of constructing
+chunk iterators per value. Local outline strings are allocated directly as shared strings,
+avoiding generic String/Box temporaries; the dictionary uses a bounded sequence-size hint.
+A direct-construction diagnostic prototype reduced the combined numeric/model stage from
+about 185–190 ms to 108–115 ms. The change does not defer validation/materialization or alter
+encoding 3, native table 1, coordinates, ordering or retained geometry. Missing packed paths
+and expanded-path overflow remain errors, with regression coverage.
+
+The fixture contains 1,170,000 characters/glyph placements. Its native JSON is 25,607,910 bytes
+after ZIP expansion. A synthetic control copy with only `appearance` and `textOutlines` removed
+contains approximately 6,379,922 JSON bytes after rewriting; this control is not the vanilla-main
+archive. The remaining load difference includes processing this larger metadata/number payload
+and constructing all saved geometry; main stores editable text without those glyph records.
+
+Final production builds, without diagnostic timers: same corpus/toolchain/Inter input and one
+warm-up plus five measured medians, run sequentially without a concurrent build. The previous
+production binary corresponds to `759565f83c8e4546badf207625753c891363a66b`; main remains
+`0d6ce1124c03c8efc3807db5689fee7f8ec94756`. Reopen includes all decoding and session setup.
+
+| Text layers | Variant | First save ms | Repeat save ms | Reopen ms | ZIP bytes | Appearances |
+|---:|---|---:|---:|---:|---:|---:|
+| 1,000 | main (fresh) | 114.679 | 114.118 | 4.984 | 127,908 | 0 |
+| 1,000 | previous portable | 161.768 | 159.841 | 43.197 | 251,186 | 1,000 |
+| 1,000 | direct model decode | 156.389 | 156.354 | 37.108 | 251,186 | 1,000 |
+| 10,000 | main (fresh) | 1878.315 | 1892.246 | 61.297 | 265,376 | 0 |
+| 10,000 | previous portable | 2526.593 | 2271.747 | 484.186 | 1,343,321 | 10,000 |
+| 10,000 | direct model decode | 2304.325 | 2317.884 | 375.279 | 1,343,321 | 10,000 |
+
+The 10,000-layer reopen time falls from **484.186 to 375.279 ms (22.5% less time)**.
+All appearances survive every round trip; saved byte counts are unchanged. Read-only fixes do
+not target saving, whose small timing differences remain subject to normal machine variation.
+Versus the fresh main sample, reopen is **6.12x** (previously 7.90x in this pair),
+repeat save **+22.5%**, and archive size **5.06x**. The roughly 10%
+default-path acceptance target remains unmet; no opt-in policy or font-preservation semantics
+were changed. These measurements exclude filesystem fsync, network and GUI startup.

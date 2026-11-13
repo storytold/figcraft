@@ -84,28 +84,6 @@ enum ReadGlyph {
     Legacy(TextGlyph),
 }
 
-// Decode a packed vector directly into model glyphs. Do not first allocate and copy a second
-// vector of the large legacy/compact enum for every text layer.
-enum GlyphIter {
-    Records(std::vec::IntoIter<ReadGlyph>),
-    Packed(std::vec::IntoIter<CompactGlyph>),
-}
-impl Iterator for GlyphIter {
-    type Item = ReadGlyph;
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Records(v) => v.next(),
-            Self::Packed(v) => v.next().map(ReadGlyph::Compact),
-        }
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Records(v) => v.size_hint(),
-            Self::Packed(v) => v.size_hint(),
-        }
-    }
-}
-
 // Dispatch on sequence/map directly. An untagged enum buffers every number into serde's
 // generic Content tree; a million positioned glyphs should be streamed instead.
 impl<'de> Deserialize<'de> for ReadGlyph {
@@ -149,6 +127,27 @@ struct Read {
 /// Even unused dictionary entries count toward the budget; otherwise an untrusted file could
 /// allocate a large pool while referring only to a tiny valid entry.
 fn read_outlines<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Arc<str>>, D::Error> {
+    // Serde's generic Arc<str> path goes through String/Box<str>. Read directly into the
+    // shared string instead of allocating and copying a temporary string per palette entry.
+    struct Outline(Arc<str>);
+    impl<'de> Deserialize<'de> for Outline {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct Path;
+            impl serde::de::Visitor<'_> for Path {
+                type Value = Outline;
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str("a bounded outline string")
+                }
+                fn visit_str<E: serde::de::Error>(self, path: &str) -> Result<Outline, E> {
+                    if path.len() > MAX_PATH_BYTES {
+                        return Err(E::custom("portable outline dictionary exceeds limit"));
+                    }
+                    Ok(Outline(Arc::from(path)))
+                }
+            }
+            d.deserialize_str(Path)
+        }
+    }
     struct Outlines;
     impl<'de> serde::de::Visitor<'de> for Outlines {
         type Value = Vec<Arc<str>>;
@@ -156,9 +155,9 @@ fn read_outlines<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Arc<str>>, D::Er
             f.write_str("bounded portable outlines")
         }
         fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-            let mut paths = Vec::new();
+            let mut paths = Vec::with_capacity(seq.size_hint().unwrap_or_default().min(MAX_GLYPHS));
             let mut bytes = 0usize;
-            while let Some(path) = seq.next_element::<Arc<str>>()? {
+            while let Some(Outline(path)) = seq.next_element::<Outline>()? {
                 bytes = bytes.saturating_add(path.len());
                 if paths.len() >= MAX_GLYPHS || bytes > MAX_PATH_BYTES {
                     return Err(serde::de::Error::custom("portable outline dictionary exceeds limit"));
@@ -205,41 +204,49 @@ fn read_glyphs<'de, D: Deserializer<'de>>(d: D) -> Result<ReadGlyphs, D::Error> 
     d.deserialize_any(Glyphs)
 }
 
+fn compact_glyph(c: CompactGlyph, outlines: &[Arc<str>]) -> Result<TextGlyph, &'static str> {
+    let (index, x, y, size, advance, char_start, char_end, style, rtl, placement) = c;
+    let path = outlines.get(index).ok_or("missing portable outline")?;
+    let transform = placement.map(|p| match p {
+        Placement::Scale(s) => [s, 0.0, 0.0, s, x, y],
+        Placement::Matrix(m) => m,
+    });
+    Ok(TextGlyph { d: path.clone(), transform, x, y, size, advance, char_start, char_end, style, rtl })
+}
+
 impl<'de> Deserialize<'de> for TextAppearance {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let wire = Read::deserialize(d)?;
         if wire.encoding > 3 || wire.outlines.len() > MAX_GLYPHS {
             return Err(serde::de::Error::custom("unsupported portable geometry encoding or outline count"));
         }
-        let records = match wire.glyphs {
-            ReadGlyphs::Records(records) if wire.encoding < 2 => GlyphIter::Records(records.into_iter()),
+        let mut bytes = 0usize;
+        let mut finish = |glyph: TextGlyph| {
+            bytes = bytes.saturating_add(glyph.d.len());
+            if bytes > MAX_PATH_BYTES {
+                return Err("portable outlines exceed byte limit");
+            }
+            Ok(glyph)
+        };
+        let glyphs = match wire.glyphs {
+            ReadGlyphs::Records(records) if wire.encoding < 2 => {
+                let mut glyphs = Vec::with_capacity(records.len());
+                for record in records {
+                    let glyph = match record {
+                        ReadGlyph::Legacy(g) if wire.encoding == 0 => g,
+                        ReadGlyph::Compact(c) if wire.encoding == 1 => compact_glyph(c, &wire.outlines).map_err(serde::de::Error::custom)?,
+                        _ => return Err(serde::de::Error::custom("glyph does not match portable geometry encoding")),
+                    };
+                    glyphs.push(finish(glyph).map_err(serde::de::Error::custom)?);
+                }
+                glyphs
+            }
             ReadGlyphs::Packed(text) if matches!(wire.encoding, 2 | 3) => {
-                GlyphIter::Packed(crate::text_glyph_bytes::decode(&text, wire.encoding == 3).map_err(serde::de::Error::custom)?.into_iter())
+                crate::text_glyph_bytes::decode_map(&text, wire.encoding == 3, |c| finish(compact_glyph(c, &wire.outlines)?))
+                    .map_err(serde::de::Error::custom)?
             }
             _ => return Err(serde::de::Error::custom("glyph data does not match portable encoding")),
         };
-        let mut bytes = 0usize;
-        let glyphs = records
-            .map(|g| {
-                let g = match g {
-                    ReadGlyph::Legacy(g) if wire.encoding == 0 => g,
-                    ReadGlyph::Compact((index, x, y, size, advance, char_start, char_end, style, rtl, placement)) if wire.encoding >= 1 => {
-                        let path = wire.outlines.get(index).ok_or_else(|| serde::de::Error::custom("missing portable outline"))?;
-                        let transform = placement.map(|p| match p {
-                            Placement::Scale(s) => [s, 0.0, 0.0, s, x, y],
-                            Placement::Matrix(m) => m,
-                        });
-                        TextGlyph { d: path.clone(), transform, x, y, size, advance, char_start, char_end, style, rtl }
-                    }
-                    _ => return Err(serde::de::Error::custom("glyph does not match portable geometry encoding")),
-                };
-                bytes = bytes.saturating_add(g.d.len());
-                if bytes > MAX_PATH_BYTES {
-                    return Err(serde::de::Error::custom("portable outlines exceed byte limit"));
-                }
-                Ok(g)
-            })
-            .collect::<Result<Vec<_>, D::Error>>()?;
         Ok(Self {
             fingerprint: wire.fingerprint,
             box_width: wire.box_width,
@@ -288,6 +295,15 @@ mod tests {
             styles: vec![TextStyle::default()],
             truncated: false,
         }
+    }
+
+    #[test]
+    fn packed_model_construction_rejects_missing_paths_and_expansion() {
+        let mut wire = serde_json::to_value(appearance()).unwrap();
+        wire["outlines"] = json!([]);
+        assert!(serde_json::from_value::<TextAppearance>(wire.clone()).unwrap_err().to_string().contains("missing portable outline"));
+        wire["outlines"] = json!(["M0 0L10 0L10 10Z".repeat(1200)]);
+        assert!(serde_json::from_value::<TextAppearance>(wire).unwrap_err().to_string().contains("portable outlines exceed byte limit"));
     }
 
     #[test]
