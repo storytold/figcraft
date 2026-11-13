@@ -218,6 +218,20 @@ fn the_pass_keeps_a_blocks_layout_and_width_sizing() {
 }
 
 #[test]
+fn a_block_in_a_section_without_a_place_is_centred_on_the_view_too() {
+    let mut s = board();
+    let (vx, vy) = {
+        let v = &s.ds().unwrap().view;
+        (v.cx, v.cy)
+    };
+    let sec = id(&s.execute("node.create", &json!({"type": "section", "x": 1000, "y": 500, "width": 4000, "height": 4000})).unwrap(), "id");
+    let (f, _) = block(&mut s, json!({"parent": sec}));
+    assert_eq!(node(&s, f).parent, Some(sec));
+    let r = bx(&s, f);
+    assert_eq!((r.x0, r.y0), (vx - 288.0, vy - 64.0), "on the page, where a block on the page would be");
+}
+
+#[test]
 fn a_default_position_is_within_a_billion_too() {
     let mut s = board();
     s.execute("view.set", &json!({"cx": 1e300})).unwrap();

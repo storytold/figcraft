@@ -79,9 +79,13 @@ pub(super) fn code_block_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|w| w.is_finite() && (CODE_MIN_W..=CODE_MAX_W).contains(w))
             .ok_or_else(|| bad(cmd, format!("`width` is a size from {CODE_MIN_W} to {CODE_MAX_W}")))?
     };
+    // The view's centre is on the page, and `x`/`y` are in the parent: a block in a section or
+    // frame takes the centre in that parent's coordinates (a parent that can't be inverted gives a
+    // non-finite centre, which `coord` refuses).
     let (vx, vy) = {
-        let v = &s.ds()?.view;
-        (v.cx, v.cy)
+        let ds = s.ds()?;
+        let c = ds.doc.world_transform(parent).inverse() * figcraft_geom::Point::new(ds.view.cx, ds.view.cy);
+        (c.x, c.y)
     };
     let x = coord(cmd, p, "x", vx - width / 2.0)?;
     let y = coord(cmd, p, "y", vy - CODE_MIN_H / 2.0)?;
