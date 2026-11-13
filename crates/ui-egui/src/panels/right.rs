@@ -657,7 +657,8 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
     })
 }
 
-/// Whether the Design panel offers Tidy up for `sel` (three or more layers that don't overlap).
+/// Whether the Design panel offers Tidy up for `sel`: three or more layers forming a row, a column
+/// or a full grid, none in an auto layout flow (`can_tidy`).
 pub(crate) fn tidy_available(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> bool {
     crate::selection_cache::cached(ctx, "tidy", doc, sel, &[], || figcraft_engine::tidy::can_tidy(doc, sel))
 }
@@ -711,7 +712,8 @@ fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col
                 ] {
                     let item = ui.add_enabled_ui(on, |ui| menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")));
                     if !on {
-                        item.response.on_disabled_hover_text(tr("Tidy up needs three or more layers that don't overlap"));
+                        item.response
+                            .on_disabled_hover_text(tr("Select a row, a column or a full grid of three or more layers, outside an auto layout flow"));
                     }
                     if item.inner {
                         app.run(c, json!({"ids": ids}));

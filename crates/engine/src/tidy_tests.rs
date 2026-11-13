@@ -304,3 +304,57 @@ fn a_rotated_layer_is_tidied_by_its_box() {
     let after = figcraft_geom::rotation_degrees(s.doc().unwrap().node(m).unwrap().transform);
     assert!((rot - after).abs() < 1e-9, "rotation unchanged");
 }
+
+/// Rectangles at Y 0, H 50 with the given (X, W) pairs.
+fn bars(s: &mut Session, xw: &[(f64, f64)]) -> Vec<NodeId> {
+    xw.iter().map(|(x, w)| make(s, *x, 0.0, *w, 50.0)).collect()
+}
+
+#[test]
+fn a_row_whose_layers_overlap_in_a_chain_is_tidied_at_its_most_common_gap() {
+    // Measured in Figma's web app on 2026-11-13: gaps -10, -10, 20 give X 0, 40, 80, 120.
+    let mut s = Session::new();
+    let ids = squares(&mut s, &[0., 40., 80., 150.]);
+    assert!(can(&s, &ids), "the first and third layers don't overlap, the chain still counts as a row");
+    tidy(&mut s, &ids);
+    assert_eq!(xs_of(&s, &ids), vec![0., 40., 80., 120.]);
+}
+
+#[test]
+fn a_negative_gap_is_raised_so_no_layer_reaches_the_one_two_before() {
+    // Measured in Figma's web app on 2026-11-13, X before 0, 80, 200, 260, 400, 460.
+    let cases: [([f64; 6], [f64; 6]); 4] = [
+        ([100., 10., 100., 100., 100., 100.], [0., 96., 102., 198., 294., 390.]),
+        ([100., 20., 100., 100., 100., 100.], [0., 91., 102., 193., 284., 375.]),
+        ([100., 30., 100., 100., 100., 100.], [0., 86., 102., 188., 274., 360.]),
+        ([100., 100., 100., 10., 100., 100.], [0., 96., 192., 288., 294., 390.]),
+    ];
+    for (widths, want) in cases {
+        let mut s = Session::new();
+        let xs = [0., 80., 200., 260., 400., 460.];
+        let pairs: Vec<(f64, f64)> = xs.iter().copied().zip(widths).collect();
+        let ids = bars(&mut s, &pairs);
+        tidy(&mut s, &ids);
+        assert_eq!(xs_of(&s, &ids), want.to_vec(), "widths {widths:?}");
+    }
+}
+
+#[test]
+fn a_negative_gap_between_equal_widths_is_the_most_common_gap() {
+    let mut s = Session::new();
+    let xs = [0., 80., 200., 260., 400., 460.];
+    let pairs: Vec<(f64, f64)> = xs.iter().map(|x| (*x, 100.)).collect();
+    let ids = bars(&mut s, &pairs);
+    tidy(&mut s, &ids);
+    assert_eq!(xs_of(&s, &ids), vec![0., 60., 120., 180., 240., 300.]);
+}
+
+#[test]
+fn an_explicit_spacing_is_not_raised() {
+    // Not measured in Figma: the Spacing field stays as typed.
+    let mut s = Session::new();
+    let pairs: Vec<(f64, f64)> = [(0., 100.), (80., 10.), (200., 100.)].to_vec();
+    let ids = bars(&mut s, &pairs);
+    s.execute("arrange.tidy", &json!({"ids": ids, "spacing": -40})).unwrap();
+    assert_eq!(xs_of(&s, &ids), vec![0., 60., 30.]);
+}

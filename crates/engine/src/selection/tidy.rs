@@ -5,7 +5,7 @@
 //! and keeps the first layer where it is. Rows are the groups of layers whose Y ranges overlap
 //! (transitively), columns the groups whose X ranges overlap. A row is one row group of layers
 //! side by side: its horizontal gaps are evened and every Y kept; a column is the mirror image.
-//! Layers of a row may overlap along X: a negative gap counts in the mean. The one gap is the most
+//! Layers of a row may overlap along X, also in a chain: a negative gap counts in the mean. The one gap is the most
 //! common existing gap (the smaller of two equally common ones), else the mean rounded to a whole
 //! number, half up. A grid (two or more rows and two or more columns, one layer in every cell) is
 //! packed along the axis that has more groups: for 2 rows by 3 columns each column is as wide as
@@ -89,19 +89,25 @@ fn classify(items: &[Item]) -> Option<Shape> {
     let cols = groups(items, false);
     let rows = groups(items, true);
     match (cols.len(), rows.len()) {
-        (c, 1) if c >= 2 && cols.iter().all(|g| overlapping(g)) => Some(Shape::Line { vertical: false }),
-        (1, r) if r >= 2 && rows.iter().all(|g| overlapping(g)) => Some(Shape::Line { vertical: true }),
+        (c, 1) if c >= 2 && cols.iter().all(|g| overlapping(g, false)) => Some(Shape::Line { vertical: false }),
+        (1, r) if r >= 2 && rows.iter().all(|g| overlapping(g, true)) => Some(Shape::Line { vertical: true }),
         (c, r) if c >= 2 && r >= 2 && one_per_cell(&cols, &rows) => Some(Shape::Grid { vertical: r > c }),
         _ => None,
     }
 }
 
-/// Layers that share a group along a row's or column's own axis must overlap each other (50 px
-/// squares at X 0, 60, 105, 170: the middle two do), not merely sit in the same band: a header
-/// above two layers side by side is irregular.
-fn overlapping(group: &[Item]) -> bool {
-    let both = |a: Rect, b: Rect| a.x1.min(b.x1) - a.x0.max(b.x0) > EPS && a.y1.min(b.y1) - a.y0.max(b.y0) > EPS;
-    group.iter().enumerate().all(|(i, a)| group.iter().skip(i + 1).all(|b| both(a.1, b.1)))
+/// Layers that share a group along a row's (`vertical` false) or column's own axis must overlap
+/// each other pairwise on the OTHER axis, not merely sit in the same band: a header above two
+/// layers side by side is irregular (a row's column group of the header and one of the pair has Y
+/// ranges that don't overlap for the pair). The own axis is already covered by `groups`, which
+/// chains transitively, so 50 px squares at X 0, 40, 80, 150 are a row although the first and
+/// third don't touch.
+fn overlapping(group: &[Item], vertical: bool) -> bool {
+    let across = |a: Rect, b: Rect| {
+        let (a, b) = (span(a, !vertical), span(b, !vertical));
+        a.1.min(b.1) - a.0.max(b.0) > EPS
+    };
+    group.iter().enumerate().all(|(i, a)| group.iter().skip(i + 1).all(|b| across(a.1, b.1)))
 }
 
 fn span(b: Rect, vertical: bool) -> (f64, f64) {
@@ -154,6 +160,22 @@ fn even_gap(gaps: &[f64], spacing: Option<f64>) -> f64 {
     }
 }
 
+/// The even gap of a line of three or more layers, from its derived gap `gap`: raised so that
+/// every layer starts strictly after the end of the layer two places before it. With one gap `g`,
+/// layer `i + 2` starts at `end(i) + w(i + 1) + 2g`, so `g > -w(i + 1) / 2` for every interior
+/// layer, in whole pixels `floor(-w_min / 2) + 1` for the narrowest interior size `w_min`. Measured
+/// in Figma's web app on 2026-11-13: interior widths of 10, 20 and 30 among 100s gave -4, -9 and
+/// -14, and widths of 100 left the most common gap, -40, alone. Only those three widths were
+/// measured; other widths follow the same formula.
+fn raise_negative_gap(gap: f64, widths: &[f64]) -> f64 {
+    let interior = widths.get(1..widths.len().saturating_sub(1)).unwrap_or(&[]);
+    let w_min = interior.iter().copied().fold(f64::INFINITY, f64::min);
+    if widths.len() < 3 || !w_min.is_finite() {
+        return gap;
+    }
+    gap.max((-w_min / 2.0).floor() + 1.0)
+}
+
 /// A row (`vertical` false) or a column: the first layer stays, each next one follows the last at
 /// the even gap, the other axis is untouched.
 fn line_moves(items: &[Item], vertical: bool, spacing: Option<f64>) -> Vec<Move> {
@@ -166,7 +188,11 @@ fn line_moves(items: &[Item], vertical: bool, spacing: Option<f64>) -> Vec<Move>
             _ => None,
         })
         .collect();
-    let gap = even_gap(&gaps, spacing);
+    let widths: Vec<f64> = line.iter().map(|i| span(i.1, vertical).1 - span(i.1, vertical).0).collect();
+    let gap = match spacing {
+        Some(s) => s,
+        None => raise_negative_gap(even_gap(&gaps, None), &widths),
+    };
     let mut pos = line.first().map_or(0.0, |i| span(i.1, vertical).0);
     let mut out = Vec::with_capacity(line.len());
     for (id, b) in line {

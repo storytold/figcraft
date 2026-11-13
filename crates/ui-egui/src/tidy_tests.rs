@@ -1,5 +1,5 @@
 //! The Design panel's Tidy up row follows the engine's rule (measured in Figma's web app on
-//! 2026-11-12): offered for three or more layers that don't overlap, greyed out otherwise.
+//! 2026-11-12): offered for three or more layers forming a row, a column or a full grid, greyed out otherwise.
 
 use egui::Context;
 use figcraft_doc::NodeId;
