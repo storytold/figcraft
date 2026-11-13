@@ -358,6 +358,21 @@ pub(crate) fn run(
         *by_rule.entry(f.rule).or_default() += 1;
     }
     let findings: Vec<Value> = shown.into_iter().map(Finding::json).collect();
+    // What the walk could not check, by rule: past the node limit it looked at nothing more, and
+    // past a measure cap it saw layers without measuring them. A gate reads this list, so a new
+    // cap somewhere in the walk fails it without a second place to remember.
+    let mut unchecked: Vec<Value> = Vec::new();
+    if report.truncated {
+        for r in super::rules::RULES.iter().filter(|r| settings.enabled(r.id)) {
+            unchecked.push(json!({"rule": r.id, "reason": "truncated"}));
+        }
+    } else {
+        for (rule, layers) in [("layout.text-overflow", report.text_unmeasured), ("layout.clipped", report.frames_unmeasured)] {
+            if layers > 0 && settings.enabled(rule) {
+                unchecked.push(json!({"rule": rule, "reason": "measure-cap", "layers": layers}));
+            }
+        }
+    }
     let mut out = settings.json();
     if let Some(o) = out.as_object_mut() {
         o.insert("scope".into(), json!(scope));
@@ -368,7 +383,8 @@ pub(crate) fn run(
         o.insert("limit".into(), json!(report.limit));
         o.insert("findings".into(), json!(findings));
         o.insert("truncated".into(), json!(report.truncated));
-        // Checks the walk capped before finishing: what they did not measure is unchecked.
+        o.insert("unchecked".into(), json!(unchecked));
+        // How many layers each capped check left unmeasured, for the window and agents.
         if report.text_unmeasured > 0 {
             o.insert("textUnmeasured".into(), json!(report.text_unmeasured));
         }

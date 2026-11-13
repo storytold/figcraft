@@ -750,6 +750,12 @@ fn assert_fails_when_the_audit_is_truncated() {
     let r = ex(&mut s, "design.audit", json!({"scope": "page"}));
     assert_eq!(r["truncated"], true, "{r}");
     assert_eq!(r["limit"], 50_000, "{r}");
+    // Every rule the file enables is named as unchecked: the report says what it could not see,
+    // which is what the gate reads.
+    let unchecked = r["unchecked"].as_array().map(Vec::as_slice).unwrap_or_default();
+    assert!(unchecked.len() >= 20, "{r}");
+    assert!(unchecked.iter().all(|e| e["reason"] == "truncated"), "{r}");
+    assert!(unchecked.iter().any(|e| e["rule"] == "color.contrast"), "{r}");
     // The gate must not turn a truncated audit into a pass at score 100.
     let err = s.execute("design.assert", &json!({"scope": "page", "failOn": "high"})).unwrap_err().to_string();
     assert!(err.contains("stopped at the 50000-node limit"), "{err}");
@@ -874,6 +880,11 @@ fn assert_refuses_a_scope_whose_measured_checks_were_capped() {
     let only = json!(["layout.text-overflow"]);
     let audit = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &only}));
     assert!(audit["textUnmeasured"].as_u64().unwrap_or(0) >= 1, "{audit}");
+    // The report names the rule the cap left unmeasured, which is what the gate reads.
+    let unchecked = audit["unchecked"].as_array().map(Vec::as_slice).unwrap_or_default();
+    assert_eq!(unchecked.len(), 1, "{audit}");
+    assert_eq!(unchecked[0]["rule"], "layout.text-overflow", "{audit}");
+    assert_eq!(unchecked[0]["reason"], "measure-cap", "{audit}");
     let err = s.execute("design.assert", &json!({"scope": "page", "rules": &only})).unwrap_err().to_string();
     assert!(err.contains("did not measure all of layout.text-overflow"), "{err}");
     // A gate that does not ask for the capped rule is unaffected.
@@ -884,6 +895,7 @@ fn assert_refuses_a_scope_whose_measured_checks_were_capped() {
     ex(&mut s, "design.configure", json!({"disabled": ["layout.text-overflow"]}));
     let audit = ex(&mut s, "design.audit", json!({"scope": "page"}));
     assert!(audit["textUnmeasured"].is_null(), "{audit}");
+    assert!(audit["unchecked"].as_array().is_some_and(Vec::is_empty), "{audit}");
     assert!(s.execute("design.assert", &json!({"scope": "page"})).is_ok(), "a disabled rule leaves nothing unchecked");
 }
 
