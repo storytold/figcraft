@@ -405,10 +405,11 @@ fn renaming_a_group_into_its_own_new_subgroup_moves_the_deeper_names_first() {
 
 #[test]
 fn a_group_rename_onto_a_variable_name_that_stays_changes_nothing() {
-    let mut u = named_window(&["Orange/100", "Orange/200", "Palette/Orange/100"]);
+    // Orange/100 moves first; Orange/200 then collides, and the move already made is undone.
+    let mut u = named_window(&["Orange/100", "Orange/200", "Palette/Orange/200"]);
     rename_group(&mut u, "Orange", "Palette/Orange");
-    assert!(u.app.ui.last_error.as_deref().is_some_and(|e| e.contains("Palette/Orange/100")), "{:?}", u.app.ui.last_error);
-    assert_eq!(sorted_names(&u), ["Orange/100", "Orange/200", "Palette/Orange/100"]);
+    assert!(u.app.ui.last_error.as_deref().is_some_and(|e| e.contains("Palette/Orange/200")), "{:?}", u.app.ui.last_error);
+    assert_eq!(sorted_names(&u), ["Orange/100", "Orange/200", "Palette/Orange/200"]);
 }
 
 fn open_edit_variables(u: &mut Ui) -> Vec<egui::Shape> {
