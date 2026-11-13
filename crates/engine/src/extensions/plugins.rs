@@ -798,6 +798,7 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Convert a human-readable plugin name into a lowercase ASCII hyphen-separated slug.
+#[cfg(not(target_arch = "wasm32"))]
 fn slugify(name: &str) -> String {
     let mut out = String::new();
     let mut prev_dash = false;
