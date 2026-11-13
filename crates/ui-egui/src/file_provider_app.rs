@@ -1,5 +1,5 @@
 //! Native archives and document-scoped persistence acknowledgements.
-use crate::{FigApp, file_providers::Action};
+use crate::{FigApp, file_providers::Action, windows::TabClose};
 use base64::Engine as _;
 use serde_json::json;
 
@@ -51,8 +51,9 @@ pub(crate) fn tick(app: &mut FigApp) {
             Action::Save { request, capture, status, resource } => {
                 let alive = app.session.docs.iter().any(|d| d.uid == capture.doc);
                 let saved = status == "saved";
-                if app.ui.close_tab == Some(crate::windows::TabClose::SavingToProvider(capture.doc)) {
-                    app.ui.close_tab = saved.then_some(crate::windows::TabClose::AfterSave(capture.doc));
+                // A result can arrive after the Save answer but before the UI's deferred close pass.
+                if matches!(app.ui.close_tab, Some(TabClose::Save(uid) | TabClose::SavingToProvider(uid)) if uid == capture.doc) {
+                    app.ui.close_tab = saved.then_some(TabClose::AfterSave(capture.doc));
                 }
                 if saved {
                     for alias in host.unbind_resource_aliases(capture.doc, &resource) {
@@ -318,9 +319,13 @@ mod tests {
         output.textures_delta.clear();
     }
 
-    fn start_tab_close_save(app: &mut FigApp, index: usize) -> String {
+    fn answer_tab_close_with_save(app: &mut FigApp, index: usize) {
         crate::windows::ask_close_tab(app, index);
         crate::windows::answer_close_tab(app, &egui::Context::default(), crate::windows::CloseAnswer::Save);
+    }
+
+    fn start_tab_close_save(app: &mut FigApp, index: usize) -> String {
+        answer_tab_close_with_save(app, index);
         confirm_tab_close(app);
         let events = app.file_providers.take_events();
         assert_eq!(events.len(), 1);
@@ -369,12 +374,67 @@ mod tests {
     }
 
     #[test]
+    fn tab_close_save_reuses_the_existing_provider_save_for_the_target() {
+        for settled_before_ui in [false, true] {
+            let mut app = app();
+            let uid = app.session.ds().unwrap().uid;
+            std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Tab to close".into();
+            let target_request = request(&mut app);
+            app.session.execute("file.new", &json!({})).unwrap();
+            let other = app.session.ds().unwrap().uid;
+            let other_request = request(&mut app);
+
+            if settled_before_ui {
+                app.file_providers.resolve_dialog(&target_request, "provider", "target.figcraft").unwrap();
+                app.file_providers.take_events();
+            }
+            app.file_providers.set_enabled(false).unwrap();
+            answer_tab_close_with_save(&mut app, 0);
+            if !settled_before_ui {
+                confirm_tab_close(&mut app);
+                assert_eq!(app.ui.close_tab, Some(TabClose::SavingToProvider(uid)));
+                assert_eq!(app.session.ds().unwrap().uid, other);
+                assert!(app.file_providers.take_events().is_empty(), "must not start another save");
+                app.file_providers.resolve_dialog(&target_request, "provider", "target.figcraft").unwrap();
+                app.file_providers.take_events();
+            }
+
+            app.file_providers.resolve_dialog(&other_request, "cancel", "").unwrap();
+            tick(&mut app);
+            let waiting = if settled_before_ui { TabClose::Save(uid) } else { TabClose::SavingToProvider(uid) };
+            assert_eq!(app.ui.close_tab, Some(waiting), "another tab's result cannot settle this close");
+            app.file_providers.take_events();
+
+            app.file_providers.result(target_request.clone(), "saved".into(), "target-file".into()).unwrap();
+            tick(&mut app);
+            confirm_tab_close(&mut app);
+            assert_eq!(app.ui.close_tab, Some(TabClose::AfterSave(uid)));
+            assert_eq!(app.session.docs.len(), 2, "wait for the original terminal event");
+            let events = app.file_providers.take_events();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].metadata["type"], "saved");
+            assert_eq!(events[0].metadata["requestId"], target_request);
+            confirm_tab_close(&mut app);
+            assert!(app.ui.close_tab.is_none());
+            assert_eq!(app.session.docs.len(), 1);
+            assert_eq!(app.session.ds().unwrap().uid, other);
+        }
+    }
+
+    #[test]
     fn provider_tab_close_stops_after_nondurable_results_or_later_edits() {
         for status in ["cancel-choice", "cancel", "failed", "download", "saved"] {
             let mut app = app();
             let clean = app.session.ds().unwrap().doc.clone();
             std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Captured".into();
-            let request = start_tab_close_save(&mut app, 0);
+            let request = request(&mut app);
+            answer_tab_close_with_save(&mut app, 0);
+            // The chooser can cancel before the deferred UI pass gets to attach to its save.
+            if status != "cancel-choice" {
+                confirm_tab_close(&mut app);
+                assert_eq!(app.ui.close_tab, Some(TabClose::SavingToProvider(app.session.ds().unwrap().uid)));
+                assert!(app.file_providers.take_events().is_empty());
+            }
             if status == "saved" {
                 std::sync::Arc::make_mut(&mut app.session.ds_mut().unwrap().doc).name = "Later edit".into();
             } else {

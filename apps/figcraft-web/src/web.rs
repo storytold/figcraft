@@ -49,7 +49,10 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
-        let result = eframe::WebRunner::new()
+        let runner = eframe::WebRunner::new();
+        let started_provider = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let app_provider = started_provider.clone();
+        let result = runner
             .start(
                 canvas,
                 options,
@@ -73,13 +76,13 @@ pub fn start() {
                     let ctx = cc.egui_ctx.clone();
                     session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(move || ctx.request_repaint()))));
                     let mut fig = FigApp::new(session, Box::new(WebServices { reduce_motion, ctx: cc.egui_ctx.clone(), host: app_bridge.clone() }));
-                    // The embedded host owns its file delivery. Offering a second storage
-                    // contract there could leave the host's remembered filename stale.
-                    if app_bridge.is_none()
-                        && let Err(error) = crate::file_providers::install(fig.file_providers.clone(), cc.egui_ctx.clone())
-                    {
-                        log::error!("file provider capability could not be installed: {error:?}");
-                    }
+                    let file_provider = match crate::file_providers::install(fig.file_providers.clone(), cc.egui_ctx.clone(), app_bridge.is_some()) {
+                        Ok(provider) => provider,
+                        Err(error) => {
+                            log::error!("file provider capability could not be installed: {error:?}");
+                            None
+                        }
+                    };
                     fig.note_recovered(recovered);
                     if let Err(e) = crate::pasted::install(cc.egui_ctx.clone()) {
                         log::error!("couldn't listen for pasted images: {e:?}");
@@ -108,11 +111,21 @@ pub fn start() {
                     if let Some(bridge) = &app_bridge {
                         bridge.listen(opens.clone(), cc.egui_ctx.clone());
                     }
-                    Ok(Box::new(WebShell { fig, host: app_bridge, opens }))
+                    *app_provider.borrow_mut() = file_provider.clone();
+                    Ok(Box::new(WebShell { fig, host: app_bridge, opens, file_provider }))
                 }),
             )
             .await;
-        // Ready only once the runner is up: starting can still fail after the app is made.
+        // Handler installation can fail after eframe has retained the app.
+        if result.is_err() {
+            runner.destroy();
+        } else {
+            // Drop the startup slot borrow before synchronous page listeners run.
+            let provider = started_provider.take();
+            if let Some(provider) = provider {
+                provider.announce_ready();
+            }
+        }
         if let Some(bridge) = &bridge {
             match &result {
                 Ok(()) => bridge.post_ready(),
@@ -188,6 +201,15 @@ struct WebShell {
     host: Option<crate::host::Bridge>,
     /// Files the host sent, waiting to join the app's own open queue.
     opens: crate::host::OpenQueue,
+    file_provider: Option<crate::file_providers::Provider>,
+}
+
+impl Drop for WebShell {
+    fn drop(&mut self) {
+        if let Some(provider) = &self.file_provider {
+            provider.uninstall();
+        }
+    }
 }
 
 impl eframe::App for WebShell {
@@ -213,7 +235,9 @@ impl eframe::App for WebShell {
             });
         }
         figcraft_ui_egui::windows::guard(&mut self.fig, ctx, |fig| fig.background_tick(ctx));
-        crate::file_providers::publish(&self.fig.file_providers);
+        if let Some(provider) = &self.file_provider {
+            provider.publish();
+        }
         // The host hears when unsaved changes appear or go away (crate::host).
         if let Some(bridge) = &self.host {
             bridge.set_dirty(self.fig.session.docs.iter().any(|d| d.is_dirty()));
@@ -233,7 +257,9 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.fig.control_queue.extend(crate::api::take_requests());
         self.fig.ui(ui);
-        crate::file_providers::publish(&self.fig.file_providers);
+        if let Some(provider) = &self.file_provider {
+            provider.publish();
+        }
         // The fonts on this computer that text asked for this frame are read; once one is in,
         // auto-sizing text measured in a fallback fits it.
         crate::local_fonts::load_wanted(ui.ctx());

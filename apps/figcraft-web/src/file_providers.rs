@@ -2,16 +2,83 @@
 //!
 //! Callbacks enqueue commands for a later egui frame. Exporting bytes never acknowledges them.
 
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
+
 use figcraft_ui_egui::file_providers::{Host, Resource};
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
 
-thread_local! {
-    static CURRENT_CONTEXT: std::cell::RefCell<Option<egui::Context>> = const { std::cell::RefCell::new(None) };
-}
 const API: &str = "figcraftFileProviders";
 const EVENT: &str = "figcraft-file-provider";
 const MAX_BYTES: u32 = 80 * 1024 * 1024;
+
+thread_local! {
+    static INSTALLED: RefCell<Option<Installed>> = const { RefCell::new(None) };
+}
+
+struct Installed {
+    api: Object,
+    editor: Rc<Editor>,
+}
+
+struct Editor {
+    host: Host,
+    ctx: egui::Context,
+}
+
+#[derive(Clone)]
+pub(crate) struct Provider(Weak<Editor>);
+
+impl Provider {
+    fn active(&self) -> Result<Rc<Editor>, JsValue> {
+        self.0
+            .upgrade()
+            .filter(|editor| INSTALLED.with_borrow(|current| current.as_ref().is_some_and(|current| Rc::ptr_eq(editor, &current.editor))))
+            .ok_or_else(|| error("this file-provider API belongs to a previous editor"))
+    }
+
+    fn wake_later(&self) {
+        let provider = self.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(editor) = provider.active() {
+                editor.ctx.request_repaint();
+            }
+        });
+    }
+
+    /// Announce the installed API only once the owning editor's startup has succeeded.
+    pub(crate) fn announce_ready(&self) {
+        if self.active().is_ok()
+            && let Err(error) = dispatch(&serde_json::json!({"type": "ready", "protocolVersion": 1}), None)
+        {
+            log::error!("file provider ready event could not be delivered: {error:?}");
+        }
+    }
+
+    pub(crate) fn publish(&self) {
+        let Ok(editor) = self.active() else { return };
+        let more = editor.host.publish_events_with(
+            |metadata, bytes| {
+                self.active()?;
+                dispatch(metadata, bytes)
+            },
+            |error| log::error!("file-provider event delivery failed: {error:?}"),
+        );
+        if more && self.active().is_ok() {
+            editor.ctx.request_repaint();
+        }
+    }
+
+    pub(crate) fn uninstall(&self) {
+        if self.active().is_ok()
+            && let Some(window) = web_sys::window()
+            && let Err(error) = uninstall(&window)
+        {
+            log::error!("file provider capability could not be removed: {error:?}");
+        }
+    }
+}
 
 #[wasm_bindgen]
 extern "C" {
@@ -53,69 +120,72 @@ fn resource(value: JsValue) -> Result<Resource, JsValue> {
     Ok(Resource { id, name, updated_at })
 }
 
-fn wake_later(ctx: &egui::Context) {
-    let fallback = ctx.clone();
-    wasm_bindgen_futures::spawn_local(async move {
-        CURRENT_CONTEXT.with(|current| current.borrow().as_ref().unwrap_or(&fallback).request_repaint());
-    });
+fn uninstall(window: &web_sys::Window) -> Result<(), JsValue> {
+    // Release the editor and any pending captures even when page code has replaced the property.
+    let current = INSTALLED.with_borrow_mut(Option::take);
+    if let Some(current) = current
+        && Object::is(&Reflect::get(window, &API.into())?, current.api.as_ref())
+        && !Reflect::delete_property(window.unchecked_ref::<Object>(), &API.into())?
+    {
+        return Err(error("file-provider API could not be removed"));
+    }
+    Ok(())
 }
 
-/// Makes the capability discoverable without enabling it or changing the browser's writer.
-pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
+/// Install an initially disabled API for this editor. Each replacement invalidates the
+/// previous nonce, provider connection and in-flight requests.
+pub(crate) fn install(host: Host, ctx: egui::Context, embedded: bool) -> Result<Option<Provider>, JsValue> {
     let window = web_sys::window().ok_or_else(|| error("no window"))?;
-    CURRENT_CONTEXT.with(|current| *current.borrow_mut() = Some(ctx.clone()));
-    if Reflect::has(&window, &API.into())? {
-        // A graphics restart keeps the page capability and pending requests, and renews its wake target.
-        return Ok(());
+    uninstall(&window)?;
+    // The embedded host owns its file delivery, including across a same-page restart.
+    if embedded {
+        return Ok(None);
     }
-    // A delayed result from an earlier page must never address a new document's request.
+    if Reflect::has(&window, &API.into())? {
+        return Err(error("the page already owns the file-provider API name"));
+    }
     let crypto = Reflect::get(&window, &"crypto".into())?;
     let random = Reflect::get(&crypto, &"getRandomValues".into())?.dyn_into::<Function>()?;
     let nonce = Uint8Array::new_with_length(16);
     random.call1(&crypto, &nonce)?;
     host.set_session(nonce.to_vec().iter().map(|byte| format!("{byte:02x}")).collect()).map_err(error)?;
 
+    let editor = Rc::new(Editor { host, ctx });
+    let provider = Provider(Rc::downgrade(&editor));
     let api = Object::new();
     set(&api, "protocolVersion", &1.into())?;
     set(&api, "app", &"figcraft".into())?;
     set(&api, "capabilities", &object(&serde_json::json!(["revisionAck", "externalRecents", "saveDestination", "openBytes"]))?)?;
 
-    let h = host.clone();
-    let wake = ctx.clone();
+    let active = provider.clone();
     let register = Closure::<dyn FnMut(JsValue, JsValue, JsValue) -> Result<String, JsValue>>::new(move |id, label, namespace| {
         let id = bounded_string(id, 160)?;
         let label = bounded_string(label, 100)?;
         let namespace = bounded_string(namespace, 160)?;
-        let connection = h.connect(id, label, namespace).map_err(error)?;
-        wake_later(&wake);
+        let connection = active.active()?.host.connect(id, label, namespace).map_err(error)?;
+        active.wake_later();
         Ok(connection)
     });
-    set(&api, "registerProvider", register.as_ref())?;
-    register.forget();
+    set(&api, "registerProvider", &register.into_js_value())?;
 
-    let h = host.clone();
-    let wake = ctx.clone();
+    let active = provider.clone();
     let unregister = Closure::<dyn FnMut() -> Result<bool, JsValue>>::new(move || {
-        h.disconnect().map_err(error)?;
-        wake_later(&wake);
+        active.active()?.host.disconnect().map_err(error)?;
+        active.wake_later();
         Ok(true)
     });
-    set(&api, "unregisterProvider", unregister.as_ref())?;
-    unregister.forget();
+    set(&api, "unregisterProvider", &unregister.into_js_value())?;
 
-    let h = host.clone();
-    let wake = ctx.clone();
+    let active = provider.clone();
     let enabled = Closure::<dyn FnMut(JsValue) -> Result<bool, JsValue>>::new(move |value: JsValue| {
         let value = value.as_bool().ok_or_else(|| error("enabled must be a boolean"))?;
-        h.set_enabled(value).map_err(error)?;
-        wake_later(&wake);
+        active.active()?.host.set_enabled(value).map_err(error)?;
+        active.wake_later();
         Ok(true)
     });
-    set(&api, "setEnabled", enabled.as_ref())?;
-    enabled.forget();
+    set(&api, "setEnabled", &enabled.into_js_value())?;
 
-    let h = host.clone();
-    let wake = ctx.clone();
+    let active = provider.clone();
     let resources = Closure::<dyn FnMut(JsValue, JsValue) -> Result<(), JsValue>>::new(move |connection, value: JsValue| {
         let connection = bounded_string(connection, 160)?;
         if !Array::is_array(&value) {
@@ -127,26 +197,22 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         }
         // Read only bounded metadata; do not copy or serialize arbitrary host properties.
         let resources = entries.iter().map(resource).collect::<Result<Vec<_>, _>>()?;
-        h.set_resources(&connection, resources).map_err(error)?;
-        wake_later(&wake);
+        active.active()?.host.set_resources(&connection, resources).map_err(error)?;
+        active.wake_later();
         Ok(())
     });
-    set(&api, "setResources", resources.as_ref())?;
-    resources.forget();
+    set(&api, "setResources", &resources.into_js_value())?;
 
-    let h = host.clone();
-    let wake = ctx.clone();
+    let active = provider.clone();
     let request_open = Closure::<dyn FnMut(JsValue) -> Result<String, JsValue>>::new(move |resource| {
         let resource = bounded_string(resource, 160)?;
-        let request = h.request_open(&resource).map_err(error)?;
-        wake_later(&wake);
+        let request = active.active()?.host.request_open(&resource).map_err(error)?;
+        active.wake_later();
         Ok(request)
     });
-    set(&api, "requestOpen", request_open.as_ref())?;
-    request_open.forget();
+    set(&api, "requestOpen", &request_open.into_js_value())?;
 
-    let h = host.clone();
-    let wake = ctx.clone();
+    let active = provider.clone();
     let open = Closure::<dyn FnMut(JsValue, JsValue, JsValue) -> Result<(), JsValue>>::new(move |request, name, value: JsValue| {
         let request = bounded_string(request, 160)?;
         let name = bounded_string(name, 255)?;
@@ -154,57 +220,51 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         if bytes.length() > MAX_BYTES {
             return Err(error("file exceeds the provider limit"));
         }
-        h.open(request, name, bytes.to_vec()).map_err(error)?;
-        wake_later(&wake);
+        active.active()?.host.open(request, name, bytes.to_vec()).map_err(error)?;
+        active.wake_later();
         Ok(())
     });
-    set(&api, "openResource", open.as_ref())?;
-    open.forget();
+    set(&api, "openResource", &open.into_js_value())?;
 
-    let h = host.clone();
-    let wake = ctx.clone();
+    let active = provider.clone();
     let cancel_open = Closure::<dyn FnMut(JsValue, JsValue) -> Result<(), JsValue>>::new(move |request, message| {
         let request = bounded_string(request, 160)?;
         let message = bounded_string(message, 1024)?;
-        h.cancel_open(request, message).map_err(error)?;
-        wake_later(&wake);
+        active.active()?.host.cancel_open(request, message).map_err(error)?;
+        active.wake_later();
         Ok(())
     });
-    set(&api, "cancelOpen", cancel_open.as_ref())?;
-    cancel_open.forget();
+    set(&api, "cancelOpen", &cancel_open.into_js_value())?;
 
-    let h = host.clone();
-    let wake = ctx.clone();
+    let active = provider.clone();
     let result = Closure::<dyn FnMut(JsValue, JsValue, JsValue) -> Result<(), JsValue>>::new(move |request, status, resource| {
         let request = bounded_string(request, 160)?;
         let status = bounded_string(status, 8)?;
         let resource = bounded_string(resource, 160)?;
-        h.result(request, status, resource).map_err(error)?;
-        wake_later(&wake);
+        active.active()?.host.result(request, status, resource).map_err(error)?;
+        active.wake_later();
         Ok(())
     });
-    set(&api, "saveResult", result.as_ref())?;
-    result.forget();
+    set(&api, "saveResult", &result.into_js_value())?;
 
-    let h = host.clone();
-    let wake = ctx.clone();
+    let active = provider.clone();
     let dialog = Closure::<dyn FnMut(JsValue, JsValue, JsValue) -> Result<(), JsValue>>::new(move |request, destination, name| {
         let request = bounded_string(request, 160)?;
         let destination = bounded_string(destination, 8)?;
         let name = bounded_string(name, 255)?;
-        h.resolve_dialog(&request, &destination, &name).map_err(error)?;
-        wake_later(&wake);
+        active.active()?.host.resolve_dialog(&request, &destination, &name).map_err(error)?;
+        active.wake_later();
         Ok(())
     });
-    set(&api, "resolveSaveDialog", dialog.as_ref())?;
-    dialog.forget();
+    set(&api, "resolveSaveDialog", &dialog.into_js_value())?;
 
-    let h = host.clone();
-    let snapshot = Closure::<dyn FnMut() -> Result<JsValue, JsValue>>::new(move || object(&h.snapshot()));
-    set(&api, "snapshot", snapshot.as_ref())?;
-    snapshot.forget();
-    set(&window, API, &Object::freeze(&api))?;
-    dispatch(&serde_json::json!({"type": "ready", "protocolVersion": 1}), None)
+    let active = provider.clone();
+    let snapshot = Closure::<dyn FnMut() -> Result<JsValue, JsValue>>::new(move || object(&active.active()?.host.snapshot()));
+    set(&api, "snapshot", &snapshot.into_js_value())?;
+    let api = Object::freeze(&api);
+    set(&window, API, api.as_ref())?;
+    INSTALLED.with_borrow_mut(|current| *current = Some(Installed { api, editor }));
+    Ok(Some(provider))
 }
 
 fn dispatch(metadata: &serde_json::Value, bytes: Option<Vec<u8>>) -> Result<(), JsValue> {
@@ -217,16 +277,6 @@ fn dispatch(metadata: &serde_json::Value, bytes: Option<Vec<u8>>) -> Result<(), 
     let event = web_sys::CustomEvent::new_with_event_init_dict(EVENT, &init)?;
     web_sys::window().ok_or_else(|| error("no window"))?.dispatch_event(&event)?;
     Ok(())
-}
-
-pub fn publish(host: &Host) {
-    if host.publish_events_with(dispatch, |error| log::error!("file-provider event delivery failed: {error:?}")) {
-        CURRENT_CONTEXT.with(|current| {
-            if let Some(ctx) = current.borrow().as_ref() {
-                ctx.request_repaint();
-            }
-        });
-    }
 }
 
 #[cfg(test)]

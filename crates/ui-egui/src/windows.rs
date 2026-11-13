@@ -499,7 +499,7 @@ pub enum TabClose {
     /// Save was answered: it saves next frame, once a panel field the click took the keyboard
     /// from has committed what was typed, then the tab closes.
     Save(u64),
-    /// Wait for the provider save started by this close to settle.
+    /// Wait for the exact tab's provider save to settle.
     SavingToProvider(u64),
     /// Continue after a native Save As dialog or a durable provider acknowledgement.
     AfterSave(u64),
@@ -568,6 +568,12 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
         }
         TabClose::Save(_) => {
             app.ui.close_tab = None;
+            // An admitted save still settles while new provider choices are paused.
+            if app.file_providers.has_unapplied_save(uid) {
+                app.ui.close_tab = Some(TabClose::SavingToProvider(uid));
+                ctx.request_repaint();
+                return;
+            }
             // Saving acts on the file shown.
             app.session.active = i;
             if app.file_providers.enabled() {

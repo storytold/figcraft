@@ -211,6 +211,13 @@ impl Host {
     pub fn pending_for(&self, doc: u64) -> bool {
         self.state().pending_for(doc)
     }
+    /// A result the app can still consume for this exact save target. Captured branches
+    /// and saves only waiting to publish a terminal event do not have a result to await.
+    pub(crate) fn has_unapplied_save(&self, doc: u64) -> bool {
+        let s = self.state();
+        s.dialogs.values().chain(s.pending.values()).any(|capture| capture.doc == doc)
+            || s.actions.iter().chain(&s.failed_deliveries).any(|action| matches!(action, Action::Save { capture, .. } if capture.doc == doc))
+    }
     /// Pausing new choices does not release an external checkpoint or an in-flight save.
     pub(crate) fn owns_document(&self, doc: u64) -> bool {
         let s = self.state();

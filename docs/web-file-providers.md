@@ -25,6 +25,11 @@ The detail contains bounded metadata and the `save` event carries the native byt
 `event.detail.bytes` as a `Uint8Array`. The host subscribes before registering. An already-ready
 editor can be discovered through the protocol object. The capability is independent of the optional control API.
 
+A same-page editor restart replaces the protocol object and emits a new `ready` event. Read the current
+object, register again and republish the current account resources. Discard outstanding requests and
+callbacks from the previous editor. A backend write that already started may still finish, so refresh
+the resource list after it settles. Its old acknowledgement cannot update the new editor.
+
 | Method | Arguments / result |
 | --- | --- |
 | registerProvider | (providerId, label, namespace) -> connectionId. Repeating the exact identity is idempotent. |
@@ -43,7 +48,7 @@ refused until the provider is enabled again. This includes its branch tabs. Thes
 not fall back to a local download or clear the external checkpoint. Unbound files keep their usual local route.
 
 The namespace must identify the authenticated account, not its display name. A new connection ID
-and per-page cryptographic request nonce prevent old account/page callbacks from matching new work.
+and per-editor cryptographic request nonce prevent old account/page callbacks from matching new work.
 This is correlation and separation of identities, **not authentication**. The host and its backend
 must authenticate users, authorize every list/read/write, and scope durable storage by account.
 Do not trust a filename, user-supplied account ID, browser page or request ID as an authorization check.
@@ -108,8 +113,9 @@ Acknowledgement updates the captured document checkpoint by UID even when a non-
 such as opening another tab, increased its revision. Version and branch metadata is marked clean
 when its independent generation still matches the capture. Closing first synchronizes branch-tab
 edits into their main file, including edits made after a provider capture. Saving to close a tab
-uses Save and keeps its existing resource binding. The tab closes after a durable acknowledgement
-only if it has no unsaved edits. A cancellation, failure, or device download leaves it open.
+uses Save and keeps its existing resource binding. If a save is already pending for the document,
+the close waits for that request. The tab closes after a durable acknowledgement only if it has no
+unsaved edits. A cancellation, failure, or device download leaves it open.
 Existing live collaboration/server publication is separate from this storage capability.
 
 Normal close/revert actions wait or refuse while provider work is unresolved. The browser can still

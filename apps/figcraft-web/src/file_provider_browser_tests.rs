@@ -37,6 +37,7 @@ struct Page {
     window: web_sys::Window,
     api: JsValue,
     host: Host,
+    provider: Option<super::Provider>,
     ctx: egui::Context,
     events: Rc<RefCell<Vec<JsValue>>>,
     listener: Closure<dyn FnMut(web_sys::Event)>,
@@ -55,11 +56,37 @@ impl Page {
             }
         });
         window.add_event_listener_with_callback(super::EVENT, listener.as_ref().unchecked_ref())?;
-        // Cleanup is armed before install can publish an API/context and then return an error.
-        let mut page = Self { window, api: JsValue::UNDEFINED, host: app.file_providers.clone(), ctx: egui::Context::default(), events, listener };
-        super::install(page.host.clone(), page.ctx.clone())?;
-        page.api = field(&page.window, super::API)?;
+        let mut page = Self {
+            window,
+            api: JsValue::UNDEFINED,
+            host: app.file_providers.clone(),
+            provider: None,
+            ctx: egui::Context::default(),
+            events,
+            listener,
+        };
+        page.restart(app, false)?;
         Ok(page)
+    }
+    fn restart(&mut self, app: &FigApp, embedded: bool) -> Result<(), JsValue> {
+        let ctx = egui::Context::default();
+        self.provider = super::install(app.file_providers.clone(), ctx.clone(), embedded)?;
+        self.host = app.file_providers.clone();
+        self.ctx = ctx;
+        self.api = field(&self.window, super::API)?;
+        Ok(())
+    }
+    fn announce_ready(&self) -> Result<(), JsValue> {
+        self.provider.as_ref().ok_or_else(|| error("missing active provider"))?.announce_ready();
+        Ok(())
+    }
+    fn ready_count(&self) -> usize {
+        self.events.borrow().iter().filter(|event| text(event, "type").is_ok_and(|kind| kind == "ready")).count()
+    }
+    fn publish(&self) {
+        if let Some(provider) = &self.provider {
+            provider.publish();
+        }
     }
     fn api(&self, method: &str, arguments: &[JsValue]) -> Result<JsValue, JsValue> {
         call(&self.api, method, arguments)
@@ -94,7 +121,7 @@ impl Page {
     fn capture(&self, app: &mut FigApp) -> Result<String, JsValue> {
         let since = self.events.borrow().len();
         app.save(); // Actual interactive Save, not Session::file.saveAs or a Host helper.
-        super::publish(&self.host);
+        self.publish();
         let dialogs: Vec<_> =
             self.events.borrow().iter().skip(since).filter(|event| text(event, "type").is_ok_and(|kind| kind == "saveDialog")).cloned().collect();
         if dialogs.len() != 1 {
@@ -111,8 +138,8 @@ impl Page {
         let object = field(&js_sys::global(), "Object")?;
         let descriptor = call(&object, "getOwnPropertyDescriptor", &[target.clone(), key.into()])?;
         let original = field(target, key)?;
-        let host = self.host.clone();
-        let operation = Closure::<dyn FnMut()>::new(move || super::publish(&host));
+        let provider = self.provider.clone().ok_or_else(|| error("missing active provider"))?;
+        let operation = Closure::<dyn FnMut()>::new(move || provider.publish());
         let outcome = match Reflect::set(target, &key.into(), replacement) {
             Ok(true) => operation.as_ref().unchecked_ref::<Function>().call0(&JsValue::UNDEFINED),
             Ok(false) => Err(error("injected method is not writable")),
@@ -175,9 +202,9 @@ impl Page {
 impl Drop for Page {
     fn drop(&mut self) {
         let _ = self.window.remove_event_listener_with_callback(super::EVENT, self.listener.as_ref().unchecked_ref());
-        let _ = self.host.disconnect();
-        let _ = Reflect::delete_property(self.window.unchecked_ref::<Object>(), &super::API.into());
-        super::CURRENT_CONTEXT.with(|current| *current.borrow_mut() = None);
+        if let Some(provider) = &self.provider {
+            provider.uninstall();
+        }
     }
 }
 
@@ -226,6 +253,9 @@ fn verify_native(bytes: &[u8], resource: &NativeResource) -> Result<(), JsValue>
 fn real_window_delivery_recovery_preserves_fig_archive_history_and_actual_app_ownership() -> Result<(), JsValue> {
     let (mut app, resource) = resource_app()?;
     let page = Page::install(&app)?;
+    assert_eq!(page.ready_count(), 0);
+    page.announce_ready()?;
+    assert_eq!(page.ready_count(), 1);
     assert!(!page.host.enabled() && !page.host.connected());
     let connection = page.api("registerProvider", &["fixture".into(), "Fixture storage".into(), "account-one".into()])?;
     let resources = Array::new();
@@ -234,12 +264,12 @@ fn real_window_delivery_recovery_preserves_fig_archive_history_and_actual_app_ow
     }
     page.api("setResources", &[connection.clone(), resources.into()])?;
     let initial = page.capture(&mut app)?;
-    super::publish(&page.host);
+    page.publish();
     let initial_bytes = field(&page.one("save", &initial)?, "bytes")?.dyn_into::<Uint8Array>()?.to_vec();
     verify_native(&initial_bytes, &resource)?;
     page.api("saveResult", &[initial.into(), "saved".into(), "remote".into()])?;
     page.tick(&mut app);
-    super::publish(&page.host);
+    page.publish();
     assert!(!app.session.ds().map_err(error)?.is_dirty());
 
     app.session.execute("shape.rectangle", &json!({"x":4,"y":4,"width":2,"height":2})).map_err(error)?;
@@ -262,7 +292,7 @@ fn real_window_delivery_recovery_preserves_fig_archive_history_and_actual_app_ow
     assert_eq!((current.uid, current.revision, &current.path), (before.uid, before.revision, &before.path));
     assert!(Arc::ptr_eq(&current.doc, &before.doc) && current.is_dirty());
     assert_eq!(page.host.bound_document("remote"), Some(before.uid));
-    super::publish(&page.host);
+    page.publish();
     let terminal = page.one("saveFailed", &failed)?;
     assert_eq!(text(&terminal, "revision")?, captured_revision.to_string());
     assert_eq!(text(&terminal, "connectionId")?, connection.as_string().ok_or_else(|| error("no connection ID"))?);
@@ -272,20 +302,20 @@ fn real_window_delivery_recovery_preserves_fig_archive_history_and_actual_app_ow
     assert!(app.session.ds().map_err(error)?.is_dirty(), "failed capture must not advance its saved checkpoint");
     app.session.execute("edit.redo", &json!({})).map_err(error)?;
     let retry = page.capture(&mut app)?;
-    super::publish(&page.host);
+    page.publish();
     let delivered = field(&page.one("save", &retry)?, "bytes")?.dyn_into::<Uint8Array>()?.to_vec();
     verify_native(&delivered, &resource)?;
     assert!(app.session.ds().map_err(error)?.is_dirty());
     page.api("saveResult", &[retry.into(), "saved".into(), "remote".into()])?;
     page.tick(&mut app);
-    super::publish(&page.host);
+    page.publish();
     assert!(!app.session.ds().map_err(error)?.is_dirty());
 
     app.session.execute("shape.rectangle", &json!({"x":12,"y":12,"width":2,"height":2})).map_err(error)?;
     app.save();
     assert_eq!(page.fail_dispatch("saveDialog", false)?, 1);
     page.tick(&mut app);
-    super::publish(&page.host);
+    page.publish();
     let choice = text(&page.latest("saveFailed")?, "requestId")?;
     assert_ne!(choice, failed);
     assert!(page.api("resolveSaveDialog", &[choice.clone().into(), "provider".into(), "Late.figcraft".into()]).is_err());
@@ -297,17 +327,17 @@ fn real_window_delivery_recovery_preserves_fig_archive_history_and_actual_app_ow
     let incoming = Uint8Array::from(delivered.as_slice());
     assert!(page.api("openResource", &[failed_read.clone().into(), "Incoming.figcraft".into(), incoming.clone().into()]).is_err());
     page.tick(&mut app);
-    super::publish(&page.host);
+    page.publish();
     page.one("openFailed", &failed_read)?;
     let unchanged = app.session.ds().map_err(error)?;
     assert_eq!((unchanged.uid, unchanged.revision), (original.uid, original.revision));
     assert!(Arc::ptr_eq(&unchanged.doc, &original.doc));
     let read_retry = page.api("requestOpen", &["continuation".into()])?.as_string().ok_or_else(|| error("missing retry ID"))?;
-    super::publish(&page.host);
+    page.publish();
     page.one("openRequested", &read_retry)?;
     page.api("openResource", &[read_retry.clone().into(), "Incoming.figcraft".into(), incoming.into()])?;
     page.tick(&mut app);
-    super::publish(&page.host);
+    page.publish();
     page.one("opened", &read_retry)?;
     let reopened = app.session.ds().map_err(error)?;
     assert_ne!(reopened.uid, original.uid);
@@ -321,7 +351,7 @@ fn real_window_delivery_recovery_preserves_fig_archive_history_and_actual_app_ow
     assert_eq!(page.fail_dispatch("save", true)?, 1);
     assert!(page.matching("saveFailed", &accepted).is_empty());
     page.tick(&mut app);
-    super::publish(&page.host);
+    page.publish();
     page.one("saved", &accepted)?;
     assert!(page.matching("saveFailed", &accepted).is_empty());
     let retained = app.session.ds().map_err(error)?;
@@ -334,5 +364,77 @@ fn real_window_delivery_recovery_preserves_fig_archive_history_and_actual_app_ow
     assert!(!page.host.busy());
     assert_eq!(page.api("unregisterProvider", &[])?.as_bool(), Some(true));
     assert!(!page.host.connected() && !page.host.enabled());
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn restarting_the_editor_replaces_the_provider_api_and_rejects_previous_requests() -> Result<(), JsValue> {
+    let (mut previous, _) = resource_app()?;
+    let mut page = Page::install(&previous)?;
+    assert_eq!(page.ready_count(), 0);
+    page.announce_ready()?;
+    assert_eq!(page.ready_count(), 1);
+    let old_provider = page.provider.clone().ok_or_else(|| error("missing previous provider"))?;
+    let old_api = page.api.clone();
+    let old_connection = page.api("registerProvider", &["fixture".into(), "Fixture storage".into(), "old-account".into()])?;
+    let resources = Array::new();
+    resources.push(&js_sys::JSON::parse(&json!({"id":"remote","name":"Fixture.figcraft"}).to_string())?);
+    page.api("setResources", &[old_connection.clone(), resources.clone().into()])?;
+    let old_save = page.capture(&mut previous)?;
+    page.publish();
+    let old_read = page.api("requestOpen", &["remote".into()])?.as_string().ok_or_else(|| error("missing previous read"))?;
+    assert!(previous.file_providers.busy());
+
+    let (mut restarted, resource) = resource_app()?;
+    page.restart(&restarted, false)?;
+    assert!(!Object::is(&old_api, &page.api));
+    assert!(!restarted.file_providers.connected() && !restarted.file_providers.enabled());
+    assert_eq!(page.ready_count(), 1);
+    old_provider.announce_ready();
+    assert_eq!(page.ready_count(), 1);
+    page.announce_ready()?;
+    assert_eq!(page.ready_count(), 2);
+    assert_eq!(page.latest("ready").and_then(|event| field(&event, "protocolVersion"))?.as_f64(), Some(1.0));
+    old_provider.uninstall(); // A late destructor for the previous shell must leave the new API in place.
+    old_provider.publish();
+    assert!(page.matching("openRequested", &old_read).is_empty());
+    assert!(Object::is(&page.api, &field(&page.window, super::API)?));
+
+    let new_connection = page.api("registerProvider", &["fixture".into(), "Fixture storage".into(), "new-account".into()])?;
+    assert_ne!(old_connection, new_connection);
+    assert!(page.api("setResources", &[old_connection, resources.into()]).is_err());
+    assert!(call(&old_api, "snapshot", &[]).is_err());
+    assert!(call(&old_api, "registerProvider", &["fixture".into(), "Fixture storage".into(), "old-account".into()]).is_err());
+    let request = page.capture(&mut restarted)?;
+    assert_ne!(old_save, request);
+    page.publish();
+    let save = page.one("save", &request)?;
+    assert_eq!(text(&save, "namespace")?, "new-account");
+    assert_eq!(field(&save, "connectionId")?, new_connection);
+    let bytes = field(&save, "bytes")?.dyn_into::<Uint8Array>()?.to_vec();
+    verify_native(&bytes, &resource)?;
+    for api in [&old_api, &page.api] {
+        assert!(call(api, "saveResult", &[old_save.clone().into(), "saved".into(), "remote".into()]).is_err());
+        let late_read = [old_read.clone().into(), "Fixture.figcraft".into(), Uint8Array::from(bytes.as_slice()).into()];
+        assert!(call(api, "openResource", &late_read).is_err());
+    }
+    assert!(call(&old_api, "saveResult", &[request.clone().into(), "saved".into(), "remote".into()]).is_err());
+    let uid = restarted.session.ds().map_err(error)?.uid;
+    assert!(restarted.session.ds().map_err(error)?.is_dirty());
+    page.api("saveResult", &[request.clone().into(), "saved".into(), "remote".into()])?;
+    page.tick(&mut restarted);
+    page.publish();
+    page.one("saved", &request)?;
+    assert!(!restarted.session.ds().map_err(error)?.is_dirty());
+    assert_eq!(restarted.file_providers.bound_document("remote"), Some(uid));
+    assert!(previous.session.ds().map_err(error)?.is_dirty());
+
+    let active_api = page.api.clone();
+    let embedded = FigApp::new(Session::empty(), Box::new(NoServices));
+    page.restart(&embedded, true)?;
+    assert_eq!(page.ready_count(), 2);
+    assert!(!Reflect::has(&page.window, &super::API.into())?);
+    assert!(call(&active_api, "snapshot", &[]).is_err());
+    assert!(!embedded.file_providers.enabled());
     Ok(())
 }
