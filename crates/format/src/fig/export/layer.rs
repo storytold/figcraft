@@ -26,7 +26,12 @@ impl<'d> Exporter<'d> {
             if !n.guides.is_empty() {
                 self.warn("ruler guides were left out");
             }
-            if *prototype != Default::default() {
+            let defaults = figcraft_doc::proto::PrototypeSettings::default();
+            // Figma writes the field only for a page whose background was set.
+            if prototype.background != defaults.background {
+                f.push(("prototypeBackgroundColor", color(prototype.background)));
+            }
+            if (figcraft_doc::proto::PrototypeSettings { background: defaults.background, ..prototype.clone() }) != defaults {
                 self.warn("prototype device settings were left out");
             }
             self.modes(n, &mut f);
