@@ -121,7 +121,7 @@ fn segment_distance(a: Pos2, b: Pos2, q: Pos2) -> f32 {
 }
 
 /// Handle centres of the selected layers (right edge, vertically centred).
-fn handles(app: &FigApp, doc: &Document, sel: &[NodeId]) -> Vec<(NodeId, Pos2)> {
+pub(crate) fn handles(app: &FigApp, doc: &Document, sel: &[NodeId]) -> Vec<(NodeId, Pos2)> {
     sel.iter()
         .take(32)
         .filter(|i| doc.node(**i).is_some_and(|n| !n.is_page()))
@@ -135,6 +135,52 @@ fn frame_at(app: &FigApp, doc: &Document, page: NodeId, p: Pos2) -> Option<NodeI
     let pt = app.to_page(p);
     let under = |i: &NodeId| doc.world_bounds(*i).is_some_and(|b| b.contains(pt));
     doc.top_frames(page).into_iter().rev().find(under).or_else(|| doc.sections_in(page).into_iter().rev().find(under))
+}
+
+/// Where a dragged connection would land.
+#[derive(Clone, Copy)]
+enum Target {
+    /// A top-level frame or section: a Navigate to it.
+    Navigate(NodeId),
+    /// A sibling variant of the source's own variant: a Change to it.
+    ChangeTo(NodeId),
+}
+
+impl Target {
+    fn node(self) -> NodeId {
+        match self {
+            Target::Navigate(n) | Target::ChangeTo(n) => n,
+        }
+    }
+}
+
+/// The variant (a child of a component set) the layer is, or sits inside.
+fn variant_of(doc: &Document, source: NodeId) -> Option<NodeId> {
+    let is_set = |i: NodeId| doc.node(i).is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::ComponentSet { .. }));
+    std::iter::once(source).chain(doc.ancestors(source)).find(|v| doc.node(*v).and_then(|n| n.parent).is_some_and(is_set))
+}
+
+/// What a connection dragged from `source` and released at screen point `p` targets: a sibling
+/// variant of the source's own variant (Change to), else a frame other than the source's own
+/// (Navigate to). `None` over the source's own variant, over the rest of its set (its background),
+/// and where no frame or section is under the pointer.
+fn target_at(app: &FigApp, doc: &Document, page: NodeId, source: NodeId, p: Pos2) -> Option<Target> {
+    if let Some(v) = variant_of(doc, source)
+        && let Some(set) = doc.node(v).and_then(|n| n.parent)
+        && doc.node(set).is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::ComponentSet { .. }))
+    {
+        let pt = app.to_page(p);
+        let siblings = doc.node(set).map(|n| n.children.clone()).unwrap_or_default();
+        if let Some(w) = siblings.into_iter().rev().find(|w| doc.world_bounds(*w).is_some_and(|b| b.contains(pt))) {
+            return (w != v).then_some(Target::ChangeTo(w));
+        }
+        // The set's own background: nothing, as in Figma, whatever holds the set. (A set in a
+        // group has no top-level frame, so the fallback below would offer a section around it.)
+        if doc.world_bounds(set).is_some_and(|b| b.contains(pt)) {
+            return None;
+        }
+    }
+    frame_at(app, doc, page, p).filter(|f| doc.top_level_frame(source) != Some(*f)).map(Target::Navigate)
 }
 
 fn arrow(painter: &egui::Painter, pts: &[Pos2; 4], col: Color32) {
@@ -203,9 +249,8 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
     match dragging {
         Some(d) => {
             let from = app.to_screen(d.from.x, d.from.y);
-            if let Some(f) = frame_at(app, doc, page, d.pos)
-                && doc.top_level_frame(d.source) != Some(f)
-                && let Some(r) = screen_rect(app, doc, f)
+            if let Some(t) = target_at(app, doc, page, d.source, d.pos)
+                && let Some(r) = screen_rect(app, doc, t.node())
             {
                 painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(2.0, crate::theme::canvas_accent(painter.ctx())), StrokeKind::Outside);
             }
@@ -267,9 +312,12 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
         }
         if released || !down {
             ctx.data_mut(|m| m.remove::<Drag>(drag_id()));
-            if let Some(dest) = frame_at(app, &doc, page, d.pos)
-                && doc.top_level_frame(d.source) != Some(dest)
-                && let Some(r) = app.run("proto.interaction.add", json!({"ids": [d.source], "dest": dest}))
+            let params = target_at(app, &doc, page, d.source, d.pos).map(|t| match t {
+                Target::Navigate(dest) => json!({"ids": [d.source], "dest": dest}),
+                Target::ChangeTo(dest) => json!({"ids": [d.source], "action": {"type": "changeTo", "dest": dest}}),
+            });
+            if let Some(params) = params
+                && let Some(r) = app.run("proto.interaction.add", params)
             {
                 let k = r.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                 crate::proto_panel::open_editor(&ctx, Some((d.source, k)));

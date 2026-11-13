@@ -63,7 +63,15 @@ fn number_past(d: &str, max: f64) -> bool {
         big
     }
     let (mut cur, mut dot, mut exp) = (String::new(), false, false);
+    // Whether the command is an arc, and how many numbers it has had: the 4th and 5th of each
+    // seven are flags, single `0`/`1` characters that may run into the next number unseparated.
+    let (mut arc, mut idx) = (false, 0usize);
     for c in d.chars() {
+        if cur.is_empty() && arc && matches!(idx % 7, 3 | 4) && matches!(c, '0' | '1') {
+            idx += 1;
+            (dot, exp) = (false, false);
+            continue;
+        }
         let continues = match c {
             '0'..='9' => true,
             '.' => !dot && !exp,
@@ -77,8 +85,12 @@ fn number_past(d: &str, max: f64) -> bool {
             cur.push(c);
             continue;
         }
+        idx += cur.chars().any(|c| c.is_ascii_digit()) as usize;
         if big(&mut cur, max) {
             return true;
+        }
+        if c.is_ascii_alphabetic() {
+            (arc, idx) = (matches!(c, 'A' | 'a'), 0);
         }
         (dot, exp) = (c == '.', false);
         if matches!(c, '+' | '-' | '.') {
@@ -474,15 +486,29 @@ pub fn ellipse(width: f64, height: f64, start: f64, sweep: f64, inner: f64) -> B
     let mut path = BezPath::new();
     // A whole turn as an arc with these radii: kurbo's `Ellipse` recovers its radii from an
     // affine map, which overflows to infinity for radii near f64's limit (and infinite cubics).
-    let whole = |rx: f64, ry: f64| kurbo::Arc::new(c, (rx, ry), 0.0, TAU, 0.0);
+    // Four cubics through the right, bottom, left and top extremes (clockwise from 3 o'clock),
+    // the same four anchors an ellipse has when edited as a vector; an arc subdivided by
+    // tolerance would give five or six.
+    let whole = |rx: f64, ry: f64| {
+        const K: f64 = 0.552_284_749_830_793_4;
+        let (kx, ky) = (rx * K, ry * K);
+        let mut p = BezPath::new();
+        p.move_to(c + Vec2::new(rx, 0.0));
+        p.curve_to(c + Vec2::new(rx, ky), c + Vec2::new(kx, ry), c + Vec2::new(0.0, ry));
+        p.curve_to(c + Vec2::new(-kx, ry), c + Vec2::new(-rx, ky), c + Vec2::new(-rx, 0.0));
+        p.curve_to(c + Vec2::new(-rx, -ky), c + Vec2::new(-kx, -ry), c + Vec2::new(0.0, -ry));
+        p.curve_to(c + Vec2::new(kx, -ry), c + Vec2::new(rx, -ky), c + Vec2::new(rx, 0.0));
+        p.close_path();
+        p
+    };
     if full && inner <= 0.0 {
-        return whole(rx, ry).to_path(tol);
+        return whole(rx, ry);
     }
     if full {
         // A ring: outer clockwise, inner counter-clockwise.
-        path.extend(whole(rx, ry).path_elements(tol));
-        let inner_path = whole(rx * inner, ry * inner).to_path(tol);
-        path.extend(inner_path.reverse_subpaths());
+        path.extend(whole(rx, ry).elements().iter().copied());
+        let inner_path = whole(rx * inner, ry * inner);
+        path.extend(inner_path.reverse_subpaths().elements().iter().copied());
         return path;
     }
     let outer = kurbo::Arc::new(c, (rx, ry), start, sweep, 0.0);

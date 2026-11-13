@@ -263,7 +263,7 @@ fn smoothed_polygon_smooths_every_corner() {
 #[test]
 fn ellipse_ring_area() {
     let full = area(&ellipse(100.0, 100.0, 0.0, TAU, 0.0));
-    assert!((full - PI * 2500.0).abs() < 2.0);
+    assert!((full - PI * 2500.0).abs() < 5.0, "{full}");
     let ring = ellipse(100.0, 100.0, 0.0, TAU, 0.5);
     // Winding area of a ring with a reversed inner contour: outer - inner.
     let a = ring.area().abs();
@@ -307,6 +307,12 @@ fn round_to_handles_large_precision_without_changing_finite_values() {
 }
 
 #[test]
+fn round_to_keeps_huge_finite_values_finite() {
+    assert_eq!(round_to(1e307, 2), 1e307);
+    assert_eq!(round_to(-1e307, 2), -1e307);
+}
+
+#[test]
 fn reverse_subpaths_preserves_open_and_closed() {
     let mut open = BezPath::new();
     open.move_to((0.0, 0.0));
@@ -319,6 +325,46 @@ fn reverse_subpaths_preserves_open_and_closed() {
     closed.close_path();
     let r = <BezPath as ReverseSubpaths>::reverse_subpaths(&closed);
     assert!(matches!(r.elements().last(), Some(kurbo::PathEl::ClosePath)), "{:?}", r.elements());
+}
+
+fn cubics(path: &BezPath) -> Vec<kurbo::CubicBez> {
+    path.segments()
+        .filter_map(|s| match s {
+            kurbo::PathSeg::Cubic(c) => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_whole_ellipse_is_four_cubics_through_the_extremes() {
+    for (w, h) in [(100.0, 100.0), (200.0, 60.0), (3.0, 900.0)] {
+        let segs = cubics(&ellipse(w, h, 0.0, TAU, 0.0));
+        assert_eq!(segs.len(), 4, "{w}x{h}");
+        let (rx, ry) = (w / 2.0, h / 2.0);
+        let want = [Point::new(rx, h), Point::new(0.0, ry), Point::new(rx, 0.0), Point::new(w, ry)];
+        for (i, s) in segs.iter().enumerate() {
+            assert!((s.p3 - want[i]).hypot() < 1e-9, "{w}x{h}: anchor {i} is {:?}", s.p3);
+            // Handle length is 0.5523 of the radius along the tangent.
+            let k = 0.552_284_749_830_793_4;
+            let r_along = if i % 2 == 0 { ry } else { rx };
+            assert!(((s.p1 - s.p0).hypot() - k * r_along).abs() < 1e-9, "{w}x{h}: handle {i}");
+        }
+    }
+}
+
+#[test]
+fn a_whole_ring_is_four_cubics_per_contour() {
+    let segs = cubics(&ellipse(100.0, 100.0, 0.0, TAU, 0.5));
+    assert_eq!(segs.len(), 8);
+}
+
+#[test]
+fn a_sliced_ellipse_still_builds_its_arc() {
+    let pie = ellipse(100.0, 100.0, 0.0, PI, 0.0);
+    assert!(!cubics(&pie).is_empty());
+    assert!(matches!(pie.elements().last(), Some(kurbo::PathEl::ClosePath)));
+    assert!((area(&pie) - PI * 1250.0).abs() < 2.0);
 }
 
 #[test]

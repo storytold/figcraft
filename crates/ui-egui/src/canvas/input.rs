@@ -81,10 +81,18 @@ fn wheel_zoom(app: &mut FigApp, ctx: &egui::Context, zoom: f32, shift: bool) -> 
     if let Some(mouse) = latest {
         app.canvas.wheel_is_mouse = mouse;
     }
+    let invert = app.session.prefs.invert_zoom && !pinch;
     if !app.session.prefs.scroll_wheel_zoom || !app.canvas.wheel_is_mouse || pinch {
-        return (wheel, zoom);
+        return (wheel, if invert { invert_zoom_factor(zoom) } else { zoom });
     }
-    swap_wheel(wheel, zoom, shift, speed)
+    let (scroll, zoom) = swap_wheel(wheel, zoom, shift, speed);
+    (scroll, if invert { invert_zoom_factor(zoom) } else { zoom })
+}
+
+/// The zoom factor for the opposite direction (Preferences ▸ Invert zoom direction): its
+/// reciprocal. A factor that is zero, negative or not finite is left as it is.
+pub(crate) fn invert_zoom_factor(zoom: f32) -> f32 {
+    if zoom.is_finite() && zoom > 0.0 { 1.0 / zoom } else { zoom }
 }
 
 /// Whether a scroll event came from a mouse wheel. Only macOS says which device scrolled; elsewhere
