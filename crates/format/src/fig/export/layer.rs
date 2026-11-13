@@ -28,8 +28,14 @@ impl<'d> Exporter<'d> {
             }
             let defaults = figcraft_doc::proto::PrototypeSettings::default();
             // Figma writes the field only for a page whose background was set.
-            if prototype.background != defaults.background {
-                f.push(("prototypeBackgroundColor", color(prototype.background)));
+            // The colour is written opaque: the record measured has alpha 1, and the import reads the colour as opaque and
+            // an alpha of 0 as no background.
+            let shown = prototype.background.with_alpha(1.0);
+            if shown != defaults.background {
+                f.push(("prototypeBackgroundColor", color(shown)));
+            }
+            if prototype.background.a < 1.0 {
+                self.warn("a prototype background's opacity was left out");
             }
             if (figcraft_doc::proto::PrototypeSettings { background: defaults.background, ..prototype.clone() }) != defaults {
                 self.warn("prototype device settings were left out");
