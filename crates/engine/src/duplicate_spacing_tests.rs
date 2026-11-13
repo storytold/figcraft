@@ -385,6 +385,54 @@ fn several_uneven_layers_turned_in_place_repeat_the_turn_without_a_move() {
     }
 }
 
+/// The uneven pair the collective-turn tests share: a square and a wide one, selected and duplicated.
+fn uneven_pair_and_copies(s: &mut Session) -> Vec<NodeId> {
+    let wide = id_of(&ex(s, "shape.rectangle", json!({"x": 200, "y": 0, "width": 300, "height": 100}))["id"]).unwrap();
+    let ids = [rect(s, 0.0, 200.0), wide];
+    ex(s, "select.set", json!({"ids": ids}));
+    let out = ex(s, "edit.duplicate", json!({}));
+    out["ids"].as_array().unwrap().iter().map(|v| id_of(v).unwrap()).collect()
+}
+
+#[test]
+fn several_uneven_layers_turned_together_repeat_the_turn_without_a_move() {
+    let mut s = Session::new();
+    let copies = uneven_pair_and_copies(&mut s);
+    ex(&mut s, "transform.rotate", json!({"ids": copies, "degrees": 90}));
+    let pivot = s.doc().unwrap().bounds_of(&copies).unwrap().center();
+    let before: Vec<(f64, f64)> = copies.iter().map(|c| centre(&s, *c)).collect();
+    let again = ex(&mut s, "edit.duplicate", json!({}));
+    let next: Vec<NodeId> = again["ids"].as_array().unwrap().iter().map(|v| id_of(v).unwrap()).collect();
+    assert_eq!(next.len(), 2);
+    for (i, c) in next.iter().enumerate() {
+        assert!(near(turn(&s, *c).abs(), 180.0), "layer {i}: rotation {}", turn(&s, *c));
+        let want = figcraft_geom::translation(figcraft_geom::rotate_about(figcraft_geom::Affine::translate((before[i].0, before[i].1)), pivot, 90.0));
+        let got = centre(&s, *c);
+        assert!(near(got.0, want.x) && near(got.1, want.y), "layer {i}: {got:?} vs {want:?}");
+    }
+}
+
+#[test]
+fn several_uneven_layers_moved_and_turned_together_repeat_both() {
+    let mut s = Session::new();
+    let copies = uneven_pair_and_copies(&mut s);
+    ex(&mut s, "transform.nudge", json!({"dx": 150, "dy": 0}));
+    ex(&mut s, "transform.rotate", json!({"ids": copies, "degrees": -15}));
+    let pivot = s.doc().unwrap().bounds_of(&copies).unwrap().center();
+    let before: Vec<(f64, f64)> = copies.iter().map(|c| centre(&s, *c)).collect();
+    let again = ex(&mut s, "edit.duplicate", json!({}));
+    let next: Vec<NodeId> = again["ids"].as_array().unwrap().iter().map(|v| id_of(v).unwrap()).collect();
+    assert_eq!(next.len(), 2);
+    let moved_pivot = figcraft_geom::Point::new(pivot.x + 150.0, pivot.y);
+    for (i, c) in next.iter().enumerate() {
+        assert!(near(turn(&s, *c), -30.0), "layer {i}: rotation {}", turn(&s, *c));
+        let moved = figcraft_geom::Affine::translate((before[i].0 + 150.0, before[i].1));
+        let want = figcraft_geom::translation(figcraft_geom::rotate_about(moved, moved_pivot, -15.0));
+        let got = centre(&s, *c);
+        assert!(near(got.0, want.x) && near(got.1, want.y), "layer {i}: {got:?} vs {want:?}");
+    }
+}
+
 #[test]
 fn a_widened_copy_turned_in_place_repeats_the_turn_without_a_move() {
     let mut s = Session::new();

@@ -632,8 +632,9 @@ impl Duplicated {
 
     /// The step from the sources to the copies, if both are still there and the copies move freely
     /// (an auto layout places its own): the mean move of the copies' own centres in the page frame
-    /// (less what a size change shifts them by, and not counting a turn in place), and the turn
-    /// every copy has over its source (zero unless they all agree, or when a flip differs).
+    /// (less what a size change shifts them by), and the turn every copy has over its source (zero
+    /// unless they all agree, or when a flip differs). A turn is not counted as a move, whether each
+    /// copy turned about its own centre or the copies turned together about their shared centre.
     fn step(&self, doc: &Document) -> Option<Step> {
         let free = self
             .copies
@@ -642,20 +643,6 @@ impl Duplicated {
         if !free || self.sources.iter().chain(&self.copies).any(|i| !doc.contains(*i)) {
             return None;
         }
-        // Per pair, how far the copy's own centre went, less what its size change moved that
-        // centre by (a growing edge shifts it, in the source's frame). A turn about a layer's own
-        // centre does not move it, so it is not recorded as a move.
-        let mut moves = Vec::new();
-        for (s, c) in self.sources.iter().zip(&self.copies) {
-            let (sn, cn) = (doc.node(*s)?, doc.node(*c)?);
-            let (sw, cw) = (doc.world_transform(*s), doc.world_transform(*c));
-            let (ps, pc) = (sw * Point::new(sn.width / 2.0, sn.height / 2.0), cw * Point::new(cn.width / 2.0, cn.height / 2.0));
-            let grow = Point::new((cn.width - sn.width) / 2.0, (cn.height - sn.height) / 2.0);
-            let shift = sw * grow - sw * Point::ORIGIN;
-            moves.push((pc.x - ps.x - shift.x, pc.y - ps.y - shift.y));
-        }
-        let n = moves.len() as f64;
-        let (dx, dy) = (moves.iter().map(|m| m.0).sum::<f64>() / n, moves.iter().map(|m| m.1).sum::<f64>() / n);
         // A flip reads as a half turn and was not measured: never repeat a turn across one.
         let flips_differ = self
             .sources
@@ -676,6 +663,47 @@ impl Duplicated {
             Some(first) if !flips_differ && turns.iter().all(|t| (t - first).abs() < 1e-6) => *first,
             _ => 0.0,
         };
+        // Per pair, where the copy's own centre is, less what its size change moved that centre by
+        // (a growing edge shifts it, in the source's frame), and where the source's centre is.
+        let mut pairs = Vec::new();
+        for (s, c) in self.sources.iter().zip(&self.copies) {
+            let (sn, cn) = (doc.node(*s)?, doc.node(*c)?);
+            let (sw, cw) = (doc.world_transform(*s), doc.world_transform(*c));
+            let (ps, pc) = (sw * Point::new(sn.width / 2.0, sn.height / 2.0), cw * Point::new(cn.width / 2.0, cn.height / 2.0));
+            let grow = Point::new((cn.width - sn.width) / 2.0, (cn.height - sn.height) / 2.0);
+            let shift = sw * grow - sw * Point::ORIGIN;
+            pairs.push((ps, Point::new(pc.x - shift.x, pc.y - shift.y)));
+        }
+        // The mean of the residuals, and whether they all agree (the copies fit that reading).
+        let fit = |res: &[(f64, f64)]| {
+            let n = res.len() as f64;
+            let mean = (res.iter().map(|m| m.0).sum::<f64>() / n, res.iter().map(|m| m.1).sum::<f64>() / n);
+            let agree = res.iter().all(|m| (m.0 - mean.0).hypot(m.1 - mean.1) < 1e-6);
+            (mean, agree)
+        };
+        // Reading A, each copy turned about its own centre: the residual is the move of its centre.
+        let each: Vec<(f64, f64)> = pairs.iter().map(|(ps, pc)| (pc.x - ps.x, pc.y - ps.y)).collect();
+        let (mut mv, each_fits) = fit(&each);
+        // Reading B, the copies turned together about the sources' centre (as a Rotate on several
+        // layers does): the residual is what is left once each source's centre is turned that way.
+        if angle != 0.0
+            && pairs.len() > 1
+            && !each_fits
+            && let Some(c) = doc.bounds_of(&self.sources).map(|b| b.center())
+        {
+            let together: Vec<(f64, f64)> = pairs
+                .iter()
+                .map(|(ps, pc)| {
+                    let q = figcraft_geom::translation(figcraft_geom::rotate_about(Affine::translate(ps.to_vec2()), c, angle));
+                    (pc.x - q.x, pc.y - q.y)
+                })
+                .collect();
+            let (m, together_fits) = fit(&together);
+            if together_fits {
+                mv = m;
+            }
+        }
+        let (dx, dy) = mv;
         let step = Step { dx, dy, angle };
         (step.dx.is_finite() && step.dy.is_finite() && step.angle.is_finite() && (dx != 0.0 || dy != 0.0 || angle != 0.0)).then_some(step)
     }
