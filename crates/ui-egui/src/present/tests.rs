@@ -536,3 +536,59 @@ fn detail_plan_edge_cases() {
     let view = R::new(0.0, 0.0, 1440.0, 860.0);
     assert_eq!(actions::detail_plan(bounds, view, 2.0, 2048.0), Some(view));
 }
+
+#[test]
+fn the_detail_replaces_the_whole_frame_texture_instead_of_drawing_over_it() {
+    // A frame with no fill holding a 50% rectangle: both textures start from a transparent pixmap,
+    // so drawn over each other the rectangle would count twice (75%, not 50%).
+    let mut session = figcraft_engine::Session::new();
+    let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": 1440, "height": 9701, "props": {"fills": []}})).unwrap());
+    let r =
+        id(&session.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 0, "y": 0, "width": 1440, "height": 9701})).unwrap());
+    session.execute("node.set", &json!({"id": r, "props": {"fill": "#ff0000", "opacity": 0.5}})).unwrap();
+    let mut ui = Ui::new(session);
+    ui.hidpi = Some((2.0, 16_384));
+    ui.run("proto.present", json!({"start": frame}));
+    ui.app.ui.present.as_mut().unwrap().view.scale = PresentScale::FitWidth;
+    ui.frames(2, Vec::new);
+
+    // The pixel's alpha is the rectangle's 0.5 in the whole-frame render and in the detail render.
+    let doc = ui.app.session.doc().unwrap();
+    let alpha = |pix: &figcraft_render::Pixmap| pix.data()[3];
+    let whole = figcraft_render::render_node_at(doc, frame, 0.5, 0.0).unwrap();
+    let detail = figcraft_render::render_area_at(doc, &[frame], figcraft_geom::Rect::new(0.0, 0.0, 100.0, 100.0), 2.0, 0.0).unwrap();
+    assert!((i32::from(alpha(&whole)) - 128).abs() <= 1 && (i32::from(alpha(&detail)) - 128).abs() <= 1);
+
+    // On screen, no whole-frame texture is drawn under the detail: one texture covers its centre.
+    let out = ui.frame_output(Vec::new());
+    let prims = ui.ctx.tessellate(out.shapes, 2.0);
+    let names: std::collections::HashMap<egui::TextureId, String> =
+        ui.ctx.tex_manager().read().allocated().map(|(id, m)| (*id, m.name.clone())).collect();
+    let mut present: Vec<(String, egui::Rect, egui::Rect)> = Vec::new();
+    for prim in &prims {
+        if let egui::epaint::Primitive::Mesh(m) = &prim.primitive
+            && let Some(n) = names.get(&m.texture_id).filter(|n| n.starts_with("present-"))
+        {
+            let bbox = m.vertices.iter().fold(egui::Rect::NOTHING, |r, v| r.union(egui::Rect::from_min_max(v.pos, v.pos)));
+            present.push((n.clone(), bbox, prim.clip_rect));
+        }
+    }
+    let (_, dbox, dclip) = present.iter().find(|(n, ..)| n.starts_with("present-detail-")).expect("the detail is drawn");
+    let centre = dbox.intersect(*dclip).center();
+    let covering: Vec<_> = present.iter().filter(|(_, b, c)| b.contains(centre) && c.contains(centre)).map(|(n, ..)| n.as_str()).collect();
+    assert_eq!(covering.len(), 1, "only the detail covers the view's centre:: {covering:?}");
+}
+
+#[test]
+fn base_parts_leave_the_hole_out() {
+    use egui::{Rect, pos2};
+    let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0));
+    assert_eq!(draw::base_parts(clip, None), vec![clip]);
+    let hole = Rect::from_min_max(pos2(10.0, 20.0), pos2(60.0, 70.0));
+    let parts = draw::base_parts(clip, Some(hole));
+    assert_eq!(parts.len(), 4);
+    let area: f32 = parts.iter().map(|r| r.width() * r.height()).sum();
+    assert_eq!(area, 100.0 * 100.0 - 50.0 * 50.0);
+    assert!(parts.iter().all(|r| !r.intersects(hole.shrink(0.01))));
+    assert!(draw::base_parts(clip, Some(clip)).is_empty());
+}

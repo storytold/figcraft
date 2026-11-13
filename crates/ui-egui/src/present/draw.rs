@@ -75,17 +75,24 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
     }
     if !drawn && let Some(to) = &to_tex {
         let on_clip = painter.with_clip_rect(l.clip);
-        on_clip.image(to.tex.id(), l.place.rect(to.bounds), uv, Color32::WHITE);
         // A frame too big for one texture at device scale is drawn from a smaller one: the part in
-        // view is drawn again from a texture at device scale, over it (and the overlays over that).
+        // view is drawn from a texture at device scale instead. The detail REPLACES that part of the
+        // whole-frame texture (the base is drawn only around it): both start from a transparent
+        // pixmap, so drawn over it a translucent layer would count twice.
         let shown = l.clip.intersect(l.place.rect(to.bounds));
+        let mut detail = None;
         if shown.is_positive() {
             let (a, b) = (l.place.page(shown.min), l.place.page(shown.max));
             let visible = figcraft_geom::Rect::new(a.x, a.y, b.x, b.y);
             let moving = p.fling.is_some() || p.drag_scroll.is_some() || p.wheel.is_some();
-            if let Some(d) = p.detail_texture(ctx, &l.disp, p.current, px, to.bounds, visible, moving, now) {
-                on_clip.image(d.tex.id(), l.place.rect(d.bounds), uv, Color32::WHITE);
-            }
+            detail = p.detail_texture(ctx, &l.disp, p.current, px, to.bounds, visible, moving, now);
+        }
+        let hole = detail.as_ref().map(|d| l.clip.intersect(l.place.rect(d.bounds)));
+        for part in base_parts(l.clip, hole) {
+            painter.with_clip_rect(part).image(to.tex.id(), l.place.rect(to.bounds), uv, Color32::WHITE);
+        }
+        if let Some(d) = detail {
+            on_clip.image(d.tex.id(), l.place.rect(d.bounds), uv, Color32::WHITE);
         }
     }
     // Overlays (each with its background and opening transition); closing ones run it backwards.
@@ -132,4 +139,24 @@ pub(super) fn draw(p: &mut Presenter, painter: &egui::Painter, ctx: &egui::Conte
         }
         ctx.request_repaint();
     }
+}
+
+/// The parts of `clip` outside `hole` (up to four disjoint rectangles; `clip` itself with no hole).
+pub(super) fn base_parts(clip: Rect, hole: Option<Rect>) -> Vec<Rect> {
+    let Some(h) = hole.filter(|h| h.is_positive()) else {
+        return vec![clip];
+    };
+    let h = h.intersect(clip);
+    if !h.is_positive() {
+        return vec![clip];
+    }
+    [
+        Rect::from_min_max(clip.min, egui::pos2(clip.max.x, h.min.y)),
+        Rect::from_min_max(egui::pos2(clip.min.x, h.max.y), clip.max),
+        Rect::from_min_max(egui::pos2(clip.min.x, h.min.y), egui::pos2(h.min.x, h.max.y)),
+        Rect::from_min_max(egui::pos2(h.max.x, h.min.y), egui::pos2(clip.max.x, h.max.y)),
+    ]
+    .into_iter()
+    .filter(|r| r.is_positive())
+    .collect()
 }
