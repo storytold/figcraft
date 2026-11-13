@@ -142,7 +142,8 @@ message StyleId GUID guid=1
 message VariableID GUID guid=1
 message VariableSetID GUID guid=1
 message ColorStopVar Color color=1, VariableData colorVar=2, float position=3
-message Paint PaintType type=1, Color color=2, float opacity=3, bool visible=4, BlendMode blendMode=5, ColorStop[] stops=6, Matrix transform=7, Image image=8, ImageScaleMode imageScaleMode=10, float rotation=11, float scale=12, VariableData colorVar=21, ColorStopVar[] stopsVar=23
+message PaintFilterMessage float tint=1, float shadows=2, float highlights=3, float exposure=5, float temperature=7, float vibrance=8, float contrast=9
+message Paint PaintType type=1, Color color=2, float opacity=3, bool visible=4, BlendMode blendMode=5, ColorStop[] stops=6, Matrix transform=7, Image image=8, ImageScaleMode imageScaleMode=10, float rotation=11, float scale=12, PaintFilterMessage paintFilter=14, VariableData colorVar=21, ColorStopVar[] stopsVar=23
 message Effect EffectType type=1, Color color=2, Vector offset=3, float radius=4, bool visible=5, BlendMode blendMode=6, float spread=7, bool showShadowBehindNode=8, BlurOpType blurOpType=19, float startRadius=21, Vector startOffset=20, Vector endOffset=28, NoiseType noiseType=26, Vector noiseSize=22, float density=25, float opacity=27, Color secondaryColor=24, bool clipToShape=23, VariableData radiusVar=9, VariableData colorVar=10, VariableData spreadVar=11, VariableData xVar=12, VariableData yVar=13, VariableData startRadiusVar=45
 struct FontName string family, string style, string postscript
 struct Number float value, NumberUnits units
