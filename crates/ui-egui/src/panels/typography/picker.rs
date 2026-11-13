@@ -75,6 +75,7 @@ pub(crate) fn font_picker(
     let just_opened = anchor.clicked();
     let hi_id = Id::unique("font_highlight");
     let q_id = Id::unique("font_query");
+    let search_id = Id::unique("font_search");
     craft_ui::combo::Menu::new(ui, anchor)
         .height(MENU_HEIGHT)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -96,8 +97,8 @@ pub(crate) fn font_picker(
                     i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) as i64
                         - i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as i64
                 });
-                let search = widgets::search_edit(ui, &mut q, tr("Search fonts"), regular(11.5));
-                crate::widgets::select_all_on_focus(ui, &search, &q);
+                let (field, _) = ui.allocate_exact_size(vec2(ui.available_width(), widgets::FIELD_H), egui::Sense::hover());
+                let search = widgets::search_box(ui, field, search_id, &mut q, tr("Search fonts"));
                 if just_opened {
                     search.request_focus();
                 }

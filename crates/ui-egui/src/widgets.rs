@@ -1475,17 +1475,3 @@ pub fn sublabels(ui: &mut Ui, a: &str, b: Option<&str>) {
 pub fn col_width(w: f32) -> f32 {
     ((w - PAD - PAD_RIGHT - GUTTER * 2.0 - 24.0) / 2.0).max(40.0)
 }
-
-/// The search box of a menu (the font list's): one line, as wide as the menu, its hint and text
-/// centred in the box. [`egui::TextEdit`] puts the text at the top of a box taller than a line
-/// unless told otherwise (#2318).
-pub(crate) fn search_edit(ui: &mut Ui, text: &mut String, hint: &str, font: egui::FontId) -> Response {
-    ui.add(
-        egui::TextEdit::singleline(text)
-            .hint_text(hint)
-            .desired_width(ui.available_width())
-            .font(font)
-            .align(Align2::LEFT_CENTER)
-            .min_size(vec2(0.0, FIELD_H)),
-    )
-}

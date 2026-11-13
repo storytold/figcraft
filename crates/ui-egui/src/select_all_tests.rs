@@ -187,12 +187,36 @@ fn a_rename_field_in_a_short_row_centres_its_text() {
 fn the_font_search_box_centres_its_hint() {
     let ctx = egui::Context::default();
     let mut q = String::new();
+    let id = Id::unique("font_search");
     let mut mid_box = 0.0;
     let mut f = |ui: &mut Ui| {
-        let r = widgets::search_edit(ui, &mut q, "Search fonts", egui::FontId::proportional(11.5));
-        mid_box = r.rect.center().y;
+        let (field, _) = ui.allocate_exact_size(vec2(120.0, widgets::FIELD_H), egui::Sense::hover());
+        widgets::search_box(ui, field, id, &mut q, "Search fonts");
+        mid_box = field.center().y;
     };
     let shapes = shapes_of(&ctx, &mut f);
     let mid = text_mid_y(&shapes, "Search fonts").expect("the hint is painted");
     assert!((mid - mid_box).abs() <= 1.0, "hint centre {mid} vs box centre {mid_box}");
+}
+
+/// The font menu's search field is the shared search box: its text starts after the magnifier,
+/// not at the field's left edge as a bare editor's would (#2318).
+#[test]
+fn the_font_search_box_leaves_room_for_the_magnifier() {
+    fn left(s: &egui::Shape) -> Option<f32> {
+        match s {
+            egui::Shape::Text(t) if t.galley.text().contains("Search fonts") => Some(t.pos.x),
+            egui::Shape::Vec(v) => v.iter().find_map(left),
+            _ => None,
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut q = String::new();
+    let id = Id::unique("font_search_icon");
+    let mut f = |ui: &mut Ui| {
+        let (field, _) = ui.allocate_exact_size(vec2(120.0, widgets::FIELD_H), egui::Sense::hover());
+        widgets::search_box(ui, field, id, &mut q, "Search fonts");
+    };
+    let x = shapes_of(&ctx, &mut f).iter().find_map(|c| left(&c.shape)).expect("the hint is painted");
+    assert!(x >= FIELD.min.x + 20.0, "hint starts at {x}, field at {}", FIELD.min.x);
 }
