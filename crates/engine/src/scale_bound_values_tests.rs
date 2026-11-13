@@ -246,3 +246,94 @@ fn scaling_a_frame_holding_an_instance_drops_its_own_binding_and_scales_the_inst
     assert!(saved.get("scale_factor").is_none(), "{saved}");
     healthy(&s);
 }
+
+/// A bound instance beside an unbound rectangle with the same radius (4), as (instance, its first
+/// rectangle, the unbound one).
+fn bound_and_unbound(s: &mut Session) -> (NodeId, NodeId, NodeId) {
+    let (_c, a, i) = row_instance(s);
+    let r = idv(&ex(s, "shape.rectangle", json!({"x": 500, "y": 0, "width": 24, "height": 24})));
+    ex(s, "node.set", json!({"id": r, "props": {"cornerRadius": 4}}));
+    (i, a, r)
+}
+
+fn radius(s: &Session, id: NodeId) -> f64 {
+    node(s, id).corners.radii[0]
+}
+
+/// The bound radius (the instance's copy of `a`) and the unbound one agree: both are 4 times `k`.
+fn assert_radii_equal(s: &Session, i: NodeId, a: NodeId, r: NodeId, k: f64, why: &str) {
+    let (bound, plain) = (radius(s, copy_of(s, i, a)), radius(s, r));
+    assert!(near(bound, 4.0 * k) && near(plain, 4.0 * k), "{why}: bound {bound} unbound {plain} want {}", 4.0 * k);
+}
+
+#[test]
+fn scaling_past_the_largest_factor_is_refused_and_keeps_bound_and_unbound_lengths_equal() {
+    let mut s = Session::new();
+    let (i, a, r) = bound_and_unbound(&mut s);
+    ex(&mut s, "transform.scale", json!({"ids": [i, r], "factor": 100}));
+    assert!(near(factor(&s, i), 100.0));
+    assert_radii_equal(&s, i, a, r, 100.0, "first");
+    let again = s.execute("transform.scale", &json!({"ids": [i, r], "factor": 100}));
+    assert!(again.is_err(), "the second scale must be refused: {again:?}");
+    assert!(near(factor(&s, i), 100.0), "factor {}", factor(&s, i));
+    assert_radii_equal(&s, i, a, r, 100.0, "after the refusal");
+    healthy(&s);
+    s.undo().unwrap();
+    assert!(near(factor(&s, i), 1.0), "factor after undo {}", factor(&s, i));
+    assert_radii_equal(&s, i, a, r, 1.0, "undone");
+}
+
+#[test]
+fn scaling_past_the_smallest_factor_is_refused_the_same_way() {
+    let mut s = Session::new();
+    let (i, a, r) = bound_and_unbound(&mut s);
+    ex(&mut s, "transform.scale", json!({"ids": [i, r], "factor": 0.05}));
+    assert!(near(factor(&s, i), 0.05));
+    assert_radii_equal(&s, i, a, r, 0.05, "first");
+    let again = s.execute("transform.scale", &json!({"ids": [i, r], "factor": 0.01}));
+    assert!(again.is_err(), "the second scale must be refused: {again:?}");
+    assert!(near(factor(&s, i), 0.05), "factor {}", factor(&s, i));
+    assert_radii_equal(&s, i, a, r, 0.05, "after the refusal");
+    healthy(&s);
+    s.undo().unwrap();
+    assert!(near(factor(&s, i), 1.0), "factor after undo {}", factor(&s, i));
+    assert_radii_equal(&s, i, a, r, 1.0, "undone");
+}
+
+#[test]
+fn a_selection_where_one_instance_cannot_scale_changes_nothing() {
+    let mut s = Session::new();
+    let (c, _a, i1) = row_instance(&mut s);
+    let i2 = idv(&ex(&mut s, "instance.create", json!({"component": c, "x": 600, "y": 0})));
+    ex(&mut s, "transform.scale", json!({"ids": [i1], "factor": 500}));
+    let (before1, before2) = (node(&s, i1), node(&s, i2));
+    let res = s.execute("transform.scale", &json!({"ids": [i2, i1], "factor": 4}));
+    assert!(res.is_err(), "{res:?}");
+    assert!(near(factor(&s, i1), 500.0) && near(factor(&s, i2), 1.0), "{} {}", factor(&s, i1), factor(&s, i2));
+    assert!(node(&s, i1) == before1 && node(&s, i2) == before2, "a refused scale changed a layer");
+    healthy(&s);
+}
+
+#[test]
+fn dragging_the_scale_tool_past_the_limit_stops_at_the_last_factor_that_fits() {
+    use crate::tools::{PointerEvent, PointerKind};
+    let mut s = Session::new();
+    let (_c, a, i) = row_instance(&mut s);
+    // The instance is already 5 times; its 280 x 120 box at (300, 0) is dragged by the bottom right
+    // handle out to 100 times (500 in all), then to the tool's own top of 1000 times (5000 in all).
+    ex(&mut s, "transform.scale", json!({"ids": [i], "factor": 5}));
+    ex(&mut s, "select.set", json!({"ids": [i]}));
+    ex(&mut s, "tool.scale", json!({}));
+    for (kind, (x, y)) in [
+        (PointerKind::Down, (580.0, 120.0)),
+        (PointerKind::Move, (300.0 + 280.0 * 100.0, 120.0 * 100.0)),
+        (PointerKind::Move, (300.0 + 280.0 * 1000.0, 120.0 * 1000.0)),
+        (PointerKind::Up, (300.0 + 280.0 * 1000.0, 120.0 * 1000.0)),
+    ] {
+        s.pointer(&PointerEvent::at(kind, x, y, 1.0)).unwrap();
+    }
+    assert!(near(factor(&s, i), 500.0), "factor {}", factor(&s, i));
+    assert!(near(gap(&s, i), 8.0 * 500.0), "gap {}", gap(&s, i));
+    assert!(near(radius(&s, copy_of(&s, i, a)), 4.0 * 500.0), "radius {}", radius(&s, copy_of(&s, i, a)));
+    healthy(&s);
+}

@@ -646,14 +646,25 @@ impl Session {
         // A layer's place in the box scales about the pivot; a negative factor turns it over.
         let about = frame * Affine::translate(pivot.to_vec2() * (1.0 - k));
         let sign = k.signum();
-        self.preview(|doc, _| {
+        // A factor an instance can't follow (its scale factor would leave 0.001 to 1000) is not
+        // applied: the drag keeps the last frame that fit.
+        let mut refused = false;
+        let shown = self.preview(|doc, _| {
+            if !nodes.iter().all(|(id, ..)| crate::cmd::arrange::scale_fits(doc, *id, k.abs())) {
+                refused = true;
+                return Err(crate::error::bad("transform.scale", "past the scale range"));
+            }
             for (id, world, _, _) in &nodes {
                 let c = (inv * *world).as_coeffs();
                 doc.set_world_transform(*id, about * Affine::new([sign * c[0], sign * c[1], sign * c[2], sign * c[3], k * c[4], k * c[5]]))?;
                 crate::cmd::arrange::scale_node(doc, *id, k.abs())?;
             }
             Ok(())
-        })?;
+        });
+        if refused {
+            return Ok(());
+        }
+        shown?;
         let p = frame * pivot;
         self.tool.overlay.scale = Some(ScaleHint { factor: k, pivot: [p.x, p.y] });
         self.tool.overlay.guides = guides;

@@ -403,26 +403,10 @@ fn turn_pivot(s: &Session, ids: &[NodeId]) -> Result<Option<Point>> {
 pub(crate) const MIN_SCALE_FACTOR: f64 = 1e-3;
 pub(crate) const MAX_SCALE_FACTOR: f64 = 1e3;
 
-/// Scale a node and everything in it uniformly (the Scale tool): sizes and positions (whatever
-/// the children's constraints), strokes, effects, radii, auto layout spacing, min/max sizes,
-/// layout grids, ruler guides, tiled images and text sizes.
-///
-/// Variable-bound lengths follow the incumbent (#2090): an instance multiplies its scale factor and
-/// keeps its bindings, which draw at the variable's value times the factor; any other layer not
-/// inside an instance keeps the scaled value and drops the binding of each length it scaled.
-pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
-    let k = if k.is_finite() && k > 0.0 { k } else { return Ok(()) };
-    let sub = doc.subtree(id);
-    // The layers below `id` scale whatever their constraints, so where they are layers of an
-    // instance their new size and place are overrides. The edit's own diff takes geometry that
-    // changed with an ancestor's size for what constraints give, so the next rebuild of the
-    // instance would put them back at their main's size (#922).
-    let in_instance: Vec<bool> = sub.iter().enumerate().map(|(depth, i)| depth > 0 && crate::components::inside_instance(doc, *i)).collect();
-    let nested: Vec<bool> = sub.iter().map(|i| crate::components::inside_instance(doc, *i)).collect();
-    // An instance inside another instance of the subtree is covered by the outer factor through
-    // `scale_of`'s product (#2090); only an instance with no instance above it, up to `id`, takes k.
-    let covered: Vec<bool> = sub
-        .iter()
+/// For each layer of `sub` (the subtree of `id`), whether an instance sits above it, up to `id`
+/// (never `id` itself): `scale_of`'s product already carries the outer factor to it (#2090).
+fn covered_by_instance(doc: &Document, sub: &[NodeId], id: NodeId) -> Vec<bool> {
+    sub.iter()
         .map(|i| {
             if *i == id {
                 return false;
@@ -437,7 +421,51 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
             }
             false
         })
-        .collect();
+        .collect()
+}
+
+/// Whether [`scale_node`] by `k` keeps every instance it multiplies inside the scale factor's
+/// range. Every other length takes the full `k`, so a factor that had to be clamped would leave
+/// bound lengths (drawn at the variable's value times the factor) off from unbound ones.
+pub(crate) fn scale_fits(doc: &Document, id: NodeId, k: f64) -> bool {
+    if !(k.is_finite() && k > 0.0) {
+        return true;
+    }
+    let sub = doc.subtree(id);
+    let covered = covered_by_instance(doc, &sub, id);
+    sub.iter().enumerate().all(|(depth, i)| {
+        let Some(n) = doc.node(*i) else { return true };
+        if !matches!(n.kind, NodeKind::Instance { .. }) || covered.get(depth).copied().unwrap_or(false) {
+            return true;
+        }
+        // A hair of slack, so 10 x 100 and 0.1 x 0.01 land on the bounds despite rounding.
+        let f = n.scale_factor * k;
+        (MIN_SCALE_FACTOR * (1.0 - 1e-9)..=MAX_SCALE_FACTOR * (1.0 + 1e-9)).contains(&f)
+    })
+}
+
+/// Scale a node and everything in it uniformly (the Scale tool): sizes and positions (whatever
+/// the children's constraints), strokes, effects, radii, auto layout spacing, min/max sizes,
+/// layout grids, ruler guides, tiled images and text sizes.
+///
+/// Variable-bound lengths follow the incumbent (#2090): an instance multiplies its scale factor and
+/// keeps its bindings, which draw at the variable's value times the factor; any other layer not
+/// inside an instance keeps the scaled value and drops the binding of each length it scaled.
+pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
+    let k = if k.is_finite() && k > 0.0 { k } else { return Ok(()) };
+    if !scale_fits(doc, id, k) {
+        return Err(scale_range_error());
+    }
+    let sub = doc.subtree(id);
+    // The layers below `id` scale whatever their constraints, so where they are layers of an
+    // instance their new size and place are overrides. The edit's own diff takes geometry that
+    // changed with an ancestor's size for what constraints give, so the next rebuild of the
+    // instance would put them back at their main's size (#922).
+    let in_instance: Vec<bool> = sub.iter().enumerate().map(|(depth, i)| depth > 0 && crate::components::inside_instance(doc, *i)).collect();
+    let nested: Vec<bool> = sub.iter().map(|i| crate::components::inside_instance(doc, *i)).collect();
+    // An instance inside another instance of the subtree is covered by the outer factor through
+    // `scale_of`'s product (#2090); only an instance with no instance above it, up to `id`, takes k.
+    let covered = covered_by_instance(doc, &sub, id);
     let tiles = |paints: &mut Vec<figcraft_color::Paint>| {
         for p in paints {
             if let figcraft_color::PaintKind::Image(img) = &mut p.kind
@@ -565,6 +593,10 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     Ok(())
 }
 
+fn scale_range_error() -> crate::EngineError {
+    bad("transform.scale", "the scale would take an instance past the supported scale range of 0.001 to 1000")
+}
+
 fn scale_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let k = req_num("transform.scale", p, "factor")?;
     if k <= 0.0 {
@@ -575,6 +607,10 @@ fn scale_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = roots(doc, &ids);
     let b = doc.bounds_of(&ids).unwrap_or_default();
     let pivot = Point::new(num_or(p, "cx", b.x0), num_or(p, "cy", b.y0));
+    // Refuse before anything changes, so a selection where only a later root fails stays whole.
+    if !ids.iter().all(|i| scale_fits(doc, *i, k)) {
+        return Err(scale_range_error());
+    }
     for i in ids {
         let Some(nb) = doc.world_bounds(i) else { continue };
         scale_node(doc, i, k)?;
