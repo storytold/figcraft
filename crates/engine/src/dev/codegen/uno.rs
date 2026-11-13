@@ -184,7 +184,6 @@ pub(crate) fn cs_ident(name: &str, pascal: bool, kind: &str) -> String {
 }
 
 /// `base` made unique among `used` (C# names are case-sensitive): `Card`, `Card2`, `Card3`, ….
-#[cfg_attr(not(test), allow(dead_code, reason = "names of component members (U3)"))]
 pub(crate) fn cs_unique(base: &str, used: &mut BTreeSet<String>) -> String {
     let name = (1usize..)
         .map(|k| if k == 1 { base.to_string() } else { format!("{base}{k}") })
@@ -227,19 +226,23 @@ fn comment_name(name: &str) -> String {
     if cut.chars().count() < one.chars().count() { format!("{cut}…") } else { cut }
 }
 
-/// One element of the tree before it is written: comment lines above it, its constructor, the
-/// chain of property calls (a call starting with `//` is a comment line) and its children.
+/// One element of the tree before it is written: comment lines above it, the local it is held
+/// in, its constructor, the chain of property calls (a call starting with `//` is a comment
+/// line) and its children. Children are added with `Children.Add(x)` or `Child = x`, never with
+/// the fluent `.Children(…)` / `.Child(…)`, whose load time doubles with every level of nesting.
 struct Element {
     lead: Vec<String>,
+    var: String,
     ctor: String,
     calls: Vec<String>,
-    /// `Child` (one) or `Children` (several) and the child expressions, written two levels in.
-    kids: Option<(&'static str, Vec<String>)>,
+    /// `Child` (a single child, assigned) or `Children` (added one by one), and the children.
+    adds: &'static str,
+    kids: Vec<Element>,
 }
 
 impl Element {
     fn new(ctor: &str) -> Self {
-        Element { lead: Vec::new(), ctor: ctor.to_string(), calls: Vec::new(), kids: None }
+        Element { lead: Vec::new(), var: String::new(), ctor: ctor.to_string(), calls: Vec::new(), adds: "Children", kids: Vec::new() }
     }
 
     fn call(&mut self, c: impl Into<String>) {
@@ -250,22 +253,45 @@ impl Element {
         self.calls.push(format!("// not mapped: {what}"));
     }
 
-    /// The element written at `depth`: a complete expression, no trailing newline.
-    fn write(&self, depth: usize) -> String {
+    /// The constructor and the chain at `depth`, as an expression without a trailing newline.
+    fn expr(&self, depth: usize) -> String {
         let (pad, inner) = (uno_indent(depth), uno_indent(depth + 1));
-        let mut out = String::new();
-        for l in &self.lead {
-            out.push_str(&format!("{pad}{l}\n"));
-        }
-        out.push_str(&format!("{pad}{}", self.ctor));
+        let mut out = format!("{pad}{}", self.ctor);
         for c in &self.calls {
             // A call of several lines is indented relative to its first.
             out.push_str(&format!("\n{inner}{}", c.replace('\n', &format!("\n{inner}"))));
         }
-        if let Some((method, kids)) = &self.kids {
-            out.push_str(&format!("\n{inner}.{method}(\n{})", kids.join(",\n")));
-        }
         out
+    }
+
+    /// The statements for this element and its subtree at `depth`: its comment lines, the
+    /// declaration of its local, then each child's statements followed by the line that adds it.
+    fn write(&self, depth: usize, out: &mut String) {
+        let (pad, inner) = (uno_indent(depth), uno_indent(depth + 1));
+        for l in &self.lead {
+            out.push_str(&format!("{pad}{l}\n"));
+        }
+        out.push_str(&format!("{pad}var {} = {}", self.var, self.ctor));
+        // The semicolon ends the last call, not a `// not mapped` comment after it.
+        let last = self.calls.iter().rposition(|c| !c.starts_with("//"));
+        if last.is_none() {
+            out.push(';');
+        }
+        for (i, c) in self.calls.iter().enumerate() {
+            out.push_str(&format!("\n{inner}{}", c.replace('\n', &format!("\n{inner}"))));
+            if last == Some(i) {
+                out.push(';');
+            }
+        }
+        out.push('\n');
+        for k in &self.kids {
+            k.write(depth, out);
+            if self.adds == "Child" {
+                out.push_str(&format!("{pad}{}.Child = {};\n", self.var, k.var));
+            } else {
+                out.push_str(&format!("{pad}{}.Children.Add({});\n", self.var, k.var));
+            }
+        }
     }
 }
 
@@ -284,15 +310,23 @@ struct Gen<'a> {
     assets: BTreeSet<String>,
     /// Frames written as a `Canvas` for lack of auto layout (one warning per view says how many).
     free_frames: usize,
+    /// The names of the locals given out.
+    names: BTreeSet<String>,
 }
 
 /// Uno C# Markup for layer `id` and its subtree: a `UserControl` class whose content is the tree.
 pub(crate) fn uno(doc: &Document, id: NodeId) -> String {
     let Some(root) = doc.node(id) else { return String::new() };
-    // The tree sits three levels in: namespace member, constructor body, `Content(` argument.
-    let ctx = Ctx { base: 3, ..Ctx::new(doc, id) };
-    let mut g = Gen { ctx: &ctx, assets: BTreeSet::new(), free_frames: 0 };
-    let mut body = g.layer(root, 3, Place::Flow).unwrap_or_else(|| format!("{}new Border()", uno_indent(3)));
+    let ctx = Ctx::new(doc, id);
+    let mut g = Gen { ctx: &ctx, assets: BTreeSet::new(), free_frames: 0, names: BTreeSet::new() };
+    let mut top = match g.layer(root, 0, Place::Flow) {
+        Some(e) => e,
+        None => {
+            let mut e = Element::new("new Border()");
+            e.var = "root".into();
+            e
+        }
+    };
     if g.free_frames > 0 {
         // One warning per view, above everything else written for the root layer.
         let (count, verb) = if g.free_frames == 1 {
@@ -300,8 +334,12 @@ pub(crate) fn uno(doc: &Document, id: NodeId) -> String {
         } else {
             (format!("{} frames have", g.free_frames), "children are")
         };
-        body = format!("{}// warning: {count} no auto layout: {verb} positioned absolutely and do not adapt to size.\n{body}", uno_indent(3));
+        top.lead.insert(0, format!("// warning: {count} no auto layout: {verb} positioned absolutely and do not adapt to size."));
     }
+    // The statements sit two levels in: namespace member, constructor body.
+    let mut body = String::new();
+    top.write(2, &mut body);
+    body.push_str(&format!("{}Content = {};\n", uno_indent(2), top.var));
     let mut out = String::new();
     let usings: Vec<&str> = [
         ("using Microsoft.UI.Text;", "FontWeights."),
@@ -328,28 +366,40 @@ pub(crate) fn uno(doc: &Document, id: NodeId) -> String {
     }
     out.push_str(&format!("// {}\nnamespace MyApp;\n\n", comment_name(&root.name)));
     out.push_str(&format!("internal sealed partial class {name} : UserControl\n{{\n"));
-    out.push_str(&format!("    public {name}()\n    {{\n        this.Content(\n{body});\n    }}\n}}\n"));
+    out.push_str(&format!("    public {name}()\n    {{\n{body}    }}\n}}\n"));
     out
 }
 
 impl Gen<'_> {
-    /// A layer and its subtree at `depth`, placed in its parent as `at` says. `None` for a layer
-    /// that draws nothing.
-    fn layer(&mut self, n: &Node, depth: usize, at: Place) -> Option<String> {
+    /// A local name from a layer name, unique in the view (`card`, `card2`, …).
+    fn fresh(&mut self, name: &str, kind: &str) -> String {
+        let base = cs_ident(name, false, kind);
+        cs_unique(&base, &mut self.names)
+    }
+
+    /// A layer and its subtree at `depth` (levels of nesting), placed in its parent as `at` says.
+    /// `None` for a layer that draws nothing.
+    fn layer(&mut self, n: &Node, depth: usize, at: Place) -> Option<Element> {
         if matches!(n.kind, NodeKind::Slice) {
             return None;
         }
+        // The parent's name comes before its children's.
+        let var = self.fresh(&n.name, n.kind.label());
         if self.ctx.too_deep(depth) {
-            return Some(format!("{pad}// {} …\n{pad}new Border()", comment_name(&n.name), pad = uno_indent(depth)));
+            let mut e = Element::new("new Border()");
+            e.lead.push(format!("// {} …", comment_name(&n.name)));
+            e.var = var;
+            return Some(e);
         }
-        let e = match &n.kind {
-            NodeKind::Text(t) => self.text(n, t, depth, at),
+        let mut e = match &n.kind {
+            NodeKind::Text(t) => self.text(n, t, at),
             NodeKind::Ellipse { start, sweep, inner } => self.ellipse(n, (*start, *sweep, *inner), at),
             NodeKind::Rectangle | NodeKind::Group | NodeKind::Section { .. } => self.boxed(n, depth, at),
             k if k.is_frame_like() => self.boxed(n, depth, at),
             _ => self.asset(n, at),
         };
-        Some(e.write(depth))
+        e.var = var;
+        Some(e)
     }
 
     /// A frame-like layer, group or rectangle. Horizontal and vertical auto layout is an
@@ -380,13 +430,9 @@ impl Gen<'_> {
         let pad = [pt - weights[0], pr - weights[1], pb - weights[2], pl - weights[3]];
         let behind = pad.iter().any(|p| *p < 0.0);
         let mut line = Element::new("new AutoLayout()");
-        let mut exprs: Vec<String> = Vec::new();
         for k in self.ctx.kids(n).iter().take(MAX_CHILDREN) {
             let Some(c) = self.ctx.doc.node(*k) else { continue };
-            exprs.extend(self.layer(c, depth + if behind { 4 } else { 2 }, Place::Flow));
-        }
-        if !exprs.is_empty() {
-            line.kids = Some(("Children", exprs));
+            line.kids.extend(self.layer(c, depth + 1, Place::Flow));
         }
         let mut outer;
         if behind {
@@ -397,7 +443,9 @@ impl Gen<'_> {
             outer = Element::new("new Grid()");
             place(&mut outer, at);
             size(&mut outer, n);
-            outer.kids = Some(("Children", vec![border.write(depth + 2), line.write(depth + 2)]));
+            border.var = self.fresh(&format!("{} border", n.name), "border");
+            line.var = self.fresh(&format!("{} layout", n.name), "layout");
+            outer.kids = vec![border, line];
             common(&mut outer, n);
         } else {
             outer = line;
@@ -421,16 +469,15 @@ impl Gen<'_> {
         let mut border = Element::new("new Border()");
         let sized = !matches!(n.kind, NodeKind::Group | NodeKind::Section { .. });
         self.paint_box(&mut border, n, sized);
-        let mut exprs: Vec<String> = Vec::new();
+        let mut canvas = Element::new("new Canvas()");
         for k in self.ctx.kids(n).iter().take(MAX_CHILDREN) {
             let Some(c) = self.ctx.doc.node(*k) else { continue };
             let [_, _, _, _, x, y] = c.transform.as_coeffs();
-            exprs.extend(self.layer(c, depth + 4, Place::At(x, y)));
+            canvas.kids.extend(self.layer(c, depth + 1, Place::At(x, y)));
         }
-        let mut canvas = Element::new("new Canvas()");
-        let has_kids = !exprs.is_empty();
+        let has_kids = !canvas.kids.is_empty();
         if has_kids {
-            canvas.kids = Some(("Children", exprs));
+            canvas.var = self.fresh(&format!("{} canvas", n.name), "canvas");
             if n.layout.is_none() {
                 self.free_frames += 1;
             }
@@ -441,13 +488,15 @@ impl Gen<'_> {
             place(&mut outer, at);
             size(&mut outer, n);
             border.calls.retain(|c| !c.starts_with(".Width(") && !c.starts_with(".Height("));
-            outer.kids = Some(("Children", vec![border.write(depth + 2), canvas.write(depth + 2)]));
+            border.var = self.fresh(&format!("{} border", n.name), "border");
+            outer.kids = vec![border, canvas];
             common(&mut outer, n);
         } else {
             outer = border;
             place(&mut outer, at);
             if has_kids {
-                outer.kids = Some(("Child", vec![canvas.write(depth + 2)]));
+                outer.adds = "Child";
+                outer.kids = vec![canvas];
             }
             common(&mut outer, n);
         }
@@ -558,7 +607,7 @@ impl Gen<'_> {
 
     /// Text: a `TextBlock`, in a `Grid` of the box's height when it is aligned to the middle or
     /// bottom of a fixed box.
-    fn text(&mut self, n: &Node, t: &TextData, depth: usize, at: Place) -> Element {
+    fn text(&mut self, n: &Node, t: &TextData, at: Place) -> Element {
         let fixed = matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate);
         let framed = fixed && t.align_v != TextAlignV::Top;
         let mut tb = text_block(n, t, !framed);
@@ -571,7 +620,8 @@ impl Gen<'_> {
         let mut g = Element::new("new Grid()");
         place(&mut g, at);
         size(&mut g, n);
-        g.kids = Some(("Children", vec![tb.write(depth + 2)]));
+        tb.var = self.fresh(&format!("{} text", n.name), "text");
+        g.kids = vec![tb];
         common(&mut g, n);
         g
     }
@@ -767,7 +817,7 @@ fn text_block(n: &Node, t: &TextData, with_height: bool) -> Element {
             if !plain {
                 style_calls(&mut r, style, fills, Some((s, fill)));
             }
-            pieces.push(r.write(1));
+            pieces.push(r.expr(1));
         };
         for r in &runs {
             let (start, end) = (r.start.max(at), r.end.min(chars.len()));
