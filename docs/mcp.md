@@ -2091,6 +2091,9 @@ turned off 0°.
 - **Select**: `select.layersAt {x, y}` lists every layer under a page point, front-most first with its
   depth (the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
   / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab; on a board, a mind map node's next or previous sibling). With `pointer`, `cmd: true`
+- **Select**: `select.layersAt {x, y}` lists every layer under a page point, locked ones too, front-most first with its
+  depth and a `locked` flag (true when the layer or an ancestor is locked; the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
+  / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab). With `pointer`, `cmd: true`
   clicks select the nested layer, `cmd` drags from empty canvas select the nested layers they touch,
   and `shift` drags toggle what they touch. A press on the background of a top-level frame with
   layers in it (the frame not selected) starts a marquee, as on the canvas; an empty frame

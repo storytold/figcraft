@@ -8,9 +8,13 @@ pub(super) fn layers_at(s: &mut Session, p: &Value) -> Result<Value> {
     let zoom = s.ds()?.view.zoom.max(1e-6);
     let sel = s.selection();
     let result = crate::booleans::result_outline(doc, &sel);
-    let layers: Vec<Value> = figcraft_doc::geometry::layers_at(doc, s.page()?, figcraft_geom::Point::new(x, y), 2.0 / zoom, Some(&result))
+    let opts = figcraft_doc::geometry::HitOpts { locked: true };
+    let layers: Vec<Value> = figcraft_doc::geometry::layers_at_opts(doc, s.page()?, figcraft_geom::Point::new(x, y), 2.0 / zoom, Some(&result), opts)
         .into_iter()
-        .filter_map(|(id, depth)| doc.node(id).map(|n| json!({"id": id, "name": n.name, "type": n.kind.type_name(), "depth": depth})))
+        .filter_map(|(id, depth)| {
+            doc.node(id)
+                .map(|n| json!({"id": id, "name": n.name, "type": n.kind.type_name(), "depth": depth, "locked": crate::tools::locked_in(doc, id)}))
+        })
         .collect();
     Ok(json!({"layers": layers}))
 }
