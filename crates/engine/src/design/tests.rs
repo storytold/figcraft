@@ -910,6 +910,18 @@ fn assert_refuses_an_explicit_empty_selection() {
 }
 
 #[test]
+fn an_empty_rule_filter_is_refused() {
+    let mut s = Session::new();
+    ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10}));
+    for cmd in ["design.audit", "design.assert", "design.fix"] {
+        let err = s.execute(cmd, &json!({"scope": "page", "rules": []})).unwrap_err().to_string();
+        assert!(err.contains("`rules`"), "{cmd}: {err}");
+    }
+    // Naming a rule still works.
+    assert!(ex(&mut s, "design.audit", json!({"scope": "page", "rules": ["color.accents"]})).is_object());
+}
+
+#[test]
 fn hardcoded_values_that_match_variables_are_reported() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "C"}));

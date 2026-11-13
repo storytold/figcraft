@@ -397,6 +397,14 @@ fn severity_arg(cmd: &str, p: &Value) -> Result<Severity> {
 fn filter_arg(cmd: &str, p: &Value) -> Result<Option<BTreeSet<String>>> {
     let Some(v) = params::get(p, "rules") else { return Ok(None) };
     let Value::Array(items) = v else { return Err(bad(cmd, "`rules` must be an array of rule ids")) };
+    // A filter that names nothing checks nothing: a gate would pass over a review that never
+    // ran, the same way a truncated audit would.
+    if items.is_empty() {
+        return Err(bad(
+            cmd,
+            "`rules` names no rule, so nothing would be checked; list at least one (design.rules has them) or leave `rules` out to check them all",
+        ));
+    }
     let mut set = BTreeSet::new();
     for item in items {
         let Some(s) = item.as_str() else { return Err(bad(cmd, "`rules` must be an array of rule ids")) };
