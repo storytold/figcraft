@@ -438,3 +438,50 @@ fn a_review_edit_reaches_only_the_peers_that_read_it() {
     assert!(changes.iter().all(|c| !c.is_design_review()), "{changes:?}");
     assert!(changes.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::Name, .. })), "{changes:?}");
 }
+
+/// A review-only batch advances the server sequence for every peer. An older peer must still be
+/// sent the accepted batch, empty as it is, or it falls a sequence behind and refuses what
+/// follows.
+#[test]
+fn a_review_only_batch_keeps_an_older_peer_in_step() {
+    let (d, _, frame) = doc();
+    let mut s = Server::new(d, "tok", Limits::default());
+    let mut capable = join(&mut s);
+    let (old_id, out) = s.join(hello_of("0.18.0 signals hosting comments packed")).unwrap();
+    let mut old = {
+        let Some(Outgoing::To(_, welcome)) = out.into_iter().next() else { panic!("no welcome") };
+        Client::join(welcome).unwrap()
+    };
+    assert_eq!(old.id(), old_id);
+
+    // Only the review settings change, so this batch has nothing for the older peer.
+    let msg = edit(&mut capable, |d| d.design_review.grid = 8.0);
+    let ClientMsg::Changes { changes, .. } = &msg else { panic!("not a batch") };
+    assert!(!changes.is_empty() && changes.iter().all(Change::is_design_review), "review only: {changes:?}");
+    let out = s.receive(capable.id(), msg);
+    assert_eq!(s.seq(), 1);
+    let to_old = for_client(&out, old.id());
+    let empty = to_old.iter().any(|m| matches!(m, ServerMsg::Changes(a) if a.changes.is_empty()));
+    assert!(empty, "the older peer is told the batch happened: {to_old:?}");
+    for m in for_client(&out, capable.id()) {
+        capable.receive(m, &NoRecompute).unwrap();
+    }
+    for m in to_old {
+        old.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(old.seq(), s.seq());
+
+    // The next ordinary edit still lands for it.
+    let msg = edit(&mut capable, |d| {
+        d.create(frame, NodeKind::Rectangle, "After", 0.0, 0.0, 10.0, 10.0).unwrap();
+    });
+    let out = s.receive(capable.id(), msg);
+    for m in for_client(&out, capable.id()) {
+        capable.receive(m, &NoRecompute).unwrap();
+    }
+    for m in for_client(&out, old.id()) {
+        old.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(old.seq(), s.seq());
+    assert_eq!(old.document().node(frame).map(|n| n.children.len()), Some(1), "the new node is there");
+}

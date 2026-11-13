@@ -511,18 +511,19 @@ impl Server {
         if !acc.changes.iter().any(Change::is_design_review) || self.everyone_reads_design_review() {
             return vec![Outgoing::All(ServerMsg::Changes(acc))];
         }
+        // Every peer hears the batch, even one with nothing left for it: the batch still carries
+        // the next sequence number, and a peer that skipped it would reject its next ordinary
+        // batch as out of order.
         self.peers
             .keys()
             .copied()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .filter_map(|id| {
-                if self.design_review.contains(&id) {
-                    Some(Outgoing::To(id, ServerMsg::Changes(acc.clone())))
+            .map(|id| {
+                if self.design_review.contains(&id) || id == acc.author {
+                    Outgoing::To(id, ServerMsg::Changes(acc.clone()))
                 } else {
                     let mut filtered = acc.clone();
                     filtered.changes = Change::without_design_review(filtered.changes);
-                    (!filtered.changes.is_empty()).then_some(Outgoing::To(id, ServerMsg::Changes(filtered)))
+                    Outgoing::To(id, ServerMsg::Changes(filtered))
                 }
             })
             .collect()
