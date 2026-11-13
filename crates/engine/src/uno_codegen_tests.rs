@@ -42,11 +42,29 @@ fn set(s: &mut Session, id: NodeId, props: serde_json::Value) {
     ex(s, "node.set", json!({"id": id, "props": props}));
 }
 
-/// The body of the generated class: what sits inside `this.Content(` … `);`.
+/// The statements of the generated constructor, as written (eight spaces of indent): what sits
+/// between `public XView()` `{` and its closing brace.
 fn tree(code: &str) -> String {
-    let start = code.find("this.Content(\n").map_or(0, |i| i + "this.Content(\n".len());
-    let end = code.rfind(");\n    }\n}").unwrap_or(code.len());
+    let start = code.find("    {\n").map_or(0, |i| i + "    {\n".len());
+    let end = code.rfind("    }\n}").unwrap_or(code.len());
     code.get(start..end).unwrap_or_default().to_string()
+}
+
+/// [`tree`] with the indent taken off.
+fn body(code: &str) -> String {
+    tree(code).lines().map(|l| format!("{}\n", l.get(8..).unwrap_or(l))).collect::<String>().trim_end().to_string()
+}
+
+/// Whether `block` (lines, indent and a closing `;` ignored) appears in `code` as consecutive lines.
+fn has_block(code: &str, block: &str) -> bool {
+    let norm = |t: &str| t.lines().map(|l| l.trim().trim_end_matches(';').to_string()).collect::<Vec<_>>();
+    let (c, b) = (norm(code), norm(block));
+    !b.is_empty() && c.windows(b.len()).any(|w| w == b.as_slice())
+}
+
+/// Whether one line of `code` is exactly `call` (a closing `;` ignored).
+fn has_call(code: &str, call: &str) -> bool {
+    has_block(code, call)
 }
 
 #[test]
@@ -62,11 +80,11 @@ internal sealed partial class EmptyView : UserControl
 {
     public EmptyView()
     {
-        this.Content(
-            new Border()
-                .Width(100)
-                .Height(50)
-                .Background(Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)));
+        var empty = new Border()
+            .Width(100)
+            .Height(50)
+            .Background(Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF));
+        Content = empty;
     }
 }
 ";
@@ -82,27 +100,28 @@ fn a_frame_with_a_stroke_and_children_keeps_the_children_out_of_the_border() {
     set(&mut s, f, json!({"fill": "#112233", "stroke": "#FF0000", "strokeWeight": 3, "opacity": 0.5, "cornerRadius": 8}));
     ex(&mut s, "shape.rectangle", json!({"x": 5, "y": 5, "width": 20, "height": 20, "parent": f, "props": {"name": "Box"}}));
     let expected = "// warning: 1 frame has no auto layout: its children are positioned absolutely and do not adapt to size.
-new Grid()
+var loginScreen = new Grid()
     .Width(200)
     .Height(100)
-    .Opacity(0.5)
-    .Children(
-        new Border()
-            .Background(Color.FromArgb(0xFF, 0x11, 0x22, 0x33))
-            .BorderBrush(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00))
-            .BorderThickness(3)
-            .CornerRadius(8),
-        new Canvas()
-            .Children(
-                new Border()
-                    .Canvas(left: 5, top: 5)
-                    .Width(20)
-                    .Height(20)
-                    .Background(Color.FromArgb(0xFF, 0xD9, 0xD9, 0xD9))))";
+    .Opacity(0.5);
+var loginScreenBorder = new Border()
+    .Background(Color.FromArgb(0xFF, 0x11, 0x22, 0x33))
+    .BorderBrush(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00))
+    .BorderThickness(3)
+    .CornerRadius(8);
+loginScreen.Children.Add(loginScreenBorder);
+var loginScreenCanvas = new Canvas();
+var box = new Border()
+    .Canvas(left: 5, top: 5)
+    .Width(20)
+    .Height(20)
+    .Background(Color.FromArgb(0xFF, 0xD9, 0xD9, 0xD9));
+loginScreenCanvas.Children.Add(box);
+loginScreen.Children.Add(loginScreenCanvas);
+Content = loginScreen;";
     let code = uno(&mut s, f);
     assert!(code.contains("internal sealed partial class LoginScreenView : UserControl"), "{code}");
-    let body: String = tree(&code).lines().map(|l| format!("{}\n", l.get(12..).unwrap_or(l))).collect();
-    assert_eq!(body.trim_end(), expected, "{code}");
+    assert_eq!(body(&code), expected, "{code}");
 }
 
 #[test]
@@ -144,15 +163,14 @@ fn an_ellipse_is_an_ellipse_with_a_centred_stroke() {
         json!({"x": 10, "y": 20, "width": 40, "height": 40, "parent": f, "props": {"name": "Dot", "fill": "#FF0000", "stroke": "#000000", "strokeWeight": 2, "strokeAlign": "center"}}),
     );
     let code = uno(&mut s, f);
-    let expected = "new Ellipse()
+    let expected = "var dot = new Ellipse()
     .Canvas(left: 10, top: 20)
     .Width(40)
     .Height(40)
     .Fill(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00))
     .Stroke(Color.FromArgb(0xFF, 0x00, 0x00, 0x00))
-    .StrokeThickness(2)";
-    let indented = expected.lines().collect::<Vec<_>>().join("\n                            ");
-    assert!(code.contains(&indented), "{code}");
+    .StrokeThickness(2);";
+    assert!(has_block(&code, expected), "{code}");
 }
 
 #[test]
@@ -182,7 +200,7 @@ fn text_maps_its_style_and_box() {
         ".Width(150)",
         ".TextWrapping(TextWrapping.Wrap)",
     ] {
-        assert!(code.contains(&format!("{line}\n")) || code.contains(&format!("{line})")), "{line} in {code}");
+        assert!(has_call(&code, line) || code.contains(&format!("{line})")), "{line} in {code}");
     }
     // Auto height has a width but no height of its own.
     assert!(!code.contains(".Height(") || code.matches(".Height(").count() == 1, "{code}");
@@ -230,8 +248,7 @@ fn mixed_styles_become_runs() {
         .FontWeight(FontWeights.Bold),
     new Run()
         .Text(\" end\"))";
-    let indented = expected.lines().collect::<Vec<_>>().join("\n                                ");
-    assert!(code.contains(&indented), "{code}");
+    assert!(has_block(&code, expected), "{code}");
     assert!(!code.contains(".Text(\"Plain bold end\")"), "{code}");
 }
 
@@ -336,11 +353,6 @@ fn instances_and_components_are_walked_as_frames() {
     assert!(!code.contains("export default") && !code.contains("function "), "{code}");
 }
 
-/// The body of a view with the class shell and its indent taken off.
-fn body(code: &str) -> String {
-    tree(code).lines().map(|l| format!("{}\n", l.get(12..).unwrap_or(l))).collect::<String>().trim_end().to_string()
-}
-
 fn rect(s: &mut Session, parent: NodeId, w: f64, h: f64, name: &str) -> NodeId {
     idv(&ex(s, "shape.rectangle", json!({"parent": parent, "x": 0, "y": 0, "width": w, "height": h, "props": {"name": name, "fill": "#FF0000"}})))
 }
@@ -367,7 +379,7 @@ fn a_row_is_an_auto_layout_with_its_box_gap_padding_and_alignment() {
     rect(&mut s, f, 20.0, 20.0, "B");
     let code = uno(&mut s, f);
     assert!(code.starts_with("using Windows.UI;\nusing Uno.Toolkit.UI;\n") || code.contains("using Uno.Toolkit.UI;"), "{code}");
-    let expected = "new AutoLayout()
+    let expected = "var row = new AutoLayout()
     .Width(200)
     .Height(100)
     .Background(Color.FromArgb(0xFF, 0x11, 0x22, 0x33))
@@ -376,16 +388,18 @@ fn a_row_is_an_auto_layout_with_its_box_gap_padding_and_alignment() {
     .Spacing(12)
     .Padding(15, 7, 15, 7)
     .PrimaryAxisAlignment(AutoLayoutAlignment.Center)
-    .CounterAxisAlignment(AutoLayoutAlignment.Center)
-    .Children(
-        new Border()
-            .Width(20)
-            .Height(20)
-            .Background(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00)),
-        new Border()
-            .Width(20)
-            .Height(20)
-            .Background(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00)))";
+    .CounterAxisAlignment(AutoLayoutAlignment.Center);
+var a = new Border()
+    .Width(20)
+    .Height(20)
+    .Background(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00));
+row.Children.Add(a);
+var b = new Border()
+    .Width(20)
+    .Height(20)
+    .Background(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00));
+row.Children.Add(b);
+Content = row;";
     assert_eq!(body(&code), expected, "{code}");
     // A frame with auto layout is not a frame without one: no warning.
     assert!(!code.contains("// warning"), "{code}");
@@ -396,8 +410,8 @@ fn a_column_has_a_vertical_orientation_and_a_uniform_padding_is_one_number() {
     let mut s = Session::new();
     let f = row(&mut s, json!({"layout": "vertical", "padding": 8, "gap": 0}));
     let code = uno(&mut s, f);
-    assert!(code.contains(".Orientation(Orientation.Vertical)\n"), "{code}");
-    assert!(code.contains(".Padding(8)\n"), "{code}");
+    assert!(has_call(&code, ".Orientation(Orientation.Vertical)"), "{code}");
+    assert!(has_call(&code, ".Padding(8)"), "{code}");
     assert!(!code.contains(".Spacing("), "no gap, no spacing: {code}");
     set(&mut s, f, json!({"padding": 0}));
     assert!(!uno(&mut s, f).contains(".Padding("));
@@ -436,14 +450,14 @@ fn the_stroke_weight_comes_off_the_padding_unless_strokes_are_included() {
     let mut s = Session::new();
     let f = row(&mut s, json!({"padding": 10, "stroke": "#0000FF", "strokeWeight": 4, "strokeAlign": "inside", "strokesIncluded": false}));
     let code = uno(&mut s, f);
-    assert!(code.contains(".BorderThickness(4)") && code.contains(".Padding(6)\n"), "{code}");
+    assert!(code.contains(".BorderThickness(4)") && has_call(&code, ".Padding(6)"), "{code}");
     assert!(!code.contains("new Grid()"), "{code}");
     set(&mut s, f, json!({"strokesIncluded": true}));
-    assert!(uno(&mut s, f).contains(".Padding(10)\n"));
+    assert!(has_call(&uno(&mut s, f), ".Padding(10)"));
     // A stroke thicker than the padding on a side: the border sits behind the layout.
     set(&mut s, f, json!({"strokesIncluded": false, "padding": 2}));
     let code = uno(&mut s, f);
-    assert!(code.contains("new Grid()") && code.contains("new Border()") && code.contains(".Padding(2)\n"), "{code}");
+    assert!(code.contains("new Grid()") && code.contains("new Border()") && has_call(&code, ".Padding(2)"), "{code}");
     let (grid, layout) = (code.find("new Grid()"), code.find("new AutoLayout()"));
     assert!(grid < layout, "{code}");
     assert!(!code[layout.unwrap_or(0)..].contains(".BorderThickness("), "{code}");
@@ -475,4 +489,38 @@ fn nested_auto_layouts_carry_no_canvas_offsets() {
     let code = uno(&mut s, outer);
     assert_eq!(code.matches("new AutoLayout()").count(), 2, "{code}");
     assert!(!code.contains(".Canvas("), "{code}");
+}
+
+#[test]
+fn children_are_added_never_chained() {
+    // Fluent `.Children(…)` / `.Child(…)` doubles the load time with every level of nesting, so
+    // containers are locals and their children are added one by one.
+    let mut s = Session::new();
+    let outer = frame(&mut s, "Outer", 300.0, 300.0);
+    set(&mut s, outer, json!({"stroke": "#000000", "strokeWeight": 2}));
+    let inner = idv(&ex(&mut s, "frame.create", json!({"x": 5, "y": 5, "width": 100, "height": 100, "parent": outer, "name": "Inner"})));
+    set(&mut s, inner, json!({"layout": "vertical", "padding": 4, "gap": 3, "stroke": "#FF0000", "strokeWeight": 9, "strokesIncluded": false}));
+    rect(&mut s, inner, 10.0, 10.0, "R");
+    let t = idv(&ex(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 0, "parent": outer, "props": {"name": "T"}})));
+    set(&mut s, t, json!({"textAutoResize": "none", "width": 50, "height": 40, "textAlignVertical": "middle"}));
+    let mut parent = outer;
+    for i in 0..6 {
+        parent = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 50, "parent": parent, "name": format!("Level {i}")})));
+    }
+    let code = uno(&mut s, outer);
+    assert!(!code.contains(".Children(") && !code.contains(".Child("), "{code}");
+    assert!(code.contains(".Children.Add(") && code.contains(".Child = "), "{code}");
+    // A single child of a border is assigned.
+    let lone = frame(&mut s, "Lone", 20.0, 20.0);
+    rect(&mut s, lone, 5.0, 5.0, "X");
+    let code = uno(&mut s, lone);
+    assert!(!code.contains(".Child(") && !code.contains(".Children("), "{code}");
+    // Names of locals are unique C# identifiers, the parent's before its children's.
+    let twins = frame(&mut s, "Card", 50.0, 50.0);
+    rect(&mut s, twins, 5.0, 5.0, "Card");
+    rect(&mut s, twins, 5.0, 5.0, "class");
+    let code = uno(&mut s, twins);
+    for decl in ["var card = ", "var card2 = ", "var class_ = "] {
+        assert_eq!(code.matches(decl).count(), 1, "{decl} in {code}");
+    }
 }
