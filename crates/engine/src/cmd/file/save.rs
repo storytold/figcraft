@@ -42,6 +42,11 @@ pub fn file_bytes(ds: &DocState) -> Result<Vec<u8>> {
     FileSnapshot::of(ds).encode()
 }
 
+/// [`file_bytes`] for the file at `path` (library links are stored relative to its folder too).
+pub fn file_bytes_at(ds: &DocState, path: &str) -> Result<Vec<u8>> {
+    FileSnapshot::of(ds).encode_at(Some(path))
+}
+
 /// A document's file as it is at one moment, so the slow part of saving it (the thumbnail and the
 /// encoding) can run on another thread while editing goes on: [`encode`](Self::encode) there, then
 /// [`save`](Self::save) the bytes back on the session's thread.
@@ -73,8 +78,17 @@ impl FileSnapshot {
 
     /// The file's bytes: content, thumbnail and version history.
     pub fn encode(&self) -> Result<Vec<u8>> {
+        self.encode_at(self.path.as_deref())
+    }
+
+    /// [`encode`](Self::encode) for the file at `path`: library links also say where their
+    /// files are from its folder.
+    fn encode_at(&self, path: Option<&str>) -> Result<Vec<u8>> {
         let mut doc = (*self.doc).clone();
         doc.current_page = Some(self.page);
+        if let Some(path) = path {
+            crate::library::relate_links(&mut doc, path);
+        }
         let thumb = thumbnail(&doc);
         figcraft_format::save_bytes_with_history(&doc, thumb.as_deref(), &self.versions, &self.branches)
             .map_err(|e| EngineError::Other(e.to_string()))
@@ -177,7 +191,7 @@ fn save_to(s: &mut Session, path: Option<String>) -> Result<Value> {
     {
         Arc::make_mut(&mut snapshot.doc).name = file_stem(path);
     }
-    let bytes = snapshot.encode()?;
+    let bytes = snapshot.encode_at(path.as_deref().or(snapshot.path.as_deref()))?;
     let Some(path) = path else {
         // The download can still be refused: the caller marks the file saved once it was delivered.
         let name = format!("{}.figcraft", ds.doc.name);
