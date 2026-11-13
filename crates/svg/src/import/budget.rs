@@ -76,20 +76,36 @@ fn raster(data: &[u8]) -> bool {
 /// decode (usvg decodes before it asks). Found by parsing the document, so a comment holding
 /// `<image>` or spaces around `=` don't count. A document that doesn't parse reports nothing,
 /// since usvg can't read it either.
+///
+/// It follows usvg where that is cheap: an element in the SVG namespace or none, the unprefixed
+/// `href` over `xlink:href`, and no image under `display="none"` (attribute or `style`). It goes no
+/// further: an image in `<defs>`, a `<symbol>` nothing uses, a `<use>` target, a mask or a pattern
+/// is still counted. Such a false omission errs the safe way, since it only makes a paste prefer
+/// the complete clipboard bitmap.
 pub(super) fn drops_images(svg: &[u8]) -> bool {
-    use usvg::roxmltree::{Document, ParsingOptions};
+    use usvg::roxmltree::{Document, Node, ParsingOptions};
     const SVG_NS: &str = "http://www.w3.org/2000/svg";
     const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+    fn hidden(n: Node) -> bool {
+        n.ancestors().any(|a| {
+            a.attribute("display") == Some("none")
+                || a.attribute("style")
+                    .is_some_and(|style| style.split(';').filter_map(|d| d.split_once(':')).any(|(k, v)| k.trim() == "display" && v.trim() == "none"))
+        })
+    }
     let Ok(text) = std::str::from_utf8(svg) else { return false };
     let Ok(doc) = Document::parse_with_options(text, ParsingOptions { allow_dtd: true, ..ParsingOptions::default() }) else { return false };
-    doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "image" && n.tag_name().namespace() == Some(SVG_NS)).any(|n| {
-        let Some(href) = n.attribute((XLINK_NS, "href")).or_else(|| n.attribute("href")) else { return false };
-        let href = href.trim();
-        match data_url::DataUrl::process(href) {
-            Ok(url) => url.decode_to_vec().is_err(),
-            Err(_) => true,
-        }
-    })
+    doc.descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "image" && matches!(n.tag_name().namespace(), None | Some(SVG_NS)))
+        .filter(|n| !hidden(*n))
+        .any(|n| {
+            let find = |ns: Option<&str>| n.attributes().find(|a| a.name() == "href" && a.namespace() == ns).map(|a| a.value());
+            let Some(href) = find(None).or_else(|| find(Some(XLINK_NS))) else { return false };
+            match data_url::DataUrl::process(href.trim()) {
+                Ok(url) => url.decode_to_vec().is_err(),
+                Err(_) => true,
+            }
+        })
 }
 
 /// Whether usvg can read a raster's size, which it needs after the resolver says yes.

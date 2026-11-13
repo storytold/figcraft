@@ -111,6 +111,29 @@ fn svg_import_has_layers_needs_markup_the_importer_reads_and_says_whether_it_dra
 }
 
 #[test]
+fn the_image_scan_takes_the_unprefixed_href_first_as_usvg_does() {
+    use crate::svg_import_has_layers as layers;
+    let both = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" xlink:href="https://x/y.png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/></svg>"#;
+    assert_eq!(layers(both), Some(true), "href wins over xlink:href, so the image is the inline one");
+}
+
+#[test]
+fn the_image_scan_reads_a_nested_svg_without_a_namespace_as_usvg_does() {
+    use crate::svg_import_has_layers as layers;
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,&lt;svg width='4' height='4'&gt;&lt;rect width='4' height='4'/&gt;&lt;image href='https://x/y.png' width='4' height='4'/&gt;&lt;/svg&gt;"/></svg>"#;
+    assert_eq!(layers(svg), Some(false), "an element with no namespace is SVG to usvg");
+}
+
+#[test]
+fn the_image_scan_skips_hidden_content_as_usvg_does() {
+    use crate::svg_import_has_layers as layers;
+    let attr = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><g display="none"><image href="https://x/y.png" width="4" height="4"/></g></svg>"#;
+    assert_eq!(layers(attr), Some(true), "a linked image under display=none is never drawn");
+    let style = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image href="https://x/y.png" style="fill:red; display : none" width="4" height="4"/></svg>"#;
+    assert_eq!(layers(style), Some(true), "display:none in a style attribute hides it too");
+}
+
+#[test]
 fn import_rejects_garbage() {
     let mut d = Document::new("t");
     let p = d.first_page().unwrap();
