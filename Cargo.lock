@@ -253,7 +253,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1018,12 +1018,24 @@ source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f2591
 dependencies = [
  "craft-figma-rest",
  "craft-kiwi",
- "craft-zip",
+ "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c)",
  "flate2",
  "kurbo",
  "ruzstd",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-figcraft-format"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=976eb51c59edb0a37f24105850f52d921c8518ee#976eb51c59edb0a37f24105850f52d921c8518ee"
+dependencies = [
+ "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=976eb51c59edb0a37f24105850f52d921c8518ee)",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip 9.1.1",
 ]
 
 [[package]]
@@ -1214,6 +1226,16 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 dependencies = [
  "wayland-client",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=976eb51c59edb0a37f24105850f52d921c8518ee#976eb51c59edb0a37f24105850f52d921c8518ee"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+ "zip 9.1.1",
 ]
 
 [[package]]
@@ -1416,7 +1438,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1758,7 +1780,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1976,6 +1998,7 @@ name = "figcraft-format"
 version = "0.18.1"
 dependencies = [
  "craft-fig",
+ "craft-figcraft-format",
  "craft-figma-rest",
  "figcraft-doc",
  "figcraft-layout",
@@ -3927,7 +3950,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4623,7 +4646,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4680,7 +4703,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5249,10 +5272,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6376,7 +6399,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

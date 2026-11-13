@@ -7,13 +7,12 @@ use std::io::{Read, Seek};
 use std::path::Path;
 
 /// Largest `thumbnail.png` read from an archive.
-pub const MAX_THUMBNAIL_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_THUMBNAIL_BYTES: u64 = craft_figcraft_format::MAX_PREVIEW_THUMBNAIL_BYTES;
 /// Largest image file read as its own picture.
 pub const MAX_IMAGE_FILE_BYTES: u64 = 32 * 1024 * 1024;
 /// Widest or tallest picture decoded (pixels); a larger one gives none.
 pub const MAX_THUMBNAIL_SIDE: u32 = 8192;
-/// Largest `document.json` read for its page colour, and `.fig` `meta.json`.
-const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
+/// Largest `.fig` `meta.json` read for its page colour.
 const MAX_META_BYTES: u64 = 1024 * 1024;
 /// Most memory one decode may take.
 const MAX_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
@@ -29,8 +28,7 @@ pub struct Thumbnail {
 /// The bytes of `thumbnail.png` in a zip archive (`.figcraft`, `.fig`); `None` when it isn't a zip,
 /// has no thumbnail, or the thumbnail is larger than [`MAX_THUMBNAIL_BYTES`].
 pub fn thumbnail_png<R: Read + Seek>(archive: R) -> Option<Vec<u8>> {
-    let mut z = zip::ZipArchive::new(archive).ok()?;
-    crate::read_member(&mut z, "thumbnail.png", MAX_THUMBNAIL_BYTES).ok()
+    craft_figcraft_format::read_preview_thumbnail(archive).ok().flatten()
 }
 
 /// The bytes of `previews/preview.png` in a `.sketch` zip; `None` as [`thumbnail_png`] gives it.
@@ -148,35 +146,26 @@ pub fn file_preview(path: &Path, fit: u32) -> Preview {
 /// The [`Preview`] of a `.figcraft` or `.fig` archive: `thumbnail.png`, and the first page's colour
 /// from `document.json` (`.figcraft`) or `meta.json` (`.fig`).
 pub fn archive_preview<R: Read + Seek>(archive: R, fit: u32) -> Preview {
-    let Ok(mut z) = zip::ZipArchive::new(archive) else { return Preview::default() };
-    let picture = crate::read_member(&mut z, "thumbnail.png", MAX_THUMBNAIL_BYTES).ok().and_then(|png| decode_thumbnail(&png, fit));
-    let (page, kind) = if z.file_names().any(|n| n == "document.json") {
-        crate::read_member(&mut z, "document.json", MAX_DOCUMENT_BYTES).ok().map(|json| figcraft_page(&json)).unwrap_or_default()
+    let Ok(mut z) = craft_figcraft_format::SeekArchive::open(archive, u64::MAX) else { return Preview::default() };
+    let native = craft_figcraft_format::read_preview_archive_from(&mut z);
+    let picture = native.thumbnail_png.and_then(|png| decode_thumbnail(&png, fit));
+    let (page, kind) = if native.has_document {
+        native.document.as_ref().map(figcraft_page).unwrap_or_default()
     } else {
-        (crate::read_member(&mut z, "meta.json", MAX_META_BYTES).ok().and_then(|json| fig_page(&json)), figcraft_doc::FileKind::Design)
+        let meta = z.read("meta.json", MAX_META_BYTES).ok().flatten();
+        (meta.as_deref().and_then(fig_page), figcraft_doc::FileKind::Design)
     };
     Preview { page, picture, kind }
 }
 
 /// The first page's background in a `.figcraft` `document.json`, and the file's kind.
-fn figcraft_page(json: &[u8]) -> (Option<[f32; 4]>, figcraft_doc::FileKind) {
-    #[derive(serde::Deserialize)]
-    struct Head {
-        #[serde(default)]
-        pages: Vec<u64>,
-        #[serde(default)]
-        nodes: std::collections::BTreeMap<String, Node>,
-        #[serde(default)]
-        kind: figcraft_doc::FileKind,
-    }
-    #[derive(serde::Deserialize)]
-    struct Node {
-        #[serde(default)]
-        background: Option<serde_json::Value>,
-    }
-    let Ok(head) = serde_json::from_slice::<Head>(json) else { return (None, figcraft_doc::FileKind::Design) };
+fn figcraft_page(head: &craft_figcraft_format::PreviewDocument) -> (Option<[f32; 4]>, figcraft_doc::FileKind) {
     let page = head.pages.first().and_then(|first| head.nodes.get(&first.to_string())).and_then(|n| n.background.as_ref()).and_then(rgba);
-    (page, head.kind)
+    let kind = match head.kind {
+        craft_figcraft_format::PreviewKind::Design => figcraft_doc::FileKind::Design,
+        craft_figcraft_format::PreviewKind::Board => figcraft_doc::FileKind::Board,
+    };
+    (page, kind)
 }
 
 /// The canvas colour a `.fig` file's `meta.json` gives (`client_meta.background_color`).
