@@ -31,7 +31,7 @@ pub use library::{is_valid_library_id, read_library, read_library_within};
 mod density;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
 use figcraft_doc::{Document, ImageData};
@@ -44,8 +44,8 @@ use sha2::Digest;
 pub use craft_figcraft_format::{
     BRANCH_INDEX, BranchEntry as NativeBranchEntry, BranchIndex as NativeBranchIndex, BranchState as NativeBranchState, DOCUMENT_RATIO, EXTENSION,
     FORMAT, FormatError, IMAGE_BUDGET, ImageBudget, MAX_BRANCHES, MAX_DOCUMENT, MAX_MEMBER, MAX_UNPACKED, MAX_VERSION_BYTES, MAX_VERSION_DESCRIPTION,
-    MAX_VERSION_INDEX, MAX_VERSION_NAME, MAX_VERSIONS, VERSION, VersionEntry as NativeVersionEntry, VersionIndex as NativeVersionIndex, clip,
-    document_limit, is_valid_version_id,
+    MAX_VERSION_INDEX, MAX_VERSION_NAME, MAX_VERSIONS, ReadBudget, VERSION, VersionEntry as NativeVersionEntry, VersionIndex as NativeVersionIndex,
+    clip, document_limit, is_valid_version_id,
 };
 const JSON_LEVEL: i64 = 3;
 /// The export warning for colour calculations that resolve to nothing (an operand missing, or more
@@ -554,16 +554,6 @@ pub fn load_bytes(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> 
     load_bytes_with_versions(bytes).map(|l| (l.doc, l.issues))
 }
 
-/// Read archive member `name`, refusing members larger than `limit` bytes.
-fn read_native_member(z: &mut impl craft_figcraft_format::NativeArchive, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
-    match z.read_member(name, limit) {
-        Ok(Some(bytes)) => Ok(bytes),
-        Ok(None) => Err(FormatError::Corrupt(format!("{name}: not found"))),
-        Err(error) if error.is_limit() => Err(FormatError::Corrupt(format!("{name} is too large"))),
-        Err(error) => Err(FormatError::Corrupt(format!("{name}: {error}"))),
-    }
-}
-
 /// Read a member from a foreign ZIP archive, refusing entries larger than `limit`.
 pub(crate) fn read_member<R: Read + std::io::Seek>(z: &mut zip::ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
     let f = z.by_name(name).map_err(|e| FormatError::Corrupt(format!("{name}: {e}")))?;
@@ -578,48 +568,8 @@ pub(crate) fn read_member<R: Read + std::io::Seek>(z: &mut zip::ZipArchive<R>, n
     Ok(data)
 }
 
-/// What one file open may still unpack, every area together ([`MAX_UNPACKED`]).
-pub(crate) struct Unpacked {
-    left: u64,
-    total: u64,
-}
-
-impl Unpacked {
-    pub(crate) fn new(total: u64) -> Self {
-        Self { left: total, total }
-    }
-
-    /// Why a member is left out once the total is spent.
-    fn passed(&self) -> String {
-        match self.total / (1024 * 1024) {
-            0 => format!("too large: the file's contents together pass {} bytes", self.total),
-            mb => format!("too large: the file's contents together pass {mb} MB"),
-        }
-    }
-
-    /// Whether member `name` (by its recorded size) needs more than is left.
-    fn exceeded(&self, z: &mut impl craft_figcraft_format::NativeArchive, name: &str) -> bool {
-        z.declared_size(name).is_some_and(|size| size > self.left)
-    }
-
-    /// [`read_member`] within `limit` (the area's own cap) and what is left of the total, which the
-    /// member then uses up.
-    pub(crate) fn read(&mut self, z: &mut impl craft_figcraft_format::NativeArchive, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
-        if self.exceeded(z, name) && z.declared_size(name).is_some_and(|size| size <= limit) {
-            return Err(FormatError::Corrupt(format!("{name}: {}", self.passed())));
-        }
-        let cap = limit.min(self.left);
-        let size = z.declared_size(name).unwrap_or(0);
-        let data = read_native_member(z, name, cap);
-        // A read that failed part way (a bad checksum at the end, say) did its unpacking all the
-        // same: it is charged in full, so an index naming that member again can't repeat it. One
-        // refused for its recorded size before any unpacking costs nothing.
-        if size <= cap {
-            self.left = self.left.saturating_sub(data.as_ref().map_or(size, |d| d.len() as u64));
-        }
-        data
-    }
-}
+/// The remaining archive-wide expansion budget while the app maps native records.
+pub(crate) type Unpacked = ReadBudget;
 
 /// Read a `.figcraft` archive (or bare JSON) with its version history.
 pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
@@ -642,21 +592,25 @@ pub(crate) fn load_limited(bytes: &[u8], budget: ImageBudget, total: u64) -> Res
     let mut z =
         craft_figcraft_format::Archive::open(bytes, craft_figcraft_format::ArchiveLimits { max_entries: u64::MAX, max_total_bytes: u64::MAX })
             .map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    load_archive(&mut z, budget, total, bytes.len() as u64)
+}
+
+fn load_archive(z: &mut impl craft_figcraft_format::NativeArchive, budget: ImageBudget, total: u64, archive_len: u64) -> Result<Loaded, FormatError> {
     let packed = z.compressed_size("document.json").unwrap_or(0);
-    let limit = document_limit(packed, bytes.len() as u64);
+    let limit = document_limit(packed, archive_len);
     let mut unpacked = Unpacked::new(total);
-    let text = String::from_utf8(unpacked.read(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let text = String::from_utf8(unpacked.read(z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
-    let ImagesRead { images, unread, past_budget } = read_images(&mut z, own_images.as_ref(), budget, &mut unpacked);
+    let ImagesRead { images, unread, past_budget } = read_images(z, own_images.as_ref(), budget, &mut unpacked);
     report_lost_images(&mut issues, &unread, &past_budget, own_images.as_ref(), &images);
     let images_past_budget = past_budget.len();
-    match library::read(&mut z, &images, &mut unpacked) {
+    match library::read(z, &images, &mut unpacked) {
         Ok(lib) => doc.published = lib.map(Arc::new),
         Err(e) => issues.push(format!("the published library was skipped: {e}")),
     }
     let mut budget = MAX_VERSION_BYTES;
-    let versions = read_versions(&mut z, "versions", &images, &mut issues, &mut budget, &mut unpacked);
-    let branches = read_branches(&mut z, &images, &mut issues, &mut unpacked);
+    let versions = read_versions(z, "versions", &images, &mut issues, &mut budget, &mut unpacked);
+    let branches = read_branches(z, &images, &mut issues, &mut unpacked);
     // Images only the version history or branches use stay with them.
     let branch_images =
         branches.iter().flat_map(|b| b.base.images.keys().chain(b.head.images.keys()).chain(b.versions.iter().flat_map(|v| v.images().keys())));
@@ -709,9 +663,9 @@ fn read_images(
         }
         // Past the file's total, an image is left out as one past the images' own budget: it stays
         // in the file, which can't then be saved over without losing it (#1313).
-        if unpacked.exceeded(z, &name) {
+        if unpacked.exceeds_remaining(z, &name) {
             past_budget.insert(hash.clone());
-            unread.push((hash, FormatError::Corrupt(unpacked.passed())));
+            unread.push((hash, FormatError::Corrupt(unpacked.exhausted_message())));
             continue;
         }
         match unpacked.read(z, &name, left.min(MAX_MEMBER)) {
@@ -947,8 +901,29 @@ pub fn write_file_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Resul
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_file(path: &std::path::Path) -> Result<(Document, Vec<String>), FormatError> {
-    let bytes = std::fs::read(path).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
-    load_bytes(&bytes)
+    let mut file = std::fs::File::open(path).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
+    let archive_len = file.metadata().map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?.len();
+    let mut first = None;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let count = file.read(&mut chunk).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
+        if count == 0 {
+            break;
+        }
+        if let Some(byte) = chunk[..count].iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
+            first = Some(byte);
+            break;
+        }
+    }
+    file.seek(SeekFrom::Start(0)).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
+    if first == Some(b'{') {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(|e| FormatError::Io(format!("{}: {e}", path.display())))?;
+        return load_bytes(&bytes);
+    }
+    let mut archive = craft_figcraft_format::SeekArchive::open(file, u64::MAX).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let loaded = load_archive(&mut archive, IMAGE_BUDGET, MAX_UNPACKED, archive_len)?;
+    Ok((loaded.doc, loaded.issues))
 }
 
 #[cfg(test)]
