@@ -614,6 +614,8 @@ fn position(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, shown: &Arc<Docu
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PositionValues {
     pub can_align: bool,
+    /// Align is off because the one selected layer is placed by its auto layout frame.
+    pub align_blocked: bool,
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub rot: Option<f64>,
@@ -644,6 +646,7 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
     let parent = |n: &Node| n.parent.and_then(|p| doc.node(p));
     crate::selection_cache::cached(ctx, "position", doc, sel, &[], || PositionValues {
         can_align: figcraft_engine::cmd::arrange::can_align(doc, sel),
+        align_blocked: figcraft_engine::cmd::arrange::align_blocked_by_auto_layout(doc, sel),
         x: common(doc, sel, |n| x_of(doc, n)),
         y: common(doc, sel, |n| y_of(doc, n)),
         rot: common(doc, sel, |n| rot_of(doc, n)),
@@ -662,7 +665,7 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
 fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let pv = position_values(ui.ctx(), doc, sel);
     let col = widgets::col_width(ui.available_width());
-    align_row(app, ui, sel, pv.can_align, col);
+    align_row(app, ui, sel, pv.can_align, pv.align_blocked, col);
     position_row(app, ui, doc, sel, &pv, col);
     rotation_row(app, ui, doc, sel, pv.rot, col);
     if pv.in_frame {
@@ -671,7 +674,7 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[No
 }
 
 /// Alignment, and distribution and tidy up for three or more layers.
-fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col: f32) {
+fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, blocked: bool, col: f32) {
     let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Alignment"), None);
     row(ui, 32.0, |ui| {
@@ -691,7 +694,12 @@ fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col
             let v = widgets::segmented(ui, &items[3..], None, w).map(|i| i + 3);
             h.or(v)
         });
-        picked.response.on_disabled_hover_text(tr("A layer on its own aligns to its frame: select more layers, or one in a frame"));
+        let why = if blocked {
+            tr("A layer in an auto layout frame is placed by its frame")
+        } else {
+            tr("A layer on its own aligns to its frame: select more layers, or one in a frame")
+        };
+        picked.response.on_disabled_hover_text(why);
         if let Some(i) = picked.inner {
             app.run(cmds[i], json!({"ids": ids}));
         }
