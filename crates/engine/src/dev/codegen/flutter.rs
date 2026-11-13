@@ -335,7 +335,7 @@ fn flutter_line(ctx: &Ctx, l: &AutoLayout, flow: &[Placed], slot: Option<&Param>
         out.push_str(&format!("{inner}textBaseline: TextBaseline.alphabetic,\n"));
     }
     // The gap between the children; the space distributions already spread them.
-    if l.gap > 0.0 && flutter_main_align(l.main_align).is_none_or(|m| !m.contains("Space")) {
+    if l.gap > 0.0 && !matches!(l.main_align, MainAlign::SpaceBetween | MainAlign::SpaceAround | MainAlign::SpaceEvenly) {
         out.push_str(&format!("{inner}spacing: {},\n", num(l.gap)));
     }
     out.push_str(&format!("{inner}children: [\n"));

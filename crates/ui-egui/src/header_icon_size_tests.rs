@@ -6,11 +6,13 @@ use egui::{Context, Rect, pos2, vec2};
 use crate::icons::{self, Icon};
 use crate::widgets::{icon_button_at, icon_glyph_rect, section_header};
 
-/// Bounding box of everything painted in one frame of `add`.
-fn painted_box(add: impl FnOnce(&mut egui::Ui)) -> Rect {
+/// The bounding box of every glyph-like shape painted in one frame of `add`, one per shape, with
+/// the pointer at `pointer` (hover-only buttons) when given.
+pub(crate) fn painted_rects(pointer: Option<egui::Pos2>, add: impl FnOnce(&mut egui::Ui)) -> Vec<Rect> {
     let ctx = Context::default();
     let mut add = Some(add);
-    let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0))), ..Default::default() };
+    let events = pointer.map(egui::Event::PointerMoved).into_iter().collect();
+    let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 600.0))), events, ..Default::default() };
     let mut out = ctx.run_ui(raw, |ui| {
         if let Some(f) = add.take() {
             f(ui);
@@ -21,7 +23,27 @@ fn painted_box(add: impl FnOnce(&mut egui::Ui)) -> Rect {
         .iter()
         .filter(|s| matches!(s.shape, egui::Shape::Path(_) | egui::Shape::Mesh(_) | egui::Shape::LineSegment { .. } | egui::Shape::Circle(_)))
         .map(|s| s.shape.visual_bounding_rect())
-        .fold(Rect::NOTHING, |a, b| a.union(b))
+        .collect()
+}
+
+/// Bounding box of everything painted in one frame of `add`.
+fn painted_box(add: impl FnOnce(&mut egui::Ui)) -> Rect {
+    painted_rects(None, add).into_iter().fold(Rect::NOTHING, |a, b| a.union(b))
+}
+
+/// Whether `painted` holds `icon` drawn at the size of a 24 pt `icons::button`'s glyph (16 pt): the
+/// reference glyph's shapes, moved by one offset, are all among `painted` (same sizes and spacing,
+/// so a three-dot glyph's spread counts too).
+pub(crate) fn paints_icon_at_button_size(painted: &[Rect], icon: Icon) -> bool {
+    let reference = painted_rects(None, |ui| {
+        icons::button(ui, icon, 24.0, false, "reference");
+    });
+    let same = |a: Rect, b: Rect| (a.min - b.min).length() < 0.5 && (a.size() - b.size()).length() < 0.5;
+    let Some(first) = reference.first() else { return false };
+    painted.iter().any(|p| {
+        let shift = p.min - first.min;
+        reference.iter().all(|r| painted.iter().any(|q| same(*q, r.translate(shift))))
+    })
 }
 
 /// The header's eye, `icon_button_at`'s and a fill row's (`icons::button`, the reporter's
