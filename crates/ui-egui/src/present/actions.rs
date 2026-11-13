@@ -281,6 +281,10 @@ impl Presenter {
         moving: bool,
         now: f64,
     ) -> Option<FrameTex> {
+        // Converted back from the screen, the view can stand a rounding error outside the frame,
+        // which a detail (always inside the frame) never covers: a still view would then render a
+        // new detail every frame.
+        let visible = visible.intersect(whole);
         let (t, clock) = self.frame_clock(ctx, doc, id, now);
         let key = (self.rev, px.to_bits(), clock.map_or(0, |c| c.0));
         let covers = |b: &figcraft_geom::Rect| b.x0 <= visible.x0 && b.y0 <= visible.y0 && b.x1 >= visible.x1 && b.y1 >= visible.y1;

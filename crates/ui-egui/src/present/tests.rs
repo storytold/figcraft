@@ -512,6 +512,22 @@ fn the_detail_is_kept_while_nothing_changes_and_made_again_when_the_frame_does()
 }
 
 #[test]
+fn a_view_a_rounding_error_past_the_frame_keeps_its_detail() {
+    let mut ui = tall_hidpi(16_384);
+    let ctx = ui.ctx.clone();
+    let doc = ui.app.session.doc().unwrap().clone();
+    let now = ui.time;
+    let p = ui.app.ui.present.as_mut().unwrap();
+    let id = p.current;
+    let whole = figcraft_geom::Rect::new(0.0, 0.0, 1440.0, 9701.0);
+    // The screen-to-page round trip can put the view a hair outside the frame.
+    let view = figcraft_geom::Rect::new(-1e-9, 0.0, 1440.0 + 1e-9, 860.0);
+    let first = p.detail_texture(&ctx, &doc, id, 2.0, whole, view, false, now).expect("a detail").tex.id();
+    let again = p.detail_texture(&ctx, &doc, id, 2.0, whole, view, false, now).expect("a detail").tex.id();
+    assert_eq!(again, first, "the same view reuses its detail instead of rendering a new one");
+}
+
+#[test]
 fn detail_plan_edge_cases() {
     use figcraft_geom::Rect as R;
     let bounds = R::new(0.0, 0.0, 1440.0, 9701.0);
