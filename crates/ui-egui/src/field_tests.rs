@@ -189,7 +189,7 @@ fn setup() -> (Ui, NodeId, NodeId) {
 
 /// The topmost field named `name` in the Design panel: its value centre and displayed text.
 /// Layer opacity precedes the equally named opacity fields in paint rows.
-fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
+pub(crate) fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
@@ -234,7 +234,7 @@ fn geom(u: &Ui, n: NodeId) -> (f64, f64, f64, f64) {
     (b.x0, b.y0, b.width(), b.height())
 }
 
-fn undo_steps(u: &Ui) -> usize {
+pub(crate) fn undo_steps(u: &Ui) -> usize {
     u.app.session.ds().unwrap().history.undo.len()
 }
 
@@ -252,7 +252,7 @@ fn click(u: &mut Ui, p: Pos2) {
 }
 
 /// Click into field `name`, type `text` over what it shows and press `end`.
-fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
+pub(crate) fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
     let (p, _) = field(u, name);
     click(u, p);
     u.frame(vec![Event::Text(text.into())]);
@@ -261,7 +261,7 @@ fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
 }
 
 /// Scrub field `name` by its label: `dx` points with `modifiers` held, then let go.
-fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
+pub(crate) fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
     let from = label(u, name);
     drag(u, from, dx, modifiers);
 }
@@ -439,6 +439,68 @@ fn the_arrow_keys_step_by_the_nudge_amounts_and_fractional_fields_by_their_own()
     key(&mut u, Key::Escape, Modifiers::NONE);
     let rot = figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(a).unwrap().transform);
     assert!((rot.abs() - 11.0).abs() < 1e-6, "rotation {rot}: the steps stay after Escape");
+}
+
+#[test]
+fn the_rotation_field_shows_and_sets_the_rotation_on_the_page() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 100, "width": 400, "height": 400})).unwrap());
+    s.execute("node.set", &json!({"ids": [f], "props": {"rotation": 10}})).unwrap();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 120, "height": 80, "parent": f})).unwrap());
+    s.execute("node.set", &json!({"ids": [r], "props": {"rotation": -10}})).unwrap();
+    let b = id(s.execute("shape.rectangle", &json!({"x": 600, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().world_transform(n));
+    let local = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(n).unwrap().transform);
+    assert_eq!(field(&mut u, "Rotation").1, "0°");
+    type_into(&mut u, "Rotation", "7", Key::Enter);
+    assert!((page(&u, r) - 7.0).abs() < 1e-6 && (local(&u, r) + 3.0).abs() < 1e-6, "{} {}", page(&u, r), local(&u, r));
+    assert_eq!(field(&mut u, "Rotation").1, "7°");
+    // Arrows step the shown value.
+    let shift = Modifiers { shift: true, ..Modifiers::NONE };
+    let (p, _) = field(&mut u, "Rotation");
+    click(&mut u, p);
+    key(&mut u, Key::ArrowUp, Modifiers::NONE);
+    key(&mut u, Key::ArrowUp, shift);
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    assert!((page(&u, r) - 18.0).abs() < 1e-6, "{}", page(&u, r));
+    assert_eq!(field(&mut u, "Rotation").1, "18°");
+    // Scrubbing is one undo step.
+    let steps = undo_steps(&u);
+    scrub(&mut u, "Rotation", 15.0, Modifiers::NONE);
+    assert!((page(&u, r) - 33.0).abs() < 1e-6, "{}", page(&u, r));
+    assert_eq!(undo_steps(&u), steps + 1);
+    // Mixed: layers in differently turned parents agree when their page angles do.
+    u.app.session.execute("node.set", &json!({"ids": [b], "props": {"rotation": 33}})).unwrap();
+    u.app.session.execute("select.set", &json!({"ids": [r, b]})).unwrap();
+    assert_eq!(field(&mut u, "Rotation").1, "33°");
+    u.app.session.execute("node.set", &json!({"ids": [b], "props": {"rotation": 20}})).unwrap();
+    assert_eq!(field(&mut u, "Rotation").1, "Mixed");
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Rotation", "+10", Key::Enter);
+    assert!((page(&u, r) - 43.0).abs() < 1e-6 && (page(&u, b) - 30.0).abs() < 1e-6, "{} {}", page(&u, r), page(&u, b));
+    assert_eq!(undo_steps(&u), steps + 1);
+}
+
+#[test]
+fn a_relative_rotation_edit_turns_a_selected_parent_before_its_child_whatever_the_selection_order() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 400, "height": 400})).unwrap());
+    let c = id(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 120, "height": 80, "parent": f})).unwrap());
+    s.execute("node.set", &json!({"ids": [f], "props": {"rotation": 10}})).unwrap();
+    s.execute("node.set", &json!({"ids": [c], "props": {"absoluteRotation": 30}})).unwrap();
+    // The child first, then its parent.
+    s.execute("select.set", &json!({"ids": [c, f]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().world_transform(n));
+    assert_eq!(field(&mut u, "Rotation").1, "Mixed");
+    type_into(&mut u, "Rotation", "+10", Key::Enter);
+    assert!((page(&u, f) - 20.0).abs() < 1e-6 && (page(&u, c) - 40.0).abs() < 1e-6, "{} {}", page(&u, f), page(&u, c));
 }
 
 #[test]
@@ -1669,4 +1731,36 @@ fn alt_held_over_a_field_scrubs_it() {
     u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y)), press(false, alt, pos2(at.x + 10.0, at.y))], alt);
     u.frame(vec![]);
     assert_eq!(geom(&u, a).0, 65.0, "ten more");
+}
+
+#[test]
+fn a_boolean_group_has_one_corner_radius_field_and_a_mixed_selection_reads_mixed() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let r = id(u.app.session.execute("shape.rectangle", &json!({"x": 400, "y": 0, "width": 50, "height": 50})).unwrap());
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0");
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Corner radius", "20", Key::Enter);
+    let radii = |u: &Ui, n: NodeId| u.app.session.doc().unwrap().node(n).unwrap().corners.radii;
+    assert_eq!(radii(&u, g), [20.0; 4]);
+    assert_eq!(undo_steps(&u), steps + 1, "one undo step");
+    u.app.run("select.set", json!({"ids": [g, r]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "Mixed");
+    type_into(&mut u, "Corner radius", "8", Key::Enter);
+    assert_eq!((radii(&u, g), radii(&u, r)), ([8.0; 4], [8.0; 4]));
+}
+
+/// A boolean group draws its first radius; per-corner values a script or a file left behind don't
+/// make its field read Mixed, and a relative edit starts from the radius it draws.
+#[test]
+fn a_boolean_groups_field_shows_the_radius_it_draws() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let corners = json!({"topRightRadius": 30, "bottomRightRadius": 30, "bottomLeftRadius": 30});
+    u.app.session.execute("node.set", &json!({"ids": [g], "props": corners})).unwrap();
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0", "the radius it draws");
+    type_into(&mut u, "Corner radius", "+10", Key::Enter);
+    assert_eq!(u.app.session.doc().unwrap().node(g).unwrap().corners.radii, [10.0; 4], "0 + 10, not 30 + 10");
 }
