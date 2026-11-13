@@ -69,6 +69,19 @@ fn svg_import_has_layers_needs_markup_the_importer_reads_and_says_whether_it_dra
     assert_eq!(layers(nested), Some(false), "an image dropped inside a nested SVG counts too");
     let inline = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/></svg>"#;
     assert_eq!(layers(inline), Some(true), "an embedded image is resolved, nothing dropped");
+    let spaced = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><svg width="4" height="4"><image width="4" height="4" href = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/></svg></svg>"#;
+    assert_eq!(layers(spaced), Some(true), "spaces around = in an image href are still a data URI");
+    let nested_spaced = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%224%22%20height%3D%224%22%3E%3Cimage%20width%3D%224%22%20height%3D%224%22%20href%20%3D%20%22data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk%2BM9QDwADhgGAWjR9awAAAABJRU5ErkJggg%3D%3D%22%2F%3E%3C%2Fsvg%3E"/></svg>"#;
+    assert_eq!(layers(nested_spaced), Some(true), "a nested SVG's data-URI image with spaces around = isn't omitted");
+    let commented =
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><!-- <image href="https://x/y.png"/> --><rect width="4" height="4"/></svg>"#;
+    assert_eq!(layers(commented), Some(true), "an image in a comment isn't content");
+    let nested_commented = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%224%22%20height%3D%224%22%3E%3C!--%20%3Cimage%20href%3D%22https%3A%2F%2Fx%2Fy.png%22%2F%3E%20--%3E%3Crect%20width%3D%224%22%20height%3D%224%22%2F%3E%3C%2Fsvg%3E"/></svg>"#;
+    assert_eq!(layers(nested_commented), Some(true), "a commented-out image in a nested SVG isn't omitted");
+    let undecodable = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/png;base64,!!!!"/></svg>"#;
+    assert_eq!(layers(undecodable), Some(false), "a data URI that doesn't decode is dropped");
+    let unsized_png = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/png;base64,AA=="/></svg>"#;
+    assert_eq!(layers(unsized_png), Some(false), "a raster whose size can't be read is dropped");
     assert_eq!(layers(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8""#), None, "cut short");
     assert_eq!(layers("<svg\tName\nAda\tLead"), None, "a spreadsheet row that starts like SVG");
     assert_eq!(layers("hello"), None);

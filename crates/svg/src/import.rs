@@ -959,7 +959,7 @@ fn import_within(
         Some(resolved) => resolved,
         None => (data, Vec::new()),
     };
-    let omitted = Arc::new(AtomicBool::new(false));
+    let omitted = Arc::new(AtomicBool::new(budget::drops_images(&data)));
     let tree = usvg::Tree::from_data(&data, &options(&data, limits, Arc::clone(&omitted))).map_err(|e| ImportError(e.to_string()))?;
     let size = tree.size();
     let frame =

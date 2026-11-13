@@ -71,13 +71,30 @@ fn raster(data: &[u8]) -> bool {
         || (data.len() > 12 && data.get(8..12) == Some(b"WEBP"))
 }
 
-/// Whether the SVG text has an `<image>` element whose `href` isn't a data URI (or has none).
-fn links_an_image(svg: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(svg);
-    text.split("<image").skip(1).any(|rest| {
-        let tag = rest.split('>').next().unwrap_or("");
-        !(tag.contains("href=\"data:") || tag.contains("href='data:"))
+/// Whether `svg` has an `<image>` that usvg will drop before the resolver can say so: one linked
+/// by a path or URL (nested SVGs never ask the resolver for those), or one whose data URI doesn't
+/// decode (usvg decodes before it asks). Found by parsing the document, so a comment holding
+/// `<image>` or spaces around `=` don't count. A document that doesn't parse reports nothing,
+/// since usvg can't read it either.
+pub(super) fn drops_images(svg: &[u8]) -> bool {
+    use usvg::roxmltree::{Document, ParsingOptions};
+    const SVG_NS: &str = "http://www.w3.org/2000/svg";
+    const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+    let Ok(text) = std::str::from_utf8(svg) else { return false };
+    let Ok(doc) = Document::parse_with_options(text, ParsingOptions { allow_dtd: true, ..ParsingOptions::default() }) else { return false };
+    doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "image" && n.tag_name().namespace() == Some(SVG_NS)).any(|n| {
+        let Some(href) = n.attribute((XLINK_NS, "href")).or_else(|| n.attribute("href")) else { return false };
+        let href = href.trim();
+        match data_url::DataUrl::process(href) {
+            Ok(url) => url.decode_to_vec().is_err(),
+            Err(_) => true,
+        }
     })
+}
+
+/// Whether usvg can read a raster's size, which it needs after the resolver says yes.
+fn sized(data: &[u8]) -> bool {
+    matches!(imagesize::blob_size(data), Ok(size) if size.width > 0 && size.height > 0)
 }
 
 /// An embedded SVG document, if the budgets allow it.
@@ -99,9 +116,9 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], opts: &Options, omitted: 
     if super::too_wide(&plain) || super::too_deep(&plain) {
         return None;
     }
-    // usvg ignores a nested SVG's linked images without asking our resolver, so they are looked
-    // for here: an `<image>` whose href isn't a data URI is left out of what the frame draws.
-    if links_an_image(&plain) {
+    // usvg ignores a nested SVG's linked images without asking our resolver, and drops a data URI
+    // that doesn't decode before asking, so the document is searched for them.
+    if drops_images(&plain) {
         omitted.store(true, Ordering::Relaxed);
     }
     used.depth.fetch_add(1, Ordering::Relaxed);
@@ -135,12 +152,12 @@ pub(super) fn resolver(limits: Limits, omitted: Arc<AtomicBool>) -> ImageHrefRes
 
 fn resolve_data(used: &Used, limits: &Limits, mime: &str, data: Arc<Vec<u8>>, opts: &Options, omitted: &AtomicBool) -> Option<ImageKind> {
     match mime {
-        "image/jpg" | "image/jpeg" => Some(ImageKind::JPEG(data)),
-        "image/png" => Some(ImageKind::PNG(data)),
-        "image/gif" => Some(ImageKind::GIF(data)),
-        "image/webp" => Some(ImageKind::WEBP(data)),
+        "image/jpg" | "image/jpeg" if sized(&data) => Some(ImageKind::JPEG(data)),
+        "image/png" if sized(&data) => Some(ImageKind::PNG(data)),
+        "image/gif" if sized(&data) => Some(ImageKind::GIF(data)),
+        "image/webp" if sized(&data) => Some(ImageKind::WEBP(data)),
         "image/svg+xml" => embedded(used, limits, &data, opts, omitted),
-        "text/plain" if raster(&data) => match data.first() {
+        "text/plain" if raster(&data) && sized(&data) => match data.first() {
             Some(0x89) => Some(ImageKind::PNG(data)),
             Some(0xff) => Some(ImageKind::JPEG(data)),
             Some(b'G') => Some(ImageKind::GIF(data)),
