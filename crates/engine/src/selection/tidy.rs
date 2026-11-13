@@ -167,13 +167,18 @@ fn even_gap(gaps: &[f64], spacing: Option<f64>) -> f64 {
 /// in Figma's web app on 2026-11-13: interior widths of 10, 20 and 30 among 100s gave -4, -9 and
 /// -14, and widths of 100 left the most common gap, -40, alone. Only those three widths were
 /// measured; other widths follow the same formula.
+///
+/// The first layer has no layer two places before it, but the second must still start after it:
+/// `g > -w(0)`, in whole pixels `floor(-w(0)) + 1`. Figma kept the order in every run; a narrow
+/// first layer was not measured, so this bound keeps that order rather than following a reading.
 fn raise_negative_gap(gap: f64, widths: &[f64]) -> f64 {
     let interior = widths.get(1..widths.len().saturating_sub(1)).unwrap_or(&[]);
     let w_min = interior.iter().copied().fold(f64::INFINITY, f64::min);
-    if widths.len() < 3 || !w_min.is_finite() {
+    let Some(first) = widths.first().copied() else { return gap };
+    if widths.len() < 3 || !w_min.is_finite() || !first.is_finite() {
         return gap;
     }
-    gap.max((-w_min / 2.0).floor() + 1.0)
+    gap.max((-w_min / 2.0).floor() + 1.0).max((-first).floor() + 1.0)
 }
 
 /// A row (`vertical` false) or a column: the first layer stays, each next one follows the last at

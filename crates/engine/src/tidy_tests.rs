@@ -340,6 +340,19 @@ fn a_negative_gap_is_raised_so_no_layer_reaches_the_one_two_before() {
 }
 
 #[test]
+fn a_narrow_first_layer_still_keeps_the_second_after_it() {
+    // Not measured in Figma (it kept the order in every run): the modal gap -40 would start the
+    // second layer at -30, before a 10 wide first layer, so the gap is raised to -9.
+    let mut s = Session::new();
+    let xs = [0., 80., 200., 260., 400., 460.];
+    let widths = [10., 100., 100., 100., 100., 100.];
+    let pairs: Vec<(f64, f64)> = xs.iter().copied().zip(widths).collect();
+    let ids = bars(&mut s, &pairs);
+    tidy(&mut s, &ids);
+    assert_eq!(xs_of(&s, &ids), vec![0., 1., 92., 183., 274., 365.]);
+}
+
+#[test]
 fn a_negative_gap_between_equal_widths_is_the_most_common_gap() {
     let mut s = Session::new();
     let xs = [0., 80., 200., 260., 400., 460.];
