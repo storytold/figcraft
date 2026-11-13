@@ -896,7 +896,12 @@ fn select_clicked(app: &mut FigApp, rows: &[Row], sel: &[NodeId], id: NodeId, m:
     app.ui.pages_focus = None;
     let order: Vec<NodeId> = rows.iter().map(|r| r.id).collect();
     let pos = |x: NodeId| order.iter().position(|o| *o == x);
-    let anchor = app.ui.layer_anchor.filter(|a| sel.contains(a)).and_then(pos);
+    // The anchor stays usable while it, or a frame covering it, is selected.
+    let covered = |a: NodeId| match app.session.ds() {
+        Ok(ds) => sel.contains(&a) || ds.doc.ancestors(a).iter().any(|p| sel.contains(p)),
+        Err(_) => sel.contains(&a),
+    };
+    let anchor = app.ui.layer_anchor.filter(|a| covered(*a)).and_then(pos);
     if m.shift
         && let (Some(ai), Some(bi)) = (anchor, pos(id))
     {

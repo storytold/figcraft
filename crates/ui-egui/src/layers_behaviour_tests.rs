@@ -865,6 +865,27 @@ fn a_shift_range_across_frames_keeps_a_frame_and_not_its_covered_children() {
 }
 
 #[test]
+fn a_second_shift_click_after_a_reverse_cross_frame_range_extends_the_range() {
+    let mut s = Session::new();
+    let frame1 = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Frame 1"})).unwrap());
+    let rect2 = rect(&mut s, "Rect 2", 0.0, Some(frame1));
+    let rect3 = rect(&mut s, "Rect 3", 30.0, Some(frame1));
+    let frame2 = id(s.execute("frame.create", &json!({"x": 200, "y": 0, "width": 100, "height": 100, "name": "Frame 2"})).unwrap());
+    let rect4 = rect(&mut s, "Rect 4", 0.0, Some(frame2));
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame1, frame2]);
+    u.frame(vec![]);
+    let (row2, row4, row3) = (u.row_at(rect2), u.row_at(rect4), u.row_at(rect3));
+    click(&mut u, row2, Modifiers::NONE);
+    click(&mut u, row4, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![rect4, frame1]));
+    // Rows run Frame 2, Rect 4, Frame 1, Rect 3, Rect 2: the range from Rect 2 to Rect 3 is those two.
+    click(&mut u, row3, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![rect3, rect2]), "the range still runs from Rect 2, not a toggle");
+}
+
+#[test]
 fn a_shift_range_inside_one_frame_is_unchanged() {
     let mut s = Session::new();
     let frame = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "F"})).unwrap());
