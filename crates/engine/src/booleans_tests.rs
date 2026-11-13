@@ -11,21 +11,21 @@ use crate::tools::{PointerEvent, PointerKind};
 use figcraft_doc::{BoolOp, NodeId, NodeKind};
 use figcraft_geom::Shape;
 
-fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
+pub(crate) fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
     s.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"))
 }
 
-fn ev(kind: PointerKind, x: f64, y: f64, cmd: bool) -> PointerEvent {
+pub(crate) fn ev(kind: PointerKind, x: f64, y: f64, cmd: bool) -> PointerEvent {
     PointerEvent { cmd, ..PointerEvent::at(kind, x, y, 1.0) }
 }
 
-fn click(s: &mut Session, x: f64, y: f64, cmd: bool) {
+pub(crate) fn click(s: &mut Session, x: f64, y: f64, cmd: bool) {
     s.pointer(&ev(PointerKind::Down, x, y, cmd)).unwrap();
     s.pointer(&ev(PointerKind::Up, x, y, cmd)).unwrap();
 }
 
 /// A layer's filled area (a boolean group's result; none of these have holes).
-fn area(s: &Session, id: NodeId) -> f64 {
+pub(crate) fn area(s: &Session, id: NodeId) -> f64 {
     let doc = s.doc().unwrap();
     figcraft_render::node_outline(doc, doc.node(id).unwrap()).unwrap().0.area().abs()
 }

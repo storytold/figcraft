@@ -254,6 +254,8 @@ mod save_as_tests;
 #[cfg(test)]
 mod select_all_tests;
 #[cfg(test)]
+mod selection_colors_tests;
+#[cfg(test)]
 mod shortcut_keys_tests;
 #[cfg(test)]
 mod shortcuts_tests;
@@ -291,6 +293,8 @@ mod variants_discovery_tests;
 mod vector_keys_tests;
 #[cfg(test)]
 mod vector_panel_tests;
+#[cfg(test)]
+mod vector_point_xy_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
 #[cfg(test)]

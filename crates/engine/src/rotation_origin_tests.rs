@@ -91,6 +91,17 @@ fn rotation_field_and_rotate_commands_turn_about_a_moved_origin() {
 }
 
 #[test]
+fn the_absolute_rotation_key_turns_about_a_moved_origin_too() {
+    let mut s = Session::new();
+    let r = rect(&mut s);
+    s.execute("transform.setRotationOrigin", &json!({"x": 100, "y": 100})).unwrap();
+    s.execute("node.set", &json!({"ids": [r], "props": {"absoluteRotation": 30}})).unwrap();
+    let doc = s.doc().unwrap();
+    assert!(near(doc.world_transform(r) * Point::new(100.0, 100.0), Point::new(100.0, 100.0)));
+    assert!((figcraft_geom::rotation_degrees(doc.world_transform(r)) - 30.0).abs() < 1e-6);
+}
+
+#[test]
 fn origin_lasts_as_long_as_its_selection() {
     let mut s = Session::new();
     let r = rect(&mut s);
