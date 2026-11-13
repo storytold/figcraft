@@ -13,7 +13,7 @@ use serde_json::Value;
 use super::Ctx;
 
 /// Largest width/height/stroke/radius/spacing value taken from the file.
-pub(super) const MAX_SIZE: f64 = 1e6;
+pub(crate) const MAX_SIZE: f64 = 1e6;
 /// Largest coordinate taken from the file.
 pub(super) const MAX_COORD: f64 = 1e7;
 /// Most entries read from any one list (paints, effects, dashes, grids…).
