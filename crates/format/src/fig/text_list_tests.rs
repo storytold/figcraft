@@ -64,7 +64,7 @@ fn numbered_lists_keep_their_start() {
     assert_eq!(starts(&doc, "From 1"), [(N, 0)]);
     assert_eq!(starts(&doc, "From 2"), [(N, 1)], "shows 2.");
     assert_eq!(starts(&doc, "First only"), [(N, 3), (N, 0), (N, 0)]);
-    assert_eq!(starts(&doc, "Every line"), [(N, 3), (N, 3), (N, 3)]);
+    assert_eq!(starts(&doc, "Every line"), [(N, 3), (N, 0), (N, 0)], "Figma writes the start on every line; only the first counts");
     assert_eq!(starts(&doc, "Mixed"), [(P, 0), (N, 4), (B, 0)], "bullets have no number, so no start");
     assert_eq!(starts(&doc, "Junk"), [(N, 0)], "a negative offset counts from 1");
 }
@@ -89,5 +89,23 @@ fn the_export_writes_where_a_list_starts() {
     // line or per list counts the same); bullets and plain lines carry none.
     assert_eq!(offsets, [1.0, 1.0, 0.0, 5.0, 0.0]);
     let (back, _) = import(&bytes, "x").unwrap();
-    assert_eq!(starts(&back, "List"), [(N, 1), (N, 1), (P, 0), (N, 5), (B, 0)]);
+    assert_eq!(starts(&back, "List"), [(N, 1), (N, 0), (P, 0), (N, 5), (B, 0)], "reads back as it went in");
+}
+
+#[test]
+fn a_start_on_every_line_counts_only_where_the_list_starts() {
+    use ListStyle::{None as P, Numbered as N};
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "Document", vec![]),
+        node(1, Some((0, "!")), "CANVAS", "Page", vec![]),
+        text_node(2, "Three", "a\nb\nc", vec![line("ORDERED_LIST", 4, true), line("ORDERED_LIST", 4, false), line("ORDERED_LIST", 4, false)]),
+        text_node(3, "Split", "a\nb\nc", vec![line("ORDERED_LIST", 4, true), line("PLAIN", 4, false), line("ORDERED_LIST", 0, true)]),
+        text_node(4, "Two lists", "a\nb\nc", vec![line("ORDERED_LIST", 4, true), line("PLAIN", 4, false), line("ORDERED_LIST", 6, true)]),
+    ];
+    let sc = Schema::parse(LIST_SCHEMA).unwrap();
+    let (doc, warnings) = import(&canvas(&sc, &o(vec![("nodeChanges", arr(nodes))])), "x").unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(starts(&doc, "Three"), [(N, 4), (N, 0), (N, 0)]);
+    assert_eq!(starts(&doc, "Split"), [(N, 4), (P, 0), (N, 0)]);
+    assert_eq!(starts(&doc, "Two lists"), [(N, 4), (P, 0), (N, 6)], "a second list keeps its own start");
 }
