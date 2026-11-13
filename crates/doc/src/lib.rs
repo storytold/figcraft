@@ -24,6 +24,7 @@ pub mod proto;
 pub mod styles;
 pub mod text;
 mod text_appearance;
+mod text_appearance_meta;
 mod text_glyph_bytes;
 pub mod vector;
 pub mod vector_faces;

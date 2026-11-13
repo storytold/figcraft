@@ -366,3 +366,49 @@ Versus the fresh main sample, reopen is **6.12x** (previously 7.90x in this pair
 repeat save **+22.5%**, and archive size **5.06x**. The roughly 10%
 default-path acceptance target remains unmet; no opt-in policy or font-preservation semantics
 were changed. These measurements exclude filesystem fsync, network and GUI startup.
+
+
+### Compact JSON metadata follow-up, 2026-11-13
+
+Appearance line records now serialize as twelve-element arrays in the existing `TextLine`
+field order: `glyph_start, glyph_end, char_start, char_end, top, height, baseline, width, x,
+para_end, break_after, rtl`. The existing derived reader accepts both these arrays and named
+objects. Appearance styles omit only stable defaults: auto line height, positive-zero percent
+letter spacing, no decoration, original case, absent optional fields and empty variation axes.
+Font family, style and size are always explicit because font defaults can differ between builds.
+Nondefault styles, explicitly empty fills, links and negative-zero values stay explicit. These
+changes apply only to saved appearance metadata, not editable text styles or fingerprints.
+Encoding 3 and native outline table 1 are unchanged; no extra reader or migration is required.
+Exhaustive field destructuring catches newly added model fields instead of silently dropping them.
+
+All glyph byte strings and local/native outline palettes are untouched. A native rewrite of
+all 10,000 layers was compared to the previous fixture after restoring the declared metadata
+defaults and field names: the complete document, including every floating-point bit, matched.
+The previous production binary (`e6d6fc7545b94648b00ef44c49a5cee93e17bfeb`) opened the new native
+file successfully without source system fonts. Reading and resaving it with that previous
+production binary reconstructed the original 25,607,910 JSON bytes exactly (SHA-256
+`de943c9a310480d04c9900d787b306f75cca07268e03860533c336a0922148a4`).
+A regression uses the old derived reader types,
+nondefault styles and precise/signed-zero numbers through an actual JSON string round trip.
+
+Fresh release runs use the same corpus, toolchain, fonts, one warm-up and medians of five
+samples as above, sequentially without a concurrent build. The before binary is that same
+`e6d6fc75`; the unchanged main binary is `0d6ce112`. Reopen still decodes and initializes all
+geometry before its timer stops.
+
+| Text layers | Variant | First save ms | Repeat save ms | Reopen ms | ZIP bytes | Appearances |
+|---:|---|---:|---:|---:|---:|---:|
+| 1,000 | main (fresh) | 112.700 | 110.301 | 4.908 | 127,908 | 0 |
+| 1,000 | previous portable | 148.696 | 152.753 | 34.252 | 251,186 | 1,000 |
+| 1,000 | compact metadata | 158.349 | 155.107 | 33.696 | 245,029 | 1,000 |
+| 10,000 | main (fresh) | 1748.223 | 1784.232 | 61.772 | 265,376 | 0 |
+| 10,000 | previous portable | 2247.750 | 2214.062 | 378.614 | 1,343,321 | 10,000 |
+| 10,000 | compact metadata | 2179.060 | 2156.879 | 337.938 | 1,286,854 | 10,000 |
+
+At 10,000 layers, expanded native `document.json` falls from **25,607,910 to 21,222,910 bytes
+(17.1% smaller)**; ZIP size falls **4.2%**. Reopen takes **10.7% less time** and repeat save
+**2.6% less time** in this sample. Small timing differences remain subject to machine variation;
+there is no cross-machine guarantee. All 10,000 appearances / 1,170,000 glyph placements remain.
+Versus fresh main, reopen is **5.47x**, repeat save **+20.9%**, and archive size **4.85x**.
+The approximately 10% default-path target remains unmet. No validation/materialization was
+deferred, and no geometry precision, source-font policy or capture behavior was changed.

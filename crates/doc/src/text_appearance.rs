@@ -31,8 +31,10 @@ struct Saved<'a> {
     height: f64,
     outlines: Vec<&'a str>,
     glyphs: String,
+    #[serde(serialize_with = "crate::text_appearance_meta::lines")]
     lines: &'a [TextLine],
     decorations: &'a [TextDecorationPath],
+    #[serde(serialize_with = "crate::text_appearance_meta::styles")]
     styles: &'a [TextStyle],
     truncated: bool,
 }
