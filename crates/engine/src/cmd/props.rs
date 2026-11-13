@@ -678,7 +678,7 @@ fn apply_look(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -> 
         "startCap" => doc.get_mut(id)?.stroke.cap_start = enum_of(v).ok_or_else(|| bad(cmd, format!("startCap: {STROKE_CAP_HELP}")))?,
         "endCap" => doc.get_mut(id)?.stroke.cap_end = enum_of(v).ok_or_else(|| bad(cmd, format!("endCap: {STROKE_CAP_HELP}")))?,
         "strokeJoin" => doc.get_mut(id)?.stroke.join = enum_of(v).ok_or_else(|| bad(cmd, "strokeJoin: miter|bevel|round"))?,
-        "miterLimit" => doc.get_mut(id)?.stroke.miter_limit = f64_of(v).unwrap_or(4.0).clamp(1.0, 100.0),
+        "miterLimit" => doc.get_mut(id)?.stroke.miter_limit = f64_of(v).ok_or_else(|| bad(cmd, "`miterLimit` must be a number"))?.clamp(1.0, 100.0),
         "miterAngle" => {
             let deg = f64_of(v).ok_or_else(|| bad(cmd, "`miterAngle` must be degrees"))?;
             doc.get_mut(id)?.stroke.miter_limit = StrokeProps::miter_limit_for(deg);
@@ -728,7 +728,9 @@ fn apply_corners(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) 
                 *slot = r;
             }
         }
-        "cornerSmoothing" => doc.get_mut(id)?.corners.smoothing = f64_of(v).unwrap_or(0.0).clamp(0.0, 1.0),
+        "cornerSmoothing" => {
+            doc.get_mut(id)?.corners.smoothing = f64_of(v).ok_or_else(|| bad(cmd, "`cornerSmoothing` must be a number"))?.clamp(0.0, 1.0)
+        }
         "effects" => doc.get_mut(id)?.effects = effects_from(cmd, v)?,
         "clip" | "clipsContent" => doc.get_mut(id)?.clip = v.as_bool().ok_or_else(|| bad(cmd, "`clip` must be a boolean"))?,
         "isMask" => doc.get_mut(id)?.is_mask = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be a boolean")))?,
@@ -1002,8 +1004,12 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
             text_mut(cmd, doc.get_mut(id)?)?.auto_resize =
                 enum_of(v).ok_or_else(|| bad(cmd, "textAutoResize: widthAndHeight|height|none|truncate"))?
         }
-        "paragraphSpacing" => text_mut(cmd, doc.get_mut(id)?)?.paragraph_spacing = f64_of(v).unwrap_or(0.0).max(0.0),
-        "paragraphIndent" => text_mut(cmd, doc.get_mut(id)?)?.paragraph_indent = f64_of(v).unwrap_or(0.0).max(0.0),
+        "paragraphSpacing" => {
+            text_mut(cmd, doc.get_mut(id)?)?.paragraph_spacing = f64_of(v).ok_or_else(|| bad(cmd, "`paragraphSpacing` must be a number"))?.max(0.0)
+        }
+        "paragraphIndent" => {
+            text_mut(cmd, doc.get_mut(id)?)?.paragraph_indent = f64_of(v).ok_or_else(|| bad(cmd, "`paragraphIndent` must be a number"))?.max(0.0)
+        }
         "listStyle" | "indentation" => {
             let t = text_mut(cmd, doc.get_mut(id)?)?;
             let (start, end) = range_of(props, t.char_count());

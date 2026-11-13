@@ -41,7 +41,7 @@ use open::append_pages;
 pub(crate) use open::open;
 use open::{import, open_recent, revert};
 pub(crate) use save::save_ends_preview;
-pub use save::{FileSnapshot, file_bytes, thumbnail};
+pub use save::{FileSnapshot, file_bytes, file_bytes_at, thumbnail};
 use save::{color_profile, mark_saved, save, save_as};
 pub use version::MAX_AUTOSAVES;
 pub(crate) use version::{add_version, keep_in_history, read_version, unique_id};
