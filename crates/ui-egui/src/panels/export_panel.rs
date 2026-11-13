@@ -24,6 +24,27 @@ const PREVIEW_REFRESH: f64 = 0.3;
 /// Height of the preview box.
 const PREVIEW_H: f32 = 160.0;
 
+/// Put an export-row affordance at the active language's reading edge.
+fn export_edge_x(left: f32, right: f32, inset: f32, rtl: bool) -> f32 {
+    if rtl { right - inset } else { left + inset }
+}
+
+#[cfg(test)]
+mod hebrew_export_geometry_tests {
+    use super::export_edge_x;
+
+    #[test]
+    fn preview_and_pdf_summary_edges_mirror_for_hebrew() {
+        assert_eq!(export_edge_x(10.0, 210.0, 8.0, false), 18.0);
+        assert_eq!(export_edge_x(10.0, 210.0, 8.0, true), 202.0);
+        assert_eq!(export_edge_x(10.0, 210.0, 20.0, false), 30.0);
+        assert_eq!(export_edge_x(10.0, 210.0, 20.0, true), 190.0);
+        // Trailing PDF option icon is moved opposite the translated summary.
+        assert_eq!(export_edge_x(10.0, 210.0, 12.0, true), 198.0);
+        assert_eq!(export_edge_x(10.0, 210.0, 12.0, false), 22.0);
+    }
+}
+
 /// The Export section for the selected layers.
 /// What the Export section shows of the selection, kept while the document and the selection
 /// stay the same ([`crate::selection_cache`]).
@@ -224,8 +245,12 @@ fn print_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &PrintS
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
         let label = ui.painter().layout(print_summary(p), regular(11.0), t.text_secondary, r.width() - 32.0);
-        ui.painter().galley(pos2(r.min.x + 8.0, r.center().y - label.size().y / 2.0), label, t.text_secondary);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 12.0, r.center().y), vec2(14.0, 14.0)), Icon::Dots, t.icon_secondary);
+        let rtl = crate::i18n::right_to_left();
+        let text_edge = export_edge_x(r.min.x, r.max.x, 8.0, rtl);
+        let label_x = if rtl { text_edge - label.size().x } else { text_edge };
+        ui.painter().galley(pos2(label_x, r.center().y - label.size().y / 2.0), label, t.text_secondary);
+        let icon_x = export_edge_x(r.min.x, r.max.x, 12.0, !rtl);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, r.center().y), vec2(14.0, 14.0)), Icon::Dots, t.icon_secondary);
         egui::Popup::from_toggle_button_response(&resp.on_hover_text(tr("PDF print settings")))
             .id(open_id)
             .width(216.0)
@@ -326,9 +351,18 @@ fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        let icon = if open { Icon::Chevron } else { Icon::ChevronRight };
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 8.0, r.center().y), vec2(12.0, 12.0)), icon, t.icon_secondary);
-        ui.painter().text(pos2(r.min.x + 20.0, r.center().y), Align2::LEFT_CENTER, tr("Preview"), regular(11.0), t.text);
+        let rtl = crate::i18n::right_to_left();
+        let icon = if open {
+            Icon::Chevron
+        } else if rtl {
+            Icon::ChevronLeft
+        } else {
+            Icon::ChevronRight
+        };
+        let icon_x = export_edge_x(r.min.x, r.max.x, 8.0, rtl);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, r.center().y), vec2(12.0, 12.0)), icon, t.icon_secondary);
+        let text_align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+        ui.painter().text(pos2(export_edge_x(r.min.x, r.max.x, 20.0, rtl), r.center().y), text_align, tr("Preview"), regular(11.0), t.text);
         if resp.clicked() {
             open = !open;
         }

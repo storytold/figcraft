@@ -1,5 +1,6 @@
 //! The left panel: file header, File/Assets tabs, pages and the layers tree.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -14,6 +15,21 @@ use crate::theme::{ACCENT, Tokens, regular, semibold};
 use crate::{FigApp, LeftTab};
 
 pub const ROW: f32 = 32.0;
+
+/// Localize only generated `Page N` labels for the visible page list. Keep the
+/// original document name untouched for saving, editing, and automation APIs.
+fn visible_page_name<'a>(name: &'a str, mirrored: bool, page_label: &str) -> Cow<'a, str> {
+    if !mirrored || page_label == "Page" {
+        return Cow::Borrowed(name);
+    }
+    let Some(suffix) = name.strip_prefix("Page ") else { return Cow::Borrowed(name) };
+    let Ok(number) = suffix.parse::<u32>() else { return Cow::Borrowed(name) };
+    if number == 0 || number.to_string() != suffix {
+        return Cow::Borrowed(name);
+    }
+    Cow::Owned(format!("{page_label} {suffix}"))
+}
+
 /// Width of the icon rail left of the side panel; the Home tab above it is as wide.
 pub const RAIL_WIDTH: f32 = 56.0;
 /// Size of the rail's tab icons: 20 pt, which `icons::paint` draws at 20 pt at 100 % and 200 %
@@ -254,7 +270,8 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     let max_h = pages_list_height(app.ui.pages_height, ui.available_height());
     let mut moved = egui::ScrollArea::vertical().id_salt("pages_list").max_height(max_h).show(ui, |ui| {
         for (k, (id, name, divider)) in pages.iter().cloned().enumerate() {
-            if filtering && (divider || !name.to_lowercase().contains(&filter)) {
+            let shown = visible_page_name(&name, app.ui.mirrored, tr("Page"));
+            if filtering && (divider || (!name.to_lowercase().contains(&filter) && !shown.to_lowercase().contains(&filter))) {
                 continue;
             }
             let sense = if filtering { Sense::click() } else { Sense::click_and_drag() };
@@ -271,7 +288,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
             if !filtering && !dev {
                 reorder.row_by(&resp, k, r, || if divider { tr("Divider").to_string() } else { name.clone() });
             }
-            a11y::list_item(&resp, if divider { tr("Divider") } else { &name }, id == cur);
+            a11y::list_item(&resp, if divider { tr("Divider") } else { shown.as_ref() }, id == cur);
             let r = r.shrink2(vec2(8.0, 0.0));
             a11y::ring_around(ui, r, &resp);
             let renaming = app.ui.rename_page.as_ref().is_some_and(|(i, _)| *i == id);
@@ -306,7 +323,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 }
             } else if !divider {
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
-                crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 10.0, r.center().y), &name, font, t.text, r.width() - 14.0);
+                crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 10.0, r.center().y), shown.as_ref(), font, t.text, r.width() - 14.0);
             }
             if resp.clicked() && !divider {
                 select = Some(id);
@@ -1377,4 +1394,26 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         select_clicked(app, &rows, &sel, id, m);
     }
     let _ = Color32::TRANSPARENT;
+}
+
+#[cfg(test)]
+mod visible_page_name_tests {
+    use super::visible_page_name;
+
+    #[test]
+    fn default_page_names_are_localized_only_in_an_rtl_ui() {
+        let persisted = "Page 1";
+        assert_eq!(visible_page_name(persisted, true, "עמוד"), "עמוד 1");
+        assert_eq!(visible_page_name("Page 12", true, "עמוד"), "עמוד 12");
+        assert_eq!(visible_page_name(persisted, false, "עמוד"), persisted);
+        assert_eq!(visible_page_name(persisted, true, "Page"), persisted);
+        assert_eq!(persisted, "Page 1", "the saved node's name is never changed");
+    }
+
+    #[test]
+    fn authored_and_nonstandard_page_names_are_not_rewritten() {
+        for name in ["My Page 1", "Page 01", "Page 0", "Page 1a", "Page -1", "עמוד 1", "Page "] {
+            assert_eq!(visible_page_name(name, true, "עמוד"), name);
+        }
+    }
 }
