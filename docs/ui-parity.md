@@ -159,7 +159,9 @@ in the table. `crates/ui-egui/src/shortcut_keys_tests.rs` drives the keys a look
   presenting. The paint bucket's tooltip shows Shift+B (B still works).
 - **Fixed (2026-10-17):** Shift+Cmd/Ctrl+V (Paste over selection) and Alt+Cmd/Ctrl+V (Paste
   properties) work on the desktop (they were bound but didn't act there, #716); Cmd/Ctrl+V pastes an
-  image copied in another app (#663). Counts above unchanged (the suite checks bindings).
+  image copied in another app (#663). With one layer inside a frame selected, Cmd/Ctrl+V pastes
+  into its parent just above it (in an auto layout frame, the item after it), #2355. Counts above
+  unchanged (the suite checks bindings).
 - **Where the documentation disagrees with itself** (noted per row): pixel grid (Shift+' or
   Cmd+'), letter spacing (Alt or Cmd with < >; Cmd would be the font size keys, Alt bound),
   Windows remove fill (Alt+/ or Alt+,; Alt+, is letter spacing), the Layers panel on Windows (Alt+1
@@ -208,6 +210,7 @@ This audit records candidates for subsequent fixes; their behaviour is unchanged
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | patch | M1, #2355: Cmd/Ctrl+V with one layer inside a frame selected pasted the copy onto the page on top of the frame; it now goes into the layer's parent just above it (in an auto layout frame, the item after it, so the layout grows), keeping today's behaviour for a page-level layer, several layers, an instance's children and a board atom. Tests: `paste_sibling_tests` (5) |
 | 2026-11-08 | minor | M8, #2109: in vector edit mode the Align commands (`align.left` to `align.bottom`, Alt+A/H/D/W/V/S) and Distribute horizontal and vertical spacing act on the selected points when neither `ids` nor `id` is given (either one targets layers), as in Figma (measured in Figma on 2026-11-08): each point moves along one axis only, to its box's left, horizontal centre, right, top, vertical centre or bottom, and distribute spaces the points evenly between the outermost two in order along the axis; handles go with their vertex, a single point stays, with no point selected nothing moves (the layer is not aligned to its frame, as measured in Figma), and one undo restores them. The Design panel draws the alignment row first, with a Distribute menu from three points. Numbers unchanged. |
 | 2026-11-08 | patch | Number fields: scrubbing a label moves half a step a point, not a step, as measured in Figma (X from 100: +6 for a 12.2 px drag, +31 for 61.2 px; rotation 6° and opacity 5% for 12.2 px); Shift (x10), Alt (x0.1) and the speed by height are kept on top of it and were not measured, and no field's scrub direction changed |
 | 2026-11-17 | patch | M8: each page keeps its view in a session: going back to a page (the Pages list, `page.select`, Previous/Next page) shows it where it was left instead of fitting it again; a new page is still fitted, and going to the page shown moves nothing (`page_view_tests`) |
