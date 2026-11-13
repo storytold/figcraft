@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "style.bind",
             "Bind variable in style",
-            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` (glass: `lightAngle|lightIntensity|refraction|depth|dispersion|radius|splay`), a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing` (numbers, px) and `fontFamily|fontStyle` (strings). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
+            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` (glass: `lightAngle|lightIntensity|refraction|depth|dispersion|radius|splay`), a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing|fontWeight` (numbers; line height and letter spacing in px, as the reference tool applies them; a weight picks the family's face nearest it and the `wght` axis of a variable font) and `fontFamily|fontStyle` (strings; a weight bound as a number replaces a bound style name and the reverse). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
             true,
             bind_style
         ),
@@ -317,6 +317,9 @@ fn paragraph_style_json(cmd: &str, v: &Value) -> Result<ParagraphStyle> {
             "paragraphSpacing" | "paragraph_spacing" => ps.paragraph_spacing = length(k, x)?,
             "paragraphIndent" | "paragraph_indent" => ps.paragraph_indent = length(k, x)?,
             "listStyle" | "list" => ps.list = super::props::enum_of(x).ok_or_else(|| bad(cmd, "listStyle: none|bulleted|numbered"))?,
+            "wrapStyle" | "textWrap" | "wrap_style" => {
+                ps.wrap_style = super::props::enum_of(x).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?;
+            }
             "features" | "openTypeFeatures" | "fontFeatures" | "textFeatures" => {
                 ps.features = super::props::features_of(cmd, x)?.into_iter().filter_map(|(tag, on)| Some((tag, on?))).collect();
             }
@@ -331,10 +334,11 @@ fn paragraph_style_json(cmd: &str, v: &Value) -> Result<ParagraphStyle> {
 fn paragraph_style_of(n: &Node, range: Option<(usize, usize)>) -> Option<ParagraphStyle> {
     let t = n.kind.text()?;
     let mut ps = t.paragraph_style();
-    if let Some((a, b)) = range
-        && let Some(pl) = t.common_para_list(a, b)
-    {
-        ps.list = pl.list;
+    if let Some((a, b)) = range {
+        if let Some(pl) = t.common_para_list(a, b) {
+            ps.list = pl.list;
+        }
+        ps.wrap_style = t.common_wrap_style(a, b).unwrap_or(t.wrap_style);
     }
     Some(ps)
 }
@@ -562,6 +566,11 @@ fn bind_style(s: &mut Session, p: &Value) -> Result<Value> {
             {
                 rebind_paint_alpha(paints, &mut [], &key, true);
             }
+            match key.as_str() {
+                "fontWeight" => style.bound.remove("fontStyle"),
+                "fontStyle" => style.bound.remove("fontWeight"),
+                _ => None,
+            };
             style.bound.insert(key, id);
         }
         None => {

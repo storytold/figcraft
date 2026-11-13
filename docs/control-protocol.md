@@ -67,6 +67,7 @@ state are answered without a frame (about half a second each), while `ui.screens
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent
 frame (groups have no coordinate space of their own).
+`rotation` in `node.set` is the layer's angle to its parent; `absoluteRotation` sets its rotation on the page (what the Design panel's field shows); a call takes one of the two.
 
 **Windows.** The desktop app can show files in several windows (`window.new`). Every method takes
 an optional `window` (an id from `window.list`; `0` is the main window) and then runs in that

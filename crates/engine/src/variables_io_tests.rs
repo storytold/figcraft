@@ -723,6 +723,19 @@ fn css_export_gives_lengths_a_unit_and_keeps_opacity_bare() {
 }
 
 #[test]
+fn css_export_keeps_a_style_weight_bare() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
+    ex(&mut s, "variable.create", json!({"collection": "Brand", "name": "weight", "type": "number", "value": 700}));
+    let t = idv(&ex(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 0})));
+    let st = ex(&mut s, "style.create", json!({"type": "text", "name": "Body", "from": t}))["id"].as_str().unwrap_or_default().to_string();
+    ex(&mut s, "style.bind", json!({"style": st, "field": "fontWeight", "variable": "weight"}));
+    let css = ex(&mut s, "variable.export", json!({"format": "css"}))["text"].as_str().unwrap_or_default().to_string();
+    // A weight bound only to a text style is still a bare number, not a length.
+    assert!(css.contains("--weight: 700;") && !css.contains("700px"), "{css}");
+}
+
+#[test]
 fn review_a_long_alias_chain_keeps_its_role_to_the_end() {
     let mut s = Session::new();
     ex(&mut s, "variable.createCollection", json!({"name": "Brand"}));
