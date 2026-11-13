@@ -151,7 +151,8 @@ As built:
   colour profile, image presets, annotation categories, the design review settings
   (`DocProp::DesignReview`, sent only to clients whose `client_version` announces
   `design-review`; a client that doesn't gets every batch, catch-up delta and snapshot without
-  them, and a snapshot saved with longer lists opens clamped to the limits `design.configure`
+  them, and an accepted batch still reaches it when nothing of it is left, so sequence numbers
+  never skip; a snapshot saved with longer lists opens clamped to the limits `design.configure`
   keeps) and library data (whole values); styles,
   comment threads, variable collections and variables (one entry per id plus the order of ids;
   the whole list when ids aren't unique); dev-mode snapshots (per layer); images (per content

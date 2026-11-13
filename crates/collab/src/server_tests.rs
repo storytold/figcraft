@@ -3,7 +3,7 @@
 use figcraft_doc::{Document, Node, NodeId, NodeKind};
 
 use crate::change::{Change, DocProp, Entry, Json, Prop};
-use crate::message::{ClientMsg, Hello, PROTOCOL, Presence, ServerMsg, client_version, reads_design_review};
+use crate::message::{CatchUp, ClientMsg, Hello, PROTOCOL, Presence, ServerMsg, client_version, reads_design_review};
 use crate::replica::Mode;
 use crate::{Client, Limits, NoRecompute, Outgoing, Server};
 
@@ -484,4 +484,73 @@ fn a_review_only_batch_keeps_an_older_peer_in_step() {
     }
     assert_eq!(old.seq(), s.seq());
     assert_eq!(old.document().node(frame).map(|n| n.children.len()), Some(1), "the new node is there");
+}
+
+/// The same batch through the other catch-up path: a peer that was away comes back with a delta,
+/// and the review-only batch is there as an accepted batch with nothing in it for it, so its
+/// sequence carries on and the edits after it apply.
+#[test]
+fn a_review_only_batch_is_an_empty_delta_for_a_peer_that_was_away() {
+    let (d, _, frame) = doc();
+    let mut s = Server::new(d, "tok", Limits::default());
+    let mut capable = join(&mut s);
+    let (old_id, out) = s.join(hello_of("0.18.0 signals hosting comments packed")).unwrap();
+    let mut old = {
+        let Some(Outgoing::To(_, welcome)) = out.into_iter().next() else { panic!("no welcome") };
+        Client::join(welcome).unwrap()
+    };
+    assert_eq!(old.id(), old_id);
+
+    // One ordinary edit, so the peer's resume point sits before the review-only batch.
+    let msg = edit(&mut capable, |d| {
+        d.create(frame, NodeKind::Rectangle, "Before", 0.0, 0.0, 10.0, 10.0).unwrap();
+    });
+    let out = s.receive(capable.id(), msg);
+    for m in for_client(&out, capable.id()) {
+        capable.receive(m, &NoRecompute).unwrap();
+    }
+    for m in for_client(&out, old.id()) {
+        old.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(old.seq(), 1);
+
+    // It drops; only the review settings change while it is away.
+    old.disconnect();
+    let msg = edit(&mut capable, |d| d.design_review.grid = 8.0);
+    let out = s.receive(capable.id(), msg);
+    for m in for_client(&out, capable.id()) {
+        capable.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(s.seq(), 2);
+
+    // It comes back: the delta holds the batch, empty, and its sequence carries on.
+    let ClientMsg::Hello(h) = old.reconnect(hello_of("0.18.0 signals hosting comments packed")) else {
+        panic!("not a hello");
+    };
+    let (id, out) = s.join(h).unwrap();
+    assert_eq!(id, old.id());
+    let welcome = out
+        .into_iter()
+        .find_map(|o| match o {
+            Outgoing::To(to, w @ ServerMsg::Welcome { .. }) if to == id => Some(w),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no welcome"));
+    assert!(
+        matches!(&welcome, ServerMsg::Welcome { catch_up: CatchUp::Delta(list), .. } if list.len() == 1 && list[0].changes.is_empty()),
+        "{welcome:?}"
+    );
+    old.receive(welcome, &NoRecompute).unwrap();
+    assert_eq!(old.seq(), s.seq());
+
+    // And the next ordinary edit still applies.
+    let msg = edit(&mut capable, |d| {
+        d.create(frame, NodeKind::Rectangle, "After", 0.0, 20.0, 10.0, 10.0).unwrap();
+    });
+    let out = s.receive(capable.id(), msg);
+    for m in for_client(&out, old.id()) {
+        old.receive(m, &NoRecompute).unwrap();
+    }
+    assert_eq!(old.seq(), s.seq());
+    assert_eq!(old.document().node(frame).map(|n| n.children.len()), Some(2), "both nodes are there");
 }
