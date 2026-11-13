@@ -204,6 +204,11 @@ fn plain(doc: &Document, id: NodeId, clip: &mut Option<figcraft_geom::Rect>) -> 
             if a.corners.radii.iter().any(|r| *r != 0.0) {
                 return false;
             }
+            // Its world box is the clip only when the frame is axis-aligned: for a rotated or skewed
+            // one it is just the box around the real clip, and the layers would paint outside it.
+            if !figcraft_geom::is_axis_aligned(doc.world_transform(a.id)) {
+                return false;
+            }
             let Some(b) = doc.world_bounds(a.id) else { return false };
             *clip = Some(clip.map_or(b, |c| c.intersect(b)));
         }
@@ -211,6 +216,11 @@ fn plain(doc: &Document, id: NodeId, clip: &mut Option<figcraft_geom::Rect>) -> 
         at = a.parent;
     }
     true
+}
+
+/// The clipping frames above layer `id`, nearest first.
+fn clippers(doc: &Document, id: NodeId) -> Vec<NodeId> {
+    doc.ancestors(id).into_iter().filter(|a| doc.node(*a).is_some_and(|n| n.clip && n.kind.is_frame_like())).collect()
 }
 
 /// Render the dragged layers of `base` into a sprite, if they qualify: the roots are plain (see
@@ -230,6 +240,13 @@ fn plan(
         return None;
     }
     let mut clip = None;
+    // Layers under different clipping frames would need a clip each; one shared (intersected) clip
+    // could hide both, so the sprite stands aside.
+    if let Some((first, rest)) = sel.split_first()
+        && rest.iter().any(|o| clippers(base, *o) != clippers(base, *first))
+    {
+        return None;
+    }
     for id in sel {
         if !plain(base, *id, &mut clip) || sel.iter().any(|o| o != id && base.ancestors(*id).contains(o)) {
             return None;
@@ -364,5 +381,28 @@ mod plain_tests {
         let mut s = Session::new();
         let (_, c) = frame_with_child(&mut s, json!({"clip": true, "cornerRadius": 12}));
         assert!(!plain(s.doc().unwrap(), c, &mut None), "a rounded frame clips to a shape the sprite can't follow");
+    }
+
+    #[test]
+    fn a_rotated_clipping_ancestor_is_not_plain() {
+        let mut s = Session::new();
+        let (f, c) = frame_with_child(&mut s, json!({"clip": true}));
+        assert!(plain(s.doc().unwrap(), c, &mut None), "axis-aligned: plain");
+        s.execute("transform.rotate", &json!({"ids": [f], "degrees": 30})).unwrap();
+        assert!(!plain(s.doc().unwrap(), c, &mut None), "its world box is not its clip");
+    }
+
+    #[test]
+    fn layers_under_different_clipping_frames_decline_the_sprite() {
+        let ctx = egui::Context::default();
+        let mut s = Session::new();
+        let (_, a) = frame_with_child(&mut s, json!({"clip": true}));
+        let f2 = id(&s.execute("frame.create", &json!({"x": 300, "y": 0, "width": 200, "height": 200})).unwrap());
+        s.execute("node.set", &json!({"id": f2, "props": {"clip": true}})).unwrap();
+        let b = id(&s.execute("shape.rectangle", &json!({"x": 310, "y": 10, "width": 40, "height": 40, "parent": f2})).unwrap());
+        let base = std::sync::Arc::new(s.doc().unwrap().clone());
+        let of = (0, base.page_of(a).unwrap());
+        assert!(super::plan(&ctx, &base, &[a], of, 1.0, 1.0, 4096, 1e9).is_some(), "one clipping frame: a sprite");
+        assert!(super::plan(&ctx, &base, &[a, b], of, 1.0, 1.0, 4096, 1e9).is_none(), "two: no shared clip");
     }
 }
