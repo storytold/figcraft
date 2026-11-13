@@ -141,7 +141,7 @@ scales and empty-style clears; they have not been checked in other software.
   with the width on both sides when the shape has a fill too), pattern fills, WebP export settings (written as PNG),
   image adjustments, glass settings other than frost, springs other than Gentle (written as ease
   out), set-variable, set-variable-mode and conditional actions, scroll-to offsets, text decoration
-  looks, variable font axes, text on a path with more than one line or on a path the format can't hold (written as plain text), the parts of a text's path after the first, text on a path in an instance but not in its main or the other way round (written as the main has it), nested list levels, OpenType features, per-layer operations inside boolean groups, different stroke ends
+  looks, variable font axes, text on a path with more than one line or on a path the format can't hold (written as plain text), the parts of a text's path after the first, text on a path in an instance but not in its main or the other way round (written as the main has it), an instance's text of more than one line on a main on a path (it stays on that path, as an override can't take it off), nested list levels, OpenType features, per-layer operations inside boolean groups, different stroke ends
   on lines, the Dash cap (no public name for it). Not written at all: stroke outlines of dashed and per-side strokes and of inside or
   outside strokes on polygons, stars and vectors, glyph outlines of text (a reader lays text out
   with its own fonts), version history and branches.

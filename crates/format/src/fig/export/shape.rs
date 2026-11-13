@@ -381,7 +381,11 @@ impl<'d> Exporter<'d> {
         if let Some(main) = main {
             let main_ok = matches!(&main.kind, NodeKind::Text(m) if text_path_net(m, main.width, main.height).is_ok());
             if main_ok != own.is_ok() {
-                self.warn(TEXT_PATH_INSTANCE);
+                // An override can't take its layer off the main's path. So an instance text of
+                // more than one line, on a main that is on a path, stays on that path in the file:
+                // say so rather than the general mismatch (FigCraft's import reads it as plain text).
+                let lines = main_ok && matches!(own, Err(TEXT_PATH_LINES));
+                self.warn(if lines { TEXT_PATH_INSTANCE_LINES } else { TEXT_PATH_INSTANCE });
                 return None;
             }
         }
@@ -414,6 +418,8 @@ const TEXT_PATH_CANT: &str = "text on a path the format can't hold was written a
 const TEXT_PATH_PARTS: &str = "the parts of a text's path after the first were left out";
 const TEXT_PATH_INSTANCE: &str =
     "text on a path in an instance but not in its main component, or the other way round, was written as the main has it";
+const TEXT_PATH_INSTANCE_LINES: &str =
+    "an instance's text of more than one line stays on its main component's text path in the file, as an override can't take it off";
 
 /// A text's path as the format holds it: one chain (or cycle) of a vector network with the
 /// segment the text starts on marked, and the start as that segment's own parameter.

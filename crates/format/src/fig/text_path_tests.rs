@@ -275,6 +275,8 @@ const W1: &str = "text on a path with more than one line was written as plain te
 const W2: &str = "text on a path the format can't hold was written as plain text";
 const W3: &str = "the parts of a text's path after the first were left out";
 const W4: &str = "text on a path in an instance but not in its main component, or the other way round, was written as the main has it";
+const W4_LINES: &str =
+    "an instance's text of more than one line stays on its main component's text path in the file, as an override can't take it off";
 const MARK: u32 = 0x01ff_ffff;
 
 /// What an export wrote: its warnings, the layer records and the blobs.
@@ -556,6 +558,15 @@ fn an_instance_layer_on_a_path_survives_a_fig_export() {
     assert!(w.warned(W4), "{:?}", w.warnings);
     let (back, _) = super::import(&bytes, "Back").unwrap();
     assert_eq!(path_of(&back, "Half").as_deref(), Some("M0,0 L50,0"));
+
+    // An instance's text of two lines on a main that is on a path: the override can't leave the
+    // path, so the warning names that case, not the general mismatch.
+    let mut two = doc.clone();
+    let id: NodeId = two.nodes().find(|n| n.name == "Half").unwrap().children[0];
+    two.node_mut(id).unwrap().kind.text_mut().unwrap().characters = "al\npha".into();
+    let (_, w) = Written::of(&two);
+    assert!(w.warned(W4_LINES), "{:?}", w.warnings);
+    assert!(!w.warned(W4), "{:?}", w.warnings);
 
     // The other way round: the main's layer is plain text, and so is the instance's.
     let (bytes, w) = Written::of(&off("Main"));
