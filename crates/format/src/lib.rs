@@ -35,14 +35,11 @@ use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
 use figcraft_doc::{Document, ImageData};
-use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
 use sha2::Digest;
 
-pub const EXTENSION: &str = "figcraft";
-pub const FORMAT: &str = "figcraft";
-pub const VERSION: u32 = 1;
+pub use craft_figcraft_format::{EXTENSION, FORMAT, VERSION};
 /// Largest archive member we read (guards against zip bombs).
 const MAX_MEMBER: u64 = 512 * 1024 * 1024;
 /// `document.json` may unpack to [`DOCUMENT_RATIO`] times what it takes in the archive, within
@@ -243,33 +240,14 @@ pub(crate) fn image_data(data: Vec<u8>) -> ImageData {
     ImageData { bytes: Arc::new(data), width: w, height: h }
 }
 
-/// `document.json`: the format header, the image index and the document's own fields, written
-/// straight from the document (no intermediate JSON tree).
-#[derive(Serialize)]
-struct DocumentJson<'a> {
-    format: &'static str,
-    version: u32,
-    #[serde(rename = "imageIndex", serialize_with = "image_index")]
-    images: &'a BTreeMap<String, ImageData>,
-    #[serde(flatten)]
-    doc: &'a Document,
-}
+/// The image hashes a `document.json` lists in its `imageIndex` (`None` without one).
+type ImageIndex = Option<BTreeSet<String>>;
 
-impl<'a> DocumentJson<'a> {
-    fn new(doc: &'a Document) -> Self {
-        Self { format: FORMAT, version: VERSION, images: &doc.images, doc }
-    }
-}
-
-/// The `imageIndex`: `[{hash, width, height}]` for every image the document holds.
-fn image_index<S: Serializer>(images: &&BTreeMap<String, ImageData>, s: S) -> Result<S::Ok, S::Error> {
-    #[derive(Serialize)]
-    struct Entry<'a> {
-        hash: &'a str,
-        width: u32,
-        height: u32,
-    }
-    s.collect_seq(images.iter().map(|(hash, i)| Entry { hash, width: i.width, height: i.height }))
+fn native_image_index(doc: &Document) -> Vec<craft_figcraft_format::ImageIndexEntry> {
+    doc.images
+        .iter()
+        .map(|(hash, image)| craft_figcraft_format::ImageIndexEntry { hash: hash.clone(), width: image.width, height: image.height })
+        .collect()
 }
 
 /// A serializer adapter that writes `0` in place of every NaN or infinite float. JSON has no such
@@ -452,13 +430,17 @@ impl<S: serde::ser::SerializeStructVariant> serde::ser::SerializeStructVariant f
 /// Serialize the document (without images) to the JSON value stored in `document.json`.
 /// NaN and infinite numbers are written as `0`.
 pub fn to_json(doc: &Document) -> Result<Value, FormatError> {
-    DocumentJson::new(doc).serialize(Finite(serde_json::value::Serializer)).map_err(io_err)
+    {
+        let mut bytes = Vec::new();
+        craft_figcraft_format::write_document_json(&FiniteValue(doc), &native_image_index(doc), &mut bytes).map_err(io_err)?;
+        serde_json::from_slice(&bytes).map_err(io_err)
+    }
 }
 
 /// Write the document (without images) as `document.json` content to `w`.
 /// NaN and infinite numbers are written as `0`.
 pub fn write_json(doc: &Document, w: impl Write) -> Result<(), FormatError> {
-    DocumentJson::new(doc).serialize(Finite(&mut serde_json::Serializer::new(w))).map_err(io_err)
+    craft_figcraft_format::write_document_json(&FiniteValue(doc), &native_image_index(doc), w).map_err(io_err)
 }
 
 /// Parse `document.json` content.
@@ -467,64 +449,21 @@ pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
 }
 
 /// The image hashes a `document.json` lists in its `imageIndex` (`None` without one).
-type ImageIndex = Option<BTreeSet<String>>;
-
-/// The header of a `document.json` (its format version and image index), read in a pass that
-/// skips over everything else without building it.
-#[derive(Default)]
-struct Header {
-    version: Option<u64>,
-    images: ImageIndex,
-}
-
-impl<'de> Deserialize<'de> for Header {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct HeaderVisitor;
-        impl<'de> Visitor<'de> for HeaderVisitor {
-            type Value = Header;
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("a FigCraft document object")
-            }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Header, A::Error> {
-                let mut h = Header::default();
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "version" => h.version = map.next_value::<Value>()?.as_u64(),
-                        "imageIndex" => {
-                            h.images = map
-                                .next_value::<Value>()?
-                                .as_array()
-                                .map(|a| a.iter().filter_map(|i| i.get("hash").and_then(Value::as_str).map(str::to_string)).collect());
-                        }
-                        _ => {
-                            map.next_value::<IgnoredAny>()?;
-                        }
-                    }
-                }
-                Ok(h)
-            }
-        }
-        d.deserialize_map(HeaderVisitor)
-    }
-}
 
 /// Parse `document.json` content; also returns its [`ImageIndex`]. The header is checked first
 /// (a newer file is refused before its document is read), then the document is deserialized
 /// straight from the text.
 fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatError> {
     let corrupt = |e: serde_json::Error| FormatError::Corrupt(e.to_string());
-    let header: Header = serde_json::from_str(text).map_err(corrupt)?;
-    if let Some(ver) = header.version
-        && ver > u64::from(VERSION)
-    {
-        return Err(FormatError::Newer(u32::try_from(ver).unwrap_or(u32::MAX)));
-    }
+    let header = craft_figcraft_format::read_header(text).map_err(corrupt)?;
+    craft_figcraft_format::check_version(&header).map_err(|e| FormatError::Newer(e.0))?;
+    let images = header.images.map(|hashes| hashes.into_iter().collect());
     let mut doc: Document = serde_json::from_str(text).map_err(corrupt)?;
     let issues = doc.validate();
     if !issues.is_empty() {
         doc.repair();
     }
-    Ok((doc, issues, header.images))
+    Ok((doc, issues, images))
 }
 
 pub(crate) fn io_err(e: impl std::fmt::Display) -> FormatError {
