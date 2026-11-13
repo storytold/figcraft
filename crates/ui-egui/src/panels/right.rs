@@ -614,6 +614,8 @@ fn position(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, shown: &Arc<Docu
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PositionValues {
     pub can_align: bool,
+    /// Align is off because the one selected layer is placed by its auto layout frame.
+    pub align_blocked: bool,
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub rot: Option<f64>,
@@ -644,6 +646,7 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
     let parent = |n: &Node| n.parent.and_then(|p| doc.node(p));
     crate::selection_cache::cached(ctx, "position", doc, sel, &[], || PositionValues {
         can_align: figcraft_engine::cmd::arrange::can_align(doc, sel),
+        align_blocked: figcraft_engine::cmd::arrange::align_blocked_by_auto_layout(doc, sel),
         x: common(doc, sel, |n| x_of(doc, n)),
         y: common(doc, sel, |n| y_of(doc, n)),
         rot: common(doc, sel, |n| rot_of(doc, n)),
@@ -657,12 +660,18 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
     })
 }
 
+/// Whether the Design panel offers Tidy up for `sel`: three or more layers forming a row, a column
+/// or a full grid, none in an auto layout flow (`can_tidy`).
+pub(crate) fn tidy_available(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> bool {
+    crate::selection_cache::cached(ctx, "tidy", doc, sel, &[], || figcraft_engine::tidy::can_tidy(doc, sel))
+}
+
 /// Draw alignment and distribution, X/Y and rotation with flip/rotate controls, the
 /// absolute-position toggle and frame constraints.
 fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let pv = position_values(ui.ctx(), doc, sel);
     let col = widgets::col_width(ui.available_width());
-    align_row(app, ui, AlignTarget::Layers(sel), pv.can_align, col);
+    align_row(app, ui, AlignTarget::Layers(sel), pv.can_align, pv.align_blocked, col);
     position_row(app, ui, doc, sel, &pv, col);
     rotation_row(app, ui, doc, sel, pv.rot, col);
     if pv.in_frame {
@@ -681,7 +690,7 @@ pub enum AlignTarget<'a> {
 }
 
 /// Alignment, and distribution and tidy up for three or more layers (or the selected points).
-pub fn align_row(app: &mut FigApp, ui: &mut Ui, target: AlignTarget, can_align: bool, col: f32) {
+pub fn align_row(app: &mut FigApp, ui: &mut Ui, target: AlignTarget, can_align: bool, blocked: bool, col: f32) {
     let (ids, count, points) = match target {
         AlignTarget::Layers(sel) => (sel.to_vec(), sel.len(), false),
         AlignTarget::Points(n) => (vec![], n, true),
@@ -706,18 +715,32 @@ pub fn align_row(app: &mut FigApp, ui: &mut Ui, target: AlignTarget, can_align: 
             let v = widgets::segmented(ui, &items[3..], None, w).map(|i| i + 3);
             h.or(v)
         });
-        picked.response.on_disabled_hover_text(tr("A layer on its own aligns to its frame: select more layers, or one in a frame"));
+        let why = if blocked {
+            tr("A layer in an auto layout frame is placed by its frame")
+        } else {
+            tr("A layer on its own aligns to its frame: select more layers, or one in a frame")
+        };
+        picked.response.on_disabled_hover_text(why);
         if let Some(i) = picked.inner {
             app.run(cmds[i], params());
         }
         if count > 2 {
             let more = icons::button(ui, Icon::DistributeH, 24.0, false, tr("Distribute and tidy"));
             menu_popup(&more).show(|ui| {
-                let tidy = (tr("Tidy up"), "arrange.tidy");
-                let entries =
-                    [(tr("Distribute horizontal spacing"), "distribute.horizontal"), (tr("Distribute vertical spacing"), "distribute.vertical")];
-                for (l, c) in entries.into_iter().chain((!points).then_some(tidy)) {
-                    if menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")) {
+                let can_tidy = !points && app.session.ds().is_ok_and(|ds| tidy_available(ui.ctx(), &ds.doc, &ids));
+                let tidy = (tr("Tidy up"), "arrange.tidy", can_tidy);
+                let entries = [
+                    (tr("Distribute horizontal spacing"), "distribute.horizontal", true),
+                    (tr("Distribute vertical spacing"), "distribute.vertical", true),
+                ];
+                // Points have no tidy up.
+                for (l, c, on) in entries.into_iter().chain((!points).then_some(tidy)) {
+                    let item = ui.add_enabled_ui(on, |ui| menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")));
+                    if !on {
+                        item.response
+                            .on_disabled_hover_text(tr("Select a row, a column or a full grid of three or more layers, outside an auto layout flow"));
+                    }
+                    if item.inner {
                         app.run(c, params());
                         ui.close();
                     }

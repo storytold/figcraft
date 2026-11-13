@@ -105,7 +105,7 @@ pub fn points(app: &mut FigApp, ui: &mut Ui, doc: &Document, ve: &VectorEdit) {
     // when only another edited layer has points selected.
     let count = vectoredit::transform::edit_point_count(doc, ve);
     if count > 0 {
-        crate::right::align_row(app, ui, crate::right::AlignTarget::Points(count), true, col);
+        crate::right::align_row(app, ui, crate::right::AlignTarget::Points(count), true, false, col);
     }
     if pts.is_empty() {
         let t = crate::theme::Tokens::get(ui.ctx());

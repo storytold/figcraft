@@ -207,7 +207,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "select.layersAt",
             "Layers at a point",
-            "{x, y (page coordinates)} → {layers: [{id, name, type, depth}]} (every layer under the point, front-most first; what the context menu's Select layer lists)",
+            "{x, y (page coordinates)} → {layers: [{id, name, type, depth, locked}]} (every layer under the point, locked ones too, front-most first; locked is true when the layer or an ancestor is locked; what the context menu's Select layer lists)",
             false,
             layers_at
         ),
