@@ -266,11 +266,11 @@ fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Opti
 
 /// Render several nodes (in z-order) into an existing pixmap through `view`.
 pub fn render_nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap) {
-    nodes_into(doc, ids, view, pix, 0.0);
+    nodes_into(doc, ids, view, pix, 0.0, None);
 }
 
 /// [`render_nodes_into`] `time` seconds into animated GIFs.
-fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, time: f64) {
+fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, time: f64, under: Option<&backdrop::Under>) {
     let bounds = draw::Bounds::default();
     let ctx = draw::Ctx {
         doc,
@@ -282,7 +282,7 @@ fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, tim
         lod: false,
         preview: false,
         magnified_image_pixels: false,
-        under: None,
+        under,
         time,
         bounds: &bounds,
     };
@@ -353,21 +353,29 @@ pub fn render_node(doc: &Document, id: NodeId, scale: f64) -> Option<Pixmap> {
 
 /// [`render_node`] `time` seconds into animated GIFs (the presenter plays them).
 pub fn render_node_at(doc: &Document, id: NodeId, scale: f64, time: f64) -> Option<Pixmap> {
-    area_at(doc, &[id], export_bounds(doc, id)?, scale, time)
+    area_at(doc, &[id], None, export_bounds(doc, id)?, scale, time)
 }
 
 /// Rasterise `ids` (bottom to top) over page area `b` at `scale` (export): the image starts at the
 /// area's top-left and its sides round up to whole pixels. `None` past 16384 pixels a side.
 pub fn render_area(doc: &Document, ids: &[NodeId], b: Rect, scale: f64) -> Option<Pixmap> {
-    area_at(doc, ids, b, scale, 0.0)
+    area_at(doc, ids, None, b, scale, 0.0)
 }
 
 /// [`render_area`] `time` seconds into animated GIFs (the presenter plays them).
 pub fn render_area_at(doc: &Document, ids: &[NodeId], b: Rect, scale: f64, time: f64) -> Option<Pixmap> {
-    area_at(doc, ids, b, scale, time)
+    area_at(doc, ids, None, b, scale, time)
 }
 
-fn area_at(doc: &Document, ids: &[NodeId], b: Rect, scale: f64, time: f64) -> Option<Pixmap> {
+/// [`render_area`] for an export of layers that sit among `page_layers` (the page's top-level
+/// layers, in z-order): a background blur or glass in `ids` reads what lies under the first of
+/// them on that page, clipped to the area (#2213). Only `ids` are drawn; the layers above stay
+/// out. Without such an effect it is [`render_area`].
+pub fn render_area_over(doc: &Document, ids: &[NodeId], page_layers: &[NodeId], b: Rect, scale: f64) -> Option<Pixmap> {
+    area_at(doc, ids, Some(page_layers), b, scale, 0.0)
+}
+
+fn area_at(doc: &Document, ids: &[NodeId], page_layers: Option<&[NodeId]>, b: Rect, scale: f64, time: f64) -> Option<Pixmap> {
     let scale = if scale.is_finite() && scale > 0.0 { scale.min(64.0) } else { 1.0 };
     let w = (b.width() * scale - 1e-6).ceil().max(1.0);
     let h = (b.height() * scale - 1e-6).ceil().max(1.0);
@@ -376,7 +384,31 @@ fn area_at(doc: &Document, ids: &[NodeId], b: Rect, scale: f64, time: f64) -> Op
     }
     let view = View { origin: (b.x0, b.y0), scale, width: w as u32, height: h as u32 };
     let mut pix = new_pixmap(view.width, view.height)?;
-    nodes_into(doc, ids, &view, &mut pix, time);
+    // What the backdrop effects read: the page under the first layer, with the margin they reach.
+    let reach = page_layers.and_then(|_| {
+        ids.iter()
+            .flat_map(|i| doc.subtree(*i))
+            .filter_map(|i| doc.node(i))
+            .filter(|n| n.visible && backdrop::has_effects(n))
+            .map(|n| backdrop::pad(n, scale))
+            .max()
+    });
+    let beneath = match (page_layers, ids.first(), reach) {
+        (Some(layers), Some(first), Some(m)) => {
+            let m = i32::try_from(m).unwrap_or(0);
+            let p = f64::from(m) / scale;
+            let around = View {
+                origin: (b.x0 - p, b.y0 - p),
+                scale,
+                width: view.width.saturating_add(m.unsigned_abs() * 2),
+                height: view.height.saturating_add(m.unsigned_abs() * 2),
+            };
+            backdrop::render_beneath(doc, layers, *first, &around).map(|back| (back, m))
+        }
+        _ => None,
+    };
+    let under = beneath.as_ref().map(|(back, m)| backdrop::Under::new(back, (*m, *m), None));
+    nodes_into(doc, ids, &view, &mut pix, time, under.as_ref());
     Some(pix)
 }
 
@@ -522,6 +554,8 @@ mod band_tests;
 mod boolean_budget_tests;
 #[cfg(test)]
 mod boolean_cache_tests;
+#[cfg(test)]
+mod boolean_radius_tests;
 #[cfg(test)]
 mod bounds_memo_tests;
 #[cfg(test)]

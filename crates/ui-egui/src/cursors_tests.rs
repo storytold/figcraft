@@ -22,7 +22,7 @@ fn every_engine_cursor_has_a_system_cursor_or_a_glyph() {
     // (engine cursor, what shows, its name in `ui.inspect`)
     let rows: Vec<(Cursor, Shown, &str)> = vec![
         (Cursor::Default, System(CursorIcon::Default), "default"),
-        (Cursor::Crosshair, System(CursorIcon::Crosshair), "crosshair"),
+        (Cursor::Crosshair, Drawn(Glyph::Crosshair), "crosshair"),
         (Cursor::Move, System(CursorIcon::Move), "move"),
         (Cursor::Resize(0.0), System(CursorIcon::ResizeHorizontal), "ew-resize"),
         (Cursor::Resize(90.0), System(CursorIcon::ResizeVertical), "ns-resize"),
@@ -57,6 +57,44 @@ fn every_engine_cursor_has_a_system_cursor_or_a_glyph() {
     // Junk angles don't break it.
     assert_eq!(of(Cursor::Resize(f64::NAN)), System(CursorIcon::Default));
     assert_eq!(of(Cursor::Rotate(f64::INFINITY)), Drawn(Glyph::Rotate(0.0)));
+}
+
+#[test]
+fn the_crosshair_is_drawn_dark_with_a_white_edge_so_it_shows_on_white() {
+    use egui::epaint::Shape;
+    let shown = of(Cursor::Crosshair);
+    assert_eq!(shown, Shown::Drawn(Glyph::Crosshair));
+    // The system's pointer is hidden under it, whatever its colour.
+    assert_eq!(shown.icon(), CursorIcon::None);
+    let at = pos2(50.0, 40.0);
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let ctx = ui.ctx().clone();
+        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("crosshair_test"));
+        crate::cursors::paint(&ctx.layer_painter(layer), at, Glyph::Crosshair);
+    });
+    out.textures_delta.clear();
+    let mut strokes = Vec::new();
+    for clipped in &out.shapes {
+        if let Shape::LineSegment { points, stroke } = &clipped.shape {
+            strokes.push((points.to_vec(), stroke.color, stroke.width));
+        }
+    }
+    let dark: Vec<_> = strokes.iter().filter(|s| s.1 == crate::cursors::INK).collect();
+    let white: Vec<_> = strokes.iter().filter(|s| s.1 == egui::Color32::WHITE).collect();
+    assert!(!dark.is_empty() && !white.is_empty(), "{strokes:?}");
+    // The white edge is wider than the dark line and is painted first.
+    assert!(white.iter().all(|w| w.2 > dark[0].2), "{strokes:?}");
+    assert_eq!(strokes[0].1, egui::Color32::WHITE);
+    // The arms are centred on the pointer and leave its pixel clear.
+    for (pts, ..) in &dark {
+        for p in pts {
+            let d = (p.x - at.x).abs().max((p.y - at.y).abs());
+            assert!((2.0..=8.0).contains(&d), "{p:?}");
+            assert!((p.x - at.x).abs() < 0.01 || (p.y - at.y).abs() < 0.01, "{p:?}");
+        }
+    }
+    assert_eq!(dark.len(), 4);
 }
 
 #[test]
@@ -134,10 +172,10 @@ fn the_window_asks_for_the_cursor_of_the_tool_under_the_pointer() {
         ("move", edge, &[], no, CursorIcon::ResizeHorizontal, "ew-resize"),
         ("move", on, &[], alt, CursorIcon::Copy, "copy"),
         ("hand", empty, &[], no, CursorIcon::Grab, "grab"),
-        ("rectangle", empty, &[], no, CursorIcon::Crosshair, "crosshair"),
-        ("frame", on, &[], no, CursorIcon::Crosshair, "crosshair"),
-        ("slice", empty, &[], no, CursorIcon::Crosshair, "crosshair"),
-        ("text", empty, &[], no, CursorIcon::Crosshair, "crosshair"),
+        ("rectangle", empty, &[], no, CursorIcon::None, "crosshair"),
+        ("frame", on, &[], no, CursorIcon::None, "crosshair"),
+        ("slice", empty, &[], no, CursorIcon::None, "crosshair"),
+        ("text", empty, &[], no, CursorIcon::None, "crosshair"),
         ("pen", empty, &[], no, CursorIcon::None, "pen"),
         ("comment", empty, &[], no, CursorIcon::None, "comment"),
         ("move", empty, &[Key::Space], no, CursorIcon::Grab, "grab"),

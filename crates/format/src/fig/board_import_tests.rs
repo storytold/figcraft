@@ -446,10 +446,106 @@ fn a_jam_file_imports_like_a_fig() {
         let (doc, warnings) = import(&bytes, "Synthetic board").unwrap();
         assert_eq!(doc.kind, figcraft_doc::FileKind::Board, "a FigJam whiteboard opens as a board");
         let note = named(&doc, "Board object");
-        assert!(matches!(note.kind, NodeKind::Frame) && note.children.len() == 3, "the sticky with its background, note and author");
+        assert!(matches!(note.kind, NodeKind::Frame) && note.children.len() == 2, "the sticky is native: its note and author");
+        assert_eq!(note.board, Some(figcraft_doc::BoardItem::Sticky { author: "Test Author".into() }));
         assert!(matches!(named(&doc, "Synthetic table").kind, NodeKind::Frame));
         assert!(doc.nodes().all(|n| n.name != "Unknown object"), "left out");
         assert!(warnings.iter().any(|w| w.contains("table layers import as")), "{warnings:?}");
         assert!(warnings.iter().any(|w| w.contains("SYNTHETIC_JAM_ONLY")), "a note says what was left out: {warnings:?}");
     }
+}
+
+/// Import `layer` through the public importer as a FigJam whiteboard (`fig-jam.` header).
+fn jam(layer: Kv<'static>) -> (Document, Vec<String>) {
+    let mut bytes = canvas(&board_schema(), &message(layer));
+    bytes.splice(..8, *b"fig-jam.");
+    import(&bytes, "Synthetic board").unwrap()
+}
+
+/// On a whiteboard a sticky is a native sticky: its colour, size, text and author come along.
+#[test]
+fn a_jam_sticky_is_a_native_sticky_with_its_colour_text_and_author() {
+    let (doc, warnings) = jam(board_node("STICKY"));
+    assert_eq!(doc.kind, figcraft_doc::FileKind::Board);
+    let frame = named(&doc, "Board object");
+    assert_eq!(frame.board, Some(figcraft_doc::BoardItem::Sticky { author: "Test Author".into() }));
+    assert_eq!(frame.fills[0].solid_color().unwrap().to_rgba8(), [255, 191, 64, 255]);
+    assert_eq!((frame.width, frame.height), (240.0, 240.0));
+    assert_eq!(frame.opacity, 0.5);
+    let layout = frame.layout.as_ref().expect("sticky auto layout");
+    assert_eq!(layout.padding, [20.0; 4]);
+    assert_eq!(frame.child_layout.min_h, Some(240.0));
+    assert_eq!(frame.children.len(), 2, "the note and its author, no background vector");
+    let texts: Vec<_> = frame.children.iter().map(|id| doc.node(*id).unwrap()).collect();
+    assert!(texts.iter().all(|n| n.kind.text().is_some()));
+    let note = texts[0].kind.text().unwrap();
+    assert_eq!(note.characters, "Olá\nIdea");
+    assert_eq!(note.style.font_size, 24.0);
+    assert!(note.runs.iter().any(|r| r.style.font_size == 18.0), "inline styles survive");
+    let author = texts[1].kind.text().unwrap();
+    assert_eq!(author.characters, "Test Author");
+    assert_eq!(author.style.font_size, 12.0);
+    assert!(!warnings.iter().any(|w| w.contains("skipped")), "{warnings:?}");
+}
+
+/// A sticky whose author line is not saved has an empty author and just its note.
+#[test]
+fn a_jam_sticky_without_an_author_line_has_no_author() {
+    let mut layer = board_node("STICKY");
+    let background = record(0, vec![("fillPaints", arr(vec![solid(1.0, 0.75, 0.25)]))]);
+    set(&mut layer, "nodeGenerationData", o(vec![("overrides", arr(vec![background, record(1, text("Olá\nIdea", 24.0))]))]));
+    let (doc, _) = jam(layer);
+    let frame = named(&doc, "Board object");
+    assert_eq!(frame.children.len(), 1);
+    let Some(figcraft_doc::BoardItem::Sticky { author }) = &frame.board else { panic!("{:?}", frame.board) };
+    assert!(author.is_empty());
+}
+
+/// A sticky record that isn't complete keeps today's generated layers and no board item.
+#[test]
+fn a_damaged_jam_sticky_keeps_the_generated_layers() {
+    let gradient = o(vec![("type", e("GRADIENT_LINEAR")), ("visible", Kv::Bool(true))]);
+    let cases: Vec<Kv<'static>> = {
+        let mut v = Vec::new();
+        // Layout version 2.
+        let mut a = board_node("STICKY");
+        set(&mut a, "derivedImmutableFrameData", o(vec![("version", u(2))]));
+        v.push(a);
+        // Background record missing.
+        let mut b = board_node("STICKY");
+        set(&mut b, "nodeGenerationData", o(vec![("overrides", arr(vec![record(1, text("Olá", 24.0))]))]));
+        v.push(b);
+        // A stroke on the background.
+        let mut c = board_node("STICKY");
+        let stroked = record(0, vec![("fillPaints", arr(vec![solid(1.0, 0.75, 0.25)])), ("strokePaints", arr(vec![solid(0.0, 0.0, 0.0)]))]);
+        set(&mut c, "nodeGenerationData", o(vec![("overrides", arr(vec![stroked, record(1, text("Olá", 24.0))]))]));
+        v.push(c);
+        // A gradient on the background.
+        let mut d = board_node("STICKY");
+        let graded = record(0, vec![("fillPaints", arr(vec![gradient]))]);
+        set(&mut d, "nodeGenerationData", o(vec![("overrides", arr(vec![graded, record(1, text("Olá", 24.0))]))]));
+        v.push(d);
+        // Blank note.
+        let mut f = board_node("STICKY");
+        let background = record(0, vec![("fillPaints", arr(vec![solid(1.0, 0.75, 0.25)]))]);
+        set(&mut f, "nodeGenerationData", o(vec![("overrides", arr(vec![background, record(1, text("  ", 24.0))]))]));
+        v.push(f);
+        v
+    };
+    for (i, layer) in cases.into_iter().enumerate() {
+        let (as_fig, _) = imported(layer.clone());
+        let (doc, _) = jam(layer);
+        let frame = named(&doc, "Board object");
+        assert!(frame.board.is_none(), "case {i}");
+        assert_eq!(frame.children.len(), named(&as_fig, "Board object").children.len(), "case {i}: the generated layers, as in a .fig");
+    }
+}
+
+/// The same sticky in a `.fig` stays the design frame it always was.
+#[test]
+fn a_fig_sticky_stays_a_design_frame() {
+    let (doc, _) = imported(board_node("STICKY"));
+    let frame = named(&doc, "Board object");
+    assert!(frame.board.is_none());
+    assert_eq!(frame.children.len(), 3);
 }
