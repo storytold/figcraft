@@ -524,3 +524,157 @@ fn children_are_added_never_chained() {
         assert_eq!(code.matches(decl).count(), 1, "{decl} in {code}");
     }
 }
+
+/// The calls of the local `var`, in order, without indent or the closing `;`.
+fn chain(code: &str, var: &str) -> Vec<String> {
+    let head = format!("var {var} = ");
+    let mut out = Vec::new();
+    let mut lines = code.lines().skip_while(|l| !l.trim_start().starts_with(&head));
+    let Some(first) = lines.next() else { return out };
+    let mut done = first.trim_end().ends_with(';');
+    for l in lines {
+        // A `// not mapped` comment may follow the call that ends the statement.
+        if done && !l.trim_start().starts_with("//") {
+            break;
+        }
+        done = done || l.trim_end().ends_with(';');
+        out.push(l.trim().trim_end_matches(';').to_string());
+    }
+    out
+}
+
+fn first_child(s: &Session, f: NodeId) -> NodeId {
+    s.doc().ok().and_then(|d| d.node(f)).and_then(|n| n.children.first().copied()).unwrap_or(f)
+}
+
+#[test]
+fn fill_stretches_on_the_axis_it_fills_and_fixed_keeps_its_size() {
+    let mut s = Session::new();
+    let f = row(&mut s, json!({}));
+    let a = first_child(&s, f);
+    let has = |c: &[String], p: &str| c.iter().any(|l| l.starts_with(p));
+    // Horizontal parent: width is the primary axis, height the counter axis.
+    set(&mut s, a, json!({"sizingH": "fill"}));
+    let code = uno(&mut s, f);
+    let kid = chain(&code, "a");
+    assert_eq!(kid[0], ".AutoLayout(primaryAlignment: AutoLayoutPrimaryAlignment.Stretch)", "{code}");
+    assert!(!has(&kid, ".Width(") && has(&kid, ".Height("), "{code}");
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    let kid = chain(&uno(&mut s, f), "a");
+    assert_eq!(kid[0], ".AutoLayout(primaryAlignment: AutoLayoutPrimaryAlignment.Stretch, counterAlignment: AutoLayoutAlignment.Stretch)");
+    assert!(!has(&kid, ".Width(") && !has(&kid, ".Height("));
+    // In a column the axes swap.
+    set(&mut s, f, json!({"layout": "vertical"}));
+    set(&mut s, a, json!({"sizingH": "fixed"}));
+    let kid = chain(&uno(&mut s, f), "a");
+    assert_eq!(kid[0], ".AutoLayout(primaryAlignment: AutoLayoutPrimaryAlignment.Stretch)");
+    assert!(has(&kid, ".Width("));
+    set(&mut s, a, json!({"sizingH": "fill", "sizingV": "fixed"}));
+    assert_eq!(chain(&uno(&mut s, f), "a")[0], ".AutoLayout(counterAlignment: AutoLayoutAlignment.Stretch)");
+}
+
+#[test]
+fn a_hugging_frame_has_no_size_of_its_own_and_the_root_keeps_its_size() {
+    let mut s = Session::new();
+    let outer = row(&mut s, json!({"layout": "vertical", "sizingH": "hug", "sizingV": "hug"}));
+    let inner = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 50, "parent": outer, "name": "Inner"})));
+    set(&mut s, inner, json!({"layout": "horizontal", "padding": 3, "gap": 2, "sizingH": "hug", "sizingV": "hug"}));
+    rect(&mut s, inner, 5.0, 5.0, "C");
+    let code = uno(&mut s, outer);
+    let has = |c: &[String], p: &str| c.iter().any(|l| l.starts_with(p));
+    let root = chain(&code, "row");
+    assert!(has(&root, ".Width(") && has(&root, ".Height("), "the root keeps its size: {code}");
+    let nested = chain(&code, "inner");
+    assert!(!has(&nested, ".Width(") && !has(&nested, ".Height("), "{code}");
+}
+
+#[test]
+fn min_and_max_sizes_go_on_the_child() {
+    let mut s = Session::new();
+    let f = row(&mut s, json!({}));
+    let a = first_child(&s, f);
+    set(&mut s, a, json!({"sizingH": "fill", "minWidth": 40, "maxWidth": 120, "minHeight": 10, "maxHeight": 30}));
+    let code = uno(&mut s, f);
+    for line in [".MinWidth(40)", ".MaxWidth(120)", ".MinHeight(10)", ".MaxHeight(30)"] {
+        assert!(chain(&code, "a").contains(&line.to_string()), "{line} in {code}");
+    }
+}
+
+#[test]
+fn text_in_a_flow_hugs_fills_or_is_fixed() {
+    let mut s = Session::new();
+    let f = row(&mut s, json!({}));
+    let t = idv(&ex(&mut s, "text.create", json!({"text": "Hello", "x": 0, "y": 0, "parent": f, "props": {"name": "T"}})));
+    let calls = |s: &mut Session| chain(&uno(s, f), "t");
+    let has = |c: &[String], p: &str| c.iter().any(|l| l.starts_with(p));
+    set(&mut s, t, json!({"textAutoResize": "widthAndHeight", "sizingH": "hug", "sizingV": "hug"}));
+    let c = calls(&mut s);
+    assert!(c.contains(&".TextWrapping(TextWrapping.NoWrap)".to_string()), "{c:?}");
+    assert!(!has(&c, ".Width(") && !has(&c, ".Height("), "{c:?}");
+    set(&mut s, t, json!({"textAutoResize": "height", "sizingH": "fill"}));
+    let c = calls(&mut s);
+    assert_eq!(c.first().map(String::as_str), Some(".AutoLayout(primaryAlignment: AutoLayoutPrimaryAlignment.Stretch)"), "{c:?}");
+    assert!(c.contains(&".TextWrapping(TextWrapping.Wrap)".to_string()) && !has(&c, ".Width("), "{c:?}");
+    set(&mut s, t, json!({"textAutoResize": "height", "sizingH": "fixed", "width": 90}));
+    let c = calls(&mut s);
+    assert!(c.contains(&".Width(90)".to_string()) && c.contains(&".TextWrapping(TextWrapping.Wrap)".to_string()), "{c:?}");
+}
+
+#[test]
+fn an_absolute_child_ignores_the_layout_and_keeps_its_offsets() {
+    let mut s = Session::new();
+    let f = row(&mut s, json!({"padding": 10}));
+    let b = rect(&mut s, f, 12.0, 12.0, "Badge");
+    set(&mut s, b, json!({"absolute": true, "x": 30, "y": 40}));
+    let code = uno(&mut s, f);
+    let expected = [
+        ".AutoLayout(isIndependentLayout: true)",
+        ".HorizontalAlignment(HorizontalAlignment.Left)",
+        ".VerticalAlignment(VerticalAlignment.Top)",
+        ".Margin(30, 40, 0, 0)",
+        ".Width(12)",
+        ".Height(12)",
+    ];
+    assert_eq!(chain(&code, "badge")[..6], expected, "{code}");
+    // A top-left child needs no note; another constraint does, and the offsets stay.
+    assert!(!code.contains("// not mapped: constraints"), "{code}");
+    set(&mut s, b, json!({"constraints": {"horizontal": "right"}}));
+    let code = uno(&mut s, f);
+    assert!(chain(&code, "badge").iter().any(|l| l == "// not mapped: constraints (the child stays at its top-left offset)"), "{code}");
+    assert!(chain(&code, "badge").contains(&".Margin(30, 40, 0, 0)".to_string()), "{code}");
+}
+
+#[test]
+fn a_hugging_parent_with_an_absolute_child_is_written_at_its_size() {
+    let mut s = Session::new();
+    let outer = row(&mut s, json!({"layout": "vertical"}));
+    let hug = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 60, "height": 40, "parent": outer, "name": "Hug"})));
+    set(&mut s, hug, json!({"layout": "horizontal", "padding": 0, "gap": 0, "sizingH": "hug", "sizingV": "hug"}));
+    rect(&mut s, hug, 60.0, 40.0, "Body");
+    let code = uno(&mut s, outer);
+    assert!(!code.contains("hug size fixed"), "{code}");
+    let badge = rect(&mut s, hug, 8.0, 8.0, "Badge");
+    set(&mut s, badge, json!({"absolute": true, "x": 50, "y": -4}));
+    let code = uno(&mut s, outer);
+    let c = chain(&code, "hug");
+    assert!(c.contains(&"// not mapped: hug size fixed: an absolute child would enlarge it".to_string()), "{code}");
+    assert!(c.contains(&".Width(60)".to_string()) && c.contains(&".Height(40)".to_string()), "{code}");
+}
+
+#[test]
+fn first_on_top_paints_in_descending_order_without_reordering() {
+    let mut s = Session::new();
+    let f = row(&mut s, json!({"gap": -10}));
+    rect(&mut s, f, 20.0, 20.0, "B");
+    rect(&mut s, f, 20.0, 20.0, "C");
+    let plain = uno(&mut s, f);
+    assert!(!plain.contains("zIndex") && !plain.contains("IsReverseZIndex"), "{plain}");
+    set(&mut s, f, json!({"reverseZ": true}));
+    let code = uno(&mut s, f);
+    for (var, z) in [("a", 3), ("b", 2), ("c", 1)] {
+        assert!(chain(&code, var).contains(&format!(".Canvas(zIndex: {z})")), "{var} in {code}");
+    }
+    // The order of the children is unchanged.
+    assert!(code.find("var a = ") < code.find("var b = ") && code.find("var b = ") < code.find("var c = "), "{code}");
+    assert!(!code.contains("IsReverseZIndex"), "{code}");
+}
