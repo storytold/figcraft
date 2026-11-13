@@ -719,7 +719,7 @@ pub(crate) fn collapse_all(app: &mut FigApp) {
     app.ui.expanded.extend(ds.selection.iter().flat_map(|s| ds.doc.ancestors(*s)).filter(|a| *a != ds.page));
 }
 
-/// Rename `id` in its row, selected (the selection follows a rename that moves with Tab).
+/// Rename `id` in its row, selected.
 fn rename_layer(app: &mut FigApp, id: NodeId) {
     app.ui.rename = Some(Rename { id, start: true });
     if app.session.selection() != [id] {
@@ -1127,7 +1127,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     scroll_to = Some(i);
                 } else if let Some(back) = crate::widgets::take_tab(ui) {
                     ui.memory_mut(|m| m.surrender_focus(rename_id(rn.id).with("te")));
-                    rename_next = if back { i.checked_sub(1) } else { Some(i + 1) }.and_then(|j| rows.get(j)).map(|r| r.id);
+                    // Tab on the last row wraps to the first (measured in Figma's web app); Shift+Tab
+                    // on the first row ends the rename (not measured).
+                    rename_next = if back { i.checked_sub(1).and_then(|j| rows.get(j)) } else { rows.get(i + 1).or(rows.first()) }.map(|r| r.id);
                 }
                 rename_row = rows.get(i).map(|r| (i, r.id, r.depth));
             }
@@ -1378,7 +1380,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         app.run("object.rename", json!({"ids": [id], "name": new}));
     }
     if let Some(id) = rename_next {
-        rename_layer(app, id);
+        // Only the rename moves: the selection stays on the layer first renamed (measured in
+        // Figma's web app, 2026-11-12).
+        app.ui.rename = Some(Rename { id, start: true });
     }
     if renaming && app.ui.rename.is_none() {
         a11y::refocus_row(&mut app.ui.nav);
