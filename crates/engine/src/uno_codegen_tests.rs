@@ -678,3 +678,120 @@ fn first_on_top_paints_in_descending_order_without_reordering() {
     assert!(code.find("var a = ") < code.find("var b = ") && code.find("var b = ") < code.find("var c = "), "{code}");
     assert!(!code.contains("IsReverseZIndex"), "{code}");
 }
+
+/// A grid frame of 300 × 200 with no padding and no fill.
+fn grid(s: &mut Session, props: serde_json::Value) -> NodeId {
+    let f = frame(s, "Table", 300.0, 200.0);
+    let mut all = json!({"layout": "grid", "padding": 0, "gap": 0, "crossGap": 0, "fills": [], "sizingH": "fixed", "sizingV": "fixed"});
+    if let (Some(all), serde_json::Value::Object(extra)) = (all.as_object_mut(), props) {
+        all.extend(extra);
+    }
+    set(s, f, all);
+    f
+}
+
+#[test]
+fn a_grid_frame_is_a_grid_with_tracks_spacing_and_cells_from_the_layout_crate() {
+    let mut s = Session::new();
+    let g = grid(&mut s, json!({"columnTracks": [120, "auto", "1fr", "2fr"], "rowTracks": ["auto", "1fr"], "gap": 16, "crossGap": 8, "padding": 4}));
+    let kids: Vec<NodeId> = ["A", "B", "C", "D", "E"].iter().map(|n| rect(&mut s, g, 20.0, 20.0, n)).collect();
+    set(&mut s, kids[1], json!({"gridColumnSpan": 2}));
+    set(&mut s, kids[4], json!({"gridColumn": 3, "gridRow": 1}));
+    let code = uno(&mut s, g);
+    let root = chain(&code, "table");
+    for call in [".ColumnDefinitions(\"120,Auto,1*,2*\")", ".RowDefinitions(\"Auto,1*\")", ".ColumnSpacing(16)", ".RowSpacing(8)", ".Padding(4)"] {
+        assert!(root.contains(&call.to_string()), "{call} in {code}");
+    }
+    assert!(!code.contains("new AutoLayout()") && !code.contains("// not mapped"), "{code}");
+    // Every child sits in the cell FigCraft's own layout gives it.
+    let doc = s.doc().unwrap();
+    let (cells, _) = figcraft_layout::grid_place(doc, doc.node(g).unwrap().layout.as_ref().unwrap(), &kids);
+    for (cell, name) in cells.iter().zip(["a", "b", "c", "d", "e"]) {
+        let mut want = format!(".Grid(row: {}, column: {}", cell.row, cell.column);
+        if cell.row_span > 1 {
+            want.push_str(&format!(", rowSpan: {}", cell.row_span));
+        }
+        if cell.column_span > 1 {
+            want.push_str(&format!(", columnSpan: {}", cell.column_span));
+        }
+        want.push(')');
+        assert_eq!(chain(&code, name)[0], want, "{name} in {code}");
+    }
+    assert!(chain(&code, "b")[0].contains("columnSpan: 2"), "{code}");
+    assert_eq!(chain(&code, "e")[0], ".Grid(row: 1, column: 3)", "{code}");
+    // The cell alignment is written, since a fixed size would otherwise be centred.
+    assert!(chain(&code, "a").contains(&".HorizontalAlignment(HorizontalAlignment.Left)".to_string()), "{code}");
+}
+
+#[test]
+fn fractional_stars_are_scaled_to_whole_numbers_or_rounded_with_a_note() {
+    let mut s = Session::new();
+    let g = grid(&mut s, json!({"columnTracks": ["1.5fr", "1fr", "0.5fr"], "rowTracks": ["fill"]}));
+    rect(&mut s, g, 20.0, 20.0, "A");
+    let code = uno(&mut s, g);
+    assert!(chain(&code, "table").contains(&".ColumnDefinitions(\"3*,2*,1*\")".to_string()), "{code}");
+    assert!(!code.contains("// not mapped"), "{code}");
+    set(&mut s, g, json!({"columnTracks": ["1.3333fr", "1fr"]}));
+    let code = uno(&mut s, g);
+    assert!(chain(&code, "table").contains(&".ColumnDefinitions(\"1*,1*\")".to_string()), "{code}");
+    assert!(code.contains("// not mapped: fractional grid track sizes"), "{code}");
+}
+
+#[test]
+fn a_grid_writes_at_most_sixty_four_tracks_per_axis() {
+    let mut s = Session::new();
+    let tracks: Vec<serde_json::Value> = (0..70).map(|_| json!("1fr")).collect();
+    let g = grid(&mut s, json!({ "columnTracks": tracks }));
+    for i in 0..3 {
+        rect(&mut s, g, 5.0, 5.0, &format!("R{i}"));
+    }
+    let code = uno(&mut s, g);
+    let defs = chain(&code, "table").into_iter().find(|l| l.starts_with(".ColumnDefinitions(")).unwrap_or_default();
+    assert_eq!(defs.matches('*').count(), 64, "{defs}");
+    assert!(code.contains("// not mapped: more than 64 grid tracks"), "{code}");
+}
+
+#[test]
+fn grid_children_align_in_their_cell_and_a_filling_one_stretches() {
+    let mut s = Session::new();
+    let g = grid(&mut s, json!({"columnTracks": ["1fr", "1fr"], "rowTracks": ["1fr"], "mainAlign": "center", "crossAlign": "max"}));
+    let a = rect(&mut s, g, 20.0, 20.0, "A");
+    let b = rect(&mut s, g, 20.0, 20.0, "B");
+    set(&mut s, a, json!({"gridAlignH": "max", "gridAlignV": "min"}));
+    set(&mut s, b, json!({"sizingH": "fill", "sizingV": "fill"}));
+    let code = uno(&mut s, g);
+    let (ka, kb) = (chain(&code, "a"), chain(&code, "b"));
+    assert!(ka.contains(&".HorizontalAlignment(HorizontalAlignment.Right)".to_string()), "{code}");
+    assert!(ka.contains(&".VerticalAlignment(VerticalAlignment.Top)".to_string()), "{code}");
+    assert!(!kb.iter().any(|l| l.starts_with(".HorizontalAlignment") || l.starts_with(".VerticalAlignment") || l.starts_with(".Width(")), "{code}");
+    // With no alignment of its own a child takes the frame's.
+    let c = rect(&mut s, g, 20.0, 20.0, "C");
+    let _ = c;
+    let code = uno(&mut s, g);
+    assert!(chain(&code, "c").contains(&".HorizontalAlignment(HorizontalAlignment.Center)".to_string()), "{code}");
+    assert!(chain(&code, "c").contains(&".VerticalAlignment(VerticalAlignment.Bottom)".to_string()), "{code}");
+}
+
+#[test]
+fn an_absolute_child_of_a_grid_spans_all_cells_at_its_offset_inside_the_padding() {
+    let mut s = Session::new();
+    let g = grid(&mut s, json!({"columnTracks": ["1fr", "1fr"], "rowTracks": ["1fr"], "padding": 10}));
+    rect(&mut s, g, 20.0, 20.0, "A");
+    let badge = rect(&mut s, g, 12.0, 12.0, "Badge");
+    set(&mut s, badge, json!({"absolute": true, "x": 30, "y": 40}));
+    let code = uno(&mut s, g);
+    let c = chain(&code, "badge");
+    assert_eq!(c[0], ".Grid(row: 0, column: 0, rowSpan: 1, columnSpan: 2)", "{code}");
+    assert!(c.contains(&".Margin(20, 30, 0, 0)".to_string()), "{code}");
+}
+
+#[test]
+fn wrapping_is_one_line_and_a_note() {
+    let mut s = Session::new();
+    let f = row(&mut s, json!({"wrap": true}));
+    let code = uno(&mut s, f);
+    assert!(code.contains("// not mapped: wrap (FlexPanel needs Uno.Toolkit 10; one line written)"), "{code}");
+    assert!(code.contains("new AutoLayout()"), "{code}");
+    set(&mut s, f, json!({"wrap": false}));
+    assert!(!uno(&mut s, f).contains("wrap (FlexPanel"));
+}

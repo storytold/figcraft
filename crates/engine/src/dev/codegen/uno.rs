@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 
 use figcraft_color::{BlendMode, Color, ImageScaleMode, PaintKind};
 use figcraft_doc::{
-    AutoLayout, CrossAlign, Document, EffectKind, HConstraint, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, Sizing,
-    StrokeAlign, TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, VConstraint,
+    AutoLayout, CellAlign, CrossAlign, Document, EffectKind, HConstraint, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind,
+    Sizing, StrokeAlign, TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, VConstraint,
 };
 
 use super::swift::one_line;
@@ -297,13 +297,35 @@ impl Element {
 
 /// Where a child sits in its parent: nowhere in particular (the root), at an offset in a
 /// `Canvas`, in the flow of an `AutoLayout` (`z` is its paint order when the parent paints the first
-/// child on top), or over an `AutoLayout` at an offset that ignores it.
+/// child on top), over an `AutoLayout` at an offset that ignores it, or in a cell of a `Grid`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Place {
     Flow,
     At(f64, f64),
-    Line { vertical: bool, z: Option<usize> },
-    Independent { x: f64, y: f64, z: Option<usize> },
+    Line {
+        vertical: bool,
+        z: Option<usize>,
+    },
+    Independent {
+        x: f64,
+        y: f64,
+        z: Option<usize>,
+    },
+    /// In a cell of a `Grid`: row, column, spans and the alignment in the cell.
+    Cell {
+        row: usize,
+        column: usize,
+        row_span: usize,
+        column_span: usize,
+        align: (CellAlign, CellAlign),
+    },
+    /// Over a `Grid`, across all its cells, at an offset that ignores it.
+    Overlay {
+        x: f64,
+        y: f64,
+        rows: usize,
+        columns: usize,
+    },
 }
 
 /// What a tree walk keeps between layers.
@@ -405,19 +427,17 @@ impl Gen<'_> {
         Some(e)
     }
 
-    /// A frame-like layer, group or rectangle. Horizontal and vertical auto layout is an
-    /// `AutoLayout`; anything else is a `Border` holding a `Canvas` with the children at their
-    /// offsets.
+    /// A frame-like layer, group or rectangle. Auto layout is an `AutoLayout` (horizontal,
+    /// vertical) or a `Grid` (grid mode); anything else is a `Border` holding a `Canvas` with the
+    /// children at their offsets.
     fn boxed(&mut self, n: &Node, depth: usize, at: Place) -> Element {
         match n.layout.as_ref() {
-            Some(l) if matches!(l.mode, LayoutMode::Horizontal | LayoutMode::Vertical) && !matches!(n.kind, NodeKind::Rectangle) => {
-                self.auto_layout(n, l, depth, at)
-            }
+            Some(l) if !matches!(n.kind, NodeKind::Rectangle) => self.auto_layout(n, l, depth, at),
             _ => self.canvas_box(n, depth, at),
         }
     }
 
-    /// A frame with horizontal or vertical auto layout: an `AutoLayout` that takes the box
+    /// A frame with auto layout: an `AutoLayout` (or, in grid mode, a `Grid`) that takes the box
     /// (fill, border, corners) itself. A `Border` pushes its content in by its thickness, so
     /// the padding is written less the stroke weight, as FigCraft's layout ignores strokes (unless
     /// they are included). Where that would be negative the border sits behind the layout in a
@@ -432,18 +452,59 @@ impl Gen<'_> {
         let weights = if l.strokes_included { [0.0; 4] } else { weights };
         let pad = [pt - weights[0], pr - weights[1], pb - weights[2], pl - weights[3]];
         let behind = pad.iter().any(|p| *p < 0.0);
-        let mut line = Element::new("new AutoLayout()");
+        let grid = l.mode == LayoutMode::Grid;
+        let mut line = Element::new(if grid { "new Grid()" } else { "new AutoLayout()" });
         let kids = self.ctx.kids(n);
         let vertical = l.mode == LayoutMode::Vertical;
         let mut absolute = false;
+        // Grid mode: where FigCraft's own layout puts each child.
+        let (cells, rows) =
+            if grid { figcraft_layout::grid_place(self.ctx.doc, l, &figcraft_layout::flow_children(self.ctx.doc, n.id)) } else { (Vec::new(), 0) };
+        let tracks = GridTracks::new(l, rows);
+        let frame_align = (
+            match l.main_align {
+                MainAlign::Center => CellAlign::Center,
+                MainAlign::Max => CellAlign::Max,
+                _ => CellAlign::Min,
+            },
+            match l.cross_align {
+                CrossAlign::Center => CellAlign::Center,
+                CrossAlign::Max => CellAlign::Max,
+                _ => CellAlign::Min,
+            },
+        );
         for (i, k) in kids.iter().enumerate().take(MAX_CHILDREN) {
             let Some(c) = self.ctx.doc.node(*k) else { continue };
             // "First on top": the paint order descends, the order of the children stays.
-            let z = l.reverse_z.then_some(kids.len() - i);
+            let z = (l.reverse_z && !grid).then_some(kids.len() - i);
             let place = if c.child_layout.absolute {
                 absolute = true;
                 let [_, _, _, _, x, y] = c.transform.as_coeffs();
-                Place::Independent { x, y, z }
+                if grid {
+                    // Against the grid's padded box, the offsets are the frame's less the padding.
+                    Place::Overlay {
+                        x: x - if behind { pl } else { pad[3] },
+                        y: y - if behind { pt } else { pad[0] },
+                        rows: tracks.rows,
+                        columns: tracks.columns,
+                    }
+                } else {
+                    Place::Independent { x, y, z }
+                }
+            } else if grid {
+                match cells.iter().find(|cell| cell.id == *k) {
+                    Some(cell) => {
+                        let (cl, cr) = (cell.column.min(tracks.columns - 1), cell.row.min(tracks.rows - 1));
+                        Place::Cell {
+                            row: cr,
+                            column: cl,
+                            row_span: cell.row_span.min(tracks.rows - cr),
+                            column_span: cell.column_span.min(tracks.columns - cl),
+                            align: (c.child_layout.grid_align_h.unwrap_or(frame_align.0), c.child_layout.grid_align_v.unwrap_or(frame_align.1)),
+                        }
+                    }
+                    None => Place::Flow,
+                }
             } else {
                 Place::Line { vertical, z }
             };
@@ -463,7 +524,11 @@ impl Gen<'_> {
             // The layout inside keeps the whole padding; the border is drawn behind it.
             let mut border = Element::new("new Border()");
             self.paint_box(&mut border, n, false, at);
-            layout_calls(&mut line, l, [pt, pr, pb, pl]);
+            if grid {
+                grid_calls(&mut line, l, &tracks, [pt, pr, pb, pl]);
+            } else {
+                layout_calls(&mut line, l, [pt, pr, pb, pl]);
+            }
             outer = Element::new("new Grid()");
             place(&mut outer, n, at);
             size(&mut outer);
@@ -476,7 +541,11 @@ impl Gen<'_> {
             place(&mut outer, n, at);
             size(&mut outer);
             self.paint_box(&mut outer, n, false, at);
-            layout_calls(&mut outer, l, pad);
+            if grid {
+                grid_calls(&mut outer, l, &tracks, pad);
+            } else {
+                layout_calls(&mut outer, l, pad);
+            }
             common(&mut outer, n);
         }
         if n.clip && n.corners.radii.iter().all(|r| *r <= 0.0) && !n.children.is_empty() {
@@ -523,9 +592,6 @@ impl Gen<'_> {
                 outer.kids = vec![canvas];
             }
             common(&mut outer, n);
-        }
-        if n.layout.as_ref().is_some_and(|l| l.mode == LayoutMode::Grid) {
-            outer.note("grid auto layout (children are positioned absolutely)");
         }
         if n.clip && has_kids && n.corners.radii.iter().all(|r| *r <= 0.0) {
             outer.call(format!(".Clip(new RectangleGeometry().Rect(new Rect(0, 0, {}, {})))", num(n.width), num(n.height)));
@@ -685,6 +751,32 @@ fn place(e: &mut Element, n: &Node, at: Place) {
                 }
             }
         }
+        Place::Cell { row, column, row_span, column_span, align } => {
+            let mut args = format!("row: {row}, column: {column}");
+            if row_span > 1 {
+                args.push_str(&format!(", rowSpan: {row_span}"));
+            }
+            if column_span > 1 {
+                args.push_str(&format!(", columnSpan: {column_span}"));
+            }
+            lead.push(format!(".Grid({args})"));
+            cell_alignment(n, align, &mut lead);
+            let cl = &n.child_layout;
+            for (name, v) in [("MinWidth", cl.min_w), ("MaxWidth", cl.max_w), ("MinHeight", cl.min_h), ("MaxHeight", cl.max_h)] {
+                if let Some(v) = v.filter(|v| v.is_finite()) {
+                    lead.push(format!(".{name}({})", num(v)));
+                }
+            }
+        }
+        Place::Overlay { x, y, rows, columns } => {
+            lead.push(format!(".Grid(row: 0, column: 0, rowSpan: {rows}, columnSpan: {columns})"));
+            lead.push(".HorizontalAlignment(HorizontalAlignment.Left)".into());
+            lead.push(".VerticalAlignment(VerticalAlignment.Top)".into());
+            lead.push(format!(".Margin({}, {}, 0, 0)", num(x), num(y)));
+            if n.constraints.horizontal != HConstraint::Left || n.constraints.vertical != VConstraint::Top {
+                e.note("constraints (the child stays at its top-left offset)");
+            }
+        }
         Place::Independent { x, y, z: order } => {
             lead.push(".AutoLayout(isIndependentLayout: true)".into());
             z(order, &mut lead);
@@ -699,17 +791,122 @@ fn place(e: &mut Element, n: &Node, at: Place) {
     e.calls.splice(0..0, lead);
 }
 
+/// The sizes of a cell child's alignment: a filling axis stretches (the cell's default), any
+/// other aligns in its cell.
+fn cell_alignment(n: &Node, align: (CellAlign, CellAlign), lead: &mut Vec<String>) {
+    let cl = &n.child_layout;
+    if cl.sizing_h != Sizing::Fill {
+        let a = match align.0 {
+            CellAlign::Min => "Left",
+            CellAlign::Center => "Center",
+            CellAlign::Max => "Right",
+        };
+        lead.push(format!(".HorizontalAlignment(HorizontalAlignment.{a})"));
+    }
+    if cl.sizing_v != Sizing::Fill {
+        let a = match align.1 {
+            CellAlign::Min => "Top",
+            CellAlign::Center => "Center",
+            CellAlign::Max => "Bottom",
+        };
+        lead.push(format!(".VerticalAlignment(VerticalAlignment.{a})"));
+    }
+}
+
 /// How a child sizes on each axis in its parent: fixed everywhere but in an auto layout flow.
 fn axes(n: &Node, at: Place) -> (Sizing, Sizing) {
     match at {
-        Place::Line { .. } => (n.child_layout.sizing_h, n.child_layout.sizing_v),
+        Place::Line { .. } | Place::Cell { .. } => (n.child_layout.sizing_h, n.child_layout.sizing_v),
         _ => (Sizing::Fixed, Sizing::Fixed),
     }
 }
 
 /// [`axes`] for a text in a flow (outside one a text sizes itself from its resize mode).
 fn line_axes(n: &Node, at: Place) -> Option<(Sizing, Sizing)> {
-    matches!(at, Place::Line { .. }).then(|| axes(n, at))
+    matches!(at, Place::Line { .. } | Place::Cell { .. }).then(|| axes(n, at))
+}
+
+/// The tracks a grid frame is written with: how many of each, and what had to be cut or rounded.
+struct GridTracks {
+    columns: usize,
+    rows: usize,
+    cut: bool,
+}
+
+/// Most tracks written per axis.
+const MAX_WRITTEN_TRACKS: usize = 64;
+
+impl GridTracks {
+    fn new(l: &AutoLayout, rows: usize) -> Self {
+        let (columns, rows) = ((l.grid_columns as usize).max(1), rows.max(1));
+        GridTracks {
+            columns: columns.min(MAX_WRITTEN_TRACKS),
+            rows: rows.min(MAX_WRITTEN_TRACKS),
+            cut: columns > MAX_WRITTEN_TRACKS || rows > MAX_WRITTEN_TRACKS,
+        }
+    }
+}
+
+/// A `ColumnDefinitions` / `RowDefinitions` string for `count` tracks: fixed ones in pixels, hugging
+/// ones `Auto`, filling ones as stars. Uno ignores fractional stars, so the shares of an axis are
+/// scaled by the smallest factor up to 100 that makes them whole; the flag says they could not be
+/// and were rounded. A track missing from `specs` fills one share.
+fn track_string(specs: &[figcraft_doc::GridTrack], count: usize) -> (String, bool) {
+    let spec = |i: usize| specs.get(i).copied().unwrap_or_default();
+    let share = |t: figcraft_doc::GridTrack| if t.value.is_finite() { t.value.clamp(0.0, 1e6) } else { 0.0 };
+    let shares: Vec<f64> = (0..count).map(&spec).filter(|t| t.sizing == Sizing::Fill).map(share).collect();
+    let whole = |k: f64| shares.iter().all(|f| (f * k - (f * k).round()).abs() < 1e-6);
+    let factor = (1..=100).map(f64::from).find(|k| whole(*k));
+    let k = factor.unwrap_or(1.0);
+    let out: Vec<String> = (0..count)
+        .map(|i| {
+            let t = spec(i);
+            match t.sizing {
+                Sizing::Fixed => num(share(t)),
+                Sizing::Hug => "Auto".to_string(),
+                Sizing::Fill => format!("{}*", num((share(t) * k).round().max(if factor.is_some() { 0.0 } else { 1.0 }))),
+            }
+        })
+        .collect();
+    (out.join(","), factor.is_none())
+}
+
+/// The calls a `Grid` takes for its tracks, spacing and padding. In grid mode FigCraft's `gap` is
+/// the space between columns and `cross_gap` between rows (`layout_grid` reads them as `gx`, `gy`),
+/// and the main and cross alignment are the children's default alignment in their cell.
+fn grid_calls(e: &mut Element, l: &AutoLayout, t: &GridTracks, pad: [f64; 4]) {
+    let (columns, rounded_c) = track_string(&l.column_tracks, t.columns);
+    let (rows, rounded_r) = track_string(&l.row_tracks, t.rows);
+    e.call(format!(".ColumnDefinitions({})", cs_literal(&columns)));
+    e.call(format!(".RowDefinitions({})", cs_literal(&rows)));
+    if l.gap > 0.0 {
+        e.call(format!(".ColumnSpacing({})", num(l.gap)));
+    }
+    if l.cross_gap > 0.0 {
+        e.call(format!(".RowSpacing({})", num(l.cross_gap)));
+    }
+    padding_call(e, pad);
+    if rounded_c || rounded_r {
+        e.note("fractional grid track sizes (rounded to whole stars)");
+    }
+    if t.cut {
+        e.note(&format!("more than {MAX_WRITTEN_TRACKS} grid tracks (only {MAX_WRITTEN_TRACKS} per axis are written)"));
+    }
+    if l.reverse_z {
+        e.note("first child on top (a grid paints its children in order)");
+    }
+}
+
+/// `Padding` from top, right, bottom, left: one number when equal, nothing when zero.
+fn padding_call(e: &mut Element, pad: [f64; 4]) {
+    let [t, r, b, lf] = pad;
+    if pad.iter().any(|p| *p != 0.0) {
+        if t == r && r == b && b == lf {
+            e.call(format!(".Padding({})", num(t)));
+        } else {
+            e.call(format!(".Padding({}, {}, {}, {})", num(lf), num(t), num(r), num(b)));
+        }
+    }
 }
 
 /// The calls an `AutoLayout` takes for its orientation, gap, padding (`pad` is top, right,
@@ -720,13 +917,9 @@ fn layout_calls(e: &mut Element, l: &AutoLayout, pad: [f64; 4]) {
     if l.gap != 0.0 && !l.main_align.is_auto_gap() {
         e.call(format!(".Spacing({})", num(l.gap)));
     }
-    let [t, r, b, lf] = pad;
-    if [t, r, b, lf].iter().any(|p| *p != 0.0) {
-        if t == r && r == b && b == lf {
-            e.call(format!(".Padding({})", num(t)));
-        } else {
-            e.call(format!(".Padding({}, {}, {}, {})", num(lf), num(t), num(r), num(b)));
-        }
+    padding_call(e, pad);
+    if l.wrap {
+        e.note("wrap (FlexPanel needs Uno.Toolkit 10; one line written)");
     }
     match l.main_align {
         MainAlign::Min => {}
