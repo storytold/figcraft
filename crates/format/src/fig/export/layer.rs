@@ -74,6 +74,11 @@ impl<'d> Exporter<'d> {
             }
             _ => None,
         };
+        // A text on a path is its own layer kind, written only when its path fields were built.
+        let on_path = match &n.kind {
+            NodeKind::Text(td) => self.text_path(n, td, nested),
+            _ => None,
+        };
         let ty = match &n.kind {
             NodeKind::Page { .. } | NodeKind::Frame | NodeKind::Group | NodeKind::ComponentSet { .. } => "FRAME",
             NodeKind::Instance { .. } if main.is_none() => "FRAME",
@@ -84,6 +89,7 @@ impl<'d> Exporter<'d> {
             NodeKind::Star { .. } => "STAR",
             NodeKind::Line => "LINE",
             NodeKind::Vector { .. } => "VECTOR",
+            NodeKind::Text(_) if on_path.is_some() => "TEXT_PATH",
             NodeKind::Text(_) => "TEXT",
             NodeKind::BooleanOp { .. } => "BOOLEAN_OPERATION",
             NodeKind::Component { .. } => "SYMBOL",
@@ -107,7 +113,16 @@ impl<'d> Exporter<'d> {
             NodeKind::Polygon { count } => f.push(("count", u(*count))),
             NodeKind::Star { count, inner_ratio } => f.extend([("count", u(*count)), ("starInnerScale", fl(*inner_ratio))]),
             NodeKind::Vector { network } => self.vector(n, network, f),
-            NodeKind::Text(td) => self.text(td, &n.fills, f),
+            NodeKind::Text(td) => {
+                self.text(td, &n.fills, f);
+                if let Some(path) = on_path {
+                    // Text on a path has no box to align in: it is written as top, which is how it draws.
+                    if let Some(entry) = f.iter_mut().find(|(k, _)| *k == "textAlignVertical") {
+                        entry.1 = e("TOP");
+                    }
+                    f.extend(path);
+                }
+            }
             NodeKind::BooleanOp { op } => {
                 let name = match op {
                     BoolOp::Union => "UNION",

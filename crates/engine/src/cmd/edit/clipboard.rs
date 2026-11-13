@@ -383,14 +383,22 @@ pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
     let sel = s.selection();
     let page = s.page()?;
     let doc = s.doc()?;
-    let (parent, at) = match sel.first() {
+    let (parent, at, above) = match sel.first() {
         Some(i) => {
             let parent = doc.node(*i).and_then(|n| n.parent).unwrap_or(page);
-            (parent, doc.world_bounds(*i).map(|b| (b.x0, b.y0)))
+            (parent, doc.world_bounds(*i).map(|b| (b.x0, b.y0)), doc.index_in_parent(*i).map(|ix| ix + 1))
         }
-        None => (page, None),
+        None => (page, None, None),
     };
     let ids = paste_into(s, parent, at)?;
+    if let Some(above) = above {
+        let doc = s.doc_mut()?;
+        for (k, i) in
+            ids.iter().filter(|i| doc.node(**i).is_some_and(|n| n.parent == Some(parent))).copied().collect::<Vec<_>>().into_iter().enumerate()
+        {
+            doc.reorder(i, above + k)?;
+        }
+    }
     s.set_selection(ids.clone());
     Ok(json!({"ids": ids}))
 }

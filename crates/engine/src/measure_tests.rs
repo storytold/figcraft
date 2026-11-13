@@ -196,9 +196,9 @@ fn alt_drag_shows_live_distances_to_the_neighbours() {
         e
     };
     s.pointer(&ev(PointerKind::Down, 30.0)).unwrap();
-    // Alt duplicates: the copy, dragged to 110..160, snaps to equal spacing between the original
+    // Alt duplicates: the copy, dragged to 109..159, snaps to equal spacing between the original
     // and the other layer (105..155).
-    s.pointer(&ev(PointerKind::Move, 130.0)).unwrap();
+    s.pointer(&ev(PointerKind::Move, 129.0)).unwrap();
     let g = s.tool.overlay.guides.clone();
     assert_eq!(
         labelled(&g),
@@ -209,7 +209,7 @@ fn alt_drag_shows_live_distances_to_the_neighbours() {
             ("45".into(), [155, 50, 200, 50])
         ]
     );
-    s.pointer(&ev(PointerKind::Up, 130.0)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 129.0)).unwrap();
     assert!(s.tool.overlay.guides.is_empty());
 }
 
