@@ -6,7 +6,7 @@ use figcraft_engine::harness::{HarnessKind, attach_command, detect_cli_binary, i
 use serde_json::json;
 
 use crate::FigApp;
-use crate::i18n::{tr, trf};
+use crate::i18n::{tr, trf, trn};
 use crate::theme::{Tokens, regular, semibold};
 
 /// Default width of the standalone Local MCP Server window on desktop viewports.
@@ -134,7 +134,7 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
     let server_status = app.services.mcp_server_status();
     if let Some((listening, active, ref err)) = server_status {
         if listening != 0 {
-            let status_text = trf("Listening on 127.0.0.1:{port} · {count} active connection(s)", &[("port", &listening), ("count", &active)]);
+            let status_text = trn("Listening on 127.0.0.1:{port} · {n} active connections", active, &[("port", &listening)]);
             ui.add(egui::Label::new(RichText::new(status_text).color(t.accent).font(semibold(11.0))).wrap());
         } else if let Some(err) = err {
             ui.add(egui::Label::new(RichText::new(trf("Error: {error}", &[("error", &err)])).color(t.danger).font(regular(11.0))).wrap());
@@ -195,7 +195,7 @@ pub(crate) fn body(app: &mut FigApp, ui: &mut egui::Ui, t: &Tokens) {
                 if let Some(e) = last_err {
                     app.show_error(e);
                 } else {
-                    app.toast(trf("Configured {count} MCP harnesses", &[("count", &ok_count)]));
+                    app.toast(trn("Configured {n} MCP harnesses", ok_count, &[]));
                 }
             }
             if crate::widgets::button(ui, tr("Refresh"), false, true).on_hover_text(tr("Re-check harness configuration files")).clicked() {
