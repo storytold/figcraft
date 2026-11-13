@@ -1092,3 +1092,58 @@ fn hebrew_native_variable_style_library_controls_are_localized() {
                    "variable/style placeholder parity: {key:?}");
     }
 }
+
+/// Hebrew collaboration, publishing, comments and plugin controls use actual
+/// translations and keep all interpolation fields from their English source.
+#[test]
+fn hebrew_native_collaboration_sharing_plugins_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Comment",
+        "Edit comment",
+        "No comments yet",
+        "No comments to copy",
+        "No matching comments",
+        "Show comments (Shift+C)",
+        "Presenting: comments",
+        "Publish changes",
+        "Publish to server",
+        "Publish to another server…",
+        "Publishing…",
+        "Published version {v}",
+        "Published version {v} to the server",
+        "Publishing with the server's key.",
+        "Hide from publishing",
+        "Hide when publishing",
+        "Shared by your team on {server}",
+        "Library updates available",
+        "Reading the library…",
+        "From the library \"{name}\": read-only",
+        "Can't read this library: {e}",
+        "Plugin",
+        "Install plugin",
+        "Update plugin",
+        "Import plugin from manifest",
+        "Import plugin from manifest…",
+        "It asks permission to:",
+        "No plugins on {server}.",
+        "No plugins yet. Import a development plugin from its figcraft-plugin.json.",
+        "Edit link",
+        "Edit link copied",
+        "An invite link that opens FigCraft and joins",
+        "View only: you see every change as it happens but can't edit. Leave to keep a copy you can edit.",
+        "Can comment: you see every change as it happens and can comment, but can't edit. Leave to keep a copy you can edit.",
+        "can edit the document",
+        "read the document",
+        "reads the document",
+        "read and edit the document",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew collaboration/share/plugin control: {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\\u{0590}'..='\\u{05ff}').contains(&c)),
+                "{key:?} fell back to English");
+        assert_eq!(placeholders(key), placeholders(value),
+                   "collaboration/share/plugin placeholder parity: {key:?}");
+    }
+}
