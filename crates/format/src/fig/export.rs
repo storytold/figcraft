@@ -533,17 +533,18 @@ impl<'d> Exporter<'d> {
     /// A node's ruler `guides` field: Y is a horizontal guide and X a vertical one, the offset the ruler's reading (a
     /// page's in page coordinates, a frame's in the frame's own).
     fn guides(&mut self, guides: &[figcraft_doc::Guide], f: &mut Fields) {
-        if guides.is_empty() {
-            return;
-        }
-        let list = guides
+        // A guide whose offset isn't finite shows nowhere in the document: it is left out, not written at 0.
+        let list: Vec<Kv<'static>> = guides
             .iter()
+            .filter(|g| g.offset.is_finite())
             .map(|g| {
                 self.guide_session = self.guide_session.saturating_add(1);
                 o(vec![("axis", e(if g.vertical { "X" } else { "Y" })), ("offset", fl(g.offset)), ("guid", guid(self.guide_session, 1))])
             })
             .collect();
-        f.push(("guides", arr(list)));
+        if !list.is_empty() {
+            f.push(("guides", arr(list)));
+        }
     }
 
     fn next_aux(&mut self) -> u32 {
