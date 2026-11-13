@@ -413,10 +413,11 @@ fn zero_padding(sides: [bool; 4]) -> Vec<&'static str> {
 pub(crate) fn merge(mobile: Option<&[(String, String)]>, desktop: &[(String, String)]) -> Vec<String> {
     let hidden = [("display".to_string(), "hidden".to_string())];
     // A mobile frame's widths are the phone's, not caps: below the breakpoint boxes fill the page.
+    // Except a cap desktop has too: that is the layer's own size (a badge, an avatar), kept at every width.
     let fluid: Vec<(String, String)>;
     let mobile = match mobile {
         Some(m) => {
-            fluid = m.iter().filter(|(k, _)| k != "max-width").cloned().collect();
+            fluid = m.iter().filter(|(k, c)| k != "max-width" || desktop.iter().any(|(_, d)| d == c)).cloned().collect();
             fluid.as_slice()
         }
         None => &hidden,
