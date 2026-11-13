@@ -77,6 +77,42 @@ fn up_and_down_walk_the_rows_and_shift_extends() {
 }
 
 #[test]
+fn a_keyboard_shift_range_keeps_an_anchor_covered_by_a_selected_frame() {
+    let mut s = Session::new();
+    let frame1 = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Frame 1"})).unwrap());
+    let mk = |s: &mut Session, name: &str, parent: NodeId| {
+        id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 20, "height": 20, "parent": parent, "props": {"name": name}})).unwrap())
+    };
+    let rect2 = mk(&mut s, "Rect 2", frame1);
+    let rect3 = mk(&mut s, "Rect 3", frame1);
+    let frame2 = id(s.execute("frame.create", &json!({"x": 200, "y": 0, "width": 100, "height": 100, "name": "Frame 2"})).unwrap());
+    let rect4 = mk(&mut s, "Rect 4", frame2);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame1, frame2]);
+    u.frame(vec![]);
+    click_row(&mut u, rect2);
+    let p4 = u.row_at(rect4);
+    let shift = Modifiers { shift: true, ..Default::default() };
+    u.frame_with(vec![Event::PointerMoved(p4)], shift);
+    let button = |pressed| Event::PointerButton { pos: p4, button: egui::PointerButton::Primary, pressed, modifiers: shift };
+    u.frame_with(vec![button(true)], shift);
+    u.frame_with(vec![button(false)], shift);
+    let mut got = sel(&u);
+    got.sort();
+    let mut want = vec![rect4, frame1];
+    want.sort();
+    assert_eq!(got, want, "the pointer range keeps the frame");
+    // Rows: Frame 2, Rect 4, Frame 1, Rect 3, Rect 2. Shift+Down runs from Rect 2 (the anchor).
+    key(&mut u, Key::ArrowDown, true);
+    let mut got = sel(&u);
+    got.sort();
+    let mut want = vec![rect3, rect2];
+    want.sort();
+    assert_eq!(got, want, "the keyboard range extends from Rect 2's row, not from the current row");
+}
+
+#[test]
 fn left_and_right_open_close_and_move_between_levels() {
     let (mut u, _, frame, child, _) = setup();
     click_row(&mut u, frame);

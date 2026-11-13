@@ -624,6 +624,14 @@ fn matching(doc: &Document, id: NodeId, q: &str, out: &mut Vec<Row>) {
     }
 }
 
+/// The range anchor while it is still part of the selection: selected itself, or covered by a
+/// selected frame (a range across parents selects the frame and not its children).
+fn live_anchor(app: &FigApp, sel: &[NodeId]) -> Option<NodeId> {
+    let a = app.ui.layer_anchor?;
+    let covered = || app.session.ds().is_ok_and(|ds| ds.doc.ancestors(a).iter().any(|p| sel.contains(p)));
+    (sel.contains(&a) || covered()).then_some(a)
+}
+
 /// Arrow keys while the layers panel has the keyboard: Up/Down select the row above or below
 /// (Shift extends the range from the anchor), Left collapses a row or goes to its parent, Right
 /// expands a row or goes to its first child. Returns whether the key was used.
@@ -656,7 +664,7 @@ pub(crate) fn key_nav(app: &mut FigApp, key: egui::Key, shift: bool) -> bool {
             let Some((j, next)) = j.and_then(|j| rows.get(j).map(|r| (j, r.id))) else { return true };
             if shift {
                 // The rows from the anchor to the new one, with the moving end last.
-                let anchor = app.ui.layer_anchor.filter(|a| sel.contains(a)).unwrap_or(cur);
+                let anchor = live_anchor(app, &sel).unwrap_or(cur);
                 let a = rows.iter().position(|r| r.id == anchor).unwrap_or(i);
                 let ids: Vec<NodeId> = if a <= j {
                     rows.get(a..=j).unwrap_or_default().iter().map(|r| r.id).collect()
@@ -896,12 +904,8 @@ fn select_clicked(app: &mut FigApp, rows: &[Row], sel: &[NodeId], id: NodeId, m:
     app.ui.pages_focus = None;
     let order: Vec<NodeId> = rows.iter().map(|r| r.id).collect();
     let pos = |x: NodeId| order.iter().position(|o| *o == x);
-    // The anchor stays usable while it, or a frame covering it, is selected.
-    let covered = |a: NodeId| match app.session.ds() {
-        Ok(ds) => sel.contains(&a) || ds.doc.ancestors(a).iter().any(|p| sel.contains(p)),
-        Err(_) => sel.contains(&a),
-    };
-    let anchor = app.ui.layer_anchor.filter(|a| covered(*a)).and_then(pos);
+    let live = live_anchor(app, sel);
+    let anchor = live.and_then(pos);
     if m.shift
         && let (Some(ai), Some(bi)) = (anchor, pos(id))
     {
