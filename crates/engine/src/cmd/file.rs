@@ -26,8 +26,8 @@ pub(crate) use export::FORBIDDEN_FILE_NAME_CHARS;
 use export::add_member;
 pub(super) use export::export_setting;
 pub use export::{
-    ExportJob, copy_png, drawn_layers, export_area, export_bytes, export_bytes_with, export_jobs, export_scale, exportable_layers, fig_bytes,
-    frames_pdf, jobs_for, penpot_bytes, safe_file_name,
+    ExportJob, backdrop_layers, copy_png, drawn_layers, export_area, export_bytes, export_bytes_with, export_jobs, export_scale, exportable_layers,
+    fig_bytes, frames_pdf, jobs_for, penpot_bytes, safe_file_name,
 };
 use export::{export, export_frames_pdf, export_layers, pdf_bytes};
 use load::font_report;
@@ -409,7 +409,10 @@ pub fn export_file(doc: &Document, ids: &[NodeId], setting: &ExportSetting, scal
             Ok((pdf_bytes(doc, &groups, &setting.print, (!own_area).then_some(area))?, Vec::new()))
         }
         _ => {
-            let mut pix = figcraft_render::render_area(doc, &drawn, area, scale)
+            // Layers exported on their own still read the page beneath them for a background blur
+            // or glass (#2213); a "contents only" off export already draws the whole page.
+            let page = if setting.contents_only { backdrop_layers(doc, ids) } else { Vec::new() };
+            let mut pix = figcraft_render::render_area_over(doc, &drawn, &page, area, scale)
                 .ok_or_else(|| EngineError::Other("render failed (empty or too large)".into()))?;
             // The render is in the document's profile; the setting's profile converts the pixels
             // (out-of-gamut colors clip) and tags the file.
