@@ -31,73 +31,26 @@ pub use library::{is_valid_library_id, read_library, read_library_within};
 mod density;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 use figcraft_doc::{Document, ImageData};
 use serde::{Deserialize, Serialize, Serializer};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use sha2::Digest;
 
-pub use craft_figcraft_format::{EXTENSION, FORMAT, VERSION};
-/// Largest archive member we read (guards against zip bombs).
-const MAX_MEMBER: u64 = 512 * 1024 * 1024;
-/// `document.json` may unpack to [`DOCUMENT_RATIO`] times what it takes in the archive, within
-/// [`MAX_MEMBER`] and [`MAX_DOCUMENT`]: a large document saved by us (a 900 000-layer file packs
-/// 1.48 GB into 244 MB) opens again, while a small archive still can't unpack into gigabytes.
-/// 32-bit targets (wasm32) have a 4 GB address space in all, so their ceiling is lower.
-const DOCUMENT_RATIO: u64 = 16;
-#[cfg(not(target_pointer_width = "32"))]
-const MAX_DOCUMENT: u64 = 4 * 1024 * 1024 * 1024;
-#[cfg(target_pointer_width = "32")]
-const MAX_DOCUMENT: u64 = 1024 * 1024 * 1024;
-/// Most versions a file keeps: saving more is refused, extra entries in a file are skipped.
-pub const MAX_VERSIONS: usize = 100;
+pub use craft_figcraft_format::{
+    BRANCH_INDEX, BranchEntry as NativeBranchEntry, BranchIndex as NativeBranchIndex, BranchState as NativeBranchState, DOCUMENT_RATIO, EXTENSION,
+    FORMAT, FormatError, IMAGE_BUDGET, ImageBudget, MAX_BRANCHES, MAX_DOCUMENT, MAX_MEMBER, MAX_UNPACKED, MAX_VERSION_BYTES, MAX_VERSION_DESCRIPTION,
+    MAX_VERSION_INDEX, MAX_VERSION_NAME, MAX_VERSIONS, VERSION, VersionEntry as NativeVersionEntry, VersionIndex as NativeVersionIndex, clip,
+    document_limit, is_valid_version_id,
+};
+const JSON_LEVEL: i64 = 3;
 /// The export warning for colour calculations that resolve to nothing (an operand missing, or more
 /// than 32 variables to read), shared by the Penpot and `.fig` exports.
 pub(crate) const CALCULATIONS_LEFT_OUT: &str = "colour calculations that don't resolve were left out";
-/// Longest version name and description kept (chars).
-pub const MAX_VERSION_NAME: usize = 200;
-pub const MAX_VERSION_DESCRIPTION: usize = 2000;
-/// Largest version index and total size of the version snapshots read from one file.
-const MAX_VERSION_INDEX: u64 = 16 * 1024 * 1024;
-const MAX_VERSION_BYTES: u64 = 1024 * 1024 * 1024;
-/// Most images, and image bytes together, read from one file (members past it are left out).
-const IMAGE_BUDGET: ImageBudget = ImageBudget { images: 20_000, bytes: 4 * 1024 * 1024 * 1024 };
-/// Most bytes one open of a `.figcraft` file unpacks, every area together: its document, images,
-/// published library, version history and branches ([`Unpacked`], #1079). Each area keeps its own
-/// cap; their sum was about 10 GB. Read in that order, the document (a 900 000-layer one unpacks
-/// to 1.5 GB) and the images up to their own 4 GiB cap fit, so a file whose images pass that cap
-/// (#1313: an 84 MiB document with 7.3 GiB of images) keeps as many as before; the history and
-/// branches share what is left. 32-bit targets (wasm32) have 4 GB of address space in all.
-#[cfg(not(target_pointer_width = "32"))]
-const MAX_UNPACKED: u64 = 6 * 1024 * 1024 * 1024;
-#[cfg(target_pointer_width = "32")]
-const MAX_UNPACKED: u64 = 2 * 1024 * 1024 * 1024;
-const BRANCH_INDEX: &str = "branches/index.json";
-/// Most branches a file keeps: making more is refused, extra entries in a file are skipped.
-pub const MAX_BRANCHES: usize = 100;
-/// Deflate level of JSON members (see [`json_options`]).
-const JSON_LEVEL: i64 = 3;
-
-#[derive(Debug)]
-pub enum FormatError {
-    Io(String),
-    Corrupt(String),
-    Newer(u32),
-}
-
-impl std::fmt::Display for FormatError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FormatError::Io(e) => write!(f, "{e}"),
-            FormatError::Corrupt(e) => write!(f, "not a valid FigCraft file: {e}"),
-            FormatError::Newer(v) => write!(f, "this file was saved by a newer FigCraft (format version {v})"),
-        }
-    }
-}
-
-impl std::error::Error for FormatError {}
 
 /// One entry of a file's version history: a named snapshot of the document.
 #[derive(Clone, Debug)]
@@ -186,16 +139,6 @@ pub struct Branch {
     pub head: Arc<Document>,
     /// The branch's own version history, oldest first.
     pub versions: Vec<Version>,
-}
-
-/// Whether `id` can name a version (and its archive entry).
-pub fn is_valid_version_id(id: &str) -> bool {
-    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
-
-/// `s` cut to at most `max` chars.
-pub fn clip(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
 }
 
 /// A file as read: the document, the repairs made (and versions skipped), and its version
@@ -470,44 +413,35 @@ pub(crate) fn io_err(e: impl std::fmt::Display) -> FormatError {
     FormatError::Io(e.to_string())
 }
 
-/// Add one member to the archive.
-pub(crate) fn put<W: Write + Seek>(
-    z: &mut zip::ZipWriter<W>,
+/// JSON compression for Penpot and external ZIP exporters.
+pub(crate) fn json_options() -> zip::write::SimpleFileOptions {
+    zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).compression_level(Some(JSON_LEVEL))
+}
+
+/// Add one member to the native archive.
+pub(crate) fn put(
+    z: &mut craft_figcraft_format::ArchiveWriter,
     name: &str,
-    opts: zip::write::SimpleFileOptions,
+    compression: craft_figcraft_format::Compression,
     bytes: &[u8],
 ) -> Result<(), FormatError> {
-    z.start_file(name, opts).map_err(io_err)?;
-    z.write_all(bytes).map_err(io_err)
+    z.add(name, bytes, compression).map_err(io_err)
 }
 
 /// `files` (name, bytes; a `/` in a name makes a folder) as one zip archive: several exports
 /// delivered as a single download (#969).
 pub fn zip_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Result<Vec<u8>, FormatError> {
-    let mut buf = std::io::Cursor::new(Vec::new());
-    {
-        let mut z = zip::ZipWriter::new(&mut buf);
-        for (name, bytes) in files {
-            put(&mut z, name, zip::write::SimpleFileOptions::default(), bytes)?;
-        }
-        z.finish().map_err(io_err)?;
-    }
-    Ok(buf.into_inner())
+    craft_figcraft_format::write_archive(files.into_iter().map(|(name, bytes)| craft_figcraft_format::Member {
+        name,
+        bytes,
+        compression: craft_figcraft_format::Compression::Deflated,
+    }))
+    .map_err(io_err)
 }
 
 /// Add `doc` as a `document.json`-style member, serialized straight into the compressor.
-fn put_json<W: Write + Seek>(z: &mut zip::ZipWriter<W>, name: &str, doc: &Document) -> Result<(), FormatError> {
-    z.start_file(name, json_options()).map_err(io_err)?;
-    // The serializer writes many small pieces: batch them before they reach the compressor.
-    let mut w = std::io::BufWriter::with_capacity(1 << 16, z);
-    write_json(doc, &mut w)?;
-    w.flush().map_err(io_err)
-}
-
-/// How JSON members are compressed. Document JSON is very repetitive: a fast level compresses it
-/// nearly as well as the default one (about 15% larger) in half the time.
-pub(crate) fn json_options() -> zip::write::SimpleFileOptions {
-    zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).compression_level(Some(JSON_LEVEL))
+fn put_json(z: &mut craft_figcraft_format::ArchiveWriter, name: &str, doc: &Document) -> Result<(), FormatError> {
+    z.add_document_json(name, &FiniteValue(doc), &native_image_index(doc)).map_err(io_err)
 }
 
 /// Write a `.figcraft` archive to bytes.
@@ -527,50 +461,62 @@ pub fn save_bytes_with_history(
     versions: &[Version],
     branches: &[Branch],
 ) -> Result<Vec<u8>, FormatError> {
-    let mut buf = std::io::Cursor::new(Vec::new());
-    {
-        let mut z = zip::ZipWriter::new(&mut buf);
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        put_json(&mut z, "document.json", doc)?;
-        // Every image once, whether the document, a version or a branch uses it.
-        let mut written = BTreeSet::new();
-        let branch_images = branches.iter().flat_map(|b| [&b.base.images, &b.head.images].into_iter().chain(b.versions.iter().map(Version::images)));
-        for (hash, img) in std::iter::once(&doc.images).chain(versions.iter().map(Version::images)).chain(branch_images).flatten() {
-            if written.insert(hash) {
-                put(&mut z, &format!("images/{hash}"), stored, &img.bytes)?;
-            }
+    let mut z = craft_figcraft_format::ArchiveWriter::new();
+    let stored = craft_figcraft_format::Compression::Stored;
+    put_json(&mut z, "document.json", doc)?;
+    // Every image once, whether the document, a version or a branch uses it.
+    let mut written = BTreeSet::new();
+    let branch_images = branches.iter().flat_map(|b| [&b.base.images, &b.head.images].into_iter().chain(b.versions.iter().map(Version::images)));
+    for (hash, img) in std::iter::once(&doc.images).chain(versions.iter().map(Version::images)).chain(branch_images).flatten() {
+        if written.insert(hash) {
+            put(&mut z, &format!("images/{hash}"), stored, img.bytes.as_slice())?;
         }
-        if let Some(t) = thumbnail_png {
-            put(&mut z, "thumbnail.png", stored, t)?;
-        }
-        put_versions(&mut z, "versions", versions)?;
-        if !branches.is_empty() {
-            let mut ids = BTreeSet::new();
-            let mut index = Vec::with_capacity(branches.len());
-            for b in branches {
-                if !is_valid_version_id(&b.id) || !ids.insert(b.id.as_str()) {
-                    return Err(FormatError::Io(format!("invalid or duplicate branch id `{}`", b.id)));
-                }
-                put_json(&mut z, &format!("branches/{}/base.json", b.id), &b.base)?;
-                put_json(&mut z, &format!("branches/{}/head.json", b.id), &b.head)?;
-                put_versions(&mut z, &format!("branches/{}/versions", b.id), &b.versions)?;
-                let images = |d: &Document| d.images.keys().cloned().collect::<Vec<String>>();
-                index.push(json!({"id": b.id, "name": b.name, "time": b.time, "client": b.client, "state": b.state,
-                    "baseImages": images(&b.base), "headImages": images(&b.head)}));
-            }
-            put(&mut z, BRANCH_INDEX, json_options(), &serde_json::to_vec(&json!({"branches": index})).map_err(io_err)?)?;
-        }
-        if let Some(lib) = &doc.published {
-            library::write(&mut z, lib, &written)?;
-        }
-        z.finish().map_err(io_err)?;
     }
-    Ok(buf.into_inner())
+    if let Some(t) = thumbnail_png {
+        put(&mut z, "thumbnail.png", stored, t)?;
+    }
+    put_versions(&mut z, "versions", versions)?;
+    if !branches.is_empty() {
+        let mut ids = BTreeSet::new();
+        let mut index = Vec::with_capacity(branches.len());
+        for b in branches {
+            if !is_valid_version_id(&b.id) || !ids.insert(b.id.as_str()) {
+                return Err(FormatError::Io(format!("invalid or duplicate branch id `{}`", b.id)));
+            }
+            put_json(&mut z, &format!("branches/{}/base.json", b.id), &b.base)?;
+            put_json(&mut z, &format!("branches/{}/head.json", b.id), &b.head)?;
+            put_versions(&mut z, &format!("branches/{}/versions", b.id), &b.versions)?;
+            let images = |d: &Document| d.images.keys().cloned().collect::<Vec<String>>();
+            index.push(NativeBranchEntry {
+                id: b.id.clone(),
+                name: b.name.clone(),
+                time: b.time,
+                client: b.client,
+                state: match b.state {
+                    BranchState::Active => NativeBranchState::Active,
+                    BranchState::Merged => NativeBranchState::Merged,
+                    BranchState::Archived => NativeBranchState::Archived,
+                },
+                base_images: images(&b.base),
+                head_images: images(&b.head),
+            });
+        }
+        put(
+            &mut z,
+            BRANCH_INDEX,
+            craft_figcraft_format::Compression::Level(3),
+            &serde_json::to_vec(&NativeBranchIndex { branches: index }).map_err(io_err)?,
+        )?;
+    }
+    if let Some(lib) = &doc.published {
+        library::write(&mut z, lib, &written)?;
+    }
+    z.finish().map_err(io_err)
 }
 
 /// Write version history `versions` (oldest first) under `dir`: `<dir>/index.json` and one
 /// `<dir>/<id>.json` snapshot per version. Nothing when there are none.
-fn put_versions<W: Write + Seek>(z: &mut zip::ZipWriter<W>, dir: &str, versions: &[Version]) -> Result<(), FormatError> {
+fn put_versions(z: &mut craft_figcraft_format::ArchiveWriter, dir: &str, versions: &[Version]) -> Result<(), FormatError> {
     if versions.is_empty() {
         return Ok(());
     }
@@ -583,16 +529,23 @@ fn put_versions<W: Write + Seek>(z: &mut zip::ZipWriter<W>, dir: &str, versions:
         let name = format!("{dir}/{}.json", v.id);
         match &v.snapshot {
             Snapshot::Doc(d) => put_json(z, &name, d)?,
-            Snapshot::Stored { json, .. } => put(z, &name, json_options(), json)?,
+            Snapshot::Stored { json, .. } => put(z, &name, craft_figcraft_format::Compression::Level(3), json)?,
         }
-        let images: Vec<&String> = v.images().keys().collect();
-        let mut entry = json!({"id": v.id, "name": v.name, "description": v.description, "time": v.time, "images": images});
-        if v.auto {
-            entry["auto"] = json!(true);
-        }
-        index.push(entry);
+        index.push(NativeVersionEntry {
+            id: v.id.clone(),
+            name: v.name.clone(),
+            description: v.description.clone(),
+            time: v.time,
+            auto: v.auto,
+            images: v.images().keys().cloned().collect(),
+        });
     }
-    put(z, &format!("{dir}/index.json"), json_options(), &serde_json::to_vec(&json!({"versions": index})).map_err(io_err)?)?;
+    put(
+        z,
+        &format!("{dir}/index.json"),
+        craft_figcraft_format::Compression::Level(3),
+        &serde_json::to_vec(&NativeVersionIndex { versions: index }).map_err(io_err)?,
+    )?;
     Ok(())
 }
 
@@ -602,16 +555,25 @@ pub fn load_bytes(bytes: &[u8]) -> Result<(Document, Vec<String>), FormatError> 
 }
 
 /// Read archive member `name`, refusing members larger than `limit` bytes.
-pub(crate) fn read_member<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
+fn read_native_member(z: &mut impl craft_figcraft_format::NativeArchive, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
+    match z.read_member(name, limit) {
+        Ok(Some(bytes)) => Ok(bytes),
+        Ok(None) => Err(FormatError::Corrupt(format!("{name}: not found"))),
+        Err(error) if error.is_limit() => Err(FormatError::Corrupt(format!("{name} is too large"))),
+        Err(error) => Err(FormatError::Corrupt(format!("{name}: {error}"))),
+    }
+}
+
+/// Read a member from a foreign ZIP archive, refusing entries larger than `limit`.
+pub(crate) fn read_member<R: Read + std::io::Seek>(z: &mut zip::ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
     let f = z.by_name(name).map_err(|e| FormatError::Corrupt(format!("{name}: {e}")))?;
-    let too_large = || FormatError::Corrupt(format!("{name} is too large"));
     if f.size() > limit {
-        return Err(too_large());
+        return Err(FormatError::Corrupt(format!("{name} is too large")));
     }
     let mut data = Vec::new();
     f.take(limit.saturating_add(1)).read_to_end(&mut data).map_err(|e| FormatError::Corrupt(format!("{name}: {e}")))?;
     if data.len() as u64 > limit {
-        return Err(too_large());
+        return Err(FormatError::Corrupt(format!("{name} is too large")));
     }
     Ok(data)
 }
@@ -636,19 +598,19 @@ impl Unpacked {
     }
 
     /// Whether member `name` (by its recorded size) needs more than is left.
-    fn exceeded<R: Read + Seek>(&self, z: &mut zip::ZipArchive<R>, name: &str) -> bool {
-        z.by_name(name).is_ok_and(|f| f.size() > self.left)
+    fn exceeded(&self, z: &mut impl craft_figcraft_format::NativeArchive, name: &str) -> bool {
+        z.declared_size(name).is_some_and(|size| size > self.left)
     }
 
     /// [`read_member`] within `limit` (the area's own cap) and what is left of the total, which the
     /// member then uses up.
-    pub(crate) fn read<R: Read + Seek>(&mut self, z: &mut zip::ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
-        if self.exceeded(z, name) && z.by_name(name).is_ok_and(|f| f.size() <= limit) {
+    pub(crate) fn read(&mut self, z: &mut impl craft_figcraft_format::NativeArchive, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
+        if self.exceeded(z, name) && z.declared_size(name).is_some_and(|size| size <= limit) {
             return Err(FormatError::Corrupt(format!("{name}: {}", self.passed())));
         }
         let cap = limit.min(self.left);
-        let size = z.by_name(name).map_or(0, |f| f.size());
-        let data = read_member(z, name, cap);
+        let size = z.declared_size(name).unwrap_or(0);
+        let data = read_native_member(z, name, cap);
         // A read that failed part way (a bad checksum at the end, say) did its unpacking all the
         // same: it is charged in full, so an index naming that member again can't repeat it. One
         // refused for its recorded size before any unpacking costs nothing.
@@ -657,18 +619,6 @@ impl Unpacked {
         }
         data
     }
-}
-
-/// Largest `document.json` read from an archive of `len` bytes in which it takes `packed`.
-pub(crate) fn document_limit(packed: u64, len: u64) -> u64 {
-    packed.min(len).saturating_mul(DOCUMENT_RATIO).clamp(MAX_MEMBER, MAX_DOCUMENT)
-}
-
-/// How many images, and how many bytes of them together, one file may give.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ImageBudget {
-    pub images: usize,
-    pub bytes: u64,
 }
 
 /// Read a `.figcraft` archive (or bare JSON) with its version history.
@@ -689,8 +639,10 @@ pub(crate) fn load_limited(bytes: &[u8], budget: ImageBudget, total: u64) -> Res
         let (doc, issues) = from_json(text)?;
         return Ok(Loaded { issues, ..Loaded::from(doc) });
     }
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-    let packed = z.by_name("document.json").map(|f| f.compressed_size()).unwrap_or(0);
+    let mut z =
+        craft_figcraft_format::Archive::open(bytes, craft_figcraft_format::ArchiveLimits { max_entries: u64::MAX, max_total_bytes: u64::MAX })
+            .map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let packed = z.compressed_size("document.json").unwrap_or(0);
     let limit = document_limit(packed, bytes.len() as u64);
     let mut unpacked = Unpacked::new(total);
     let text = String::from_utf8(unpacked.read(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
@@ -721,13 +673,14 @@ pub(crate) fn load_limited(bytes: &[u8], budget: ImageBudget, total: u64) -> Res
 /// The archive's `images/` members by hash, within `budget`, and the ones that couldn't be read
 /// with why. The document's own images (`own`) are read first, so a file past the budget loses
 /// the images only its history uses before its own.
-fn read_images<R: Read + Seek>(
-    z: &mut zip::ZipArchive<R>,
+fn read_images(
+    z: &mut impl craft_figcraft_format::NativeArchive,
     own: Option<&BTreeSet<String>>,
     budget: ImageBudget,
     unpacked: &mut Unpacked,
 ) -> ImagesRead {
-    let mut hashes: Vec<String> = z.file_names().filter_map(|n| n.strip_prefix("images/")).filter(|h| !h.is_empty()).map(str::to_string).collect();
+    let mut hashes: Vec<String> =
+        z.names().into_iter().filter_map(|n| n.strip_prefix("images/").map(str::to_owned)).filter(|h| !h.is_empty()).collect();
     hashes.sort_by_key(|h| !own.is_some_and(|o| o.contains(h)));
     let mut images = BTreeMap::new();
     let mut unread = Vec::new();
@@ -748,7 +701,7 @@ fn read_images<R: Read + Seek>(
             unread.push((hash, FormatError::Corrupt(format!("the file has more than {} images", budget.images))));
             continue;
         }
-        if z.by_name(&name).is_ok_and(|f| f.size() > left) {
+        if z.declared_size(&name).is_some_and(|size| size > left) {
             let mb = budget.bytes / (1024 * 1024);
             past_budget.insert(hash.clone());
             unread.push((hash, FormatError::Corrupt(format!("the file's images together pass {mb} MB"))));
@@ -819,8 +772,8 @@ fn report_lost_images(
 /// The version history kept under `dir` in an archive (none when it has no index), reading at
 /// most `budget` bytes of snapshots. Damaged entries are skipped and reported in `issues`; nothing
 /// here fails the load.
-fn read_versions<R: Read + Seek>(
-    z: &mut zip::ZipArchive<R>,
+fn read_versions(
+    z: &mut impl craft_figcraft_format::NativeArchive,
     dir: &str,
     images: &BTreeMap<String, ImageData>,
     issues: &mut Vec<String>,
@@ -828,12 +781,12 @@ fn read_versions<R: Read + Seek>(
     unpacked: &mut Unpacked,
 ) -> Vec<Version> {
     let index_name = format!("{dir}/index.json");
-    if z.index_for_name(&index_name).is_none() {
+    if !z.contains(&index_name) {
         return Vec::new();
     }
     let index = match unpacked
         .read(z, &index_name, MAX_VERSION_INDEX)
-        .and_then(|b| serde_json::from_slice::<Value>(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
+        .and_then(|b| serde_json::from_slice::<NativeVersionIndex>(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
     {
         Ok(v) => v,
         Err(e) => {
@@ -841,14 +794,13 @@ fn read_versions<R: Read + Seek>(
             return Vec::new();
         }
     };
-    let entries = index.get("versions").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
     let mut out: Vec<Version> = Vec::new();
-    for e in entries {
+    for e in index.versions {
         if out.len() >= MAX_VERSIONS {
             issues.push(format!("only the first {MAX_VERSIONS} versions were kept"));
             break;
         }
-        let id = e.get("id").and_then(Value::as_str).unwrap_or_default();
+        let id = e.id.as_str();
         if !is_valid_version_id(id) || out.iter().any(|v| v.id == id) {
             issues.push("a version with an invalid id was skipped".into());
             continue;
@@ -861,21 +813,13 @@ fn read_versions<R: Read + Seek>(
             }
         };
         *budget = budget.saturating_sub(json.len() as u64);
-        let text = |k: &str, max: usize| e.get(k).and_then(Value::as_str).map(|s| clip(s, max)).unwrap_or_default();
-        let images = e
-            .get("images")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone())))
-            .collect();
+        let images = e.images.iter().filter_map(|h| images.get(h).map(|i| (h.clone(), i.clone()))).collect();
         out.push(Version {
             id: id.to_string(),
-            name: text("name", MAX_VERSION_NAME),
-            description: text("description", MAX_VERSION_DESCRIPTION),
-            time: e.get("time").and_then(Value::as_u64).unwrap_or(0),
-            auto: e.get("auto").and_then(Value::as_bool).unwrap_or(false),
+            name: clip(&e.name, MAX_VERSION_NAME),
+            description: clip(&e.description, MAX_VERSION_DESCRIPTION),
+            time: e.time,
+            auto: e.auto,
             snapshot: Snapshot::Stored { json: Arc::new(json), images },
         });
     }
@@ -884,18 +828,18 @@ fn read_versions<R: Read + Seek>(
 
 /// The branches of an archive (none when it has no index), parsed. Damaged entries are skipped and
 /// reported in `issues`; nothing here fails the load.
-fn read_branches<R: Read + Seek>(
-    z: &mut zip::ZipArchive<R>,
+fn read_branches(
+    z: &mut impl craft_figcraft_format::NativeArchive,
     images: &BTreeMap<String, ImageData>,
     issues: &mut Vec<String>,
     unpacked: &mut Unpacked,
 ) -> Vec<Branch> {
-    if z.index_for_name(BRANCH_INDEX).is_none() {
+    if !z.contains(BRANCH_INDEX) {
         return Vec::new();
     }
     let index = match unpacked
         .read(z, BRANCH_INDEX, MAX_VERSION_INDEX)
-        .and_then(|b| serde_json::from_slice::<Value>(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
+        .and_then(|b| serde_json::from_slice::<NativeBranchIndex>(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
     {
         Ok(v) => v,
         Err(e) => {
@@ -903,28 +847,26 @@ fn read_branches<R: Read + Seek>(
             return Vec::new();
         }
     };
-    let entries = index.get("branches").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
     let mut out: Vec<Branch> = Vec::new();
     let mut budget = MAX_VERSION_BYTES;
-    for e in entries {
+    for e in index.branches {
         if out.len() >= MAX_BRANCHES {
             issues.push(format!("only the first {MAX_BRANCHES} branches were kept"));
             break;
         }
-        let id = e.get("id").and_then(Value::as_str).unwrap_or_default();
+        let id = e.id.as_str();
         if !is_valid_version_id(id) || out.iter().any(|b| b.id == id) {
             issues.push("a branch with an invalid id was skipped".into());
             continue;
         }
-        let mut snapshot = |part: &str, list: &str| -> Result<Arc<Document>, FormatError> {
+        let mut snapshot = |part: &str, hashes: &[String]| -> Result<Arc<Document>, FormatError> {
             let json = unpacked.read(z, &format!("branches/{id}/{part}.json"), budget.min(MAX_MEMBER))?;
             budget = budget.saturating_sub(json.len() as u64);
             let (mut doc, _) = from_json(std::str::from_utf8(&json).map_err(|e| FormatError::Corrupt(e.to_string()))?)?;
-            let hashes = e.get(list).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
-            doc.images = hashes.filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone()))).collect();
+            doc.images = hashes.iter().filter_map(|h| images.get(h).map(|i| (h.clone(), i.clone()))).collect();
             Ok(Arc::new(doc))
         };
-        let (base, head) = match (snapshot("base", "baseImages"), snapshot("head", "headImages")) {
+        let (base, head) = match (snapshot("base", &e.base_images), snapshot("head", &e.head_images)) {
             (Ok(b), Ok(h)) => (b, h),
             (Err(err), _) | (_, Err(err)) => {
                 issues.push(format!("branch `{id}` was skipped: {err}"));
@@ -933,10 +875,14 @@ fn read_branches<R: Read + Seek>(
         };
         out.push(Branch {
             id: id.to_string(),
-            name: e.get("name").and_then(Value::as_str).map(|s| clip(s, MAX_VERSION_NAME)).unwrap_or_default(),
-            time: e.get("time").and_then(Value::as_u64).unwrap_or(0),
-            client: e.get("client").and_then(Value::as_u64).and_then(|c| u32::try_from(c).ok()).unwrap_or(0),
-            state: e.get("state").and_then(|s| BranchState::deserialize(s).ok()).unwrap_or(BranchState::Active),
+            name: clip(&e.name, MAX_VERSION_NAME),
+            time: e.time,
+            client: e.client,
+            state: match e.state {
+                NativeBranchState::Active => BranchState::Active,
+                NativeBranchState::Merged => BranchState::Merged,
+                NativeBranchState::Archived => BranchState::Archived,
+            },
             versions: read_versions(z, &format!("branches/{id}/versions"), images, issues, &mut budget, unpacked),
             base,
             head,

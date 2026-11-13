@@ -10,12 +10,12 @@
 //! so a missing, damaged or oversized library file is an error, never a crash.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek};
 use std::sync::Arc;
 
 use figcraft_doc::{ImageData, LibraryManifest, NodeKind, PublishedLibrary, used_images};
 
-use crate::{FormatError, MAX_MEMBER, Unpacked, from_json, image_data, io_err, json_options, put, put_json};
+use crate::{FormatError, MAX_MEMBER, Unpacked, from_json, image_data, io_err, put, put_json};
 
 const MANIFEST: &str = "library/manifest.json";
 const SNAPSHOT: &str = "library/document.json";
@@ -39,13 +39,13 @@ pub fn is_valid_library_id(id: &str) -> bool {
 }
 
 /// Write the published library's entries. `written` are the images already in `images/`.
-pub(crate) fn write<W: Write + Seek>(z: &mut zip::ZipWriter<W>, lib: &PublishedLibrary, written: &BTreeSet<&String>) -> Result<(), FormatError> {
-    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    put(z, MANIFEST, json_options(), &serde_json::to_vec(&lib.manifest).map_err(io_err)?)?;
+pub(crate) fn write(z: &mut craft_figcraft_format::ArchiveWriter, lib: &PublishedLibrary, written: &BTreeSet<&String>) -> Result<(), FormatError> {
+    let stored = craft_figcraft_format::Compression::Stored;
+    put(z, MANIFEST, craft_figcraft_format::Compression::Level(3), &serde_json::to_vec(&lib.manifest).map_err(io_err)?)?;
     put_json(z, SNAPSHOT, &lib.doc)?;
     for (hash, img) in &lib.doc.images {
         if !written.contains(hash) && ImageData::is_valid_key(hash) {
-            put(z, &format!("{IMAGES}{hash}"), stored, &img.bytes)?;
+            put(z, &format!("{IMAGES}{hash}"), stored, img.bytes.as_slice())?;
         }
     }
     Ok(())
@@ -54,12 +54,12 @@ pub(crate) fn write<W: Write + Seek>(z: &mut zip::ZipWriter<W>, lib: &PublishedL
 /// The published library in an archive (`None` when the file was never published). `own` are
 /// the images already read from `images/`; what it unpacks comes out of `unpacked` (beyond the
 /// per-part caps).
-pub(crate) fn read<R: Read + Seek>(
-    z: &mut zip::ZipArchive<R>,
+pub(crate) fn read(
+    z: &mut impl craft_figcraft_format::NativeArchive,
     own: &BTreeMap<String, ImageData>,
     unpacked: &mut Unpacked,
 ) -> Result<Option<PublishedLibrary>, FormatError> {
-    if z.index_for_name(MANIFEST).is_none() {
+    if !z.contains(MANIFEST) {
         return Ok(None);
     }
     let mut manifest: LibraryManifest = serde_json::from_slice(&unpacked.read(z, MANIFEST, MAX_MANIFEST)?).map_err(corrupt)?;
@@ -77,7 +77,7 @@ pub(crate) fn read<R: Read + Seek>(
             doc.images.insert(hash, img.clone());
             continue;
         }
-        let name = [format!("{IMAGES}{hash}"), format!("images/{hash}")].into_iter().find(|n| z.index_for_name(n).is_some());
+        let name = [format!("{IMAGES}{hash}"), format!("images/{hash}")].into_iter().find(|n| z.contains(n));
         // A missing or oversized image shows as a placeholder, like in any other file.
         let Some(data) = name.and_then(|n| unpacked.read(z, &n, budget.min(MAX_MEMBER)).ok()) else { continue };
         budget = budget.saturating_sub(data.len() as u64);
@@ -107,7 +107,7 @@ pub fn read_library<R: Read + Seek>(r: R) -> Result<Option<PublishedLibrary>, Fo
 /// archive that would unpack to more is refused, or loses the images past it), for libraries from
 /// people the reader doesn't trust (a server).
 pub fn read_library_within<R: Read + Seek>(r: R, max_bytes: u64) -> Result<Option<PublishedLibrary>, FormatError> {
-    let mut z = zip::ZipArchive::new(r).map_err(corrupt)?;
+    let mut z = craft_figcraft_format::SeekArchive::open(r, u64::MAX).map_err(corrupt)?;
     read(&mut z, &BTreeMap::new(), &mut Unpacked::new(max_bytes))
 }
 
