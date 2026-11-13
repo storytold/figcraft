@@ -63,7 +63,15 @@ fn number_past(d: &str, max: f64) -> bool {
         big
     }
     let (mut cur, mut dot, mut exp) = (String::new(), false, false);
+    // Whether the command is an arc, and how many numbers it has had: the 4th and 5th of each
+    // seven are flags, single `0`/`1` characters that may run into the next number unseparated.
+    let (mut arc, mut idx) = (false, 0usize);
     for c in d.chars() {
+        if cur.is_empty() && arc && matches!(idx % 7, 3 | 4) && matches!(c, '0' | '1') {
+            idx += 1;
+            (dot, exp) = (false, false);
+            continue;
+        }
         let continues = match c {
             '0'..='9' => true,
             '.' => !dot && !exp,
@@ -77,8 +85,12 @@ fn number_past(d: &str, max: f64) -> bool {
             cur.push(c);
             continue;
         }
+        idx += cur.chars().any(|c| c.is_ascii_digit()) as usize;
         if big(&mut cur, max) {
             return true;
+        }
+        if c.is_ascii_alphabetic() {
+            (arc, idx) = (matches!(c, 'A' | 'a'), 0);
         }
         (dot, exp) = (c == '.', false);
         if matches!(c, '+' | '-' | '.') {

@@ -56,6 +56,7 @@ fn a_plugin_gets_library_names_but_not_their_links() {
         name: "Kit".into(),
         path: LINK.into(),
         version: 3,
+        ..Default::default()
     });
     let tail = "(call $set_output (i32.const 40000) (call $reply_read (i32.const 40000) (i32.const 20000))) (return (i32.const 0))";
     install(&mut s, manifest("org.test.libs", "read", &[]), &script(&[("library.list", json!({}))], OnRefusal::Fail, tail));
@@ -73,6 +74,7 @@ fn a_plugin_gets_a_fixed_message_for_library_update_failures() {
         name: "Kit".into(),
         path: LINK.into(),
         version: 3,
+        ..Default::default()
     });
     let tail = "(call $set_output (i32.const 40000) (call $reply_read (i32.const 40000) (i32.const 20000))) (return (i32.const 0))";
     install(&mut s, manifest("org.test.upd", "read", &[]), &script(&[("library.updates", json!({}))], OnRefusal::Fail, tail));
