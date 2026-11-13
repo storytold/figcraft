@@ -528,10 +528,7 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
         }
         return true;
     }
-    if m.is_none() && !repeat && opacity_digit(app, key, now) {
-        return true;
-    }
-    false
+    m.is_none() && !repeat && opacity_digit(app, key, now)
 }
 
 /// Keys while a selection box drawn from the keyboard shows (`select.area`, Alt+Space or Ctrl+Space,
