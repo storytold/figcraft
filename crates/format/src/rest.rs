@@ -442,6 +442,8 @@ pub(crate) struct Ctx<'a> {
     set_defs: BTreeMap<NodeId, BTreeMap<String, PropDef>>,
     /// Prototype starting points: (page, name, REST node id).
     flows: Vec<(NodeId, String, String)>,
+    /// Board connectors and labels, resolved once every layer is imported (their ends name layers).
+    pending_boards: Vec<(NodeId, &'a Value)>,
     /// Layers with prototype interactions, resolved once every layer is imported.
     protos: Vec<(NodeId, &'a Value)>,
     /// Layers that carry overlay settings (position, background, outside clicks), by REST id.
@@ -478,6 +480,7 @@ impl<'a> Ctx<'a> {
             swap_defaults: Vec::new(),
             set_defs: BTreeMap::new(),
             flows: Vec::new(),
+            pending_boards: Vec::new(),
             protos: Vec::new(),
             overlay_meta: BTreeMap::new(),
             var_kinds: BTreeMap::new(),
@@ -781,10 +784,43 @@ impl<'a> Ctx<'a> {
             self.overlay_meta.entry(rid).or_insert(j);
         }
         self.bindings(n, j);
+        if let Some(b) = j.get("board") {
+            self.board_item(n, b);
+        }
         let restored = j.get("outlinedStroke").is_some_and(|original| restore_stroke(n, original));
         // Styles and bindings were read against the stroke: they follow its paints to the fill.
         if outlined && !restored {
             outline_stroke(n);
+        }
+    }
+
+    /// The `board` field (a FigCraft extension): what the object is on a board. A sticky or shape
+    /// is set at once; anything else, or junk, is ignored with a warning.
+    fn board_item(&mut self, n: &mut Node, b: &'a Value) {
+        // A sticky or shape is a frame holding its layers: on anything else it is ignored.
+        let frame = n.kind.is_frame_like();
+        let item = match text(b, "type") {
+            Some("sticky") if frame => {
+                let author = text(b, "author").unwrap_or("").trim();
+                Some(figcraft_doc::BoardItem::Sticky { author: author.chars().filter(|c| !c.is_control()).take(64).collect() })
+            }
+            Some("shape") if frame => {
+                text(b, "shape").and_then(figcraft_doc::BoardShape::from_id).map(|shape| figcraft_doc::BoardItem::Shape { shape })
+            }
+            _ => None,
+        };
+        match item {
+            Some(item) => n.board = Some(item),
+            None => self.warn(format!("unknown board item on {} was ignored", n.name)),
+        }
+    }
+
+    /// Board items that name other layers (connector ends, a label's connector), once every
+    /// layer is imported and `ids` can resolve them.
+    fn resolve_boards(&mut self) {
+        for (id, _) in std::mem::take(&mut self.pending_boards) {
+            let name = self.doc.node(id).map(|n| n.name.clone()).unwrap_or_default();
+            self.warn(format!("unknown board item on {name} was ignored"));
         }
     }
 
@@ -1096,6 +1132,7 @@ impl<'a> Ctx<'a> {
             }
         }
         self.resolve_instances();
+        self.resolve_boards();
         if let Some(sources) = self.fig_sources.take() {
             let missing = sources.apply(&mut self.doc, &self.ids);
             if missing > 0 {
