@@ -503,7 +503,7 @@ pub fn save_bytes_with_history(
             &mut z,
             BRANCH_INDEX,
             craft_figcraft_format::Compression::Level(3),
-            &serde_json::to_vec(&NativeBranchIndex { branches: index }).map_err(io_err)?,
+            &craft_figcraft_format::write_branch_index(&NativeBranchIndex { branches: index }).map_err(io_err)?,
         )?;
     }
     if let Some(lib) = &doc.published {
@@ -542,7 +542,7 @@ fn put_versions(z: &mut craft_figcraft_format::ArchiveWriter, dir: &str, version
         z,
         &format!("{dir}/index.json"),
         craft_figcraft_format::Compression::Level(3),
-        &serde_json::to_vec(&NativeVersionIndex { versions: index }).map_err(io_err)?,
+        &craft_figcraft_format::write_version_index(&NativeVersionIndex { versions: index }).map_err(io_err)?,
     )?;
     Ok(())
 }
@@ -738,7 +738,7 @@ fn read_versions(
     }
     let index = match unpacked
         .read(z, &index_name, MAX_VERSION_INDEX)
-        .and_then(|b| serde_json::from_slice::<NativeVersionIndex>(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
+        .and_then(|b| craft_figcraft_format::read_version_index(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
     {
         Ok(v) => v,
         Err(e) => {
@@ -791,7 +791,7 @@ fn read_branches(
     }
     let index = match unpacked
         .read(z, BRANCH_INDEX, MAX_VERSION_INDEX)
-        .and_then(|b| serde_json::from_slice::<NativeBranchIndex>(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
+        .and_then(|b| craft_figcraft_format::read_branch_index(&b).map_err(|e| FormatError::Corrupt(e.to_string())))
     {
         Ok(v) => v,
         Err(e) => {
