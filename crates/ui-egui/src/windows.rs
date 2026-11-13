@@ -156,7 +156,11 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
     };
     // A frame with no batch of its own says nothing about the document: never treat "nothing
     // queued" as a dropped batch (that used to error another window's acknowledgement).
-    if !events.is_empty() && tagged != current {
+    // egui derives pointer, scroll and key state from the raw input before this frame's control
+    // requests run, and that state cannot be undone afterwards. A `doc.switch` (or other command
+    // that changes the open files) still queued behind the batch would let it reach the new file,
+    // so the batch is rejected here, before egui begins processing it.
+    if !events.is_empty() && (tagged != current || queue_changes_files(app)) {
         // The file changed before the batch reached a frame: say so once instead of replaying it
         // into the new document. Only this window's own acknowledgements belong to the batch.
         fail_input_acks(app, viewport_id);
@@ -172,6 +176,14 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
         app.applied_frame = Some(viewport_id);
     }
     events
+}
+
+/// Whether a queued control request runs a command that can change which file is active.
+fn queue_changes_files(app: &FigApp) -> bool {
+    app.control_queue.iter().any(|r| {
+        r.method == "engine.execute"
+            && r.params.get("command").and_then(|c| c.as_str()).is_some_and(|c| matches!(c, "doc.switch" | "doc.close") || c.starts_with("file."))
+    })
 }
 
 /// After this frame's control requests ran: the batch it took for one file never reaches another

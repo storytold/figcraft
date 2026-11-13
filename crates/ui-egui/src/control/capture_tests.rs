@@ -732,3 +732,40 @@ fn input_for_the_still_active_document_is_applied_and_acknowledged() {
     assert!(u.app.session.docs[0].doc.node(a).is_none(), "the Delete applied to file A");
     assert!(u.app.session.docs[1].doc.node(b).is_some());
 }
+
+/// Asserts a pointer press and a scroll batch queued for one file, followed by `doc.switch`, never
+/// reach egui's derived input state for the new file, while the batch fails and platform input stays.
+#[test]
+fn pointer_and_scroll_queued_before_a_document_switch_never_reach_the_new_document() {
+    let (mut u, _a, _b) = two_files_with_selected_rectangles();
+    let (tx, rx) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(33),
+        method: "ui.input".into(),
+        params: json!({"events": [{"down": [300, 300]}, {"scroll": [0, -80]}]}),
+        reply: tx,
+        state: Default::default(),
+    });
+    u.frame(vec![]);
+    let (tx, switched) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(34),
+        method: "engine.execute".into(),
+        params: json!({"command": "doc.switch", "params": {"index": 1}}),
+        reply: tx,
+        state: Default::default(),
+    });
+    let mut events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let unrelated = egui::Event::PointerMoved(egui::pos2(321.0, 123.0));
+    events.insert(0, unrelated.clone());
+    u.frame(events);
+    assert!(switched.try_recv().expect("switched").result.is_ok());
+    assert_eq!(u.app.session.active, 1);
+    let (pressed, down, scroll, seen) =
+        u.ctx.input(|i| (i.pointer.button_pressed(egui::PointerButton::Primary), i.pointer.primary_down(), i.smooth_scroll_delta, i.events.clone()));
+    assert!(!pressed && !down, "the batch's press never reaches the new file");
+    assert_eq!(scroll, egui::Vec2::ZERO, "the batch's scroll never reaches the new file");
+    assert!(seen.contains(&unrelated), "the window's own input still arrives");
+    let reply = rx.try_recv().expect("the batch's acknowledgement");
+    assert!(reply.result.is_err(), "the batch was not applied: {:?}", reply.result);
+}
