@@ -60,11 +60,13 @@ fn a_page_with_a_device_keeps_its_background_and_warns_for_the_device() {
 }
 
 #[test]
-fn a_default_page_writes_no_prototype_background_and_no_warning() {
+fn a_default_page_writes_its_prototype_background_so_figma_shows_the_same_colour() {
     let doc = with_prototype(|_| {});
-    assert_eq!(written(&doc), None);
+    let default = PrototypeSettings::default().background;
+    assert_eq!(default.to_hex(), "1E1E1E");
+    assert_eq!(written(&doc), Some([default.r, default.g, default.b, 1.0]));
     let (background, _, warnings) = back(&doc);
-    assert_eq!(background.to_hex(), figcraft_doc::proto::PrototypeSettings::default().background.to_hex());
+    assert_eq!(background, default);
     assert!(warnings.iter().all(|w| !w.contains("prototype")), "{warnings:?}");
 }
 
@@ -77,7 +79,7 @@ fn the_schema_numbers_the_prototype_background() {
 }
 
 #[test]
-fn each_device_setting_alone_warns_and_writes_no_background() {
+fn each_device_setting_alone_warns_and_keeps_the_default_background() {
     let settings: [fn(&mut PrototypeSettings); 5] = [
         |p| p.device = "iPhone 17".into(),
         |p| p.rotation = DeviceRotation::Landscape,
@@ -87,7 +89,8 @@ fn each_device_setting_alone_warns_and_writes_no_background() {
     ];
     for (i, set) in settings.into_iter().enumerate() {
         let doc = with_prototype(set);
-        assert_eq!(written(&doc), None, "setting {i}");
+        let default = PrototypeSettings::default().background;
+        assert_eq!(written(&doc), Some([default.r, default.g, default.b, 1.0]), "setting {i}");
         let (_, _, warnings) = back(&doc);
         assert!(warnings.iter().any(|w| w == "prototype device settings were left out"), "setting {i}: {warnings:?}");
     }
@@ -103,7 +106,8 @@ fn a_prototype_background_is_written_opaque() {
         assert_eq!(background, blue(), "alpha {alpha}");
         assert!(warnings.iter().any(|w| w == "a prototype background's opacity was left out"), "alpha {alpha}: {warnings:?}");
     }
-    // The default colour is the default at any opacity: no field.
+    // The default colour is written opaque too.
     let doc = with_prototype(|p| p.background = p.background.with_alpha(0.5));
-    assert_eq!(written(&doc), None);
+    let default = PrototypeSettings::default().background;
+    assert_eq!(written(&doc), Some([default.r, default.g, default.b, 1.0]));
 }
