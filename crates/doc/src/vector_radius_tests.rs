@@ -48,7 +48,10 @@ fn assert_arcs(path: &BezPath, want: &[(Point, Point, Point, f64)], why: &str) {
         // Two arcs can share both ends (opposite corners of a square), so the middle picks one.
         let ends = |c: &&CubicBez| (near(c.p0, a) && near(c.p3, b)) || (near(c.p0, b) && near(c.p3, a));
         let passing: Vec<Point> = got.iter().filter(ends).map(|c| c.eval(0.5)).collect();
-        assert!(passing.iter().any(|&m| near(m, mid)), "{why}: no arc at {corner:?} from {a:?} to {b:?} through {mid:?}; arcs between them pass {passing:?}");
+        assert!(
+            passing.iter().any(|&m| near(m, mid)),
+            "{why}: no arc at {corner:?} from {a:?} to {b:?} through {mid:?}; arcs between them pass {passing:?}"
+        );
     }
 }
 
