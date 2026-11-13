@@ -1029,9 +1029,9 @@ dependencies = [
 [[package]]
 name = "craft-figcraft-format"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9aac9301a#9aac9301a92ec7f8db16760b6de0f0576f4bd52c"
+source = "git+https://github.com/storytold/craft-libs?rev=0e2a717c644bcfaae1a27cd5e2f6b4c0a6b7798b#0e2a717c644bcfaae1a27cd5e2f6b4c0a6b7798b"
 dependencies = [
- "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9aac9301a)",
+ "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=0e2a717c644bcfaae1a27cd5e2f6b4c0a6b7798b)",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1231,7 +1231,7 @@ dependencies = [
 [[package]]
 name = "craft-zip"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=9aac9301a#9aac9301a92ec7f8db16760b6de0f0576f4bd52c"
+source = "git+https://github.com/storytold/craft-libs?rev=0e2a717c644bcfaae1a27cd5e2f6b4c0a6b7798b#0e2a717c644bcfaae1a27cd5e2f6b4c0a6b7798b"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
