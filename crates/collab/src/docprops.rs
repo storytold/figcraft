@@ -403,6 +403,27 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
     apply_indexed(doc, change, &mut Index::default())
 }
 
+/// Clamp the review settings a snapshot carries to the limits this build keeps, in place: an
+/// older or looser snapshot may hold longer radii or brand lists, and the file opens with what
+/// fits — the preset, grid and disabled rules exactly as saved. An ordinary edit is refused
+/// instead (`apply_indexed`), and a peer that can't read the settings at all gets them left out
+/// of what the server sends (`Change::without_design_review`).
+pub(crate) fn clamp_snapshot_design_review(changes: &mut Vec<Change>) {
+    for c in changes {
+        if let Change::SetDoc { prop: DocProp::DesignReview, value } = c
+            && let Ok(config) = value.read::<figcraft_doc::DesignReview>("design review")
+            && (config.radii.len() > figcraft_doc::MAX_RADII || config.brand.len() > figcraft_doc::MAX_BRAND_COLORS)
+        {
+            let mut clamped = config;
+            clamped.radii.truncate(figcraft_doc::MAX_RADII);
+            clamped.brand.truncate(figcraft_doc::MAX_BRAND_COLORS);
+            if let Ok(v) = Json::of(&clamped) {
+                *value = v;
+            }
+        }
+    }
+}
+
 /// Apply a document-level change, with the keyed lists' positions kept in `index` between the
 /// changes of one batch. Returns whether it can change which pages are listed (the library store
 /// page is never listed).

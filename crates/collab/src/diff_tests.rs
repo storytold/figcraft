@@ -61,21 +61,30 @@ fn design_review_settings_round_trip_and_reach_a_snapshot() {
 }
 
 #[test]
-fn an_edit_past_the_review_limits_is_refused_but_a_snapshot_applies() {
+fn an_edit_past_the_review_limits_is_refused_but_a_snapshot_clamps() {
     let (a, _, _, _) = setup();
     // An edit peer trying to hand the file tens of thousands of radii is refused at apply.
     let mut b = a.document().clone();
+    b.design_review.preset = DesignPreset::Strict;
+    b.design_review.grid = 8.0;
     b.design_review.radii = (0..40).map(|i| i as f64).collect();
+    b.design_review.brand = vec![Color::from_rgb8_const(1, 2, 3); 40];
+    b.design_review.disabled = vec!["radius.off-scale".into()];
     let mut r = a.clone();
     let change = Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() };
     let err = r.apply(std::slice::from_ref(&change), Mode::Strict).unwrap_err().to_string();
     assert!(err.contains("pass the 32 limit `design.configure` keeps"), "{err}");
-    // A snapshot holding settings over the limits (an old file's) still opens: like an image
-    // entry that fails today's checks, the oversized entry is left out of what it loads.
+    // A snapshot holding settings over the limits (an old file's) opens clamped to what fits:
+    // the preset, grid and disabled rules exactly as saved, the lists to the limit.
     let snap = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
     let (r2, left_out) = Replica::from_snapshot_leaving_out(&snap).unwrap();
-    assert_eq!(left_out, 1, "the oversized settings entry is the one left out");
-    assert!(r2.document().design_review.radii.is_empty(), "the file opens without them");
+    assert_eq!(left_out, 0, "nothing needed leaving out");
+    let cfg = &r2.document().design_review;
+    assert_eq!(cfg.preset, DesignPreset::Strict, "the preset survives");
+    assert_eq!(cfg.grid, 8.0, "the grid survives");
+    assert_eq!(cfg.disabled, vec!["radius.off-scale".to_string()], "the disabled rules survive");
+    assert_eq!(cfg.radii, (0..32).map(|i| i as f64).collect::<Vec<_>>(), "the radii keep their first 32");
+    assert_eq!(cfg.brand, vec![Color::from_rgb8_const(1, 2, 3); 32], "the brand colours keep their first 32");
 }
 
 #[test]

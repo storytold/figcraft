@@ -326,15 +326,6 @@ impl Change {
         matches!(self, Change::Put { entry: Entry::Image(_), .. } | Change::Remove { entry: Entry::Image(_) })
     }
 
-    /// Whether this edit carries review settings past the limits `design.configure` keeps: a
-    /// snapshot saved by a looser build may hold one, and opens without it (see
-    /// [`crate::docprops`], which refuses such a change inside an ordinary batch).
-    pub(crate) fn is_oversized_design_review(&self) -> bool {
-        let Change::SetDoc { prop: DocProp::DesignReview, value } = self else { return false };
-        let Ok(config) = value.read::<figcraft_doc::DesignReview>("design review") else { return false };
-        config.radii.len() > figcraft_doc::MAX_RADII || config.brand.len() > figcraft_doc::MAX_BRAND_COLORS
-    }
-
     /// Whether this only changes comment threads (a thread, their order, or all of them): what a
     /// comment link may send.
     pub fn is_comment(&self) -> bool {
@@ -343,6 +334,19 @@ impl Change {
             Change::SetDoc { prop, .. } => matches!(prop.list(), Some(Ok(Family::Comments) | Err(Family::Comments))),
             Change::Create { .. } | Change::Set { .. } | Change::Delete { .. } => false,
         }
+    }
+
+    /// Whether this writes the file's design review settings: a batch carrying one can't be read
+    /// by a peer that doesn't announce [`crate::message::DESIGN_REVIEW`], so the server keeps it
+    /// out of what it sends them ([`Self::without_design_review`]).
+    pub(crate) fn is_design_review(&self) -> bool {
+        matches!(self, Change::SetDoc { prop: DocProp::DesignReview, .. })
+    }
+
+    /// `changes` without the review-setting edits: what an older peer reads of a batch (its other
+    /// edits, order kept), or of a catch-up delta or snapshot.
+    pub(crate) fn without_design_review(changes: Vec<Self>) -> Vec<Self> {
+        changes.into_iter().filter(|c| !c.is_design_review()).collect()
     }
 }
 

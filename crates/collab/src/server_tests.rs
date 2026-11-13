@@ -2,8 +2,8 @@
 
 use figcraft_doc::{Document, Node, NodeId, NodeKind};
 
-use crate::change::{Change, Entry, Json, Prop};
-use crate::message::{ClientMsg, Hello, PROTOCOL, Presence, ServerMsg};
+use crate::change::{Change, DocProp, Entry, Json, Prop};
+use crate::message::{ClientMsg, Hello, PROTOCOL, Presence, ServerMsg, client_version, reads_design_review};
 use crate::replica::Mode;
 use crate::{Client, Limits, NoRecompute, Outgoing, Server};
 
@@ -36,6 +36,22 @@ fn for_client(out: &[Outgoing], to: u32) -> Vec<ServerMsg> {
             Outgoing::Others(not, m) if *not != to => Some(m.clone()),
             _ => None,
         })
+        .collect()
+}
+
+/// A hello whose `client_version` says exactly `version` (what an older or newer build announces).
+fn hello_of(version: &str) -> Hello {
+    Hello { client_version: version.to_string(), ..hello("tok") }
+}
+
+/// The changes an `Accepted` relay or catch-up carries, or none.
+fn accepted_changes(msgs: &[ServerMsg]) -> Vec<&Change> {
+    msgs.iter()
+        .filter_map(|m| match m {
+            ServerMsg::Changes(a) => Some(a.changes.iter().collect::<Vec<_>>()),
+            _ => None,
+        })
+        .flatten()
         .collect()
 }
 
@@ -363,4 +379,62 @@ fn junk_batches_never_panic_and_never_corrupt_the_document() {
         let _ = s.receive(a.id(), ClientMsg::Changes { base_seq: s.seq(), batch_id: round + 1, changes });
         assert!(s.document().validate().is_empty(), "{:?}", s.document().validate());
     }
+}
+
+#[test]
+fn the_client_version_announces_the_design_review() {
+    assert!(reads_design_review(&client_version()));
+    assert!(!reads_design_review("0.18.0 signals hosting comments packed"));
+}
+
+/// A capable editor, a peer built before the review existed, and a mixed batch: the old peer
+/// hears the same batch without the review-setting edit, the new peer hears it whole.
+#[test]
+fn a_review_edit_reaches_only_the_peers_that_read_it() {
+    let (d, _, _) = doc();
+    let mut s = Server::new(d, "tok", Limits::default());
+    let capable = join(&mut s);
+    let (old_id, out) = s.join(hello_of("0.18.0 signals hosting comments packed")).unwrap();
+    let old = {
+        let Some(Outgoing::To(_, welcome)) = out.into_iter().next() else { panic!("no welcome") };
+        Client::join(welcome).unwrap()
+    };
+    assert_eq!(old.id(), old_id);
+
+    // One batch: rename the document (everyone) and set the review grid (capable peers only).
+    let batch = vec![
+        Change::SetDoc { prop: DocProp::Name, value: Json::of("Renamed").unwrap() },
+        Change::SetDoc { prop: DocProp::DesignReview, value: Json(serde_json::json!({"preset": "strict", "grid": 8.0})) },
+    ];
+    let out = s.receive(capable.id(), ClientMsg::Changes { base_seq: s.seq(), batch_id: 1, changes: batch });
+    let for_old = for_client(&out, old.id());
+    assert!(accepted_changes(&for_old).iter().all(|c| !c.is_design_review()), "the old peer's copy carries no review edit: {:?}", for_old);
+    assert!(
+        accepted_changes(&for_old).iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::Name, .. })),
+        "the old peer still hears the rename: {:?}",
+        for_old
+    );
+    let for_new = for_client(&out, capable.id());
+    assert_eq!(accepted_changes(&for_new).len(), 2, "the capable peer hears both: {for_new:?}");
+
+    // A capable newcomer's catch-up (a fresh join, so a snapshot) carries the settings.
+    let (_, out) = s.join(hello("tok")).unwrap();
+    let Some(Outgoing::To(_, ServerMsg::Welcome { catch_up, .. })) =
+        out.into_iter().find(|o| matches!(o, Outgoing::To(_, ServerMsg::Welcome { .. })))
+    else {
+        panic!("no welcome");
+    };
+    let crate::message::CatchUp::Snapshot(changes) = catch_up else { panic!("not a snapshot") };
+    assert!(changes.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::DesignReview, .. })), "{changes:?}");
+
+    // An old newcomer's catch-up carries none, and still has the rename.
+    let (_, out) = s.join(hello_of("0.18.0 signals hosting comments packed")).unwrap();
+    let Some(Outgoing::To(_, ServerMsg::Welcome { catch_up, .. })) =
+        out.into_iter().find(|o| matches!(o, Outgoing::To(_, ServerMsg::Welcome { .. })))
+    else {
+        panic!("no welcome");
+    };
+    let crate::message::CatchUp::Snapshot(changes) = catch_up else { panic!("not a snapshot") };
+    assert!(changes.iter().all(|c| !c.is_design_review()), "{changes:?}");
+    assert!(changes.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::Name, .. })), "{changes:?}");
 }
