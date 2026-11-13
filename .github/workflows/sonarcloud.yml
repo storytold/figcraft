@@ -17,7 +17,7 @@ concurrency:
 jobs:
   sonarcloud:
     # Pin the coverage setup that checks out this repo's pinned craft-i18n data.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@20ebee3cb1eef69f886b98d566aa07552ee0196f
+    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@ea24c9c24e1997238334182160f60e602e5bce32
     with:
       # The shared coverage archive's shards omit the CLI executable used by integration tests.
       # Run this repository's suite in one instrumented job and provide its pinned test data.
