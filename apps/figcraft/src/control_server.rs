@@ -3,8 +3,8 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use figcraft_engine::events::{self, EventLog};
@@ -113,10 +113,89 @@ pub struct ControlHandle {
 #[derive(Default)]
 struct ControlInner {
     listening_port: AtomicU16,
-    active_connections: AtomicUsize,
+    /// Bumped by every [`ControlHandle::apply`]: a connection accepted under an older generation
+    /// is revoked, so turning the server off or moving it to another port also ends the
+    /// connections it had already accepted.
     generation: AtomicU64,
+    /// The connections being served, so [`ControlHandle::apply`] can close them.
+    connections: Mutex<Vec<Arc<Connection>>>,
     last_error: Mutex<Option<String>>,
     deps: Mutex<Option<(Queue, CtxSlot, Arc<EventLog>)>>,
+}
+
+impl ControlInner {
+    fn connections(&self) -> MutexGuard<'_, Vec<Arc<Connection>>> {
+        self.connections.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// End every connection accepted before the current generation: shut its socket, which wakes a
+    /// read blocked on it, and cancel the request it queued if the UI has not started it yet.
+    fn revoke_stale(&self) {
+        let current = self.generation.load(Ordering::SeqCst);
+        let stale: Vec<Arc<Connection>> = self.connections().iter().filter(|c| c.generation != current).cloned().collect();
+        for connection in stale {
+            let pending = connection.pending();
+            if let Some(gate) = pending.as_ref() {
+                gate.cancel_if_open();
+            }
+            drop(pending);
+            let _ = connection.stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+/// One accepted connection, as the server sees it from outside its worker.
+struct Connection {
+    /// The server generation that accepted it.
+    generation: u64,
+    /// A handle on its socket, to shut it when the connection is revoked.
+    stream: TcpStream,
+    /// The request it has queued and is waiting on, if any. A request is queued while this lock is
+    /// held and only after the generation was checked under it, so a revocation either sees the
+    /// request here and cancels it, or the worker sees the revocation and queues nothing.
+    pending: Mutex<Option<RequestGate>>,
+}
+
+impl Connection {
+    fn pending(&self) -> MutexGuard<'_, Option<RequestGate>> {
+        self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// A connection's registration with its server, for as long as its worker serves it.
+struct Lease {
+    inner: Arc<ControlInner>,
+    connection: Arc<Connection>,
+}
+
+impl Lease {
+    /// Register `stream`, accepted under `generation`.
+    fn new(inner: Arc<ControlInner>, generation: u64, stream: &TcpStream) -> std::io::Result<Self> {
+        let connection = Arc::new(Connection { generation, stream: stream.try_clone()?, pending: Mutex::new(None) });
+        inner.connections().push(connection.clone());
+        Ok(Self { inner, connection })
+    }
+
+    fn revoked(&self) -> bool {
+        self.inner.generation.load(Ordering::SeqCst) != self.connection.generation
+    }
+
+    /// Admit a request under `gate`: `None` once the connection is revoked. The guard must be held
+    /// until the request is in the UI queue.
+    fn admit(&self, gate: &RequestGate) -> Option<MutexGuard<'_, Option<RequestGate>>> {
+        let mut pending = self.connection.pending();
+        if self.revoked() {
+            return None;
+        }
+        *pending = Some(gate.clone());
+        Some(pending)
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        self.inner.connections().retain(|c| !Arc::ptr_eq(c, &self.connection));
+    }
 }
 
 impl ControlHandle {
@@ -135,15 +214,18 @@ impl ControlHandle {
     /// Return `(listening_port, active_connections, last_error)`.
     pub fn status(&self) -> (u16, usize, Option<String>) {
         let port = self.inner.listening_port.load(Ordering::Relaxed);
-        let active = self.inner.active_connections.load(Ordering::Relaxed);
+        let active = self.inner.connections().len();
         let err = self.inner.last_error.lock().ok().and_then(|e| e.clone());
         (port, active, err)
     }
 
-    /// Start, rebind, or stop the localhost TCP control listener.
+    /// Start, rebind, or stop the localhost TCP control listener. The connections the previous
+    /// listener accepted end here too: a client connected before the server was turned off or
+    /// moved can't go on sending requests.
     pub fn apply(&self, enabled: bool, port: u16, busy: Duration) {
         let old_port = self.inner.listening_port.swap(0, Ordering::SeqCst);
-        let next_gen = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let next_gen = self.inner.generation.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
+        self.inner.revoke_stale();
         if old_port != 0 {
             let _ = TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], old_port)), Duration::from_millis(50));
         }
@@ -177,7 +259,14 @@ impl ControlHandle {
                 if inner.generation.load(Ordering::SeqCst) != next_gen {
                     break;
                 }
-                spawn_connection_tracked(stream, queue.clone(), ctx.clone(), events.clone(), Some(inner.clone()), &mut workers, TIMEOUT);
+                let lease = match Lease::new(inner.clone(), next_gen, &stream) {
+                    Ok(lease) => lease,
+                    Err(e) => {
+                        log::error!("control connection: {e}");
+                        continue;
+                    }
+                };
+                spawn_connection_tracked(stream, queue.clone(), ctx.clone(), events.clone(), Some(lease), &mut workers, TIMEOUT);
             }
         });
         if let Err(e) = spawned {
@@ -207,13 +296,14 @@ fn spawn_connection(
     spawn_connection_tracked(stream, queue, ctx, events, None, workers, timeout);
 }
 
-/// Spawn a worker thread for an accepted control connection while tracking active connection count.
+/// Spawn a worker thread for an accepted control connection, registered with its server by `lease`
+/// while it is served.
 fn spawn_connection_tracked(
     stream: TcpStream,
     queue: Queue,
     ctx: CtxSlot,
     events: Arc<EventLog>,
-    inner: Option<Arc<ControlInner>>,
+    lease: Option<Lease>,
     workers: &mut Vec<std::thread::JoinHandle<()>>,
     timeout: Duration,
 ) {
@@ -222,13 +312,7 @@ fn spawn_connection_tracked(
         return;
     }
     match std::thread::Builder::new().name("figcraft-control-conn".into()).spawn(move || {
-        if let Some(ref inner) = inner {
-            inner.active_connections.fetch_add(1, Ordering::Relaxed);
-        }
-        let _ = serve_with_events(stream, queue, ctx, events, timeout);
-        if let Some(ref inner) = inner {
-            inner.active_connections.fetch_sub(1, Ordering::Relaxed);
-        }
+        let _ = serve_with_events(stream, queue, ctx, events, timeout, lease.as_ref());
     }) {
         Ok(worker) => workers.push(worker),
         Err(e) => log::error!("control connection thread: {e}"),
@@ -241,10 +325,20 @@ fn spawn_connection_tracked(
 /// Serve a connection with a private event log (the tests; the app shares its session's log).
 #[cfg(test)]
 fn serve(out: TcpStream, queue: Queue, ctx: CtxSlot, timeout: Duration) -> std::io::Result<()> {
-    serve_with_events(out, queue, ctx, Arc::new(EventLog::default()), timeout)
+    serve_with_events(out, queue, ctx, Arc::new(EventLog::default()), timeout, None)
 }
 
-fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc<EventLog>, timeout: Duration) -> std::io::Result<()> {
+/// Message for a request sent on a connection the server has since revoked.
+const REVOKED: &str = "the local control server was turned off or moved to another port: reconnect";
+
+fn serve_with_events(
+    mut out: TcpStream,
+    queue: Queue,
+    ctx: CtxSlot,
+    events: Arc<EventLog>,
+    timeout: Duration,
+    lease: Option<&Lease>,
+) -> std::io::Result<()> {
     out.set_read_timeout(Some(timeout))?;
     out.set_write_timeout(Some(timeout))?;
     let mut reader = BufReader::new(out.try_clone()?);
@@ -268,6 +362,10 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
         let reply = match serde_json::from_str::<Value>(line) {
             Ok(v) => {
                 let id = v.get("id").cloned().unwrap_or(Value::Null);
+                if lease.is_some_and(Lease::revoked) {
+                    let _ = writeln!(out, "{}", json!({"id": id, "ok": false, "error": REVOKED}));
+                    break;
+                }
                 let method = v.get("method").and_then(Value::as_str).unwrap_or("").to_string();
                 let params = v.get("params").cloned().unwrap_or(json!({}));
                 // A poll waits on the shared log, not on a frame: it needs no UI thread and no
@@ -283,6 +381,15 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                 let waits = request_timeout(&v, timeout);
                 let (tx, rx) = std::sync::mpsc::channel();
                 let gate = RequestGate::new();
+                // Checked again with the request: a revocation that lands now cancels it or stops it.
+                let admitted = match lease.map(|l| l.admit(&gate)) {
+                    Some(None) => {
+                        let _ = writeln!(out, "{}", json!({"id": id, "ok": false, "error": REVOKED}));
+                        break;
+                    }
+                    Some(Some(admitted)) => Some(admitted),
+                    None => None,
+                };
                 let mut pending = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 pending.retain(|request| !request.is_cancelled());
                 if pending.len() >= MAX_QUEUED_REQUESTS {
@@ -293,6 +400,7 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                 let needs_frame = matches!(method.as_str(), "ui.screenshot" | "ui.input");
                 pending.push(ControlRequest { id: id.clone(), method, params, reply: tx, state: gate.clone() });
                 drop(pending);
+                drop(admitted);
                 if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
                     c.request_repaint();
                 }
