@@ -671,8 +671,15 @@ impl Duplicated {
             let (sw, cw) = (doc.world_transform(*s), doc.world_transform(*c));
             let (ps, pc) = (sw * Point::new(sn.width / 2.0, sn.height / 2.0), cw * Point::new(cn.width / 2.0, cn.height / 2.0));
             let grow = Point::new((cn.width - sn.width) / 2.0, (cn.height - sn.height) / 2.0);
-            let shift = sw * grow - sw * Point::ORIGIN;
-            pairs.push((ps, Point::new(pc.x - shift.x, pc.y - shift.y)));
+            let shift_in = |x: Affine| x * grow - x * Point::ORIGIN;
+            // The order of a turn and a resize isn't recorded. A resize then a turn shifts the centre
+            // along the source's axes; a turn then a resize, along the copy's. Take the copy's only
+            // when it alone makes this pair's own move zero: a pure resize plus turn, either order,
+            // with no move must give no move. Otherwise keep the source's.
+            let (by_source, by_copy) = (pc - shift_in(sw), pc - shift_in(cw));
+            let still = |q: Point| (q.x - ps.x).hypot(q.y - ps.y) < 1e-6;
+            let corrected = if still(by_copy) && !still(by_source) { by_copy } else { by_source };
+            pairs.push((ps, corrected));
         }
         // The mean of the residuals, and whether they all agree (the copies fit that reading).
         let fit = |res: &[(f64, f64)]| {
@@ -686,25 +693,35 @@ impl Duplicated {
         let (mut mv, each_fits) = fit(&each);
         // Reading B, the copies turned together about the sources' centre (as a Rotate on several
         // layers does): the residual is what is left once each source's centre is turned that way.
-        if angle != 0.0
-            && pairs.len() > 1
-            && !each_fits
-            && let Some(c) = doc.bounds_of(&self.sources).map(|b| b.center())
-        {
-            let together: Vec<(f64, f64)> = pairs
-                .iter()
-                .map(|(ps, pc)| {
-                    let q = figcraft_geom::translation(figcraft_geom::rotate_about(Affine::translate(ps.to_vec2()), c, angle));
-                    (pc.x - q.x, pc.y - q.y)
-                })
-                .collect();
-            let (m, together_fits) = fit(&together);
-            if together_fits {
-                mv = m;
+        // The Rotate handle turns about the centre of the handle box (which several layers sharing a
+        // rotation have turned with them), and transform.rotate about the bounds centre: try the
+        // handle box first, then the bounds.
+        let mut pivot = TurnPivot::Bounds;
+        if angle != 0.0 && pairs.len() > 1 && !each_fits {
+            let handle_box = crate::tools::selection_box(doc, &self.sources)
+                .map(|q| Point::new(q.iter().map(|c| c.x).sum::<f64>() / 4.0, q.iter().map(|c| c.y).sum::<f64>() / 4.0));
+            let bounds = doc.bounds_of(&self.sources).map(|b| b.center());
+            // The same point (no shared rotation among the sources): the bounds reading, as before.
+            let handle_box = handle_box.filter(|h| bounds.is_none_or(|b| (h.x - b.x).hypot(h.y - b.y) > 1e-6));
+            for (kind, c) in [(TurnPivot::HandleBox, handle_box), (TurnPivot::Bounds, bounds)] {
+                let Some(c) = c else { continue };
+                let together: Vec<(f64, f64)> = pairs
+                    .iter()
+                    .map(|(ps, pc)| {
+                        let q = figcraft_geom::translation(figcraft_geom::rotate_about(Affine::translate(ps.to_vec2()), c, angle));
+                        (pc.x - q.x, pc.y - q.y)
+                    })
+                    .collect();
+                let (m, together_fits) = fit(&together);
+                if together_fits {
+                    mv = m;
+                    pivot = kind;
+                    break;
+                }
             }
         }
         let (dx, dy) = mv;
-        let step = Step { dx, dy, angle };
+        let step = Step { dx, dy, angle, pivot };
         (step.dx.is_finite() && step.dy.is_finite() && step.angle.is_finite() && (dx != 0.0 || dy != 0.0 || angle != 0.0)).then_some(step)
     }
 }
@@ -716,6 +733,15 @@ struct Step {
     dx: f64,
     dy: f64,
     angle: f64,
+    pivot: TurnPivot,
+}
+
+/// The point a repeated turn is about, as the step read it: the centre of the selection's handle
+/// box (what the Rotate handle uses), or the bounds centre (transform.rotate, one layer, in place).
+#[derive(Clone, Copy, Debug)]
+enum TurnPivot {
+    HandleBox,
+    Bounds,
 }
 
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -756,9 +782,14 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         out.push(nid);
     }
-    // A repeated turn is about the new copies' own centre (one layer) or their shared one.
+    // A repeated turn is about the new copies' own centre (one layer) or their shared one: the
+    // handle box's centre or the bounds centre, whichever the step read.
     if let Some(st) = repeat.filter(|st| st.angle != 0.0)
-        && let Some(c) = doc.bounds_of(&out).map(|b| b.center())
+        && let Some(c) = match st.pivot {
+            TurnPivot::HandleBox => crate::tools::selection_box(doc, &out)
+                .map(|q| Point::new(q.iter().map(|c| c.x).sum::<f64>() / 4.0, q.iter().map(|c| c.y).sum::<f64>() / 4.0)),
+            TurnPivot::Bounds => doc.bounds_of(&out).map(|b| b.center()),
+        }
     {
         for nid in out.iter().copied() {
             super::arrange::rotate_world(doc, nid, c, st.angle)?;

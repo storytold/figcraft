@@ -450,6 +450,52 @@ fn a_widened_copy_turned_in_place_repeats_the_turn_without_a_move() {
 }
 
 #[test]
+fn a_copy_turned_then_widened_repeats_the_turn_without_a_move() {
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0);
+    ex(&mut s, "select.set", json!({"ids": [a]}));
+    let c1 = cmd_d(&mut s);
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"rotation": -90}}));
+    ex(&mut s, "node.set", json!({"ids": [c1], "props": {"width": 120}}));
+    let c1_centre = centre(&s, c1);
+    let c2 = cmd_d(&mut s);
+    let got = centre(&s, c2);
+    assert!(near(got.0, c1_centre.0) && near(got.1, c1_centre.1), "centre {got:?} vs {c1_centre:?}");
+    assert!(near(turn(&s, c2).abs(), 180.0), "rotation {}", turn(&s, c2));
+    assert!(near(s.doc().unwrap().get(c2).unwrap().width, 120.0));
+}
+
+/// The centre of the selection's handle box, which is what the Rotate handle turns about.
+fn handle_box_centre(s: &Session, ids: &[NodeId]) -> figcraft_geom::Point {
+    let q = crate::tools::selection_box(s.doc().unwrap(), ids).unwrap();
+    figcraft_geom::Point::new(q.iter().map(|c| c.x).sum::<f64>() / 4.0, q.iter().map(|c| c.y).sum::<f64>() / 4.0)
+}
+
+#[test]
+fn a_turned_pair_turned_again_about_its_handle_box_repeats_without_a_move() {
+    let mut s = Session::new();
+    let wide = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 200, "y": 0, "width": 300, "height": 100}))["id"]).unwrap();
+    let ids = [rect(&mut s, 0.0, 200.0), wide];
+    ex(&mut s, "transform.rotate", json!({"ids": ids, "degrees": 60}));
+    ex(&mut s, "select.set", json!({"ids": ids}));
+    let out = ex(&mut s, "edit.duplicate", json!({}));
+    let copies: Vec<NodeId> = out["ids"].as_array().unwrap().iter().map(|v| id_of(v).unwrap()).collect();
+    let p = handle_box_centre(&s, &copies);
+    ex(&mut s, "transform.rotate", json!({"ids": copies, "degrees": 30, "cx": p.x, "cy": p.y}));
+    let before: Vec<(f64, f64)> = copies.iter().map(|c| centre(&s, *c)).collect();
+    let again = ex(&mut s, "edit.duplicate", json!({}));
+    let next: Vec<NodeId> = again["ids"].as_array().unwrap().iter().map(|v| id_of(v).unwrap()).collect();
+    assert_eq!(next.len(), 2);
+    let pivot = handle_box_centre(&s, &next);
+    for (i, c) in next.iter().enumerate() {
+        assert!(near(turn(&s, *c), 120.0), "layer {i}: rotation {}", turn(&s, *c));
+        let want = figcraft_geom::translation(figcraft_geom::rotate_about(figcraft_geom::Affine::translate((before[i].0, before[i].1)), pivot, 30.0));
+        let got = centre(&s, *c);
+        assert!(near(got.0, want.x) && near(got.1, want.y), "layer {i}: {got:?} vs {want:?}");
+    }
+}
+
+#[test]
 fn a_flipped_copy_does_not_repeat_a_half_turn() {
     let mut s = Session::new();
     let a = rect(&mut s, 0.0, 0.0);
