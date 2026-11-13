@@ -480,7 +480,9 @@ fn path_chain(part: &[figcraft_doc::geom::kurbo::PathEl]) -> Option<(network::Ne
             }
             PathEl::CurveTo(a, b, p) => {
                 cur = rp(*p);
-                add(&mut net, Some(rp(*a)), Some(rp(*b)), cur);
+                // The control points are not rounded on their own: the format holds each as its offset from the end
+                // point, and taken from the point as read that is the offset the file had.
+                add(&mut net, Some((finite(a.x), finite(a.y))), Some((finite(b.x), finite(b.y))), cur);
             }
             PathEl::ClosePath => closed = true,
         }

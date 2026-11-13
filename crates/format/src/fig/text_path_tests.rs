@@ -545,12 +545,24 @@ fn an_instance_layer_on_a_path_survives_a_fig_export() {
     assert_eq!(path_of(&back, "Main").as_deref(), Some("M0,0 L100,0"));
     assert_eq!(path_of(&back, "Half").as_deref(), Some("M0,0 L50,0"));
 
-    // A layer in an instance that isn't on a path where its main's layer is.
-    let mut cleared = doc;
-    let half: NodeId = cleared.nodes().find(|n| n.name == "Half").unwrap().children[0];
-    cleared.node_mut(half).unwrap().kind.text_mut().unwrap().path = None;
-    let (_, w) = Written::of(&cleared);
+    // A layer in an instance that isn't on a path where its main's layer is: it comes back on the main's path.
+    let off = |parent: &str| {
+        let mut doc = doc.clone();
+        let id: NodeId = doc.nodes().find(|n| n.name == parent).unwrap().children[0];
+        doc.node_mut(id).unwrap().kind.text_mut().unwrap().path = None;
+        doc
+    };
+    let (bytes, w) = Written::of(&off("Half"));
     assert!(w.warned(W4), "{:?}", w.warnings);
+    let (back, _) = super::import(&bytes, "Back").unwrap();
+    assert_eq!(path_of(&back, "Half").as_deref(), Some("M0,0 L50,0"));
+
+    // The other way round: the main's layer is plain text, and so is the instance's.
+    let (bytes, w) = Written::of(&off("Main"));
+    assert!(w.warned(W4), "{:?}", w.warnings);
+    assert_eq!(ty(w.record("arc")), "TEXT");
+    let (back, _) = super::import(&bytes, "Back").unwrap();
+    assert_eq!((path_of(&back, "Main"), path_of(&back, "Half")), (None, None));
 }
 
 #[test]
@@ -563,4 +575,58 @@ fn the_schema_numbers_text_on_a_path() {
     assert!(matches!(start.kind, super::kiwi::Kind::Message));
     let fields: Vec<_> = start.fields.iter().map(|x| (x.name.as_str(), x.value)).collect();
     assert_eq!(fields, [("tValue", 1), ("forward", 2)]);
+}
+
+/// A text on a path of two curves whose coordinates 32-bit floats hold while their control points (a point plus its
+/// tangent) need more digits, as the curves of a saved file do.
+fn uneven_curve_canvas() -> Vec<u8> {
+    let mut blob = Vec::new();
+    let u32le = |out: &mut Vec<u8>, n: u32| out.extend_from_slice(&n.to_le_bytes());
+    let f32le = |out: &mut Vec<u8>, n: f32| out.extend_from_slice(&n.to_le_bytes());
+    for n in [3, 2, 0] {
+        u32le(&mut blob, n);
+    }
+    for (x, y) in [(0.1, 82.3), (300.7, 82.9), (600.3, 81.7)] {
+        u32le(&mut blob, 0);
+        f32le(&mut blob, x);
+        f32le(&mut blob, y);
+    }
+    for (style, a, ta, b, tb) in [(0, 0, (70.7, -110.3), 1, (-70.9, -110.1)), (MARK, 1, (70.3, 110.7), 2, (-70.1, 110.9))] {
+        u32le(&mut blob, style);
+        u32le(&mut blob, a);
+        f32le(&mut blob, ta.0);
+        f32le(&mut blob, ta.1);
+        u32le(&mut blob, b);
+        f32le(&mut blob, tb.0);
+        f32le(&mut blob, tb.1);
+    }
+    let identity = o(vec![("m00", f(1.0)), ("m01", f(0.0)), ("m02", f(0.0)), ("m10", f(0.0)), ("m11", f(1.0)), ("m12", f(0.0))]);
+    let text = node(
+        2,
+        Some(1),
+        "TEXT_PATH",
+        vec![
+            ("name", s("curve")),
+            ("size", point(600.5, 221.25)),
+            ("transform", identity),
+            ("textData", o(vec![("characters", s("alpha"))])),
+            ("fontSize", f(24.0)),
+            ("fontName", o(vec![("family", s("Inter")), ("style", s("Regular"))])),
+            ("textPathStart", o(vec![("tValue", f(0.4)), ("forward", Kv::Bool(true))])),
+            ("vectorData", o(vec![("vectorNetworkBlob", u(0)), ("normalizedSize", point(600.5, 221.25))])),
+        ],
+    );
+    let nodes = vec![node(0, None, "DOCUMENT", vec![]), node(1, Some(0), "CANVAS", vec![]), text];
+    canvas_of(o(vec![("nodeChanges", a(nodes)), ("blobs", a(vec![o(vec![("bytes", Kv::Bytes(blob))])]))]))
+}
+
+#[test]
+fn a_curve_read_from_a_file_is_written_back_as_it_was() {
+    let (doc, _) = super::import(&uneven_curve_canvas(), "Curve").unwrap();
+    let read = text_of(&doc, "curve").path.as_deref().unwrap().clone();
+    let (bytes, _) = super::export(&doc, None).unwrap();
+    let (back, warnings) = super::import(&bytes, "Back").unwrap();
+    no_text_path_warning(&warnings);
+    // The file holds a control point as its offset from the end point: taken from the point as read, it is the same offset.
+    assert_eq!(text_of(&back, "curve").path.as_deref(), Some(&read));
 }
