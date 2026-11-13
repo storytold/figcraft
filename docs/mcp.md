@@ -498,7 +498,7 @@ one undo step and returns the ids it made:
   in the app does both).
 - `board.mindMap {x?, y?, text?, children?, parent?, edit?}` → `{id, text, children: [{id, text, connector}]}`:
   a mind map: a first node (`mindNode`, bold 24, no box; `text` defaults to `Topic`, `x`/`y` to the
-  middle of the view) with up to 20 `children` (texts; default `Idea 1`, `Idea 2`, `Idea 3`)
+  view's centre, in the parent's coordinates) with up to 20 `children` (texts; default `Idea 1`, `Idea 2`, `Idea 3`)
   on its right, each joined to it by a curved branch (a connector with `branch: true`: stroke 4,
   `#757575`, round caps). The map lays itself out: children stand in one column 88 units right of
   the widest node of their parent's column, 48 apart, centred on their parent; a node is its text,
@@ -1732,7 +1732,9 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   `--radius-*`, `--text-*`, `--spacing-*`, `--font-*`; a number's namespace and unit come from what
   layers bind it to), other modes on `[data-<collection>="<mode>"]`. With `mobile: <frame id>` (the
   same layer names, mobile layout) the code is mobile first: the mobile frame's classes, the
-  desktop frame's that differ behind `lg:`, and layers only on desktop `hidden` plus `lg:flex`
+  desktop frame's that differ behind `lg:` (a mobile `max-width` is dropped as the phone's own width,
+  unless desktop has the same cap: a fixed-size layer such as a badge keeps `max-w-[48px]` at every
+  width), and layers only on desktop `hidden` plus `lg:flex`
   (auto layout frames) or `lg:block` (other layers).
 - **Component code:** `inspect.code {id, language: react|leptos|vue|swiftui|compose|arkui|flutter}` on a component,
   a component set or a variant writes the component as a reusable unit: React (TSX) with a props
@@ -2082,8 +2084,8 @@ turned off 0°.
   `node.set {pointCount}` keeps stars to 3–60 points; `miterAngle` (degrees, the Design panel's
   Miter angle) sets the miter limit (`limit = 1 / sin(angle / 2)`); `get_node` reports a join
   other than miter (`strokeJoin`) or a miter angle other than the default ~28.96° (`miterAngle`).
-- **Select**: `select.layersAt {x, y}` lists every layer under a page point, front-most first with its
-  depth (the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
+- **Select**: `select.layersAt {x, y}` lists every layer under a page point, locked ones too, front-most first with its
+  depth and a `locked` flag (true when the layer or an ancestor is locked; the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
   / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab). With `pointer`, `cmd: true`
   clicks select the nested layer, `cmd` drags from empty canvas select the nested layers they touch,
   and `shift` drags toggle what they touch. A press on the background of a top-level frame with

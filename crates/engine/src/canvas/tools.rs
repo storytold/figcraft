@@ -34,7 +34,7 @@ pub use handles::{
     PENCIL_STROKE, SMALL_BOX_PX, anchor_name, anchor_of, box_sides_px, handle_at, handle_at_corners, label_at, locked_in, scale_anchor_point,
     selection_box, selection_frame, shared_rotation_degrees,
 };
-pub(crate) use handles::{SNAP_PX, handle_cursor, readable_text_fills, resized_box};
+pub(crate) use handles::{SNAP_PX, UNMEASURED_SNAP_PX, handle_cursor, readable_text_fills, resized_box};
 #[cfg(test)]
 pub(crate) use pen::pressure_profile;
 
@@ -586,8 +586,9 @@ pub struct ToolState {
     /// Vector edit mode's pen: where the last press that started something new (no path being
     /// drawn) was, and the undo depth before it, so a double-click there takes that edit back.
     pub(crate) pen_press: Option<(Point, usize)>,
-    /// The Scale tool's anchor: column and row (0 start, 1 middle, 2 end) of the point of the
-    /// selection box that stays put (`tool.scaleAnchor`).
+    /// The Scale tool's origin: column and row (0 start, 1 middle, 2 end) of the point of the
+    /// selection box that stays put when the Scale field sets a factor (`tool.scaleAnchor`; the
+    /// centre, `(1, 1)`, until set). Handle drags ignore it and pivot on the opposite handle.
     pub scale_anchor: (u8, u8),
     /// The last drag move handled (a held button repeats it every frame).
     pub(crate) last_move: Option<PointerEvent>,
