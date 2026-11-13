@@ -14,6 +14,10 @@ pub enum EngineError {
     NoNode(NodeId),
     #[error("{0}")]
     Other(String),
+    /// A preview was asked for with no gesture open (something committed it under a held button).
+    /// Not for the user: the canvas drops it, as the drag it belonged to is over.
+    #[error("no gesture in progress")]
+    NoGesture,
     /// A command run in the background sent a request to a server and runs again with the answer
     /// ([`background`]); never returned to other callers.
     #[error("waiting for the server")]
