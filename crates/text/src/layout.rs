@@ -460,6 +460,7 @@ fn style_fingerprint(s: &TextStyle, seed: u64) -> u64 {
                 PaintKind::Gradient(_) => h = mix(h, PAINT_KIND_TAG + 1),
                 PaintKind::Image(_) => h = mix(h, PAINT_KIND_TAG + 2),
                 PaintKind::Pattern(_) => h = mix(h, PAINT_KIND_TAG + 3),
+                PaintKind::Shader(_) => h = mix(h, PAINT_KIND_TAG + 4),
             }
         }
     }

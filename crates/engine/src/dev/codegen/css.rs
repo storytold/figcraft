@@ -172,6 +172,7 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
                 PaintKind::Gradient(g) => put("background", css_gradient(g, n.width, n.height, p.opacity)),
                 PaintKind::Image(_) => put("background", "url(image.png) center / cover".into()),
                 PaintKind::Pattern(_) => put("background", "url(pattern.png) repeat".into()),
+                PaintKind::Shader(_) => put("background", "url(shader.png) center / cover".into()),
             }
         }
     } else {
@@ -198,6 +199,7 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
                 PaintKind::Gradient(g) => css_gradient(g, n.width, n.height, p.opacity),
                 PaintKind::Image(_) => "url(image.png) center / cover".into(),
                 PaintKind::Pattern(_) => "url(pattern.png) repeat".into(),
+                PaintKind::Shader(_) => "url(shader.png) center / cover".into(),
             })
             .collect();
         if !layers.is_empty() {

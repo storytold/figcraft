@@ -50,6 +50,10 @@ fn alpha_fills(doc: &Document, n: &Node, counts: impl Fn(&Paint) -> bool) -> boo
         && fills.all(|f| match &f.kind {
             PaintKind::Pattern(_) => true,
             PaintKind::Image(img) => !crate::paint::fills_box_opaque(doc, img, n.width, n.height),
+            PaintKind::Shader(shader) => {
+                let shader = shader.sanitized();
+                shader.color_a.a < 1.0 || shader.color_b.a < 1.0
+            }
             PaintKind::Solid { .. } | PaintKind::Gradient(_) => false,
         })
 }
