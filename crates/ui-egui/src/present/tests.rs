@@ -528,6 +528,29 @@ fn a_view_a_rounding_error_past_the_frame_keeps_its_detail() {
 }
 
 #[test]
+fn a_still_view_keeps_its_detail_at_fractional_scales() {
+    // Frame widths that give fractional fit-width scales: the view's page rect then comes back
+    // from the screen with rounding, a hair past the frame's edge.
+    let mut with_detail = 0;
+    for w in [1001.3, 1111.1, 1234.5, 1337.7, 1440.9, 1555.5, 1666.6, 1777.7, 1888.8, 1999.9, 2345.6] {
+        let mut session = figcraft_engine::Session::new();
+        let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": w, "height": 9701})).unwrap());
+        session.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 100, "y": 100, "width": 300, "height": 200})).unwrap();
+        let mut ui = Ui::new(session);
+        ui.hidpi = Some((2.0, 16_384));
+        ui.run("proto.present", json!({"start": frame}));
+        ui.app.ui.present.as_mut().unwrap().view.scale = PresentScale::FitWidth;
+        ui.frames(2, Vec::new);
+        let tex_id = |ui: &Ui| ui.app.ui.present.as_ref().and_then(|p| p.detail.as_ref().map(|(_, d)| d.tex.id()));
+        let Some(first) = tex_id(&ui) else { continue };
+        with_detail += 1;
+        ui.frames(4, Vec::new);
+        assert_eq!(tex_id(&ui), Some(first), "width {w}: a still view keeps its detail");
+    }
+    assert!(with_detail >= 3, "most of these widths need a detail texture: {with_detail}");
+}
+
+#[test]
 fn detail_plan_edge_cases() {
     use figcraft_geom::Rect as R;
     let bounds = R::new(0.0, 0.0, 1440.0, 9701.0);
