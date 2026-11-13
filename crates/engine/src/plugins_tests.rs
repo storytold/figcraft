@@ -877,3 +877,18 @@ fn wasm_out_destination_symlink_and_folder_confinement() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Cargo names a library's wasm with underscores and a binary's as written (#2019 review).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn wasm_artifact_names_follow_the_target_kind() {
+    let names = |targets: Value| crate::plugins::target_wasm_names(targets.as_array().unwrap());
+    assert_eq!(names(json!([{"name": "my-tool", "kind": ["cdylib"]}])), vec!["my_tool.wasm"]);
+    assert_eq!(names(json!([{"name": "my-tool", "kind": ["bin"]}])), vec!["my-tool.wasm"]);
+    assert_eq!(
+        names(json!([{"name": "my-tool", "kind": ["lib", "cdylib"]}, {"name": "my-tool", "kind": ["bin"]}])),
+        vec!["my_tool.wasm", "my-tool.wasm"]
+    );
+    // Targets that build no wasm module are not candidates.
+    assert!(names(json!([{"name": "build-script-build", "kind": ["custom-build"]}, {"name": "it", "kind": ["test"]}])).is_empty());
+}

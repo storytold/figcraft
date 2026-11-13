@@ -1179,18 +1179,28 @@ pub(crate) fn cargo_package_target_wasm_names(cargo: &std::path::Path, root: &st
         })
         .or_else(|| if packages.len() == 1 { packages.first() } else { None });
 
+    target_pkg.and_then(|pkg| pkg["targets"].as_array()).map(|targets| target_wasm_names(targets)).unwrap_or_default()
+}
+
+/// The `.wasm` file names Cargo writes for `targets` (a package's `targets` in `cargo metadata`).
+/// A library's file name has its hyphens turned into underscores (`my-tool` → `my_tool.wasm`); a
+/// binary's keeps its name as written (`my-tool.wasm`).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn target_wasm_names(targets: &[Value]) -> Vec<String> {
     let mut names = Vec::new();
-    if let Some(pkg) = target_pkg
-        && let Some(targets) = pkg["targets"].as_array()
-    {
-        for target in targets {
-            let is_artifact_kind = target["kind"].as_array().is_none_or(|kinds| kinds.iter().any(|k| k == "cdylib" || k == "bin"));
-            if is_artifact_kind && let Some(name) = target["name"].as_str().filter(|s| !s.is_empty()) {
-                let wasm_name = format!("{}.wasm", name.replace('-', "_"));
-                if !names.contains(&wasm_name) {
-                    names.push(wasm_name);
-                }
+    for target in targets {
+        let Some(name) = target["name"].as_str().filter(|s| !s.is_empty()) else { continue };
+        let kinds: Vec<&str> = target["kind"].as_array().map(|k| k.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        let mut push = |wasm_name: String| {
+            if !names.contains(&wasm_name) {
+                names.push(wasm_name);
             }
+        };
+        if kinds.is_empty() || kinds.contains(&"cdylib") {
+            push(format!("{}.wasm", name.replace('-', "_")));
+        }
+        if kinds.is_empty() || kinds.contains(&"bin") {
+            push(format!("{name}.wasm"));
         }
     }
     names
@@ -1241,11 +1251,7 @@ fn normalize_lexical(path: &std::path::Path) -> std::path::PathBuf {
 pub(crate) fn resolve_destination_in_folder(dest: &std::path::Path, root: &std::path::Path) -> std::result::Result<std::path::PathBuf, String> {
     let canonical_root = std::fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
 
-    let abs_dest = if dest.is_absolute() {
-        dest.to_path_buf()
-    } else {
-        std::path::absolute(dest).map_err(|e| format!("{}: {e}", dest.display()))?
-    };
+    let abs_dest = if dest.is_absolute() { dest.to_path_buf() } else { std::path::absolute(dest).map_err(|e| format!("{}: {e}", dest.display()))? };
 
     let mut current = normalize_lexical(&abs_dest);
     let mut hops = 0;
