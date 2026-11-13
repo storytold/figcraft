@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 
 use figcraft_color::{BlendMode, Color, ImageScaleMode, PaintKind};
 use figcraft_doc::{
-    AutoLayout, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, StrokeAlign, TextAlignH,
-    TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle,
+    AutoLayout, CrossAlign, Document, EffectKind, HConstraint, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, Sizing,
+    StrokeAlign, TextAlignH, TextAlignV, TextAutoResize, TextCase, TextData, TextDecoration, TextStyle, VConstraint,
 };
 
 use super::swift::one_line;
@@ -295,12 +295,15 @@ impl Element {
     }
 }
 
-/// Where a child sits in its parent: at an offset in a `Canvas`, or wherever the parent's flow
-/// (an `AutoLayout`) puts it.
+/// Where a child sits in its parent: nowhere in particular (the root), at an offset in a
+/// `Canvas`, in the flow of an `AutoLayout` (`z` is its paint order when the parent paints the first
+/// child on top), or over an `AutoLayout` at an offset that ignores it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Place {
     Flow,
     At(f64, f64),
+    Line { vertical: bool, z: Option<usize> },
+    Independent { x: f64, y: f64, z: Option<usize> },
 }
 
 /// What a tree walk keeps between layers.
@@ -430,28 +433,49 @@ impl Gen<'_> {
         let pad = [pt - weights[0], pr - weights[1], pb - weights[2], pl - weights[3]];
         let behind = pad.iter().any(|p| *p < 0.0);
         let mut line = Element::new("new AutoLayout()");
-        for k in self.ctx.kids(n).iter().take(MAX_CHILDREN) {
+        let kids = self.ctx.kids(n);
+        let vertical = l.mode == LayoutMode::Vertical;
+        let mut absolute = false;
+        for (i, k) in kids.iter().enumerate().take(MAX_CHILDREN) {
             let Some(c) = self.ctx.doc.node(*k) else { continue };
-            line.kids.extend(self.layer(c, depth + 1, Place::Flow));
+            // "First on top": the paint order descends, the order of the children stays.
+            let z = l.reverse_z.then_some(kids.len() - i);
+            let place = if c.child_layout.absolute {
+                absolute = true;
+                let [_, _, _, _, x, y] = c.transform.as_coeffs();
+                Place::Independent { x, y, z }
+            } else {
+                Place::Line { vertical, z }
+            };
+            line.kids.extend(self.layer(c, depth + 1, place));
         }
+        // The Toolkit grows a hugging layout to cover a child that ignores it; FigCraft's does not.
+        let (aw, ah) = axes(n, at);
+        let force = (absolute && aw == Sizing::Hug, absolute && ah == Sizing::Hug);
+        let size = |e: &mut Element| {
+            dims(e, n, if force.0 { Sizing::Fixed } else { aw }, if force.1 { Sizing::Fixed } else { ah });
+            if force.0 || force.1 {
+                e.note("hug size fixed: an absolute child would enlarge it");
+            }
+        };
         let mut outer;
         if behind {
             // The layout inside keeps the whole padding; the border is drawn behind it.
             let mut border = Element::new("new Border()");
-            self.paint_box(&mut border, n, false);
+            self.paint_box(&mut border, n, false, at);
             layout_calls(&mut line, l, [pt, pr, pb, pl]);
             outer = Element::new("new Grid()");
-            place(&mut outer, at);
-            size(&mut outer, n);
+            place(&mut outer, n, at);
+            size(&mut outer);
             border.var = self.fresh(&format!("{} border", n.name), "border");
             line.var = self.fresh(&format!("{} layout", n.name), "layout");
             outer.kids = vec![border, line];
             common(&mut outer, n);
         } else {
             outer = line;
-            place(&mut outer, at);
-            size(&mut outer, n);
-            self.paint_box(&mut outer, n, false);
+            place(&mut outer, n, at);
+            size(&mut outer);
+            self.paint_box(&mut outer, n, false, at);
             layout_calls(&mut outer, l, pad);
             common(&mut outer, n);
         }
@@ -468,7 +492,7 @@ impl Gen<'_> {
     fn canvas_box(&mut self, n: &Node, depth: usize, at: Place) -> Element {
         let mut border = Element::new("new Border()");
         let sized = !matches!(n.kind, NodeKind::Group | NodeKind::Section { .. });
-        self.paint_box(&mut border, n, sized);
+        self.paint_box(&mut border, n, sized, at);
         let mut canvas = Element::new("new Canvas()");
         for k in self.ctx.kids(n).iter().take(MAX_CHILDREN) {
             let Some(c) = self.ctx.doc.node(*k) else { continue };
@@ -485,15 +509,15 @@ impl Gen<'_> {
         let mut outer;
         if has_kids && stroke_color(n).is_some() {
             outer = Element::new("new Grid()");
-            place(&mut outer, at);
-            size(&mut outer, n);
+            place(&mut outer, n, at);
+            size(&mut outer, n, at);
             border.calls.retain(|c| !c.starts_with(".Width(") && !c.starts_with(".Height("));
             border.var = self.fresh(&format!("{} border", n.name), "border");
             outer.kids = vec![border, canvas];
             common(&mut outer, n);
         } else {
             outer = border;
-            place(&mut outer, at);
+            place(&mut outer, n, at);
             if has_kids {
                 outer.adds = "Child";
                 outer.kids = vec![canvas];
@@ -510,9 +534,9 @@ impl Gen<'_> {
     }
 
     /// The fill, stroke and corners of a `Border`.
-    fn paint_box(&mut self, e: &mut Element, n: &Node, sized: bool) {
+    fn paint_box(&mut self, e: &mut Element, n: &Node, sized: bool, at: Place) {
         if sized {
-            size(e, n);
+            size(e, n, at);
         }
         let visible: Vec<_> = n.fills.iter().filter(|p| p.visible).collect();
         match visible.first().map(|p| &p.kind) {
@@ -573,8 +597,8 @@ impl Gen<'_> {
     /// An ellipse: `Ellipse` with `Fill` and a centred `Stroke`.
     fn ellipse(&mut self, n: &Node, (start, sweep, inner): (f64, f64, f64), at: Place) -> Element {
         let mut e = Element::new("new Ellipse()");
-        place(&mut e, at);
-        size(&mut e, n);
+        place(&mut e, n, at);
+        size(&mut e, n, at);
         if let Some(c) = first_fill(n) {
             e.call(format!(".Fill({})", cs_color(c)));
         }
@@ -597,9 +621,9 @@ impl Gen<'_> {
         let name = asset_name(&n.name, n.kind.label(), &mut self.assets);
         let mut e = Element::new("new Image()");
         e.lead.push(format!("// {} \"{}\": export it as an SVG to Assets/{name}.svg", n.kind.label(), comment_name(&n.name)));
-        place(&mut e, at);
+        place(&mut e, n, at);
         e.call(format!(".Source(\"{ASSETS}/{name}.svg\")"));
-        size(&mut e, n);
+        size(&mut e, n, at);
         e.call(".Stretch(Stretch.Uniform)");
         common(&mut e, n);
         e
@@ -610,16 +634,16 @@ impl Gen<'_> {
     fn text(&mut self, n: &Node, t: &TextData, at: Place) -> Element {
         let fixed = matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate);
         let framed = fixed && t.align_v != TextAlignV::Top;
-        let mut tb = text_block(n, t, !framed);
+        let mut tb = text_block(n, t, !framed, line_axes(n, at));
         if !framed {
-            place(&mut tb, at);
+            place(&mut tb, n, at);
             common(&mut tb, n);
             return tb;
         }
         tb.call(format!(".VerticalAlignment(VerticalAlignment.{})", if t.align_v == TextAlignV::Middle { "Center" } else { "Bottom" }));
         let mut g = Element::new("new Grid()");
-        place(&mut g, at);
-        size(&mut g, n);
+        place(&mut g, n, at);
+        size(&mut g, n, at);
         tb.var = self.fresh(&format!("{} text", n.name), "text");
         g.kids = vec![tb];
         common(&mut g, n);
@@ -627,12 +651,65 @@ impl Gen<'_> {
     }
 }
 
-/// The `Canvas` offsets of a child at `at`; a child in a flow carries nothing.
-fn place(e: &mut Element, at: Place) {
-    if let Place::At(x, y) = at {
-        // The offsets come first in the chain: they read as the element's address.
-        e.calls.insert(0, format!(".Canvas(left: {}, top: {})", num(x), num(y)));
+/// The calls that address a child in its parent, first in its chain: the `Canvas` offsets, or
+/// the attached `AutoLayout` call (fill on an axis, or independent of the layout), the paint
+/// order and the size limits.
+fn place(e: &mut Element, n: &Node, at: Place) {
+    let mut lead: Vec<String> = Vec::new();
+    let z = |z: Option<usize>, lead: &mut Vec<String>| {
+        if let Some(z) = z {
+            lead.push(format!(".Canvas(zIndex: {z})"));
+        }
+    };
+    match at {
+        Place::Flow => {}
+        // The offsets read as the element's address.
+        Place::At(x, y) => lead.push(format!(".Canvas(left: {}, top: {})", num(x), num(y))),
+        Place::Line { vertical, z: order } => {
+            let cl = &n.child_layout;
+            let (primary, counter) = if vertical { (cl.sizing_v, cl.sizing_h) } else { (cl.sizing_h, cl.sizing_v) };
+            let mut args: Vec<&str> = Vec::new();
+            if primary == Sizing::Fill {
+                args.push("primaryAlignment: AutoLayoutPrimaryAlignment.Stretch");
+            }
+            if counter == Sizing::Fill {
+                args.push("counterAlignment: AutoLayoutAlignment.Stretch");
+            }
+            if !args.is_empty() {
+                lead.push(format!(".AutoLayout({})", args.join(", ")));
+            }
+            z(order, &mut lead);
+            for (name, v) in [("MinWidth", cl.min_w), ("MaxWidth", cl.max_w), ("MinHeight", cl.min_h), ("MaxHeight", cl.max_h)] {
+                if let Some(v) = v.filter(|v| v.is_finite()) {
+                    lead.push(format!(".{name}({})", num(v)));
+                }
+            }
+        }
+        Place::Independent { x, y, z: order } => {
+            lead.push(".AutoLayout(isIndependentLayout: true)".into());
+            z(order, &mut lead);
+            lead.push(".HorizontalAlignment(HorizontalAlignment.Left)".into());
+            lead.push(".VerticalAlignment(VerticalAlignment.Top)".into());
+            lead.push(format!(".Margin({}, {}, 0, 0)", num(x), num(y)));
+            if n.constraints.horizontal != HConstraint::Left || n.constraints.vertical != VConstraint::Top {
+                e.note("constraints (the child stays at its top-left offset)");
+            }
+        }
     }
+    e.calls.splice(0..0, lead);
+}
+
+/// How a child sizes on each axis in its parent: fixed everywhere but in an auto layout flow.
+fn axes(n: &Node, at: Place) -> (Sizing, Sizing) {
+    match at {
+        Place::Line { .. } => (n.child_layout.sizing_h, n.child_layout.sizing_v),
+        _ => (Sizing::Fixed, Sizing::Fixed),
+    }
+}
+
+/// [`axes`] for a text in a flow (outside one a text sizes itself from its resize mode).
+fn line_axes(n: &Node, at: Place) -> Option<(Sizing, Sizing)> {
+    matches!(at, Place::Line { .. }).then(|| axes(n, at))
 }
 
 /// The calls an `AutoLayout` takes for its orientation, gap, padding (`pad` is top, right,
@@ -669,10 +746,20 @@ fn layout_calls(e: &mut Element, l: &AutoLayout, pad: [f64; 4]) {
     }
 }
 
-/// The layer's fixed width and height.
-fn size(e: &mut Element, n: &Node) {
-    e.call(format!(".Width({})", num(n.width)));
-    e.call(format!(".Height({})", num(n.height)));
+/// The layer's width and height on the axes where it is fixed (a hugging axis takes its size
+/// from the content, a filling one from the parent).
+fn size(e: &mut Element, n: &Node, at: Place) {
+    let (w, h) = axes(n, at);
+    dims(e, n, w, h);
+}
+
+fn dims(e: &mut Element, n: &Node, w: Sizing, h: Sizing) {
+    if w == Sizing::Fixed {
+        e.call(format!(".Width({})", num(n.width)));
+    }
+    if h == Sizing::Fixed {
+        e.call(format!(".Height({})", num(n.height)));
+    }
 }
 
 /// What every layer shares: opacity, rotation, and the notes for what has no counterpart.
@@ -792,7 +879,7 @@ fn style_calls(e: &mut Element, s: &TextStyle, fill: Option<Color>, base: Option
 
 /// A `TextBlock` for a text layer. `with_height` sets the box's height when the text has a fixed
 /// box (a text in a `Grid` of that height leaves it to the grid).
-fn text_block(n: &Node, t: &TextData, with_height: bool) -> Element {
+fn text_block(n: &Node, t: &TextData, with_height: bool, axes: Option<(Sizing, Sizing)>) -> Element {
     let mut e = Element::new("new TextBlock()");
     let s = &t.style;
     let fill = first_fill(n);
@@ -839,19 +926,21 @@ fn text_block(n: &Node, t: &TextData, with_height: bool) -> Element {
         TextAlignH::Right => e.call(".TextAlignment(TextAlignment.Right)"),
         TextAlignH::Justified => e.call(".TextAlignment(TextAlignment.Justify)"),
     }
-    match t.auto_resize {
-        TextAutoResize::WidthAndHeight => e.call(".TextWrapping(TextWrapping.NoWrap)"),
-        TextAutoResize::Height => {
+    // In a flow the text takes its width from the sizing: hugging is one line, filling wraps at
+    // the parent's width, fixed is the box's width.
+    let one_line = t.auto_resize == TextAutoResize::WidthAndHeight;
+    // Outside a flow the resize mode says it.
+    let (width, tall) = axes.unwrap_or((if one_line { Sizing::Hug } else { Sizing::Fixed }, Sizing::Fixed));
+    match width {
+        Sizing::Hug => e.call(".TextWrapping(TextWrapping.NoWrap)"),
+        Sizing::Fill => e.call(".TextWrapping(TextWrapping.Wrap)"),
+        Sizing::Fixed => {
             e.call(format!(".Width({})", num(n.width)));
-            e.call(".TextWrapping(TextWrapping.Wrap)");
+            e.call(format!(".TextWrapping(TextWrapping.{})", if one_line { "NoWrap" } else { "Wrap" }));
         }
-        TextAutoResize::None | TextAutoResize::Truncate => {
-            e.call(format!(".Width({})", num(n.width)));
-            if with_height {
-                e.call(format!(".Height({})", num(n.height)));
-            }
-            e.call(".TextWrapping(TextWrapping.Wrap)");
-        }
+    }
+    if tall == Sizing::Fixed && with_height && matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate) {
+        e.call(format!(".Height({})", num(n.height)));
     }
     if t.auto_resize == TextAutoResize::Truncate || (t.max_lines > 0 && t.auto_resize != TextAutoResize::WidthAndHeight) {
         e.call(".TextTrimming(TextTrimming.CharacterEllipsis)");
