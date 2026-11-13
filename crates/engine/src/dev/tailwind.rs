@@ -105,6 +105,23 @@ fn arb(v: &str) -> String {
     format!("[{}]", v.trim().replace('_', "\\_").replace(' ', "_"))
 }
 
+/// Whether `v` has a comma outside any parentheses (a multi-layer `background`).
+fn layered(v: &str) -> bool {
+    let mut depth = 0usize;
+    v.chars().any(|c| match c {
+        '(' => {
+            depth += 1;
+            false
+        }
+        ')' => {
+            depth = depth.saturating_sub(1);
+            false
+        }
+        ',' => depth == 0,
+        _ => false,
+    })
+}
+
 /// The custom property a `var(--name, fallback)` value reads, when that one call is the whole
 /// value (not `var(--a, 4px) 8px`, four corners of which only the first is a variable).
 fn var_name(v: &str) -> Option<&str> {
@@ -270,6 +287,8 @@ fn decl(key: &str, value: &str) -> Vec<(String, String)> {
             Ok(o) if ((o * 100.0).round() - o * 100.0).abs() < 1e-9 => one(format!("opacity-{}", num(o * 100.0))),
             _ => one(util("opacity", "", v, "")),
         },
+        // Several fills are one layered `background`: commas between the layers, outside any call.
+        ("background", v) if layered(v) => one(format!("[background:{}]", arb(v).trim_matches(['[', ']']))),
         ("background", v) if v.contains("gradient(") => one(format!("bg-{}", arb(v))),
         // An image shorthand (`url(…) center / cover`) is a whole `background`, not a bg colour.
         ("background", v) if v.starts_with("url(") => one(format!("[background:{}]", arb(v).trim_matches(['[', ']']))),
@@ -413,10 +432,11 @@ fn zero_padding(sides: [bool; 4]) -> Vec<&'static str> {
 pub(crate) fn merge(mobile: Option<&[(String, String)]>, desktop: &[(String, String)]) -> Vec<String> {
     let hidden = [("display".to_string(), "hidden".to_string())];
     // A mobile frame's widths are the phone's, not caps: below the breakpoint boxes fill the page.
+    // Except a cap desktop has too: that is the layer's own size (a badge, an avatar), kept at every width.
     let fluid: Vec<(String, String)>;
     let mobile = match mobile {
         Some(m) => {
-            fluid = m.iter().filter(|(k, _)| k != "max-width").cloned().collect();
+            fluid = m.iter().filter(|(k, c)| k != "max-width" || desktop.iter().any(|(_, d)| d == c)).cloned().collect();
             fluid.as_slice()
         }
         None => &hidden,

@@ -168,7 +168,7 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
     if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), hr.shrink(5.0), Icon::Panels, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(hr), Icon::Panels, t.icon);
     if hresp.clicked() {
         app.run("view.minimize", json!({}));
     }
@@ -204,7 +204,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     if sresp.hovered() || app.ui.page_search {
         ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), sr.shrink(5.0), Icon::Search, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(sr), Icon::Search, t.icon);
     let search_id = Id::unique("page_search_field");
     if sresp.clicked() {
         app.ui.page_search = !app.ui.page_search;
@@ -218,7 +218,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     if aresp.hovered() {
         ui.painter().rect_filled(ar, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), ar.shrink(5.0), Icon::Plus, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(ar), Icon::Plus, t.icon);
     if aresp.clicked() {
         app.ui.pages_focus = app.session.ds().ok().map(|d| d.uid);
         if !crate::menus::dev_mode_refuses(app, "page.add") {
@@ -719,7 +719,7 @@ pub(crate) fn collapse_all(app: &mut FigApp) {
     app.ui.expanded.extend(ds.selection.iter().flat_map(|s| ds.doc.ancestors(*s)).filter(|a| *a != ds.page));
 }
 
-/// Rename `id` in its row, selected (the selection follows a rename that moves with Tab).
+/// Rename `id` in its row, selected.
 fn rename_layer(app: &mut FigApp, id: NodeId) {
     app.ui.rename = Some(Rename { id, start: true });
     if app.session.selection() != [id] {
@@ -1090,7 +1090,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
     if sresp.hovered() || app.ui.layer_search {
         ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), sr.shrink(5.0), Icon::Search, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(sr), Icon::Search, t.icon);
     let search_id = Id::unique("layer_search_field");
     if sresp.clicked() {
         app.ui.layer_search = !app.ui.layer_search;
@@ -1127,7 +1127,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     scroll_to = Some(i);
                 } else if let Some(back) = crate::widgets::take_tab(ui) {
                     ui.memory_mut(|m| m.surrender_focus(rename_id(rn.id).with("te")));
-                    rename_next = if back { i.checked_sub(1) } else { Some(i + 1) }.and_then(|j| rows.get(j)).map(|r| r.id);
+                    // Tab on the last row wraps to the first (measured in Figma's web app); Shift+Tab
+                    // on the first row ends the rename (not measured).
+                    rename_next = if back { i.checked_sub(1).and_then(|j| rows.get(j)) } else { rows.get(i + 1).or(rows.first()) }.map(|r| r.id);
                 }
                 rename_row = rows.get(i).map(|r| (i, r.id, r.depth));
             }
@@ -1364,7 +1366,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         app.run("object.rename", json!({"ids": [id], "name": new}));
     }
     if let Some(id) = rename_next {
-        rename_layer(app, id);
+        // Only the rename moves: the selection stays on the layer first renamed (measured in
+        // Figma's web app, 2026-11-12).
+        app.ui.rename = Some(Rename { id, start: true });
     }
     if renaming && app.ui.rename.is_none() {
         a11y::refocus_row(&mut app.ui.nav);

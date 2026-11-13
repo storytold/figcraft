@@ -132,6 +132,8 @@ mod home_tests;
 #[cfg(test)]
 mod host_save_tests;
 #[cfg(test)]
+mod icon_button_size_tests;
+#[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
 mod ime_tests;
@@ -197,6 +199,8 @@ mod online_tests;
 mod open_issues_tests;
 #[cfg(test)]
 mod padding_individual_tests;
+#[cfg(test)]
+mod page_variable_modes_tests;
 #[cfg(test)]
 mod palette_tests;
 #[cfg(test)]
