@@ -124,9 +124,62 @@ pub fn move_handles(net: &mut VectorNetwork, hs: &[(usize, bool)], d: Vec2, inde
     }
 }
 
+/// Each handle of a sharp point turned smooth by a mirror mode is this fraction of the length of its
+/// own segment. Measured in the incumbent (0.3905 and 0.390 at two angles): known to about 3 digits only.
+const MIRROR_SMOOTH_FACTOR: f64 = 0.3905;
+
+/// Give a sharp point (two segments, no handles) the handles a mirror mode makes in the incumbent.
+/// Both lie on one line through the point, along `(B - A) / |BA|^2 + (C - B) / |BC|^2` (A, C: the far
+/// ends of the two segments). "Angle": each is [`MIRROR_SMOOTH_FACTOR`] x its own segment.
+/// "Angle and length": both are that factor x the shorter segment (medium confidence: the
+/// measurement could not separate this from other rules). Open-path ends, points with a handle
+/// already and coincident neighbours are left alone. Returns whether handles were made.
+fn smooth_sharp_point(net: &mut VectorNetwork, vi: usize, mode: HandleMirroring) -> bool {
+    if mode == HandleMirroring::None {
+        return false;
+    }
+    let inc = net.incident(vi);
+    let [(s1, a1), (s2, a2)] = inc.as_slice() else { return false };
+    let (Some(h1), Some(h2)) = (net.handle(*s1, *a1), net.handle(*s2, *a2)) else { return false };
+    if tvec(h1).hypot() > 1e-9 || tvec(h2).hypot() > 1e-9 {
+        return false;
+    }
+    let far = |s: usize, st: bool| net.segments.get(s).and_then(|x| net.vertices.get(if st { x.b } else { x.a })).map(|v| v.point());
+    let (Some(b), Some(a), Some(c)) = (net.vertices.get(vi).map(|v| v.point()), far(*s1, *a1), far(*s2, *a2)) else { return false };
+    let (ab, bc) = (b - a, c - b);
+    let (la, lc) = (ab.hypot(), bc.hypot());
+    if !(la > 1e-9 && lc > 1e-9 && la.is_finite() && lc.is_finite()) {
+        return false;
+    }
+    let d = ab / (la * la) + bc / (lc * lc);
+    if !finite(d) || d.hypot() < 1e-12 {
+        return false;
+    }
+    let d = d.normalize();
+    let (l_in, l_out) = if mode == HandleMirroring::AngleAndLength {
+        let l = MIRROR_SMOOTH_FACTOR * la.min(lc);
+        (l, l)
+    } else {
+        (MIRROR_SMOOTH_FACTOR * la, MIRROR_SMOOTH_FACTOR * lc)
+    };
+    let (in_h, out_h) = (-d * l_in, d * l_out);
+    if !(finite(in_h) && finite(out_h)) {
+        return false;
+    }
+    net.set_handle(*s1, *a1, (in_h.x, in_h.y));
+    net.set_handle(*s2, *a2, (out_h.x, out_h.y));
+    true
+}
+
 /// Set the mirroring of vertices and make their handles agree with it.
 pub fn set_mirroring(net: &mut VectorNetwork, verts: &[usize], mode: HandleMirroring) {
     for &vi in verts {
+        if smooth_sharp_point(net, vi, mode) {
+            if let Some(v) = net.vertices.get_mut(vi) {
+                v.mirror = Some(mode);
+            }
+            continue;
+        }
         let inc = net.incident(vi);
         if let [(s1, a1), (s2, a2)] = inc.as_slice()
             && let (Some(h1), Some(h2)) = (net.handle(*s1, *a1), net.handle(*s2, *a2))
@@ -947,6 +1000,72 @@ mod tests {
         set_mirroring(&mut n, &[1], HandleMirroring::AngleAndLength);
         let (a, b) = (tvec(n.segments[1].ta), tvec(n.segments[0].tb));
         assert!((a + b).hypot() < 1e-9, "made symmetric: {a:?} {b:?}");
+    }
+
+    /// An open path A, B, C (the measured triangle of #2110) with B sharp.
+    fn triangle_path() -> VectorNetwork {
+        VectorNetwork::from_points(&[Point::new(-250.0, -174.0), Point::new(117.0, -174.0), Point::new(-67.0, 194.0)], false)
+    }
+
+    fn handles_at_b(n: &VectorNetwork) -> (Vec2, Vec2) {
+        (tvec(n.segments[0].tb), tvec(n.segments[1].ta))
+    }
+
+    #[test]
+    fn mirror_modes_smooth_a_sharp_point_as_measured() {
+        // Mirror angle and length: both handles 0.3905 x the shorter segment (367), opposite.
+        let mut n = triangle_path();
+        set_mirroring(&mut n, &[1], HandleMirroring::AngleAndLength);
+        let (i, o) = handles_at_b(&n);
+        assert!((o - Vec2::new(86.24, 114.47)).hypot() < 0.1, "{o:?}");
+        assert!((i + o).hypot() < 1e-9, "{i:?} {o:?}");
+        assert!((o.hypot() - 143.3).abs() < 0.1, "{}", o.hypot());
+        // Mirror angle: each handle 0.3905 x its own segment; still collinear.
+        let mut n = triangle_path();
+        set_mirroring(&mut n, &[1], HandleMirroring::Angle);
+        let (i, o) = handles_at_b(&n);
+        assert!((i - Vec2::new(-86.24, -114.47)).hypot() < 0.1, "{i:?}");
+        assert!((o - Vec2::new(96.69, 128.33)).hypot() < 0.1, "{o:?}");
+        assert!((i.x * o.y - i.y * o.x).abs() < 1e-6, "collinear");
+        assert!((i.hypot() - 143.3).abs() < 0.1 && (o.hypot() - 160.7).abs() < 0.1);
+        assert_eq!(n.mirroring(1), HandleMirroring::Angle);
+    }
+
+    #[test]
+    fn mirror_modes_smooth_other_angles_and_several_points() {
+        // A right angle at B with legs 100 and 50: d = (1,0)/100 + (0,1)/50, so the line leans to +y.
+        let mut n = VectorNetwork::from_points(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 50.0)], false);
+        set_mirroring(&mut n, &[1], HandleMirroring::Angle);
+        let (i, o) = handles_at_b(&n);
+        let want = Vec2::new(0.01, 0.02).normalize();
+        assert!((o.normalize() - want).hypot() < 1e-9, "{o:?}");
+        assert!((o.hypot() - 19.525).abs() < 1e-9 && (i.hypot() - 39.05).abs() < 1e-9, "{i:?} {o:?}");
+        // Two sharp points of a closed square, both selected: both become smooth.
+        let mut sq = square();
+        set_mirroring(&mut sq, &[0, 2], HandleMirroring::AngleAndLength);
+        for v in [0, 2] {
+            assert!(sq.incident(v).iter().all(|(s, st)| sq.handle(*s, *st).is_some_and(|h| tvec(h).hypot() > 1.0)), "vertex {v}");
+            assert_eq!(sq.mirroring(v), HandleMirroring::AngleAndLength);
+        }
+        assert!(sq.segments.iter().all(|s| tvec(s.ta).x.is_finite() && tvec(s.tb).y.is_finite()));
+    }
+
+    #[test]
+    fn mirror_modes_leave_unmeasured_points_alone() {
+        // Open-path ends have only one segment.
+        let mut n = open_line();
+        set_mirroring(&mut n, &[0, 2], HandleMirroring::Angle);
+        assert!(n.segments.iter().all(|s| s.is_straight()));
+        // A zero-length neighbour: stays sharp, finite.
+        let mut z = VectorNetwork::from_points(&[Point::new(5.0, 5.0), Point::new(5.0, 5.0), Point::new(60.0, 0.0)], false);
+        set_mirroring(&mut z, &[1], HandleMirroring::AngleAndLength);
+        assert!(z.segments.iter().all(|s| s.is_straight()));
+        // One handle already: the old behaviour (the lone handle stays, the other mirrors it).
+        let mut h = open_line();
+        h.segments[1].ta = (10.0, 5.0);
+        set_mirroring(&mut h, &[1], HandleMirroring::Angle);
+        assert_eq!(h.segments[1].ta, (10.0, 5.0));
+        assert_eq!(h.segments[0].tb, (-10.0, -5.0));
     }
 
     fn loop_is_continuous(n: &VectorNetwork, lp: &[usize]) -> bool {
