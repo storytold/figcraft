@@ -1,10 +1,11 @@
-use super::menu::{blend_menu, context_popup, menu_check, menu_item, menu_popup, preview_blend, row, row_context_menu, row_rect};
+use super::menu::{blend_menu, context_popup, menu_check, menu_item, menu_popup, preview_blend, row, row_context_menu, row_target};
 use super::stroke::stroke_settings;
 use super::{
     Align2, BlendMode, CornerRadius, Document, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, ListDrag, MaskType, Node, NodeId, NodeKind, Paint,
     PaintKind, Rect, Sense, Stroke, StrokeAlign, StyleSlot, Tip, Tokens, Ui, Value, VariableType, common, icons, json, moved_index, pos2, regular,
     removed_index, style_picker, tr, trf, vec2, widgets,
 };
+use crate::property_rows::PropertyKind;
 
 /// Draw visibility/blend/mask, opacity, uniform or per-corner radius, corner smoothing and
 /// the blend-mode row.
@@ -51,11 +52,16 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
     let op_of = |n: &Node| (f64::from(n.opacity) * 100.0).round();
     let op = common(doc, sel, op_of);
     let radius_ok = crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_radius());
-    // Only rectangles and frames round each corner on its own.
+    // Only rectangles and frames round each corner on its own; a boolean group has one radius for
+    // every sharp corner of its result.
     let indep_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_independent_corners());
-    // For polygons, stars and closed vectors the same panel holds only the Corner smoothing row.
+    // For polygons, stars, boolean groups and closed vectors the same panel holds only the Corner
+    // smoothing row.
     let smooth_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_smoothing());
-    let r = common(doc, sel, |n| n.corners.uniform().map(|r| (r * 100.0).round() / 100.0));
+    // A layer with one radius (polygon, star, boolean group, vector) draws its first one, whatever
+    // the other three hold; a rectangle or frame shows a value only when its four corners agree.
+    let shown = |n: &Node| if n.kind.has_independent_corners() { n.corners.uniform() } else { n.corners.radii.first().copied() };
+    let r = common(doc, sel, |n| shown(n).map(|r| (r * 100.0).round() / 100.0));
     widgets::sublabels(ui, tr("Opacity"), radius_ok.then_some(tr("Corner radius")));
     row(ui, 32.0, |ui| {
         let lead = Lead::Icon(Icon::Opacity, tr("Opacity"));
@@ -73,11 +79,13 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
                 "",
                 col,
             );
-            // A layer with corners of its own starts from its largest.
-            let radius_of = |n: &Node| n.corners.uniform().unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max));
+            // A relative edit starts from the radius shown; a rectangle with differing corners
+            // starts from its largest.
+            let radius_of = |n: &Node| shown(n).unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max));
             app.field_of(&ids, "cornerRadius", e, radius_of, |v| json!(v.max(0.0)));
             let open = ui.data(|d| d.get_temp::<bool>(Id::unique("indep_corners"))).unwrap_or(false);
-            // Polygons and stars have no corners of their own: the button opens only Corner smoothing.
+            // Polygons, stars and boolean groups have no corners of their own: the button opens only
+            // Corner smoothing.
             let tip = if indep_ok { tr("Individual corners") } else { tr("Corner smoothing") };
             if smooth_ok && icons::button(ui, Icon::IndependentCorners, 24.0, open, tip).clicked() {
                 ui.data_mut(|d| d.insert_temp(Id::unique("indep_corners"), !open));
@@ -150,6 +158,17 @@ pub(super) fn variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel:
     if !crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like()) {
         return false;
     }
+    mode_section(app, ui, doc, sel, false)
+}
+
+/// The same section for the current page, with nothing selected: Auto there is the collection's
+/// default mode, and a pick sets the page's own (`variable.setMode` without layers).
+pub(super) fn page_variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId) -> bool {
+    mode_section(app, ui, doc, &[page], true)
+}
+
+/// The Variable modes section of `sel` (the page when `on_page`): one row per multi-mode collection.
+fn mode_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], on_page: bool) -> bool {
     let libs = crate::variable_ui::libraries(app, doc);
     let rows = crate::variable_ui::mode_rows(doc, &libs);
     if rows.is_empty() {
@@ -209,7 +228,7 @@ pub(super) fn variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel:
                     }
                 }
                 if let Some(mode) = pick {
-                    set_variable_mode(app, sel, r, mode);
+                    set_variable_mode(app, if on_page { &[] } else { sel }, r, mode);
                     ui.close();
                 }
             });
@@ -219,15 +238,23 @@ pub(super) fn variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel:
     true
 }
 
-/// Set `sel`'s mode of the collection of `row` (`mode` null: Auto). A library collection goes
+/// Set `sel`'s mode of the collection of `row` (`mode` null: Auto; no `sel`: the page's). A library collection goes
 /// through `library.setVariableMode` (copying it in); Auto on one never used here is already so.
 fn set_variable_mode(app: &mut FigApp, sel: &[NodeId], row: &crate::variable_ui::ModeRow, mode: Value) {
     match (row.library, row.key, row.local) {
         (Some((lib, _)), Some(key), _) if !mode.is_null() => {
-            app.run("library.setVariableMode", json!({"library": lib, "collection": key, "ids": sel, "mode": mode}));
+            let mut p = json!({"library": lib, "collection": key, "mode": mode});
+            if !sel.is_empty() {
+                p["ids"] = json!(sel);
+            }
+            app.run("library.setVariableMode", p);
         }
         (_, _, Some(local)) => {
-            app.run("variable.setMode", json!({"ids": sel, "collection": local, "mode": mode}));
+            let mut p = json!({"collection": local, "mode": mode});
+            if !sel.is_empty() {
+                p["ids"] = json!(sel);
+            }
+            app.run("variable.setMode", p);
         }
         _ => {}
     }
@@ -341,10 +368,13 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
             let mut drag = ListDrag::new(ui, if fills { "fills" } else { "strokes" });
             for (i, p) in l.iter().enumerate().rev() {
                 let r = paint_row(app, ui, &ids, i, p, fills, region);
-                drag.row(ui, i, r, r, || paint_label(p));
+                if drag.row_clicked(ui, i, r, r, || paint_label(p)) {
+                    crate::property_rows::click(app, if fills { PropertyKind::Fill } else { PropertyKind::Stroke }, i, &ids, r);
+                }
             }
             if let Some((from, to)) = drag.finish(ui) {
                 app.run(if fills { "fill.move" } else { "stroke.move" }, json!({"ids": ids, "from": from, "to": to}));
+                crate::property_rows::follow(app, if fills { PropertyKind::Fill } else { PropertyKind::Stroke }, from, Some(to));
                 // An open colour picker keeps editing the paint it was on.
                 if let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
                     && *f == fills
@@ -451,12 +481,15 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
 
 /// Paint `i`'s row (swatch, colour or kind, opacity, visibility, remove); returns its area.
 /// One paint's row; `region`: a row of the regions selected in vector edit mode (#1875), which
-/// leaves out what belongs to the layer (its variable binding, the image crop).
+/// leaves out what belongs to the layer (its variable binding, the image crop). A click on its
+/// background highlights it for Cmd/Ctrl+C ([`crate::property_rows`]).
 fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint, fills: bool, region: bool) -> Rect {
     let t = Tokens::get(ui.ctx());
     let ids = ids.to_vec();
     let cmd = if fills { "fill.set" } else { "stroke.set" };
-    let r = row_rect(ui, 32.0, |ui| {
+    let kind = if fills { PropertyKind::Fill } else { PropertyKind::Stroke };
+    let highlight = crate::property_rows::fill(app, kind, i, t.selected_row);
+    let resp = row_target(ui, 32.0, highlight, |ui| {
         let w = ui.available_width() - 60.0;
         let (sresp, e) = widgets::paint_field(ui, Id::unique(("swatch", fills, i)), Id::unique(("pop", fills, i)), p, w, |child, text_r| {
             let r = child.max_rect();
@@ -537,24 +570,28 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
         if toggle {
             app.run(cmd, json!({"ids": ids, "index": i, "visible": !p.visible}));
         }
-        if remove
-            && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some()
-            && let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
-            && *f == fills
-        {
+        if remove && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some() {
+            // A highlighted row stays on its paint, or goes with it.
+            crate::property_rows::follow(app, kind, i, None);
             // An open colour picker keeps editing the paint it was on, or closes with it.
-            match removed_index(*index, i) {
-                Some(k) => *index = k,
-                None => app.ui.picker = None,
+            if let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
+                && *f == fills
+            {
+                match removed_index(*index, i) {
+                    Some(k) => *index = k,
+                    None => app.ui.picker = None,
+                }
             }
         }
     });
+    crate::property_rows::row(app, &resp, kind, i, &ids);
+    let r = resp.rect;
     let copy = if fills { tr("Copy fill") } else { tr("Copy stroke") };
     let paste = if fills { tr("Paste fill") } else { tr("Paste stroke") };
     let can_paste = app.session.clipboard.paint.as_ref().is_some_and(|(f, _)| *f == fills);
     row_context_menu(ui, r, Id::unique(("paint_menu", fills, i))).show(|ui| {
         if menu_item(ui, copy, "") {
-            app.run(if fills { "fill.copy" } else { "stroke.copy" }, json!({"ids": ids, "index": i}));
+            crate::property_rows::copy(app, kind, i, &ids);
             ui.close();
         }
         if can_paste && menu_item(ui, paste, "") {
