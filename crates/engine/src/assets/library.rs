@@ -1340,6 +1340,12 @@ fn relink_by_identity(
         let layers: BTreeMap<&str, NodeId> =
             doc.subtree(mine).into_iter().filter_map(|i| Some((doc.node(i)?.plugin_data.get("fig.guid")?.as_str(), i))).collect();
         remote.insert(m, mine);
+        // A guid is unique within one file only: a main matched by its library key across files
+        // shares no layer guids with the component found, so its layers are not matched by guid.
+        let same_file = theirs.plugin_data.get("fig.file").is_some_and(|f| doc.node(mine).is_some_and(|n| n.plugin_data.get("fig.file") == Some(f)));
+        if !same_file {
+            continue;
+        }
         for l in src.subtree(m) {
             if let Some(&target) = src.node(l).and_then(|n| n.plugin_data.get("fig.guid")).and_then(|g| layers.get(g.as_str())) {
                 remote.entry(l).or_insert(target);
