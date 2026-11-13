@@ -167,9 +167,9 @@ in the table. `crates/ui-egui/src/shortcut_keys_tests.rs` drives the keys a look
   presenting. The paint bucket's tooltip shows Shift+B (B still works).
 - **Fixed (2026-10-17):** Shift+Cmd/Ctrl+V (Paste over selection) and Alt+Cmd/Ctrl+V (Paste
   properties) work on the desktop (they were bound but didn't act there, #716); Cmd/Ctrl+V pastes an
-  image copied in another app (#663). With one layer inside a frame selected, Cmd/Ctrl+V pastes
-  into its parent just above it (in an auto layout frame, the item after it), #2355. Counts above
-  unchanged (the suite checks bindings).
+  image copied in another app (#663). Counts above unchanged (the suite checks bindings).
+- **Fixed (2026-11-13):** with one layer inside a frame selected, Cmd/Ctrl+V pastes into its parent
+  just above it (in an auto layout frame, the item after it), #2355.
 - **Where the documentation disagrees with itself** (noted per row): pixel grid (Shift+' or
   Cmd+'), letter spacing (Alt or Cmd with < >; Cmd would be the font size keys, Alt bound),
   Windows remove fill (Alt+/ or Alt+,; Alt+, is letter spacing), the Layers panel on Windows (Alt+1
