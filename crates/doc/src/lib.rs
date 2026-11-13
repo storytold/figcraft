@@ -33,7 +33,7 @@ pub use board_mindmap::{MIND_GAP_X, MIND_GAP_Y, MIND_MAX_DEPTH, MIND_MAX_NODES, 
 pub use board_route::{END_GAP, MAX_RUNS, RouteEnd, attach_points, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
-pub use design_review::{DesignPreset, DesignReview, GRID_MAX, GRID_MIN, MAX_BRAND_COLORS, MAX_RADII};
+pub use design_review::{DesignPreset, DesignReview, GRID_MAX, GRID_MIN, MAX_BRAND_COLORS, MAX_DISABLED, MAX_RADII};
 pub use facilitation::*;
 pub use figcraft_color as color;
 pub use figcraft_geom as geom;

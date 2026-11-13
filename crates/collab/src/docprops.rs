@@ -403,20 +403,33 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
     apply_indexed(doc, change, &mut Index::default())
 }
 
+/// The review-settings lists that hold more than this build keeps, as (what, how many, the cap).
+fn review_lists_over_limit(c: &figcraft_doc::DesignReview) -> Vec<(&'static str, usize, usize)> {
+    [
+        ("radii", c.radii.len(), figcraft_doc::MAX_RADII),
+        ("brand colours", c.brand.len(), figcraft_doc::MAX_BRAND_COLORS),
+        ("disabled rules", c.disabled.len(), figcraft_doc::MAX_DISABLED),
+    ]
+    .into_iter()
+    .filter(|(_, have, max)| have > max)
+    .collect()
+}
+
 /// Clamp the review settings a snapshot carries to the limits this build keeps, in place: an
-/// older or looser snapshot may hold longer radii or brand lists, and the file opens with what
-/// fits — the preset, grid and disabled rules exactly as saved. An ordinary edit is refused
-/// instead (`apply_indexed`), and a peer that can't read the settings at all gets them left out
-/// of what the server sends (`Change::without_design_review`).
+/// older or looser snapshot may hold longer radii, brand or disabled lists, and the file opens
+/// with what fits — the preset, grid and the rest of each list exactly as saved. An ordinary edit
+/// is refused instead (`apply_indexed`), and a peer that can't read the settings at all gets them
+/// left out of what the server sends (`Change::without_design_review`).
 pub(crate) fn clamp_snapshot_design_review(changes: &mut Vec<Change>) {
     for c in changes {
         if let Change::SetDoc { prop: DocProp::DesignReview, value } = c
             && let Ok(config) = value.read::<figcraft_doc::DesignReview>("design review")
-            && (config.radii.len() > figcraft_doc::MAX_RADII || config.brand.len() > figcraft_doc::MAX_BRAND_COLORS)
+            && !review_lists_over_limit(&config).is_empty()
         {
             let mut clamped = config;
             clamped.radii.truncate(figcraft_doc::MAX_RADII);
             clamped.brand.truncate(figcraft_doc::MAX_BRAND_COLORS);
+            clamped.disabled.truncate(figcraft_doc::MAX_DISABLED);
             if let Ok(v) = Json::of(&clamped) {
                 *value = v;
             }
@@ -431,18 +444,13 @@ pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Ind
     match change {
         Change::SetDoc { prop, value } => {
             // A peer's review settings stay inside the limits `design.configure` enforces, so an
-            // edit cannot smuggle in tens of thousands of radii or accents for every corner
-            // check to scan. An oversized value arrives only in an old snapshot: snapshots keep
-            // applying as they are.
+            // edit cannot smuggle in tens of thousands of radii, accents or rule ids for every
+            // check to scan. An oversized value arrives only in an old snapshot, and the snapshot
+            // path clamps it (`clamp_snapshot_design_review`).
             if *prop == DocProp::DesignReview {
                 let config: figcraft_doc::DesignReview = value.read("design review")?;
-                if config.radii.len() > figcraft_doc::MAX_RADII || config.brand.len() > figcraft_doc::MAX_BRAND_COLORS {
-                    return Err(Error::Invalid(format!(
-                        "design review: {} radii and {} brand colours pass the {} limit `design.configure` keeps",
-                        config.radii.len(),
-                        config.brand.len(),
-                        figcraft_doc::MAX_RADII
-                    )));
+                if let Some((what, have, max)) = review_lists_over_limit(&config).first() {
+                    return Err(Error::Invalid(format!("design review: {have} {what} pass the {max} limit `design.configure` keeps")));
                 }
             }
             if set_scalar(doc, *prop, value)? {

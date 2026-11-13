@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use figcraft_color::{Color, Paint};
-use figcraft_doc::{Comment, DesignPreset, DevSnapshot, Document, ImageData, Message, Node, NodeId, NodeKind, Style, StyleKind};
+use figcraft_doc::{Comment, DesignPreset, DevSnapshot, Document, ImageData, MAX_DISABLED, Message, Node, NodeId, NodeKind, Style, StyleKind};
 
 use crate::change::{Change, DocProp, Entry, Json, Prop};
 use crate::replica::{Mode, Replica};
@@ -85,6 +85,24 @@ fn an_edit_past_the_review_limits_is_refused_but_a_snapshot_clamps() {
     assert_eq!(cfg.disabled, vec!["radius.off-scale".to_string()], "the disabled rules survive");
     assert_eq!(cfg.radii, (0..32).map(|i| i as f64).collect::<Vec<_>>(), "the radii keep their first 32");
     assert_eq!(cfg.brand, vec![Color::from_rgb8_const(1, 2, 3); 32], "the brand colours keep their first 32");
+}
+
+#[test]
+fn an_edit_with_too_many_disabled_rules_is_refused_and_a_snapshot_truncates_them() {
+    let (a, _, _, _) = setup();
+    let mut b = a.document().clone();
+    b.design_review.disabled = (0..200).map(|i| format!("rule.{i}")).collect();
+    let mut r = a.clone();
+    let change = Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() };
+    let err = r.apply(std::slice::from_ref(&change), Mode::Strict).unwrap_err().to_string();
+    assert!(err.contains("200 disabled rules pass the 64 limit `design.configure` keeps"), "{err}");
+    // A snapshot with a longer list opens with the ones that fit, not without the settings.
+    let snap = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
+    let (r2, left_out) = Replica::from_snapshot_leaving_out(&snap).unwrap();
+    assert_eq!(left_out, 0, "nothing needed leaving out");
+    let cfg = &r2.document().design_review;
+    assert_eq!(cfg.disabled.len(), MAX_DISABLED, "the list keeps its first {MAX_DISABLED}");
+    assert_eq!(cfg.disabled.first().map(String::as_str), Some("rule.0"));
 }
 
 #[test]

@@ -50,6 +50,10 @@ pub const GRID_MAX: f64 = 64.0;
 pub const MAX_RADII: usize = 32;
 pub const MAX_BRAND_COLORS: usize = 32;
 
+/// Most rules a file turns off. The rule catalog is smaller than this: the cap keeps a hand-edited
+/// or older file from carrying thousands of ids every review would read.
+pub const MAX_DISABLED: usize = 64;
+
 /// A file's design review settings. The default is the recommended preset on a 4px grid with the
 /// 4px radius scale and no brand palette.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
