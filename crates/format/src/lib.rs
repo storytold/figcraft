@@ -391,8 +391,6 @@ pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
     parse_json(text).map(|(doc, issues, _)| (doc, issues))
 }
 
-/// The image hashes a `document.json` lists in its `imageIndex` (`None` without one).
-
 /// Parse `document.json` content; also returns its [`ImageIndex`]. The header is checked first
 /// (a newer file is refused before its document is read), then the document is deserialized
 /// straight from the text.
