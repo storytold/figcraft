@@ -174,9 +174,9 @@ impl<'a> Mapper<'a> {
         // A label without a snapshot: the connector becomes a frame holding its line and its label.
         let connector_label = own == "CONNECTOR" && !connector_snapshot && self.connector_label_fits(&view, depth);
         let ty = if connector_label { "FRAME" } else { Self::mapped_type(own, &view, connector_snapshot, connector_terminal, stand)? };
-        // A whiteboard's sticky says it imports as a frame only when it can't be a native one.
-        let native_sticky = self.board && own == "STICKY";
-        if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH" && !native_sticky) {
+        // A whiteboard's sticky or shape with text says it imports as a frame only when it can't be a native one.
+        let native_board = self.board && matches!(own, "STICKY" | "SHAPE_WITH_TEXT");
+        if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH" && !native_board) {
             self.warn(format!("{} layers import as {what}", own.to_ascii_lowercase().replace('_', " ")));
         }
         if connector_snapshot {
@@ -264,7 +264,7 @@ impl<'a> Mapper<'a> {
         });
         kids.splice(0..0, connector_kids);
         if stand.is_some_and(|s| s.0 == "FRAME") {
-            let native = if native_sticky { self.native_sticky(&mut o, &view, &rest_id, depth) } else { None };
+            let native = if native_board { self.native_board_item(own, &mut o, &view, &rest_id, depth) } else { None };
             if let Some(native) = native {
                 kids.splice(0..0, native);
             } else if let Some(snapshot) = self.board_snapshot(&mut o, &view, own, &rest_id, depth) {
@@ -272,9 +272,6 @@ impl<'a> Mapper<'a> {
             } else {
                 kids.splice(0..0, self.shape_with_text(&mut o, &view, own, &rest_id));
                 kids.extend(self.inner_text(&o, &view, &rest_id, own == "STICKY"));
-            }
-            if native_sticky && !o.contains_key("board") {
-                self.warn("sticky layers import as frames with their text");
             }
         }
         if !kids.is_empty() {
