@@ -395,11 +395,11 @@ pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
 /// (a newer file is refused before its document is read), then the document is deserialized
 /// straight from the text.
 fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatError> {
-    let corrupt = |e: serde_json::Error| FormatError::Corrupt(e.to_string());
-    let header = craft_figcraft_format::read_header(text).map_err(corrupt)?;
-    craft_figcraft_format::check_version(&header).map_err(|e| FormatError::Newer(e.0))?;
+    let (mut doc, header) = craft_figcraft_format::read_document_json::<Document>(text).map_err(|e| match e {
+        craft_figcraft_format::ReadDocumentError::Json(error) => FormatError::Corrupt(error.to_string()),
+        craft_figcraft_format::ReadDocumentError::NewerVersion(error) => FormatError::Newer(error.0),
+    })?;
     let images = header.images.map(|hashes| hashes.into_iter().collect());
-    let mut doc: Document = serde_json::from_str(text).map_err(corrupt)?;
     let issues = doc.validate();
     if !issues.is_empty() {
         doc.repair();
@@ -938,6 +938,8 @@ mod jpeg_tests;
 mod large_tests;
 #[cfg(test)]
 mod staging_tests;
+#[cfg(test)]
+mod streaming_tests;
 #[cfg(test)]
 mod thumbnail_tests;
 #[cfg(test)]

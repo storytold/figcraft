@@ -129,8 +129,7 @@ pub(crate) fn read(
     if !z.contains(native::MANIFEST) {
         return Ok(None);
     }
-    let wire_manifest: native::Manifest =
-        serde_json::from_slice(&unpacked.read(z, native::MANIFEST, native::MAX_MANIFEST_BYTES)?).map_err(corrupt)?;
+    let wire_manifest = native::read_manifest(&unpacked.read(z, native::MANIFEST, native::MAX_MANIFEST_BYTES)?).map_err(corrupt)?;
     let mut manifest = from_native_manifest(wire_manifest);
     if !is_valid_library_id(&manifest.id) {
         return Err(corrupt("the library has an invalid id"));

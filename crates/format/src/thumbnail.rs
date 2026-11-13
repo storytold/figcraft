@@ -160,23 +160,13 @@ pub fn archive_preview<R: Read + Seek>(archive: R, fit: u32) -> Preview {
 
 /// The first page's background in a `.figcraft` `document.json`, and the file's kind.
 fn figcraft_page(json: &[u8]) -> (Option<[f32; 4]>, figcraft_doc::FileKind) {
-    #[derive(serde::Deserialize)]
-    struct Head {
-        #[serde(default)]
-        pages: Vec<u64>,
-        #[serde(default)]
-        nodes: std::collections::BTreeMap<String, Node>,
-        #[serde(default)]
-        kind: figcraft_doc::FileKind,
-    }
-    #[derive(serde::Deserialize)]
-    struct Node {
-        #[serde(default)]
-        background: Option<serde_json::Value>,
-    }
-    let Ok(head) = serde_json::from_slice::<Head>(json) else { return (None, figcraft_doc::FileKind::Design) };
+    let Ok(head) = craft_figcraft_format::read_preview_document(json) else { return (None, figcraft_doc::FileKind::Design) };
     let page = head.pages.first().and_then(|first| head.nodes.get(&first.to_string())).and_then(|n| n.background.as_ref()).and_then(rgba);
-    (page, head.kind)
+    let kind = match head.kind {
+        craft_figcraft_format::PreviewKind::Design => figcraft_doc::FileKind::Design,
+        craft_figcraft_format::PreviewKind::Board => figcraft_doc::FileKind::Board,
+    };
+    (page, kind)
 }
 
 /// The canvas colour a `.fig` file's `meta.json` gives (`client_meta.background_color`).
