@@ -332,6 +332,85 @@ fn a_second_duplicate_group_takes_the_next_free_name() {
     assert_eq!(n.len(), 6);
 }
 
+/// A collection with the variables `names` (numbers).
+fn named_window(names: &[&str]) -> Ui {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    for n in names {
+        s.execute("variable.create", &json!({"collection": "Theme", "name": n, "type": "number", "value": 1})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    u
+}
+
+/// Right-click the group row `name`, choose Rename group, type `to` and press Enter.
+fn rename_group(u: &mut Ui, name: &str, to: &str) {
+    let p = row(u, name);
+    click(u, p, PointerButton::Secondary, Modifiers::NONE);
+    let menu = flat(&u.frame_output(vec![]).shapes);
+    click(u, text_center(&menu, "Rename group"), PointerButton::Primary, Modifiers::NONE);
+    u.frame(vec![Event::Text(to.into())]);
+    for pressed in [true, false] {
+        u.frame(vec![Event::Key { key: Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }]);
+    }
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+}
+
+fn sorted_names(u: &Ui) -> Vec<String> {
+    let mut n = names(u);
+    n.sort();
+    n
+}
+
+#[test]
+fn renaming_a_group_with_a_slash_nests_it_in_a_new_parent_group_in_one_undo_step() {
+    let mut u = named_window(&["Orange/100", "Orange/200", "Blue/100"]);
+    let before = u.app.session.undo_labels(100).len();
+    rename_group(&mut u, "Orange", "Palette/Orange");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert_eq!(sorted_names(&u), ["Blue/100", "Palette/Orange/100", "Palette/Orange/200"]);
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    assert_eq!(u.app.session.undo_labels(1), ["Rename group"]);
+    // The sidebar lists Palette with Orange indented under it.
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    let (parent, child) = (text_center(&shapes, "Palette"), text_center(&shapes, "Orange"));
+    assert!(child.y > parent.y && child.x > parent.x, "Orange is indented under Palette: {parent:?} {child:?}");
+    assert!(!has_text(&shapes, "Palette-Orange"));
+    u.app.session.undo().unwrap();
+    assert_eq!(sorted_names(&u), ["Blue/100", "Orange/100", "Orange/200"]);
+}
+
+#[test]
+fn a_nested_groups_new_path_stays_in_its_parent_and_drops_empty_parts() {
+    let mut u = named_window(&["Palette/Orange/100", "Palette/Orange/200"]);
+    rename_group(&mut u, "Orange", " /Warm // Orange / ");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert_eq!(sorted_names(&u), ["Palette/Warm/Orange/100", "Palette/Warm/Orange/200"]);
+}
+
+#[test]
+fn renaming_a_group_into_its_own_new_subgroup_moves_the_deeper_names_first() {
+    // Orange/100 takes Orange/Warm/100, which itself moves on to Orange/Warm/Warm/100.
+    let mut u = named_window(&["Orange/100", "Orange/Warm/100"]);
+    rename_group(&mut u, "Orange", "Orange/Warm");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert_eq!(sorted_names(&u), ["Orange/Warm/100", "Orange/Warm/Warm/100"]);
+}
+
+#[test]
+fn a_group_rename_onto_a_variable_name_that_stays_changes_nothing() {
+    let mut u = named_window(&["Orange/100", "Orange/200", "Palette/Orange/100"]);
+    rename_group(&mut u, "Orange", "Palette/Orange");
+    assert!(u.app.ui.last_error.as_deref().is_some_and(|e| e.contains("Palette/Orange/100")), "{:?}", u.app.ui.last_error);
+    assert_eq!(sorted_names(&u), ["Orange/100", "Orange/200", "Palette/Orange/100"]);
+}
+
 fn open_edit_variables(u: &mut Ui) -> Vec<egui::Shape> {
     let menu = select_three_and_open_menu(u);
     assert!(has_text(&menu, "Edit variables"), "the bulk menu offers Edit variables");
