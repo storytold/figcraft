@@ -841,3 +841,40 @@ fn search_fields_keep_their_text_in_the_middle() {
     let off = off_centre(&mut u, "Search assets");
     assert!(off < 1.0, "Search assets is {off} points off the middle");
 }
+
+#[test]
+fn a_shift_range_across_frames_keeps_a_frame_and_not_its_covered_children() {
+    let mut s = Session::new();
+    let frame1 = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Frame 1"})).unwrap());
+    let rect2 = rect(&mut s, "Rect 2", 0.0, Some(frame1));
+    let rect3 = rect(&mut s, "Rect 3", 30.0, Some(frame1));
+    let frame2 = id(s.execute("frame.create", &json!({"x": 200, "y": 0, "width": 100, "height": 100, "name": "Frame 2"})).unwrap());
+    let rect4 = rect(&mut s, "Rect 4", 0.0, Some(frame2));
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame1, frame2]);
+    u.frame(vec![]);
+    let (row4, row2) = (u.row_at(rect4), u.row_at(rect2));
+    click(&mut u, row4, Modifiers::NONE);
+    click(&mut u, row2, SHIFT);
+    assert_eq!(
+        sorted(u.app.session.selection()),
+        sorted(vec![rect4, frame1]),
+        "the range keeps Frame 1 and drops its covered children {rect3:?} and {rect2:?}"
+    );
+}
+
+#[test]
+fn a_shift_range_inside_one_frame_is_unchanged() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "F"})).unwrap());
+    let kids = [0.0, 30.0, 60.0].map(|x| rect(&mut s, "k", x, Some(frame)));
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.insert(frame);
+    u.frame(vec![]);
+    let (first, last) = (u.row_at(kids[0]), u.row_at(kids[2]));
+    click(&mut u, first, Modifiers::NONE);
+    click(&mut u, last, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(kids.to_vec()));
+}

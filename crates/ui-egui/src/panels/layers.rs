@@ -908,6 +908,11 @@ fn select_clicked(app: &mut FigApp, rows: &[Row], sel: &[NodeId], id: NodeId, m:
                 s.push(*x);
             }
         }
+        // A layer under a selected ancestor is covered by it, not a member of its own.
+        if let Ok(ds) = app.session.ds() {
+            let all = s.clone();
+            s.retain(|x| !ds.doc.ancestors(*x).iter().any(|a| all.contains(a)));
+        }
         app.run("select.set", json!({"ids": s}));
     } else if m.shift || m.command {
         let mut s = sel.to_vec();
