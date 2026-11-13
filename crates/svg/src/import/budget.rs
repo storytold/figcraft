@@ -86,12 +86,16 @@ pub(super) fn drops_images(svg: &[u8]) -> bool {
     use usvg::roxmltree::{Document, Node, ParsingOptions};
     const SVG_NS: &str = "http://www.w3.org/2000/svg";
     const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+    // The display that applies to an element: a `display` in `style` wins over the attribute, as
+    // usvg applies the inline style after the presentation attribute.
+    fn display<'a>(n: Node<'a, '_>) -> Option<&'a str> {
+        let from_style = n.attribute("style").and_then(|style| {
+            style.split(';').filter_map(|d| d.split_once(':')).filter(|(k, _)| k.trim() == "display").map(|(_, v)| v.trim()).next_back()
+        });
+        from_style.or_else(|| n.attribute("display").map(str::trim))
+    }
     fn hidden(n: Node) -> bool {
-        n.ancestors().any(|a| {
-            a.attribute("display") == Some("none")
-                || a.attribute("style")
-                    .is_some_and(|style| style.split(';').filter_map(|d| d.split_once(':')).any(|(k, v)| k.trim() == "display" && v.trim() == "none"))
-        })
+        n.ancestors().any(|a| display(a) == Some("none"))
     }
     let Ok(text) = std::str::from_utf8(svg) else { return false };
     let Ok(doc) = Document::parse_with_options(text, ParsingOptions { allow_dtd: true, ..ParsingOptions::default() }) else { return false };

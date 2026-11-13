@@ -131,6 +131,11 @@ fn the_image_scan_skips_hidden_content_as_usvg_does() {
     assert_eq!(layers(attr), Some(true), "a linked image under display=none is never drawn");
     let style = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image href="https://x/y.png" style="fill:red; display : none" width="4" height="4"/></svg>"#;
     assert_eq!(layers(style), Some(true), "display:none in a style attribute hides it too");
+    // The style wins over the presentation attribute: this image is drawn, so its linked file is
+    // missing content. In a nested SVG, where usvg drops a linked image without asking the
+    // resolver, only the scan can say so.
+    let shown = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,&lt;svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'&gt;&lt;rect width='4' height='4'/&gt;&lt;image href='https://x/y.png' display='none' style='display:inline' width='4' height='4'/&gt;&lt;/svg&gt;"/></svg>"#;
+    assert_eq!(layers(shown), Some(false), "an inline style that shows the image beats display=\"none\"");
 }
 
 #[test]
