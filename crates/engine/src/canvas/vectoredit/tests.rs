@@ -659,6 +659,27 @@ fn a_rounded_chamfer_made_other_ways_fills_along_its_arcs() {
     fill_traces_stroke(&s, id, "drawn with the pen");
 }
 
+/// The reporter's sequence (#1951): a bridge drawn between the two new points while the corner is
+/// still there (both have two segments, so the region keeps its ring), then the corner deleted with
+/// Delete. The region's loop must close through the bridge, so the rounded fill traces the stroke.
+#[test]
+fn deleting_the_corner_behind_a_pen_bridge_closes_the_loop_through_the_bridge() {
+    let mut s = Session::new();
+    let id = rect(&mut s);
+    ex(&mut s, "vector.edit.addVertex", json!({"segment": 0, "t": 0.5}));
+    ex(&mut s, "vector.edit.addVertex", json!({"segment": 1, "t": 0.5}));
+    let n = net(&s, id);
+    let (top, right) = (vertex_at(&n, 50.0, 0.0), vertex_at(&n, 100.0, 50.0));
+    ex(&mut s, "vector.edit.connect", json!({"a": top, "b": right}));
+    let n = net(&s, id);
+    assert_eq!((n.segments.len(), n.regions[0].loops[0].len()), (7, 6), "bridged, the ring kept: {:?}", n.regions);
+    let corner = vertex_at(&n, 100.0, 0.0);
+    ex(&mut s, "vector.edit.select", json!({"vertices": [corner]}));
+    ex(&mut s, "vector.edit.delete", json!({}));
+    ex(&mut s, "vector.edit.cornerRadius", json!({"radius": 43, "vertices": [0, 1, 2, 3, 4]}));
+    fill_traces_stroke(&s, id, "bridged, then the corner deleted");
+}
+
 /// The rounded chamfered rectangle `id` (five points on the origin's 100×100 box, the top-right
 /// corner cut off between (50, 0) and (100, 50)): one region with every segment in its loop, and a
 /// fill that keeps off every sharp point and traces the same outline as the stroke.

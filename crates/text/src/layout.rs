@@ -869,7 +869,7 @@ fn line_width(items: &[Item], (start, end, _, _): LineRange) -> f64 {
 /// to give a word to the lines after it ("keeps each line full, but adjusts the last four lines to
 /// avoid an orphan"). `rebreak` lays the text out again with a width per paragraph and line.
 fn restyle_breaks(
-    style: WrapStyle,
+    style_of: &dyn Fn(usize) -> WrapStyle,
     w: f64,
     lines: Vec<LineRange>,
     items: &[Item],
@@ -905,7 +905,7 @@ fn restyle_breaks(
         }
         // Words wider than the box break where they must; the re-breaking adds no such break.
         let base = emergency_breaks(items, word_breaks, &para);
-        match style {
+        match style_of(p) {
             WrapStyle::Auto => {}
             WrapStyle::Balance => {
                 // The narrowest width that still gives `n` lines, to half a pixel.
@@ -992,8 +992,8 @@ fn wrapped_lines(
     let lines = from_saved.or_else(|| breaks(&|_, _| wrap, None)).unwrap_or_default();
     // Balance and Pretty re-break the paragraphs at narrower widths (never saved breaks).
     match wrap {
-        Some(w) if !followed && text.wrap_style != WrapStyle::Auto => {
-            restyle_breaks(text.wrap_style, w, lines, items, word_breaks, line_indent_of, hung_of, &|wrap_of| {
+        Some(w) if !followed && (0..text.paragraph_count()).any(|p| text.para_wrap_style(p) != WrapStyle::Auto) => {
+            restyle_breaks(&|p| text.para_wrap_style(p), w, lines, items, word_breaks, line_indent_of, hung_of, &|wrap_of| {
                 breaks(wrap_of, None).unwrap_or_default()
             })
         }

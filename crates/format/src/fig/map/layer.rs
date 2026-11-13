@@ -174,7 +174,9 @@ impl<'a> Mapper<'a> {
         // A label without a snapshot: the connector becomes a frame holding its line and its label.
         let connector_label = own == "CONNECTOR" && !connector_snapshot && self.connector_label_fits(&view, depth);
         let ty = if connector_label { "FRAME" } else { Self::mapped_type(own, &view, connector_snapshot, connector_terminal, stand)? };
-        if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH") {
+        // A whiteboard's sticky says it imports as a frame only when it can't be a native one.
+        let native_sticky = self.board && own == "STICKY";
+        if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH" && !native_sticky) {
             self.warn(format!("{} layers import as {what}", own.to_ascii_lowercase().replace('_', " ")));
         }
         if connector_snapshot {
@@ -262,11 +264,17 @@ impl<'a> Mapper<'a> {
         });
         kids.splice(0..0, connector_kids);
         if stand.is_some_and(|s| s.0 == "FRAME") {
-            if let Some(snapshot) = self.board_snapshot(&mut o, &view, own, &rest_id, depth) {
+            let native = if native_sticky { self.native_sticky(&mut o, &view, &rest_id, depth) } else { None };
+            if let Some(native) = native {
+                kids.splice(0..0, native);
+            } else if let Some(snapshot) = self.board_snapshot(&mut o, &view, own, &rest_id, depth) {
                 kids.splice(0..0, snapshot);
             } else {
                 kids.splice(0..0, self.shape_with_text(&mut o, &view, own, &rest_id));
                 kids.extend(self.inner_text(&o, &view, &rest_id, own == "STICKY"));
+            }
+            if native_sticky && !o.contains_key("board") {
+                self.warn("sticky layers import as frames with their text");
             }
         }
         if !kids.is_empty() {
@@ -668,6 +676,8 @@ impl<'a> Mapper<'a> {
             size.zip(norm).filter(|(s, n)| s.is_finite() && *n > 1e-9).map_or(1.0, |(s, n)| s / n)
         };
         let (sx, sy) = (scale("x"), scale("y"));
+        // A point whose style doesn't set a radius takes the layer's, as the editor draws it.
+        let layer_radius = v.len("cornerRadius");
         let vertices: Vec<Value> = net
             .vertices
             .iter()
@@ -676,7 +686,7 @@ impl<'a> Mapper<'a> {
                 let st = style(p.style);
                 // Point radii are lengths in this row's space, unlike the normalized positions.
                 // An override/derived row already carries the instance's scale.
-                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).and_then(|r| scaled(r, radius_scale)).filter(|r| *r > 0.0) {
+                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).and_then(|r| scaled(r, radius_scale)).or(layer_radius).filter(|r| *r > 0.0) {
                     out["radius"] = json!(r);
                 }
                 match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
@@ -793,7 +803,8 @@ impl<'a> Mapper<'a> {
             return true;
         }
         // A resized instance and a K-scaled one can have the same box but different radii.
-        let key = (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize, radius_scale.to_bits());
+        let key =
+            (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize, radius_scale.to_bits(), layer_radius.unwrap_or(0.0).to_bits());
         let id = match self.network_ids.get(&key) {
             Some(id) => *id,
             None => {

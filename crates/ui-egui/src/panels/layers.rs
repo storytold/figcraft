@@ -719,7 +719,7 @@ pub(crate) fn collapse_all(app: &mut FigApp) {
     app.ui.expanded.extend(ds.selection.iter().flat_map(|s| ds.doc.ancestors(*s)).filter(|a| *a != ds.page));
 }
 
-/// Rename `id` in its row, selected (the selection follows a rename that moves with Tab).
+/// Rename `id` in its row, selected.
 fn rename_layer(app: &mut FigApp, id: NodeId) {
     app.ui.rename = Some(Rename { id, start: true });
     if app.session.selection() != [id] {
@@ -972,6 +972,8 @@ fn eye_lock(
     // A sweep across the eyes or padlocks takes in the rows the pointer passes.
     if let Some(sw) = sweep.as_mut()
         && !sw.ids.contains(&row.id)
+        // A padlock sweep leaves the children of a locked layer alone (their padlock is inert).
+        && !(sw.lock && row.locked_above)
         && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.y_range().contains(p.y))
     {
         sw.ids.push(row.id);
@@ -1003,13 +1005,20 @@ fn eye_lock(
         icons::paint(ui.painter(), lr.shrink(3.0), if locked || row.locked_above { Icon::Lock } else { Icon::Unlock }, col);
     }
     if show_lock && !dev {
-        let lresp = ui.interact(lr, ui.scope_id().with(("lock", row.id)), Sense::click_and_drag());
+        // A child of a locked layer can't be locked or unlocked on its own while the parent is
+        // locked (Lock and unlock layers): its padlock is inert.
+        let sense = if row.locked_above { Sense::hover() } else { Sense::click_and_drag() };
+        let lresp = ui.interact(lr, ui.scope_id().with(("lock", row.id)), sense);
         a11y::toggle(&lresp, tr("Locked"), locked || row.locked_above);
-        if lresp.clicked() {
-            lock = Some(row.id);
-        }
-        if lresp.drag_started() {
-            *sweep = Some(Sweep { lock: true, on: !n.locked, ids: vec![row.id] });
+        if row.locked_above {
+            a11y::disabled(&lresp);
+        } else {
+            if lresp.clicked() {
+                lock = Some(row.id);
+            }
+            if lresp.drag_started() {
+                *sweep = Some(Sweep { lock: true, on: !n.locked, ids: vec![row.id] });
+            }
         }
     }
     (vis, lock)
@@ -1118,7 +1127,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     scroll_to = Some(i);
                 } else if let Some(back) = crate::widgets::take_tab(ui) {
                     ui.memory_mut(|m| m.surrender_focus(rename_id(rn.id).with("te")));
-                    rename_next = if back { i.checked_sub(1) } else { Some(i + 1) }.and_then(|j| rows.get(j)).map(|r| r.id);
+                    // Tab on the last row wraps to the first (measured in Figma's web app); Shift+Tab
+                    // on the first row ends the rename (not measured).
+                    rename_next = if back { i.checked_sub(1).and_then(|j| rows.get(j)) } else { rows.get(i + 1).or(rows.first()) }.map(|r| r.id);
                 }
                 rename_row = rows.get(i).map(|r| (i, r.id, r.depth));
             }
@@ -1355,7 +1366,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         app.run("object.rename", json!({"ids": [id], "name": new}));
     }
     if let Some(id) = rename_next {
-        rename_layer(app, id);
+        // Only the rename moves: the selection stays on the layer first renamed (measured in
+        // Figma's web app, 2026-11-12).
+        app.ui.rename = Some(Rename { id, start: true });
     }
     if renaming && app.ui.rename.is_none() {
         a11y::refocus_row(&mut app.ui.nav);

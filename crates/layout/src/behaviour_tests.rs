@@ -674,27 +674,48 @@ fn grid_rules() {
             rects: &[(0.0, 0.0, 60.0, 20.0), (60.0, 0.0, 240.0, 20.0)],
         },
         Case {
-            rule: "fr tracks behave like the CSS fr unit: a fixed child taller than its share keeps its row",
-            // Share 50 < 80: row 1 keeps 80, row 2 gets the remaining 20.
+            rule: "fr tracks as measured in Figma: a fixed child taller than its share keeps its row's share and overflows",
+            // Share 50 < 80: rows stay 50 / 50, child 1 overflows into row 2.
             frame: Frame { mode: Grid, size: (100.0, 100.0), columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
             kids: &[kid(20.0, 80.0), Kid { sizing: (Fixed, Fill), ..KID }],
             want: (100.0, 100.0),
-            rects: &[(0.0, 0.0, 20.0, 80.0), (0.0, 80.0, 20.0, 20.0)],
+            rects: &[(0.0, 0.0, 20.0, 80.0), (0.0, 50.0, 20.0, 50.0)],
         },
         Case {
-            rule: "fr tracks: children bigger than every share keep their sizes (the grid overflows)",
+            rule: "fr tracks as measured in Figma: children bigger than every share keep their sizes (the grid overflows)",
             frame: Frame { mode: Grid, size: (100.0, 100.0), columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
             kids: &[kid(20.0, 80.0), kid(20.0, 70.0)],
             want: (100.0, 100.0),
-            rects: &[(0.0, 0.0, 20.0, 80.0), (0.0, 80.0, 20.0, 70.0)],
+            rects: &[(0.0, 0.0, 20.0, 80.0), (0.0, 50.0, 20.0, 70.0)],
         },
         Case {
-            rule: "fr columns: a fixed child wider than its share keeps its column",
-            // Share 100 < 150: column 1 keeps 150; column 2 (2fr alone) gets the other 150.
+            rule: "fr columns as measured in Figma: a fixed child wider than its share overflows its column",
+            // Share 100 < 150: columns stay 100 / 200.
             frame: Frame { mode: Grid, size: (300.0, 20.0), columns: &[fr(1.0), fr(2.0)], ..FRAME },
             kids: &[kid(150.0, 20.0), Kid { sizing: (Fill, Fixed), ..KID }],
             want: (300.0, 20.0),
-            rects: &[(0.0, 0.0, 150.0, 20.0), (150.0, 0.0, 150.0, 20.0)],
+            rects: &[(0.0, 0.0, 150.0, 20.0), (100.0, 0.0, 200.0, 20.0)],
+        },
+        Case {
+            rule: "fr rows as measured in Figma: 300 x 200, 1fr / 1fr, a 150-tall child does not widen its row",
+            frame: Frame { mode: Grid, size: (300.0, 200.0), columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
+            kids: &[kid(100.0, 150.0), kid(100.0, 20.0)],
+            want: (300.0, 200.0),
+            rects: &[(0.0, 0.0, 100.0, 150.0), (0.0, 100.0, 100.0, 20.0)],
+        },
+        Case {
+            rule: "fr rows as measured in Figma: the row gap comes off first (95 / 95, second child at 105)",
+            frame: Frame { mode: Grid, size: (300.0, 200.0), cross_gap: 10.0, columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
+            kids: &[kid(100.0, 150.0), kid(100.0, 20.0)],
+            want: (300.0, 200.0),
+            rects: &[(0.0, 0.0, 100.0, 150.0), (0.0, 105.0, 100.0, 20.0)],
+        },
+        Case {
+            rule: "fr rows as measured in Figma: with the frame on Hug the rows size to content (150 / 20, frame 170)",
+            frame: Frame { mode: Grid, size: (300.0, 200.0), sizing: (Fixed, Hug), columns: &[fr(1.0)], rows: &[fr(1.0), fr(1.0)], ..FRAME },
+            kids: &[kid(100.0, 150.0), kid(100.0, 20.0)],
+            want: (300.0, 170.0),
+            rects: &[(0.0, 0.0, 100.0, 150.0), (0.0, 150.0, 100.0, 20.0)],
         },
         Case {
             rule: "placement: left to right, top to bottom; rows grow to fit the children",

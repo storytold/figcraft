@@ -812,6 +812,21 @@ fn generated_documents_round_trip() {
 }
 
 #[test]
+fn a_boolean_groups_corner_radius_round_trips() {
+    let mut doc = Document::new("t");
+    let page = doc.first_page().unwrap();
+    let g = doc.create(page, NodeKind::BooleanOp { op: BoolOp::Union }, "G", 0.0, 0.0, 0.0, 0.0).unwrap();
+    doc.create(g, NodeKind::Rectangle, "A", 0.0, 0.0, 200.0, 100.0).unwrap();
+    doc.create(g, NodeKind::Rectangle, "B", 150.0, 0.0, 100.0, 200.0).unwrap();
+    doc.fit_to_children(g).unwrap();
+    doc.get_mut(g).unwrap().corners = Corners { radii: [20.0; 4], smoothing: 0.6 };
+    let (back, _) = round_trip(&doc, "boolean radius");
+    let n = back.nodes().find(|n| matches!(n.kind, NodeKind::BooleanOp { .. })).unwrap();
+    assert!(n.corners.radii.iter().all(|r| (r - 20.0).abs() < 1e-4), "{:?}", n.corners);
+    assert!((n.corners.smoothing - 0.6).abs() < 1e-4, "{:?}", n.corners);
+}
+
+#[test]
 fn round_trip_keeps_the_details() {
     let doc = generate(3);
     let (back, warnings) = round_trip(&doc, "seed 3");
@@ -953,6 +968,25 @@ fn closed_vector_geometry_is_written_with_its_corner_smoothing() {
     let NodeKind::Vector { network } = &v.kind else { panic!("vector") };
     let radii: Vec<f64> = network.vertices.iter().map(|x| x.radius).collect();
     assert_eq!(radii, vec![20.0, 0.0, 10.0, 0.0], "each point keeps its own radius");
+}
+
+#[test]
+fn sharp_points_on_a_rounded_vector_stay_sharp() {
+    // A point without a radius takes the layer's when read, so a sharp point on a vector with a
+    // layer radius is written with its own zero.
+    let mut doc = Document::new("sharp point");
+    let page = doc.first_page().unwrap();
+    let mut network = VectorNetwork::from_points(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| Point::new(x, y)), true);
+    for (v, r) in network.vertices.iter_mut().zip([8.0, 0.0, 8.0, 0.0]) {
+        v.radius = r;
+    }
+    let id = doc.create(page, NodeKind::Vector { network }, "V", 0.0, 0.0, 100.0, 100.0).unwrap();
+    doc.node_mut(id).unwrap().corners.radii = [8.0; 4];
+    let (back, _) = round_trip(&doc, "sharp point");
+    let v = back.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).unwrap();
+    let NodeKind::Vector { network } = &v.kind else { panic!("vector") };
+    let radii: Vec<f64> = network.vertices.iter().map(|x| x.radius).collect();
+    assert_eq!(radii, vec![8.0, 0.0, 8.0, 0.0]);
 }
 
 #[test]
