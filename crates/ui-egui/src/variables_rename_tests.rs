@@ -100,7 +100,9 @@ fn a_collection_of_this_file_extends_from_its_context_menu() {
         u.frame(vec![]);
     }
     let shapes = flat(&u.frame_output(vec![]).shapes);
-    click_with(&mut u, text_center(&shapes, "Theme"), PointerButton::Secondary);
+    // The window's row: the Design panel's Page section names the collection too (its modes), under it.
+    let (_, at, size) = crate::live_tests::texts(&shapes).into_iter().rfind(|(t, ..)| t == "Theme").expect("the collection's row");
+    click_with(&mut u, at + size / 2.0, PointerButton::Secondary);
     let menu = flat(&u.frame_output(vec![]).shapes);
     for item in ["Rename", "Extend collection", "Delete collection"] {
         assert!(has_text(&menu, item), "{item} in the menu");

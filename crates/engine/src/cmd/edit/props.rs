@@ -113,8 +113,12 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
     // A new rotation for the selection turns it about its moved rotation origin: each layer's
     // point under the origin stays put.
     let ds = s.ds()?;
-    let pivot =
-        ds.moved_origin().filter(|_| props.contains_key("rotation") && !props.contains_key("x") && !props.contains_key("y") && ds.selection == ids);
+    let pivot = ds.moved_origin().filter(|_| {
+        (props.contains_key("rotation") || props.contains_key("absoluteRotation"))
+            && !props.contains_key("x")
+            && !props.contains_key("y")
+            && ds.selection == ids
+    });
     let pinned: Vec<(NodeId, figcraft_geom::Point)> = match pivot {
         Some(o) => roots(&ds.doc, &ids)
             .into_iter()
@@ -164,6 +168,11 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let targets = ids.clone();
     let doc = s.doc_mut()?;
     let before = crate::cmd::styles::bound_before(doc, &ids);
+    let mut ids = ids;
+    if props.contains_key("absoluteRotation") {
+        // A page angle depends on the parents': turn a selected parent before the layers in it.
+        ids.sort_by_key(|i| doc.ancestors(*i).len());
+    }
     for i in ids {
         crate::cmd::props::apply("node.set", doc, i, skipped.get(&i).unwrap_or(&props))?;
     }
