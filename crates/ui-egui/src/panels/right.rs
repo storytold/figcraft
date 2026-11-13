@@ -37,7 +37,7 @@ pub(crate) use menu::menu_row_width;
 pub(crate) use menu::preview_blend;
 pub use menu::{blend_menu, context_popup, menu_check, menu_icon_item, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
 pub(crate) use menu::{block, menu_row_lit, menu_style, row, row_rect};
-use paints::{appearance, paints, variable_modes};
+use paints::{appearance, page_variable_modes, paints, variable_modes};
 pub(crate) use stroke::{CAP_ART_W, cap_art, join_label};
 
 /// Common value of `f` across `ids` (None when mixed or empty).
@@ -374,6 +374,9 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
         }
     }
     widgets::separator(ui);
+    if page_variable_modes(app, ui, doc, page) {
+        widgets::separator(ui);
+    }
     widgets::section_header(ui, tr("Color profile"), &[], false);
     row(ui, 32.0, |ui| {
         let resp = widgets::dropdown(ui, doc.color_profile.label(), 140.0, None);

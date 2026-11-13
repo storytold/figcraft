@@ -198,6 +198,8 @@ mod open_issues_tests;
 #[cfg(test)]
 mod padding_individual_tests;
 #[cfg(test)]
+mod page_variable_modes_tests;
+#[cfg(test)]
 mod palette_tests;
 #[cfg(test)]
 mod panel_remove_tests;
