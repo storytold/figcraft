@@ -304,6 +304,30 @@ fn svg_markup_with_only_a_linked_image_leaves_the_picture_to_paste() {
 }
 
 #[test]
+fn svg_markup_with_a_rectangle_and_a_dropped_linked_image_leaves_the_picture_to_paste() {
+    let mut w = Win::new();
+    let before = w.rects();
+    // The rectangle survives but the linked image is never fetched: the picture holds all of it.
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="40" height="40" fill="#E5484D"/><image href="https://example.com/a.png" x="40" width="40" height="40"/></svg>"##;
+    *w.clip.borrow_mut() = Clip { text: Some(svg.into()), image: Some((2, 2, vec![255; 16])), ..Clip::default() };
+    w.cmd_v();
+    assert_eq!(w.named("Pasted image"), 1, "the complete bitmap was pasted");
+    assert_eq!(w.named("Pasted SVG"), 0, "not the partial vectors");
+    assert_eq!(w.rects(), before, "the SVG's rectangle was not imported");
+}
+
+#[test]
+fn svg_markup_with_a_dropped_linked_image_and_no_picture_still_pastes_its_vectors() {
+    let mut w = Win::new();
+    let before = w.rects();
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="40" height="40" fill="#E5484D"/><image href="https://example.com/a.png" x="40" width="40" height="40"/></svg>"##;
+    *w.clip.borrow_mut() = Clip { text: Some(svg.into()), ..Clip::default() };
+    w.cmd_v();
+    assert_eq!(w.named("Pasted image"), 0);
+    assert!(w.rects() > before, "with no bitmap the vectors are all there is");
+}
+
+#[test]
 fn an_empty_svg_alone_still_pastes_as_its_frame() {
     let mut w = Win::new();
     *w.clip.borrow_mut() = Clip { text: Some(r#"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"/>"#.into()), ..Clip::default() };

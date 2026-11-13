@@ -63,6 +63,12 @@ fn svg_import_has_layers_needs_markup_the_importer_reads_and_says_whether_it_dra
     let linked =
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><image href="https://example.com/a.png" width="8" height="4"/></svg>"#;
     assert_eq!(layers(linked), Some(false), "a linked image isn't fetched");
+    let mixed = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image href="https://example.com/a.png" width="4" height="4"/></svg>"#;
+    assert_eq!(layers(mixed), Some(false), "a rectangle plus a dropped linked image isn't the whole copy");
+    let nested = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%224%22%20height%3D%224%22%3E%3Cimage%20href%3D%22https%3A%2F%2Fexample.com%2Fb.png%22%20width%3D%224%22%20height%3D%224%22%2F%3E%3C%2Fsvg%3E"/></svg>"#;
+    assert_eq!(layers(nested), Some(false), "an image dropped inside a nested SVG counts too");
+    let inline = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/></svg>"#;
+    assert_eq!(layers(inline), Some(true), "an embedded image is resolved, nothing dropped");
     assert_eq!(layers(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8""#), None, "cut short");
     assert_eq!(layers("<svg\tName\nAda\tLead"), None, "a spreadsheet row that starts like SVG");
     assert_eq!(layers("hello"), None);

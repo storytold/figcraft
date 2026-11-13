@@ -5,7 +5,7 @@
 
 use std::io::Read;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use usvg::{ImageHrefResolver, ImageKind, Options};
 
@@ -71,8 +71,17 @@ fn raster(data: &[u8]) -> bool {
         || (data.len() > 12 && data.get(8..12) == Some(b"WEBP"))
 }
 
+/// Whether the SVG text has an `<image>` element whose `href` isn't a data URI (or has none).
+fn links_an_image(svg: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(svg);
+    text.split("<image").skip(1).any(|rest| {
+        let tag = rest.split('>').next().unwrap_or("");
+        !(tag.contains("href=\"data:") || tag.contains("href='data:"))
+    })
+}
+
 /// An embedded SVG document, if the budgets allow it.
-fn embedded(used: &Used, limits: &Limits, data: &[u8], opts: &Options) -> Option<ImageKind> {
+fn embedded(used: &Used, limits: &Limits, data: &[u8], opts: &Options, omitted: &AtomicBool) -> Option<ImageKind> {
     if used.depth.load(Ordering::Relaxed) >= limits.depth {
         return None;
     }
@@ -90,32 +99,54 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], opts: &Options) -> Option
     if super::too_wide(&plain) || super::too_deep(&plain) {
         return None;
     }
+    // usvg ignores a nested SVG's linked images without asking our resolver, so they are looked
+    // for here: an `<image>` whose href isn't a data URI is left out of what the frame draws.
+    if links_an_image(&plain) {
+        omitted.store(true, Ordering::Relaxed);
+    }
     used.depth.fetch_add(1, Ordering::Relaxed);
     let tree = usvg::Tree::from_data_nested(&plain, opts);
     used.depth.fetch_sub(1, Ordering::Relaxed);
     tree.ok().map(ImageKind::SVG)
 }
 
-/// Resolve `<image>` data URIs: rasters as they are, SVGs within `limits`; nothing else.
-pub(super) fn resolver(limits: Limits) -> ImageHrefResolver<'static> {
+/// Resolve `<image>` data URIs: rasters as they are, SVGs within `limits`; nothing else. Every
+/// image it declines (a linked file, an unreadable or over-budget data URI, nested SVGs included)
+/// sets `omitted`, so the importer can say the result lacks graphical content.
+pub(super) fn resolver(limits: Limits, omitted: Arc<AtomicBool>) -> ImageHrefResolver<'static> {
     let used = Arc::new(Used { bytes: AtomicUsize::new(0), depth: AtomicUsize::new(0) });
+    let data_omitted = Arc::clone(&omitted);
+    let nested_omitted = Arc::clone(&omitted);
     ImageHrefResolver {
-        resolve_data: Box::new(move |mime, data, opts| match mime {
-            "image/jpg" | "image/jpeg" => Some(ImageKind::JPEG(data)),
-            "image/png" => Some(ImageKind::PNG(data)),
-            "image/gif" => Some(ImageKind::GIF(data)),
-            "image/webp" => Some(ImageKind::WEBP(data)),
-            "image/svg+xml" => embedded(&used, &limits, &data, opts),
-            "text/plain" if raster(&data) => match data.first() {
-                Some(0x89) => Some(ImageKind::PNG(data)),
-                Some(0xff) => Some(ImageKind::JPEG(data)),
-                Some(b'G') => Some(ImageKind::GIF(data)),
-                _ => Some(ImageKind::WEBP(data)),
-            },
-            "text/plain" => embedded(&used, &limits, &data, opts),
-            _ => None,
+        resolve_data: Box::new(move |mime, data, opts| {
+            let kind = resolve_data(&used, &limits, mime, data, opts, &nested_omitted);
+            if kind.is_none() {
+                data_omitted.store(true, Ordering::Relaxed);
+            }
+            kind
         }),
         // Linked files are never read.
-        resolve_string: Box::new(|_, _| None),
+        resolve_string: Box::new(move |_, _| {
+            omitted.store(true, Ordering::Relaxed);
+            None
+        }),
+    }
+}
+
+fn resolve_data(used: &Used, limits: &Limits, mime: &str, data: Arc<Vec<u8>>, opts: &Options, omitted: &AtomicBool) -> Option<ImageKind> {
+    match mime {
+        "image/jpg" | "image/jpeg" => Some(ImageKind::JPEG(data)),
+        "image/png" => Some(ImageKind::PNG(data)),
+        "image/gif" => Some(ImageKind::GIF(data)),
+        "image/webp" => Some(ImageKind::WEBP(data)),
+        "image/svg+xml" => embedded(used, limits, &data, opts, omitted),
+        "text/plain" if raster(&data) => match data.first() {
+            Some(0x89) => Some(ImageKind::PNG(data)),
+            Some(0xff) => Some(ImageKind::JPEG(data)),
+            Some(b'G') => Some(ImageKind::GIF(data)),
+            _ => Some(ImageKind::WEBP(data)),
+        },
+        "text/plain" => embedded(used, limits, &data, opts, omitted),
+        _ => None,
     }
 }
