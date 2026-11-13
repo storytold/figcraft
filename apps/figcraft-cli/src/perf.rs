@@ -508,7 +508,13 @@ fn measure_components(table: &mut Table, col: usize, instances: usize) -> CliRes
     let lib = figcraft_engine::library::Cache::default().load(&path).map_err(failed)?;
     let mut doc = Document::new("Consumer");
     let m = &lib.manifest;
-    doc.libraries_mut().enabled.push(figcraft_doc::LibraryLink { id: m.id.clone(), name: m.name.clone(), path: path.clone(), version: m.version });
+    doc.libraries_mut().enabled.push(figcraft_doc::LibraryLink {
+        id: m.id.clone(),
+        name: m.name.clone(),
+        path: path.clone(),
+        version: m.version,
+        ..Default::default()
+    });
     let map = figcraft_engine::library::import(&mut doc, &lib, &lib_ds.assets(), false).map_err(failed)?;
     let mut local = lib_ds.remap(&map);
     local.theme = doc.libraries.collections.iter().find(|r| r.key == lib_ds.theme).map(|r| r.local.clone()).unwrap_or_default();
