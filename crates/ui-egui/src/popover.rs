@@ -262,13 +262,13 @@ fn header_text(t: Tokens, dark: bool) -> Color32 {
     if dark { t.menu_text } else { t.text }
 }
 
-/// The X: a 24-point button, its icon inset 6 (the colour picker's header).
+/// The X: a 24-point button, its cross 16 points like every 24 pt icon button (the colour picker's header).
 fn close_button(ui: &mut Ui, id: Id, rect: Rect, dark: bool, t: Tokens) -> bool {
     let resp = ui.interact(rect, id, Sense::click()).tip(tr("Close"));
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), if dark { Color32::from_white_alpha(20) } else { t.hover });
     }
-    icons::paint(ui.painter(), rect.shrink(6.0), Icon::Close, if dark { t.menu_text } else { t.icon });
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(rect), Icon::Close, if dark { t.menu_text } else { t.icon });
     resp.clicked()
 }
 

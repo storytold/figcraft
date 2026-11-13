@@ -38,6 +38,8 @@ mod paste_style_tests;
 #[cfg(test)]
 mod prop_value_tests;
 #[cfg(test)]
+mod proto_background_tests;
+#[cfg(test)]
 mod scale_factor_tests;
 #[cfg(test)]
 mod slot_tests;

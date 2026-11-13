@@ -168,7 +168,7 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
     if hresp.hovered() {
         ui.painter().rect_filled(hr, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), hr.shrink(5.0), Icon::Panels, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(hr), Icon::Panels, t.icon);
     if hresp.clicked() {
         app.run("view.minimize", json!({}));
     }
@@ -204,7 +204,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     if sresp.hovered() || app.ui.page_search {
         ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), sr.shrink(5.0), Icon::Search, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(sr), Icon::Search, t.icon);
     let search_id = Id::unique("page_search_field");
     if sresp.clicked() {
         app.ui.page_search = !app.ui.page_search;
@@ -218,7 +218,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
     if aresp.hovered() {
         ui.painter().rect_filled(ar, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), ar.shrink(5.0), Icon::Plus, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(ar), Icon::Plus, t.icon);
     if aresp.clicked() {
         app.ui.pages_focus = app.session.ds().ok().map(|d| d.uid);
         if !crate::menus::dev_mode_refuses(app, "page.add") {
@@ -1104,7 +1104,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
     if sresp.hovered() || app.ui.layer_search {
         ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), sr.shrink(5.0), Icon::Search, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(sr), Icon::Search, t.icon);
     let search_id = Id::unique("layer_search_field");
     if sresp.clicked() {
         app.ui.layer_search = !app.ui.layer_search;
