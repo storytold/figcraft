@@ -278,6 +278,7 @@ fn lists(v: &Value, td: &mut TextData) {
                 Some("RTL") => TextDirection::Rtl,
                 _ => TextDirection::Auto,
             },
+            wrap: None,
         })
         .collect();
     // Clamp the levels and fold one style for all back into the layer's list style.
