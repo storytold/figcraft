@@ -120,12 +120,11 @@ fn native_board_shapes(msg: &Kv, json: &mut Value, warnings: &mut Vec<String>) {
 /// origin at most once. The origin index avoids rescanning the tree for every source record.
 fn apply_native_board_shapes(json: &mut Value, shapes: &std::collections::HashMap<String, (BoardShape, bool)>) {
     fn visit(json: &mut Value, shapes: &std::collections::HashMap<String, (BoardShape, bool)>, visited: &mut std::collections::HashSet<String>) {
-        if let Some(origin) = json.get(craft_fig::rest::FIG_SOURCE_FIELD).and_then(|s| s.get("origin")).and_then(Value::as_str).map(str::to_owned) {
-            if visited.insert(origin.clone()) {
-                if let Some((shape, empty_body)) = shapes.get(&origin).copied() {
-                    apply_native_board_shape(json, &origin, shape, empty_body);
-                }
-            }
+        if let Some(origin) = json.get(craft_fig::rest::FIG_SOURCE_FIELD).and_then(|s| s.get("origin")).and_then(Value::as_str).map(str::to_owned)
+            && visited.insert(origin.clone())
+            && let Some((shape, empty_body)) = shapes.get(&origin).copied()
+        {
+            apply_native_board_shape(json, &origin, shape, empty_body);
         }
         match json {
             Value::Object(fields) => fields.values_mut().for_each(|child| visit(child, shapes, visited)),
