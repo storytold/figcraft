@@ -117,6 +117,18 @@ fn a_file_with_a_scaled_instance_keeps_its_factor_and_bound_gap_after_save_and_o
 }
 
 #[test]
+fn a_scale_by_one_keeps_a_plain_frames_bindings() {
+    // A Scale tool drag back to where it started scales by exactly one: no length changes, so no
+    // binding is dropped.
+    let mut s = Session::new();
+    let (f, a) = bound_row(&mut s);
+    ex(&mut s, "transform.scale", json!({"ids": [f], "factor": 1}));
+    assert!(node(&s, f).bound.contains_key("gap"), "{:?}", node(&s, f).bound);
+    assert!(node(&s, a).bound.contains_key("cornerRadius"), "{:?}", node(&s, a).bound);
+    healthy(&s);
+}
+
+#[test]
 fn scaling_a_plain_frame_bakes_its_bound_gap_and_drops_the_binding() {
     let mut s = Session::new();
     let (f, a) = bound_row(&mut s);

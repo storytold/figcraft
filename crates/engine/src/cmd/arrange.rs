@@ -456,6 +456,11 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     if !scale_fits(doc, id, k) {
         return Err(scale_range_error());
     }
+    // A scale by one changes no length, so it keeps every binding: a Scale tool drag back to where it
+    // started scales by exactly one, and must not unbind the lengths it never changed.
+    if (k - 1.0).abs() <= f64::EPSILON {
+        return Ok(());
+    }
     let sub = doc.subtree(id);
     // The layers below `id` scale whatever their constraints, so where they are layers of an
     // instance their new size and place are overrides. The edit's own diff takes geometry that
