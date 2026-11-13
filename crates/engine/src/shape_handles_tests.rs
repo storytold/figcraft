@@ -3,6 +3,7 @@
 use figcraft_doc::{NodeId, NodeKind};
 use figcraft_geom::Point;
 use serde_json::{Value, json};
+use std::f64::consts::TAU;
 
 use crate::Session;
 use crate::params::id_of;
@@ -63,7 +64,11 @@ fn polygon_and_star_handles() {
     let doc = s.doc().unwrap().clone();
     let hs = handles(&doc, &[star], 1.0);
     let kinds: Vec<ShapeHandle> = hs.iter().map(|h| h.0).collect();
-    assert_eq!(kinds, vec![ShapeHandle::Radius { corner: 0 }, ShapeHandle::Ratio], "a star has a radius and a ratio handle");
+    assert_eq!(
+        kinds,
+        vec![ShapeHandle::Radius { corner: 0 }, ShapeHandle::Ratio, ShapeHandle::Count],
+        "a star has a radius, a ratio and a count handle"
+    );
     // The ratio handle sits on the first inner point; dragging it to the centre's side shrinks it.
     let ratio_at = hs[1].1;
     let inner = figcraft_geom::star_points(200.0, 200.0, 5, 0.38)[1];
@@ -78,7 +83,7 @@ fn polygon_and_star_handles() {
     assert!(radii(&s, star)[0] > 1.0, "the star's points round");
     let mut s = Session::new();
     let poly = create(&mut s, "shape.polygon", json!({"x": 0, "y": 0, "width": 200, "height": 200}));
-    assert_eq!(handles(s.doc().unwrap(), &[poly], 1.0).len(), 1, "a polygon has one radius handle");
+    assert_eq!(handles(s.doc().unwrap(), &[poly], 1.0).len(), 2, "a polygon has a radius and a count handle");
 }
 
 #[test]
@@ -99,4 +104,101 @@ fn handles_show_only_where_they_can_be_used() {
     assert_eq!(s.shape_handles().len(), 4);
     s.execute("vector.edit.begin", &json!({"id": r})).unwrap();
     assert!(s.shape_handles().is_empty(), "none while editing points");
+}
+
+fn count_of(s: &Session, id: NodeId) -> u32 {
+    match s.doc().unwrap().node(id).unwrap().kind {
+        NodeKind::Polygon { count } | NodeKind::Star { count, .. } => count,
+        _ => panic!("a polygon or star"),
+    }
+}
+
+fn count_handle(s: &Session, id: NodeId) -> [f64; 2] {
+    handles(s.doc().unwrap(), &[id], 1.0).into_iter().find(|h| h.0 == ShapeHandle::Count).expect("a count handle").1
+}
+
+/// The page point at `deg` degrees clockwise from the shape's own top, `r` from its centre (200 x 200 box).
+fn at_angle(s: &Session, id: NodeId, deg: f64, r: f64) -> (f64, f64) {
+    let a = deg.to_radians();
+    let p = s.doc().unwrap().world_transform(id) * Point::new(100.0 + r * a.sin(), 100.0 - r * a.cos());
+    (p.x, p.y)
+}
+
+fn count_drag(s: &mut Session, id: NodeId, deg: f64) {
+    let h = count_handle(s, id);
+    let to = at_angle(s, id, deg, 80.0);
+    drag(s, (h[0], h[1]), to, false);
+}
+
+#[test]
+fn a_polygon_has_a_count_handle_on_its_first_vertex_clockwise_from_the_top() {
+    let mut s = Session::new();
+    let poly = create(&mut s, "shape.polygon", json!({"x": 0, "y": 0, "width": 200, "height": 200}));
+    s.execute("node.set", &json!({"ids": [poly], "props": {"pointCount": 5}})).unwrap();
+    let h = count_handle(&s, poly);
+    let v1 = figcraft_geom::polygon_points(200.0, 200.0, 5)[1];
+    assert!((Point::new(h[0], h[1]) - v1).hypot() < 1e-6, "on vertex 1, not inset: {h:?} vs {v1:?}");
+    assert!((h[0] - (100.0 + 100.0 * (TAU / 5.0).sin())).abs() < 1e-6, "72 degrees from the top");
+    // Hovering it finds it, not the radius handle.
+    assert_eq!(hit(s.doc().unwrap(), &[poly], Point::new(h[0], h[1]), 1.0).map(|x| x.1), Some(ShapeHandle::Count));
+}
+
+#[test]
+fn dragging_the_count_handle_sets_the_count_by_the_angle_about_the_centre() {
+    let mut s = Session::new();
+    let poly = create(&mut s, "shape.polygon", json!({"x": 0, "y": 0, "width": 200, "height": 200}));
+    s.execute("node.set", &json!({"ids": [poly], "props": {"pointCount": 5}})).unwrap();
+    for (deg, want) in [(90.0, 4), (45.0, 8), (120.0, 3), (0.5, 60), (0.0, 60), (200.0, 3)] {
+        count_drag(&mut s, poly, deg);
+        assert_eq!(count_of(&s, poly), want, "{deg} degrees");
+    }
+    // The radius from the centre doesn't matter.
+    let h = count_handle(&s, poly);
+    let to = at_angle(&s, poly, 90.0, 30.0);
+    drag(&mut s, (h[0], h[1]), to, false);
+    assert_eq!(count_of(&s, poly), 4, "90 degrees near the centre");
+    // The readout is the count.
+    let doc = s.doc().unwrap();
+    assert_eq!(crate::shape_handles::value(doc, poly, ShapeHandle::Count), Some(4.0));
+    // A pointer on the centre has no direction: it gives the most points.
+    let h = count_handle(&s, poly);
+    drag(&mut s, (h[0], h[1]), (100.0, 100.0), false);
+    assert_eq!(count_of(&s, poly), 60, "a pointer on the centre");
+}
+
+#[test]
+fn dragging_a_stars_count_handle_sets_its_points() {
+    let mut s = Session::new();
+    let star = create(&mut s, "shape.star", json!({"x": 0, "y": 0, "width": 200, "height": 200}));
+    let h = count_handle(&s, star);
+    let outer = figcraft_geom::star_points(200.0, 200.0, 5, 0.38)[2];
+    assert!((Point::new(h[0], h[1]) - outer).hypot() < 1e-6, "on its first outer point clockwise from the top");
+    for (deg, want) in [(90.0, 4), (45.0, 8), (130.0, 3), (1.0, 60)] {
+        count_drag(&mut s, star, deg);
+        assert_eq!(count_of(&s, star), want, "{deg} degrees");
+    }
+    let NodeKind::Star { inner_ratio, .. } = s.doc().unwrap().node(star).unwrap().kind else { panic!("star") };
+    assert!((inner_ratio - 0.38).abs() < 0.02, "the ratio stays through count drags: {inner_ratio}");
+}
+
+#[test]
+fn a_count_drag_is_one_undo_step() {
+    let mut s = Session::new();
+    let poly = create(&mut s, "shape.polygon", json!({"x": 0, "y": 0, "width": 200, "height": 200}));
+    s.execute("node.set", &json!({"ids": [poly], "props": {"pointCount": 5}})).unwrap();
+    count_drag(&mut s, poly, 45.0);
+    assert_eq!(count_of(&s, poly), 8);
+    s.undo().unwrap();
+    assert_eq!(count_of(&s, poly), 5, "one Ctrl+Z takes the drag back");
+}
+
+#[test]
+fn a_rotated_polygons_count_angle_is_measured_in_its_own_frame() {
+    let mut s = Session::new();
+    let poly = create(&mut s, "shape.polygon", json!({"x": 0, "y": 0, "width": 200, "height": 200}));
+    s.execute("node.set", &json!({"ids": [poly], "props": {"pointCount": 5, "rotation": 30}})).unwrap();
+    for (deg, want) in [(90.0, 4), (45.0, 8)] {
+        count_drag(&mut s, poly, deg);
+        assert_eq!(count_of(&s, poly), want, "{deg} degrees in the shape's frame");
+    }
 }
