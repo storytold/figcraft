@@ -140,7 +140,7 @@ fn has(app: &FigApp) -> Option<Has> {
                 });
                 line.ids.push(n.id);
             }
-            Some(BoardItem::Label { .. }) => h.text = true,
+            Some(BoardItem::Label { .. } | BoardItem::MindNode) => h.text = true,
             Some(BoardItem::Table) => h.table = true,
             Some(BoardItem::Stamp { .. }) | None => {}
         }
@@ -191,10 +191,11 @@ pub(crate) fn place(sel: Rect, size: egui::Vec2, canvas: Rect) -> Pos2 {
     pos2(cx - w / 2.0, y)
 }
 
-/// The bar above a board's selection, while nothing is being dragged and the file can be edited.
+/// The bar above a board's selection, while nothing is being dragged (a "+" handle included) and
+/// the file can be edited.
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let editable = app.session.active_read_only().is_none();
-    if app.session.tool.busy() || !editable || !app.session.doc().is_ok_and(figcraft_engine::board::is_board) {
+    if app.session.tool.busy() || !editable || !app.session.doc().is_ok_and(figcraft_engine::board::is_board) || crate::board_connect::dragging(ctx) {
         return;
     }
     let Some(h) = has(app) else { return };

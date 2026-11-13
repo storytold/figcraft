@@ -230,7 +230,7 @@ pub fn dev_mode_allows(id: &str) -> bool {
     // Edits recorded as one grouped undo step, so their spec says no history of its own.
     const GROUPED: [&str; 1] = ["data.fill"];
     match id.strip_prefix("tool.") {
-        Some(t) => matches!(t, "move" | "hand" | "comment"),
+        Some(t) => crate::tools::ToolId::from_id(t).is_some_and(crate::tools::ToolId::works_in_dev_mode),
         None if id == "file.revert" || GROUPED.contains(&id) => false,
         None => OWN.iter().any(|p| id.starts_with(p)) || crate::cmd::find_command(id).is_none_or(|c| !c.history),
     }
@@ -475,7 +475,7 @@ pub fn properties_with(doc: &Document, id: NodeId, fmt: ColorFormat) -> Vec<Sect
                     pct(g.refraction),
                     num(g.depth),
                     pct(g.dispersion),
-                    num(g.frost),
+                    num(g.sanitized().frost),
                     pct(g.splay)
                 ),
             ),

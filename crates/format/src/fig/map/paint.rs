@@ -1,6 +1,6 @@
 use super::layer::cap_name;
 use super::variables::alias;
-use super::{Affine, Kv, Mapper, NO_STYLE, Obj, Point, Value, View, copy_num, copy_str, guid, json, matrix, num, rows, vec2};
+use super::{Affine, Kv, Mapper, NO_STYLE, Obj, Point, Value, View, copy_len, copy_str, guid, json, matrix, num, rows, scaled, vec2};
 
 fn filter_number(value: &Kv) -> Option<f64> {
     let number = match value {
@@ -55,7 +55,7 @@ impl<'a> Mapper<'a> {
 }
 
 pub(super) fn stroke(o: &mut Obj, v: &View) {
-    copy_num(o, v, "strokeWeight", "strokeWeight");
+    copy_len(o, v, "strokeWeight", "strokeWeight");
     if let Some(a) = v.str("strokeAlign").filter(|a| *a != "OFFSET") {
         o.insert("strokeAlign".into(), json!(a));
     }
@@ -84,7 +84,8 @@ pub(super) fn stroke(o: &mut Obj, v: &View) {
     if !profile.is_empty() {
         o.insert("strokeWidthProfile".into(), Value::Array(profile));
     }
-    let dashes: Vec<f64> = v.list("dashPattern").iter().filter_map(Kv::f64).collect();
+    let (dash_list, dash_scale) = v.list_scaled("dashPattern");
+    let dashes: Vec<f64> = dash_list.iter().filter_map(Kv::f64).filter_map(|d| scaled(d, dash_scale)).collect();
     if !dashes.is_empty() {
         o.insert("strokeDashes".into(), json!(dashes));
     }
@@ -94,7 +95,7 @@ pub(super) fn stroke(o: &mut Obj, v: &View) {
     }
     if v.flag("borderStrokeWeightsIndependent") == Some(true) {
         // A side that isn't written has no border.
-        let side = |k: &str| v.num(k).unwrap_or(0.0);
+        let side = |k: &str| v.len(k).unwrap_or(0.0);
         o.insert(
             "individualStrokeWeights".into(),
             json!({"top": side("borderTopWeight"), "right": side("borderRightWeight"), "bottom": side("borderBottomWeight"), "left": side("borderLeftWeight")}),
@@ -162,8 +163,17 @@ pub(crate) fn paint(p: &Kv, warn: &mut dyn FnMut(String)) -> Option<Value> {
             o.insert("gradientStops".into(), Value::Array(stops));
         }
         "IMAGE" => {
-            let hash: String =
-                p.get("image").and_then(|i| i.get("hash")).and_then(Kv::bytes).unwrap_or_default().iter().map(|b| format!("{b:02x}")).collect();
+            // A hash longer than any the file's images can be named by resolves to nothing: it
+            // isn't spelled out, which a shared style would repeat for every layer using it.
+            let hash: String = p
+                .get("image")
+                .and_then(|i| i.get("hash"))
+                .and_then(Kv::bytes)
+                .filter(|h| h.len() <= crate::fig::MAX_IMAGE_HASH)
+                .unwrap_or_default()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
             o.insert("imageRef".into(), json!(hash));
             let mode = p.get("imageScaleMode").and_then(Kv::str).unwrap_or("FILL");
             o.insert("scaleMode".into(), json!(mode));
@@ -245,7 +255,8 @@ pub(super) fn bound(v: Option<&Kv>, fields: &[(&str, &str)]) -> Option<Value> {
     (!found.is_empty()).then_some(Value::Object(found))
 }
 
-pub(super) fn effect(e: &Kv) -> Option<Value> {
+/// A layer effect; `k`: the factor its lengths take (a scaled instance's layer).
+pub(super) fn effect(e: &Kv, k: f64) -> Option<Value> {
     let ty = match e.get("type").and_then(Kv::str)? {
         "FOREGROUND_BLUR" => "LAYER_BLUR",
         "GRAIN" => "TEXTURE",
@@ -253,9 +264,10 @@ pub(super) fn effect(e: &Kv) -> Option<Value> {
     };
     let mut o = Obj::new();
     o.insert("type".into(), json!(ty));
-    for k in ["radius", "spread", "startRadius", "density", "opacity"] {
-        if let Some(x) = num(e, k) {
-            o.insert(k.into(), json!(x));
+    for key in ["radius", "spread", "startRadius", "density", "opacity"] {
+        let length = matches!(key, "radius" | "spread" | "startRadius");
+        if let Some(x) = num(e, key).and_then(|x| scaled(x, if length { k } else { 1.0 })) {
+            o.insert(key.into(), json!(x));
         }
     }
     for k in ["visible", "showShadowBehindNode", "clipToShape"] {
@@ -273,9 +285,15 @@ pub(super) fn effect(e: &Kv) -> Option<Value> {
             o.insert(k.into(), color(c));
         }
     }
-    for (from, to) in [("offset", "offset"), ("startOffset", "startOffset"), ("endOffset", "endOffset"), ("noiseSize", "noiseSizeVector")] {
+    // `startOffset` and `endOffset` are positions in the layer's unit box, not lengths: they stay.
+    for (from, to) in [("offset", "offset"), ("noiseSize", "noiseSizeVector")] {
         if let Some(p) = e.get(from).and_then(vec2) {
-            o.insert(to.into(), p);
+            o.insert(to.into(), scale_vec2(p, k));
+        }
+    }
+    for key in ["startOffset", "endOffset"] {
+        if let Some(p) = e.get(key).and_then(vec2) {
+            o.insert(key.into(), p);
         }
     }
     if e.get("blurOpType").and_then(Kv::str) == Some("PROGRESSIVE") {
@@ -293,6 +311,15 @@ pub(super) fn effect(e: &Kv) -> Option<Value> {
         o.insert("boundVariables".into(), b);
     }
     Some(Value::Object(o))
+}
+
+/// A `{"x", "y"}` vector at scale `k` (unchanged when that is not finite).
+fn scale_vec2(p: Value, k: f64) -> Value {
+    let axis = |name: &str| p.get(name).and_then(Value::as_f64).and_then(|x| scaled(x, k));
+    match (axis("x"), axis("y")) {
+        (Some(x), Some(y)) => json!({"x": x, "y": y}),
+        _ => p,
+    }
 }
 
 pub(super) fn export_setting(e: &Kv) -> Value {

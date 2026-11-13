@@ -278,6 +278,45 @@ fn legacy_evenodd_holes_survive_bucket_offset_and_flatten() {
     assert!(!net(&s, flattened).fill_contains(Point::new(100.0, 100.0)), "flatten retains the even-odd hole");
 }
 
+#[test]
+fn simplify_and_offset_keep_a_closed_vectors_smoothed_corners() {
+    // A closed 100 × 100 vector with radius 20 on every point and corner smoothing 0.6 draws a
+    // smoothed rectangle's outline; simplify and offset rebuild it from that outline.
+    let drawn = figcraft_geom::rounded_rect(100.0, 100.0, [20.0; 4], 0.6);
+    let plain = figcraft_geom::rounded_rect(100.0, 100.0, [20.0; 4], 0.0).area().abs();
+    let (area, d) = (drawn.area().abs(), 2.0);
+    // Offsetting a convex outline by d adds its perimeter times d and a circle of radius d.
+    let grown = area + drawn.perimeter(1e-6) * d + std::f64::consts::PI * d * d;
+    assert!((area - plain).abs() > 10.0, "smoothing changes the outline: {area} vs {plain}");
+    // (command, params, region paints of its own, expected area, tolerance: the offset ring is
+    // flattened before the union)
+    let rows = [
+        ("vector.simplify", json!({"tolerance": 0.01}), false, area, 1.0),
+        ("vector.simplify", json!({"tolerance": 0.01}), true, area, 1.0),
+        ("vector.offset", json!({"offset": d}), false, grown, 4.0),
+        ("vector.offset", json!({"offset": d}), true, grown, 4.0),
+    ];
+    let mut wrong = Vec::new();
+    for (cmd, mut params, painted, expected, tolerance) in rows {
+        let mut s = Session::new();
+        let id = id_of(&ex(&mut s, "vector.create", json!({"points": [[0, 0], [100, 0], [100, 100], [0, 100]], "closed": true}))["id"]).unwrap();
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerRadius": 20}}));
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerSmoothing": 0.6}}));
+        if painted {
+            let doc = s.doc_mut().unwrap();
+            let NodeKind::Vector { network } = &mut doc.get_mut(id).unwrap().kind else { panic!("expected vector fixture") };
+            network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+        }
+        params["ids"] = json!([id]);
+        ex(&mut s, cmd, params);
+        let got = net(&s, id).fill_path().area().abs();
+        if (got - expected).abs() >= tolerance {
+            wrong.push(format!("{cmd} (region paints: {painted}): {got} vs {expected}"));
+        }
+    }
+    assert!(wrong.is_empty(), "simplify and offset keep the smoothed corners: {wrong:?}");
+}
+
 /// Give vector `id` a painted region, converting a plain shape to a vector first.
 fn ex_to_vector(doc: &mut figcraft_doc::Document, id: NodeId) {
     let n = doc.get(id).unwrap();
@@ -285,6 +324,58 @@ fn ex_to_vector(doc: &mut figcraft_doc::Document, id: NodeId) {
     let mut network = VectorNetwork::from_path(&path);
     network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
     doc.get_mut(id).unwrap().kind = NodeKind::Vector { network };
+}
+
+/// How far `path` strays from `from`: the largest distance from a point sampled along `path` to
+/// the nearest segment of `from`.
+pub(crate) fn strays(path: &BezPath, from: &BezPath) -> f64 {
+    use figcraft_geom::kurbo::ParamCurveNearest;
+    let segs: Vec<_> = from.segments().collect();
+    path.segments()
+        .flat_map(|seg| (0..=32).map(move |i| seg.eval(f64::from(i) / 32.0)))
+        .map(|p| segs.iter().map(|s| s.nearest(p, 1e-6).distance_sq).fold(f64::INFINITY, f64::min).sqrt())
+        .fold(0.0, f64::max)
+}
+
+/// Simplify path keeps nearly collinear points, and a stroke that goes out and back, near where
+/// they were: kurbo's fit, which Simplify path and the Pencil share, ran a handle hundreds of units
+/// on along the line (#1741). That holds for each way the command simplifies a layer: an open
+/// stroke, a filled shape, a region with its own fill, and a stroke beside a filled shape.
+#[test]
+fn simplify_keeps_nearly_collinear_points_near_them() {
+    // The points exactly as sampled.
+    let straight = "M209.5986907940155 -204.90932811973988 L211.27791426387097 -207.1909740207534 L214.24650682872084 -211.22882759062324";
+    let back =
+        "M80 -160 L86.04356571908697 -173.74440234910094 L87.85185073933535 -179.20284644595452 L86.04356571908697 -173.74440234910094 L95 -185";
+    let shape = format!("{straight} L260 -150 Z");
+    let cases = [
+        ("an open stroke", straight.to_string(), false),
+        ("a filled shape", shape.clone(), false),
+        ("a region with its own fill", shape.clone(), true),
+        ("a stroke beside a filled shape", format!("{shape} {back}"), false),
+    ];
+    for (what, d, own_fill) in cases {
+        let mut s = Session::new();
+        let id = id_of(&ex(&mut s, "vector.create", json!({"path": "M0 0 L10 10"}))["id"]).unwrap();
+        // At the page origin, as given (`vector.create` would move the points).
+        let mut network = VectorNetwork::from_path(&BezPath::from_svg(&d).unwrap());
+        if own_fill {
+            network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("#FF0000").unwrap())]);
+        }
+        {
+            let n = s.doc_mut().unwrap().get_mut(id).unwrap();
+            n.transform = figcraft_geom::Affine::IDENTITY;
+            n.kind = NodeKind::Vector { network };
+        }
+        let before = net(&s, id);
+        ex(&mut s, "vector.simplify", json!({"ids": [id], "tolerance": 0.75}));
+        let after = s.doc().unwrap().world_transform(id) * net(&s, id).stroke_path();
+        let gone = strays(&after, &before.stroke_path());
+        assert!(gone <= 1.5, "{what}: strays {gone}: {}", after.to_svg());
+        let (b0, b1) = (before.stroke_path().bounding_box(), after.bounding_box());
+        assert!(b0.inflate(1.5, 1.5).contains_rect(b1), "{what}: {b1:?} past {b0:?}: {}", after.to_svg());
+        assert_eq!(net(&s, id).regions.len(), before.regions.len(), "{what}: the fill is kept");
+    }
 }
 
 fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
@@ -789,4 +880,69 @@ fn vector_points_take_the_requested_size() {
     assert_eq!(corners(&s, one), vec![(0.0, 0.0), (48.0, 0.0), (48.0, 24.0)]);
     let e = s.execute("vector.create", &json!({"points": points, "width": 16, "height": -1})).unwrap_err().to_string();
     assert!(e.contains("positive"), "{e}");
+}
+
+/// A vector from `points` with a corner radius per point (`radii`), via `vector.create`.
+fn rounded_vector(s: &mut Session, points: &[(f64, f64)], radii: &[f64], closed: bool) -> NodeId {
+    let pts: Vec<Value> = points.iter().map(|p| json!([p.0, p.1])).collect();
+    let id = id_of(&ex(s, "vector.create", json!({"points": pts, "closed": closed}))["id"]).unwrap();
+    if let NodeKind::Vector { network } = &mut s.doc_mut().unwrap().get_mut(id).unwrap().kind {
+        for (v, r) in network.vertices.iter_mut().zip(radii) {
+            v.radius = *r;
+        }
+    }
+    id
+}
+
+/// #2195: Flatten bakes a vector's point radii into its path: the rounded vertex becomes the
+/// arc's end points joined by curves, the layer stays a vector, the box fits the real geometry.
+#[test]
+fn flatten_bakes_a_vectors_point_radius() {
+    // An open V with the apex rounded.
+    let mut s = Session::new();
+    let v = rounded_vector(&mut s, &[(0.0, 0.0), (184.0, 245.0), (368.0, 0.0)], &[0.0, 60.0, 0.0], false);
+    let before = net(&s, v);
+    let drawn = before.rounded().unwrap().stroke_path().perimeter(1e-4);
+    let h_before = s.doc().unwrap().node(v).unwrap().height;
+    let out = ex(&mut s, "vector.flatten", json!({"ids": [v]}));
+    let f = id_of(&out["id"]).unwrap();
+    let after = net(&s, f);
+    assert_eq!(after.vertices.len(), 4, "the apex became two points: 3 + 1");
+    assert!(after.vertices.iter().all(|p| p.radius == 0.0), "no radius left");
+    let len = after.stroke_path().perimeter(1e-4);
+    assert!((len - drawn).abs() < 0.5, "the outline is the same: {len} vs {drawn}");
+    let h = s.doc().unwrap().node(f).unwrap().height;
+    let bb = after.bounds().unwrap();
+    assert!(h < h_before && (h - 245.0).abs() > 1.0, "the box shrinks from 245: {h}");
+    assert!((h - bb.height()).abs() < 1e-6 && bb.y0.abs() < 1e-6, "the box is the baked path's bounds: {h} vs {bb:?}");
+    println!("open V: points {} -> {}, height {h_before} -> {h}", before.vertices.len(), after.vertices.len());
+    s.undo().unwrap();
+    assert!(s.doc().unwrap().node(v).is_some() && s.doc().unwrap().node(f).is_none(), "one undo step");
+    assert_eq!(net(&s, v).vertices[1].radius, 60.0);
+
+    // A closed triangle rounded at every point.
+    let mut s = Session::new();
+    let v = rounded_vector(&mut s, &[(0.0, 0.0), (368.0, 0.0), (184.0, 245.0)], &[40.0; 3], true);
+    let drawn = net(&s, v).rounded().unwrap();
+    let (len, area) = (drawn.stroke_path().perimeter(1e-4), drawn.fill_path().area().abs());
+    let f = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [v]}))["id"]).unwrap();
+    let after = net(&s, f);
+    assert_eq!(after.vertices.len(), 6, "each corner became two points");
+    assert!(after.vertices.iter().all(|p| p.radius == 0.0));
+    assert_eq!(after.regions.len(), 1, "still one filled region");
+    assert!((after.stroke_path().perimeter(1e-4) - len).abs() < 0.5);
+    assert!((after.fill_path().area().abs() - area).abs() < 0.5, "same fill area");
+    let n = s.doc().unwrap().node(f).unwrap().clone();
+    let bb = after.bounds().unwrap();
+    assert!(n.height < 245.0 && (n.height - bb.height()).abs() < 1e-6 && (n.width - bb.width()).abs() < 1e-6);
+    println!("triangle: points 3 -> {}, height 245 -> {}", after.vertices.len(), n.height);
+
+    // Guard: no radius, nothing changes.
+    let mut s = Session::new();
+    let v = rounded_vector(&mut s, &[(0.0, 0.0), (184.0, 245.0), (368.0, 0.0)], &[0.0; 3], false);
+    let before = net(&s, v);
+    let f = id_of(&ex(&mut s, "vector.flatten", json!({"ids": [v]}))["id"]).unwrap();
+    assert_eq!(net(&s, f).vertices.len(), 3);
+    assert_eq!(s.doc().unwrap().node(f).unwrap().height, 245.0);
+    assert_eq!(net(&s, f).vertices, before.vertices);
 }

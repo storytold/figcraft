@@ -382,6 +382,45 @@ fn font_bytes_load_into_the_db() {
     }
 }
 
+/// #2092: a font loaded with `text.loadFont` wins over the built-in and installed faces of its family
+/// and style, the latest load over earlier ones; other styles resolve as before.
+#[test]
+fn a_loaded_face_wins_over_the_built_in_one_of_its_family_and_style() {
+    // Any embedded or installed font stands in for the faces (none without craft-fonts on CI).
+    let stand_in = CRAFT_FONTS.first().map(|f| f.bytes.to_vec()).or_else(|| {
+        let mut installed = BTreeMap::new();
+        for dir in system_font_dirs() {
+            scan_dir(&dir, 0, &mut installed);
+        }
+        installed.values().flat_map(|(_, v)| v).find_map(|p| std::fs::read(&p.path).ok())
+    });
+    let Some(bytes) = stand_in.map(Arc::new) else {
+        eprintln!("skipping: no font to stand in");
+        return;
+    };
+    let face = |style: &str, name: &str| {
+        let mut f = Face::from_bytes(FontBytes::Shared(bytes.clone()), 0, Some("Brand Sans"), Some(style)).unwrap();
+        f.instances.clear();
+        f.postscript = Some(name.into());
+        f
+    };
+    let name = |db: &FontDb, style: &str| db.best("Brand Sans", style).and_then(|f| f.postscript.clone());
+    let mut db = FontDb::default();
+    db.add(face("Regular", "Built-in-Regular"));
+    db.add(face("Bold", "Built-in-Bold"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Built-in-Regular"));
+    db.add_loaded(face("Regular", "Loaded-Regular"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Loaded-Regular"));
+    // Bold wasn't loaded: the built-in one stays. Nor does the loaded Regular stand in for it.
+    assert_eq!(name(&db, "Bold").as_deref(), Some("Built-in-Bold"));
+    // The latest load wins.
+    db.add_loaded(face("Regular", "Loaded-Regular-2"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Loaded-Regular-2"));
+    // A face added after a load, not loaded, doesn't displace it.
+    db.add(face("Regular", "Installed-Regular"));
+    assert_eq!(name(&db, "Regular").as_deref(), Some("Loaded-Regular-2"));
+}
+
 /// Apple's system font answers to the names designs and CSS use for it (SF Pro, SF UI Text,
 /// system-ui, …), unless a font of that name is installed.
 #[test]
@@ -541,6 +580,31 @@ fn every_platform_has_a_thai_font_in_the_fallbacks() {
     }
 }
 
+/// #1902: a web build has no system fonts, so a document's missing characters can only come from
+/// the embedded faces. Every script face craft-fonts can embed (`FIGCRAFT_EMBED_SCRIPTS`) is a
+/// document fallback after the Latin faces; else Hebrew or Devanagari typed into an Inter layer
+/// would stay missing glyphs with its face embedded.
+#[test]
+fn every_embeddable_script_face_is_a_document_fallback() {
+    let at = |family: &str| FALLBACK_FAMILIES.iter().position(|f| *f == family);
+    let latin = at("Segoe UI").unwrap();
+    for face in [
+        "Noto Sans Arabic",
+        "Noto Sans Thai",
+        "Noto Sans Hebrew",
+        "Noto Sans Devanagari",
+        "Noto Sans Georgian",
+        "Noto Sans Symbols",
+        "Noto Sans Symbols 2",
+    ] {
+        assert!(at(face).is_some_and(|i| i > latin), "{face} is a fallback after the Latin faces");
+    }
+    // And whatever script face this build embeds (CI builds have craft-fonts; CJK by request).
+    for f in CRAFT_FONTS.iter().filter(|f| f.family.starts_with("Noto Sans") && !f.family.contains("CJK")) {
+        assert!(FALLBACK_FAMILIES.contains(&f.family), "embedded {} is a document fallback", f.family);
+    }
+}
+
 // The paths are Unix absolute paths (font managers are a macOS thing): on Windows they aren't absolute.
 #[cfg(unix)]
 #[test]
@@ -597,4 +661,16 @@ fn system_font_dirs_are_walked_once_each() {
     let dirs = super::system_font_dirs();
     let unique: std::collections::HashSet<_> = dirs.iter().collect();
     assert_eq!(unique.len(), dirs.len(), "{dirs:?}");
+}
+
+#[test]
+fn a_collection_header_naming_billions_of_faces_loads_a_bounded_few() {
+    // Four bytes per face offset: a header can name far more faces than the data holds, and each
+    // one would be parsed (and keep a character map) in turn.
+    let mut bytes = synthetic_font_collection(32);
+    bytes[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
+    let start = std::time::Instant::now();
+    let faces = FontDb::default().add_bytes(bytes);
+    assert!(faces.len() <= 64, "{}", faces.len());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
 }

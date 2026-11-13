@@ -32,7 +32,7 @@ use handles::DRAG_SLOP_PX;
 pub(crate) use handles::scale_factor;
 pub use handles::{
     PENCIL_STROKE, SMALL_BOX_PX, anchor_name, anchor_of, box_sides_px, handle_at, handle_at_corners, label_at, locked_in, scale_anchor_point,
-    selection_box, selection_frame,
+    selection_box, selection_frame, shared_rotation_degrees,
 };
 pub(crate) use handles::{SNAP_PX, handle_cursor, readable_text_fills, resized_box};
 #[cfg(test)]
@@ -58,6 +58,7 @@ pub enum ToolId {
     Text,
     TextOnPath,
     Comment,
+    Annotation,
     Eyedropper,
     ShapeBuilder,
     // Board tools.
@@ -71,7 +72,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 26] = [
+    pub const ALL: [ToolId; 27] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -89,6 +90,7 @@ impl ToolId {
         ToolId::Text,
         ToolId::TextOnPath,
         ToolId::Comment,
+        ToolId::Annotation,
         ToolId::Eyedropper,
         ToolId::ShapeBuilder,
         ToolId::Sticky,
@@ -118,6 +120,7 @@ impl ToolId {
             ToolId::Text => "text",
             ToolId::TextOnPath => "textOnPath",
             ToolId::Comment => "comment",
+            ToolId::Annotation => "annotation",
             ToolId::Eyedropper => "eyedropper",
             ToolId::ShapeBuilder => "shapeBuilder",
             ToolId::Sticky => "sticky",
@@ -128,6 +131,11 @@ impl ToolId {
             ToolId::Eraser => "eraser",
             ToolId::Stamp => "stamp",
         }
+    }
+    /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
+    /// The one list behind the engine's pointer routing and command allowlist and the toolbar.
+    pub fn works_in_dev_mode(self) -> bool {
+        matches!(self, ToolId::Move | ToolId::Hand | ToolId::Comment | ToolId::Annotation)
     }
     pub fn from_id(s: &str) -> Option<ToolId> {
         ToolId::ALL.into_iter().find(|t| t.id().eq_ignore_ascii_case(s))
@@ -151,6 +159,7 @@ impl ToolId {
             ToolId::Text => "Text",
             ToolId::TextOnPath => "Text on a path",
             ToolId::Comment => "Comment",
+            ToolId::Annotation => "Annotation",
             ToolId::Eyedropper => "Pick color",
             ToolId::ShapeBuilder => "Shape builder",
             ToolId::Sticky => "Sticky note",
@@ -201,6 +210,7 @@ impl ToolId {
                 | ToolId::Star
                 | ToolId::Line
                 | ToolId::Arrow
+                | ToolId::BoardShape
         )
     }
 }
@@ -327,6 +337,9 @@ pub struct Overlay {
     pub cursor: Cursor,
     /// Pen tool: the in-progress path's anchor points and the rubber band to the pointer.
     pub pen: Vec<[f64; 2]>,
+    /// Pencil: the colour of the stroke in progress, for its preview (white over a dark page or
+    /// frame); None outside a Pencil stroke.
+    pub pen_color: Option<figcraft_color::Color>,
     pub rubber: Option<[f64; 4]>,
     /// Pen tool: the handles shaping the segments at the pen (anchor x, y, handle x, y): the last
     /// anchor's in and out handles and the one before's out handle.
@@ -441,6 +454,8 @@ pub(crate) enum Gesture {
     Rotate {
         center: Point,
         start_angle: f64,
+        /// The rotation (Design panel convention) the layers share when the drag began, else 0.
+        base: f64,
         ids: Vec<NodeId>,
     },
     Draw {
@@ -544,6 +559,8 @@ pub struct PenPath {
     pub closed: bool,
     /// The path ends connected to this anchor of its own (a vector network).
     pub join: Option<usize>,
+    /// Anchors taken back by undo, the last one first to come back on redo.
+    pub undone: Vec<(Point, Vec2, Vec2)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -589,6 +606,13 @@ pub struct ToolState {
     pub picked: Option<figcraft_color::Color>,
     /// The widget layers whose hover styles show while the pointer is over them (a live preview).
     pub(crate) widget_hover: Vec<NodeId>,
+    /// The placement crosshair: where Enter puts the next shape or frame once the arrows have
+    /// shown it (in the middle of the view) and moved it (`tool.crosshair`), in page coordinates
+    /// of the document and page in `place_on` (elsewhere it isn't shown: `Session::crosshair`).
+    /// Placing, Escape and a change of tool take it away.
+    pub place_at: Option<Point>,
+    /// The document (uid) and page the crosshair was shown on.
+    pub(crate) place_on: Option<(u64, NodeId)>,
 }
 
 impl ToolState {

@@ -332,7 +332,8 @@ struct Item {
     /// inside stroke): fill children share the free space by their content area, border-box
     /// fashion, so these come on top of each one's share.
     inset_main: f64,
-    /// Baseline alignment: distance from the item's top to its first baseline.
+    /// Baseline alignment: distance from the item's top to its first text baseline, or to its
+    /// bottom edge when it has no text (an icon next to a text sits on the line with its bottom).
     baseline: Option<f64>,
     /// Baseline alignment: offset from the line's top (computed per line).
     base_off: f64,
@@ -555,8 +556,11 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
         it.cross = if horizontal { h } else { w };
     }
     if baseline {
+        // A layer without a text baseline (an icon, a shape, a frame holding no text) sits on the
+        // line with its bottom edge: "the bottoms of the icon and the word home are aligned on the
+        // red line" (Use the horizontal and vertical flows in auto layout; #1825).
         for it in items.iter_mut().filter(|it| !it.fill_cross) {
-            it.baseline = item_baseline(doc, it.id, m, 0);
+            it.baseline = item_baseline(doc, it.id, m, 0).or(Some(it.cross));
         }
     }
 
@@ -790,9 +794,9 @@ fn track_spec(specs: &[figcraft_doc::GridTrack], i: usize) -> (Sizing, f64) {
 }
 
 /// Resolve track sizes: fixed tracks keep their size, hug tracks fit their content, fill tracks
-/// share what is left by their fractional units like the CSS `fr` unit (a track never gets less
-/// than its content: one whose share is too small keeps its content size and the others share the
-/// rest). `avail` is None when the frame hugs that axis (fill tracks then hug their content too).
+/// share what is left by their fractional units (a track whose share is below its content, which
+/// only a Fill child's minimum or a spanning child asks for, keeps that size and the others share
+/// the rest). `avail` is None when the frame hugs that axis (fill tracks then hug their content too).
 fn resolve_tracks(specs: &[figcraft_doc::GridTrack], content: &[f64], avail: Option<f64>) -> Vec<f64> {
     let mut out: Vec<f64> = (0..content.len())
         .map(|i| match track_spec(specs, i) {
@@ -887,13 +891,29 @@ pub fn grid_geometry(doc: &Document, frame: NodeId) -> Option<GridGeometry> {
     let gy = finite_or_zero(al.cross_gap).max(0.0);
     let hug_w = f.child_layout.sizing_h == Sizing::Hug;
     let hug_h = f.child_layout.sizing_v == Sizing::Hug;
-    // What each child asks of its tracks: its size, or (filling a non-hugging axis) its minimum.
+    // What each child asks of its tracks: its size, its minimum when it fills a non-hugging axis, or
+    // nothing when it sits alone in a Fill track of a non-hugging axis.
     let (mut ws, mut hs) = (Vec::with_capacity(cells.len()), Vec::with_capacity(cells.len()));
     for c in &cells {
         let (w, h) = outer_size(doc, c.id);
         let cl = doc.node(c.id).map(|n| n.child_layout.clone()).unwrap_or_default();
-        ws.push(if cl.sizing_h == Sizing::Fill && !hug_w { cl.min_w.unwrap_or(0.0) } else { w });
-        hs.push(if cl.sizing_v == Sizing::Fill && !hug_h { cl.min_h.unwrap_or(0.0) } else { h });
+        // Measured in Figma: a Fill track of a fixed-size axis shares the space by its fraction and
+        // ignores a fixed-size (or hug-size) child in it, which overflows into the next track.
+        let in_fill = |tracks: &[figcraft_doc::GridTrack], start: usize, span: usize| span == 1 && track_spec(tracks, start).0 == Sizing::Fill;
+        ws.push(if cl.sizing_h == Sizing::Fill && !hug_w {
+            cl.min_w.unwrap_or(0.0)
+        } else if !hug_w && in_fill(&al.column_tracks, c.column, c.column_span) {
+            0.0
+        } else {
+            w
+        });
+        hs.push(if cl.sizing_v == Sizing::Fill && !hug_h {
+            cl.min_h.unwrap_or(0.0)
+        } else if !hug_h && in_fill(&al.row_tracks, c.row, c.row_span) {
+            0.0
+        } else {
+            h
+        });
     }
     let col_content = track_content(&cells, &ws, &al.column_tracks, cols, gx, true, hug_w);
     let row_content = track_content(&cells, &hs, &al.row_tracks, rows, gy, false, hug_h);
@@ -1155,6 +1175,9 @@ pub fn grid_snap_lines(doc: &Document, frame: NodeId) -> (Vec<f64>, Vec<f64>) {
     grid_snap_lines_in(doc, frame, doc.world_transform(frame))
 }
 
+/// The most snap coordinates a frame's grids give together (a few dozen grids' worth of lines).
+const MAX_SNAP_LINES: usize = 200_000;
+
 /// [`grid_snap_lines`] mapped from the frame's coordinates by `xf` (the frame's world transform
 /// for page lines).
 pub fn grid_snap_lines_in(doc: &Document, frame: NodeId, xf: Affine) -> (Vec<f64>, Vec<f64>) {
@@ -1162,7 +1185,13 @@ pub fn grid_snap_lines_in(doc: &Document, frame: NodeId, xf: Affine) -> (Vec<f64
     let mut xs = Vec::new();
     let mut ys = Vec::new();
     for g in f.grids.iter().filter(|g| g.visible) {
-        for r in grid_lines(g, f.width, f.height) {
+        // A frame-wide budget: each grid adds up to ~17,000 lines, and a file can hold any number of grids;
+        // a grid that would pass it is left out whole.
+        let lines = grid_lines(g, f.width, f.height);
+        if xs.len() + ys.len() + 2 * lines.len() > MAX_SNAP_LINES {
+            break;
+        }
+        for r in lines {
             let a = xf * Point::new(r.x0, r.y0);
             let b = xf * Point::new(r.x1, r.y1);
             match g.kind {

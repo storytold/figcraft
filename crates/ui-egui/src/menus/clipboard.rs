@@ -7,8 +7,8 @@ use crate::i18n::trf;
 /// Paste: the system clipboard wins when it holds something newer than our own copy (layers copied
 /// from another design app, an image, SVG or text from another app); otherwise our copied layers.
 /// `event_text` is the text the platform handed over with the paste event (the browser has no
-/// other way to read it). `at`: the page point to paste at (Paste here); `None` pastes in the
-/// middle of the view.
+/// other way to read it; the desktop's clipboard bridge has already read it). `at`: the page
+/// point to paste at (Paste here); `None` pastes in the middle of the view.
 /// In Dev Mode only a comment's link pastes (it opens the thread); everything else would edit.
 pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>) {
     // A gesture injected through the control channel pastes only our own copied layers: it must not
@@ -16,7 +16,7 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
     if app.control_synthetic {
         // Synthetic input is user-like: Dev Mode refuses the paste here too, and only the engine's
         // own copied layers are pasted (the system clipboard is never read).
-        if !dev_mode_refuses(app, "edit.paste") {
+        if !(at.is_none() && crate::property_rows::paste(app)) && !dev_mode_refuses(app, "edit.paste") {
             app.run("edit.paste", at.map_or(json!({}), |(x, y)| json!({"x": x, "y": y})));
         }
         return;
@@ -47,7 +47,15 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
         }
         return;
     }
-    let sys_text = app.services.clipboard_get_text().or_else(|| event_text.map(str::to_string)).filter(|t| !t.is_empty());
+    // The text the platform handed over with the paste event is the system clipboard's text: the
+    // browser delivers it, and the desktop's async clipboard bridge read it while the window
+    // thread was free to serve the transfer. Never re-read the clipboard synchronously for it —
+    // on the desktop that read blocks the window thread for the read timeout, and when this app
+    // itself owns the clipboard (a self-paste) its own source can only be served by that very
+    // thread, so the read waits the full timeout and the window freezes for seconds (#2021).
+    // A paste the platform didn't hand text over (a chord, an image, the menu) reads it, as before.
+    let sys_text =
+        if let Some(t) = event_text { (!t.is_empty()).then(|| t.to_string()) } else { app.services.clipboard_get_text().filter(|t| !t.is_empty()) };
     // The text matching `last_copy` means the system clipboard still holds what we mirrored only
     // while the engine clipboard is the one we mirrored. A control-channel copy changes the engine
     // clipboard without writing the system clipboard, so its generation no longer matches and the
@@ -80,6 +88,11 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
         if let Some(text) = sys_text.filter(|t| !is_clipboard_marker(t)) {
             return paste_text(app, &text, (cx, cy), at.is_none());
         }
+    }
+    // Nothing newer from another app: a fill, stroke or effect copied from its row, when that was
+    // the last copy, else our copied layers.
+    if at.is_none() && crate::property_rows::paste(app) {
+        return;
     }
     if !dev_mode_refuses(app, "edit.paste") {
         app.run("edit.paste", at.map_or(json!({}), |(x, y)| json!({"x": x, "y": y})));
@@ -129,9 +142,6 @@ fn clipboard_png(app: &mut FigApp) -> Option<(Vec<u8>, f64, f64)> {
         Some(readable) => readable,
         None => with_pixel_size(encoded_clipboard_image(app)?)?,
     };
-    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PASTED_IMAGE_PIXELS {
-        return None;
-    }
     let density = figcraft_format::pixel_density(&png);
     let (w, h) = figcraft_format::placed_size(w, h, density, figcraft_engine::cmd::create::PLACED_IMAGE_MAX_SIDE);
     Some((png, w, h))
@@ -140,8 +150,14 @@ fn clipboard_png(app: &mut FigApp) -> Option<(Vec<u8>, f64, f64)> {
 const MAX_PASTED_IMAGE_PIXELS: u64 = 100_000_000;
 
 fn with_pixel_size(png: Vec<u8>) -> Option<(Vec<u8>, (u32, u32))> {
-    let size = image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().ok()?.into_dimensions().ok()?;
-    Some((png, size))
+    use image::ImageDecoder as _;
+    let decoder = image::ImageReader::new(std::io::Cursor::new(&png)).with_guessed_format().ok()?.into_decoder().ok()?;
+    let (w, h) = decoder.dimensions();
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PASTED_IMAGE_PIXELS {
+        return None;
+    }
+    image::DynamicImage::from_decoder(decoder).ok()?;
+    Some((png, (w, h)))
 }
 
 fn encoded_clipboard_image(app: &mut FigApp) -> Option<Vec<u8>> {

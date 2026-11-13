@@ -10,7 +10,9 @@
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{Paint, PaintKind};
-use figcraft_doc::{Document, GridKind, Node, NodeId, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, trim_num};
+use figcraft_doc::{
+    Document, GridKind, ListStyle, Node, NodeId, ParagraphStyle, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, WrapStyle, trim_num,
+};
 use figcraft_engine::library;
 use serde_json::{Value, json};
 
@@ -354,7 +356,7 @@ fn by_folder<'a>(styles: impl Iterator<Item = &'a Style>) -> Vec<(&'a str, Vec<&
 /// A text style's definition, if `s` is one.
 fn text_def(s: &Style) -> Option<&TextStyle> {
     match &s.kind {
-        StyleKind::Text { style } => Some(style),
+        StyleKind::Text { style, .. } => Some(style),
         _ => None,
     }
 }
@@ -724,6 +726,8 @@ struct TextBinding<'a> {
 fn text_binding(ui: &mut Ui, binding: TextBinding<'_>, out: &mut Frame) {
     let TextBinding { style, field, kind, rect, name, lead } = binding;
     match widgets::bound_field(ui, Id::unique(("ts_bound", style, field)), lead, rect, name) {
+        // The weight slot takes a face name or a number, so its chip opens the picker that offers both.
+        Some(widgets::BindEvent::Open(at)) if matches!(field, "fontWeight" | "fontStyle") => crate::variable_ui::open_style_weight(ui, style, at),
         Some(widgets::BindEvent::Open(at)) => crate::variable_ui::open_style(ui, style, field, kind, at),
         Some(widgets::BindEvent::Detach) => out.act = Some(Act::Unbind(style.to_string(), field.to_string())),
         None => {}
@@ -785,15 +789,16 @@ fn font_style_size_row(ui: &mut Ui, doc: &Document, style: &Style, def: &TextSty
     let id = style.id.as_str();
     let mut style_resp = None;
     ui.horizontal(|ui| {
-        match bound_name(doc, style, "fontStyle") {
+        let weight_field = if style.bound.contains_key("fontWeight") { "fontWeight" } else { "fontStyle" };
+        match bound_name(doc, style, weight_field) {
             Some(name) => {
                 let (r, _) = ui.allocate_exact_size(vec2(half, widgets::FIELD_H), Sense::hover());
                 text_binding(
                     ui,
                     TextBinding {
                         style: id,
-                        field: "fontStyle",
-                        kind: VariableType::String,
+                        field: weight_field,
+                        kind: if weight_field == "fontWeight" { VariableType::Number } else { VariableType::String },
                         rect: r,
                         name: &name,
                         lead: widgets::Lead::Named(tr("Font style")),
@@ -942,7 +947,7 @@ fn font_family_menu(ui: &Ui, id: &str, def: &TextStyle, family_resp: &Response, 
 fn font_style_menu(id: &str, def: &TextStyle, style_resp: &Response, out: &mut Frame) {
     crate::right::menu_popup(style_resp).width(200.0).show(|ui| {
         if crate::right::menu_item(ui, tr("Apply variable"), "") {
-            crate::variable_ui::open_style(ui, id, "fontStyle", VariableType::String, style_resp.rect.left_bottom());
+            crate::variable_ui::open_style_weight(ui, id, style_resp.rect.left_bottom());
             ui.close();
             return;
         }
@@ -973,6 +978,44 @@ fn text_properties(ui: &mut Ui, doc: &Document, style: &Style, def: &TextStyle, 
     }
     if let Some(sr) = style_resp {
         font_style_menu(id, def, &sr, out);
+    }
+    if let StyleKind::Text { paragraph, .. } = &style.kind {
+        paragraph_rows(ui, paragraph);
+    }
+}
+
+/// What a text style sets at the paragraph level (#1829), when it sets anything: the spacing,
+/// indent, list style and OpenType features (as `+tnum -liga`). A layer's Type settings edit
+/// them; Update from selection takes them into the style.
+fn paragraph_rows(ui: &mut Ui, ps: &ParagraphStyle) {
+    let mut rows: Vec<String> = Vec::new();
+    if ps.paragraph_spacing != 0.0 {
+        let label = tr("Paragraph spacing");
+        rows.push(format!("{label}: {}", trim_num(ps.paragraph_spacing)));
+    }
+    if ps.paragraph_indent != 0.0 {
+        let label = tr("Paragraph indent");
+        rows.push(format!("{label}: {}", trim_num(ps.paragraph_indent)));
+    }
+    match ps.list {
+        ListStyle::None => {}
+        ListStyle::Bulleted => rows.push(tr("Bulleted list").into()),
+        ListStyle::Numbered => rows.push(tr("Numbered list").into()),
+    }
+    match ps.wrap_style {
+        WrapStyle::Auto => {}
+        WrapStyle::Balance => rows.push(format!("{}: {}", tr("Wrap style"), tr("Balance"))),
+        WrapStyle::Pretty => rows.push(format!("{}: {}", tr("Wrap style"), tr("Pretty"))),
+    }
+    if !ps.features.is_empty() {
+        rows.push(ps.features.iter().map(|(tag, on)| format!("{}{tag}", if *on { '+' } else { '-' })).collect::<Vec<_>>().join(" "));
+    }
+    if rows.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    for row in rows {
+        caption(ui, &row);
     }
 }
 
@@ -1038,7 +1081,7 @@ fn editor(ui: &mut Ui, doc: &Document, p: &mut Picker, out: &mut Frame) {
                     binding_cell(ui, doc, &style, &format!("layoutGrids/{i}/size"), figcraft_doc::VariableType::Number, out);
                 }
             }
-            StyleKind::Text { style: def } => text_properties(ui, doc, &style, def, out),
+            StyleKind::Text { style: def, .. } => text_properties(ui, doc, &style, def, out),
         }
     });
     ui.add_space(8.0);
@@ -1082,11 +1125,17 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         return;
     }
     let screen = ctx.content_rect();
-    // Left of the Design panel; further left while the colour picker (which sits there) is open.
-    let mut x = screen.max.x - app.ui.right_width - W - 32.0;
-    if app.ui.picker.is_some() {
-        x -= 260.0;
-    }
+    // Beside the Design panel, on its canvas side; further out while the colour picker (which
+    // sits there) is open.
+    let gap = if app.ui.picker.is_some() { 32.0 + 260.0 } else { 32.0 };
+    // Mirrored, the panel as drawn: a small window draws it narrower than asked, and a narrow one
+    // across the window, so the asked width would put the picker over it.
+    let panel = if app.ui.mirrored {
+        app.ui.right_panel_rect.map_or_else(|| egui::Rangef::new(screen.min.x, screen.min.x + app.ui.right_width), |r| r.x_range())
+    } else {
+        egui::Rangef::new(screen.max.x - app.ui.right_width, screen.max.x)
+    };
+    let x = crate::popover::beside_panel(panel, W, gap, app.ui.mirrored);
     let y = p.y.clamp(screen.min.y + 48.0, (screen.max.y - 460.0).max(screen.min.y + 48.0));
     let mut out = Frame { act: None, hover: None, budget: 4 };
     // The title and the X are the shared popover's now; the list keeps its tools row.

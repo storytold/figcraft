@@ -17,7 +17,11 @@ pub(crate) struct Script {
     pub(crate) events: Vec<Event>,
     pub(crate) sent: Vec<Presence>,
     pub(crate) hosted: Vec<HostOptions>,
-    joined: Vec<String>,
+    pub(crate) joined: Vec<String>,
+    /// What the last join asked to resume as.
+    pub(crate) resumed: Option<crate::live::Resume>,
+    /// The sessions told to reconnect now, in order.
+    pub(crate) retried: Vec<u64>,
     pub(crate) left: usize,
     pub(crate) msgs: Vec<ClientMsg>,
     pub(crate) published: Vec<PublishOptions>,
@@ -46,6 +50,15 @@ impl LiveLink for Mock {
         i.url = format!("ws://{}/?file=f&token=t", i.address);
         Ok(i)
     }
+    fn join_resuming(&mut self, session: u64, link: &str, name: &str, resume: Option<crate::live::Resume>) -> Result<(), String> {
+        self.0.lock().unwrap().resumed = resume;
+        self.join(session, link, name)
+    }
+
+    fn retry(&mut self, session: u64) {
+        self.0.lock().unwrap().retried.push(session);
+    }
+
     fn join(&mut self, session: u64, link: &str, _: &str) -> Result<(), String> {
         if !link.starts_with("figcraft://") {
             return Err("not an invite".into());
@@ -90,6 +103,7 @@ impl LiveLink for Mock {
     }
 }
 
+/// A session you are in as `role`, as client `me`, everyone in it editing.
 pub(crate) fn info(role: Role, me: u32) -> SessionInfo {
     SessionInfo {
         role,
@@ -103,6 +117,7 @@ pub(crate) fn info(role: Role, me: u32) -> SessionInfo {
         address: "127.0.0.1:47900".into(),
         network: false,
         access: crate::live::Access::Edit,
+        view: None,
     }
 }
 
@@ -229,7 +244,7 @@ fn events_build_who_is_here() {
     assert_eq!(s.live_summary()["attempt"], 1);
     push(&script, vec![Event::Status(Status::Failed { reason: "Lost the connection".into() })]);
     s.live_poll();
-    assert!(s.live().info.is_none());
+    assert!(s.live().peers.is_empty() && !s.live().syncing());
     assert_eq!(s.live_summary()["reason"], "Lost the connection");
     assert_eq!(s.message.as_deref(), Some("Lost the connection"));
     assert!(!s.live_poll(), "nothing new");

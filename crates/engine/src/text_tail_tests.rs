@@ -64,7 +64,7 @@ fn a_list_with_a_start_number_toggles_off() {
     let mut s = Session::new();
     let t = text(&mut s, "two\nthree\nfour");
     if let figcraft_doc::NodeKind::Text(td) = &mut s.doc_mut().unwrap().get_mut(t).unwrap().kind {
-        let n = |start_offset| ParaList { list: N, indent: 0, start_offset };
+        let n = |start_offset| ParaList { list: N, indent: 0, start_offset, ..ParaList::default() };
         td.paragraphs = vec![n(1), n(0), n(0)];
     }
     let j = crate::inspect::node_json(s.doc().unwrap(), t, 0);
@@ -84,7 +84,11 @@ fn typed_list_starts() {
         ("- ", "", B, "hyphen and space: bullets"),
         ("* ", "", B, "asterisk and space: bullets"),
         ("1. ", "", N, "one, full stop, space: numbers"),
-        ("2. ", "2. ", P, "silent: only 1. starts a numbered list"),
+        ("2. ", "", N, "as measured in Figma: a typed number starts the list there"),
+        ("0. ", "0. ", P, "zero is not measured: text"),
+        ("12a. ", "12a. ", P, "digits only: text"),
+        ("1) ", "", N, "one and a closing bracket: numbers"),
+        ("2) ", "2) ", P, "silent: only 1) starts with a bracket"),
         ("a- ", "a- ", P, "not at the paragraph's start: text"),
         ("-x ", "-x ", P, "the space must follow the marker"),
     ];
@@ -106,6 +110,76 @@ fn typed_list_starts() {
         insert(&mut s, &c.to_string()).unwrap();
     }
     assert_eq!((data(&s, t).characters.as_str(), lists(&s, t)), ("Intro\n- ", vec![(P, 0), (B, 0)]), "an item's own text stays text");
+}
+
+#[test]
+fn typed_number_starts_the_list_there() {
+    // As measured in Figma (2026-11-11): typing "5. x", Enter, "y" reads 5. then 6.; the start
+    // is the typed number less one, and the next item goes on counting from it.
+    let mut s = Session::new();
+    let t = text(&mut s, "x");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+    begin(&mut s, t, Some(0), false).unwrap();
+    for c in "5. x".chars() {
+        insert(&mut s, &c.to_string()).unwrap();
+    }
+    assert_eq!(data(&s, t).para_list(0).start_offset, 4, "5 starts at offset 4");
+    key(&mut s, "Enter", false, false, false).unwrap();
+    insert(&mut s, "y").unwrap();
+    crate::textedit::end(&mut s).unwrap();
+    let d = data(&s, t);
+    assert_eq!(d.characters, "x\ny");
+    assert_eq!(lists(&s, t), [(N, 0), (N, 0)]);
+    // An item made by Enter has no start of its own and goes on counting: 5. then 6.
+    assert_eq!((d.para_list(0).start_offset, d.para_list(1).start_offset), (4, 0), "the new item has no start");
+    s.undo().unwrap();
+    assert_eq!(data(&s, t).characters, "", "one undo step for the session");
+    assert_eq!(data(&s, t).para_list(0).start_offset, 0);
+}
+
+/// Type `first` ("5. a" style), then Enter, "b", Enter, "c", leaving the caret in "c".
+fn three_typed_items(s: &mut Session, first: &str) -> NodeId {
+    let t = text(s, "x");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+    begin(s, t, Some(0), false).unwrap();
+    for c in first.chars() {
+        insert(s, &c.to_string()).unwrap();
+    }
+    for step in ["Enter", "b", "Enter", "c"] {
+        if step == "Enter" {
+            key(s, step, false, false, false).unwrap();
+        } else {
+            insert(s, step).unwrap();
+        }
+    }
+    t
+}
+
+#[test]
+fn a_list_split_by_unlisting_a_middle_item_restarts_at_one() {
+    // As measured in Figma (2026-11-11): typed "5. a", Enter, "b", Enter, "c" reads 5. 6. 7.;
+    // Backspace at the start of "b" takes its marker and "c" then reads 1., for "1. " too.
+    // `list_markers` counts on after a numbered item and restarts a numbered item that follows a
+    // plain paragraph at its own start, so the starts and the neighbours give the markers.
+    for (first, start) in [("5. a", 4), ("1. a", 0)] {
+        let mut s = Session::new();
+        let t = three_typed_items(&mut s, first);
+        assert_eq!(
+            data(&s, t).characters,
+            "a
+b
+c"
+        );
+        // The guard: unsplit, "b" and "c" go on counting (5. 6. 7.).
+        let d = data(&s, t);
+        assert_eq!(lists(&s, t), [(N, 0); 3], "{first}: no split");
+        assert_eq!((d.para_list(0).start_offset, d.para_list(1).start_offset, d.para_list(2).start_offset), (start, 0, 0), "{first}");
+        set_caret(&mut s, 2, false).unwrap();
+        key(&mut s, "Backspace", false, false, false).unwrap();
+        let d = data(&s, t);
+        assert_eq!(lists(&s, t), [(N, 0), (P, 0), (N, 0)], "{first}: split");
+        assert_eq!(d.para_list(2).start_offset, 0, "{first}: c restarts at 1 (the item made by Enter has no start)");
+    }
 }
 
 #[test]
@@ -157,7 +231,8 @@ fn list_keys_at_list_items() {
     for (chars, before, caret, k, shift, after, want, why) in cases {
         let mut s = Session::new();
         let t = text(&mut s, chars);
-        let ps: Vec<ParaList> = before.iter().map(|(list, indent)| ParaList { list: *list, indent: *indent, start_offset: 0 }).collect();
+        let ps: Vec<ParaList> =
+            before.iter().map(|(list, indent)| ParaList { list: *list, indent: *indent, start_offset: 0, ..ParaList::default() }).collect();
         if let figcraft_doc::NodeKind::Text(td) = &mut s.doc_mut().unwrap().get_mut(t).unwrap().kind {
             td.paragraphs = ps;
         }
@@ -181,7 +256,11 @@ fn paragraph_lists_follow_edits() {
     // A paragraph's list stays with it as text is typed, pasted and deleted: new paragraphs copy
     // the one they split from; joined paragraphs keep the first one's.
     let mut t = TextData::new("ab\ncd\nef");
-    t.paragraphs = vec![ParaList { list: B, indent: 1, start_offset: 0 }, ParaList::default(), ParaList { list: N, indent: 0, start_offset: 0 }];
+    t.paragraphs = vec![
+        ParaList { list: B, indent: 1, start_offset: 0, ..ParaList::default() },
+        ParaList::default(),
+        ParaList { list: N, indent: 0, start_offset: 0, ..ParaList::default() },
+    ];
     let get = |t: &TextData| (0..t.paragraph_count()).map(|p| (t.para_list(p).list, t.para_list(p).indent)).collect::<Vec<_>>();
     t.replace_range(1, 1, "x\ny");
     assert_eq!(get(&t), [(B, 1), (B, 1), (P, 0), (N, 0)], "a pasted newline: a new item like it");
@@ -196,7 +275,7 @@ fn paragraph_lists_follow_edits() {
         (seed >> 33) as usize % n.max(1)
     };
     let mut t = TextData::new("a\nb\nc\nd");
-    t.paragraphs = vec![ParaList { list: B, indent: 2, start_offset: 0 }; 4];
+    t.paragraphs = vec![ParaList { list: B, indent: 2, start_offset: 0, ..ParaList::default() }; 4];
     for _ in 0..500 {
         let n = t.char_count();
         let (a, b) = (rnd(n + 2), rnd(n + 2));
@@ -366,4 +445,40 @@ fn typing_a_creation_character_and_a_space_starts_a_list() {
         insert(&mut s, c).unwrap();
     }
     assert_eq!((data(&s, t).characters.as_str(), lists(&s, t)), ("2) ", vec![(P, 0)]));
+}
+
+#[test]
+fn splitting_a_plain_paragraph_that_kept_its_level_keeps_the_level() {
+    // Backspace at a nested item's start unlists it but keeps indent 1; Enter inside it then
+    // splits it, and neither half loses the level (the start reset changes only starts).
+    let mut s = Session::new();
+    let t = text(&mut s, "ab\ncd");
+    let ps = vec![ParaList { list: N, start_offset: 4, ..ParaList::default() }, ParaList { list: N, indent: 1, ..ParaList::default() }];
+    if let figcraft_doc::NodeKind::Text(td) = &mut s.doc_mut().unwrap().get_mut(t).unwrap().kind {
+        td.paragraphs = ps;
+    }
+    begin(&mut s, t, Some(3), false).unwrap();
+    key(&mut s, "Backspace", false, false, false).unwrap();
+    assert_eq!(lists(&s, t), [(N, 0), (P, 1)], "unlisted, level kept");
+    set_caret(&mut s, 4, false).unwrap();
+    key(&mut s, "Enter", false, false, false).unwrap();
+    assert_eq!(data(&s, t).characters, "ab\nc\nd");
+    assert_eq!(lists(&s, t), [(N, 0), (P, 1), (P, 1)], "both halves keep indent 1");
+}
+
+#[test]
+fn a_many_line_paste_clears_every_created_start() {
+    let mut s = Session::new();
+    let t = text(&mut s, "x");
+    s.execute("node.set", &json!({"id": t, "props": {"characters": ""}})).unwrap();
+    begin(&mut s, t, Some(0), false).unwrap();
+    for c in "5. x".chars() {
+        insert(&mut s, &c.to_string()).unwrap();
+    }
+    let lines: Vec<String> = (0..2001).map(|i| format!("l{i}")).collect();
+    insert(&mut s, &lines.join("\n")).unwrap();
+    let d = data(&s, t);
+    assert_eq!(d.paragraph_count(), 2001);
+    assert_eq!(d.para_list(0).start_offset, 4, "the first item keeps its start");
+    assert!((1..d.paragraph_count()).all(|p| d.para_list(p).start_offset == 0 && d.para_list(p).list == N));
 }

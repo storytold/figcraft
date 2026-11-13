@@ -10,6 +10,8 @@
 pub mod ops;
 pub(crate) mod point_snap;
 mod pointer;
+#[cfg(test)]
+mod position_tests;
 pub mod regions;
 #[cfg(test)]
 mod regions_tests;
@@ -638,7 +640,7 @@ fn index(cmd: &str, p: &Value, key: &str) -> Result<usize> {
 }
 
 /// Delete the points and segments of `parts` (`heal` keeps paths through deleted points closed).
-fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool) -> Result<()> {
+pub(crate) fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool) -> Result<()> {
     let doc = s.doc_mut()?;
     for EditPart { id, vertices: verts, segments: segs } in parts {
         edit(doc, id, |net| {
@@ -706,7 +708,61 @@ fn handle_list(p: &Value, key: &str) -> Option<Vec<(usize, bool)>> {
     }
 }
 
-/// Selection bounds' top-left in the parent's coordinates (what the X/Y fields show).
+/// One axis of `vector.edit.position`: left alone, set, or relative to each point's own value.
+#[derive(Clone, Copy)]
+enum AxisEdit {
+    Keep,
+    Set(f64),
+    Add(f64),
+    Mul(f64),
+    Div(f64),
+}
+
+impl AxisEdit {
+    fn apply(self, cur: f64) -> Result<f64> {
+        let v = match self {
+            AxisEdit::Keep => cur,
+            AxisEdit::Set(v) => v,
+            AxisEdit::Add(n) => cur + n,
+            AxisEdit::Mul(n) => cur * n,
+            AxisEdit::Div(n) if n != 0.0 => cur / n,
+            AxisEdit::Div(_) => return Err(bad("vector.edit.position", "cannot divide by zero")),
+        };
+        if v.is_finite() { Ok(v) } else { Err(bad("vector.edit.position", "the result is not a number")) }
+    }
+}
+
+/// Parse `p[key]`: absent is `Keep`, a number is `Set`, `{add|mul|div: n}` is relative; anything else is refused.
+fn axis_edit(p: &Value, key: &str) -> Result<AxisEdit> {
+    let junk = || bad("vector.edit.position", format!("`{key}` must be a number or {{add|mul|div: number}}"));
+    match get(p, key) {
+        None => Ok(AxisEdit::Keep),
+        Some(Value::Object(o)) => {
+            let (Some((k, v)), 1) = (o.iter().next(), o.len()) else { return Err(junk()) };
+            let n = match v {
+                Value::Number(n) => n.as_f64().filter(|n| n.is_finite()),
+                _ => None,
+            }
+            .ok_or_else(junk)?;
+            match k.as_str() {
+                "add" => Ok(AxisEdit::Add(n)),
+                "mul" => Ok(AxisEdit::Mul(n)),
+                "div" if n != 0.0 => Ok(AxisEdit::Div(n)),
+                _ => Err(junk()),
+            }
+        }
+        Some(v) => f64_of(v).filter(|_| !v.is_boolean()).map(AxisEdit::Set).ok_or_else(junk),
+    }
+}
+
+/// The selected points in the parent's coordinates (what the X/Y fields show).
+pub fn selected_parent_points(doc: &Document, ve: &VectorEdit) -> Vec<Point> {
+    let Some(net) = network(doc, ve.id) else { return Vec::new() };
+    let t = doc.node(ve.id).map(|n| n.transform).unwrap_or_default();
+    selected_points(net, ve).into_iter().filter_map(|v| net.vertices.get(v)).map(|v| t * v.point()).collect()
+}
+
+/// Selection bounds' top-left in the parent's coordinates (the `x` and `y` of `vector.edit.bounds`).
 pub fn selection_position(doc: &Document, ve: &VectorEdit) -> Option<Point> {
     let net = network(doc, ve.id)?;
     let t = doc.node(ve.id)?.transform;
@@ -935,18 +991,50 @@ pub fn specs() -> Vec<CommandSpec> {
             edit_sets(s, sets, |net, v, w| ops::move_vertices(net, v, local_offset(w, d)))?;
             Ok(json!({"ok": true}))
         }),
-        spec!("vector.edit.position", "Point position", "{x?, y?} (the selected points' top-left, in the parent's coordinates)", true, |s, p| {
-            let ve = editing(s)?;
-            let doc = s.doc()?;
-            let cur = selection_position(doc, &ve).ok_or_else(|| bad("vector.edit.position", "select points"))?;
-            let target = Point::new(num_or(p, "x", cur.x), num_or(p, "y", cur.y));
-            let t = doc.node(ve.id).map(|n| n.transform).unwrap_or_default();
-            let inv = t.inverse();
-            let d = inv * target - inv * cur;
-            let v = network(doc, ve.id).map(|n| selected_points(n, &ve)).unwrap_or_default();
-            edit(s.doc_mut()?, ve.id, |net| ops::move_vertices(net, &v, d))?;
-            Ok(json!({"ok": true}))
-        }),
+        spec!(
+            "vector.edit.position",
+            "Point position",
+            "{x?, y?}: each a number (every selected point's own coordinate becomes it) or {add: n}, {mul: n} or {div: n} (applied to each selected point's own coordinate); in the parent's coordinates",
+            true,
+            |s, p| {
+                let ve = editing(s)?;
+                let doc = s.doc()?;
+                let (ax, ay) = (axis_edit(p, "x")?, axis_edit(p, "y")?);
+                let t = doc.node(ve.id).map(|n| n.transform).unwrap_or_default();
+                let inv = t.inverse();
+                let net = network(doc, ve.id).ok_or_else(|| bad("vector.edit.position", "select points"))?;
+                let mut moves: Vec<(usize, Vec2)> = Vec::new();
+                for i in selected_points(net, &ve) {
+                    let Some(v) = net.vertices.get(i) else { continue };
+                    let cur = t * v.point();
+                    let target = Point::new(ax.apply(cur.x)?, ay.apply(cur.y)?);
+                    let d = inv * target - v.point();
+                    if !(d.x.is_finite() && d.y.is_finite()) {
+                        return Err(bad("vector.edit.position", "the result is not a number"));
+                    }
+                    moves.push((i, d));
+                }
+                if moves.is_empty() {
+                    return Err(bad("vector.edit.position", "select points"));
+                }
+                // Points that all share one offset move as one, so moving every point of a layer
+                // by one offset still carries the regions' paint frames, as a drag of all of them
+                // does. Otherwise no one move covers every point, so each point moves alone.
+                let d0 = moves[0].1;
+                let uniform = moves.iter().all(|(_, d)| (*d - d0).hypot() < 1e-9);
+                edit(s.doc_mut()?, ve.id, |net| {
+                    if uniform {
+                        let all: Vec<usize> = moves.iter().map(|(i, _)| *i).collect();
+                        ops::move_vertices(net, &all, d0);
+                    } else {
+                        for (i, d) in &moves {
+                            ops::move_vertices(net, &[*i], *d);
+                        }
+                    }
+                })?;
+                Ok(json!({"ok": true}))
+            }
+        ),
         spec!("vector.edit.setHandle", "Set handle", "{segment, start (bool), x, y (local), independent?}", true, |s, p| {
             let ve = editing(s)?;
             let seg = index("vector.edit.setHandle", p, "segment")?;
@@ -1259,6 +1347,20 @@ pub fn paint_all(doc: &mut Document, id: NodeId, pts: &[Point]) -> Result<bool> 
         n.fills = vec![default];
     }
     Ok(filled)
+}
+
+/// The fills the Fill section shows for layer `id` while regions of it are selected in edit
+/// mode: the stack those regions share (their own, else the layer's), `Some(None)` when they
+/// differ (mixed), `None` when no region of that layer is selected (the layer's fills show). The
+/// fill commands edit the same regions then (#1875).
+pub fn selected_region_fills(s: &Session, id: NodeId) -> Option<Option<Vec<figcraft_color::Paint>>> {
+    let ve = s.ds().ok()?.vector_edit.as_ref().filter(|ve| ve.id == id && !ve.regions.is_empty())?;
+    let doc = s.doc().ok()?;
+    let node = doc.node(id)?;
+    let net = network(doc, id)?;
+    let mut stacks = ve.regions.iter().filter_map(|r| net.regions.get(*r)).map(|r| r.fills.clone().unwrap_or_else(|| node.fills.clone()));
+    let first = stacks.next()?;
+    Some(stacks.all(|st| st == first).then_some(first))
 }
 
 /// Add points `vs` of edited layer `id` to its selection.

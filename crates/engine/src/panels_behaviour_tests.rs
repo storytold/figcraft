@@ -201,6 +201,22 @@ fn reparent_index_is_the_final_position_in_auto_layout_and_across_parents() {
 }
 
 #[test]
+fn reparent_rejects_a_negative_or_fractional_index() {
+    let mut s = Session::new();
+    let frame = id(&ex(&mut s, "node.create", json!({"type": "frame", "name": "F"})));
+    let rect = |s: &mut Session, n: &str, parent: NodeId| id(&ex(s, "node.create", json!({"type": "rectangle", "name": n, "parent": parent})));
+    let (a, b) = (rect(&mut s, "a", frame), rect(&mut s, "b", frame));
+    let free = id(&ex(&mut s, "node.create", json!({"type": "rectangle", "name": "free"})));
+    for bad in [json!(-1), json!(1.5), json!("x")] {
+        let r = s.execute("node.reparent", &json!({"ids": [free], "parent": frame, "index": bad}));
+        assert!(r.is_err(), "index {bad} accepted");
+        assert_eq!(kids(&s, frame), [a, b], "the tree is unchanged for index {bad}");
+    }
+    ex(&mut s, "node.reparent", json!({"ids": [free], "parent": frame, "index": 0}));
+    assert_eq!(kids(&s, frame), [free, a, b]);
+}
+
+#[test]
 fn renaming_several_layers_by_the_documented_codes() {
     // Three layers named `names`, bottom to top; (names, params, new names, derivation).
     let rows: Vec<([&str; 3], Value, [&str; 3], &str)> = vec![
@@ -396,6 +412,20 @@ fn page_select_and_doc_switch_refuse_negative_or_fractional_indexes() {
         assert!(s.execute("doc.switch", &json!({"index": bad_index})).is_err(), "doc.switch index {bad_index} must fail");
         assert_eq!(s.active, active, "doc.switch index {bad_index} leaves the active tab alone");
     }
+}
+
+#[test]
+fn page_move_refuses_negative_or_fractional_indexes() {
+    let mut s = Session::new();
+    ex(&mut s, "page.add", json!({}));
+    let p3 = id(&ex(&mut s, "page.add", json!({})));
+    let before = pages(&mut s);
+    for bad_index in [json!(-1), json!(1.5)] {
+        assert!(s.execute("page.move", &json!({"id": p3, "index": bad_index})).is_err(), "page.move index {bad_index} must fail");
+        assert_eq!(pages(&mut s), before, "page.move index {bad_index} leaves the order alone");
+    }
+    ex(&mut s, "page.move", json!({"id": p3, "index": 0}));
+    assert_eq!(pages(&mut s)[0]["id"], json!(p3), "a valid index still moves the page");
 }
 
 #[test]

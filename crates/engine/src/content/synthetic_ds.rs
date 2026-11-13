@@ -154,7 +154,7 @@ fn auto_layout(doc: &mut Document, id: NodeId, mode: LayoutMode, gap: f64, pad: 
 fn styled_text(doc: &mut Document, parent: NodeId, chars: &str, name: &str, style: &str) -> DocResult<NodeId> {
     let id = doc.create(parent, text(chars), name, 0.0, 0.0, 60.0, 16.0)?;
     let def = doc.styles.iter().find(|s| s.id == style).and_then(|s| match &s.kind {
-        StyleKind::Text { style } => Some(style.clone()),
+        StyleKind::Text { style, .. } => Some(style.clone()),
         _ => None,
     });
     set_node(doc, id, |n| {
@@ -242,7 +242,7 @@ fn foundations(doc: &mut Document) -> (CollectionId, ModeId, ModeId) {
             id: format!("ds:text:{name}"),
             name: name.into(),
             description: String::new(),
-            kind: StyleKind::Text { style },
+            kind: StyleKind::Text { style, paragraph: Default::default() },
             bound: Default::default(),
         });
     }

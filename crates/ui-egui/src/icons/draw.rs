@@ -88,6 +88,11 @@ impl P<'_> {
         // A hairline around the mesh gives it the same soft edge as the convex fills.
         self.painter.add(Shape::closed_line(v, Stroke::new(self.px, self.color)));
     }
+    /// A polygon filled in the icon colour at reduced alpha, so the strokes over it stay readable.
+    fn fill_soft(&self, pts: &[(f32, f32)]) {
+        let soft = P { painter: self.painter, o: self.o, s: self.s, px: self.px, stroke: self.stroke, color: self.color.gamma_multiply(0.4) };
+        soft.fill(pts);
+    }
     /// Triangles `tris` over `verts` (x, y, alpha): the colour fades between the vertices.
     fn shade(&self, verts: &[(f32, f32, f32)], tris: &[u32]) {
         let mut mesh = Mesh::default();
@@ -280,6 +285,13 @@ fn draw(p: &P, icon: Icon) {
     use Icon::*;
     match icon {
         Move => p.fill(&[(4.0, 2.0), (4.0, 13.6), (6.9, 10.9), (8.8, 14.8), (10.6, 14.0), (8.7, 10.2), (12.6, 10.2)]),
+        SelectColor => {
+            p.poly(&[(2.5, 5.5), (2.5, 2.5), (5.5, 2.5)], false);
+            p.poly(&[(10.5, 2.5), (13.5, 2.5), (13.5, 5.5)], false);
+            p.poly(&[(2.5, 10.5), (2.5, 13.5), (5.5, 13.5)], false);
+            p.poly(&[(10.5, 13.5), (13.5, 13.5), (13.5, 10.5)], false);
+            p.circle(8.0, 8.0, 2.5);
+        }
         Scale => {
             p.rect(2.5, 7.5, 8.5, 13.5, 0.0);
             p.line(6.0, 10.0, 13.0, 3.0);
@@ -386,11 +398,20 @@ fn draw(p: &P, icon: Icon) {
         ChevronUp => p.poly(&[(4.5, 10.0), (8.0, 6.5), (11.5, 10.0)], false),
         ChevronRight => p.poly(&[(6.0, 4.5), (9.5, 8.0), (6.0, 11.5)], false),
         ChevronLeft => p.poly(&[(10.0, 4.5), (6.5, 8.0), (10.0, 11.5)], false),
-        Plus => {
-            p.line(7.5, 2.0, 7.5, 13.0);
-            p.line(2.0, 7.5, 13.0, 7.5);
+        Plus | Minus => {
+            // Snap the shared centre once, then give every arm the same pixel length.
+            // Snapping each line's ends separately can offset its midpoint at small sizes.
+            let c = p.sp(8.0, 8.0);
+            let half = p.stroke.width / 2.0;
+            let reach = (5.0 * p.s / p.px).round() * p.px + half;
+            let mut mesh = Mesh::default();
+            mesh.add_colored_rect(Rect::from_min_max(c - vec2(reach, half), c + vec2(reach, half)), p.color);
+            if icon == Plus {
+                mesh.add_colored_rect(Rect::from_min_max(c - vec2(half, reach), c + vec2(half, -half)), p.color);
+                mesh.add_colored_rect(Rect::from_min_max(c + vec2(-half, half), c + vec2(half, reach)), p.color);
+            }
+            p.painter.add(Shape::mesh(mesh));
         }
-        Minus => p.line(2.0, 7.5, 13.0, 7.5),
         Eye | EyeOff => {
             // An almond (two arcs meeting at the corners) with the pupil.
             let (r, cy, half) = (7.0f32, 7.5f32, 5.5f32);
@@ -427,24 +448,28 @@ fn draw(p: &P, icon: Icon) {
             p.fill_rect(11.5, 2.0, 14.5, 5.0, 0.0);
         }
         Boolean | Union => {
-            p.rect(2.5, 2.5, 9.5, 9.5, 0.0);
-            p.rect(6.5, 6.5, 13.5, 13.5, 0.0);
+            // Two squares offset diagonally: the outline of both together, filled.
+            p.fill_soft(&[(2.5, 2.5), (9.5, 2.5), (9.5, 6.5), (13.5, 6.5), (13.5, 13.5), (6.5, 13.5), (6.5, 9.5), (2.5, 9.5)]);
+            p.poly(&[(2.5, 2.5), (9.5, 2.5), (9.5, 6.5), (13.5, 6.5), (13.5, 13.5), (6.5, 13.5), (6.5, 9.5), (2.5, 9.5)], true);
         }
         Subtract => {
-            p.fill_rect(2.0, 2.0, 10.0, 10.0, 0.0);
+            // The first square less the overlap, filled; both squares outlined.
+            p.fill_soft(&[(2.5, 2.5), (9.5, 2.5), (9.5, 6.5), (6.5, 6.5), (6.5, 9.5), (2.5, 9.5)]);
+            p.rect(2.5, 2.5, 9.5, 9.5, 0.0);
             p.rect(6.5, 6.5, 13.5, 13.5, 0.0);
         }
         Intersect => {
+            // Only the overlap filled; both squares outlined.
+            p.fill_soft(&[(6.5, 6.5), (9.5, 6.5), (9.5, 9.5), (6.5, 9.5)]);
             p.rect(2.5, 2.5, 9.5, 9.5, 0.0);
             p.rect(6.5, 6.5, 13.5, 13.5, 0.0);
-            p.fill_rect(6.0, 6.0, 10.0, 10.0, 0.0);
         }
         Exclude => {
-            p.fill_rect(2.0, 2.0, 10.0, 6.0, 0.0);
-            p.fill_rect(2.0, 6.0, 6.0, 10.0, 0.0);
-            p.fill_rect(10.0, 6.0, 14.0, 14.0, 0.0);
-            p.fill_rect(6.0, 10.0, 10.0, 14.0, 0.0);
-            p.rect(6.5, 6.5, 9.5, 9.5, 0.0);
+            // Both squares less the overlap, filled; both squares outlined.
+            p.fill_soft(&[(2.5, 2.5), (9.5, 2.5), (9.5, 6.5), (6.5, 6.5), (6.5, 9.5), (2.5, 9.5)]);
+            p.fill_soft(&[(13.5, 6.5), (13.5, 13.5), (6.5, 13.5), (6.5, 9.5), (9.5, 9.5), (9.5, 6.5)]);
+            p.rect(2.5, 2.5, 9.5, 9.5, 0.0);
+            p.rect(6.5, 6.5, 13.5, 13.5, 0.0);
         }
         Page => {
             p.poly(&[(3.5, 2.5), (9.5, 2.5), (12.5, 5.5), (12.5, 13.5), (3.5, 13.5)], true);
@@ -808,6 +833,14 @@ fn draw(p: &P, icon: Icon) {
                 p.arc(8.0, 8.0, r, -FRAC_PI_4, FRAC_PI_4);
                 p.arc(8.0, 8.0, r, PI - FRAC_PI_4, PI + FRAC_PI_4);
             }
+        }
+        LiveDisconnected => {
+            p.dot(8.0, 8.0, 1.6);
+            for r in [3.6, 6.0] {
+                p.arc(8.0, 8.0, r, -FRAC_PI_4, FRAC_PI_4);
+                p.arc(8.0, 8.0, r, PI - FRAC_PI_4, PI + FRAC_PI_4);
+            }
+            p.line(3.0, 13.0, 13.0, 3.0);
         }
         LivePrivate => {
             p.dot(8.0, 8.0, 1.6);

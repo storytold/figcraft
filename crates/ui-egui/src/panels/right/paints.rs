@@ -1,10 +1,11 @@
-use super::menu::{blend_menu, context_popup, menu_check, menu_item, menu_popup, preview_blend, row, row_context_menu, row_rect};
+use super::menu::{blend_menu, context_popup, menu_check, menu_item, menu_popup, preview_blend, row, row_context_menu, row_target};
 use super::stroke::stroke_settings;
 use super::{
     Align2, BlendMode, CornerRadius, Document, FIELD_H, FieldEdit, FigApp, Icon, Id, Lead, ListDrag, MaskType, Node, NodeId, NodeKind, Paint,
     PaintKind, Rect, Sense, Stroke, StrokeAlign, StyleSlot, Tip, Tokens, Ui, Value, VariableType, common, icons, json, moved_index, pos2, regular,
     removed_index, style_picker, tr, trf, vec2, widgets,
 };
+use crate::property_rows::PropertyKind;
 
 /// Draw visibility/blend/mask, opacity, uniform or per-corner radius, corner smoothing and
 /// the blend-mode row.
@@ -51,11 +52,16 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
     let op_of = |n: &Node| (f64::from(n.opacity) * 100.0).round();
     let op = common(doc, sel, op_of);
     let radius_ok = crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_radius());
-    // Only rectangles and frames round each corner on its own.
+    // Only rectangles and frames round each corner on its own; a boolean group has one radius for
+    // every sharp corner of its result.
     let indep_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_independent_corners());
-    // For polygons and stars the same panel holds only the Corner smoothing row.
+    // For polygons, stars, boolean groups and closed vectors the same panel holds only the Corner
+    // smoothing row.
     let smooth_ok = radius_ok && crate::selection_cache::every(doc, sel, |n| n.kind.has_corner_smoothing());
-    let r = common(doc, sel, |n| n.corners.uniform().map(|r| (r * 100.0).round() / 100.0));
+    // A layer with one radius (polygon, star, boolean group, vector) draws its first one, whatever
+    // the other three hold; a rectangle or frame shows a value only when its four corners agree.
+    let shown = |n: &Node| if n.kind.has_independent_corners() { n.corners.uniform() } else { n.corners.radii.first().copied() };
+    let r = common(doc, sel, |n| shown(n).map(|r| (r * 100.0).round() / 100.0));
     widgets::sublabels(ui, tr("Opacity"), radius_ok.then_some(tr("Corner radius")));
     row(ui, 32.0, |ui| {
         let lead = Lead::Icon(Icon::Opacity, tr("Opacity"));
@@ -73,11 +79,13 @@ pub(super) fn appearance(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[N
                 "",
                 col,
             );
-            // A layer with corners of its own starts from its largest.
-            let radius_of = |n: &Node| n.corners.uniform().unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max));
+            // A relative edit starts from the radius shown; a rectangle with differing corners
+            // starts from its largest.
+            let radius_of = |n: &Node| shown(n).unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max));
             app.field_of(&ids, "cornerRadius", e, radius_of, |v| json!(v.max(0.0)));
             let open = ui.data(|d| d.get_temp::<bool>(Id::unique("indep_corners"))).unwrap_or(false);
-            // Polygons and stars have no corners of their own: the button opens only Corner smoothing.
+            // Polygons, stars and boolean groups have no corners of their own: the button opens only
+            // Corner smoothing.
             let tip = if indep_ok { tr("Individual corners") } else { tr("Corner smoothing") };
             if smooth_ok && icons::button(ui, Icon::IndependentCorners, 24.0, open, tip).clicked() {
                 ui.data_mut(|d| d.insert_temp(Id::unique("indep_corners"), !open));
@@ -293,20 +301,28 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
     }
     let t = Tokens::get(ui.ctx());
     let ids = sel.to_vec();
-    let list = common(doc, sel, |n| if fills { n.fills.clone() } else { n.strokes.clone() });
+    // Regions selected in vector edit mode: their own fills (#1875); the fill commands edit those too.
+    let region_list = match sel {
+        [id] if fills => figcraft_engine::vectoredit::selected_region_fills(&app.session, *id),
+        _ => None,
+    };
+    // The fill style, a variable bound to the layer's fill and the image crop are the layer's:
+    // they stay off a region's rows.
+    let region = region_list.is_some();
+    // Else a text's fills are what its characters show: one list they share, or mixed (#1856).
+    let list = region_list.unwrap_or_else(|| {
+        common(doc, sel, |n| if fills { figcraft_engine::cmd::lists::character_fills(n) } else { Some(n.strokes.clone()) }).flatten()
+    });
     let title = if fills { tr("Fill") } else { tr("Stroke") };
     let empty = list.as_ref().is_none_or(|l| l.is_empty());
     let slot = if fills { StyleSlot::Fill } else { StyleSlot::Stroke };
     // The section's right-click menu adds the copied paint (`fill.paste` / `stroke.paste`).
     let paste = if fills { tr("Paste fill") } else { tr("Paste stroke") };
-    let (clicked, header) = widgets::section_header_resp(
-        ui,
-        title,
-        &[(Icon::Styles, tr("Styles")), (Icon::Plus, if fills { tr("Add fill") } else { tr("Add stroke") })],
-        empty,
-    );
+    let add = (Icon::Plus, if fills { tr("Add fill") } else { tr("Add stroke") });
+    let buttons = if region { vec![add] } else { vec![(Icon::Styles, tr("Styles")), add] };
+    let (clicked, header) = widgets::section_header_resp(ui, title, &buttons, empty);
     if let Some(i) = clicked {
-        if i == 1 {
+        if buttons.get(i).is_some_and(|(icon, _)| *icon == Icon::Plus) {
             // The new paint goes on top; open its picker. A mixed selection has no one index to edit.
             if app.run(if fills { "fill.add" } else { "stroke.add" }, json!({"ids": ids})).is_some()
                 && let Some(l) = &list
@@ -323,18 +339,23 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
             ui.close();
         }
     });
-    style_picker::chip(app, ui, doc, &ids, slot);
+    if !region {
+        style_picker::chip(app, ui, doc, &ids, slot);
+    }
     match &list {
         None => widgets::note(ui, tr("Click + to replace mixed content"), t.text_secondary),
         Some(l) => {
             // The last paint is on top: shown first. Rows drag to reorder.
             let mut drag = ListDrag::new(ui, if fills { "fills" } else { "strokes" });
             for (i, p) in l.iter().enumerate().rev() {
-                let r = paint_row(app, ui, &ids, i, p, fills);
-                drag.row(ui, i, r, r, || paint_label(p));
+                let r = paint_row(app, ui, &ids, i, p, fills, region);
+                if drag.row_clicked(ui, i, r, r, || paint_label(p)) {
+                    crate::property_rows::click(app, if fills { PropertyKind::Fill } else { PropertyKind::Stroke }, i, &ids, r);
+                }
             }
             if let Some((from, to)) = drag.finish(ui) {
                 app.run(if fills { "fill.move" } else { "stroke.move" }, json!({"ids": ids, "from": from, "to": to}));
+                crate::property_rows::follow(app, if fills { PropertyKind::Fill } else { PropertyKind::Stroke }, from, Some(to));
                 // An open colour picker keeps editing the paint it was on.
                 if let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
                     && *f == fills
@@ -440,84 +461,73 @@ pub(super) fn paints(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeI
 }
 
 /// Paint `i`'s row (swatch, colour or kind, opacity, visibility, remove); returns its area.
-fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint, fills: bool) -> Rect {
+/// One paint's row; `region`: a row of the regions selected in vector edit mode (#1875), which
+/// leaves out what belongs to the layer (its variable binding, the image crop). A click on its
+/// background highlights it for Cmd/Ctrl+C ([`crate::property_rows`]).
+fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint, fills: bool, region: bool) -> Rect {
     let t = Tokens::get(ui.ctx());
     let ids = ids.to_vec();
     let cmd = if fills { "fill.set" } else { "stroke.set" };
-    let r = row_rect(ui, 32.0, |ui| {
+    let kind = if fills { PropertyKind::Fill } else { PropertyKind::Stroke };
+    let highlight = crate::property_rows::fill(app, kind, i, t.selected_row);
+    let resp = row_target(ui, 32.0, highlight, |ui| {
         let w = ui.available_width() - 60.0;
-        let (r, _) = ui.allocate_exact_size(vec2(w, FIELD_H), Sense::hover());
-        ui.painter().rect_filled(r, CornerRadius::same(5), t.field);
-        let sw = Rect::from_min_size(pos2(r.min.x + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
-        widgets::paint_swatch(ui.painter(), sw, p);
-        let sresp = ui.interact(sw.expand(2.0), Id::unique(("swatch", fills, i)), Sense::click());
-        app.picker_control(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, &sresp);
-        let text_r = Rect::from_min_max(pos2(sw.max.x + 8.0, r.min.y), pos2(r.max.x - 52.0, r.max.y));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_r));
-        // The variable bound to this paint's colour (its key on the layers: `fill` or `fills/<i>/color`).
-        let bound = app.session.doc().ok().and_then(|d| {
-            let key = ids.first().and_then(|id| d.node(*id)).and_then(|n| figcraft_engine::cmd::lists::paint_binding_key(n, fills, i))?;
-            Some((key.to_string(), crate::variable_ui::bound_name(d, &ids, key)?))
-        });
-        match &p.kind {
-            PaintKind::Solid { .. } if bound.is_some() => {
-                let (key, name) = bound.clone().unwrap_or_default();
-                let chip = Rect::from_min_max(pos2(text_r.min.x - 2.0, r.min.y + 3.0), pos2(text_r.max.x - 20.0, r.max.y - 3.0));
-                child.painter().rect_filled(chip, CornerRadius::same(4), t.hover);
-                child.painter().rect_stroke(chip, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                let short = name.rsplit('/').next().unwrap_or(&name).to_string();
-                child.painter().with_clip_rect(chip.shrink2(vec2(5.0, 0.0))).text(
-                    pos2(chip.min.x + 5.0, r.center().y),
-                    Align2::LEFT_CENTER,
-                    short,
-                    regular(11.0),
-                    t.text,
-                );
-                let _ = ui.interact(chip, Id::unique(("bound_paint", fills, i)), Sense::hover()).on_hover_text(&name);
-                let dr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
-                let dresp = ui.interact(dr, Id::unique(("detach_paint", fills, i)), Sense::click()).tip(tr("Detach variable"));
-                icons::paint(ui.painter(), dr.shrink(3.0), Icon::Detach, t.icon_secondary);
-                if dresp.clicked() {
-                    app.run("variable.bind", json!({"ids": ids, "field": key, "variable": null}));
+        let (sresp, e) = widgets::paint_field(ui, Id::unique(("swatch", fills, i)), Id::unique(("pop", fills, i)), p, w, |child, text_r| {
+            let r = child.max_rect();
+            // The variable bound to this paint's colour (its key on the layers: `fill` or `fills/<i>/color`).
+            let bound = app.session.doc().ok().filter(|_| !region).and_then(|d| {
+                let key = ids.first().and_then(|id| d.node(*id)).and_then(|n| figcraft_engine::cmd::lists::paint_binding_key(n, fills, i))?;
+                Some((key.to_string(), crate::variable_ui::bound_name(d, &ids, key)?))
+            });
+            match &p.kind {
+                PaintKind::Solid { .. } if bound.is_some() => {
+                    let (key, name) = bound.clone().unwrap_or_default();
+                    let chip = Rect::from_min_max(pos2(text_r.min.x - 2.0, r.min.y + 3.0), pos2(text_r.max.x - 20.0, r.max.y - 3.0));
+                    child.painter().rect_filled(chip, CornerRadius::same(4), t.hover);
+                    child.painter().rect_stroke(chip, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                    let short = name.rsplit('/').next().unwrap_or(&name).to_string();
+                    child.painter().with_clip_rect(chip.shrink2(vec2(5.0, 0.0))).text(
+                        pos2(chip.min.x + 5.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        short,
+                        regular(11.0),
+                        t.text,
+                    );
+                    let _ = child.interact(chip, Id::unique(("bound_paint", fills, i)), Sense::hover()).on_hover_text(&name);
+                    let dr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
+                    let dresp = child.interact(dr, Id::unique(("detach_paint", fills, i)), Sense::click()).tip(tr("Detach variable"));
+                    icons::paint(child.painter(), dr.shrink(3.0), Icon::Detach, t.icon_secondary);
+                    if dresp.clicked() {
+                        app.run("variable.bind", json!({"ids": ids, "field": key, "variable": null}));
+                    }
                 }
-            }
-            PaintKind::Solid { color } => {
-                if let Some(h) = widgets::text_field_inline(
-                    &mut child,
-                    Id::unique(("hex", fills, i)),
-                    &color.to_hex(),
-                    text_r.shrink2(vec2(0.0, 4.0)),
-                    regular(11.0),
-                ) && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
-                {
-                    app.run(cmd, json!({"ids": ids, "index": i, "color": c.to_css_hex()}));
+                PaintKind::Solid { color } => {
+                    if let Some(h) = widgets::text_field_inline(
+                        child,
+                        Id::unique(("hex", fills, i)),
+                        &color.to_hex(),
+                        text_r.shrink2(vec2(0.0, 4.0)),
+                        regular(11.0),
+                    ) && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+                    {
+                        app.run(cmd, json!({"ids": ids, "index": i, "color": c.to_css_hex()}));
+                    }
                 }
-            }
-            _ => {
-                child.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, paint_label(p), regular(11.0), t.text);
-                // One layer's image fill: crop it on the canvas.
-                if fills && ids.len() == 1 && matches!(p.kind, PaintKind::Image(_)) {
-                    let cr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
-                    let cresp = ui.interact(cr, Id::unique(("crop_image", i)), Sense::click()).tip(tr("Crop image"));
-                    icons::paint(ui.painter(), cr.shrink(3.0), Icon::Crop, if cresp.hovered() { t.icon } else { t.icon_secondary });
-                    if cresp.clicked() {
-                        app.run("image.crop", json!({"ids": ids, "index": i}));
+                _ => {
+                    child.painter().text(pos2(text_r.min.x, r.center().y), Align2::LEFT_CENTER, paint_label(p), regular(11.0), t.text);
+                    // One layer's image fill: crop it on the canvas.
+                    if fills && ids.len() == 1 && !region && matches!(p.kind, PaintKind::Image(_)) {
+                        let cr = Rect::from_center_size(pos2(text_r.max.x - 9.0, r.center().y), vec2(18.0, 18.0));
+                        let cresp = child.interact(cr, Id::unique(("crop_image", i)), Sense::click()).tip(tr("Crop image"));
+                        icons::paint(child.painter(), cr.shrink(3.0), Icon::Crop, if cresp.hovered() { t.icon } else { t.icon_secondary });
+                        if cresp.clicked() {
+                            app.run("image.crop", json!({"ids": ids, "index": i}));
+                        }
                     }
                 }
             }
-        }
-        let op_r = Rect::from_min_max(pos2(r.max.x - 48.0, r.min.y), r.max);
-        ui.painter().line_segment([pos2(op_r.min.x, r.min.y + 4.0), pos2(op_r.min.x, r.max.y - 4.0)], Stroke::new(1.0, t.panel));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(op_r));
-        let e = widgets::number_field(
-            &mut child,
-            Id::unique(("pop", fills, i)),
-            Lead::None,
-            Some((f64::from(p.opacity) * 100.0).round()),
-            "%",
-            48.0,
-            1.0,
-        );
+        });
+        app.picker_control(crate::colorpicker::PickerTarget::Paint { fills, index: i, ids: ids.clone() }, &sresp);
         match e {
             Some(FieldEdit::Set(v)) => {
                 app.run(cmd, json!({"ids": ids, "index": i, "opacity": (v / 100.0).clamp(0.0, 1.0)}));
@@ -541,24 +551,28 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
         if toggle {
             app.run(cmd, json!({"ids": ids, "index": i, "visible": !p.visible}));
         }
-        if remove
-            && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some()
-            && let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
-            && *f == fills
-        {
+        if remove && app.run(if fills { "fill.remove" } else { "stroke.remove" }, json!({"ids": ids, "index": i})).is_some() {
+            // A highlighted row stays on its paint, or goes with it.
+            crate::property_rows::follow(app, kind, i, None);
             // An open colour picker keeps editing the paint it was on, or closes with it.
-            match removed_index(*index, i) {
-                Some(k) => *index = k,
-                None => app.ui.picker = None,
+            if let Some(crate::colorpicker::PickerTarget::Paint { fills: f, index, .. }) = &mut app.ui.picker
+                && *f == fills
+            {
+                match removed_index(*index, i) {
+                    Some(k) => *index = k,
+                    None => app.ui.picker = None,
+                }
             }
         }
     });
+    crate::property_rows::row(app, &resp, kind, i, &ids);
+    let r = resp.rect;
     let copy = if fills { tr("Copy fill") } else { tr("Copy stroke") };
     let paste = if fills { tr("Paste fill") } else { tr("Paste stroke") };
     let can_paste = app.session.clipboard.paint.as_ref().is_some_and(|(f, _)| *f == fills);
     row_context_menu(ui, r, Id::unique(("paint_menu", fills, i))).show(|ui| {
         if menu_item(ui, copy, "") {
-            app.run(if fills { "fill.copy" } else { "stroke.copy" }, json!({"ids": ids, "index": i}));
+            crate::property_rows::copy(app, kind, i, &ids);
             ui.close();
         }
         if can_paste && menu_item(ui, paste, "") {

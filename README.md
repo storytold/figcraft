@@ -103,8 +103,8 @@
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/shot-4-devmode.png" alt="Dev Mode on the Ridgeline home screen: the frame carries a Ready for dev badge, a Development annotation callout points at the featured trail card, a trail row instance is selected and the Inspect panel shows a Playground preview of it and generated React code with a TrailRow props interface and the instance's title and details values" width="100%">
-  <p align="center"><sub><b>Dev Mode</b>: ready-for-dev status, annotations and React code where component properties become props · <code>examples/ridgeline-app.figcraft</code></sub></p>
+  <img src="docs/images/shot-4-devmode.png" alt="Developer Mode on the Ridgeline home screen: the frame carries a Ready for dev badge, a Development annotation callout points at the featured trail card, a trail row instance is selected and the Inspect panel shows a Playground preview of it and generated React code with a TrailRow props interface and the instance's title and details values" width="100%">
+  <p align="center"><sub><b>Developer Mode</b>: ready-for-dev status, annotations and React code where component properties become props · <code>examples/ridgeline-app.figcraft</code></sub></p>
 </td>
 <td width="50%" valign="top">
   <img src="docs/images/shot-5-vector.png" alt="Vector edit mode on a wave path with a gradient, tapered variable-width stroke: its anchor points, Bezier handles and the transform box of the selected points are visible, with the vector edit toolbar at the bottom; above it are a boolean-built mountain mark and an angular-gradient knot of excluded rings" width="100%">
@@ -127,8 +127,8 @@
   <p align="center"><sub><b>Boards</b>: a whiteboard file kind with sticky notes, templates, connectors, a shared timer and voting, in the same live sessions</sub></p>
 </td>
 <td width="50%" valign="top">
-  <img src="docs/images/shot-9-devmode-measure.png" alt="Dev Mode on the Ridgeline home screen with the featured trail card selected: red redlines kept on the canvas show 118.3 from the card to the search field, 62.1 from the card to the first trail row and 256.3 along the card's left side, and the Inspect panel's Measurements section lists the three with their values under an Add measurement menu" width="100%">
-  <p align="center"><sub><b>Dev Mode measurements</b>: redlines placed between layers or along a side, saved in the file and following the layers · <code>examples/ridgeline-app.figcraft</code></sub></p>
+  <img src="docs/images/shot-9-devmode-measure.png" alt="Developer Mode on the Ridgeline home screen with the featured trail card selected: red redlines kept on the canvas show 118.3 from the card to the search field, 62.1 from the card to the first trail row and 256.3 along the card's left side, and the Inspect panel's Measurements section lists the three with their values under an Add measurement menu" width="100%">
+  <p align="center"><sub><b>Developer Mode measurements</b>: redlines placed between layers or along a side, saved in the file and following the layers · <code>examples/ridgeline-app.figcraft</code></sub></p>
 </td>
 </tr>
 </table>

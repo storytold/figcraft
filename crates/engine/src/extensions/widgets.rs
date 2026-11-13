@@ -43,6 +43,8 @@ const FIELD: &str = "figcraft.widget.field";
 const HOVER: &str = "figcraft.widget.hover";
 /// Images in a widget are at most this many pixels on a side.
 const MAX_IMAGE_SIDE: u32 = 4096;
+/// All images of one widget together are at most this many pixels once decoded (four of the largest).
+const MAX_IMAGES_PIXELS: u64 = 4 * 4096 * 4096;
 
 /// Whether `n` is a widget's own layer.
 pub fn is_widget(n: &Node) -> bool {
@@ -319,8 +321,9 @@ fn build(s: &mut Session, plugin: &str, w: NodeId, r: &WidgetRender) -> Result<(
         _ => n.plugin_data.remove(MENU),
     };
     set_hover(n, r.root.hover.as_ref());
+    let mut pixels = 0;
     for c in &r.root.children {
-        add(doc, w, c, cmd)?;
+        add(doc, w, c, cmd, &mut pixels)?;
     }
     // An SVG brings as many layers as it describes.
     if doc.subtree(w).len() > MAX_NODES {
@@ -331,7 +334,7 @@ fn build(s: &mut Session, plugin: &str, w: NodeId, r: &WidgetRender) -> Result<(
 }
 
 /// Add layer `d` (and what it holds) inside `parent`, locked.
-fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<()> {
+fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str, pixels: &mut u64) -> Result<()> {
     let (kind, name) = match d.kind {
         WidgetKind::Frame => (NodeKind::Frame, "Frame"),
         WidgetKind::Text => (NodeKind::Text(TextData { characters: d.text.clone(), ..TextData::default() }), "Text"),
@@ -352,6 +355,16 @@ fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<
         if bytes.len() > MAX_IMAGE_BYTES {
             return Err(bad(cmd, format!("an image is larger than {} KB", MAX_IMAGE_BYTES / 1024)));
         }
+        // From the header, before anything is decoded: a small file can hold billions of pixels.
+        if let Some((w, h)) = figcraft_render::images::dimensions(&bytes) {
+            if w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
+                return Err(bad(cmd, format!("an image is larger than {MAX_IMAGE_SIDE} pixels on a side")));
+            }
+            *pixels += u64::from(w) * u64::from(h);
+            if *pixels > MAX_IMAGES_PIXELS {
+                return Err(bad(cmd, format!("the images are larger than {MAX_IMAGES_PIXELS} pixels together")));
+            }
+        }
         let (hash, iw, ih) = crate::cmd::create::add_readable_image(doc, bytes).map_err(|e| bad(cmd, e))?;
         if iw > MAX_IMAGE_SIDE || ih > MAX_IMAGE_SIDE {
             return Err(bad(cmd, format!("an image is larger than {MAX_IMAGE_SIDE} pixels on a side")));
@@ -362,7 +375,7 @@ fn add(doc: &mut Document, parent: NodeId, d: &WidgetNode, cmd: &str) -> Result<
     }
     doc.insert(n, parent, None)?;
     crate::cmd::props::apply(cmd, doc, id, &props(d, false))?;
-    d.children.iter().try_for_each(|c| add(doc, id, c, cmd))
+    d.children.iter().try_for_each(|c| add(doc, id, c, cmd, pixels))
 }
 
 /// Add SVG layer `d` inside `parent`: a frame of the picture's own size holding its layers, locked
@@ -663,4 +676,33 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("widget.list", "List widgets", "{} → {widgets: [{id, plugin, name, page, state, targets, fields, menu}]}", false, list),
     ]
+}
+
+#[cfg(test)]
+mod pixel_budget_tests {
+    use super::*;
+    use base64::Engine as _;
+
+    /// A `side` x `side` blank PNG (a few KB however many pixels).
+    fn png(side: u32) -> String {
+        let pix = figcraft_render::Pixmap::new(side, side).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(figcraft_render::encode_png(&pix).unwrap())
+    }
+
+    #[test]
+    fn images_of_a_widget_share_a_decoded_pixel_budget() {
+        let mut doc = Document::new("t");
+        let page = doc.first_page().unwrap();
+        let data = png(4096);
+        let image = |i: usize| serde_json::from_value::<WidgetNode>(json!({"type": "image", "name": format!("I{i}"), "data": data})).unwrap();
+        let mut pixels = 0;
+        for i in 0..4 {
+            add(&mut doc, page, &image(i), "widget.insert", &mut pixels).unwrap();
+        }
+        let err = add(&mut doc, page, &image(4), "widget.insert", &mut pixels).unwrap_err().to_string();
+        assert!(err.contains("together"), "{err}");
+        // A header past the side limit is refused before it is decoded.
+        let wide = serde_json::from_value::<WidgetNode>(json!({"type": "image", "data": png(4097)})).unwrap();
+        assert!(add(&mut doc, page, &wide, "widget.insert", &mut 0).unwrap_err().to_string().contains("pixels on a side"));
+    }
 }

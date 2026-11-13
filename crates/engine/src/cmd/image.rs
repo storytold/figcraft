@@ -5,7 +5,7 @@ use figcraft_doc::{Document, ImagePreset, Node};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
-use crate::params::{f64_of, get, num, req_index, req_string, req_targets, string, targets};
+use crate::params::{f64_of, get, req_index, req_string, req_targets, string, targets};
 use crate::{EngineError, Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -184,9 +184,10 @@ fn replace(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"image": image, "width": width, "height": height, "changed": changed}))
 }
 
-/// The index of a layer's top visible image fill (fills paint bottom to top).
+/// The index of a layer's top visible image fill among the fills it shows (fills paint bottom to
+/// top): a text's characters' shared list, so none while they are coloured differently.
 pub fn top_image_fill(n: &Node) -> Option<usize> {
-    n.fills.iter().rposition(|f| f.visible && matches!(f.kind, PaintKind::Image(_)))
+    crate::cmd::lists::character_fills(n)?.iter().rposition(|f| f.visible && matches!(f.kind, PaintKind::Image(_)))
 }
 
 fn crop(s: &mut Session, p: &Value) -> Result<Value> {
@@ -197,11 +198,15 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     let [id] = ids[..] else { return Err(refuse("select one layer to crop its image")) };
     let doc = s.doc()?;
     let n = doc.get(id)?;
+    // A text's fills are its characters' (the Design panel's rows): the crop edits that list, and
+    // characters coloured differently have no row to crop ("Click + to replace mixed content").
+    let shown =
+        crate::cmd::lists::character_fills(n).ok_or_else(|| refuse("the characters have different fills, so there is no one fill to crop"))?;
     let index = match get(p, "index") {
         None | Some(Value::Null) => top_image_fill(n).ok_or_else(|| refuse("the layer has no image fill to crop"))?,
         Some(_) => req_index(cmd, p, "index")?,
     };
-    let mut paint = n.fills.get(index).cloned().ok_or_else(|| bad(cmd, "no fill at that index"))?;
+    let mut paint = shown.get(index).cloned().ok_or_else(|| bad(cmd, "no fill at that index"))?;
     let PaintKind::Image(img) = &mut paint.kind else { return Err(bad(cmd, "that fill is not an image")) };
     // An image already in Crop mode only enters crop mode: no edit, no undo step.
     if img.scale_mode != ImageScaleMode::Crop {
@@ -209,6 +214,8 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         img.crop = Some(img.placement_crop(f64::from(data.width), f64::from(data.height), n.width, n.height));
         img.scale_mode = ImageScaleMode::Crop;
         let n = s.doc_mut()?.get_mut(id)?;
+        // The characters' shared list becomes the layer's, so the crop shows on every one of them.
+        crate::cmd::lists::take_character_fills(n);
         if let Some(f) = n.fills.get_mut(index) {
             *f = paint;
         }
@@ -229,7 +236,10 @@ fn save_preset(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => with_values(cmd, ImageFilters::NONE, v)?,
         None => {
             let stroke = strokes(cmd, p)?;
-            let index = num(p, "index").filter(|k| k.is_finite() && *k >= 0.0).map(|k| k as usize);
+            let index = match get(p, "index") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(req_index(cmd, p, "index")?),
+            };
             let doc = s.doc()?;
             targets(s, p)
                 .iter()

@@ -16,7 +16,7 @@ use crate::{Result, bad};
 pub const STROKE_SIDES: [&str; 4] = ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"];
 
 /// Keys `node.set` understands (documented for agents).
-pub const KEYS: &str = "name, visible, locked, opacity (0-1 or \"50%\"), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), \
+pub const KEYS: &str = "name, visible, locked, opacity (0-1 or \"50%\"), blend, x, y (relative to the parent frame; groups don't count), width, height, rotation (degrees), absoluteRotation (degrees on the page: the layer's angle plus its parents', what the Design panel's field shows; one of the two per call), \
 fills (paints or colours; gradients as {type: linearGradient|radialGradient|angularGradient|diamondGradient, stops: [\"#hex\", ...], from?, to?} too), fill (colour, {$var: variable id or name}, or \"none\"/null: no fill), strokes, stroke (colour, {$var: variable id or name}, or \"none\"/null: no stroke), strokeWeight, strokeAlign (inside|center|outside), strokeSides [t,r,b,l], strokeTopWeight / strokeRightWeight / strokeBottomWeight / strokeLeftWeight (one side; turns on individual strokes), \
 strokeCap / startCap / endCap, strokeJoin, miterAngle (degrees: sharper joins bevel; or miterLimit as a ratio), dashes [..], dashCap (none|round|square; null: dashes take startCap and endCap), widthProfile (preset uniform|wedge|taper|eye|rounded|pinch, [[t, scale], ...] or null), brush (preset id, {preset, spacing, sizeJitter, rotationJitter, scatter, seed} or null), cornerRadius (n or [tl,tr,br,bl]), cornerSmoothing (0-1), effects, \
 clip, isMask, layout (null|horizontal|vertical|grid|{...}), gap, crossGap, padding (n or [t,r,b,l]), paddingTop/Right/Bottom/Left, \
@@ -29,7 +29,7 @@ fontSize, lineHeight (auto|px|\"150%\"), letterSpacing (px|\"2%\"), textAlign (l
 (auto|px|\"10%\" of the font size; the offset runs from the baseline down to an underline's top edge), textDecorationSkipInk (underlines break around descenders), \
 textDecorationColor (colour, or auto/null: the text's), textCase (original|upper|lower|title|smallCaps), paragraphSpacing, paragraphIndent, \
 listStyle (none|bulleted|numbered; with start/end: the paragraphs those chars touch), indentation (list nesting level 0-8, same range rule), \
-listSpacing (px between list items, in place of paragraphSpacing), hangingPunctuation, hangingList (markers outside the box), leadingTrim (vertical trim: none|capHeight), maxLines, features ({tag: bool}, e.g. {\"liga\": false, \"tnum\": true}), \
+listSpacing (px between list items, in place of paragraphSpacing), wrapStyle (auto|balance|pretty; with start/end: the paragraphs those chars touch), hangingPunctuation, hangingList (markers outside the box), leadingTrim (vertical trim: none|capHeight), maxLines, features ({tag: bool}, e.g. {\"liga\": false, \"tnum\": true}), \
 fontVariations / variationSettings ({axis: number}, e.g. {\"wght\": 550, \"wdth\": 85}; null = none), \
 path (a vector's SVG path data: replaces its geometry, keeping the layer, its paints, styles and bindings; width/height in the same call scale it as \
 node.create does; its own box goes at the layer's x/y, or with x/y given, at x + its left edge and y + its top as node.create places it), pointCount, innerRadius, arcStart, arcSweep, \
@@ -39,6 +39,30 @@ group: how it combines with the operands below it; null: the group's), constrain
 /// CRLF, bare CR, U+2028 and U+2029 become LF, the only line ending text layout understands (editor insertion does the same).
 pub(crate) fn normalize_line_endings(s: &str) -> String {
     s.replace("\r\n", "\n").replace(['\r', '\u{2028}', '\u{2029}'], "\n")
+}
+
+/// The name a text layer derives from its characters: the first line, at most 64 characters, or
+/// None when that line is blank (a layer with no name of its own, which the Layers panel shows by
+/// its kind).
+///
+/// A layer whose name is this derived name is one nobody has renamed, so the editor keeps its name
+/// in step as the characters are typed ([`crate::textedit`]); any other name was chosen by the
+/// author and is kept. Commands never rename, so a layer named for its role keeps that name as a
+/// field key even when `characters` replace text that reads like it.
+pub(crate) fn text_layer_name(characters: &str) -> Option<String> {
+    let first: String = characters.lines().next().unwrap_or("").chars().take(64).collect();
+    (!first.trim().is_empty()).then_some(first)
+}
+
+/// Whether `name` is one a text layer was given for its characters rather than by its author, so
+/// the editor may keep it in step with them. Blank text leaves a layer named `""` when the Text
+/// tool draws it and `Text` when `node.create` makes it, and both read as unnamed in the panel.
+pub(crate) fn text_name_is_derived(name: &str, derived: Option<&String>) -> bool {
+    match derived {
+        Some(d) => name == d,
+        // `NodeKind::Text(_).label()`, which the panel falls back to for an unnamed layer.
+        None => name.is_empty() || name == "Text",
+    }
 }
 
 /// camelCase object keys → snake_case (accept the inspect/camel forms for serde-backed values).
@@ -85,10 +109,18 @@ pub fn effect_from(cmd: &str, p: &Value, key: &str) -> Result<Option<Effect>> {
     Ok(Some(effect))
 }
 
+/// Most keys an effect object may carry (the widest effect takes about a dozen).
+const MAX_EFFECT_KEYS: usize = 32;
+
 /// Refuse the keys of effect `given` that `parse` ignores, naming the keys the effect takes. Set to
 /// null, a key it reads fails to parse or changes the effect; a key it ignores changes nothing.
 fn refuse_ignored_effect_keys(cmd: &str, at: &str, given: &Value, parse: impl Fn(&Value) -> Option<Effect>) -> Result<()> {
     let Some(fields) = given.as_object() else { return Ok(()) };
+    // Each key is probed by reparsing the whole object without it: bounded, or a long list of
+    // unknown keys costs its length squared before it is refused.
+    if fields.len() > MAX_EFFECT_KEYS {
+        return Err(bad(cmd, format!("{at}: more than {MAX_EFFECT_KEYS} properties")));
+    }
     let parsed = parse(given);
     let ignored: Vec<&str> = fields
         .iter()
@@ -195,6 +227,9 @@ fn set_operand_op(doc: &mut Document, id: NodeId, v: &Value, cmd: &str) -> Resul
 }
 
 pub(crate) const WIDTH_PROFILE_HELP: &str = "widthProfile: a preset (uniform|wedge|taper|eye|rounded|pinch), points [[t (0-1 along the path), scale (× stroke weight)] | [t, left, right] (one-sided: each side's scale, looking along the path), ...] or [{t, scale} | {t, left, right}], {preset} | {points}, or null (uniform)";
+
+/// The stroke caps `strokeCap`, `startCap` and `endCap` take (every [`StrokeCap`]).
+pub(crate) const STROKE_CAP_HELP: &str = "none|round|square|lineArrow|triangleArrow|reversedTriangle|circleFilled|diamondFilled";
 
 pub(crate) const BRUSH_HELP: &str = "brush: a preset (taper|ink|ribbon|bristle: stretched; dots|stars|confetti|leaves: scattered), {preset, spacing? (× weight), sizeJitter? (0-1), rotationJitter? (0-1), scatter? (0-4 × weight), seed?}, or null (a plain stroke)";
 
@@ -378,6 +413,9 @@ fn layout_mut<'a>(cmd: &str, k: &str, n: &'a mut Node) -> Result<&'a mut AutoLay
 /// Replace a node's fills (or strokes). Bindings on the paints whose bound values the new list
 /// changed let go, as an explicit edit does (see `lists::rebind_edited_paint`).
 fn set_paints(n: &mut Node, fills: bool, paints: Vec<Paint>) {
+    if fills {
+        super::lists::take_character_fills(n);
+    }
     let old = std::mem::replace(if fills { &mut n.fills } else { &mut n.strokes }, paints);
     for (i, p) in old.iter().enumerate() {
         super::lists::rebind_edited_paint(n, fills, i, p);
@@ -418,7 +456,7 @@ fn apply_order(k: &str, v: &Value) -> u8 {
     match k {
         "path" | "width" | "height" | "w" | "h" => 0,
         "layout" | "layoutMode" => 1,
-        "rotation" => 3,
+        "rotation" | "absoluteRotation" => 3,
         "x" | "y" => 4,
         "fillStyle" | "strokeStyle" | "effectStyle" | "textStyle" | "gridStyle" => 5,
         "boundVariables" => 6,
@@ -557,6 +595,27 @@ fn apply_geometry(
             let n = doc.get_mut(id)?;
             n.transform = figcraft_geom::set_rotation_about_center(n.transform, n.width, n.height, deg);
         }
+        "absoluteRotation" => {
+            let deg = f64_of(v).ok_or_else(|| bad(cmd, "`absoluteRotation` must be degrees"))?;
+            if props.contains_key("rotation") {
+                return Err(bad(cmd, "give one of `rotation` and `absoluteRotation`"));
+            }
+            let (w, h) = {
+                let n = doc.get(id)?;
+                (n.width, n.height)
+            };
+            let world = figcraft_geom::set_rotation_about_center(doc.world_transform(id), w, h, deg);
+            let parent = doc.get(id)?.parent;
+            let pw = parent.map(|p| doc.world_transform(p)).unwrap_or(figcraft_geom::Affine::IDENTITY);
+            let local = pw.inverse() * world;
+            if local.as_coeffs().iter().all(|c| c.is_finite()) {
+                doc.get_mut(id)?.transform = local;
+            } else {
+                // A degenerate parent can't be inverted: turn the local angle instead.
+                let n = doc.get_mut(id)?;
+                n.transform = figcraft_geom::set_rotation_about_center(n.transform, n.width, n.height, deg);
+            }
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -611,13 +670,13 @@ fn apply_look(cmd: &str, doc: &mut Document, id: NodeId, k: &str, v: &Value) -> 
             st.sides = Some(sides);
         }
         "strokeCap" => {
-            let c: StrokeCap = enum_of(v).ok_or_else(|| bad(cmd, "unknown stroke cap"))?;
+            let c: StrokeCap = enum_of(v).ok_or_else(|| bad(cmd, format!("strokeCap: {STROKE_CAP_HELP}")))?;
             let n = doc.get_mut(id)?;
             n.stroke.cap_start = c;
             n.stroke.cap_end = c;
         }
-        "startCap" => doc.get_mut(id)?.stroke.cap_start = enum_of(v).ok_or_else(|| bad(cmd, "unknown stroke cap"))?,
-        "endCap" => doc.get_mut(id)?.stroke.cap_end = enum_of(v).ok_or_else(|| bad(cmd, "unknown stroke cap"))?,
+        "startCap" => doc.get_mut(id)?.stroke.cap_start = enum_of(v).ok_or_else(|| bad(cmd, format!("startCap: {STROKE_CAP_HELP}")))?,
+        "endCap" => doc.get_mut(id)?.stroke.cap_end = enum_of(v).ok_or_else(|| bad(cmd, format!("endCap: {STROKE_CAP_HELP}")))?,
         "strokeJoin" => doc.get_mut(id)?.stroke.join = enum_of(v).ok_or_else(|| bad(cmd, "strokeJoin: miter|bevel|round"))?,
         "miterLimit" => doc.get_mut(id)?.stroke.miter_limit = f64_of(v).unwrap_or(4.0).clamp(1.0, 100.0),
         "miterAngle" => {
@@ -956,6 +1015,12 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
                 t.set_para_lists(start, end, |p| p.indent = d.clamp(0.0, f64::from(MAX_LIST_INDENT)) as u8);
             }
         }
+        "textDirection" | "direction" => {
+            let d: figcraft_doc::TextDirection = enum_of(v).ok_or_else(|| bad(cmd, "textDirection: auto|ltr|rtl"))?;
+            let t = text_mut(cmd, doc.get_mut(id)?)?;
+            let (start, end) = range_of(props, t.char_count());
+            t.set_para_lists(start, end, |p| p.direction = d);
+        }
         "listSpacing" => text_mut(cmd, doc.get_mut(id)?)?.list_spacing = f64_of(v).filter(|s| s.is_finite()).unwrap_or(0.0).clamp(0.0, 10_000.0),
         "hangingPunctuation" | "hangingList" => {
             let on = v.as_bool().ok_or_else(|| bad(cmd, format!("`{k}` must be true or false")))?;
@@ -964,7 +1029,14 @@ fn apply_text(cmd: &str, doc: &mut Document, id: NodeId, props: &Map<String, Val
         }
         "leadingTrim" => text_mut(cmd, doc.get_mut(id)?)?.leading_trim = enum_of(v).ok_or_else(|| bad(cmd, "leadingTrim: none|capHeight"))?,
         "wrapStyle" | "textWrap" => {
-            text_mut(cmd, doc.get_mut(id)?)?.wrap_style = enum_of(v).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?
+            let w: figcraft_doc::WrapStyle = enum_of(v).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?;
+            let t = text_mut(cmd, doc.get_mut(id)?)?;
+            if props.contains_key("start") || props.contains_key("end") {
+                let (start, end) = range_of(props, t.char_count());
+                t.set_para_wrap_styles(start, end, w);
+            } else {
+                t.set_wrap_style(w);
+            }
         }
         "maxLines" => {
             let lines = f64_of(v).unwrap_or(0.0).clamp(0.0, 10_000.0) as u32;
@@ -1210,7 +1282,7 @@ pub fn override_group(k: &str) -> &'static str {
         "name" => "name",
         "characters" | "text" => "characters",
         "features" | "fontFeatures" | "openTypeFeatures" | "listStyle" | "indentation" | "listSpacing" | "maxLines" | "variationSettings"
-        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" => "textStyle",
+        | "hangingPunctuation" | "hangingList" | "wrapStyle" | "textWrap" | "textDirection" | "direction" => "textStyle",
         "cornerRadius" | "cornerSmoothing" | "topLeftRadius" | "topRightRadius" | "bottomRightRadius" | "bottomLeftRadius" => "corners",
         "width" | "height" | "w" | "h" => "size",
         "sizingH" | "sizingV" | "layoutSizingHorizontal" | "layoutSizingVertical" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => "resizing",

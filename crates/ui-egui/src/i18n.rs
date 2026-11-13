@@ -60,6 +60,18 @@ pub fn current() -> Option<&'static Lang> {
     LANGS.get(CURRENT.load(Ordering::Relaxed))
 }
 
+/// Whether the language the UI shows is written right to left, so the window mirrors.
+pub fn right_to_left() -> bool {
+    current().is_some_and(|l| writes_right_to_left(l.code))
+}
+
+/// Whether language `code` ("ar", "he-IL"…) is written right to left: Arabic, Hebrew, Persian,
+/// Urdu, Pashto, Sindhi, Kurdish (Sorani), Uyghur, Dhivehi and Yiddish.
+fn writes_right_to_left(code: &str) -> bool {
+    let base = code.split(['-', '_']).next().unwrap_or("");
+    ["ar", "he", "fa", "ur", "ps", "sd", "ckb", "ug", "dv", "yi"].iter().any(|rtl| rtl.eq_ignore_ascii_case(base))
+}
+
 /// Show the language of `pref` (a language code, or "system" for `system`, the OS or browser
 /// languages, most preferred first and comma-separated). Unknown languages show English.
 pub fn set(pref: &str, system: Option<&str>) {
@@ -78,15 +90,19 @@ const LATIN_AMERICA: &[&str] =
 
 /// The [`LANGS`] index for one tag: the exact tag ("pt-BR"), else its base language ("es" for
 /// "es_ES.UTF-8"), else a regional catalog of that language ("pt-BR" for "pt-PT"); Latin American
-/// Spanish ("es-MX") reads es-419, and Traditional Chinese (zh-Hant, zh-TW, zh-HK, zh-MO) none: it
-/// has no catalog and Simplified isn't a stand-in. A language the UI can't draw (CJK on the web
-/// without CJK faces built in) doesn't count.
+/// Spanish ("es-MX") reads es-419. A Chinese tag reads Traditional (zh-Hant) for `Hant`, `TW`, `HK`
+/// or `MO` and Simplified (zh-Hans) otherwise; an explicit `Hans` always reads Simplified. A
+/// language the UI can't draw (CJK on the web without CJK faces built in) doesn't count.
 fn resolve_one(want: &str) -> Option<usize> {
     let tag = want.trim().split(['.', '@']).next().unwrap_or("").replace('_', "-");
     let base = tag.split('-').next().unwrap_or("");
     let has = |subtags: &[&str]| tag.split('-').skip(1).any(|t| subtags.iter().any(|s| s.eq_ignore_ascii_case(t)));
-    if base.eq_ignore_ascii_case("zh") && (has(&["Hant"]) || (!has(&["Hans"]) && has(&["TW", "HK", "MO"]))) {
-        return None;
+    let zh = |code: &str| {
+        LANGS.iter().position(|l| l.code.eq_ignore_ascii_case(code)).filter(|i| LANGS.get(*i).is_some_and(|l| crate::cjk::can_show(l.code)))
+    };
+    if base.eq_ignore_ascii_case("zh") {
+        let traditional = has(&["Hant"]) || (!has(&["Hans"]) && has(&["TW", "HK", "MO"]));
+        return zh(if traditional { "zh-Hant" } else { "zh-Hans" });
     }
     let find = |t: &str| LANGS.iter().position(|l| l.code.eq_ignore_ascii_case(t));
     let alias = (base.eq_ignore_ascii_case("es") && has(LATIN_AMERICA)).then(|| find("es-419")).flatten();
@@ -94,6 +110,7 @@ fn resolve_one(want: &str) -> Option<usize> {
     alias.or_else(|| find(&tag)).or_else(|| find(base)).or_else(regional).filter(|i| LANGS.get(*i).is_some_and(|l| crate::cjk::can_show(l.code)))
 }
 
+/// Look `key` up in one of the sorted catalog tables.
 fn find(table: &'static [(&'static str, Text)], key: &str) -> Option<&'static Text> {
     table.binary_search_by(|(k, _)| (*k).cmp(key)).ok().and_then(|i| table.get(i)).map(|(_, t)| t)
 }
@@ -182,7 +199,7 @@ fn plural(code: &str, n: usize) -> Plural {
         "bs" if n % 10 == 1 && n % 100 != 11 => Plural::One,
         "bs" if (2..=4).contains(&(n % 10)) && !(12..=14).contains(&(n % 100)) => Plural::Few,
         "bs" => Plural::Other,
-        "ja" | "ko" | "th" | "zh-Hans" | "vi" => Plural::Other,
+        "ja" | "ko" | "th" | "zh-Hans" | "zh-Hant" | "vi" => Plural::Other,
         "fr" | "pt-BR" if n <= 1 => Plural::One,
         _ if n == 1 => Plural::One,
         _ => Plural::Other,
@@ -238,6 +255,8 @@ pub fn menu_item<'a>(id: &str, english: &'a str) -> Cow<'a, str> {
     label(true, id, english)
 }
 
+/// A command's or menu item's label: the catalog wording from `chain`, keeping a dialog's trailing
+/// ellipsis when the English label has one.
 fn label<'a>(menu: bool, id: &str, english: &'a str) -> Cow<'a, str> {
     let text = chain(CURRENT.load(Ordering::Relaxed)).find_map(|l| menu.then(|| find(l.menu, id)).flatten().or_else(|| find(l.commands, id)));
     match text {

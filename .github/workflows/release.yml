@@ -1,6 +1,10 @@
 name: Release
 
 on:
+  # A nightly dry run on main: every release build except macOS, nothing signed or released
+  # (craft-common-actions release.yml `dry-run`). Finds release-only breakage before release day.
+  schedule:
+    - cron: "40 1 * * *"
   push:
     branches: [release]
   workflow_dispatch:
@@ -19,10 +23,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Regenerates contributors/contributors.json for the release commit; every build bundles it.
+  credits:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@main
   release:
+    needs: credits
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
+      dry-run: ${{ github.event_name == 'schedule' }}
       app-name: figcraft
       app-title: FigCraft
       # Combined Latin presentation and core UI catalog. Required web builds enforce
@@ -33,6 +45,7 @@ jobs:
       # crates/text/build.rs keeps the web allowlist small (Inter and Georgian).
       web-craft-fonts: true
       version: ${{ inputs.version }}
+      contributors-artifact: ${{ needs.credits.outputs.artifact-name }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -48,3 +61,4 @@ jobs:
       AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
       AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
       AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
