@@ -232,6 +232,25 @@ fn a_block_in_a_section_without_a_place_is_centred_on_the_view_too() {
 }
 
 #[test]
+fn a_block_in_a_turned_frame_without_a_place_is_centred_on_the_view_and_a_given_place_is_the_frames() {
+    let mut s = board();
+    let (vx, vy) = {
+        let v = &s.ds().unwrap().view;
+        (v.cx, v.cy)
+    };
+    let fr = id(&s.execute("node.create", &json!({"type": "frame", "x": 300, "y": -200, "width": 3000, "height": 3000})).unwrap(), "id");
+    s.execute("node.set", &json!({"id": fr, "props": {"rotation": 30}})).unwrap();
+    // Left out: the block's middle (a four-line block) is on the view's centre, in the page.
+    let (f, _) = block(&mut s, json!({"parent": fr}));
+    let c = bx(&s, f).center();
+    assert!((c.x - vx).abs() < 1e-6 && (c.y - vy).abs() < 1e-6, "{c:?} vs ({vx}, {vy})");
+    // Given: `x`/`y` stay the frame's own coordinates.
+    let (g, _) = block(&mut s, json!({"parent": fr, "x": 10, "y": 20}));
+    let t = node(&s, g).transform.translation();
+    assert_eq!((t.x, t.y), (10.0, 20.0));
+}
+
+#[test]
 fn a_default_position_is_within_a_billion_too() {
     let mut s = board();
     s.execute("view.set", &json!({"cx": 1e300})).unwrap();
