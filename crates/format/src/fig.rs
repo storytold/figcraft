@@ -148,7 +148,7 @@ fn import_with_image_limit(bytes: &[u8], name: &str, image_limit: u64) -> Result
     let max_nodes = layer_budget(packed);
     drop(message);
     let file_name = archive.file_name.as_deref().filter(|n| !n.trim().is_empty()).unwrap_or(name);
-    let (mut json, mut warnings, networks) = map::to_rest(&msg, file_name, max_nodes);
+    let (mut json, mut warnings, networks) = map::to_rest_for(&msg, file_name, max_nodes, board);
     // The message goes before the layers are built, so the images it carries are copied out first.
     let embedded = embedded_copies(&msg);
     drop(msg);
