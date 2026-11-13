@@ -640,7 +640,7 @@ impl Session {
     /// text included, children by the same factor whatever their constraints.
     fn scale_drag(&mut self, ev: &PointerEvent, r: &ResizeStart, q: Point, guides: Vec<Guide>) -> Result<()> {
         let (frame, w0, h0) = r.frame;
-        let Some((k, pivot)) = scale_factor(r.handle, q, w0, h0, self.tool.scale_anchor, ev.alt) else { return Ok(()) };
+        let Some((k, pivot)) = scale_factor(r.handle, q, w0, h0, ev.alt) else { return Ok(()) };
         let nodes = r.nodes.clone();
         let inv = frame.inverse();
         // A layer's place in the box scales about the pivot; a negative factor turns it over.
