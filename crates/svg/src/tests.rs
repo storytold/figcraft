@@ -82,6 +82,29 @@ fn svg_import_has_layers_needs_markup_the_importer_reads_and_says_whether_it_dra
     assert_eq!(layers(undecodable), Some(false), "a data URI that doesn't decode is dropped");
     let unsized_png = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/png;base64,AA=="/></svg>"#;
     assert_eq!(layers(unsized_png), Some(false), "a raster whose size can't be read is dropped");
+    // A nested SVG document beside a rectangle, as a data URI percent-encoded into the attribute.
+    let beside_a_rect = |inner: &str| {
+        let mut uri = String::from("data:image/svg+xml;utf8,");
+        for ch in inner.chars() {
+            match ch {
+                '%' => uri.push_str("%25"),
+                '"' => uri.push_str("%22"),
+                '<' => uri.push_str("%3C"),
+                '>' => uri.push_str("%3E"),
+                '&' => uri.push_str("%26"),
+                '#' => uri.push_str("%23"),
+                ' ' => uri.push_str("%20"),
+                c => uri.push(c),
+            }
+        }
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="{uri}"/></svg>"#
+        )
+    };
+    let qualified = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/><s:image href="https://example.com/c.png" width="4" height="4"/></svg>"#;
+    assert_eq!(layers(&beside_a_rect(qualified)), Some(false), "a namespace-qualified linked image in a nested SVG is dropped");
+    let misleading = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/><image data-href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" href="https://example.com/d.png" width="4" height="4"/></svg>"#;
+    assert_eq!(layers(&beside_a_rect(misleading)), Some(false), "only the real href counts, not a data-href beside it");
     assert_eq!(layers(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8""#), None, "cut short");
     assert_eq!(layers("<svg\tName\nAda\tLead"), None, "a spreadsheet row that starts like SVG");
     assert_eq!(layers("hello"), None);
