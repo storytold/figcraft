@@ -296,6 +296,8 @@ mod vector_keys_tests;
 #[cfg(test)]
 mod vector_panel_tests;
 #[cfg(test)]
+mod vector_point_radius_tests;
+#[cfg(test)]
 mod vector_point_xy_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
