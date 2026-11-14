@@ -477,9 +477,11 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **Landed (2026-10-24):** files dropped on the canvas, the Pages list and the Assets panel no
   longer edit the design in Dev Mode (a dropped document still opens as a file of its own, and
   the Pages list only opens pages).
-- **Landed (2026-11-10):** Uno Platform C# Markup for layers: `inspect.code {language: uno}` writes frames, groups, rectangles,
-  ellipses, text (also mixed styles) and image or vector assets as a fluent C# tree (a `Border` with a `Canvas` for the children at their
-  offsets, `TextBlock`, `Ellipse`, `Image`), fixed sizes. Still to do: auto layout (`AutoLayout` panels), variables as theme resources,
+- **Landed (2026-11-14):** Uno Platform C# Markup for layers: `inspect.code {language: uno}` writes frames with horizontal, vertical or
+  grid auto layout (`AutoLayout`, `Grid`; sizing per axis, absolute children, first-on-top order), frames without auto layout
+  (`Border` with a `Canvas`, one warning per view), groups, rectangles, ellipses, text (also mixed styles, with the half-leading of
+  explicit line heights), vectors and booleans as `Path` data, and PNG assets for what a path cannot draw. Children are added with
+  `Children.Add` / `Child =`. Still to do: wrapping layouts (`FlexPanel`, needs Uno Toolkit 10), variables as theme resources,
   components, variants and code connect for Uno, a folder export that writes the asset files.
 - **Landed (2026-10-30):** `figcraft-cli connect publish <file.figcraft> [--mappings
   figcraft.connect.json] [--dry-run]` publishes a code repository's mappings to a design file, so
