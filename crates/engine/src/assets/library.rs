@@ -1026,6 +1026,10 @@ pub fn import(doc: &mut Document, lib: &PublishedLibrary, keys: &[NodeId], updat
             nodes.push(n);
         }
         doc.paste_nodes(&nodes, &map, *u, store, None)?;
+        // An instance whose main is missing became a plain frame: its lengths stay as drawn (#2090).
+        if let Some(root) = map.get(u).copied() {
+            crate::cmd::styles::bake_stale_scales(doc, root);
+        }
     }
     copy_images(doc, src, &hashes);
     for (u, sub) in &write {
@@ -1266,6 +1270,7 @@ fn merge_components(
             }
             let Some(root) = remote.get(&r.root).copied() else { continue };
             doc.paste_nodes(&nodes, &remote, r.root, store, None)?;
+            crate::cmd::styles::bake_stale_scales(doc, root);
             let ids = r.ids.iter().filter_map(|(lib, theirs)| remote.get(theirs).map(|l| (*lib, *l))).collect();
             doc.libraries_mut().components.push(ImportedComponent { root, ids, ..r.clone() });
         }
