@@ -80,6 +80,7 @@ internal sealed partial class EmptyView : UserControl
 {
     public EmptyView()
     {
+        // Empty
         var empty = new Border()
             .Width(100)
             .Height(50)
@@ -100,6 +101,7 @@ fn a_frame_with_a_stroke_and_children_keeps_the_children_out_of_the_border() {
     set(&mut s, f, json!({"fill": "#112233", "stroke": "#FF0000", "strokeWeight": 3, "opacity": 0.5, "cornerRadius": 8}));
     ex(&mut s, "shape.rectangle", json!({"x": 5, "y": 5, "width": 20, "height": 20, "parent": f, "props": {"name": "Box"}}));
     let expected = "// warning: 1 frame has no auto layout: its children are positioned absolutely and do not adapt to size.
+// Login Screen
 var loginScreen = new Grid()
     .Width(200)
     .Height(100)
@@ -111,6 +113,7 @@ var loginScreenBorder = new Border()
     .CornerRadius(8);
 loginScreen.Children.Add(loginScreenBorder);
 var loginScreenCanvas = new Canvas();
+// Box
 var box = new Border()
     .Canvas(left: 5, top: 5)
     .Width(20)
@@ -364,7 +367,8 @@ fn a_row_is_an_auto_layout_with_its_box_gap_padding_and_alignment() {
     rect(&mut s, f, 20.0, 20.0, "B");
     let code = uno(&mut s, f);
     assert!(code.starts_with("using Windows.UI;\nusing Uno.Toolkit.UI;\n") || code.contains("using Uno.Toolkit.UI;"), "{code}");
-    let expected = "var row = new AutoLayout()
+    let expected = "// Row
+var row = new AutoLayout()
     .Width(200)
     .Height(100)
     .Background(Color.FromArgb(0xFF, 0x11, 0x22, 0x33))
@@ -374,11 +378,13 @@ fn a_row_is_an_auto_layout_with_its_box_gap_padding_and_alignment() {
     .Padding(15, 7, 15, 7)
     .PrimaryAxisAlignment(AutoLayoutAlignment.Center)
     .CounterAxisAlignment(AutoLayoutAlignment.Center);
+// A
 var a = new Border()
     .Width(20)
     .Height(20)
     .Background(Color.FromArgb(0xFF, 0xFF, 0x00, 0x00));
 row.Children.Add(a);
+// B
 var b = new Border()
     .Width(20)
     .Height(20)
@@ -980,4 +986,61 @@ fn vectors_that_a_path_cannot_draw_are_png_assets_with_unique_lowercase_names() 
     // The fourth is plain: a path, and it takes no asset name.
     assert_eq!(code.matches("new Microsoft.UI.Xaml.Shapes.Path()").count(), 1, "{code}");
     assert!(!code.contains("star_icon_4") && !code.contains(".svg"), "{code}");
+}
+
+#[test]
+fn the_last_comment_line_above_a_layer_is_its_name_and_notes_and_warnings_cannot_be_taken_for_it() {
+    // The plugin that post-processes the code pairs elements with layers by this rule.
+    let mut s = Session::new();
+    let root = frame(&mut s, "Root", 200.0, 200.0);
+    let warn = rect(&mut s, root, 10.0, 10.0, "warning: x");
+    set(&mut s, warn, json!({"effects": [{"type": "dropShadow", "color": "#00000040", "offset": [0, 4], "radius": 8}]}));
+    rect(&mut s, root, 10.0, 10.0, "line one\nline two\u{2028}three");
+    rect(&mut s, root, 10.0, 10.0, &"long ".repeat(40));
+    let hidden = rect(&mut s, root, 10.0, 10.0, "Hidden Layer");
+    set(&mut s, hidden, json!({"visible": false}));
+    let code = uno(&mut s, root);
+    let tree_text = tree(&code);
+    let lines: Vec<&str> = tree_text.lines().map(str::trim).collect();
+    // For every statement that creates a layer's element (not the helpers a layer needs), the line
+    // above it is `// <name>`; `// warning:` lines come before that line.
+    let decl = |l: &str| l.starts_with("var ");
+    let anchors: Vec<(&str, &str)> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| decl(l))
+        .map(|(i, l)| (*l, i.checked_sub(1).and_then(|j| lines.get(j)).copied().unwrap_or("")))
+        .collect();
+    let name_of = |var: &str| anchors.iter().find(|(l, _)| l.starts_with(&format!("var {var} = "))).map(|(_, a)| *a);
+    assert_eq!(name_of("root"), Some("// Root"), "{code}");
+    assert_eq!(name_of("warningX"), Some("// warning: x"), "{code}");
+    assert_eq!(name_of("lineOneLineTwoThree"), Some("// line one line two three"), "{code}");
+    assert!(anchors.iter().any(|(_, a)| a.starts_with("// long long ") && a.ends_with('…') && a.chars().count() <= 84), "{code}");
+    // The root's warning is above its name, never between the name and the statement.
+    let at = lines.iter().position(|l| l.starts_with("var root = ")).unwrap_or(0);
+    assert!(lines.get(at.wrapping_sub(2)).is_some_and(|l| l.starts_with("// warning: 1 frame has no auto layout")), "{code}");
+    // A note is below the constructor, in the chain, and the layer's name still comes first.
+    let shadow = chain(&code, "warningX");
+    assert!(shadow.iter().any(|l| l.starts_with("// not mapped: drop shadow")), "{code}");
+    assert!(!anchors.iter().any(|(_, a)| a.starts_with("// not mapped:")), "{code}");
+    // Hidden layers write nothing.
+    assert!(!code.contains("Hidden Layer") && !code.contains("hiddenLayer"), "{code}");
+}
+
+#[test]
+fn a_slice_writes_nothing_and_a_cut_subtree_keeps_its_name() {
+    let mut s = Session::new();
+    let f = frame(&mut s, "Cut", 100.0, 100.0);
+    ex(&mut s, "node.create", json!({"type": "slice", "parent": f, "name": "Export Area", "x": 0, "y": 0, "width": 10, "height": 10}));
+    let mut parent = f;
+    for i in 0..20 {
+        parent = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 50, "parent": parent, "name": format!("Level {i}")})));
+    }
+    let code = uno(&mut s, f);
+    assert!(!code.contains("Export Area") && !code.contains("exportArea"), "{code}");
+    // The placeholder where the depth cap cuts keeps its layer's name above its statement.
+    let tree_text = tree(&code);
+    let lines: Vec<&str> = tree_text.lines().map(str::trim).collect();
+    let cut = lines.iter().position(|l| l.ends_with(" …")).unwrap_or(0);
+    assert!(lines.get(cut + 1).is_some_and(|l| l.starts_with("var ") && l.ends_with("new Border();")), "{code}");
 }
