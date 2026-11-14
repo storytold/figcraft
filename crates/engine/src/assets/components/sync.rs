@@ -336,6 +336,28 @@ fn index_old_layers(doc: &Document, inst: NodeId, spare: BTreeMap<NodeId, std::s
     (old, by_source, by_src)
 }
 
+/// The `ChildLayout` of an instance's rebuilt root. Its placement is its own (absolute position,
+/// grid cell, min and max). `sizing_h` / `sizing_v` serve two roles: how a frame sizes its own
+/// content (Hug, Fixed), which follows the main unless the instance overrides its size (measured in
+/// Figma: a plain instance turns Fixed when its main does and back to Hug with it; a typed width
+/// stays), and Fill in an auto layout parent, which is the instance's own and is kept.
+fn instance_child_layout(doc: &Document, root: &Node, comp: &Node) -> figcraft_doc::ChildLayout {
+    let mut cl = root.child_layout.clone();
+    // One "size" override covers both axes, as in Figma ("Reset size"): it keeps both.
+    if root.overrides.contains("size") || root.overrides.contains("resizing") {
+        return cl;
+    }
+    let in_flow = root.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some());
+    let take = |own: &mut figcraft_doc::Sizing, main: figcraft_doc::Sizing| {
+        if !(in_flow && *own == figcraft_doc::Sizing::Fill) && main != figcraft_doc::Sizing::Fill {
+            *own = main;
+        }
+    };
+    take(&mut cl.sizing_h, comp.child_layout.sizing_h);
+    take(&mut cl.sizing_v, comp.child_layout.sizing_v);
+    cl
+}
+
 /// The rebuilt root of instance `inst` of `comp`.
 fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, component: NodeId, map: &BTreeMap<NodeId, NodeId>) -> Node {
     // Root: follows the main except its own placement, name, size and overrides.
@@ -351,7 +373,7 @@ fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, compon
     let nested_copy = inside_instance(doc, inst);
     fresh.source = if nested_copy { root.source } else { Some(component) };
     fresh.constraints = root.constraints;
-    fresh.child_layout = root.child_layout.clone();
+    fresh.child_layout = instance_child_layout(doc, root, comp);
     fresh.interactions = root.interactions.clone();
     fresh.exports = root.exports.clone();
     fresh.prop_refs = root.prop_refs.clone();

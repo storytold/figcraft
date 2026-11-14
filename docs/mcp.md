@@ -187,8 +187,12 @@ Or in a project's `.mcp.json`:
   before the keys that tune it, so `{"layout": {"mode": "vertical"}, "gap": 8}` keeps the gap;
   auto layout keys beside a `layout` of `null` or `"none"` are refused. More auto layout props:
   - `sizingH` / `sizingV`: `fixed`, `hug` (auto layout frames and text) or `fill` (children in an
-    auto layout flow). A child can't fill an axis its parent hugs: setting `fill` turns the parent
-    `fixed` on that axis, and a parent set to `hug` turns the children that filled it `fixed`. A
+    auto layout flow). A child can't fill the axis its parent hugs along the flow: setting `fill`
+    turns the parent `fixed` on that axis (the session notice reads "Width set to Fixed for <name>"),
+    and a parent set to `hug` turns the children that filled it `fixed`. Across the flow the parent keeps
+    hugging and the child takes the line's cross size (the largest sibling that doesn't fill, its min
+    counted, padding outside); the parent turns `fixed` ("Height set to Fixed for <name>") only when no
+    such sibling is left, and `fill` across a wrapping row that hugs that axis is refused. A
     layer moved out of auto layout (or whose frame loses it) keeps its size as `fixed`. Fill
     children share the space like CSS flexbox, within their min/max.
   - `minWidth` / `maxWidth` / `minHeight` / `maxHeight` (px, `null` removes) bound Hug, Fill and

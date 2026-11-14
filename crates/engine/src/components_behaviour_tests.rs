@@ -1002,6 +1002,180 @@ fn deleting_a_layer_inside_an_instance_hides_it_instead() {
     assert!(s.doc().unwrap().node(k.inst).is_none());
 }
 
+/// Issue 2090 item 2: after a main's child is set to fill, the instance's copy must match the main's
+/// child (sizing, size) and the copy's parent must match the main's parent sizing. Relative, not
+/// absolute, so it holds whatever the cross-axis rule is.
+fn fill_matches_main(horizontal: bool, axis: &str) {
+    let hug_axis = if horizontal { "sizingV" } else { "sizingH" };
+    fill_matches_main_hugging(horizontal, axis, hug_axis);
+}
+
+/// As `fill_matches_main`, with the axis the main root hugs given explicitly.
+fn fill_matches_main_hugging(horizontal: bool, axis: &str, hug_axis: &str) {
+    let mut s = Session::new();
+    let mode = if horizontal { "horizontal" } else { "vertical" };
+    let comp = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 60, "name": "Note"})));
+    let bar = idv(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 3, "height": 20, "parent": comp, "props": {"name": "Bar"}})));
+    ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 40, "parent": comp, "props": {"name": "Body"}}));
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"layout": mode, "gap": 12, "padding": 10, hug_axis: "hug"}}));
+    let comp = idv(&ex(&mut s, "component.create", json!({"ids": [comp]})));
+    let inst = idv(&ex(&mut s, "instance.create", json!({"component": comp, "x": 400, "y": 0})));
+    let bar = if node(&s, bar).parent.is_some() { bar } else { kids(&s, comp)[0] };
+    ex(&mut s, "node.set", json!({"id": bar, "props": {axis: "fill"}}));
+    let ibar = copy_of(&s, inst, bar);
+    let (m, c) = (node(&s, bar), node(&s, ibar));
+    let (mp, cp) = (node(&s, comp), node(&s, inst));
+    eprintln!(
+        "{axis}: main bar {}x{} sizing {:?}/{:?}; copy {}x{} sizing {:?}/{:?}; main parent {}x{} {:?}/{:?}; inst {}x{} {:?}/{:?}",
+        m.width,
+        m.height,
+        m.child_layout.sizing_h,
+        m.child_layout.sizing_v,
+        c.width,
+        c.height,
+        c.child_layout.sizing_h,
+        c.child_layout.sizing_v,
+        mp.width,
+        mp.height,
+        mp.child_layout.sizing_h,
+        mp.child_layout.sizing_v,
+        cp.width,
+        cp.height,
+        cp.child_layout.sizing_h,
+        cp.child_layout.sizing_v
+    );
+    assert_eq!((c.child_layout.sizing_h, c.child_layout.sizing_v), (m.child_layout.sizing_h, m.child_layout.sizing_v), "copy sizing");
+    assert_eq!((c.width, c.height), (m.width, m.height), "copy size matches main child");
+    assert_eq!(
+        (cp.child_layout.sizing_h, cp.child_layout.sizing_v),
+        (mp.child_layout.sizing_h, mp.child_layout.sizing_v),
+        "parent sizing matches main parent"
+    );
+}
+
+#[test]
+fn instance_follows_main_child_fill_on_the_cross_axis() {
+    fill_matches_main(true, "sizingV");
+}
+
+#[test]
+fn instance_follows_main_child_fill_on_the_main_axis() {
+    fill_matches_main(true, "sizingH");
+}
+
+#[test]
+fn instance_follows_main_child_fill_along_a_hugging_main_axis() {
+    fill_matches_main_hugging(true, "sizingH", "sizingH");
+}
+
+/// A horizontal auto layout main hugging its width, with a "Bar" and a "Body" child, and an instance.
+fn hugging_note(s: &mut Session) -> (NodeId, NodeId, NodeId) {
+    let comp = idv(&ex(s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 60, "name": "Note"})));
+    let bar = idv(&ex(s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 3, "height": 20, "parent": comp, "props": {"name": "Bar"}})));
+    ex(s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 40, "parent": comp, "props": {"name": "Body"}}));
+    ex(s, "node.set", json!({"id": comp, "props": {"layout": "horizontal", "gap": 12, "padding": 10, "sizingH": "hug"}}));
+    let comp = idv(&ex(s, "component.create", json!({"ids": [comp]})));
+    let inst = idv(&ex(s, "instance.create", json!({"component": comp, "x": 400, "y": 0})));
+    let bar = if node(s, bar).parent.is_some() { bar } else { kids(s, comp)[0] };
+    (comp, inst, bar)
+}
+
+fn sizing_h(s: &Session, id: NodeId) -> Sizing {
+    node(s, id).child_layout.sizing_h
+}
+
+/// Measured in Figma: the main's root turning Fixed (set directly) reaches a plain instance, and
+/// the main going back to Hug brings it back.
+#[test]
+fn a_plain_instances_resizing_follows_the_mains_root_both_ways() {
+    let mut s = Session::new();
+    let (comp, inst, _) = hugging_note(&mut s);
+    assert_eq!(sizing_h(&s, inst), Sizing::Hug);
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "fixed"}}));
+    assert_eq!(sizing_h(&s, comp), Sizing::Fixed);
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed, "the instance turns Fixed with its main");
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "hug"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Hug, "and back to Hug with it");
+}
+
+/// Measured in Figma: a child set to Fill along the hugging axis turns the main Fixed; the plain
+/// instance follows it, and follows it back to Hug.
+#[test]
+fn a_plain_instance_goes_fixed_and_back_to_hug_with_its_main() {
+    let mut s = Session::new();
+    let (comp, inst, bar) = hugging_note(&mut s);
+    ex(&mut s, "node.set", json!({"id": bar, "props": {"sizingH": "fill"}}));
+    assert_eq!(sizing_h(&s, comp), Sizing::Fixed);
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed);
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "hug"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Hug);
+}
+
+/// Measured in Figma: an instance whose width was typed keeps that Fixed width through both
+/// changes, while its height kept hugging its content. Figma keeps one size override for both
+/// axes, as FigCraft does: with the width typed, a change to a fixed main's height does not reach
+/// the instance, and the only size reset is "Reset size" (measured 2026-11-09).
+#[test]
+fn an_instance_with_a_typed_width_keeps_it_when_the_main_turns_fixed_and_back() {
+    let mut s = Session::new();
+    let (comp, inst, bar) = hugging_note(&mut s);
+    ex(&mut s, "node.set", json!({"id": inst, "props": {"width": 200}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed);
+    assert_eq!(node(&s, inst).width, 200.0);
+    ex(&mut s, "node.set", json!({"id": bar, "props": {"sizingH": "fill"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed);
+    assert_eq!(node(&s, inst).width, 200.0, "the typed width stays");
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "hug"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed, "still Fixed after the main hugs again");
+    assert_eq!(node(&s, inst).width, 200.0);
+}
+
+/// An instance placed in an auto layout frame and set to Fill there keeps Fill when its main changes.
+#[test]
+fn an_instance_filling_its_auto_layout_parent_keeps_fill_when_the_main_changes() {
+    let mut s = Session::new();
+    let (comp, inst, bar) = hugging_note(&mut s);
+    let row = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 200, "width": 500, "height": 100, "name": "Row"})));
+    ex(&mut s, "node.set", json!({"id": row, "props": {"layout": "horizontal"}}));
+    ex(&mut s, "node.reparent", json!({"ids": [inst], "parent": row}));
+    ex(&mut s, "node.set", json!({"id": inst, "props": {"sizingH": "fill"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fill);
+    ex(&mut s, "node.set", json!({"id": bar, "props": {"sizingH": "fill"}}));
+    assert_eq!(sizing_h(&s, comp), Sizing::Fixed);
+    assert_eq!(sizing_h(&s, inst), Sizing::Fill, "its own Fill in the row is kept");
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "hug"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fill);
+}
+
+/// Inferred (Figma was measured only with a typed width): a Fixed set directly on an instance's
+/// root, with no width typed, is an override the sync keeps when the main's root turns Hug, Fixed
+/// and Hug again.
+#[test]
+fn an_instance_root_set_to_fixed_keeps_it_through_the_mains_resizing_changes() {
+    let mut s = Session::new();
+    let (comp, inst, _) = hugging_note(&mut s);
+    ex(&mut s, "node.set", json!({"id": inst, "props": {"sizingH": "fixed"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed);
+    assert!(node(&s, inst).overrides.contains("resizing"), "{:?}", node(&s, inst).overrides);
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "fixed"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed);
+    ex(&mut s, "node.set", json!({"id": comp, "props": {"sizingH": "hug"}}));
+    assert_eq!(sizing_h(&s, comp), Sizing::Hug);
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed, "its own Fixed stays after the main hugs again");
+}
+
+/// Resetting that instance brings its resizing back to the main's.
+#[test]
+fn resetting_an_instance_brings_its_own_resizing_back_to_the_mains() {
+    let mut s = Session::new();
+    let (_, inst, _) = hugging_note(&mut s);
+    ex(&mut s, "node.set", json!({"id": inst, "props": {"sizingH": "fixed"}}));
+    assert_eq!(sizing_h(&s, inst), Sizing::Fixed);
+    ex(&mut s, "component.resetInstance", json!({"ids": [inst]}));
+    assert!(!node(&s, inst).overrides.contains("resizing"));
+    assert_eq!(sizing_h(&s, inst), Sizing::Hug, "the main hugs");
+}
+
 /// Create multiple components (#2088): each selected layer becomes its own component in place,
 /// keeping its name and position; all stay selected and one undo reverts them all.
 #[test]

@@ -77,6 +77,34 @@ fn a_layer_in_an_instance_fills_and_keeps_it_through_main_edits() {
     healthy(&s);
 }
 
+/// A child set to Fill along a hugging instance root turns the root Fixed: that is the root's own
+/// resizing now, recorded as an override, so a later rebuild from the main (an edit of the main's
+/// resizing or structure) keeps it Fixed and the child keeps filling.
+#[test]
+fn a_child_filling_a_hugging_instance_root_keeps_the_root_fixed_through_a_rebuild() {
+    let mut s = Session::new();
+    let f = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 120, "height": 40, "name": "Row"})));
+    ex(&mut s, "node.set", json!({"id": f, "props": {"layout": "horizontal", "padding": 0, "gap": 0, "sizingH": "hug", "sizingV": "hug"}}));
+    let atom = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 20, "parent": f, "name": "Atom"})));
+    ex(&mut s, "node.set", json!({"id": atom, "props": {"layout": "horizontal", "padding": 0, "gap": 0, "sizingH": "hug", "sizingV": "hug"}}));
+    ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 20, "parent": atom, "props": {"name": "Dot"}}));
+    let c = idv(&ex(&mut s, "component.create", json!({"ids": [f]})));
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": c, "x": 0, "y": 100})));
+    let ia = copy_of(&s, i, atom);
+    assert_eq!((sizing_h(&s, i), sizing_h(&s, ia), node(&s, i).width), (Sizing::Hug, Sizing::Hug, 50.0));
+    ex(&mut s, "node.set", json!({"id": ia, "props": {"sizingH": "fill"}}));
+    assert_eq!((sizing_h(&s, i), sizing_h(&s, ia)), (Sizing::Fixed, Sizing::Fill), "the root turned Fixed, the child fills");
+    // The main's resizing changes, and its structure: both rebuild the instance.
+    ex(&mut s, "node.set", json!({"id": c, "props": {"minWidth": 60}}));
+    ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 5, "height": 5, "parent": c}));
+    assert_eq!((sizing_h(&s, i), sizing_h(&s, ia)), (Sizing::Fixed, Sizing::Fill), "the root stays Fixed through the rebuild");
+    assert!(node(&s, i).overrides.contains("resizing"), "{:?}", node(&s, i).overrides);
+    // Reset instance gives the main's Hug back.
+    ex(&mut s, "component.resetInstance", json!({"ids": [i]}));
+    assert_eq!(sizing_h(&s, i), Sizing::Hug);
+    healthy(&s);
+}
+
 #[test]
 fn size_and_resizing_overrides_undo_reset_and_detach() {
     let mut s = Session::new();
@@ -123,8 +151,10 @@ fn layers_in_instances_resize_but_keep_their_place() {
     for props in [json!({"x": 50}), json!({"rotation": 15}), json!({"constraints": {"horizontal": "right"}})] {
         assert!(s.execute("node.set", &json!({"id": it, "props": props})).is_err(), "{props} is refused");
     }
-    // The instance's own resizing is its own, not an override.
+    // The instance's own resizing is recorded as an override (inferred), which Reset instance clears.
     ex(&mut s, "node.set", json!({"id": i, "props": {"minWidth": 100}}));
+    assert!(node(&s, i).overrides.contains("resizing"));
+    ex(&mut s, "component.resetInstance", json!({"ids": [i]}));
     assert!(!node(&s, i).overrides.contains("resizing"));
     healthy(&s);
 }
