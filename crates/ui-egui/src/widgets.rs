@@ -713,9 +713,14 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
         }
         None => {
             let (s, col) = if value.is_empty() { (placeholder, t.text_tertiary) } else { (&*shown, t.text) };
-            // Long text stays inside the field.
+            // Long text ends in an ellipsis inside the field; hovering shows the whole value (not
+            // of a secret one: that is a key).
+            let fitted = elide(ui, s, rect.width() - 16.0);
             let painter = ui.painter().with_clip_rect(rect.shrink2(vec2(8.0, 0.0)));
-            painter.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, s, regular(11.0), col);
+            painter.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, &fitted, regular(11.0), col);
+            if fitted != s && !secret && !value.is_empty() {
+                resp.on_hover_text(value);
+            }
         }
     }
     out
