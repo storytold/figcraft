@@ -79,6 +79,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 moxcms = "0.8"
 png = "0.18"
 usvg = "0.48"
+# What usvg reads images with, so the SVG importer can tell what it will drop (same versions as usvg).
+data-url = "0.3"
+imagesize = "0.15"
 krilla = "0.8"
 skrifa = "0.47"
 harfrust = "0.13"

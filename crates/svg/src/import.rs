@@ -41,6 +41,8 @@ mod structure_tests;
 mod tile_tests;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use figcraft_color::{BlendMode, ImageScaleMode, Paint};
 use figcraft_doc::{Document, Effect, MaskType, Node, NodeId, NodeKind, StrokeAlign, StrokeCap, StrokeJoin, VectorNetwork, WindingRule};
@@ -63,6 +65,9 @@ impl std::fmt::Display for ImportError {
 pub struct Imported {
     pub frame: NodeId,
     pub notes: Vec<String>,
+    /// An `<image>` was left out (a linked file, never fetched, or a data URI that couldn't be
+    /// read or was over budget), so the frame lacks some of what the document draws.
+    pub images_omitted: bool,
 }
 
 pub(crate) fn xf(t: usvg::Transform) -> Affine {
@@ -832,10 +837,10 @@ pub(crate) fn too_deep(data: &[u8]) -> bool {
     }
 }
 
-fn options(data: &[u8], limits: budget::Limits) -> usvg::Options<'static> {
+fn options(data: &[u8], limits: budget::Limits, omitted: Arc<AtomicBool>) -> usvg::Options<'static> {
     // Only data URIs, within budgets: an opened or pasted SVG never pulls other files off the disk
     // and never expands without limit.
-    let mut o = usvg::Options { image_href_resolver: budget::resolver(limits), ..Default::default() };
+    let mut o = usvg::Options { image_href_resolver: budget::resolver(limits, omitted), ..Default::default() };
     if data.windows(4).any(|w| w == b"text") {
         text::prepare(&mut o);
     }
@@ -906,6 +911,22 @@ pub fn looks_like_svg(text: &str) -> bool {
     false
 }
 
+/// A trial import of `text` into a scratch document: `None` when it isn't SVG markup the importer
+/// reads ([`looks_like_svg`], then the import), else whether the frame it makes holds any layers
+/// (`false`: nothing drawn, an empty `<svg>` or only linked images it doesn't fetch, or drawing
+/// only part of the document because an `<image>` was left out: the layers then aren't the whole
+/// copy). A paste prefers the markup over a picture copied with it, or over a table on a board,
+/// by this.
+pub fn svg_import_has_layers(text: &str) -> Option<bool> {
+    if !looks_like_svg(text) {
+        return None;
+    }
+    let mut doc = Document::new("scratch");
+    let page = doc.first_page()?;
+    let imported = import_svg_with_notes(&mut doc, text.as_bytes(), page, 0.0, 0.0, "").ok()?;
+    Some(!imported.images_omitted && doc.node(imported.frame).is_some_and(|f| !f.children.is_empty()))
+}
+
 /// Import SVG bytes as a new frame under `parent` at `(x, y)`. Returns the frame id.
 pub fn import_svg(doc: &mut Document, data: &[u8], parent: NodeId, x: f64, y: f64, name: &str) -> Result<NodeId, ImportError> {
     import_svg_with_notes(doc, data, parent, x, y, name).map(|i| i.frame)
@@ -938,7 +959,8 @@ fn import_within(
         Some(resolved) => resolved,
         None => (data, Vec::new()),
     };
-    let tree = usvg::Tree::from_data(&data, &options(&data, limits)).map_err(|e| ImportError(e.to_string()))?;
+    let omitted = Arc::new(AtomicBool::new(budget::drops_images(&data)));
+    let tree = usvg::Tree::from_data(&data, &options(&data, limits, Arc::clone(&omitted))).map_err(|e| ImportError(e.to_string()))?;
     let size = tree.size();
     let frame =
         doc.create(parent, NodeKind::Frame, name, x, y, f64::from(size.width()), f64::from(size.height())).map_err(|e| ImportError(e.to_string()))?;
@@ -948,5 +970,5 @@ fn import_within(
     let mut cx = Ctx::new(doc);
     color_notes.into_iter().for_each(|n| cx.note(n));
     children(&mut cx, tree.root(), frame, Affine::IDENTITY, 0);
-    Ok(Imported { frame, notes: cx.notes.into_iter().collect() })
+    Ok(Imported { frame, notes: cx.notes.into_iter().collect(), images_omitted: omitted.load(Ordering::Relaxed) })
 }
