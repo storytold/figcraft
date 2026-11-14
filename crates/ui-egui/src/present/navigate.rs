@@ -225,6 +225,14 @@ impl Presenter {
 
     pub(super) fn revert(&mut self, now: f64) {
         let Some(t) = self.temp.take() else { return };
+        // The delays fired during the temporary change: inside an instance it changed the variant
+        // of, a key names the temporary variant's interaction, not the restored one's, so drop it;
+        // keep the others, and put back the ones the change cleared.
+        let changed: Vec<NodeId> = self.swapped.iter().filter(|(i, at)| t.snap.swapped.get(*i) != Some(*at)).map(|(i, _)| *i).collect();
+        let restored = &t.snap.doc;
+        let during: Vec<(NodeId, usize)> = self.delays_fired.difference(&t.snap.delays_fired).copied().collect();
+        let mut fired = t.snap.delays_fired.clone();
+        fired.extend(during.into_iter().filter(|(id, _)| !changed.iter().any(|i| i == id || restored.is_ancestor(*i, *id))));
         self.begin(t.transition.reversed(), t.dur, t.easing, now);
         self.current = t.snap.current;
         self.design = Some(t.snap.doc);
@@ -233,8 +241,7 @@ impl Presenter {
         self.history = t.snap.history;
         self.scroll = t.snap.scroll;
         self.swapped = t.snap.swapped;
-        // Put back the delays the temporary variant change cleared; keep the ones that fired since.
-        self.delays_fired.extend(t.snap.delays_fired);
+        self.delays_fired = fired;
         self.stop_scrolling();
         self.hovered.clear();
         self.rev += 1;

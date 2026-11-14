@@ -190,6 +190,70 @@ fn a_hover_variant_that_reverts_does_not_rerun_a_fired_delay() {
     assert_eq!(runs, Some(figcraft_doc::VariableValue::Number(1.0)), "A's delay ran once, not again after the hover");
 }
 
+/// A delay that fires on the hover variant names that variant's interaction: after the revert it
+/// doesn't count as A's delay at the same index, which still runs on its own deadline.
+#[test]
+fn a_delay_fired_on_a_hover_variant_does_not_block_the_restored_variants_delay() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Run", "modes": ["Default"]}));
+    ex(&mut s, "variable.create", json!({"collection": "Run", "name": "a_runs", "type": "number", "value": 0}));
+    ex(&mut s, "variable.create", json!({"collection": "Run", "name": "hover_runs", "type": "number", "value": 0}));
+    let var = |s: &Session, name: &str| s.doc().unwrap().variables.get(name).map(|v| v.id.clone()).unwrap();
+    let (a_runs, hover_runs) = (var(&s, "a_runs"), var(&s, "hover_runs"));
+    let inc = |v: &str| json!({"op": {"op": "add", "args": [{"value": {"type": "alias", "value": v}}, {"value": {"type": "number", "value": 1}}]}});
+    let variants: Vec<NodeId> = ["A", "Hover"]
+        .iter()
+        .enumerate()
+        .map(|(k, state)| {
+            let f = id(&ex(
+                &mut s,
+                "frame.create",
+                json!({"x": k as f64 * 150.0, "y": 600, "width": 100, "height": 60, "name": format!("State={state}")}),
+            ));
+            id(&ex(&mut s, "component.create", json!({"ids": [f]})))
+        })
+        .collect();
+    ex(&mut s, "component.combineVariants", json!({"ids": variants.clone()}));
+    let instant = json!({"type": "instant"});
+    // A: index 0 a 1,000 ms delay counting its runs, index 1 the hover. Hover: index 0 a delay due at once.
+    let a_delay = json!({"id": variants[0], "trigger": {"type": "afterDelay", "ms": 1000}, "action": {"type": "setVariable", "variable": a_runs, "value": null, "expr": inc(&a_runs)}, "transition": instant, "durationMs": 0});
+    ex(&mut s, "proto.interaction.add", a_delay);
+    let hover = json!({"id": variants[0], "trigger": {"type": "onHover"}, "action": {"type": "changeTo", "dest": variants[1]}, "transition": instant, "durationMs": 0});
+    ex(&mut s, "proto.interaction.add", hover);
+    let h_delay = json!({"id": variants[1], "trigger": {"type": "afterDelay", "ms": 0}, "action": {"type": "setVariable", "variable": hover_runs, "value": null, "expr": inc(&hover_runs)}, "transition": instant, "durationMs": 0});
+    ex(&mut s, "proto.interaction.add", h_delay);
+    let set = s.doc().unwrap().node(variants[0]).unwrap().parent.unwrap();
+    let screen = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 400, "height": 300, "name": "Screen"})));
+    let inst = id(&ex(&mut s, "instance.create", json!({"component": set, "x": 20, "y": 20, "parent": screen})));
+    ex(&mut s, "instance.swap", json!({"ids": [inst], "component": variants[0]}));
+    let mut u = Harness::new(s);
+    u.run("proto.present", json!({"start": screen}));
+    u.frame(Vec::new());
+    let start = u.time;
+    let hot = u.app.inspect()["presenter"]["hotspots"].as_array().cloned().unwrap_or_default();
+    let h = hot.iter().find(|h| h["id"] == json!(inst)).unwrap_or_else(|| panic!("no hotspot on the instance: {hot:?}"));
+    let r: Vec<f32> = h["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
+    let (on, away) = (egui::pos2((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0), egui::pos2(r[0] - 40.0, r[1] - 40.0));
+    let value = |u: &Harness, v: &str| {
+        crate::tabs::shown_or_paused(&u.app).and_then(|p| p.design.as_ref().and_then(|d| d.variables.resolve(v, &Default::default())))
+    };
+    while u.time < start + 0.2 {
+        u.frame(vec![egui::Event::PointerMoved(away)]);
+    }
+    while u.time < start + 0.4 {
+        u.frame(vec![egui::Event::PointerMoved(on)]);
+    }
+    assert_eq!(shown(&u, inst, &variants), Some(1), "while hovering: the hover variant");
+    assert_eq!(value(&u, &hover_runs), Some(figcraft_doc::VariableValue::Number(1.0)), "the hover variant's delay ran");
+    u.frame(vec![egui::Event::PointerMoved(away)]);
+    u.frame(Vec::new());
+    assert_eq!(shown(&u, inst, &variants), Some(0), "the hover left: A again");
+    while u.time < start + 1.3 {
+        u.frame(vec![egui::Event::PointerMoved(away)]);
+    }
+    assert_eq!(value(&u, &a_runs), Some(figcraft_doc::VariableValue::Number(1.0)), "A's own delay at index 0 ran on its deadline");
+}
+
 /// An edit in the editor while presenting brings back the editor's variants, so the swap times of
 /// the variants changed at run time no longer delay them.
 #[test]
