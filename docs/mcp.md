@@ -2084,8 +2084,8 @@ turned off 0°.
   `node.set {pointCount}` keeps stars to 3–60 points; `miterAngle` (degrees, the Design panel's
   Miter angle) sets the miter limit (`limit = 1 / sin(angle / 2)`); `get_node` reports a join
   other than miter (`strokeJoin`) or a miter angle other than the default ~28.96° (`miterAngle`).
-- **Select**: `select.layersAt {x, y}` lists every layer under a page point, front-most first with its
-  depth (the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
+- **Select**: `select.layersAt {x, y}` lists every layer under a page point, locked ones too, front-most first with its
+  depth and a `locked` flag (true when the layer or an ancestor is locked; the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
   / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab). With `pointer`, `cmd: true`
   clicks select the nested layer, `cmd` drags from empty canvas select the nested layers they touch,
   and `shift` drags toggle what they touch. A press on the background of a top-level frame with
