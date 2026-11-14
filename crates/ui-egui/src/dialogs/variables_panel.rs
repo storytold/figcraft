@@ -294,7 +294,8 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             ui.set_min_size(size);
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             header(app, ui, &mut open);
-            let h = (size.y - 44.0).max(160.0);
+            // The body below the 44-point header: what is left of the window (the table scrolls).
+            let h = (size.y - 44.0).max(0.0);
             let top_down = egui::Layout::top_down(egui::Align::Min);
             ui.horizontal_top(|ui| {
                 ui.allocate_ui_with_layout(vec2(SIDEBAR_W, h), top_down, |ui| sidebar(app, ui, &views, &doc.variables, &mut st));

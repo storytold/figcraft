@@ -77,6 +77,25 @@ fn on_a_narrow_screen_the_variables_window_fits_inside_it() {
 }
 
 #[test]
+fn on_a_short_screen_the_variables_window_fits_inside_it() {
+    // Lower than the minimum (240): the body takes what is left below the header and scrolls.
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    for k in 0..COUNT {
+        s.execute("variable.create", &json!({"collection": "Theme", "name": format!("v{k:02}"), "type": "number", "value": 1})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.screen = vec2(800.0, 180.0);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    let r = rect(&u);
+    let screen = Rect::from_min_size(Pos2::ZERO, u.screen);
+    assert!(screen.contains_rect(r), "the window {r:?} is inside the screen {screen:?}");
+}
+
+#[test]
 fn the_variables_window_keeps_a_minimum_size() {
     let mut u = window();
     drag_corner(&mut u, vec2(-2000.0, -2000.0));
