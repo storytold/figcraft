@@ -1761,6 +1761,34 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   are snake_case, Dart enum members lowerCamel; names that would shadow framework types get one too, `Text` → `TextComponent`). `inspect.componentCode
   {id?, language?}` returns the parts: `{component, name, set, properties: [{name, param, type,
   default, value? (instances)}], definition, usage? (instances)}`.
+- **Uno C# Markup:** `inspect.code {id, language: uno}` (aliases `csharp-markup`, `cs-markup`) writes the layer and its subtree as a
+  `UserControl` class (file-scoped `namespace MyApp;`, the class named after the layer plus `View`, internal) whose constructor builds the
+  tree with Uno C# Markup (`Uno.Extensions.Markup`) and ends with `Content = root;`. Each element is a local with fluent property setters;
+  its children are added with `parent.Children.Add(child)` or `parent.Child = child`, never the fluent `.Children(…)` / `.Child(…)`,
+  whose load time doubles with every level of nesting. A frame with horizontal or vertical auto layout is a Toolkit `AutoLayout` that takes
+  the box itself (`Background`, `BorderBrush`, `BorderThickness`, `CornerRadius`, `Opacity`) with `Orientation`, `Spacing`, `Padding` (less
+  the stroke weight unless the layout includes strokes; where a side would go negative the border sits behind the layout in a `Grid`),
+  `PrimaryAxisAlignment`, `CounterAxisAlignment` and `Justify`; space around and evenly are written as space between, baseline alignment
+  and a wrapping layout are `// not mapped: …` notes (a wrapping layout is one line). Children are sized per axis: fixed writes `Width` /
+  `Height`, hug writes none, fill stretches with `.AutoLayout(primaryAlignment:, counterAlignment:)`, `MinWidth` / `MaxWidth` / `MinHeight`
+  / `MaxHeight` go on the child; a child that ignores the layout is `.AutoLayout(isIndependentLayout: true)` at its offset as a `Margin`
+  (a hugging parent with one is written at its current size), and "first on top" is a descending `.Canvas(zIndex: n)`. A grid is a `Grid`
+  with `ColumnDefinitions` / `RowDefinitions` (pixels, `Auto`, whole-number stars: fractional shares are scaled up to a factor of 100 or
+  rounded with a note; at most 64 tracks per axis), `ColumnSpacing` (the layout's gap) and `RowSpacing` (its cross gap), and each child in
+  its cell with `.Grid(row:, column:, rowSpan:, columnSpan:)` and its alignment in the cell. A frame without auto layout, a group or a
+  rectangle is a `Border` holding a `Canvas` whose children carry `.Canvas(left:, top:)`, with a stroke and children a `Grid` with the
+  border behind; one `// warning:` comment above the root counts such frames. Text is a `TextBlock` (`FontFamily`, `FontSize`,
+  `FontWeight`, `FontStyle`, `Foreground`, `LineHeight`, `CharacterSpacing` in thousandths of an em, `TextAlignment`, `TextWrapping`,
+  `TextTrimming`, `MaxLines`, `TextDecorations`; case is applied at run time; style runs are `Inlines` of `Run`s); an explicit line height
+  moves it down by the half-leading `(L - (ascent + descent) / upem * size) / 2` of the face FigCraft draws with (a top padding and a
+  negative bottom margin in a panel, the offset in a `Canvas`), so the code depends on the fonts installed where `inspect.code` runs;
+  with the family missing it is a note; a line height below the font's natural height keeps `LineHeight` and adds `LineStackingStrategy.BlockLineHeight`, with no shift. Vectors, booleans and shapes are a
+  `Microsoft.UI.Xaml.Shapes.Path` with `Data("F1 M …")` (`F1` non-zero, `F0` even-odd; at most 5,000 elements), one solid `Fill` and one
+  solid `Stroke`; gradients, several fills or strokes, effects and bigger outlines are an `Image` on `ms-appx:///Assets/<name>.png` with a
+  comment to export it. Image fills are an `ImageBrush` on `<name>.png` (names lowercase ASCII, unique in the snippet; the files are not
+  written). Shadows, blurs, blend modes, masks, gradients beyond the first stop, pattern fills, stroke alignment other than inside,
+  corner smoothing and arcs are `// not mapped: …` comments. Components and instances are written as the frames they are;
+  `inspect.componentCode` and code connect do not take `uno` yet.
 - **Code connect:** link a component (a variant links its set) to the code component it is built
   as, per language (`react`, `leptos`, `vue`, `swiftui`, `compose`, `arkui`, `flutter`): `codeConnect.set {id?, language?, importPath?,
   name?, template?}` (undoable; fields left out keep their value; the defaults are the generated

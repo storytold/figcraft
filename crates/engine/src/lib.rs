@@ -618,6 +618,8 @@ mod transform_behaviour_tests;
 #[cfg(test)]
 mod unknown_params_tests;
 #[cfg(test)]
+mod uno_codegen_tests;
+#[cfg(test)]
 mod variable_props_tests;
 #[cfg(test)]
 mod variable_tests;
