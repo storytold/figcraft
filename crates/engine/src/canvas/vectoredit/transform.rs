@@ -172,6 +172,126 @@ pub fn transform_in_edit_mode(s: &mut Session, p: &Value, f: impl FnOnce(&PointB
     Some(s.doc_mut().and_then(|doc| transform_points(doc, ve.id, &b.points, m)).map(|()| json!({"ok": true})))
 }
 
+/// Which edge or centre line of the selected points' box each point goes to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PointAlign {
+    Left,
+    HCenter,
+    Right,
+    Top,
+    VCenter,
+    Bottom,
+}
+
+/// Every selected point of `b` in every layer as (layer, vertex, page position).
+fn page_points(doc: &Document, b: &PointBox, id: NodeId) -> Vec<(NodeId, usize, Point)> {
+    let layers = std::iter::once((id, &b.points)).chain(b.others.iter().map(|(o, v)| (*o, v)));
+    layers
+        .flat_map(|(l, verts)| {
+            let w = doc.world_transform(l);
+            let net = network(doc, l);
+            verts.iter().filter_map(move |v| net.and_then(|n| n.vertices.get(*v)).map(|vx| (l, *v, w * vx.point()))).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The box to align or distribute in: all edited layers' points when several are selected.
+fn edit_box(doc: &Document, ve: &VectorEdit) -> Option<PointBox> {
+    let b = if ve.others_selected() { layers_box(doc, ve) } else { point_box(doc, ve) };
+    b.filter(|b| b.point_count() > 0)
+}
+
+/// How many points align and distribute act on: the selected points and selected segments' ends
+/// of every edited layer.
+pub fn edit_point_count(doc: &Document, ve: &VectorEdit) -> usize {
+    edit_box(doc, ve).map_or(0, |b| b.point_count())
+}
+
+/// Move each point by its own page delta, one vertex at a time (handles go with their vertex).
+fn move_each(doc: &mut Document, moves: &[(NodeId, usize, Point)]) -> Result<()> {
+    for (l, v, d) in moves {
+        if d.x.is_finite() && d.y.is_finite() && (d.x != 0.0 || d.y != 0.0) {
+            transform_points(doc, *l, &[*v], Affine::translate((d.x, d.y)))?;
+        }
+    }
+    Ok(())
+}
+
+/// The page delta of moving by `(dx, dy)` along the box's axes.
+fn along(frame: Affine, dx: f64, dy: f64) -> Point {
+    let [a, b, c, d, _, _] = frame.as_coeffs();
+    Point::new(a * dx + c * dy, b * dx + d * dy)
+}
+
+/// Align the selected points to their box's edge or centre line (`None` when edit mode is off or
+/// the command names layers; with no points selected in edit mode nothing moves, and the edited
+/// layer is not aligned to its parent). Each point moves along one axis of the box only; fewer than
+/// two points stay put.
+pub fn align_points_in_edit_mode(s: &mut Session, p: &Value, how: PointAlign) -> Option<Result<Value>> {
+    if get(p, "ids").is_some() || get(p, "id").is_some() {
+        return None;
+    }
+    let ve = editing(s).ok()?;
+    let Some(b) = edit_box(s.doc().ok()?, &ve) else {
+        return Some(Ok(json!({"ok": true})));
+    };
+    let pts = page_points(s.doc().ok()?, &b, ve.id);
+    let inv = b.frame.inverse();
+    let moves: Vec<(NodeId, usize, Point)> = if b.point_count() < 2 {
+        vec![]
+    } else {
+        pts.iter()
+            .map(|(l, v, pg)| {
+                let q = inv * *pg;
+                let (dx, dy) = match how {
+                    PointAlign::Left => (-q.x, 0.0),
+                    PointAlign::HCenter => (b.width / 2.0 - q.x, 0.0),
+                    PointAlign::Right => (b.width - q.x, 0.0),
+                    PointAlign::Top => (0.0, -q.y),
+                    PointAlign::VCenter => (0.0, b.height / 2.0 - q.y),
+                    PointAlign::Bottom => (0.0, b.height - q.y),
+                };
+                (*l, *v, along(b.frame, dx, dy))
+            })
+            .collect()
+    };
+    Some(s.doc_mut().and_then(|doc| move_each(doc, &moves)).map(|()| json!({"ok": true})))
+}
+
+/// Space the selected points evenly along the box's x (or y) axis between the outermost two, in
+/// order along it (`None` when edit mode is off or the command names layers; with no points
+/// selected in edit mode nothing moves). Fewer than three points stay put.
+pub fn distribute_points_in_edit_mode(s: &mut Session, p: &Value, horizontal: bool) -> Option<Result<Value>> {
+    if get(p, "ids").is_some() || get(p, "id").is_some() {
+        return None;
+    }
+    let ve = editing(s).ok()?;
+    let Some(b) = edit_box(s.doc().ok()?, &ve) else {
+        return Some(Ok(json!({"ok": true})));
+    };
+    let pts = page_points(s.doc().ok()?, &b, ve.id);
+    let inv = b.frame.inverse();
+    let mut items: Vec<(NodeId, usize, Point)> = pts.iter().map(|(l, v, pg)| (*l, *v, inv * *pg)).collect();
+    let axis = |q: &Point| if horizontal { q.x } else { q.y };
+    items.sort_by(|a, c| axis(&a.2).total_cmp(&axis(&c.2)));
+    let n = items.len();
+    let moves: Vec<(NodeId, usize, Point)> = if n < 3 {
+        vec![]
+    } else {
+        let (lo, hi) = (0.0, if horizontal { b.width } else { b.height });
+        items
+            .iter()
+            .enumerate()
+            .map(|(k, (l, v, q))| {
+                let target = lo + (hi - lo) * k as f64 / (n - 1) as f64;
+                let d = target - axis(q);
+                (*l, *v, if horizontal { along(b.frame, d, 0.0) } else { along(b.frame, 0.0, d) })
+            })
+            .collect()
+    };
+    Some(s.doc_mut().and_then(|doc| move_each(doc, &moves)).map(|()| json!({"ok": true})))
+}
+
 /// The selected points' box, or an error naming `cmd`.
 fn selected_box(s: &Session, cmd: &str) -> Result<(VectorEdit, PointBox)> {
     let ve = editing(s)?;
