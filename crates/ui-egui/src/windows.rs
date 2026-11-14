@@ -228,6 +228,8 @@ pub(crate) fn revalidate_input(app: &mut FigApp, ctx: &Context) {
     }
     // The hooks append the batch after the platform's events: remove one copy of each from the
     // end, so an identical event of the user's own stays.
+    let options = ctx.options(|o| o.input_options);
+    let pixels_per_point = ctx.pixels_per_point();
     ctx.input_mut(|i| {
         for e in batch.iter().rev() {
             if let Some(at) = i.events.iter().rposition(|x| x == e) {
@@ -236,6 +238,39 @@ pub(crate) fn revalidate_input(app: &mut FigApp, ctx: &Context) {
             if let Some(at) = i.raw.events.iter().rposition(|x| x == e) {
                 i.raw.events.remove(at);
             }
+        }
+        // egui already derived pointer and scroll state from the batch; events alone cannot undo it.
+        if batch.iter().any(|e| matches!(e, egui::Event::PointerButton { .. })) {
+            // Rebuild the pointer from what the batch did not set: the last position and the
+            // buttons held before it, then this pass's remaining events.
+            let pos = i.pointer.latest_pos();
+            let mut seed = Vec::new();
+            if let Some(pos) = pos {
+                seed.push(egui::Event::PointerMoved(pos));
+                for button in [
+                    egui::PointerButton::Primary,
+                    egui::PointerButton::Secondary,
+                    egui::PointerButton::Middle,
+                    egui::PointerButton::Extra1,
+                    egui::PointerButton::Extra2,
+                ] {
+                    // A button the batch touched was held before it only if the batch released it first.
+                    let first = batch.iter().find_map(|e| match e {
+                        egui::Event::PointerButton { button: b, pressed, .. } if *b == button => Some(*pressed),
+                        _ => None,
+                    });
+                    if first.map_or_else(|| i.pointer.button_down(button), |pressed| !pressed) {
+                        seed.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers: egui::Modifiers::NONE });
+                    }
+                }
+            }
+            let time = i.raw.time;
+            let held =
+                egui::InputState::default().begin_pass(egui::RawInput { time, events: seed, ..Default::default() }, false, pixels_per_point, options);
+            i.pointer = held.begin_pass(i.raw.clone(), false, pixels_per_point, options).pointer;
+        }
+        if batch.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. })) {
+            i.smooth_scroll_delta = egui::Vec2::ZERO;
         }
     });
 }
