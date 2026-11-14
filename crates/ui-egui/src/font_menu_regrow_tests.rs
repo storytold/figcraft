@@ -75,13 +75,13 @@ fn centre(n: &Node) -> Pos2 {
     Pos2::new(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
 }
 
-/// The top of the search field: the text input as wide as `menu` (the panel's own fields are narrower).
+/// The top of the search field: the text input nearly as wide as `menu`, less the search box's margin and magnifier (the panel's own fields are narrower).
 fn search_top(nodes: &[Node], menu: Rect) -> f32 {
     let field = nodes
         .iter()
         .filter(|n| n.role() == Role::TextInput)
         .filter_map(|n| n.bounds())
-        .find(|b| menu.contains(Pos2::new(b.x0 as f32 + 1.0, b.y0 as f32 + 1.0)) && b.x1 - b.x0 > f64::from(menu.width()) - 40.0)
+        .find(|b| menu.contains(Pos2::new(b.x0 as f32 + 1.0, b.y0 as f32 + 1.0)) && b.x1 - b.x0 > f64::from(menu.width()) - 60.0)
         .expect("the menu has a search field");
     field.y0 as f32
 }

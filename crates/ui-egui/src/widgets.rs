@@ -1381,7 +1381,10 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
         Some(mut text) => {
             ui.painter().rect_filled(rect.expand(2.0), CornerRadius::same(4), t.panel);
             ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(4), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            // The editor is at least the theme's field height; centred on a shorter row it
+            // keeps its text on the row's middle line instead of hanging below it (#2318).
+            let edit = Rect::from_center_size(rect.center(), vec2(rect.width(), rect.height().max(FIELD_H)));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit));
             let r = crate::bidi::single_line(&mut child, te_id, &mut text, font, rect.width());
             a11y::own_focus(&r);
             keep_focus(&r, started);
