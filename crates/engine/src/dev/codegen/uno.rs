@@ -424,6 +424,10 @@ impl Gen<'_> {
             _ => self.asset(n, at),
         };
         e.var = var;
+        // The layer's name is the last comment line above the statement that creates its outermost
+        // element, below any `// warning:` line: the plugin that post-processes the code pairs
+        // elements with layers by it. `// not mapped:` lines sit in the chain, below the constructor.
+        e.lead.push(format!("// {}", comment_name(&n.name)));
         Some(e)
     }
 
