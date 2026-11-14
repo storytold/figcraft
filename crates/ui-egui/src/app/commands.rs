@@ -15,6 +15,10 @@ impl FigApp {
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
         let layers_generation = self.session.clipboard.layers_generation;
         let r = self.session.execute(id, &params);
+        if id == "pref.mcp" && r.is_ok() {
+            self.services.mcp_server_apply(self.session.prefs.mcp_enabled, self.session.prefs.mcp_port);
+            self.services.save_prefs(&self.session.prefs);
+        }
         self.clear_comment_draft_after_tool_set(id, r.is_ok());
         self.handle_ui_requests();
         self.invalidate_synthetic_copy(layers_generation);
@@ -291,6 +295,11 @@ impl FigApp {
                     }
                 }
                 "dialog.plugins" => self.ui.plugins_window = true,
+                "dialog.pluginNew" | "dialog.pluginConsole" => {
+                    self.ui.plugins_window = true;
+                    self.ui.plugins_manage.tab = plugins_ui::PluginsTab::Development;
+                }
+                "dialog.mcp" => self.ui.mcp_window = true,
                 "dialog.pluginSave" => plugins_ui::save_file(self, &r.data),
                 "dialog.cursorChat" => live::open_chat(self),
                 "window.new" | "window.focus" | "window.fullscreen" => self.window_requests.push(r),

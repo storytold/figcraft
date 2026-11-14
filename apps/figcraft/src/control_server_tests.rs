@@ -358,7 +358,7 @@ fn events_poll_is_answered_without_the_ui_queue() {
     let log = Arc::new(figcraft_engine::events::EventLog::default());
     log.push("comment.added", "Doc", None, json!({"commentId": 7}));
     let l = log.clone();
-    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5)));
+    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5), None));
     client.write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"after\":0,\"timeoutMs\":0}}\n").unwrap();
     let mut reader = BufReader::new(client);
     let r = reply(&mut reader);
@@ -484,7 +484,7 @@ fn events_poll_rejects_an_unknown_topic_without_the_ui_queue() {
     let q = pending.clone();
     let log = Arc::new(figcraft_engine::events::EventLog::default());
     let l = log.clone();
-    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5)));
+    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5), None));
     let mut reader = BufReader::new(client);
     reader.get_mut().write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"topics\":[\"nope\"],\"timeoutMs\":0}}\n").unwrap();
     let r = reply(&mut reader);
@@ -503,7 +503,7 @@ fn events_poll_reports_reset_for_a_cursor_ahead_of_the_log() {
     log.push("comment.added", "Doc", None, json!({"commentId": 1}));
     let q = queue();
     let l = log.clone();
-    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5)));
+    let worker = std::thread::spawn(move || serve_with_events(server, q, context(), l, Duration::from_secs(5), None));
     let mut reader = BufReader::new(client);
     reader.get_mut().write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"after\":2,\"timeoutMs\":0}}\n").unwrap();
     let r = reply(&mut reader);
@@ -512,4 +512,90 @@ fn events_poll_reports_reset_for_a_cursor_ahead_of_the_log() {
     assert_eq!(r["result"]["cursor"], 1);
     reader.get_ref().shutdown(Shutdown::Write).unwrap();
     worker.join().unwrap().unwrap();
+}
+
+/// A port that was free a moment ago.
+fn free_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port()
+}
+
+/// A started server handle on a free port, with its UI queue.
+fn started() -> (ControlHandle, Queue, u16) {
+    let pending = queue();
+    let control = ControlHandle::new();
+    control.bind_deps(pending.clone(), context(), Arc::new(EventLog::default()));
+    let port = free_port();
+    control.apply(true, port, Duration::from_secs(2));
+    assert_eq!(control.status().0, port);
+    (control, pending, port)
+}
+
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(5), "timed out waiting until {what}");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// A client connected to the server and already served once (so it is past the accept).
+fn connected(control: &ControlHandle, port: u16) -> (TcpStream, BufReader<TcpStream>) {
+    let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    client.write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"timeoutMs\":0}}\n").unwrap();
+    let mut reader = BufReader::new(client.try_clone().unwrap());
+    assert_eq!(reply(&mut reader)["ok"], true);
+    wait_until("the connection is counted", || control.status().1 == 1);
+    (client, reader)
+}
+
+/// What is left on a connection until it closes (a reset counts as closed).
+fn rest(reader: &mut BufReader<TcpStream>) -> String {
+    let mut rest = String::new();
+    let _ = reader.read_to_string(&mut rest);
+    rest
+}
+
+#[test]
+fn turning_the_server_off_ends_the_connections_it_had_accepted() {
+    // Connect, turn the server off, then send file.save on the same socket: it must not reach the UI.
+    let (control, pending, port) = started();
+    let (mut client, mut reader) = connected(&control, port);
+    control.apply(false, port, Duration::from_secs(2));
+    assert_eq!(control.status().0, 0, "the listener reports off");
+    let _ = client.write_all(b"{\"id\":2,\"method\":\"engine.execute\",\"params\":{\"command\":\"file.save\"}}\n");
+    let left = rest(&mut reader);
+    assert!(!left.contains("\"ok\":true"), "{left}");
+    wait_until("the connection is gone", || control.status().1 == 0);
+    assert!(pending.lock().unwrap().is_empty(), "the request never reached the UI queue");
+}
+
+#[test]
+fn moving_the_server_to_another_port_ends_the_old_connections() {
+    let (control, pending, port) = started();
+    let (mut client, mut reader) = connected(&control, port);
+    let moved = free_port();
+    control.apply(true, moved, Duration::from_secs(2));
+    assert_eq!(control.status().0, moved);
+    let _ = client.write_all(b"{\"id\":2,\"method\":\"engine.execute\",\"params\":{\"command\":\"file.save\"}}\n");
+    let left = rest(&mut reader);
+    assert!(!left.contains("\"ok\":true"), "{left}");
+    assert!(pending.lock().unwrap().is_empty(), "the old connection queued nothing");
+    // A client on the new port is served.
+    let (_client, _reader) = connected(&control, moved);
+    control.apply(false, moved, Duration::from_secs(2));
+}
+
+#[test]
+fn a_request_still_waiting_for_the_ui_is_cancelled_when_the_server_is_turned_off() {
+    let (control, pending, port) = started();
+    let (mut client, mut reader) = connected(&control, port);
+    client.write_all(b"{\"id\":2,\"method\":\"engine.execute\",\"params\":{\"command\":\"file.save\"}}\n").unwrap();
+    wait_until("the request is queued", || pending.lock().unwrap().len() == 1);
+    control.apply(false, port, Duration::from_secs(2));
+    assert!(pending.lock().unwrap().iter().all(ControlRequest::is_cancelled), "the UI will not run it");
+    let mut ui = Vec::new();
+    drain_queue(&pending, &mut ui);
+    assert!(ui.is_empty());
+    let _ = rest(&mut reader);
 }

@@ -25,6 +25,8 @@ pub struct Desktop {
     recovery: crate::recovery::Shared,
     /// The folder of the last file or folder a dialog picked, where the next one starts.
     last_folder: Arc<Mutex<Option<PathBuf>>>,
+    /// Shared handle to the local control/MCP server.
+    pub control: crate::control_server::ControlHandle,
 }
 
 /// The settings folder's name in the platform folder, as it always was (the suite keeps existing
@@ -112,6 +114,7 @@ impl Desktop {
             language: system_language(),
             recovery,
             last_folder: Arc::default(),
+            control: crate::control_server::ControlHandle::new(),
         }
     }
 
@@ -566,6 +569,19 @@ impl Services for Desktop {
     }
     fn system_language(&self) -> Option<String> {
         self.language.clone()
+    }
+    /// Return `(listening_port, active_connections, last_error)` of the local MCP/control server.
+    fn mcp_server_status(&self) -> Option<(u16, usize, Option<String>)> {
+        Some(self.control.status())
+    }
+    /// Apply `enabled` and `port` to the running local MCP/control server.
+    fn mcp_server_apply(&mut self, enabled: bool, port: u16) {
+        self.control.apply(enabled, port, std::time::Duration::from_millis(250));
+    }
+    /// Build a Rust plugin project at `manifest_or_dir` for `wasm32-unknown-unknown`.
+    fn build_plugin(&mut self, manifest_or_dir: &Path) -> Result<String, String> {
+        let (_, wasm_out) = figcraft_engine::plugins::build_plugin_project(manifest_or_dir)?;
+        Ok(wasm_out.display().to_string())
     }
 }
 
