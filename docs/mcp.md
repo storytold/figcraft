@@ -1782,7 +1782,7 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   `TextTrimming`, `MaxLines`, `TextDecorations`; case is applied at run time; style runs are `Inlines` of `Run`s); an explicit line height
   moves it down by the half-leading `(L - (ascent + descent) / upem * size) / 2` of the face FigCraft draws with (a top padding and a
   negative bottom margin in a panel, the offset in a `Canvas`), so the code depends on the fonts installed where `inspect.code` runs;
-  with the family missing, or a line height below the font's natural height, it is a note. Vectors, booleans and shapes are a
+  with the family missing it is a note; a line height below the font's natural height keeps `LineHeight` and adds `LineStackingStrategy.BlockLineHeight`, with no shift. Vectors, booleans and shapes are a
   `Microsoft.UI.Xaml.Shapes.Path` with `Data("F1 M …")` (`F1` non-zero, `F0` even-odd; at most 5,000 elements), one solid `Fill` and one
   solid `Stroke`; gradients, several fills or strokes, effects and bigger outlines are an `Image` on `ms-appx:///Assets/<name>.png` with a
   comment to export it. Image fills are an `ImageBrush` on `<name>.png` (names lowercase ASCII, unique in the snippet; the files are not
