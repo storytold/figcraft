@@ -234,7 +234,7 @@ fn call(a: &args::CallArgs) -> CliResult<ExitCode> {
     if let Some(agent) = a.agent.as_deref() {
         // `--agent` comes with `--agent-key` (the arguments refuse one without the other); should
         // the key be missing all the same, the app refuses an empty one.
-        figcraft_mcp::name_agent(&a.method, &mut params, agent, a.agent_key.as_deref().unwrap_or_default());
+        figcraft_mcp::name_agent(&mut params, agent, a.agent_key.as_deref().unwrap_or_default());
     }
     let result = attached(&a.attach, a.timeout)?.call(&a.method, params)?;
     writeln!(std::io::stdout().lock(), "{result}").map_err(|e| format!("stdout: {e}"))?;

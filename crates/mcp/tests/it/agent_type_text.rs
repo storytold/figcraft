@@ -49,7 +49,7 @@ fn type_text_reaches_the_editor_of_an_agent_apart() {
 
     // Agent `b` is there too, joined by the test; agent `a` joins through the MCP tool.
     let mut p = json!({"agent": "b"});
-    name_agent("agent.join", &mut p, "b", "key-b");
+    name_agent(&mut p, "b", "key-b");
     shared.borrow_mut().call("agent.join", p).unwrap();
     ok(&mut s, "agent_join", json!({}));
     // Guard: both are apart, else the editor stays in the window and this test proves nothing.

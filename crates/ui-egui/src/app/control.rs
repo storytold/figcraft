@@ -5,7 +5,9 @@ use super::{
 impl FigApp {
     /// Queue raw input injected through the control channel for the window drawing next, tagged
     /// with the document it belongs to (a batch is dropped if another file is active by then).
-    pub(crate) fn push_control_input(&mut self, events: Vec<egui::Event>) -> bool {
+    /// It also carries the agent that makes the batch (`None`: no agent), and is replayed under
+    /// that name.
+    pub(crate) fn push_control_input(&mut self, events: Vec<egui::Event>, agent: Option<&str>) -> bool {
         if events.is_empty() {
             return false;
         }
@@ -21,6 +23,7 @@ impl FigApp {
         // its pane into the app, and `leave` swaps these events back into that pane.
         self.control_input.extend(events);
         self.control_input_doc = doc;
+        self.control_input_agent = agent.map(str::to_string);
         self.control_synthetic = true;
         true
     }

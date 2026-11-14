@@ -312,6 +312,8 @@ mod web_clipboard_tests;
 #[cfg(test)]
 mod web_save_tests;
 #[cfg(test)]
+mod windows_deferred_tests;
+#[cfg(test)]
 mod windows_qa_tests;
 #[cfg(test)]
 mod windows_tests;
@@ -841,11 +843,11 @@ pub struct FigApp {
     /// The active-document id when synthetic input was queued: a batch is dropped when the file
     /// changed before a UI pass applied it.
     pub(crate) control_input_doc: Option<u64>,
+    /// The agent the queued synthetic batch was injected for (`None`: no agent); it is replayed under that name.
+    pub(crate) control_input_agent: Option<String>,
     /// This frame applies events injected through the control channel: no system clipboard
     /// read or write may happen for them.
     pub(crate) control_synthetic: bool,
-    /// An injected frame showed the unsaved-changes question: the next one takes the keyboard back first.
-    pub(crate) question_shown_to_control_client: bool,
     /// `ui.input` replies waiting for the pass that actually presents the injected batch (a
     /// discarded sizing pass must not acknowledge it).
     pub(crate) input_acks: Vec<PendingAck>,
@@ -858,6 +860,11 @@ pub struct FigApp {
     pub(crate) control_input_queued: bool,
     /// The viewport whose batch this frame took into its raw input (`applied_input`/`applied_acks`).
     pub(crate) applied_frame: Option<egui::ViewportId>,
+    /// The agent of the batch `applied_frame` applies, set and cleared with it.
+    pub(crate) applied_agent: Option<String>,
+    /// The identity the frame replaying an agent's input runs under, from the end of the control
+    /// requests to the end of the frame (`FigApp::frame` ends it however the frame ends).
+    pub(crate) frame_acting: Option<figcraft_engine::agent::Acting>,
     /// Monotonic time for background work and capture deadlines.
     pub(crate) clock: FrameClock,
     /// Screenshot requests admitted, settling and awaiting readback.

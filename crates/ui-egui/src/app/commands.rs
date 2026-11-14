@@ -24,6 +24,18 @@ impl FigApp {
         }
     }
 
+    /// Run `f` as `agent` through `door` (`Session::agent_begin`), and end that whatever ends `f`,
+    /// a panic too: an identity left set would make the user's next action the agent's.
+    pub(crate) fn acting<T>(&mut self, agent: Option<&str>, door: figcraft_engine::agent::Door, f: impl FnOnce(&mut Self) -> T) -> T {
+        let acting = self.session.agent_begin(agent, door);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        self.session.agent_end(acting);
+        match r {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
     /// Run a command, surfacing errors as a toast. Returns the result.
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
         let layers_generation = self.session.clipboard.layers_generation;
@@ -137,7 +149,9 @@ impl FigApp {
     pub fn handle_ui_requests(&mut self) {
         let reqs = std::mem::take(&mut self.session.ui_requests);
         for r in reqs {
-            match r.kind.as_str() {
+            // Each request runs under the folders its maker was confined to, not those of the pass that happens to handle it.
+            let roots = r.roots.clone();
+            figcraft_engine::file_access::confined(roots.as_ref(), || match r.kind.as_str() {
                 "dialog.about" => {
                     self.ui.about = true;
                     self.ui.about_tab = dialogs::AboutTab::About;
@@ -312,7 +326,7 @@ impl FigApp {
                 "dialog.cursorChat" => live::open_chat(self),
                 "window.new" | "window.focus" | "window.fullscreen" => self.window_requests.push(r),
                 _ => {}
-            }
+            });
         }
         if let Some(m) = self.session.message.take() {
             self.toast(m);

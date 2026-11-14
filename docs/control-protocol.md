@@ -173,14 +173,23 @@ own selection in each file, so `page.select`, `select.set` and every command tha
 current page" or "the selection" act on the agent's, on a page the window shows or not. The
 window's page, selection and view stay the user's; the document is the same for everyone, and the
 last edit of a layer wins. A new agent starts on the window's page with the window's selection.
-`document.inspect` takes `agent` too and then reads that agent's page and selection. The history is
+Every method takes `agent` and `agentKey` (`events.poll` ignores them, see below): `engine.execute`, `document.inspect`, `node.get`,
+`ui.pointer`, `ui.key`, `ui.type`, `ui.menu.invoke` and `ui.render` act and read as that agent, on
+its page and selection while it works apart; the methods of the window (`ui.input`, `ui.set`,
+`ui.inspect`, `ui.screenshot`, `window.*`…) are admitted for the name and run as the agent on
+what the window shows. Each method has one of four doors, which the engine keeps in one table
+(`figcraft_engine::agent::DOORS`; a method not in it is unknown): the agent's own page and
+selection, the window, membership (`agent.join`, `agent.leave`, `agent.list`), and the event log
+(`events.poll`). The event log is the same for every client and its reply names nobody, so its door
+admits no name and runs under none: the application answers it on its transport thread, without the
+session. The history is
 one per file and a step holds the whole document, so `edit.undo` and `edit.redo` are refused to an
 agent while another one is there: it corrects with a new edit. The user's undo is never refused.
 
 An agent holds its name with a key: `agentKey` (a string of 1 to 256 bytes, next to `agent`), any
 text only its client knows. The first key given under a name holds it. From then on
-`engine.execute`, `document.inspect`, `agent.join` and `agent.leave` under that name are refused
-with another key or with none: an agent is a name, not a connection, and without the key any
+every request under that name, whatever its method (`agent.join` and `agent.leave` check the key
+by their own rule, and `events.poll` is answered for everyone), is refused with another key or with none: an agent is a name, not a connection, and without the key any
 client of the channel could work under another agent's name or make it leave. The key is forgotten
 with the agent (`agent.leave`, or 30 minutes without a request). A name no key holds is anyone's:
 a request that gives `agent` alone works, until a client takes that name with a key.
@@ -248,7 +257,8 @@ at once, otherwise waits up to `timeoutMs` (default 20 000, max 25 000; 0 = no w
 `cursor` is the sequence to pass next; `reset: true` means `after` is ahead of the log (the app
 restarted) and the caller should re-read the comments; `dropped` counts events lost because `after`
 is older than the retained window (1024 events). The method is answered by the control worker
-against the shared log, not by the UI thread, so it does not freeze the app, use a request slot, or
+against the shared log, not by the UI thread, under nobody's name (an `agent` or `agentKey` in its
+params is not looked at: the events are the same for every client), so it does not freeze the app, use a request slot, or
 need a drawn frame: it works while the window is minimised. Other requests on the same connection
 wait until the poll finishes (at most 25 s); use a separate connection to keep editing meanwhile.
 
@@ -392,9 +402,11 @@ Type into the text being edited (start editing with a double-click, `text.edit.b
 text tool).
 
 `ui.key`, `ui.type`, `ui.input`, `ui.pointer` and `ui.menu.invoke` accept `agent` and `agentKey` (see
-`agent.join`). Undo is refused to an agent while another agent is present: `edit.undo` and
+`agent.join`), as does every other method. Undo is refused to an agent while another agent is present: `edit.undo` and
 `edit.redo`, whether sent by a key (`Cmd+Z`), a menu entry (`ui.menu.invoke`) or raw input
-(`ui.input`), fail for it; they are never refused to the user.
+(`ui.input`), fail for it; they are never refused to the user. A key or a menu entry sent for an
+agent answers with the error when the command it ran is refused; raw input is applied in a later
+frame, so its own reply cannot say so.
 
 ### `ui.input {events}`
 
@@ -412,6 +424,12 @@ short name, a key/gamepad trigger's name or a standard layout index 0–16; an e
 plays); positions are window points. Events of one call
 arrive in the same frame, so send a press and its release (or a double-click's two clicks) as
 separate calls. Returns `{queued}`.
+
+A batch keeps the agent that sent it. While one agent's batch waits for its frame, a batch from
+another agent is refused ("another agent's input is waiting for its frame: send it again"): nothing
+is merged or dropped. The window's own rules apply when the frame runs the batch, as that agent,
+and not when the request is received: an undo clicked in the Edit menu or sent as a shortcut is
+refused in the frame as `edit.undo` is.
 
 ```json
 {"id":6,"method":"ui.input","params":{"events":[{"move":[1000,315]}]}}

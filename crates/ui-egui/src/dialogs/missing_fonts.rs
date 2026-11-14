@@ -15,7 +15,7 @@ use crate::i18n::{tr, trf, trn};
 use crate::theme::{Tokens, regular};
 
 /// The mark of the two-frame keyboard rule of the whole window (consent, Download / Try again,
-/// Close): see `dialogs::drop_keyboard_if_injected`.
+/// Close): see `dialogs::leave_keyboard_mark`.
 const MARK: &str = "missing_fonts_injected_focus";
 
 #[derive(Clone, Debug)]
@@ -84,7 +84,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let mut open = true;
     let mut clicks = Clicks::default();
     crate::dialogs::window(tr("Missing fonts"), ctx).open(&mut open).show(ctx, |ui| clicks = body(ui, &t, shown));
-    crate::dialogs::drop_keyboard_if_injected(app, ctx, egui::Id::unique(MARK));
+    if app.control_synthetic {
+        crate::dialogs::leave_keyboard_mark(ctx, egui::Id::unique(MARK));
+    }
     let close = !open || clicks.close;
     act(app, clicks);
     if close {

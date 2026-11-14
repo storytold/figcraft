@@ -1,5 +1,5 @@
 //! The keyboard, pointer and typing methods (`ui.key`, `ui.pointer`, `ui.type`) are made under the
-//! agent's name like `engine.execute`: with another agent at work, its Cmd+Z is refused as its
+//! agent's name like every request: with another agent at work, its Cmd+Z is refused as its
 //! `edit.undo` is, and the user's never is.
 
 use figcraft_mcp::{Backend, Headless, name_agent};
@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 /// `method` as the MCP server sends it for the agent `name` (key `key-<name>`).
 fn as_agent(h: &mut Headless, method: &str, mut p: Value, name: &str) -> Result<Value, String> {
-    name_agent(method, &mut p, name, &format!("key-{name}"));
+    name_agent(&mut p, name, &format!("key-{name}"));
     h.call(method, p)
 }
 
@@ -26,19 +26,6 @@ fn two_agents() -> Headless {
 fn drawn(h: &mut Headless) -> usize {
     let doc = h.call("document.inspect", json!({})).unwrap();
     doc["pages"][0]["children"].as_array().map_or(0, Vec::len)
-}
-
-/// Every method of the UI that acts carries the agent's name and key to the backend.
-#[test]
-fn the_ui_methods_carry_the_agents_name_and_key() {
-    for method in ["ui.key", "ui.type", "ui.input", "ui.pointer", "ui.menu.invoke"] {
-        let mut p = json!({});
-        name_agent(method, &mut p, "a", "k");
-        assert_eq!((p["agent"].as_str(), p["agentKey"].as_str()), (Some("a"), Some("k")), "{method}: {p}");
-    }
-    let mut p = json!({});
-    name_agent("ui.inspect", &mut p, "a", "k");
-    assert_eq!(p, json!({}), "a method that only reads is left as it is");
 }
 
 /// Cmd+Z by key, from `a` while `b` is there: refused, `b`'s rectangle stays. This is the path

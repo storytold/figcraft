@@ -3,6 +3,12 @@
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod agent_comments;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod agent_doors;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod agent_doors_table;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod agent_named_requests;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod agent_tasks;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod agent_type_text;

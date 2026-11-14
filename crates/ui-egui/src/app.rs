@@ -53,13 +53,15 @@ impl FigApp {
             automation_roots_for_agents: false,
             agent_control_fixed: false,
             control_input_doc: None,
+            control_input_agent: None,
             control_synthetic: false,
-            question_shown_to_control_client: false,
             input_acks: Vec::new(),
             applied_acks: Vec::new(),
             applied_input: None,
             control_input_queued: false,
             applied_frame: None,
+            applied_agent: None,
+            frame_acting: None,
             clock: FrameClock::default(),
             capture: crate::control::CaptureState::default(),
             logic_ticked: false,
@@ -182,10 +184,12 @@ impl FigApp {
             // this frame's (undrawn) input waits for the first drawn frame.
             ctx.request_repaint();
             if let Some(events) = self.applied_input.take() {
-                self.push_control_input(events);
+                let agent = self.applied_agent.take();
+                self.push_control_input(events, agent.as_deref());
             }
             self.input_acks.append(&mut self.applied_acks);
             self.applied_frame = None;
+            self.applied_agent = None;
             self.control_synthetic = false;
             // The next (drawn) frame ticks for itself in a direct harness.
             self.logic_ticked = false;
@@ -224,6 +228,18 @@ impl FigApp {
 
     /// One frame of the window drawing now.
     pub(crate) fn frame(&mut self, ui: &mut egui::Ui) {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.frame_shown(ui)));
+        // Whatever ended the frame (an early return, a panic): an identity left set would make the
+        // next action the agent's.
+        if let Some(acting) = self.frame_acting.take() {
+            self.session.agent_end(acting);
+        }
+        if let Err(payload) = r {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn frame_shown(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         // Bind this input batch before controls or pointer input can replace its composing
         // target/caret. Outgoing IME receipts run after mutation and cannot authorize it.
@@ -242,6 +258,12 @@ impl FigApp {
         // Control requests run first so their results reflect this frame.
         crate::control::drain(self, &ctx);
         windows::requests(self, &ctx);
+        // From here the frame replays the injected input as the agent it was made for: a request
+        // handled above runs under its own identity, and what precedes has none (as before).
+        if self.applied_frame == Some(ctx.viewport_id()) {
+            let agent = self.applied_agent.clone();
+            self.frame_acting = Some(self.session.agent_begin(agent.as_deref(), figcraft_engine::agent::Door::Window));
+        }
         selection_spacing::sync(self, &ctx);
         // Before any widget: the navigation keys (F6, Tab, arrows, Escape) move the keyboard.
         a11y::begin(self, &ctx, ui.scope_id());

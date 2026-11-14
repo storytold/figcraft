@@ -186,6 +186,10 @@ impl Default for Prefs {
 pub struct UiRequest {
     pub kind: String,
     pub data: Value,
+    /// The folders the caller was confined to when it asked: the request is handled later, and
+    /// without these a deferred request would run with more access than its caller had.
+    #[serde(skip)]
+    pub roots: Option<Arc<crate::file_access::Roots>>,
 }
 
 /// What Edit ▸ Set default properties keeps: the properties new layers drawn with the tools take,

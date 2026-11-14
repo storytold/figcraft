@@ -25,6 +25,14 @@ fn frame(ctx: &egui::Context, app: &mut FigApp, close: bool) -> Vec<egui::Viewpo
     out.viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default()
 }
 
+/// The input of a frame drawn in the window `id`: the backend declares every window it draws in,
+/// and egui panics when the current one is missing from `viewports`.
+pub(crate) fn raw_input_in(id: ViewportId) -> RawInput {
+    let mut input = RawInput { viewport_id: id, ..Default::default() };
+    input.viewports.insert(id, ViewportInfo::default());
+    input
+}
+
 /// A control request queued for the UI, and where its reply arrives.
 fn request(app: &mut FigApp, method: &str, params: Value) -> Receiver<ControlReply> {
     let (reply, rx) = channel();
@@ -217,7 +225,7 @@ fn synthetic_input_for_a_child_window_reaches_the_pane_that_draws_it() {
     let events = vec![egui::Event::PointerMoved(egui::pos2(10.0, 10.0))];
     // A request applied while the child draws must go to the live pane, not the swapped-out
     // default `Pane` that `enter` took out (which `leave` would overwrite).
-    let pushed = crate::windows::as_window(&mut app, w, |app| app.push_control_input(events.clone()));
+    let pushed = crate::windows::as_window(&mut app, w, |app| app.push_control_input(events.clone(), None));
     assert_eq!(pushed, Some(true));
     assert!(app.control_input.is_empty(), "the main window's pane is untouched");
     assert_eq!(crate::windows::take_input(&mut app, other), events, "the child's next frame takes its batch");
@@ -562,7 +570,7 @@ fn a_launch_that_named_its_port_still_quits_by_app_quit() {
 /// are the user's own.
 fn frame_with(ctx: &egui::Context, app: &mut FigApp, events: Vec<egui::Event>, injected: bool) {
     let events = if injected {
-        assert!(app.push_control_input(events), "the batch is queued");
+        assert!(app.push_control_input(events, None), "the batch is queued");
         let events = crate::windows::take_input(app, ViewportId::ROOT);
         assert!(!events.is_empty(), "the batch reaches the frame");
         events
@@ -747,7 +755,7 @@ fn frame_on_dont_save(
     dont_save: &mut std::collections::HashSet<egui::accesskit::NodeId>,
 ) -> bool {
     let events = if injected {
-        assert!(app.push_control_input(events), "the batch is queued");
+        assert!(app.push_control_input(events, None), "the batch is queued");
         crate::windows::take_input(app, ViewportId::ROOT)
     } else {
         events

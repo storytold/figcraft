@@ -62,26 +62,19 @@ pub struct Server {
     key: String,
 }
 
-/// The backend as the MCP client's AI agent: `engine.execute`, `document.inspect`, `agent.join`,
-/// `agent.leave` and the methods that act through the UI (`ui.key`, `ui.type`, `ui.input`,
-/// `ui.pointer`, `ui.menu.invoke`) carry its name (`agent`) and its key (`agentKey`).
-struct AsAgent<'a> {
-    inner: &'a mut dyn Backend,
-    agent: &'a str,
-    key: &'a str,
+/// The backend as the MCP client's AI agent: every request carries its name (`agent`) and its key
+/// (`agentKey`). The one place a request is named, whatever builds it: a tool, a resource, a render.
+pub(crate) struct AsAgent<'a, B: ?Sized> {
+    pub(crate) inner: &'a mut B,
+    pub(crate) agent: &'a str,
+    pub(crate) key: &'a str,
 }
 
-/// Name the AI agent a control request is made for: the methods that act as an agent
-/// (`engine.execute`, `document.inspect`, `agent.join`, `agent.leave`, and the UI methods that act:
-/// `ui.key`, `ui.type`, `ui.input`, `ui.pointer`, `ui.menu.invoke`: a shortcut or a menu runs the
-/// same commands, undo among them) get it as `agent`, with the `key` it holds that name with as
-/// `agentKey`; the others are left as they are.
-pub fn name_agent(method: &str, params: &mut Value, agent: &str, key: &str) {
-    if matches!(
-        method,
-        "engine.execute" | "document.inspect" | "agent.join" | "agent.leave" | "ui.key" | "ui.type" | "ui.input" | "ui.pointer" | "ui.menu.invoke"
-    ) && let Some(p) = params.as_object_mut()
-    {
+/// Name the AI agent a control request is made for: every method gets it as `agent`, with the
+/// `key` it holds that name with as `agentKey`, so the backend admits the name for the request
+/// whatever the method does.
+pub fn name_agent(params: &mut Value, agent: &str, key: &str) {
+    if let Some(p) = params.as_object_mut() {
         p.insert("agent".into(), json!(agent));
         p.insert("agentKey".into(), json!(key));
     }
@@ -96,9 +89,9 @@ fn new_key() -> String {
     format!("{:016x}{:016x}", part(), part())
 }
 
-impl Backend for AsAgent<'_> {
+impl<B: Backend + ?Sized> Backend for AsAgent<'_, B> {
     fn call(&mut self, method: &str, mut params: Value) -> Result<Value, String> {
-        name_agent(method, &mut params, self.agent, self.key);
+        name_agent(&mut params, self.agent, self.key);
         self.inner.call(method, params)
     }
 
@@ -112,14 +105,6 @@ impl Backend for AsAgent<'_> {
 
     fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
         self.inner.render_png_as(self.agent, self.key, ids, scale)
-    }
-
-    fn screenshot_png(&mut self) -> Result<Vec<u8>, String> {
-        self.inner.screenshot_png()
-    }
-
-    fn window_png(&mut self, window: u64) -> Result<Vec<u8>, String> {
-        self.inner.window_png(window)
     }
 }
 
@@ -281,7 +266,7 @@ impl Server {
     }
 
     /// The backend, acting as the client's agent.
-    fn as_agent(&mut self) -> AsAgent<'_> {
+    fn as_agent(&mut self) -> AsAgent<'_, dyn Backend> {
         AsAgent { inner: self.backend.as_mut(), agent: &self.agent, key: &self.key }
     }
 

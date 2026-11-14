@@ -74,7 +74,7 @@ fn the_switch_asks_nothing_when_it_cannot_change_anything() {
 /// One frame that applies `events` as a batch a control client sent with `ui.input`
 /// (`windows::take_input` stands for the desktop app's input hook).
 fn injected(u: &mut Ui, events: Vec<Event>) {
-    u.app.push_control_input(events);
+    u.app.push_control_input(events, None);
     let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
     assert!(!events.is_empty(), "the batch reaches the frame");
     u.frame(events);
@@ -143,7 +143,7 @@ fn asking_to_allow() -> Ui {
 /// the nodes that changed: `allow` remembers the button's id.
 fn frame_on_allow(u: &mut Ui, events: Vec<Event>, injected: bool, allow: &mut std::collections::HashSet<egui::accesskit::NodeId>) -> bool {
     let events = if injected {
-        assert!(u.app.push_control_input(events), "the batch is queued");
+        assert!(u.app.push_control_input(events, None), "the batch is queued");
         crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT)
     } else {
         events
@@ -194,4 +194,59 @@ fn injected_tab_cannot_leave_allow_for_the_users_enter_on_the_agent_question() {
         "the user's own Enter answered the agent question: a control client had left the keyboard on Allow"
     );
     assert!(!u.app.session.prefs.agent_control, "the user's own Enter answered the agent question: a control client had left the keyboard on Allow");
+}
+
+/// The id another window of the same app draws with.
+fn second_window() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("second window")
+}
+
+/// One frame of the second window: no events of its own, but the app draws its dialogs in it too.
+fn frame_in_second_window(u: &mut Ui) {
+    u.frame_raw(crate::windows_tests::raw_input_in(second_window()));
+}
+
+/// The keyboard a control client's Tab left on Allow belongs to the window that frame drew. A frame
+/// of another window between that one and the user's Enter must not decide whether the focus is
+/// let go: the user's Enter in the first window must still not answer the question. Without a fix
+/// the mark the injected frame left is one for the whole app, the second window's frame takes it,
+/// and the first window's focus stays on Allow.
+///
+/// Calibration, first on a window of its own: the user's own Tab that reach Allow, a frame of the
+/// second window, then the user's Enter does answer the question. Without that answer the scenario
+/// could not show the defect, and the test fails there.
+#[test]
+fn a_frame_of_another_window_does_not_take_back_the_keyboard_left_on_allow() {
+    let k = tabs_to_allow();
+
+    let mut c = asking_to_allow();
+    let mut allow = std::collections::HashSet::new();
+    for _ in 0..k {
+        frame_on_allow(&mut c, key_tap(egui::Key::Tab), false, &mut allow);
+    }
+    frame_in_second_window(&mut c);
+    frame_on_allow(&mut c, key_tap(egui::Key::Enter), false, &mut allow);
+    c.frame(vec![]);
+    assert_eq!(
+        c.app.ui.agent_control_ask, None,
+        "calibration: the user's own Tab then Enter answer the question, a second window's frame in between or not"
+    );
+    assert!(c.app.session.prefs.agent_control, "calibration: the user's own Enter on Allow turns agent control on");
+
+    let mut u = asking_to_allow();
+    let mut allow = std::collections::HashSet::new();
+    for _ in 0..k {
+        frame_on_allow(&mut u, key_tap(egui::Key::Tab), true, &mut allow);
+    }
+    frame_in_second_window(&mut u);
+    assert!(!u.app.control_synthetic, "the frames that follow are the user's own");
+    assert_eq!(u.app.ui.agent_control_ask, Some(true), "the question is still shown before the user's Enter");
+    frame_on_allow(&mut u, key_tap(egui::Key::Enter), false, &mut allow);
+    u.frame(vec![]);
+    assert_eq!(
+        u.app.ui.agent_control_ask,
+        Some(true),
+        "the user's own Enter answered the question: a frame of another window took back the mark the injected frame left"
+    );
+    assert!(!u.app.session.prefs.agent_control, "the user's own Enter answered the question: a frame of another window took back the mark");
 }

@@ -42,6 +42,8 @@ struct Pane {
     control_input: Vec<egui::Event>,
     /// The document the queued synthetic batch was injected for (dropped if it changed).
     control_input_doc: Option<u64>,
+    /// The agent the queued synthetic batch was injected for.
+    control_input_agent: Option<String>,
 }
 
 /// The app's other windows.
@@ -144,16 +146,17 @@ pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
 /// Control-channel input events (`ui.input`) for the window `viewport` draws next. A batch queued
 /// for another document is dropped rather than replayed into the new one.
 pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event> {
-    let (events, tagged, current) = match app.windows.list.iter_mut().find(|w| viewport(w.id) == viewport_id) {
+    let (events, tagged, agent, current) = match app.windows.list.iter_mut().find(|w| viewport(w.id) == viewport_id) {
         Some(w) => {
             let events = std::mem::take(&mut w.pane.control_input);
-            (events, w.pane.control_input_doc.take(), w.active)
+            (events, w.pane.control_input_doc.take(), w.pane.control_input_agent.take(), w.active)
         }
         None if viewport_id == ViewportId::ROOT => {
             let events = std::mem::take(&mut app.control_input);
             let tagged = app.control_input_doc.take();
+            let agent = app.control_input_agent.take();
             let current = app.session.docs.get(app.session.active).map(|d| d.uid);
-            (events, tagged, current)
+            (events, tagged, agent, current)
         }
         None => return Vec::new(),
     };
@@ -172,6 +175,7 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
         app.applied_acks.extend(acks);
         app.applied_input = Some(events.clone());
         app.applied_frame = Some(viewport_id);
+        app.applied_agent = agent;
     }
     events
 }
@@ -247,6 +251,7 @@ fn exchange(app: &mut FigApp, p: &mut Pane) {
     std::mem::swap(&mut app.field_focus, &mut p.field_focus);
     std::mem::swap(&mut app.control_input, &mut p.control_input);
     std::mem::swap(&mut app.control_input_doc, &mut p.control_input_doc);
+    std::mem::swap(&mut app.control_input_agent, &mut p.control_input_agent);
 }
 
 /// Open a window (`window.new`) with open file `index` moved into it, the file at `path`, or a new
@@ -335,11 +340,14 @@ pub(crate) fn requests(app: &mut FigApp, ctx: &Context) {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(on));
             continue;
         }
-        let res = if r.kind == "window.new" {
-            open(app, ctx, n("index").map(|i| i as usize), r.data.get("path").and_then(Value::as_str), None).map(|_| ())
-        } else {
-            focus(app, ctx, n("id").unwrap_or(u64::MAX)).map(|_| ())
-        };
+        // Under the folders the asker was confined to: this pass is not the asker's.
+        let res = figcraft_engine::file_access::confined(r.roots.as_ref(), || {
+            if r.kind == "window.new" {
+                open(app, ctx, n("index").map(|i| i as usize), r.data.get("path").and_then(Value::as_str), None).map(|_| ())
+            } else {
+                focus(app, ctx, n("id").unwrap_or(u64::MAX)).map(|_| ())
+            }
+        });
         if let Err(e) = res {
             app.toast(e);
         }
@@ -449,7 +457,7 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
         app.ui.confirm_close = false;
         return;
     }
-    take_back_injected_focus(app, ctx);
+    take_back_injected_focus(ctx);
     if let Some(a) = unsaved_question(ctx, &names) {
         answer_close(app, ctx, a);
     }
@@ -528,17 +536,20 @@ fn answered_by_a_control_client(app: &FigApp) -> bool {
 /// user's own Enter would answer with the button a control client chose (Don't Save), not Save.
 pub(crate) fn drop_injected_focus(app: &mut FigApp, ctx: &Context) {
     if answered_by_a_control_client(app) {
-        app.question_shown_to_control_client = true;
-        surrender_held_focus(ctx);
+        crate::dialogs::leave_keyboard_mark(ctx, question_mark());
     }
 }
 
 /// The frame after an injected one takes back a keyboard that frame left to the next (egui hands
 /// a Shift+Tab's target over at the start of the next pass), before the buttons read it.
-pub(crate) fn take_back_injected_focus(app: &mut FigApp, ctx: &Context) {
-    if std::mem::take(&mut app.question_shown_to_control_client) {
-        surrender_held_focus(ctx);
-    }
+/// The mark is per window (viewport), so a frame of another window leaves it for this one.
+pub(crate) fn take_back_injected_focus(ctx: &Context) {
+    crate::dialogs::take_back_keyboard(ctx, question_mark());
+}
+
+/// The base key of the unsaved-changes question's keyboard mark (made per window by the dialogs helpers).
+fn question_mark() -> egui::Id {
+    egui::Id::unique("unsaved_question_injected_focus")
 }
 
 pub(crate) fn surrender_held_focus(ctx: &Context) {
@@ -594,7 +605,7 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
         }
         TabClose::Ask(_) => {
             let names: Vec<String> = app.session.docs.get(i).map(|d| d.doc.name.clone()).into_iter().collect();
-            take_back_injected_focus(app, ctx);
+            take_back_injected_focus(ctx);
             if let Some(a) = unsaved_question(ctx, &names) {
                 answer_close_tab(app, ctx, a);
             }
@@ -848,6 +859,7 @@ impl Windows {
         for w in &mut self.list {
             w.pane.control_input.clear();
             w.pane.control_input_doc = None;
+            w.pane.control_input_agent = None;
         }
     }
 }

@@ -159,8 +159,9 @@ pub struct Session {
     pub events: Arc<events::EventLog>,
     /// Events recorded inside a group: (kind, document, path, data).
     pending_events: Vec<(String, String, Option<String>, Value)>,
-    /// The AI agent the running command is for ([`Session::execute_as`]), as comments are signed
-    /// (`"Claude (agent)"`); `None` for the user.
+    /// The AI agent the running call is for, as comments and presence are signed (`"Claude (agent)"`);
+    /// `None` for the user. Only [`Session::agent_begin`] and [`Session::agent_end`] write it, with
+    /// the name the rules read; it signs, it is not what the rules read.
     pub agent: Option<String>,
     /// Where an attached AI agent last worked ([`Session::agent_presence_at`]): display only.
     pub agent_presence: Option<agent::AgentPresence>,
@@ -186,6 +187,10 @@ mod a11y_keys_tests;
 mod agent_gesture_tests;
 #[cfg(test)]
 mod agent_presence_tests;
+#[cfg(test)]
+mod agent_request_roots_tests;
+#[cfg(test)]
+mod agent_rules_tests;
 #[cfg(test)]
 mod agents_apart_tests;
 #[cfg(test)]

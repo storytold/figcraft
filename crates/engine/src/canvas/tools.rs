@@ -567,6 +567,9 @@ pub struct PenPath {
 pub struct ToolState {
     pub tool: ToolId,
     pub(crate) gesture: Gesture,
+    /// Who started the gesture under way (an agent's name, `None` for the window); only
+    /// meaningful while [`busy`](Self::busy).
+    pub(crate) held_by: Option<String>,
     pub overlay: Overlay,
     pub pen: Option<PenPath>,
     /// Tool to return to after a temporary tool (space → hand).

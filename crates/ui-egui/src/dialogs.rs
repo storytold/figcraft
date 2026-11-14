@@ -270,7 +270,11 @@ fn agent_control_question(app: &mut FigApp, ctx: &Context) {
             }
         });
     });
-    drop_keyboard_if_injected(app, ctx, mark);
+    // Guarded by `control_synthetic`, not by the control-client exemption: wherever the answer is
+    // ignored, the focus is let go.
+    if app.control_synthetic {
+        leave_keyboard_mark(ctx, mark);
+    }
     if !open {
         answer = Some(false);
     }
@@ -294,25 +298,27 @@ fn answer_agent_control(app: &mut FigApp, on: bool, confirmed: bool) {
 }
 
 /// Frame two of the keyboard rule of a consent window: a frame that was drawn from injected input
-/// left a mark (see [`drop_keyboard_if_injected`]); egui hands a Tab's focus to the next frame, so
+/// left a mark (see [`leave_keyboard_mark`]); egui hands a Tab's focus to the next frame, so
 /// the focus is let go again at the start of this one, before the user's Enter can reach a button
-/// and answer in their place. The mark is read even when the window is closed.
+/// and answer in their place. The mark is read even when the window is closed. It is kept per
+/// window (viewport): a frame of another window must not consume the focus this window's frame left.
 pub(crate) fn take_back_keyboard(ctx: &egui::Context, mark: egui::Id) {
+    let mark = mark.with(ctx.viewport_id());
     if ctx.data_mut(|d| d.remove_temp::<bool>(mark)) == Some(true) {
         crate::windows::surrender_held_focus(ctx);
     }
 }
 
 /// Frame one of the keyboard rule of a consent window: when this frame comes from injected input
-/// (whose answers the window ignores), the focus it may have left on a button is let go once the
-/// question is drawn, and `mark` asks [`take_back_keyboard`] to do it again in the next frame.
-/// Guarded by `control_synthetic`, not by the control-client exemption: wherever the answer is
-/// ignored, the focus is let go.
-pub(crate) fn drop_keyboard_if_injected(app: &FigApp, ctx: &egui::Context, mark: egui::Id) {
-    if app.control_synthetic {
-        ctx.data_mut(|d| d.insert_temp(mark, true));
-        crate::windows::surrender_held_focus(ctx);
-    }
+/// (whose answers the window ignores), the caller lets go of the focus it may have left on a
+/// button once the question is drawn, and `mark` asks [`take_back_keyboard`] to do it again in the
+/// next frame. Lets go of the focus and leaves `mark`, for this window only (the key is derived
+/// here, from the frame's viewport, so no caller can forget it).
+pub(crate) fn leave_keyboard_mark(ctx: &egui::Context, mark: egui::Id) {
+    // The viewport is read before the context's data is taken: both sit behind the context's one lock.
+    let mark = mark.with(ctx.viewport_id());
+    ctx.data_mut(|d| d.insert_temp(mark, true));
+    crate::windows::surrender_held_focus(ctx);
 }
 
 /// Escape closes the topmost simple dialog (one without menus of its own), before the canvas's

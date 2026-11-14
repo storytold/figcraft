@@ -105,6 +105,7 @@ impl FigApp {
             return;
         }
         self.applied_frame = None;
+        self.applied_agent = None;
         for ack in self.applied_acks.drain(..) {
             let _ = ack.tx.send(ack.reply);
         }

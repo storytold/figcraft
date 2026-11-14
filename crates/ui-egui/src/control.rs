@@ -385,6 +385,14 @@ fn admit(app: &mut FigApp, r: ControlRequest, window: u64, now: f64) {
         }
         return;
     }
+    // A capture never reaches `handle`, so it is admitted here, once, on whichever path takes it:
+    // the name it gives must be its client's.
+    if let Err(e) = app.session.agent_admit_request("ui.screenshot", &params) {
+        if !canceled {
+            let _ = tx.send(ControlReply { id, result: Err(e.to_string()) });
+        }
+        return;
+    }
     let path = params.get("path").and_then(Value::as_str).map(str::to_string);
     let (document, presentation) = app.windows.presentation(&app.session, window);
     if let Err(e) = front_only(&app.session, Some(document), "ui.screenshot", &params) {
@@ -474,6 +482,7 @@ impl FigApp {
         }
         self.control_input.clear();
         self.control_input_doc = None;
+        self.control_input_agent = None;
         self.control_input_queued = false;
         // A pass that is discarded would queue its batch again.
         self.applied_input = None;
@@ -808,8 +817,9 @@ fn admit_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now
     }
 }
 
-/// Route one queued control request: retarget another window, admit a capture, or run a
-/// state-only request for the window drawing now.
+/// Route one queued control request: retarget another window, admit a capture (the only request
+/// admitted here: the rest is admitted by `handle`), or run a state-only request for the window
+/// drawing now.
 fn route_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now: f64, r: ControlRequest) {
     if r.is_cancelled() {
         return;
@@ -1047,6 +1057,19 @@ fn b(p: &Value, k: &str) -> bool {
     p.get(k).and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// Run `f` the way the window does (a shortcut, a menu row): there a refused command only shows
+/// its error. A request made for an agent answers with that error, or the agent would read `ok`
+/// for a command the rules refused; any other client keeps the reply it had.
+fn as_the_window(app: &mut FigApp, f: impl FnOnce(&mut FigApp)) -> Result<(), String> {
+    let earlier = app.ui.last_error.take();
+    f(app);
+    let Some(error) = app.ui.last_error.clone() else {
+        app.ui.last_error = earlier;
+        return Ok(());
+    };
+    if app.session.agent.is_some() { Err(error) } else { Ok(()) }
+}
+
 fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
     let key = p.get("key").and_then(Value::as_str).ok_or("`key` required")?;
     let m = figcraft_engine::keymap::Mods { shift: b(p, "shift"), alt: b(p, "alt"), cmd: b(p, "cmd"), ctrl: b(p, "ctrl") };
@@ -1055,8 +1078,7 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
     // Text editing keys go to the editor (after the shortcuts live while editing).
     if app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
         if let Some(bd) = lookup(platform, KeyContext::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
-            refuse_agent_undo(app, p, bd.id)?;
-            crate::menus::invoke(app, bd.id);
+            as_the_window(app, |app| crate::menus::invoke(app, bd.id))?;
             return Ok(json!({"command": bd.id}));
         }
         let (word, line) = figcraft_engine::keymap::text_motion(platform, key, m);
@@ -1080,8 +1102,7 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
         return Ok(json!({"comment": r.and_then(|v| v.get("id").cloned())}));
     }
     if let Some(bd) = lookup(platform, KeyContext::Canvas, key, m) {
-        refuse_agent_undo(app, p, bd.id)?;
-        crate::shortcuts::run_binding(app, bd.id);
+        as_the_window(app, |app| crate::shortcuts::run_binding(app, bd.id))?;
         return Ok(json!({"command": bd.id}));
     }
     let (name, _) = normalize(key).ok_or_else(|| format!("unknown key `{key}`"))?;
@@ -1144,6 +1165,12 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
         let p = egui::pos2(a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32);
         p.is_finite().then_some(p)
     };
+    // A batch carries its agent: a second agent's input is not merged into one still waiting for
+    // its frame, nor does it replace it.
+    let agent = p.get("agent").and_then(Value::as_str).filter(|a| !a.is_empty());
+    if !app.control_input.is_empty() && app.control_input_agent.as_deref() != agent {
+        return Err("another agent's input is waiting for its frame: send it again".into());
+    }
     let mut events = Vec::new();
     let mut pads = Vec::new();
     for e in list.iter().take(256) {
@@ -1158,7 +1185,6 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
             events.push(egui::Event::PointerButton { pos: p, button, pressed, modifiers: mods });
         } else if let Some(k) = e.get("key").and_then(Value::as_str) {
             let key = egui::Key::from_name(k).ok_or_else(|| format!("unknown key `{k}`"))?;
-            refuse_agent_undo_key(app, p, e, k)?;
             for pressed in [true, false] {
                 events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods });
             }
@@ -1199,7 +1225,7 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
             (None, None) => return Err("controller buttons go to a prototype that is playing: run proto.present or proto.preview".into()),
         }
     }
-    app.control_input_queued = app.push_control_input(events);
+    app.control_input_queued = app.push_control_input(events, agent);
     ctx.request_repaint();
     Ok(json!({"queued": list.len().min(256)}))
 }
@@ -1490,46 +1516,9 @@ fn ui_set_styles(app: &mut FigApp, p: &Value) -> Result<(), String> {
 /// The methods whose `document` may name a file behind the tab in front.
 const DOCUMENT_METHODS: &[&str] = &["engine.execute", "document.inspect", "node.get", "ui.render"];
 
-/// A `ui.*` request that acts (keys, pointer, typing, a menu) names the agent it is made for as
-/// `engine.execute` does (`agent` and `agentKey`): is it that agent's? Asked before anything runs.
-fn admit_ui(app: &mut FigApp, p: &Value) -> Result<(), String> {
-    let agent = p.get("agent").and_then(Value::as_str);
-    app.session.agent_admit(agent, figcraft_engine::agent::key_of(p)).map_err(|e| e.to_string())
-}
-
-/// An agent's undo or redo through the interface (a key, a menu) is refused as its command is,
-/// while another agent is there: the rule is the engine's. A request with no agent is the user's.
-fn refuse_agent_undo(app: &FigApp, p: &Value, id: &str) -> Result<(), String> {
-    app.session.refuse_shared_undo_as(p.get("agent").and_then(Value::as_str), id).map_err(|e| e.to_string())
-}
-
-/// A raw key event of `ui.input` (`e`, key name `k`): egui resolves its shortcut when it takes the event,
-/// with no agent, so the keymap is asked now whether it is an undo or redo the agent may not make.
-fn refuse_agent_undo_key(app: &FigApp, p: &Value, e: &Value, k: &str) -> Result<(), String> {
-    use figcraft_engine::keymap::{Context as KeyContext, Mods, lookup};
-    let m = Mods { shift: b(e, "shift"), alt: b(e, "alt"), cmd: b(e, "cmd"), ctrl: b(e, "ctrl") };
-    let platform = crate::shortcuts::platform();
-    for context in [KeyContext::Canvas, KeyContext::Text] {
-        if let Some(bd) = lookup(platform, context, k, m) {
-            refuse_agent_undo(app, p, bd.id)?;
-        }
-    }
-    Ok(())
-}
-
 /// The request's `document` (an `id` from `doc.list`, or an open file's path), when it names one.
 fn document_of(p: &Value) -> Option<&Value> {
     p.get("document").filter(|d| !d.is_null())
-}
-
-/// Run `f` with the request's `document` in front and the user's tab back afterwards, else on the
-/// tab in front (the same swap a command run in the background makes).
-fn in_document<T>(app: &mut FigApp, p: &Value, f: impl FnOnce(&mut Session) -> Result<T, String>) -> Result<T, String> {
-    let Some(target) = document_of(p) else { return f(&mut app.session) };
-    let forward = app.session.bring_forward(target).map_err(|e| e.to_string())?;
-    let r = f(&mut app.session);
-    app.session.put_back(forward);
-    r
 }
 
 /// A method that acts on the tab in front (`front`, a document uid) refuses a `document` naming
@@ -1542,29 +1531,47 @@ fn front_only(session: &Session, front: Option<u64>, method: &str, p: &Value) ->
     Err(format!("`{method}` acts on the tab in front: `document` can name another open file only for {}", DOCUMENT_METHODS.join(", ")))
 }
 
-/// Handle one control method (also used by tests and the headless snapshot tool).
+/// Handle one control method (also used by tests and the headless snapshot tool). The one entry
+/// for every request: the agent is admitted first, then the `document` the request names comes to
+/// the front, and only then does the method run, as that agent.
 pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
+    // Whether the name (`agent`, `agentKey`) is this client's, for every method and before anything
+    // else: a door that skipped it would let one client act under another's name.
+    let door = app.session.agent_admit_request(method, p).map_err(|e| e.to_string())?;
+    // A method that names its `document` runs on that file in front; the rest act on the tab in
+    // front and refuse a `document` that is another file.
+    let forward = if DOCUMENT_METHODS.contains(&method) {
+        match document_of(p) {
+            Some(target) => Some(app.session.bring_forward(target).map_err(|e| e.to_string())?),
+            None => None,
+        }
+    } else {
+        front_only(&app.session, app.session.ds().ok().map(|d| d.uid), method, p)?;
+        None
+    };
     // On the channel the user opened in Preferences the clients are agents at work in the user's
     // own app: nothing a request runs drops unsaved changes (`file.close` with `force`,
     // `file.revert`), whichever method gets to the command (`engine.execute`, a batch step, a
     // menu row). An app started with `--control PORT` is its script's own and keeps both.
     let keep = !app.agent_control_fixed;
-    app.keeping_unsaved(keep, |app| handle_method(app, ctx, method, p))
+    // The identity covers the whole method, its reply and its reads included.
+    let agent = p.get("agent").and_then(Value::as_str);
+    let r = app.acting(agent, door, |app| app.keeping_unsaved(keep, |app| handle_method(app, ctx, method, p)));
+    if let Some(forward) = forward {
+        app.session.put_back(forward);
+    }
+    r
 }
 
-/// [`handle`], once the caller's limits are set.
+/// [`handle`], once the caller is admitted, its document is in front and its identity is set.
 fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
-    if !DOCUMENT_METHODS.contains(&method) {
-        front_only(&app.session, app.session.ds().ok().map(|d| d.uid), method, p)?;
-    }
     match method {
         "engine.execute" => {
             let cmd = p.get("command").and_then(Value::as_str).ok_or("`command` required")?;
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let layers_generation = app.session.clipboard.layers_generation;
             let agent = p.get("agent").and_then(Value::as_str);
-            app.session.agent_admit(agent, figcraft_engine::agent::key_of(p)).map_err(|e| e.to_string())?;
-            let r = in_document(app, p, |s| s.execute_as(agent, cmd, &params).map_err(|e| e.to_string()));
+            let r = app.session.with_agent(agent, |s| s.execute(cmd, &params)).map_err(|e| e.to_string());
             // An agent working apart leaves the window's page and selection as they were, yet the
             // document changed: the canvas has to show it.
             ctx.request_repaint();
@@ -1587,14 +1594,7 @@ fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Re
         "document.inspect" => {
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
             let options = figcraft_engine::inspect::InspectOptions::parse(p)?;
-            // An agent working apart reads its own page and selection, as its commands do.
-            let agent = p.get("agent").and_then(Value::as_str);
-            app.session.agent_admit(agent, figcraft_engine::agent::key_of(p)).map_err(|e| e.to_string())?;
-            in_document(
-                app,
-                p,
-                |s| Ok(s.with_agent(agent, |s| figcraft_engine::inspect::document_with_options(s, depth, b(p, "allPages"), &options))),
-            )
+            Ok(figcraft_engine::inspect::document_with_options(&app.session, depth, b(p, "allPages"), &options))
         }
         "agent.join" | "agent.leave" => {
             let agent = p.get("agent").and_then(Value::as_str).ok_or("`agent` required")?;
@@ -1611,9 +1611,7 @@ fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Re
             let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required")?;
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(1) as usize;
             let options = figcraft_engine::inspect::InspectOptions::parse(p)?;
-            in_document(app, p, |s| {
-                s.doc().map(|d| figcraft_engine::inspect::node_json_with_options(d, id, depth, &options)).map_err(|e| e.to_string())
-            })
+            app.session.doc().map(|d| figcraft_engine::inspect::node_json_with_options(d, id, depth, &options)).map_err(|e| e.to_string())
         }
         "window.new" => {
             let index = p.get("index").and_then(Value::as_u64).map(|i| i as usize);
@@ -1629,21 +1627,17 @@ fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Re
             }
             Ok(v)
         }
-        "ui.pointer" => admit_ui(app, p).and_then(|()| pointer(app, p)),
-        "ui.key" => admit_ui(app, p).and_then(|()| ui_key(app, ctx, p)),
-        "ui.input" => admit_ui(app, p).and_then(|()| ui_input(app, ctx, p)),
+        "ui.pointer" => pointer(app, p),
+        "ui.key" => ui_key(app, ctx, p),
+        "ui.input" => ui_input(app, ctx, p),
         "ui.type" => {
-            admit_ui(app, p)?;
             let text = p.get("text").and_then(Value::as_str).ok_or("`text` required")?;
-            let agent = p.get("agent").and_then(Value::as_str);
-            app.session.with_agent(agent, |s| figcraft_engine::textedit::insert(s, text)).map_err(|e| e.to_string())?;
+            figcraft_engine::textedit::insert(&mut app.session, text).map_err(|e| e.to_string())?;
             Ok(json!({"ok": true}))
         }
         "ui.menu.invoke" => {
-            admit_ui(app, p)?;
             let id = p.get("id").and_then(Value::as_str).ok_or("`id` required")?;
-            refuse_agent_undo(app, p, id)?;
-            crate::menus::invoke(app, id);
+            as_the_window(app, |app| crate::menus::invoke(app, id))?;
             Ok(json!({"ok": true, "lastError": app.ui.last_error}))
         }
         "ui.set" => {
@@ -1665,7 +1659,7 @@ fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Re
             if !ids.is_empty() {
                 params["ids"] = json!(ids);
             }
-            in_document(app, p, |s| s.execute("file.export", &params).map_err(|e| e.to_string()))
+            app.session.execute("file.export", &params).map_err(|e| e.to_string())
         }
         "app.quit" => {
             // `app.quit` closes every window without asking about unsaved changes, and the recovery
@@ -1714,9 +1708,7 @@ fn pointer(app: &mut FigApp, p: &Value) -> Result<Value, String> {
     // A drag's pressure goes from `pressure` to `pressureTo`.
     let (pr0, pr1) = (pressure("pressure"), pressure("pressureTo").or(pressure("pressure")));
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("click");
-    // Under the name of the agent the request is made for, as `engine.execute` is.
-    let agent = p.get("agent").and_then(Value::as_str);
-    let run = |app: &mut FigApp, ev: PointerEvent| app.session.with_agent(agent, |s| s.pointer(&ev)).map_err(|e| e.to_string());
+    let run = |app: &mut FigApp, ev: PointerEvent| app.session.pointer(&ev).map_err(|e| e.to_string());
     match kind {
         "down" => run(app, mk(PointerKind::Down, x, y))?,
         "move" => run(app, mk(PointerKind::Move, x, y))?,
@@ -1763,3 +1755,9 @@ mod unsaved_tests;
 
 #[cfg(test)]
 mod agent_ui_undo_tests;
+
+#[cfg(test)]
+mod agent_doors_tests;
+
+#[cfg(test)]
+mod agent_doors_table_tests;

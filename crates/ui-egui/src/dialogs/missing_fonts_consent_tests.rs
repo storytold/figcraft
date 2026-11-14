@@ -52,7 +52,7 @@ fn blocked_consent() -> (egui::Context, FigApp) {
 /// and returns whether the keyboard is on it afterwards.
 fn frame_with(ctx: &egui::Context, app: &mut FigApp, events: Vec<egui::Event>, injected: bool, allow: &mut Option<egui::accesskit::NodeId>) -> bool {
     let events = if injected {
-        assert!(app.push_control_input(events), "the batch is queued");
+        assert!(app.push_control_input(events, None), "the batch is queued");
         crate::windows::take_input(app, egui::ViewportId::ROOT)
     } else {
         events
@@ -119,5 +119,58 @@ fn injected_tab_cannot_leave_allow_and_download_for_the_users_enter() {
     frame_with(&ctx, &mut app, Vec::new(), false, &mut allow);
     let triggered = ALLOW_TRIGGERED.with(|n| n.get());
     assert_eq!(triggered, 0, "the user's own Enter ran Allow and download: a control client had left the keyboard on it");
+    assert_eq!(asked(&app), Some("Some Family"), "the question is still on screen");
+}
+
+/// One frame of a second window of the same app: no events of its own, but the app draws its
+/// dialogs in it too.
+fn frame_in_second_window(ctx: &egui::Context, app: &mut FigApp) {
+    let raw = crate::windows_tests::raw_input_in(egui::ViewportId::from_hash_of("second window"));
+    ctx.run_ui(raw, |ui| app.ui(ui)).textures_delta.clear();
+}
+
+/// The keyboard a control client's Tab left on "Allow and download" belongs to the window that
+/// frame drew: a frame of another window between that one and the user's Enter must not decide
+/// whether the focus is let go. Without a fix the mark the injected frame left is one for the whole
+/// app, the second window's frame takes it, and the first window's Enter runs the allow action.
+///
+/// Calibration, on a window of its own: the user's own Tab that reach the button, a frame of the
+/// second window, then the user's Enter does run the allow action. Without that, the scenario
+/// could not show the defect, and the test fails there.
+#[test]
+fn a_frame_of_another_window_does_not_take_back_the_keyboard_left_on_allow_and_download() {
+    let k = tabs_to_allow_and_download();
+
+    let (ctx, mut app) = blocked_consent();
+    let mut allow = None;
+    for _ in 0..k {
+        frame_with(&ctx, &mut app, tab(), false, &mut allow);
+    }
+    frame_in_second_window(&ctx, &mut app);
+    ALLOW_TRIGGERED.with(|n| n.set(0));
+    frame_with(&ctx, &mut app, enter(), false, &mut allow);
+    frame_with(&ctx, &mut app, Vec::new(), false, &mut allow);
+    assert_eq!(
+        ALLOW_TRIGGERED.with(|n| n.get()),
+        1,
+        "calibration: the user's own Tab then Enter run Allow and download, a second window's frame in between or not"
+    );
+
+    let (ctx, mut app) = blocked_consent();
+    let mut allow = None;
+    for _ in 0..k {
+        frame_with(&ctx, &mut app, tab(), true, &mut allow);
+    }
+    frame_in_second_window(&ctx, &mut app);
+    assert!(!app.control_synthetic, "the frames that follow are the user's own");
+    assert_eq!(asked(&app), Some("Some Family"), "the question is still on screen before the user's Enter");
+    ALLOW_TRIGGERED.with(|n| n.set(0));
+    frame_with(&ctx, &mut app, enter(), false, &mut allow);
+    frame_with(&ctx, &mut app, Vec::new(), false, &mut allow);
+    assert_eq!(
+        ALLOW_TRIGGERED.with(|n| n.get()),
+        0,
+        "the user's own Enter ran Allow and download: a frame of another window took back the mark the injected frame left"
+    );
     assert_eq!(asked(&app), Some("Some Family"), "the question is still on screen");
 }

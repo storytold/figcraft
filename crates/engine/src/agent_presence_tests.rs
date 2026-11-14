@@ -14,14 +14,16 @@ fn id(v: &Value) -> NodeId {
 }
 
 fn rect(s: &mut Session, agent: Option<&str>, x: i32) -> NodeId {
-    id(&s.execute_as(agent, "shape.rectangle", &json!({"x": x, "y": 0, "width": 40, "height": 40})).unwrap())
+    id(&s.with_agent(agent, |s| s.execute("shape.rectangle", &json!({"x": x, "y": 0, "width": 40, "height": 40}))).unwrap())
 }
 
 #[test]
 fn an_agents_edit_shows_it_on_the_layers_it_changed() {
     let mut s = Session::new();
     let f = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 200})).unwrap());
-    let r = id(&s.execute_as(Some("Claude"), "shape.rectangle", &json!({"parent": f, "x": 10, "y": 10, "width": 40, "height": 40})).unwrap());
+    let r = id(&s
+        .with_agent(Some("Claude"), |s| s.execute("shape.rectangle", &json!({"parent": f, "x": 10, "y": 10, "width": 40, "height": 40})))
+        .unwrap());
     let p = s.agent_presence.clone().expect("the agent is at work");
     assert_eq!(p.name, "Claude (agent)");
     assert_eq!(p.doc, s.ds().unwrap().uid);
@@ -33,16 +35,16 @@ fn an_agents_edit_shows_it_on_the_layers_it_changed() {
 fn an_agents_selection_shows_it_there_and_a_look_keeps_it() {
     let mut s = Session::new();
     let (a, b) = (rect(&mut s, None, 0), rect(&mut s, None, 100));
-    s.execute_as(Some(""), "select.set", &json!({"ids": [a, b]})).unwrap();
+    s.with_agent(Some(""), |s| s.execute("select.set", &json!({"ids": [a, b]}))).unwrap();
     let p = s.agent_presence.clone().unwrap();
     assert_eq!((p.name.as_str(), p.layers.clone()), ("AI agent", vec![a, b]));
     // A command that changes nothing keeps where it works and when it was last seen moves on.
-    s.execute_as(Some(""), "view.zoomFit", &json!({})).unwrap();
+    s.with_agent(Some(""), |s| s.execute("view.zoomFit", &json!({}))).unwrap();
     let again = s.agent_presence.clone().unwrap();
     assert_eq!(again.layers, vec![a, b]);
     assert!(again.at >= p.at);
     // So does a failed one.
-    assert!(s.execute_as(Some(""), "node.set", &json!({"ids": [999_999], "props": {}})).is_err());
+    assert!(s.with_agent(Some(""), |s| s.execute("node.set", &json!({"ids": [999_999], "props": {}}))).is_err());
     assert_eq!(s.agent_presence.as_ref().unwrap().layers, vec![a, b]);
 }
 
@@ -77,8 +79,27 @@ fn another_file_starts_afresh() {
     let a = rect(&mut s, Some("Claude"), 0);
     assert_eq!(s.agent_presence.as_ref().unwrap().layers, vec![a]);
     s.execute("file.new", &json!({})).unwrap();
-    s.execute_as(Some("Claude"), "view.zoomFit", &json!({})).unwrap();
+    s.with_agent(Some("Claude"), |s| s.execute("view.zoomFit", &json!({}))).unwrap();
     let p = s.agent_presence.clone().unwrap();
     assert_eq!(p.doc, s.ds().unwrap().uid);
     assert!(p.layers.is_empty(), "the old file's layers don't follow it");
+}
+
+#[test]
+fn a_command_of_an_agents_call_notes_the_presence_and_a_batch_notes_it_for_the_whole_batch() {
+    let mut s = Session::new();
+    // `execute` itself notes it: no wrapper around it is needed.
+    let a = s.with_agent(Some("Claude"), |s| id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()));
+    assert_eq!(s.agent_presence.as_ref().map(|p| (p.name.as_str(), p.layers.clone())), Some(("Claude (agent)", vec![a])));
+
+    // The commands a batch runs are part of its one call: the presence is on all they made.
+    let rect = |x: i32| json!({"command": "shape.rectangle", "params": {"x": x, "y": 50, "width": 10, "height": 10}});
+    s.with_agent(Some("Claude"), |s| s.execute("command.batch", &json!({"commands": [rect(100), rect(200)]}))).unwrap();
+    let layers = s.agent_presence.as_ref().unwrap().layers.clone();
+    assert_eq!(layers.len(), 2, "both rectangles of the batch: {layers:?}");
+    assert!(!layers.contains(&a));
+    // The call is over: the user's next command makes no presence of its own.
+    let before = s.agent_presence.clone();
+    s.execute("shape.rectangle", &json!({"x": 300, "y": 0, "width": 10, "height": 10})).unwrap();
+    assert_eq!(s.agent_presence, before);
 }

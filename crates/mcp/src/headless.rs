@@ -11,9 +11,6 @@ use crate::backend::Backend;
 /// Headless backend: a [`Session`] with one untitled document.
 pub struct Headless {
     pub session: Session,
-    /// The AI agent whose `ui.*` request is running: its keys, pointer and typing act under its
-    /// name, so a shortcut is refused to it as the command is (`edit.undo` with other agents).
-    acting: Option<String>,
 }
 
 impl Default for Headless {
@@ -54,37 +51,14 @@ impl Headless {
         if !session.live.available() {
             session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(|| {}))));
         }
-        Self { session, acting: None }
+        Self { session }
     }
 
-    /// A command for the agent whose `ui.*` request is running, else for the user.
+    /// A command for whoever `call` set as acting: the session notes the agent's presence itself.
     fn execute(&mut self, cmd: &str, params: &Value) -> Result<Value, String> {
-        let agent = self.acting.clone();
-        self.execute_as(agent.as_deref(), cmd, params)
-    }
-
-    /// `f` on the session under the name of the agent whose `ui.*` request is running.
-    fn as_acting<T>(&mut self, f: impl FnOnce(&mut Session) -> T) -> T {
-        let agent = self.acting.clone();
-        self.session.with_agent(agent.as_deref(), f)
-    }
-
-    /// A `ui.*` request, made for the agent it names (`agent`, with its `agentKey`, as
-    /// `engine.execute` is) or for the user.
-    fn ui_as_agent(&mut self, p: &Value, run: impl FnOnce(&mut Self) -> Result<Value, String>) -> Result<Value, String> {
-        let agent = p.get("agent").and_then(Value::as_str);
-        self.session.agent_admit(agent, figcraft_engine::agent::key_of(p)).map_err(|e| e.to_string())?;
-        self.acting = agent.map(str::to_owned);
-        let r = run(self);
-        self.acting = None;
-        r
-    }
-
-    /// A command for `agent` (an AI agent's name, `engine.execute {agent}`) or for the user.
-    fn execute_as(&mut self, agent: Option<&str>, cmd: &str, params: &Value) -> Result<Value, String> {
         // What happened in a live session since the last call (latest presence only).
         self.session.live_poll();
-        let r = self.session.execute_as(agent, cmd, params).map_err(|e| e.to_string());
+        let r = self.session.execute(cmd, params).map_err(|e| e.to_string());
         self.session.live_sync();
         // No UI: dialogs and panels requested by commands are dropped.
         self.session.ui_requests.clear();
@@ -143,7 +117,7 @@ impl Headless {
             other => return Err(format!("unknown pointer kind `{other}` (down|move|up|click|double|hover|drag)")),
         }
         for ev in &events {
-            let r = figcraft_engine::guard::run("ui.pointer", || self.as_acting(|s| s.pointer(ev)));
+            let r = figcraft_engine::guard::run("ui.pointer", || self.session.pointer(ev));
             self.session.ui_requests.clear();
             r.map_err(|e| e.to_string())?;
         }
@@ -166,13 +140,13 @@ impl Headless {
             }
             if !(m.cmd && key.len() == 1) {
                 let (word, line) = figcraft_engine::keymap::text_motion(platform, key, m);
-                self.as_acting(|s| textedit::key(s, key, m.shift, word, line)).map_err(|e| e.to_string())?;
+                textedit::key(&mut self.session, key, m.shift, word, line).map_err(|e| e.to_string())?;
                 return Ok(json!({"ok": true, "textEdit": true}));
             }
         }
         // Vector edit mode and shape builder keys (tools, nudging points, delete, join, Enter), as
         // on the canvas.
-        if self.as_acting(|s| s.tool_key(key, m.shift, m.alt, m.cmd)).map_err(|e| e.to_string())? {
+        if self.session.tool_key(key, m.shift, m.alt, m.cmd).map_err(|e| e.to_string())? {
             return Ok(json!({"ok": true}));
         }
         if let Some(bd) = lookup(platform, Context::Canvas, key, m) {
@@ -235,7 +209,7 @@ impl Headless {
     fn render_to(&mut self, p: &Value) -> Result<Value, String> {
         let scale = f(p, "scale").unwrap_or(1.0);
         let ids: Vec<u64> = ids_of(p).into_iter().map(|i| i.0).collect();
-        let bytes = self.render_png(&ids, scale)?;
+        let bytes = self.render_bytes(&ids, scale)?;
         let (w, h) = crate::png_size(&bytes).unwrap_or((0, 0));
         match p.get("path").and_then(Value::as_str) {
             Some(path) => {
@@ -267,9 +241,7 @@ impl Headless {
                     None | Some(Value::Null) => json!({}),
                     Some(v) => v.clone(),
                 };
-                let agent = p.get("agent").and_then(Value::as_str);
-                self.session.agent_admit(agent, figcraft_engine::agent::key_of(&p)).map_err(|e| e.to_string())?;
-                self.execute_as(agent, &cmd, &params)
+                self.execute(&cmd, &params)
             }
             "engine.commands" => Ok(Value::Array(
                 figcraft_engine::all_commands().iter().map(|c| json!({"id": c.id, "label": c.label, "params": c.params, "menu": c.menu(), "shortcut": c.shortcut(), "undoable": c.history})).collect(),
@@ -277,9 +249,7 @@ impl Headless {
             "document.inspect" => {
                 let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
                 let options = figcraft_engine::inspect::InspectOptions::parse(&p)?;
-                let agent = p.get("agent").and_then(Value::as_str);
-                self.session.agent_admit(agent, figcraft_engine::agent::key_of(&p)).map_err(|e| e.to_string())?;
-                Ok(self.session.with_agent(agent, |s| figcraft_engine::inspect::document_with_options(s, depth, b(&p, "allPages"), &options)))
+                Ok(figcraft_engine::inspect::document_with_options(&self.session, depth, b(&p, "allPages"), &options))
             }
             "node.get" => {
                 let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required (a node id)")?;
@@ -292,16 +262,16 @@ impl Headless {
                 Ok(figcraft_engine::inspect::node_json_with_options(doc, id, depth, &options))
             }
             "ui.inspect" => Ok(self.inspect_ui()),
-            "ui.pointer" => self.ui_as_agent(&p, |h| h.pointer(&p)),
-            "ui.key" => self.ui_as_agent(&p, |h| h.key(&p)),
-            "ui.type" => self.ui_as_agent(&p, |h| {
+            "ui.pointer" => self.pointer(&p),
+            "ui.key" => self.key(&p),
+            "ui.type" => {
                 let text = p.get("text").and_then(Value::as_str).ok_or("`text` required")?;
-                if !h.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
+                if !self.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
                     return Err("not editing text: double-click a text layer, press Enter on it, or run text.edit.begin {id}".into());
                 }
-                h.as_acting(|s| textedit::insert(s, text)).map_err(|e| e.to_string())?;
+                textedit::insert(&mut self.session, text).map_err(|e| e.to_string())?;
                 Ok(json!({"ok": true}))
-            }),
+            }
             "ui.render" => self.render_to(&p),
             "ui.screenshot" => {
                 let bytes = self.screenshot_png()?;
@@ -337,37 +307,38 @@ impl Headless {
             other => Err(format!("unknown method `{other}`")),
         }
     }
-}
 
-impl Backend for Headless {
-    /// With `document` (an `id` from `doc.list`, or an open file's path) the call acts on that
-    /// file, and the file in front stays in front.
-    fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
-        let Some(target) = p.get("document").filter(|d| !d.is_null()) else { return self.dispatch(method, p) };
-        let forward = self.session.bring_forward(target).map_err(|e| e.to_string())?;
-        let r = self.dispatch(method, p);
-        self.session.put_back(forward);
-        r
+    /// The one entry of a request: admitted (the method's door, and the name it gives), the
+    /// `document` it names in front, then `work` run as the agent it names. With `document` (an `id`
+    /// from `doc.list`, or an open file's path) the call acts on that file, and the file in front
+    /// stays in front.
+    fn entered<T>(&mut self, method: &str, p: Value, work: impl FnOnce(&mut Self, Value) -> Result<T, String>) -> Result<T, String> {
+        // First, so that a method nobody knows, or a name held with another key, does nothing at all.
+        let door = self.session.agent_admit_request(method, &p).map_err(|e| e.to_string())?;
+        // Before the identity, so the agent's page is the named file's and not the one in front.
+        let forward = match p.get("document").filter(|d| !d.is_null()) {
+            Some(target) => Some(self.session.bring_forward(target).map_err(|e| e.to_string())?),
+            None => None,
+        };
+        let agent = p.get("agent").and_then(Value::as_str).map(str::to_owned);
+        let acting = self.session.agent_begin(agent.as_deref(), door);
+        // Caught only so that `agent_end` and `put_back` always run; the panic goes on to the caller's guard.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(self, p)));
+        self.session.agent_end(acting);
+        if let Some(f) = forward {
+            self.session.put_back(f);
+        }
+        match r {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
-    fn has_ui(&self) -> bool {
-        false
-    }
-
-    fn describe(&self) -> String {
-        "headless (in-process engine session; no window)".into()
-    }
-
-    fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
-        self.render_png_as("", "", ids, scale)
-    }
-
-    fn render_png_as(&mut self, agent: &str, key: &str, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
-        // As `document.inspect` is asked: the page is the agent's only for the agent itself.
-        self.session.agent_admit(Some(agent), Some(key)).map_err(|e| e.to_string())?;
+    /// The PNG of `ids` (or of the current page) for whoever is acting already: no admission, no identity.
+    fn render_bytes(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
         let scale = if scale.is_finite() && scale > 0.0 { scale.min(64.0) } else { 1.0 };
-        // The page the agent works on: its own while several agents work apart.
-        let page = self.session.with_agent(Some(agent), |s| s.page()).map_err(|e| e.to_string())?;
+        // The page of the call in progress: the agent's own while several agents work apart.
+        let page = self.session.page().map_err(|e| e.to_string())?;
         let doc = self.session.doc().map_err(|e| e.to_string())?;
         if !ids.is_empty() {
             let ids: Vec<NodeId> = ids.iter().map(|i| NodeId(*i)).collect();
@@ -389,6 +360,30 @@ impl Backend for Headless {
         };
         let pix = figcraft_render::render_view(doc, page, &view, &Default::default()).ok_or("render failed")?;
         figcraft_render::encode_png(&pix)
+    }
+}
+
+impl Backend for Headless {
+    /// The one entry of a request (see [`Headless::entered`]).
+    fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
+        self.entered(method, p, |s, p| s.dispatch(method, p))
+    }
+
+    fn has_ui(&self) -> bool {
+        false
+    }
+
+    fn describe(&self) -> String {
+        "headless (in-process engine session; no window)".into()
+    }
+
+    fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+        self.render_png_as("", "", ids, scale)
+    }
+
+    fn render_png_as(&mut self, agent: &str, key: &str, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+        // The same entry as every request: admitted for its name, the page the agent's own.
+        self.entered("ui.render", json!({"agent": agent, "agentKey": key}), |s, _| s.render_bytes(ids, scale))
     }
 
     fn screenshot_png(&mut self) -> Result<Vec<u8>, String> {

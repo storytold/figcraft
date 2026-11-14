@@ -5,7 +5,7 @@ use super::{
 
 /// Why an agent's edit is refused while a gesture that is not its own is open on the document:
 /// the gesture would fold the edit into its own step, or lose it when cancelled.
-const GESTURE_IN_PROGRESS: &str = "a drag or other gesture is in progress in the window: retry the edit once it ends";
+pub(super) const GESTURE_IN_PROGRESS: &str = "a drag or other gesture is in progress in the window: retry the edit once it ends";
 
 /// Whether a command, or a batch wrapping one, imports a file passed as Base64 `data`.
 fn command_carries_import_bytes(id: &str, params: &Value) -> bool {
@@ -56,41 +56,20 @@ impl Session {
         }
     }
 
-    /// [`Session::execute`] for an AI agent named `agent` (the client's name; empty when it gave
-    /// none), or for the user (`None`): the comments it makes are signed with the agent's name and
-    /// marked as an agent's, and the app shows where it works ([`Session::agent_presence_at`]).
-    ///
-    /// While several named agents work in the session, each has its own page and selection
-    /// ([`Session::with_agent`]): the command runs on those, and the window keeps its own.
-    pub fn execute_as(&mut self, agent: Option<&str>, id: &str, params: &Value) -> Result<Value> {
-        self.run_as(agent, |s| s.execute(id, params))
-    }
-
-    /// What [`Session::execute_as`] does around `run`, the call it makes for `agent`.
-    pub(crate) fn run_as<T>(&mut self, agent: Option<&str>, run: impl FnOnce(&mut Session) -> T) -> T {
-        let was = std::mem::replace(&mut self.agent, agent.map(cmd::comment::agent_author));
-        // A panic in the call ends it like any other end, then goes on to the caller's guard: what
-        // the user does next is signed by the user, not by the agent whose call panicked.
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.with_agent(agent, |s| {
-                let before = agent.and_then(|_| s.agent_before());
-                let r = run(s);
-                if agent.is_some() {
-                    s.note_agent(before);
-                }
-                r
-            })
-        }));
-        self.agent = was;
-        match r {
-            Ok(r) => r,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
-    }
-
     /// Run a command by id. Mutations become one undo step; a failure or panic leaves the document
     /// as it was.
+    ///
+    /// When an AI agent's call is running ([`Session::with_agent`]) the app shows where it works
+    /// ([`Session::agent_presence_at`]): noted when the outermost `execute` of the call ends, not
+    /// by the commands it runs in turn.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        let call = self.call_begin();
+        let r = self.run_command(id, params);
+        self.call_end(call);
+        r
+    }
+
+    fn run_command(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         crate::cmd::refuse_unknown_params(id, params)?;
         board::refuse_on_board(self, id)?;
@@ -191,19 +170,14 @@ impl Session {
         }
     }
 
-    /// Is a gesture open on `ds` that the agent now calling did not start? Its own (the text it is
-    /// editing) takes its edits; the window's, or another agent's, would fold them in or lose them.
-    fn in_foreign_gesture(&self, ds: &crate::DocState) -> bool {
-        self.agent.is_some() && ds.interaction.as_ref().is_some_and(|it| it.agent != self.agent)
-    }
-
     /// While a gesture that is not its own is open on the active document, an agent's edit is
     /// refused before it runs. Undo and redo are refused too: they pop the history before any later
     /// check.
     fn refuse_agent_edit_in_gesture(&self, id: &str, spec: &CommandSpec) -> Result<()> {
         let edits = spec.history || matches!(id, "edit.undo" | "edit.redo");
-        if edits && self.ds().is_ok_and(|d| self.in_foreign_gesture(d)) {
-            return Err(EngineError::Disabled(id.to_string(), GESTURE_IN_PROGRESS.into()));
+        if edits {
+            // The same rule as every other way into a gesture: see `refuse_foreign_gesture`.
+            self.refuse_foreign_gesture(id)?;
         }
         Ok(())
     }
