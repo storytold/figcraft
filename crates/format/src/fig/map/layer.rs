@@ -301,6 +301,14 @@ impl<'a> Mapper<'a> {
             // The saved vector is flattened into the connector node when no child slot remains.
         } else if ty == "INSTANCE" {
             if let Some((sub, sym)) = self.instance(o, view, id, inst, rest_id) {
+                let was = base.get("symbolData").and_then(|s| s.get("symbolID")).and_then(guid);
+                // A layer that records no main (a frame turned into an instance) has no old look to replace.
+                if let Some(was) = was.filter(|w| *w != sym)
+                    && let Some(new_main) = self.nodes.get(&sym).copied()
+                {
+                    let old = self.nodes.get(&was).copied();
+                    self.swapped_look(o, view, base, old, new_main, sub.scale, ty);
+                }
                 let main = self.nodes.get(&sym).map(|m| View::of_scaled(m, sub.scale));
                 // A scaled main's size is the factor's product, rounded to a float: it matches an
                 // instance of that size without a fit that would round the layers again.
@@ -504,25 +512,8 @@ impl<'a> Mapper<'a> {
         Some(Value::Object(t))
     }
 
-    /// Fields every layer type shares.
-    pub(super) fn common(&mut self, o: &mut Obj, v: &View<'a>, ty: &str, space: Affine, parent: Option<&View<'a>>) {
-        for (from, to) in [("visible", "visible"), ("locked", "locked"), ("mask", "isMask")] {
-            if let Some(b) = v.flag(from) {
-                o.insert(to.into(), json!(b));
-            }
-        }
-        if let Some(m) = v.str("maskType") {
-            o.insert("maskType".into(), json!(if m == "OUTLINE" { "VECTOR" } else { m }));
-        }
-        copy_num(o, v, "opacity", "opacity");
-        if let Some(b) = v.str("blendMode").filter(|b| *b != "UNSET") {
-            o.insert("blendMode".into(), json!(b));
-        }
-        if let Some((x, y)) = v.size() {
-            o.insert("size".into(), json!({"x": x, "y": y}));
-        }
-        let t = v.transform().unwrap_or_default();
-        o.insert("relativeTransform".into(), rows(space * t));
+    /// The look a layer draws: paints with their styles, effects, grids, stroke and corners.
+    pub(super) fn look(&mut self, o: &mut Obj, v: &View<'a>, ty: &str) {
         // Paints, from the shared style when one is linked (the layer's own copy can be stale),
         // unless the layer's own paints are bound to variables: those bindings must not be lost.
         let mut styles = Obj::new();
@@ -568,6 +559,28 @@ impl<'a> Mapper<'a> {
                 ]),
             );
         }
+    }
+
+    /// Fields every layer type shares.
+    pub(super) fn common(&mut self, o: &mut Obj, v: &View<'a>, ty: &str, space: Affine, parent: Option<&View<'a>>) {
+        for (from, to) in [("visible", "visible"), ("locked", "locked"), ("mask", "isMask")] {
+            if let Some(b) = v.flag(from) {
+                o.insert(to.into(), json!(b));
+            }
+        }
+        if let Some(m) = v.str("maskType") {
+            o.insert("maskType".into(), json!(if m == "OUTLINE" { "VECTOR" } else { m }));
+        }
+        copy_num(o, v, "opacity", "opacity");
+        if let Some(b) = v.str("blendMode").filter(|b| *b != "UNSET") {
+            o.insert("blendMode".into(), json!(b));
+        }
+        if let Some((x, y)) = v.size() {
+            o.insert("size".into(), json!({"x": x, "y": y}));
+        }
+        let t = v.transform().unwrap_or_default();
+        o.insert("relativeTransform".into(), rows(space * t));
+        self.look(o, v, ty);
         let constraint = |k: &str, min: &'static str, max: &'static str, both: &'static str| match v.str(k) {
             Some("CENTER") => "CENTER",
             Some("MAX" | "FIXED_MAX") => max,

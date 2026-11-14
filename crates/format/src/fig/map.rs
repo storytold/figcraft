@@ -25,6 +25,7 @@ mod layer;
 mod layout;
 mod paint;
 mod proto;
+mod swap;
 mod text;
 mod variables;
 
