@@ -70,10 +70,10 @@ fn a_scrubbed_field_keeps_its_value_when_the_pointer_lets_go() {
     for k in 1..=10 {
         u.frame(vec![Event::PointerMoved(from + vec2(4.0 * k as f32, 0.0))]);
     }
-    assert_eq!(width(&u, a).0, 80.0, "40 points to the right while dragging");
+    assert_eq!(width(&u, a).0, 60.0, "40 points to the right while dragging: half a step a point");
     u.button(from + vec2(40.0, 0.0), false);
     u.frame(vec![]);
-    assert_eq!(width(&u, a).0, 80.0, "kept after the release");
+    assert_eq!(width(&u, a).0, 60.0, "kept after the release");
     assert_eq!(u.app.session.doc().unwrap().node(a).unwrap().height, 30.0);
 }
 

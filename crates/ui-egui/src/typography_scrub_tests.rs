@@ -84,18 +84,18 @@ fn typography_icon_drag_changes_each_spacing_field_in_one_undo_step() {
         let mut f = Fields::new();
         let undo = f.app.session.undo_depth().0;
         f.drag(key, 16.0, Modifiers::NONE);
-        assert_eq!(f.value(key), before + 16.0, "{key}: dragging the icon must change the value");
+        assert_eq!(f.value(key), before + 8.0, "{key}: dragging the icon must change the value");
         assert_eq!(f.app.session.undo_depth().0, undo + 1, "{key}: one gesture, one undo step");
         f.app.session.undo().unwrap();
         assert_eq!(f.value(key), before);
         f.app.session.redo().unwrap();
-        assert_eq!(f.value(key), before + 16.0);
+        assert_eq!(f.value(key), before + 8.0);
     }
 }
 
 #[test]
 fn typography_icon_scrub_uses_shift_and_alt_rates_and_the_resize_cursor() {
-    for (modifiers, delta) in [(Modifiers::SHIFT, 160.0), (Modifiers::ALT, 1.6)] {
+    for (modifiers, delta) in [(Modifiers::SHIFT, 80.0), (Modifiers::ALT, 0.8)] {
         for (key, start) in [("ty_lh", 24.0), ("ty_ls", 0.0), ("ty_ps", 12.0)] {
             let mut f = Fields::new();
             let p = f.lead(key);
@@ -114,10 +114,10 @@ fn typography_icon_scrub_preserves_units_and_clamps_only_nonnegative_fields() {
     f.drag("ty_lh", 16.0, Modifiers::NONE);
     f.drag("ty_ls", -16.0, Modifiers::NONE);
     let t = f.app.session.doc().unwrap().node(f.text).unwrap().kind.text().unwrap();
-    assert_eq!(t.style.line_height, LineHeight::Percent(166.0));
-    assert_eq!(t.style.letter_spacing, LetterSpacing::Pixels(-14.0));
-    f.drag("ty_lh", -200.0, Modifiers::NONE);
-    f.drag("ty_ps", -200.0, Modifiers::NONE);
+    assert_eq!(t.style.line_height, LineHeight::Percent(158.0));
+    assert_eq!(t.style.letter_spacing, LetterSpacing::Pixels(-6.0));
+    f.drag("ty_lh", -320.0, Modifiers::NONE);
+    f.drag("ty_ps", -320.0, Modifiers::NONE);
     assert_eq!(f.value("ty_lh"), 0.0);
     assert_eq!(f.value("ty_ps"), 0.0);
     assert!(f.app.ui.last_error.is_none(), "{:?}", f.app.ui.last_error);
@@ -152,7 +152,7 @@ fn typography_icon_scrub_changes_only_the_selected_characters_without_ending_tex
     f.drag("ty_ls", 16.0, Modifiers::NONE);
     let t = f.app.session.doc().unwrap().node(f.text).unwrap().kind.text().unwrap();
     assert_eq!(t.style_at(0).letter_spacing, LetterSpacing::Pixels(0.0));
-    assert_eq!(t.style_at(1).letter_spacing, LetterSpacing::Pixels(16.0));
+    assert_eq!(t.style_at(1).letter_spacing, LetterSpacing::Pixels(8.0));
     assert_eq!(t.style_at(4).letter_spacing, LetterSpacing::Pixels(0.0));
     assert!(f.app.session.ds().unwrap().text_edit.is_some());
     assert_eq!(f.app.session.undo_depth().0, undo);
