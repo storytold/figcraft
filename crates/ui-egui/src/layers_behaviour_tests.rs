@@ -643,6 +643,50 @@ fn the_page_menus_rename_starts_with_the_keyboard_in_the_name() {
     assert_clicking_page_opens_it(&mut u, p2, p1, r2);
 }
 
+/// Right-clicks `at` in the pages list and returns the menu's "Set as opening page" item, if shown.
+fn opening_item(u: &mut Ui, at: Pos2) -> Option<Pos2> {
+    u.frame(vec![
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+    let shapes: Vec<egui::Shape> = u.frame_output(vec![]).shapes.into_iter().map(|c| c.shape).collect();
+    crate::live_tests::has_text(&shapes, "Set as opening page").then(|| crate::live_tests::text_center(&shapes, "Set as opening page"))
+}
+
+/// The pages list's menu offers "Set as opening page" on a page and not on a divider, and using it
+/// writes the document's opening page without moving the viewer's own page (#1817).
+#[test]
+fn the_page_menu_sets_the_opening_page_and_not_on_dividers() {
+    let mut s = Session::new();
+    let p1 = s.page().unwrap();
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    let div = id(s.execute("page.add", &json!({"name": "-"})).unwrap());
+    s.execute("page.move", &json!({"id": div, "index": 1})).unwrap();
+    s.execute("page.select", &json!({"id": p1})).unwrap();
+    let mut u = Ui::new(s);
+    let (r1, r2) = (page_row(&mut u, p1, p2), page_row(&mut u, p2, p1));
+    let mid = Pos2::new(r1.x, (r1.y + r2.y) / 2.0);
+    u.app.session.execute("page.select", &json!({"id": p1})).unwrap();
+    u.frame(vec![]);
+    assert_eq!(opening_item(&mut u, mid), None, "a divider has no such item");
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    let item = opening_item(&mut u, r2).expect("a page has the item (and its menu is open)");
+    assert_ne!(u.app.session.doc().unwrap().current_page, Some(p2), "not the opening page yet");
+    u.frame(vec![Event::PointerMoved(item)]);
+    u.button(item, true);
+    u.button(item, false);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.doc().unwrap().current_page, Some(p2), "the document's opening page is the clicked page");
+    assert_eq!(u.app.session.page().unwrap(), p1, "the viewer's own page stays");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
 /// The y of the line between the pages and the layers, above the layers' row at `layer` (found by
 /// the resize cursor it shows when hovered).
 fn pages_edge_at(u: &mut Ui, layer: f32) -> f32 {
