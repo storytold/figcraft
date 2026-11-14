@@ -1086,10 +1086,8 @@ fn hebrew_native_variable_style_library_controls_are_localized() {
         let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
             panic!("missing Hebrew variable/style translation for {key:?}");
         };
-        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)),
-                "{key:?} fell back to non-Hebrew UI");
-        assert_eq!(placeholders(key), placeholders(value),
-                   "variable/style placeholder parity: {key:?}");
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to non-Hebrew UI");
+        assert_eq!(placeholders(key), placeholders(value), "variable/style placeholder parity: {key:?}");
     }
 }
 
@@ -1141,13 +1139,10 @@ fn hebrew_native_collaboration_sharing_plugins_are_localized() {
         let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
             panic!("missing Hebrew collaboration/share/plugin control: {key:?}");
         };
-        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)),
-                "{key:?} fell back to English");
-        assert_eq!(placeholders(key), placeholders(value),
-                   "collaboration/share/plugin placeholder parity: {key:?}");
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        assert_eq!(placeholders(key), placeholders(value), "collaboration/share/plugin placeholder parity: {key:?}");
     }
 }
-
 
 /// Prototype editor, presentation and interaction labels stay translated in Native Hebrew.
 /// Every key comes from the maintained English UI source catalog.
@@ -1209,10 +1204,7 @@ fn hebrew_native_prototype_flows_and_interactions_are_localized() {
         let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
             panic!("missing Hebrew Native prototype control: {key:?}");
         };
-        assert!(
-            value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)),
-            "{key:?} fell back to English"
-        );
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
         assert_eq!(placeholders(key), placeholders(value), "prototype placeholder parity: {key:?}");
     }
 }
