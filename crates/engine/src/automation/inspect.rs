@@ -577,6 +577,8 @@ pub fn document_with_options(s: &Session, depth: usize, all_pages: bool, options
             .collect();
     json!({
         "id": ds.uid,
+        "revision": ds.revision,
+        "capabilities": {"conditionalExecute": 1,"documentChangeEvents": 1},
         "name": doc.name,
         "kind": doc.kind.id(),
         "path": ds.path,
