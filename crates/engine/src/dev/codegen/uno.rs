@@ -682,17 +682,54 @@ impl Gen<'_> {
         e
     }
 
-    /// A vector, shape or other layer without a counterpart: the image the app is to hold.
+    /// A vector, shape or other layer without a counterpart: a `Path` with the outline as path
+    /// data, which takes the theme's colours; or, when the layer is more than one plain fill and
+    /// one plain stroke, the image the app is to hold.
     fn asset(&mut self, n: &Node, at: Place) -> Element {
+        if let Some(e) = self.path(n, at) {
+            return e;
+        }
         let name = asset_name(&n.name, n.kind.label(), &mut self.assets);
         let mut e = Element::new("new Image()");
-        e.lead.push(format!("// {} \"{}\": export it as an SVG to Assets/{name}.svg", n.kind.label(), comment_name(&n.name)));
+        e.lead.push(format!("// {} \"{}\": export it as a PNG to Assets/{name}.png", n.kind.label(), comment_name(&n.name)));
         place(&mut e, n, at);
-        e.call(format!(".Source(\"{ASSETS}/{name}.svg\")"));
+        e.call(format!(".Source(\"{ASSETS}/{name}.png\")"));
         size(&mut e, n, at);
         e.call(".Stretch(Stretch.Uniform)");
         common(&mut e, n);
         e
+    }
+
+    /// The layer's outline as a `Microsoft.UI.Xaml.Shapes.Path` (written in full: the implicit
+    /// usings bring in `System.IO`, whose `Path` clashes), with at most one solid fill and one solid
+    /// stroke. `None` when the layer needs the image: a gradient, image or pattern paint, several
+    /// fills or strokes, effects, no outline, or an outline past [`MAX_PATH_ELEMENTS`].
+    fn path(&mut self, n: &Node, at: Place) -> Option<Element> {
+        let fills: Vec<_> = n.fills.iter().filter(|p| p.visible).collect();
+        let strokes: Vec<_> = n.strokes.iter().filter(|p| p.visible).collect();
+        let plain = |ps: &[&figcraft_color::Paint]| ps.iter().all(|p| matches!(p.kind, PaintKind::Solid { .. }));
+        if fills.len() > 1 || strokes.len() > 1 || !plain(&fills) || !plain(&strokes) || n.effects.iter().any(|f| f.visible) {
+            return None;
+        }
+        let (outline, rule) = figcraft_render::node_outline(self.ctx.doc, n)?;
+        let data = path_data(&outline, rule)?;
+        let mut e = Element::new("new Microsoft.UI.Xaml.Shapes.Path()");
+        place(&mut e, n, at);
+        e.call(format!(".Data({})", cs_literal(&data)));
+        if let Some(c) = first_fill(n) {
+            e.call(format!(".Fill({})", cs_color(c)));
+        }
+        if let Some(c) = stroke_color(n) {
+            e.call(format!(".Stroke({})", cs_color(c)));
+            e.call(format!(".StrokeThickness({})", num(n.stroke.weight)));
+            if n.stroke.align != StrokeAlign::Center {
+                // A `Path` stroke is centred on the outline.
+                e.note("stroke inside or outside (drawn centred)");
+            }
+        }
+        size(&mut e, n, at);
+        common(&mut e, n);
+        Some(e)
     }
 
     /// Text: a `TextBlock`, in a `Grid` of the box's height when it is aligned to the middle or
@@ -986,6 +1023,35 @@ fn leading_calls(e: &mut Element, leading: Leading, flow: bool) {
         }
         Leading::Shift(_) => {}
     }
+}
+
+/// Most elements (moves, lines, curves, closes) of an outline written as path data.
+const MAX_PATH_ELEMENTS: usize = 5_000;
+
+/// An outline as the path mini-language of `Path.Data`: a fill rule (`F1` non-zero, `F0` even-odd)
+/// then `M x y`, `L x y`, `Q cx cy x y`, `C c1x c1y c2x c2y x y` and `Z`, numbers through [`num`].
+/// `None` for an empty outline, one with a coordinate that is not finite, or one past
+/// [`MAX_PATH_ELEMENTS`].
+pub(crate) fn path_data(path: &figcraft_geom::BezPath, rule: figcraft_render::FillRule) -> Option<String> {
+    use figcraft_geom::kurbo::PathEl;
+    let els = path.elements();
+    if els.is_empty() || els.len() > MAX_PATH_ELEMENTS {
+        return None;
+    }
+    let pt = |p: figcraft_geom::Point| (p.x.is_finite() && p.y.is_finite()).then(|| format!("{} {}", num(p.x), num(p.y)));
+    let mut out = String::from(if rule == figcraft_render::FillRule::EvenOdd { "F0" } else { "F1" });
+    for el in els {
+        let part = match *el {
+            PathEl::MoveTo(p) => format!("M {}", pt(p)?),
+            PathEl::LineTo(p) => format!("L {}", pt(p)?),
+            PathEl::QuadTo(c, p) => format!("Q {} {}", pt(c)?, pt(p)?),
+            PathEl::CurveTo(c1, c2, p) => format!("C {} {} {}", pt(c1)?, pt(c2)?, pt(p)?),
+            PathEl::ClosePath => "Z".to_string(),
+        };
+        out.push(' ');
+        out.push_str(&part);
+    }
+    Some(out)
 }
 
 /// The calls an `AutoLayout` takes for its orientation, gap, padding (`pad` is top, right,

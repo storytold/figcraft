@@ -253,21 +253,6 @@ fn mixed_styles_become_runs() {
 }
 
 #[test]
-fn vectors_are_svg_assets_with_unique_lowercase_names() {
-    let mut s = Session::new();
-    let f = frame(&mut s, "Icons", 200.0, 100.0);
-    for x in [0, 50, 100] {
-        ex(&mut s, "node.create", json!({"type": "star", "parent": f, "name": "Star Icon", "x": x, "y": 0, "width": 40, "height": 40}));
-    }
-    let code = uno(&mut s, f);
-    for n in ["star_icon", "star_icon_2", "star_icon_3"] {
-        assert!(code.contains(&format!(".Source(\"ms-appx:///Assets/{n}.svg\")")), "{n} in {code}");
-        assert!(code.contains(&format!("// Star \"Star Icon\": export it as an SVG to Assets/{n}.svg")), "{code}");
-    }
-    assert!(code.contains(".Stretch(Stretch.Uniform)"), "{code}");
-}
-
-#[test]
 fn an_image_fill_is_an_image_brush_on_a_png_asset() {
     use base64::Engine as _;
     let mut s = Session::new();
@@ -869,4 +854,130 @@ fn a_font_that_is_not_installed_gets_no_shift_and_a_note() {
     let c = chain(&uno(&mut s, col), "para");
     assert!(c.iter().any(|l| l.starts_with("// not mapped: line height shift")), "{c:?}");
     assert!(!c.iter().any(|l| l.starts_with(".Padding(") || l.starts_with(".Margin(")), "{c:?}");
+}
+
+#[test]
+fn path_data_writes_moves_lines_curves_and_closes_with_the_fill_rule() {
+    use crate::codegen::path_data;
+    use figcraft_geom::BezPath;
+    use figcraft_render::FillRule;
+    let mut p = BezPath::new();
+    p.move_to((0.0, 0.0));
+    p.line_to((24.0, 0.0));
+    p.quad_to((30.5, 6.25), (24.0, 12.0));
+    p.curve_to((20.0, 20.0), (4.0, 20.125), (0.0, 12.0));
+    p.close_path();
+    assert_eq!(path_data(&p, FillRule::Winding).as_deref(), Some("F1 M 0 0 L 24 0 Q 30.5 6.25 24 12 C 20 20 4 20.13 0 12 Z"));
+    assert!(path_data(&p, FillRule::EvenOdd).is_some_and(|d| d.starts_with("F0 M 0 0")));
+    // An open path has no Z; a second subpath starts with its own M.
+    let mut open = BezPath::new();
+    open.move_to((1.0, 2.0));
+    open.line_to((3.0, 4.0));
+    open.move_to((5.0, 6.0));
+    open.line_to((7.0, 8.0));
+    assert_eq!(path_data(&open, FillRule::Winding).as_deref(), Some("F1 M 1 2 L 3 4 M 5 6 L 7 8"));
+}
+
+#[test]
+fn path_data_refuses_empty_non_finite_and_huge_outlines() {
+    use crate::codegen::path_data;
+    use figcraft_geom::BezPath;
+    use figcraft_render::FillRule;
+    assert!(path_data(&BezPath::new(), FillRule::Winding).is_none());
+    let mut bad = BezPath::new();
+    bad.move_to((0.0, 0.0));
+    bad.line_to((f64::NAN, 1.0));
+    assert!(path_data(&bad, FillRule::Winding).is_none());
+    let mut inf = BezPath::new();
+    inf.move_to((0.0, f64::INFINITY));
+    assert!(path_data(&inf, FillRule::Winding).is_none());
+    let mut huge = BezPath::new();
+    huge.move_to((0.0, 0.0));
+    for i in 0..5_000 {
+        huge.line_to((f64::from(i), 1.0));
+    }
+    assert!(path_data(&huge, FillRule::Winding).is_none(), "5,001 elements are past the cap");
+    let mut ok = BezPath::new();
+    ok.move_to((0.0, 0.0));
+    for i in 0..4_999 {
+        ok.line_to((f64::from(i), 1.0));
+    }
+    assert!(path_data(&ok, FillRule::Winding).is_some());
+}
+
+#[test]
+fn a_star_is_a_path_with_its_fill_and_size_and_no_asset() {
+    let mut s = Session::new();
+    let f = frame(&mut s, "Icons", 100.0, 100.0);
+    let star =
+        idv(&ex(&mut s, "node.create", json!({"type": "star", "parent": f, "name": "Star Icon", "x": 10, "y": 20, "width": 40, "height": 40})));
+    set(&mut s, star, json!({"fill": "#141414"}));
+    let code = uno(&mut s, f);
+    let c = chain(&code, "starIcon");
+    assert_eq!(c.first().map(String::as_str), Some(".Canvas(left: 10, top: 20)"), "{code}");
+    let data = c.iter().find(|l| l.starts_with(".Data(\"F1 M ")).cloned().unwrap_or_default();
+    assert!(data.ends_with(" Z\")") && data.contains(" L "), "{c:?}");
+    assert!(c.contains(&".Fill(Color.FromArgb(0xFF, 0x14, 0x14, 0x14))".to_string()), "{c:?}");
+    assert!(c.contains(&".Width(40)".to_string()) && c.contains(&".Height(40)".to_string()), "{c:?}");
+    assert!(code.contains("var starIcon = new Microsoft.UI.Xaml.Shapes.Path()"), "{code}");
+    assert!(!code.contains("Assets/") && !code.contains(".svg") && !code.contains("new Image()"), "{code}");
+}
+
+#[test]
+fn a_boolean_result_and_an_even_odd_outline_are_paths_too() {
+    let mut s = Session::new();
+    let f = frame(&mut s, "Shapes", 200.0, 100.0);
+    let a = idv(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 40, "height": 40, "parent": f, "props": {"name": "A"}})));
+    let b = idv(&ex(&mut s, "shape.rectangle", json!({"x": 20, "y": 20, "width": 40, "height": 40, "parent": f, "props": {"name": "B"}})));
+    let u = idv(&ex(&mut s, "bool.union", json!({"ids": [a, b]})));
+    set(&mut s, u, json!({"name": "Union", "fill": "#00FF00"}));
+    let code = uno(&mut s, f);
+    let c = chain(&code, "union");
+    assert!(c.iter().any(|l| l.starts_with(".Data(\"F") && l.contains(" M ")), "{code}");
+    // A boolean's result is even-odd; a star is non-zero.
+    assert!(c.iter().any(|l| l.starts_with(".Data(\"F0 ")), "{c:?}");
+    assert!(!code.contains("export it as"), "{code}");
+}
+
+#[test]
+fn a_stroked_vector_has_a_centred_stroke_and_a_note_for_inside_or_outside() {
+    let mut s = Session::new();
+    let f = frame(&mut s, "Strokes", 100.0, 100.0);
+    let v = idv(&ex(&mut s, "node.create", json!({"type": "star", "parent": f, "name": "Line Star", "x": 0, "y": 0, "width": 30, "height": 30})));
+    set(&mut s, v, json!({"fill": "#FF0000", "stroke": "#0000FF", "strokeWeight": 2, "strokeAlign": "center"}));
+    let c = chain(&uno(&mut s, f), "lineStar");
+    assert!(c.contains(&".Stroke(Color.FromArgb(0xFF, 0x00, 0x00, 0xFF))".to_string()) && c.contains(&".StrokeThickness(2)".to_string()), "{c:?}");
+    assert!(!c.iter().any(|l| l.starts_with("//")), "{c:?}");
+    set(&mut s, v, json!({"strokeAlign": "inside"}));
+    let c = chain(&uno(&mut s, f), "lineStar");
+    assert!(c.contains(&"// not mapped: stroke inside or outside (drawn centred)".to_string()), "{c:?}");
+}
+
+#[test]
+fn vectors_that_a_path_cannot_draw_are_png_assets_with_unique_lowercase_names() {
+    let mut s = Session::new();
+    let f = frame(&mut s, "Icons", 300.0, 100.0);
+    let gradient = json!({"type": "gradient", "kind": "linear",
+        "stops": [{"position": 0, "color": {"r": 1, "g": 0, "b": 0, "a": 1}}, {"position": 1, "color": {"r": 0, "g": 0, "b": 1, "a": 1}}],
+        "from": [0, 0.5], "to": [1, 0.5]});
+    let mut ids = Vec::new();
+    for x in [0, 50, 100, 150] {
+        ids.push(idv(&ex(
+            &mut s,
+            "node.create",
+            json!({"type": "star", "parent": f, "name": "Star Icon", "x": x, "y": 0, "width": 40, "height": 40}),
+        )));
+    }
+    set(&mut s, ids[0], json!({"fills": [gradient]}));
+    set(&mut s, ids[1], json!({"fills": ["#FF0000", "#00FF00"]}));
+    set(&mut s, ids[2], json!({"effects": [{"type": "dropShadow", "color": "#00000040", "offset": [0, 4], "radius": 8}]}));
+    let code = uno(&mut s, f);
+    for n in ["star_icon", "star_icon_2", "star_icon_3"] {
+        assert!(code.contains(&format!(".Source(\"ms-appx:///Assets/{n}.png\")")), "{n} in {code}");
+        assert!(code.contains(&format!("// Star \"Star Icon\": export it as a PNG to Assets/{n}.png")), "{code}");
+    }
+    assert!(code.contains(".Stretch(Stretch.Uniform)"), "{code}");
+    // The fourth is plain: a path, and it takes no asset name.
+    assert_eq!(code.matches("new Microsoft.UI.Xaml.Shapes.Path()").count(), 1, "{code}");
+    assert!(!code.contains("star_icon_4") && !code.contains(".svg"), "{code}");
 }
