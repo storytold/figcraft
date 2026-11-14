@@ -170,6 +170,8 @@ fn the_dragged_frame_never_receives_itself_and_plain_frames_in_a_flow_are_items(
     let list = frame(&mut s, None, 500.0, 0.0, 200.0, 400.0);
     let cards: Vec<NodeId> = (0..3).map(|i| frame(&mut s, Some(list), 0.0, i as f64 * 70.0, 150.0, 60.0)).collect();
     s.execute("layout.add", &json!({"ids": [list], "direction": "vertical"})).unwrap();
+    // The list now hugs its cards; padding gives it room around them to drop into.
+    s.execute("node.set", &json!({"id": list, "props": {"padding": 20, "sizingH": "hug"}})).unwrap();
     s.execute("select.none", &json!({})).unwrap();
     let card0 = bounds(&s, cards[0]);
     let grab = Point::new(bounds(&s, cards[2]).x0 + 3.0, bounds(&s, cards[2]).y0 + 3.0);

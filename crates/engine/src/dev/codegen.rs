@@ -601,6 +601,8 @@ mod tests {
         let mut s = Session::new();
         let f = card(&mut s);
         let doc = s.doc().unwrap();
+        // Add auto layout hugs the height: the taller of the 24 ellipse and the text line (30).
+        assert_eq!(doc.node(f).map(|n| n.height), Some(30.0));
         let ark = code_for(doc, f, CodeLang::ArkUi);
         for want in [
             "Row({ space: ",
@@ -611,7 +613,7 @@ mod tests {
             ".backgroundColor('#FFFFFF')",
             ".borderRadius(12)",
             ".width(",
-            ".height(100)",
+            ".height(30)",
             ".clip(true)",
         ] {
             assert!(ark.contains(want), "ArkUI has {want:?}:\n{ark}");
@@ -694,7 +696,8 @@ mod tests {
         let dart = code_for(doc, f, CodeLang::Flutter);
         // The card hugs its content, so its width is the layout's, not the 200 it was created with.
         let w = doc.node(f).map(|n| n.width).unwrap_or_default();
-        assert!(dart.starts_with(&format!("Container(\n  width: {},\n  height: 100,\n", num(w))), "{dart}");
+        assert_eq!(doc.node(f).map(|n| n.height), Some(30.0), "hugs the taller of the ellipse and the text line");
+        assert!(dart.starts_with(&format!("Container(\n  width: {},\n  height: 30,\n", num(w))), "{dart}");
         assert!(dart.contains("borderRadius: BorderRadius.circular(12)"), "{dart}");
         assert!(dart.contains("child: Row(\n"), "{dart}");
         assert!(dart.contains("      Text(\n        \"Say \\\"hi\\\" \\$5\\nnow\",\n"), "escaped: {dart}");
