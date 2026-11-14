@@ -312,9 +312,12 @@ fn own(cmd: &str, m: &Message, who: &str, what: &str) -> crate::Result<()> {
 }
 
 /// A node to pin to: a node id on `page`, `true` for the innermost frame under the point, else none.
-fn anchor_at(doc: &Document, page: NodeId, x: f64, y: f64, v: Option<&Value>) -> Option<NodeId> {
+fn anchor_at(doc: &Document, page: NodeId, x: f64, y: f64, v: Option<&Value>, within: Option<NodeId>) -> Option<NodeId> {
     match v {
-        Some(Value::Bool(true)) => frame_at(doc, page, x, y),
+        Some(Value::Bool(true)) => match within.filter(|w| *w != page && doc.page_of(*w) == Some(page) && contains(doc, *w, x, y)) {
+            Some(w) => frame_in(doc, w, x, y, Some(w)),
+            None => frame_at(doc, page, x, y),
+        },
         Some(v) => id_of(v).filter(|a| *a != page && doc.page_of(*a) == Some(page)),
         None => None,
     }
@@ -670,7 +673,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "comment.add",
             "Add comment",
-            "{x, y, text, page?, author?, anchor? (node id to pin to; true = innermost frame under the point)}",
+            "{x, y, text, page?, author?, anchor? (node id to pin to; true = innermost frame under the point), within? (with anchor true: search only inside this frame on the page, which is the anchor when no child holds the point)}",
             true,
             |s, p| {
                 let x = req_num("comment.add", p, "x")?;
@@ -682,7 +685,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !doc.pages.contains(&page) {
                     return Err(bad("comment.add", format!("{page} is not a page")));
                 }
-                let anchor = anchor_at(doc, page, x, y, get(p, "anchor"));
+                let anchor = anchor_at(doc, page, x, y, get(p, "anchor"), id(p, "within"));
                 let (lx, ly) = local(doc, anchor, x, y);
                 let mut c = Comment {
                     id: s.doc_mut()?.new_comment_id(),
@@ -772,7 +775,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let (x, y) = (req_num("comment.move", p, "x")?, req_num("comment.move", p, "y")?);
                 let doc = s.doc()?;
                 let page = doc.comment(id).map(|c| c.page).ok_or_else(|| bad("comment.move", "no comment"))?;
-                let anchor = anchor_at(doc, page, x, y, Some(get(p, "anchor").unwrap_or(&Value::Bool(true))));
+                let anchor = anchor_at(doc, page, x, y, Some(get(p, "anchor").unwrap_or(&Value::Bool(true))), None);
                 let (lx, ly) = local(doc, anchor, x, y);
                 if let Some(c) = s.doc_mut()?.comment_mut(id) {
                     (c.x, c.y, c.anchor) = (lx, ly, anchor);
@@ -974,9 +977,20 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Innermost frame (or component/instance/section) under a page point, for anchoring.
 fn frame_at(doc: &Document, page: NodeId, x: f64, y: f64) -> Option<NodeId> {
+    frame_in(doc, page, x, y, None)
+}
+
+/// Whether the page point lies inside node `n`'s box.
+fn contains(doc: &Document, n: NodeId, x: f64, y: f64) -> bool {
+    let Some(node) = doc.node(n) else { return false };
+    let l = doc.world_transform(n).inverse() * geom::Point::new(x, y);
+    l.x >= 0.0 && l.y >= 0.0 && l.x <= node.width && l.y <= node.height
+}
+
+/// The innermost frame-like or section under the point, searching from `root` (with `found` as the fallback).
+fn frame_in(doc: &Document, root: NodeId, x: f64, y: f64, mut found: Option<NodeId>) -> Option<NodeId> {
     let pt = geom::Point::new(x, y);
-    let mut found = None;
-    let mut stack = vec![page];
+    let mut stack = vec![root];
     while let Some(parent) = stack.pop() {
         let Some(n) = doc.node(parent) else { continue };
         for c in n.children.iter().rev() {
@@ -1010,6 +1024,25 @@ mod tests {
         assert_eq!(super::parse_link(""), None);
         assert_eq!(super::parse_link("5"), Some(5));
         assert_eq!(super::parse_link("figcraft://comment/5/"), Some(5));
+    }
+
+    #[test]
+    fn comment_add_within_anchors_to_the_presented_frame() {
+        let mut s = Session::new();
+        let mk = |s: &mut Session, params: serde_json::Value| crate::params::id_of(&s.execute("node.create", &params).unwrap()["id"]).unwrap();
+        let a = mk(&mut s, json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 200}));
+        let b = mk(&mut s, json!({"type": "frame", "x": 100, "y": 0, "width": 200, "height": 200}));
+        let anchor = |s: &mut Session, params: serde_json::Value| {
+            let c = s.execute("comment.add", &params).unwrap();
+            let id = c["id"].as_u64().unwrap();
+            s.doc().unwrap().comment(id).unwrap().anchor
+        };
+        assert_eq!(anchor(&mut s, json!({"x": 150, "y": 50, "text": "t", "anchor": true})), Some(b));
+        assert_eq!(anchor(&mut s, json!({"x": 150, "y": 50, "text": "t", "anchor": true, "within": a})), Some(a));
+        let c = mk(&mut s, json!({"type": "frame", "x": 120, "y": 20, "width": 50, "height": 50, "parent": a}));
+        assert_eq!(anchor(&mut s, json!({"x": 130, "y": 30, "text": "t", "anchor": true, "within": a})), Some(c));
+        // A point outside `within` ignores it.
+        assert_eq!(anchor(&mut s, json!({"x": 250, "y": 50, "text": "t", "anchor": true, "within": a})), Some(b));
     }
 
     #[test]

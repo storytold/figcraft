@@ -34,6 +34,19 @@ fn release_drag_scroll(p: &mut Presenter, l: &Layout, down: bool, velocity: Vec2
     }
 }
 
+/// Without clicks (the comment mode), forget a press in progress and what it began: a drag-scroll and a
+/// transition following the pointer.
+fn drop_press(p: &mut Presenter, clicks: bool) {
+    if clicks {
+        return;
+    }
+    p.press = None;
+    p.drag_scroll = None;
+    if let Some(a) = p.anim.as_mut() {
+        a.follow = None;
+    }
+}
+
 /// Scrolls the first of `targets` the wheel can still move, and smooths the wheel's speed over
 /// ~50 ms whatever the frame rate.
 fn wheel_scroll(p: &mut Presenter, l: &Layout, base: &Document, targets: Vec<Scroller>, wheel: Vec2, dt: f64) {
@@ -162,13 +175,16 @@ fn fire_pads(p: &mut Presenter, doc: &Document, root: NodeId, pads: &[String], n
 /// player takes the keyboard; `pane`: it plays in the preview pane (which always fits).
 pub(super) struct InputMode {
     pub over_area: bool,
+    /// Presses reach the prototype: false in the presenter's comment mode, where a click places a
+    /// comment (hover and the wheel still work).
+    pub clicks: bool,
     pub keys_on: bool,
     pub pane: bool,
     pub now: f64,
 }
 
 pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, mode: InputMode) {
-    let InputMode { over_area, keys_on, pane, now } = mode;
+    let InputMode { over_area, clicks, keys_on, pane, now } = mode;
     let (pos, pressed, released, down, wheel, velocity, dt, keys) = ctx.input(|i| {
         let keys: Vec<(egui::Key, egui::Modifiers)> = i
             .events
@@ -190,6 +206,9 @@ pub(super) fn input(p: &mut Presenter, ctx: &egui::Context, l: &Layout, mode: In
         )
     });
     let keys = if keys_on { keys } else { Vec::new() };
+    let pressed = pressed && clicks;
+    // A press already in progress when the comment mode starts is dropped, so its release is no click.
+    drop_press(p, clicks);
     // Controller buttons pressed while a link notice shows are dropped, as keys are.
     let pads = std::mem::take(&mut p.pads);
     let pads = if p.link_notice.is_none() { pads } else { Vec::new() };

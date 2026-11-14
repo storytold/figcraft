@@ -94,12 +94,24 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         }
         _ => {}
     }
+    // Escape with no draft or thread open turns the comment mode off and keeps the presentation.
+    let cu = &app.ui.comments;
+    if live
+        && pres.view.comments
+        && pres.link_notice.is_none()
+        && cu.open.is_none()
+        && cu.draft.is_none()
+        && !cu.mention.active()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        pres.view.comments = false;
+    }
     if live
         && pres.view.comments
         && let Some((frame, place, clip)) = pres.shown
     {
         crate::comments::presenter(app, &ctx, frame, place, clip);
-    } else if app.ui.comments.open.is_some() {
+    } else if app.ui.comments.open.is_some() || app.ui.comments.draft.is_some() {
         app.ui.comments.close();
     }
     finish(app, &mut pres);
