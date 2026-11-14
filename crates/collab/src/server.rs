@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::change::{Change, Entry, Family, Prop, Target};
 use crate::message::{
-    Accepted, Access, CatchUp, ClientMsg, Hello, PROTOCOL, Peer, Presence, Processed, Resume, ServerMsg, Signal, reads_comments, reads_signals,
+    Accepted, Access, CatchUp, ClientMsg, Hello, PROTOCOL, Peer, Presence, Processed, Resume, ServerMsg, Signal, reads_comments, reads_design_review,
+    reads_signals,
 };
 use crate::replica::{Mode, Replica, create_change};
 use crate::{Error, Limits, docprops, same_secret};
@@ -86,6 +87,10 @@ pub struct Server {
     journal: Option<Vec<Journal>>,
     /// The connected clients that read signals (cursor chat, spotlight).
     signals: BTreeSet<u32>,
+    /// The connected clients that read the design review settings (`DocProp::DesignReview`): a
+    /// peer that doesn't announce them can't decode the variant, so the server keeps review
+    /// edits out of everything it sends them.
+    design_review: BTreeSet<u32>,
     /// Who spotlights now (a newcomer is told).
     spotlight: Option<u32>,
     /// Saved history this server restored or replayed left image entries out (or may give a
@@ -146,6 +151,7 @@ impl Server {
             limited: BTreeMap::new(),
             journal: None,
             signals: BTreeSet::new(),
+            design_review: BTreeSet::new(),
             spotlight: None,
             resync: false,
         }
@@ -333,12 +339,16 @@ impl Server {
         }
         // The log holds every batch after `floor`.
         let floor = self.log.front().map_or(self.seq, |a| a.seq.saturating_sub(1));
+        let reads_design_review = reads_design_review(&hello.client_version);
         let catch_up = match resume {
             Some(r) if !self.resync && r.seq <= self.seq && r.seq >= floor => {
                 CatchUp::Delta(self.log.iter().filter(|a| a.seq > r.seq).cloned().collect())
             }
             _ => CatchUp::Snapshot(self.state.snapshot().map_err(|e| refuse(&e.to_string()))?),
         };
+        // A peer that doesn't read the review settings can't decode them: its catch-up carries
+        // everything else.
+        let catch_up = filter_catch_up(catch_up, reads_design_review);
         let (id, secret) = match resume {
             Some(r) => (r.client_id, *self.secrets.entry(r.client_id).or_insert(r.secret)),
             None => {
@@ -374,7 +384,18 @@ impl Server {
         } else {
             self.signals.remove(&id);
         }
+        if reads_design_review {
+            self.design_review.insert(id);
+        } else {
+            self.design_review.remove(&id);
+        }
         Ok((id, outs))
+    }
+
+    /// Whether every connected peer reads the design review settings: then a batch goes out as
+    /// one message, the common case.
+    fn everyone_reads_design_review(&self) -> bool {
+        self.peers.keys().all(|id| self.design_review.contains(id))
     }
 
     /// Whether `r` may take its client id back: it carries the secret that id was given with, or
@@ -393,6 +414,7 @@ impl Server {
         self.acked.remove(&id);
         self.limited.remove(&id);
         self.signals.remove(&id);
+        self.design_review.remove(&id);
         if self.spotlight == Some(id) {
             self.spotlight = None;
         }
@@ -430,7 +452,7 @@ impl Server {
                         let acc = Accepted { seq: self.seq, author: from, batch_id, changes };
                         self.remember(acc.clone());
                         self.note(Journal::Accepted(acc.clone()));
-                        vec![Outgoing::All(ServerMsg::Changes(acc))]
+                        self.relay_changes(acc)
                     }
                     Err(e) => {
                         self.note(Journal::Refused { client: from, batch_id });
@@ -480,6 +502,31 @@ impl Server {
                 vec![Outgoing::To(from, ServerMsg::Refused { reason: "managing files and libraries needs a connection of its own".into() })]
             }
         }
+    }
+
+    /// Send an accepted batch to every connected peer. A peer that doesn't read the review
+    /// settings can't decode them, so it gets the same batch (its seq, batch id and the peer's
+    /// own accounting included) with those edits left out and everything else in order.
+    fn relay_changes(&self, acc: Accepted) -> Vec<Outgoing> {
+        if !acc.changes.iter().any(Change::is_design_review) || self.everyone_reads_design_review() {
+            return vec![Outgoing::All(ServerMsg::Changes(acc))];
+        }
+        // Every peer hears the batch, even one with nothing left for it: the batch still carries
+        // the next sequence number, and a peer that skipped it would reject its next ordinary
+        // batch as out of order.
+        self.peers
+            .keys()
+            .copied()
+            .map(|id| {
+                if self.design_review.contains(&id) || id == acc.author {
+                    Outgoing::To(id, ServerMsg::Changes(acc.clone()))
+                } else {
+                    let mut filtered = acc.clone();
+                    filtered.changes = Change::without_design_review(filtered.changes);
+                    Outgoing::To(id, ServerMsg::Changes(filtered))
+                }
+            })
+            .collect()
     }
 
     /// Client `from` is called `name` from now on (cleaned): everyone, itself too, hears it as its
@@ -703,4 +750,24 @@ pub fn weight(changes: &[Change]) -> usize {
             Change::Remove { .. } => 64,
         })
         .fold(0, usize::saturating_add)
+}
+
+/// A catch-up a peer that doesn't read the design review settings can decode: the review-setting
+/// edits are left out of a delta and out of a snapshot, everything else as it was.
+fn filter_catch_up(cu: CatchUp, reads_design_review: bool) -> CatchUp {
+    if reads_design_review {
+        return cu;
+    }
+    match cu {
+        CatchUp::Delta(list) => CatchUp::Delta(
+            list.into_iter()
+                .map(|mut a| {
+                    a.changes = Change::without_design_review(a.changes);
+                    a
+                })
+                .collect(),
+        ),
+        CatchUp::Snapshot(changes) => CatchUp::Snapshot(Change::without_design_review(changes)),
+        packed => packed,
+    }
 }

@@ -77,9 +77,12 @@ impl Replica {
 
     /// [`from_snapshot`](Self::from_snapshot), and how many image entries it left out: a
     /// snapshot saved before the image checks may hold one they refuse, and opens without it.
+    /// Review settings past the current limits are clamped to them, not dropped (see
+    /// [`docprops::clamp_snapshot_design_review`]).
     pub(crate) fn from_snapshot_leaving_out(changes: &[Change]) -> Result<(Replica, usize), Error> {
         let mut r = Replica { doc: Document::without_pages(""), positions: Positions::new() };
         let mut changes = changes.to_vec();
+        docprops::clamp_snapshot_design_review(&mut changes);
         let left_out = r.apply_kept(&mut changes, Change::is_image)?;
         if r.doc.pages.is_empty() {
             return Err(Error::Invalid("a snapshot needs a page".into()));

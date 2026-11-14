@@ -148,7 +148,12 @@ As built:
   A diff gives new keys only to the children that need them (the longest run of old keys that is
   still increasing keeps its keys) and re-spaces a parent whose keys would grow past 48 characters.
 - **Document-level objects covered now**: the file name, the current page, document colours, the
-  colour profile, image presets, annotation categories and library data (whole values); styles,
+  colour profile, image presets, annotation categories, the design review settings
+  (`DocProp::DesignReview`, sent only to clients whose `client_version` announces
+  `design-review`; a client that doesn't gets every batch, catch-up delta and snapshot without
+  them, and an accepted batch still reaches it when nothing of it is left, so sequence numbers
+  never skip; a snapshot saved with longer lists opens clamped to the limits `design.configure`
+  keeps) and library data (whole values); styles,
   comment threads, variable collections and variables (one entry per id plus the order of ids;
   the whole list when ids aren't unique); dev-mode snapshots (per layer); images (per content
   hash, the encoded bytes as base64; as an entry applies the claim is checked: every key is

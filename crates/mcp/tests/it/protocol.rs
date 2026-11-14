@@ -219,13 +219,16 @@ fn prompts_list_and_get() {
     let mut c = Client::new();
     let r = c.rpc("prompts/list", json!({}));
     let names: Vec<&str> = r["result"]["prompts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["mobile_screen", "design_system", "landing_page", "prototype_flow", "fix_comments", "watch_comments"]);
+    assert_eq!(names, ["mobile_screen", "design_system", "landing_page", "design_review", "prototype_flow", "fix_comments", "watch_comments"]);
     let r = c.rpc("prompts/get", json!({"name": "mobile_screen", "arguments": {"screen": "login"}}));
     let text = r["result"]["messages"][0]["content"]["text"].as_str().unwrap();
     assert!(text.contains("login") && text.contains("iPhone 16") && text.contains("#3B5BDB") && !text.contains("{device}"));
     assert_eq!(c.rpc("prompts/get", json!({"name": "mobile_screen"}))["error"]["code"], -32602);
     assert_eq!(c.rpc("prompts/get", json!({"name": "nope"}))["error"]["code"], -32602);
     assert_eq!(c.rpc("prompts/get", json!({"name": "landing_page", "arguments": {"product": ["x"]}}))["error"]["code"], -32602);
+    let r = c.rpc("prompts/get", json!({"name": "design_review", "arguments": {"target": "document"}}));
+    let text = r["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(text.contains("design.audit") && text.contains("\"document\"") && !text.contains("{target}"), "{text}");
     let r = c.rpc("prompts/get", json!({"name": "prototype_flow"}));
     assert!(r["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("Home, Details, Checkout"));
     let r = c.rpc("prompts/get", json!({"name": "fix_comments", "arguments": {"auto_resolve": "no", "author": "Ada"}}));

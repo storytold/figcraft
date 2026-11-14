@@ -1,7 +1,7 @@
 //! Creating nodes.
 
 use figcraft_color::{ImageFilters, ImageScaleMode, Paint};
-use figcraft_doc::{Document, Node, NodeId, NodeKind, StrokeCap, TextAutoResize, TextData, VectorNetwork};
+use figcraft_doc::{Document, Node, NodeId, NodeKind, Sizing, StrokeCap, TextAutoResize, TextData, VectorNetwork};
 use figcraft_geom::Point;
 use serde_json::{Value, json};
 
@@ -99,7 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.create",
             "Text",
-            "{text | characters, x, y, parent?, index?, name? (default: the first line), width? (fixed width wraps), props? (fontSize, fontFamily, …), select? (default true)}",
+            "{text | characters, x?, y? (ignored inside an auto layout parent unless props.absolute is true, which keeps the transform they set), parent?, index?, name? (default: the first line), width? (fixed width wraps), props? (fontSize, fontWeight, fontFamily, …), select? (default true)}",
             true,
             |s, p| { create_kind(s, p, "text") }
         ),
@@ -275,7 +275,9 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc()?;
     let pn = doc.get(parent)?;
     if !pn.kind.is_container() {
-        return Err(bad(cmd, format!("{parent} can't contain layers")));
+        let name = pn.name.trim();
+        let what = if name.is_empty() { pn.kind.type_name().to_string() } else { format!("{} \"{}\"", pn.kind.type_name(), name) };
+        return Err(bad(cmd, format!("{parent} ({what}) can't contain layers")));
     }
     if base == "Section" && !doc.takes_sections(parent) {
         return Err(bad(cmd, "sections go on the page or in other sections"));
@@ -371,6 +373,24 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     doc.insert(node, parent, index)?;
     if let Some(Value::Object(props)) = get(p, "props") {
         super::props::apply(cmd, doc, nid, props)?;
+        // An auto layout frame hugs the axes the caller left unset — the incumbent's default, and
+        // the difference between a card and a 100pt-tall box that silently clips its rows.
+        // Explicit width/height and explicit sizing keep their fixed/fill behaviour.
+        if doc.node(nid).is_some_and(|n| n.layout.is_some()) {
+            let asked = |axis: &str, keys: &[&str]| {
+                let long = if axis == "h" { "width" } else { "height" };
+                let short = if axis == "h" { "w" } else { "h" };
+                num(p, long).is_some() || props.contains_key(long) || props.contains_key(short) || keys.iter().any(|k| props.contains_key(*k))
+            };
+            if let Some(n) = doc.node_mut(nid) {
+                if !asked("h", &["sizingH", "layoutSizingHorizontal"]) {
+                    n.child_layout.sizing_h = Sizing::Hug;
+                }
+                if !asked("v", &["sizingV", "layoutSizingVertical"]) {
+                    n.child_layout.sizing_v = Sizing::Hug;
+                }
+            }
+        }
     }
     if boolean(p, "select").unwrap_or(true) {
         ds.selection = vec![nid];

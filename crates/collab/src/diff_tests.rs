@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use figcraft_color::{Color, Paint};
-use figcraft_doc::{Comment, DevSnapshot, Document, ImageData, Message, Node, NodeId, NodeKind, Style, StyleKind};
+use figcraft_doc::{Comment, DesignPreset, DevSnapshot, Document, ImageData, MAX_DISABLED, Message, Node, NodeId, NodeKind, Style, StyleKind};
 
 use crate::change::{Change, DocProp, Entry, Json, Prop};
 use crate::replica::{Mode, Replica};
@@ -46,6 +46,63 @@ fn property_edits_send_only_what_changed() {
     assert_eq!(changes.len(), 2);
     assert!(changes.iter().all(|c| matches!(c, Change::Set { id, prop: Prop::Opacity | Prop::Fills, .. } if *id == kids[1])));
     assert!(round_trip(&a, a.document()).is_empty(), "nothing changed");
+}
+
+#[test]
+fn design_review_settings_round_trip_and_reach_a_snapshot() {
+    let (a, _, _, _) = setup();
+    let mut b = a.document().clone();
+    b.design_review.preset = DesignPreset::Strict;
+    b.design_review.grid = 8.0;
+    let changes = round_trip(&a, &b);
+    assert!(changes.contains(&Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() }));
+    let snapshot = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
+    assert!(snapshot.iter().any(|c| matches!(c, Change::SetDoc { prop: DocProp::DesignReview, .. })), "a snapshot carries the review settings");
+}
+
+#[test]
+fn an_edit_past_the_review_limits_is_refused_but_a_snapshot_clamps() {
+    let (a, _, _, _) = setup();
+    // An edit peer trying to hand the file tens of thousands of radii is refused at apply.
+    let mut b = a.document().clone();
+    b.design_review.preset = DesignPreset::Strict;
+    b.design_review.grid = 8.0;
+    b.design_review.radii = (0..40).map(|i| i as f64).collect();
+    b.design_review.brand = vec![Color::from_rgb8_const(1, 2, 3); 40];
+    b.design_review.disabled = vec!["radius.off-scale".into()];
+    let mut r = a.clone();
+    let change = Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() };
+    let err = r.apply(std::slice::from_ref(&change), Mode::Strict).unwrap_err().to_string();
+    assert!(err.contains("pass the 32 limit `design.configure` keeps"), "{err}");
+    // A snapshot holding settings over the limits (an old file's) opens clamped to what fits:
+    // the preset, grid and disabled rules exactly as saved, the lists to the limit.
+    let snap = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
+    let (r2, left_out) = Replica::from_snapshot_leaving_out(&snap).unwrap();
+    assert_eq!(left_out, 0, "nothing needed leaving out");
+    let cfg = &r2.document().design_review;
+    assert_eq!(cfg.preset, DesignPreset::Strict, "the preset survives");
+    assert_eq!(cfg.grid, 8.0, "the grid survives");
+    assert_eq!(cfg.disabled, vec!["radius.off-scale".to_string()], "the disabled rules survive");
+    assert_eq!(cfg.radii, (0..32).map(|i| i as f64).collect::<Vec<_>>(), "the radii keep their first 32");
+    assert_eq!(cfg.brand, vec![Color::from_rgb8_const(1, 2, 3); 32], "the brand colours keep their first 32");
+}
+
+#[test]
+fn an_edit_with_too_many_disabled_rules_is_refused_and_a_snapshot_truncates_them() {
+    let (a, _, _, _) = setup();
+    let mut b = a.document().clone();
+    b.design_review.disabled = (0..200).map(|i| format!("rule.{i}")).collect();
+    let mut r = a.clone();
+    let change = Change::SetDoc { prop: DocProp::DesignReview, value: Json::of(&b.design_review).unwrap() };
+    let err = r.apply(std::slice::from_ref(&change), Mode::Strict).unwrap_err().to_string();
+    assert!(err.contains("200 disabled rules pass the 64 limit `design.configure` keeps"), "{err}");
+    // A snapshot with a longer list opens with the ones that fit, not without the settings.
+    let snap = diff(&Replica::new(Document::without_pages("")), &b).unwrap().changes;
+    let (r2, left_out) = Replica::from_snapshot_leaving_out(&snap).unwrap();
+    assert_eq!(left_out, 0, "nothing needed leaving out");
+    let cfg = &r2.document().design_review;
+    assert_eq!(cfg.disabled.len(), MAX_DISABLED, "the list keeps its first {MAX_DISABLED}");
+    assert_eq!(cfg.disabled.first().map(String::as_str), Some("rule.0"));
 }
 
 #[test]
