@@ -181,14 +181,14 @@ fn text_maps_its_style_and_box() {
     set(
         &mut s,
         t,
-        json!({"fontFamily": "Inter", "fontSize": 16, "fontWeight": 600, "fontStyle": "Semi Bold Italic", "letterSpacing": 2, "lineHeight": "150%", "textDecoration": "underline", "textAlign": "center", "width": 150, "textAutoResize": "height", "fill": "#112233"}),
+        json!({"fontFamily": "Zzyzx Test Family", "fontSize": 16, "fontWeight": 600, "fontStyle": "Semi Bold Italic", "letterSpacing": 2, "lineHeight": "150%", "textDecoration": "underline", "textAlign": "center", "width": 150, "textAutoResize": "height", "fill": "#112233"}),
     );
     let code = uno(&mut s, f);
     assert!(code.contains("using Microsoft.UI.Text;"), "{code}");
     for line in [
         ".Canvas(left: 10, top: 12)",
         ".Text(\"Say \\\"hi\\\"\\n\\\\\")",
-        ".FontFamily(\"Inter\")",
+        ".FontFamily(\"Zzyzx Test Family\")",
         ".FontSize(16)",
         ".FontWeight(FontWeights.SemiBold)",
         ".FontStyle(FontStyle.Italic)",
@@ -794,4 +794,79 @@ fn wrapping_is_one_line_and_a_note() {
     assert!(code.contains("new AutoLayout()"), "{code}");
     set(&mut s, f, json!({"wrap": false}));
     assert!(!uno(&mut s, f).contains("wrap (FlexPanel"));
+}
+
+/// A text in `parent` with an explicit pixel line height, in the first installed family (any, as the
+/// formula is checked against the face the code itself asks for). `None` when no font is installed.
+fn spaced_text(s: &mut Session, parent: NodeId, line_height: f64) -> Option<(NodeId, f64)> {
+    // The fonts of the machine; a face that exists nearly everywhere is preferred.
+    figcraft_text::scan_system_fonts();
+    let family = ["DejaVu Sans", "Liberation Sans", "Arial"].into_iter().find(|f| figcraft_text::has_family(f)).map(str::to_string);
+    let family = family.or_else(|| figcraft_text::family_names().into_iter().next())?;
+    let t = idv(&ex(s, "text.create", json!({"text": "One\nTwo\nThree", "x": 7, "y": 9, "parent": parent, "props": {"name": "Para"}})));
+    set(s, t, json!({"fontFamily": family, "fontSize": 20, "lineHeight": line_height, "textAutoResize": "widthAndHeight"}));
+    let style = match &s.doc().ok()?.node(t)?.kind {
+        NodeKind::Text(td) => td.style.clone(),
+        _ => return None,
+    };
+    let face = figcraft_text::find_face(&style.font_family, &style.font_style)?;
+    Some((t, (line_height - (face.ascent + face.descent) / face.upem * 20.0) / 2.0))
+}
+
+#[test]
+fn half_leading_moves_text_down_with_padding_in_a_flow_and_the_offset_in_a_canvas() {
+    use crate::codegen::num;
+    let mut s = Session::new();
+    let col = row(&mut s, json!({"layout": "vertical"}));
+    let Some((_, h)) = spaced_text(&mut s, col, 60.0) else { return };
+    assert!(h > 0.5, "60 px lines are looser than any 20 px font");
+    let code = uno(&mut s, col);
+    let c = chain(&code, "para");
+    assert!(c.contains(&".LineHeight(60)".to_string()), "{code}");
+    assert!(c.contains(&format!(".Padding(0, {}, 0, 0)", num(h))), "{c:?}");
+    assert!(c.contains(&format!(".Margin(0, 0, 0, {})", num(-h))), "{c:?}");
+    assert!(!c.iter().any(|l| l.starts_with(".Height(")), "never a height of n lines: {c:?}");
+    // In a canvas the offset takes the shift and there is no padding.
+    let free = frame(&mut s, "Free", 200.0, 200.0);
+    let (_, h) = spaced_text(&mut s, free, 60.0).unwrap_or((free, 0.0));
+    let code = uno(&mut s, free);
+    let c = chain(&code, "para");
+    assert_eq!(c[0], format!(".Canvas(left: 7, top: {})", num(9.0 + h)), "{c:?}");
+    assert!(!c.iter().any(|l| l.starts_with(".Padding(") || l.starts_with(".Margin(")), "{c:?}");
+}
+
+#[test]
+fn half_leading_merges_with_the_margin_of_an_independent_child() {
+    use crate::codegen::num;
+    let mut s = Session::new();
+    let col = row(&mut s, json!({"layout": "vertical"}));
+    let Some((t, h)) = spaced_text(&mut s, col, 60.0) else { return };
+    set(&mut s, t, json!({"absolute": true, "x": 30, "y": 40}));
+    let c = chain(&uno(&mut s, col), "para");
+    assert!(c.contains(&format!(".Margin(30, 40, 0, {})", num(-h))), "{c:?}");
+    assert_eq!(c.iter().filter(|l| l.starts_with(".Margin(")).count(), 1, "{c:?}");
+}
+
+#[test]
+fn a_line_height_below_the_font_is_noted_and_an_automatic_one_needs_nothing() {
+    let mut s = Session::new();
+    let col = row(&mut s, json!({"layout": "vertical"}));
+    let Some((t, _)) = spaced_text(&mut s, col, 1.0) else { return };
+    let c = chain(&uno(&mut s, col), "para");
+    assert!(c.contains(&"// not mapped: line height below the font's natural height is not reproduced in Uno".to_string()), "{c:?}");
+    assert!(!c.iter().any(|l| l.starts_with(".Padding(") || l.starts_with(".Margin(")), "{c:?}");
+    set(&mut s, t, json!({"lineHeight": "auto"}));
+    let c = chain(&uno(&mut s, col), "para");
+    assert!(!c.iter().any(|l| l.starts_with(".Padding(") || l.starts_with(".Margin(") || l.starts_with("//")), "{c:?}");
+}
+
+#[test]
+fn a_font_that_is_not_installed_gets_no_shift_and_a_note() {
+    let mut s = Session::new();
+    let col = row(&mut s, json!({"layout": "vertical"}));
+    let t = idv(&ex(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 0, "parent": col, "props": {"name": "Para"}})));
+    set(&mut s, t, json!({"fontFamily": "Nonexistent Family Zzyzx", "fontSize": 20, "lineHeight": 60}));
+    let c = chain(&uno(&mut s, col), "para");
+    assert!(c.iter().any(|l| l.starts_with("// not mapped: line height shift")), "{c:?}");
+    assert!(!c.iter().any(|l| l.starts_with(".Padding(") || l.starts_with(".Margin(")), "{c:?}");
 }

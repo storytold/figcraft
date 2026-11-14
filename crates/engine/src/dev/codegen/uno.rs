@@ -696,16 +696,25 @@ impl Gen<'_> {
     }
 
     /// Text: a `TextBlock`, in a `Grid` of the box's height when it is aligned to the middle or
-    /// bottom of a fixed box.
+    /// bottom of a fixed box. An explicit line height puts half the leading above the first line in
+    /// FigCraft and all of it below in Uno, so the text is moved down by the half-leading.
     fn text(&mut self, n: &Node, t: &TextData, at: Place) -> Element {
         let fixed = matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate);
         let framed = fixed && t.align_v != TextAlignV::Top;
         let mut tb = text_block(n, t, !framed, line_axes(n, at));
+        let leading = leading(&t.style);
+        // In a `Canvas` the offset takes the shift; anywhere else the recipe below does.
+        let at_text = match (leading, at) {
+            (Leading::Shift(h), Place::At(x, y)) if !framed => Place::At(x, y + h),
+            _ => at,
+        };
         if !framed {
-            place(&mut tb, n, at);
+            place(&mut tb, n, at_text);
+            leading_calls(&mut tb, leading, !matches!(at_text, Place::At(..)));
             common(&mut tb, n);
             return tb;
         }
+        leading_calls(&mut tb, leading, true);
         tb.call(format!(".VerticalAlignment(VerticalAlignment.{})", if t.align_v == TextAlignV::Middle { "Center" } else { "Bottom" }));
         let mut g = Element::new("new Grid()");
         place(&mut g, n, at);
@@ -906,6 +915,76 @@ fn padding_call(e: &mut Element, pad: [f64; 4]) {
         } else {
             e.call(format!(".Padding({}, {}, {}, {})", num(lf), num(t), num(r), num(b)));
         }
+    }
+}
+
+/// What an explicit line height asks of a text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Leading {
+    /// An automatic line height, or one so close to the font's own that there is nothing to move.
+    None,
+    /// The text moves down by the half-leading (pixels).
+    Shift(f64),
+    /// The line height is below the font's natural height.
+    Tight,
+    /// The font family is not installed where the code is written, so its metrics are unknown.
+    NoFont,
+}
+
+/// The half-leading of a text style: `h = (L - (ascent + descent) / upem * size) / 2` for the
+/// explicit line height `L`, from the face FigCraft itself draws with. The number depends on the
+/// fonts installed where `inspect.code` runs. `find_face` falls back to the default face, so
+/// `has_family` tells whether the family is really here.
+fn leading(s: &TextStyle) -> Leading {
+    let size = s.font_size;
+    if !size.is_finite() || size <= 0.0 {
+        return Leading::None;
+    }
+    let l = match s.line_height {
+        LineHeight::Pixels(v) if v > 0.0 && v.is_finite() => v,
+        LineHeight::Percent(p) if p > 0.0 && p.is_finite() => p / 100.0 * size,
+        _ => return Leading::None,
+    };
+    if !figcraft_text::has_family(&s.font_family) {
+        return Leading::NoFont;
+    }
+    let Some(face) = figcraft_text::find_face(&s.font_family, &s.font_style) else { return Leading::NoFont };
+    if face.upem <= 0.0 || !face.upem.is_finite() {
+        return Leading::NoFont;
+    }
+    let h = (l - (face.ascent + face.descent) / face.upem * size) / 2.0;
+    if !h.is_finite() || h.abs() < 0.5 {
+        Leading::None
+    } else if h < 0.0 {
+        // Uno never draws a line closer than the font's natural height (`BlockLineHeight` was tried
+        // for this and is left to a harness check), so the case is noted, not mapped.
+        Leading::Tight
+    } else {
+        Leading::Shift(h)
+    }
+}
+
+/// The calls (or note) a [`Leading`] needs. `flow`: the text sits in a panel, where the shift is a
+/// top padding with a negative bottom margin that gives the room back (the box keeps its height
+/// and the last line is not cut); an existing margin (an independent child's offsets) is merged.
+fn leading_calls(e: &mut Element, leading: Leading, flow: bool) {
+    match leading {
+        Leading::None => {}
+        Leading::Tight => e.note("line height below the font's natural height is not reproduced in Uno"),
+        Leading::NoFont => e.note("line height shift (the font is not installed here, so its metrics are unknown)"),
+        Leading::Shift(h) if flow => {
+            e.call(format!(".Padding(0, {}, 0, 0)", num(h)));
+            match e.calls.iter().position(|c| c.starts_with(".Margin(") && c.ends_with(", 0, 0)")) {
+                Some(i) => {
+                    if let Some(c) = e.calls.get_mut(i) {
+                        let head = c.trim_end_matches(", 0, 0)").to_string();
+                        *c = format!("{head}, 0, {})", num(-h));
+                    }
+                }
+                None => e.call(format!(".Margin(0, 0, 0, {})", num(-h))),
+            }
+        }
+        Leading::Shift(_) => {}
     }
 }
 
