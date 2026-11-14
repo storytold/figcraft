@@ -1470,6 +1470,10 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             let layers_generation = app.session.clipboard.layers_generation;
             let agent = p.get("agent").and_then(Value::as_str);
             let r = in_document(app, p, |s| s.execute_as(agent, cmd, &params).map_err(|e| e.to_string()));
+            if cmd == "pref.mcp" && r.is_ok() {
+                app.services.mcp_server_apply(app.session.prefs.mcp_enabled, app.session.prefs.mcp_port);
+                app.services.save_prefs(&app.session.prefs);
+            }
             app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             app.invalidate_synthetic_copy(layers_generation);
             // Programmatic calls never open dialogs.
