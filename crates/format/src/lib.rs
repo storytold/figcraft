@@ -29,6 +29,7 @@ pub use density::{pixel_density, placed_size};
 pub use library::{is_valid_library_id, read_library, read_library_within};
 
 mod density;
+mod text_outlines;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, Write};
@@ -252,12 +253,15 @@ struct DocumentJson<'a> {
     #[serde(rename = "imageIndex", serialize_with = "image_index")]
     images: &'a BTreeMap<String, ImageData>,
     #[serde(flatten)]
-    doc: &'a Document,
+    doc: std::borrow::Cow<'a, Document>,
+    #[serde(rename = "textOutlines", skip_serializing_if = "Option::is_none")]
+    outlines: Option<text_outlines::Pool>,
 }
 
 impl<'a> DocumentJson<'a> {
     fn new(doc: &'a Document) -> Self {
-        Self { format: FORMAT, version: VERSION, images: &doc.images, doc }
+        let (packed, outlines) = text_outlines::pack(doc);
+        Self { format: FORMAT, version: VERSION, images: &doc.images, doc: packed, outlines }
     }
 }
 
@@ -475,6 +479,7 @@ type ImageIndex = Option<BTreeSet<String>>;
 struct Header {
     version: Option<u64>,
     images: ImageIndex,
+    outlines: Option<text_outlines::Pool>,
 }
 
 impl<'de> Deserialize<'de> for Header {
@@ -490,6 +495,7 @@ impl<'de> Deserialize<'de> for Header {
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "version" => h.version = map.next_value::<Value>()?.as_u64(),
+                        "textOutlines" => h.outlines = map.next_value()?,
                         "imageIndex" => {
                             h.images = map
                                 .next_value::<Value>()?
@@ -520,6 +526,7 @@ fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatE
         return Err(FormatError::Newer(u32::try_from(ver).unwrap_or(u32::MAX)));
     }
     let mut doc: Document = serde_json::from_str(text).map_err(corrupt)?;
+    text_outlines::expand(&mut doc, header.outlines.as_ref())?;
     let issues = doc.validate();
     if !issues.is_empty() {
         doc.repair();
@@ -681,11 +688,27 @@ pub(crate) fn read_member<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str
 pub(crate) struct Unpacked {
     left: u64,
     total: u64,
+    glyphs_left: usize,
 }
 
 impl Unpacked {
     pub(crate) fn new(total: u64) -> Self {
-        Self { left: total, total }
+        Self { left: total, total, glyphs_left: figcraft_doc::MAX_PORTABLE_MEMORY }
+    }
+
+    // Share the expanded glyph budget between the main document, parsed branch snapshots
+    // and published library. History JSON remains lazy, so opening a file cannot retain a
+    // fresh per-document allowance for every automatically decoded snapshot.
+    pub(crate) fn geometry(&mut self, doc: &Document) -> Result<(), FormatError> {
+        let bytes = doc
+            .nodes()
+            .filter_map(|n| n.kind.text()?.appearance.as_ref())
+            .fold(0usize, |sum, a| sum.saturating_add(a.glyphs.len().saturating_mul(std::mem::size_of::<figcraft_doc::TextGlyph>())));
+        if bytes > self.glyphs_left {
+            return Err(FormatError::Corrupt("file snapshots exceed portable glyph memory limit".into()));
+        }
+        self.glyphs_left -= bytes;
+        Ok(())
     }
 
     /// Why a member is left out once the total is spent.
@@ -756,6 +779,7 @@ pub(crate) fn load_limited(bytes: &[u8], budget: ImageBudget, total: u64) -> Res
     let mut unpacked = Unpacked::new(total);
     let text = String::from_utf8(unpacked.read(&mut z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
+    unpacked.geometry(&doc)?;
     let ImagesRead { images, unread, past_budget } = read_images(&mut z, own_images.as_ref(), budget, &mut unpacked);
     report_lost_images(&mut issues, &unread, &past_budget, own_images.as_ref(), &images);
     let images_past_budget = past_budget.len();
@@ -981,6 +1005,7 @@ fn read_branches<R: Read + Seek>(
             let json = unpacked.read(z, &format!("branches/{id}/{part}.json"), budget.min(MAX_MEMBER))?;
             budget = budget.saturating_sub(json.len() as u64);
             let (mut doc, _) = from_json(std::str::from_utf8(&json).map_err(|e| FormatError::Corrupt(e.to_string()))?)?;
+            unpacked.geometry(&doc)?;
             let hashes = e.get(list).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
             doc.images = hashes.filter_map(|h| images.get(h).map(|i| (h.to_string(), i.clone()))).collect();
             Ok(Arc::new(doc))

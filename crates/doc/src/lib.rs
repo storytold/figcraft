@@ -23,6 +23,9 @@ pub mod props;
 pub mod proto;
 pub mod styles;
 pub mod text;
+mod text_appearance;
+mod text_appearance_meta;
+mod text_glyph_bytes;
 pub mod vector;
 pub mod vector_faces;
 pub mod vector_regions;
@@ -198,6 +201,7 @@ pub struct Document {
     pub kind: FileKind,
     /// Page ids in order.
     pub pages: Vec<NodeId>,
+    #[serde(serialize_with = "serialize_nodes", deserialize_with = "deserialize_nodes")]
     nodes: imbl::OrdMap<NodeId, Arc<Node>>,
     /// Nodes touched since the last [`take_dirty`](Self::take_dirty) (edited, added or removed).
     #[serde(skip)]
@@ -250,6 +254,70 @@ pub struct Document {
     /// Ended votes' results kept in the file, oldest first (at most [`VOTE_HISTORY_MAX`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vote_history: Vec<VoteRecord>,
+}
+
+// Zero-run geometry can be much smaller than its in-memory glyphs. Bound the aggregate
+// retained geometry while reading nodes, not after an entire compressed document is allocated.
+/// Aggregate estimated decoded portable-geometry bytes in one document (not a file-size cap).
+#[cfg(not(target_pointer_width = "32"))]
+pub const MAX_PORTABLE_MEMORY: usize = 1024 * 1024 * 1024;
+/// Lower decoded-geometry budget on 32-bit targets.
+#[cfg(target_pointer_width = "32")]
+pub const MAX_PORTABLE_MEMORY: usize = 256 * 1024 * 1024;
+
+fn deserialize_nodes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<imbl::OrdMap<NodeId, Arc<Node>>, D::Error> {
+    deserialize_nodes_limited(d, MAX_PORTABLE_MEMORY)
+}
+
+fn deserialize_nodes_limited<'de, D: serde::Deserializer<'de>>(d: D, limit: usize) -> Result<imbl::OrdMap<NodeId, Arc<Node>>, D::Error> {
+    struct Nodes(usize);
+    impl<'de> serde::de::Visitor<'de> for Nodes {
+        type Value = imbl::OrdMap<NodeId, Arc<Node>>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a node map with bounded portable geometry")
+        }
+        fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+            let mut nodes = imbl::OrdMap::new();
+            let mut bytes = 0usize;
+            while let Some((id, node)) = map.next_entry::<NodeId, Arc<Node>>()? {
+                if let Some(saved) = node.kind.text().and_then(|t| t.appearance.as_ref()) {
+                    bytes = bytes.saturating_add(saved.glyphs.memory_bytes());
+                    if bytes > self.0 {
+                        return Err(serde::de::Error::custom("document portable geometry exceeds memory limit"));
+                    }
+                }
+                nodes.insert(id, node);
+            }
+            Ok(nodes)
+        }
+    }
+    d.deserialize_map(Nodes(limit))
+}
+
+// JSON objects do not define layer order: pages/children carry that order explicitly. Keep
+// similar portable layouts together so their dictionaries/number columns fit in Deflate's
+// 32 KiB window instead of alternating distant font/size combinations. Files without portable
+// geometry retain their established id order and pay no sort/allocation cost.
+fn serialize_nodes<S: serde::Serializer>(nodes: &imbl::OrdMap<NodeId, Arc<Node>>, s: S) -> Result<S::Ok, S::Error> {
+    fn key(node: &Node) -> Option<(&str, &str, u64, u64)> {
+        node.kind
+            .text()
+            .filter(|t| t.appearance.is_some())
+            .map(|t| (t.style.font_family.as_str(), t.style.font_style.as_str(), t.style.font_size.to_bits(), node.width.to_bits()))
+    }
+    let mut sorted: Vec<_> = nodes.iter().filter(|(_, n)| key(n).is_some()).collect();
+    if sorted.is_empty() {
+        return nodes.serialize(s);
+    }
+    sorted.sort_unstable_by(|a, b| key(a.1).cmp(&key(b.1)).then_with(|| a.0.cmp(b.0)));
+    // Preserve actual map keys even for an unrepaired document with an inconsistent node.id.
+    // Supply the known length explicitly: binary serializers cannot infer it from a filter.
+    use serde::ser::SerializeMap;
+    let mut map = s.serialize_map(Some(nodes.len()))?;
+    for (id, node) in nodes.iter().filter(|(_, n)| key(n).is_none()).chain(sorted) {
+        map.serialize_entry(id, node)?;
+    }
+    map.end()
 }
 
 impl Default for Document {

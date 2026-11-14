@@ -17,7 +17,9 @@ use crate::fontdb::{Coords, Face, db, no_coords};
 /// A positioned glyph (pen position on the baseline, layout coordinates, y down).
 #[derive(Clone, Debug)]
 pub struct Glyph {
-    pub face: Arc<Face>,
+    pub face: Option<Arc<Face>>,
+    /// Placed outline from the document when the original face is unavailable.
+    pub saved_path: Option<Arc<BezPath>>,
     /// Variable font coordinates (empty = the face's default instance).
     pub coords: Coords,
     pub gid: u32,
@@ -39,13 +41,14 @@ pub struct Glyph {
 impl Glyph {
     /// The glyph outline placed in layout coordinates.
     pub fn path(&self) -> BezPath {
-        self.layer_path(self.gid)
+        self.saved_path.as_ref().map_or_else(|| self.layer_path(self.gid), |p| (**p).clone())
     }
 
     /// The outline of one of the face's glyphs (a COLR layer), placed like this glyph.
     pub fn layer_path(&self, gid: u32) -> BezPath {
-        let s = self.size / self.face.upem;
-        let mut p = (*self.face.outline_at(gid, &self.coords)).clone();
+        let Some(face) = &self.face else { return BezPath::new() };
+        let s = self.size / face.upem;
+        let mut p = (*face.outline_at(gid, &self.coords)).clone();
         p.apply_affine(self.warp * Affine::new([s, 0.0, 0.0, s, self.x, self.y]));
         p
     }
@@ -57,12 +60,13 @@ impl Glyph {
         if !scale.is_finite() || scale <= 0.0 {
             return None;
         }
-        if let Some(layers) = self.face.color_layers(self.gid) {
+        let face = self.face.as_ref()?;
+        if let Some(layers) = face.color_layers(self.gid) {
             return Some(ColorInk::Layers(layers));
         }
         // Whole device pixels per em: rasters stay on the pixel grid and the cache stays small.
         let px = (self.size * scale).round().clamp(1.0, MAX_PX_PER_EM);
-        let bitmap = self.face.color_bitmap(self.gid, &self.coords, px)?;
+        let bitmap = face.color_bitmap(self.gid, &self.coords, px)?;
         let s = px / self.size;
         let place = self.warp * Affine::translate((self.x + bitmap.left / s, self.y + bitmap.top / s)) * Affine::scale(1.0 / s);
         Some(ColorInk::Bitmap(bitmap, place))
@@ -1018,7 +1022,8 @@ struct LayoutFinish<'a> {
 fn glyph_at(styles: &[TextStyle], item: &Item, pen: f64, baseline: f64) -> Option<Glyph> {
     let size = styles.get(item.style).map(|st| sanitize_size(st.font_size)).unwrap_or(12.0) * item.scale;
     (item.gid != 0 || !item.is_space()).then(|| Glyph {
-        face: item.face.clone(),
+        face: Some(item.face.clone()),
+        saved_path: None,
         coords: item.coords.clone(),
         gid: item.gid,
         x: pen + item.dx,
@@ -1159,7 +1164,7 @@ fn finish_layout(out: &mut TextLayout, finish: LayoutFinish<'_>) {
                 let x1 = last.x + last.advance;
                 // The style's own font and size (not a fallback face or a small-cap scale), so the
                 // line runs at one height and weight through mixed scripts.
-                let f = faces.get(g0.style).and_then(Option::as_ref).unwrap_or(&g0.face);
+                let Some(f) = faces.get(g0.style).and_then(Option::as_ref).or(g0.face.as_ref()) else { continue };
                 let size = sanitize_size(st.font_size);
                 let s = size / f.upem;
                 let look = st.look();
@@ -1212,6 +1217,9 @@ fn finish_layout(out: &mut TextLayout, finish: LayoutFinish<'_>) {
 /// Lay out `text` for a box of `box_width` (used when the text wraps or aligns; for auto width
 /// pass `None`). `box_height` is used for truncation only.
 pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) -> TextLayout {
+    if let Some(saved) = crate::appearance::restore(text, box_width, box_height) {
+        return saved;
+    }
     let ShapedText { chars, styles, faces, fallbacks, items, bidi, cluster_start, word_breaks } = shape_text(text);
     let rtl_para_at = |i: usize| bidi.as_ref().and_then(|b| b.rtl_para.get(i)).copied().unwrap_or(false);
 
@@ -1396,7 +1404,8 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
                     let gid = face.glyph_for(c);
                     let adv = face.advance_at(gid, &coords) * k;
                     out.glyphs.push(Glyph {
-                        face: face.clone(),
+                        face: Some(face.clone()),
+                        saved_path: None,
                         coords: coords.clone(),
                         gid,
                         x: mx,
@@ -1601,7 +1610,7 @@ fn ink_cuts(glyphs: &[Glyph], y0: f64, y1: f64, gap: f64) -> Vec<(f64, f64)> {
 fn add_ellipsis(out: &mut TextLayout, wrap: Option<f64>) {
     let Some(line) = out.lines.last().cloned() else { return };
     let Some(last) = out.glyphs.get(line.glyph_end.saturating_sub(1)).cloned() else { return };
-    let face = last.face.clone();
+    let Some(face) = last.face.clone() else { return };
     let gid = face.glyph_for('…');
     let gid = if gid == 0 { face.glyph_for('.') } else { gid };
     let k = last.size / face.upem;
@@ -1611,12 +1620,15 @@ fn add_ellipsis(out: &mut TextLayout, wrap: Option<f64>) {
     while out.glyphs.len() > line.glyph_start && out.glyphs.last().is_some_and(|g| g.x + g.advance + adv > limit) {
         out.glyphs.pop();
     }
-    while out.glyphs.len() > line.glyph_start && out.glyphs.last().is_some_and(|g| g.char_end > g.char_start && g.gid == g.face.glyph_for(' ')) {
+    while out.glyphs.len() > line.glyph_start
+        && out.glyphs.last().is_some_and(|g| g.char_end > g.char_start && g.face.as_ref().is_some_and(|f| g.gid == f.glyph_for(' ')))
+    {
         out.glyphs.pop();
     }
     let x = out.glyphs.last().filter(|_| out.glyphs.len() > line.glyph_start).map(|g| g.x + g.advance).unwrap_or(0.0);
     out.glyphs.push(Glyph {
-        face,
+        face: Some(face),
+        saved_path: None,
         coords: last.coords.clone(),
         gid,
         x,

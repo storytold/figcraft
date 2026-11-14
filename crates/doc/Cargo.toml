@@ -9,6 +9,7 @@ description = "FigCraft document model: pages, the node tree, properties, compon
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 serde = { workspace = true }

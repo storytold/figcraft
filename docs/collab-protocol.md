@@ -1096,3 +1096,26 @@ chooses to share on the network; the default is the invite link with a random to
    join codes (online through the server, or carrying the host's address on the local network)
    and by your online files (the app remembers what it owns and opens it again as its owner).
 6. **Accounts**: people signing in, per-person permissions, teams and projects.
+
+## Portable text appearance (2026-10-20)
+
+Native text nodes can carry `appearance`: a fingerprint of editable text/style/box inputs,
+positioned vector glyph outlines, line metrics and styled decorations. These are document
+geometry, not font binaries. Full creations and snapshots carry them in node kinds. Metadata-only
+text-to-text `kind` updates with unchanged runs omit `appearance` and carry `unchangedAppearance: true`; receivers
+apply only base-style hyperlinks/style identifiers, leaving all current run overrides intact and preserving concurrently changed characters and
+typography together with their geometry. A full kind update without the metadata marker replaces its appearance (null or omission clears it). Regenerated geometry is included with edited
+text in the same property update. Run metadata uses a normal atomic kind update rather than a partial run merge. Moves, node-paint changes and base metadata do not retransmit
+unchanged outlines. Logs, saves, undo and redo retain appearances. No message variant or
+property is added. A receiving machine with absent faces uses the saved geometry and keeps the
+author's text box. SVG/PDF exports use those outlines too. See [portable-text.md](portable-text.md).
+Both server and clients must implement the retained-field update semantics; older builds may
+discard the optional geometry when applying an update. Upgrade participating clients together.
+
+Compact appearance encoding 1 stores normalized outlines in a table local to that text node,
+with glyph tuples referencing shapes and retaining exact placement/metrics. It remains a
+self-contained kind update; no session-global table, message variant or property is added.
+Current writers use encoding 3, with lossless bit-predicted numeric columns in a base64 string.
+Readers also accept encoding-2 raw numeric columns, encoding-1 tuples and earlier object-shaped glyphs as encoding zero. Experimental builds before
+encoding 3 can reject the new records, so update the server and participating clients together.
+See [portable-text.md](portable-text.md#compact-encoding-and-migration) for migration and limits.

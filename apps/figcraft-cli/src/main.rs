@@ -97,7 +97,7 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
         Command::Perf(a) => {
             let sizes: Vec<usize> = a.layers.into_iter().map(|n| n.clamp(10, 2_000_000)).collect();
             let instances: Vec<usize> = a.instances.into_iter().filter(|n| *n > 0).map(|n| n.min(100_000)).collect();
-            perf::run(&sizes, &instances, !cli.no_system_fonts)
+            if a.text_only { perf::text_storage(&sizes) } else { perf::run(&sizes, &instances, !cli.no_system_fonts) }
         }
     }
 }

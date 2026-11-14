@@ -540,6 +540,101 @@ fn measure_components(table: &mut Table, col: usize, instances: usize) -> CliRes
     Ok(())
 }
 
+/// Storage-only workload: unique paragraphs, two embedded Inter faces at two sizes, no images or history.
+/// Kept separate from viewport/drag timings so expensive rendering cannot perturb the samples.
+pub fn text_storage(sizes: &[usize]) -> CliResult<ExitCode> {
+    println!("Text storage: release={}, embedded Inter; median of 5 runs after 1 warm-up; memory I/O, no fsync", !cfg!(debug_assertions));
+    println!(
+        "| text layers | characters | prepare ms | first snapshot ms | repeat snapshot ms | reopen ms | saved bytes | saved text layers | portable layers |"
+    );
+    println!("|--:|--:|--:|--:|--:|--:|--:|--:|--:|");
+    for &count in sizes {
+        // Bound this dedicated workload independently of the mixed-layer perf command.
+        if count > 50_000 {
+            return Err(failed("text storage supports at most 50,000 text layers"));
+        }
+        let mut doc = Document::new("Text storage benchmark");
+        let page = doc.first_page().ok_or_else(|| failed("no page"))?;
+        let mut characters = 0;
+        for i in 0..count {
+            let mut text = figcraft_doc::TextData::new(format!(
+                "Paragraph {i:05}: Clear typography keeps a shared design readable. Numbers 0123456789, punctuation, and unique labels."
+            ));
+            text.style.font_family = "Inter".into();
+            text.style.font_style = if i % 2 == 0 { "Regular" } else { "Bold" }.into();
+            text.style.font_size = if i % 4 < 2 { 14.0 } else { 20.0 };
+            text.auto_resize = figcraft_doc::TextAutoResize::None;
+            characters += text.characters.chars().count();
+            doc.create(page, NodeKind::Text(text), "Paragraph", (i % 20) as f64 * 640.0, (i / 20) as f64 * 100.0, 600.0, 80.0).map_err(failed)?;
+        }
+        for style in ["Regular", "Bold"] {
+            if figcraft_text::find_face("Inter", style).is_none() {
+                return Err(failed("embedded Inter required"));
+            }
+        }
+        let mut preparation = Vec::new();
+        let mut first = Vec::new();
+        let mut repeat = Vec::new();
+        let mut load = Vec::new();
+        let mut size = 0;
+        let mut text_count = 0;
+        let mut portable = 0;
+        for sample in 0..6 {
+            let source = doc.clone();
+            let t = Instant::now();
+            let original = Session::with_document(source);
+            let prepare_ms = ms(t);
+            let t = Instant::now();
+            let bytes = figcraft_engine::cmd::file::file_bytes(original.ds().map_err(failed)?).map_err(failed)?;
+            let first_ms = ms(t);
+            let t = Instant::now();
+            let (loaded, warnings) = figcraft_format::load_bytes(&bytes).map_err(failed)?;
+            let prepared = Session::with_document(loaded);
+            let load_ms = ms(t);
+            let loaded = prepared.doc().map_err(failed)?;
+            if !warnings.is_empty() {
+                return Err(failed(format!("load warnings: {warnings:?}")));
+            }
+            text_count = loaded.ids().filter(|id| loaded.node(*id).is_some_and(|n| n.kind.text().is_some())).count();
+            if text_count != count {
+                return Err(failed("text layers lost on round trip"));
+            }
+            // Counting the serialized field keeps this harness identical on main and on the feature.
+            portable = loaded
+                .ids()
+                .filter(|id| {
+                    loaded.node(*id).is_some_and(|n| serde_json::to_value(&n.kind).is_ok_and(|v| v.get("appearance").is_some_and(|a| !a.is_null())))
+                })
+                .count();
+            let t = Instant::now();
+            let saved = figcraft_engine::cmd::file::file_bytes(prepared.ds().map_err(failed)?).map_err(failed)?;
+            let repeat_ms = ms(t);
+            size = bytes.len();
+            if saved.is_empty() {
+                return Err(failed("empty saved file"));
+            }
+            if sample > 0 {
+                preparation.push(prepare_ms);
+                first.push(first_ms);
+                repeat.push(repeat_ms);
+                load.push(load_ms);
+            }
+        }
+        let median = |mut values: Vec<f64>| {
+            values.sort_by(f64::total_cmp);
+            values.get(values.len() / 2).copied().unwrap_or_default()
+        };
+        println!(
+            "| {count} | {characters} | {:.3} | {:.3} | {:.3} | {:.3} | {size} | {text_count} | {portable} |",
+            median(preparation),
+            median(first),
+            median(repeat),
+            median(load)
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

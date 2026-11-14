@@ -1888,6 +1888,7 @@ dependencies = [
 name = "figcraft-doc"
 version = "0.18.1"
 dependencies = [
+ "base64 0.22.1",
  "figcraft-color",
  "figcraft-geom",
  "imbl",
@@ -2092,6 +2093,8 @@ dependencies = [
  "log",
  "objc2 0.6.5",
  "png",
+ "serde_json",
+ "sha2",
  "skrifa 0.47.0",
  "unicode-bidi",
  "unicode-segmentation",

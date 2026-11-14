@@ -85,6 +85,7 @@ impl FileSnapshot {
     /// files are from its folder.
     fn encode_at(&self, path: Option<&str>) -> Result<Vec<u8>> {
         let mut doc = (*self.doc).clone();
+        figcraft_text::appearance::capture(&mut doc, None);
         doc.current_page = Some(self.page);
         if let Some(path) = path {
             crate::library::relate_links(&mut doc, path);

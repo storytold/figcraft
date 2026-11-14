@@ -72,6 +72,16 @@ pub fn request(app: &mut FigApp) {
 }
 
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
+    // Joined server documents bypass file.open; check them once their tab is live.
+    if let Ok(ds) = app.session.ds() {
+        let uid = ds.uid;
+        if app.session.live().status == figcraft_engine::live::Status::Live
+            && app.session.live().info.as_ref().is_some_and(|info| info.role == figcraft_engine::live::Role::Guest)
+            && app.ui.font_checked.insert(uid)
+        {
+            app.ui.font_checks.push(uid);
+        }
+    }
     finish_downloads(app, ctx);
     list_when_known(app);
     let Some(shown) = &app.ui.missing_fonts else { return };
@@ -127,7 +137,7 @@ fn body(ui: &mut egui::Ui, t: &Tokens, shown: &Shown) -> Clicks {
     } else {
         ui.label(
             RichText::new(tr(
-                "This file uses fonts that aren't installed on this computer. Their text is drawn in a fallback font until you install them.",
+                "This file uses fonts that aren't installed on this computer. Saved text outlines preserve its appearance where available. Install the missing fonts or choose replacements before editing text.",
             ))
             .color(t.text_secondary)
             .font(regular(11.0)),
