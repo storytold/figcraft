@@ -966,7 +966,7 @@ enum Leading {
     None,
     /// The text moves down by the half-leading (pixels).
     Shift(f64),
-    /// The line height is below the font's natural height.
+    /// The line height is below the font's natural height: block line stacking draws it as written.
     Tight,
     /// The font family is not installed where the code is written, so its metrics are unknown.
     NoFont,
@@ -997,21 +997,22 @@ fn leading(s: &TextStyle) -> Leading {
     if !h.is_finite() || h.abs() < 0.5 {
         Leading::None
     } else if h < 0.0 {
-        // Uno never draws a line closer than the font's natural height (`BlockLineHeight` was tried
-        // for this and is left to a harness check), so the case is noted, not mapped.
+        // Uno's default stacking never draws a line closer than the font's natural height;
+        // `BlockLineHeight` does (measured), so the lines keep `LineHeight` as written.
         Leading::Tight
     } else {
         Leading::Shift(h)
     }
 }
 
-/// The calls (or note) a [`Leading`] needs. `flow`: the text sits in a panel, where the shift is a
+/// The calls (or note) a [`Leading`] needs. A tight line height needs no shift, only the stacking
+/// strategy (the `LineHeight` call itself comes with the text style). `flow`: the text sits in a panel, where the shift is a
 /// top padding with a negative bottom margin that gives the room back (the box keeps its height
 /// and the last line is not cut); an existing margin (an independent child's offsets) is merged.
 fn leading_calls(e: &mut Element, leading: Leading, flow: bool) {
     match leading {
         Leading::None => {}
-        Leading::Tight => e.note("line height below the font's natural height is not reproduced in Uno"),
+        Leading::Tight => e.call(".LineStackingStrategy(LineStackingStrategy.BlockLineHeight)"),
         Leading::NoFont => e.note("line height shift (the font is not installed here, so its metrics are unknown)"),
         Leading::Shift(h) if flow => {
             e.call(format!(".Padding(0, {}, 0, 0)", num(h)));

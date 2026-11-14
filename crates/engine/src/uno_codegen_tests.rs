@@ -839,16 +839,24 @@ fn half_leading_merges_with_the_margin_of_an_independent_child() {
 }
 
 #[test]
-fn a_line_height_below_the_font_is_noted_and_an_automatic_one_needs_nothing() {
+fn a_line_height_below_the_font_uses_block_line_stacking_and_an_automatic_one_needs_nothing() {
     let mut s = Session::new();
     let col = row(&mut s, json!({"layout": "vertical"}));
     let Some((t, _)) = spaced_text(&mut s, col, 1.0) else { return };
     let c = chain(&uno(&mut s, col), "para");
-    assert!(c.contains(&"// not mapped: line height below the font's natural height is not reproduced in Uno".to_string()), "{c:?}");
-    assert!(!c.iter().any(|l| l.starts_with(".Padding(") || l.starts_with(".Margin(")), "{c:?}");
+    assert!(c.contains(&".LineHeight(1)".to_string()), "{c:?}");
+    assert!(c.contains(&".LineStackingStrategy(LineStackingStrategy.BlockLineHeight)".to_string()), "{c:?}");
+    assert!(!c.iter().any(|l| l.starts_with(".Padding(") || l.starts_with(".Margin(") || l.starts_with("//")), "{c:?}");
     set(&mut s, t, json!({"lineHeight": "auto"}));
     let c = chain(&uno(&mut s, col), "para");
-    assert!(!c.iter().any(|l| l.starts_with(".Padding(") || l.starts_with(".Margin(") || l.starts_with("//")), "{c:?}");
+    assert!(
+        !c.iter().any(|l| l.starts_with(".Padding(") || l.starts_with(".Margin(") || l.starts_with("//") || l.starts_with(".LineStacking")),
+        "{c:?}"
+    );
+    // A looser line height than the font's keeps the half-leading shift and no block stacking.
+    set(&mut s, t, json!({"lineHeight": 60}));
+    let c = chain(&uno(&mut s, col), "para");
+    assert!(c.iter().any(|l| l.starts_with(".Padding(0, ")) && !c.iter().any(|l| l.starts_with(".LineStacking")), "{c:?}");
 }
 
 #[test]
