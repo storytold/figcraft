@@ -4,7 +4,7 @@
 
 use super::kiwi::{Kv, Schema, encode};
 use super::tests::{Lcg, arr, at, f, g, node, o, s, schema, solid, u, xy};
-use super::{decode_canvas, export, import, kiwi};
+use super::{decode_canvas, import};
 
 fn frac(r: &mut Lcg, hi: f64) -> f64 {
     (r.next() % 100_000) as f64 / 100_000.0 * hi
@@ -84,7 +84,7 @@ fn one_list_canvas(sc: &Schema, count: u32, elements: impl IntoIterator<Item = u
     let mut msg = head.0;
     msg.extend(elements);
     msg.push(0);
-    export::canvas(&encode::schema(sc), &msg).unwrap()
+    craft_fig::encode_canvas(&encode::schema(sc), &msg).unwrap()
 }
 
 /// `pages` pages of `rects` rectangles and `texts` texts of `chars` characters, framed the way the
@@ -125,7 +125,7 @@ fn opens_whole(label: &str, pages: usize, rects: usize, texts: usize, chars: usi
     let file = canvas(pages, rects, texts, chars);
     let (sc, msg) = decode_canvas(&file).unwrap();
     let root = sc.find("Message").unwrap();
-    let one_per_byte = file.len().clamp(kiwi::value_budget(0), kiwi::value_budget(usize::MAX));
+    let one_per_byte = file.len().clamp(craft_fig::value_budget(0), craft_fig::value_budget(usize::MAX));
     let refused = sc.decode_message_within(root, &msg, one_per_byte).is_err_and(|e| e.0 == "message: too many values");
     assert!(refused, "{label}: one value per compressed byte no longer refuses it");
     let (doc, warnings) = import(&file, label).unwrap_or_else(|e| panic!("{label}: refused: {e}"));
@@ -133,7 +133,7 @@ fn opens_whole(label: &str, pages: usize, rects: usize, texts: usize, chars: usi
     assert!(warnings.is_empty(), "{label}: {warnings:?}");
     println!("{label}: {} canvas bytes, {} layers", file.len(), doc.node_count());
     drop(doc);
-    assert!(sc.decode_message_within(root, &msg, kiwi::value_budget(file.len()) / 10 * 9).is_ok(), "{label}: not within 90% of its budget");
+    assert!(sc.decode_message_within(root, &msg, craft_fig::value_budget(file.len()) / 10 * 9).is_ok(), "{label}: not within 90% of its budget");
     file.len()
 }
 
@@ -151,7 +151,7 @@ fn dense_canvases_open_whole() {
 #[ignore = "heavy: --release --ignored, about 9 GB"]
 fn a_canvas_budgeted_at_the_ceiling_opens_whole() {
     let packed = opens_whole("50 MB text-heavy canvas", 106, 0, 5000, 100);
-    assert_eq!(kiwi::value_budget(packed), kiwi::value_budget(usize::MAX), "budgeted at the ceiling");
+    assert_eq!(craft_fig::value_budget(packed), craft_fig::value_budget(usize::MAX), "budgeted at the ceiling");
 }
 
 /// However far a small canvas inflates, the floor bounds what it may decode.
