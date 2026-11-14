@@ -338,6 +338,42 @@ struct Zones {
     tracks: Vec<[Pos2; 2]>,
 }
 
+/// Screen-space grip targets. Opposite grips stay at least 20 pixels apart, moving outward from
+/// their midpoint only when needed: tiny frames and zoomed-out content must not merge them into
+/// one indistinguishable target. Bands keep their actual padding geometry.
+fn padding_handles(bands: &[(usize, Rect, f64)]) -> Vec<(usize, Rect, f64)> {
+    bands
+        .iter()
+        .map(|&(side, band, value)| {
+            let mut center = band.center();
+            if let Some((_, opposite, _)) = bands.iter().find(|(s, _, _)| *s == (side + 2) % 4) {
+                let (axis, other) = if side.is_multiple_of(2) { (&mut center.y, opposite.center().y) } else { (&mut center.x, opposite.center().x) };
+                if (*axis - other).abs() < 20.0 {
+                    *axis = (*axis + other) / 2.0 + if matches!(side, 0 | 3) { -10.0 } else { 10.0 };
+                }
+            }
+            let rect = Rect::from_center_size(center, if side.is_multiple_of(2) { vec2(20.0, 12.0) } else { vec2(12.0, 20.0) });
+            (side, rect, value)
+        })
+        .collect()
+}
+
+/// Resolve overlapping targets by distance to the visible grip, shared by hover and press.
+/// Iteration order alone can let an earlier target steal clicks on a later grip's painted bar.
+fn padding_at(handles: &[(usize, Rect, f64)], pos: Pos2) -> Option<(usize, Rect, f64)> {
+    handles
+        .iter()
+        .filter(|(_, rect, _)| rect.contains(pos))
+        .min_by(|(_, a, _), (_, b, _)| a.center().distance_sq(pos).total_cmp(&b.center().distance_sq(pos)))
+        .copied()
+}
+
+/// Alt links opposing sides, Alt+Shift all four. Shift alone retains the existing axis gesture.
+/// Painting and editing share this rule so the highlighted sides are exactly those that change.
+fn padding_affects(side: usize, candidate: usize, modifiers: egui::Modifiers) -> bool {
+    candidate == side || (modifiers.alt && modifiers.shift) || ((modifiers.alt || modifiers.shift) && candidate == (side + 2) % 4)
+}
+
 fn al_zones(app: &FigApp) -> Option<Zones> {
     let ds = app.session.ds().ok()?;
     if ds.selection.len() != 1 || ds.text_edit.is_some() || ds.vector_edit.is_some() {
@@ -357,13 +393,17 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
         app.to_screen(p.x, p.y)
     };
     let band = |x0: f64, y0: f64, x1: f64, y1: f64| Rect::from_two_pos(to(x0, y0), to(x1, y1));
-    let [pt, pr, pb, pl] = al.padding;
+    let [pt, pr, pb, pl] = al.padding.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    let (it, ir, ib, il) = figcraft_layout::insets(n, al);
     let (fw, fh) = (n.width, n.height);
+    // Padding starts at the inside edge of an included stroke, as the layout's content does.
+    // The bands exclude the stroke itself so their labels and drags still edit only padding.
+    let (left, top, right, bottom) = (il - pl, it - pt, fw - ir + pr, fh - ib + pb);
     let bands = vec![
-        (0, band(0.0, 0.0, fw, pt.max(4.0)), pt),
-        (1, band(fw - pr.max(4.0), 0.0, fw, fh), pr),
-        (2, band(0.0, fh - pb.max(4.0), fw, fh), pb),
-        (3, band(0.0, 0.0, pl.max(4.0), fh), pl),
+        (0, band(left, top, right, top + pt.max(4.0)), pt),
+        (1, band(right - pr.max(4.0), top, right, bottom), pr),
+        (2, band(left, bottom - pb.max(4.0), right, bottom), pb),
+        (3, band(left, top, left + pl.max(4.0), bottom), pl),
     ];
     // An auto gap shows (and is dragged from) the distance the layout gives it; the drag makes it a
     // fixed gap again, as typing one does.
@@ -376,8 +416,8 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
     let mut tracks = Vec::new();
     if let Some(g) = figcraft_layout::grid_geometry(doc, id) {
         // Grid: bands between columns (column gap) and between rows (row gap), and the tracks.
-        let (top, bottom) = (g.rows.first().map(|r| r.0).unwrap_or(pt), g.rows.last().map(|r| r.1).unwrap_or(fh - pb));
-        let (left, right) = (g.columns.first().map(|c| c.0).unwrap_or(pl), g.columns.last().map(|c| c.1).unwrap_or(fw - pr));
+        let (top, bottom) = (g.rows.first().map(|r| r.0).unwrap_or(it), g.rows.last().map(|r| r.1).unwrap_or(fh - ib));
+        let (left, right) = (g.columns.first().map(|c| c.0).unwrap_or(il), g.columns.last().map(|c| c.1).unwrap_or(fw - ir));
         for pair in g.columns.windows(2) {
             if let [a, b] = pair {
                 gaps.push(main(band(a.1, top, b.0, bottom), false, al.gap));
@@ -403,7 +443,7 @@ fn al_zones(app: &FigApp) -> Option<Zones> {
         let flip = |r: figcraft_geom::Rect| if vertical { figcraft_geom::Rect::new(r.y0, r.x0, r.y1, r.x1) } else { r };
         let fband = |x0: f64, y0: f64, x1: f64, y1: f64| if vertical { band(y0, x0, y1, x1) } else { band(x0, y0, x1, y1) };
         // Main-axis length and padding, cross-axis length and padding.
-        let (mw, mp0, mp1, cw, cp0, cp1) = if vertical { (fh, pt, pb, fw, pl, pr) } else { (fw, pl, pr, fh, pt, pb) };
+        let (mw, mp0, mp1, cw, cp0, cp1) = if vertical { (fh, it, ib, fw, il, ir) } else { (fw, il, ir, fh, it, ib) };
         let boxes: Vec<figcraft_geom::Rect> = figcraft_layout::flow_children(doc, id)
             .into_iter()
             .filter_map(|c| doc.node(c))
@@ -514,26 +554,38 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
         draw_crop(app, painter, id, &img, r);
         return;
     }
-    let hover = painter.ctx().input(|i| i.pointer.hover_pos());
+    let (hover, modifiers) = painter.ctx().input(|i| (i.pointer.hover_pos(), i.modifiers));
     let tool_move = app.session.tool.tool == figcraft_engine::ToolId::Move && !app.session.tool.busy();
     let dragging: Option<Drag> = painter.ctx().data(|d| d.get_temp(drag_id()));
     if !tool_move && dragging.is_none() {
         return;
     }
     let Some(z) = al_zones(app) else { return };
+    let tokens = crate::theme::Tokens::get(painter.ctx());
+    let handles = padding_handles(&z.bands);
     let active_side = match &dragging {
         Some(Drag::Padding { side, .. }) => Some(*side),
-        _ => None,
+        _ => hover.and_then(|pos| padding_at(&handles, pos).map(|(side, _, _)| side)),
     };
     for seg in &z.tracks {
         painter.add(Shape::dashed_line(seg, Stroke::new(1.0, PINK.gamma_multiply(0.6)), 3.0, 3.0));
     }
-    for (side, r, v) in &z.bands {
-        let hot = hover.is_some_and(|h| r.contains(h)) || active_side == Some(*side);
+    for ((side, r, v), (_, handle, _)) in z.bands.iter().zip(&handles) {
+        let linked = active_side.is_some_and(|active| padding_affects(active, *side, modifiers));
+        let hot = hover.is_some_and(|h| r.contains(h)) || linked;
         if hot {
             painter.rect_filled(*r, CornerRadius::ZERO, PINK.gamma_multiply(0.25));
-            pink_label(painter, crate::canvas::fmt(*v), r.center());
+            let offset = if side.is_multiple_of(2) { vec2(28.0, 0.0) } else { vec2(0.0, -20.0) };
+            pink_label(painter, crate::canvas::fmt(*v), handle.center() + offset);
         }
+        let grip = Rect::from_center_size(handle.center(), if side.is_multiple_of(2) { vec2(16.0, 4.0) } else { vec2(4.0, 16.0) });
+        painter.rect_filled(grip, CornerRadius::same(2), if linked { tokens.padding_grip } else { tokens.padding_grip.gamma_multiply(0.6) });
+        painter.rect_stroke(
+            grip,
+            CornerRadius::same(2),
+            Stroke::new(if linked { 1.5 } else { 1.0 }, tokens.padding_grip_border),
+            StrokeKind::Outside,
+        );
     }
     let drag_key = match &dragging {
         Some(Drag::Gap { key, .. }) => Some(*key),
@@ -552,14 +604,21 @@ pub fn draw(app: &mut FigApp, painter: &egui::Painter) {
     let _ = Align2::CENTER_CENTER;
 }
 
-/// Pointer handling; returns true when a handle owns the pointer this frame.
-pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
-    let (pressed, down, released, shift) = ctx.input(|i| {
+/// A handle may own only the cursor while ordinary canvas hover and secondary clicks continue.
+pub enum Input {
+    Ignored,
+    Hover(egui::CursorIcon),
+    Captured,
+}
+
+/// Consume active handle gestures, but report padding hover separately from captured input.
+pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> Input {
+    let (pressed, down, released, modifiers) = ctx.input(|i| {
         (
             i.pointer.button_pressed(egui::PointerButton::Primary),
             i.pointer.primary_down(),
             i.pointer.button_released(egui::PointerButton::Primary),
-            i.modifiers.shift,
+            i.modifiers,
         )
     });
     let dragging: Option<Drag> = ctx.data(|d| d.get_temp(drag_id()));
@@ -567,17 +626,17 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         // Escape or Undo closed the gesture under the held button: the drag is over.
         if !gesture_open(app) {
             ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
-            return true;
+            return Input::Captured;
         }
         if down {
-            apply(app, &drag, pos, shift);
+            apply(app, &drag, pos, modifiers);
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         if released || !down {
             let _ = app.session.commit_interaction();
             ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
         }
-        return true;
+        return Input::Captured;
     }
     // Hover cursors / press to start.
     if let Some((id, fills, index, g)) = gradient_target(app) {
@@ -594,16 +653,16 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
                     let _ = app.session.begin_interaction("Edit gradient");
                     ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gradient { id, fills, index, which }));
                 }
-                return true;
+                return Input::Captured;
             }
         }
         // Stops: select and slide them; a click elsewhere on the line adds one there.
-        let (Some(a), Some(b)) = (pts[0], pts[1]) else { return false };
+        let (Some(a), Some(b)) = (pts[0], pts[1]) else { return Input::Ignored };
         let stop_hit = g.stops.iter().position(|st| (a + (b - a) * st.position - pos).length() <= 8.0);
         let t = line_param(a, b, pos);
         let on_line = t.is_some_and(|(_, d)| d <= 5.0);
         if stop_hit.is_none() && !on_line {
-            return false;
+            return Input::Ignored;
         }
         ctx.set_cursor_icon(if stop_hit.is_some() { egui::CursorIcon::Grab } else { egui::CursorIcon::Copy });
         if pressed {
@@ -624,7 +683,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             ctx.data_mut(|d| d.insert_temp(crate::colorpicker::stop_id(), stop));
             ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gradient { id, fills, index, which: 3 + stop }));
         }
-        return true;
+        return Input::Captured;
     }
     if let Some((id, index, e)) = blur_target(app, ctx) {
         let hit = blur_points(app, id, &e).and_then(|pts| pts.iter().position(|p| (*p - pos).length() <= 8.0));
@@ -634,15 +693,15 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
                 let _ = app.session.begin_interaction("Edit progressive blur");
                 ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Blur { id, index, which }));
             }
-            return true;
+            return Input::Captured;
         }
     }
     if let Some((id, fills, index, _, rect)) = crop_target(app) {
         // Crop mode: the layer's own resize handles crop it (the pointer events carry Cmd/Ctrl).
         if app.ui.crop.is_some() && on_resize_handle(app, pos) {
-            return false;
+            return Input::Ignored;
         }
-        let Some(c) = crop_corners(app, id, rect) else { return false };
+        let Some(c) = crop_corners(app, id, rect) else { return Input::Ignored };
         let start = screen_to_unit(app, id, pos).unwrap_or((0.0, 0.0));
         let corner = c.iter().position(|p| (*p - pos).length() <= 8.0);
         let inside = start.0 >= rect.0.min(rect.2) && start.0 <= rect.0.max(rect.2) && start.1 >= rect.1.min(rect.3) && start.1 <= rect.1.max(rect.3);
@@ -654,7 +713,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
                 if pressed {
                     app.ui.crop = None;
                 }
-                return false;
+                return Input::Ignored;
             }
         };
         ctx.set_cursor_icon(if which == 4 {
@@ -668,22 +727,21 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             let _ = app.session.begin_interaction("Crop image");
             ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Crop { id, fills, index, which, start, rect }));
         }
-        return true;
+        return Input::Captured;
     }
     if app.session.tool.tool != figcraft_engine::ToolId::Move || app.session.tool.busy() {
-        return false;
+        return Input::Ignored;
     }
-    let Some(Zones { id, bands, gaps, .. }) = al_zones(app) else { return false };
-    for (side, r, v) in bands {
-        if r.contains(pos) {
-            ctx.set_cursor_icon(if side % 2 == 0 { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
-            if pressed {
-                let _ = app.session.begin_interaction("Padding");
-                ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side, start: pos, value: v }));
-                return true;
-            }
-            return false;
+    let Some(Zones { id, bands, gaps, .. }) = al_zones(app) else { return Input::Ignored };
+    if let Some((side, _, value)) = padding_at(&padding_handles(&bands), pos) {
+        let cursor = if side.is_multiple_of(2) { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal };
+        ctx.set_cursor_icon(cursor);
+        if pressed {
+            let _ = app.session.begin_interaction("Padding");
+            ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side, start: pos, value }));
+            return Input::Captured;
         }
+        return Input::Hover(cursor);
     }
     for g in gaps {
         if g.rect.contains(pos) {
@@ -691,15 +749,15 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             if pressed {
                 let _ = app.session.begin_interaction("Gap");
                 ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gap { id, start: pos, value: g.value, vertical: g.vertical, key: g.key }));
-                return true;
+                return Input::Captured;
             }
-            return false;
+            return Input::Ignored;
         }
     }
-    false
+    Input::Ignored
 }
 
-fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
+fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, modifiers: egui::Modifiers) {
     let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0).max(1e-6);
     match drag {
         Drag::Gradient { id, fills, index, which } => {
@@ -748,10 +806,12 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
                 _ => pos.x - start.x,
             }) / zoom;
             let v = (value + d).round().max(0.0);
-            let key = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"].get(*side).copied().unwrap_or("paddingTop");
-            // Shift drags both sides of the axis together.
-            let props =
-                if shift { if side % 2 == 0 { json!({"paddingVertical": v}) } else { json!({"paddingHorizontal": v}) } } else { json!({ key: v }) };
+            let props: serde_json::Map<String, serde_json::Value> = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]
+                .iter()
+                .enumerate()
+                .filter(|(candidate, _)| padding_affects(*side, *candidate, modifiers))
+                .map(|(_, key)| ((*key).to_owned(), json!(v)))
+                .collect();
             let _ = app.session.execute("node.set", &json!({"ids": [id], "props": props}));
         }
         Drag::Crop { id, fills, index, which, start, rect } => {
@@ -767,7 +827,7 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
                 let (cx, cy) = corners.get(*which).copied().unwrap_or((x1, y1));
                 let (ow, oh) = (cx - ax, cy - ay);
                 let (mut nw, mut nh) = (u.0 - ax, u.1 - ay);
-                if !shift {
+                if !modifiers.shift {
                     // Node aspect matters: the unit box is not square in pixels.
                     let Some(n) = app.session.doc().ok().and_then(|d| d.node(*id)).cloned() else { return };
                     let k = ((nw * n.width).abs() / (ow * n.width).abs().max(1e-9)).max((nh * n.height).abs() / (oh * n.height).abs().max(1e-9));
@@ -805,5 +865,7 @@ fn apply(app: &mut FigApp, drag: &Drag, pos: Pos2, shift: bool) {
 
 #[cfg(test)]
 mod character_fill_tests;
+#[cfg(test)]
+mod padding_tests;
 #[cfg(test)]
 mod region_tests;
