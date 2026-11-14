@@ -251,6 +251,9 @@ struct Snapshot {
     /// When each instance last changed variant: a temporary change that reverts restores it, so
     /// the variant shown again keeps its After delay deadline.
     swapped: HashMap<NodeId, f64>,
+    /// The After delays that had fired: a temporary variant change clears the swapped instance's,
+    /// and the revert puts them back so a delay that already ran doesn't run again.
+    delays_fired: HashSet<(NodeId, usize)>,
 }
 
 /// A "while hovering / while pressing" state that reverts when the pointer leaves / lifts.

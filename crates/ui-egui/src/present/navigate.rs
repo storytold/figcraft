@@ -42,6 +42,8 @@ impl Presenter {
         self.closing.retain(|(_, o)| doc.contains(o.id));
         // These hold states of the document before the edit.
         self.temp = None;
+        // The edit's variants replace the runtime ones: their swap times no longer apply.
+        self.swapped.clear();
         self.anim = None;
         self.scroll_anim = None;
         self.stop_scrolling();
@@ -151,6 +153,7 @@ impl Presenter {
             history: self.history.clone(),
             scroll: self.scroll.clone(),
             swapped: self.swapped.clone(),
+            delays_fired: self.delays_fired.clone(),
         })
     }
 
@@ -230,6 +233,8 @@ impl Presenter {
         self.history = t.snap.history;
         self.scroll = t.snap.scroll;
         self.swapped = t.snap.swapped;
+        // Put back the delays the temporary variant change cleared; keep the ones that fired since.
+        self.delays_fired.extend(t.snap.delays_fired);
         self.stop_scrolling();
         self.hovered.clear();
         self.rev += 1;

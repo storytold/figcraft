@@ -132,6 +132,89 @@ fn a_hover_variant_that_reverts_keeps_the_after_delay_deadline() {
     assert_eq!(shown(&u, inst, &variants), Some(2), "A's 1,000 ms delay from the arrival fired, not 1,000 ms after the hover");
 }
 
+/// A delay that already ran on a variant stays run after a hover changes the variant and reverts:
+/// the keys the temporary change cleared come back with the revert.
+#[test]
+fn a_hover_variant_that_reverts_does_not_rerun_a_fired_delay() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Run", "modes": ["Default"]}));
+    ex(&mut s, "variable.create", json!({"collection": "Run", "name": "count", "type": "number", "value": 0}));
+    let count = s.doc().unwrap().variables.get("count").map(|v| v.id.clone()).unwrap();
+    let variants: Vec<NodeId> = ["A", "Hover"]
+        .iter()
+        .enumerate()
+        .map(|(k, state)| {
+            let f = id(&ex(
+                &mut s,
+                "frame.create",
+                json!({"x": k as f64 * 150.0, "y": 600, "width": 100, "height": 60, "name": format!("State={state}")}),
+            ));
+            id(&ex(&mut s, "component.create", json!({"ids": [f]})))
+        })
+        .collect();
+    ex(&mut s, "component.combineVariants", json!({"ids": variants.clone()}));
+    let instant = json!({"type": "instant"});
+    // A's delay leaves A on screen: it counts its runs (count = count + 1).
+    let inc = json!({"op": {"op": "add", "args": [{"value": {"type": "alias", "value": count}}, {"value": {"type": "number", "value": 1}}]}});
+    let delay = json!({"id": variants[0], "trigger": {"type": "afterDelay", "ms": 100}, "action": {"type": "setVariable", "variable": count, "value": null, "expr": inc}, "transition": instant, "durationMs": 0});
+    ex(&mut s, "proto.interaction.add", delay);
+    let hover = json!({"id": variants[0], "trigger": {"type": "onHover"}, "action": {"type": "changeTo", "dest": variants[1]}, "transition": instant, "durationMs": 0});
+    ex(&mut s, "proto.interaction.add", hover);
+    let set = s.doc().unwrap().node(variants[0]).unwrap().parent.unwrap();
+    let screen = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 400, "height": 300, "name": "Screen"})));
+    let inst = id(&ex(&mut s, "instance.create", json!({"component": set, "x": 20, "y": 20, "parent": screen})));
+    ex(&mut s, "instance.swap", json!({"ids": [inst], "component": variants[0]}));
+    let mut u = Harness::new(s);
+    u.run("proto.present", json!({"start": screen}));
+    u.frame(Vec::new());
+    let start = u.time;
+    let hot = u.app.inspect()["presenter"]["hotspots"].as_array().cloned().unwrap_or_default();
+    let h = hot.iter().find(|h| h["id"] == json!(inst)).unwrap_or_else(|| panic!("no hotspot on the instance: {hot:?}"));
+    let r: Vec<f32> = h["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
+    let (on, away) = (egui::pos2((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0), egui::pos2(r[0] - 40.0, r[1] - 40.0));
+    while u.time < start + 0.3 {
+        u.frame(vec![egui::Event::PointerMoved(away)]);
+    }
+    let fired: Vec<(NodeId, usize)> = crate::tabs::shown_or_paused(&u.app).map(|p| p.delays_fired.iter().copied().collect()).unwrap_or_default();
+    assert!(!fired.is_empty(), "A's delay ran before the hover");
+    u.frame(vec![egui::Event::PointerMoved(on)]);
+    u.frame(Vec::new());
+    assert_eq!(shown(&u, inst, &variants), Some(1), "while hovering: the hover variant");
+    u.frame(vec![egui::Event::PointerMoved(away)]);
+    u.frame(Vec::new());
+    assert_eq!(shown(&u, inst, &variants), Some(0), "the hover left: A again");
+    u.frames(5, Vec::new);
+    let p = crate::tabs::shown_or_paused(&u.app).expect("presenting");
+    assert!(fired.iter().all(|k| p.delays_fired.contains(k)), "the delay that ran before the hover is still marked as run: {:?}", p.delays_fired);
+    let runs = p.design.as_ref().and_then(|d| d.variables.resolve(&count, &Default::default()));
+    assert_eq!(runs, Some(figcraft_doc::VariableValue::Number(1.0)), "A's delay ran once, not again after the hover");
+}
+
+/// An edit in the editor while presenting brings back the editor's variants, so the swap times of
+/// the variants changed at run time no longer delay them.
+#[test]
+fn an_edit_while_presenting_drops_the_swap_times() {
+    let (mut u, inst, variants) = chain(500);
+    let start = u.time;
+    let mut guard = 0;
+    while shown(&u, inst, &variants) != Some(1) {
+        u.frame(Vec::new());
+        guard += 1;
+        assert!(guard < 120, "A never changed to B");
+    }
+    // An edit: the presenter shows the editor's document again, the instance on A.
+    u.run("page.rename", json!({"name": "Renamed"}));
+    u.frame(Vec::new());
+    let edited = u.time;
+    // A's 500 ms delay counts from the screen's arrival, long past: it fires at once, not 500 ms
+    // after the run-time change to B.
+    while u.time < edited + 0.2 {
+        u.frame(Vec::new());
+    }
+    assert!(edited < start + 0.9, "the edit came before B's own delay was due");
+    assert_eq!(shown(&u, inst, &variants), Some(1), "A changed to B again right after the edit");
+}
+
 #[test]
 fn a_single_after_delay_still_fires_once() {
     let mut s = Session::new();
