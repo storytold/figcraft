@@ -254,6 +254,58 @@ fn a_delay_fired_on_a_hover_variant_does_not_block_the_restored_variants_delay()
     assert_eq!(value(&u, &a_runs), Some(figcraft_doc::VariableValue::Number(1.0)), "A's own delay at index 0 ran on its deadline");
 }
 
+/// A layer that only the hover variant has, with its own After delay that ran during the hover,
+/// leaves no fired key behind after the revert (its id may be issued again by the next hover).
+#[test]
+fn a_hover_variants_own_layer_leaves_no_fired_key_after_the_revert() {
+    let mut s = Session::new();
+    ex(&mut s, "variable.createCollection", json!({"name": "Run", "modes": ["Default"]}));
+    ex(&mut s, "variable.create", json!({"collection": "Run", "name": "runs", "type": "number", "value": 0}));
+    let runs = s.doc().unwrap().variables.get("runs").map(|v| v.id.clone()).unwrap();
+    let inc = json!({"op": {"op": "add", "args": [{"value": {"type": "alias", "value": runs}}, {"value": {"type": "number", "value": 1}}]}});
+    let frames: Vec<NodeId> = ["A", "Hover"]
+        .iter()
+        .enumerate()
+        .map(|(k, state)| {
+            id(&ex(&mut s, "frame.create", json!({"x": k as f64 * 150.0, "y": 600, "width": 100, "height": 60, "name": format!("State={state}")})))
+        })
+        .collect();
+    // Only the hover state has this layer, with a delay due at once.
+    let dot = id(&ex(&mut s, "shape.rectangle", json!({"x": 160, "y": 610, "width": 10, "height": 10, "parent": frames[1]})));
+    let instant = json!({"type": "instant"});
+    let dot_delay = json!({"id": dot, "trigger": {"type": "afterDelay", "ms": 0}, "action": {"type": "setVariable", "variable": runs, "value": null, "expr": inc}, "transition": instant, "durationMs": 0});
+    ex(&mut s, "proto.interaction.add", dot_delay);
+    let variants: Vec<NodeId> = frames.iter().map(|f| id(&ex(&mut s, "component.create", json!({"ids": [f]})))).collect();
+    ex(&mut s, "component.combineVariants", json!({"ids": variants.clone()}));
+    let hover = json!({"id": variants[0], "trigger": {"type": "onHover"}, "action": {"type": "changeTo", "dest": variants[1]}, "transition": instant, "durationMs": 0});
+    ex(&mut s, "proto.interaction.add", hover);
+    let set = s.doc().unwrap().node(variants[0]).unwrap().parent.unwrap();
+    let screen = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 400, "height": 300, "name": "Screen"})));
+    let inst = id(&ex(&mut s, "instance.create", json!({"component": set, "x": 20, "y": 20, "parent": screen})));
+    ex(&mut s, "instance.swap", json!({"ids": [inst], "component": variants[0]}));
+    let mut u = Harness::new(s);
+    u.run("proto.present", json!({"start": screen}));
+    u.frame(Vec::new());
+    let hot = u.app.inspect()["presenter"]["hotspots"].as_array().cloned().unwrap_or_default();
+    let h = hot.iter().find(|h| h["id"] == json!(inst)).unwrap_or_else(|| panic!("no hotspot on the instance: {hot:?}"));
+    let r: Vec<f32> = h["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
+    let (on, away) = (egui::pos2((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0), egui::pos2(r[0] - 40.0, r[1] - 40.0));
+    for _ in 0..6 {
+        u.frame(vec![egui::Event::PointerMoved(on)]);
+    }
+    assert_eq!(shown(&u, inst, &variants), Some(1), "while hovering: the hover variant");
+    let p = crate::tabs::shown_or_paused(&u.app).expect("presenting");
+    let ran = p.design.as_ref().and_then(|d| d.variables.resolve(&runs, &Default::default()));
+    assert_eq!(ran, Some(figcraft_doc::VariableValue::Number(1.0)), "the hover variant's own layer ran its delay");
+    u.frame(vec![egui::Event::PointerMoved(away)]);
+    u.frame(Vec::new());
+    assert_eq!(shown(&u, inst, &variants), Some(0), "the hover left: A again");
+    let p = crate::tabs::shown_or_paused(&u.app).expect("presenting");
+    let d = p.design.as_ref().expect("a document");
+    let stale: Vec<_> = p.delays_fired.iter().filter(|(id, _)| !d.contains(*id)).collect();
+    assert!(stale.is_empty(), "no fired key names a layer the restored document lacks: {stale:?}");
+}
+
 /// An edit in the editor while presenting brings back the editor's variants, so the swap times of
 /// the variants changed at run time no longer delay them.
 #[test]

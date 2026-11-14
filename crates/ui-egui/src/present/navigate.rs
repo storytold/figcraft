@@ -233,6 +233,8 @@ impl Presenter {
         let during: Vec<(NodeId, usize)> = self.delays_fired.difference(&t.snap.delays_fired).copied().collect();
         let mut fired = t.snap.delays_fired.clone();
         fired.extend(during.into_iter().filter(|(id, _)| !changed.iter().any(|i| i == id || restored.is_ancestor(*i, *id))));
+        // A layer the temporary change added is gone again (and its id may be issued anew).
+        fired.retain(|(id, _)| restored.contains(*id));
         self.begin(t.transition.reversed(), t.dur, t.easing, now);
         self.current = t.snap.current;
         self.design = Some(t.snap.doc);
