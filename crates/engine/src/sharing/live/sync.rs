@@ -232,6 +232,27 @@ impl Session {
         }
     }
 
+    /// Session `id`'s file is kept by a server that never deletes it, and the server confirmed all
+    /// of it: a tab with no file of its own on this computer then has nothing to save, so closing
+    /// it or quitting doesn't ask. Not for a session an app hosts (nothing keeps it once the host
+    /// leaves), a file that expires unopened (a public server keeps no backups), versions or a
+    /// local file the tab has (they stay on this computer), or edits the server hasn't confirmed.
+    pub(super) fn live_kept(&mut self, id: SessionId) {
+        let Some(live) = self.live.get(id) else { return };
+        let kept = live.status == Status::Live && live.hosting.as_ref().is_some_and(|h| h.expires.is_none());
+        let confirmed = live.client.as_ref().is_some_and(|c| c.pending() == 0) && live.deferred.is_empty() && live.hold == 0;
+        let (Some(uid), Some(synced)) = (live.doc_uid, live.synced.clone()) else { return };
+        if !kept || !confirmed {
+            return;
+        }
+        if let Some(ds) = self.docs.iter_mut().find(|d| d.uid == uid && d.path.is_none() && d.branch_of.is_none() && !d.versions_changed)
+            && Arc::ptr_eq(ds.document_itself(), &synced)
+            && ds.is_dirty()
+        {
+            ds.mark_saved();
+        }
+    }
+
     /// Hand your presence in session `id` to the link when it changed.
     fn live_present(&mut self, id: SessionId) {
         let Some(live) = self.live.get(id).filter(|l| l.status == Status::Live) else { return };

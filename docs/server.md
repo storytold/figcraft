@@ -222,6 +222,14 @@ comment link's batch only when every change in it touches comment threads. An ap
 comment links joins with one as a viewer. **Leave session** keeps the file open as your own copy,
 editable again.
 
+The server keeps the file, so a tab joined there has nothing to save on your computer once the
+server has confirmed every edit in it: closing the tab or quitting doesn't ask to save it, and the
+tab shows no unsaved mark. It still asks while an edit of yours hasn't reached the server (offline,
+say), for a file that expires unopened (a [public server](#running-a-public-server) keeps no
+backups: keep a copy of your own), for a tab saved to a file on this computer (that file would be
+behind), for versions you made in the tab (they live only on this computer), and in a session a
+desktop app hosts on the local network (nothing keeps that file once the host leaves).
+
 ## Team libraries
 
 A file on the server can hold a **team library**: its published components, styles and variables,
