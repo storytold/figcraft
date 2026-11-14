@@ -239,8 +239,9 @@ impl<'a> View<'a> {
     }
 }
 
-/// The smallest the window can be dragged to.
-const MIN_SIZE: egui::Vec2 = vec2(480.0, 240.0);
+/// The smallest the window can be dragged to: wide enough that the table's header row holds the
+/// search field and a library collection's "Extend collection" button side by side.
+const MIN_SIZE: egui::Vec2 = vec2(600.0, 240.0);
 
 /// The largest the window can be dragged to: the screen less a margin.
 fn max_size(screen: Rect) -> egui::Vec2 {
@@ -269,7 +270,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     st.collection = coll.map(|c| c.id.clone());
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    let size = vec2(880.0_f32.min(screen.width() - 80.0).max(480.0), 480.0_f32.min(screen.height() - 120.0).max(240.0));
+    let size = vec2(880.0_f32.min(screen.width() - 80.0).max(MIN_SIZE.x), 480.0_f32.min(screen.height() - 120.0).max(MIN_SIZE.y));
     let mut open = true;
     egui::Window::new(tr("Local variables"))
         .id(Id::unique("variables_window"))

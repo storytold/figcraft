@@ -64,7 +64,7 @@ fn the_variables_window_keeps_a_minimum_size() {
     let mut u = window();
     drag_corner(&mut u, vec2(-2000.0, -2000.0));
     let r = rect(&u);
-    assert!((r.width() - 480.0).abs() < 3.0, "width {}", r.width());
+    assert!((r.width() - 600.0).abs() < 3.0, "width {}", r.width());
     assert!((r.height() - 240.0).abs() < 3.0, "height {}", r.height());
 }
 
