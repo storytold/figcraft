@@ -1469,25 +1469,27 @@ pub(crate) fn list_markers(lists: &[ParaList]) -> Vec<String> {
     // "Figma bullets will keep the same styling at all levels of indentation." (Create bulleted
     // and numbered lists)
     const BULLET: &str = "\u{2022}";
-    let mut count = [(ListStyle::None, 0usize); figcraft_doc::MAX_LIST_INDENT as usize + 1];
+    let starts = figcraft_doc::list_item_starts_counting(lists);
+    let mut count = [0usize; figcraft_doc::MAX_LIST_INDENT as usize + 1];
     lists
         .iter()
-        .map(|pl| {
+        .zip(starts)
+        .map(|(pl, starts)| {
             if pl.list == ListStyle::None {
-                count.fill((ListStyle::None, 0));
+                count.fill(0);
                 return String::new();
             }
             let d = usize::from(pl.indent).min(count.len() - 1);
             for c in count.iter_mut().skip(d + 1) {
-                *c = (ListStyle::None, 0);
+                *c = 0;
             }
             let Some(c) = count.get_mut(d) else { return String::new() };
             let first = usize::try_from(pl.start_offset).unwrap_or(usize::MAX).saturating_add(1);
-            *c = if c.0 == pl.list { (pl.list, c.1.saturating_add(1)) } else { (pl.list, first) };
+            *c = if starts { first } else { c.saturating_add(1) };
             match (pl.list, d % 3) {
-                (ListStyle::Numbered, 1) => format!("{}.", alpha(c.1)),
-                (ListStyle::Numbered, 2) => format!("{}.", roman(c.1)),
-                (ListStyle::Numbered, _) => format!("{}.", c.1),
+                (ListStyle::Numbered, 1) => format!("{}.", alpha(*c)),
+                (ListStyle::Numbered, 2) => format!("{}.", roman(*c)),
+                (ListStyle::Numbered, _) => format!("{}.", *c),
                 _ => BULLET.to_string(),
             }
         })

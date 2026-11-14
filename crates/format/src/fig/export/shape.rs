@@ -173,9 +173,6 @@ impl<'d> Exporter<'d> {
         if styles.clone().any(|st| unsupported_decoration_look(st) || !st.variations.is_empty()) {
             self.warn("text decoration looks and variable font settings were left out");
         }
-        if td.path.is_some() {
-            self.warn("text on a path was written as plain text");
-        }
         if !td.features.is_empty() {
             self.warn("OpenType features were left out");
         }
@@ -184,8 +181,8 @@ impl<'d> Exporter<'d> {
     /// The editable network (with per-point corner radii, handle mirroring and end caps) and,
     /// when it has filled areas, their outline.
     pub(super) fn vector(&mut self, n: &Node, net: &VectorNetwork, f: &mut Fields) {
-        if net.regions.iter().any(|region| region.fills.is_some() || region.paint_space.is_some()) {
-            self.warn("vector region paints were left out of the .fig export");
+        if net.regions.iter().any(|region| region.paint_space.is_some()) {
+            self.warn("vector region paint frames were left out (their gradients and images follow the layer's box)");
         }
         let entries: usize = net.regions.iter().flat_map(|r| &r.loops).map(Vec::len).sum();
         if net.vertices.len() + net.segments.len() + entries > MAX_NETWORK {
@@ -263,11 +260,19 @@ impl<'d> Exporter<'d> {
                     tb: (finite(sg.tb.0), finite(sg.tb.1)),
                 })
                 .collect();
-            let regions = net
-                .regions
-                .iter()
-                .map(|r| network::Region { style: 0, non_zero: r.winding == WindingRule::NonZero, loops: r.loops.clone() })
-                .collect();
+            // A region with paints of its own (an empty list included) names a style entry that
+            // holds them; one without writes style 0 and shows the layer's fills.
+            let mut regions = Vec::with_capacity(net.regions.len());
+            for r in &net.regions {
+                let style = match &r.fills {
+                    Some(paints) => {
+                        let list = self.paints(paints, true, &Bound::default());
+                        style_of(vec![("fillPaints", list)])
+                    }
+                    None => 0,
+                };
+                regions.push(network::Region { style, non_zero: r.winding == WindingRule::NonZero, loops: r.loops.clone() });
+            }
             let blob = network::encode(&network::Network { vertices, segments, regions });
             let table = styles.into_iter().zip(1u32..).map(|(mut st, id)| {
                 st.insert(0, ("styleID", u(id)));
@@ -374,4 +379,236 @@ impl<'d> Exporter<'d> {
         self.blobs.insert(bytes, i);
         Some(i)
     }
+
+    /// The fields of a text on a path (its start and its path as a vector network), or `None` when the text stays plain text
+    /// (with the warning that says why). `nested`: for an instance's override row, which follows its main's layer.
+    pub(super) fn text_path(&mut self, n: &Node, td: &TextData, nested: bool) -> Option<Fields> {
+        let doc = self.doc;
+        let own = text_path_net(td, n.width, n.height);
+        let main = if nested { n.source.and_then(|s| doc.node(s)) } else { None };
+        if let Some(main) = main {
+            let main_ok = matches!(&main.kind, NodeKind::Text(m) if text_path_net(m, main.width, main.height).is_ok());
+            if main_ok != own.is_ok() {
+                // An override can't take its layer off the main's path. So an instance text of
+                // more than one line, on a main that is on a path, stays on that path in the file:
+                // say so rather than the general mismatch (FigCraft's import reads it as plain text).
+                let lines = main_ok && matches!(own, Err(TEXT_PATH_LINES));
+                self.warn(if lines { TEXT_PATH_INSTANCE_LINES } else { TEXT_PATH_INSTANCE });
+                return None;
+            }
+        }
+        let tp = td.path.as_deref()?;
+        let made = match own {
+            Ok(made) => made,
+            Err(why) => {
+                self.warn(why);
+                return None;
+            }
+        };
+        let Some(index) = self.blob(network::encode(&made.net)) else {
+            self.warn(TEXT_PATH_CANT);
+            return None;
+        };
+        if made.later_parts {
+            self.warn(TEXT_PATH_PARTS);
+        }
+        Some(vec![
+            ("textPathStart", o(vec![("tValue", fl(made.t)), ("forward", b(!tp.flip))])),
+            ("vectorData", o(vec![("vectorNetworkBlob", u(index)), ("normalizedSize", xy(n.width, n.height))])),
+        ])
+    }
+}
+
+/// The style id the format gives the segment a text on a path starts on.
+const TEXT_PATH_MARK: u32 = 0x01ff_ffff;
+const TEXT_PATH_LINES: &str = "text on a path with more than one line was written as plain text";
+const TEXT_PATH_CANT: &str = "text on a path the format can't hold was written as plain text";
+const TEXT_PATH_PARTS: &str = "the parts of a text's path after the first were left out";
+const TEXT_PATH_INSTANCE: &str =
+    "text on a path in an instance but not in its main component, or the other way round, was written as the main has it";
+const TEXT_PATH_INSTANCE_LINES: &str =
+    "an instance's text of more than one line stays on its main component's text path in the file, as an override can't take it off";
+
+/// A text's path as the format holds it: one chain (or cycle) of a vector network with the
+/// segment the text starts on marked, and the start as that segment's own parameter.
+struct PathNet {
+    net: network::Network,
+    t: f64,
+    later_parts: bool,
+}
+
+/// The tangent-to-control-point cubic of a network segment, as the import reads it.
+fn net_cubic(net: &network::Network, s: &network::Segment) -> Option<(figcraft_doc::geom::kurbo::CubicBez, bool)> {
+    use figcraft_doc::geom::kurbo::CubicBez;
+    let (a, b) = (net.vertices.get(s.a)?, net.vertices.get(s.b)?);
+    let line = s.ta == (0.0, 0.0) && s.tb == (0.0, 0.0);
+    let cubic = CubicBez::new((a.x, a.y), (a.x + s.ta.0, a.y + s.ta.1), (b.x + s.tb.0, b.y + s.tb.1), (b.x, b.y));
+    Some((cubic, line))
+}
+
+/// The length of a segment, as the import measures it.
+fn net_length(net: &network::Network, s: &network::Segment) -> f64 {
+    use figcraft_doc::geom::kurbo::{Line, ParamCurveArclen};
+    match net_cubic(net, s) {
+        Some((c, true)) => Line::new(c.p0, c.p3).arclen(1e-9),
+        Some((c, false)) => c.arclen(1e-9),
+        None => 0.0,
+    }
+}
+
+/// The part of a path (a move and what follows it) as a chain of the network, and whether it is
+/// a cycle; `None` without a segment longer than a billionth.
+fn path_chain(part: &[figcraft_doc::geom::kurbo::PathEl]) -> Option<(network::Network, bool)> {
+    use figcraft_doc::geom::kurbo::{PathEl, Point, QuadBez};
+    let r = |x: f64| f64::from(finite(x) as f32);
+    let rp = |p: Point| (r(p.x), r(p.y));
+    let mut net = network::Network::default();
+    let mut closed = false;
+    let mut cur = (0.0, 0.0);
+    let add = |net: &mut network::Network, c1: Option<(f64, f64)>, c2: Option<(f64, f64)>, end: (f64, f64)| {
+        let Some(last) = net.vertices.last() else { return };
+        let (a, index) = ((last.x, last.y), net.vertices.len() - 1);
+        let tangent = |c: Option<(f64, f64)>, from: (f64, f64)| c.map_or((0.0, 0.0), |c| (r(c.0 - from.0), r(c.1 - from.1)));
+        let seg = network::Segment { style: 0, a: index, ta: tangent(c1, a), b: index + 1, tb: tangent(c2, end) };
+        net.vertices.push(network::Vertex { style: 0, x: end.0, y: end.1 });
+        if net_length(net, &seg) > 1e-9 {
+            net.segments.push(seg);
+        } else {
+            net.vertices.pop();
+        }
+    };
+    for el in part {
+        match el {
+            PathEl::MoveTo(p) => {
+                cur = rp(*p);
+                net.vertices.push(network::Vertex { style: 0, x: cur.0, y: cur.1 });
+            }
+            PathEl::LineTo(p) => {
+                cur = rp(*p);
+                add(&mut net, None, None, cur);
+            }
+            PathEl::QuadTo(c, p) => {
+                let q = QuadBez::new(Point::new(cur.0, cur.1), Point::new(r(c.x), r(c.y)), Point::new(r(p.x), r(p.y))).raise();
+                cur = rp(*p);
+                add(&mut net, Some((q.p1.x, q.p1.y)), Some((q.p2.x, q.p2.y)), cur);
+            }
+            PathEl::CurveTo(a, b, p) => {
+                cur = rp(*p);
+                // The control points are not rounded on their own: the format holds each as its offset from the end
+                // point, and taken from the point as read that is the offset the file had.
+                add(&mut net, Some((finite(a.x), finite(a.y))), Some((finite(b.x), finite(b.y))), cur);
+            }
+            PathEl::ClosePath => closed = true,
+        }
+    }
+    if net.segments.is_empty() {
+        return None;
+    }
+    let first = net.vertices.first().map(|v| (v.x, v.y))?;
+    let last = net.vertices.last().map(|v| (v.x, v.y))?;
+    let near = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).hypot(p.1 - q.1) <= 1e-6;
+    let mut cycle = false;
+    if closed || near(last, first) {
+        if near(last, first) {
+            // The last segment ends on the first vertex. A single segment stays an open chain of
+            // two vertices at one place: the import refuses a segment from a vertex to itself.
+            if net.segments.len() > 1 {
+                net.vertices.pop();
+                if let Some(s) = net.segments.last_mut() {
+                    s.b = 0;
+                    s.tb = (r(last.0 + s.tb.0 - first.0), r(last.1 + s.tb.1 - first.1));
+                    cycle = true;
+                }
+            }
+        } else {
+            net.segments.push(network::Segment { style: 0, a: net.vertices.len() - 1, ta: (0.0, 0.0), b: 0, tb: (0.0, 0.0) });
+            cycle = true;
+        }
+    }
+    Some((net, cycle))
+}
+
+/// A text on a path as the format holds it, or the warning for why it stays plain text.
+fn text_path_net(td: &TextData, w: f64, h: f64) -> Result<PathNet, &'static str> {
+    use figcraft_doc::geom::kurbo::{ParamCurveArclen, PathEl};
+    let Some(tp) = td.path.as_deref() else { return Err(TEXT_PATH_CANT) };
+    if td.characters.contains(['\n', '\r']) {
+        return Err(TEXT_PATH_LINES);
+    }
+    let path = tp.path();
+    let mut parts: Vec<Vec<PathEl>> = Vec::new();
+    for el in path.elements() {
+        if matches!(el, PathEl::MoveTo(_)) {
+            parts.push(Vec::new());
+        }
+        if let Some(part) = parts.last_mut() {
+            part.push(*el);
+        }
+    }
+    let mut chains = parts.iter().filter_map(|p| path_chain(p));
+    let (mut net, cycle) = chains.next().ok_or(TEXT_PATH_CANT)?;
+    let later_parts = chains.next().is_some();
+    if net.vertices.len() + net.segments.len() > MAX_NETWORK {
+        return Err(TEXT_PATH_CANT);
+    }
+    // The import scales the coordinates by size over normalized size, which are the same number
+    // here; an axis of no extent holds nothing but zeros.
+    let size = |x: f64| f64::from(finite(x) as f32);
+    for (extent, axis) in [(size(w), 0), (size(h), 1)] {
+        let at = |p: (f64, f64)| if axis == 0 { p.0 } else { p.1 };
+        let flat = net.vertices.iter().all(|v| at((v.x, v.y)) == 0.0) && net.segments.iter().all(|s| at(s.ta) == 0.0 && at(s.tb) == 0.0);
+        if extent < 0.0 || (extent <= 1e-9 && (extent != 0.0 || !flat)) {
+            return Err(TEXT_PATH_CANT);
+        }
+    }
+    let lengths: Vec<f64> = net.segments.iter().map(|s| net_length(&net, s)).collect();
+    let total: f64 = lengths.iter().sum();
+    if !total.is_finite() || total <= 1e-10 {
+        return Err(TEXT_PATH_CANT);
+    }
+    // The path the import builds from it must be one the text renderer can measure.
+    let mut shape = figcraft_doc::geom::BezPath::new();
+    for (i, s) in net.segments.iter().enumerate() {
+        let Some((c, line)) = net_cubic(&net, s) else { return Err(TEXT_PATH_CANT) };
+        if i == 0 {
+            shape.move_to(c.p0);
+        }
+        if line {
+            shape.line_to(c.p3);
+        } else {
+            shape.curve_to(c.p1, c.p2, c.p3);
+        }
+    }
+    if cycle {
+        shape.close_path();
+    }
+    let measured = figcraft_doc::geom::measure::polylines(&shape);
+    if measured.as_ref().and_then(|l| l.first()).is_none_or(|l| l.length() <= 1e-9) {
+        return Err(TEXT_PATH_CANT);
+    }
+    // The start, by length, as a parameter of the segment it falls on.
+    let start = tp.start();
+    let at = (if tp.flip { 1.0 - start } else { start }) * total;
+    let mut before = 0.0;
+    let mut k = lengths.len().saturating_sub(1);
+    for (i, len) in lengths.iter().enumerate() {
+        if before + len >= at {
+            k = i;
+            break;
+        }
+        before += len;
+    }
+    if k + 1 == lengths.len() && before + lengths[k] < at {
+        before = total - lengths[k];
+    }
+    let local = (at - before).clamp(0.0, lengths[k]);
+    let t = match net.segments.get(k).and_then(|s| net_cubic(&net, s)) {
+        Some((_, true)) | None => local / lengths[k],
+        Some((c, false)) => c.inv_arclen(local, 1e-9),
+    };
+    let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+    if let Some(s) = net.segments.get_mut(k) {
+        s.style = TEXT_PATH_MARK;
+    }
+    Ok(PathNet { net, t, later_parts })
 }

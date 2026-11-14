@@ -594,23 +594,40 @@ fn group_rows(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
     }
 }
 
-/// Rename the last part of group `g` of a collection (its variables `members`) to `new`: every
-/// variable under it moves along (one undo step).
-fn rename_group(app: &mut FigApp, members: &[&Variable], g: &str, new: &str, st: &mut Editor) {
-    let new = new.trim().replace('/', "-");
+/// What renaming group `g` (of the variables `members`) to `new` does: the group's new path and
+/// each moved variable's (id, new name). `new` replaces the group's last part; a `/` in it nests
+/// the group, as in Figma ("Palette/Orange" puts it in a group Palette, made if there is none).
+/// Each part is trimmed and empty parts are dropped. The renames come deepest name first, so a
+/// variable moving into the group's own new path ("Orange" to "Orange/Warm") never takes a name
+/// another moved variable still holds. None when nothing changes.
+fn group_renames(members: &[&Variable], g: &str, new: &str) -> Option<(String, Vec<(String, String)>)> {
+    let new = new.split('/').map(str::trim).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
     if new.is_empty() {
-        return;
+        return None;
     }
     let renamed = match g.rsplit_once('/') {
         Some((parent, _)) => format!("{parent}/{new}"),
         None => new,
     };
+    if renamed == g {
+        return None;
+    }
     let prefix = format!("{g}/");
-    let steps: Vec<serde_json::Value> = members
-        .iter()
-        .filter(|v| v.name.starts_with(&prefix))
-        .map(|v| json!({"command": "variable.update", "params": {"variable": v.id, "name": format!("{renamed}/{}", &v.name[prefix.len()..])}}))
-        .collect();
+    let mut moved: Vec<(&Variable, &str)> = members.iter().filter_map(|v| Some((*v, v.name.strip_prefix(&prefix)?))).collect();
+    // A longer name can only be one a shorter one moves to: rename those out of the way first.
+    moved.sort_by_key(|(_, rest)| std::cmp::Reverse(rest.len()));
+    Some((renamed.clone(), moved.into_iter().map(|(v, rest)| (v.id.clone(), format!("{renamed}/{rest}"))).collect()))
+}
+
+/// Rename group `g` of a collection (its variables `members`) to `new` (see [`group_renames`]):
+/// every variable under it moves along, in one undo step.
+fn rename_group(app: &mut FigApp, members: &[&Variable], g: &str, new: &str, st: &mut Editor) {
+    let Some((renamed, moves)) = group_renames(members, g, new) else {
+        return;
+    };
+    let steps: Vec<serde_json::Value> =
+        moves.iter().map(|(id, name)| json!({"command": "variable.update", "params": {"variable": id, "name": name}})).collect();
+    let prefix = format!("{g}/");
     if app.run("command.batch", json!({"label": "Rename group", "commands": steps})).is_some()
         && st.group.as_deref().is_some_and(|s| s == g || s.starts_with(&prefix))
     {
@@ -1308,7 +1325,7 @@ fn bulk_details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Edit
 
 #[cfg(test)]
 mod tests {
-    use super::{groups, tri};
+    use super::{group_renames, groups, tri};
 
     #[test]
     fn tri_is_checked_empty_or_mixed() {
@@ -1329,5 +1346,48 @@ mod tests {
         let names = ["space/sm", "space/md", "color/brand/blue", "color/text", "plain", "color/brand/red"];
         assert_eq!(groups(names.into_iter()), ["color", "color/brand", "space"]);
         assert!(groups(["a", "b"].into_iter()).is_empty());
+    }
+
+    /// The renames of group `g` among `names` (numbers in one collection) typed as `new`, by name.
+    fn renames(names: &[&str], g: &str, new: &str) -> Option<(String, Vec<(String, String)>)> {
+        let mut s = figcraft_engine::Session::new();
+        s.execute("variable.createCollection", &serde_json::json!({"name": "Theme"})).unwrap();
+        for n in names {
+            s.execute("variable.create", &serde_json::json!({"collection": "Theme", "name": n, "type": "number", "value": 1})).unwrap();
+        }
+        let vars = &s.doc().unwrap().variables.variables;
+        let members: Vec<_> = vars.iter().collect();
+        let (renamed, moves) = group_renames(&members, g, new)?;
+        let by_name = |id: &str| vars.iter().find(|v| v.id == id).unwrap().name.clone();
+        Some((renamed, moves.into_iter().map(|(id, n)| (by_name(&id), n)).collect()))
+    }
+
+    #[test]
+    fn a_slash_in_a_group_rename_nests_the_group_keeping_its_parent() {
+        let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(
+            renames(&["Orange/100", "Orange/200", "Blue/100"], "Orange", "Palette/Orange"),
+            Some(("Palette/Orange".into(), vec![pair("Orange/100", "Palette/Orange/100"), pair("Orange/200", "Palette/Orange/200")]))
+        );
+        assert_eq!(
+            renames(&["a/b/x"], "a/b", " / Warm //  c / "),
+            Some(("a/Warm/c".into(), vec![pair("a/b/x", "a/Warm/c/x")])),
+            "parts are trimmed, empty parts dropped, and the parent stays"
+        );
+    }
+
+    #[test]
+    fn a_group_rename_to_nothing_or_to_itself_does_nothing() {
+        for new in ["", "  ", "/", " / // ", "Orange", " Orange ", "/Orange/"] {
+            assert_eq!(renames(&["Orange/100"], "Orange", new), None, "{new:?}");
+        }
+        assert_eq!(renames(&["a/b/x"], "a/b", "b/"), None);
+    }
+
+    #[test]
+    fn a_group_moved_into_its_own_subgroup_renames_the_deeper_names_first() {
+        let (_, moves) = renames(&["Orange/100", "Orange/Warm/100"], "Orange", "Orange/Warm").unwrap();
+        let order: Vec<&str> = moves.iter().map(|(old, _)| old.as_str()).collect();
+        assert_eq!(order, ["Orange/Warm/100", "Orange/100"]);
     }
 }
