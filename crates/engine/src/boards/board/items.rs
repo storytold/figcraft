@@ -26,7 +26,7 @@ pub(super) fn add(
 }
 
 /// A soft shadow under stickies and stamps.
-fn soft_shadow() -> Effect {
+pub(super) fn soft_shadow() -> Effect {
     Effect {
         kind: EffectKind::DropShadow(Shadow { color: Color::new(0.0, 0.0, 0.0, 0.16), offset: (0.0, 2.0), radius: 6.0, ..Shadow::default() }),
         visible: true,
@@ -142,14 +142,17 @@ pub(super) fn next_sticky(s: &mut Session, p: &Value) -> Result<Value> {
     let from = id(p, "id")
         .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
         .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
-        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky or a shape first".into()))?;
+        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a sticky, a shape or a code block first".into()))?;
     let n = doc.get(from)?;
+    if let Some(BoardItem::CodeBlock { language }) = n.board {
+        return super::code::next_block(s, from, language, p);
+    }
     if matches!(n.board, Some(BoardItem::Shape { .. })) {
         // A shape gets the next one joined to it, as the "+" beside it makes (#1597).
         return add_connected(s, p);
     }
     if !matches!(n.board, Some(BoardItem::Sticky { .. })) {
-        return Err(bad(cmd, "that isn't a sticky or a shape"));
+        return Err(bad(cmd, "that isn't a sticky, a shape or a code block"));
     }
     let color = n.fills.iter().find_map(Paint::solid_color).unwrap_or(s.tool.board.sticky);
     let parent = n.parent.ok_or_else(|| bad(cmd, "that sticky has no parent"))?;

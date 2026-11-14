@@ -87,6 +87,12 @@ fn text_of(s: &Session, id: NodeId) -> Result<TextData> {
     }
 }
 
+/// Whether the text being edited is a code block's.
+fn in_code(s: &Session) -> bool {
+    let Some(te) = s.ds().ok().and_then(|d| d.text_edit.as_ref()) else { return false };
+    s.doc().is_ok_and(|d| crate::board::is_code_text(d, te.id))
+}
+
 /// Start editing text node `id` with the caret at `caret` (None = select all).
 pub fn begin(s: &mut Session, id: NodeId, caret: Option<usize>, created: bool) -> Result<()> {
     let t = text_of(s, id)?;
@@ -282,13 +288,15 @@ fn insert_model(s: &mut Session, text: &str, ime_commit: bool) -> Result<ImeInse
     // A commit the editor had to transform is an application edit, not a plain insertion.
     let mut outcome = if normalized == text { ImeInsertion::Plain } else { ImeInsertion::Transformed };
     let text = normalized;
+    // Code is typed as it is: no list from "- " (and no smart punctuation or link to come).
+    let code = in_code(s);
     edit(s, |t, te| {
         let (a, b) = range(te);
         // "- ", "* ", "<number>. " or "1) " typed at the start of a plain paragraph starts a list
         // (the creation characters of Create bulleted and numbered lists). As measured in Figma
         // (2026-11-11), a typed "5. " starts the numbered list at 5 (there is no start-number
         // field). "0. " and a bracket after a number other than 1 are not measured: plain text.
-        if text == " " && a == b && t.para_list(t.para_of(a)).list == ListStyle::None {
+        if !code && text == " " && a == b && t.para_list(t.para_of(a)).list == ListStyle::None {
             let chars: Vec<char> = t.characters.chars().collect();
             let start = line_start(&chars, a);
             let typed: String = chars.get(start..a).unwrap_or(&[]).iter().collect();
@@ -462,6 +470,16 @@ pub fn key(s: &mut Session, key: &str, shift: bool, word: bool, line: bool) -> R
     let n = chars.len();
     if matches!(key, "Tab" | "Backspace" | "Delete" | "Enter") && !word && !line && list_key(s, key, shift)? {
         return Ok(());
+    }
+    // In a code block Tab types two spaces and Enter keeps the line's indent.
+    if matches!(key, "Tab" | "Enter") && !word && !line && in_code(s) {
+        if key == "Tab" {
+            return if shift { Ok(()) } else { insert(s, figcraft_doc::CODE_TAB) };
+        }
+        let (a, _) = range(&te);
+        let start = line_start(&chars, a);
+        let indent: String = chars.get(start..a).unwrap_or(&[]).iter().take(256).take_while(|c| matches!(c, ' ' | '\t')).collect();
+        return insert(s, &format!("\n{indent}"));
     }
     match key {
         "Escape" => return end(s),
