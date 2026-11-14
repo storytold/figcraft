@@ -170,6 +170,7 @@ impl Presenter {
         }
         self.arrived = now;
         self.delays_fired.clear();
+        self.swapped.clear();
         self.waiting.clear();
         self.hovered.clear();
         self.rev += 1;
@@ -245,7 +246,9 @@ pub(crate) fn next_delay(p: &Presenter, doc: &Document, root: NodeId, now: f64) 
             if let Trigger::AfterDelay { ms } = it.trigger
                 && !p.delays_fired.contains(&(id, k))
             {
-                let due = since + f64::from(ms) / 1000.0 - now;
+                // Inside an instance that changed variant, the timer starts when it did.
+                let from = p.swapped.iter().filter(|(inst, _)| doc.is_ancestor(**inst, id)).fold(since, |a, (_, t)| a.max(*t));
+                let due = from + f64::from(ms) / 1000.0 - now;
                 if next.is_none_or(|(_, d)| due < d) {
                     next = Some(((id, k), due));
                 }

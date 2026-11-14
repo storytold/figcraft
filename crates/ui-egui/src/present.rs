@@ -290,6 +290,8 @@ pub struct Presenter {
     bar_thumb: Option<(NodeId, usize, egui::TextureHandle)>,
     arrived: f64,
     delays_fired: HashSet<(NodeId, usize)>,
+    /// When each instance last changed variant (Change to): its After delay timers count from then.
+    swapped: HashMap<NodeId, f64>,
     /// Mouse triggers waiting out their delay.
     waiting: Vec<Waiting>,
     hovered: Vec<NodeId>,
@@ -370,6 +372,7 @@ impl Presenter {
             bar_thumb: None,
             arrived: -1.0,
             delays_fired: HashSet::new(),
+            swapped: HashMap::new(),
             waiting: Vec::new(),
             hovered: Vec::new(),
             press: None,
@@ -459,6 +462,9 @@ mod tail_tests;
 
 #[cfg(test)]
 mod delay_tests;
+
+#[cfg(test)]
+mod afterdelay_chain_tests;
 
 #[cfg(test)]
 mod overlay_anchor_tests;
