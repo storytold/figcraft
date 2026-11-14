@@ -437,6 +437,201 @@ fn smart_animate_frame_cost() {
     eprintln!("smart animate: {per:.2} ms per frame (80 layers, 400x800 px)");
 }
 
+#[test]
+fn tall_frame_detail_plan_renders_the_view_at_device_scale() {
+    use figcraft_geom::Rect as PageRect;
+    let bounds = PageRect::new(0.0, 0.0, 1440.0, 9701.0);
+    let visible = PageRect::new(0.0, 0.0, 1440.0, 860.0);
+    let side = 16382.0;
+    assert!(actions::texture_scale_for(bounds, 2.0, side) < 1.1, "the whole frame is capped below device scale");
+    let r = actions::detail_plan(bounds, visible, 2.0, side).expect("a capped frame gets a detail");
+    assert!(r.x0 <= visible.x0 && r.y0 <= visible.y0 && r.x1 >= visible.x1 && r.y1 >= visible.y1, "covers the view");
+    assert!(r.x0 >= bounds.x0 && r.y0 >= bounds.y0 && r.x1 <= bounds.x1 && r.y1 <= bounds.y1, "inside the frame");
+    assert!(r.width() * 2.0 <= side && r.height() * 2.0 <= side);
+    assert!(r.width() * r.height() * 4.0 <= 16_777_216.0);
+    let small = PageRect::new(0.0, 0.0, 1440.0, 900.0);
+    assert!(actions::detail_plan(small, PageRect::new(0.0, 0.0, 1440.0, 860.0), 2.0, side).is_none());
+}
+
+#[test]
+fn presenting_a_tall_frame_on_a_hidpi_display_draws_the_view_at_device_scale() {
+    let mut session = figcraft_engine::Session::new();
+    let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": 1440, "height": 9701})).unwrap());
+    session.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 100, "y": 100, "width": 300, "height": 200})).unwrap();
+    let mut ui = Ui::new(session);
+    ui.hidpi = Some((2.0, 16_384));
+    ui.run("proto.present", json!({"start": frame}));
+    ui.app.ui.present.as_mut().unwrap().view.scale = PresentScale::FitWidth;
+    ui.frames(2, Vec::new);
+
+    let textures = ui.ctx.tex_manager();
+    let textures = textures.read();
+    let present: Vec<_> = textures.allocated().filter(|(_, m)| m.name.starts_with("present-")).map(|(_, m)| m.size).collect();
+    assert!(!present.is_empty());
+    assert!(present.iter().any(|s| s[0] >= 2878), "some texture shows the view at 2 px a unit: {present:?}");
+    for s in &present {
+        // The scale caps the area; each side then rounds up to a whole pixel.
+        assert!(s[0] * s[1] <= 16_777_216 + s[0] + s[1] && s[0] <= 16_384 && s[1] <= 16_384, "{s:?}");
+    }
+}
+
+/// A tall frame on a 2x display, presented, and the page area its detail texture shows.
+fn tall_hidpi(side: usize) -> Ui {
+    let mut session = figcraft_engine::Session::new();
+    let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": 1440, "height": 9701})).unwrap());
+    session.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 100, "y": 100, "width": 300, "height": 200})).unwrap();
+    let mut ui = Ui::new(session);
+    ui.hidpi = Some((2.0, side));
+    ui.run("proto.present", json!({"start": frame}));
+    ui.app.ui.present.as_mut().unwrap().view.scale = PresentScale::FitWidth;
+    ui.frames(2, Vec::new);
+    ui
+}
+
+fn detail_bounds(ui: &Ui) -> Option<figcraft_geom::Rect> {
+    ui.app.ui.present.as_ref().and_then(|p| p.detail.as_ref().map(|(_, d)| d.bounds))
+}
+
+#[test]
+fn the_detail_is_kept_while_nothing_changes_and_made_again_when_the_frame_does() {
+    let mut ui = tall_hidpi(16_384);
+    let tex_id = |ui: &Ui| ui.app.ui.present.as_ref().and_then(|p| p.detail.as_ref().map(|(_, d)| d.tex.id()));
+    let first = tex_id(&ui).expect("a detail is drawn");
+    let bounds = detail_bounds(&ui).unwrap();
+    assert!(
+        bounds.x0 == 0.0 && bounds.y0 == 0.0 && bounds.x1 == 1440.0 && bounds.y1 > 860.0 && bounds.y1 < 9701.0,
+        "the view and a margin: {bounds:?}"
+    );
+    ui.frames(5, Vec::new);
+    assert_eq!(tex_id(&ui), Some(first), "the same view makes no new render");
+    let rect = ui.app.session.doc().unwrap().node(ui.app.session.doc().unwrap().first_page().unwrap()).unwrap().children[0];
+    let child = ui.app.session.doc().unwrap().node(rect).unwrap().children[0];
+    ui.run("node.set", json!({"id": child, "props": {"x": 120}}));
+    ui.frames(3, Vec::new);
+    assert_ne!(tex_id(&ui), Some(first), "an edit renders the detail again");
+}
+
+#[test]
+fn a_view_a_rounding_error_past_the_frame_keeps_its_detail() {
+    let mut ui = tall_hidpi(16_384);
+    let ctx = ui.ctx.clone();
+    let doc = ui.app.session.doc().unwrap().clone();
+    let now = ui.time;
+    let p = ui.app.ui.present.as_mut().unwrap();
+    let id = p.current;
+    let whole = figcraft_geom::Rect::new(0.0, 0.0, 1440.0, 9701.0);
+    // The screen-to-page round trip can put the view a hair outside the frame.
+    let view = figcraft_geom::Rect::new(-1e-9, 0.0, 1440.0 + 1e-9, 860.0);
+    let first = p.detail_texture(&ctx, &doc, id, 2.0, whole, view, false, now).expect("a detail").tex.id();
+    let again = p.detail_texture(&ctx, &doc, id, 2.0, whole, view, false, now).expect("a detail").tex.id();
+    assert_eq!(again, first, "the same view reuses its detail instead of rendering a new one");
+}
+
+#[test]
+fn a_still_view_keeps_its_detail_at_fractional_scales() {
+    // Frame widths that give fractional fit-width scales: the view's page rect then comes back
+    // from the screen with rounding, a hair past the frame's edge.
+    let mut with_detail = 0;
+    for w in [1001.3, 1111.1, 1234.5, 1337.7, 1440.9, 1555.5, 1666.6, 1777.7, 1888.8, 1999.9, 2345.6] {
+        let mut session = figcraft_engine::Session::new();
+        let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": w, "height": 9701})).unwrap());
+        session.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 100, "y": 100, "width": 300, "height": 200})).unwrap();
+        let mut ui = Ui::new(session);
+        ui.hidpi = Some((2.0, 16_384));
+        ui.run("proto.present", json!({"start": frame}));
+        ui.app.ui.present.as_mut().unwrap().view.scale = PresentScale::FitWidth;
+        ui.frames(2, Vec::new);
+        let tex_id = |ui: &Ui| ui.app.ui.present.as_ref().and_then(|p| p.detail.as_ref().map(|(_, d)| d.tex.id()));
+        let Some(first) = tex_id(&ui) else { continue };
+        with_detail += 1;
+        ui.frames(4, Vec::new);
+        assert_eq!(tex_id(&ui), Some(first), "width {w}: a still view keeps its detail");
+    }
+    assert!(with_detail >= 3, "most of these widths need a detail texture: {with_detail}");
+}
+
+#[test]
+fn detail_plan_edge_cases() {
+    use figcraft_geom::Rect as R;
+    let bounds = R::new(0.0, 0.0, 1440.0, 9701.0);
+    let side = 16382.0;
+    // Nothing in view, an empty or invalid view, a bad scale: no detail.
+    for v in [R::new(0.0, 10_000.0, 1440.0, 11_000.0), R::new(0.0, 100.0, 0.0, 100.0)] {
+        assert!(actions::detail_plan(bounds, v, 2.0, side).is_none(), "{v:?}");
+    }
+    for px in [0.0, -1.0, f64::NAN] {
+        assert!(actions::detail_plan(bounds, R::new(0.0, 0.0, 1440.0, 860.0), px, side).is_none(), "{px}");
+    }
+    // Partly outside: the part inside.
+    let r = actions::detail_plan(bounds, R::new(0.0, -500.0, 1440.0, 360.0), 2.0, side).unwrap();
+    assert!(r.y0 == 0.0 && r.y1 >= 360.0, "{r:?}");
+    // A view whose quarter margin passes the pixel cap gets a smaller margin that fits.
+    let r = actions::detail_plan(bounds, R::new(0.0, 3000.0, 1440.0, 5000.0), 2.0, side).unwrap();
+    assert!(r.height() > 2000.0 && r.height() < 3000.0 && r.width() * r.height() * 4.0 <= 16_777_216.0, "{r:?}");
+    // A view past the caps by itself is returned as it is.
+    let tall = R::new(0.0, 1000.0, 1440.0, 5000.0);
+    assert_eq!(actions::detail_plan(bounds, tall, 2.0, side), Some(tall));
+    // A small texture limit: the view alone is over it, so it is the view.
+    let view = R::new(0.0, 0.0, 1440.0, 860.0);
+    assert_eq!(actions::detail_plan(bounds, view, 2.0, 2048.0), Some(view));
+}
+
+#[test]
+fn the_detail_replaces_the_whole_frame_texture_instead_of_drawing_over_it() {
+    // A frame with no fill holding a 50% rectangle: both textures start from a transparent pixmap,
+    // so drawn over each other the rectangle would count twice (75%, not 50%).
+    let mut session = figcraft_engine::Session::new();
+    let frame = id(&session.execute("node.create", &json!({"type": "frame", "width": 1440, "height": 9701, "props": {"fills": []}})).unwrap());
+    let r =
+        id(&session.execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 0, "y": 0, "width": 1440, "height": 9701})).unwrap());
+    session.execute("node.set", &json!({"id": r, "props": {"fill": "#ff0000", "opacity": 0.5}})).unwrap();
+    let mut ui = Ui::new(session);
+    ui.hidpi = Some((2.0, 16_384));
+    ui.run("proto.present", json!({"start": frame}));
+    ui.app.ui.present.as_mut().unwrap().view.scale = PresentScale::FitWidth;
+    ui.frames(2, Vec::new);
+
+    // The pixel's alpha is the rectangle's 0.5 in the whole-frame render and in the detail render.
+    let doc = ui.app.session.doc().unwrap();
+    let alpha = |pix: &figcraft_render::Pixmap| pix.data()[3];
+    let whole = figcraft_render::render_node_at(doc, frame, 0.5, 0.0).unwrap();
+    let detail = figcraft_render::render_area_at(doc, &[frame], figcraft_geom::Rect::new(0.0, 0.0, 100.0, 100.0), 2.0, 0.0).unwrap();
+    assert!((i32::from(alpha(&whole)) - 128).abs() <= 1 && (i32::from(alpha(&detail)) - 128).abs() <= 1);
+
+    // On screen, no whole-frame texture is drawn under the detail: one texture covers its centre.
+    let out = ui.frame_output(Vec::new());
+    let prims = ui.ctx.tessellate(out.shapes, 2.0);
+    let names: std::collections::HashMap<egui::TextureId, String> =
+        ui.ctx.tex_manager().read().allocated().map(|(id, m)| (*id, m.name.clone())).collect();
+    let mut present: Vec<(String, egui::Rect, egui::Rect)> = Vec::new();
+    for prim in &prims {
+        if let egui::epaint::Primitive::Mesh(m) = &prim.primitive
+            && let Some(n) = names.get(&m.texture_id).filter(|n| n.starts_with("present-"))
+        {
+            let bbox = m.vertices.iter().fold(egui::Rect::NOTHING, |r, v| r.union(egui::Rect::from_min_max(v.pos, v.pos)));
+            present.push((n.clone(), bbox, prim.clip_rect));
+        }
+    }
+    let (_, dbox, dclip) = present.iter().find(|(n, ..)| n.starts_with("present-detail-")).expect("the detail is drawn");
+    let centre = dbox.intersect(*dclip).center();
+    let covering: Vec<_> = present.iter().filter(|(_, b, c)| b.contains(centre) && c.contains(centre)).map(|(n, ..)| n.as_str()).collect();
+    assert_eq!(covering.len(), 1, "only the detail covers the view's centre:: {covering:?}");
+}
+
+#[test]
+fn base_parts_leave_the_hole_out() {
+    use egui::{Rect, pos2};
+    let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0));
+    assert_eq!(draw::base_parts(clip, None), vec![clip]);
+    let hole = Rect::from_min_max(pos2(10.0, 20.0), pos2(60.0, 70.0));
+    let parts = draw::base_parts(clip, Some(hole));
+    assert_eq!(parts.len(), 4);
+    let area: f32 = parts.iter().map(|r| r.width() * r.height()).sum();
+    assert_eq!(area, 100.0 * 100.0 - 50.0 * 50.0);
+    assert!(parts.iter().all(|r| !r.intersects(hole.shrink(0.01))));
+    assert!(draw::base_parts(clip, Some(clip)).is_empty());
+}
+
 /// The preview pane's 24 pt bar buttons paint their glyphs at 16 pt (#2238).
 #[test]
 fn pane_bar_buttons_paint_16pt() {

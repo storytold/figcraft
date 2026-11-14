@@ -362,6 +362,11 @@ pub fn render_area(doc: &Document, ids: &[NodeId], b: Rect, scale: f64) -> Optio
     area_at(doc, ids, None, b, scale, 0.0)
 }
 
+/// [`render_area`] `time` seconds into animated GIFs (the presenter plays them).
+pub fn render_area_at(doc: &Document, ids: &[NodeId], b: Rect, scale: f64, time: f64) -> Option<Pixmap> {
+    area_at(doc, ids, None, b, scale, time)
+}
+
 /// [`render_area`] for an export of layers that sit among `page_layers` (the page's top-level
 /// layers, in z-order): a background blur or glass in `ids` reads what lies under the first of
 /// them on that page, clipped to the area (#2213). Only `ids` are drawn; the layers above stay
