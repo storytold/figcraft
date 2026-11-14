@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_doc::{Document, Effect, ExportSetting, ImageData, LayoutGrid, Node, NodeId, NodeKind};
-use figcraft_geom::Affine;
+use figcraft_geom::{Affine, Point};
 use serde_json::{Map, Value, json};
 
 use super::{CommandSpec, ok};
@@ -616,7 +616,8 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Layers duplicated last (Duplicate or Alt-drag) and their copies, in the same order. While the
 /// copies are the selection, Duplicate places the next copies as far from them as they are from
-/// their sources, measured then: so moving the copies first sets the step.
+/// their sources, measured then (their move and turn, not their size): so moving or turning the
+/// copies first sets the step.
 #[derive(Clone, Debug)]
 pub struct Duplicated {
     pub sources: Vec<NodeId>,
@@ -629,9 +630,12 @@ impl Duplicated {
         !self.copies.is_empty() && set(&self.copies) == set(sel)
     }
 
-    /// The page offset from the sources to the copies, if both are still there and the copies move
-    /// freely (an auto layout places its own).
-    fn offset(&self, doc: &Document) -> Option<(f64, f64)> {
+    /// The step from the sources to the copies, if both are still there and the copies move freely
+    /// (an auto layout places its own): the mean move of the copies' own centres in the page frame
+    /// (less what a size change shifts them by), and the turn every copy has over its source (zero
+    /// unless they all agree, or when a flip differs). A turn is not counted as a move, whether each
+    /// copy turned about its own centre or the copies turned together about their shared centre.
+    fn step(&self, doc: &Document) -> Option<Step> {
         let free = self
             .copies
             .iter()
@@ -639,10 +643,100 @@ impl Duplicated {
         if !free || self.sources.iter().chain(&self.copies).any(|i| !doc.contains(*i)) {
             return None;
         }
-        let (a, b) = (doc.bounds_of(&self.sources)?, doc.bounds_of(&self.copies)?);
-        let d = (b.x0 - a.x0, b.y0 - a.y0);
-        (d.0.is_finite() && d.1.is_finite() && (d.0 != 0.0 || d.1 != 0.0)).then_some(d)
+        // A flip reads as a half turn and was not measured: never repeat a turn across one.
+        let flips_differ = self
+            .sources
+            .iter()
+            .zip(&self.copies)
+            .any(|(s, c)| figcraft_geom::is_flipped(doc.world_transform(*s)) != figcraft_geom::is_flipped(doc.world_transform(*c)));
+        let turns: Vec<f64> = self
+            .sources
+            .iter()
+            .zip(&self.copies)
+            .map(|(s, c)| {
+                let d = figcraft_geom::rotation_degrees(doc.world_transform(*c)) - figcraft_geom::rotation_degrees(doc.world_transform(*s));
+                let d = d.rem_euclid(360.0);
+                if d > 180.0 { d - 360.0 } else { d }
+            })
+            .collect();
+        let angle = match turns.first() {
+            Some(first) if !flips_differ && turns.iter().all(|t| (t - first).abs() < 1e-6) => *first,
+            _ => 0.0,
+        };
+        // Per pair, where the copy's own centre is, less what its size change moved that centre by
+        // (a growing edge shifts it, in the source's frame), and where the source's centre is.
+        let mut pairs = Vec::new();
+        for (s, c) in self.sources.iter().zip(&self.copies) {
+            let (sn, cn) = (doc.node(*s)?, doc.node(*c)?);
+            let (sw, cw) = (doc.world_transform(*s), doc.world_transform(*c));
+            let (ps, pc) = (sw * Point::new(sn.width / 2.0, sn.height / 2.0), cw * Point::new(cn.width / 2.0, cn.height / 2.0));
+            let grow = Point::new((cn.width - sn.width) / 2.0, (cn.height - sn.height) / 2.0);
+            let shift_in = |x: Affine| x * grow - x * Point::ORIGIN;
+            // The order of a turn and a resize isn't recorded. A resize then a turn shifts the centre
+            // along the source's axes; a turn then a resize, along the copy's. Take the copy's only
+            // when it alone makes this pair's own move zero: a pure resize plus turn, either order,
+            // with no move must give no move. Otherwise keep the source's.
+            let (by_source, by_copy) = (pc - shift_in(sw), pc - shift_in(cw));
+            let still = |q: Point| (q.x - ps.x).hypot(q.y - ps.y) < 1e-6;
+            let corrected = if still(by_copy) && !still(by_source) { by_copy } else { by_source };
+            pairs.push((ps, corrected));
+        }
+        // The mean of the residuals, and whether they all agree (the copies fit that reading).
+        let fit = |res: &[(f64, f64)]| {
+            let n = res.len() as f64;
+            let mean = (res.iter().map(|m| m.0).sum::<f64>() / n, res.iter().map(|m| m.1).sum::<f64>() / n);
+            let agree = res.iter().all(|m| (m.0 - mean.0).hypot(m.1 - mean.1) < 1e-6);
+            (mean, agree)
+        };
+        // Reading A, each copy turned about its own centre: the residual is the move of its centre.
+        let each: Vec<(f64, f64)> = pairs.iter().map(|(ps, pc)| (pc.x - ps.x, pc.y - ps.y)).collect();
+        let (mut mv, each_fits) = fit(&each);
+        // Reading B, the copies turned together about the sources' centre (as a Rotate on several
+        // layers does): the residual is what is left once each source's centre is turned that way.
+        // The centre is `turn_centre`, never read from the copies: a turn about another point shifts
+        // every residual by the same vector, so where the copies are can't say which point they
+        // turned about. Such a turn reads as this one plus a move.
+        if angle != 0.0
+            && pairs.len() > 1
+            && !each_fits
+            && let Some(c) = turn_centre(doc, &self.sources)
+        {
+            let together: Vec<(f64, f64)> = pairs
+                .iter()
+                .map(|(ps, pc)| {
+                    let q = figcraft_geom::translation(figcraft_geom::rotate_about(Affine::translate(ps.to_vec2()), c, angle));
+                    (pc.x - q.x, pc.y - q.y)
+                })
+                .collect();
+            let (m, together_fits) = fit(&together);
+            if together_fits {
+                mv = m;
+            }
+        }
+        let (dx, dy) = mv;
+        let step = Step { dx, dy, angle };
+        (step.dx.is_finite() && step.dy.is_finite() && step.angle.is_finite() && (dx != 0.0 || dy != 0.0 || angle != 0.0)).then_some(step)
     }
+}
+
+/// What Duplicate repeats: a move of the copies' centre in the page frame, then a turn about the
+/// centre of the new copies. Size is not part of it.
+#[derive(Clone, Copy, Debug)]
+struct Step {
+    dx: f64,
+    dy: f64,
+    angle: f64,
+}
+
+/// Where several layers turn, for the step and for its repeat: the centre of their handle box
+/// (`selection_box`), the point the Rotate handle and the rotate keys turn a selection about.
+/// One layer: its own centre. Several: their bounds centre, or the centre of the box turned
+/// with them when they share a rotation. `transform.rotate` without a pivot turns about the
+/// bounds centre instead, so its turn of layers that share a rotation repeats as a turn plus
+/// a move.
+fn turn_centre(doc: &Document, ids: &[NodeId]) -> Option<Point> {
+    let q = crate::tools::selection_box(doc, ids)?;
+    Some(Point::new(q.iter().map(|c| c.x).sum::<f64>() / 4.0, q.iter().map(|c| c.y).sum::<f64>() / 4.0))
 }
 
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -651,7 +745,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let explicit = num(p, "dx").is_some() || num(p, "dy").is_some();
     let ds = s.ds()?;
     let roots_now = z_sorted(&ds.doc, &roots(&ds.doc, &ids));
-    let repeat = ds.last_duplicate.as_ref().filter(|d| !explicit && d.is_selection(&roots_now)).and_then(|d| d.offset(&ds.doc));
+    let repeat = ds.last_duplicate.as_ref().filter(|d| !explicit && d.is_selection(&roots_now)).and_then(|d| d.step(&ds.doc));
     let doc = s.doc_mut()?;
     let ids = roots_now;
     let mut out = Vec::new();
@@ -670,7 +764,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             _ => (0.0, 0.0),
         };
         match repeat {
-            Some((rx, ry)) => super::arrange::move_world(doc, nid, rx, ry)?,
+            Some(st) => super::arrange::move_world(doc, nid, st.dx, st.dy)?,
             None => {
                 let nn = doc.get_mut(nid)?;
                 nn.transform = Affine::translate((dx, dy)) * nn.transform;
@@ -682,6 +776,14 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             nn.name = bump_name(&nn.name);
         }
         out.push(nid);
+    }
+    // A repeated turn is about the new copies' centre: one layer's own, several layers' shared one.
+    if let Some(st) = repeat.filter(|st| st.angle != 0.0)
+        && let Some(c) = turn_centre(doc, &out)
+    {
+        for nid in out.iter().copied() {
+            super::arrange::rotate_world(doc, nid, c, st.angle)?;
+        }
     }
     crate::library::count_inserted(doc, &out);
     // Board connectors copied with what they join join the copies.
