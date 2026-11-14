@@ -365,6 +365,7 @@ Ranked; detail and milestones in [`docs/roadmap.md`](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Experimental `.fig` export preserves set-variable, set-variable-mode and conditional prototype actions (#2210). |
 | 2026-11-10 | minor | M4, #2222: a boolean group takes a corner radius that rounds every sharp corner of its result. Numbers unchanged |
 | 2026-11-10 | minor | M12, #2226 (step 1 of 4): mind maps in the document and engine. `board.mindMap` places a first node with three children on curved branches and `board.mindMapAdd` adds a child or a sibling; the normalize pass lays a touched map out again from its first node (88 between columns, 48 between siblings, stacks centred on their parents). No toolbar entry yet; numbers unchanged. |
 | 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`, 繁體中文（台灣）) draft catalog: every UI string (1,975), command label (641) and menu wording (31), translated clean-room from the English source; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant` read it while an explicit Hans stays Simplified; the desktop UI prefers an installed Noto Sans CJK TC, then Microsoft JhengHei, PingFang TC and Heiti TC; no font is bundled; native review pending. Numbers unchanged |

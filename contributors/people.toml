@@ -116,5 +116,9 @@ display_name = "Hamza0101"
 [people.ashokram-si]
 real_name = "Ashok Ram"
 
+[people.TKlerx]
+real_name = "Timo Klerx"
+sync_github_name = true
+
 [people.GiovanniBot]
 sync_github_name = true

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Deepest struct/message nesting decoded.
-const MAX_DEPTH: usize = 64;
+pub(super) const MAX_DEPTH: usize = 64;
 /// Most values decoded from one message (every scalar, array element and field counts): at least
 /// [`MIN_VALUES`], and [`VALUES_PER_PACKED_BYTE`] per byte of the file's compressed canvas up to
 /// [`MAX_VALUES`], so a large real file decodes while a small one can't expand into a huge tree,

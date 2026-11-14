@@ -115,12 +115,12 @@ enum ImageType PNG=0 JPEG=1 SVG=2 PDF=3
 enum ExportConstraintType CONTENT_SCALE=0 CONTENT_WIDTH=1 CONTENT_HEIGHT=2
 enum ComponentPropType BOOL=0 TEXT=1 INSTANCE_SWAP=3 VARIANT=4
 enum VariableField MISSING=0 CORNER_RADIUS=1 PARAGRAPH_SPACING=2 PARAGRAPH_INDENT=3 STROKE_WEIGHT=4 STACK_SPACING=5 STACK_PADDING_LEFT=6 STACK_PADDING_TOP=7 STACK_PADDING_RIGHT=8 STACK_PADDING_BOTTOM=9 VISIBLE=10 TEXT_DATA=11 WIDTH=12 HEIGHT=13 RECTANGLE_TOP_LEFT_CORNER_RADIUS=14 RECTANGLE_TOP_RIGHT_CORNER_RADIUS=15 RECTANGLE_BOTTOM_LEFT_CORNER_RADIUS=16 RECTANGLE_BOTTOM_RIGHT_CORNER_RADIUS=17 BORDER_TOP_WEIGHT=18 BORDER_BOTTOM_WEIGHT=19 BORDER_LEFT_WEIGHT=20 BORDER_RIGHT_WEIGHT=21 STACK_COUNTER_SPACING=23 MIN_WIDTH=24 MAX_WIDTH=25 MIN_HEIGHT=26 MAX_HEIGHT=27 FONT_FAMILY=28 FONT_STYLE=29 OPACITY=31 FONT_SIZE=32 LETTER_SPACING=34 LINE_HEIGHT=36 OVERRIDDEN_SYMBOL_ID=37
-enum VariableDataType BOOLEAN=0 FLOAT=1 STRING=2 ALIAS=3 COLOR=4 SYMBOL_ID=7 TEXT_DATA=9 PROP_REF=13
+enum VariableDataType BOOLEAN=0 FLOAT=1 STRING=2 ALIAS=3 COLOR=4 EXPRESSION=5 SYMBOL_ID=7 TEXT_DATA=9 PROP_REF=13
 enum VariableScope ALL_SCOPES=0 TEXT_CONTENT=1 CORNER_RADIUS=2 WIDTH_HEIGHT=3 GAP=4 ALL_FILLS=5 FRAME_FILL=6 SHAPE_FILL=7 TEXT_FILL=8 STROKE=9 STROKE_FLOAT=10 EFFECT_FLOAT=11 EFFECT_COLOR=12 OPACITY=13 FONT_STYLE=14 FONT_FAMILY=15 FONT_SIZE=16 LINE_HEIGHT=17 LETTER_SPACING=18 PARAGRAPH_SPACING=19 PARAGRAPH_INDENT=20
 enum StyleType NONE=0 FILL=1 STROKE=2 TEXT=3 EFFECT=4 EXPORT=5 GRID=6
 enum InteractionType ON_CLICK=0 DRAG=9 ON_HOVER=4 ON_PRESS=7 MOUSE_IN=2 MOUSE_OUT=3 MOUSE_DOWN=5 MOUSE_UP=6 AFTER_TIMEOUT=1 ON_KEY_DOWN=10
 enum TriggerDevice KEYBOARD=0 UNKNOWN_CONTROLLER=1
-enum ConnectionType NONE=0 INTERNAL_NODE=1 URL=2 BACK=3 CLOSE=4
+enum ConnectionType NONE=0 INTERNAL_NODE=1 URL=2 BACK=3 CLOSE=4 SET_VARIABLE=5 CONDITIONAL=7 SET_VARIABLE_MODE=8
 enum NavigationType NAVIGATE=0 OVERLAY=1 SWAP=2 SWAP_STATE=3 SCROLL_TO=4
 enum TransitionType INSTANT_TRANSITION=0 DISSOLVE=1 SMART_ANIMATE=24 SLIDE_FROM_LEFT=3 SLIDE_FROM_RIGHT=4 SLIDE_FROM_TOP=5 SLIDE_FROM_BOTTOM=6 PUSH_FROM_LEFT=7 PUSH_FROM_RIGHT=8 PUSH_FROM_TOP=9 PUSH_FROM_BOTTOM=10 MOVE_FROM_LEFT=11 MOVE_FROM_RIGHT=12 MOVE_FROM_TOP=13 MOVE_FROM_BOTTOM=14 SLIDE_OUT_TO_LEFT=15 SLIDE_OUT_TO_RIGHT=16 SLIDE_OUT_TO_TOP=17 SLIDE_OUT_TO_BOTTOM=18 MOVE_OUT_TO_LEFT=19 MOVE_OUT_TO_RIGHT=20 MOVE_OUT_TO_TOP=21 MOVE_OUT_TO_BOTTOM=22
 enum EasingType IN_CUBIC=0 OUT_CUBIC=1 INOUT_CUBIC=2 LINEAR=3 IN_BACK_CUBIC=4 OUT_BACK_CUBIC=5 INOUT_BACK_CUBIC=6 CUSTOM_CUBIC=7 GENTLE_SPRING=9
@@ -170,7 +170,9 @@ message VariantPropSpec GUID propDefId=1, string value=2
 message StateGroupPropertyValueOrder string property=1, string[] values=2
 message PropRefValue GUID defId=1
 message SymbolId GUID guid=1
-message VariableAnyValue bool boolValue=1, string textValue=2, float floatValue=3, VariableID alias=4, Color colorValue=5, SymbolId symbolIdValue=8, TextData textDataValue=10, PropRefValue propRefValue=13
+message VariableAnyValue bool boolValue=1, string textValue=2, float floatValue=3, VariableID alias=4, Color colorValue=5, Expression expressionValue=6, SymbolId symbolIdValue=8, TextData textDataValue=10, PropRefValue propRefValue=13
+enum ExpressionFunction ADDITION=0 SUBTRACTION=1 MULTIPLY=3 DIVIDE=4 EQUALS=5 NOT_EQUAL=6 LESS_THAN=7 LESS_THAN_OR_EQUAL=8 GREATER_THAN=9 GREATER_THAN_OR_EQUAL=10 AND=11 OR=12 NOT=13 VAR_MODE_LOOKUP=16 NEGATE=17
+message Expression ExpressionFunction expressionFunction=1, VariableData[] expressionArguments=2
 message VariableData VariableAnyValue value=1, VariableDataType dataType=2, VariableResolvedDataType resolvedDataType=3
 message VariableDataMapEntry uint nodeField=1, VariableData variableData=2, VariableField variableField=3
 message VariableDataMap VariableDataMapEntry[] entries=1
@@ -181,7 +183,9 @@ message VariableDataValuesEntry GUID modeID=1, VariableData variableData=2
 message VariableDataValues VariableDataValuesEntry[] entries=1
 message KeyTrigger int[] keyCodes=1, TriggerDevice triggerDevice=2
 message PrototypeEvent InteractionType interactionType=1, float transitionTimeout=6, KeyTrigger keyTrigger=4
-message PrototypeAction GUID transitionNodeID=1, TransitionType transitionType=2, float transitionDuration=3, EasingType easingType=4, float[] easingFunction=12, ConnectionType connectionType=7, Vector overlayRelativePosition=9, NavigationType navigationType=10, string connectionURL=8, bool transitionPreserveScroll=11
+message PrototypeVariableTarget VariableID id=1
+message ConditionalActions PrototypeAction[] actions=1, VariableData condition=2
+message PrototypeAction GUID transitionNodeID=1, TransitionType transitionType=2, float transitionDuration=3, EasingType easingType=4, float[] easingFunction=12, ConnectionType connectionType=7, Vector overlayRelativePosition=9, NavigationType navigationType=10, string connectionURL=8, bool transitionPreserveScroll=11, PrototypeVariableTarget targetVariable=19, VariableData targetVariableData=20, ConditionalActions[] conditionalActions=24, VariableSetID targetVariableSetID=27, GUID targetVariableModeID=28
 message PrototypeInteraction PrototypeEvent event=2, PrototypeAction[] actions=3
 message PrototypeStartingPoint string name=1, string position=3
 message OverlayBackgroundAppearance OverlayBackgroundType backgroundType=1, Color backgroundColor=2

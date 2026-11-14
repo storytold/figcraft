@@ -131,7 +131,8 @@ scales and empty-style clears; they have not been checked in other software.
   with the area it paints); prototype
   interactions (clicks, hovers, presses, drags, mouse triggers, delays, keys with modifiers and
   controller buttons; navigate, overlays with their position, outside-click setting and
-  background, swap, change to, scroll to, back, close, open link; transitions and easing, custom
+  background, swap, change to, scroll to, back, close, open link, set variable, set variable mode
+  and conditional branches; transitions and easing, custom
   curves included), scrolling and fixed layers, flow starting points.
 - **Left out, with a warning each:** colour calculations that resolve to nothing (an operand
   missing, or more than 32 variables to read), variable bindings the format has no field for (component
@@ -143,7 +144,8 @@ scales and empty-style clears; they have not been checked in other software.
   strokes (written plain), strokes wider on one side of their path (written as filled outlines, or
   with the width on both sides when the shape has a fill too), pattern fills, WebP export settings (written as PNG),
   glass settings other than frost, springs other than Gentle (written as ease
-  out), set-variable, set-variable-mode and conditional actions, scroll-to offsets, text decoration
+  out), prototype actions with unsupported values, references or nesting (including expressions
+  that read the current mode of a collection), scroll-to offsets, text decoration
   looks, variable font axes, text on a path with more than one line or on a path the format can't hold (written as plain text), the parts of a text's path after the first, text on a path in an instance but not in its main or the other way round (written as the main has it), an instance's text of more than one line on a main on a path (it stays on that path, as an override can't take it off), nested list levels, OpenType features, per-layer operations inside boolean groups, different stroke ends
   on lines, the Dash cap (no public name for it). Not written at all: stroke outlines of dashed and per-side strokes and of inside or
   outside strokes on polygons, stars and vectors, glyph outlines of text (a reader lays text out
