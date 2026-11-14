@@ -9,7 +9,9 @@ use serde_json::json;
 use crate::field_tests::{field, scrub, type_into, undo_steps};
 use crate::layers_drag_tests::Ui;
 
-fn setup() -> (Ui, NodeId) {
+/// A 100 × 60 rectangle at the origin, selected and in vector edit mode (points clockwise from
+/// the top left), and its id.
+pub(crate) fn setup() -> (Ui, NodeId) {
     let mut s = Session::new();
     let r = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 60})).unwrap();
     let id = NodeId(r["id"].as_u64().unwrap());
