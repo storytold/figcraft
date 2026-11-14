@@ -1147,3 +1147,72 @@ fn hebrew_native_collaboration_sharing_plugins_are_localized() {
                    "collaboration/share/plugin placeholder parity: {key:?}");
     }
 }
+
+
+/// Prototype editor, presentation and interaction labels stay translated in Native Hebrew.
+/// Every key comes from the maintained English UI source catalog.
+#[test]
+fn hebrew_native_prototype_flows_and_interactions_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Action",
+        "Actions for {name}",
+        "Add action",
+        "Add actions for when no condition holds",
+        "After delay",
+        "After delay {ms}ms",
+        "Conditional",
+        "Delay",
+        "Every top-level frame already starts a flow",
+        "Flow chart",
+        "Flow starting point",
+        "Flow starting points",
+        "Flows",
+        "Highlight layers on hover",
+        "If {condition}",
+        "Interaction",
+        "Interactions",
+        "Leaving the prototype",
+        "Link frames on the Prototype tab, then present the flow",
+        "Mixed interactions: click + to replace them",
+        "Navigate to",
+        "No scrolling",
+        "On click",
+        "Overlay",
+        "Overlay position",
+        "Pause",
+        "Present or preview",
+        "Present this flow",
+        "Preserve scroll position",
+        "Preview this flow",
+        "Preview this frame",
+        "Prototype preview",
+        "Remove interaction",
+        "Remove the else and its actions",
+        "Remove this condition and its actions",
+        "Replace with a new interaction",
+        "Scroll behavior",
+        "Scroll to",
+        "Scroll to layer",
+        "Scroll with parent",
+        "Select a frame and add a starting point to present it as a flow.",
+        "Select a frame to preview it",
+        "Smart animate",
+        "Swap overlay",
+        "There's no destination for that action",
+        "This condition is edited as an expression",
+        "This link opens a website outside the prototype:",
+        "Trigger",
+        "Trigger layer",
+        "Your system asks for reduced motion: animations stay off.",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew Native prototype control: {key:?}");
+        };
+        assert!(
+            value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)),
+            "{key:?} fell back to English"
+        );
+        assert_eq!(placeholders(key), placeholders(value), "prototype placeholder parity: {key:?}");
+    }
+}
