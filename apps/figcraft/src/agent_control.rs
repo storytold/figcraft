@@ -79,6 +79,8 @@ impl AgentControl {
 
     /// Make the server what Preferences ask, when they changed (cheap otherwise: every tick calls it).
     pub fn follow(&mut self, fig: &mut FigApp) {
+        // Preferences show the switch as it is: on, and not theirs to change.
+        fig.agent_control_fixed = self.fixed;
         if self.fixed {
             return;
         }
@@ -87,7 +89,13 @@ impl AgentControl {
             return;
         }
         let want = (prefs.agent_control, prefs.automation_root.clone());
+        let served = self.server.is_some();
         self.stop();
+        if served {
+            // What its clients sent and the app already holds was sent under the folders that
+            // end here: run later, it would act with no confinement, or under another folder.
+            fig.cancel_control_work("agent control changed in Preferences before this request ran: it was not applied");
+        }
         if !self.launch_roots {
             fig.automation_roots = None;
             fig.automation_roots_for_agents = false;
@@ -151,8 +159,64 @@ fn xdg_documents(text: &str, home: &std::path::Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::xdg_documents;
+    use super::{AgentControl, Wiring, xdg_documents};
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use figcraft_engine::Session;
+    use figcraft_ui_egui::{ControlRequest, FigApp, NoServices};
+    use serde_json::json;
+
+    /// What the server needs from the app, with no state file.
+    fn wiring() -> Wiring {
+        Wiring {
+            queue: Arc::new(Mutex::new(Vec::new())),
+            ctx: Arc::new(Mutex::new(None)),
+            events: Arc::new(figcraft_engine::events::EventLog::default()),
+            config_dir: None,
+        }
+    }
+
+    #[test]
+    fn turning_agent_control_off_cancels_the_work_the_app_already_holds() {
+        let dir = std::env::temp_dir().join(format!("figcraft-agent-control-off-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut fig = FigApp::new(Session::new(), Box::new(NoServices));
+        fig.session.prefs.agent_control = true;
+        fig.session.prefs.automation_root = dir.to_string_lossy().into_owned();
+        let mut control = AgentControl::new(wiring(), None, Duration::ZERO, false);
+        control.follow(&mut fig);
+        assert!(fig.automation_roots.is_some(), "agents work confined to their folder");
+        // What a client sent before the user turned control off: a request the server already
+        // handed to the app (`drain_queue`) and an input batch no frame has applied yet.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let export = json!({"command": "file.export", "params": {"format": "svg", "path": "/outside.svg"}});
+        fig.control_queue.push(ControlRequest {
+            id: json!(7),
+            method: "engine.execute".into(),
+            params: export,
+            reply: tx,
+            state: Default::default(),
+        });
+        fig.control_input.push(egui::Event::Copy);
+        fig.session.prefs.agent_control = false;
+        control.follow(&mut fig);
+        assert!(fig.automation_roots.is_none());
+        assert!(fig.control_queue.is_empty(), "a request outlived the confinement it was sent under");
+        assert!(fig.control_input.is_empty(), "injected input outlived the agent that sent it");
+        assert!(rx.try_recv().expect("the cancelled request is answered").result.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_launch_that_named_its_port_tells_preferences_the_switch_is_fixed() {
+        let mut fig = FigApp::new(Session::new(), Box::new(NoServices));
+        let mut control = AgentControl::new(wiring(), Some(0), Duration::ZERO, false);
+        control.follow(&mut fig);
+        assert!(fig.agent_control_fixed, "Preferences offer a switch that changes nothing");
+        control.stop();
+    }
 
     #[test]
     fn the_documents_folder_follows_user_dirs() {

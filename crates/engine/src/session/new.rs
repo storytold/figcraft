@@ -35,6 +35,7 @@ impl Session {
             agent: None,
             agent_presence: None,
             agents: crate::agent::Agents::default(),
+            keep_unsaved: false,
         }
     }
 

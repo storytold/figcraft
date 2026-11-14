@@ -33,6 +33,11 @@ one file. As soon as two are there (or after `agent_join`), each keeps its own c
 selection, apart from the window's, so they work on parts of one page or on different pages,
 shown or not, without waiting for each other. `edit.undo` and `edit.redo` are refused to an agent
 while another is there: fix a mistake with a new command. Send a block of work as one `batch`.
+The server holds its agent's name with a key it draws when it starts and sends by itself
+(`agentKey`, see [control-protocol.md](control-protocol.md)): no other client of the app works
+under that name or makes it leave. A second server under a name that is held is refused, so give
+each its own `--agent NAME`; a server that was killed gets its name back once the app has
+forgotten it (30 minutes without a request).
 
 While an attached agent works, the app shows where, as it shows a person in a live session: its
 avatar, in a colour of its own and named as its comments are signed ("Claude (agent)", see
@@ -408,7 +413,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `key {key, shift, alt, cmd}` | A shortcut or key as if typed on the canvas (every default shortcut, tool keys, Escape, Delete, arrows, number keys for opacity, arrows that pan the view when nothing is selected; while editing text, the text shortcuts and then text editing keys). Keys are names like `A`, `0`, `Enter`, `ArrowLeft`, `=`, `/`, or egui's (`Plus`, `Questionmark`); `cmd` is Cmd on macOS and Ctrl elsewhere. |
 | `type_text {text, id?}` | Type into the text being edited, or replace the contents of text layer `id`. |
 | `inspect_ui {}` | Tool, view and status (and panels, timings and the app's `windows` when attached). |
-| `wait_for_changes {after?, timeoutMs?, topics?, limit?}` | Wait for new comment events in the attached app; returns pending events at once, else waits up to `timeoutMs` (default 20 s, max 25 s). Pass the returned `cursor` back to keep watching. Headless returns immediately. |
+| `wait_for_changes {after?, timeoutMs?, topics?, limit?}` | Wait for new events in the attached app: comments, and with the `agents` topic the AI agents that come, leave, or change their page or selection; returns pending events at once, else waits up to `timeoutMs` (default 20 s, max 25 s). Pass the returned `cursor` back to keep watching. Headless returns immediately. |
 | `agent_join {}` / `agent_leave {}` / `agent_list {}` | Several agents on one file: `agent_join` announces this server's agent, which works apart from then on (its own page and selection), even alone; `agent_leave` forgets it; `agent_list` returns `{agents: [{agent, apart, page, selection}]}`. |
 
 ### Compact layer trees

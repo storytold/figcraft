@@ -35,19 +35,24 @@ at the first excess byte, replies `{"id": null, "ok": false, "error": "message t
 closes the connection without consuming the rest of the frame. The server accepts at most **256
 active connections**; an additional connection gets
 `{"id": null, "ok": false, "error": "too many control connections (256 at most): the app is busy, try again shortly"}`
-and is closed. A client that had already sent a request may see the connection reset instead of
-that line; either way, reconnect a little later. Socket reads and writes each
+and is closed. A client that had already sent a request reads that line too; reconnect a little
+later. Socket reads and writes each
 have a **60 s inactivity timeout**, so idle clients and clients that stop reading release their
 worker. This bounds blocked socket operations, not the total duration of a frame arriving slowly.
 Clients can reconnect after an idle timeout (the attached MCP backend already does).
 Replies have no size limit on the app's side. The attached MCP backend reads them up to **512 MiB
 before the newline** and drops the connection on a longer one (see [MCP server](mcp.md)).
 
-Both the socket queue and the UI queue hold at most **8 requests** each, including requests waiting
+Both the socket queue and the UI queue hold at most **256 requests** each, including requests waiting
 for another window's frame. A full socket queue replies with `"control request queue is full"`
 instead of dispatching the new request. These limits apply to the opt-in loopback control channel;
 requests still queued after the UI timeout are discarded (never run), including requests deferred to
 a hidden window. A command already running is not interrupted: it takes effect when it finishes.
+
+A request whose client closed the connection before the app started it (the client was killed, or
+gave up) is discarded the same way, about a second later, and so is anything else that client had
+sent. A client that only closes its sending side and goes on reading is still answered: to tell it
+from one that left, the app may send it a space ahead of the reply line.
 
 A minimised or covered window (the main one or another, see Windows below) draws no frames, but
 still answers every method that acts on the app's state (`engine.execute`, `document.inspect`,
@@ -92,8 +97,10 @@ an error, and so is a `document` naming a file behind the tab in front on any ot
 An app started without `--control` listens too while **Preferences ▸ Allow AI agents to control
 FigCraft** is on (off by default; the app asks before it turns on, and before it turns off). It
 takes a free port, starts and stops listening at once when the preference changes, with no
-restart, and stops when it quits. `--control PORT` keeps its fixed port whatever the preference
-says.
+restart, and stops when it quits. Turned off, or given another folder, it also drops the requests
+and the input its clients had sent and no frame had finished: they get an error, and are never
+applied. `--control PORT` keeps its fixed port whatever the preference says; Preferences then show
+the switch on and greyed out.
 
 While it listens, the app keeps `control.json` in its settings folder (`FigCraft` in the system's
 configuration folder, or the folder `FIGCRAFT_CONFIG_DIR` names): `{"port": 51234, "pid": 4242}`,
@@ -102,14 +109,16 @@ written atomically and removed when it stops listening. `figcraft-cli mcp --atta
 system's configuration folder, then in `~/.config/FigCraft`: a client run in a sandbox (Flatpak,
 Snap) has its own configuration folder, while the app outside keeps its settings in `~/.config`.
 When no folder holds the file, the error names the folders searched. A file left by an app that
-crashed names a port nothing listens on: connecting fails.
+crashed names a port nothing listens on: the client goes on to the next folder, and reports that
+failed connection only when no folder leads to an app that answers.
 
 An app that listens because of the preference, started without automation roots, confines agents
 to **Folder for agents** in Preferences (empty: `FigCraft` in the user's documents, made if
 missing). A folder that can't be used is an error shown in the app, and it doesn't listen.
 
 No command sets these two preferences, so a control client can neither open the channel nor
-widen its folder: only the Preferences window does.
+widen its folder: only the Preferences window does, and only for the user. Input a client injects
+(`ui.input`) is ignored by the switch, by its question, by the folder field and by **Browse**.
 
 ## Confining file access
 
@@ -168,6 +177,16 @@ last edit of a layer wins. A new agent starts on the window's page with the wind
 one per file and a step holds the whole document, so `edit.undo` and `edit.redo` are refused to an
 agent while another one is there: it corrects with a new edit. The user's undo is never refused.
 
+An agent holds its name with a key: `agentKey` (a string of 1 to 256 bytes, next to `agent`), any
+text only its client knows. The first key given under a name holds it. From then on
+`engine.execute`, `document.inspect`, `agent.join` and `agent.leave` under that name are refused
+with another key or with none: an agent is a name, not a connection, and without the key any
+client of the channel could work under another agent's name or make it leave. The key is forgotten
+with the agent (`agent.leave`, or 30 minutes without a request). A name no key holds is anyone's:
+a request that gives `agent` alone works, until a client takes that name with a key.
+`figcraft-cli call --agent` asks for the key (`--agent-key`), and the MCP server draws its own
+when it starts.
+
 ```json
 {"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":10,"y":10,"width":100,"height":50}}}
 {"id":1,"ok":true,"result":{"id":2}}
@@ -192,11 +211,13 @@ it and duplicate it:
 {"id":4,"method":"engine.execute","params":{"command":"command.batch","params":{"commands":[{"command":"node.create","as":"card","params":{"type":"frame","width":200,"height":100}},{"command":"node.create","params":{"type":"rectangle","parent":{"$ref":"card"},"width":20,"height":20}},{"command":"edit.duplicate","as":"copy","params":{"ids":[{"$ref":"card"}]}},{"command":"node.set","params":{"ids":[{"$ref":"copy","field":"ids/0"}],"props":{"name":"Card copy"}}}]}}}
 ```
 
-### `agent.join {agent}` / `agent.leave {agent}` / `agent.list {}`
+### `agent.join {agent, agentKey}` / `agent.leave {agent, agentKey?}` / `agent.list {}`
 
 `agent.join` announces a named agent and makes it work apart at once, even alone; it returns
-`{agent, agents}`. `agent.leave` forgets the agent, its pages and its selections, and returns
-`{left}`; closing a connection does not do it. An agent that made no request for 30 minutes is
+`{agent, agents}`. The agent takes its name there, so `agentKey` is required: without a key the
+name would be anyone's. `agent.leave` forgets the agent, its pages and its selections, and returns
+`{left}`; it is refused without the key of a name that is held, and closing a connection does not
+do it. An agent that made no request for 30 minutes is
 forgotten the same way (its client stopped without leaving); if it comes back, it is a new agent
 and starts where the window is. `agent.list` returns `{agents: [{agent, apart, page,
 selection}]}`, in the order they came: `page` and `selection` are those of an agent working apart
@@ -490,7 +511,17 @@ closing while others are open takes over one of them, and closing the last windo
 
 ### `app.quit {}`
 
-Close the app (every window, without asking about unsaved changes).
+Close the app (every window, without asking about unsaved changes). Only an app started with its
+control port (`--control PORT` or `FIGCRAFT_CONTROL_PORT`) takes it: that is a script ending the
+app it launched. An app that listens because of **Preferences ▸ Allow AI agents to control
+FigCraft** refuses it: its clients are agents at work in the user's own app, and only the user
+closes it.
+
+On the channel the user opens with **Preferences ▸ Allow AI agents to control FigCraft**, a request never
+discards unsaved changes. `file.close` with `force` and `file.revert` are refused on a modified document, also
+as a step of `command.batch` or through `ui.menu.invoke`: the client saves first (`file.save`) or leaves the
+document open. Injected input (`ui.input`, `ui.pointer`, `ui.key`) does not answer the "Unsaved changes"
+question either; that choice stays with the user. An app started with `--control PORT` keeps both rules.
 
 ## Example session (shell)
 

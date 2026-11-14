@@ -283,7 +283,9 @@ pub fn agent_author(name: &str) -> String {
 /// [`MAX_AGENT_NAME`] characters; empty when it gave none.
 pub fn agent_name(name: &str) -> String {
     let n: String = name.chars().filter(|c| !c.is_control()).collect();
-    n.trim().chars().take(MAX_AGENT_NAME).collect()
+    let cut: String = n.trim().chars().take(MAX_AGENT_NAME).collect();
+    // The cut can end on a space: trimmed again, the name kept is the one it is found under.
+    cut.trim_end().to_string()
 }
 
 /// Who acts when no `author` is given: the AI agent the command runs for, else the user.

@@ -114,6 +114,10 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Replace the active tab's document with its file as saved (`file.revert`, `file.open {reload}`).
 pub(super) fn revert(s: &mut Session) -> Result<()> {
+    // Reverting drops the unsaved changes: not for a caller who may not drop the user's work.
+    if s.keep_unsaved && s.ds()?.is_dirty() {
+        return Err(EngineError::Disabled("file.revert".into(), super::UNSAVED_KEPT.into()));
+    }
     let path = s.ds()?.path.clone().ok_or_else(|| EngineError::Disabled("file.revert".into(), "the file was never saved".into()))?;
     // Stamped before reading: a change made during the read makes the next save refuse.
     let on_disk = crate::library::stat(&path).ok();

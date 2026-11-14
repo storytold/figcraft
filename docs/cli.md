@@ -289,7 +289,7 @@ live sessions (`collab.*`: without a key on a server open to the public, with `c
 `collab.manageFile` for the owner token and `collab.report`) and use plugin directories
 (`plugin.directory.*`); the one-shot `run` can't (no network link).
 
-### `call <method> [PARAMS|-] [--attach auto|PORT] [--agent NAME] [--timeout SECONDS]`
+### `call <method> [PARAMS|-] [--attach auto|PORT] [--agent NAME --agent-key KEY] [--timeout SECONDS]`
 
 Send one request of the [control protocol](control-protocol.md) to the running app and print its
 result as JSON: what an AI agent that has a shell, and no MCP client of its own, drives the app
@@ -304,17 +304,21 @@ stderr and exits with code 1; parameters that are not a JSON object exit with co
 
 `--agent NAME` names the agent the request is made for (`engine.execute`, `document.inspect`,
 `agent.join` and `agent.leave` carry it): several agents on one file each give their own name and
-keep their own page and selection.
+keep their own page and selection. `--agent-key KEY` goes with it: the key the agent holds its name
+with, any text only it knows, the same at each of its calls. The app refuses a call under that
+name with another key, so no other agent works under it or makes it leave (see
+[control-protocol.md](control-protocol.md)).
 
 ```sh
-figcraft-cli call --agent Header agent.join
-figcraft-cli call --agent Header engine.execute - <<'JSON'
+KEY=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+figcraft-cli call --agent Header --agent-key "$KEY" agent.join
+figcraft-cli call --agent Header --agent-key "$KEY" engine.execute - <<'JSON'
 {"command": "command.batch", "params": {"label": "Header", "commands": [
   {"command": "select.set", "params": {"ids": [12]}},
   {"command": "node.set", "params": {"ids": [12], "props": {"name": "Header"}}}
 ]}}
 JSON
-figcraft-cli call --agent Header agent.leave
+figcraft-cli call --agent Header --agent-key "$KEY" agent.leave
 ```
 
 ### `plugin publish <folder> --server ws://host:port/[?key=KEY]`

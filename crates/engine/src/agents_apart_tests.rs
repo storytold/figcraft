@@ -2,6 +2,7 @@
 //! its own, an agent's undo is refused while another agent is there, and one agent alone works as
 //! before.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
 use figcraft_doc::NodeId;
@@ -130,4 +131,70 @@ fn an_agent_silent_for_too_long_is_forgotten_and_comes_back_as_a_new_one() {
     // Back, `b` is a new agent: its page and selection were forgotten with it.
     s.agent_join("b").unwrap();
     assert_eq!(s.agent_list(), json!({"agents": [{"agent": "b", "apart": true, "page": null, "selection": null}]}));
+}
+
+/// `a` joined and `b` works on the second page, the window on the first with its rectangle
+/// selected; returns the two pages and the rectangle.
+fn a_and_b_apart() -> (Session, NodeId, NodeId, NodeId) {
+    let (mut s, first, second, r) = two_pages();
+    s.agent_join("a").unwrap();
+    s.execute_as(Some("b"), "page.select", &json!({"id": second})).unwrap();
+    (s, first, second, r)
+}
+
+/// A bug that panics in the middle of `b`'s call; the MCP server catches it and keeps serving.
+fn b_panics(s: &mut Session) {
+    let unwound = catch_unwind(AssertUnwindSafe(|| s.with_agent::<()>(Some("b"), |_| panic!("a bug in b's command"))));
+    assert!(unwound.is_err(), "the panic goes on to the caller");
+}
+
+#[test]
+fn a_call_that_panics_gives_the_window_its_page_and_selection_back() {
+    let (mut s, first, second, r) = a_and_b_apart();
+    b_panics(&mut s);
+    let ds = s.ds().unwrap();
+    assert_eq!((ds.page, ds.selection.clone()), (first, vec![r]), "the window shows the user's page and selection, not b's");
+    assert_eq!(s.agent_list()["agents"][1], json!({"agent": "b", "apart": true, "page": second, "selection": []}), "b keeps its own");
+}
+
+#[test]
+fn after_a_call_that_panicked_the_next_call_is_its_own_callers() {
+    let (mut s, first, _, _) = a_and_b_apart();
+    b_panics(&mut s);
+    let ra = rect(&mut s, Some("a"));
+    assert_eq!(s.ds().unwrap().doc.page_of(ra), Some(first), "a's call ran as a, on a's page, not as b on b's");
+    assert_eq!(s.agent_list()["agents"][0], json!({"agent": "a", "apart": true, "page": first, "selection": [ra]}));
+    assert_eq!(s.execute("edit.undo", &json!({})).unwrap(), json!({"undone": true}), "the user's undo is never an agent's");
+}
+
+#[test]
+fn the_first_agent_keeps_its_selection_when_a_second_one_comes() {
+    let mut s = Session::new();
+    let users = rect(&mut s, None);
+    let agents = rect(&mut s, None);
+    // Alone, `a` works on the window's selection.
+    s.execute_as(Some("a"), "select.set", &json!({"ids": [agents]})).unwrap();
+    s.agent_join("b").unwrap();
+    // From then on the window's selection is the user's alone.
+    s.execute("select.set", &json!({"ids": [users]})).unwrap();
+
+    s.execute_as(Some("a"), "edit.delete", &json!({})).unwrap();
+    let ds = s.ds().unwrap();
+    assert!(!ds.doc.contains(agents), "a deleted what a had selected");
+    assert!(ds.doc.contains(users), "what the user selected after b came is not a's selection");
+    assert_eq!(ds.selection, vec![users], "the window's selection is still the user's");
+}
+
+#[test]
+fn an_agent_on_the_windows_page_does_not_move_the_windows_view() {
+    let (mut s, first, _, _) = two_pages();
+    s.agent_join("a").unwrap();
+    s.agent_join("b").unwrap();
+    let view = s.ds().unwrap().view.clone();
+
+    let panned = s.execute_as(Some("a"), "view.pan", &json!({"dx": 3, "dy": -2})).unwrap();
+    assert_ne!((panned["cx"].as_f64(), panned["cy"].as_f64()), (Some(view.cx), Some(view.cy)), "the pan did move the view a worked with");
+    let ds = s.ds().unwrap();
+    assert_eq!(ds.page, first, "a stayed on the page the window shows");
+    assert_eq!(ds.view, view, "the window's view is the user's: an agent working apart does not scroll it");
 }

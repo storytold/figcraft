@@ -333,6 +333,47 @@ fn connection_limit_rejects_excess_clients_and_reuses_finished_slots() {
     workers.pop().unwrap().join().unwrap();
 }
 
+/// A client over the limit that had already sent its request still reads why it is refused, then
+/// a clean end. Closing over the unread request resets the connection instead, and a reset can
+/// take the refusal away before the client reads it.
+#[test]
+fn a_refused_client_that_already_wrote_reads_the_refusal_then_a_clean_end() {
+    let (mut client, server) = pair();
+    client.write_all(b"{\"id\":1,\"method\":\"document.inspect\"}\n").unwrap();
+    // The request is in the server's socket before the server refuses.
+    assert_eq!(server.peek(&mut [0]).unwrap(), 1);
+    refuse(server);
+    let mut reader = BufReader::new(client);
+    let refusal = reply(&mut reader);
+    assert_eq!(refusal["ok"], false);
+    assert!(refusal["error"].as_str().is_some_and(|e| e.contains("too many control connections")), "{refusal}");
+    let end = reader.read(&mut [0]);
+    assert!(matches!(end, Ok(0)), "the connection ends cleanly after the refusal, not by a reset: {end:?}");
+}
+
+/// A client that sent more after a line that isn't JSON (a file of requests whose first line is
+/// broken) still reads why the connection ends, then a clean end. Closing over what it sent and
+/// nobody read resets the connection instead, and the reset takes the reason away.
+#[test]
+fn a_client_that_sent_more_after_a_broken_line_reads_why_then_a_clean_end() {
+    let (mut client, server) = pair();
+    // More than the server reads at once: the rest waits in its socket when it gives up.
+    let mut sent = b"{broken\n".to_vec();
+    sent.resize(32 * 1024, b' ');
+    client.write_all(&sent).unwrap();
+    assert_eq!(server.peek(&mut [0]).unwrap(), 1);
+    let worker = std::thread::spawn(move || serve(server, queue(), context(), Duration::from_secs(5)));
+    let mut reader = BufReader::new(client);
+    let mut line = String::new();
+    let read = reader.read_line(&mut line);
+    assert!(matches!(read, Ok(n) if n > 0), "the reason is lost with the connection: {read:?}");
+    let reason: Value = serde_json::from_str(&line).unwrap();
+    assert!(reason["error"].as_str().is_some_and(|e| e.starts_with("bad JSON")), "{reason}");
+    let end = reader.read(&mut [0]);
+    assert!(matches!(end, Ok(0)), "the connection ends cleanly after the reason, not by a reset: {end:?}");
+    worker.join().unwrap().unwrap();
+}
+
 #[test]
 fn a_client_that_stops_reading_cannot_hold_a_worker() {
     let (mut client, server) = pair();
@@ -352,6 +393,63 @@ fn a_client_that_stops_reading_cannot_hold_a_worker() {
     r.reply.send(figcraft_ui_egui::ControlReply { id: r.id, result: Ok(json!("x".repeat(8 * 1024 * 1024))) }).unwrap();
     let err = finished.recv_timeout(Duration::from_secs(5)).unwrap().unwrap_err();
     assert!(matches!(err.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut));
+    worker.join().unwrap().unwrap();
+}
+
+/// A client that leaves while its request waits for the UI has given it up (killed, out of budget,
+/// its own timeout): the request is cancelled then, not when the server's wait runs out, so the
+/// UI does not run it later for nobody.
+#[test]
+fn a_request_whose_client_left_is_cancelled_long_before_its_timeout() {
+    let (mut client, server) = pair();
+    let pending = queue();
+    let q = pending.clone();
+    let worker = std::thread::spawn(move || serve(server, q, context(), Duration::from_secs(60)));
+    client.write_all(b"{\"id\":1,\"method\":\"engine.execute\",\"params\":{\"command\":\"edit.delete\"}}\n").unwrap();
+    let start = Instant::now();
+    let gate = loop {
+        let waiting = pending.lock().unwrap().first().map(|r| r.state.clone());
+        if let Some(gate) = waiting {
+            break gate;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(gate.state(), RequestState::Open, "queued, not started");
+
+    drop(client);
+    let left = Instant::now();
+    while gate.state() != RequestState::Cancelled {
+        assert!(left.elapsed() < Duration::from_secs(3), "the client left {:?} ago and its request still waits to run", left.elapsed());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!gate.start(), "the UI must not run a request nobody waits for");
+    worker.join().unwrap().unwrap();
+}
+
+/// A client that only stopped sending (`| nc -N`, a half-close) still reads: the look that finds
+/// a client gone must not take this one for it, however long its request waits for the UI.
+#[test]
+fn a_client_that_only_stopped_sending_gets_its_answer_after_a_long_wait() {
+    let (mut client, server) = pair();
+    let pending = queue();
+    let q = pending.clone();
+    let worker = std::thread::spawn(move || serve(server, q, context(), Duration::from_secs(10)));
+    client.write_all(b"{\"id\":1,\"method\":\"ui.inspect\"}\n").unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let start = Instant::now();
+    let r = loop {
+        if let Some(r) = pending.lock().unwrap().pop() {
+            break r;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    // Long enough for the server to look at its client and to hear how the look was taken.
+    std::thread::sleep(CLIENT_CHECK + PROBE_ANSWER * 3);
+    assert_eq!(r.state.state(), RequestState::Open, "the request of a client that still reads was cancelled");
+    r.reply.send(figcraft_ui_egui::ControlReply { id: r.id, result: Ok(json!({})) }).unwrap();
+    assert_eq!(reply(&mut BufReader::new(client)), json!({"id": 1, "ok": true, "result": {}}));
     worker.join().unwrap().unwrap();
 }
 

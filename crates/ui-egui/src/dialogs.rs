@@ -165,30 +165,79 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
 
 /// Preferences ▸ AI agents: the switch, which asks before it changes (it opens a local port, or
 /// cuts agents off), and the folder agents read and write. Only this screen writes these two
-/// preferences: no command does (see [`figcraft_engine::Prefs::agent_control`]).
+/// preferences: no command does (see [`figcraft_engine::Prefs::agent_control`]), and neither does
+/// input a control client injects (`ui.input`), which reaches this window like the user's own: a
+/// client could otherwise widen its own folder or let itself in.
 fn agent_control_prefs(app: &mut FigApp, ui: &mut egui::Ui, prefs: &figcraft_engine::Prefs, t: &Tokens) {
     ui.add_space(8.0);
-    if crate::widgets::checkbox(ui, prefs.agent_control, tr("Allow AI agents to control FigCraft")) {
-        app.ui.agent_control_ask = Some(!prefs.agent_control);
+    if app.agent_control_fixed {
+        // A launch that named its control port keeps its server until the app quits: the switch
+        // shows that, and offers no change it could not make.
+        ui.add_enabled_ui(false, |ui| crate::widgets::checkbox(ui, true, tr("Allow AI agents to control FigCraft")));
+        crate::widgets::label(ui, tr("FigCraft was started with a control port: agents can connect until it quits."), t.text_secondary);
+    } else if crate::widgets::checkbox(ui, prefs.agent_control, tr("Allow AI agents to control FigCraft")) {
+        ask_agent_control(app, !prefs.agent_control);
     }
     ui.horizontal(|ui| {
         let name = tr("Folder for agents");
         ui.label(name);
-        if let Some(dir) = crate::widgets::text_field_named(ui, egui::Id::unique("pref_automation_root"), &prefs.automation_root, 160.0, name) {
+        let id = egui::Id::unique("pref_automation_root");
+        let editing = id.with("editing");
+        let before = ui.data(|d| d.get_temp::<String>(editing));
+        let kept = crate::widgets::text_field_named(ui, id, &prefs.automation_root, 160.0, name);
+        let after = ui.data(|d| d.get_temp::<String>(editing));
+        // What a control client types waits in the field like the user's own text, and the user's
+        // next click elsewhere would keep it: text an injected frame started or changed is the
+        // client's from then on, and is dropped where it would be kept.
+        let mark = id.with("injected");
+        let injected = (app.control_synthetic && after != before) || ui.data(|d| d.get_temp::<bool>(mark).unwrap_or(false));
+        ui.data_mut(|d| {
+            if injected && after.is_some() {
+                d.insert_temp(mark, true);
+            } else {
+                d.remove::<bool>(mark);
+            }
+        });
+        if let Some(dir) = kept.filter(|_| !injected) {
             set_automation_root(app, dir.trim());
         }
         if crate::widgets::button(ui, tr("Browse"), false, true).clicked() {
-            app.pick_folder(name, |app, dir| set_automation_root(app, &dir.to_string_lossy()));
+            browse_automation_root(app, name);
         }
     });
     crate::widgets::label(ui, tr("Agents read and write files in this folder only. Empty: the FigCraft folder in your documents."), t.text_secondary);
 }
 
-/// Keep the folder agents read and write (Preferences only; the app follows it at once).
+/// The folder field was changed: keep the folder agents read and write, unless the frame applies
+/// input a control client injected.
 fn set_automation_root(app: &mut FigApp, dir: &str) {
+    if !app.control_synthetic {
+        keep_automation_root(app, dir);
+    }
+}
+
+/// Keep the folder agents read and write (Preferences only; the app follows it at once).
+fn keep_automation_root(app: &mut FigApp, dir: &str) {
     if app.session.prefs.automation_root != dir {
         app.session.prefs.automation_root = dir.to_owned();
         app.session.prefs_unsaved = true;
+    }
+}
+
+/// The switch was clicked: ask before it changes ([`agent_control_question`]). Not for injected
+/// input, and not when the launch options keep the server whatever the preference says: the
+/// question would promise a change that does not happen.
+fn ask_agent_control(app: &mut FigApp, on: bool) {
+    if !app.control_synthetic && !app.agent_control_fixed {
+        app.ui.agent_control_ask = Some(on);
+    }
+}
+
+/// "Browse" was clicked: pick the folder agents read and write. Who clicked is checked here, when
+/// the picker opens: the folder comes back in a later frame, which says nothing of who asked.
+fn browse_automation_root(app: &mut FigApp, name: &str) {
+    if !app.control_synthetic {
+        app.pick_folder(name, |app, dir| keep_automation_root(app, &dir.to_string_lossy()));
     }
 }
 
@@ -225,6 +274,15 @@ fn agent_control_question(app: &mut FigApp, ctx: &Context) {
     let Some(confirmed) = answer else {
         return;
     };
+    answer_agent_control(app, on, confirmed);
+}
+
+/// Take the answer to [`agent_control_question`]: the question closes and a confirmed change is kept.
+/// An answer from injected input is none: the question stays for the user.
+fn answer_agent_control(app: &mut FigApp, on: bool, confirmed: bool) {
+    if app.control_synthetic {
+        return;
+    }
     app.ui.agent_control_ask = None;
     if confirmed && app.session.prefs.agent_control != on {
         app.session.prefs.agent_control = on;
@@ -560,3 +618,6 @@ fn interface_size(app: &mut FigApp, ui: &mut egui::Ui, chosen: f64) {
         crate::widgets::label(ui, &note, t.text_secondary);
     }
 }
+
+#[cfg(test)]
+mod agent_prefs_tests;

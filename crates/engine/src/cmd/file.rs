@@ -452,13 +452,23 @@ fn vd_compat_param(cmd: &str, p: &Value) -> Result<Option<VdCompat>> {
     }
 }
 
+/// Why `file.close {force}` and `file.revert` refuse while `Session::keep_unsaved` is set.
+const UNSAVED_KEPT: &str = "the document has unsaved changes and this caller may not discard them: save it first, or leave it open";
+
 fn close(s: &mut Session, p: &Value) -> Result<Value> {
     let i = if get(p, "index").is_none() { s.active } else { req_index("file.close", p, "index")? };
     let Some(ds) = s.docs.get(i) else { return Err(bad("file.close", "no such document")) };
     // A branch tab's edits are in its main file already (which then has unsaved changes).
-    if ds.branch_of.is_none() && ds.is_dirty() && !boolean(p, "force").unwrap_or(false) {
-        s.request_ui("dialog.unsaved", json!({"index": i}));
-        return Err(EngineError::Disabled("file.close".into(), "the document has unsaved changes (pass force: true to discard)".into()));
+    if ds.branch_of.is_none() && ds.is_dirty() {
+        let force = boolean(p, "force").unwrap_or(false);
+        // `force` discards the changes: not for a caller who may not drop the user's work.
+        if force && s.keep_unsaved {
+            return Err(EngineError::Disabled("file.close".into(), UNSAVED_KEPT.into()));
+        }
+        if !force {
+            s.request_ui("dialog.unsaved", json!({"index": i}));
+            return Err(EngineError::Disabled("file.close".into(), "the document has unsaved changes (pass force: true to discard)".into()));
+        }
     }
     let uid = ds.uid;
     let active_uid = s.docs.get(s.active).map(|d| d.uid);
@@ -469,6 +479,8 @@ fn close(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+#[cfg(test)]
+mod keep_unsaved_tests;
 #[cfg(test)]
 mod tab_order_tests;
 

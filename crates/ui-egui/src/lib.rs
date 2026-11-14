@@ -835,12 +835,17 @@ pub struct FigApp {
     /// The roots are the Preferences' folder for agents, not launch options: they confine what
     /// arrives through the control channel only, never the user's own work in the window.
     pub automation_roots_for_agents: bool,
+    /// The launch named the control port: that server runs until exit, and the Preferences'
+    /// switch for agent control changes nothing.
+    pub agent_control_fixed: bool,
     /// The active-document id when synthetic input was queued: a batch is dropped when the file
     /// changed before a UI pass applied it.
     pub(crate) control_input_doc: Option<u64>,
     /// This frame applies events injected through the control channel: no system clipboard
     /// read or write may happen for them.
     pub(crate) control_synthetic: bool,
+    /// An injected frame showed the unsaved-changes question: the next one takes the keyboard back first.
+    pub(crate) question_shown_to_control_client: bool,
     /// `ui.input` replies waiting for the pass that actually presents the injected batch (a
     /// discarded sizing pass must not acknowledge it).
     pub(crate) input_acks: Vec<PendingAck>,

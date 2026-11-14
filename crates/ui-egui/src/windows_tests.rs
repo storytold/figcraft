@@ -522,6 +522,159 @@ fn a_quit_with_unsaved_changes_waits_for_the_answer() {
     assert!(app.ui.quit && sent.contains(&egui::ViewportCommand::Close), "Don't Save quits: {sent:?}");
 }
 
+/// `app.quit` skips the question about unsaved changes and the recovery copy. That is for a
+/// script that launched the app with its control port and ends it. On the channel the user opened
+/// in Preferences the clients are agents at work in the user's own app: none of them closes it,
+/// least of all over unsaved changes.
+#[test]
+fn a_client_of_the_channel_opened_in_preferences_cannot_quit_the_users_app() {
+    let mut s = Session::new();
+    s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    let ctx = egui::Context::default();
+    let mut app = FigApp::new(s, Box::new(NoServices));
+    frame(&ctx, &mut app, false);
+    let answer = crate::control::handle(&mut app, &ctx, "app.quit", &json!({}));
+    let sent = frame(&ctx, &mut app, false);
+    assert!(answer.is_err(), "`app.quit` was accepted on the channel opened in Preferences: {answer:?}");
+    assert!(!app.ui.quit && !sent.contains(&egui::ViewportCommand::Close), "the app stays open: {sent:?}");
+    assert!(app.session.docs.iter().any(|d| d.is_dirty()), "with its unsaved changes");
+}
+
+/// A guard, not the proof of a defect (it passes without the fix): a launch that named its
+/// control port keeps `app.quit` as documented.
+#[test]
+fn a_launch_that_named_its_port_still_quits_by_app_quit() {
+    let ctx = egui::Context::default();
+    let mut app = FigApp::new(Session::new(), Box::new(NoServices));
+    frame(&ctx, &mut app, false);
+    app.agent_control_fixed = true;
+    let answer = crate::control::handle(&mut app, &ctx, "app.quit", &json!({}));
+    assert!(answer.is_ok() && app.ui.quit, "{answer:?}");
+}
+
+/// One frame whose input is `events`. When `injected`, the events go through the queue a control
+/// client's `ui.input` fills, so the frame applies them as that client's batch; otherwise they
+/// are the user's own.
+fn frame_with(ctx: &egui::Context, app: &mut FigApp, events: Vec<egui::Event>, injected: bool) {
+    let events = if injected {
+        assert!(app.push_control_input(events), "the batch is queued");
+        let events = crate::windows::take_input(app, ViewportId::ROOT);
+        assert!(!events.is_empty(), "the batch reaches the frame");
+        events
+    } else {
+        events
+    };
+    ctx.run_ui(RawInput { events, ..Default::default() }, |ui| {
+        crate::windows::on_close_request(app, ui.ctx());
+        app.ui(ui);
+    })
+    .textures_delta
+    .clear();
+}
+
+/// The middle of the question's button labelled `label`.
+fn question_button(ctx: &egui::Context, app: &mut FigApp, label: &str) -> egui::Pos2 {
+    ctx.enable_accesskit();
+    frame(ctx, app, false);
+    let mut out = ctx.run_ui(RawInput::default(), |ui| app.ui(ui));
+    out.textures_delta.clear();
+    let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
+    let n =
+        nodes.iter().map(|(_, n)| n).find(|n| n.role() == egui::accesskit::Role::Button && n.label() == Some(label)).expect("the question's button");
+    let b = n.bounds().expect("bounds");
+    egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
+}
+
+/// A client of the channel opened in Preferences cannot answer the question about unsaved
+/// changes for the user: a click it injects on Don't Save leaves the question on screen, while
+/// the user's own click on it answers.
+#[test]
+fn an_injected_click_on_dont_save_leaves_the_question_to_the_user() {
+    let (ctx, mut app, _) = asking(None, vec![]);
+    let at = question_button(&ctx, &mut app, "Don't Save");
+    let pointer = |pressed| {
+        vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() },
+        ]
+    };
+    frame_with(&ctx, &mut app, pointer(true), true);
+    frame_with(&ctx, &mut app, pointer(false), true);
+    settle(&ctx, &mut app);
+    assert!(!app.ui.quit, "a control client clicked Don't Save and closed the user's app");
+    assert!(app.ui.confirm_close, "the question stays for the user to answer");
+    assert!(app.session.docs.iter().any(|d| d.is_dirty()), "the document keeps its changes");
+    // The user's own click answers.
+    assert!(!app.control_synthetic, "the frames that follow are the user's own");
+    frame_with(&ctx, &mut app, pointer(true), false);
+    frame_with(&ctx, &mut app, pointer(false), false);
+    settle(&ctx, &mut app);
+    assert!(app.ui.quit, "the user's own click on Don't Save closes");
+}
+
+/// Enter answers Save for the user, never for a client of the channel opened in Preferences.
+#[test]
+fn injected_enter_does_not_answer_the_unsaved_changes_question() {
+    let d = temp_dir("enter-injected");
+    let path = d.join("a.figcraft");
+    let (ctx, mut app, _) = asking(Some(&path), vec![]);
+    frame(&ctx, &mut app, false);
+    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    frame_with(&ctx, &mut app, vec![enter(true), enter(false)], true);
+    settle(&ctx, &mut app);
+    assert!(!app.ui.quit, "a control client answered the question and closed the user's app");
+    assert_eq!(rects_in(&path), 0, "a control client answered Save");
+    assert!(app.ui.confirm_close, "the question stays for the user to answer");
+    // The user's own Enter answers Save.
+    assert!(!app.control_synthetic, "the frames that follow are the user's own");
+    frame_with(&ctx, &mut app, vec![enter(true), enter(false)], false);
+    settle(&ctx, &mut app);
+    assert_eq!(rects_in(&path), 1, "the user's Enter saved");
+    assert!(app.ui.quit);
+    std::fs::remove_dir_all(&d).ok();
+}
+
+/// The question about closing one tab is the user's too: a frame that applies a client's batch
+/// answers nothing.
+#[test]
+fn injected_input_cannot_answer_the_question_about_a_closing_tab() {
+    use crate::windows::{CloseAnswer, TabClose, answer_close_tab};
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    s.execute("doc.switch", &json!({"index": 0})).unwrap();
+    s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    let uid = s.docs[0].uid;
+    let ctx = egui::Context::default();
+    let mut app = FigApp::new(s, Box::new(NoServices));
+    frame(&ctx, &mut app, false);
+    app.ui.close_tab = Some(TabClose::Ask(uid));
+    app.control_synthetic = true;
+    answer_close_tab(&mut app, &ctx, CloseAnswer::DontSave);
+    assert!(app.session.docs.iter().any(|d| d.uid == uid && d.is_dirty()), "a control client dropped the user's unsaved changes");
+    assert_eq!(app.ui.close_tab, Some(TabClose::Ask(uid)), "the question stays for the user to answer");
+    // The user's own answer closes the tab.
+    app.control_synthetic = false;
+    answer_close_tab(&mut app, &ctx, CloseAnswer::DontSave);
+    assert!(!app.session.docs.iter().any(|d| d.uid == uid), "the user's Don't Save closes the tab");
+}
+
+/// A guard, not the proof of a defect (it passes without the fix): a launch that named its
+/// control port keeps answering the question by injected input, as documented.
+#[test]
+fn a_launch_that_named_its_port_still_answers_the_question_by_injected_input() {
+    let d = temp_dir("enter-fixed");
+    let path = d.join("a.figcraft");
+    let (ctx, mut app, _) = asking(Some(&path), vec![]);
+    frame(&ctx, &mut app, false);
+    app.agent_control_fixed = true;
+    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    frame_with(&ctx, &mut app, vec![enter(true), enter(false)], true);
+    settle(&ctx, &mut app);
+    assert_eq!(rects_in(&path), 1, "the injected Enter saved");
+    assert!(app.ui.quit);
+    std::fs::remove_dir_all(&d).ok();
+}
+
 /// A quit while the main window is hidden reaches only the app's logic, which runs without the
 /// frame that acts on it; a second quit before the window draws again must not count twice. The
 /// main window has no unsaved changes and another window has: one quit lets the main window take
@@ -554,4 +707,135 @@ fn quitting_twice_before_the_window_draws_closes_it_once() {
     frame(&ctx, &mut app, false);
     assert!(app.session.docs.iter().any(|d| d.doc.name == "A" && d.is_dirty()), "A keeps its changes: {:?}", names(&app));
     assert!(!app.ui.quit, "the app didn't quit over A's unsaved changes");
+}
+
+/// A key press and release, as one batch of events.
+fn key_tap(key: egui::Key, modifiers: egui::Modifiers) -> Vec<egui::Event> {
+    [true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }).to_vec()
+}
+
+/// A window with the unsaved-changes question on screen over the About window. About is one flag
+/// of `app.ui` (dialogs.rs draws it from nothing but the theme), and it is one of the states in
+/// which the app's own Tab handler stands aside (`blocked` in a11y.rs), so egui moves the keyboard
+/// with Tab and Shift+Tab: the only state in which a client's Tab can reach the question's buttons.
+/// Returns the directory to remove, the file's path, the context and the app.
+fn blocked_question(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, egui::Context, FigApp) {
+    let d = temp_dir(tag);
+    let path = d.join("a.figcraft");
+    let (ctx, mut app, _) = asking(Some(&path), vec![]);
+    ctx.enable_accesskit();
+    app.ui.about = true;
+    frame(&ctx, &mut app, false);
+    assert!(app.ui.about, "the About window stays open");
+    assert!(app.ui.confirm_close, "the question still shows over it");
+    (d, path, ctx, app)
+}
+
+/// One frame of `events` (a control client's batch when `injected`, else the user's own) with
+/// AccessKit on; whether the keyboard is on the question's Don't Save button afterwards.
+/// AccessKit updates carry only the nodes that changed: `dont_save` remembers the button's id.
+fn frame_on_dont_save(
+    ctx: &egui::Context,
+    app: &mut FigApp,
+    events: Vec<egui::Event>,
+    injected: bool,
+    dont_save: &mut std::collections::HashSet<egui::accesskit::NodeId>,
+) -> bool {
+    let events = if injected {
+        assert!(app.push_control_input(events), "the batch is queued");
+        crate::windows::take_input(app, ViewportId::ROOT)
+    } else {
+        events
+    };
+    let mut out = ctx.run_ui(RawInput { events, ..Default::default() }, |ui| {
+        crate::windows::on_close_request(app, ui.ctx());
+        app.ui(ui);
+    });
+    out.textures_delta.clear();
+    let update = out.platform_output.accesskit_update.expect("an AccessKit update");
+    for (id, node) in &update.nodes {
+        if node.role() == egui::accesskit::Role::Button && node.label() == Some("Don't Save") {
+            dont_save.insert(*id);
+        }
+    }
+    dont_save.contains(&update.focus)
+}
+
+/// Calibration on a window of its own: how many of the user's own Tab it takes to put the keyboard
+/// on Don't Save. Red, not green, when no Tab ever gets there.
+fn tabs_to_dont_save() -> usize {
+    let (d, _, ctx, mut app) = blocked_question("tab-calibration");
+    let mut dont_save = std::collections::HashSet::new();
+    let reached = (1..=400).find(|_| frame_on_dont_save(&ctx, &mut app, key_tap(egui::Key::Tab, egui::Modifiers::NONE), false, &mut dont_save));
+    std::fs::remove_dir_all(&d).ok();
+    let Some(k) = reached else {
+        panic!("the user's own Tab never reaches Don't Save in 400 frames: the test cannot show the defect");
+    };
+    k
+}
+
+/// The user's own Enter, then the frames the window draws: it must have answered Save.
+fn assert_the_users_enter_saved(ctx: &egui::Context, app: &mut FigApp, d: &std::path::Path, path: &std::path::Path, why: &str) {
+    assert!(!app.control_synthetic, "the frames that follow are the user's own");
+    frame_with(ctx, app, key_tap(egui::Key::Enter, egui::Modifiers::NONE), false);
+    settle(ctx, app);
+    assert_eq!(rects_in(path), 1, "{why}");
+    assert!(app.ui.quit, "Save closed the window");
+    std::fs::remove_dir_all(d).ok();
+}
+
+/// A control client's Tab can move the keyboard to Don't Save, but the user's own Enter must
+/// still answer Save: the window drops focus a client moved onto the question's buttons.
+/// The defect is only reachable while the app's own Tab handler stands aside (`blocked` in
+/// a11y.rs: here the About window is open); otherwise it cancels every Tab and no button gets
+/// the keyboard. So the test first counts, on a window of its own, the user's Tab that reach Don't
+/// Save (and fails if none does), then has a client inject that many on a fresh one.
+#[test]
+fn a_client_cannot_leave_the_keyboard_on_dont_save_for_the_users_enter() {
+    let k = tabs_to_dont_save();
+    let (d, path, ctx, mut app) = blocked_question("tab-enter");
+    for _ in 0..k {
+        frame_with(&ctx, &mut app, key_tap(egui::Key::Tab, egui::Modifiers::NONE), true);
+    }
+    assert_the_users_enter_saved(
+        &ctx,
+        &mut app,
+        &d,
+        &path,
+        "the user's own Enter answered Don't Save: a control client had left the keyboard on that button",
+    );
+}
+
+/// A control client's Shift+Tab, once the keyboard is on a button, hands egui's next pass a
+/// button to hold (`id_next_frame`), which a plain surrender of the keyboard does not clear: with
+/// the keyboard on the button after Don't Save, it is Don't Save the next frame, and the user's own
+/// Enter would answer it. As above, that is only reachable while the app's Tab handler stands
+/// aside (the About window is open). The test first shows on a window of its own that the user's
+/// own k+1 Tab and a Shift+Tab put the keyboard on Don't Save (and fails if they do not), then has
+/// a client inject the Shift+Tab on a fresh one.
+#[test]
+fn a_clients_shift_tab_cannot_hand_the_users_enter_to_dont_save() {
+    let k = tabs_to_dont_save();
+    let (d, _, ctx, mut app) = blocked_question("shift-tab-calibration");
+    let mut dont_save = std::collections::HashSet::new();
+    for _ in 0..=k {
+        frame_on_dont_save(&ctx, &mut app, key_tap(egui::Key::Tab, egui::Modifiers::NONE), false, &mut dont_save);
+    }
+    frame_on_dont_save(&ctx, &mut app, key_tap(egui::Key::Tab, egui::Modifiers::SHIFT), false, &mut dont_save);
+    let armed = frame_on_dont_save(&ctx, &mut app, vec![], false, &mut dont_save);
+    std::fs::remove_dir_all(&d).ok();
+    assert!(armed, "the user's own Shift+Tab after {} Tab never puts the keyboard back on Don't Save: the test cannot show the defect", k + 1);
+
+    let (d, path, ctx, mut app) = blocked_question("shift-tab-enter");
+    for _ in 0..=k {
+        frame_with(&ctx, &mut app, key_tap(egui::Key::Tab, egui::Modifiers::NONE), false);
+    }
+    frame_with(&ctx, &mut app, key_tap(egui::Key::Tab, egui::Modifiers::SHIFT), true);
+    assert_the_users_enter_saved(
+        &ctx,
+        &mut app,
+        &d,
+        &path,
+        "a client's Shift+Tab handed the keyboard to Don't Save: the user's own Enter answered it",
+    );
 }

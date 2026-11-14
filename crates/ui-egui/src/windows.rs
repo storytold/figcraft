@@ -449,9 +449,11 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
         app.ui.confirm_close = false;
         return;
     }
+    take_back_injected_focus(app, ctx);
     if let Some(a) = unsaved_question(ctx, &names) {
         answer_close(app, ctx, a);
     }
+    drop_injected_focus(app, ctx);
 }
 
 /// The unsaved-changes question about files `names` (Don't Save / Cancel / Save, as the other
@@ -513,9 +515,45 @@ pub(crate) fn ask_close_tab(app: &mut FigApp, i: usize) {
     }
 }
 
+/// Whether this frame's answer to the unsaved-changes question comes from input a control client
+/// injected (`ui.input`) on the channel the user opened in Preferences. Such an answer is none:
+/// Don't Save would drop the user's work and Save would close their window, so the question stays
+/// for the user (as `dialogs::answer_agent_control` does). An app started with `--control PORT` is
+/// its script's own, which answers its questions.
+fn answered_by_a_control_client(app: &FigApp) -> bool {
+    app.control_synthetic && !app.agent_control_fixed
+}
+
+/// A frame of injected input leaves no button of the question with the keyboard: left there, the
+/// user's own Enter would answer with the button a control client chose (Don't Save), not Save.
+fn drop_injected_focus(app: &mut FigApp, ctx: &Context) {
+    if answered_by_a_control_client(app) {
+        app.question_shown_to_control_client = true;
+        surrender_held_focus(ctx);
+    }
+}
+
+/// The frame after an injected one takes back a keyboard that frame left to the next (egui hands
+/// a Shift+Tab's target over at the start of the next pass), before the buttons read it.
+fn take_back_injected_focus(app: &mut FigApp, ctx: &Context) {
+    if std::mem::take(&mut app.question_shown_to_control_client) {
+        surrender_held_focus(ctx);
+    }
+}
+
+fn surrender_held_focus(ctx: &Context) {
+    if let Some(id) = ctx.memory(|m| m.focused()) {
+        ctx.memory_mut(|m| m.surrender_focus(id));
+    }
+}
+
 /// Act on the unsaved-changes question's answer for the tab it asks about: Cancel keeps the tab,
 /// Don't Save closes it and drops the changes, Save saves the file next frame, then closes it.
+/// An answer from input a control client injected is none on the channel opened in Preferences: the question stays.
 pub(crate) fn answer_close_tab(app: &mut FigApp, ctx: &Context, answer: CloseAnswer) {
+    if answered_by_a_control_client(app) {
+        return;
+    }
     let Some(TabClose::Ask(uid)) = app.ui.close_tab else { return };
     app.ui.close_tab = None;
     match answer {
@@ -556,9 +594,11 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
         }
         TabClose::Ask(_) => {
             let names: Vec<String> = app.session.docs.get(i).map(|d| d.doc.name.clone()).into_iter().collect();
+            take_back_injected_focus(app, ctx);
             if let Some(a) = unsaved_question(ctx, &names) {
                 answer_close_tab(app, ctx, a);
             }
+            drop_injected_focus(app, ctx);
         }
         TabClose::Save(_) => {
             app.ui.close_tab = None;
@@ -596,7 +636,11 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
 }
 
 /// Act on the unsaved-changes question's answer.
+/// An answer from input a control client injected is none on the channel opened in Preferences: the question stays.
 pub(crate) fn answer_close(app: &mut FigApp, ctx: &Context, answer: CloseAnswer) {
+    if answered_by_a_control_client(app) {
+        return;
+    }
     app.ui.confirm_close = false;
     match answer {
         CloseAnswer::Cancel => {}
@@ -796,6 +840,15 @@ impl Windows {
     /// need a forced paint for it).
     pub(crate) fn pending_input_viewports(&self) -> Vec<ViewportId> {
         self.list.iter().filter(|w| !w.pane.control_input.is_empty()).map(|w| viewport(w.id)).collect()
+    }
+
+    /// Drop the synthetic input no frame has taken yet, in every window
+    /// ([`FigApp::cancel_control_work`]).
+    pub(crate) fn forget_control_input(&mut self) {
+        for w in &mut self.list {
+            w.pane.control_input.clear();
+            w.pane.control_input_doc = None;
+        }
     }
 }
 

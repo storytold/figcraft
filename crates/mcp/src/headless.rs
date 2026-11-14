@@ -245,7 +245,9 @@ impl Headless {
                     None | Some(Value::Null) => json!({}),
                     Some(v) => v.clone(),
                 };
-                self.execute_as(p.get("agent").and_then(Value::as_str), &cmd, &params)
+                let agent = p.get("agent").and_then(Value::as_str);
+                self.session.agent_admit(agent, figcraft_engine::agent::key_of(&p)).map_err(|e| e.to_string())?;
+                self.execute_as(agent, &cmd, &params)
             }
             "engine.commands" => Ok(Value::Array(
                 figcraft_engine::all_commands().iter().map(|c| json!({"id": c.id, "label": c.label, "params": c.params, "menu": c.menu(), "shortcut": c.shortcut(), "undoable": c.history})).collect(),
@@ -254,6 +256,7 @@ impl Headless {
                 let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
                 let options = figcraft_engine::inspect::InspectOptions::parse(&p)?;
                 let agent = p.get("agent").and_then(Value::as_str);
+                self.session.agent_admit(agent, figcraft_engine::agent::key_of(&p)).map_err(|e| e.to_string())?;
                 Ok(self.session.with_agent(agent, |s| figcraft_engine::inspect::document_with_options(s, depth, b(&p, "allPages"), &options)))
             }
             "node.get" => {
@@ -299,7 +302,12 @@ impl Headless {
             }
             "agent.join" | "agent.leave" => {
                 let agent = p.get("agent").and_then(Value::as_str).ok_or("`agent` required")?;
-                let r = if method == "agent.join" { self.session.agent_join(agent) } else { self.session.agent_leave(agent) };
+                let key = figcraft_engine::agent::key_of(&p);
+                let r = if method == "agent.join" {
+                    self.session.agent_admit_join(agent, key).and_then(|()| self.session.agent_join(agent))
+                } else {
+                    self.session.agent_admit(Some(agent), key).and_then(|()| self.session.agent_leave(agent))
+                };
                 r.map_err(|e| e.to_string())
             }
             "agent.list" => Ok(self.session.agent_list()),
@@ -329,8 +337,15 @@ impl Backend for Headless {
     }
 
     fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+        self.render_png_as("", "", ids, scale)
+    }
+
+    fn render_png_as(&mut self, agent: &str, key: &str, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+        // As `document.inspect` is asked: the page is the agent's only for the agent itself.
+        self.session.agent_admit(Some(agent), Some(key)).map_err(|e| e.to_string())?;
         let scale = if scale.is_finite() && scale > 0.0 { scale.min(64.0) } else { 1.0 };
-        let page = self.session.page().map_err(|e| e.to_string())?;
+        // The page the agent works on: its own while several agents work apart.
+        let page = self.session.with_agent(Some(agent), |s| s.page()).map_err(|e| e.to_string())?;
         let doc = self.session.doc().map_err(|e| e.to_string())?;
         if !ids.is_empty() {
             let ids: Vec<NodeId> = ids.iter().map(|i| NodeId(*i)).collect();

@@ -21,6 +21,8 @@ pub const MAX_LAYERS: usize = 500;
 /// name, not a connection, and a client that stops (killed, out of budget) sends no `agent.leave`:
 /// without this, it would stay there for good, and keep the others working apart.
 pub const AGENT_IDLE: Duration = Duration::from_secs(30 * 60);
+/// Most bytes of the key an agent holds its name with ([`Session::agent_admit`]).
+pub const MAX_AGENT_KEY: usize = 256;
 
 /// An attached AI agent at work.
 #[derive(Clone, Debug, PartialEq)]
@@ -123,8 +125,21 @@ pub struct Agents {
     slots: BTreeMap<(String, u64), Slot>,
     /// When the last request of each one came, for [`AGENT_IDLE`].
     seen: BTreeMap<String, Instant>,
+    /// The key each name is held with, for the names a client took with one
+    /// ([`Session::agent_admit`]). Never listed, never recorded in an event.
+    keys: BTreeMap<String, String>,
     /// The agent whose call is running ([`Session::with_agent`]).
     current: Option<String>,
+}
+
+/// The key a control request gives for the agent it names (`agentKey`, next to `agent`).
+pub fn key_of(p: &Value) -> Option<&str> {
+    p.get("agentKey").and_then(Value::as_str)
+}
+
+/// Whether two keys are the same, in a time that does not tell where they differ.
+fn same_key(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
 }
 
 /// What [`Session::enter_slot`] took from the document, for [`Session::leave_slot`] to put back.
@@ -151,12 +166,17 @@ impl Session {
         self.agent_seen(&name);
         let entered = self.enter_slot(&name);
         self.agents.current = Some(name.clone());
-        let r = f(self);
+        // A panic in `f` ends the call like any other end, then goes on to the caller's guard:
+        // the next call is its own caller's, and the window has its page and selection back.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
         self.agents.current = None;
         if let Some(e) = entered {
             self.leave_slot(name, e);
         }
-        r
+        match r {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Note that `name` is there. `agent.joined` events start with the second agent (its own and
@@ -169,6 +189,15 @@ impl Session {
             return;
         }
         self.agents.present.push(name.to_string());
+        // Whoever worked alone until now did so on the window's page and selection. Those are its
+        // own from this moment: at its next call the window may show what the user chose since.
+        let alone: Vec<String> = self.agents.present.iter().filter(|n| *n != name && !self.agents.apart.contains(*n)).cloned().collect();
+        for first in alone {
+            for ds in &self.docs {
+                self.agents.slots.insert((first.clone(), ds.uid), Slot::of(ds));
+            }
+            self.agents.apart.insert(first);
+        }
         let announce = match self.agents.present.len() {
             1 => Vec::new(),
             2 => self.agents.present.clone(),
@@ -208,11 +237,9 @@ impl Session {
         let Some(ds) = self.docs.iter_mut().find(|d| d.uid == e.uid) else { return };
         let mut slot = e.window;
         slot.swap(ds);
-        if slot.page != ds.page {
-            // The agent is on another page: what it did to the view (a page change fits it) is
-            // not what the window shows.
-            ds.view = e.view;
-        }
+        // What the agent did to the view (a page change fits it, a pan scrolls it) is not what the
+        // window shows, on whichever page the agent is.
+        ds.view = e.view;
         // The user's undo of the agent's step comes back to what the window showed, not to the
         // agent's page.
         let (page, selection) = (ds.page, ds.selection.clone());
@@ -246,6 +273,50 @@ impl Session {
         Ok(())
     }
 
+    /// A request from a control channel names `agent` and gives `key` (its `agentKey`): is it that
+    /// agent's? The first key given under a name holds it, until the agent is forgotten
+    /// (`agent.leave`, or [`AGENT_IDLE`] without a request). Meanwhile a request under that name
+    /// with another key, or with none, is refused. An agent is a name, not a connection: without
+    /// the key, any client of the channel could work under another one's name, or make it leave
+    /// and lose its pages and selections. A name no key holds is anyone's, as before agents had
+    /// keys. The channel asks this before it runs anything for the agent; the session's own calls
+    /// ([`Session::execute_as`], [`Session::with_agent`], [`Session::agent_join`]…) are not asked.
+    pub fn agent_admit(&mut self, agent: Option<&str>, key: Option<&str>) -> crate::Result<()> {
+        let name = agent.map(crate::cmd::comment::agent_name).unwrap_or_default();
+        if name.is_empty() {
+            return Ok(());
+        }
+        if key.is_some_and(|k| k.is_empty() || k.len() > MAX_AGENT_KEY) {
+            return Err(crate::EngineError::Other(format!("`agentKey` is 1 to {MAX_AGENT_KEY} bytes")));
+        }
+        let now = Instant::now();
+        // An agent that stopped without leaving no longer holds its name.
+        self.agents_gone_at(now);
+        let own = self.agents.keys.get(&name).map(|held| key.is_some_and(|k| same_key(held, k)));
+        match (own, key) {
+            (Some(true), _) | (None, None) => Ok(()),
+            (Some(false), _) => Err(crate::EngineError::Other(format!(
+                "the name `{name}` is held by another client: only a request with that agent's `agentKey` is made under it (work under another name)"
+            ))),
+            (None, Some(key)) => {
+                self.agents.keys.insert(name.clone(), key.to_string());
+                // The time it may stay silent runs from now, even if this request gets no further.
+                self.agents.seen.entry(name).or_insert(now);
+                Ok(())
+            }
+        }
+    }
+
+    /// [`Session::agent_admit`] for `agent.join`: the agent takes its name there, so it gives a
+    /// key. Without one, the name it joined under would be anyone's.
+    pub fn agent_admit_join(&mut self, agent: &str, key: Option<&str>) -> crate::Result<()> {
+        if key.is_none() {
+            let why = "`agentKey` is required: the key this agent holds its name with (any text only its client knows)";
+            return Err(crate::bad("agent.join", why));
+        }
+        self.agent_admit(Some(agent), key)
+    }
+
     /// `agent.join`: `name` is there and works apart from now on, even alone.
     pub fn agent_join(&mut self, name: &str) -> crate::Result<Value> {
         let name = crate::cmd::comment::agent_name(name);
@@ -275,6 +346,8 @@ impl Session {
         self.agents.apart.remove(name);
         self.agents.slots.retain(|(n, _), _| n != name);
         self.agents.seen.remove(name);
+        // Its name is free again: whoever comes next under it takes it with its own key.
+        self.agents.keys.remove(name);
         if was_there && several {
             let data = match reason {
                 Some(reason) => json!({"agent": name, "reason": reason}),

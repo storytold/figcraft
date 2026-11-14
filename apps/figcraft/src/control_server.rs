@@ -36,8 +36,14 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 /// example while the process has no file descriptors left, and retrying at once would keep a
 /// core busy until it recovers.
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
-/// The longest the accepting thread spends telling a connection it is refused.
+/// The longest the accepting thread spends on a connection it refuses: telling it why, then
+/// letting it close.
 const REFUSAL_WRITE: Duration = Duration::from_millis(200);
+/// How often a connection waiting for the UI looks whether its client is still there.
+const CLIENT_CHECK: Duration = Duration::from_secs(1);
+/// How long after it was sent a byte a client that left is seen to have refused it. The channel
+/// is loopback only: the refusal comes back at once.
+const PROBE_ANSWER: Duration = Duration::from_millis(100);
 
 /// Why a request's transport wait ended without a control reply.
 #[derive(Debug, PartialEq, Eq)]
@@ -69,6 +75,88 @@ fn after_timeout(rx: &std::sync::mpsc::Receiver<ControlReply>, gate: &RequestGat
         // It may have finished just now: its reply is the truth then.
         RequestState::Running => rx.try_recv().map_err(|_| WaitFailure::StillRunning),
         RequestState::Open | RequestState::Cancelled => Err(WaitFailure::Timeout),
+    }
+}
+
+/// What a connection waiting for the UI sees of its client.
+enum Client {
+    /// Nothing says it left.
+    There,
+    /// It stopped sending, and was just sent the byte that tells whether it left.
+    Asked,
+    /// It stopped sending but took the byte: it still reads, and has nothing more to show.
+    Listening,
+    Gone,
+}
+
+/// Look at the client without waiting and without taking anything it sent. `asked`: it was
+/// already sent the byte.
+///
+/// A client that left and one that only closed its sending side look the same from here: nothing
+/// more comes from either. One byte tells them apart: the first refuses it and the connection
+/// breaks, the second takes it and goes on waiting for its reply. The byte is a space, which JSON
+/// allows before the reply.
+fn look_at(client: &TcpStream, asked: bool) -> Client {
+    let no_wait = |e: &std::io::Error| matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted);
+    if client.set_nonblocking(true).is_err() {
+        return Client::There;
+    }
+    let seen = match client.peek(&mut [0]) {
+        // The end of what it sent reads the same once it has left. What came of the byte tells
+        // the two apart: refused, the connection holds the error.
+        Ok(0) if asked => match client.take_error() {
+            Ok(None) => Client::Listening,
+            _ => Client::Gone,
+        },
+        Ok(0) => {
+            let mut to = client;
+            match to.write(b" ") {
+                Ok(1) => Client::Asked,
+                // No room for it now: asked at the next look.
+                Err(e) if no_wait(&e) => Client::There,
+                _ => Client::Gone,
+            }
+        }
+        Ok(_) => Client::There,
+        Err(e) if no_wait(&e) => Client::There,
+        Err(_) => Client::Gone,
+    };
+    // A connection that stays without waits can no longer be served.
+    if client.set_nonblocking(false).is_err() { Client::Gone } else { seen }
+}
+
+/// [`wait_for_reply`] for a request whose client may leave meanwhile (killed, out of budget, its
+/// own timeout). `None` when it left: a request the UI had not started is cancelled there and
+/// then, where it would otherwise run for nobody when its turn came.
+fn wait_while_client_stays(
+    client: &TcpStream,
+    rx: &std::sync::mpsc::Receiver<ControlReply>,
+    gate: &RequestGate,
+    timeout: Duration,
+) -> Option<Result<ControlReply, WaitFailure>> {
+    let until = std::time::Instant::now() + timeout;
+    let left = || until.saturating_duration_since(std::time::Instant::now());
+    let mut asked = false;
+    loop {
+        let pause = if asked { PROBE_ANSWER } else { CLIENT_CHECK };
+        if left() <= pause {
+            return Some(wait_for_reply(rx, gate, left()));
+        }
+        match rx.recv_timeout(pause) {
+            Ok(reply) => return Some(Ok(reply)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Some(Err(WaitFailure::Disconnected)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        match look_at(client, asked) {
+            Client::There => {}
+            Client::Asked => asked = true,
+            Client::Listening => return Some(wait_for_reply(rx, gate, left())),
+            Client::Gone => {
+                // Started already, it takes effect; nobody is there to read what it answers.
+                gate.cancel_if_open();
+                return None;
+            }
+        }
     }
 }
 
@@ -256,13 +344,37 @@ fn spawn_tracked(
 }
 
 /// Tell a connection over the limit why it is not served, instead of dropping it without a word
-/// (the client then saw only a reset). The write is bounded: the accepting thread never waits on
-/// a client that does not read.
-fn refuse(mut stream: TcpStream) {
+/// (the client then saw only a reset). All of it is bounded by [`REFUSAL_WRITE`]: the accepting
+/// thread never waits longer on a client that does not read, or that does not close.
+fn refuse(stream: TcpStream) {
     log::warn!("control server: connection refused, {MAX_CONNECTIONS} are already open");
-    if stream.set_write_timeout(Some(REFUSAL_WRITE)).is_ok() {
-        let error = format!("too many control connections ({MAX_CONNECTIONS} at most): the app is busy, try again shortly");
-        let _ = writeln!(stream, "{}", json!({"id": null, "ok": false, "error": error}));
+    let error = format!("too many control connections ({MAX_CONNECTIONS} at most): the app is busy, try again shortly");
+    end_with(&stream, &error);
+}
+
+/// Say why a connection ends, in a line its client reads, then end it: a connection over the
+/// limit, a message too large, a line that isn't JSON. All of it is bounded by [`REFUSAL_WRITE`].
+fn end_with(mut stream: &TcpStream, error: &str) {
+    let until = std::time::Instant::now() + REFUSAL_WRITE;
+    if stream.set_write_timeout(Some(REFUSAL_WRITE)).is_err() {
+        return;
+    }
+    // In one write: sent in pieces, the pieces still to go are dropped when the connection closes.
+    let line = format!("{}\n", json!({"id": null, "ok": false, "error": error}));
+    if stream.write_all(line.as_bytes()).is_err() || stream.shutdown(Shutdown::Write).is_err() {
+        return;
+    }
+    // What the client sends is taken out until it closes: closed over a request not read, the
+    // connection is reset, and the client gets an error where the refusal was.
+    let mut unread = [0; 4096];
+    loop {
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            break;
+        }
+        if !matches!(stream.read(&mut unread), Ok(n) if n > 0) {
+            break;
+        }
     }
 }
 
@@ -289,7 +401,7 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
             line.pop();
         }
         if line.len() > MAX_LINE {
-            writeln!(out, "{}", json!({"id": null, "ok": false, "error": "message too large"}))?;
+            end_with(&out, "message too large");
             break;
         }
         let Ok(line) = std::str::from_utf8(&line) else { break };
@@ -327,7 +439,11 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                 if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
                     c.request_repaint();
                 }
-                match wait_for_reply(&rx, &gate, waits) {
+                let Some(waited) = wait_while_client_stays(&out, &rx, &gate, waits) else {
+                    // Nobody is there to answer, and what else this client sent is for nobody.
+                    break;
+                };
+                match waited {
                     Ok(r) => match r.result {
                         Ok(res) => json!({"id": r.id, "ok": true, "result": res}),
                         Err(e) => json!({"id": r.id, "ok": false, "error": e}),
@@ -339,7 +455,7 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
                 // A line that isn't JSON ends the connection: a web page can make the browser send
                 // an HTTP request here, and its header lines must not let the JSON lines of its body
                 // through as commands.
-                writeln!(out, "{}", json!({"id": null, "ok": false, "error": format!("bad JSON: {e}")}))?;
+                end_with(&out, &format!("bad JSON: {e}"));
                 break;
             }
         };

@@ -204,7 +204,8 @@ pub struct CommandsArgs {
 /// The app is the one that lets AI agents in (its Preferences), found by itself, unless --attach
 /// names it. The result is printed as JSON on standard output; a request the app refuses is an
 /// error (exit 1). Several commands go in one request with `command.batch`:
-/// `figcraft-cli call --agent Header engine.execute -` reads the parameters from standard input.
+/// `figcraft-cli call --agent Header --agent-key KEY engine.execute -` reads the parameters from
+/// standard input.
 #[derive(Args)]
 pub struct CallArgs {
     /// The control method: engine.execute, document.inspect, node.get, agent.join… (see
@@ -218,9 +219,13 @@ pub struct CallArgs {
     #[arg(long, value_name = "PORT", value_parser = attach, default_value = ATTACH_AUTO)]
     pub attach: String,
     /// The name this agent works under: with several agents on one file, each keeps its own page
-    /// and selection
-    #[arg(long, value_name = "NAME")]
+    /// and selection. Needs --agent-key
+    #[arg(long, value_name = "NAME", requires = "agent_key")]
     pub agent: Option<String>,
+    /// The key this agent holds its name with: any text only it knows, the same at each of its
+    /// calls. The app refuses a call under that name with another key, or with none
+    #[arg(long, value_name = "KEY", requires = "agent")]
+    pub agent_key: Option<String>,
     /// How long the app may take over the request, in seconds (1–600; default 60)
     #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..=600))]
     pub timeout: Option<u64>,
@@ -489,6 +494,13 @@ mod tests {
         assert_eq!((a.layers, a.instances), (vec![1000, 10_000, 50_000], vec![0]));
     }
 
+    /// An agent's call gives the key its name is held with: without one the name would be
+    /// anyone's, and another agent could work under it or make it leave.
+    #[test]
+    fn a_call_as_an_agent_needs_its_key() {
+        assert!(try_parse(&["call", "--agent", "Header", "agent.join"]).is_err(), "`call --agent` was accepted without `--agent-key`");
+    }
+
     #[test]
     fn mcp_and_plugin_publish() {
         let Command::Mcp(a) = ok(&["mcp"]) else { panic!("mcp") };
@@ -501,10 +513,13 @@ mod tests {
         assert_eq!((a.attach.as_deref(), a.agent.as_deref()), (Some(ATTACH_AUTO), Some("Layout")));
         let Command::Call(a) = ok(&["call", "agent.list"]) else { panic!("call") };
         assert_eq!((a.method.as_str(), a.params.as_str(), a.attach.as_str(), a.agent), ("agent.list", "{}", ATTACH_AUTO, None));
-        let Command::Call(a) = ok(&["call", "--agent", "Header", "--attach", "7979", "engine.execute", r#"{"command":"select.all"}"#]) else {
+        let Command::Call(a) =
+            ok(&["call", "--agent", "Header", "--agent-key", "its key", "--attach", "7979", "engine.execute", r#"{"command":"select.all"}"#])
+        else {
             panic!("call")
         };
         assert_eq!((a.params.as_str(), a.attach.as_str(), a.agent.as_deref()), (r#"{"command":"select.all"}"#, "127.0.0.1:7979", Some("Header")));
+        assert_eq!(a.agent_key.as_deref(), Some("its key"));
         let Command::Call(a) = ok(&["call", "engine.execute", "-"]) else { panic!("call") };
         assert_eq!(a.params, "-");
         let Command::Mcp(a) = ok(&["mcp", "--attach", "7979", "--timeout", "300"]) else { panic!("mcp") };

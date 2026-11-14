@@ -167,6 +167,11 @@ pub struct Session {
     /// The named AI agents at work, and the page and selection of each while there are several
     /// ([`Session::with_agent`]): never saved.
     pub(crate) agents: agent::Agents,
+    /// Set by the host while a command runs for a caller who may not drop the user's unsaved
+    /// changes (in the desktop app: a client of the control channel the user opened in
+    /// Preferences). `file.close` with `force` and `file.revert` then refuse a document that has
+    /// unsaved changes. Never saved.
+    pub keep_unsaved: bool,
 }
 
 impl Default for Session {

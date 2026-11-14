@@ -162,6 +162,11 @@ fn act(app: &mut FigApp, clicks: Clicks) {
         }
     }
     let Some(allow) = clicks.consent else { return };
+    // An answer from input a control client injected (`ui.input`) is none: the question stays for
+    // the user, who alone turns downloading on.
+    if app.control_synthetic {
+        return;
+    }
     let Some(family) = app.ui.missing_fonts.as_mut().and_then(|m| m.consent.take()) else { return };
     if allow {
         match allow_downloads() {
@@ -248,3 +253,7 @@ fn finish_downloads(app: &mut FigApp, ctx: &egui::Context) {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
+
+#[cfg(test)]
+#[path = "missing_fonts_consent_tests.rs"]
+mod consent_tests;

@@ -4,6 +4,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod args;
+#[cfg(test)]
+mod call_tests;
 mod files;
 mod perf;
 
@@ -149,15 +151,27 @@ fn publish_plugin(folder: &str, server: &str) -> CliResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `--attach auto`: the address of the app that lets AI agents in, from the state file it keeps
-/// in its settings folder while it listens.
-fn running_app() -> CliResult<String> {
+/// `--attach auto`: a connection to the app that lets AI agents in, found by the state file it
+/// keeps in its settings folder while it listens. `dirs` are the folders searched, in order.
+fn auto_app(dirs: &[std::path::PathBuf]) -> CliResult<figcraft_mcp::Attached> {
     use figcraft_engine::discovery;
-    let dirs = discovery::search_dirs();
-    let Some((port, _)) = dirs.iter().find_map(|dir| discovery::read(dir)) else {
-        return Err(no_running_app(&dirs).into());
-    };
-    Ok(std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)).to_string())
+    // A state file outlives an app that was killed: when nothing answers on its port, the next
+    // folder's is tried. With no app reached, the first failure is the one reported.
+    let mut unreachable = None;
+    for (port, _) in dirs.iter().filter_map(|dir| discovery::read(dir)) {
+        let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)).to_string();
+        match figcraft_mcp::Attached::connect(&addr) {
+            Ok(app) => return Ok(app),
+            Err(e) if unreachable.is_none() => unreachable = Some(unreachable_app(&addr, &e)),
+            Err(_) => {}
+        }
+    }
+    Err(unreachable.unwrap_or_else(|| no_running_app(dirs)).into())
+}
+
+/// Why the app at `addr` was not reached.
+fn unreachable_app(addr: &str, e: &std::io::Error) -> String {
+    format!("can't reach the FigCraft app at {addr}: {e} (start it with `figcraft --control PORT`)")
 }
 
 /// Why `--attach auto` found no app: the folders searched for its state file, and what to do.
@@ -177,11 +191,16 @@ fn no_running_app(dirs: &[std::path::PathBuf]) -> String {
 /// A connection to the running app `attach` names (`auto`: the one that lets AI agents in),
 /// which may take `timeout` seconds over each request.
 fn attached(attach: &str, timeout: Option<u64>) -> CliResult<figcraft_mcp::Attached> {
-    let addr = if attach == args::ATTACH_AUTO { running_app()? } else { attach.to_owned() };
-    let no_app = |e: std::io::Error| format!("can't reach the FigCraft app at {addr}: {e} (start it with `figcraft --control PORT`)");
-    let app = figcraft_mcp::Attached::connect(&addr).map_err(no_app)?;
+    let app = if attach == args::ATTACH_AUTO {
+        auto_app(&figcraft_engine::discovery::search_dirs())?
+    } else {
+        figcraft_mcp::Attached::connect(attach).map_err(|e| unreachable_app(attach, &e))?
+    };
     Ok(match timeout {
-        Some(secs) => app.with_timeout(std::time::Duration::from_secs(secs)).map_err(no_app)?,
+        Some(secs) => {
+            let addr = app.addr().to_owned();
+            app.with_timeout(std::time::Duration::from_secs(secs)).map_err(|e| unreachable_app(&addr, &e))?
+        }
         None => app,
     })
 }
@@ -189,23 +208,33 @@ fn attached(attach: &str, timeout: Option<u64>) -> CliResult<figcraft_mcp::Attac
 /// The most text `call` reads as parameters from standard input.
 const MAX_CALL_PARAMS: u64 = 16 << 20;
 
-/// `call`: one request to the running app, named for `--agent`; its result on standard output.
+/// The parameters `call` is given on `input` (standard input).
+fn read_params(input: impl std::io::Read) -> CliResult<String> {
+    use std::io::Read;
+    // One byte past the limit tells a longer text from one of the limit's size. A longer one is
+    // refused: cut at the limit, what is left can still be JSON, and it would be sent as if it
+    // were all the caller wrote.
+    let mut bytes = Vec::new();
+    input.take(MAX_CALL_PARAMS + 1).read_to_end(&mut bytes).map_err(|e| format!("stdin: {e}"))?;
+    if bytes.len() as u64 > MAX_CALL_PARAMS {
+        return Err(CliError::Usage(format!("the parameters on standard input are too large ({} MiB at most)", MAX_CALL_PARAMS >> 20)));
+    }
+    String::from_utf8(bytes).map_err(|e| CliError::from(format!("stdin: {e}")))
+}
+
+/// `call`: one request to the running app, named for `--agent` with its `--agent-key`; its result
+/// on standard output.
 fn call(a: &args::CallArgs) -> CliResult<ExitCode> {
     use figcraft_mcp::Backend;
-    use std::io::Read;
-    let text = if a.params == "-" {
-        let mut text = String::new();
-        std::io::stdin().lock().take(MAX_CALL_PARAMS).read_to_string(&mut text).map_err(|e| format!("stdin: {e}"))?;
-        text
-    } else {
-        a.params.clone()
-    };
+    let text = if a.params == "-" { read_params(std::io::stdin().lock())? } else { a.params.clone() };
     let mut params: Value = serde_json::from_str(&text).map_err(|e| CliError::Usage(format!("the parameters are not JSON: {e}")))?;
     if !params.is_object() {
         return Err(CliError::Usage("the parameters must be a JSON object, like {\"command\":\"select.all\"}".into()));
     }
     if let Some(agent) = a.agent.as_deref() {
-        figcraft_mcp::name_agent(&a.method, &mut params, agent);
+        // `--agent` comes with `--agent-key` (the arguments refuse one without the other); should
+        // the key be missing all the same, the app refuses an empty one.
+        figcraft_mcp::name_agent(&a.method, &mut params, agent, a.agent_key.as_deref().unwrap_or_default());
     }
     let result = attached(&a.attach, a.timeout)?.call(&a.method, params)?;
     writeln!(std::io::stdout().lock(), "{result}").map_err(|e| format!("stdout: {e}"))?;

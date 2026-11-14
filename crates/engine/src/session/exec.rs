@@ -59,17 +59,29 @@ impl Session {
     /// While several named agents work in the session, each has its own page and selection
     /// ([`Session::with_agent`]): the command runs on those, and the window keeps its own.
     pub fn execute_as(&mut self, agent: Option<&str>, id: &str, params: &Value) -> Result<Value> {
+        self.run_as(agent, |s| s.execute(id, params))
+    }
+
+    /// What [`Session::execute_as`] does around `run`, the call it makes for `agent`.
+    pub(crate) fn run_as<T>(&mut self, agent: Option<&str>, run: impl FnOnce(&mut Session) -> T) -> T {
         let was = std::mem::replace(&mut self.agent, agent.map(cmd::comment::agent_author));
-        let r = self.with_agent(agent, |s| {
-            let before = agent.and_then(|_| s.agent_before());
-            let r = s.execute(id, params);
-            if agent.is_some() {
-                s.note_agent(before);
-            }
-            r
-        });
+        // A panic in the call ends it like any other end, then goes on to the caller's guard: what
+        // the user does next is signed by the user, not by the agent whose call panicked.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_agent(agent, |s| {
+                let before = agent.and_then(|_| s.agent_before());
+                let r = run(s);
+                if agent.is_some() {
+                    s.note_agent(before);
+                }
+                r
+            })
+        }));
         self.agent = was;
-        r
+        match r {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Run a command by id. Mutations become one undo step; a failure or panic leaves the document

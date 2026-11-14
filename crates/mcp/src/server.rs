@@ -57,29 +57,43 @@ pub struct Server {
     agent: String,
     /// The name was given when the server started ([`Server::with_agent`]): `initialize` keeps it.
     named: bool,
+    /// The key this server's agent holds its name with ([`new_key`]), sent with every request made
+    /// under that name: no other client of the app works under it, or makes it leave.
+    key: String,
 }
 
 /// The backend as the MCP client's AI agent: `engine.execute`, `document.inspect`, `agent.join`
-/// and `agent.leave` carry its name (`agent`).
+/// and `agent.leave` carry its name (`agent`) and its key (`agentKey`).
 struct AsAgent<'a> {
     inner: &'a mut dyn Backend,
     agent: &'a str,
+    key: &'a str,
 }
 
 /// Name the AI agent a control request is made for: the methods that act as an agent
-/// (`engine.execute`, `document.inspect`, `agent.join`, `agent.leave`) get it as `agent`; the
-/// others are left as they are.
-pub fn name_agent(method: &str, params: &mut Value, agent: &str) {
+/// (`engine.execute`, `document.inspect`, `agent.join`, `agent.leave`) get it as `agent`, with the
+/// `key` it holds that name with as `agentKey`; the others are left as they are.
+pub fn name_agent(method: &str, params: &mut Value, agent: &str, key: &str) {
     if matches!(method, "engine.execute" | "document.inspect" | "agent.join" | "agent.leave")
         && let Some(p) = params.as_object_mut()
     {
         p.insert("agent".into(), json!(agent));
+        p.insert("agentKey".into(), json!(key));
     }
+}
+
+/// A key for this server's agent, drawn when the server starts: 32 hexadecimal digits another
+/// client of the app cannot guess. The standard library keys each `RandomState` from the system's
+/// random source, which is enough here and adds no dependency.
+fn new_key() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let part = || std::collections::hash_map::RandomState::new().build_hasher().finish();
+    format!("{:016x}{:016x}", part(), part())
 }
 
 impl Backend for AsAgent<'_> {
     fn call(&mut self, method: &str, mut params: Value) -> Result<Value, String> {
-        name_agent(method, &mut params, self.agent);
+        name_agent(method, &mut params, self.agent, self.key);
         self.inner.call(method, params)
     }
 
@@ -92,7 +106,7 @@ impl Backend for AsAgent<'_> {
     }
 
     fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
-        self.inner.render_png(ids, scale)
+        self.inner.render_png_as(self.agent, self.key, ids, scale)
     }
 
     fn screenshot_png(&mut self) -> Result<Vec<u8>, String> {
@@ -125,7 +139,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false, roots: None, agent: String::new(), named: false }
+        Self { backend, initialized: false, roots: None, agent: String::new(), named: false, key: new_key() }
     }
 
     /// Work as the AI agent `name` whatever the client calls itself (`figcraft-cli mcp --agent`):
@@ -263,7 +277,7 @@ impl Server {
 
     /// The backend, acting as the client's agent.
     fn as_agent(&mut self) -> AsAgent<'_> {
-        AsAgent { inner: self.backend.as_mut(), agent: &self.agent }
+        AsAgent { inner: self.backend.as_mut(), agent: &self.agent, key: &self.key }
     }
 
     fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {

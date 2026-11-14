@@ -378,12 +378,12 @@ fn tools() -> Vec<Value> {
         tool(
             "wait_for_changes",
             "Wait for changes",
-            "Wait for new comment events in the attached FigCraft app. Returns pending events immediately; otherwise waits up to `timeoutMs` (default 20000, max 25000). Call it again with the returned `cursor` to keep watching. Headless returns immediately (no other writer). Events carry a sequence number, kind, document and a small payload (for comments, the thread id).",
+            "Wait for new events in the attached FigCraft app: comments, and with the `agents` topic the AI agents that come, leave, or change their page or selection. Returns pending events immediately; otherwise waits up to `timeoutMs` (default 20000, max 25000). Call it again with the returned `cursor` to keep watching. Headless returns immediately (no other writer). Events carry a sequence number, kind, document and a small payload (for comments, the thread id; for agents, the agent's name).",
             obj(
                 json!({
                     "after": int("Return events after this cursor (default 0)"),
                     "timeoutMs": int("Longest wait in milliseconds (default 20000, max 25000)"),
-                    "topics": {"type": "array", "items": {"type": "string", "enum": ["comments", "document", "all"]}, "description": "Event topics (default [\"comments\"]; document events are not emitted yet)"},
+                    "topics": {"type": "array", "items": {"type": "string", "enum": ["comments", "document", "agents", "all"]}, "description": "Event topics (default [\"comments\"]; `agents`: the AI agents that come, leave, or change their page or selection; document events are not emitted yet)"},
                     "limit": int("Most events to return (default 100, max 1000)")
                 }),
                 &[],
