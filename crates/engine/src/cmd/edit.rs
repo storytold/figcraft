@@ -23,7 +23,7 @@ pub use vector_clipboard::clipboard_svg;
 mod vector_clipboard_tests;
 
 pub(crate) use clipboard::apply_copied_props;
-pub use clipboard::{CLIP_CLOSE, CLIP_OPEN, copy_to_clipboard, design_clipboard_buffer, paste_into};
+pub use clipboard::{CLIP_CLOSE, CLIP_OPEN, copy_to_clipboard, design_clipboard_buffer, design_clipboard_file, paste_into};
 use clipboard::{copy, copy_props, copy_props_of, cut, paste, paste_design_layers, paste_over, paste_props, paste_replace};
 use props::{
     batch_rename, effect_add, effect_copy, effect_paste, find_replace, paint_copy, paint_list, paint_paste, paint_set, pattern_fill, reparent, set,
@@ -145,7 +145,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.pasteDesignLayers",
             "Paste design layers",
-            "{html (the clipboard's HTML) | data (base64 of the clipboard's design data, at most 256 MB), parent?, x?, y?}  layers copied from another design app (a .fig canvas in the clipboard's HTML), read like a .fig file (best effort, with `warnings`), pasted as edit.paste pastes; `missingImages`: the names of pasted layers whose image the clipboard didn't carry (they show the missing-image placeholder)",
+            "{html (the clipboard's HTML) | data (base64 of the clipboard's design data, at most 256 MB), fileKey? (the Figma file the copy came from, with `data`; `html` carries it in its metadata; without one only a library key links instances to mains pasted earlier), parent?, x?, y?}  layers copied from another design app (a .fig canvas in the clipboard's HTML), read like a .fig file (best effort, with `warnings`), pasted as edit.paste pastes; `missingImages`: the names of pasted layers whose image the clipboard didn't carry (they show the missing-image placeholder)",
             true,
             paste_design_layers
         ),

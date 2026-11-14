@@ -165,7 +165,7 @@ pub fn import(v: &Value, images: ImageResolver) -> Result<(Document, Vec<String>
 /// in the file JSON (a `meta` with `variableCollections`, or `variableCollections` and
 /// `variables` at the top level) are read too; the first definition of an id wins.
 pub fn import_with(v: &Value, variables: Option<&Value>, images: ImageResolver) -> Result<(Document, Vec<String>), FormatError> {
-    import_parts(v, variables, images, Vec::new(), MAX_NODES, false)
+    import_parts(v, variables, images, Vec::new(), MAX_NODES, false, false)
 }
 
 /// Internal .fig JSON path: GUID provenance is not part of the public REST import contract.
@@ -184,7 +184,19 @@ pub(crate) fn import_with_networks(
     networks: Vec<Option<VectorNetwork>>,
     max_nodes: usize,
 ) -> Result<(Document, Vec<String>), FormatError> {
-    import_parts(v, None, images, networks, max_nodes, true)
+    import_parts(v, None, images, networks, max_nodes, true, false)
+}
+
+/// [`import_with_networks`] that also records each main's Figma identity in its plugin data
+/// (`fig.guid`, `fig.key`, `fig.main`; see `Ctx::record_identity`). Only a clipboard paste asks
+/// for it: a file that is opened carries no identity.
+pub(crate) fn import_with_identity(
+    v: &Value,
+    images: ImageResolver,
+    networks: Vec<Option<VectorNetwork>>,
+    max_nodes: usize,
+) -> Result<(Document, Vec<String>), FormatError> {
+    import_parts(v, None, images, networks, max_nodes, true, true)
 }
 
 /// [`import_with_networks`] for imports other than `.fig` (no `.fig` source identities): the
@@ -195,7 +207,7 @@ pub(crate) fn import_with_networks_plain(
     networks: Vec<Option<VectorNetwork>>,
     max_nodes: usize,
 ) -> Result<(Document, Vec<String>), FormatError> {
-    import_parts(v, None, images, networks, max_nodes, false)
+    import_parts(v, None, images, networks, max_nodes, false, false)
 }
 
 fn import_parts(
@@ -205,6 +217,7 @@ fn import_parts(
     networks: Vec<Option<VectorNetwork>>,
     max_nodes: usize,
     fig_sources: bool,
+    identity: bool,
 ) -> Result<(Document, Vec<String>), FormatError> {
     let entries: Vec<&Value> = if is_document(v) { vec![v] } else { nodes_entries(v).collect() };
     if entries.is_empty() {
@@ -213,6 +226,7 @@ fn import_parts(
     let name = text(v, "name").filter(|n| !n.trim().is_empty()).map_or("Imported file", clip_str);
     let mut cx = Ctx::new(Document::new(name), images);
     cx.fig_sources = fig_sources.then(|| fig_sources::Sources::new(max_nodes));
+    cx.keep_identity = identity;
     let blank = cx.doc.first_page();
     let mut loose: Option<NodeId> = None;
     for e in &entries {
@@ -457,6 +471,8 @@ pub(crate) struct Ctx<'a> {
     max_nodes: usize,
     /// Mains the `.fig` file has but its layer cap kept out ([`FIG_CAPPED_MAINS_FIELD`]).
     capped_mains: BTreeSet<String>,
+    /// Whether mains keep their Figma identity in plugin data (a clipboard paste).
+    keep_identity: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -488,6 +504,7 @@ impl<'a> Ctx<'a> {
             networks: Vec::new(),
             max_nodes: MAX_NODES,
             capped_mains: BTreeSet::new(),
+            keep_identity: false,
         }
     }
 
@@ -595,6 +612,9 @@ impl<'a> Ctx<'a> {
             let primary = *self.ids.entry(rid.to_string()).or_insert(id) == id;
             if let Some(sources) = &mut self.fig_sources {
                 sources.record(id, j, primary);
+            }
+            if primary && self.keep_identity {
+                self.record_identity(id, rid, ty, j);
             }
         }
         match ty {
@@ -1165,6 +1185,40 @@ impl<'a> Ctx<'a> {
         if unused > 0 {
             let (s, verb) = if unused == 1 { ("", "was") } else { ("s", "were") };
             self.warn(format!("{unused} style{s} that no layer uses {verb} skipped (the file JSON carries style values only on layers)"));
+        }
+    }
+
+    /// Keep the file's own identity of a main (and of every layer in it) in the layer's plugin data,
+    /// so instances pasted later can find mains pasted earlier: `fig.guid` (unique within one
+    /// file), `fig.key` (a library component's key, unique everywhere). Instances keep their
+    /// main's guid as `fig.main`. Only layers the file really holds (not the copies an instance
+    /// expands) are recorded.
+    fn record_identity(&mut self, id: NodeId, rest_id: &str, ty: &str, j: &Value) {
+        let meta = j.get(FIG_SOURCE_FIELD);
+        if meta.and_then(|m| m.get("expanded")).and_then(Value::as_bool) != Some(false) || rest_id.starts_with('I') || rest_id.len() > 41 {
+            return;
+        }
+        let is_main = matches!(ty, "COMPONENT" | "COMPONENT_SET");
+        let in_main = is_main
+            || self
+                .doc
+                .ancestors(id)
+                .into_iter()
+                .any(|a| self.doc.node(a).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. })));
+        let main = (ty == "INSTANCE").then(|| text(j, "componentId")).flatten().filter(|m| m.len() <= 41);
+        if !in_main && main.is_none() {
+            return;
+        }
+        let key = meta.and_then(|m| m.get("key")).and_then(Value::as_str).filter(|k| is_main && !k.is_empty());
+        let Some(n) = self.doc.node_mut(id) else { return };
+        if in_main {
+            n.plugin_data.insert("fig.guid".into(), rest_id.into());
+        }
+        if let Some(k) = key {
+            n.plugin_data.insert("fig.key".into(), k.into());
+        }
+        if let Some(m) = main {
+            n.plugin_data.insert("fig.main".into(), m.into());
         }
     }
 

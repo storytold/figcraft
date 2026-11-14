@@ -284,6 +284,8 @@ mod datafill_tests;
 #[cfg(test)]
 mod default_props_tests;
 #[cfg(test)]
+mod design_paste_relink_tests;
+#[cfg(test)]
 mod design_paste_tests;
 #[cfg(test)]
 mod dev_measurements_tests;

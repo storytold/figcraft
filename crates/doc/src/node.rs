@@ -673,7 +673,24 @@ mod guides_key {
     }
 }
 
+/// The plugin-data keys that tie a main to the file it was pasted from (`fig.guid`, `fig.key`,
+/// `fig.file`); `fig.main` (an instance's pointer at its main) is not among them.
+pub const FIGMA_IDENTITY_KEYS: [&str; 3] = ["fig.guid", "fig.key", "fig.file"];
+
 impl Node {
+    /// Drop the Figma identity of a pasted main from this layer: a copy FigCraft makes is not that
+    /// main, and a second layer holding the identity would take later pastes. Keeps `fig.main`.
+    pub fn drop_figma_identity(&mut self) {
+        for k in FIGMA_IDENTITY_KEYS {
+            self.plugin_data.remove(k);
+        }
+    }
+
+    /// Whether this layer carries a Figma identity (see [`Node::drop_figma_identity`]).
+    pub fn has_figma_identity(&self) -> bool {
+        FIGMA_IDENTITY_KEYS.iter().any(|k| self.plugin_data.contains_key(*k))
+    }
+
     /// A node with Figma's defaults for its kind.
     pub fn new(id: NodeId, kind: NodeKind, name: impl Into<String>, width: f64, height: f64) -> Self {
         let fills = match &kind {

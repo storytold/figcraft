@@ -876,7 +876,21 @@ impl Document {
             let nid = self.alloc_id();
             map.insert(n.id, nid);
         }
-        self.paste_nodes(&src_nodes, &map, id, parent, index)
+        let root = self.paste_nodes(&src_nodes, &map, id, parent, index)?;
+        self.drop_figma_identity_in(root);
+        Ok(root)
+    }
+
+    /// Drop the Figma identity (see [`Node::drop_figma_identity`]) from `root` and every layer under
+    /// it. For copies FigCraft makes of layers.
+    pub fn drop_figma_identity_in(&mut self, root: NodeId) {
+        for i in self.subtree(root) {
+            if self.node(i).is_some_and(Node::has_figma_identity)
+                && let Some(n) = self.node_mut(i)
+            {
+                n.drop_figma_identity();
+            }
+        }
     }
 
     /// Deep-copy each of `ids`' subtrees to the end of `parent`, in order, returning the new root
@@ -893,7 +907,12 @@ impl Document {
             }
             trees.push((id, src_nodes));
         }
-        trees.into_iter().map(|(id, src_nodes)| self.paste_nodes(&src_nodes, &map, id, parent, None)).collect()
+        let roots: Vec<NodeId> =
+            trees.into_iter().map(|(id, src_nodes)| self.paste_nodes(&src_nodes, &map, id, parent, None)).collect::<DocResult<_>>()?;
+        for r in &roots {
+            self.drop_figma_identity_in(*r);
+        }
+        Ok(roots)
     }
 
     /// Insert copies of `nodes` (a subtree rooted at `root`, from this or another document) with ids

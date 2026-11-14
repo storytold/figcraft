@@ -403,6 +403,8 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let n = doc.get_mut(target)?;
     let was_group = matches!(n.kind, NodeKind::Group);
     n.kind = NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() };
+    // A new component is not the main it was made from.
+    n.drop_figma_identity();
     if was_group {
         n.fills.clear();
         n.clip = false;

@@ -393,7 +393,13 @@ fn installed_fonts_first() {
 
 /// Gives `None` when `bytes` are not a `.fig` file. Then other readers can try.
 pub(crate) fn load_fig(bytes: &[u8], name: &str) -> Option<Result<figcraft_format::Loaded>> {
-    let r = figcraft_format::fig::try_import(bytes, name)?;
+    load_fig_with(bytes, name, false)
+}
+
+/// [`load_fig`]; `pasted`: the bytes are layers pasted from the clipboard, whose mains keep their
+/// Figma identity so instances pasted later can link to them.
+pub(crate) fn load_fig_with(bytes: &[u8], name: &str, pasted: bool) -> Option<Result<figcraft_format::Loaded>> {
+    let r = if pasted { figcraft_format::fig::try_import_pasted(bytes, name)? } else { figcraft_format::fig::try_import(bytes, name)? };
     Some(r.map_err(|e| EngineError::Other(e.to_string())).map(|(mut doc, warnings)| {
         link_instances(&mut doc);
         installed_fonts_first();
