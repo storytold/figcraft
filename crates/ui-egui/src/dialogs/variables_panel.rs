@@ -239,6 +239,14 @@ impl<'a> View<'a> {
     }
 }
 
+/// The smallest the window can be dragged to.
+const MIN_SIZE: egui::Vec2 = vec2(480.0, 240.0);
+
+/// The largest the window can be dragged to: the screen less a margin.
+fn max_size(screen: Rect) -> egui::Vec2 {
+    (screen.size() - vec2(16.0, 16.0)).max(MIN_SIZE)
+}
+
 /// Show the editor while it's open (call once per frame).
 pub fn show(app: &mut FigApp, ctx: &Context) {
     let Some(mut st) = app.ui.variables.take() else { return };
@@ -267,12 +275,16 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         .id(Id::unique("variables_window"))
         .title_bar(false)
         .collapsible(false)
-        .resizable(false)
-        .fixed_size(size)
+        .resizable(true)
+        .default_size(size)
+        .min_size(MIN_SIZE)
+        .max_size(max_size(screen))
         .pivot(Align2::CENTER_CENTER)
         .default_pos(screen.center())
         .frame(egui::Frame::window(&ctx.global_style()).fill(t.panel).inner_margin(egui::Margin::same(0)))
         .show(ctx, |ui| {
+            // The window's current size (its default until the user drags an edge or corner).
+            let size = ui.available_size().max(MIN_SIZE);
             ui.set_min_size(size);
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             header(app, ui, &mut open);
