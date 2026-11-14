@@ -61,3 +61,74 @@ fn recent_file_names_preserve_spaces() {
         assert_eq!(shortcut, None);
     }
 }
+
+#[path = "../support/native_raster.rs"]
+mod native_raster;
+
+/// Native Home output for the default-off capability and a connected provider. The optional
+/// image is rasterised from the same egui meshes and font textures inspected by this test.
+#[test]
+fn provider_recents_render_separately_from_device_history() {
+    let directory = std::env::var_os("CRAFT_PROVIDER_UI_FIXTURES").map(std::path::PathBuf::from);
+    if let Some(path) = &directory {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    for enabled in [false, true] {
+        let mut session = Session::empty();
+        session.prefs.recent_files = vec!["Device design.figcraft".into()];
+        session.prefs.getting_started_dismissed = true;
+        session.prefs.home_views.insert("recents".into(), "list".into());
+        let mut app = FigApp::new(session, Box::new(NoServices));
+        app.ui.home = true;
+        if enabled {
+            let host = &app.file_providers;
+            host.set_session("fixture-session-0123456789abcdef".into()).unwrap();
+            let connection = host.connect("fixture".into(), "External storage".into(), "fixture-account".into()).unwrap();
+            host.set_resources(
+                &connection,
+                vec![figcraft_ui_egui::file_providers::Resource {
+                    id: "provider-design".into(),
+                    name: "Provider design.figcraft".into(),
+                    updated_at: String::new(),
+                }],
+            )
+            .unwrap();
+        }
+        let ctx = Context::default();
+        let mut textures = std::collections::HashMap::new();
+        let mut output = None;
+        for frame in 0..6 {
+            let mut out = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 1000.0))),
+                    max_texture_side: Some(8192),
+                    time: Some(frame as f64 / 60.0),
+                    ..Default::default()
+                },
+                |ui| app.ui(ui),
+            );
+            native_raster::remember(&mut textures, &mut out);
+            output = Some(out);
+        }
+        let out = output.unwrap();
+        fn texts(shape: &egui::Shape, found: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => found.push(text.galley.text().to_string()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, found)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for shape in &out.shapes {
+            texts(&shape.shape, &mut found);
+        }
+        assert!(found.iter().any(|text| text == "Device design"), "{found:?}");
+        assert_eq!(found.iter().any(|text| text == "Provider design.figcraft"), enabled, "{found:?}");
+        assert_eq!(found.iter().any(|text| text == "Recent files — External storage"), enabled, "{found:?}");
+        assert_eq!(found.iter().any(|text| text == "Recent files on this device"), enabled, "{found:?}");
+        if let Some(path) = &directory {
+            let state = if enabled { "on" } else { "off" };
+            native_raster::raster(&ctx, &textures, out).save(path.join(format!("figcraft-provider-recents-{state}.png"))).unwrap();
+        }
+    }
+}

@@ -381,6 +381,7 @@ pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
     if app.ui.quit || !ctx.input(|i| i.viewport().close_requested()) {
         return;
     }
+    figcraft_engine::branches::sync(&mut app.session);
     let unsaved = !app.unsaved().is_empty();
     if app.windows.current == 0 && (unsaved || !app.windows.list.is_empty()) {
         ctx.send_viewport_cmd(ViewportCommand::CancelClose);
@@ -390,6 +391,12 @@ pub fn on_close_request(app: &mut FigApp, ctx: &Context) {
 
 /// The custom title bar's Close button uses the same unsaved-file check as a system close event.
 pub(crate) fn request_close(app: &mut FigApp, ctx: &Context) {
+    figcraft_engine::branches::sync(&mut app.session);
+    if app.file_providers.busy() {
+        ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+        app.toast("Finish or cancel the pending file provider operation before closing");
+        return;
+    }
     if !app.unsaved().is_empty() {
         app.ui.confirm_close = true;
         ctx.request_repaint();
@@ -422,6 +429,7 @@ pub(crate) enum CloseAnswer {
 /// The unsaved-changes question when a window closes: Don't Save / Cancel / Save, as the other
 /// Craft apps ask it.
 pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
+    figcraft_engine::branches::sync(&mut app.session);
     if std::mem::take(&mut app.ui.save_on_close) {
         save_then_close(app, ctx);
         return;
@@ -429,7 +437,7 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
     // A Save as this question started: once its dialog is answered, closing goes on if the file
     // was saved; cancelled or failed, the window stays open.
     if let Some(uid) = app.ui.close_after_save_as {
-        if app.pending_dialog.is_some() {
+        if app.pending_dialog.is_some() || app.file_providers.pending_for(uid) {
             return;
         }
         app.ui.close_after_save_as = None;
@@ -493,9 +501,10 @@ pub enum TabClose {
     /// Save was answered: it saves next frame, once a panel field the click took the keyboard
     /// from has committed what was typed, then the tab closes.
     Save(u64),
-    /// Its Save as dialog (a file without a path, or a .fig) is open: the tab closes once the file
-    /// is saved, and stays open if the dialog is cancelled or the save fails.
-    AfterSaveAs(u64),
+    /// Wait for the exact tab's provider save to settle.
+    SavingToProvider(u64),
+    /// Continue after a native Save As dialog or a durable provider acknowledgement.
+    AfterSave(u64),
 }
 
 /// Close tab `i` (its X, a middle click, File ▸ Close tab): at once when its file has no unsaved
@@ -537,10 +546,11 @@ fn tab_of(app: &FigApp, uid: u64) -> Option<usize> {
 
 /// The unsaved-changes question for a closing tab and what its answer starts: Don't Save closes
 /// the tab and drops the changes, Cancel keeps it, Save saves the file (Save as for one without a
-/// path or saved as .fig) and closes the tab once it is saved.
+/// path or saved as .fig) and closes the tab once it is saved. A provider Save waits for
+/// acknowledgement and keeps the tab open if there are later unsaved edits.
 pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
     let Some(step) = app.ui.close_tab else { return };
-    let (TabClose::Ask(uid) | TabClose::Save(uid) | TabClose::AfterSaveAs(uid)) = step;
+    let (TabClose::Ask(uid) | TabClose::Save(uid) | TabClose::SavingToProvider(uid) | TabClose::AfterSave(uid)) = step;
     let Some(i) = tab_of(app, uid) else {
         app.ui.close_tab = None;
         return;
@@ -560,13 +570,32 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
         }
         TabClose::Save(_) => {
             app.ui.close_tab = None;
+            // An admitted save still settles while new provider choices are paused.
+            if app.file_providers.has_unapplied_save(uid) {
+                app.ui.close_tab = Some(TabClose::SavingToProvider(uid));
+                ctx.request_repaint();
+                return;
+            }
             // Saving acts on the file shown.
             app.session.active = i;
+            if app.file_providers.enabled() {
+                match crate::file_provider_app::save(app, false) {
+                    Ok(()) => app.ui.close_tab = Some(TabClose::SavingToProvider(uid)),
+                    Err(error) => app.toast(error),
+                }
+                ctx.request_repaint();
+                return;
+            }
+            if app.file_providers.owns_document(uid) {
+                // The ordinary Save guard explains why a paused provider file cannot be saved.
+                app.save();
+                return;
+            }
             let native = app.session.docs.get(i).and_then(|d| d.path.as_deref()).is_some_and(|p| {
                 !std::path::Path::new(p).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("fig"))
             });
             if !native {
-                app.ui.close_tab = Some(TabClose::AfterSaveAs(uid));
+                app.ui.close_tab = Some(TabClose::AfterSave(uid));
                 app.save_as_dialog();
                 if app.pending_dialog.is_none() {
                     // No dialog could start: the tab stays open.
@@ -581,8 +610,10 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
                 app.run("file.close", json!({"index": i}));
             }
         }
-        TabClose::AfterSaveAs(_) => {
-            if app.pending_dialog.is_some() {
+        TabClose::SavingToProvider(_) => {}
+        TabClose::AfterSave(_) => {
+            // Closing is refused while provider operations or their terminal delivery are pending.
+            if app.pending_dialog.is_some() || app.file_providers.busy() {
                 return;
             }
             app.ui.close_tab = None;
@@ -615,6 +646,12 @@ fn save_then_close(app: &mut FigApp, ctx: &Context) {
     for uid in files {
         let Some(i) = app.session.docs.iter().position(|d| d.uid == uid) else { continue };
         app.session.active = i;
+        if app.file_providers.enabled() {
+            app.ui.close_after_save_as = Some(uid);
+            app.save();
+            ctx.request_repaint();
+            return;
+        }
         let native =
             app.session.docs.get(i).and_then(|d| d.path.as_deref()).is_some_and(|p| {
                 !std::path::Path::new(p).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("fig"))
