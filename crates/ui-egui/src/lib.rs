@@ -294,6 +294,8 @@ mod variables_rename_tests;
 #[cfg(test)]
 mod variables_select_tests;
 #[cfg(test)]
+mod variables_window_resize_tests;
+#[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]
 mod vector_keys_tests;
