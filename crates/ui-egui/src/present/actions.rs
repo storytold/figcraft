@@ -218,6 +218,9 @@ impl Presenter {
                 }
                 figcraft_engine::components::sync_instance(d, inst);
                 self.settle(&before);
+                // The new variant's After delay interactions are fresh: they count from now.
+                self.delays_fired.retain(|(id, _)| !doc.is_ancestor(inst, *id));
+                self.swapped.insert(inst, now);
                 true
             }
             Action::SetVariable { variable, value, expr } => {

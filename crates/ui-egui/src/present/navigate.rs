@@ -42,6 +42,8 @@ impl Presenter {
         self.closing.retain(|(_, o)| doc.contains(o.id));
         // These hold states of the document before the edit.
         self.temp = None;
+        // The edit's variants replace the runtime ones: their swap times no longer apply.
+        self.swapped.clear();
         self.anim = None;
         self.scroll_anim = None;
         self.stop_scrolling();
@@ -150,6 +152,8 @@ impl Presenter {
             overlays: self.overlays.clone(),
             history: self.history.clone(),
             scroll: self.scroll.clone(),
+            swapped: self.swapped.clone(),
+            delays_fired: self.delays_fired.clone(),
         })
     }
 
@@ -170,6 +174,7 @@ impl Presenter {
         }
         self.arrived = now;
         self.delays_fired.clear();
+        self.swapped.clear();
         self.waiting.clear();
         self.hovered.clear();
         self.rev += 1;
@@ -220,6 +225,16 @@ impl Presenter {
 
     pub(super) fn revert(&mut self, now: f64) {
         let Some(t) = self.temp.take() else { return };
+        // The delays fired during the temporary change: inside an instance it changed the variant
+        // of, a key names the temporary variant's interaction, not the restored one's, so drop it;
+        // keep the others, and put back the ones the change cleared.
+        let changed: Vec<NodeId> = self.swapped.iter().filter(|(i, at)| t.snap.swapped.get(*i) != Some(*at)).map(|(i, _)| *i).collect();
+        let restored = &t.snap.doc;
+        let during: Vec<(NodeId, usize)> = self.delays_fired.difference(&t.snap.delays_fired).copied().collect();
+        let mut fired = t.snap.delays_fired.clone();
+        fired.extend(during.into_iter().filter(|(id, _)| !changed.iter().any(|i| i == id || restored.is_ancestor(*i, *id))));
+        // A layer the temporary change added is gone again (and its id may be issued anew).
+        fired.retain(|(id, _)| restored.contains(*id));
         self.begin(t.transition.reversed(), t.dur, t.easing, now);
         self.current = t.snap.current;
         self.design = Some(t.snap.doc);
@@ -227,6 +242,8 @@ impl Presenter {
         self.overlays = t.snap.overlays;
         self.history = t.snap.history;
         self.scroll = t.snap.scroll;
+        self.swapped = t.snap.swapped;
+        self.delays_fired = fired;
         self.stop_scrolling();
         self.hovered.clear();
         self.rev += 1;
@@ -245,7 +262,9 @@ pub(crate) fn next_delay(p: &Presenter, doc: &Document, root: NodeId, now: f64) 
             if let Trigger::AfterDelay { ms } = it.trigger
                 && !p.delays_fired.contains(&(id, k))
             {
-                let due = since + f64::from(ms) / 1000.0 - now;
+                // Inside an instance that changed variant, the timer starts when it did.
+                let from = p.swapped.iter().filter(|(inst, _)| doc.is_ancestor(**inst, id)).fold(since, |a, (_, t)| a.max(*t));
+                let due = from + f64::from(ms) / 1000.0 - now;
                 if next.is_none_or(|(_, d)| due < d) {
                     next = Some(((id, k), due));
                 }
