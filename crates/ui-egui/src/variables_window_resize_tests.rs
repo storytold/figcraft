@@ -55,8 +55,25 @@ fn the_variables_window_grows_when_dragged_taller() {
     drag_corner(&mut u, vec2(0.0, 200.0));
     let after = rect(&u);
     assert!((after.height() - before.height() - 200.0).abs() < 2.0, "height {} -> {}", before.height(), after.height());
+    assert!((after.min.y - before.min.y).abs() < 2.0, "the top edge stays where it was: {} -> {}", before.min.y, after.min.y);
     let rows_after = rows(&mut u);
     assert!(rows_after > rows_before, "the table shows more rows: {rows_before} -> {rows_after}");
+}
+
+#[test]
+fn on_a_narrow_screen_the_variables_window_fits_inside_it() {
+    // Narrower than the minimum (600): the window takes the screen less its margin instead.
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    let mut u = Ui::new(s);
+    u.screen = vec2(550.0, 700.0);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    let r = rect(&u);
+    let screen = Rect::from_min_size(Pos2::ZERO, u.screen);
+    assert!(screen.contains_rect(r), "the window {r:?} is inside the screen {screen:?}");
 }
 
 #[test]

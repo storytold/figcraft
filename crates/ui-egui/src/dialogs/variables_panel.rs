@@ -243,9 +243,11 @@ impl<'a> View<'a> {
 /// search field and a library collection's "Extend collection" button side by side.
 const MIN_SIZE: egui::Vec2 = vec2(600.0, 240.0);
 
-/// The largest the window can be dragged to: the screen less a margin.
-fn max_size(screen: Rect) -> egui::Vec2 {
-    (screen.size() - vec2(16.0, 16.0)).max(MIN_SIZE)
+/// The smallest and largest the window can be: at most the screen less a margin, and at least
+/// [`MIN_SIZE`] unless the screen is smaller than that (then the screen less the margin).
+fn limits(screen: Rect) -> (egui::Vec2, egui::Vec2) {
+    let max = (screen.size() - vec2(16.0, 16.0)).max(vec2(1.0, 1.0));
+    (MIN_SIZE.min(max), max)
 }
 
 /// Show the editor while it's open (call once per frame).
@@ -270,7 +272,8 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     st.collection = coll.map(|c| c.id.clone());
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    let size = vec2(880.0_f32.min(screen.width() - 80.0).max(MIN_SIZE.x), 480.0_f32.min(screen.height() - 120.0).max(MIN_SIZE.y));
+    let (min, max) = limits(screen);
+    let size = vec2(880.0_f32.min(screen.width() - 80.0), 480.0_f32.min(screen.height() - 120.0)).clamp(min, max);
     let mut open = true;
     egui::Window::new(tr("Local variables"))
         .id(Id::unique("variables_window"))
@@ -278,14 +281,16 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         .collapsible(false)
         .resizable(true)
         .default_size(size)
-        .min_size(MIN_SIZE)
-        .max_size(max_size(screen))
-        .pivot(Align2::CENTER_CENTER)
-        .default_pos(screen.center())
+        .min_size(min)
+        .max_size(max)
+        // Pinned at its top-left corner, so dragging one edge leaves the opposite one in place;
+        // it opens centred.
+        .pivot(Align2::LEFT_TOP)
+        .default_pos((screen.center() - size / 2.0).max(screen.min))
         .frame(egui::Frame::window(&ctx.global_style()).fill(t.panel).inner_margin(egui::Margin::same(0)))
         .show(ctx, |ui| {
             // The window's current size (its default until the user drags an edge or corner).
-            let size = ui.available_size().max(MIN_SIZE);
+            let size = ui.available_size().max(min);
             ui.set_min_size(size);
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             header(app, ui, &mut open);
