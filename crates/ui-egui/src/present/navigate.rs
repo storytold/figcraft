@@ -150,6 +150,7 @@ impl Presenter {
             overlays: self.overlays.clone(),
             history: self.history.clone(),
             scroll: self.scroll.clone(),
+            swapped: self.swapped.clone(),
         })
     }
 
@@ -228,6 +229,7 @@ impl Presenter {
         self.overlays = t.snap.overlays;
         self.history = t.snap.history;
         self.scroll = t.snap.scroll;
+        self.swapped = t.snap.swapped;
         self.stop_scrolling();
         self.hovered.clear();
         self.rev += 1;

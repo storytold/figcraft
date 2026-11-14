@@ -248,6 +248,9 @@ struct Snapshot {
     overlays: Vec<OverlayState>,
     history: Vec<Visit>,
     scroll: HashMap<NodeId, (f64, f64)>,
+    /// When each instance last changed variant: a temporary change that reverts restores it, so
+    /// the variant shown again keeps its After delay deadline.
+    swapped: HashMap<NodeId, f64>,
 }
 
 /// A "while hovering / while pressing" state that reverts when the pointer leaves / lifts.

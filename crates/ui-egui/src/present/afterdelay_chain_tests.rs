@@ -79,6 +79,59 @@ fn each_step_waits_its_own_delay_from_when_its_variant_appeared() {
     assert_eq!(shown(&u, inst, &variants), Some(2), "600 ms after B appeared: C");
 }
 
+/// A hover that changes the variant and reverts leaves the variant shown again on its own After
+/// delay deadline (counted from the screen's arrival), not from the hover.
+#[test]
+fn a_hover_variant_that_reverts_keeps_the_after_delay_deadline() {
+    let mut s = Session::new();
+    let variants: Vec<NodeId> = ["A", "Hover", "Next"]
+        .iter()
+        .enumerate()
+        .map(|(k, state)| {
+            let f = id(&ex(
+                &mut s,
+                "frame.create",
+                json!({"x": k as f64 * 150.0, "y": 600, "width": 100, "height": 60, "name": format!("State={state}")}),
+            ));
+            id(&ex(&mut s, "component.create", json!({"ids": [f]})))
+        })
+        .collect();
+    ex(&mut s, "component.combineVariants", json!({"ids": variants.clone()}));
+    let instant = json!({"type": "instant"});
+    let delay = json!({"id": variants[0], "trigger": {"type": "afterDelay", "ms": 1000}, "action": {"type": "changeTo", "dest": variants[2]}, "transition": instant, "durationMs": 0});
+    ex(&mut s, "proto.interaction.add", delay);
+    let hover = json!({"id": variants[0], "trigger": {"type": "onHover"}, "action": {"type": "changeTo", "dest": variants[1]}, "transition": instant, "durationMs": 0});
+    ex(&mut s, "proto.interaction.add", hover);
+    let set = s.doc().unwrap().node(variants[0]).unwrap().parent.unwrap();
+    let screen = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 400, "height": 300, "name": "Screen"})));
+    let inst = id(&ex(&mut s, "instance.create", json!({"component": set, "x": 20, "y": 20, "parent": screen})));
+    ex(&mut s, "instance.swap", json!({"ids": [inst], "component": variants[0]}));
+    let mut u = Harness::new(s);
+    u.run("proto.present", json!({"start": screen}));
+    u.frame(Vec::new());
+    let start = u.time;
+    let hot = u.app.inspect()["presenter"]["hotspots"].as_array().cloned().unwrap_or_default();
+    let h = hot.iter().find(|h| h["id"] == json!(inst)).unwrap_or_else(|| panic!("no hotspot on the instance: {hot:?}"));
+    let r: Vec<f32> = h["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
+    let (on, away) = (egui::pos2((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0), egui::pos2(r[0] - 40.0, r[1] - 40.0));
+    while u.time < start + 0.8 {
+        u.frame(vec![egui::Event::PointerMoved(away)]);
+    }
+    u.frame(vec![egui::Event::PointerMoved(on)]);
+    u.frame(Vec::new());
+    assert_eq!(shown(&u, inst, &variants), Some(1), "while hovering: the hover variant");
+    while u.time < start + 0.9 {
+        u.frame(vec![egui::Event::PointerMoved(on)]);
+    }
+    u.frame(vec![egui::Event::PointerMoved(away)]);
+    u.frame(Vec::new());
+    assert_eq!(shown(&u, inst, &variants), Some(0), "the hover left: A again");
+    while u.time < start + 1.3 {
+        u.frame(vec![egui::Event::PointerMoved(away)]);
+    }
+    assert_eq!(shown(&u, inst, &variants), Some(2), "A's 1,000 ms delay from the arrival fired, not 1,000 ms after the hover");
+}
+
 #[test]
 fn a_single_after_delay_still_fires_once() {
     let mut s = Session::new();
