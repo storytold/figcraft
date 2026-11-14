@@ -49,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("branch.open", "Open branch", "{id}  open the branch in a tab (or switch to its tab) → {index}", false, |s, p| {
             let (mi, bi) = locate(s, "branch.open", string(p, "id").as_deref())?;
             let (uid, id) = s.docs.get(mi).and_then(|m| Some((m.uid, m.branches.get(bi)?.id.clone()))).ok_or(EngineError::NoDocument)?;
-            Ok(json!({"index": open_tab(s, uid, &id)?}))
+            Ok(json!({"index": open_tab(s, uid, &id, "branch.open")?}))
         }),
         spec!(
             "branch.review",
@@ -292,6 +292,8 @@ fn foreign(plan: &Plan, base: &Document, main: &Document, merged: &Document, cli
 
 fn create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "branch.create";
+    // The new branch opens in a tab of its own, which becomes the active one.
+    s.refuse_active_switch(CMD)?;
     let ds = s.ds()?;
     if ds.branch_of.is_some() {
         return Err(disabled(CMD, "this tab is a branch: make branches from the main file"));
@@ -336,7 +338,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if live.is_some() {
         s.live_branch_base(uid, &id);
     }
-    let index = open_tab(s, uid, &id)?;
+    let index = open_tab(s, uid, &id, CMD)?;
     if let Some(tab) = s.docs.get_mut(index) {
         crate::cmd::file::add_version(tab, CREATED, "", false);
     }
@@ -344,11 +346,12 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Open branch `id` of the file in the tab with uid `main` in a tab, or switch to its tab.
-fn open_tab(s: &mut Session, main: u64, id: &str) -> Result<usize> {
+fn open_tab(s: &mut Session, main: u64, id: &str, cmd: &str) -> Result<usize> {
     if let Some(i) = tab_of(s, main, id) {
-        s.active = i;
+        s.switch_active_tab(i, cmd)?;
         return Ok(i);
     }
+    s.refuse_active_switch(cmd)?;
     let live = s.live_client_id("branch.open", main)?;
     let m = s.docs.iter().find(|d| d.uid == main).ok_or(EngineError::NoDocument)?;
     let b = m.branches.iter().find(|b| b.id == id).ok_or_else(|| bad("branch.open", format!("no branch `{id}`")))?;
@@ -399,6 +402,11 @@ fn archive(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(disabled(CMD, "the branch was already merged or archived"));
     }
     let (uid, id) = (m.uid, m.branches.get(bi).map(|b| b.id.clone()).unwrap_or_default());
+    // Archiving the branch whose tab is in front closes that tab: another document comes in front.
+    if s.ds().is_ok_and(|d| d.branch_of.as_ref().is_some_and(|(mu, bid)| *mu == uid && *bid == id)) {
+        s.refuse_active_switch(CMD)?;
+    }
+    let m = s.docs.get_mut(mi).ok_or(EngineError::NoDocument)?;
     if let Some(b) = m.branches_mut().get_mut(bi) {
         b.state = BranchState::Archived;
     }
@@ -423,6 +431,10 @@ fn resolutions(cmd: &str, p: &Value) -> Result<BTreeMap<String, Side>> {
 fn combine(s: &mut Session, p: &Value, from: Side) -> Result<Value> {
     let cmd = if from == Side::Branch { "branch.merge" } else { "branch.updateFromMain" };
     let (mi, bi) = locate(s, cmd, string(p, "id").as_deref())?;
+    // A merge closes the branch's tab and puts the main file in front.
+    if from == Side::Branch && s.ds().is_ok_and(|d| d.branch_of.is_some()) {
+        s.refuse_active_switch(cmd)?;
+    }
     let m = s.docs.get_mut(mi).ok_or(EngineError::NoDocument)?;
     let main_uid = m.uid;
     let (id, state) = m.branches.get(bi).map(|b| (b.id.clone(), b.state)).ok_or(EngineError::NoDocument)?;

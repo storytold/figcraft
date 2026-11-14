@@ -262,11 +262,46 @@ impl Session {
         }
     }
 
+    /// Does this agent work apart (named in `apart`, or with another agent present)?
+    fn works_apart(&self, name: &str) -> bool {
+        self.agents.apart.contains(name) || self.agents.present.iter().any(|n| n != name)
+    }
+
+    /// The open document is what the others at work apart see in front of them: a call of an agent
+    /// working apart does not change it. A lone agent and the window's own commands are free to.
+    pub(crate) fn refuse_active_switch(&self, id: &str) -> crate::Result<()> {
+        if self.agents.current.as_deref().is_some_and(|name| self.works_apart(name)) {
+            let why =
+                "the open document cannot change while agents work apart: work in the document the agent came with, or wait for the others to leave";
+            return Err(crate::EngineError::Disabled(id.to_string(), why.into()));
+        }
+        Ok(())
+    }
+
+    /// Bring the tab `i` in front for the command `id`: a call of an agent working apart may not
+    /// change which document is open (see [`Session::refuse_active_switch`]); the tab already in
+    /// front is no switch.
+    pub(crate) fn switch_active_tab(&mut self, i: usize, id: &str) -> crate::Result<()> {
+        if i != self.active {
+            self.refuse_active_switch(id)?;
+        }
+        self.active = i;
+        Ok(())
+    }
+
     /// Undo and redo put the whole document back, so with other agents at work they would take
     /// away another agent's edits: an agent's are refused then. The user's never are.
     pub(crate) fn refuse_shared_undo(&self, id: &str) -> crate::Result<()> {
+        self.refuse_shared_undo_as(self.agents.current.as_deref(), id)
+    }
+
+    /// [`Session::refuse_shared_undo`] for `agent` (named as [`Session::with_agent`] takes it)
+    /// instead of the current one: for a channel that runs an interface entry (a key, a menu) on
+    /// the agent's behalf without being inside `with_agent`. `None` is the user: never refused.
+    pub fn refuse_shared_undo_as(&self, agent: Option<&str>, id: &str) -> crate::Result<()> {
+        let name = agent.map(crate::cmd::comment::agent_name).filter(|n| !n.is_empty());
         let others = |a: &String| self.agents.present.iter().any(|n| n != a);
-        if matches!(id, "edit.undo" | "edit.redo") && self.agents.current.as_ref().is_some_and(others) {
+        if matches!(id, "edit.undo" | "edit.redo") && name.as_ref().is_some_and(others) {
             let why = "the history is shared by everyone in the file: with other agents at work, correct with a new edit instead";
             return Err(crate::EngineError::Disabled(id.to_string(), why.into()));
         }

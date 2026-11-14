@@ -62,8 +62,9 @@ pub struct Server {
     key: String,
 }
 
-/// The backend as the MCP client's AI agent: `engine.execute`, `document.inspect`, `agent.join`
-/// and `agent.leave` carry its name (`agent`) and its key (`agentKey`).
+/// The backend as the MCP client's AI agent: `engine.execute`, `document.inspect`, `agent.join`,
+/// `agent.leave` and the methods that act through the UI (`ui.key`, `ui.type`, `ui.input`,
+/// `ui.pointer`, `ui.menu.invoke`) carry its name (`agent`) and its key (`agentKey`).
 struct AsAgent<'a> {
     inner: &'a mut dyn Backend,
     agent: &'a str,
@@ -71,11 +72,15 @@ struct AsAgent<'a> {
 }
 
 /// Name the AI agent a control request is made for: the methods that act as an agent
-/// (`engine.execute`, `document.inspect`, `agent.join`, `agent.leave`) get it as `agent`, with the
-/// `key` it holds that name with as `agentKey`; the others are left as they are.
+/// (`engine.execute`, `document.inspect`, `agent.join`, `agent.leave`, and the UI methods that act:
+/// `ui.key`, `ui.type`, `ui.input`, `ui.pointer`, `ui.menu.invoke`: a shortcut or a menu runs the
+/// same commands, undo among them) get it as `agent`, with the `key` it holds that name with as
+/// `agentKey`; the others are left as they are.
 pub fn name_agent(method: &str, params: &mut Value, agent: &str, key: &str) {
-    if matches!(method, "engine.execute" | "document.inspect" | "agent.join" | "agent.leave")
-        && let Some(p) = params.as_object_mut()
+    if matches!(
+        method,
+        "engine.execute" | "document.inspect" | "agent.join" | "agent.leave" | "ui.key" | "ui.type" | "ui.input" | "ui.pointer" | "ui.menu.invoke"
+    ) && let Some(p) = params.as_object_mut()
     {
         p.insert("agent".into(), json!(agent));
         p.insert("agentKey".into(), json!(key));

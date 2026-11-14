@@ -3,6 +3,10 @@ use super::{
     components, events, find_command, guard, library, normalize, params, textpreview,
 };
 
+/// Why an agent's edit is refused while a gesture that is not its own is open on the document:
+/// the gesture would fold the edit into its own step, or lose it when cancelled.
+const GESTURE_IN_PROGRESS: &str = "a drag or other gesture is in progress in the window: retry the edit once it ends";
+
 /// Whether a command, or a batch wrapping one, imports a file passed as Base64 `data`.
 fn command_carries_import_bytes(id: &str, params: &Value) -> bool {
     match id {
@@ -91,6 +95,7 @@ impl Session {
         crate::cmd::refuse_unknown_params(id, params)?;
         board::refuse_on_board(self, id)?;
         self.refuse_shared_undo(id)?;
+        self.refuse_agent_edit_in_gesture(id, spec)?;
         // Revert replaces the document's uid: refuse before ending previews or syncing branches.
         if id == "file.revert" && self.live().doc_uid.is_some() {
             return Err(EngineError::Disabled(id.into(), "leave the live session before reverting to the saved file".into()));
@@ -124,6 +129,7 @@ impl Session {
             .and_then(|v| self.check_instance_structure(id, &before).map(|()| v))
             .and_then(|v| self.check_preview(id, &before).map(|()| v))
             .and_then(|v| self.check_live_access(id, &before).map(|()| v))
+            .and_then(|v| self.check_agent_edit_in_gesture(id, &before).map(|()| v))
             .and_then(|v| self.check_finite_geometry(id, &before).map(|()| v))
             // Normalising is part of the command: a panic in it rolls the edit back too (#1085).
             .and_then(|v| {
@@ -183,6 +189,34 @@ impl Session {
             Err(EngineError::Internal { .. }) => self.restore_after_internal_error(group_depth, pending_events),
             Err(_) => {}
         }
+    }
+
+    /// Is a gesture open on `ds` that the agent now calling did not start? Its own (the text it is
+    /// editing) takes its edits; the window's, or another agent's, would fold them in or lose them.
+    fn in_foreign_gesture(&self, ds: &crate::DocState) -> bool {
+        self.agent.is_some() && ds.interaction.as_ref().is_some_and(|it| it.agent != self.agent)
+    }
+
+    /// While a gesture that is not its own is open on the active document, an agent's edit is
+    /// refused before it runs. Undo and redo are refused too: they pop the history before any later
+    /// check.
+    fn refuse_agent_edit_in_gesture(&self, id: &str, spec: &CommandSpec) -> Result<()> {
+        let edits = spec.history || matches!(id, "edit.undo" | "edit.redo");
+        if edits && self.ds().is_ok_and(|d| self.in_foreign_gesture(d)) {
+            return Err(EngineError::Disabled(id.to_string(), GESTURE_IN_PROGRESS.into()));
+        }
+        Ok(())
+    }
+
+    /// An agent's command that changes the document during a gesture that is not its own is refused
+    /// (it is rolled back): the gesture would fold the change in, or lose it when cancelled.
+    fn check_agent_edit_in_gesture(&self, id: &str, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) -> Result<()> {
+        let Some((bdoc, _, _, uid)) = before else { return Ok(()) };
+        let Some(ds) = self.docs.iter().find(|d| d.uid == *uid) else { return Ok(()) };
+        if !self.in_foreign_gesture(ds) || Arc::ptr_eq(&ds.doc, bdoc) {
+            return Ok(());
+        }
+        Err(EngineError::Disabled(id.to_string(), GESTURE_IN_PROGRESS.into()))
     }
 
     /// A version shown in place of the document is read-only: refuse an edit (it is rolled back).

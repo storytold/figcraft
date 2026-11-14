@@ -1051,10 +1051,11 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
     let key = p.get("key").and_then(Value::as_str).ok_or("`key` required")?;
     let m = figcraft_engine::keymap::Mods { shift: b(p, "shift"), alt: b(p, "alt"), cmd: b(p, "cmd"), ctrl: b(p, "ctrl") };
     let platform = crate::shortcuts::platform();
-    use figcraft_engine::keymap::{Context, lookup, normalize};
+    use figcraft_engine::keymap::{Context as KeyContext, lookup, normalize};
     // Text editing keys go to the editor (after the shortcuts live while editing).
     if app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
-        if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
+        if let Some(bd) = lookup(platform, KeyContext::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
+            refuse_agent_undo(app, p, bd.id)?;
             crate::menus::invoke(app, bd.id);
             return Ok(json!({"command": bd.id}));
         }
@@ -1078,7 +1079,8 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
         let r = crate::comments::step(app, ctx, if matches!(key, "ArrowUp" | "Up") { -1 } else { 1 });
         return Ok(json!({"comment": r.and_then(|v| v.get("id").cloned())}));
     }
-    if let Some(bd) = lookup(platform, Context::Canvas, key, m) {
+    if let Some(bd) = lookup(platform, KeyContext::Canvas, key, m) {
+        refuse_agent_undo(app, p, bd.id)?;
         crate::shortcuts::run_binding(app, bd.id);
         return Ok(json!({"command": bd.id}));
     }
@@ -1156,6 +1158,7 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
             events.push(egui::Event::PointerButton { pos: p, button, pressed, modifiers: mods });
         } else if let Some(k) = e.get("key").and_then(Value::as_str) {
             let key = egui::Key::from_name(k).ok_or_else(|| format!("unknown key `{k}`"))?;
+            refuse_agent_undo_key(app, p, e, k)?;
             for pressed in [true, false] {
                 events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods });
             }
@@ -1487,6 +1490,33 @@ fn ui_set_styles(app: &mut FigApp, p: &Value) -> Result<(), String> {
 /// The methods whose `document` may name a file behind the tab in front.
 const DOCUMENT_METHODS: &[&str] = &["engine.execute", "document.inspect", "node.get", "ui.render"];
 
+/// A `ui.*` request that acts (keys, pointer, typing, a menu) names the agent it is made for as
+/// `engine.execute` does (`agent` and `agentKey`): is it that agent's? Asked before anything runs.
+fn admit_ui(app: &mut FigApp, p: &Value) -> Result<(), String> {
+    let agent = p.get("agent").and_then(Value::as_str);
+    app.session.agent_admit(agent, figcraft_engine::agent::key_of(p)).map_err(|e| e.to_string())
+}
+
+/// An agent's undo or redo through the interface (a key, a menu) is refused as its command is,
+/// while another agent is there: the rule is the engine's. A request with no agent is the user's.
+fn refuse_agent_undo(app: &FigApp, p: &Value, id: &str) -> Result<(), String> {
+    app.session.refuse_shared_undo_as(p.get("agent").and_then(Value::as_str), id).map_err(|e| e.to_string())
+}
+
+/// A raw key event of `ui.input` (`e`, key name `k`): egui resolves its shortcut when it takes the event,
+/// with no agent, so the keymap is asked now whether it is an undo or redo the agent may not make.
+fn refuse_agent_undo_key(app: &FigApp, p: &Value, e: &Value, k: &str) -> Result<(), String> {
+    use figcraft_engine::keymap::{Context as KeyContext, Mods, lookup};
+    let m = Mods { shift: b(e, "shift"), alt: b(e, "alt"), cmd: b(e, "cmd"), ctrl: b(e, "ctrl") };
+    let platform = crate::shortcuts::platform();
+    for context in [KeyContext::Canvas, KeyContext::Text] {
+        if let Some(bd) = lookup(platform, context, k, m) {
+            refuse_agent_undo(app, p, bd.id)?;
+        }
+    }
+    Ok(())
+}
+
 /// The request's `document` (an `id` from `doc.list`, or an open file's path), when it names one.
 fn document_of(p: &Value) -> Option<&Value> {
     p.get("document").filter(|d| !d.is_null())
@@ -1599,16 +1629,20 @@ fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Re
             }
             Ok(v)
         }
-        "ui.pointer" => pointer(app, p),
-        "ui.key" => ui_key(app, ctx, p),
-        "ui.input" => ui_input(app, ctx, p),
+        "ui.pointer" => admit_ui(app, p).and_then(|()| pointer(app, p)),
+        "ui.key" => admit_ui(app, p).and_then(|()| ui_key(app, ctx, p)),
+        "ui.input" => admit_ui(app, p).and_then(|()| ui_input(app, ctx, p)),
         "ui.type" => {
+            admit_ui(app, p)?;
             let text = p.get("text").and_then(Value::as_str).ok_or("`text` required")?;
-            figcraft_engine::textedit::insert(&mut app.session, text).map_err(|e| e.to_string())?;
+            let agent = p.get("agent").and_then(Value::as_str);
+            app.session.with_agent(agent, |s| figcraft_engine::textedit::insert(s, text)).map_err(|e| e.to_string())?;
             Ok(json!({"ok": true}))
         }
         "ui.menu.invoke" => {
+            admit_ui(app, p)?;
             let id = p.get("id").and_then(Value::as_str).ok_or("`id` required")?;
+            refuse_agent_undo(app, p, id)?;
             crate::menus::invoke(app, id);
             Ok(json!({"ok": true, "lastError": app.ui.last_error}))
         }
@@ -1680,7 +1714,9 @@ fn pointer(app: &mut FigApp, p: &Value) -> Result<Value, String> {
     // A drag's pressure goes from `pressure` to `pressureTo`.
     let (pr0, pr1) = (pressure("pressure"), pressure("pressureTo").or(pressure("pressure")));
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("click");
-    let run = |app: &mut FigApp, ev: PointerEvent| app.session.pointer(&ev).map_err(|e| e.to_string());
+    // Under the name of the agent the request is made for, as `engine.execute` is.
+    let agent = p.get("agent").and_then(Value::as_str);
+    let run = |app: &mut FigApp, ev: PointerEvent| app.session.with_agent(agent, |s| s.pointer(&ev)).map_err(|e| e.to_string());
     match kind {
         "down" => run(app, mk(PointerKind::Down, x, y))?,
         "move" => run(app, mk(PointerKind::Move, x, y))?,
@@ -1724,3 +1760,6 @@ mod agent_key_tests;
 
 #[cfg(test)]
 mod unsaved_tests;
+
+#[cfg(test)]
+mod agent_ui_undo_tests;

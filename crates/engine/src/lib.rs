@@ -183,6 +183,8 @@ impl Default for Session {
 #[cfg(test)]
 mod a11y_keys_tests;
 #[cfg(test)]
+mod agent_gesture_tests;
+#[cfg(test)]
 mod agent_presence_tests;
 #[cfg(test)]
 mod agents_apart_tests;

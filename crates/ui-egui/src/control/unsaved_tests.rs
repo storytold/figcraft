@@ -31,11 +31,20 @@ fn open_and_modified(u: &Ui, index: usize) -> bool {
     u.app.session.docs.len() == 2 && u.app.session.docs.get(index).is_some_and(|d| d.is_dirty())
 }
 
-fn temp_dir(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("figcraft-unsaved-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
+/// A temporary directory unique to one test, removed when dropped (also after a failed assertion).
+struct ScratchDir(std::path::PathBuf);
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(tag: &str) -> ScratchDir {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let d = std::env::temp_dir().join(format!("figcraft-unsaved-{tag}-{}-{stamp}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
-    d
+    ScratchDir(d)
 }
 
 #[test]
@@ -57,7 +66,8 @@ fn nor_as_a_step_of_a_batch() {
 
 #[test]
 fn nor_revert_it_to_the_saved_file() {
-    let d = temp_dir("revert");
+    let scratch = temp_dir("revert");
+    let d = scratch.0.clone();
     let mut s = Session::new();
     s.execute("file.saveAs", &json!({"path": d.join("a.figcraft").to_string_lossy()})).unwrap();
     draw(&mut s);
@@ -71,7 +81,6 @@ fn nor_revert_it_to_the_saved_file() {
     // The menu answers `Ok` with `lastError`; only the document's state matters.
     let _ = call(&mut u, "ui.menu.invoke", json!({"id": "file.revert"}));
     assert!(dirty(&u), "a menu invoked by a control client reverted the user's unsaved changes");
-    std::fs::remove_dir_all(&d).ok();
 }
 
 #[test]

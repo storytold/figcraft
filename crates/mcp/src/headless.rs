@@ -11,6 +11,9 @@ use crate::backend::Backend;
 /// Headless backend: a [`Session`] with one untitled document.
 pub struct Headless {
     pub session: Session,
+    /// The AI agent whose `ui.*` request is running: its keys, pointer and typing act under its
+    /// name, so a shortcut is refused to it as the command is (`edit.undo` with other agents).
+    acting: Option<String>,
 }
 
 impl Default for Headless {
@@ -51,11 +54,30 @@ impl Headless {
         if !session.live.available() {
             session.live.install(Box::new(figcraft_collab_net::NetLink::new(std::sync::Arc::new(|| {}))));
         }
-        Self { session }
+        Self { session, acting: None }
     }
 
+    /// A command for the agent whose `ui.*` request is running, else for the user.
     fn execute(&mut self, cmd: &str, params: &Value) -> Result<Value, String> {
-        self.execute_as(None, cmd, params)
+        let agent = self.acting.clone();
+        self.execute_as(agent.as_deref(), cmd, params)
+    }
+
+    /// `f` on the session under the name of the agent whose `ui.*` request is running.
+    fn as_acting<T>(&mut self, f: impl FnOnce(&mut Session) -> T) -> T {
+        let agent = self.acting.clone();
+        self.session.with_agent(agent.as_deref(), f)
+    }
+
+    /// A `ui.*` request, made for the agent it names (`agent`, with its `agentKey`, as
+    /// `engine.execute` is) or for the user.
+    fn ui_as_agent(&mut self, p: &Value, run: impl FnOnce(&mut Self) -> Result<Value, String>) -> Result<Value, String> {
+        let agent = p.get("agent").and_then(Value::as_str);
+        self.session.agent_admit(agent, figcraft_engine::agent::key_of(p)).map_err(|e| e.to_string())?;
+        self.acting = agent.map(str::to_owned);
+        let r = run(self);
+        self.acting = None;
+        r
     }
 
     /// A command for `agent` (an AI agent's name, `engine.execute {agent}`) or for the user.
@@ -121,7 +143,7 @@ impl Headless {
             other => return Err(format!("unknown pointer kind `{other}` (down|move|up|click|double|hover|drag)")),
         }
         for ev in &events {
-            let r = figcraft_engine::guard::run("ui.pointer", || self.session.pointer(ev));
+            let r = figcraft_engine::guard::run("ui.pointer", || self.as_acting(|s| s.pointer(ev)));
             self.session.ui_requests.clear();
             r.map_err(|e| e.to_string())?;
         }
@@ -144,13 +166,13 @@ impl Headless {
             }
             if !(m.cmd && key.len() == 1) {
                 let (word, line) = figcraft_engine::keymap::text_motion(platform, key, m);
-                textedit::key(&mut self.session, key, m.shift, word, line).map_err(|e| e.to_string())?;
+                self.as_acting(|s| textedit::key(s, key, m.shift, word, line)).map_err(|e| e.to_string())?;
                 return Ok(json!({"ok": true, "textEdit": true}));
             }
         }
         // Vector edit mode and shape builder keys (tools, nudging points, delete, join, Enter), as
         // on the canvas.
-        if self.session.tool_key(key, m.shift, m.alt, m.cmd).map_err(|e| e.to_string())? {
+        if self.as_acting(|s| s.tool_key(key, m.shift, m.alt, m.cmd)).map_err(|e| e.to_string())? {
             return Ok(json!({"ok": true}));
         }
         if let Some(bd) = lookup(platform, Context::Canvas, key, m) {
@@ -270,16 +292,16 @@ impl Headless {
                 Ok(figcraft_engine::inspect::node_json_with_options(doc, id, depth, &options))
             }
             "ui.inspect" => Ok(self.inspect_ui()),
-            "ui.pointer" => self.pointer(&p),
-            "ui.key" => self.key(&p),
-            "ui.type" => {
+            "ui.pointer" => self.ui_as_agent(&p, |h| h.pointer(&p)),
+            "ui.key" => self.ui_as_agent(&p, |h| h.key(&p)),
+            "ui.type" => self.ui_as_agent(&p, |h| {
                 let text = p.get("text").and_then(Value::as_str).ok_or("`text` required")?;
-                if !self.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
+                if !h.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
                     return Err("not editing text: double-click a text layer, press Enter on it, or run text.edit.begin {id}".into());
                 }
-                textedit::insert(&mut self.session, text).map_err(|e| e.to_string())?;
+                h.as_acting(|s| textedit::insert(s, text)).map_err(|e| e.to_string())?;
                 Ok(json!({"ok": true}))
-            }
+            }),
             "ui.render" => self.render_to(&p),
             "ui.screenshot" => {
                 let bytes = self.screenshot_png()?;

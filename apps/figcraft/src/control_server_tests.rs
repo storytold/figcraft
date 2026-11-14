@@ -406,23 +406,11 @@ fn a_request_whose_client_left_is_cancelled_long_before_its_timeout() {
     let q = pending.clone();
     let worker = std::thread::spawn(move || serve(server, q, context(), Duration::from_secs(60)));
     client.write_all(b"{\"id\":1,\"method\":\"engine.execute\",\"params\":{\"command\":\"edit.delete\"}}\n").unwrap();
-    let start = Instant::now();
-    let gate = loop {
-        let waiting = pending.lock().unwrap().first().map(|r| r.state.clone());
-        if let Some(gate) = waiting {
-            break gate;
-        }
-        assert!(start.elapsed() < Duration::from_secs(5));
-        std::thread::sleep(Duration::from_millis(1));
-    };
+    let gate = queued_gate(&pending);
     assert_eq!(gate.state(), RequestState::Open, "queued, not started");
 
     drop(client);
-    let left = Instant::now();
-    while gate.state() != RequestState::Cancelled {
-        assert!(left.elapsed() < Duration::from_secs(3), "the client left {:?} ago and its request still waits to run", left.elapsed());
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    assert_cancelled_within(&gate, Duration::from_secs(15), "the client left and its request still waits to run");
     assert!(!gate.start(), "the UI must not run a request nobody waits for");
     worker.join().unwrap().unwrap();
 }
@@ -631,4 +619,191 @@ fn a_finished_connection_leaves_no_handle_behind() {
         std::thread::sleep(Duration::from_millis(10));
     }
     stop.stop();
+}
+
+// ---- Departures the server must see (N1, N2, N2 bis) and the end of the server (N3). ----
+
+/// The gate of the first request waiting in `pending`, without taking it out of the queue.
+fn queued_gate(pending: &Queue) -> RequestGate {
+    let start = Instant::now();
+    loop {
+        if let Some(r) = pending.lock().unwrap().first() {
+            return r.state.clone();
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "the request never reached the queue");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Wait (polling, at most `within`) until `gate` is `Cancelled`; panics with `what` otherwise.
+fn assert_cancelled_within(gate: &RequestGate, within: Duration, what: &str) {
+    let left = Instant::now();
+    while gate.state() != RequestState::Cancelled {
+        assert!(left.elapsed() < within, "{what}: still {:?} after {:?}", gate.state(), left.elapsed());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// N1. Bytes the client sent beyond the server's read buffer stay in the socket. `look_at` must
+/// not take them for a client still there, or the request runs for nobody: it has to see the
+/// departure whatever is still unread.
+#[test]
+fn a_client_that_left_with_unread_bytes_in_the_socket_does_not_leave_its_request_to_run() {
+    let (mut client, server) = pair();
+    let probe = server.try_clone().unwrap();
+    let pending = queue();
+    let q = pending.clone();
+    let worker = std::thread::spawn(move || serve(server, q, context(), Duration::from_secs(60)));
+    // The request, then far more than the 8 KiB the server reads at once: the rest waits in its socket.
+    let mut sent = b"{\"id\":1,\"method\":\"ui.inspect\"}\n".to_vec();
+    sent.resize(64 * 1024, b' ');
+    client.write_all(&sent).unwrap();
+    let gate = queued_gate(&pending);
+    // Calibration 1: bytes really remain in the server's socket (else this proves nothing).
+    let start = Instant::now();
+    loop {
+        match probe.peek(&mut [0]) {
+            Ok(n) if n > 0 => break,
+            other => assert!(start.elapsed() < Duration::from_secs(2), "no byte left in the socket: {other:?}"),
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Calibration 2: with the client still there, several looks pass and the request stays open
+    // (a window of observation, not a synchronisation: a wrong cancel would show in it).
+    std::thread::sleep(CLIENT_CHECK + PROBE_ANSWER * 2);
+    assert_eq!(gate.state(), RequestState::Open, "the request of a present client was cancelled");
+    drop(client);
+    assert_cancelled_within(&gate, Duration::from_secs(15), "the client left with bytes unread and its request still waits to run");
+    assert!(!gate.start(), "the UI must not run a request nobody waits for");
+    worker.join().unwrap().unwrap();
+}
+
+/// N2. A client that closed only its sending side (FIN) is `Listening` once it took the probe
+/// byte; the wait must keep looking at it until the reply, or its later full departure goes
+/// unseen. The neighbour test
+/// `a_client_that_only_stopped_sending_gets_its_answer_after_a_long_wait` keeps the other half.
+#[test]
+fn a_half_closed_client_that_then_leaves_entirely_does_not_leave_its_request_to_run() {
+    let (mut client, server) = pair();
+    let probe = server.try_clone().unwrap();
+    let pending = queue();
+    let q = pending.clone();
+    let worker = std::thread::spawn(move || serve(server, q, context(), Duration::from_secs(60)));
+    client.write_all(b"{\"id\":1,\"method\":\"ui.inspect\"}\n").unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let gate = queued_gate(&pending);
+    // Calibration 1: the server sees the end of what it sent (EOF), not a byte.
+    assert_eq!(probe.peek(&mut [0]).unwrap(), 0);
+    // Calibration 2: the server asked, and the client took the byte (the read blocks until it comes).
+    let mut byte = [0];
+    assert_eq!(client.read(&mut byte).unwrap(), 1);
+    assert_eq!(byte[0], b' ');
+    // The server's next look (PROBE_ANSWER later) finds it `Listening`: a margin, the look is not observable.
+    std::thread::sleep(PROBE_ANSWER * 5);
+    // Calibration 3: half-closed and still open, the request waits.
+    assert_eq!(gate.state(), RequestState::Open, "the request of a client that still reads was cancelled");
+    drop(client);
+    assert_cancelled_within(&gate, Duration::from_secs(15), "the half-closed client left entirely and its request still waits to run");
+    worker.join().unwrap().unwrap();
+}
+
+/// N2 bis. `events.poll` waits up to `timeoutMs` on the log. It must look at its client
+/// meanwhile, or a client that left holds the connection thread for the whole wait. The poll's
+/// timeout is 20 s and the test's deadline 12 s; a client that left is seen within about 2 s, so
+/// the deadline has a wide margin. The poll itself is light to test: the log is empty, so it
+/// waits for its whole timeout.
+#[test]
+fn an_events_poll_wait_ends_when_its_client_leaves() {
+    let (mut client, server) = pair();
+    let log = Arc::new(figcraft_engine::events::EventLog::default());
+    let (done, ended) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let r = serve_with_events(server, queue(), context(), log, Duration::from_secs(30));
+        let _ = done.send(());
+        r
+    });
+    client.write_all(b"{\"id\":1,\"method\":\"events.poll\",\"params\":{\"after\":0,\"timeoutMs\":20000}}\n").unwrap();
+    // Calibration: the poll is waiting, no answer comes while the client stays.
+    client.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+    let early = client.read(&mut [0]);
+    assert!(matches!(&early, Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)), "{early:?}");
+    assert!(ended.try_recv().is_err(), "the connection ended while its client stayed");
+    drop(client);
+    assert!(ended.recv_timeout(Duration::from_secs(12)).is_ok(), "the client left and its events.poll still holds the connection");
+    worker.join().unwrap().unwrap_or_default();
+}
+
+/// A started server whose connection has a request queued in `pending`, for the stop tests.
+fn started(pending: &Queue) -> (Stop, TcpStream) {
+    let server = start(0, Duration::ZERO, pending.clone(), context(), Arc::new(EventLog::default())).unwrap();
+    let client = TcpStream::connect(("127.0.0.1", server.port())).unwrap();
+    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    (server, client)
+}
+
+/// Wait until the accepting thread tracks one connection (it pushes it just before it spawns the
+/// connection thread), so `stop` cannot beat the connection it is meant to find.
+fn wait_tracked(server: &Stop) {
+    let start = Instant::now();
+    while server.open.lock().unwrap().is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(5), "the connection was never accepted");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// N3 (agent_control's sequence: `stop`, then the queue is drained). A request queued by a client
+/// still connected must not be live once `stop` returned: `stop` has to join the connection
+/// threads, not only the accepting one. A thread left running only cancels at its next look
+/// (>= CLIENT_CHECK later), and the drain below would still find the request `Open`.
+#[test]
+fn a_request_queued_before_stop_is_not_live_when_stop_returns() {
+    let pending = queue();
+    let (server, mut client) = started(&pending);
+    client.write_all(b"{\"id\":1,\"method\":\"ui.inspect\"}\n").unwrap();
+    let _gate = queued_gate(&pending);
+    server.stop();
+    let mut ui = Vec::new();
+    drain_queue(&pending, &mut ui);
+    assert!(ui.is_empty(), "{} request(s) still run after stop", ui.len());
+    assert!(pending.lock().unwrap().iter().all(ControlRequest::is_cancelled));
+}
+
+/// N3, the late push, made deterministic without a seam: the test holds the queue's lock, so the
+/// connection thread is held right before its push (at its `queue.lock()`); `stop` runs
+/// meanwhile; the lock is then released. Nothing live may be in the queue once `stop` has
+/// returned. A `stop` that neither waits for that thread nor makes its push refuse lets the
+/// request land after `stop`. Either way passes: `stop` joins the thread (it then returns only
+/// after the release), or the push refuses once stopping.
+#[test]
+fn a_connection_held_before_its_push_cannot_queue_a_request_after_stop() {
+    let pending = queue();
+    let (server, mut client) = started(&pending);
+    let hold = pending.lock().unwrap();
+    client.write_all(b"{\"id\":1,\"method\":\"ui.inspect\"}\n").unwrap();
+    wait_tracked(&server);
+    let (returned, stopped) = mpsc::channel();
+    let stopper = std::thread::spawn(move || {
+        server.stop();
+        let _ = returned.send(());
+    });
+    // A `stop` that joins waits for the lock; one that only refuses the push returns at once: both
+    // are allowed here.
+    let returned_early = stopped.recv_timeout(Duration::from_millis(300)).is_ok();
+    drop(hold);
+    if !returned_early {
+        stopped.recv_timeout(Duration::from_secs(5)).expect("stop never returned after the queue was released");
+    }
+    stopper.join().unwrap();
+    // A `stop` that joined the thread leaves nothing more to come: one look is conclusive. A `stop`
+    // that returned early leaves the held thread to push right after the release: wait (up to 5 s,
+    // ending at once on the push) for it to land, then look at what it queued.
+    let waited = Instant::now();
+    while returned_early && pending.lock().unwrap().is_empty() && waited.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        pending.lock().unwrap().iter().all(ControlRequest::is_cancelled),
+        "a request reached the queue live after stop returned (returned_early: {returned_early})"
+    );
+    drop(client);
 }

@@ -198,3 +198,164 @@ fn an_agent_on_the_windows_page_does_not_move_the_windows_view() {
     assert_eq!(ds.page, first, "a stayed on the page the window shows");
     assert_eq!(ds.view, view, "the window's view is the user's: an agent working apart does not scroll it");
 }
+
+/// Two documents, the first active with its rectangle selected in the window; returns the session
+/// and that rectangle.
+fn two_documents() -> (Session, NodeId) {
+    let mut s = Session::new();
+    let r = rect(&mut s, None);
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    s.execute("file.new", &json!({})).unwrap();
+    s.execute("doc.switch", &json!({"index": 0})).unwrap();
+    assert_eq!((s.docs.len(), s.active), (2, 0));
+    (s, r)
+}
+
+fn assert_window_untouched(s: &Session, r: NodeId) {
+    assert_eq!(s.active, 0, "the window is still on its document");
+    assert!(s.docs[0].doc.contains(r), "the window's rectangle still exists");
+    assert_eq!(s.docs[0].selection, vec![r], "the window's selection is the user's");
+}
+
+#[test]
+fn a_document_switch_is_refused_to_an_agent_working_apart() {
+    let (mut s, r) = two_documents();
+    s.agent_join("a").unwrap();
+    s.agent_join("b").unwrap();
+    assert_eq!(s.agent_list()["agents"][0]["apart"], json!(true), "calibration: a works apart");
+    assert!(s.execute_as(Some("a"), "doc.switch", &json!({"index": 1})).is_err(), "an agent apart may not change the active document");
+    assert_window_untouched(&s, r);
+}
+
+#[test]
+fn a_command_batch_switching_document_then_deleting_cannot_delete_the_windows_selection() {
+    let (mut s, r) = two_documents();
+    // The second document gets a selected rectangle of its own: without the guard the batch's
+    // doc.switch succeeds and edit.delete removes it (an empty selection would make the delete fail
+    // and roll the batch back, proving nothing).
+    s.execute("doc.switch", &json!({"index": 1})).unwrap();
+    let other = rect(&mut s, None);
+    s.execute("select.set", &json!({"ids": [other]})).unwrap();
+    s.execute("doc.switch", &json!({"index": 0})).unwrap();
+    assert_eq!((s.docs.len(), s.active), (2, 0));
+    s.agent_join("a").unwrap();
+    s.agent_join("b").unwrap();
+    assert_eq!(s.agent_list()["agents"][0]["apart"], json!(true), "calibration: a works apart");
+    let batch = json!({"commands": [
+        {"command": "doc.switch", "params": {"index": 1}},
+        {"command": "edit.delete", "params": {}}
+    ]});
+    // Expected: the batch errors or the switch never happens; either way the window is untouched.
+    let _ = s.execute_as(Some("a"), "command.batch", &batch);
+    assert_window_untouched(&s, r);
+    assert!(s.docs[1].doc.contains(other), "the other document's rectangle was not deleted");
+    assert_eq!(s.docs[1].selection, vec![other], "the other document keeps its selection");
+}
+
+#[test]
+fn an_agent_alone_may_still_switch_document() {
+    let (mut s, _) = two_documents();
+    // No `agent.join`: that would put `a` apart even alone. A lone agent that only sends commands
+    // works on the window's own page and selection.
+    s.execute_as(Some("a"), "doc.switch", &json!({"index": 1})).unwrap();
+    assert_eq!(s.active, 1);
+    assert_eq!(s.agent_list()["agents"][0]["apart"], json!(false), "calibration: a is alone, not apart");
+}
+
+/// A directory unique to one test, removed when dropped (also after a failed assertion).
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(test: &str) -> Self {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("figcraft-agents-apart-{}-{stamp}-{test}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn file(&self, name: &str) -> String {
+        self.0.join(name).to_string_lossy().to_string()
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Two saved documents (`one.figcraft` active in the window, `two.figcraft` behind it) and two
+/// agents at work apart.
+fn two_saved_documents(scratch: &Scratch) -> (Session, String, String) {
+    let (one, two) = (scratch.file("one.figcraft"), scratch.file("two.figcraft"));
+    let mut s = Session::new();
+    s.execute("file.saveAs", &json!({"path": one})).unwrap();
+    s.execute("file.new", &json!({})).unwrap();
+    s.execute("file.saveAs", &json!({"path": two})).unwrap();
+    s.execute("doc.switch", &json!({"index": 0})).unwrap();
+    assert_eq!((s.docs.len(), s.active), (2, 0));
+    s.agent_join("a").unwrap();
+    s.agent_join("b").unwrap();
+    assert_eq!(s.agent_list()["agents"][0]["apart"], json!(true), "calibration: a works apart");
+    (s, one, two)
+}
+
+#[test]
+fn an_agent_apart_may_open_the_file_that_is_already_the_active_document() {
+    let scratch = Scratch::new("open_active_file");
+    let (mut s, one, _) = two_saved_documents(&scratch);
+    // The file in front: opening it changes nothing, so an agent apart may open it.
+    s.execute_as(Some("a"), "file.open", &json!({"path": one})).unwrap();
+    assert_eq!((s.active, s.docs.len()), (0, 2), "nothing changed: the file was already in front");
+}
+
+#[test]
+fn an_agent_apart_may_not_open_another_file() {
+    let scratch = Scratch::new("open_other_file");
+    let (mut s, _, two) = two_saved_documents(&scratch);
+    // Another tab that is open already: a switch.
+    assert!(s.execute_as(Some("a"), "file.open", &json!({"path": two})).is_err(), "a switch to another tab was allowed");
+    assert_eq!(s.active, 0);
+    // A file that is not open: a new document in front.
+    let copy = scratch.file("copy.figcraft");
+    std::fs::copy(&two, &copy).unwrap();
+    assert!(s.execute_as(Some("a"), "file.open", &json!({"path": copy})).is_err(), "a new document was opened in front");
+    assert_eq!((s.active, s.docs.len()), (0, 2));
+}
+
+#[test]
+fn an_agent_apart_may_not_start_a_document_from_a_template() {
+    let (mut s, r) = two_documents();
+    s.agent_join("a").unwrap();
+    s.agent_join("b").unwrap();
+    assert_eq!(s.agent_list()["agents"][0]["apart"], json!(true), "calibration: a works apart");
+    // The template would be pushed and made the active document: refused to an agent apart.
+    assert!(s.execute_as(Some("a"), "file.newFromTemplate", &json!({"template": "dashboard"})).is_err());
+    assert_eq!(s.docs.len(), 2);
+    assert_window_untouched(&s, r);
+}
+
+#[test]
+fn an_agent_apart_may_list_the_recent_files() {
+    let (mut s, _) = two_documents();
+    s.agent_join("a").unwrap();
+    s.agent_join("b").unwrap();
+    assert_eq!(s.agent_list()["agents"][0]["apart"], json!(true), "calibration: a works apart");
+    // Listing the recent files changes no document: an agent apart may list them.
+    let listed = s.execute_as(Some("a"), "file.openRecent", &json!({})).unwrap();
+    assert!(listed["files"].is_array());
+    assert_eq!(s.active, 0);
+}
+
+/// `refuse_shared_undo_as` is the undo rule for an agent named by a channel: refused with another
+/// agent there for an agent's undo and redo, never for the user or for other commands.
+#[test]
+fn the_shared_undo_rule_can_be_asked_for_a_named_agent() {
+    let mut s = Session::new();
+    s.agent_join("a").unwrap();
+    s.agent_join("b").unwrap();
+    assert!(s.refuse_shared_undo_as(Some("a"), "edit.undo").is_err());
+    assert!(s.refuse_shared_undo_as(Some("a"), "edit.redo").is_err());
+    assert!(s.refuse_shared_undo_as(None, "edit.undo").is_ok(), "the user's undo is never refused");
+    assert!(s.refuse_shared_undo_as(Some("a"), "shape.rectangle").is_ok());
+}

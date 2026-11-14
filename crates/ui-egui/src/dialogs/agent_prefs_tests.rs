@@ -114,3 +114,84 @@ fn text_a_client_typed_in_the_folder_field_is_not_kept_by_the_users_next_click()
     assert_eq!(draft(&u), None, "the click away ended the edit");
     assert_eq!(u.app.session.prefs.automation_root, "/agents", "the user's click kept what a control client typed as its folder");
 }
+
+/// A key press and release, as one batch of events (copied from windows_tests.rs, where it is private).
+fn key_tap(key: egui::Key) -> Vec<Event> {
+    [true, false].map(|pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Default::default() }).to_vec()
+}
+
+/// A window with Preferences open over a document and "Allow AI agents?" asked, AccessKit on.
+/// Preferences is one of the states in which the app's own Tab handler stands aside (`blocked` in
+/// a11y.rs), so egui moves the keyboard with Tab: the only state in which a client's Tab can reach
+/// the question's buttons.
+fn asking_to_allow() -> Ui {
+    let mut u = Ui::new(Session::new());
+    u.app.session.prefs.agent_control = false;
+    u.app.session.prefs_unsaved = false;
+    u.app.ui.preferences = true;
+    u.app.ui.agent_control_ask = Some(true);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    assert!(u.app.has_files(), "a document is open");
+    assert!(u.app.ui.preferences, "Preferences stays open");
+    assert_eq!(u.app.ui.agent_control_ask, Some(true), "the question shows");
+    u
+}
+
+/// One frame of `events` (a control client's batch when `injected`, else the user's own);
+/// whether the keyboard is on the question's Allow button afterwards. AccessKit updates carry only
+/// the nodes that changed: `allow` remembers the button's id.
+fn frame_on_allow(u: &mut Ui, events: Vec<Event>, injected: bool, allow: &mut std::collections::HashSet<egui::accesskit::NodeId>) -> bool {
+    let events = if injected {
+        assert!(u.app.push_control_input(events), "the batch is queued");
+        crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT)
+    } else {
+        events
+    };
+    let out = u.frame_output(events);
+    let update = out.platform_output.accesskit_update.expect("an AccessKit update");
+    for (id, node) in &update.nodes {
+        if node.role() == egui::accesskit::Role::Button && node.label() == Some("Allow") {
+            allow.insert(*id);
+        }
+    }
+    allow.contains(&update.focus)
+}
+
+/// Calibration on a window of its own: how many of the user's own Tab it takes to put the keyboard
+/// on Allow. Red, not green, when no Tab ever gets there.
+fn tabs_to_allow() -> usize {
+    let mut u = asking_to_allow();
+    let mut allow = std::collections::HashSet::new();
+    let Some(k) = (1..=400).find(|_| frame_on_allow(&mut u, key_tap(egui::Key::Tab), false, &mut allow)) else {
+        panic!("the user's own Tab never reaches Allow in 400 frames: the test cannot show the defect");
+    };
+    k
+}
+
+/// A control client's Tab can move the keyboard to Allow, but the user's own Enter must not
+/// answer "Allow AI agents?" for the user. Without a fix, the Enter presses the button the client
+/// left the keyboard on: the question answers Allow, `answer_agent_control` takes it (the frame is
+/// the user's own) and `prefs.agent_control` (an in-memory preference) turns true. The test first
+/// counts, on a window of its own, the user's Tab that reach Allow (and fails if none does):
+/// without that count the number of injected Tab would be a guess, and a test that never reaches
+/// the button would be green for nothing.
+#[test]
+fn injected_tab_cannot_leave_allow_for_the_users_enter_on_the_agent_question() {
+    let k = tabs_to_allow();
+    let mut u = asking_to_allow();
+    let mut allow = std::collections::HashSet::new();
+    for _ in 0..k {
+        frame_on_allow(&mut u, key_tap(egui::Key::Tab), true, &mut allow);
+    }
+    assert!(!u.app.control_synthetic, "the frames that follow are the user's own");
+    assert_eq!(u.app.ui.agent_control_ask, Some(true), "the question is still shown before the user's Enter");
+    frame_on_allow(&mut u, key_tap(egui::Key::Enter), false, &mut allow);
+    u.frame(vec![]);
+    assert_eq!(
+        u.app.ui.agent_control_ask,
+        Some(true),
+        "the user's own Enter answered the agent question: a control client had left the keyboard on Allow"
+    );
+    assert!(!u.app.session.prefs.agent_control, "the user's own Enter answered the agent question: a control client had left the keyboard on Allow");
+}

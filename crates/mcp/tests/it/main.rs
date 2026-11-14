@@ -5,6 +5,10 @@ mod agent_comments;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod agent_tasks;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod agent_type_text;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod agent_ui_undo;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod attached;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::disallowed_methods)]
 mod automation_roots;

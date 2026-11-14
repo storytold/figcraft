@@ -526,7 +526,7 @@ fn answered_by_a_control_client(app: &FigApp) -> bool {
 
 /// A frame of injected input leaves no button of the question with the keyboard: left there, the
 /// user's own Enter would answer with the button a control client chose (Don't Save), not Save.
-fn drop_injected_focus(app: &mut FigApp, ctx: &Context) {
+pub(crate) fn drop_injected_focus(app: &mut FigApp, ctx: &Context) {
     if answered_by_a_control_client(app) {
         app.question_shown_to_control_client = true;
         surrender_held_focus(ctx);
@@ -535,13 +535,13 @@ fn drop_injected_focus(app: &mut FigApp, ctx: &Context) {
 
 /// The frame after an injected one takes back a keyboard that frame left to the next (egui hands
 /// a Shift+Tab's target over at the start of the next pass), before the buttons read it.
-fn take_back_injected_focus(app: &mut FigApp, ctx: &Context) {
+pub(crate) fn take_back_injected_focus(app: &mut FigApp, ctx: &Context) {
     if std::mem::take(&mut app.question_shown_to_control_client) {
         surrender_held_focus(ctx);
     }
 }
 
-fn surrender_held_focus(ctx: &Context) {
+pub(crate) fn surrender_held_focus(ctx: &Context) {
     if let Some(id) = ctx.memory(|m| m.focused()) {
         ctx.memory_mut(|m| m.surrender_focus(id));
     }

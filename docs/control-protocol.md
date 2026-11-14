@@ -391,6 +391,11 @@ Returns `{"command": id}` for shortcuts.
 Type into the text being edited (start editing with a double-click, `text.edit.begin {id}`, or the
 text tool).
 
+`ui.key`, `ui.type`, `ui.input`, `ui.pointer` and `ui.menu.invoke` accept `agent` and `agentKey` (see
+`agent.join`). Undo is refused to an agent while another agent is present: `edit.undo` and
+`edit.redo`, whether sent by a key (`Cmd+Z`), a menu entry (`ui.menu.invoke`) or raw input
+(`ui.input`), fail for it; they are never refused to the user.
+
 ### `ui.input {events}`
 
 Raw window input for the next frame, as if from the mouse and keyboard: it reaches the panels,

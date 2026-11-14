@@ -328,8 +328,13 @@ impl crate::Services for SaveAs {
     }
 }
 
+/// Counter that makes each `temp_dir` call its own folder, even when tests share a tag and run in
+/// parallel in the same process (same pid).
+static TEMP_DIR_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn temp_dir(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("figcraft-close-save-{tag}-{}", std::process::id()));
+    let n = TEMP_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let d = std::env::temp_dir().join(format!("figcraft-close-save-{tag}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d

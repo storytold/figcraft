@@ -1248,7 +1248,7 @@ fn type_text(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, 
         Some(id) => {
             let id = id_arg(id)?;
             exec(b, "text.edit.begin", json!({"id": id}))?;
-            let typed = b.call("ui.type", json!({"text": text}));
+            let typed = exec(b, "text.edit.insert", json!({"text": text}));
             // Always leave edit mode, even when typing failed.
             let ended = exec(b, "text.edit.end", json!({}));
             typed?;
@@ -1256,6 +1256,6 @@ fn type_text(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, 
             let node = b.call("node.get", json!({"id": id, "depth": 0}))?;
             Ok(ToolResult::json(&json!({"ok": true, "node": node})))
         }
-        None => b.call("ui.type", json!({"text": text})).map(|v| ToolResult::json(&v)),
+        None => exec(b, "text.edit.insert", json!({"text": text})).map(|v| ToolResult::json(&v)),
     }
 }

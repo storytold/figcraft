@@ -1,6 +1,7 @@
 //! Localhost JSON-lines control server: each line `{"id", "method", "params"}` is queued for the UI
 //! thread; the reply line `{"id", "ok", "result" | "error"}` is written when the frame handled it.
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,40 +90,97 @@ enum Client {
     Gone,
 }
 
-/// Look at the client without waiting and without taking anything it sent. `asked`: it was
-/// already sent the byte.
+/// What a client sent while the connection waited, to hand back to its reader before anything
+/// else: the look takes it out of the socket to see past it, and loses none of it.
+struct Inbox {
+    stream: TcpStream,
+    back: VecDeque<u8>,
+}
+
+impl Read for Inbox {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.back.is_empty() { self.stream.read(buf) } else { self.back.read(buf) }
+    }
+}
+
+/// Look at the client without waiting. `asked`: it was already sent the byte. What it sent is
+/// taken out of the socket into `back` (to be read before anything else, see [`Inbox`]): a peek
+/// cannot see the end of the connection behind bytes still unread. At most [`MAX_LINE`] bytes
+/// are kept; past that the look sees nothing more.
 ///
 /// A client that left and one that only closed its sending side look the same from here: nothing
 /// more comes from either. One byte tells them apart: the first refuses it and the connection
 /// breaks, the second takes it and goes on waiting for its reply. The byte is a space, which JSON
 /// allows before the reply.
-fn look_at(client: &TcpStream, asked: bool) -> Client {
-    let no_wait = |e: &std::io::Error| matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted);
+fn look_at(client: &TcpStream, asked: bool, back: &mut VecDeque<u8>) -> Client {
     if client.set_nonblocking(true).is_err() {
         return Client::There;
     }
-    let seen = match client.peek(&mut [0]) {
-        // The end of what it sent reads the same once it has left. What came of the byte tells
-        // the two apart: refused, the connection holds the error.
-        Ok(0) if asked => match client.take_error() {
-            Ok(None) => Client::Listening,
-            _ => Client::Gone,
-        },
-        Ok(0) => {
-            let mut to = client;
-            match to.write(b" ") {
-                Ok(1) => Client::Asked,
-                // No room for it now: asked at the next look.
-                Err(e) if no_wait(&e) => Client::There,
-                _ => Client::Gone,
-            }
-        }
-        Ok(_) => Client::There,
-        Err(e) if no_wait(&e) => Client::There,
-        Err(_) => Client::Gone,
+    let seen = match drain_into(client, back) {
+        Some(seen) => seen,
+        None => after_end(client, asked),
     };
     // A connection that stays without waits can no longer be served.
     if client.set_nonblocking(false).is_err() { Client::Gone } else { seen }
+}
+
+/// Whether a failed non-blocking read or write only means "not now".
+fn would_wait(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted)
+}
+
+/// Take what the client sent into `back`, up to [`MAX_LINE`] bytes. `None`: the end of what it sent
+/// was reached; otherwise what the look sees.
+fn drain_into(mut from: &TcpStream, back: &mut VecDeque<u8>) -> Option<Client> {
+    let mut chunk = [0; 8192];
+    loop {
+        if back.len() >= MAX_LINE {
+            return Some(Client::There);
+        }
+        match from.read(&mut chunk) {
+            Ok(0) => return None,
+            Ok(n) => back.extend(&chunk[..n]),
+            Err(e) if would_wait(&e) => return Some(Client::There),
+            Err(_) => return Some(Client::Gone),
+        }
+    }
+}
+
+/// What the look sees once the end of what the client sent is reached. It reads the same once the
+/// client has left. What came of the byte tells the two apart: refused, the connection holds the
+/// error.
+fn after_end(client: &TcpStream, asked: bool) -> Client {
+    if asked {
+        return match client.take_error() {
+            Ok(None) => Client::Listening,
+            _ => Client::Gone,
+        };
+    }
+    let mut to = client;
+    match to.write(b" ") {
+        Ok(1) => Client::Asked,
+        // No room for it now: asked at the next look.
+        Err(e) if would_wait(&e) => Client::There,
+        _ => Client::Gone,
+    }
+}
+
+/// One look at the client, keeping what it sent in `back` and in `asked` how the probe stands.
+/// `false` when it left. A client that took the probe is asked again at a later look: it may
+/// leave entirely after that.
+fn client_stays(client: &TcpStream, asked: &mut bool, back: &mut VecDeque<u8>) -> bool {
+    match look_at(client, *asked, back) {
+        Client::There => true,
+        Client::Asked => {
+            *asked = true;
+            true
+        }
+        Client::Listening => {
+            *asked = false;
+            true
+        }
+        Client::Gone => false,
+    }
 }
 
 /// [`wait_for_reply`] for a request whose client may leave meanwhile (killed, out of budget, its
@@ -133,6 +191,7 @@ fn wait_while_client_stays(
     rx: &std::sync::mpsc::Receiver<ControlReply>,
     gate: &RequestGate,
     timeout: Duration,
+    back: &mut VecDeque<u8>,
 ) -> Option<Result<ControlReply, WaitFailure>> {
     let until = std::time::Instant::now() + timeout;
     let left = || until.saturating_duration_since(std::time::Instant::now());
@@ -147,15 +206,10 @@ fn wait_while_client_stays(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Some(Err(WaitFailure::Disconnected)),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
-        match look_at(client, asked) {
-            Client::There => {}
-            Client::Asked => asked = true,
-            Client::Listening => return Some(wait_for_reply(rx, gate, left())),
-            Client::Gone => {
-                // Started already, it takes effect; nobody is there to read what it answers.
-                gate.cancel_if_open();
-                return None;
-            }
+        if !client_stays(client, &mut asked, back) {
+            // Started already, it takes effect; nobody is there to read what it answers.
+            gate.cancel_if_open();
+            return None;
         }
     }
 }
@@ -212,7 +266,8 @@ pub struct Stop {
     stopping: Arc<AtomicBool>,
     /// The accepted connections, to end them with the server.
     open: Open,
-    accepting: std::thread::JoinHandle<()>,
+    /// Ends with the connection threads it started, which [`Stop::stop`] joins.
+    accepting: std::thread::JoinHandle<Vec<std::thread::JoinHandle<()>>>,
 }
 
 /// A handle on each connection still served, under the number the server gave it.
@@ -238,15 +293,20 @@ impl Stop {
         self.port
     }
 
-    /// Stop accepting, free the port and end the open connections. The accepting thread waits in
-    /// `accept`: a connection from here wakes it, and it is only joined when that got through.
+    /// Stop accepting, free the port, end the open connections and wait for their threads: when
+    /// it returns none can queue a request any more, and each has cancelled the one it waited on.
+    /// The accepting thread waits in `accept`: a connection from here wakes it, and it is only
+    /// joined (and its connection threads with it) when that got through. Each join ends: the
+    /// shut streams end a read or a write, and a wait for the UI looks at its client every
+    /// [`CLIENT_CHECK`].
     pub fn stop(self) {
         self.stopping.store(true, Ordering::SeqCst);
-        if TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
-            let _ = self.accepting.join();
-        }
+        let workers = if TcpStream::connect(("127.0.0.1", self.port)).is_ok() { self.accepting.join().unwrap_or_default() } else { Vec::new() };
         for (_, connection) in self.open.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain(..) {
             let _ = connection.shutdown(Shutdown::Both);
+        }
+        for worker in workers {
+            let _ = worker.join();
         }
     }
 }
@@ -284,6 +344,7 @@ pub fn start(port: u16, busy: Duration, queue: Queue, ctx: CtxSlot, events: Arc<
             };
             spawn_tracked(stream, queue.clone(), ctx.clone(), events.clone(), &mut workers, TIMEOUT, forget);
         }
+        workers
     });
     let accepting = accepting.inspect_err(|e| log::error!("control server thread: {e}"))?;
     Ok(Stop { port, stopping, open, accepting })
@@ -378,19 +439,19 @@ fn end_with(mut stream: &TcpStream, error: &str) {
     }
 }
 
-/// Serve one control connection: read bounded JSON lines, reject oversized frames and a
-/// full queue, queue one request, wait under its gate, and write one reply. Non-JSON input
-/// answers with an error and closes the connection so HTTP body lines cannot become commands.
 /// Serve a connection with a private event log (the tests; the app shares its session's log).
 #[cfg(test)]
 fn serve(out: TcpStream, queue: Queue, ctx: CtxSlot, timeout: Duration) -> std::io::Result<()> {
     serve_with_events(out, queue, ctx, Arc::new(EventLog::default()), timeout)
 }
 
+/// Serve one control connection: read bounded JSON lines, reject oversized frames and a
+/// full queue, queue one request, wait under its gate, and write one reply. Non-JSON input
+/// answers with an error and closes the connection so HTTP body lines cannot become commands.
 fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc<EventLog>, timeout: Duration) -> std::io::Result<()> {
     out.set_read_timeout(Some(timeout))?;
     out.set_write_timeout(Some(timeout))?;
-    let mut reader = BufReader::new(out.try_clone()?);
+    let mut reader = BufReader::new(Inbox { stream: out.try_clone()?, back: VecDeque::new() });
     let mut line = Vec::new();
     loop {
         line.clear();
@@ -410,46 +471,9 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
         }
         let reply = match serde_json::from_str::<Value>(line) {
             Ok(v) => {
-                let id = v.get("id").cloned().unwrap_or(Value::Null);
-                let method = v.get("method").and_then(Value::as_str).unwrap_or("").to_string();
-                let params = v.get("params").cloned().unwrap_or(json!({}));
-                // A poll waits on the shared log, not on a frame: it needs no UI thread and no
-                // request slot, and it works while the window is minimised.
-                if method == "events.poll" {
-                    let reply = match event_poll(&events, &params) {
-                        Ok(result) => json!({"id": id, "ok": true, "result": result}),
-                        Err(error) => json!({"id": id, "ok": false, "error": error}),
-                    };
-                    writeln!(out, "{reply}")?;
-                    continue;
-                }
-                let waits = request_timeout(&v, timeout);
-                let (tx, rx) = std::sync::mpsc::channel();
-                let gate = RequestGate::new();
-                let mut pending = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                pending.retain(|request| !request.is_cancelled());
-                if pending.len() >= MAX_QUEUED_REQUESTS {
-                    drop(pending);
-                    writeln!(out, "{}", json!({"id": id, "ok": false, "error": "control request queue is full"}))?;
-                    continue;
-                }
-                let needs_frame = matches!(method.as_str(), "ui.screenshot" | "ui.input");
-                pending.push(ControlRequest { id: id.clone(), method, params, reply: tx, state: gate.clone() });
-                drop(pending);
-                if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
-                    c.request_repaint();
-                }
-                let Some(waited) = wait_while_client_stays(&out, &rx, &gate, waits) else {
-                    // Nobody is there to answer, and what else this client sent is for nobody.
-                    break;
-                };
-                match waited {
-                    Ok(r) => match r.result {
-                        Ok(res) => json!({"id": r.id, "ok": true, "result": res}),
-                        Err(e) => json!({"id": r.id, "ok": false, "error": e}),
-                    },
-                    Err(failure) => json!({"id": id, "ok": false, "error": timeout_message(&failure, needs_frame, waits)}),
-                }
+                // `None`: nobody is there to answer, and what else this client sent is for nobody.
+                let Some(reply) = answer(&out, &mut reader.get_mut().back, (&queue, &ctx), &events, timeout, &v) else { break };
+                reply
             }
             Err(e) => {
                 // A line that isn't JSON ends the connection: a web page can make the browser send
@@ -464,14 +488,91 @@ fn serve_with_events(mut out: TcpStream, queue: Queue, ctx: CtxSlot, events: Arc
     Ok(())
 }
 
+/// The reply to one parsed request `v`; `None` when its client left before it could be answered.
+fn answer(
+    out: &TcpStream,
+    back: &mut VecDeque<u8>,
+    (queue, ctx): (&Queue, &CtxSlot),
+    events: &EventLog,
+    timeout: Duration,
+    v: &Value,
+) -> Option<Value> {
+    let id = v.get("id").cloned().unwrap_or(Value::Null);
+    let method = v.get("method").and_then(Value::as_str).unwrap_or("").to_string();
+    let params = v.get("params").cloned().unwrap_or(json!({}));
+    // A poll waits on the shared log, not on a frame: it needs no UI thread and no
+    // request slot, and it works while the window is minimised.
+    if method == "events.poll" {
+        let mut asked = false;
+        return match event_poll_watched(events, &params, &mut || client_stays(out, &mut asked, back)) {
+            Ok(Some(result)) => Some(json!({"id": id, "ok": true, "result": result})),
+            Ok(None) => None,
+            Err(error) => Some(json!({"id": id, "ok": false, "error": error})),
+        };
+    }
+    let waits = request_timeout(v, timeout);
+    let needs_frame = matches!(method.as_str(), "ui.screenshot" | "ui.input");
+    let Some((rx, gate)) = enqueue(queue, ctx, &id, method, params) else {
+        return Some(json!({"id": id, "ok": false, "error": "control request queue is full"}));
+    };
+    Some(match wait_while_client_stays(out, &rx, &gate, waits, back)? {
+        Ok(r) => match r.result {
+            Ok(res) => json!({"id": r.id, "ok": true, "result": res}),
+            Err(e) => json!({"id": r.id, "ok": false, "error": e}),
+        },
+        Err(failure) => json!({"id": id, "ok": false, "error": timeout_message(&failure, needs_frame, waits)}),
+    })
+}
+
+/// Queue one request for the UI thread and wake it. `None` when the queue is full.
+fn enqueue(
+    queue: &Queue,
+    ctx: &CtxSlot,
+    id: &Value,
+    method: String,
+    params: Value,
+) -> Option<(std::sync::mpsc::Receiver<ControlReply>, RequestGate)> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let gate = RequestGate::new();
+    let mut pending = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    pending.retain(|request| !request.is_cancelled());
+    if pending.len() >= MAX_QUEUED_REQUESTS {
+        return None;
+    }
+    pending.push(ControlRequest { id: id.clone(), method, params, reply: tx, state: gate.clone() });
+    drop(pending);
+    if let Some(c) = ctx.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+        c.request_repaint();
+    }
+    Some((rx, gate))
+}
+
+#[cfg(test)]
 /// `events.poll {after?, timeoutMs?, topics?, limit?}`: read the shared log, waiting up to 25 s.
 fn event_poll(log: &EventLog, params: &Value) -> Result<Value, String> {
+    event_poll_watched(log, params, &mut || true).map(|result| result.unwrap_or(Value::Null))
+}
+
+/// [`event_poll`] that waits in slices of [`CLIENT_CHECK`] and asks `stays` between two: `None`
+/// when the client left, so a poll does not hold the connection for a client that is gone. A
+/// slice that ends empty is the same poll with the same cursor, as a repeated one would be.
+fn event_poll_watched(log: &EventLog, params: &Value, stays: &mut dyn FnMut() -> bool) -> Result<Option<Value>, String> {
     let after = params.get("after").and_then(Value::as_u64).unwrap_or(0);
     let timeout = params.get("timeoutMs").and_then(Value::as_u64).unwrap_or(20_000).min(25_000);
     let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 1000) as usize;
     let topics = events::topics(params.get("topics"))?;
-    let result = log.poll(after, &topics, limit, Duration::from_millis(timeout));
-    serde_json::to_value(result).map_err(|e| format!("serialize events: {e}"))
+    let until = std::time::Instant::now() + Duration::from_millis(timeout);
+    let result = loop {
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        let result = log.poll(after, &topics, limit, left.min(CLIENT_CHECK));
+        if !result.events.is_empty() || result.reset || left <= CLIENT_CHECK {
+            break result;
+        }
+        if !stays() {
+            return Ok(None);
+        }
+    };
+    serde_json::to_value(result).map(Some).map_err(|e| format!("serialize events: {e}"))
 }
 
 #[cfg(test)]

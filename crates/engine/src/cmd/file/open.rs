@@ -61,13 +61,14 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
     if string(p, "path").is_none()
         && let Some(d) = string(p, "data")
     {
+        s.refuse_active_switch("file.open")?;
         return open_data(s, &d, p, variables.as_ref());
     }
     let path = req_string("file.open", p, "path")?;
     // Already open: switch to it, and say when the file changed on disk since this tab read or
     // saved it (`stale`), or read it again (`reload`).
     if let Some(i) = s.docs.iter().position(|d| d.path.as_deref() == Some(path.as_str())) {
-        s.active = i;
+        s.switch_active_tab(i, "file.open")?;
         remember(s, &path);
         let stale = s.ds()?.on_disk.as_ref().is_some_and(|read| crate::library::stat(&path).ok().as_ref() != Some(read));
         if !boolean(p, "reload").unwrap_or(false) {
@@ -85,6 +86,8 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
         revert(s)?;
         return Ok(json!({"index": i, "reloaded": true}));
     }
+    // A new document becomes the active one.
+    s.refuse_active_switch("file.open")?;
     // Stamped before reading: a change made during the read makes the next save refuse.
     let on_disk = crate::library::stat(&path).ok();
     let (loaded, rest) = load_path(&path, variables.as_ref())?;
