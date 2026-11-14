@@ -157,7 +157,11 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
     };
     // A frame with no batch of its own says nothing about the document: never treat "nothing
     // queued" as a dropped batch (that used to error another window's acknowledgement).
-    if !events.is_empty() && tagged != current {
+    // egui derives pointer, scroll and key state from the raw input before this frame's control
+    // requests run, and that state cannot be undone afterwards. A `doc.switch` (or other command
+    // that changes the open files) still queued behind the batch would let it reach the new file,
+    // so the batch is rejected here, before egui begins processing it.
+    if !events.is_empty() && (tagged != current || queue_changes_files(app)) {
         // The file changed before the batch reached a frame: say so once instead of replaying it
         // into the new document. Only this window's own acknowledgements belong to the batch.
         fail_input_acks(app, viewport_id);
@@ -169,9 +173,71 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
         let acks = app.take_input_acks(viewport_id);
         app.applied_acks.extend(acks);
         app.applied_input = Some(events.clone());
+        app.applied_doc = tagged;
         app.applied_frame = Some(viewport_id);
     }
     events
+}
+
+/// Whether a queued control request runs a command that can change which file is active. Commands
+/// that leave the active file alone (`file.versionHistory`, `file.save`) do not count.
+fn queue_changes_files(app: &FigApp) -> bool {
+    const CHANGES_ACTIVE: &[&str] = &[
+        "doc.switch",
+        "doc.nextTab",
+        "doc.previousTab",
+        "file.new",
+        "file.newBoard",
+        "file.newFromTemplate",
+        "file.open",
+        "file.openRecent",
+        "file.import",
+        "doc.close",
+        "file.close",
+        "file.duplicate",
+        "file.recover",
+        "version.duplicate",
+        "branch.open",
+        "branch.create",
+        "branch.merge",
+        "branch.archive",
+        "collab.join",
+        "collab.openFile",
+        "collab.recoverFile",
+    ];
+    app.control_queue
+        .iter()
+        .any(|r| r.method == "engine.execute" && r.params.get("command").and_then(|c| c.as_str()).is_some_and(|c| CHANGES_ACTIVE.contains(&c)))
+}
+
+/// After this frame's control requests ran: the batch it took for one file never reaches another
+/// the window switched to meanwhile (`ui.input` then `doc.switch`, unacknowledged). Its
+/// acknowledgements fail once and its events leave this pass's input; other events stay.
+pub(crate) fn revalidate_input(app: &mut FigApp, ctx: &Context) {
+    if app.applied_frame != Some(ctx.viewport_id()) {
+        return;
+    }
+    let current = app.session.docs.get(app.session.active).map(|d| d.uid);
+    if app.applied_doc == current {
+        return;
+    }
+    // Only the pass holding the batch: a discarded pass's rerun has none (it was applied).
+    let Some(batch) = app.applied_input.take() else { return };
+    for ack in app.applied_acks.drain(..) {
+        let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err("the document changed before the input could be applied".into()) });
+    }
+    // The hooks append the batch after the platform's events: remove one copy of each from the
+    // end, so an identical event of the user's own stays.
+    ctx.input_mut(|i| {
+        for e in batch.iter().rev() {
+            if let Some(at) = i.events.iter().rposition(|x| x == e) {
+                i.events.remove(at);
+            }
+            if let Some(at) = i.raw.events.iter().rposition(|x| x == e) {
+                i.raw.events.remove(at);
+            }
+        }
+    });
 }
 
 /// Error, once, the `ui.input` acknowledgements waiting for `viewport`'s batch: its file changed
