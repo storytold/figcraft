@@ -69,10 +69,11 @@ pub enum ToolId {
     Highlighter,
     Eraser,
     Stamp,
+    MindMap,
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 27] = [
+    pub const ALL: [ToolId; 28] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -100,6 +101,7 @@ impl ToolId {
         ToolId::Highlighter,
         ToolId::Eraser,
         ToolId::Stamp,
+        ToolId::MindMap,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -130,6 +132,7 @@ impl ToolId {
             ToolId::Highlighter => "highlighter",
             ToolId::Eraser => "eraser",
             ToolId::Stamp => "stamp",
+            ToolId::MindMap => "mindMap",
         }
     }
     /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
@@ -169,6 +172,7 @@ impl ToolId {
             ToolId::Highlighter => "Highlighter",
             ToolId::Eraser => "Eraser",
             ToolId::Stamp => "Stamp",
+            ToolId::MindMap => "Mind map",
         }
     }
 
@@ -176,7 +180,14 @@ impl ToolId {
     pub fn on_boards(self) -> bool {
         matches!(
             self,
-            ToolId::Sticky | ToolId::BoardShape | ToolId::Connector | ToolId::Marker | ToolId::Highlighter | ToolId::Eraser | ToolId::Stamp
+            ToolId::Sticky
+                | ToolId::BoardShape
+                | ToolId::Connector
+                | ToolId::Marker
+                | ToolId::Highlighter
+                | ToolId::Eraser
+                | ToolId::Stamp
+                | ToolId::MindMap
         )
     }
     /// The tool's key (from [`crate::keymap`]; empty when it has none).

@@ -123,6 +123,13 @@ fn lookups_on_every_platform() {
         assert_eq!(id_for(p, Context::Canvas, "B", mods(false, false, true, false)), Some("text.bold"));
         assert_eq!(id_for(p, Context::Text, "V", none), None);
         assert_eq!(id_for(p, Context::Text, "A", mods(false, true, false, false)), None);
+        // Cmd+Enter adds a mind map node's child, with Shift its next sibling (#2226).
+        for c in [Context::Canvas, Context::Text] {
+            assert_eq!(id_for(p, c, "Enter", mods(false, false, true, false)), Some("board.mindMapAdd"));
+            assert_eq!(id_for(p, c, "Enter", mods(true, false, true, false)), Some("board.nextSticky"));
+        }
+        assert_eq!(id_for(p, Context::Canvas, "Enter", none), Some("select.children"));
+        assert_eq!(id_for(p, Context::Canvas, "Enter", mods(false, true, true, false)), Some("proto.present"));
     }
 }
 

@@ -84,12 +84,19 @@ pub(super) fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
                 n.strokes = vec![Paint::solid(line_shade(color))];
             }
             BoardItem::Connector(_) | BoardItem::Ink => doc.get_mut(id)?.strokes = vec![Paint::solid(line_shade(color))],
-            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table | BoardItem::MindNode => continue,
+            BoardItem::MindNode => {
+                let Some(text) = text_of(doc, id) else { continue };
+                let n = doc.get_mut(text)?;
+                // Characters coloured one by one follow the layer's colour.
+                crate::cmd::lists::take_character_fills(n);
+                n.fills = vec![Paint::solid(line_shade(color))];
+            }
+            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table => continue,
         }
         changed.push(id);
     }
     if changed.is_empty() {
-        return Err(bad(cmd, "select stickies, shapes, connectors or ink"));
+        return Err(bad(cmd, "select stickies, shapes, connectors, ink or mind map nodes"));
     }
     Ok(json!({"ids": changed}))
 }

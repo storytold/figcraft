@@ -21,6 +21,8 @@ use crate::EngineError;
 /// The first node's text size and the other nodes'.
 const MIND_ROOT_SIZE: f64 = 24.0;
 const MIND_NODE_SIZE: f64 = 16.0;
+/// The first node's height with one line of text (the mind map tool centres it on the click).
+pub(super) const MIND_ROOT_H: f64 = MIND_ROOT_SIZE * MIND_LINE_HEIGHT / 100.0;
 /// The line height of every node's text, in percent, and the letter spacing of the first node's
 /// and the others' (percent of the size).
 const MIND_LINE_HEIGHT: f64 = 150.0;
@@ -197,15 +199,40 @@ pub(super) fn mind_map_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": root, "text": label, "children": made}))
 }
 
+/// What `board.mindMapAdd` adds to when it is given no `id`: the owner of the text being typed in,
+/// else the first selected layer (or the board object whose text that is).
+fn target(s: &Session) -> Option<NodeId> {
+    let doc = s.doc().ok()?;
+    let editing = s.ds().ok()?.text_edit.as_ref().map(|t| t.id);
+    editing.and_then(|t| owner_of_text(doc, t)).or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
+}
+
+/// The mind map node `board.mindMapAdd` would add to with no `id` (the UI asks before it binds a key).
+pub fn mind_node_target(s: &Session) -> Option<NodeId> {
+    let doc = s.doc().ok()?;
+    target(s).filter(|n| doc.node(*n).is_some_and(|n| n.board == Some(BoardItem::MindNode)))
+}
+
+/// The sibling `dir` places after `node` (1: below, -1: above) among the children of its branch's
+/// parent on its side, around the ends; `None` when no branch arrives at `node`.
+pub fn mind_sibling(doc: &Document, node: NodeId, dir: i64) -> Option<NodeId> {
+    if !is_board(doc) {
+        return None;
+    }
+    let bs = branches(doc);
+    let a = arriving(&bs, node)?;
+    let sibs = map_children(doc, &bs, a.parent, a.left);
+    let at = sibs.iter().position(|n| *n == node)? as i64;
+    let len = sibs.len() as i64;
+    sibs.get((at + dir).rem_euclid(len.max(1)) as usize).copied()
+}
+
 pub(super) fn mind_map_add(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "board.mindMapAdd";
     require(s, cmd)?;
     let editing = s.ds()?.text_edit.as_ref().map(|t| t.id);
     let doc = s.doc()?;
-    let from = id(p, "id")
-        .or_else(|| editing.and_then(|t| owner_of_text(doc, t)))
-        .or_else(|| s.selection().first().copied().map(|i| owner_of_text(doc, i).unwrap_or(i)))
-        .ok_or_else(|| EngineError::Disabled(cmd.into(), "select a mind map node first".into()))?;
+    let from = id(p, "id").or_else(|| target(s)).ok_or_else(|| EngineError::Disabled(cmd.into(), "select a mind map node first".into()))?;
     let n = doc.get(from)?;
     if n.board != Some(BoardItem::MindNode) {
         return Err(bad(cmd, "that isn't a mind map node"));
