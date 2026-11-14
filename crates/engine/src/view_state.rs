@@ -159,6 +159,44 @@ impl ViewState {
         self.cx -= dx / z;
         self.cy -= dy / z;
     }
+    /// How near the viewport's edge a drag must hold the pointer to pan the canvas (screen px).
+    pub const AUTOPAN_ZONE_PX: f64 = 15.0;
+    /// Auto-pan speed gained for each pixel the pointer is closer to the edge (screen px/s).
+    pub const AUTOPAN_RATE: f64 = 40.0;
+    /// The fastest auto-pan, at the edge and beyond it (screen px/s).
+    pub const AUTOPAN_MAX: f64 = 600.0;
+    /// The speed (screen px/s) the canvas pans toward an edge while a drag holds the pointer
+    /// `d` px inside it (negative: outside), as measured in the incumbent: `40 x (15 - d)`
+    /// clamped to 0..600 (#2015). Constant while the pointer stays put, at every zoom.
+    pub fn autopan_speed(d: f64) -> f64 {
+        if d.is_nan() {
+            return 0.0;
+        }
+        (Self::AUTOPAN_RATE * (Self::AUTOPAN_ZONE_PX - d)).clamp(0.0, Self::AUTOPAN_MAX)
+    }
+    /// The velocity (screen px/s, positive: right and down) the canvas auto-pans at while a drag
+    /// holds the pointer at (`px`, `py`) in a viewport of `width` x `height` (both from its
+    /// top-left corner): toward each edge the pointer is near, each axis by its own distance, so a
+    /// corner pans both ways.
+    pub fn autopan_velocity(px: f64, py: f64, width: f64, height: f64) -> (f64, f64) {
+        let axis = |p: f64, len: f64| {
+            if p < len / 2.0 { -Self::autopan_speed(p) } else { Self::autopan_speed(len - p) }
+        };
+        (axis(px, width), axis(py, height))
+    }
+    /// Auto-pan for `dt` seconds with the pointer at (`px`, `py`) from the viewport's top-left
+    /// corner: moves the view by the velocity ([`Self::autopan_velocity`]) in screen px. True when
+    /// it moved.
+    pub fn autopan(&mut self, px: f64, py: f64, dt: f64) -> bool {
+        let (vx, vy) = Self::autopan_velocity(px, py, self.vw, self.vh);
+        if !(dt.is_finite() && dt > 0.0) || (vx == 0.0 && vy == 0.0) {
+            return false;
+        }
+        let z = self.zoom.max(1e-6);
+        self.cx += vx * dt / z;
+        self.cy += vy * dt / z;
+        true
+    }
     pub fn page_to_screen(&self, x: f64, y: f64) -> (f64, f64) {
         let (ox, oy) = self.origin();
         ((x - ox) * self.zoom, (y - oy) * self.zoom)

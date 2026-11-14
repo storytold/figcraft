@@ -650,6 +650,8 @@ mod version_preview_tests;
 #[cfg(test)]
 mod version_tests;
 #[cfg(test)]
+mod view_autopan_tests;
+#[cfg(test)]
 mod view_behaviour_tests;
 #[cfg(test)]
 mod vote_history_tests;

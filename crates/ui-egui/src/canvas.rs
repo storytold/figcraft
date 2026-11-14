@@ -14,6 +14,7 @@ use crate::i18n::{tr, trf, trn};
 use crate::render_worker::{Done, Job, Worker};
 use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 
+mod autopan;
 mod background;
 mod builder;
 mod input;

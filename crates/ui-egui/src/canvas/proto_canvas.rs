@@ -18,7 +18,9 @@ const HANDLE_R: f32 = 7.0;
 #[derive(Clone, Copy)]
 struct Drag {
     source: NodeId,
-    from: Pos2,
+    /// Where the connection leaves the layer, on the page: the view pans under a drag at the
+    /// edge (#2015).
+    from: figcraft_geom::Point,
     pos: Pos2,
 }
 
@@ -246,13 +248,14 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
     }
     match dragging {
         Some(d) => {
+            let from = app.to_screen(d.from.x, d.from.y);
             if let Some(t) = target_at(app, doc, page, d.source, d.pos)
                 && let Some(r) = screen_rect(app, doc, t.node())
             {
                 painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(2.0, crate::theme::canvas_accent(painter.ctx())), StrokeKind::Outside);
             }
-            let dx = ((d.pos.x - d.from.x).abs() * 0.5).max(30.0) * if d.pos.x >= d.from.x { 1.0 } else { -1.0 };
-            let pts = [d.from, d.from + vec2(dx, 0.0), d.pos - vec2(dx, 0.0), d.pos];
+            let dx = ((d.pos.x - from.x).abs() * 0.5).max(30.0) * if d.pos.x >= from.x { 1.0 } else { -1.0 };
+            let pts = [from, from + vec2(dx, 0.0), d.pos - vec2(dx, 0.0), d.pos];
             painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
                 pts,
                 false,
@@ -260,7 +263,7 @@ pub fn draw(app: &FigApp, painter: &egui::Painter) {
                 Stroke::new(2.0, crate::theme::canvas_accent(painter.ctx())),
             ));
             arrow(painter, &pts, crate::theme::canvas_accent(painter.ctx()));
-            plus_handle(painter, d.from, true);
+            plus_handle(painter, from, true);
         }
         None => {
             if ds.text_edit.is_none() {
@@ -298,10 +301,15 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
     let Ok(ds) = app.session.ds() else { return false };
     let (doc, page, sel) = (ds.doc.clone(), ds.page, ds.selection.clone());
     if let Some(mut d) = drag {
-        if let Some(p) = pos {
+        if let Some(p) = pos.or_else(|| ctx.input(|i| i.pointer.latest_pos())) {
             d.pos = p;
         }
         ctx.request_repaint();
+        // Held near the edge of the canvas, or past it, the view pans toward it (#2015); the
+        // connection's end stays under the pointer, and its start stays on its layer.
+        if down && !released {
+            super::autopan::pan(app, &ctx, d.pos);
+        }
         if released || !down {
             ctx.data_mut(|m| m.remove::<Drag>(drag_id()));
             let params = target_at(app, &doc, page, d.source, d.pos).map(|t| match t {
@@ -331,7 +339,7 @@ pub fn input(app: &mut FigApp, ui: &egui::Ui, resp: &egui::Response) -> bool {
         return false;
     }
     if let Some((source, from)) = over_handle {
-        ctx.data_mut(|m| m.insert_temp(drag_id(), Drag { source, from, pos }));
+        ctx.data_mut(|m| m.insert_temp(drag_id(), Drag { source, from: app.to_page(from), pos }));
         return true;
     }
     let hit = noodles(app, &ctx, &doc, page)
@@ -371,6 +379,66 @@ mod tests {
         u.button(at, true);
         assert!(u.app.ui.pages_focus.is_none());
         u.button(at, false);
+    }
+
+    /// A connection dragged out of a layer and held at the canvas's edge pans the view toward it
+    /// (520 px/s 2 px inside), so a frame off screen scrolls under the pointer and the link can
+    /// reach it (#2015). The connection keeps leaving its layer.
+    #[test]
+    fn a_connection_dragged_to_the_edge_pans_until_a_frame_off_screen_is_under_it() {
+        use egui::Event;
+        let mut s = figcraft_engine::Session::new();
+        let a = s.execute("frame.create", &json!({"x": -300, "y": -100, "width": 200, "height": 150})).unwrap();
+        let a = crate::present_tests::id(&a);
+        // Beyond the right edge of a 1440 x 900 screen at 100%.
+        let b = s.execute("frame.create", &json!({"x": 1500, "y": -200, "width": 400, "height": 400})).unwrap();
+        let b = crate::present_tests::id(&b);
+        s.execute("select.set", &json!({"ids": [a]})).unwrap();
+        let mut u = crate::layers_drag_tests::Ui::new(s);
+        u.app.ui.right_tab = RightTab::Prototype;
+        {
+            let v = &mut u.app.session.ds_mut().unwrap().view;
+            v.zoom = 1.0;
+            v.cx = 0.0;
+            v.cy = 0.0;
+        }
+        u.frame(vec![]);
+        u.frame(vec![]);
+        let rect = u.app.canvas.rect;
+        let doc = u.app.session.doc().unwrap().clone();
+        let (_, at) = *handles(&u.app, &doc, &[a]).first().unwrap();
+        let start = u.app.to_page(at);
+        u.button(at, true);
+        let out = pos2(rect.max.x - 40.0, at.y);
+        u.frame(vec![Event::PointerMoved(out)]);
+        u.frame(vec![]);
+        assert_eq!(u.app.session.ds().unwrap().view.cx, 0.0, "40 px in: no pan");
+        let edge = pos2(rect.max.x - 2.0, at.y);
+        u.frame(vec![Event::PointerMoved(edge)]);
+        let mut frames = 1;
+        let under_pointer = |u: &crate::layers_drag_tests::Ui| {
+            let doc = u.app.session.doc().unwrap().clone();
+            frame_at(&u.app, &doc, u.app.session.ds().unwrap().page, edge)
+        };
+        assert_eq!(under_pointer(&u), None, "nothing there yet");
+        while under_pointer(&u) != Some(b) && frames < 600 {
+            u.frame(vec![]);
+            frames += 1;
+        }
+        let cx = u.app.session.ds().unwrap().view.cx;
+        assert!((cx - 520.0 * f64::from(frames) / 60.0).abs() < 1.0, "{frames} frames panned {cx}");
+        // It still leaves the layer where it started, now pushed off to the left on screen.
+        let drag: Drag = u.ctx.data(|d| d.get_temp(drag_id())).expect("the drag goes on");
+        assert_eq!(drag.from, start);
+        assert!(u.app.to_screen(start.x, start.y).x < at.x - 600.0);
+        u.button(edge, false);
+        let doc = u.app.session.doc().unwrap().clone();
+        let links = doc.node(a).map(|n| n.interactions.clone()).unwrap_or_default();
+        assert_eq!(links.len(), 1, "the link was made");
+        assert!(
+            matches!(links[0].actions.as_slice(), [figcraft_doc::proto::Action::Navigate { dest, .. }] if *dest == b),
+            "to the frame that scrolled in"
+        );
     }
 
     #[test]
