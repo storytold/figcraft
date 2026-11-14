@@ -10,7 +10,7 @@ pub(super) struct JobKey {
     outline: bool,
     outline_extras: figcraft_render::Outline,
     outlined: Vec<NodeId>,
-    skip: Vec<NodeId>,
+    pub(super) skip: Vec<NodeId>,
     solo: Option<NodeId>,
     /// Text lays out anew when fonts arrive (system fonts load in the background).
     fonts: u64,
@@ -46,7 +46,16 @@ fn covers(outer: &figcraft_render::View, inner: &figcraft_render::View) -> bool 
     o.x0 <= i.x0 + eps && o.y0 <= i.y0 + eps && o.x1 >= i.x1 - eps && o.y1 >= i.y1 - eps
 }
 
-pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_side: u32, dots: Option<figcraft_render::Dots>) {
+pub(super) fn request_render(
+    app: &mut FigApp,
+    worker: &mut Worker,
+    ctx: &egui::Context,
+    ppp: f32,
+    max_texture_side: u32,
+    dots: Option<figcraft_render::Dots>,
+) {
+    // A dragged layer drawn as a sprite: the render is of the document the drag started from, without it.
+    let sprite = super::drag_sprite::sync(app, ctx, ppp, max_texture_side);
     let Ok(ds) = app.session.ds() else { return };
     let rect = app.canvas.rect;
     let (mut ox, mut oy) = ds.view.origin();
@@ -60,7 +69,10 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         (ds.view.zoom * f64::from(ppp), (rect.width() * ppp).ceil().max(1.0) as u32, (rect.height() * ppp).ceil().max(1.0) as u32)
     };
     // The edited text is drawn live (an IME composition included); the caret is an overlay.
-    let doc = app.preedit_view().map(|p| p.doc.clone()).unwrap_or_else(|| ds.doc.clone());
+    let (doc, skip) = match sprite {
+        Some(s) => s,
+        None => (app.preedit_view().map(|p| p.doc.clone()).unwrap_or_else(|| ds.doc.clone()), vec![]),
+    };
     let outlined = if ds.view.outlines_selection { ds.selection.clone() } else { vec![] };
     let proof = ds.view.proof_srgb && !doc.color_profile.is_srgb();
     let outline_extras = figcraft_render::Outline { hidden: ds.view.outline_hidden, bounds: ds.view.outline_bounds, light: false };
@@ -81,7 +93,7 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         outline: ds.view.outlines,
         outline_extras,
         outlined: outlined.clone(),
-        skip: vec![],
+        skip: skip.clone(),
         solo: ds.focused(),
         fonts: figcraft_text::layout_generation(),
         proof,
@@ -105,7 +117,7 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         outline: ds.view.outlines,
         outline_extras,
         outlined,
-        skip: vec![],
+        skip,
         solo: key.solo,
         proof,
         dots,
@@ -114,6 +126,9 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         at: web_time::Instant::now(),
     };
     app.canvas.want_view = Some(job.view.clone());
+    if job.skip.is_empty() {
+        super::drag_sprite::released_at(&mut app.canvas, job.at);
+    }
     worker.submit(job);
     app.canvas.submitted = Some(key);
 }
