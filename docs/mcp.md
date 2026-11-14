@@ -172,6 +172,7 @@ Or in a project's `.mcp.json`:
 - `create_node` and `set_properties` take `x`/`y` **relative to the parent frame** (the page when
   there is none, so they are page coordinates then). Groups and boolean groups have no coordinate
   space of their own: a layer in a group is placed in the frame (or on the page) the group is in.
+  `rotation` is the layer's angle to its parent (Figma's plugin API `rotation` is the same); `absoluteRotation` sets its rotation on the page, what the Design panel's field shows; a call takes one of the two.
   `inspect_document` reports `x`/`y` the same way, plus `absoluteBounds` in page coordinates.
   In `props`, `fill` and `stroke` also accept `"none"` (either case) or `null` as no paint, the
   same as an empty `fills`/`strokes` list, so an outline-only shape can be made in one call.
@@ -255,8 +256,8 @@ Or in a project's `.mcp.json`:
   profile into the file's space: an embedded ICC profile (PNG, JPG, WebP, TIFF; RGB or grey), a PNG's
   `sRGB` / `gAMA` / `cHRM` chunks, else sRGB (also for CMYK or damaged profiles); `image.place` reports
   the profile's name as `imageProfile` (`null`: none usable, taken as sRGB). PNG exports are tagged (`sRGB` chunk, or a Display P3 ICC profile plus
-  `cICP`), Display P3 JPG and WebP embed the ICC profile, and SVG and PDF export Display P3 files
-  converted to sRGB (out-of-gamut colours clip). The app's canvas shows sRGB (P3 colours outside sRGB clip on screen):
+  `cICP`), JPG embeds the ICC profile for sRGB and for Display P3, WebP embeds it for Display P3 only (sRGB WebP is untagged), and SVG and RGB PDF export Display P3 files
+  converted to sRGB (out-of-gamut colours clip). PDF with `cmyk` converts them to sRGB the same way and then to DeviceCMYK. The app's canvas shows sRGB (P3 colours outside sRGB clip on screen):
   `view.proofSrgb {on?}` (View ▸ Soft-proof sRGB) stripes those pixels so `screenshot {window:
   true}` shows where they are (after the next canvas render), and the colour picker says Outside
   sRGB for such a colour.
@@ -298,6 +299,11 @@ Or in a project's `.mcp.json`:
   `textDecorationOffset` (`auto`, px, or `"10%"` of the font size; the offset runs from the baseline
   down to an underline's top edge), `textDecorationSkipInk` (underlines break around descenders) and
   `textDecorationColor` (a colour, or `auto` for the text's) are character props too.
+- **Wrap style** (`auto`, `balance`, `pretty`) works at three levels: `wrapStyle` on `node.set`
+  sets the layer (every paragraph); with `start`/`end` it sets the paragraphs those chars touch,
+  and a paragraph's own style beats the layer's. `text.wrapStyle` sets the selected paragraphs while
+  text is edited. `get_node` reports one `wrapStyle`, or `lineWrapStyles` per paragraph when they
+  differ.
 - **Lists** are per paragraph: `listStyle` (`none`, `bulleted`, `numbered`) and `indentation` (the
   nesting level, 0–8) apply to the paragraphs chars `start`..`end` touch (all of them without a
   range); `get_node` reports one `listStyle` for the layer, or `lineTypes` and `lineIndentations`
@@ -313,10 +319,11 @@ Or in a project's `.mcp.json`:
   `style.detach {which: "text", start?, end?}` unlinks them (values stay). A layer's `styles.text` is
   the style all its chars share (none when they differ); `get_node` lists the linked chars as
   `textStyleRanges` (`[start, end, style id]`).
-  A text style also carries paragraph spacing and indent, the list style and the OpenType features
-  (`paragraph` beside `style` in `style.list`): applying it sets them (on a range, the list goes to
-  the paragraphs touched; the rest is the layer's), `style.update` moves them too, and a `.fig`
-  file keeps them with the style.
+  A text style also carries paragraph spacing and indent, the list style, the wrap style and the
+  OpenType features (`paragraph` beside `style` in `style.list`; a `value` takes `wrapStyle`):
+  applying it sets them (on a range, the list and wrap style go to the paragraphs touched; the rest
+  is the layer's), `style.update` moves them too, and a `.fig` file keeps them with the style
+  (not the wrap style yet).
   Changing what a text style sets (font, size, line height, letter spacing, decoration, case, axis
   values; at the paragraph level the spacing, indent, list and features) on linked chars unlinks
   them; `style.update` moves every linked char. `style.create {type: "text", name}` takes the
@@ -380,7 +387,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
 | `select {ids}` | Replace the selection (`[]` deselects). |
-| `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (SVG, PDF and XML are always sRGB). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
+| `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (PNG: `sRGB` chunk, or ICC and `cICP` for Display P3; JPG: ICC profile; WebP: ICC profile for Display P3, none for sRGB) (SVG, XML and RGB PDF output are always sRGB; PDF with `cmyk` is DeviceCMYK). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
 | `open_file {path, variables?, reload?}` / `save_file {path?}` | Open `.figcraft`, `.json` (FigCraft JSON or REST API file JSON with its variables, see below), `.fig` or FigJam `.jam` (best effort, see below), `.sketch` (Sketch 48 and newer, best effort), `.svg` (see Importing SVG below) or an image; save as `.figcraft`. `open_file` returns `opened` (for a file opened anew, a `summary` of `name`, `pages`, `layers` and `images`, and `warnings` or `repairs`; a file that was already open gives its `index`, with `stale: true` when the file changed on disk since that tab read or saved it; `reload: true` reads it again into the tab, refused while the tab has unsaved changes) and the document's `document` outline. |
 | `undo` / `redo` | Step through history. |
@@ -491,7 +498,7 @@ one undo step and returns the ids it made:
   in the app does both).
 - `board.mindMap {x?, y?, text?, children?, parent?, edit?}` → `{id, text, children: [{id, text, connector}]}`:
   a mind map: a first node (`mindNode`, bold 24, no box; `text` defaults to `Topic`, `x`/`y` to the
-  middle of the view) with up to 20 `children` (texts; default `Idea 1`, `Idea 2`, `Idea 3`)
+  view's centre, in the parent's coordinates) with up to 20 `children` (texts; default `Idea 1`, `Idea 2`, `Idea 3`)
   on its right, each joined to it by a curved branch (a connector with `branch: true`: stroke 4,
   `#757575`, round caps). The map lays itself out: children stand in one column 88 units right of
   the widest node of their parent's column, 48 apart, centred on their parent; a node is its text,
@@ -638,7 +645,7 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   `board.nextSticky` (`Shift+Cmd/Ctrl+Enter`, also while typing in a sticky). Keys no design-file
   shortcut uses; on a design file they refuse.
 - `view.pan {dx, dy, big?}`: the arrow keys with nothing selected (`key ArrowRight` does the same)
-  pan the view by 20 screen pixels a step, 200 with `big` (Shift).
+  pan the view by 64 screen pixels a step, 320 with `big` (Shift).
 - `view.multiplayerCursors {on?}` (`Alt+Cmd+\`): show or hide others' cursors in a live session.
 - `view.outlinesHiddenLayers {on?}` and `view.outlinesObjectBounds {on?}`: what outline mode
   (`view.outlines`, `view.outlinesSelection`) draws besides the shapes: hidden layers, and the box
@@ -691,8 +698,11 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   panel has the keyboard (after F6 or a click on a row), else on the canvas below the selection; the
   menu takes the keyboard and gives it back when it closes (no-op headless).
 - `select.area {x, y, width, height, add?, deep?}`: select what a marquee from `x, y` over that box
-  (page units) would: top-level layers, a frame only when the box covers it, the children of the
-  top-level frame the box starts in; `add` toggles like a Shift marquee, `deep` takes nested layers
+  (page units) would: the top-level layers it touches (a rotated shape by its outline); an empty
+  frame on touch; any other frame or section only when the box covers it, otherwise the layers in it
+  the box touches, except that once the box takes a frame whole, a partly covered frame comes whole
+  too, and the frame the box starts in is selected only then (when the box also takes another
+  top-level frame); `add` toggles like a Shift marquee, `deep` takes nested layers
   like Cmd/Ctrl. Returns `{selection}`. Without a box (`F8` in the app) it draws one for the
   keyboard around the selection (or in the middle of the view): the arrows move it, Shift+arrows
   move its far corner (10 screen pixels a press), Enter selects (Shift+Enter adds, Cmd/Ctrl+Enter
@@ -758,7 +768,7 @@ page line crosses; parts that come apart move to layers of their own above, list
 `vector.deleteHeal`, `vector.join` / `vector.smoothJoin` (join the selected points while editing),
 `vector.edit.cornerRadius` (rounds the selected sharp points, next to straight or curved segments: a
 curve is cut where the arc meets it and keeps the rest of its shape; drawn and exported;
-`node.set {cornerRadius}` on a vector rounds every point), `vector.edit.strokeCap {cap, vertices?}`
+`node.set {cornerRadius}` on a vector rounds every point, and on a boolean group every sharp corner of its result, while its layers keep their own radius), `vector.edit.strokeCap {cap, vertices?}`
 and `vector.edit.strokeJoin {join, vertices?}` (the stroke's cap where it ends at these points and
 its join where it turns there, `null` for the layer's; drawn, exported and outlined),
 `vector.edit.moveHandles {dx, dy, handles?}` (moves the selected handles by a page offset),
@@ -1722,7 +1732,9 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   `--radius-*`, `--text-*`, `--spacing-*`, `--font-*`; a number's namespace and unit come from what
   layers bind it to), other modes on `[data-<collection>="<mode>"]`. With `mobile: <frame id>` (the
   same layer names, mobile layout) the code is mobile first: the mobile frame's classes, the
-  desktop frame's that differ behind `lg:`, and layers only on desktop `hidden` plus `lg:flex`
+  desktop frame's that differ behind `lg:` (a mobile `max-width` is dropped as the phone's own width,
+  unless desktop has the same cap: a fixed-size layer such as a badge keeps `max-w-[48px]` at every
+  width), and layers only on desktop `hidden` plus `lg:flex`
   (auto layout frames) or `lg:block` (other layers).
 - **Component code:** `inspect.code {id, language: react|leptos|vue|swiftui|compose|arkui|flutter}` on a component,
   a component set or a variant writes the component as a reusable unit: React (TSX) with a props
@@ -1883,7 +1895,9 @@ properties with their values, its code and, with `path`, a PNG of it. The docume
 unbinds): `fill` or `fills/<i>/color` and `fills/<i>/stops/<j>/color` on a paint style,
 `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` on an effect style,
 `layoutGrids/<i>/<size|count|gutter|offset>` on a grid style, `fontSize`, `lineHeight`,
-`letterSpacing`, `fontFamily`, `fontStyle` on a text style. Each layer using the style shows the
+`letterSpacing`, `fontWeight` (numbers; a weight picks the family's face nearest it and sets the
+`wght` axis of a variable font), `fontFamily`, `fontStyle` (strings; a bound weight and a bound style
+name replace each other) on a text style. Each layer using the style shows the
 field in its own modes and stays linked; `style.list` gives a style's `bound` map.
 
 `effect.add {ids?, type? | effect?}` adds an effect (`dropShadow`, `innerShadow`, `layerBlur`,
@@ -2070,12 +2084,12 @@ turned off 0°.
   `node.set {pointCount}` keeps stars to 3–60 points; `miterAngle` (degrees, the Design panel's
   Miter angle) sets the miter limit (`limit = 1 / sin(angle / 2)`); `get_node` reports a join
   other than miter (`strokeJoin`) or a miter angle other than the default ~28.96° (`miterAngle`).
-- **Select**: `select.layersAt {x, y}` lists every layer under a page point, front-most first with its
-  depth (the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
+- **Select**: `select.layersAt {x, y}` lists every layer under a page point, locked ones too, front-most first with its
+  depth and a `locked` flag (true when the layer or an ancestor is locked; the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
   / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab). With `pointer`, `cmd: true`
   clicks select the nested layer, `cmd` drags from empty canvas select the nested layers they touch,
   and `shift` drags toggle what they touch. A press on the background of a top-level frame with
-  layers in it (the frame not selected) starts a marquee inside it, as on the canvas; an empty frame
+  layers in it (the frame not selected) starts a marquee, as on the canvas; an empty frame
   is picked and dragged. Locked layers (selectable with `select.set`) get no handles and stay put
   when the rest of the selection is dragged. `select.all` / `select.inverse` skip hidden and locked
   layers.

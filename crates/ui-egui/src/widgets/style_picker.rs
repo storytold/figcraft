@@ -11,7 +11,7 @@
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_color::{Paint, PaintKind};
 use figcraft_doc::{
-    Document, GridKind, ListStyle, Node, NodeId, ParagraphStyle, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, trim_num,
+    Document, GridKind, ListStyle, Node, NodeId, ParagraphStyle, PublishedLibrary, Style, StyleKind, TextStyle, VariableType, WrapStyle, trim_num,
 };
 use figcraft_engine::library;
 use serde_json::{Value, json};
@@ -303,7 +303,12 @@ fn menu_icon(ui: &mut Ui, rect: Rect, icon: Icon, tip: &str, on: bool) -> Respon
     if on || resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.menu_hover);
     }
-    icons::paint(ui.painter(), rect.shrink(5.0), icon, t.menu_text);
+    let glyph = if (rect.width() - 24.0).abs() < 0.5 && (rect.height() - 24.0).abs() < 0.5 {
+        crate::widgets::icon_glyph_rect(rect)
+    } else {
+        rect.shrink(5.0)
+    };
+    icons::paint(ui.painter(), glyph, icon, t.menu_text);
     resp
 }
 
@@ -726,6 +731,8 @@ struct TextBinding<'a> {
 fn text_binding(ui: &mut Ui, binding: TextBinding<'_>, out: &mut Frame) {
     let TextBinding { style, field, kind, rect, name, lead } = binding;
     match widgets::bound_field(ui, Id::unique(("ts_bound", style, field)), lead, rect, name) {
+        // The weight slot takes a face name or a number, so its chip opens the picker that offers both.
+        Some(widgets::BindEvent::Open(at)) if matches!(field, "fontWeight" | "fontStyle") => crate::variable_ui::open_style_weight(ui, style, at),
         Some(widgets::BindEvent::Open(at)) => crate::variable_ui::open_style(ui, style, field, kind, at),
         Some(widgets::BindEvent::Detach) => out.act = Some(Act::Unbind(style.to_string(), field.to_string())),
         None => {}
@@ -787,15 +794,16 @@ fn font_style_size_row(ui: &mut Ui, doc: &Document, style: &Style, def: &TextSty
     let id = style.id.as_str();
     let mut style_resp = None;
     ui.horizontal(|ui| {
-        match bound_name(doc, style, "fontStyle") {
+        let weight_field = if style.bound.contains_key("fontWeight") { "fontWeight" } else { "fontStyle" };
+        match bound_name(doc, style, weight_field) {
             Some(name) => {
                 let (r, _) = ui.allocate_exact_size(vec2(half, widgets::FIELD_H), Sense::hover());
                 text_binding(
                     ui,
                     TextBinding {
                         style: id,
-                        field: "fontStyle",
-                        kind: VariableType::String,
+                        field: weight_field,
+                        kind: if weight_field == "fontWeight" { VariableType::Number } else { VariableType::String },
                         rect: r,
                         name: &name,
                         lead: widgets::Lead::Named(tr("Font style")),
@@ -944,7 +952,7 @@ fn font_family_menu(ui: &Ui, id: &str, def: &TextStyle, family_resp: &Response, 
 fn font_style_menu(id: &str, def: &TextStyle, style_resp: &Response, out: &mut Frame) {
     crate::right::menu_popup(style_resp).width(200.0).show(|ui| {
         if crate::right::menu_item(ui, tr("Apply variable"), "") {
-            crate::variable_ui::open_style(ui, id, "fontStyle", VariableType::String, style_resp.rect.left_bottom());
+            crate::variable_ui::open_style_weight(ui, id, style_resp.rect.left_bottom());
             ui.close();
             return;
         }
@@ -998,6 +1006,11 @@ fn paragraph_rows(ui: &mut Ui, ps: &ParagraphStyle) {
         ListStyle::None => {}
         ListStyle::Bulleted => rows.push(tr("Bulleted list").into()),
         ListStyle::Numbered => rows.push(tr("Numbered list").into()),
+    }
+    match ps.wrap_style {
+        WrapStyle::Auto => {}
+        WrapStyle::Balance => rows.push(format!("{}: {}", tr("Wrap style"), tr("Balance"))),
+        WrapStyle::Pretty => rows.push(format!("{}: {}", tr("Wrap style"), tr("Pretty"))),
     }
     if !ps.features.is_empty() {
         rows.push(ps.features.iter().map(|(tag, on)| format!("{}{tag}", if *on { '+' } else { '-' })).collect::<Vec<_>>().join(" "));

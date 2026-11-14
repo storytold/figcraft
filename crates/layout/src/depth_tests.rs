@@ -93,3 +93,15 @@ fn deeply_nested_fill_frames_lay_out_without_running_out_of_stack() {
         assert_eq!(width(&d, chain[DEEP - 1]), 10.0, "past the nesting the layout follows, layers stay");
     });
 }
+
+#[test]
+fn snap_lines_are_bounded_across_a_frames_grids() {
+    use figcraft_doc::{Document, GridKind, LayoutGrid, NodeKind};
+    let mut d = Document::new("t");
+    let p = d.first_page().unwrap();
+    let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 4000.0, 4000.0).unwrap();
+    d.get_mut(f).unwrap().grids = vec![LayoutGrid { kind: GridKind::Grid, size: 1.0, visible: true, ..LayoutGrid::default() }; 1000];
+    let (xs, ys) = crate::grid_snap_lines(&d, f);
+    assert!(xs.len() + ys.len() <= 200_000, "{}", xs.len() + ys.len());
+    assert!(xs.len() > 4000 && ys.len() > 4000, "the first grids still give their lines");
+}

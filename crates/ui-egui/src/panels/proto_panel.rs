@@ -374,7 +374,7 @@ fn icon_button(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) -> bool {
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), rect.shrink(5.0), icon, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(rect), icon, t.icon);
     resp.clicked()
 }
 
@@ -684,7 +684,7 @@ fn editor_popover(app: &mut FigApp, ctx: &egui::Context, popover: InteractionPop
                 if xr.hovered() {
                     ui.painter().rect_filled(x, CornerRadius::same(5), t.hover);
                 }
-                icons::paint(ui.painter(), x.shrink(6.0), Icon::Close, t.icon);
+                icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(x), Icon::Close, t.icon);
                 if xr.clicked() {
                     close = true;
                 }
@@ -1352,5 +1352,23 @@ fn scroll_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId],
                 }
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod icon_size_tests {
+    use super::*;
+    use crate::header_icon_size_tests::{painted_rects, paints_icon_at_button_size};
+
+    /// The panel's 24 pt icon buttons (flow play, preview, remove) paint their glyphs at 16 pt (#2238).
+    #[test]
+    fn prototype_icon_buttons_paint_16pt() {
+        for icon in [Icon::Play, Icon::Preview, Icon::Minus] {
+            let painted = painted_rects(None, |ui| {
+                let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(24.0, 24.0));
+                icon_button(ui, Id::unique("proto_icon_size"), rect, icon, "x");
+            });
+            assert!(paints_icon_at_button_size(&painted, icon), "{icon:?} is not 16 pt");
+        }
     }
 }

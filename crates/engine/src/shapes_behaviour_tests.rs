@@ -189,6 +189,7 @@ fn corner_radius_follows_the_documented_rules() {
         (NodeKind::Polygon { count: 5 }, true, false, "polygons: one radius for every corner"),
         (NodeKind::Star { count: 5, inner_ratio: 0.4 }, true, false, "stars: one radius for every corner"),
         (NodeKind::Vector { network: Default::default() }, true, false, "vectors: a radius, and one per point in edit mode"),
+        (NodeKind::BooleanOp { op: BoolOp::Union }, true, false, "boolean groups: one radius for every sharp corner of the result"),
         (NodeKind::Line, false, false, "lines and arrows take no radius"),
     ];
     for (kind, radius, independent, why) in doc_rows {
@@ -241,6 +242,7 @@ fn corner_smoothing_follows_the_documented_rules() {
             "vector networks that are closed shapes",
         ),
         (NodeKind::Vector { network: Default::default() }, false, "an open vector has no closed shape to smooth"),
+        (NodeKind::BooleanOp { op: BoolOp::Union }, true, "boolean groups (the plugin API's corner mixin; the look is pinned)"),
         (NodeKind::Line, false, "lines take no radius, so no smoothing"),
     ];
     for (kind, smoothing, why) in doc_rows {
@@ -567,4 +569,19 @@ fn outline_stroke_outlines_every_selected_layer() {
         assert!(s.doc().unwrap().node(line).is_none(), "the line was replaced by its outline");
         assert_eq!(s.selection(), ids, "the results are selected");
     }
+}
+
+#[test]
+fn node_set_non_numeric_miter_smoothing_paragraph_is_an_error() {
+    let mut s = Session::new();
+    let r = create(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 50}));
+    let t = create(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 100}));
+    ex(&mut s, "node.set", json!({"ids": [r], "props": {"miterLimit": 8, "cornerSmoothing": 0.5}}));
+    ex(&mut s, "node.set", json!({"ids": [t], "props": {"paragraphSpacing": 6, "paragraphIndent": 4}}));
+    for (id, key) in [(r, "miterLimit"), (r, "cornerSmoothing"), (t, "paragraphSpacing"), (t, "paragraphIndent")] {
+        let err = s.execute("node.set", &json!({"ids": [id], "props": {key: "abc"}})).expect_err(key);
+        assert!(err.to_string().contains("must be a number"), "{key}: {err}");
+    }
+    assert_eq!(node(&s, r).stroke.miter_limit, 8.0);
+    assert_eq!(node(&s, r).corners.smoothing, 0.5);
 }

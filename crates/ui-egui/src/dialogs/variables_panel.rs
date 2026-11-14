@@ -59,6 +59,10 @@ pub struct Editor {
     pub(crate) anchor: Option<String>,
     /// The variable ids the table shows now, in row order (the range a Shift+click covers).
     pub(crate) order: Vec<String>,
+    /// The variables the compact "Edit variables" editor is open on (empty = closed).
+    bulk_edit: Vec<String>,
+    /// That editor's tab: 0 Details, 1 Scope.
+    bulk_tab: usize,
 }
 
 /// A click on row `id`: plain selects only it, Shift extends from the anchor to it through the
@@ -113,8 +117,13 @@ fn bulk_run(app: &mut FigApp, label: &str, vars: &[&Variable], step: impl Fn(&Va
 
 /// The context menu of a row that is part of a selection of several: delete, move to a group and
 /// scope act on all of them.
-fn bulk_menu(app: &mut FigApp, ui: &mut Ui, coll_groups: &[String], vars: &[&Variable]) {
+fn bulk_menu(app: &mut FigApp, ui: &mut Ui, st: &mut Editor, coll_groups: &[String], vars: &[&Variable]) {
     let n = vars.len();
+    if menu_item(ui, tr("Edit variables"), "") {
+        st.bulk_edit = vars.iter().map(|v| v.id.clone()).collect();
+        st.bulk_tab = 0;
+        ui.close();
+    }
     if menu_item(ui, &trn("Delete {n} variables", n, &[]), "") {
         bulk_run(app, "Delete variables", vars, |v| Some(("variable.delete", json!({"variable": v.id}))));
         ui.close();
@@ -277,6 +286,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             });
         });
     details(app, ctx, &doc.variables, &mut st);
+    bulk_details(app, ctx, &doc.variables, &mut st);
     app.ui.variables = open.then_some(st);
 }
 
@@ -564,6 +574,10 @@ fn group_rows(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
                 start_rename(st, target.clone());
                 ui.close();
             }
+            if menu_item(ui, tr("Duplicate group"), "") {
+                duplicate_group(app, &members, &list, g);
+                ui.close();
+            }
             if menu_item(ui, tr("Delete group"), "") {
                 let steps: Vec<serde_json::Value> = members
                     .iter()
@@ -580,28 +594,67 @@ fn group_rows(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
     }
 }
 
-/// Rename the last part of group `g` of a collection (its variables `members`) to `new`: every
-/// variable under it moves along (one undo step).
-fn rename_group(app: &mut FigApp, members: &[&Variable], g: &str, new: &str, st: &mut Editor) {
-    let new = new.trim().replace('/', "-");
+/// What renaming group `g` (of the variables `members`) to `new` does: the group's new path and
+/// each moved variable's (id, new name). `new` replaces the group's last part; a `/` in it nests
+/// the group, as in Figma ("Palette/Orange" puts it in a group Palette, made if there is none).
+/// Each part is trimmed and empty parts are dropped. The renames come deepest name first, so a
+/// variable moving into the group's own new path ("Orange" to "Orange/Warm") never takes a name
+/// another moved variable still holds. None when nothing changes.
+fn group_renames(members: &[&Variable], g: &str, new: &str) -> Option<(String, Vec<(String, String)>)> {
+    let new = new.split('/').map(str::trim).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
     if new.is_empty() {
-        return;
+        return None;
     }
     let renamed = match g.rsplit_once('/') {
         Some((parent, _)) => format!("{parent}/{new}"),
         None => new,
     };
+    if renamed == g {
+        return None;
+    }
     let prefix = format!("{g}/");
-    let steps: Vec<serde_json::Value> = members
-        .iter()
-        .filter(|v| v.name.starts_with(&prefix))
-        .map(|v| json!({"command": "variable.update", "params": {"variable": v.id, "name": format!("{renamed}/{}", &v.name[prefix.len()..])}}))
-        .collect();
+    let mut moved: Vec<(&Variable, &str)> = members.iter().filter_map(|v| Some((*v, v.name.strip_prefix(&prefix)?))).collect();
+    // A longer name can only be one a shorter one moves to: rename those out of the way first.
+    moved.sort_by_key(|(_, rest)| std::cmp::Reverse(rest.len()));
+    Some((renamed.clone(), moved.into_iter().map(|(v, rest)| (v.id.clone(), format!("{renamed}/{rest}"))).collect()))
+}
+
+/// Rename group `g` of a collection (its variables `members`) to `new` (see [`group_renames`]):
+/// every variable under it moves along, in one undo step.
+fn rename_group(app: &mut FigApp, members: &[&Variable], g: &str, new: &str, st: &mut Editor) {
+    let Some((renamed, moves)) = group_renames(members, g, new) else {
+        return;
+    };
+    let steps: Vec<serde_json::Value> =
+        moves.iter().map(|(id, name)| json!({"command": "variable.update", "params": {"variable": id, "name": name}})).collect();
+    let prefix = format!("{g}/");
     if app.run("command.batch", json!({"label": "Rename group", "commands": steps})).is_some()
         && st.group.as_deref().is_some_and(|s| s == g || s.starts_with(&prefix))
     {
         st.group = st.group.as_ref().map(|s| format!("{renamed}{}", &s[g.len()..]));
     }
+}
+
+/// Copy group `g` (its variables `members`, every mode, scope and setting) as the group named
+/// after it plus " 2" (the next free number among the collection's groups `list`), in one undo
+/// step. Each copy is `variable.duplicate` then a rename; an alias keeps pointing at its target.
+fn duplicate_group(app: &mut FigApp, members: &[&Variable], list: &[String], g: &str) {
+    let (parent, leaf) = g.rsplit_once('/').map_or(("", g), |(p, l)| (p, l));
+    let leaf = unique(leaf, |n| {
+        let full = if parent.is_empty() { n.to_string() } else { format!("{parent}/{n}") };
+        full == g || list.contains(&full) || members.iter().any(|v| v.name.starts_with(&format!("{full}/")))
+    });
+    let copy = if parent.is_empty() { leaf } else { format!("{parent}/{leaf}") };
+    let prefix = format!("{g}/");
+    let mut steps: Vec<serde_json::Value> = Vec::new();
+    for (k, v) in members.iter().filter(|v| v.name.starts_with(&prefix)).enumerate() {
+        let tag = format!("copy{k}");
+        steps.push(json!({"command": "variable.duplicate", "params": {"variable": v.id}, "as": tag}));
+        steps.push(
+            json!({"command": "variable.update", "params": {"variable": {"$ref": tag}, "name": format!("{copy}/{}", &v.name[prefix.len()..])}}),
+        );
+    }
+    app.run("command.batch", json!({"label": "Duplicate group", "commands": steps}));
 }
 
 fn create_collection(app: &mut FigApp, vars: &Variables, st: &mut Editor) {
@@ -848,7 +901,7 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
         crate::right::context_popup(&resp).show(|ui| {
             if let Some(vars) = bulk_ids(view, st, v) {
                 let coll_groups = groups(view.in_collection(&coll.id).map(|x| x.name.as_str()));
-                bulk_menu(app, ui, &coll_groups, &vars);
+                bulk_menu(app, ui, st, &coll_groups, &vars);
                 return;
             }
             if menu_item(ui, tr("Edit variable"), "") {
@@ -1178,14 +1231,163 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
     }
 }
 
+/// Whether `f` holds for every variable (Some(true)), for none (Some(false)) or only some (None).
+/// With no variables nothing is on: Some(false), never a checked box for an empty list.
+fn tri<T>(vars: &[&T], f: impl Fn(&T) -> bool) -> Option<bool> {
+    if vars.is_empty() {
+        return Some(false);
+    }
+    let on = vars.iter().filter(|v| f(v)).count();
+    if on == vars.len() {
+        Some(true)
+    } else if on == 0 {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The compact editor of several selected variables: Details (only Hide from publishing) and Scope
+/// (the scopes every selected variable's type has), each box mixed where the selection differs; a
+/// click sets or clears it on all of them in one undo step.
+fn bulk_details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
+    if st.bulk_edit.is_empty() {
+        return;
+    }
+    let list: Vec<&Variable> = st.bulk_edit.iter().filter_map(|id| vars.get_by_id(id)).filter(|v| v.extends.is_none()).collect();
+    // The menu offers Edit variables only for two or more editable, non-inherited variables of a
+    // file collection (`bulk_ids`), so this closes only when they have since gone (deleted,
+    // undone) or a library was opened: there is nothing left to edit.
+    if list.is_empty() || st.library.is_some() {
+        st.bulk_edit.clear();
+        return;
+    }
+    let t = Tokens::get(ctx);
+    let mut open = true;
+    egui::Window::new(tr("Edit variables"))
+        .id(Id::unique("variables_bulk_details"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(280.0)
+        .frame(egui::Frame::window(&ctx.global_style()).fill(t.panel).inner_margin(egui::Margin::same(16)))
+        .show(ctx, |ui| {
+            ui.set_width(260.0);
+            if let Some(i) = widgets::segmented_text(ui, &[tr("Details"), tr("Scope")], st.bulk_tab) {
+                st.bulk_tab = i;
+            }
+            ui.add_space(8.0);
+            if st.bulk_tab == 0 {
+                let hidden = tri(&list, |v| v.hidden_from_publishing);
+                if widgets::checkbox_tri(ui, hidden, tr("Hide from publishing")) {
+                    let to = hidden != Some(true);
+                    bulk_run(app, "Edit variables", &list, |v| Some(("variable.update", json!({"variable": v.id, "hiddenFromPublishing": to}))));
+                }
+                return;
+            }
+            // The scopes every selected variable's type has.
+            let first = list.first().map_or(&[][..], |v| scopes_for(v.kind));
+            let common: Vec<(&'static str, &'static str)> =
+                first.iter().filter(|(id, _)| list.iter().all(|v| scopes_for(v.kind).iter().any(|(k, _)| k == id))).copied().collect();
+            if common.is_empty() {
+                widgets::label(ui, tr("No scope is shared by all the selected variables"), t.text_secondary);
+                return;
+            }
+            let all = tri(&list, |v| v.scopes.is_none());
+            if widgets::checkbox_tri(ui, all, tr("All supported properties")) {
+                let to_all = all != Some(true);
+                bulk_run(app, "Edit variables", &list, |v| {
+                    Some(("variable.update", json!({"variable": v.id, "scopes": if to_all { Value::Null } else { json!([]) }})))
+                });
+            }
+            for (sid, label) in common {
+                let state = tri(&list, |v| v.in_scope(sid));
+                let clicked = ui
+                    .horizontal(|ui| {
+                        ui.add_space(16.0);
+                        widgets::checkbox_tri(ui, state, tr(label))
+                    })
+                    .inner;
+                if clicked {
+                    let to = state != Some(true);
+                    bulk_run(app, "Edit variables", &list, |v| {
+                        let next: Vec<&str> =
+                            scopes_for(v.kind).iter().map(|(id, _)| *id).filter(|id| if *id == sid { to } else { v.in_scope(id) }).collect();
+                        Some(("variable.update", json!({"variable": v.id, "scopes": next})))
+                    });
+                }
+            }
+        });
+    if !open {
+        st.bulk_edit.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::groups;
+    use super::{group_renames, groups, tri};
+
+    #[test]
+    fn tri_is_checked_empty_or_mixed() {
+        let (a, b) = (true, false);
+        assert_eq!(tri(&[&a, &a], |v| *v), Some(true));
+        assert_eq!(tri(&[&b, &b], |v| *v), Some(false));
+        assert_eq!(tri(&[&a, &b], |v| *v), None);
+    }
+
+    #[test]
+    fn tri_of_no_variables_is_not_checked() {
+        let none: [&bool; 0] = [];
+        assert_eq!(tri(&none, |v| *v), Some(false));
+    }
 
     #[test]
     fn groups_include_parents_once_and_sorted() {
         let names = ["space/sm", "space/md", "color/brand/blue", "color/text", "plain", "color/brand/red"];
         assert_eq!(groups(names.into_iter()), ["color", "color/brand", "space"]);
         assert!(groups(["a", "b"].into_iter()).is_empty());
+    }
+
+    /// The renames of group `g` among `names` (numbers in one collection) typed as `new`, by name.
+    fn renames(names: &[&str], g: &str, new: &str) -> Option<(String, Vec<(String, String)>)> {
+        let mut s = figcraft_engine::Session::new();
+        s.execute("variable.createCollection", &serde_json::json!({"name": "Theme"})).unwrap();
+        for n in names {
+            s.execute("variable.create", &serde_json::json!({"collection": "Theme", "name": n, "type": "number", "value": 1})).unwrap();
+        }
+        let vars = &s.doc().unwrap().variables.variables;
+        let members: Vec<_> = vars.iter().collect();
+        let (renamed, moves) = group_renames(&members, g, new)?;
+        let by_name = |id: &str| vars.iter().find(|v| v.id == id).unwrap().name.clone();
+        Some((renamed, moves.into_iter().map(|(id, n)| (by_name(&id), n)).collect()))
+    }
+
+    #[test]
+    fn a_slash_in_a_group_rename_nests_the_group_keeping_its_parent() {
+        let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(
+            renames(&["Orange/100", "Orange/200", "Blue/100"], "Orange", "Palette/Orange"),
+            Some(("Palette/Orange".into(), vec![pair("Orange/100", "Palette/Orange/100"), pair("Orange/200", "Palette/Orange/200")]))
+        );
+        assert_eq!(
+            renames(&["a/b/x"], "a/b", " / Warm //  c / "),
+            Some(("a/Warm/c".into(), vec![pair("a/b/x", "a/Warm/c/x")])),
+            "parts are trimmed, empty parts dropped, and the parent stays"
+        );
+    }
+
+    #[test]
+    fn a_group_rename_to_nothing_or_to_itself_does_nothing() {
+        for new in ["", "  ", "/", " / // ", "Orange", " Orange ", "/Orange/"] {
+            assert_eq!(renames(&["Orange/100"], "Orange", new), None, "{new:?}");
+        }
+        assert_eq!(renames(&["a/b/x"], "a/b", "b/"), None);
+    }
+
+    #[test]
+    fn a_group_moved_into_its_own_subgroup_renames_the_deeper_names_first() {
+        let (_, moves) = renames(&["Orange/100", "Orange/Warm/100"], "Orange", "Orange/Warm").unwrap();
+        let order: Vec<&str> = moves.iter().map(|(old, _)| old.as_str()).collect();
+        assert_eq!(order, ["Orange/Warm/100", "Orange/100"]);
     }
 }
