@@ -110,6 +110,8 @@ mod export_name_tests;
 #[cfg(test)]
 mod export_preview_tests;
 #[cfg(test)]
+mod field_ellipsis_tests;
+#[cfg(test)]
 mod field_tests;
 #[cfg(test)]
 mod font_menu_regrow_tests;
