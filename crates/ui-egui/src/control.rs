@@ -6,6 +6,9 @@
 //! - `engine.execute {command, params}` — run any command (no dialogs open)
 //! - `engine.commands {}` — every command with its params doc
 //! - `document.inspect {depth?, allPages?}` / `node.get {id, depth?}`
+//! - `agent.join {agent, agentKey}` / `agent.leave {agent, agentKey?}` / `agent.list {}` — several
+//!   named AI agents in one file, each on its own page and selection; `agentKey` (also next to
+//!   `agent` in `engine.execute` and `document.inspect`) is the key an agent holds its name with
 //! - `ui.inspect {}` — panel/tab/tool state, canvas rect, timings
 //! - `ui.pointer {kind: down|move|up|click|double|hover|drag, x, y (page) | sx, sy (screen), to?, shift?, alt?, cmd?}`
 //! - `ui.key {key, shift?, cmd?, alt?}` — a shortcut as if typed on the canvas
@@ -24,7 +27,8 @@
 //!   window), written to `path` or returned as base64 `data`
 //! - `window.new {path?, index?}` → `{window}` / `window.list {}` / `window.focus {id}` — several
 //!   windows (desktop)
-//! - `app.quit {}`
+//! - `app.quit {}` — only in an app started with its control port (`--control`); refused on the
+//!   channel opened in Preferences, where no request drops unsaved changes either
 //!
 //! Any method takes `window` (an id from `window.list`) to run in that window, with its tabs and
 //! panels; without it, requests go to the window last in front. `engine.execute`,
@@ -273,6 +277,10 @@ pub struct ShotRequest {
     pub id: Value,
     /// Where to write the PNG; `None`: return it as data.
     pub path: Option<String>,
+    /// The folders the app confined control clients to when the request was admitted. The PNG is
+    /// written by a later pass, which may be the user's own and unconfined: the write is held to
+    /// these.
+    pub roots: Option<Arc<figcraft_engine::file_access::Roots>>,
     pub reply: std::sync::mpsc::Sender<ControlReply>,
     /// The transport's timeout and this request's final write share this gate.
     pub state: RequestGate,
@@ -385,9 +393,23 @@ fn admit(app: &mut FigApp, r: ControlRequest, window: u64, now: f64) {
         }
         return;
     }
+    // A path outside the folders for control clients is refused now, with the engine's own words,
+    // not after the window was captured and encoded.
+    let roots = app.automation_roots.clone();
+    if let Some(path) = &path
+        && let Err(e) = figcraft_engine::file_access::confined(roots.as_ref(), || {
+            figcraft_engine::file_access::allow(path, figcraft_engine::file_access::Access::Write)
+        })
+    {
+        if !canceled {
+            let _ = tx.send(ControlReply { id, result: Err(e.to_string()) });
+        }
+        return;
+    }
     app.capture.shots.push(ShotRequest {
         id,
         path,
+        roots,
         reply: tx,
         state,
         deadline: now + SHOT_TIMEOUT,
@@ -430,6 +452,34 @@ fn expire(app: &mut FigApp, ctx: &Context, now: f64) {
             ctx.request_repaint();
         } else {
             i += 1;
+        }
+    }
+}
+
+impl FigApp {
+    /// Give up what control clients sent and no frame has finished: the requests waiting for a
+    /// frame, the screenshots in flight and the injected input no frame has applied. Whoever
+    /// still waits for a reply gets `reason` as its error. For when the control server stops:
+    /// that work was sent under a confinement that ends with it, and must not run after it.
+    pub fn cancel_control_work(&mut self, reason: &str) {
+        let refused = |id: Value| ControlReply { id, result: Err(reason.to_string()) };
+        for r in std::mem::take(&mut self.control_queue) {
+            // Under the gate, like a final reply: the transport reads it, or had given up already.
+            let ControlRequest { id, reply, state, .. } = r;
+            let _ = state.commit(|| reply.send(refused(id)));
+        }
+        for mut r in std::mem::take(&mut self.capture.shots) {
+            r.release();
+            let _ = r.state.commit(|| r.reply.send(refused(r.id.clone())));
+        }
+        self.control_input.clear();
+        self.control_input_doc = None;
+        self.control_input_queued = false;
+        // A pass that is discarded would queue its batch again.
+        self.applied_input = None;
+        self.windows.forget_control_input();
+        for ack in self.input_acks.drain(..).chain(self.applied_acks.drain(..)) {
+            let _ = ack.tx.send(refused(ack.reply.id));
         }
     }
 }
@@ -747,7 +797,8 @@ fn settle_arrival(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, n
     // fresh clock read and final write happen under the gate, so a timeout that arrives while the
     // image is being encoded either wins (no file, no reply) or finds the committed reply.
     let encoded = encode_shot(image, r.path.as_deref());
-    commit_shot(&r.state, &r.id, &r.reply, r.deadline, &app.clock, encoded);
+    // The file is written under the folders the request was admitted with, whoever's pass this is.
+    figcraft_engine::file_access::confined(r.roots.as_ref(), || commit_shot(&r.state, &r.id, &r.reply, r.deadline, &app.clock, encoded));
 }
 
 /// Admit queued captures for the window drawing now; other windows keep waiting for their frame.
@@ -784,7 +835,10 @@ fn route_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now
     // restored so a batch already in a frame's raw input keeps its own provenance).
     let before = app.control_synthetic;
     app.control_synthetic = true;
-    let res = handle(app, ctx, &r.method, &r.params);
+    // Confined here too: the frame around this request may be the user's own, which the
+    // Preferences' folder for agents leaves unconfined.
+    let roots = app.automation_roots.clone();
+    let res = figcraft_engine::file_access::confined(roots.as_ref(), || handle(app, ctx, &r.method, &r.params));
     app.control_synthetic = before;
     if r.method == "ui.input" && std::mem::take(&mut app.control_input_queued) {
         // Acknowledge once the pass that applies the batch is presented, never from a sizing
@@ -997,10 +1051,11 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
     let key = p.get("key").and_then(Value::as_str).ok_or("`key` required")?;
     let m = figcraft_engine::keymap::Mods { shift: b(p, "shift"), alt: b(p, "alt"), cmd: b(p, "cmd"), ctrl: b(p, "ctrl") };
     let platform = crate::shortcuts::platform();
-    use figcraft_engine::keymap::{Context, lookup, normalize};
+    use figcraft_engine::keymap::{Context as KeyContext, lookup, normalize};
     // Text editing keys go to the editor (after the shortcuts live while editing).
     if app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
-        if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
+        if let Some(bd) = lookup(platform, KeyContext::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
+            refuse_agent_undo(app, p, bd.id)?;
             crate::menus::invoke(app, bd.id);
             return Ok(json!({"command": bd.id}));
         }
@@ -1024,7 +1079,8 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
         let r = crate::comments::step(app, ctx, if matches!(key, "ArrowUp" | "Up") { -1 } else { 1 });
         return Ok(json!({"comment": r.and_then(|v| v.get("id").cloned())}));
     }
-    if let Some(bd) = lookup(platform, Context::Canvas, key, m) {
+    if let Some(bd) = lookup(platform, KeyContext::Canvas, key, m) {
+        refuse_agent_undo(app, p, bd.id)?;
         crate::shortcuts::run_binding(app, bd.id);
         return Ok(json!({"command": bd.id}));
     }
@@ -1102,6 +1158,7 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
             events.push(egui::Event::PointerButton { pos: p, button, pressed, modifiers: mods });
         } else if let Some(k) = e.get("key").and_then(Value::as_str) {
             let key = egui::Key::from_name(k).ok_or_else(|| format!("unknown key `{k}`"))?;
+            refuse_agent_undo_key(app, p, e, k)?;
             for pressed in [true, false] {
                 events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods });
             }
@@ -1433,6 +1490,33 @@ fn ui_set_styles(app: &mut FigApp, p: &Value) -> Result<(), String> {
 /// The methods whose `document` may name a file behind the tab in front.
 const DOCUMENT_METHODS: &[&str] = &["engine.execute", "document.inspect", "node.get", "ui.render"];
 
+/// A `ui.*` request that acts (keys, pointer, typing, a menu) names the agent it is made for as
+/// `engine.execute` does (`agent` and `agentKey`): is it that agent's? Asked before anything runs.
+fn admit_ui(app: &mut FigApp, p: &Value) -> Result<(), String> {
+    let agent = p.get("agent").and_then(Value::as_str);
+    app.session.agent_admit(agent, figcraft_engine::agent::key_of(p)).map_err(|e| e.to_string())
+}
+
+/// An agent's undo or redo through the interface (a key, a menu) is refused as its command is,
+/// while another agent is there: the rule is the engine's. A request with no agent is the user's.
+fn refuse_agent_undo(app: &FigApp, p: &Value, id: &str) -> Result<(), String> {
+    app.session.refuse_shared_undo_as(p.get("agent").and_then(Value::as_str), id).map_err(|e| e.to_string())
+}
+
+/// A raw key event of `ui.input` (`e`, key name `k`): egui resolves its shortcut when it takes the event,
+/// with no agent, so the keymap is asked now whether it is an undo or redo the agent may not make.
+fn refuse_agent_undo_key(app: &FigApp, p: &Value, e: &Value, k: &str) -> Result<(), String> {
+    use figcraft_engine::keymap::{Context as KeyContext, Mods, lookup};
+    let m = Mods { shift: b(e, "shift"), alt: b(e, "alt"), cmd: b(e, "cmd"), ctrl: b(e, "ctrl") };
+    let platform = crate::shortcuts::platform();
+    for context in [KeyContext::Canvas, KeyContext::Text] {
+        if let Some(bd) = lookup(platform, context, k, m) {
+            refuse_agent_undo(app, p, bd.id)?;
+        }
+    }
+    Ok(())
+}
+
 /// The request's `document` (an `id` from `doc.list`, or an open file's path), when it names one.
 fn document_of(p: &Value) -> Option<&Value> {
     p.get("document").filter(|d| !d.is_null())
@@ -1460,6 +1544,16 @@ fn front_only(session: &Session, front: Option<u64>, method: &str, p: &Value) ->
 
 /// Handle one control method (also used by tests and the headless snapshot tool).
 pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
+    // On the channel the user opened in Preferences the clients are agents at work in the user's
+    // own app: nothing a request runs drops unsaved changes (`file.close` with `force`,
+    // `file.revert`), whichever method gets to the command (`engine.execute`, a batch step, a
+    // menu row). An app started with `--control PORT` is its script's own and keeps both.
+    let keep = !app.agent_control_fixed;
+    app.keeping_unsaved(keep, |app| handle_method(app, ctx, method, p))
+}
+
+/// [`handle`], once the caller's limits are set.
+fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
     if !DOCUMENT_METHODS.contains(&method) {
         front_only(&app.session, app.session.ds().ok().map(|d| d.uid), method, p)?;
     }
@@ -1469,7 +1563,11 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let layers_generation = app.session.clipboard.layers_generation;
             let agent = p.get("agent").and_then(Value::as_str);
+            app.session.agent_admit(agent, figcraft_engine::agent::key_of(p)).map_err(|e| e.to_string())?;
             let r = in_document(app, p, |s| s.execute_as(agent, cmd, &params).map_err(|e| e.to_string()));
+            // An agent working apart leaves the window's page and selection as they were, yet the
+            // document changed: the canvas has to show it.
+            ctx.request_repaint();
             app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             app.invalidate_synthetic_copy(layers_generation);
             // Programmatic calls never open dialogs.
@@ -1489,8 +1587,26 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
         "document.inspect" => {
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
             let options = figcraft_engine::inspect::InspectOptions::parse(p)?;
-            in_document(app, p, |s| Ok(figcraft_engine::inspect::document_with_options(s, depth, b(p, "allPages"), &options)))
+            // An agent working apart reads its own page and selection, as its commands do.
+            let agent = p.get("agent").and_then(Value::as_str);
+            app.session.agent_admit(agent, figcraft_engine::agent::key_of(p)).map_err(|e| e.to_string())?;
+            in_document(
+                app,
+                p,
+                |s| Ok(s.with_agent(agent, |s| figcraft_engine::inspect::document_with_options(s, depth, b(p, "allPages"), &options))),
+            )
         }
+        "agent.join" | "agent.leave" => {
+            let agent = p.get("agent").and_then(Value::as_str).ok_or("`agent` required")?;
+            let key = figcraft_engine::agent::key_of(p);
+            let r = if method == "agent.join" {
+                app.session.agent_admit_join(agent, key).and_then(|()| app.session.agent_join(agent))
+            } else {
+                app.session.agent_admit(Some(agent), key).and_then(|()| app.session.agent_leave(agent))
+            };
+            r.map_err(|e| e.to_string())
+        }
+        "agent.list" => Ok(app.session.agent_list()),
         "node.get" => {
             let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required")?;
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(1) as usize;
@@ -1513,16 +1629,20 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             }
             Ok(v)
         }
-        "ui.pointer" => pointer(app, p),
-        "ui.key" => ui_key(app, ctx, p),
-        "ui.input" => ui_input(app, ctx, p),
+        "ui.pointer" => admit_ui(app, p).and_then(|()| pointer(app, p)),
+        "ui.key" => admit_ui(app, p).and_then(|()| ui_key(app, ctx, p)),
+        "ui.input" => admit_ui(app, p).and_then(|()| ui_input(app, ctx, p)),
         "ui.type" => {
+            admit_ui(app, p)?;
             let text = p.get("text").and_then(Value::as_str).ok_or("`text` required")?;
-            figcraft_engine::textedit::insert(&mut app.session, text).map_err(|e| e.to_string())?;
+            let agent = p.get("agent").and_then(Value::as_str);
+            app.session.with_agent(agent, |s| figcraft_engine::textedit::insert(s, text)).map_err(|e| e.to_string())?;
             Ok(json!({"ok": true}))
         }
         "ui.menu.invoke" => {
+            admit_ui(app, p)?;
             let id = p.get("id").and_then(Value::as_str).ok_or("`id` required")?;
+            refuse_agent_undo(app, p, id)?;
             crate::menus::invoke(app, id);
             Ok(json!({"ok": true, "lastError": app.ui.last_error}))
         }
@@ -1548,6 +1668,13 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             in_document(app, p, |s| s.execute("file.export", &params).map_err(|e| e.to_string()))
         }
         "app.quit" => {
+            // `app.quit` closes every window without asking about unsaved changes, and the recovery
+            // copy goes with them. That is for a script that started the app with its control port
+            // and ends it. On the channel the user opened in Preferences the clients are agents at
+            // work in the user's own app: none of them closes it.
+            if !app.agent_control_fixed {
+                return Err("`app.quit` is only for an app started with `--control PORT`: this one listens because of its Preferences, and its user closes it".into());
+            }
             app.ui.quit = true;
             ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
             Ok(json!({"ok": true}))
@@ -1587,7 +1714,9 @@ fn pointer(app: &mut FigApp, p: &Value) -> Result<Value, String> {
     // A drag's pressure goes from `pressure` to `pressureTo`.
     let (pr0, pr1) = (pressure("pressure"), pressure("pressureTo").or(pressure("pressure")));
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("click");
-    let run = |app: &mut FigApp, ev: PointerEvent| app.session.pointer(&ev).map_err(|e| e.to_string());
+    // Under the name of the agent the request is made for, as `engine.execute` is.
+    let agent = p.get("agent").and_then(Value::as_str);
+    let run = |app: &mut FigApp, ev: PointerEvent| app.session.with_agent(agent, |s| s.pointer(&ev)).map_err(|e| e.to_string());
     match kind {
         "down" => run(app, mk(PointerKind::Down, x, y))?,
         "move" => run(app, mk(PointerKind::Move, x, y))?,
@@ -1625,3 +1754,12 @@ mod capture_tests;
 
 #[cfg(test)]
 mod document_tests;
+
+#[cfg(test)]
+mod agent_key_tests;
+
+#[cfg(test)]
+mod unsaved_tests;
+
+#[cfg(test)]
+mod agent_ui_undo_tests;

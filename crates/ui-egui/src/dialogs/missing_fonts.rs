@@ -7,12 +7,16 @@
 //! own, and once it's installed the file's text fits the real font and the family leaves the list.
 
 use egui::RichText;
-use figcraft_engine::fonts::{Download, Missing, allow_downloads, downloads, downloads_allowed, missing};
+use figcraft_engine::fonts::{Download, Missing, downloads, downloads_allowed, missing};
 use serde_json::{Value, json};
 
 use crate::FigApp;
 use crate::i18n::{tr, trf, trn};
 use crate::theme::{Tokens, regular};
+
+/// The mark of the two-frame keyboard rule of the whole window (consent, Download / Try again,
+/// Close): see `dialogs::drop_keyboard_if_injected`.
+const MARK: &str = "missing_fonts_injected_focus";
 
 #[derive(Clone, Debug)]
 pub struct Shown {
@@ -72,6 +76,7 @@ pub fn request(app: &mut FigApp) {
 }
 
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
+    crate::dialogs::take_back_keyboard(ctx, egui::Id::unique(MARK));
     finish_downloads(app, ctx);
     list_when_known(app);
     let Some(shown) = &app.ui.missing_fonts else { return };
@@ -79,6 +84,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let mut open = true;
     let mut clicks = Clicks::default();
     crate::dialogs::window(tr("Missing fonts"), ctx).open(&mut open).show(ctx, |ui| clicks = body(ui, &t, shown));
+    crate::dialogs::drop_keyboard_if_injected(app, ctx, egui::Id::unique(MARK));
     let close = !open || clicks.close;
     act(app, clicks);
     if close {
@@ -162,13 +168,39 @@ fn act(app: &mut FigApp, clicks: Clicks) {
         }
     }
     let Some(allow) = clicks.consent else { return };
+    // An answer from input a control client injected (`ui.input`) is none: the question stays for
+    // the user, who alone turns downloading on.
+    if app.control_synthetic {
+        return;
+    }
     let Some(family) = app.ui.missing_fonts.as_mut().and_then(|m| m.consent.take()) else { return };
     if allow {
-        match allow_downloads() {
+        match turn_downloads_on() {
             Ok(()) => start(app, &family),
             Err(e) => app.show_error(e),
         }
     }
+}
+
+/// The "Allow and download" action: turns downloading on in the font folder the Craft apps share.
+#[cfg(not(test))]
+fn turn_downloads_on() -> Result<(), String> {
+    figcraft_engine::fonts::allow_downloads()
+}
+
+/// Under test the engine is not called (it writes in the shared font folder and may download):
+/// the action is only noted, per test thread, for the tests to read. It answers an error so the
+/// download that follows a success (`start`, a network request) does not run either.
+#[cfg(test)]
+fn turn_downloads_on() -> Result<(), String> {
+    ALLOW_TRIGGERED.with(|n| n.set(n.get() + 1));
+    Err("test: downloading is not turned on".to_string())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times the "Allow and download" action ran on this test thread.
+    static ALLOW_TRIGGERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One missing family: its name, where the file uses it, and for a family the font store has,
@@ -248,3 +280,7 @@ fn finish_downloads(app: &mut FigApp, ctx: &egui::Context) {
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
+
+#[cfg(test)]
+#[path = "missing_fonts_consent_tests.rs"]
+mod consent_tests;

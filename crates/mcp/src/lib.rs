@@ -27,7 +27,7 @@ pub use backend::{Attached, Backend, decode_data, page_children};
 pub use headless::Headless;
 pub use prompts::{PROMPTS, PromptArg, PromptDef};
 pub use resources::{COMMAND_TEMPLATE, COMMANDS_URI, DOC_URI, NODE_TEMPLATE};
-pub use server::{INSTRUCTIONS, PROTOCOL_VERSION, SUPPORTED_VERSIONS, Server};
+pub use server::{INSTRUCTIONS, PROTOCOL_VERSION, SUPPORTED_VERSIONS, Server, name_agent};
 pub use tools::{TOOL_NAMES, ToolResult, call_tool, tool_definitions};
 
 /// Width and height of a PNG from its IHDR chunk.

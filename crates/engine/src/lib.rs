@@ -34,6 +34,7 @@ pub use assets::playground;
 pub use assets::style_vars;
 pub use assets::token_roles;
 pub use automation::batch;
+pub use automation::discovery;
 pub use automation::doc_urls;
 pub use automation::file_access;
 pub use automation::inspect;
@@ -163,6 +164,14 @@ pub struct Session {
     pub agent: Option<String>,
     /// Where an attached AI agent last worked ([`Session::agent_presence_at`]): display only.
     pub agent_presence: Option<agent::AgentPresence>,
+    /// The named AI agents at work, and the page and selection of each while there are several
+    /// ([`Session::with_agent`]): never saved.
+    pub(crate) agents: agent::Agents,
+    /// Set by the host while a command runs for a caller who may not drop the user's unsaved
+    /// changes (in the desktop app: a client of the control channel the user opened in
+    /// Preferences). `file.close` with `force` and `file.revert` then refuse a document that has
+    /// unsaved changes. Never saved.
+    pub keep_unsaved: bool,
 }
 
 impl Default for Session {
@@ -174,7 +183,11 @@ impl Default for Session {
 #[cfg(test)]
 mod a11y_keys_tests;
 #[cfg(test)]
+mod agent_gesture_tests;
+#[cfg(test)]
 mod agent_presence_tests;
+#[cfg(test)]
+mod agents_apart_tests;
 #[cfg(test)]
 mod al_behaviour_tests;
 #[cfg(test)]

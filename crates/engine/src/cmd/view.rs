@@ -24,6 +24,12 @@ fn flag(s: &mut Session, p: &Value, f: fn(&mut ViewState) -> &mut bool) -> Resul
 /// One of a view's on/off settings.
 type Slot = fn(&mut ViewState) -> &mut bool;
 
+/// `path` as `window.new` opens it: allowed for this command's access (read), and resolved as checked.
+fn window_path(path: &str) -> Result<String> {
+    let resolved = crate::file_access::allow(path, crate::file_access::Access::Read)?;
+    resolved.into_os_string().into_string().map_err(|_| bad("window.new", "the path is not UTF-8"))
+}
+
 /// The View menu's on/off toggles (Pixel preview, with its scale, has its own command), and
 /// whether the preferences keep each: files opened or made later start with the kept ones. Outline
 /// modes and the sRGB soft-proof stay with their file, so a new file never opens in one.
@@ -401,7 +407,14 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             |s, p| {
                 let index = if num(p, "index").is_some() { Some(req_index("window.new", p, "index")?) } else { None };
-                s.request_ui("window.new", json!({"path": string(p, "path"), "index": index}));
+                // The path is checked now, under the automation roots this command runs with (a
+                // control client's folders, else none). The window opens it later, when those roots
+                // no longer apply, so the request carries the resolved path that was checked.
+                let path = match string(p, "path") {
+                    Some(path) => Some(window_path(&path)?),
+                    None => None,
+                };
+                s.request_ui("window.new", json!({"path": path, "index": index}));
                 ok()
             }
         ),
@@ -760,3 +773,7 @@ mod start_on_home_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "view_window_tests.rs"]
+mod window_tests;

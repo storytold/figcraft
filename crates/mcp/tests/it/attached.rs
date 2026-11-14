@@ -97,6 +97,20 @@ fn an_attached_agent_comments_under_its_own_name() {
     assert_eq!((t["author"].clone(), t["agent"].clone()), (json!("Claude (agent)"), json!(true)), "{t}");
 }
 
+/// A guard, not the proof of a defect: a named agent holds its name with its key from its first
+/// request, and the page it looks at is asked for under that name. Asked without the key, the app
+/// would refuse the server's own screenshot as another client's.
+#[test]
+fn an_attached_agent_takes_a_screenshot_of_its_own_page() {
+    let mut s = Server::new(Box::new(Attached::port(fake_app()).unwrap()));
+    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "Claude", "version": "1"}}});
+    assert!(s.handle_line(&init.to_string()).is_some());
+    let made = call(&mut s, "create_node", json!({"type": "frame", "width": 64, "height": 32, "props": {"fill": "#FF0000"}}));
+    assert_eq!(made["isError"], false, "{made}");
+    let shot = call(&mut s, "screenshot", json!({}));
+    assert_eq!(shot["content"][0]["type"], "image", "{shot}");
+}
+
 #[test]
 fn attached_to_nothing_fails_cleanly() {
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();

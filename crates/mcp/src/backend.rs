@@ -38,6 +38,21 @@ pub trait Backend {
         decode_data(&self.call("ui.render", params)?)
     }
 
+    /// [`Backend::render_png`] asked by the AI agent named `agent`: without `ids`, the page is the
+    /// one that agent works on (its own while several agents work apart), not the one the window
+    /// shows. The default asks for that page's layers as the agent, with the `key` it holds its
+    /// name with (`agentKey`): without it the app refuses the request once the name is held.
+    fn render_png_as(&mut self, agent: &str, key: &str, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+        if !ids.is_empty() {
+            return self.render_png(ids, scale);
+        }
+        let kids = children_of_page(self, json!({"depth": 1, "agent": agent, "agentKey": key}))?;
+        if kids.is_empty() {
+            return Err("the current page is empty: nothing to render".into());
+        }
+        self.render_png(&kids, scale)
+    }
+
     /// PNG bytes of what the user sees: the app window when attached, the current viewport when
     /// headless.
     fn screenshot_png(&mut self) -> Result<Vec<u8>, String> {
@@ -58,7 +73,13 @@ fn capture<B: Backend + ?Sized>(b: &mut B, params: Value) -> Result<Vec<u8>, Str
 
 /// The ids of the current page's top-level layers.
 pub fn page_children<B: Backend + ?Sized>(b: &mut B) -> Result<Vec<u64>, String> {
-    let doc = b.call("document.inspect", json!({"depth": 1}))?;
+    children_of_page(b, json!({"depth": 1}))
+}
+
+/// The ids of the top-level layers of the page `document.inspect` reports as current for `params`
+/// (with an `agent`, the page that agent works on).
+fn children_of_page<B: Backend + ?Sized>(b: &mut B, params: Value) -> Result<Vec<u64>, String> {
+    let doc = b.call("document.inspect", params)?;
     let current = doc.get("currentPage").cloned().unwrap_or(Value::Null);
     let pages = doc.get("pages").and_then(Value::as_array).cloned().unwrap_or_default();
     let page = pages.iter().find(|p| p.get("id") == Some(&current)).or_else(|| pages.first());

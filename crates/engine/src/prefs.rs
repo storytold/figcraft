@@ -123,6 +123,15 @@ pub struct Prefs {
     /// for updates by themselves. A file naming another one doesn't contact its server (#1097).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub team_libraries: Vec<String>,
+    /// AI agents on this computer may drive the desktop app: it listens on a local port while
+    /// this is on, and stops at once when it is turned off. Off unless the user turned it on. No
+    /// command sets it (Preferences does): what a control client can run must not be able to open
+    /// the channel or widen it.
+    pub agent_control: bool,
+    /// The folder agents may read from and write to when the app was started without automation
+    /// roots; empty: `FigCraft` in the user's documents. Set in Preferences only, as above.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub automation_root: String,
 }
 
 /// Recently run actions kept for the Actions palette (newest first).
@@ -165,6 +174,8 @@ impl Default for Prefs {
             board_grid: Default::default(),
             recent_actions: Vec::new(),
             team_libraries: Vec::new(),
+            agent_control: false,
+            automation_root: String::new(),
         }
     }
 }

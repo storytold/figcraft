@@ -136,6 +136,42 @@ fn a_real_arrival_that_crosses_the_deadline_does_not_write_its_png() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Asserts a capture asked through the control channel is not written outside the Preferences'
+/// folder for agents, although the pass that commits it is the user's own (which that folder
+/// leaves unconfined).
+#[test]
+fn a_capture_is_not_written_outside_the_folder_for_agents() {
+    let mut u = Ui::new(Session::empty());
+    let dir = commit_dir("agents-folder");
+    let inside = dir.join("agents");
+    std::fs::create_dir_all(&inside).expect("agents folder");
+    let name = inside.to_string_lossy().into_owned();
+    let roots = figcraft_engine::file_access::Roots::new(std::slice::from_ref(&name), std::slice::from_ref(&name)).expect("roots");
+    u.app.automation_roots = Some(Arc::new(roots));
+    u.app.automation_roots_for_agents = true;
+    let path = dir.join("outside.png");
+    let rx = push(&mut u, 61, json!({"path": path.to_string_lossy()}));
+    // As the window does it: UI passes admit and issue the capture, the renderer delivers the
+    // image, and a later pass commits it.
+    let mut reply = None;
+    for _ in 0..12 {
+        u.frame(vec![]);
+        if let Some(r) = u.app.capture.shots.first()
+            && let (Some(slot), Some(spec)) = (r.slot.clone(), r.spec)
+        {
+            slot.complete(Arc::new(egui::ColorImage::filled(spec.size_px, egui::Color32::RED)));
+        }
+        if let Ok(r) = rx.try_recv() {
+            reply = Some(r);
+            break;
+        }
+    }
+    let error = reply.expect("the capture is answered").result.expect_err("a path outside the folder for agents is refused");
+    assert!(error.contains("automation path rejected"), "{error}");
+    assert!(!path.exists(), "a control client wrote outside the folder for agents");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Asserts an expiry during encoding reports the timeout under the gate, marks the request
 /// replied and writes no file.
 #[test]

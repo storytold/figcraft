@@ -167,6 +167,7 @@ fn new_from_template(s: &mut Session, p: &Value) -> Result<Value> {
         s.request_ui("home.templates", json!({}));
         return Ok(json!({"templates": list()}));
     };
+    s.refuse_active_switch(cmd)?;
     let template = id.as_str().and_then(find).ok_or_else(|| bad(cmd, "`template` must be an id from `template.list`"))?;
     let mut doc = template.build(s.new_page_background())?;
     if let Some(name) = string(p, "name").map(|n| n.trim().chars().take(MAX_NAME).collect::<String>()).filter(|n| !n.is_empty()) {

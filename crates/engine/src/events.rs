@@ -4,6 +4,9 @@
 //! `comment.*` commands append an event. The control channel's `events.poll` long-polls this log,
 //! and the MCP server exposes it as `wait_for_changes`. Nothing here touches the file system, the
 //! document format or the undo history.
+//!
+//! While several named AI agents work in the session, `agent.joined`, `agent.left` and
+//! `agent.selection` say who is there and where each one works (topic `agents`).
 
 use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex, PoisonError};
@@ -119,6 +122,7 @@ fn keeps(topics: &[String], kind: &str) -> bool {
             "all" => true,
             "comments" => kind.starts_with("comment."),
             "document" => kind.starts_with("document."),
+            "agents" => kind.starts_with("agent."),
             _ => false,
         })
 }
@@ -133,9 +137,9 @@ pub fn topics(v: Option<&Value>) -> Result<Vec<String>, String> {
         match s {
             // Each once: the list is scanned for every retained event under the log's lock, so
             // a long list of repeats would multiply that work.
-            "comments" | "document" | "all" if out.iter().any(|t| t == s) => {}
-            "comments" | "document" | "all" => out.push(s.to_string()),
-            other => return Err(format!("unknown topic `{other}` (comments, document, all)")),
+            "comments" | "document" | "agents" | "all" if out.iter().any(|t| t == s) => {}
+            "comments" | "document" | "agents" | "all" => out.push(s.to_string()),
+            other => return Err(format!("unknown topic `{other}` (comments, document, agents, all)")),
         }
     }
     if out.is_empty() || out.iter().any(|t| t == "all") {

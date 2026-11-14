@@ -11,10 +11,27 @@ impl FigApp {
         }
     }
 
+    /// Run `f` with the engine refusing to drop unsaved changes when `keep` (`Session::keep_unsaved`),
+    /// and put the flag back whatever ends `f`, a panic too: left set, it would refuse the user's
+    /// own Don't Save.
+    pub(crate) fn keeping_unsaved<T>(&mut self, keep: bool, f: impl FnOnce(&mut Self) -> T) -> T {
+        let was = std::mem::replace(&mut self.session.keep_unsaved, keep);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        self.session.keep_unsaved = was;
+        match r {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
     /// Run a command, surfacing errors as a toast. Returns the result.
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
         let layers_generation = self.session.clipboard.layers_generation;
-        let r = self.session.execute(id, &params);
+        // A frame that applies injected input acts for a control client: on the channel the user
+        // opened in Preferences, what it runs does not drop the user's unsaved changes either
+        // (Alt+click on a tab's close button, a menu row).
+        let keep = self.session.keep_unsaved || (self.control_synthetic && !self.agent_control_fixed);
+        let r = self.keeping_unsaved(keep, |app| app.session.execute(id, &params));
         self.clear_comment_draft_after_tool_set(id, r.is_ok());
         self.handle_ui_requests();
         self.invalidate_synthetic_copy(layers_generation);

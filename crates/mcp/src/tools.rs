@@ -112,6 +112,9 @@ pub const TOOL_NAMES: &[&str] = &[
     "type_text",
     "inspect_ui",
     "wait_for_changes",
+    "agent_join",
+    "agent_leave",
+    "agent_list",
 ];
 
 /// The tools that take `document`: they act on the file it names instead of the one in front.
@@ -375,16 +378,37 @@ fn tools() -> Vec<Value> {
         tool(
             "wait_for_changes",
             "Wait for changes",
-            "Wait for new comment events in the attached FigCraft app. Returns pending events immediately; otherwise waits up to `timeoutMs` (default 20000, max 25000). Call it again with the returned `cursor` to keep watching. Headless returns immediately (no other writer). Events carry a sequence number, kind, document and a small payload (for comments, the thread id).",
+            "Wait for new events in the attached FigCraft app: comments, and with the `agents` topic the AI agents that come, leave, or change their page or selection. Returns pending events immediately; otherwise waits up to `timeoutMs` (default 20000, max 25000). Call it again with the returned `cursor` to keep watching. Headless returns immediately (no other writer). Events carry a sequence number, kind, document and a small payload (for comments, the thread id; for agents, the agent's name).",
             obj(
                 json!({
                     "after": int("Return events after this cursor (default 0)"),
                     "timeoutMs": int("Longest wait in milliseconds (default 20000, max 25000)"),
-                    "topics": {"type": "array", "items": {"type": "string", "enum": ["comments", "document", "all"]}, "description": "Event topics (default [\"comments\"]; document events are not emitted yet)"},
+                    "topics": {"type": "array", "items": {"type": "string", "enum": ["comments", "document", "agents", "all"]}, "description": "Event topics (default [\"comments\"]; `agents`: the AI agents that come, leave, or change their page or selection; document events are not emitted yet)"},
                     "limit": int("Most events to return (default 100, max 1000)")
                 }),
                 &[],
             ),
+            true,
+        ),
+        tool(
+            "agent_join",
+            "Join as an agent",
+            "Announce yourself as an AI agent working on the file, under this server's agent name: from now on you keep your own current page and selection, apart from the window's and from the other agents', even alone (two agents are set apart without it). Returns {agent, agents}. While another agent is there, undo and redo are refused: fix a mistake with a new command.",
+            empty(),
+            false,
+        ),
+        tool(
+            "agent_leave",
+            "Leave as an agent",
+            "Say you are done: your agent name, its pages and its selections are forgotten (closing the connection does not do it). Returns {left}.",
+            empty(),
+            false,
+        ),
+        tool(
+            "agent_list",
+            "List agents",
+            "The AI agents working on the app's files, in the order they came: {agents: [{agent, apart, page, selection}]}; `page` and `selection` are those of an agent working apart in the file in front, else null.",
+            empty(),
             true,
         ),
     ]
@@ -576,6 +600,10 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "type_text" => type_text(b, &a),
         "inspect_ui" => b.call("ui.inspect", json!({})).map(|v| ToolResult::json(&v)),
         "wait_for_changes" => wait_for_changes(b, &a),
+        // The server names the agent (`agent`) on the way to the backend.
+        "agent_join" => b.call("agent.join", json!({})).map(|v| ToolResult::json(&v)),
+        "agent_leave" => b.call("agent.leave", json!({})).map(|v| ToolResult::json(&v)),
+        "agent_list" => b.call("agent.list", json!({})).map(|v| ToolResult::json(&v)),
         other => Err(format!("unknown tool `{other}` (tools/list has: {})", TOOL_NAMES.join(", "))),
     };
     r.unwrap_or_else(ToolResult::error)
@@ -1220,7 +1248,7 @@ fn type_text(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, 
         Some(id) => {
             let id = id_arg(id)?;
             exec(b, "text.edit.begin", json!({"id": id}))?;
-            let typed = b.call("ui.type", json!({"text": text}));
+            let typed = exec(b, "text.edit.insert", json!({"text": text}));
             // Always leave edit mode, even when typing failed.
             let ended = exec(b, "text.edit.end", json!({}));
             typed?;
@@ -1228,6 +1256,6 @@ fn type_text(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, 
             let node = b.call("node.get", json!({"id": id, "depth": 0}))?;
             Ok(ToolResult::json(&json!({"ok": true, "node": node})))
         }
-        None => b.call("ui.type", json!({"text": text})).map(|v| ToolResult::json(&v)),
+        None => exec(b, "text.edit.insert", json!({"text": text})).map(|v| ToolResult::json(&v)),
     }
 }

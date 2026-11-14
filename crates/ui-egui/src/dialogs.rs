@@ -163,6 +163,158 @@ fn about_body(ui: &mut egui::Ui, t: &Tokens) {
     );
 }
 
+/// Preferences ▸ AI agents: the switch, which asks before it changes (it opens a local port, or
+/// cuts agents off), and the folder agents read and write. Only this screen writes these two
+/// preferences: no command does (see [`figcraft_engine::Prefs::agent_control`]), and neither does
+/// input a control client injects (`ui.input`), which reaches this window like the user's own: a
+/// client could otherwise widen its own folder or let itself in.
+fn agent_control_prefs(app: &mut FigApp, ui: &mut egui::Ui, prefs: &figcraft_engine::Prefs, t: &Tokens) {
+    ui.add_space(8.0);
+    if app.agent_control_fixed {
+        // A launch that named its control port keeps its server until the app quits: the switch
+        // shows that, and offers no change it could not make.
+        ui.add_enabled_ui(false, |ui| crate::widgets::checkbox(ui, true, tr("Allow AI agents to control FigCraft")));
+        crate::widgets::label(ui, tr("FigCraft was started with a control port: agents can connect until it quits."), t.text_secondary);
+    } else if crate::widgets::checkbox(ui, prefs.agent_control, tr("Allow AI agents to control FigCraft")) {
+        ask_agent_control(app, !prefs.agent_control);
+    }
+    ui.horizontal(|ui| {
+        let name = tr("Folder for agents");
+        ui.label(name);
+        let id = egui::Id::unique("pref_automation_root");
+        let editing = id.with("editing");
+        let before = ui.data(|d| d.get_temp::<String>(editing));
+        let kept = crate::widgets::text_field_named(ui, id, &prefs.automation_root, 160.0, name);
+        let after = ui.data(|d| d.get_temp::<String>(editing));
+        // What a control client types waits in the field like the user's own text, and the user's
+        // next click elsewhere would keep it: text an injected frame started or changed is the
+        // client's from then on, and is dropped where it would be kept.
+        let mark = id.with("injected");
+        let injected = (app.control_synthetic && after != before) || ui.data(|d| d.get_temp::<bool>(mark).unwrap_or(false));
+        ui.data_mut(|d| {
+            if injected && after.is_some() {
+                d.insert_temp(mark, true);
+            } else {
+                d.remove::<bool>(mark);
+            }
+        });
+        if let Some(dir) = kept.filter(|_| !injected) {
+            set_automation_root(app, dir.trim());
+        }
+        if crate::widgets::button(ui, tr("Browse"), false, true).clicked() {
+            browse_automation_root(app, name);
+        }
+    });
+    crate::widgets::label(ui, tr("Agents read and write files in this folder only. Empty: the FigCraft folder in your documents."), t.text_secondary);
+}
+
+/// The folder field was changed: keep the folder agents read and write, unless the frame applies
+/// input a control client injected.
+fn set_automation_root(app: &mut FigApp, dir: &str) {
+    if !app.control_synthetic {
+        keep_automation_root(app, dir);
+    }
+}
+
+/// Keep the folder agents read and write (Preferences only; the app follows it at once).
+fn keep_automation_root(app: &mut FigApp, dir: &str) {
+    if app.session.prefs.automation_root != dir {
+        app.session.prefs.automation_root = dir.to_owned();
+        app.session.prefs_unsaved = true;
+    }
+}
+
+/// The switch was clicked: ask before it changes ([`agent_control_question`]). Not for injected
+/// input, and not when the launch options keep the server whatever the preference says: the
+/// question would promise a change that does not happen.
+fn ask_agent_control(app: &mut FigApp, on: bool) {
+    if !app.control_synthetic && !app.agent_control_fixed {
+        app.ui.agent_control_ask = Some(on);
+    }
+}
+
+/// "Browse" was clicked: pick the folder agents read and write. Who clicked is checked here, when
+/// the picker opens: the folder comes back in a later frame, which says nothing of who asked.
+fn browse_automation_root(app: &mut FigApp, name: &str) {
+    if !app.control_synthetic {
+        app.pick_folder(name, |app, dir| keep_automation_root(app, &dir.to_string_lossy()));
+    }
+}
+
+/// The question Preferences asks before AI agents are let in or shut out (Cancel / Allow or
+/// Stop; the dialog's close button answers Cancel).
+fn agent_control_question(app: &mut FigApp, ctx: &Context) {
+    let mark = egui::Id::unique("agent_control_injected_focus");
+    take_back_keyboard(ctx, mark);
+    let Some(on) = app.ui.agent_control_ask else {
+        return;
+    };
+    let t = Tokens::get(ctx);
+    let mut open = true;
+    let mut answer = None;
+    let (title, text, yes) = if on {
+        (tr("Allow AI agents?"), tr("Programs on this computer will be able to read and change the files open in FigCraft."), tr("Allow"))
+    } else {
+        (tr("Stop AI agents?"), tr("Agents at work lose their connection at once."), tr("Stop"))
+    };
+    window(title, ctx).order(egui::Order::Foreground).open(&mut open).show(ctx, |ui| {
+        ui.set_width(340.0);
+        crate::widgets::label(ui, text, t.text);
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            if crate::widgets::button(ui, tr("Cancel"), false, true).clicked() {
+                answer = Some(false);
+            }
+            if crate::widgets::button(ui, yes, true, true).clicked() {
+                answer = Some(true);
+            }
+        });
+    });
+    drop_keyboard_if_injected(app, ctx, mark);
+    if !open {
+        answer = Some(false);
+    }
+    let Some(confirmed) = answer else {
+        return;
+    };
+    answer_agent_control(app, on, confirmed);
+}
+
+/// Take the answer to [`agent_control_question`]: the question closes and a confirmed change is kept.
+/// An answer from injected input is none: the question stays for the user.
+fn answer_agent_control(app: &mut FigApp, on: bool, confirmed: bool) {
+    if app.control_synthetic {
+        return;
+    }
+    app.ui.agent_control_ask = None;
+    if confirmed && app.session.prefs.agent_control != on {
+        app.session.prefs.agent_control = on;
+        app.session.prefs_unsaved = true;
+    }
+}
+
+/// Frame two of the keyboard rule of a consent window: a frame that was drawn from injected input
+/// left a mark (see [`drop_keyboard_if_injected`]); egui hands a Tab's focus to the next frame, so
+/// the focus is let go again at the start of this one, before the user's Enter can reach a button
+/// and answer in their place. The mark is read even when the window is closed.
+pub(crate) fn take_back_keyboard(ctx: &egui::Context, mark: egui::Id) {
+    if ctx.data_mut(|d| d.remove_temp::<bool>(mark)) == Some(true) {
+        crate::windows::surrender_held_focus(ctx);
+    }
+}
+
+/// Frame one of the keyboard rule of a consent window: when this frame comes from injected input
+/// (whose answers the window ignores), the focus it may have left on a button is let go once the
+/// question is drawn, and `mark` asks [`take_back_keyboard`] to do it again in the next frame.
+/// Guarded by `control_synthetic`, not by the control-client exemption: wherever the answer is
+/// ignored, the focus is let go.
+pub(crate) fn drop_keyboard_if_injected(app: &FigApp, ctx: &egui::Context, mark: egui::Id) {
+    if app.control_synthetic {
+        ctx.data_mut(|d| d.insert_temp(mark, true));
+        crate::windows::surrender_held_focus(ctx);
+    }
+}
+
 /// Escape closes the topmost simple dialog (one without menus of its own), before the canvas's
 /// shortcuts see it (it doesn't deselect), like a system dialog: from one of its fields too. A menu
 /// open over the dialog (Preferences ▸ Interface size) takes the first Escape and closes alone.
@@ -172,6 +324,7 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     }
     let u = &mut app.ui;
     let open = u.color_profile.is_some()
+        || u.agent_control_ask.is_some()
         || u.menu_input.is_some()
         || u.find.is_some()
         || u.batch_rename.is_some()
@@ -186,7 +339,9 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     if !open || !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         return;
     }
-    if u.menu_input.take().is_some()
+    // The question over Preferences first: Escape answers Cancel and leaves Preferences open.
+    if u.agent_control_ask.take().is_some()
+        || u.menu_input.take().is_some()
         || u.color_profile.take().is_some()
         || u.find.take().is_some()
         || u.batch_rename.take().is_some()
@@ -265,6 +420,10 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             }
             for c in toggles {
                 app.run(c, json!({}));
+            }
+            // The browser has no local port to listen on.
+            if !cfg!(target_arch = "wasm32") {
+                agent_control_prefs(app, ui, &prefs, &t);
             }
             // Where the app registers itself as the opener of invite links (Windows).
             if let Some(on) = app.session.invite_links_on() {
@@ -358,6 +517,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             app.ui.preferences = false;
         }
     }
+    agent_control_question(app, ctx);
     crate::shortcuts_panel::show(app, ctx);
     if let Some((mut find, mut replace)) = app.ui.find.clone() {
         let mut open = true;
@@ -483,3 +643,6 @@ fn interface_size(app: &mut FigApp, ui: &mut egui::Ui, chosen: f64) {
         crate::widgets::label(ui, &note, t.text_secondary);
     }
 }
+
+#[cfg(test)]
+mod agent_prefs_tests;

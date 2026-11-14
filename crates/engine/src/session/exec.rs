@@ -3,6 +3,10 @@ use super::{
     components, events, find_command, guard, library, normalize, params, textpreview,
 };
 
+/// Why an agent's edit is refused while a gesture that is not its own is open on the document:
+/// the gesture would fold the edit into its own step, or lose it when cancelled.
+const GESTURE_IN_PROGRESS: &str = "a drag or other gesture is in progress in the window: retry the edit once it ends";
+
 /// Whether a command, or a batch wrapping one, imports a file passed as Base64 `data`.
 fn command_carries_import_bytes(id: &str, params: &Value) -> bool {
     match id {
@@ -26,7 +30,7 @@ pub(crate) fn finite_check_candidates(doc: &Document, before: &Document) -> Vec<
 impl Session {
     /// Append a live event with the active document's identity (nothing without one). Inside a
     /// [`Session::grouped`] call the event is buffered and committed only when the group succeeds.
-    fn record_event(&mut self, kind: &str, data: Value) {
+    pub(crate) fn record_event(&mut self, kind: &str, data: Value) {
         let (document, path) = match self.ds() {
             Ok(d) => (d.doc.name.clone(), d.path.clone()),
             Err(_) => (String::new(), None),
@@ -55,15 +59,33 @@ impl Session {
     /// [`Session::execute`] for an AI agent named `agent` (the client's name; empty when it gave
     /// none), or for the user (`None`): the comments it makes are signed with the agent's name and
     /// marked as an agent's, and the app shows where it works ([`Session::agent_presence_at`]).
+    ///
+    /// While several named agents work in the session, each has its own page and selection
+    /// ([`Session::with_agent`]): the command runs on those, and the window keeps its own.
     pub fn execute_as(&mut self, agent: Option<&str>, id: &str, params: &Value) -> Result<Value> {
+        self.run_as(agent, |s| s.execute(id, params))
+    }
+
+    /// What [`Session::execute_as`] does around `run`, the call it makes for `agent`.
+    pub(crate) fn run_as<T>(&mut self, agent: Option<&str>, run: impl FnOnce(&mut Session) -> T) -> T {
         let was = std::mem::replace(&mut self.agent, agent.map(cmd::comment::agent_author));
-        let before = agent.and_then(|_| self.agent_before());
-        let r = self.execute(id, params);
-        if agent.is_some() {
-            self.note_agent(before);
-        }
+        // A panic in the call ends it like any other end, then goes on to the caller's guard: what
+        // the user does next is signed by the user, not by the agent whose call panicked.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_agent(agent, |s| {
+                let before = agent.and_then(|_| s.agent_before());
+                let r = run(s);
+                if agent.is_some() {
+                    s.note_agent(before);
+                }
+                r
+            })
+        }));
         self.agent = was;
-        r
+        match r {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     /// Run a command by id. Mutations become one undo step; a failure or panic leaves the document
@@ -72,6 +94,8 @@ impl Session {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         crate::cmd::refuse_unknown_params(id, params)?;
         board::refuse_on_board(self, id)?;
+        self.refuse_shared_undo(id)?;
+        self.refuse_agent_edit_in_gesture(id, spec)?;
         // Revert replaces the document's uid: refuse before ending previews or syncing branches.
         if id == "file.revert" && self.live().doc_uid.is_some() {
             return Err(EngineError::Disabled(id.into(), "leave the live session before reverting to the saved file".into()));
@@ -105,6 +129,7 @@ impl Session {
             .and_then(|v| self.check_instance_structure(id, &before).map(|()| v))
             .and_then(|v| self.check_preview(id, &before).map(|()| v))
             .and_then(|v| self.check_live_access(id, &before).map(|()| v))
+            .and_then(|v| self.check_agent_edit_in_gesture(id, &before).map(|()| v))
             .and_then(|v| self.check_finite_geometry(id, &before).map(|()| v))
             // Normalising is part of the command: a panic in it rolls the edit back too (#1085).
             .and_then(|v| {
@@ -164,6 +189,34 @@ impl Session {
             Err(EngineError::Internal { .. }) => self.restore_after_internal_error(group_depth, pending_events),
             Err(_) => {}
         }
+    }
+
+    /// Is a gesture open on `ds` that the agent now calling did not start? Its own (the text it is
+    /// editing) takes its edits; the window's, or another agent's, would fold them in or lose them.
+    fn in_foreign_gesture(&self, ds: &crate::DocState) -> bool {
+        self.agent.is_some() && ds.interaction.as_ref().is_some_and(|it| it.agent != self.agent)
+    }
+
+    /// While a gesture that is not its own is open on the active document, an agent's edit is
+    /// refused before it runs. Undo and redo are refused too: they pop the history before any later
+    /// check.
+    fn refuse_agent_edit_in_gesture(&self, id: &str, spec: &CommandSpec) -> Result<()> {
+        let edits = spec.history || matches!(id, "edit.undo" | "edit.redo");
+        if edits && self.ds().is_ok_and(|d| self.in_foreign_gesture(d)) {
+            return Err(EngineError::Disabled(id.to_string(), GESTURE_IN_PROGRESS.into()));
+        }
+        Ok(())
+    }
+
+    /// An agent's command that changes the document during a gesture that is not its own is refused
+    /// (it is rolled back): the gesture would fold the change in, or lose it when cancelled.
+    fn check_agent_edit_in_gesture(&self, id: &str, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) -> Result<()> {
+        let Some((bdoc, _, _, uid)) = before else { return Ok(()) };
+        let Some(ds) = self.docs.iter().find(|d| d.uid == *uid) else { return Ok(()) };
+        if !self.in_foreign_gesture(ds) || Arc::ptr_eq(&ds.doc, bdoc) {
+            return Ok(());
+        }
+        Err(EngineError::Disabled(id.to_string(), GESTURE_IN_PROGRESS.into()))
     }
 
     /// A version shown in place of the document is read-only: refuse an edit (it is rolled back).

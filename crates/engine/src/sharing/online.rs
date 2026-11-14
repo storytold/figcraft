@@ -484,7 +484,7 @@ fn open_file(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some((id, status, uid)) = s.online_session(&f).map(|l| (l.id, l.status.id(), l.doc_uid)) {
         let document = uid.and_then(|u| s.docs.iter().position(|d| d.uid == u));
         if let Some(d) = document {
-            s.active = d;
+            s.switch_active_tab(d, CMD)?;
         }
         return Ok(brief(id, status, document, true));
     }

@@ -472,6 +472,9 @@ pub struct UiState {
     /// The tab the About window shows.
     pub about_tab: dialogs::AboutTab,
     pub preferences: bool,
+    /// Preferences is asking before it lets AI agents in (`Some(true)`) or shuts them out
+    /// (`Some(false)`).
+    pub agent_control_ask: Option<bool>,
     /// A menu command that needs a value before the engine can run it.
     pub menu_input: Option<dialogs::MenuInput>,
     /// File ▸ Rename: the file name in the left panel starts its inline rename on the next frame.
@@ -685,6 +688,7 @@ impl Default for UiState {
             about: false,
             about_tab: dialogs::AboutTab::About,
             preferences: false,
+            agent_control_ask: None,
             menu_input: None,
             rename_file: false,
             ui_scale: ui_scale::plan(1.0, None, None),
@@ -828,12 +832,20 @@ pub struct FigApp {
     /// The automation roots the app was started with: every frame and control request runs
     /// confined to them ([`windows::guard`]).
     pub automation_roots: Option<Arc<figcraft_engine::file_access::Roots>>,
+    /// The roots are the Preferences' folder for agents, not launch options: they confine what
+    /// arrives through the control channel only, never the user's own work in the window.
+    pub automation_roots_for_agents: bool,
+    /// The launch named the control port: that server runs until exit, and the Preferences'
+    /// switch for agent control changes nothing.
+    pub agent_control_fixed: bool,
     /// The active-document id when synthetic input was queued: a batch is dropped when the file
     /// changed before a UI pass applied it.
     pub(crate) control_input_doc: Option<u64>,
     /// This frame applies events injected through the control channel: no system clipboard
     /// read or write may happen for them.
     pub(crate) control_synthetic: bool,
+    /// An injected frame showed the unsaved-changes question: the next one takes the keyboard back first.
+    pub(crate) question_shown_to_control_client: bool,
     /// `ui.input` replies waiting for the pass that actually presents the injected batch (a
     /// discarded sizing pass must not acknowledge it).
     pub(crate) input_acks: Vec<PendingAck>,

@@ -30,6 +30,9 @@ pub struct Interaction {
     /// their outlines, box and everything else that doesn't depend on where they are can follow
     /// by shifting what was worked out from `doc` (#1571). `None` for any other change.
     pub moved_by: Option<(f64, f64)>,
+    /// Who started it: the agent whose call opened it (the text it is editing, say), `None` for
+    /// the window. An agent's edits are refused during a gesture that is not its own.
+    pub agent: Option<String>,
 }
 
 /// The text being edited on the canvas.

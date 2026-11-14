@@ -36,6 +36,23 @@ fn an_agents_comments_carry_its_name_and_the_agent_marker() {
     assert_eq!(s.agent, None, "the agent acts only for its own call");
 }
 
+/// A panic that goes through an agent's call, outside the command's own guard, ends that call
+/// like any other end: what the user does next is the user's.
+#[test]
+fn after_an_agents_call_that_panicked_the_user_signs_as_the_user() {
+    let mut s = Session::new();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.run_as::<()>(Some("Claude"), |_| panic!("a bug in Claude's call"))));
+    assert!(unwound.is_err(), "the panic goes on to the caller");
+    s.execute("comment.add", &json!({"x": 10, "y": 10, "text": "mine"})).unwrap();
+    let t = s.execute("comment.list", &json!({"filter": "all"})).unwrap()["comments"][0].clone();
+    assert_eq!(
+        (t["author"].as_str(), t["agent"].as_bool()),
+        (Some("You"), Some(false)),
+        "the user's comment is signed by the agent whose call panicked: {t}"
+    );
+    assert_eq!(s.agent, None, "the call that panicked is over: nobody acts as its agent");
+}
+
 #[test]
 fn an_agents_read_state_is_its_own() {
     let mut s = Session::new();
@@ -66,6 +83,17 @@ fn agent_names_are_cleaned() {
     assert_eq!(agent_author("a\u{0}b"), "ab (agent)");
     let long = "x".repeat(500);
     assert_eq!(agent_author(&long).chars().count(), 64 + " (agent)".len());
+}
+
+#[test]
+fn a_name_cut_at_a_space_is_the_name_it_is_found_under() {
+    use crate::cmd::comment::agent_name;
+    // The 64th character is a space: what is kept must not end with it, or the name `agent.join`
+    // gives back would name another agent when the client sends it again.
+    let long = format!("{} Z", "a".repeat(63));
+    let kept = agent_name(&long);
+    assert_eq!(kept, "a".repeat(63), "cut to 64 characters, then trimmed");
+    assert_eq!(agent_name(&kept), kept, "a kept name is kept as it is");
 }
 
 #[test]

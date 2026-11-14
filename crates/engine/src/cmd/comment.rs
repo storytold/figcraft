@@ -275,9 +275,17 @@ pub fn user_name(s: &Session) -> String {
 /// How an AI agent's comments are signed: its client's name, marked so it never reads as a
 /// person's ("Claude" → "Claude (agent)"), or [`DEFAULT_AGENT`] when it gave none.
 pub fn agent_author(name: &str) -> String {
-    let n: String = name.chars().filter(|c| !c.is_control()).collect();
-    let n: String = n.trim().chars().take(MAX_AGENT_NAME).collect();
+    let n = agent_name(name);
     if n.is_empty() { DEFAULT_AGENT.into() } else { format!("{n} (agent)") }
+}
+
+/// The name an AI agent gave, as it is kept: no control characters, trimmed, at most
+/// [`MAX_AGENT_NAME`] characters; empty when it gave none.
+pub fn agent_name(name: &str) -> String {
+    let n: String = name.chars().filter(|c| !c.is_control()).collect();
+    let cut: String = n.trim().chars().take(MAX_AGENT_NAME).collect();
+    // The cut can end on a space: trimmed again, the name kept is the one it is found under.
+    cut.trim_end().to_string()
 }
 
 /// Who acts when no `author` is given: the AI agent the command runs for, else the user.
