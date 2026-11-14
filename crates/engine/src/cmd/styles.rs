@@ -256,6 +256,48 @@ fn text_style_json(cmd: &str, v: &Value) -> Result<TextStyle> {
     serde_json::from_value::<TextStyle>(v).map(|t| t.as_text_style()).map_err(|e| bad(cmd, e.to_string()))
 }
 
+/// A text style value from JSON: the character values from `style`, the paragraph values from
+/// `paragraph` (the same object for the flat `value` of `style.create`).
+fn text_kind(cmd: &str, style: &Value, paragraph: &Value) -> Result<StyleKind> {
+    Ok(StyleKind::Text { style: text_style_json(cmd, style)?, paragraph: Box::new(paragraph_style_json(cmd, paragraph)?) })
+}
+
+/// Make or redefine this file's text style `name` from JSON (see [`text_kind`]). `bind` gives its
+/// variable bindings from the document, the new value and the style it replaces. The style
+/// redefined is the local text style of that name with the exported `id` (so a file re-importing
+/// its own export keeps each style's identity when two share a name), else the first of that
+/// name; never one in `touched`. True when one existed (with the style's id); the caller settles
+/// and propagates.
+pub(crate) fn upsert_text_style(
+    doc: &mut Document,
+    name: &str,
+    id: Option<&str>,
+    description: &str,
+    style: &Value,
+    paragraph: &Value,
+    touched: &[StyleId],
+    bind: impl FnOnce(&Document, &StyleKind, Option<&Style>) -> BTreeMap<String, VariableId>,
+) -> Result<(StyleId, bool)> {
+    let kind = text_kind("variable.import", style, paragraph)?;
+    let eligible = |x: &Style| {
+        x.name == name && matches!(x.kind, StyleKind::Text { .. }) && !crate::library::is_remote_style(doc, &x.id) && !touched.contains(&x.id)
+    };
+    let same = id.and_then(|id| doc.styles.iter().position(|x| x.id == id && eligible(x))).or_else(|| doc.styles.iter().position(&eligible));
+    let updated = same.is_some();
+    let bound = bind(doc, &kind, same.and_then(|i| doc.styles.get(i)));
+    let mut st = match same.and_then(|i| doc.styles.get(i)) {
+        Some(x) => Style { kind, bound, ..x.clone() },
+        None => Style { id: doc.new_style_id(), name: name.to_string(), description: description.to_string(), kind, bound },
+    };
+    crate::style_vars::prune(&mut st);
+    let sid = st.id.clone();
+    match same.and_then(|i| doc.styles.get_mut(i)) {
+        Some(slot) => *slot = st,
+        None => doc.styles.push(st),
+    }
+    Ok((sid, updated))
+}
+
 /// The text style definition a layer's chars from `at` (None = its base style) show.
 fn text_style_of(n: &Node, at: Option<usize>) -> Option<TextStyle> {
     let t = n.kind.text()?;
@@ -357,7 +399,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = if let Some(v) = get(p, "value") {
         match t.as_str() {
             "paint" | "color" | "fill" => StyleKind::Paint { paints: paints_of(v).ok_or_else(|| bad(cmd, "value: paints"))? },
-            "text" => StyleKind::Text { style: text_style_json(cmd, v)?, paragraph: Box::new(paragraph_style_json(cmd, v)?) },
+            "text" => text_kind(cmd, v, v)?,
             "effect" => StyleKind::Effect { effects: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
             "grid" => StyleKind::Grid { grids: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
             _ => return Err(bad(cmd, "type: paint|text|effect|grid")),
@@ -559,7 +601,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         let cur = doc.styles.get(idx).map(|x| x.kind.type_name()).unwrap_or("paint");
         Some(match cur {
             "paint" => StyleKind::Paint { paints: paints_of(v).ok_or_else(|| bad(cmd, "value: paints"))? },
-            "text" => StyleKind::Text { style: text_style_json(cmd, v)?, paragraph: Box::new(paragraph_style_json(cmd, v)?) },
+            "text" => text_kind(cmd, v, v)?,
             "effect" => StyleKind::Effect { effects: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
             _ => StyleKind::Grid { grids: serde_json::from_value(v.clone()).map_err(|e| bad(cmd, e.to_string()))? },
         })
