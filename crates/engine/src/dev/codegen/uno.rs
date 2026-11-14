@@ -1035,8 +1035,9 @@ const MAX_PATH_ELEMENTS: usize = 5_000;
 
 /// An outline as the path mini-language of `Path.Data`: a fill rule (`F1` non-zero, `F0` even-odd)
 /// then `M x y`, `L x y`, `Q cx cy x y`, `C c1x c1y c2x c2y x y` and `Z`, numbers through [`num`].
-/// `None` for an empty outline, one with a coordinate that is not finite, or one past
-/// [`MAX_PATH_ELEMENTS`].
+/// `None` for an empty outline, one with a coordinate that is not finite, one past
+/// [`MAX_PATH_ELEMENTS`], or one whose text is longer than [`MAX_LITERAL`] (which [`cs_literal`]
+/// would cut, leaving broken geometry): the layer is then exported as an image.
 pub(crate) fn path_data(path: &figcraft_geom::BezPath, rule: figcraft_render::FillRule) -> Option<String> {
     use figcraft_geom::kurbo::PathEl;
     let els = path.elements();
@@ -1055,6 +1056,9 @@ pub(crate) fn path_data(path: &figcraft_geom::BezPath, rule: figcraft_render::Fi
         };
         out.push(' ');
         out.push_str(&part);
+        if out.len() > MAX_LITERAL {
+            return None;
+        }
     }
     Some(out)
 }

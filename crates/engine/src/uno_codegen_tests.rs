@@ -911,12 +911,20 @@ fn path_data_refuses_empty_non_finite_and_huge_outlines() {
         huge.line_to((f64::from(i), 1.0));
     }
     assert!(path_data(&huge, FillRule::Winding).is_none(), "5,001 elements are past the cap");
+    // Under the element cap but longer than one C# literal (10,000 characters): refused too.
+    let mut long = BezPath::new();
+    long.move_to((0.0, 0.0));
+    for i in 0..2_000 {
+        long.line_to((f64::from(i), 1.0));
+    }
+    assert!(path_data(&long, FillRule::Winding).is_none(), "about 16,000 characters");
     let mut ok = BezPath::new();
     ok.move_to((0.0, 0.0));
-    for i in 0..4_999 {
+    for i in 0..999 {
         ok.line_to((f64::from(i), 1.0));
     }
-    assert!(path_data(&ok, FillRule::Winding).is_some());
+    let data = path_data(&ok, FillRule::Winding);
+    assert!(data.as_ref().is_some_and(|d| d.len() <= 10_000 && d.ends_with("L 998 1")), "{data:?}");
 }
 
 #[test]
@@ -994,6 +1002,27 @@ fn vectors_that_a_path_cannot_draw_are_png_assets_with_unique_lowercase_names() 
     // The fourth is plain: a path, and it takes no asset name.
     assert_eq!(code.matches("new Microsoft.UI.Xaml.Shapes.Path()").count(), 1, "{code}");
     assert!(!code.contains("star_icon_4") && !code.contains(".svg"), "{code}");
+}
+
+#[test]
+fn a_path_too_long_for_one_literal_is_an_image_not_cut_geometry() {
+    let mut s = Session::new();
+    let f = frame(&mut s, "Long", 2000.0, 2000.0);
+    // 2,001 elements (under the element cap) but about 24,000 characters of path data.
+    let mut d = String::from("M0 0");
+    for i in 0..2000 {
+        d.push_str(&format!(" L{}.25 {}.75", 1000 + i % 997, 1000 + (i * 7) % 991));
+    }
+    d.push_str(" Z");
+    let v = idv(&ex(&mut s, "node.create", json!({"type": "vector", "path": d, "closed": true, "parent": f, "name": "Long Line"})));
+    set(&mut s, v, json!({"fills": ["#000000"]}));
+    let code = uno(&mut s, f);
+    assert!(!code.contains(".Data("), "{code}");
+    assert!(code.contains(".Source(\"ms-appx:///Assets/long_line.png\")"), "{code}");
+    // A short outline is still a path.
+    let short = idv(&ex(&mut s, "node.create", json!({"type": "vector", "path": "M0 0 L10 0 L10 10 Z", "closed": true, "parent": f})));
+    set(&mut s, short, json!({"fills": ["#000000"]}));
+    assert_eq!(uno(&mut s, f).matches(".Data(").count(), 1);
 }
 
 #[test]
