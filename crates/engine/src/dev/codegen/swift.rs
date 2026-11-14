@@ -39,7 +39,7 @@ fn swift_paint(doc: &Document, n: &Node, i: usize, p: &Paint) -> Option<String> 
             Some(if i == 0 { named(doc, n, "iOS", &["fill"], c) } else { c })
         }
         PaintKind::Gradient(g) => Some(swift_gradient(g, n.width, n.height, p.opacity)),
-        PaintKind::Image(_) | PaintKind::Pattern(_) => None,
+        PaintKind::Image(_) | PaintKind::Pattern(_) | PaintKind::Shader(_) => None,
     }
 }
 

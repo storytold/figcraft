@@ -71,7 +71,7 @@ fn vector_only(doc: &Document, id: NodeId, depth: usize, paths: &mut bool) -> bo
     if !n.visible {
         return true;
     }
-    if n.fills.iter().chain(&n.strokes).any(|p| matches!(p.kind, PaintKind::Image(_) | PaintKind::Pattern(_))) {
+    if n.fills.iter().chain(&n.strokes).any(|p| matches!(p.kind, PaintKind::Image(_) | PaintKind::Pattern(_) | PaintKind::Shader(_))) {
         return false;
     }
     match n.kind {
@@ -511,6 +511,17 @@ fn paint_row(p: &figcraft_color::Paint, fmt: ColorFormat) -> Prop {
         }
         PaintKind::Image(_) => prop("Image", format!("{}%", (p.opacity * 100.0).round())),
         PaintKind::Pattern(_) => prop("Pattern", format!("{}%", (p.opacity * 100.0).round())),
+        PaintKind::Shader(shader) => prop(
+            format!("Shader ({})", shader.pattern.label()),
+            format!(
+                "{} -> {}; scale {:.2}, time {:.2}, grain {:.2}",
+                shader.color_a.to_css_hex(),
+                shader.color_b.to_css_hex(),
+                shader.scale,
+                shader.time,
+                shader.grain
+            ),
+        ),
     }
 }
 

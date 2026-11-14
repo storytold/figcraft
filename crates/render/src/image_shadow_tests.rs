@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use figcraft_color::{Color, ImageScaleMode, Paint};
+use figcraft_color::{Color, ImageScaleMode, Paint, ShaderPaint, ShaderPattern};
 use figcraft_doc::{Document, Effect, EffectKind, ImageData, NodeId, NodeKind, Shadow};
 
 use super::{Pixmap, View, render_nodes_into, shadow};
@@ -105,4 +105,27 @@ fn a_transparent_images_inner_shadow_shades_its_alpha() {
     let p = render(&d, n);
     assert_eq!(px(&p, 200, 105), [0, 0, 0, 255]);
     assert_eq!(px(&p, 200, 200), [255, 0, 0, 255]);
+}
+
+#[test]
+fn a_transparent_shader_inner_shadow_matches_when_the_view_cuts_through_it() {
+    let effect = EffectKind::InnerShadow(Shadow { radius: 8.0, offset: (5.0, 3.0), ..shadow((0.0, 0.0), false) });
+    let (mut d, n) = scene(false, effect, 1.0);
+    d.get_mut(n).unwrap().fills = vec![Paint::shader(ShaderPaint {
+        pattern: ShaderPattern::Noise,
+        color_a: Color::BLACK.with_alpha(0.0),
+        color_b: Color::WHITE,
+        ..ShaderPaint::default()
+    })];
+    assert!(crate::draw::effect_margin(d.node(n).unwrap()) >= 16.0);
+    let full = render(&d, n);
+    let mut partial = Pixmap::new(200, 400).unwrap();
+    render_nodes_into(&d, &[n], &View { origin: (200.0, 0.0), scale: 1.0, width: 200, height: 400 }, &mut partial);
+    for y in 120..280 {
+        for x in 0..20 {
+            let a = px(&full, 200 + x, y);
+            let b = px(&partial, x, y);
+            assert!(a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 3), "at ({x}, {y}): {a:?} vs {b:?}");
+        }
+    }
 }

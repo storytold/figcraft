@@ -97,6 +97,11 @@ impl<'d> Exporter<'d> {
                 self.warn("pattern fills were left out");
                 return None;
             }
+            // FigCraft's own procedural patterns: nothing in this format draws them.
+            PaintKind::Shader(_) => {
+                self.warn("procedural shader fills were left out");
+                return None;
+            }
         }
         f.push(("opacity", fl(opacity)));
         Some(o(f))

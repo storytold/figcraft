@@ -164,6 +164,7 @@ pub fn prepare_at(paint: &Paint, w: f64, h: f64, scale: f64, doc: &Document, tim
             Some(Prepared::Pattern { pixmap: padded, mode: SpreadMode::Pad, quality: FilterQuality::Bicubic, opacity: op, transform })
         }
         PaintKind::Pattern(pt) => crate::pattern::prepare(doc, pt, w, h, scale, time, op),
+        PaintKind::Shader(sp) => crate::shader_fill::prepare(sp, w, h, scale, preview, op),
     }
 }
 

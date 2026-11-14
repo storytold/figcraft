@@ -970,6 +970,10 @@ impl<'a> Exporter<'a> {
                 self.warn("Pattern fills have no Penpot equivalent and were left out");
                 return None;
             }
+            PaintKind::Shader(_) => {
+                self.warn("Procedural shader fills have no Penpot equivalent and were left out");
+                return None;
+            }
         }
         Some(out)
     }

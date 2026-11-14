@@ -1,5 +1,5 @@
 use super::*;
-use figcraft_color::{Color, ColorStop, Gradient, GradientKind, Paint};
+use figcraft_color::{Color, ColorStop, Gradient, GradientKind, Paint, ShaderPaint, ShaderPattern};
 use figcraft_doc::{Effect, EffectKind, NodeKind, Region, Segment, Shadow, StrokeAlign, TextData, VectorNetwork, Vertex, WindingRule};
 
 fn px(p: &Pixmap, x: u32, y: u32) -> [u8; 4] {
@@ -26,6 +26,22 @@ fn solid_rect_and_page_background() {
     let pix = render_view(&d, p, &view(100, 100), &Options::default()).unwrap();
     assert_eq!(px(&pix, 30, 20), [255, 0, 0, 255]);
     assert_eq!(px(&pix, 5, 5), [0xF5, 0xF5, 0xF5, 255]);
+}
+
+#[test]
+fn procedural_shader_patterns_render_in_the_layer_space() {
+    let (mut d, _, r) = doc_with_rect(Color::BLACK);
+    for pattern in ShaderPattern::ALL {
+        d.get_mut(r).unwrap().fills = vec![Paint::shader(ShaderPaint { pattern, bands: 3, scale: 8.0, grain: 0.1, ..ShaderPaint::default() })];
+        let pix = render_node(&d, r, 1.0).unwrap();
+        let (x_a, x_b) =
+            if pattern == ShaderPattern::Concentric { (pix.width() / 2, pix.width() * 5 / 6) } else { (pix.width() / 4, pix.width() * 3 / 4) };
+        let a = px(&pix, x_a, pix.height() / 2);
+        let b = px(&pix, x_b, pix.height() / 2);
+        assert_ne!(a, b, "{pattern:?} rendered as a flat paint");
+        assert_eq!(a[3], 255);
+        assert_eq!(b[3], 255);
+    }
 }
 
 #[test]

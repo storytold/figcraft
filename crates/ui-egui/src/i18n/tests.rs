@@ -20,6 +20,13 @@ fn dynamic_keys() -> BTreeSet<String> {
 /// properties, comment filters and sorts, change kinds, the live status.
 // shortcut: a hand-kept list; enumerate each enum's `ALL` here when a label goes missing in review.
 const DATA_LABELS: &[&str] = &[
+    "Bands",
+    "Cells",
+    "Color A",
+    "Color B",
+    "Concentric",
+    "Grain",
+    "Waves",
     "Added",
     "Align",
     "All comments",
