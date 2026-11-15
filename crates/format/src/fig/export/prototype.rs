@@ -105,7 +105,7 @@ impl<'d> Exporter<'d> {
         // Message → layer → interaction → action uses three Kiwi levels. Each
         // conditional adds two, an expression operator adds three, and the deepest
         // condition (an alias with a GUID) uses five levels below its action.
-        let expression_levels = (super::super::kiwi::MAX_DEPTH - 8 - 2 * depth) / 3;
+        let expression_levels = (craft_fig::kiwi::MAX_DEPTH - 8 - 2 * depth) / 3;
         match a {
             Action::Navigate { dest, preserve_scroll } => {
                 let mut act = node(self, dest, "NAVIGATE")?;

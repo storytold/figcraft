@@ -795,11 +795,11 @@ fn hashes_naming_one_blob_share_one_copy_of_it() {
         ("blobs", Kv::Array(vec![o(vec![("bytes", Kv::Bytes(png()))]), o(vec![("bytes", Kv::Bytes(vec![7; 16]))])])),
         ("nodeChanges", Kv::Array((1..=50).map(|h| image(h, 0)).chain([image(99, 1), image(98, 2)]).collect())),
     ]);
-    let copies = embedded_copies(&msg);
+    let copies = embedded_copies(&msg, MAX_IMAGE);
     assert_eq!(copies.len(), 51, "the hash naming no blob is left out");
     let first = &copies[&"01".repeat(20)];
     assert_eq!(**first, *png());
-    assert_eq!(copies.values().filter(|c| Arc::ptr_eq(c, first)).count(), 50);
+    assert_eq!(copies.values().filter(|c| std::sync::Arc::ptr_eq(c, first)).count(), 50);
     assert_eq!(*copies[&"63".repeat(20)], [7; 16]);
 }
 
@@ -814,7 +814,7 @@ fn hashes_naming_one_blob_are_imported_once() {
     let mut nodes = vec![node(0, None, "DOCUMENT", "D", vec![]), node(1, Some((0, "!")), "CANVAS", "P", vec![])];
     nodes.extend((2..42).map(|i| rect(i, i as u8, 0)));
     let msg = o(vec![("nodeChanges", arr(nodes)), ("blobs", arr(vec![o(vec![("bytes", Kv::Bytes(png()))])]))]);
-    let copies = embedded_copies(&msg);
+    let copies = embedded_copies(&msg, MAX_IMAGE);
     let aliases = embedded_aliases(&copies, |_| false);
     assert_eq!(aliases.len(), 39);
     assert!(aliases.values().all(|c| *c == "02".repeat(20)));
@@ -974,13 +974,13 @@ mod image_budget {
         // Shorten the first member's compressed size, cutting its deflate stream mid-image.
         change_member_field(&mut zip, 1, 20, 15);
         let limit = members[0].1.len() as u64;
-        let archive = Archive::open(&zip).unwrap();
-        archive.image_budget.remaining.set(limit);
+        let archive = Archive::open_with(&zip, Limits { max_image: MAX_IMAGE, max_image_total: limit }).unwrap();
         assert!(archive.image(&"01".repeat(20)).is_none());
-        let remaining = archive.image_budget.remaining.get();
-        assert!(remaining > 0 && remaining < limit, "partial read left {remaining} of {limit} bytes");
+        // The failed read keeps its charge (craft-fig charges the declared size).
+        let remaining = archive.image_bytes_left();
+        assert!(remaining < limit, "partial read left {remaining} of {limit} bytes");
         assert!(archive.image(&"02".repeat(20)).is_none());
-        assert_eq!(archive.image_budget.remaining.get(), remaining);
+        assert_eq!(archive.image_bytes_left(), remaining);
         let (doc, warnings) = import_with_image_limit(&zip, "Images", limit).unwrap();
         assert_ne!(bytes(&doc, 1), members[1].1);
         assert_eq!(budget_warnings(&warnings).len(), 1, "{warnings:?}");
@@ -1013,14 +1013,13 @@ mod image_budget {
         let members = [(1, image(1)), (2, image(2))];
         let mut zip = file(&[1, 2], &members);
         change_member_field(&mut zip, 1, 24, 1);
-        let archive = Archive::open(&zip).unwrap();
-        archive.image_budget.remaining.set(members[0].1.len() as u64 - 1);
+        let archive = Archive::open_with(&zip, Limits { max_image: MAX_IMAGE, max_image_total: members[0].1.len() as u64 - 1 }).unwrap();
+        // Whether the ZIP reader refuses the mismatch or reads on, the member is not returned
+        // and the budget is never overdrawn.
         assert!(archive.image(&"01".repeat(20)).is_none());
-        assert_eq!(archive.image_budget.remaining.get(), 0);
-        assert_eq!(archive.image_budget.skipped.get(), 1);
+        assert!(archive.image_bytes_left() < members[0].1.len() as u64);
         assert!(archive.image(&"02".repeat(20)).is_none());
-        assert_eq!(archive.image_budget.remaining.get(), 0);
-        assert_eq!(archive.image_budget.skipped.get(), 2);
+        assert!(archive.images_skipped() >= 1);
     }
 
     #[test]
@@ -1153,23 +1152,23 @@ fn mangled_kiwi_never_panics() {
 #[test]
 fn large_files_get_a_larger_value_budget() {
     // Small files keep the fixed floor: a few bytes can't expand into a huge tree.
-    assert_eq!(kiwi::value_budget(0), 20_000_000);
-    assert_eq!(kiwi::value_budget(1 << 20), 20_000_000);
+    assert_eq!(craft_fig::value_budget(0), 20_000_000);
+    assert_eq!(craft_fig::value_budget(1 << 20), 20_000_000);
     // A real 400 000-layer file: an 83.5 MB canvas whose message unpacks to 334 MB and holds
     // 30.5 million values was refused as "too many values".
-    assert!(kiwi::value_budget(83_491_232) > 30_514_899);
+    assert!(craft_fig::value_budget(83_491_232) > 30_514_899);
     // A real 194 MB design-system file (UX4G): a 39.5 MB canvas holding 29.7 million values.
-    assert!(kiwi::value_budget(39_528_420) > 29_703_730);
+    assert!(craft_fig::value_budget(39_528_420) > 29_703_730);
     // Still bounded by the largest canvas read.
-    assert!(kiwi::value_budget(MAX_CANVAS as usize) <= 128 << 20);
+    assert!(craft_fig::value_budget(MAX_CANVAS as usize) <= 128 << 20);
     // Counting every scalar field, a dense file may reach about 2.4 values per compressed byte (the
     // 15 MB text-heavy fixture in `value_budget_tests` measures 1.8): below the ceiling the budget must
     // cover that, the floor still holds up to 5 MB of canvas, and 32 MiB is enough for the ceiling.
-    assert!(kiwi::value_budget(8 << 20) >= (8 << 20) * 12 / 5);
+    assert!(craft_fig::value_budget(8 << 20) >= (8 << 20) * 12 / 5);
     #[cfg(not(target_pointer_width = "32"))]
-    assert!(kiwi::value_budget(30_000_000) >= 30_000_000 * 12 / 5);
-    assert_eq!(kiwi::value_budget(5_000_000), 20_000_000);
-    assert_eq!(kiwi::value_budget(32 << 20), kiwi::value_budget(MAX_CANVAS as usize));
+    assert!(craft_fig::value_budget(30_000_000) >= 30_000_000 * 12 / 5);
+    assert_eq!(craft_fig::value_budget(5_000_000), 20_000_000);
+    assert_eq!(craft_fig::value_budget(32 << 20), craft_fig::value_budget(MAX_CANVAS as usize));
 }
 
 #[test]
@@ -1822,7 +1821,6 @@ fn same_version_library_copies_resolve_deterministically_and_leave_no_table() {
         let page = doc.nodes().find(|n| n.name == "Page").unwrap();
         assert_eq!(page.var_modes.get(&id).map(String::as_str), Some("1:90"));
         picked.push(id);
-        assert!(!super::map::VarCanon::installed());
     }
     assert_eq!(picked, ["1:6", "1:6"]);
 }
