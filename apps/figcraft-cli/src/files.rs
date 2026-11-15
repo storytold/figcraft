@@ -242,6 +242,7 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
 fn sanitize(name: &str) -> String {
     let s = figcraft_engine::cmd::file::safe_file_name(name);
     let s = s.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    let s = figcraft_engine::file_access::escape_device_names(s);
     if s.is_empty() { "layer".into() } else { s.char_indices().take(100).take_while(|(i, c)| i + c.len_utf8() <= 200).map(|(_, c)| c).collect() }
 }
 
@@ -543,6 +544,10 @@ mod tests {
         assert_eq!(sanitize("Home / Hero"), "Home _ Hero");
         assert_eq!(sanitize("../.."), "_");
         assert_eq!(sanitize(""), "layer");
+        assert_eq!(sanitize("CON"), "_CON");
+        assert_eq!(sanitize(" .nul.txt. "), "_nul.txt");
+        assert_eq!(sanitize("COM1"), "_COM1");
+        assert_eq!(sanitize("HomeCON"), "HomeCON");
         // The same characters the app's export keeps (#1154): only what file systems refuse goes.
         assert_eq!(sanitize("Homepage - desktop (live + verbeteringen)"), "Homepage - desktop (live + verbeteringen)");
         assert_eq!(sanitize("Q&A, 50% #1 [v2] {x} ~é"), "Q&A, 50% #1 [v2] {x} ~é");
