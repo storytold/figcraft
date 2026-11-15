@@ -242,8 +242,10 @@ pub fn info(path: &str, as_json: bool) -> CliResult<ExitCode> {
 fn sanitize(name: &str) -> String {
     let s = figcraft_engine::cmd::file::safe_file_name(name);
     let s = s.trim_matches(|c: char| c == '.' || c.is_whitespace());
-    let s = figcraft_engine::file_access::escape_device_names(s);
-    if s.is_empty() { "layer".into() } else { s.char_indices().take(100).take_while(|(i, c)| i + c.len_utf8() <= 200).map(|(_, c)| c).collect() }
+    let cap = |s: &str| s.char_indices().take(100).take_while(|(i, c)| i + c.len_utf8() <= 200).map(|(_, c)| c).collect::<String>();
+    // Truncation can expose a device name; its escape must still fit the limits.
+    let s = figcraft_engine::file_access::escape_device_names(&cap(s));
+    if s.is_empty() { "layer".into() } else { cap(&s) }
 }
 
 /// What `export` exports and how.
@@ -556,6 +558,16 @@ mod tests {
         assert_eq!(sanitize(" . .name. . "), "name", "spaces and dots at the edges, mixed");
         assert_eq!(sanitize(&"x".repeat(300)).chars().count(), 100);
         assert_eq!(sanitize(&"\u{1F600}".repeat(100)), "\u{1F600}".repeat(50), "at most 200 bytes, whole characters");
+    }
+
+    #[test]
+    fn sanitizes_names_that_become_devices_at_the_character_limit() {
+        assert_eq!(sanitize(&format!("CON{}X", " ".repeat(97))), format!("_CON{}", " ".repeat(96)));
+    }
+
+    #[test]
+    fn sanitizes_names_that_become_devices_at_the_byte_limit() {
+        assert_eq!(sanitize(&format!("NUL{}  X", "\u{2003}".repeat(65))), format!("_NUL{} ", "\u{2003}".repeat(65)));
     }
 
     #[test]
