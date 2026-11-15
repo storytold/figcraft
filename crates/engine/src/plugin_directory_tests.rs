@@ -303,3 +303,20 @@ fn a_bundle_asking_for_more_than_the_directory_showed_is_not_installed() {
     let err = s.execute("plugin.directory.install", &json!({"id": ID, "confirm": true})).unwrap_err().to_string();
     assert!(err.contains("commands"), "{err}");
 }
+
+/// Verifies listing and installing builtin example plugins offline.
+#[test]
+fn builtin_store_lists_and_installs_without_network() {
+    let mut s = Session::new();
+    let r = s.execute("plugin.directory.list", &json!({"server": "builtin"})).unwrap();
+    assert_eq!(r["server"], "builtin");
+    let plugins = r["plugins"].as_array().unwrap();
+    assert!(plugins.len() >= 4, "builtin store has all 4 example plugins");
+    assert!(plugins.iter().any(|p| p["id"] == "org.figcraft.examples.tidy-names"));
+    assert!(plugins.iter().any(|p| p["id"] == "org.figcraft.examples.counter" && p["widget"] == true));
+
+    let installed =
+        s.execute("plugin.directory.install", &json!({"id": "org.figcraft.examples.tidy-names", "server": "builtin", "confirm": true})).unwrap();
+    assert_eq!(installed["installed"], "org.figcraft.examples.tidy-names");
+    assert!(s.execute("plugin.run", &json!({"id": "org.figcraft.examples.tidy-names"})).is_ok());
+}

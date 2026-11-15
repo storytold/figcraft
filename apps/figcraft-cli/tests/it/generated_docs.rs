@@ -106,7 +106,10 @@ fn man_pages_cover_every_subcommand_without_synthetic_help_pages() -> std::io::R
             "figcraft-cli-info.1",
             "figcraft-cli-mcp.1",
             "figcraft-cli-perf.1",
+            "figcraft-cli-plugin-build.1",
+            "figcraft-cli-plugin-new.1",
             "figcraft-cli-plugin-publish.1",
+            "figcraft-cli-plugin-run.1",
             "figcraft-cli-plugin.1",
             "figcraft-cli-render.1",
             "figcraft-cli-run.1",
@@ -145,7 +148,7 @@ fn generation_creates_the_output_directory_and_can_run_again() -> std::io::Resul
     fs::write(&page, "old page")?;
     generator::generate(&output)?;
     assert_eq!(fs::read(page)?, first);
-    assert_eq!(fs::read_dir(output)?.count(), 18);
+    assert_eq!(fs::read_dir(output)?.count(), 21);
     Ok(())
 }
 
