@@ -87,11 +87,14 @@ fn text_of(s: &Session, id: NodeId) -> Result<TextData> {
     }
 }
 
+/// The label of the gesture [`begin`] opens: the one that goes with a text editor.
+pub(crate) const EDIT_TEXT: &str = "Edit text";
+
 /// Start editing text node `id` with the caret at `caret` (None = select all).
 pub fn begin(s: &mut Session, id: NodeId, caret: Option<usize>, created: bool) -> Result<()> {
     let t = text_of(s, id)?;
     let n = t.char_count();
-    s.begin_interaction("Edit text")?;
+    s.begin_interaction(EDIT_TEXT)?;
     let ds = s.ds_mut()?;
     // Editing the same layer again (a double-click into a text just made) keeps it new.
     let created = created || ds.text_edit.as_ref().is_some_and(|te| te.id == id && te.created);

@@ -7,7 +7,7 @@ impl FigApp {
     /// with the document it belongs to (a batch is dropped if another file is active by then).
     /// It also carries the agent that makes the batch (`None`: no agent), and is replayed under
     /// that name.
-    pub(crate) fn push_control_input(&mut self, events: Vec<egui::Event>, agent: Option<&str>) -> bool {
+    pub(crate) fn push_control_input(&mut self, events: Vec<egui::Event>, agent: Option<figcraft_engine::agent::Asker>) -> bool {
         if events.is_empty() {
             return false;
         }
@@ -17,13 +17,13 @@ impl FigApp {
             // merged with one for the file showing now. Its acknowledgement says so.
             self.control_input.clear();
             let viewport = crate::windows::viewport(self.windows.current);
-            crate::windows::fail_input_acks(self, viewport);
+            crate::windows::fail_input_acks(self, viewport, crate::windows::DOCUMENT_CHANGED);
         }
         // Always the live pane vector: while a child window draws, `windows::enter` has swapped
         // its pane into the app, and `leave` swaps these events back into that pane.
         self.control_input.extend(events);
         self.control_input_doc = doc;
-        self.control_input_agent = agent.map(str::to_string);
+        self.control_input_agent = agent;
         self.control_synthetic = true;
         true
     }

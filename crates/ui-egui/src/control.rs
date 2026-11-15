@@ -1167,8 +1167,10 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
     };
     // A batch carries its agent: a second agent's input is not merged into one still waiting for
     // its frame, nor does it replace it.
-    let agent = p.get("agent").and_then(Value::as_str).filter(|a| !a.is_empty());
-    if !app.control_input.is_empty() && app.control_input_agent.as_deref() != agent {
+    // It is kept with who asked, the name and the stay it was admitted in: the frame replays it
+    // only for that one, not for whoever holds the name by then.
+    let agent = app.session.agent_asker(p.get("agent").and_then(Value::as_str).filter(|a| !a.is_empty()));
+    if !app.control_input.is_empty() && app.control_input_agent != agent {
         return Err("another agent's input is waiting for its frame: send it again".into());
     }
     let mut events = Vec::new();
@@ -1599,12 +1601,21 @@ fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Re
         "agent.join" | "agent.leave" => {
             let agent = p.get("agent").and_then(Value::as_str).ok_or("`agent` required")?;
             let key = figcraft_engine::agent::key_of(p);
-            let r = if method == "agent.join" {
-                app.session.agent_admit_join(agent, key).and_then(|()| app.session.agent_join(agent))
-            } else {
-                app.session.agent_admit(Some(agent), key).and_then(|()| app.session.agent_leave(agent))
-            };
-            r.map_err(|e| e.to_string())
+            if method == "agent.join" {
+                return app.session.agent_admit_join(agent, key).and_then(|()| app.session.agent_join(agent)).map_err(|e| e.to_string());
+            }
+            app.session.agent_admit(Some(agent), key).map_err(|e| e.to_string())?;
+            // Its batch is already in this frame's input: the frame replays it under the agent's
+            // name once the requests are done. Gone now, the name would be nobody's by then (or
+            // another client's), and the input would still be played.
+            if app.applied_frame.is_some() && app.applied_agent.as_ref().is_some_and(|a| a.names(agent)) {
+                return Err("the agent's input is being applied in this frame: send `agent.leave` again".into());
+            }
+            let left = app.session.agent_leave(agent).map_err(|e| e.to_string())?;
+            // What it queued and no frame has taken is not played after it: not under a name that
+            // is free again, and not while it keeps the other agents' input waiting.
+            crate::windows::forget_input_of_gone_agents(app);
+            Ok(left)
         }
         "agent.list" => Ok(app.session.agent_list()),
         "node.get" => {
@@ -1761,3 +1772,6 @@ mod agent_doors_tests;
 
 #[cfg(test)]
 mod agent_doors_table_tests;
+
+#[cfg(test)]
+mod agent_left_tests;

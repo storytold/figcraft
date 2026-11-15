@@ -407,6 +407,12 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             |s, p| {
                 let index = if num(p, "index").is_some() { Some(req_index("window.new", p, "index")?) } else { None };
+                // The file the window opens (or the new one it makes) comes in front. An agent
+                // working apart is told now, in its reply: the window refuses it later all the
+                // same (the request carries who asked), but nobody would read that refusal.
+                if index.is_none() {
+                    s.refuse_active_switch("window.new")?;
+                }
                 // The path is checked now, under the automation roots this command runs with (a
                 // control client's folders, else none). The window opens it later, when those roots
                 // no longer apply, so the request carries the resolved path that was checked.

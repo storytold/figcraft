@@ -486,6 +486,123 @@ fn an_agent_that_leaves_does_not_end_the_interaction_of_another() {
     assert!(!interaction_open(&s));
 }
 
+/// The user who presses on the layer an agent drags goes on in the agent's interaction: that
+/// interaction is the user's too from then on. Left under the agent's name, it would be committed
+/// when the agent leaves, and the user's drag would have nothing under it.
+#[test]
+fn the_interaction_goes_to_the_user_who_takes_an_agents_drag_over() {
+    let (mut s, ..) = a_and_b_apart();
+    pointer_as(&mut s, Some("a"), PointerKind::Down, 20.0, 20.0).unwrap();
+    pointer_as(&mut s, Some("a"), PointerKind::Move, 30.0, 30.0).unwrap();
+    pointer_as(&mut s, Some("a"), PointerKind::Move, 40.0, 40.0).unwrap();
+    let owner = |s: &Session| s.ds().unwrap().interaction.as_ref().map(|it| it.agent.clone());
+    // Calibration: a's drag is under way in an interaction of its own; the rectangle is at 20, 20.
+    assert!(s.tool.busy());
+    assert_eq!(owner(&s), Some(Some("a".to_string())));
+
+    pointer_as(&mut s, None, PointerKind::Down, 40.0, 40.0).unwrap();
+    assert_eq!(s.tool.held_by, None, "the gesture is the user's from the press on");
+    assert_eq!(owner(&s), Some(None), "and so is the interaction it works in");
+
+    // `a` leaves during the user's drag: nothing of the user's is ended with it.
+    s.agent_leave("a").unwrap();
+    assert!(interaction_open(&s), "the user's drag still has its interaction");
+    pointer_as(&mut s, None, PointerKind::Move, 50.0, 50.0).unwrap();
+    pointer_as(&mut s, None, PointerKind::Up, 50.0, 50.0).unwrap();
+    assert!(!interaction_open(&s), "the user ended it");
+}
+
+/// A tool gesture that opens no interaction (a marquee, a pencil stroke, a pan) is its holder's
+/// too: another agent begins no interaction during it. It could not go on with one (its preview
+/// and its commit are refused), and the holder's next event would be refused in turn.
+#[test]
+fn an_agent_begins_no_interaction_during_another_agents_tool_gesture() {
+    let (mut s, ..) = a_and_b_apart();
+    pointer_as(&mut s, Some("a"), PointerKind::Down, 200.0, 200.0).unwrap();
+    pointer_as(&mut s, Some("a"), PointerKind::Move, 220.0, 220.0).unwrap();
+    // Calibration: a drags a marquee off any layer, which opens no interaction.
+    assert!(s.tool.busy() && !interaction_open(&s));
+    assert_eq!(s.tool.held_by.as_deref(), Some("a"));
+
+    let r = s.with_agent(Some("b"), |s| s.begin_interaction("Other"));
+    assert!(refused_gesture(&r), "begin: {r:?}");
+    assert!(!interaction_open(&s), "b opened nothing");
+    // a goes on with its gesture and ends it.
+    pointer_as(&mut s, Some("a"), PointerKind::Move, 240.0, 240.0).unwrap();
+    pointer_as(&mut s, Some("a"), PointerKind::Up, 240.0, 240.0).unwrap();
+    assert!(!s.tool.busy());
+}
+
+// ---- Going back in the history: never another agent's step ----
+
+/// The pen's double-click takes its first press back by going back in the history. With another
+/// agent at work, the steps since that press may be the other's: an agent's double-click then
+/// leaves its first press in, as its undo would be refused.
+#[test]
+fn the_pens_double_click_of_an_agent_does_not_take_back_another_agents_step() {
+    let mut s = Session::new();
+    s.agent_join("a").unwrap();
+    s.agent_join("b").unwrap();
+    s.set_tool(crate::tools::ToolId::Pen);
+    let click = |s: &mut Session, x: f64, y: f64| {
+        pointer_as(s, Some("a"), PointerKind::Down, x, y).unwrap();
+        pointer_as(s, Some("a"), PointerKind::Up, x, y).unwrap();
+    };
+    // a draws a path, then keeps the pen in edit mode (Escape), as `pen_vector_edit_tests` does.
+    click(&mut s, 100.0, 100.0);
+    click(&mut s, 200.0, 100.0);
+    s.with_agent(Some("a"), |s| s.escape()).unwrap();
+    // The first press of a double-click off the path begins something new...
+    click(&mut s, 150.0, 300.0);
+    // ...and b draws a rectangle before the second press.
+    let rect = rect_at(&mut s, Some("b"), 400.0, 400.0);
+    // Calibration: b's rectangle is in the document, a step made after a's press.
+    assert!(s.doc().unwrap().node(rect).is_some());
+
+    click(&mut s, 150.0, 300.0);
+    pointer_as(&mut s, Some("a"), PointerKind::DoubleClick, 150.0, 300.0).unwrap();
+    assert!(s.doc().unwrap().node(rect).is_some(), "a's double-click took b's rectangle back");
+}
+
+// ---- The agent that worked alone keeps what it had when it starts working apart ----
+
+/// One agent alone works on what the window shows. When a second one comes it works apart, and
+/// the text it was editing is still its own: it goes on typing in it, and ends it.
+#[test]
+fn the_agent_that_worked_alone_goes_on_typing_in_its_text_when_a_second_one_comes() {
+    let mut s = Session::new();
+    let t = id(&s.with_agent(Some("a"), |s| s.execute("node.create", &json!({"type": "text", "text": "Hi"}))).unwrap());
+    s.with_agent(Some("a"), |s| s.execute("text.edit.begin", &json!({"id": t.0}))).unwrap();
+    // Calibration: alone, a edits on what the window shows.
+    assert!(s.ds().unwrap().text_edit.is_some());
+
+    s.with_agent(Some("b"), |_| ());
+    assert!(s.with_agent(Some("a"), |s| s.ds().unwrap().text_edit.is_some()), "a lost the editor it opened");
+    s.with_agent(Some("a"), |s| s.execute("text.edit.insert", &json!({"text": "Hello"}))).unwrap();
+    s.with_agent(Some("a"), |s| s.execute("text.edit.end", &json!({}))).unwrap();
+    assert!(!interaction_open(&s), "a ended its own editing");
+}
+
+/// The same for the other editing modes (the points of a vector, here), whether a second agent
+/// comes or the agent asks to work apart while alone.
+#[test]
+fn the_agent_that_worked_alone_keeps_its_editing_mode_when_it_starts_working_apart() {
+    let editing_points = || {
+        let mut s = Session::new();
+        let r = rect_at(&mut s, Some("a"), 0.0, 0.0);
+        s.with_agent(Some("a"), |s| s.execute("vector.edit.begin", &json!({"id": r}))).unwrap();
+        assert!(s.ds().unwrap().vector_edit.is_some(), "calibration: alone, a edits the points of its rectangle");
+        s
+    };
+    let mut s = editing_points();
+    s.with_agent(Some("b"), |_| ());
+    assert!(s.with_agent(Some("a"), |s| s.ds().unwrap().vector_edit.is_some()), "a lost its editing mode when b came");
+
+    let mut s = editing_points();
+    s.agent_join("a").unwrap();
+    assert!(s.with_agent(Some("a"), |s| s.ds().unwrap().vector_edit.is_some()), "a lost its editing mode when it joined");
+}
+
 // ---- The event log: nobody's name ----
 
 #[test]

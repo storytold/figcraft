@@ -222,15 +222,25 @@ fn gesture_open(app: &FigApp) -> bool {
 /// colour picker or a ruler, outside the window) ends as a release on the handle would: the edit
 /// commits now, instead of waiting, uncommitted, to move the handle to wherever the pointer next
 /// presses. So does one whose gesture Escape or Undo closed under the held button: it stops there
-/// rather than editing on with no gesture open, an undo step a frame. True when a drag ended.
+/// rather than editing on with no gesture open, an undo step a frame. True when the release was a
+/// handle drag's.
 pub fn end_released_drag(app: &mut FigApp, ctx: &egui::Context) -> bool {
     let stashed = ctx.data(|d| d.get_temp::<Drag>(drag_id())).is_some();
     if !stashed || (ctx.input(|i| i.pointer.primary_down()) && gesture_open(app)) {
         return false;
     }
-    let _ = app.session.commit_interaction();
-    ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+    commit_drag(app, ctx);
     true
+}
+
+/// End the handle drag: commit its gesture, then forget the drag. A commit that is refused (the
+/// frame replays another agent's input, and the gesture is not that agent's) keeps the drag: with
+/// the drag forgotten, the gesture would stay open with nothing left to end it, and hold the other
+/// agents back. The next frame that may end it does.
+fn commit_drag(app: &mut FigApp, ctx: &egui::Context) {
+    if app.session.commit_interaction().is_ok() {
+        ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+    }
 }
 
 /// The gradient being edited (single node, picker open on a gradient paint).
@@ -577,8 +587,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         if released || !down {
-            let _ = app.session.commit_interaction();
-            ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+            commit_drag(app, ctx);
         }
         return true;
     }

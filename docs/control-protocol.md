@@ -173,6 +173,8 @@ own selection in each file, so `page.select`, `select.set` and every command tha
 current page" or "the selection" act on the agent's, on a page the window shows or not. The
 window's page, selection and view stay the user's; the document is the same for everyone, and the
 last edit of a layer wins. A new agent starts on the window's page with the window's selection.
+The agent that worked alone keeps what it had there when it starts working apart: its page, its
+selection, the editing mode it was in and the text it is editing.
 Every method takes `agent` and `agentKey` (`events.poll` ignores them, see below): `engine.execute`, `document.inspect`, `node.get`,
 `ui.pointer`, `ui.key`, `ui.type`, `ui.menu.invoke` and `ui.render` act and read as that agent, on
 its page and selection while it works apart; the methods of the window (`ui.input`, `ui.set`,
@@ -185,6 +187,14 @@ admits no name and runs under none: the application answers it on its transport 
 session. The history is
 one per file and a step holds the whole document, so `edit.undo` and `edit.redo` are refused to an
 agent while another one is there: it corrects with a new edit. The user's undo is never refused.
+For the same reason the pen's double-click, which takes its first press back by going back in the
+history, leaves that press in for an agent while another one is there.
+
+Work a request leaves for later is kept with the agent that asked, and is done for that agent
+only: a batch of raw input (`ui.input`) waits for its frame, and a window asked for with the
+`window.new` command is opened by a later frame. When the agent left meanwhile (`agent.leave`, or
+30 minutes without a request), or another client holds its name by then, the batch is dropped (the
+reply of its `ui.input` is an error) and the window is not opened.
 
 An agent holds its name with a key: `agentKey` (a string of 1 to 256 bytes, next to `agent`), any
 text only its client knows. The first key given under a name holds it. From then on
@@ -226,7 +236,8 @@ it and duplicate it:
 `{agent, agents}`. The agent takes its name there, so `agentKey` is required: without a key the
 name would be anyone's. `agent.leave` forgets the agent, its pages and its selections, and returns
 `{left}`; it is refused without the key of a name that is held, and closing a connection does not
-do it. An agent that made no request for 30 minutes is
+do it. The raw input the agent queued (`ui.input`) and no frame has taken is dropped with it; while
+a frame is playing its batch, `agent.leave` is refused and is sent again. An agent that made no request for 30 minutes is
 forgotten the same way (its client stopped without leaving); if it comes back, it is a new agent
 and starts where the window is. `agent.list` returns `{agents: [{agent, apart, page,
 selection}]}`, in the order they came: `page` and `selection` are those of an agent working apart
@@ -516,7 +527,9 @@ Open a window: with open file `index` moved into it (from whichever window has i
 `path`, or a new file. Returns `{window}` (its id); it comes to the front. The browser build and a
 running screen reader keep one window (only the main window has an accessibility tree): the file
 opens as a tab there and the reply is an error saying so. The `window.new` command does the same
-for menus, the Actions palette and `engine.execute`.
+for menus, the Actions palette and `engine.execute`. The file at `path` and a new file come in
+front, so both are refused to an agent working apart, by the method and by the command alike; the
+command's window is opened by a later frame, as the agent that asked.
 
 ### `window.list {}`
 

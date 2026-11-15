@@ -223,7 +223,12 @@ impl Session {
     /// being edited with the Move tool. When the double-click began something new (a point split
     /// into a segment, or a new path's first point), that edit of its first press is taken back.
     fn pen_double_click_editing(&mut self, id: NodeId, ev: &PointerEvent) -> Result<()> {
+        // With other agents at work, the steps made since the press may be theirs: an agent's
+        // double-click then leaves its first press in, as its undo would be refused
+        // (`Session::shares_the_history`). The user's takes it back as before.
+        let shared = self.shares_the_history();
         if let Some((at, depth)) = self.tool.pen_press.take()
+            && !shared
             && (at - ev.p()).hypot() * ev.zoom < 8.0
         {
             while self.undo_depth().0 > depth && self.undo()? {}

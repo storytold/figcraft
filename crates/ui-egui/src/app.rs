@@ -185,7 +185,7 @@ impl FigApp {
             ctx.request_repaint();
             if let Some(events) = self.applied_input.take() {
                 let agent = self.applied_agent.take();
-                self.push_control_input(events, agent.as_deref());
+                self.push_control_input(events, agent);
             }
             self.input_acks.append(&mut self.applied_acks);
             self.applied_frame = None;
@@ -259,10 +259,13 @@ impl FigApp {
         crate::control::drain(self, &ctx);
         windows::requests(self, &ctx);
         // From here the frame replays the injected input as the agent it was made for: a request
-        // handled above runs under its own identity, and what precedes has none (as before).
+        // handled above runs under its own identity, and what precedes has none (as before). That
+        // agent is still the one that asked: `windows::take_input` gave the batch to this frame
+        // only then, and its `agent.leave` is refused until the frame is over.
         if self.applied_frame == Some(ctx.viewport_id()) {
             let agent = self.applied_agent.clone();
-            self.frame_acting = Some(self.session.agent_begin(agent.as_deref(), figcraft_engine::agent::Door::Window));
+            let name = agent.as_ref().map(|a| a.agent());
+            self.frame_acting = Some(self.session.agent_begin(name, figcraft_engine::agent::Door::Window));
         }
         selection_spacing::sync(self, &ctx);
         // Before any widget: the navigation keys (F6, Tab, arrows, Escape) move the keyboard.

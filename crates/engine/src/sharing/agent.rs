@@ -101,6 +101,18 @@ impl Slot {
         Self { page: ds.page, selection: ds.selection.clone(), text_edit: None, vector_edit: None, rotation_origin: None, last_duplicate: None }
     }
 
+    /// The agent that worked on what the window shows until now keeps what it had there: the page
+    /// and the selection, and the editing modes it was in. The text it is editing is not copied (a
+    /// text has one editor): it follows the agent at its next call ([`Session::enter_slot`]).
+    fn of_the_one_alone(ds: &DocState) -> Self {
+        Self {
+            vector_edit: ds.vector_edit.clone(),
+            rotation_origin: ds.rotation_origin.clone(),
+            last_duplicate: ds.last_duplicate.clone(),
+            ..Self::of(ds)
+        }
+    }
+
     /// Exchange what this slot holds with what the document shows.
     fn swap(&mut self, ds: &mut DocState) {
         std::mem::swap(&mut self.page, &mut ds.page);
@@ -128,6 +140,11 @@ pub struct Agents {
     /// The key each name is held with, for the names a client took with one
     /// ([`Session::agent_admit`]). Never listed, never recorded in an event.
     keys: BTreeMap<String, String>,
+    /// The stay of each one there: a number given when the name comes and dropped when it is
+    /// forgotten, so the same name taken again is another stay ([`Asker`]).
+    stays: BTreeMap<String, u64>,
+    /// How many stays were given so far.
+    stay_count: u64,
     /// The agent whose call is running ([`Session::with_agent`]).
     current: Option<String>,
     /// How many [`Session::execute`] calls are open inside the running agent call; the outermost
@@ -138,6 +155,30 @@ pub struct Agents {
 /// The key a control request gives for the agent it names (`agentKey`, next to `agent`).
 pub fn key_of(p: &Value) -> Option<&str> {
     p.get("agentKey").and_then(Value::as_str)
+}
+
+/// Who asked for work that is done later (a batch of raw input waiting for its frame, a window to
+/// open): the name its request gave, and the stay of that name it was admitted in. A name is not a
+/// client: by the time the work is done the agent may have left, and another client may hold the
+/// name. The work is done under the name only while [`Session::agent_still_there`] says the stay
+/// is the same one. The stay is no secret, unlike the key: it can be kept with the work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Asker {
+    agent: String,
+    /// `None` for a name that was not there when it asked.
+    stay: Option<u64>,
+}
+
+impl Asker {
+    /// The name the request gave, for [`Session::agent_begin`].
+    pub fn agent(&self) -> &str {
+        &self.agent
+    }
+
+    /// Whether `agent` names the one that asked (names as they are kept: trimmed, cut).
+    pub fn names(&self, agent: &str) -> bool {
+        crate::cmd::comment::agent_name(&self.agent) == crate::cmd::comment::agent_name(agent)
+    }
 }
 
 /// Whether two keys are the same, in a time that does not tell where they differ.
@@ -338,14 +379,13 @@ impl Session {
             return;
         }
         self.agents.present.push(name.to_string());
+        self.agents.stay_count += 1;
+        self.agents.stays.insert(name.to_string(), self.agents.stay_count);
         // Whoever worked alone until now did so on the window's page and selection. Those are its
         // own from this moment: at its next call the window may show what the user chose since.
         let alone: Vec<String> = self.agents.present.iter().filter(|n| *n != name && !self.agents.apart.contains(*n)).cloned().collect();
         for first in alone {
-            for ds in &self.docs {
-                self.agents.slots.insert((first.clone(), ds.uid), Slot::of(ds));
-            }
-            self.agents.apart.insert(first);
+            self.set_apart_from_the_window(first);
         }
         let announce = match self.agents.present.len() {
             1 => Vec::new(),
@@ -355,6 +395,15 @@ impl Session {
         for agent in announce {
             self.record_event("agent.joined", json!({"agent": agent}));
         }
+    }
+
+    /// `first` worked on what the window shows until now and works apart from this moment: in
+    /// every file it keeps the page, the selection and the editing modes it had there.
+    fn set_apart_from_the_window(&mut self, first: String) {
+        for ds in &self.docs {
+            self.agents.slots.insert((first.clone(), ds.uid), Slot::of_the_one_alone(ds));
+        }
+        self.agents.apart.insert(first);
     }
 
     /// Put the agent's page and selection into the file in front, if it works apart.
@@ -375,6 +424,16 @@ impl Session {
         let no_step = !ds.history.undo.last().is_some_and(|e| Arc::ptr_eq(&e.doc, &doc));
         let (uid, view) = (ds.uid, ds.view.clone());
         slot.swap(ds);
+        // `slot` now holds what the window showed. With a text-editing gesture of the agent's own
+        // open and no editor in its hands, the editor the window showed is the agent's: it began to
+        // edit that text there (alone until now, or through the window's methods). A text has one
+        // editor, and it follows the agent that types in it. Any other editor stays the window's.
+        let text_gesture = crate::canvas::textedit::EDIT_TEXT;
+        if ds.text_edit.is_none() && ds.interaction.as_ref().is_some_and(|it| it.agent.as_deref() == Some(name) && it.label == text_gesture) {
+            ds.text_edit = slot.text_edit.take();
+            // The window no longer shows that editor.
+            ds.revision += 1;
+        }
         ds.clean_selection();
         let was = (ds.page, ds.selection.clone());
         Some(Entered { uid, window: slot, view, doc, was, no_step })
@@ -439,12 +498,46 @@ impl Session {
         Ok(())
     }
 
+    /// Is an agent calling while other agents are there? The history is one for everyone in the
+    /// file and its steps name nobody, so a step back then may be another agent's edit. Whatever
+    /// goes back in the history for an agent asks this first (`edit.undo`, `edit.redo`, the pen's
+    /// double-click that takes its first press back). Never true for the user.
+    pub(crate) fn shares_the_history(&self) -> bool {
+        self.actor().is_some_and(|a| self.agents.present.iter().any(|n| n != a))
+    }
+
+    /// Who asks, for work the request named `agent` wants done later: kept with that work, and
+    /// asked again when it is done ([`Session::agent_still_there`]). `None` when it names nobody.
+    pub fn agent_asker(&self, agent: Option<&str>) -> Option<Asker> {
+        let agent = agent?;
+        let stay = self.agents.stays.get(&crate::cmd::comment::agent_name(agent)).copied();
+        Some(Asker { agent: agent.to_string(), stay })
+    }
+
+    /// Is the agent that asked still the one its name is held by? Work kept for later is done
+    /// under the name only then: the agent may have left meanwhile (`agent.leave`, or
+    /// [`AGENT_IDLE`] without a request), and whoever took the name since is another client. When
+    /// it is, it is noted as seen: its work is about to be done, so it does not go idle before
+    /// that. A request that gave no name holds nothing, so there is nothing to lose.
+    pub fn agent_still_there(&mut self, asker: &Asker) -> bool {
+        let name = crate::cmd::comment::agent_name(&asker.agent);
+        if name.is_empty() {
+            return true;
+        }
+        let now = Instant::now();
+        self.agents_gone_at(now);
+        if asker.stay.is_none() || self.agents.stays.get(&name) != asker.stay.as_ref() {
+            return false;
+        }
+        self.agents.seen.insert(name, now);
+        true
+    }
+
     /// Undo and redo put the whole document back, so with other agents at work they would take
     /// away another agent's edits: an agent's are refused then. The user's never are.
     pub(crate) fn refuse_shared_undo(&self, id: &str) -> crate::Result<()> {
         // Every channel runs `edit.undo`/`edit.redo` under the agent's name, so this is the one place the rule is kept.
-        let others = |a: &str| self.agents.present.iter().any(|n| n != a);
-        if matches!(id, "edit.undo" | "edit.redo") && self.actor().is_some_and(others) {
+        if matches!(id, "edit.undo" | "edit.redo") && self.shares_the_history() {
             let why = "the history is shared by everyone in the file: with other agents at work, correct with a new edit instead";
             return Err(crate::EngineError::Disabled(id.to_string(), why.into()));
         }
@@ -501,8 +594,15 @@ impl Session {
         if name.is_empty() {
             return Err(crate::bad("agent.join", "`agent` (a name) is required"));
         }
+        // One that was there already and not apart worked on what the window shows: it keeps that,
+        // as the one alone does when a second agent comes. A new one starts where the window is.
+        let on_the_window = self.agents.present.contains(&name) && !self.agents.apart.contains(&name);
         self.agent_seen(&name);
-        self.agents.apart.insert(name.clone());
+        if on_the_window {
+            self.set_apart_from_the_window(name.clone());
+        } else {
+            self.agents.apart.insert(name.clone());
+        }
         Ok(json!({"agent": name, "agents": self.agent_list()["agents"]}))
     }
 
@@ -527,6 +627,8 @@ impl Session {
         self.agents.seen.remove(name);
         // Its name is free again: whoever comes next under it takes it with its own key.
         self.agents.keys.remove(name);
+        // And its stay is over: work it asked for and that is not done yet is no longer its own.
+        self.agents.stays.remove(name);
         if was_there && several {
             let data = match reason {
                 Some(reason) => json!({"agent": name, "reason": reason}),

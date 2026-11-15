@@ -293,10 +293,16 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Option<Pos2>, hovered: 
                 Action::Reorder { source, .. } if drag.plain && !drag.moved && released => Some(*source),
                 _ => None,
             };
-            let _ = app.session.commit_interaction();
-            ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
-            if let Some(id) = clicked {
-                app.session.set_selection(vec![id]);
+            if app.session.commit_interaction().is_ok() {
+                ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+                if let Some(id) = clicked {
+                    app.session.set_selection(vec![id]);
+                }
+            } else {
+                // Refused: the frame replays another agent's input, and the gesture is not that
+                // agent's. The drag is kept: forgotten, its gesture would stay open with nothing
+                // left to end it. The next frame that may end it does.
+                ctx.data_mut(|d| d.insert_temp(drag_id(), drag));
             }
         } else {
             ctx.data_mut(|d| d.insert_temp(drag_id(), drag));

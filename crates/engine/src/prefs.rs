@@ -190,6 +190,11 @@ pub struct UiRequest {
     /// without these a deferred request would run with more access than its caller had.
     #[serde(skip)]
     pub roots: Option<Arc<crate::file_access::Roots>>,
+    /// The agent whose call asked (`None`: the user, or a client that gave no name). The request
+    /// is handled later, when that call is over: without this, what it opens would be opened as
+    /// nobody, past the rules the agent works under.
+    #[serde(skip)]
+    pub agent: Option<crate::agent::Asker>,
 }
 
 /// What Edit ▸ Set default properties keeps: the properties new layers drawn with the tools take,

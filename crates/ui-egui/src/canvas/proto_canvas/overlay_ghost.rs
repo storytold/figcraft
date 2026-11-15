@@ -153,11 +153,13 @@ fn drag_to(app: &mut FigApp, ctx: &egui::Context, mut d: Drag, p: Pos2) {
     ctx.data_mut(|m| m.insert_temp(drag_id(), d));
 }
 
-/// End a drag under way, as one undo step.
+/// End a drag under way, as one undo step. A commit that is refused (the frame replays another
+/// agent's input, and the gesture is not that agent's) keeps the drag: with the drag forgotten,
+/// the gesture would stay open with nothing left to end it, and hold the other agents back. The
+/// next frame that may end it does.
 pub(super) fn end(app: &mut FigApp, ctx: &egui::Context) {
-    if ctx.data(|m| m.get_temp::<Drag>(drag_id())).is_some() {
+    if ctx.data(|m| m.get_temp::<Drag>(drag_id())).is_some() && app.session.commit_interaction().is_ok() {
         ctx.data_mut(|m| m.remove::<Drag>(drag_id()));
-        let _ = app.session.commit_interaction();
     }
 }
 

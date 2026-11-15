@@ -76,12 +76,10 @@ impl Session {
 
     /// Start a gesture: later [`preview`](Self::preview) calls re-apply edits to this snapshot.
     pub fn begin_interaction(&mut self, label: &str) -> Result<()> {
-        // An agent must not join, in silence, a gesture someone else began.
-        if let (Some(actor), Ok(ds)) = (self.actor(), self.ds())
-            && ds.interaction.as_ref().is_some_and(|it| it.agent.as_deref() != Some(actor))
-        {
-            return Err(EngineError::Disabled(label.to_string(), GESTURE_IN_PROGRESS.into()));
-        }
+        // An agent must not join, in silence, a gesture someone else began: the document's, or the
+        // tool gesture under way (a pencil stroke, a pan and a marquee open no interaction). Without
+        // the second, it would open an interaction it may not go on with, and hold the other back.
+        self.refuse_foreign_gesture(label)?;
         textpreview::end(self);
         if let Some(why) = self.active_read_only() {
             return Err(EngineError::Disabled(label.to_string(), why.into()));
@@ -91,9 +89,20 @@ impl Session {
         if ds.preview.is_some() {
             return Err(EngineError::Disabled(label.to_string(), PREVIEW_READ_ONLY.into()));
         }
-        if ds.interaction.is_none() {
-            ds.interaction =
-                Some(Interaction { label: label.to_string(), doc: ds.doc.clone(), selection: ds.selection.clone(), moved_by: None, agent });
+        match ds.interaction.as_mut() {
+            // The user goes on in a gesture an agent began (a press that takes its drag over): the
+            // gesture is the user's from now on. Left under the agent's name, it would be committed
+            // when that agent leaves, and the user's drag would have nothing under it. An agent
+            // gets here only in its own gesture.
+            Some(it) => {
+                if agent.is_none() {
+                    it.agent = None;
+                }
+            }
+            None => {
+                ds.interaction =
+                    Some(Interaction { label: label.to_string(), doc: ds.doc.clone(), selection: ds.selection.clone(), moved_by: None, agent });
+            }
         }
         Ok(())
     }
@@ -238,7 +247,8 @@ impl Session {
 
     /// Queue a UI request (dialogs etc.).
     pub fn request_ui(&mut self, kind: &str, data: Value) {
-        self.ui_requests.push(UiRequest { kind: kind.to_string(), data, roots: crate::file_access::current() });
+        let agent = self.agent_asker(self.actor());
+        self.ui_requests.push(UiRequest { kind: kind.to_string(), data, roots: crate::file_access::current(), agent });
     }
 
     /// Run several commands as one undo step. A param value `{"$step": n}` is replaced by the `id`

@@ -42,8 +42,8 @@ struct Pane {
     control_input: Vec<egui::Event>,
     /// The document the queued synthetic batch was injected for (dropped if it changed).
     control_input_doc: Option<u64>,
-    /// The agent the queued synthetic batch was injected for.
-    control_input_agent: Option<String>,
+    /// Who the queued synthetic batch was injected for (`FigApp::control_input_agent`).
+    control_input_agent: Option<figcraft_engine::agent::Asker>,
 }
 
 /// The app's other windows.
@@ -165,7 +165,13 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
     if !events.is_empty() && tagged != current {
         // The file changed before the batch reached a frame: say so once instead of replaying it
         // into the new document. Only this window's own acknowledgements belong to the batch.
-        fail_input_acks(app, viewport_id);
+        fail_input_acks(app, viewport_id, DOCUMENT_CHANGED);
+        return Vec::new();
+    }
+    // The agent the batch was queued for left before its frame came, or its name is another
+    // client's by now: the batch is not replayed under that name, nor as the user's own input.
+    if !events.is_empty() && agent.as_ref().is_some_and(|a| !app.session.agent_still_there(a)) {
+        fail_input_acks(app, viewport_id, AGENT_GONE);
         return Vec::new();
     }
     if !events.is_empty() {
@@ -180,14 +186,18 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
     events
 }
 
-/// Error, once, the `ui.input` acknowledgements waiting for `viewport`'s batch: its file changed
-/// before a frame could apply it. Other windows' acknowledgements are left alone.
-pub(crate) fn fail_input_acks(app: &mut FigApp, viewport: ViewportId) {
+/// Why a queued `ui.input` batch is dropped: its file changed before a frame could apply it.
+pub(crate) const DOCUMENT_CHANGED: &str = "the document changed before the input could be applied";
+/// Why a queued `ui.input` batch is dropped: the agent it was queued for is no longer there.
+pub(crate) const AGENT_GONE: &str = "the agent left before its input could be applied";
+
+/// Error, once, the `ui.input` acknowledgements waiting for `viewport`'s batch, which is dropped
+/// for the reason `why`. Other windows' acknowledgements are left alone.
+pub(crate) fn fail_input_acks(app: &mut FigApp, viewport: ViewportId, why: &str) {
     let mut kept = Vec::new();
     for ack in app.input_acks.drain(..) {
         if ack.viewport == viewport {
-            let _ =
-                ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err("the document changed before the input could be applied".into()) });
+            let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err(why.into()) });
         } else {
             kept.push(ack);
         }
@@ -340,13 +350,24 @@ pub(crate) fn requests(app: &mut FigApp, ctx: &Context) {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(on));
             continue;
         }
-        // Under the folders the asker was confined to: this pass is not the asker's.
-        let res = figcraft_engine::file_access::confined(r.roots.as_ref(), || {
-            if r.kind == "window.new" {
-                open(app, ctx, n("index").map(|i| i as usize), r.data.get("path").and_then(Value::as_str), None).map(|_| ())
-            } else {
-                focus(app, ctx, n("id").unwrap_or(u64::MAX)).map(|_| ())
-            }
+        // The agent that asked left since, or its name is another client's by now: nothing is
+        // opened under that name, nor as the user.
+        if r.agent.as_ref().is_some_and(|a| !app.session.agent_still_there(a)) {
+            app.toast(format!("{}: the agent that asked is no longer there", r.kind));
+            continue;
+        }
+        // As the agent that asked, and under the folders it was confined to: this pass is not the
+        // asker's. Run as nobody, the file the window opens would come in front past the rule that
+        // an agent working apart does not change the open document.
+        let agent = r.agent.as_ref().map(|a| a.agent());
+        let res = app.acting(agent, figcraft_engine::agent::Door::Window, |app| {
+            figcraft_engine::file_access::confined(r.roots.as_ref(), || {
+                if r.kind == "window.new" {
+                    open(app, ctx, n("index").map(|i| i as usize), r.data.get("path").and_then(Value::as_str), None).map(|_| ())
+                } else {
+                    focus(app, ctx, n("id").unwrap_or(u64::MAX)).map(|_| ())
+                }
+            })
         });
         if let Err(e) = res {
             app.toast(e);
@@ -861,6 +882,33 @@ impl Windows {
             w.pane.control_input_doc = None;
             w.pane.control_input_agent = None;
         }
+    }
+}
+
+/// Drop the synthetic input no frame has taken yet and that was queued for an agent that is no
+/// longer there, in every window, and answer whoever waits for it. For when an agent leaves: the
+/// frame would drop the batch too ([`take_input`]), but a window that is not drawn would keep it,
+/// and keep the other agents' input out meanwhile.
+pub(crate) fn forget_input_of_gone_agents(app: &mut FigApp) {
+    let mut dropped = Vec::new();
+    let asker = app.control_input_agent.clone();
+    if asker.is_some_and(|a| !app.session.agent_still_there(&a)) {
+        app.control_input.clear();
+        app.control_input_doc = None;
+        app.control_input_agent = None;
+        dropped.push(viewport(app.windows.current));
+    }
+    let FigApp { windows, session, .. } = &mut *app;
+    for w in &mut windows.list {
+        if w.pane.control_input_agent.as_ref().is_some_and(|a| !session.agent_still_there(a)) {
+            w.pane.control_input.clear();
+            w.pane.control_input_doc = None;
+            w.pane.control_input_agent = None;
+            dropped.push(viewport(w.id));
+        }
+    }
+    for window in dropped {
+        fail_input_acks(app, window, AGENT_GONE);
     }
 }
 

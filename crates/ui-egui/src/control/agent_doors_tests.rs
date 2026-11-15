@@ -711,6 +711,9 @@ pub(super) fn document_front_through(method: &str) -> Option<Vec<Via>> {
             Via::Call(json!({"command": "doc.switch", "params": {"index": 1}})),
             Via::Call(json!({"command": "file.new", "params": {}})),
             Via::Call(json!({"command": "file.open", "params": {"path": "/nonexistent/other.figcraft"}})),
+            // Asked for with the command, the window and its new file are opened by a later frame:
+            // as the agent that asked, not as nobody.
+            Via::Call(json!({"command": "window.new", "params": {}})),
             // The parameter `document` acts in the other file: the window stays on its own.
             Via::With(|uid| json!({"command": "shape.rectangle", "params": {"x": 0, "y": 0, "width": 9, "height": 9}, "document": uid})),
         ]),
@@ -857,7 +860,7 @@ fn a_request_drained_in_another_agents_frame_runs_as_its_own_client() {
     call(&mut u, "ui.input", as_who(json!({"events": [{"move": [5.0, 5.0]}]}), Some("a"))).unwrap();
     let events = crate::windows::take_input(&mut u.app, ViewportId::ROOT);
     assert!(!events.is_empty(), "a's batch is in the frame, which then acts as a");
-    assert_eq!(u.app.applied_agent.as_deref(), Some("a"));
+    assert_eq!(u.app.applied_agent.as_ref().map(|a| a.agent()), Some("a"));
     let comment = |text: &str| json!({"command": "comment.add", "params": {"x": 1, "y": 1, "text": text, "page": page}});
     let mut replies = Vec::new();
     for (text, who) in [("from b", Some("b")), ("from nobody", None)] {

@@ -135,7 +135,7 @@ fn saved_file(dir: &std::path::Path, name: &str) -> String {
 fn open_after_request(path: &str, roots: Option<Arc<Roots>>) -> usize {
     let mut app = FigApp::new(Session::new(), Box::new(NoServices));
     let before = app.session.docs.len();
-    app.window_requests.push(UiRequest { kind: "window.new".into(), data: json!({ "path": path }), roots });
+    app.window_requests.push(UiRequest { kind: "window.new".into(), data: json!({ "path": path }), roots, agent: None });
     crate::windows::requests(&mut app, &egui::Context::default());
     app.session.docs.len() - before
 }

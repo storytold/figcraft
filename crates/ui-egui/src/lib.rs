@@ -843,8 +843,10 @@ pub struct FigApp {
     /// The active-document id when synthetic input was queued: a batch is dropped when the file
     /// changed before a UI pass applied it.
     pub(crate) control_input_doc: Option<u64>,
-    /// The agent the queued synthetic batch was injected for (`None`: no agent); it is replayed under that name.
-    pub(crate) control_input_agent: Option<String>,
+    /// Who the queued synthetic batch was injected for (`None`: no agent): the name it is replayed
+    /// under, with the stay it was admitted in. The name alone is not enough: the agent may leave
+    /// before the frame comes, and another client may hold the name by then.
+    pub(crate) control_input_agent: Option<figcraft_engine::agent::Asker>,
     /// This frame applies events injected through the control channel: no system clipboard
     /// read or write may happen for them.
     pub(crate) control_synthetic: bool,
@@ -861,7 +863,7 @@ pub struct FigApp {
     /// The viewport whose batch this frame took into its raw input (`applied_input`/`applied_acks`).
     pub(crate) applied_frame: Option<egui::ViewportId>,
     /// The agent of the batch `applied_frame` applies, set and cleared with it.
-    pub(crate) applied_agent: Option<String>,
+    pub(crate) applied_agent: Option<figcraft_engine::agent::Asker>,
     /// The identity the frame replaying an agent's input runs under, from the end of the control
     /// requests to the end of the frame (`FigApp::frame` ends it however the frame ends).
     pub(crate) frame_acting: Option<figcraft_engine::agent::Acting>,
