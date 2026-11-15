@@ -20,6 +20,8 @@ mod select;
 mod vector_clipboard;
 pub use vector_clipboard::clipboard_svg;
 #[cfg(test)]
+mod nudge_rotated_parent_tests;
+#[cfg(test)]
 mod vector_clipboard_tests;
 
 pub(crate) use clipboard::apply_copied_props;
