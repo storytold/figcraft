@@ -333,6 +333,13 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                     }
                     ui.close();
                 }
+                // The page the file opens on, for everyone (#1817); a divider can't be one.
+                if !divider && ui.button(tr("Set as opening page")).clicked() {
+                    if !crate::menus::dev_mode_refuses(app, "page.setOpening") {
+                        app.run("page.setOpening", json!({"id": id}));
+                    }
+                    ui.close();
+                }
                 if ui.button(tr("Delete page")).clicked() {
                     if !crate::menus::dev_mode_refuses(app, "page.delete") {
                         delete_page(app, id);
@@ -1241,7 +1248,8 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             let icon = node_icon(&doc, row.id);
             let shown = n.visible && !row.dimmed;
             let icon_col = row_color(&t, is_comp || icon == Icon::Slot, shown, t.icon, t.text_tertiary);
-            icons::paint(ui.painter(), Rect::from_center_size(pos2(x0 + 22.0, r.center().y), vec2(14.0, 14.0)), icon, icon_col);
+            let icon_rect = Rect::from_center_size(pos2(x0 + 22.0, r.center().y), vec2(14.0, 14.0));
+            icons::paint(ui.painter(), icon_rect, icon, icon_col);
             let name_x = x0 + 36.0;
             if app.ui.rename.is_some_and(|rn| rn.id == row.id) {
                 if let Some(new) = rename_field(app, ui, row.id, row.depth, &n.name, r) {
@@ -1262,8 +1270,21 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
             if resp.clicked() {
                 clicked = Some((row.id, ui.input(|i| i.modifiers)));
             }
-            if resp.double_clicked() && !crate::menus::dev_mode_refuses(app, "object.rename") {
-                app.ui.rename = Some(Rename { id: row.id, start: true });
+            if resp.double_clicked() {
+                // On the icon it zooms to the layer and renames nothing (measured in Figma's web
+                // app, 2026-11-12); elsewhere on the row it renames.
+                if resp.interact_pointer_pos().is_some_and(|p| icon_rect.contains(p)) {
+                    if sel.as_slice() != [row.id] {
+                        app.run("select.set", json!({"ids": [row.id]}));
+                    }
+                    app.run("view.zoomSelection", json!({}));
+                    // The release is also a click: it must not toggle or extend the selection.
+                    clicked = None;
+                    // The layer is the anchor of the next Shift-click's range.
+                    app.ui.layer_anchor = Some(row.id);
+                } else if !crate::menus::dev_mode_refuses(app, "object.rename") {
+                    app.ui.rename = Some(Rename { id: row.id, start: true });
+                }
             }
             if resp.secondary_clicked() {
                 if !sel.contains(&row.id) {

@@ -20,7 +20,6 @@ mod connector_label_tests;
 #[cfg(test)]
 mod deep_import_tests;
 #[cfg(test)]
-#[cfg(test)]
 mod expansion_cost_tests;
 mod export;
 #[cfg(test)]
@@ -44,7 +43,6 @@ mod scale_factor_tests;
 mod slot_tests;
 #[cfg(test)]
 mod source_identity_tests;
-#[cfg(test)]
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
