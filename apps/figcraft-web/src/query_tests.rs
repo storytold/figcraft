@@ -73,3 +73,12 @@ fn a_page_preserves_valid_server_endpoint_spelling() {
         assert_eq!(page_server(server).as_deref(), Some(server), "{server}");
     }
 }
+
+#[test]
+fn a_page_rejects_server_delimiters_that_endpoint_parsing_would_strip() {
+    for suffix in ["'", "\"", "<", ">", "\"'>"] {
+        let server = format!("wss://figcraft.example/{suffix}");
+        assert!(figcraft_collab_net::Endpoint::parse(&server).is_ok(), "the parser cleans {server:?}");
+        assert_eq!(page_server(&server), None, "{server:?} must not replace the default server");
+    }
+}
