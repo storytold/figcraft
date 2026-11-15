@@ -8,6 +8,19 @@ name = "עברית"
 status = "draft — needs native review"
 
 [ui]
+# Original Hebrew translations of English-master FigCraft labels: file reporting, safety and preview, 16 Nov 2026.
+"Choose another profile to change it." = "כדי לשנות אותו, יש לבחור פרופיל אחר."
+"Color values in this file are in this color space." = "ערכי הצבע בקובץ הזה מוגדרים במרחב הצבע הזה."
+"Lines deleted" = "שורות שנמחקו"
+"Main component deleted" = "הרכיב הראשי נמחק"
+"No compatibility warnings reported" = "לא דווח על אזהרות תאימות"
+"Report this file…" = "דיווח על הקובץ הזה…"
+"Take the results off the board; they stay in the file" = "הסרת התוצאות מהלוח; הן יישארו בקובץ"
+"The whole file" = "הקובץ כולו"
+"This server is open to the public: no key needed." = "השרת הזה פתוח לציבור: אין צורך במפתח."
+"Undo takes back only your own changes; what others changed since stays." = "ביטול הפעולה מבטל רק שינויים שביצעת; שינויים שביצעו אחרים מאז יישמרו."
+"What is wrong with this file? The server's operator gets your report." = "מה הבעיה בקובץ הזה? הדיווח יישלח למפעיל השרת."
+"What you try here changes this preview and the code below, not the file" = "הפעולות כאן משנות את התצוגה המקדימה ואת הקוד שלהלן, אך לא את הקובץ"
 # Accessibility, keyboard, selection and variable controls; original Hebrew translations, 14 Nov 2026.
 "+ Create variable" = "+ יצירת משתנה"
 "A collection of this file with these modes and variables: override their values per mode and add variables of its own" = "אוסף של הקובץ עם המצבים והמשתנים האלה: ניתן לשנות את ערכיהם בכל מצב ולהוסיף משתנים נוספים"
