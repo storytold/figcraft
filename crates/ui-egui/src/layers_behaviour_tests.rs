@@ -643,6 +643,50 @@ fn the_page_menus_rename_starts_with_the_keyboard_in_the_name() {
     assert_clicking_page_opens_it(&mut u, p2, p1, r2);
 }
 
+/// Right-clicks `at` in the pages list and returns the menu's "Set as opening page" item, if shown.
+fn opening_item(u: &mut Ui, at: Pos2) -> Option<Pos2> {
+    u.frame(vec![
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+    let shapes: Vec<egui::Shape> = u.frame_output(vec![]).shapes.into_iter().map(|c| c.shape).collect();
+    crate::live_tests::has_text(&shapes, "Set as opening page").then(|| crate::live_tests::text_center(&shapes, "Set as opening page"))
+}
+
+/// The pages list's menu offers "Set as opening page" on a page and not on a divider, and using it
+/// writes the document's opening page without moving the viewer's own page (#1817).
+#[test]
+fn the_page_menu_sets_the_opening_page_and_not_on_dividers() {
+    let mut s = Session::new();
+    let p1 = s.page().unwrap();
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    let div = id(s.execute("page.add", &json!({"name": "-"})).unwrap());
+    s.execute("page.move", &json!({"id": div, "index": 1})).unwrap();
+    s.execute("page.select", &json!({"id": p1})).unwrap();
+    let mut u = Ui::new(s);
+    let (r1, r2) = (page_row(&mut u, p1, p2), page_row(&mut u, p2, p1));
+    let mid = Pos2::new(r1.x, (r1.y + r2.y) / 2.0);
+    u.app.session.execute("page.select", &json!({"id": p1})).unwrap();
+    u.frame(vec![]);
+    assert_eq!(opening_item(&mut u, mid), None, "a divider has no such item");
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    let item = opening_item(&mut u, r2).expect("a page has the item (and its menu is open)");
+    assert_ne!(u.app.session.doc().unwrap().current_page, Some(p2), "not the opening page yet");
+    u.frame(vec![Event::PointerMoved(item)]);
+    u.button(item, true);
+    u.button(item, false);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.doc().unwrap().current_page, Some(p2), "the document's opening page is the clicked page");
+    assert_eq!(u.app.session.page().unwrap(), p1, "the viewer's own page stays");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
 /// The y of the line between the pages and the layers, above the layers' row at `layer` (found by
 /// the resize cursor it shows when hovered).
 fn pages_edge_at(u: &mut Ui, layer: f32) -> f32 {
@@ -840,4 +884,101 @@ fn search_fields_keep_their_text_in_the_middle() {
     u.app.ui.left_tab = crate::LeftTab::Assets;
     let off = off_centre(&mut u, "Search assets");
     assert!(off < 1.0, "Search assets is {off} points off the middle");
+}
+
+/// The centre of `id`'s icon, a top-level row: the row's left edge is the first point from the
+/// left at which the pointer is over it, and the icon's centre is 8 (margin) + 4 + 22 points
+/// further right.
+fn icon_of(u: &mut Ui, id: NodeId) -> Pos2 {
+    let y = u.row_at(id).y;
+    let mut left = None;
+    for x in 0..150 {
+        let p = Pos2::new(x as f32, y);
+        u.app.session.ds_mut().unwrap().hover = None;
+        u.frame(vec![Event::PointerMoved(p)]);
+        if u.app.session.ds().unwrap().hover == Some(id) {
+            left = Some(x as f32);
+            break;
+        }
+    }
+    Pos2::new(left.expect("the row has a left edge") + 34.0, y)
+}
+
+/// Measured in Figma's web app, 2026-11-12: a double-click on a layer's icon zooms the canvas to
+/// the layer and starts no rename (a double-click on the name renames, as before).
+#[test]
+fn a_double_click_on_a_layers_icon_zooms_to_it_instead_of_renaming() {
+    let mut s = Session::new();
+    rect(&mut s, "near", 0.0, None);
+    let far = rect(&mut s, "far", 3000.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let icon = icon_of(&mut u, far);
+    let view = |u: &Ui| {
+        let v = &u.app.session.ds().unwrap().view;
+        (v.cx, v.cy, v.zoom)
+    };
+    let before = view(&u);
+    for _ in 0..2 {
+        u.button(icon, true);
+        u.button(icon, false);
+    }
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.rename, None, "a double-click on the icon renames nothing");
+    assert_eq!(u.app.session.selection(), vec![far], "the layer is selected");
+    let after = view(&u);
+    assert_ne!(after, before, "the view moved");
+    u.app.session.execute("view.set", &json!({"cx": before.0, "cy": before.1, "zoom": before.2})).unwrap();
+    u.app.session.execute("view.zoomSelection", &json!({})).unwrap();
+    assert_eq!(after, view(&u), "the view frames the layer, as view.zoomSelection does");
+}
+
+/// A double-click's release is also a click on the row; with Ctrl held it must not toggle the layer
+/// back out of the selection the zoom just made, nor can Shift restore a range.
+#[test]
+fn an_icon_double_click_keeps_its_selection_when_a_modifier_is_held() {
+    let mut s = Session::new();
+    rect(&mut s, "near", 0.0, None);
+    let far = rect(&mut s, "far", 3000.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let icon = icon_of(&mut u, far);
+    let before = (u.app.session.ds().unwrap().view.cx, u.app.session.ds().unwrap().view.zoom);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: CMD };
+            u.frame_with(vec![Event::PointerMoved(icon), e], CMD);
+        }
+    }
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), vec![far], "the layer stays selected");
+    assert_eq!(u.app.ui.rename, None);
+    let v = &u.app.session.ds().unwrap().view;
+    assert_ne!((v.cx, v.zoom), before, "the view frames the layer");
+}
+
+/// A Shift-double-click on an icon leaves just that layer selected, and it becomes the anchor: the
+/// next Shift-click selects the range from it, not a toggle.
+#[test]
+fn an_icon_double_click_becomes_the_range_anchor() {
+    let (mut u, [a, b, c, d]) = four();
+    u.frame(vec![]);
+    let a_row = u.row_at(a);
+    click(&mut u, a_row, Modifiers::NONE);
+    let icon = icon_of(&mut u, b);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: SHIFT };
+            u.frame_with(vec![Event::PointerMoved(icon), e], SHIFT);
+        }
+    }
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.selection(), vec![b], "the icon's layer is all that is selected");
+    let d_row = u.row_at(d);
+    click(&mut u, d_row, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![b, c, d]), "the range from the icon's layer");
 }
