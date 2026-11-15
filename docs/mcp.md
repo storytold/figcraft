@@ -1527,9 +1527,12 @@ change where the next edit lands. `run_command`, `batch`, `create_node`, `set_pr
 `inspect_document`, `get_node`, `select`, `export`, `screenshot`, `save_file`, `undo` and `redo`
 take an optional `document`: the file's `id` (in `run_command {command: "doc.list"}`, and the `id`
 of the `document` outline `open_file` and `inspect_document` return) or the path of an open file.
-The call acts on that file and the tab in front stays in front, unless the command itself opens or
-switches to another file (`file.open`, `file.new`, `doc.switch`), as it would without `document`. A
-file that isn't open is an error. `doc.list` gives an agent each open file's `id`, name and state, not`nwhere it is on disk (#1117). `screenshot {window}` captures what the window shows, so it
+The call acts on that file and ordinary reads and edits keep the tab in front. Explicit file/tab
+commands (`file.open`, `file.new`, `doc.switch`, `doc.nextTab`, `doc.previousTab`) and player commands
+(`proto.present`, `proto.preview`) keep the requested file in front, including successful commands
+inside a batch. Failed groups discard their UI requests and explicit selection. A
+file that isn't open is an error. `doc.list` gives an agent each open file's `id`, name and state, not
+where it is on disk (#1117). `screenshot {window}` captures what the window shows, so it
 needs the file in front. Over the control channel, `engine.execute`, `document.inspect`,
 `node.get` and `ui.render` take the same `document`; other methods refuse one naming a file behind
 the tab in front. Headless sessions take it too.
