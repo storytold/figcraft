@@ -56,6 +56,12 @@ craft-menu = { git = "https://github.com/storytold/craft-libs", rev = "e11f9d9ae
 # Where the settings live: the suite's folder rules, portable mode included (craft-libs).
 craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
 
+# The design-file formats (craft-libs): the .fig container and its kiwi encoding, the mapping of
+# a .fig message onto the REST file JSON, and that JSON's shared helpers. These crates share
+# types, so they stay on one rev; they share none with the crates above.
+craft-fig = { git = "https://github.com/storytold/craft-libs", rev = "d13ac58a15c45d618f25910772502e38c4ce1d4c" }
+craft-figma-rest = { git = "https://github.com/storytold/craft-libs", rev = "d13ac58a15c45d618f25910772502e38c4ce1d4c" }
+
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"
