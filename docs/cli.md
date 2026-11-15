@@ -114,13 +114,15 @@ page 1 "Screens": 380 nodes, 4 top-level
 
 ### `export <file> -o <out> [--format png|jpg|svg|webp|pdf|xml|fig|penpot] [--scale N] [--page NAME] [--node ID|NAME] [--bleed LENGTH] [--crop-marks] [--bleed-marks] [--cmyk] [--vd-compat bestEffort|exact|ignore]`
 
-- `<out>` is a directory: one file per top-level frame of the page (default the first page), named
+- `<out>` is a directory: one file per top-level frame of the selected page, named
   after the frame (`Home.png`, `Settings.png`…); with no frames, one file per top-level layer.
   The name is kept as it is, except for the characters file systems refuse (`/ \ : * ? " < > |`
   and control characters), which become `_`, and leading or trailing spaces and dots, which are
   dropped. A name is cut at 100 characters. The app's export replaces the same characters (there a
   `/` makes a folder). Two layers with the same name get `Name 2`, `Name 3`…
 - `<out>` has an image extension: one file with the given `--node`, or the whole page composited.
+- `--page` defaults to the first non-divider page: empty pages whose names start with `-` are
+  skipped. If all pages are dividers, the first is used. `--page NAME` can select one explicitly.
 - `--node` takes a layer id (`12` or `0:12`) or a layer name.
 - `--format fig` (or an `<out>` ending in `.fig`) writes the whole file as `.fig`, experimental:
   written from public format notes, including variables with their modes and bindings and shared
@@ -177,8 +179,8 @@ frames, one page each), `.fig` (the whole file, experimental, as `export --forma
 
 ### `render <file> -o <out.png> [--scale N] [--page NAME]`
 
-The whole page (default the first) with its background, as png, jpg or webp. Large pages are scaled
-down to fit 16384 px.
+The whole page with its background, as png, jpg or webp. `--page` defaults to the first non-divider
+page, as for `export`. Large pages are scaled down to fit 16384 px.
 
 ### `run <script.json|script.jsonl> [--in <file>] [--out <file>]`
 
