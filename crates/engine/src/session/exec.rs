@@ -287,6 +287,24 @@ impl Session {
     /// undo step called `label` (`None`: not undoable). On a live session's document the edit is
     /// synced and the step is the user's own ([`live`]); otherwise it is a snapshot of `before`.
     pub(crate) fn record(&mut self, uid: u64, label: Option<&str>, before: Arc<Document>, selection: Vec<NodeId>, page: NodeId) {
+        let by = self.actor().map(str::to_string);
+        self.record_by(uid, label, before, selection, page, by.as_deref());
+    }
+
+    /// [`record`](Self::record) for an edit `author` made (an agent's name, `None` for the user),
+    /// when that is not whoever calls: a gesture is its starter's, whoever ends it (an agent that
+    /// leaves has its gesture committed under another call).
+    pub(crate) fn record_by(
+        &mut self,
+        uid: u64,
+        label: Option<&str>,
+        before: Arc<Document>,
+        selection: Vec<NodeId>,
+        page: NodeId,
+        author: Option<&str>,
+    ) {
+        // First, and whatever the label: an edit that is no undo step changes the document too.
+        self.tool.edited_by(uid, author);
         if self.live_doc(uid) {
             return self.live_edit(uid, label);
         }

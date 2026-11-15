@@ -466,7 +466,8 @@ fn expire(app: &mut FigApp, ctx: &Context, now: f64) {
 
 impl FigApp {
     /// Give up what control clients sent and no frame has finished: the requests waiting for a
-    /// frame, the screenshots in flight and the injected input no frame has applied. Whoever
+    /// frame, the screenshots in flight and the injected input no frame has applied, whether it
+    /// still waits for a frame or a frame has taken it already and not played it yet. Whoever
     /// still waits for a reply gets `reason` as its error. For when the control server stops:
     /// that work was sent under a confinement that ends with it, and must not run after it.
     pub fn cancel_control_work(&mut self, reason: &str) {
@@ -484,7 +485,10 @@ impl FigApp {
         self.control_input_doc = None;
         self.control_input_agent = None;
         self.control_input_queued = false;
-        // A pass that is discarded would queue its batch again.
+        // The batch a frame already took is in that pass's raw input and cannot be taken back: it
+        // is marked, and the frame that carries it draws nothing (`FigApp::frame`). Without its
+        // events, a pass that is discarded does not queue it again.
+        self.applied_cancelled = self.applied_frame.is_some();
         self.applied_input = None;
         self.windows.forget_control_input();
         for ack in self.input_acks.drain(..).chain(self.applied_acks.drain(..)) {
@@ -1608,7 +1612,8 @@ fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Re
             // Its batch is already in this frame's input: the frame replays it under the agent's
             // name once the requests are done. Gone now, the name would be nobody's by then (or
             // another client's), and the input would still be played.
-            if app.applied_frame.is_some() && app.applied_agent.as_ref().is_some_and(|a| a.names(agent)) {
+            // (A cancelled batch is not played: it holds nobody back.)
+            if app.applied_frame.is_some() && !app.applied_cancelled && app.applied_agent.as_ref().is_some_and(|a| a.names(agent)) {
                 return Err("the agent's input is being applied in this frame: send `agent.leave` again".into());
             }
             let left = app.session.agent_leave(agent).map_err(|e| e.to_string())?;

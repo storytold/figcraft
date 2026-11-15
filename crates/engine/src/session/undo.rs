@@ -149,7 +149,8 @@ impl Session {
         let (uid, page) = (ds.uid, ds.page);
         ds.revision += 1;
         if !Arc::ptr_eq(&it.doc, &ds.doc) && *it.doc != *ds.doc {
-            self.record(uid, Some(&it.label), it.doc, it.selection, page);
+            // The step is the gesture's starter's, whoever ends the gesture.
+            self.record_by(uid, Some(&it.label), it.doc, it.selection, page, it.agent.as_deref());
         } else {
             ds.doc = it.doc;
         }

@@ -108,6 +108,15 @@ impl AgentControl {
         self.applied = Some(want);
     }
 
+    /// What the control channel adds to the raw input of the window about to draw
+    /// (`raw_input_hook`). Preferences are followed first: a batch is handed to a frame only
+    /// under the switch and the folders of that moment, and what `follow` cancels has not
+    /// reached a frame yet.
+    pub fn input_for(&mut self, fig: &mut FigApp, viewport: egui::ViewportId) -> Vec<egui::Event> {
+        self.follow(fig);
+        figcraft_ui_egui::windows::take_input(fig, viewport)
+    }
+
     /// Confine file access to the preference's folder, then listen. Without the folder there is
     /// no server: agents must never work unconfined because a folder was missing.
     fn allow(&mut self, fig: &mut FigApp, folder: &str) -> Option<String> {
@@ -206,6 +215,26 @@ mod tests {
         assert!(fig.control_queue.is_empty(), "a request outlived the confinement it was sent under");
         assert!(fig.control_input.is_empty(), "injected input outlived the agent that sent it");
         assert!(rx.try_recv().expect("the cancelled request is answered").result.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_input_for_a_frame_follows_preferences_first() {
+        let dir = std::env::temp_dir().join(format!("figcraft-agent-control-input-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut fig = FigApp::new(Session::new(), Box::new(NoServices));
+        fig.session.prefs.agent_control = true;
+        fig.session.prefs.automation_root = dir.to_string_lossy().into_owned();
+        let mut control = AgentControl::new(wiring(), None, Duration::ZERO, false);
+        control.follow(&mut fig);
+        assert!(fig.automation_roots.is_some(), "calibration: agent control is on, confined to its folder");
+        // A client's batch waits for a frame when the user turns agent control off.
+        fig.control_input.push(egui::Event::Copy);
+        fig.session.prefs.agent_control = false;
+        let events = control.input_for(&mut fig, egui::ViewportId::ROOT);
+        assert!(events.is_empty(), "a batch reached a frame after agent control was turned off");
+        assert!(fig.control_input.is_empty(), "the batch still waits for a frame");
+        assert!(fig.automation_roots.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

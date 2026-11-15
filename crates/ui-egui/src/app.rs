@@ -61,6 +61,7 @@ impl FigApp {
             control_input_queued: false,
             applied_frame: None,
             applied_agent: None,
+            applied_cancelled: false,
             frame_acting: None,
             clock: FrameClock::default(),
             capture: crate::control::CaptureState::default(),
@@ -188,9 +189,7 @@ impl FigApp {
                 self.push_control_input(events, agent);
             }
             self.input_acks.append(&mut self.applied_acks);
-            self.applied_frame = None;
-            self.applied_agent = None;
-            self.control_synthetic = false;
+            self.end_applied();
             // The next (drawn) frame ticks for itself in a direct harness.
             self.logic_ticked = false;
             self.observe_ime(&ctx, false);
@@ -228,6 +227,11 @@ impl FigApp {
 
     /// One frame of the window drawing now.
     pub(crate) fn frame(&mut self, ui: &mut egui::Ui) {
+        // The batch this frame took may no longer be played (cancelled, or its agent gone since):
+        // its events are in this pass's input, so the window draws nothing now.
+        if self.drop_unplayable_input(ui.ctx()) {
+            return;
+        }
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.frame_shown(ui)));
         // Whatever ended the frame (an early return, a panic): an identity left set would make the
         // next action the agent's.

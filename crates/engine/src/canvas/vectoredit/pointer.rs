@@ -13,7 +13,7 @@ use super::regions::region_hit;
 use super::transform::{self, BoxHit, PointBox};
 use super::{EditPart, VHit, VTool, VectorEdit, edit, editing, hit, hit_any, local_offset, network, ops, points_of, selected_points, set_state};
 use crate::snap::Targets;
-use crate::tools::{Cursor, Gesture, Handle, PenCursor, PointerEvent, PointerKind, within_slop};
+use crate::tools::{Cursor, Gesture, Handle, PenCursor, PenPress, PointerEvent, PointerKind, within_slop};
 use crate::{Result, Session};
 
 /// An in-progress edit-mode gesture (cheap to clone: snap targets are shared).
@@ -223,15 +223,15 @@ impl Session {
     /// being edited with the Move tool. When the double-click began something new (a point split
     /// into a segment, or a new path's first point), that edit of its first press is taken back.
     fn pen_double_click_editing(&mut self, id: NodeId, ev: &PointerEvent) -> Result<()> {
-        // With other agents at work, the steps made since the press may be theirs: an agent's
-        // double-click then leaves its first press in, as its undo would be refused
-        // (`Session::shares_the_history`). The user's takes it back as before.
-        let shared = self.shares_the_history();
-        if let Some((at, depth)) = self.tool.pen_press.take()
-            && !shared
-            && (at - ev.p()).hypot() * ev.zoom < 8.0
+        // Taken back only by whoever pressed, in the document it pressed in. Nobody else has
+        // edited that document since, or the press would be forgotten (`ToolState::edited_by`):
+        // the steps above its depth are that press's own, whoever else is at work or has left.
+        let press = self.tool.pen_press.take();
+        let own = press.filter(|p| p.by.as_deref() == self.actor() && self.ds().is_ok_and(|d| d.uid == p.doc));
+        if let Some(p) = own
+            && (p.at - ev.p()).hypot() * ev.zoom < 8.0
         {
-            while self.undo_depth().0 > depth && self.undo()? {}
+            while self.undo_depth().0 > p.depth && self.undo()? {}
         }
         if editing(self).is_err() {
             super::begin(self, id)?;
@@ -764,7 +764,8 @@ impl Session {
             VTool::Pen => {
                 let at = if h.is_none() && !ev.shift { self.snap_pen(ev, Some(id), &[])?.0 } else { ev.p() };
                 let Some(plan) = self.pen_plan(ve, h, w.inverse() * at, ev.shift) else { return Ok(true) };
-                self.tool.pen_press = ve.anchor.is_none().then(|| (ev.p(), self.undo_depth().0));
+                let (doc, depth, by) = (self.ds()?.uid, self.undo_depth().0, self.actor().map(str::to_string));
+                self.tool.pen_press = ve.anchor.is_none().then(|| PenPress { at: ev.p(), depth, doc, by });
                 self.begin_interaction("Pen")?;
                 let out = ve.pen_out;
                 let mut v = None;

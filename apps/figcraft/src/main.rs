@@ -86,8 +86,9 @@ impl eframe::App for App {
             }
         }
         let title = with_app(|fig| {
-            // Before the queue is read: turning agent control off drops what it still held.
-            self.agent_control.follow(fig);
+            // Preferences were followed as this tick's input was prepared (`raw_input_hook`, which
+            // eframe calls before `logic`): turning agent control off has already dropped what the
+            // app still held, before the queue is read.
             control_server::drain_queue(&self.queue, &mut fig.control_queue);
             // Phase-safe background work: control queues, autosave/recovery deadlines, live polling.
             // It runs on logic-only callbacks too, so it never reads UI input.
@@ -123,8 +124,9 @@ impl eframe::App for App {
         // (maximize, restore, ...): take it off again before the frame is laid out (#1343).
         self.window_frame.run();
         // Pointer and key events sent over the control channel (`ui.input`), for the window
-        // about to draw.
-        if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
+        // about to draw. Preferences are followed first (`AgentControl::input_for`): a batch
+        // reaches a frame only while agent control is on.
+        if let Some(events) = with_app(|fig| self.agent_control.input_for(fig, raw_input.viewport_id)) {
             raw_input.events.extend(events);
         }
     }

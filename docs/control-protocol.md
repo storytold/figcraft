@@ -120,6 +120,10 @@ No command sets these two preferences, so a control client can neither open the 
 widen its folder: only the Preferences window does, and only for the user. Input a client injects
 (`ui.input`) is ignored by the switch, by its question, by the folder field and by **Browse**.
 
+Turning the switch off, or changing the folder, drops what clients sent and no frame has finished:
+the requests still waiting, the screenshots in flight and the raw input (`ui.input`), a batch a
+frame had already taken included: it is not played. Their replies are errors.
+
 ## Confining file access
 
 ```sh
@@ -187,14 +191,18 @@ admits no name and runs under none: the application answers it on its transport 
 session. The history is
 one per file and a step holds the whole document, so `edit.undo` and `edit.redo` are refused to an
 agent while another one is there: it corrects with a new edit. The user's undo is never refused.
-For the same reason the pen's double-click, which takes its first press back by going back in the
-history, leaves that press in for an agent while another one is there.
+The pen's double-click takes its first press back by going back in the history: it does so only
+for whoever made that press, in the document it was made in, and only while nobody else has edited
+that document since.
 
 Work a request leaves for later is kept with the agent that asked, and is done for that agent
 only: a batch of raw input (`ui.input`) waits for its frame, and a window asked for with the
 `window.new` command is opened by a later frame. When the agent left meanwhile (`agent.leave`, or
 30 minutes without a request), or another client holds its name by then, the batch is dropped (the
-reply of its `ui.input` is an error) and the window is not opened.
+reply of its `ui.input` is an error) and the window is not opened. The same is asked again when a
+frame plays a batch it took: if the agent is gone by then (its window was not drawn meanwhile), the
+batch is not played. One batch of raw input is handed to a frame at a time: the next one waits
+until that frame is over.
 
 An agent holds its name with a key: `agentKey` (a string of 1 to 256 bytes, next to `agent`), any
 text only its client knows. The first key given under a name holds it. From then on

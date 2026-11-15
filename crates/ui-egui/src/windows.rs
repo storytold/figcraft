@@ -146,6 +146,20 @@ pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
 /// Control-channel input events (`ui.input`) for the window `viewport` draws next. A batch queued
 /// for another document is dropped rather than replayed into the new one.
 pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event> {
+    // One batch in flight at a time: the one a frame took and has not finished (its window was
+    // not drawn since) is played first, under its own agent. A second one handed over now would
+    // be played with it, under whichever agent came last.
+    if let Some(flying) = app.applied_frame {
+        if flying == ViewportId::ROOT || app.windows.list.iter().any(|w| viewport(w.id) == flying) {
+            return Vec::new();
+        }
+        // Its window closed before a frame played it: no frame will, and it must not keep every
+        // later batch waiting.
+        for ack in app.applied_acks.drain(..) {
+            let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err(WINDOW_GONE.into()) });
+        }
+        app.end_applied();
+    }
     let (events, tagged, agent, current) = match app.windows.list.iter_mut().find(|w| viewport(w.id) == viewport_id) {
         Some(w) => {
             let events = std::mem::take(&mut w.pane.control_input);
@@ -182,6 +196,7 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
         app.applied_input = Some(events.clone());
         app.applied_frame = Some(viewport_id);
         app.applied_agent = agent;
+        app.applied_cancelled = false;
     }
     events
 }
@@ -190,6 +205,8 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
 pub(crate) const DOCUMENT_CHANGED: &str = "the document changed before the input could be applied";
 /// Why a queued `ui.input` batch is dropped: the agent it was queued for is no longer there.
 pub(crate) const AGENT_GONE: &str = "the agent left before its input could be applied";
+/// Why a `ui.input` batch a frame took is dropped: its window closed before that frame played it.
+const WINDOW_GONE: &str = "the window closed before the input could be applied";
 
 /// Error, once, the `ui.input` acknowledgements waiting for `viewport`'s batch, which is dropped
 /// for the reason `why`. Other windows' acknowledgements are left alone.

@@ -864,6 +864,10 @@ pub struct FigApp {
     pub(crate) applied_frame: Option<egui::ViewportId>,
     /// The agent of the batch `applied_frame` applies, set and cleared with it.
     pub(crate) applied_agent: Option<figcraft_engine::agent::Asker>,
+    /// The batch `applied_frame` took was cancelled since (`cancel_control_work`). Its events are
+    /// in that pass's raw input already and cannot be taken back: the frame that carries them
+    /// draws nothing (`FigApp::frame`). Set and cleared with `applied_frame`.
+    pub(crate) applied_cancelled: bool,
     /// The identity the frame replaying an agent's input runs under, from the end of the control
     /// requests to the end of the frame (`FigApp::frame` ends it however the frame ends).
     pub(crate) frame_acting: Option<figcraft_engine::agent::Acting>,

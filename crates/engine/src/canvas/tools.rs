@@ -563,6 +563,22 @@ pub struct PenPath {
     pub undone: Vec<(Point, Vec2, Vec2)>,
 }
 
+/// Vector edit mode's pen: the last press that started something new (no path being drawn), kept
+/// for the double-click there that takes that edit back by going back in the history. The press
+/// is its presser's, in one document, and only while nobody else has edited that document since
+/// ([`ToolState::edited_by`]): the history is one for everyone and its steps name nobody.
+#[derive(Clone, Debug)]
+pub(crate) struct PenPress {
+    /// Where the press was.
+    pub(crate) at: Point,
+    /// The undo depth before it.
+    pub(crate) depth: usize,
+    /// The document (uid) it was made in.
+    pub(crate) doc: u64,
+    /// Who pressed: an agent's name, `None` for the user.
+    pub(crate) by: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ToolState {
     pub tool: ToolId,
@@ -586,9 +602,9 @@ pub struct ToolState {
     pub dev_mode: bool,
     /// Pen snap targets, kept while hovering (see `vectoredit::point_snap`).
     pub(crate) pen_targets: Option<crate::vectoredit::point_snap::PenTargets>,
-    /// Vector edit mode's pen: where the last press that started something new (no path being
-    /// drawn) was, and the undo depth before it, so a double-click there takes that edit back.
-    pub(crate) pen_press: Option<(Point, usize)>,
+    /// Vector edit mode's pen: the last press that started something new, for the double-click
+    /// there that takes that edit back ([`PenPress`]).
+    pub(crate) pen_press: Option<PenPress>,
     /// The Scale tool's origin: column and row (0 start, 1 middle, 2 end) of the point of the
     /// selection box that stays put when the Scale field sets a factor (`tool.scaleAnchor`; the
     /// centre, `(1, 1)`, until set). Handle drags ignore it and pivot on the opposite handle.
@@ -622,5 +638,23 @@ pub struct ToolState {
 impl ToolState {
     pub fn busy(&self) -> bool {
         !matches!(self.gesture, Gesture::None)
+    }
+
+    /// The document `doc` is being edited by `author` (an agent's name, `None` for the user). A
+    /// pen press someone else remembered there no longer owns what follows it, so it is
+    /// forgotten: its double-click would take the other's work back with its own, whoever is
+    /// still at work by then.
+    pub(crate) fn edited_by(&mut self, doc: u64, author: Option<&str>) {
+        if self.pen_press.as_ref().is_some_and(|p| p.doc == doc && p.by.as_deref() != author) {
+            self.pen_press = None;
+        }
+    }
+
+    /// `name` leaves: the pen press it remembered is nobody's (its name may be another client's
+    /// next).
+    pub(crate) fn forget_press_of(&mut self, name: &str) {
+        if self.pen_press.as_ref().is_some_and(|p| p.by.as_deref() == Some(name)) {
+            self.pen_press = None;
+        }
     }
 }

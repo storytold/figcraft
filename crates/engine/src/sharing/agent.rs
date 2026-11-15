@@ -500,8 +500,8 @@ impl Session {
 
     /// Is an agent calling while other agents are there? The history is one for everyone in the
     /// file and its steps name nobody, so a step back then may be another agent's edit. Whatever
-    /// goes back in the history for an agent asks this first (`edit.undo`, `edit.redo`, the pen's
-    /// double-click that takes its first press back). Never true for the user.
+    /// goes back in the history at an agent's request asks this first (`edit.undo`, `edit.redo`).
+    /// Never true for the user.
     pub(crate) fn shares_the_history(&self) -> bool {
         self.actor().is_some_and(|a| self.agents.present.iter().any(|n| n != a))
     }
@@ -639,8 +639,10 @@ impl Session {
     }
 
     /// An agent that leaves holds nothing: the interaction it owns is committed (its work stays)
-    /// and the tool gesture it holds is dropped, or the others would be refused for good.
+    /// and the tool gesture it holds is dropped, or the others would be refused for good. The pen
+    /// press it remembered for a double-click is forgotten: nobody takes it back in its name.
     fn agent_release_gestures(&mut self, name: &str) {
+        self.tool.forget_press_of(name);
         let owned: Vec<u64> =
             self.docs.iter().filter(|d| d.interaction.as_ref().is_some_and(|it| it.agent.as_deref() == Some(name))).map(|d| d.uid).collect();
         for uid in owned {

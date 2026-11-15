@@ -88,6 +88,71 @@ fn an_agent_does_not_leave_while_the_frame_plays_its_input() {
     call(&mut u, "agent.leave", as_who(json!({}), "a")).unwrap();
 }
 
+/// One key that changes the tool, as a batch of raw input.
+fn tool_key() -> Value {
+    json!({"events": [{"key": "R"}]})
+}
+
+#[test]
+fn a_batch_cancelled_after_a_frame_took_it_is_not_played() {
+    // Calibration: played, this batch changes the tool.
+    let mut played = Ui::new(Session::new());
+    let tool = played.app.session.tool.tool;
+    call(&mut played, "ui.input", tool_key()).unwrap();
+    let events = crate::windows::take_input(&mut played.app, ViewportId::ROOT);
+    played.frame(events);
+    assert_ne!(played.app.session.tool.tool, tool, "calibration: the batch changes the tool when it is played");
+
+    let mut u = Ui::new(Session::new());
+    call(&mut u, "ui.input", tool_key()).unwrap();
+    let events = crate::windows::take_input(&mut u.app, ViewportId::ROOT);
+    assert!(!events.is_empty(), "calibration: the batch is in the frame");
+    // Agent control is turned off after the frame took the batch and before it plays it.
+    u.app.cancel_control_work("agent control was turned off");
+    u.frame(events);
+    assert_eq!(u.app.session.tool.tool, tool, "a batch cancelled after its frame took it was played");
+    // The window draws again, and a batch sent afterwards is played.
+    u.frame(vec![]);
+    call(&mut u, "ui.input", tool_key()).unwrap();
+    let events = crate::windows::take_input(&mut u.app, ViewportId::ROOT);
+    u.frame(events);
+    assert_ne!(u.app.session.tool.tool, tool, "the batch sent after the cancelled one was not played");
+}
+
+#[test]
+fn a_batch_is_not_played_for_an_agent_gone_since_a_frame_took_it() {
+    let mut u = two_agents();
+    let listed = |u: &mut Ui| u.app.session.agent_list()["agents"].to_string().contains("\"a\"");
+    assert!(listed(&mut u), "calibration: a is among the agents there");
+    call(&mut u, "ui.input", as_who(batch(), "a")).unwrap();
+    let events = crate::windows::take_input(&mut u.app, ViewportId::ROOT);
+    assert!(!events.is_empty(), "calibration: a's batch is in the frame");
+    // `a` is forgotten before the frame plays its batch, without its `agent.leave` reaching the
+    // window (as when it stays silent too long while the window is not drawn).
+    u.app.session.agent_leave("a").unwrap();
+    assert!(!listed(&mut u), "calibration: a is gone");
+
+    u.frame(events);
+    assert!(!listed(&mut u), "the frame played the batch under a name nobody holds, and the agent is there again");
+}
+
+#[test]
+fn a_second_batch_waits_while_one_is_in_flight() {
+    let mut u = two_agents();
+    call(&mut u, "ui.input", as_who(batch(), "a")).unwrap();
+    let first = crate::windows::take_input(&mut u.app, ViewportId::ROOT);
+    assert!(!first.is_empty(), "calibration: a's batch is in a frame that has not played it yet");
+    // b's batch comes before that frame is drawn (the window is hidden, say).
+    call(&mut u, "ui.input", as_who(batch(), "b")).unwrap();
+    let second = crate::windows::take_input(&mut u.app, ViewportId::ROOT);
+    assert!(second.is_empty(), "a batch was handed over on top of one no frame has played");
+
+    u.frame(first);
+    let third = crate::windows::take_input(&mut u.app, ViewportId::ROOT);
+    assert!(!third.is_empty(), "b's batch is handed over once a's frame is over");
+    u.frame(third);
+}
+
 // ---------------------------------------------------------------------------------------------
 // A window asked for with the `window.new` command, opened by a later frame
 // ---------------------------------------------------------------------------------------------

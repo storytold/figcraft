@@ -104,12 +104,42 @@ impl FigApp {
             // the same frame without replaying the input.
             return;
         }
-        self.applied_frame = None;
-        self.applied_agent = None;
         for ack in self.applied_acks.drain(..) {
             let _ = ack.tx.send(ack.reply);
         }
+        self.end_applied();
+    }
+
+    /// The batch a frame took is over (played, given back to the queue, or dropped): nothing of
+    /// it stays on the app. The one place that ends it, so no part of it outlives the others.
+    pub(crate) fn end_applied(&mut self) {
+        self.applied_input = None;
+        self.applied_frame = None;
+        self.applied_agent = None;
+        self.applied_cancelled = false;
         self.control_synthetic = false;
+    }
+
+    /// The batch this window's frame took, when it may no longer be played: cancelled since it
+    /// was taken (`cancel_control_work`), or asked by an agent that is gone since (its window was
+    /// not drawn meanwhile, and the agent went idle). What allowed the batch is asked when it is
+    /// played, not only when it was handed over. Its events are in this pass's input and cannot
+    /// be taken out, so the frame draws nothing (true) and the next pass draws the window.
+    pub(crate) fn drop_unplayable_input(&mut self, ctx: &egui::Context) -> bool {
+        if self.applied_frame != Some(ctx.viewport_id()) {
+            return false;
+        }
+        let gone = !self.applied_cancelled && self.applied_agent.clone().is_some_and(|a| !self.session.agent_still_there(&a));
+        if !self.applied_cancelled && !gone {
+            return false;
+        }
+        // A cancelled batch was answered when it was cancelled; an agent that is gone is told why now.
+        for ack in self.applied_acks.drain(..) {
+            let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err(crate::windows::AGENT_GONE.into()) });
+        }
+        self.end_applied();
+        ctx.request_repaint();
+        true
     }
 
     /// The app's monotonic clock in seconds, also usable from logic-only callbacks (recovery,

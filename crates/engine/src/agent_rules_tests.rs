@@ -535,9 +535,9 @@ fn an_agent_begins_no_interaction_during_another_agents_tool_gesture() {
 
 // ---- Going back in the history: never another agent's step ----
 
-/// The pen's double-click takes its first press back by going back in the history. With another
-/// agent at work, the steps since that press may be the other's: an agent's double-click then
-/// leaves its first press in, as its undo would be refused.
+/// The pen's double-click takes its first press back by going back in the history. The press is
+/// its presser's only while nobody else has edited the document since: b's step forgets a's
+/// press, so a's double-click takes nothing back.
 #[test]
 fn the_pens_double_click_of_an_agent_does_not_take_back_another_agents_step() {
     let mut s = Session::new();
@@ -562,6 +562,82 @@ fn the_pens_double_click_of_an_agent_does_not_take_back_another_agents_step() {
     click(&mut s, 150.0, 300.0);
     pointer_as(&mut s, Some("a"), PointerKind::DoubleClick, 150.0, 300.0).unwrap();
     assert!(s.doc().unwrap().node(rect).is_some(), "a's double-click took b's rectangle back");
+}
+
+/// Who is still there when the double-click comes says nothing about the steps made since the
+/// press: b drew after a's press and left, and its rectangle is no part of that press.
+#[test]
+fn the_pens_double_click_does_not_take_back_the_step_of_an_agent_that_left() {
+    let mut s = Session::new();
+    s.agent_join("a").unwrap();
+    s.agent_join("b").unwrap();
+    s.set_tool(crate::tools::ToolId::Pen);
+    let click = |s: &mut Session, x: f64, y: f64| {
+        pointer_as(s, Some("a"), PointerKind::Down, x, y).unwrap();
+        pointer_as(s, Some("a"), PointerKind::Up, x, y).unwrap();
+    };
+    click(&mut s, 100.0, 100.0);
+    click(&mut s, 200.0, 100.0);
+    s.with_agent(Some("a"), |s| s.escape()).unwrap();
+    // The first press of a's double-click, then b draws a rectangle and leaves.
+    click(&mut s, 150.0, 300.0);
+    let rect = rect_at(&mut s, Some("b"), 400.0, 400.0);
+    // Calibration: b's rectangle is in the document, a step made after a's press.
+    assert!(s.doc().unwrap().node(rect).is_some());
+    s.agent_leave("b").unwrap();
+
+    click(&mut s, 150.0, 300.0);
+    pointer_as(&mut s, Some("a"), PointerKind::DoubleClick, 150.0, 300.0).unwrap();
+    assert!(s.doc().unwrap().node(rect).is_some(), "a's double-click took back the rectangle of an agent that left");
+}
+
+/// The same for the user, whose undo is never refused: an agent's step made between the user's
+/// two presses is not the user's press.
+#[test]
+fn the_users_pen_double_click_does_not_take_back_an_agents_step() {
+    let mut s = Session::new();
+    s.agent_join("b").unwrap();
+    s.set_tool(crate::tools::ToolId::Pen);
+    let click = |s: &mut Session, x: f64, y: f64| {
+        pointer_as(s, None, PointerKind::Down, x, y).unwrap();
+        pointer_as(s, None, PointerKind::Up, x, y).unwrap();
+    };
+    click(&mut s, 100.0, 100.0);
+    click(&mut s, 200.0, 100.0);
+    s.with_agent(None, |s| s.escape()).unwrap();
+    // The first press of the user's double-click, then b draws a rectangle.
+    click(&mut s, 150.0, 300.0);
+    let rect = rect_at(&mut s, Some("b"), 400.0, 400.0);
+    // Calibration: b's rectangle is in the document, a step made after the user's press.
+    assert!(s.doc().unwrap().node(rect).is_some());
+
+    click(&mut s, 150.0, 300.0);
+    pointer_as(&mut s, None, PointerKind::DoubleClick, 150.0, 300.0).unwrap();
+    assert!(s.doc().unwrap().node(rect).is_some(), "the user's double-click took the agent's rectangle back");
+}
+
+/// A press is taken back by whoever made it: once the agent that pressed has left, a double-click
+/// there (the user's here) takes nothing back in its name.
+#[test]
+fn the_pens_double_click_takes_nothing_back_for_the_press_of_an_agent_that_left() {
+    let mut s = Session::new();
+    s.set_tool(crate::tools::ToolId::Pen);
+    let click = |s: &mut Session, x: f64, y: f64| {
+        pointer_as(s, Some("a"), PointerKind::Down, x, y).unwrap();
+        pointer_as(s, Some("a"), PointerKind::Up, x, y).unwrap();
+    };
+    // a, the only agent, works on what the window shows.
+    click(&mut s, 100.0, 100.0);
+    click(&mut s, 200.0, 100.0);
+    s.with_agent(Some("a"), |s| s.escape()).unwrap();
+    let before = s.undo_depth().0;
+    click(&mut s, 150.0, 300.0);
+    let depth = s.undo_depth().0;
+    assert!(depth > before, "calibration: a's press began something new, a step of its own");
+    s.agent_leave("a").unwrap();
+
+    pointer_as(&mut s, None, PointerKind::DoubleClick, 150.0, 300.0).unwrap();
+    assert_eq!(s.undo_depth().0, depth, "the user's double-click took back the press of an agent that left");
 }
 
 // ---- The agent that worked alone keeps what it had when it starts working apart ----
