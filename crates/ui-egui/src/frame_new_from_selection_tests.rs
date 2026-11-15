@@ -96,3 +96,38 @@ fn new_from_selection_is_disabled_for_a_section() {
     assert_eq!(u.app.session.doc().unwrap().node(frame).unwrap().parent, Some(section));
     assert_eq!(u.app.session.tool.tool, ToolId::Move);
 }
+
+#[test]
+fn new_from_selection_respects_instance_structure_and_slots() {
+    for slot in [false, true] {
+        let mut s = Session::new();
+        let frame = NodeId(s.execute("frame.create", &json!({"width": 200, "height": 200})).unwrap()["id"].as_u64().unwrap());
+        let content = NodeId(s.execute("frame.create", &json!({"parent": frame, "width": 100, "height": 100})).unwrap()["id"].as_u64().unwrap());
+        let rect = NodeId(s.execute("shape.rectangle", &json!({"parent": content, "width": 20, "height": 20})).unwrap()["id"].as_u64().unwrap());
+        let component = NodeId(s.execute("component.create", &json!({"ids": [frame]})).unwrap()["id"].as_u64().unwrap());
+        if slot {
+            s.execute("component.makeSlot", &json!({"id": content})).unwrap();
+        }
+        let instance = NodeId(s.execute("instance.create", &json!({"component": component, "x": 300, "y": 0})).unwrap()["id"].as_u64().unwrap());
+        let doc = s.doc().unwrap();
+        let child = doc.subtree(instance).into_iter().find(|id| doc.node(*id).and_then(|n| n.source) == Some(rect)).unwrap();
+        s.execute("select.set", &json!({"ids": [child]})).unwrap();
+        s.execute("tool.set", &json!({"tool": "frame"})).unwrap();
+        let mut u = Ui::new(s);
+        let history = u.app.session.undo_depth().0;
+        let parent = u.app.session.doc().unwrap().node(child).unwrap().parent;
+        let (at, disabled) = named_button(&mut u, "New from selection");
+        assert_eq!(disabled, !slot, "only content within a slot can be reframed");
+        click(&mut u, at);
+        assert!(u.app.ui.toast.is_none(), "disabled action must not raise an error");
+        if slot {
+            assert_eq!(u.app.session.undo_depth().0, history + 1);
+            assert_ne!(u.app.session.doc().unwrap().node(child).unwrap().parent, parent);
+            assert_eq!(u.app.session.tool.tool, ToolId::Move);
+        } else {
+            assert_eq!(u.app.session.undo_depth().0, history);
+            assert_eq!(u.app.session.doc().unwrap().node(child).unwrap().parent, parent);
+            assert_eq!(u.app.session.tool.tool, ToolId::Frame);
+        }
+    }
+}

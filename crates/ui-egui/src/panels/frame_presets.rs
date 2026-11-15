@@ -15,7 +15,11 @@ use crate::widgets::{self, PAD};
 /// Whether `object.frameSelection` would frame `selection`: layers on a page, none of them a
 /// section (sections never go in frames, #1683).
 fn can_frame(doc: &Document, selection: &[NodeId]) -> bool {
-    !selection.is_empty() && selection.iter().all(|i| doc.node(*i).is_some_and(|n| n.parent.is_some() && !matches!(n.kind, NodeKind::Section { .. })))
+    !selection.is_empty()
+        && selection.iter().all(|i| doc.node(*i).is_some_and(|n| n.parent.is_some() && !matches!(n.kind, NodeKind::Section { .. })))
+        && figcraft_engine::cmd::edit::roots(doc, selection)
+            .iter()
+            .all(|id| doc.node(*id).and_then(|n| n.parent).is_some_and(|parent| !figcraft_engine::components::structure_locked(doc, parent)))
 }
 
 /// Draw New from selection and the expandable frame-preset categories. New from selection wraps
