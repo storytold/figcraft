@@ -1201,6 +1201,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-vectordrawable"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "kurbo",
+]
+
+[[package]]
 name = "craft-web-api"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=fd5e2feff6ea25bed371a99cc732b3968d621505#fd5e2feff6ea25bed371a99cc732b3968d621505"
@@ -2194,6 +2202,7 @@ dependencies = [
 name = "figcraft-vectordrawable"
 version = "0.18.1"
 dependencies = [
+ "craft-vectordrawable",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
