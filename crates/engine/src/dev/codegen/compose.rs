@@ -70,7 +70,7 @@ fn compose_paint(doc: &Document, n: &Node, i: usize, p: &Paint) -> Option<String
             Some(if i == 0 { bound(doc, n, &["fill"], c) } else { c })
         }
         PaintKind::Gradient(g) => Some(compose_gradient(g, n.width, n.height, p.opacity)),
-        PaintKind::Image(_) | PaintKind::Pattern(_) => None,
+        PaintKind::Image(_) | PaintKind::Pattern(_) | PaintKind::Shader(_) => None,
     }
 }
 

@@ -325,6 +325,22 @@ impl W<'_> {
                 let op = if p.opacity < 0.999 { format!(" fill-opacity=\"{}\"", num(f64::from(p.opacity))) } else { String::new() };
                 Some(format!("fill=\"url(#{pid})\"{op}{blend}"))
             }
+            PaintKind::Shader(shader) => {
+                let pixmap = figcraft_render::shader_fill::pixmap(shader, w, h, RASTER_SCALE, false)?;
+                let png = figcraft_render::encode_png(&pixmap).ok()?;
+                let image = base64::engine::general_purpose::STANDARD.encode(png);
+                let pid = self.id("shader");
+                let _ = write!(
+                    self.defs,
+                    "<pattern id=\"{pid}\" patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\"><image width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{image}\"/></pattern>",
+                    num(w),
+                    num(h),
+                    num(w),
+                    num(h)
+                );
+                let op = if p.opacity < 0.999 { format!(" fill-opacity=\"{}\"", num(f64::from(p.opacity))) } else { String::new() };
+                Some(format!("fill=\"url(#{pid})\"{op}{blend}"))
+            }
         }
     }
 

@@ -21,6 +21,7 @@ pub mod lod;
 pub mod paint;
 pub mod pattern;
 pub mod retained;
+pub mod shader_fill;
 pub mod shadow;
 
 pub use dots::Dots;

@@ -473,6 +473,7 @@ impl<'a> Exporter<'a> {
                 }
             }
             PaintKind::Gradient(g) if !matches!(g.kind, GradientKind::Linear | GradientKind::Radial) => self.raster_paint(s, path, &kp, r, p, frame),
+            PaintKind::Shader(_) => self.raster_paint(s, path, &kp, r, p, frame),
             _ => {
                 if let Some((paint, opacity)) = vector_paint(p, w, h, self.ink()) {
                     s.set_fill(Some(Fill { paint, opacity, rule: r }));

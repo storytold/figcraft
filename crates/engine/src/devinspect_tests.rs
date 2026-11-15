@@ -121,3 +121,13 @@ fn assets_list_layers_with_export_settings_under_the_selection() {
     assert_eq!(out["assets"][0]["name"], "Ellipse");
     assert!(crate::devinspect::assets(s.doc().unwrap(), &[]).is_empty());
 }
+
+#[test]
+fn shader_filled_shapes_are_not_advertised_as_vector_icons() {
+    let mut s = Session::new();
+    let star = id(s.execute("shape.star", &json!({"width": 40, "height": 40})).unwrap());
+    assert!(crate::devinspect::assets(s.doc().unwrap(), &[star]).iter().any(|a| a.id == star));
+    let paint = figcraft_color::Paint::shader(figcraft_color::ShaderPaint::default());
+    s.execute("fill.add", &json!({"ids": [star], "paint": paint})).unwrap();
+    assert!(!crate::devinspect::assets(s.doc().unwrap(), &[star]).iter().any(|a| a.id == star));
+}

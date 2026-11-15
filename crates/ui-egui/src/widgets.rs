@@ -1256,6 +1256,7 @@ pub fn paint_name(paint: &figcraft_color::Paint) -> String {
         PaintKind::Gradient(_) => tr("Gradient").into(),
         PaintKind::Image(_) => tr("Image").into(),
         PaintKind::Pattern(_) => tr("Pattern").into(),
+        PaintKind::Shader(shader) => tr(shader.pattern.label()).into(),
     }
 }
 
@@ -1282,6 +1283,26 @@ pub fn paint_swatch(painter: &egui::Painter, rect: Rect, paint: &figcraft_color:
                 let x0 = rect.min.x + rect.width() * i as f32 / n as f32;
                 let x1 = rect.min.x + rect.width() * (i + 1) as f32 / n as f32;
                 clip.rect_filled(Rect::from_min_max(pos2(x0, rect.min.y), pos2(x1, rect.max.y)), CornerRadius::ZERO, c);
+            }
+        }
+        PaintKind::Shader(shader) => {
+            let shader = shader.sanitized();
+            let sampler = shader.sampler();
+            let n = 16;
+            for i in 0..n {
+                let c = if shader.pattern == figcraft_color::ShaderPattern::Concentric {
+                    sampler.color_in(f64::from(i) / f64::from(n), 0.5, 1.0, 1.0)
+                } else {
+                    sampler.color(f64::from(i) * shader.scale / f64::from(n), shader.scale * 0.5)
+                };
+                let c = c.with_alpha(c.a * paint.opacity);
+                let x0 = rect.min.x + rect.width() * i as f32 / n as f32;
+                let x1 = rect.min.x + rect.width() * (i + 1) as f32 / n as f32;
+                clip.rect_filled(
+                    Rect::from_min_max(pos2(x0, rect.min.y), pos2(x1, rect.max.y)),
+                    CornerRadius::ZERO,
+                    crate::theme::doc_c32(painter.ctx(), c),
+                );
             }
         }
         PaintKind::Image(_) | PaintKind::Pattern(_) => {

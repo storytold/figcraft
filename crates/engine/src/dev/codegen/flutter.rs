@@ -110,7 +110,7 @@ fn flutter_paint(n: &Node, p: &Paint) -> Option<String> {
     match &p.kind {
         PaintKind::Solid { .. } => Some(format!("color: {}", kotlin_color(p.solid_color()?))),
         PaintKind::Gradient(g) => Some(format!("gradient: {}", flutter_gradient(g, n.width, n.height, p.opacity))),
-        PaintKind::Image(_) | PaintKind::Pattern(_) => None,
+        PaintKind::Image(_) | PaintKind::Pattern(_) | PaintKind::Shader(_) => None,
     }
 }
 

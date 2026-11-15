@@ -121,6 +121,11 @@ fn paint_color(p: &Paint) -> Option<[f32; 4]> {
             let n = stops.len().max(1) as f32;
             stops.iter().fold([0.0; 4], |acc, s| [acc[0] + s.color.r / n, acc[1] + s.color.g / n, acc[2] + s.color.b / n, acc[3] + s.color.a / n])
         }
+        // Zoomed far out a shader reads as the middle of its two colours.
+        PaintKind::Shader(sp) => {
+            let c = sp.color_a.lerp(sp.color_b, 0.5);
+            [c.r, c.g, c.b, c.a]
+        }
         PaintKind::Image(_) | PaintKind::Pattern(_) => return None,
     };
     let c = c.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });

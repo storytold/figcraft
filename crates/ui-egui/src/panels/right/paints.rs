@@ -602,7 +602,7 @@ fn paint_row(app: &mut FigApp, ui: &mut Ui, ids: &[NodeId], i: usize, p: &Paint,
     r
 }
 
-/// A paint row's label (also what a drag of it carries): its colour, gradient kind or "Image".
+/// A paint row's label (also what a drag of it carries): its colour, paint kind or "Image".
 fn paint_label(p: &Paint) -> String {
     match &p.kind {
         PaintKind::Solid { color } => color.to_hex(),
@@ -610,5 +610,6 @@ fn paint_label(p: &Paint) -> String {
         PaintKind::Gradient(g) => tr(&format!("{:?}", g.kind)).to_string(),
         PaintKind::Image(_) => tr("Image").into(),
         PaintKind::Pattern(_) => tr("Pattern").into(),
+        PaintKind::Shader(shader) => tr(shader.pattern.label()).into(),
     }
 }

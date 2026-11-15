@@ -564,10 +564,10 @@ pub fn effect_margin(n: &Node) -> f64 {
         .map(|e| match &e.kind {
             EffectKind::BackgroundBlur { .. } | EffectKind::Glass(_) => e.backdrop_radius() * 2.0,
             EffectKind::DropShadow(s) => s.radius * 2.0 + s.spread.abs() * figcraft_doc::SPREAD_MITER_LIMIT + s.offset.0.abs() + s.offset.1.abs(),
-            // Inner shadows cast from around a layer's pixels (groups, image fills with alpha; any
-            // image counts here): a layer cut off at the view would cast one from the cut.
+            // Pixel-based inner shadows need margin even when the view cuts through the layer.
             EffectKind::InnerShadow(s)
-                if matches!(n.kind, NodeKind::Group) || n.fills.iter().any(|f| matches!(f.kind, PaintKind::Image(_) | PaintKind::Pattern(_))) =>
+                if matches!(n.kind, NodeKind::Group)
+                    || n.fills.iter().any(|f| matches!(f.kind, PaintKind::Image(_) | PaintKind::Pattern(_) | PaintKind::Shader(_))) =>
             {
                 s.radius * 2.0 + s.spread.abs() + s.offset.0.abs() + s.offset.1.abs()
             }

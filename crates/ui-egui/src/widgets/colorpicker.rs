@@ -237,7 +237,7 @@ fn set_color(app: &mut FigApp, target: &PickerTarget, paint: &mut Paint, c: Colo
                 s.color = c;
             }
         }
-        PaintKind::Image(_) | PaintKind::Pattern(_) => return,
+        PaintKind::Image(_) | PaintKind::Pattern(_) | PaintKind::Shader(_) => return,
     }
     write(app, target, paint, false);
 }
@@ -690,6 +690,7 @@ fn image_well(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &Pain
 
 /// The row of paint kinds (solid, gradients, image, pattern) with `paint`'s kind selected.
 fn paint_type_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &mut Paint) {
+    ui.add_space(8.0);
     let kinds = [
         (Icon::Fill, tr("Solid")),
         (Icon::GradientLinear, tr("Linear")),
@@ -698,6 +699,7 @@ fn paint_type_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &
         (Icon::GradientDiamond, tr("Diamond")),
         (Icon::Image, tr("Image")),
         (Icon::ViewGrid, tr("Pattern")),
+        (Icon::Effects, tr("Shader")),
     ];
     let active = match &paint.kind {
         _ if image_pending(ui.ctx(), target) => 5,
@@ -710,10 +712,12 @@ fn paint_type_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &
         },
         PaintKind::Image(_) => 5,
         PaintKind::Pattern(_) => 6,
+        PaintKind::Shader(_) => 7,
     };
     ui.horizontal(|ui| {
         ui.add_space(12.0);
-        if let Some(i) = widgets::segmented(ui, &kinds, Some(active), 30.0) {
+        let cell = (ui.available_width() / kinds.len().max(1) as f32).clamp(1.0, 30.0);
+        if let Some(i) = widgets::segmented(ui, &kinds, Some(active), cell) {
             let base = paint.preview_color();
             let choosing = i == 5;
             set_image_pending(ui.ctx(), choosing.then_some(target).filter(|_| !matches!(paint.kind, PaintKind::Image(_))));
@@ -728,6 +732,7 @@ fn paint_type_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &
                         paint.kind.clone()
                     }
                 },
+                7 => PaintKind::Shader(figcraft_color::ShaderPaint::default()),
                 k => {
                     let kind = [GradientKind::Linear, GradientKind::Radial, GradientKind::Angular, GradientKind::Diamond][k - 1];
                     match &paint.kind {
@@ -743,6 +748,124 @@ fn paint_type_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &
             }
         }
     });
+}
+
+fn shader_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &Paint) {
+    let PaintKind::Shader(shader) = &paint.kind else { return };
+    let shader = shader.sanitized();
+
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        let width = ui.available_width();
+        let resp = widgets::dropdown(ui, tr(shader.pattern.label()), width, Some(Icon::Effects));
+        crate::right::menu_popup(&resp).show(|ui| {
+            for pattern in figcraft_color::ShaderPattern::ALL {
+                if crate::right::menu_item(ui, tr(pattern.label()), "") {
+                    set_shader(app, target, paint, figcraft_color::ShaderPaint { pattern, ..shader.clone() });
+                    ui.close();
+                }
+            }
+        });
+    });
+
+    if shader.pattern == figcraft_color::ShaderPattern::Concentric {
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.label(tr("Shape"));
+            let width = ui.available_width();
+            let resp = widgets::dropdown(ui, tr(shader.shape.label()), width, Some(Icon::Effects));
+            crate::right::menu_popup(&resp).show(|ui| {
+                for shape in figcraft_color::ConcentricShape::ALL {
+                    if crate::right::menu_item(ui, tr(shape.label()), "") {
+                        set_shader(app, target, paint, figcraft_color::ShaderPaint { shape, ..shader.clone() });
+                        ui.close();
+                    }
+                }
+            });
+        });
+    }
+
+    shader_color_field(app, ui, target, paint, &shader, "Color A", true);
+    shader_color_field(app, ui, target, paint, &shader, "Color B", false);
+    if shader.pattern == figcraft_color::ShaderPattern::Concentric {
+        shader_number_field(app, ui, target, paint, &shader, "Bands", f64::from(shader.bands), 1.0);
+    } else {
+        shader_number_field(app, ui, target, paint, &shader, "Scale", shader.scale, 1.0);
+        shader_number_field(app, ui, target, paint, &shader, "Time", shader.time, 0.1);
+        shader_number_field(app, ui, target, paint, &shader, "Grain", f64::from(shader.grain), 0.01);
+    }
+}
+
+fn shader_color_field(
+    app: &mut FigApp,
+    ui: &mut Ui,
+    target: &PickerTarget,
+    paint: &Paint,
+    shader: &figcraft_color::ShaderPaint,
+    label: &str,
+    first: bool,
+) {
+    let color = if first { shader.color_a } else { shader.color_b };
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), widgets::FIELD_H), Sense::hover());
+        let name_rect = Rect::from_min_max(rect.min, pos2(rect.min.x + rect.width() * 0.42, rect.max.y));
+        let edit_rect = Rect::from_min_max(pos2(name_rect.max.x + 4.0, rect.min.y), rect.max);
+        ui.painter().text(name_rect.left_center(), Align2::LEFT_CENTER, tr(label), regular(11.0), Tokens::get(ui.ctx()).text_secondary);
+        if let Some(text) = widgets::text_field_inline(ui, Id::unique(("cp_shader_color", label)), &color.to_css_hex(), edit_rect, regular(11.0))
+            && let Some(color) = Color::parse_css(&text)
+        {
+            let next = if first {
+                figcraft_color::ShaderPaint { color_a: color, ..shader.clone() }
+            } else {
+                figcraft_color::ShaderPaint { color_b: color, ..shader.clone() }
+            };
+            set_shader(app, target, paint, next);
+        }
+    });
+}
+
+fn shader_number_field(
+    app: &mut FigApp,
+    ui: &mut Ui,
+    target: &PickerTarget,
+    paint: &Paint,
+    shader: &figcraft_color::ShaderPaint,
+    field: &str,
+    value: f64,
+    step: f64,
+) {
+    let mut edit = None;
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        let width = ui.available_width();
+        edit = widgets::number_field(ui, Id::unique(("cp_shader_number", field)), widgets::Lead::Text(tr(field)), Some(value), "", width, step);
+    });
+    let update = |value: f64| match field {
+        "Scale" => figcraft_color::ShaderPaint { scale: value, ..shader.clone() },
+        "Bands" => figcraft_color::ShaderPaint { bands: value.round().clamp(1.0, 64.0) as u8, ..shader.clone() },
+        "Time" => figcraft_color::ShaderPaint { time: value, ..shader.clone() },
+        "Grain" => figcraft_color::ShaderPaint { grain: value as f32, ..shader.clone() },
+        _ => shader.clone(),
+    };
+    match edit {
+        Some(widgets::FieldEdit::Set(value)) => set_shader(app, target, paint, update(value)),
+        Some(widgets::FieldEdit::Scrub(value, done)) => {
+            let mut next = paint.clone();
+            next.kind = PaintKind::Shader(update(value).sanitized());
+            write(app, target, &next, !done);
+            if done {
+                finish(app);
+            }
+        }
+        None => {}
+    }
+}
+
+fn set_shader(app: &mut FigApp, target: &PickerTarget, paint: &Paint, shader: figcraft_color::ShaderPaint) {
+    let mut next = paint.clone();
+    next.kind = PaintKind::Shader(shader.sanitized());
+    write(app, target, &next, false);
 }
 
 /// The paint's own blend mode dropdown.
@@ -1091,6 +1214,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         if let PaintKind::Pattern(pt) = paint.kind.clone() {
             pattern_controls(app, ui, &target, &mut paint, pt);
         }
+        if matches!(paint.kind, PaintKind::Shader(_)) {
+            let height = ui.available_height().max(widgets::FIELD_H);
+            egui::ScrollArea::vertical().max_height(height).show(ui, |ui| shader_controls(app, ui, &target, &paint));
+        }
         if let Some(color) = edit_color {
             let mut hsb = ui
                 .data(|d| d.get_temp::<(f32, f32, f32, [u8; 4])>(Id::unique("cp_hsb")))
@@ -1153,7 +1280,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                             s.color = nc;
                         }
                     }
-                    PaintKind::Image(_) | PaintKind::Pattern(_) => {}
+                    PaintKind::Image(_) | PaintKind::Pattern(_) | PaintKind::Shader(_) => {}
                 }
                 write(app, &target, &paint, !done);
             }
@@ -1618,3 +1745,7 @@ mod tests {
 #[cfg(test)]
 #[path = "colorpicker_image_tests.rs"]
 mod image_tests;
+
+#[cfg(test)]
+#[path = "colorpicker_shader_tests.rs"]
+mod shader_tests;

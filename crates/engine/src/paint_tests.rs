@@ -78,6 +78,94 @@ fn exports_are_tagged_with_the_profile() {
 }
 
 #[test]
+fn procedural_shader_fill_edits_undo_and_exports() {
+    let mut s = Session::new();
+    let r = red_rect(&mut s);
+    let initial = figcraft_color::ShaderPaint {
+        pattern: figcraft_color::ShaderPattern::Waves,
+        shape: figcraft_color::ConcentricShape::Circle,
+        bands: 8,
+        color_a: Color::from_hex("#112233").unwrap(),
+        color_b: Color::from_hex("#DDEEFF").unwrap(),
+        scale: 37.0,
+        time: 1.25,
+        grain: 0.2,
+        seed: 11,
+    };
+    s.execute("fill.add", &json!({"ids": [r], "paint": figcraft_color::Paint::shader(initial.clone())})).unwrap();
+    s.execute(
+        "fill.set",
+        &json!({"ids": [r], "index": 1, "paint": figcraft_color::Paint::shader(figcraft_color::ShaderPaint { pattern: figcraft_color::ShaderPattern::Cells, ..initial.clone() })}),
+    )
+    .unwrap();
+    assert!(matches!(
+        &s.doc().unwrap().node(r).unwrap().fills[1].kind,
+        figcraft_color::PaintKind::Shader(p) if p.pattern == figcraft_color::ShaderPattern::Cells
+    ));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(matches!(
+        &s.doc().unwrap().node(r).unwrap().fills[1].kind,
+        figcraft_color::PaintKind::Shader(p) if p == &initial
+    ));
+
+    let bytes = crate::cmd::file::file_bytes(s.ds().unwrap()).unwrap();
+    let (saved, _) = figcraft_format::load_bytes(&bytes).unwrap();
+    assert!(matches!(
+        &saved.node(r).unwrap().fills[1].kind,
+        figcraft_color::PaintKind::Shader(p) if p == &initial
+    ));
+
+    let export = |s: &mut Session, format: &str| {
+        let value = s.execute("file.export", &json!({"ids": [r], "format": format})).unwrap();
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value["data"].as_str().unwrap()).unwrap()
+    };
+    let png = export(&mut s, "png");
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let svg = String::from_utf8(export(&mut s, "svg")).unwrap();
+    assert!(svg.contains("<pattern") && svg.contains("data:image/png;base64,"), "{svg}");
+    let pdf = export(&mut s, "pdf");
+    assert!(pdf.starts_with(b"%PDF") && String::from_utf8_lossy(&pdf).contains("/Subtype/Image"));
+
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().node(r).unwrap().fills.len(), 1);
+}
+
+#[test]
+fn concentric_shader_settings_save_undo_and_export() {
+    let mut s = Session::new();
+    let r = red_rect(&mut s);
+    let shader = figcraft_color::ShaderPaint {
+        pattern: figcraft_color::ShaderPattern::Concentric,
+        shape: figcraft_color::ConcentricShape::Triangle,
+        bands: 7,
+        color_a: Color::from_hex("#123456").unwrap(),
+        color_b: Color::from_hex("#ABCDEF").unwrap(),
+        ..figcraft_color::ShaderPaint::default()
+    };
+    s.execute("fill.add", &json!({"ids": [r], "paint": figcraft_color::Paint::shader(shader.clone())})).unwrap();
+    let edited = figcraft_color::ShaderPaint { shape: figcraft_color::ConcentricShape::Circle, bands: 2, ..shader.clone() };
+    s.execute("fill.set", &json!({"ids": [r], "index": 1, "paint": figcraft_color::Paint::shader(edited)})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    let bytes = crate::cmd::file::file_bytes(s.ds().unwrap()).unwrap();
+    let (saved, _) = figcraft_format::load_bytes(&bytes).unwrap();
+    assert!(matches!(&saved.node(r).unwrap().fills[1].kind, figcraft_color::PaintKind::Shader(p) if p == &shader));
+
+    let export = |s: &mut Session, format: &str| {
+        let value = s.execute("file.export", &json!({"ids": [r], "format": format})).unwrap();
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value["data"].as_str().unwrap()).unwrap()
+    };
+    let png = export(&mut s, "png");
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let svg = String::from_utf8(export(&mut s, "svg")).unwrap();
+    assert!(svg.contains("<pattern") && svg.contains("data:image/png;base64,"), "{svg}");
+    let pdf = export(&mut s, "pdf");
+    assert!(pdf.starts_with(b"%PDF") && String::from_utf8_lossy(&pdf).contains("/Subtype/Image"));
+
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().node(r).unwrap().fills.len(), 1);
+}
+
+#[test]
 fn color_profile_survives_save_and_load() {
     let mut s = Session::new();
     s.execute("file.colorProfile", &json!({"profile": "displayP3", "convert": false})).unwrap();

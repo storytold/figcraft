@@ -2,7 +2,7 @@
 //!
 //! [`Color`] is non-premultiplied sRGB in `0..=1` floats (what a design panel shows as hex + opacity).
 //! [`Paint`] is one entry of a node's fill or stroke list: solid, the four gradient kinds, an
-//! image or a pattern (a layer tiled), each with its own opacity, visibility and blend mode. [`ColorProfile`] says which RGB
+//! image, a pattern (a layer tiled) or a procedural shader, each with its own opacity, visibility and blend mode. [`ColorProfile`] says which RGB
 //! space (sRGB or Display P3) a document's values are in and converts between them.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -14,10 +14,12 @@ mod icc;
 mod lch;
 mod named;
 mod profile;
+mod shader;
 pub use blend::BlendMode;
 pub use hsx::*;
 pub use lch::{Lch, Oklch};
 pub use profile::{ColorProfile, ProfileConversion};
+pub use shader::{ConcentricShape, ShaderPaint, ShaderPattern, ShaderSampler};
 
 /// A non-premultiplied sRGB colour with alpha, components in `0..=1`. Deserializes from
 /// `{r, g, b, a}`, `[r, g, b(, a)]`, or a CSS/hex string (`"#0D99FF"`, `"rgba(…)"`).
@@ -667,10 +669,14 @@ impl PatternPaint {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PaintKind {
-    Solid { color: Color },
+    Solid {
+        color: Color,
+    },
     Gradient(Gradient),
     Image(ImagePaint),
     Pattern(PatternPaint),
+    /// A procedural shader: a built-in pattern worked out per point.
+    Shader(ShaderPaint),
 }
 
 /// One fill or stroke paint.
@@ -743,6 +749,11 @@ impl Paint {
         Self { kind: PaintKind::Pattern(PatternPaint::new(source)), opacity: 1.0, visible: true, blend: BlendMode::Normal, color_alpha: 1.0 }
     }
 
+    /// A procedural shader fill.
+    pub fn shader(sp: ShaderPaint) -> Self {
+        Self { kind: PaintKind::Shader(sp), opacity: 1.0, visible: true, blend: BlendMode::Normal, color_alpha: 1.0 }
+    }
+
     /// The solid colour (with the paint opacity folded into alpha), if solid.
     pub fn solid_color(&self) -> Option<Color> {
         match &self.kind {
@@ -763,6 +774,7 @@ impl Paint {
             },
             PaintKind::Image(_) => "Image".into(),
             PaintKind::Pattern(_) => "Pattern".into(),
+            PaintKind::Shader(_) => "Shader".into(),
         }
     }
 
@@ -771,6 +783,10 @@ impl Paint {
         match &mut self.kind {
             PaintKind::Solid { color } => f(color),
             PaintKind::Gradient(g) => g.stops.iter_mut().for_each(|s| f(&mut s.color)),
+            PaintKind::Shader(sp) => {
+                f(&mut sp.color_a);
+                f(&mut sp.color_b);
+            }
             PaintKind::Image(_) | PaintKind::Pattern(_) => {}
         }
     }
@@ -780,6 +796,10 @@ impl Paint {
         match &self.kind {
             PaintKind::Solid { color } => color.with_alpha(color.a * self.opacity),
             PaintKind::Gradient(g) => g.sample(0.0),
+            PaintKind::Shader(sp) => {
+                let c = sp.color_a.sanitized().lerp(sp.color_b.sanitized(), 0.5);
+                c.with_alpha(c.a * self.opacity)
+            }
             PaintKind::Image(_) | PaintKind::Pattern(_) => Color::from_rgb8_const(0xB3, 0xB3, 0xB3),
         }
     }
@@ -793,5 +813,7 @@ mod lch_tests;
 mod pattern_tests;
 #[cfg(test)]
 mod profile_tests;
+#[cfg(test)]
+mod shader_tests;
 #[cfg(test)]
 mod tests;

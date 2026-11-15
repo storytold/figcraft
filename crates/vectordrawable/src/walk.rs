@@ -363,6 +363,10 @@ impl<'a> Walker<'a> {
                 self.note(Warn::PatternFill, n);
                 return;
             }
+            PaintKind::Shader(_) => {
+                self.note(Warn::ShaderFill, n);
+                return;
+            }
         };
         let mut grad = None;
         if let PaintKind::Gradient(g) = &p.kind {
