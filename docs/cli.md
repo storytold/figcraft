@@ -123,6 +123,7 @@ page 1 "Screens": 380 nodes, 4 top-level
 - `<out>` has an image extension: one file with the given `--node`, or the whole page composited.
 - `--page` defaults to the first non-divider page: empty pages whose names start with `-` are
   skipped. If all pages are dividers, the first is used. `--page NAME` can select one explicitly.
+  The `.fig` and `.penpot` formats export the whole document and ignore `--page`.
 - `--node` takes a layer id (`12` or `0:12`) or a layer name.
 - `--format fig` (or an `<out>` ending in `.fig`) writes the whole file as `.fig`, experimental:
   written from public format notes, including variables with their modes and bindings and shared
