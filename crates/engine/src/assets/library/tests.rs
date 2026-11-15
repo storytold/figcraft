@@ -695,3 +695,40 @@ fn library_links_follow_a_moved_folder() {
     link_found(&mut s, &lid);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// A component with a layer, both carrying the identity a paste from a design app records.
+fn identified(d: &mut Document, name: &str, file: &str, main: &str, layer: &str, key: Option<&str>) -> (NodeId, NodeId) {
+    let page = d.pages[0];
+    let kind = || NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() };
+    let c = d.create(page, kind(), name, 0.0, 0.0, 40.0, 20.0).unwrap();
+    let l = d.create(c, NodeKind::Frame, "Face", 0.0, 0.0, 40.0, 20.0).unwrap();
+    for (id, guid) in [(c, main), (l, layer)] {
+        let n = d.get_mut(id).unwrap();
+        n.plugin_data.insert("fig.guid".into(), guid.into());
+        n.plugin_data.insert("fig.file".into(), file.into());
+    }
+    if let Some(k) = key {
+        d.get_mut(c).unwrap().plugin_data.insert("fig.key".into(), k.into());
+    }
+    (c, l)
+}
+
+#[test]
+fn a_main_matched_by_library_key_maps_layers_by_guid_only_within_one_file() {
+    let relink = |their_file: &str, their_main: &str| {
+        let mut doc = Document::new("mine");
+        let (mine, _) = identified(&mut doc, "Button", "F1", "1:20", "1:21", Some("btn"));
+        let mut src = Document::new("theirs");
+        // Their layer carries the guid of `mine`'s main: unrelated layers in another file.
+        let (theirs, their_face) = identified(&mut src, "Button", their_file, their_main, "1:20", Some("btn"));
+        let mut remote = BTreeMap::new();
+        relink_by_identity(&doc, &src, &BTreeSet::from([theirs]), &BTreeMap::new(), &mut remote);
+        (remote, mine, theirs, their_face)
+    };
+    let (remote, mine, theirs, their_face) = relink("F2", "1:19");
+    assert_eq!(remote.get(&theirs), Some(&mine), "the library key still links the main");
+    assert_eq!(remote.get(&their_face), None, "a guid of another file names an unrelated layer");
+    let (remote, mine, theirs, their_face) = relink("F1", "1:19");
+    assert_eq!(remote.get(&theirs), Some(&mine));
+    assert_eq!(remote.get(&their_face), Some(&mine), "the same file: the guid is the layer");
+}

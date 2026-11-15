@@ -31,6 +31,7 @@ pub(super) fn detach(s: &mut Session, p: &Value) -> Result<Value> {
         keep_main_modes(doc, i)?;
         let n = doc.get_mut(i)?;
         n.kind = NodeKind::Frame;
+        n.drop_figma_identity();
         n.source = None;
         n.overrides.clear();
         n.prop_refs.remove("mainComponent");

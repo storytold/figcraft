@@ -34,7 +34,7 @@ use load::font_report;
 pub use load::{MAX_DOCUMENT_FILE, load, load_bytes, load_path};
 #[cfg(test)]
 pub(crate) use load::{installed_family, sketch_line};
-pub(crate) use load::{load_fig, read_capped, recovered, recovered_from, variables_param, write};
+pub(crate) use load::{load_fig_with, read_capped, recovered, recovered_from, variables_param, write};
 pub use open::MAX_RECENT;
 #[cfg(test)]
 use open::append_pages;

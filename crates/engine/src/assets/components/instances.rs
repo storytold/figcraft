@@ -41,6 +41,8 @@ pub fn create_instance_at(doc: &mut Document, component: NodeId, parent: NodeId,
     root.interactions.clear();
     // So do the variable modes the main sets (see `Document::inherited_modes`).
     root.var_modes.clear();
+    // The instance is not the main the file's pasted layers were matched to.
+    root.drop_figma_identity();
     doc.insert(root, parent, index)?;
     sync_instance(doc, id);
     Ok(id)
