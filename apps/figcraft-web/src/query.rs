@@ -26,6 +26,8 @@ pub fn page_server(content: &str) -> Option<String> {
     (scheme
         && c.len() <= 512
         && !c.contains(|ch: char| ch.is_whitespace() || ch.is_control() || ch == '?' || ch == '#')
+        // Endpoint parsing strips pasted-link delimiters; metadata must retain its spelling.
+        && !c.ends_with(['<', '>', '"', '\''])
         && figcraft_collab_net::Endpoint::parse(c).is_ok())
     .then(|| c.to_string())
 }
