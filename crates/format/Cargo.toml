@@ -21,4 +21,5 @@ sha1 = { workspace = true }
 sha2 = { workspace = true }
 image = { workspace = true }
 craft-fig = { workspace = true }
+craft-figcraft-format = { workspace = true }
 craft-figma-rest = { workspace = true }
