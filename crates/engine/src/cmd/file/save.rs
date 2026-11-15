@@ -85,7 +85,8 @@ impl FileSnapshot {
     /// files are from its folder.
     fn encode_at(&self, path: Option<&str>) -> Result<Vec<u8>> {
         let mut doc = (*self.doc).clone();
-        doc.current_page = Some(self.page);
+        let opening = doc.pages.iter().copied().find(|&p| matches!(doc.get(p).map(|n| &n.kind), Ok(NodeKind::Page { opening: true, .. })));
+        doc.current_page = Some(opening.unwrap_or(self.page));
         if let Some(path) = path {
             crate::library::relate_links(&mut doc, path);
         }
