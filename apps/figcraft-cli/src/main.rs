@@ -91,8 +91,18 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         // `--attach` conflicts with the roots: the app runs the commands, only its own roots can confine them.
-        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, roots_of(&a.roots)?),
-        Command::Plugin { command: PluginCommand::Publish(a) } => publish_plugin(&a.folder, &a.server),
+        Command::Mcp(a) => {
+            if a.status || a.install.is_some() {
+                return mcp_harness(a.status, a.install.as_deref(), a.port);
+            }
+            mcp(a.attach.as_deref(), a.timeout, roots_of(&a.roots)?)
+        }
+        Command::Plugin { command } => match command {
+            PluginCommand::New(a) => plugin_new(&a),
+            PluginCommand::Build(a) => plugin_build(&a.folder),
+            PluginCommand::Run(a) => confined(&a.roots, || plugin_run(&a)),
+            PluginCommand::Publish(a) => publish_plugin(&a.folder, &a.server),
+        },
         Command::Connect { command: ConnectCommand::Publish(a) } => confined(&a.roots, || files::connect_publish(&a.file, &a.mappings, a.dry_run)),
         Command::Perf(a) => {
             let sizes: Vec<usize> = a.layers.into_iter().map(|n| n.clamp(10, 2_000_000)).collect();
@@ -168,5 +178,91 @@ fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     server.serve(stdin.lock(), stdout.lock()).map_err(|e| format!("stdio: {e}"))?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Inspect or install FigCraft MCP configuration for supported LLM coding harnesses.
+fn mcp_harness(status: bool, install_target: Option<&str>, port: u16) -> CliResult<ExitCode> {
+    use figcraft_engine::harness::{HarnessKind, detect_cli_binary, inspect_all, install};
+    let cli = detect_cli_binary();
+    let opt_port = (port != 0).then_some(port);
+    if let Some(target) = install_target {
+        let targets: Vec<HarnessKind> = if target.eq_ignore_ascii_case("all") {
+            HarnessKind::ALL.to_vec()
+        } else {
+            let kind = HarnessKind::parse(target).ok_or_else(|| {
+                CliError::Usage(format!("unknown harness `{target}` (expected antigravity, claude-code, claude-desktop, codex or all)"))
+            })?;
+            vec![kind]
+        };
+        for kind in targets {
+            let res = install(kind, &cli, opt_port).map_err(CliError::Failed)?;
+            println!("Configured {} ({}) -> {}", kind.label(), kind.id(), res.config_path.display());
+        }
+    }
+    if status || install_target.is_none() {
+        let statuses = inspect_all(&cli, opt_port);
+        println!("FigCraft CLI binary: {cli}");
+        println!("Control port:        {}", if port == 0 { "headless".to_string() } else { port.to_string() });
+        println!();
+        for h in statuses {
+            let state = if h.configured { "configured" } else { "not configured" };
+            println!("  {:16} [{:14}] {}", h.label, state, h.config_path.display());
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Scaffold a new plugin project on disk via `plugin.create`.
+fn plugin_new(a: &args::PluginNewArgs) -> CliResult<ExitCode> {
+    let mut s = figcraft_engine::Session::new();
+    let name =
+        a.name.clone().unwrap_or_else(|| std::path::Path::new(&a.folder).file_name().and_then(|n| n.to_str()).unwrap_or("My Plugin").to_string());
+    let mut params = json!({
+        "dir": a.folder,
+        "name": name,
+        "template": a.template,
+    });
+    if let Some(id) = &a.id {
+        params["id"] = json!(id);
+    }
+    let r = s.execute("plugin.create", &params).map_err(|e| CliError::Failed(e.to_string()))?;
+    println!(
+        "Created plugin {} ({}) in {}",
+        r["name"].as_str().unwrap_or_default(),
+        r["id"].as_str().unwrap_or_default(),
+        r["dir"].as_str().unwrap_or_default()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Compile a Rust plugin project for `wasm32-unknown-unknown`, copy its `.wasm` module to `main`, and validate it.
+fn plugin_build(folder: &str) -> CliResult<ExitCode> {
+    let dir = std::path::Path::new(folder);
+    let (manifest_path, wasm_out) = figcraft_engine::plugins::build_plugin_project(dir).map_err(CliError::Failed)?;
+    let mut s = figcraft_engine::Session::new();
+    let imported = s.execute("plugin.import", &json!({"path": manifest_path.to_string_lossy()})).map_err(|e| CliError::Failed(e.to_string()))?;
+    println!("Built {} ({}) -> {}", imported["name"].as_str().unwrap_or_default(), imported["id"].as_str().unwrap_or_default(), wasm_out.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Import and run a plugin in a headless session, optionally loading `--in` and saving `--out`.
+fn plugin_run(a: &args::PluginRunArgs) -> CliResult<ExitCode> {
+    let params_val: Value = serde_json::from_str(&a.params).map_err(|e| CliError::Usage(format!("--params is not valid JSON: {e}")))?;
+    let mut s = match &a.input {
+        Some(path) => figcraft_engine::Session::with_document(files::load(path)?),
+        None => figcraft_engine::Session::new(),
+    };
+    let imported = s.execute("plugin.import", &json!({"path": a.folder})).map_err(|e| CliError::Failed(e.to_string()))?;
+    let id = imported["id"].as_str().unwrap_or_default().to_string();
+    let mut run_params = json!({"id": id, "params": params_val});
+    if let Some(cmd) = &a.command {
+        run_params["command"] = json!(cmd);
+    }
+    let out = s.execute("plugin.run", &run_params).map_err(|e| CliError::Failed(e.to_string()))?;
+    println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+    if let Some(out_path) = &a.out {
+        s.execute("file.saveAs", &json!({"path": out_path})).map_err(|e| CliError::Failed(e.to_string()))?;
+    }
     Ok(ExitCode::SUCCESS)
 }
