@@ -269,7 +269,8 @@ impl Presenter {
     /// The part of the frame `id` (its whole texture covering `whole`, page units) in view
     /// (`visible`) at the full pixel scale `px`, for a frame whose whole texture is capped below it
     /// (see [`detail_plan`]). While the view moves (`moving`) it only returns a detail already
-    /// rendered, the capped texture showing under it.
+    /// rendered, and only while it covers the whole view: past it the capped texture shows alone
+    /// (no sharp edge across the view) until the view settles and a detail for it is rendered.
     pub(super) fn detail_texture(
         &mut self,
         ctx: &egui::Context,
@@ -291,7 +292,7 @@ impl Presenter {
         if let Some((did, d)) = &self.detail
             && *did == id
             && d.key == key
-            && (moving || covers(&d.bounds))
+            && covers(&d.bounds)
         {
             return Some(d.clone());
         }

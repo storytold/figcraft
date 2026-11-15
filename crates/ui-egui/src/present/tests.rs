@@ -527,6 +527,37 @@ fn a_view_a_rounding_error_past_the_frame_keeps_its_detail() {
     assert_eq!(again, first, "the same view reuses its detail instead of rendering a new one");
 }
 
+/// While the view moves, the detail is drawn only while it covers the whole view: past its edge
+/// the capped whole-frame texture shows alone, so no sharp/soft boundary crosses the view, and
+/// once the view settles a detail for it is rendered.
+#[test]
+fn a_moving_view_past_its_detail_shows_the_capped_frame_alone_until_it_settles() {
+    use figcraft_geom::Rect as R;
+    let mut ui = tall_hidpi(16_384);
+    let ctx = ui.ctx.clone();
+    let doc = ui.app.session.doc().unwrap().clone();
+    let now = ui.time;
+    let p = ui.app.ui.present.as_mut().unwrap();
+    let id = p.current;
+    let whole = R::new(0.0, 0.0, 1440.0, 9701.0);
+    let covers = |b: R, v: R| b.x0 <= v.x0 && b.y0 <= v.y0 && b.x1 >= v.x1 && b.y1 >= v.y1;
+    let first = p.detail_texture(&ctx, &doc, id, 2.0, whole, R::new(0.0, 0.0, 1440.0, 860.0), false, now).expect("a detail");
+    // Moving within the detail's margin: it is reused.
+    let shift = (first.bounds.y1 - 860.0) / 2.0;
+    assert!(shift > 0.0, "{:?}", first.bounds);
+    let inside = R::new(0.0, shift, 1440.0, 860.0 + shift);
+    let moved = p.detail_texture(&ctx, &doc, id, 2.0, whole, inside, true, now).expect("still covered");
+    assert_eq!(moved.tex.id(), first.tex.id());
+    // Moving past its edge: no detail, the capped texture shows alone.
+    let past = R::new(0.0, first.bounds.y1 - 430.0, 1440.0, first.bounds.y1 + 430.0);
+    assert!(!covers(first.bounds, past));
+    assert!(p.detail_texture(&ctx, &doc, id, 2.0, whole, past, true, now).is_none(), "the old detail is not drawn over part of the view");
+    // Settled there: a new detail for that view.
+    let settled = p.detail_texture(&ctx, &doc, id, 2.0, whole, past, false, now).expect("a new detail");
+    assert_ne!(settled.tex.id(), first.tex.id());
+    assert!(covers(settled.bounds, past), "{:?} covers {past:?}", settled.bounds);
+}
+
 #[test]
 fn a_still_view_keeps_its_detail_at_fractional_scales() {
     // Frame widths that give fractional fit-width scales: the view's page rect then comes back
