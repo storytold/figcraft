@@ -524,8 +524,8 @@ fn shift_click_takes_a_layer_out_where_nothing_can_move() {
     assert_eq!(s.selection(), vec![k.empty], "Shift-click still takes the layer out");
 }
 
-/// A top-level 300 x 300 frame with a filled 100 x 100 rectangle at (50, 50) and a nested frame
-/// at (200, 200 80x80) holding a rectangle at (210, 210 40x40).
+/// A top-level 300 x 300 frame with a filled 100 x 100 rectangle at (50, 50) and a nested 100 x 100
+/// frame at (180, 180) holding a 40 x 40 rectangle at (200, 200).
 fn frame_with_child(s: &mut Session) -> (NodeId, NodeId, NodeId, NodeId) {
     let f = id(&ex(s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 300})));
     let c = id(&ex(s, "shape.rectangle", json!({"x": 50, "y": 50, "width": 100, "height": 100, "parent": f})));
