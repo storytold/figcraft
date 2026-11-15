@@ -183,7 +183,7 @@ fn tools() -> Vec<Value> {
         tool(
             "create_node",
             "Create layer",
-            "Create a layer (engine `node.create`) and return its id and inspected properties. Coordinates are page units, y down; x/y are relative to the parent frame (the page when there is none, so then they are page coordinates; groups don't count). Inside an auto-layout frame the position is decided by the layout. The new layer becomes the selection.",
+            "Create a layer (engine `node.create`) and return its id and inspected properties. Coordinates are page units, y down; x/y are relative to the parent frame (the page when there is none, so then they are page coordinates; groups don't count). Inside an auto-layout frame the position is decided by the layout. The new layer becomes the selection. `warnings` reports a fontStyle that draws in another face.",
             obj(
                 json!({
                     "type": {"type": "string", "enum": ["frame", "rectangle", "ellipse", "polygon", "star", "line", "arrow", "text", "vector", "section", "component", "slice"], "description": "Layer type"},
@@ -687,8 +687,13 @@ fn create_node(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult
     }
     let r = exec(b, "node.create", Value::Object(params))?;
     let id = r.get("id").cloned().ok_or("node.create returned no id")?;
+    let warnings = r.get("warnings").cloned();
     let node = b.call("node.get", json!({"id": id, "depth": 0}))?;
-    Ok(ToolResult::json(&json!({"id": id, "node": node})))
+    let mut out = json!({"id": id, "node": node});
+    if let Some(w) = warnings {
+        out["warnings"] = w;
+    }
+    Ok(ToolResult::json(&out))
 }
 
 fn set_properties(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
