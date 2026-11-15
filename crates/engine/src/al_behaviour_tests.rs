@@ -336,3 +336,36 @@ fn auto_layout_keys_beside_no_auto_layout_are_refused() {
     set(&mut s, f, json!({"layout": null, "name": "Plain"}));
     assert!(s.doc().unwrap().node(f).unwrap().layout.is_none());
 }
+
+#[test]
+fn align_is_unavailable_for_a_child_in_an_auto_layout_flow() {
+    use crate::cmd::arrange::{align_blocked_by_auto_layout, can_align};
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"gap": 10}));
+    let a = rect(&mut s, f, 20.0, 20.0, "#ff0000");
+    let b = rect(&mut s, f, 20.0, 20.0, "#00ff00");
+    let at = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap();
+    let (before_a, before_b) = (at(&s, a), at(&s, b));
+    assert_eq!(before_b.x0, 30.0, "the layout placed the second one after the first");
+    let doc = s.doc().unwrap();
+    assert!(!can_align(doc, &[b]), "Align is greyed out for one child of the frame");
+    assert!(align_blocked_by_auto_layout(doc, &[b]), "because its frame places it");
+    for cmd in ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"] {
+        s.execute(cmd, &json!({"ids": [b]})).unwrap();
+        assert_eq!((at(&s, a), at(&s, b)), (before_a, before_b), "{cmd} leaves the layout alone");
+    }
+}
+
+#[test]
+fn an_absolute_child_of_an_auto_layout_frame_still_aligns_to_it() {
+    use crate::cmd::arrange::{align_blocked_by_auto_layout, can_align};
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({}));
+    let kid = rect(&mut s, f, 20.0, 20.0, "#ff0000");
+    set(&mut s, kid, json!({"absolute": true}));
+    let doc = s.doc().unwrap();
+    assert!(can_align(doc, &[kid]));
+    assert!(!align_blocked_by_auto_layout(doc, &[kid]));
+    s.execute("align.right", &json!({"ids": [kid]})).unwrap();
+    assert_eq!(s.doc().unwrap().world_bounds(kid).unwrap().x1, 200.0);
+}
