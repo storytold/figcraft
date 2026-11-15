@@ -55,6 +55,7 @@ impl FigApp {
             input_acks: Vec::new(),
             applied_acks: Vec::new(),
             applied_input: None,
+            applied_prior_input: None,
             applied_doc: None,
             control_input_queued: false,
             applied_frame: None,

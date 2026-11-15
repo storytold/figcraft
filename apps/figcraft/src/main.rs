@@ -113,13 +113,13 @@ impl eframe::App for App {
         }
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // winit gives an undecorated window its caption back when it changes the window's flags
         // (maximize, restore, ...): take it off again before the frame is laid out (#1343).
         self.window_frame.run();
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
-        if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
+        if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, ctx, raw_input.viewport_id)) {
             raw_input.events.extend(events);
         }
     }

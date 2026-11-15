@@ -565,7 +565,7 @@ fn injected_input_is_acknowledged_only_after_the_pass_that_applies_it() {
     let rx = push_input(&mut u, 20);
     u.frame(vec![]);
     assert!(rx.try_recv().is_err(), "queued, not applied yet");
-    let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
     assert!(!events.is_empty(), "the batch the window draws with");
     assert!(u.app.control_synthetic, "the applying frame is fenced from the system clipboard");
     u.frame(vec![]);
@@ -582,7 +582,7 @@ fn a_discarded_pass_does_not_acknowledge_or_lose_an_injected_batch() {
     let mut u = Ui::new(Session::empty());
     let rx = push_input(&mut u, 21);
     u.frame(vec![]);
-    let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
     assert!(!events.is_empty());
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
@@ -627,7 +627,7 @@ fn injected_text_lands_once_across_a_discarded_sizing_pass() {
         state: Default::default(),
     });
     u.frame(vec![]);
-    let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
     assert!(!events.is_empty(), "the applying frame's batch");
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
@@ -687,7 +687,7 @@ fn input_queued_before_a_document_switch_never_edits_the_new_document() {
     let (mut u, a, b) = two_files_with_selected_rectangles();
     let rx = push_delete(&mut u, 30);
     u.frame(vec![]);
-    let mut events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let mut events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
     assert!(!events.is_empty(), "the batch was taken for file A");
     let (tx, switched) = std::sync::mpsc::channel();
     u.app.control_queue.push(ControlRequest {
@@ -725,7 +725,7 @@ fn input_for_the_still_active_document_is_applied_and_acknowledged() {
     let (mut u, a, b) = two_files_with_selected_rectangles();
     let rx = push_delete(&mut u, 32);
     u.frame(vec![]);
-    let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
     u.frame(events);
     u.frame(vec![]);
     assert!(rx.try_recv().expect("acknowledged").result.is_ok());
@@ -755,7 +755,7 @@ fn pointer_and_scroll_queued_before_a_document_switch_never_reach_the_new_docume
         reply: tx,
         state: Default::default(),
     });
-    let mut events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let mut events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
     let unrelated = egui::Event::PointerMoved(egui::pos2(321.0, 123.0));
     events.insert(0, unrelated.clone());
     u.frame(events);
@@ -795,7 +795,7 @@ fn press_then_command(u: &mut Ui, command: &str) -> (std::sync::mpsc::Receiver<C
         reply: tx,
         state: Default::default(),
     });
-    let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
     u.frame(events);
     (rx, done)
 }
@@ -851,7 +851,7 @@ fn input_queued_before_a_command_that_keeps_the_document_is_applied() {
         reply: tx,
         state: Default::default(),
     });
-    let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
     assert!(!events.is_empty(), "the batch stays queued");
     u.frame(events);
     let ran = done.try_recv().expect("ran").result;
@@ -878,7 +878,7 @@ fn press_taken_before_a_tab_change_in_the_same_pass_leaves_the_new_document_sele
             state: Default::default(),
         });
         u.frame(vec![]);
-        let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+        let events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
         assert!(!events.is_empty(), "{command}: the batch was taken for file A");
         let params = if command == "doc.switch" { json!({"index": 1}) } else { json!({}) };
         let (tx, done) = std::sync::mpsc::channel();
@@ -914,7 +914,7 @@ fn scroll_taken_before_a_tab_change_in_the_same_pass_does_not_scroll_the_new_doc
             state: Default::default(),
         });
         u.frame(vec![]);
-        let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+        let events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
         assert!(!events.is_empty(), "{command}: the batch was taken for file A");
         let params = if command == "doc.switch" { json!({"index": 1}) } else { json!({}) };
         let (tx, done) = std::sync::mpsc::channel();
@@ -935,6 +935,96 @@ fn scroll_taken_before_a_tab_change_in_the_same_pass_does_not_scroll_the_new_doc
     }
 }
 
+/// Asserts rejecting a synthetic scroll batch removes only its own scroll amount: a platform wheel
+/// event received earlier in the same frame still scrolls.
+#[test]
+fn rejected_scroll_batch_keeps_the_users_wheel_input_from_the_same_frame() {
+    let (mut u, _a, _b) = two_files_with_selected_rectangles();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(56),
+        method: "ui.input".into(),
+        params: json!({"events": [{"scroll": [0, -3]}]}),
+        reply: tx,
+        state: Default::default(),
+    });
+    u.frame(vec![]);
+    let mut events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
+    assert!(!events.is_empty(), "the batch was taken for file A");
+    events.insert(
+        0,
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            source: egui::MouseWheelSource::Wheel,
+            delta: egui::vec2(0.0, -5.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        },
+    );
+    let (tx, _done) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(57),
+        method: "engine.execute".into(),
+        params: json!({"command": "doc.switch", "params": {"index": 1}}),
+        reply: tx,
+        state: Default::default(),
+    });
+    u.frame(events);
+    assert_eq!(u.ctx.input(|i| i.smooth_scroll_delta), egui::vec2(0.0, -5.0), "only the batch's scroll is removed");
+}
+
+/// Asserts the rejected batch's scroll is removed from the state it was merged into: a previous
+/// frame's smoothing residue stays, and the batch leaves no remainder to scroll the new file.
+#[test]
+fn rejected_scroll_batch_leaves_earlier_scroll_residue_untouched() {
+    let wheel = |y: f32| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Wheel,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // The same earlier wheel input on a context that never sees a batch is the reference.
+    let (mut reference, _a, _b) = two_files_with_selected_rectangles();
+    reference.frame(vec![wheel(-40.0)]);
+    reference.frame(vec![]);
+    reference.frame(vec![]);
+    let want = reference.ctx.input(|i| i.smooth_scroll_delta);
+    let want_next = {
+        reference.frame(vec![]);
+        reference.ctx.input(|i| i.smooth_scroll_delta)
+    };
+
+    let (mut u, _a, _b) = two_files_with_selected_rectangles();
+    // A large notch leaves unprocessed residue that later frames keep smoothing out.
+    u.frame(vec![wheel(-40.0)]);
+    let (tx, _rx) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(58),
+        method: "ui.input".into(),
+        params: json!({"events": [{"scroll": [0, -30]}]}),
+        reply: tx,
+        state: Default::default(),
+    });
+    u.frame(vec![]);
+    let events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
+    assert!(!events.is_empty(), "the batch was taken for file A");
+    let (tx, _done) = std::sync::mpsc::channel();
+    u.app.control_queue.push(ControlRequest {
+        id: json!(59),
+        method: "engine.execute".into(),
+        params: json!({"command": "doc.switch", "params": {"index": 1}}),
+        reply: tx,
+        state: Default::default(),
+    });
+    u.frame(events);
+    let got = u.ctx.input(|i| i.smooth_scroll_delta);
+    assert!((got - want).length() < 1e-3, "only the residue of the earlier frame scrolls: {got:?} vs {want:?}");
+    u.frame(vec![]);
+    let got_next = u.ctx.input(|i| i.smooth_scroll_delta);
+    assert!((got_next - want_next).length() < 1e-3, "the batch leaves nothing for the next frame: {got_next:?} vs {want_next:?}");
+}
+
 /// Asserts rejecting a press batch keeps the pointer position and a button the user already held.
 #[test]
 fn rejected_press_keeps_the_hover_position_and_held_button() {
@@ -948,7 +1038,7 @@ fn rejected_press_keeps_the_hover_position_and_held_button() {
         state: Default::default(),
     });
     u.frame(vec![]);
-    let mut events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+    let mut events = crate::windows::take_input(&mut u.app, &u.ctx, egui::ViewportId::ROOT);
     let hover = egui::pos2(321.0, 123.0);
     events.insert(0, egui::Event::PointerMoved(hover));
     events.insert(

@@ -141,7 +141,7 @@ pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
 
 /// Control-channel input events (`ui.input`) for the window `viewport` draws next. A batch queued
 /// for another document is dropped rather than replayed into the new one.
-pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event> {
+pub fn take_input(app: &mut FigApp, ctx: &Context, viewport_id: ViewportId) -> Vec<egui::Event> {
     let (events, tagged, current) = match app.windows.list.iter_mut().find(|w| viewport(w.id) == viewport_id) {
         Some(w) => {
             let events = std::mem::take(&mut w.pane.control_input);
@@ -172,6 +172,9 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
         app.control_synthetic = true;
         let acks = app.take_input_acks(viewport_id);
         app.applied_acks.extend(acks);
+        // egui's scroll smoothing carries residue between frames: keep the state this batch is
+        // merged into, so a rejected batch's scroll can be taken out of the state that made it.
+        app.applied_prior_input = events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. })).then(|| ctx.input(|i| i.clone()));
         app.applied_input = Some(events.clone());
         app.applied_doc = tagged;
         app.applied_frame = Some(viewport_id);
@@ -223,6 +226,7 @@ pub(crate) fn revalidate_input(app: &mut FigApp, ctx: &Context) {
     }
     // Only the pass holding the batch: a discarded pass's rerun has none (it was applied).
     let Some(batch) = app.applied_input.take() else { return };
+    let prior = app.applied_prior_input.take();
     for ack in app.applied_acks.drain(..) {
         let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err("the document changed before the input could be applied".into()) });
     }
@@ -270,7 +274,13 @@ pub(crate) fn revalidate_input(app: &mut FigApp, ctx: &Context) {
             i.pointer = held.begin_pass(i.raw.clone(), false, pixels_per_point, options).pointer;
         }
         if batch.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. })) {
-            i.smooth_scroll_delta = egui::Vec2::ZERO;
+            // Redo the scroll smoothing from the state before this pass without the batch: the
+            // user's own wheel input in the same frame stays, and so do earlier frames' residue.
+            let prior = prior.unwrap_or_default();
+            let mut clean = prior.begin_pass(i.raw.clone(), false, pixels_per_point, options);
+            clean.pointer = i.pointer.clone();
+            clean.events = std::mem::take(&mut i.events);
+            *i = clean;
         }
     });
 }
