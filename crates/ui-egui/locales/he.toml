@@ -8,6 +8,27 @@ name = "עברית"
 status = "draft — needs native review"
 
 [ui]
+# 16 Nov 2026 DAY-02: source-exact clipboard, import/export and recovery warnings; AI-assisted clean-room draft.
+"Copy the {label}" = "העתקת {label}"
+"Copy {value}" = "העתקת {value}"
+"Delete {n} variables" = { one = "מחיקת {n} משתנה", other = "מחיקת {n} משתנים" }
+"Exported {name}; {n} kinds of content were left out" = { one = "יוצא {name}; הושמט {n} סוג תוכן", other = "יוצא {name}; הושמטו {n} סוגי תוכן" }
+"Files nobody opens for {n} days are deleted." = { one = "קבצים שלא נפתחו במשך {n} יום נמחקים.", other = "קבצים שלא נפתחו במשך {n} ימים נמחקים." }
+"Imported {n} new variables, updated {updated}" = { one = "יובא {n} משתנה חדש; עודכנו {updated} משתנים", other = "יובאו {n} משתנים חדשים; עודכנו {updated} משתנים" }
+"Pasted design layers; the clipboard didn't carry the images of: {layers}" = "שכבות העיצוב הודבקו, אך הלוח לא כלל את התמונות של: {layers}"
+"Paste a link (https://…)" = "הדבקת קישור (https://…)"
+"Paste a team library link (a view link)" = "הדבקת קישור לספריית צוות (קישור לצפייה)"
+"Pasted design layers; {n} kinds of content were left out" = { one = "שכבות העיצוב הודבקו; הושמט {n} סוג תוכן", other = "שכבות העיצוב הודבקו; הושמטו {n} סוגי תוכן" }
+"Select layers and they space themselves as their content changes" = "בחירת שכבות כדי שהמרווחים ביניהן יתעדכנו עם שינוי התוכן"
+"document children other than pages were skipped" = "רכיבי מסמך שאינם עמודים דולגו"
+"grid track list exceeds 1000 entries; the tracks use the default equal sizing" = "רשימת רצועות הרשת כוללת יותר מ־1000 פריטים; ייעשה שימוש בגודל אחיד כברירת מחדל"
+"grid track sizing is unsupported or malformed; affected tracks use equal sizing" = "הגדרת גודל רצועות הרשת אינה נתמכת או אינה תקינה; לרצועות המושפעות יוקצה גודל אחיד"
+"grid track sizing list exceeds 1000 entries; the tracks use the default equal sizing" = "רשימת גדלי רצועות הרשת כוללת יותר מ־1000 פריטים; ייעשה שימוש בגודל אחיד כברירת מחדל"
+"layers without a position were placed at their parent's origin" = "שכבות ללא מיקום הוצבו בנקודת הראשית של רכיב האב"
+"layers without a type were skipped" = "שכבות ללא סוג דולגו"
+"style settings of some vector segments aren't supported; those segments use the layer's stroke" = "הגדרות העיצוב של חלק ממקטעי הווקטור אינן נתמכות; מקטעים אלה משתמשים בקו המתאר של השכבה"
+"text path underline or strikethrough decoration is not rendered" = "עיצוב קו תחתון או קו חוצה בטקסט על נתיב אינו מוצג"
+"text style overrides refer to missing table entries" = "דריסות סגנון הטקסט מפנות לרשומות חסרות בטבלה"
 # 16 Nov 2026 DAY-02: source-exact Hebrew drawing, layout and selection controls; AI-assisted clean-room draft.
 "A layer in an auto layout frame is placed by its frame" = "מיקום שכבה במסגרת בעלת פריסה אוטומטית נקבע לפי המסגרת"
 "Auto ({mode})" = "אוטומטי ({mode})"
