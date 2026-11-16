@@ -237,3 +237,18 @@ fn the_gesture_start_stands_in_only_while_the_selection_is_only_moved() {
     app.session.ds_mut().unwrap().selection.pop();
     assert!(crate::selection_cache::moved(app.session.ds().unwrap()).is_none());
 }
+
+#[test]
+fn the_align_buttons_are_off_for_a_layer_in_an_auto_layout_flow() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap());
+    let kid = id(s.execute("shape.rectangle", &json!({"parent": f, "x": 0, "y": 0, "width": 20, "height": 20})).unwrap());
+    s.execute("node.set", &json!({"id": f, "props": {"layout": "horizontal", "padding": 0, "gap": 0}})).unwrap();
+    s.execute("select.set", &json!({"ids": [kid]})).unwrap();
+    let app = FigApp::new(s, Box::new(NoServices));
+    let ctx = Context::default();
+    let ds = app.session.ds().unwrap();
+    let pv = crate::right::position_values(&ctx, &ds.doc.clone(), &ds.selection.clone());
+    assert!(!pv.can_align, "Align is greyed out");
+    assert!(pv.align_blocked, "and the tip says the frame places the layer");
+}

@@ -704,7 +704,10 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   in the pages list, never opened and holding no layers), `page.list` (each page's `divider`),
   `page.rename`, `page.move {id, index}`, `page.duplicate` ("Copy of …", after its source, with its colour,
   flows (starting at the copied frames), prototype settings and guides),
-  `page.delete` (the last page that isn't a divider stays).
+  `page.delete` (the last page that isn't a divider stays), `page.setOpening {id?}` (the page the
+  file opens on for everyone who opens or joins it, the current page when none is named, a divider
+  refused: a document change, so it syncs in a live session and undoes, #1817; the choice is saved
+  with the file and opens it for everyone, whichever page the saver was on).
 - `component.list`: each component's `folder` (the Assets panel's folders: its page, the frames
   holding it, then its name's slash parts) and `label` (the name on its tile).
 - `view.contextMenu` (`Shift+F10`): the selection's context menu, at its layer row when the layers
@@ -2097,8 +2100,8 @@ turned off 0°.
   `node.set {pointCount}` keeps stars to 3–60 points; `miterAngle` (degrees, the Design panel's
   Miter angle) sets the miter limit (`limit = 1 / sin(angle / 2)`); `get_node` reports a join
   other than miter (`strokeJoin`) or a miter angle other than the default ~28.96° (`miterAngle`).
-- **Select**: `select.layersAt {x, y}` lists every layer under a page point, front-most first with its
-  depth (the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
+- **Select**: `select.layersAt {x, y}` lists every layer under a page point, locked ones too, front-most first with its
+  depth and a `locked` flag (true when the layer or an ancestor is locked; the context menu's Select layer); `select.set`, `select.children` / `select.parent` (Enter
   / Shift+Enter), `select.next` / `select.previous` (Tab / Shift+Tab). With `pointer`, `cmd: true`
   clicks select the nested layer, `cmd` drags from empty canvas select the nested layers they touch,
   and `shift` drags toggle what they touch. A press on the background of a top-level frame with

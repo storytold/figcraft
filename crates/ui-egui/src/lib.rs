@@ -116,6 +116,8 @@ mod font_menu_regrow_tests;
 #[cfg(test)]
 mod frame_label_tests;
 #[cfg(test)]
+mod frame_new_from_selection_tests;
+#[cfg(test)]
 mod gap_handle_tests;
 #[cfg(test)]
 mod gradient_shorthand_tests;
@@ -277,6 +279,8 @@ mod text_enter_tests;
 mod text_link_tests;
 #[cfg(test)]
 mod text_mixed_fill_tests;
+#[cfg(test)]
+mod tidy_tests;
 #[cfg(test)]
 mod titlebar_tests;
 #[cfg(test)]
