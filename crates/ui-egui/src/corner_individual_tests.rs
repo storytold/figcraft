@@ -166,23 +166,40 @@ fn polygons_and_stars_take_corner_smoothing() {
     for cmd in ["shape.polygon", "shape.star"] {
         let mut s = Session::new();
         let id = NodeId(s.execute(cmd, &json!({"x": 0, "y": 0, "width": 120, "height": 120})).unwrap()["id"].as_u64().unwrap());
-        s.execute("node.set", &json!({"ids": [id], "props": {"cornerRadius": 8}})).unwrap();
-        s.execute("select.set", &json!({"ids": [id]})).unwrap();
-        let mut u = Ui::new(s);
-        // With no corners of their own, the button is named for what it opens.
-        let t = named_button(&mut u, "Corner smoothing");
-        click(&mut u, t);
-        assert!((0..4).all(|k| u.ctx.read_response(Id::unique(("corner", k)).with("field")).is_none()), "{cmd}: one radius, no corner fields");
-        let smoothing = u.ctx.read_response(Id::unique("smoothing").with("field")).expect("the smoothing field shows").rect.center();
-        let history = u.app.session.undo_depth().0;
-        click(&mut u, smoothing);
-        u.frame(vec![Event::Text("60".into())]);
-        enter(&mut u);
-        u.frame(vec![]);
-        let n = u.app.session.doc().unwrap().node(id).unwrap().clone();
-        assert!((n.corners.smoothing - 0.6).abs() < 1e-9, "{cmd}: {}", n.corners.smoothing);
-        assert_eq!(u.app.session.undo_depth().0, history + 1, "{cmd}: one undo step");
+        takes_corner_smoothing(s, id, cmd);
     }
+}
+
+/// A boolean group has one radius for its whole result (#2222): like a polygon, its button opens
+/// corner smoothing, with no field per corner.
+#[test]
+fn a_boolean_group_opens_corner_smoothing_and_has_no_corner_fields() {
+    let mut s = Session::new();
+    let rect = |s: &mut Session, x: i32| s.execute("shape.rectangle", &json!({"x": x, "y": 0, "width": 100, "height": 100})).unwrap()["id"].clone();
+    let (a, b) = (rect(&mut s, 0), rect(&mut s, 60));
+    let g = NodeId(s.execute("bool.union", &json!({"ids": [a, b]})).unwrap()["id"].as_u64().unwrap());
+    takes_corner_smoothing(s, g, "bool.union");
+}
+
+/// With `id` rounded at 8 and selected: the panel's button is named Corner smoothing and opens
+/// the smoothing field with no field per corner, and typing 60 sets the smoothing in one undo step.
+fn takes_corner_smoothing(mut s: Session, id: NodeId, what: &str) {
+    s.execute("node.set", &json!({"ids": [id], "props": {"cornerRadius": 8}})).unwrap();
+    s.execute("select.set", &json!({"ids": [id]})).unwrap();
+    let mut u = Ui::new(s);
+    // With no corners of their own, the button is named for what it opens.
+    let t = named_button(&mut u, "Corner smoothing");
+    click(&mut u, t);
+    assert!((0..4).all(|k| u.ctx.read_response(Id::unique(("corner", k)).with("field")).is_none()), "{what}: one radius, no corner fields");
+    let smoothing = u.ctx.read_response(Id::unique("smoothing").with("field")).expect("the smoothing field shows").rect.center();
+    let history = u.app.session.undo_depth().0;
+    click(&mut u, smoothing);
+    u.frame(vec![Event::Text("60".into())]);
+    enter(&mut u);
+    u.frame(vec![]);
+    let n = u.app.session.doc().unwrap().node(id).unwrap().clone();
+    assert!((n.corners.smoothing - 0.6).abs() < 1e-9, "{what}: {}", n.corners.smoothing);
+    assert_eq!(u.app.session.undo_depth().0, history + 1, "{what}: one undo step");
 }
 
 /// A closed vector shows the same Corner smoothing control, and its iOS button sets 60% in one

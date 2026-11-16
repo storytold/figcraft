@@ -4,6 +4,8 @@
 //!   sweep-line topology from `linesweeper`); results use the even-odd rule.
 //! - [`stroke_outline`]: a stroke as a fill, with Figma's Inside / Center / Outside alignment,
 //!   dashes, caps, joins, arrowheads, variable width profiles ([`width`]) and brushes ([`brush`]).
+//! - [`round_corners`]: a corner radius (and smoothing) on every corner still sharp in a closed path,
+//!   as a boolean group draws its result.
 //!
 //! Every sweep is capped ([`MAX_SEGMENTS`], [`MAX_CROSSINGS`], and [`MAX_FOLD_SEGMENTS`] over a
 //! fold): past the caps an operation is refused with [`PathOpsError::TooComplex`].
@@ -24,6 +26,9 @@ mod dot_dash_tests;
 #[cfg(test)]
 mod ops_tests;
 mod points;
+mod round;
+#[cfg(test)]
+mod round_tests;
 #[cfg(test)]
 mod rounded_side_strokes_tests;
 #[cfg(test)]
@@ -36,6 +41,7 @@ use figcraft_doc::{BoolOp, StrokeAlign, StrokeCap, StrokeJoin, StrokeProps, Vect
 use figcraft_geom::kurbo::{self, BezPath, Cap, Join, PathEl, PathSeg, Point, Shape, Vec2};
 
 pub use budget::{Complexity, FoldBudget, MAX_CROSSINGS, MAX_FOLD_SEGMENTS, MAX_SEGMENTS, complexity};
+pub use round::round_corners;
 
 #[derive(Debug, PartialEq)]
 pub enum PathOpsError {
@@ -57,20 +63,27 @@ impl std::fmt::Display for PathOpsError {
     }
 }
 
-/// Close every open subpath (a filled open path paints as if closed).
+/// Close every open subpath (a filled open path paints as if closed). A subpath of a lone move
+/// fills nothing and is left out.
 pub fn closed(path: &BezPath) -> BezPath {
     let mut out = BezPath::new();
     let mut open = false;
+    let mut pending: Option<PathEl> = None;
     for el in path.elements() {
         match el {
             PathEl::MoveTo(_) => {
                 if open {
                     out.close_path();
                 }
-                open = true;
+                open = false;
+                pending = Some(*el);
+                continue;
             }
             PathEl::ClosePath => open = false,
-            _ => {}
+            _ => open = true,
+        }
+        if let Some(m) = pending.take() {
+            out.push(m);
         }
         out.push(*el);
     }
@@ -240,7 +253,10 @@ pub fn faces(paths: &[(BezPath, bool)]) -> Result<Vec<ArrangementFace>, PathOpsE
     // corner folds over itself and touches the shape's fill) leave the winding on each side of a
     // segment ambiguous where they touch, which made the sweep report overlapping faces. Reducing
     // every input to the simple contours of the area it fills first keeps the faces disjoint.
-    let closed_paths: Vec<BezPath> = paths.iter().map(|(p, even_odd)| plain(&closed(p), *even_odd)).collect();
+    // Closing adds edges, so what `plain` sweeps is checked first.
+    let closed_inputs: Vec<BezPath> = paths.iter().map(|(p, _)| closed(p)).collect();
+    budget::check(&closed_inputs)?;
+    let closed_paths: Vec<BezPath> = closed_inputs.iter().zip(paths).map(|(p, (_, even_odd))| plain(p, *even_odd)).collect();
     if closed_paths.iter().all(|p| p.elements().is_empty()) {
         return Ok(Vec::new());
     }

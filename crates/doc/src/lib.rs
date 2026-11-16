@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod board;
+mod board_mindmap;
 mod board_route;
 pub mod colors;
 pub mod comments;
@@ -27,6 +28,7 @@ pub mod vector_faces;
 pub mod vector_regions;
 
 pub use board::*;
+pub use board_mindmap::{MIND_GAP_X, MIND_GAP_Y, MIND_MAX_DEPTH, MIND_MAX_NODES, MindBox, mind_layout};
 pub use board_route::{END_GAP, MAX_RUNS, RouteEnd, attach_points, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
 pub use comments::*;
@@ -437,8 +439,13 @@ impl Document {
     /// Add a page at the end.
     pub fn add_page(&mut self, name: &str) -> NodeId {
         let id = self.alloc_id();
-        let node =
-            Node::new(id, NodeKind::Page { background: Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default() }, name, 0.0, 0.0);
+        let node = Node::new(
+            id,
+            NodeKind::Page { background: Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default(), opening: false },
+            name,
+            0.0,
+            0.0,
+        );
         self.nodes.insert(id, Arc::new(node));
         self.dirty.touch(id);
         self.pages.push(id);
@@ -1313,6 +1320,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 
 #[cfg(test)]
 mod blur_tests;
+#[cfg(test)]
+mod board_mindmap_tests;
 #[cfg(test)]
 mod board_route_tests;
 #[cfg(test)]

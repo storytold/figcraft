@@ -99,3 +99,29 @@ fn overlapping_rectangle_bounds_count_self_and_cross_pairs() {
     let shapes = rects([Rect::new(0.0, 0.0, 2.0, 2.0), Rect::new(1.0, 1.0, 3.0, 3.0), Rect::new(4.0, 4.0, 5.0, 5.0)]);
     assert_eq!(complexity([&shapes]), Some(Complexity { segments: 12, crossings: 14 }));
 }
+
+/// Open L shapes whose segments never overlap but whose implicit closing edges all do.
+#[test]
+fn faces_checks_the_closed_inputs_before_normalising() {
+    let mut p = BezPath::new();
+    for i in 0..2200 {
+        let (x, y) = (-(i as f64), 10_000.0 + i as f64);
+        p.move_to((x, 0.0));
+        p.line_to((x, y));
+        p.line_to((10_000.0, y));
+    }
+    assert!(complexity([&p]).is_some_and(|c| c.crossings <= MAX_CROSSINGS), "open input passes");
+    assert!(matches!(faces(&[(p, false)]), Err(PathOpsError::TooComplex)));
+}
+
+#[test]
+fn closing_drops_move_only_subpaths() {
+    let mut p = BezPath::new();
+    for i in 0..1000 {
+        p.move_to((i as f64, 0.0));
+    }
+    assert!(crate::closed(&p).elements().is_empty());
+    p.line_to((5.0, 5.0));
+    let c = crate::closed(&p);
+    assert_eq!(c.elements().len(), 3, "the last move, the line and the close: {:?}", c.elements());
+}

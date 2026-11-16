@@ -294,6 +294,7 @@ fn unique_id_is_linear_for_repeated_names() {
         clip: None,
         used_ids: Default::default(),
         next_suffix: Default::default(),
+        images: Default::default(),
     };
     assert_eq!(w.unique_id("a"), "a");
     assert_eq!(w.unique_id("a_3"), "a_3");

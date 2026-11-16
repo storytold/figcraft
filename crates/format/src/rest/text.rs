@@ -278,10 +278,14 @@ fn lists(v: &Value, td: &mut TextData) {
                 Some("RTL") => TextDirection::Rtl,
                 _ => TextDirection::Auto,
             },
+            wrap: None,
         })
         .collect();
     // Clamp the levels and fold one style for all back into the layer's list style.
     td.set_para_lists(0, td.char_count(), |_| {});
+    // Only the item where a numbered list starts counting keeps its start; Figma writes the start on
+    // every line of the list, and a list split later must restart at 1.
+    td.keep_list_starts_where_counting_starts();
 }
 
 /// The decoration's style, thickness, offset, skip ink and colour (`{value, unit}` lengths with

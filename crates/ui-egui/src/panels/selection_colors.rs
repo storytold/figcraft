@@ -65,7 +65,7 @@ pub(crate) fn toggle(app: &mut FigApp, targets: Vec<PaintTarget>, response: Opti
     }
 }
 
-/// Draw the selection-colour groups (at least two): swatch opens the picker, hex and opacity
+/// Draw the selection-colour groups (two, or one when a selected layer has children): swatch opens the picker, hex and opacity
 /// edits, style/variable detach/apply/bind, a style from this file or an enabled library, Create
 /// style, and “select layers with this color”; disabled during an interaction.
 pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId]) {
@@ -73,7 +73,10 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
     let interacting = ds.interaction.is_some();
     let uid = ds.uid;
     let colors = colors(ui, uid, doc, ids, interacting);
-    if colors.len() < 2 {
+    // Measured in Figma: two distinct colours show the section; one colour does too when a selected
+    // layer has children (frame, group, component, instance).
+    let has_children = ids.iter().any(|id| doc.node(*id).is_some_and(|n| !n.children.is_empty()));
+    if colors.len() < 2 && !(colors.len() == 1 && has_children) {
         ui.data_mut(|d| d.remove::<CreateForm>(create_form_id()));
         return;
     }

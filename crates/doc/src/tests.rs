@@ -902,6 +902,46 @@ fn a_chamfered_rectangles_rounded_fill_is_cut_at_every_point() {
     }
 }
 
+/// The reporter's network (#1951): a corner cut off by a segment drawn before the corner point was
+/// deleted, so the region's loop is the open chain of the other four segments and the cutting
+/// segment, joining the chain's two ends, is in no loop. Rounded, the fill and the region trace
+/// the stroke's outline, cut by an arc at the chain's ends as at every other point.
+#[test]
+fn a_rounded_loop_left_open_where_a_segment_joins_its_ends_follows_that_segment() {
+    open_loop_follows_the_segment_joining_its_ends([(0, 3), (1, 2), (2, 0), (4, 1), (3, 4)], vec![3, 1, 2, 0]);
+}
+
+/// The same network with the joining segment listed first, and with the loop walked the other way.
+#[test]
+fn an_open_loop_follows_the_segment_joining_its_ends_listed_first_or_walked_backwards() {
+    open_loop_follows_the_segment_joining_its_ends([(3, 4), (0, 3), (1, 2), (2, 0), (4, 1)], vec![4, 2, 3, 1]);
+    open_loop_follows_the_segment_joining_its_ends([(0, 3), (1, 2), (2, 0), (4, 1), (3, 4)], vec![0, 2, 1, 3]);
+}
+
+fn open_loop_follows_the_segment_joining_its_ends(segments: [(usize, usize); 5], open_loop: Vec<usize>) {
+    use figcraft_geom::BezPath;
+    use figcraft_geom::kurbo::{ParamCurveArclen, ParamCurveNearest};
+    let corners = [Point::new(0.0, 0.0), Point::new(525.0, 525.0), Point::new(0.0, 525.0), Point::new(333.0, 0.0), Point::new(525.0, 183.0)];
+    let mut net = VectorNetwork::from_points(&corners, false);
+    net.segments = segments.iter().map(|&(a, b)| Segment::line(a, b)).collect();
+    net.regions.push(Region { loops: vec![open_loop], winding: WindingRule::NonZero, fills: None, paint_space: None });
+    for v in &mut net.vertices {
+        v.radius = 125.0;
+    }
+    let keeps_off = |path: &BezPath, p: Point| path.segments().map(|s| s.nearest(p, 1e-9).distance_sq.sqrt()).fold(f64::INFINITY, f64::min);
+    let length = |path: &BezPath| path.segments().map(|s| s.arclen(1e-9)).sum::<f64>();
+    let stroke = net.stroke_path();
+    let fill = net.fill_path();
+    let region = net.rounded().unwrap().region_path(0).unwrap();
+    for (i, p) in corners.iter().enumerate() {
+        assert!(keeps_off(&stroke, *p) > 2.0, "the stroke is cut at point {i}");
+        assert!(keeps_off(&fill, *p) > 2.0, "the fill runs into point {i} ({:.2} from it)", keeps_off(&fill, *p));
+        assert!(keeps_off(&region, *p) > 2.0, "the region runs into point {i} ({:.2} from it)", keeps_off(&region, *p));
+    }
+    assert!((length(&fill) - length(&stroke)).abs() < 1e-6, "fill {} and stroke {} trace the same outline", length(&fill), length(&stroke));
+    assert!((length(&region) - length(&stroke)).abs() < 1e-6, "region {} and stroke {} trace the same outline", length(&region), length(&stroke));
+}
+
 #[test]
 fn stored_variable_ids_resolve_only_their_exact_collection() {
     let mut vars = crate::proto_expr_tests::vars();

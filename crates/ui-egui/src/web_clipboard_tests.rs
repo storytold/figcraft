@@ -3,6 +3,9 @@
 //! whatever the system clipboard has. A copy that never reached the clipboard pasted the text that
 //! was there before as a text layer instead of the copied layers.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use egui::{Event, Key, Modifiers, OutputCommand, Pos2, RawInput, Rect, vec2};
 use figcraft_doc::NodeKind;
 use figcraft_engine::Session;
@@ -222,4 +225,50 @@ fn a_mismatched_image_buffer_is_dropped() {
         out.textures_delta.clear();
         assert!(out.platform_output.commands.is_empty(), "{w}x{h}");
     }
+}
+
+/// The system clipboard's text read, counted so a test can assert when it ran. The desktop's
+/// arboard read blocks the window thread up to `CLIPBOARD_TIMEOUT`; against the app's own Wayland
+/// source (a self-paste) it waits the full timeout — the whole UI freezes for seconds (#2021) —
+/// and its result is discarded in favour of the paste event's text. A paste whose platform event
+/// already carries the clipboard text must never perform that synchronous re-read.
+struct CountingReads {
+    /// How often the synchronous text read was asked for.
+    reads: Arc<AtomicUsize>,
+}
+
+impl Services for CountingReads {
+    fn clipboard_get_text(&mut self) -> Option<String> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        None
+    }
+}
+
+#[test]
+fn a_paste_event_its_own_text_never_triggers_the_synchronous_text_read() {
+    // The platform (the desktop's async clipboard bridge, or the browser) already read the
+    // clipboard and handed the text with the paste event.
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut s = Session::new();
+    s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
+    let mut p = Page {
+        ctx: egui::Context::default(),
+        app: FigApp::new(s, Box::new(CountingReads { reads: reads.clone() })),
+        time: 0.0,
+        clipboard: String::new(),
+    };
+    for _ in 0..3 {
+        p.frame(vec![]);
+    }
+
+    // The desktop delivers the copied layers' SVG as the paste event's text.
+    let text = "<svg width=\"100\" height=\"50\"><rect/></svg>";
+    p.frame(vec![Page::key(Key::V, true), Event::Paste(text.to_string())]);
+    p.frame(vec![Page::key(Key::V, false)]);
+    assert_eq!(reads.load(Ordering::Relaxed), 0, "the text came with the paste event: no blocking re-read of the system clipboard");
+
+    // Even a second paste must not re-read: the clipboard still holds the pasted text.
+    p.frame(vec![Page::key(Key::V, true), Event::Paste(text.to_string())]);
+    p.frame(vec![Page::key(Key::V, false)]);
+    assert_eq!(reads.load(Ordering::Relaxed), 0, "still the event's text: no blocking re-read");
 }

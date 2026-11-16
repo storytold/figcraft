@@ -33,7 +33,7 @@ const MAX_CACHED_IMAGES: usize = 256;
 /// The largest sides of the copies the canvas draws larger images from while they show smaller
 /// (device pixels): two 16 000 × 10 000 images take 640 MB each in full, past the cache's budget
 /// together, and 42 MB each at 4096 (168 MB at 8192).
-pub const DISPLAY_SIDES: [u32; 2] = [4096, 8192];
+pub const DISPLAY_SIDES: [u32; 6] = [256, 512, 1024, 2048, 4096, 8192];
 
 /// Decoded pixmaps by image, filters and profile, holding at most a byte budget of pixels: adding
 /// one past the budget (or past [`MAX_CACHED_IMAGES`]) drops the least recently used first, so
