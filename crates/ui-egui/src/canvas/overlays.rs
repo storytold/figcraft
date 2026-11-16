@@ -701,6 +701,7 @@ fn shape_overlay(app: &FigApp, painter: &egui::Painter, col: Color32) {
         let text = match hint.handle {
             ShapeHandle::Radius { .. } => format!("{} {}", tr("Radius"), hint.value),
             ShapeHandle::Ratio => format!("{} {}%", tr("Ratio"), hint.value),
+            ShapeHandle::Count => format!("{} {}", tr("Count"), hint.value),
         };
         pill(painter, c + vec2(12.0, 12.0), Align2::LEFT_TOP, text, col);
     }

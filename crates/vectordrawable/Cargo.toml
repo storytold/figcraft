@@ -9,6 +9,7 @@ description = "FigCraft Android Vector Drawable export (shapes, strokes, gradien
 workspace = true
 
 [dependencies]
+craft-vectordrawable.workspace = true
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }

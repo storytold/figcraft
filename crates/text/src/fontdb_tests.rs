@@ -376,9 +376,19 @@ fn font_bytes_load_into_the_db() {
         let families = load_font_bytes(f.bytes.to_vec());
         assert_eq!(families.len(), 1);
         assert!(families.iter().all(|f| has_family(f)));
-        let faces = db().read().unwrap().face_count();
+        // The global face count can grow here when another test finishes the concurrent system
+        // font scan. Count explicitly loaded faces from this family so the idempotency assertion
+        // stays isolated from unrelated installed fonts.
+        let loaded_faces = || {
+            let db = db().read().unwrap();
+            families
+                .iter()
+                .map(|family| db.faces.iter().filter(|face| face.loaded > 0 && face.family.eq_ignore_ascii_case(family)).count())
+                .collect::<Vec<_>>()
+        };
+        let faces = loaded_faces();
         assert_eq!(load_font_bytes(f.bytes.to_vec()), families);
-        assert_eq!(db().read().unwrap().face_count(), faces);
+        assert_eq!(loaded_faces(), faces);
     }
 }
 

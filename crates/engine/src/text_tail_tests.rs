@@ -482,3 +482,29 @@ fn a_many_line_paste_clears_every_created_start() {
     assert_eq!(d.para_list(0).start_offset, 4, "the first item keeps its start");
     assert!((1..d.paragraph_count()).all(|p| d.para_list(p).start_offset == 0 && d.para_list(p).list == N));
 }
+
+#[test]
+fn a_list_back_from_a_fig_split_in_the_middle_restarts_at_one() {
+    // #2273's steps: type "5. a", Enter, "b", Enter, "c"; save a copy as .fig and open it;
+    // Backspace at the start of "b". The export writes the start on every line, as Figma does,
+    // and "c" must then read 1., not 5.
+    let mut s = Session::new();
+    three_typed_items(&mut s, "5. a");
+    crate::textedit::end(&mut s).unwrap();
+    let (bytes, _) = figcraft_format::fig::export(s.doc().unwrap(), None).unwrap();
+    let (back, _) = figcraft_format::fig::import(&bytes, "x").unwrap();
+    let t = back.nodes().find(|n| n.kind.text().is_some()).map(|n| n.id).unwrap();
+    let mut s = Session::with_document(back);
+    let d = data(&s, t);
+    assert_eq!(lists(&s, t), [(N, 0); 3]);
+    assert_eq!(
+        (d.para_list(0).start_offset, d.para_list(1).start_offset, d.para_list(2).start_offset),
+        (4, 0, 0),
+        "only the first item carries the start"
+    );
+    begin(&mut s, t, Some(2), false).unwrap();
+    key(&mut s, "Backspace", false, false, false).unwrap();
+    let d = data(&s, t);
+    assert_eq!(lists(&s, t), [(N, 0), (P, 0), (N, 0)]);
+    assert_eq!((d.para_list(0).start_offset, d.para_list(2).start_offset), (4, 0), "c reads 1.");
+}

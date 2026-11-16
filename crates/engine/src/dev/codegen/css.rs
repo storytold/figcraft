@@ -160,17 +160,48 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
         put("transform", format!("rotate({}deg)", num(-rot)));
         put("transform-origin", "top left".into());
     }
-    for (i, p) in n.fills.iter().enumerate().filter(|(_, p)| p.visible) {
-        match &p.kind {
-            PaintKind::Solid { color } => {
-                let key = if matches!(n.kind, NodeKind::Text(_)) { "color" } else { "background" };
-                let c = color.with_alpha(color.a * p.opacity).to_css();
-                // A variable binds the first paint's colour.
-                put(key, if i == 0 { tok(doc, n, &["fill"], c, t) } else { c });
+    if matches!(n.kind, NodeKind::Text(_)) {
+        // Text: a solid is the ink (`color`), one per fill, so the last (top) one wins.
+        for (i, p) in n.fills.iter().enumerate().filter(|(_, p)| p.visible) {
+            match &p.kind {
+                PaintKind::Solid { color } => {
+                    let c = color.with_alpha(color.a * p.opacity).to_css();
+                    // A variable binds the first paint's colour.
+                    put("color", if i == 0 { tok(doc, n, &["fill"], c, t) } else { c });
+                }
+                PaintKind::Gradient(g) => put("background", css_gradient(g, n.width, n.height, p.opacity)),
+                PaintKind::Image(_) => put("background", "url(image.png) center / cover".into()),
+                PaintKind::Pattern(_) => put("background", "url(pattern.png) repeat".into()),
             }
-            PaintKind::Gradient(g) => put("background", css_gradient(g, n.width, n.height, p.opacity)),
-            PaintKind::Image(_) => put("background", "url(image.png) center / cover".into()),
-            PaintKind::Pattern(_) => put("background", "url(pattern.png) repeat".into()),
+        }
+    } else {
+        // One `background` with every visible fill as a layer, top first (a document's fills run
+        // bottom to top, as the renderer paints them). CSS allows a plain colour only as the last
+        // layer, so a solid above another fill becomes a one-colour gradient.
+        let visible: Vec<(usize, &figcraft_color::Paint)> = n.fills.iter().enumerate().filter(|(_, p)| p.visible).collect();
+        let layers: Vec<String> = visible
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(pos, (i, p))| match &p.kind {
+                PaintKind::Solid { color } => {
+                    let c = color.with_alpha(color.a * p.opacity).to_css();
+                    if pos > 0 {
+                        format!("linear-gradient(0deg, {c}, {c})")
+                    } else if *i == 0 {
+                        // A variable binds the first paint's colour.
+                        tok(doc, n, &["fill"], c, t)
+                    } else {
+                        c
+                    }
+                }
+                PaintKind::Gradient(g) => css_gradient(g, n.width, n.height, p.opacity),
+                PaintKind::Image(_) => "url(image.png) center / cover".into(),
+                PaintKind::Pattern(_) => "url(pattern.png) repeat".into(),
+            })
+            .collect();
+        if !layers.is_empty() {
+            put("background", layers.join(", "));
         }
     }
     for (key, value) in css_borders(doc, n, t) {

@@ -558,3 +558,17 @@ fn text_style_editor_binds_variables_from_its_fields() {
     assert_eq!((def.font_size, def.font_style.as_str()), (18.0, "Bold"), "the style takes the variables' values");
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
 }
+
+/// The picker's 24 pt icon buttons paint their glyphs at 16 pt; a smaller button keeps a smaller one
+/// (#2238).
+#[test]
+fn style_picker_icon_buttons_paint_16pt() {
+    use crate::header_icon_size_tests::{painted_rects, paints_icon_at_button_size};
+    use crate::icons::Icon;
+    for icon in [Icon::Plus, Icon::Detach, Icon::ChevronLeft] {
+        let painted = painted_rects(None, |ui| {
+            menu_icon(ui, Rect::from_min_size(egui::pos2(20.0, 20.0), vec2(24.0, 24.0)), icon, "x", false);
+        });
+        assert!(paints_icon_at_button_size(&painted, icon), "{icon:?} is not 16 pt");
+    }
+}

@@ -251,6 +251,23 @@ fn the_bulk_menu_scrolls_when_forty_groups_make_it_taller_than_the_window() {
     assert!(screen.contains_rect(popup_rect(&u)));
 }
 
+/// A collection with a group `space` of two number variables with distinct values in two modes.
+fn grouped_window() -> Ui {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    for (n, light, dark) in [("space/sm", 4, 8), ("space/md", 16, 32)] {
+        s.execute("variable.create", &json!({"collection": "Theme", "name": n, "type": "number", "value": light})).unwrap();
+        s.execute("variable.set", &json!({"variable": n, "mode": "Dark", "value": dark})).unwrap();
+        s.execute("variable.update", &json!({"variable": n, "scopes": ["GAP"], "description": n})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    u
+}
+
 /// Three colour variables: bravo and charlie also have Stroke in their scopes, delta does not.
 fn colour_window() -> Ui {
     let mut s = Session::new();
@@ -267,6 +284,133 @@ fn colour_window() -> Ui {
         u.frame(vec![]);
     }
     u
+}
+
+/// Right-click the group row `name` and choose Duplicate group.
+fn duplicate_group(u: &mut Ui, name: &str) {
+    let p = row(u, name);
+    click(u, p, PointerButton::Secondary, Modifiers::NONE);
+    let menu = flat(&u.frame_output(vec![]).shapes);
+    click(u, text_center(&menu, "Duplicate group"), PointerButton::Primary, Modifiers::NONE);
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+#[test]
+fn duplicate_group_copies_every_variable_in_both_modes_in_one_undo_step() {
+    let mut u = grouped_window();
+    let before = u.app.session.undo_labels(100).len();
+    duplicate_group(&mut u, "space");
+    let doc = u.app.session.doc().unwrap();
+    let vars = &doc.variables;
+    for (leaf, light, dark) in [("sm", 4, 8), ("md", 16, 32)] {
+        let old = vars.variables.iter().find(|v| v.name == format!("space/{leaf}")).unwrap();
+        let new = vars.variables.iter().find(|v| v.name == format!("space 2/{leaf}")).unwrap_or_else(|| panic!("no space 2/{leaf}"));
+        assert_ne!(old.id, new.id);
+        assert_eq!(new.values, old.values, "{leaf}: values in both modes");
+        assert_eq!(new.scopes, old.scopes);
+        assert_eq!(new.description, old.description);
+        let _ = (light, dark);
+    }
+    assert_eq!(names(&u).len(), 4);
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    assert_eq!(u.app.session.undo_labels(1), ["Duplicate group"]);
+    // The new group is listed directly after the original.
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "space 2"));
+    assert!(text_center(&shapes, "space 2").y > text_center(&shapes, "space").y);
+    u.app.session.undo().unwrap();
+    assert_eq!(names(&u), ["space/sm", "space/md"]);
+}
+
+#[test]
+fn a_second_duplicate_group_takes_the_next_free_name() {
+    let mut u = grouped_window();
+    duplicate_group(&mut u, "space");
+    duplicate_group(&mut u, "space");
+    let n = names(&u);
+    assert!(n.contains(&"space 2/sm".to_string()) && n.contains(&"space 3/md".to_string()), "{n:?}");
+    assert_eq!(n.len(), 6);
+}
+
+/// A collection with the variables `names` (numbers).
+fn named_window(names: &[&str]) -> Ui {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();
+    for n in names {
+        s.execute("variable.create", &json!({"collection": "Theme", "name": n, "type": "number", "value": 1})).unwrap();
+    }
+    let mut u = Ui::new(s);
+    u.app.ui.variables = Some(Default::default());
+    for _ in 0..10 {
+        u.frame(vec![]);
+    }
+    u
+}
+
+/// Right-click the group row `name`, choose Rename group, type `to` and press Enter.
+fn rename_group(u: &mut Ui, name: &str, to: &str) {
+    let p = row(u, name);
+    click(u, p, PointerButton::Secondary, Modifiers::NONE);
+    let menu = flat(&u.frame_output(vec![]).shapes);
+    click(u, text_center(&menu, "Rename group"), PointerButton::Primary, Modifiers::NONE);
+    u.frame(vec![Event::Text(to.into())]);
+    for pressed in [true, false] {
+        u.frame(vec![Event::Key { key: Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }]);
+    }
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+}
+
+fn sorted_names(u: &Ui) -> Vec<String> {
+    let mut n = names(u);
+    n.sort();
+    n
+}
+
+#[test]
+fn renaming_a_group_with_a_slash_nests_it_in_a_new_parent_group_in_one_undo_step() {
+    let mut u = named_window(&["Orange/100", "Orange/200", "Blue/100"]);
+    let before = u.app.session.undo_labels(100).len();
+    rename_group(&mut u, "Orange", "Palette/Orange");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert_eq!(sorted_names(&u), ["Blue/100", "Palette/Orange/100", "Palette/Orange/200"]);
+    assert_eq!(u.app.session.undo_labels(100).len(), before + 1, "one undo step");
+    assert_eq!(u.app.session.undo_labels(1), ["Rename group"]);
+    // The sidebar lists Palette with Orange indented under it.
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    let (parent, child) = (text_center(&shapes, "Palette"), text_center(&shapes, "Orange"));
+    assert!(child.y > parent.y && child.x > parent.x, "Orange is indented under Palette: {parent:?} {child:?}");
+    assert!(!has_text(&shapes, "Palette-Orange"));
+    u.app.session.undo().unwrap();
+    assert_eq!(sorted_names(&u), ["Blue/100", "Orange/100", "Orange/200"]);
+}
+
+#[test]
+fn a_nested_groups_new_path_stays_in_its_parent_and_drops_empty_parts() {
+    let mut u = named_window(&["Palette/Orange/100", "Palette/Orange/200"]);
+    rename_group(&mut u, "Orange", " /Warm // Orange / ");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert_eq!(sorted_names(&u), ["Palette/Warm/Orange/100", "Palette/Warm/Orange/200"]);
+}
+
+#[test]
+fn renaming_a_group_into_its_own_new_subgroup_moves_the_deeper_names_first() {
+    // Orange/100 takes Orange/Warm/100, which itself moves on to Orange/Warm/Warm/100.
+    let mut u = named_window(&["Orange/100", "Orange/Warm/100"]);
+    rename_group(&mut u, "Orange", "Orange/Warm");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+    assert_eq!(sorted_names(&u), ["Orange/Warm/100", "Orange/Warm/Warm/100"]);
+}
+
+#[test]
+fn a_group_rename_onto_a_variable_name_that_stays_changes_nothing() {
+    // The longer name moves first, whatever the order of the variables: Orange/1000 moves, then
+    // Orange/200 collides, and the move already made is undone.
+    let mut u = named_window(&["Orange/1000", "Orange/200", "Palette/Orange/200"]);
+    rename_group(&mut u, "Orange", "Palette/Orange");
+    assert!(u.app.ui.last_error.as_deref().is_some_and(|e| e.contains("Palette/Orange/200")), "{:?}", u.app.ui.last_error);
+    assert_eq!(sorted_names(&u), ["Orange/1000", "Orange/200", "Palette/Orange/200"]);
 }
 
 fn open_edit_variables(u: &mut Ui) -> Vec<egui::Shape> {

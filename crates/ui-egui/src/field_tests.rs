@@ -941,7 +941,7 @@ fn enter_in_another_field_after_tab_keeps_the_scale_tool() {
     assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
 }
 
-/// K, 2, Enter: 100 x 100 becomes 200 x 200 about the panel's origin, the tool is Move, one undo step.
+/// K, 2, Enter: 100 x 100 becomes 200 x 200 about the panel's origin (the centre), the tool is Move, one undo step.
 #[test]
 fn k_two_enter_scales_the_selection_by_two() {
     let (mut u, r) = scale_setup();
@@ -951,8 +951,8 @@ fn k_two_enter_scales_the_selection_by_two() {
     u.frame(vec![Event::Text("2".to_string())]);
     key(&mut u, Key::Enter, Modifiers::NONE);
     u.frame(vec![]);
-    // About the panel's origin, FigCraft's top-left default (Figma's grid starts at the centre).
-    assert_eq!(geom(&u, r), (0.0, 0.0, 200.0, 200.0));
+    // About the panel's origin, which starts at the centre as Figma's grid does.
+    assert_eq!(geom(&u, r), (-50.0, -50.0, 200.0, 200.0));
     assert!(!scale_field_focused(&u), "the field let go of the keyboard");
     assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
     assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
@@ -971,7 +971,8 @@ fn the_scale_field_takes_2x_and_1_5() {
         u.frame(vec![Event::Text(text.to_string())]);
         key(&mut u, Key::Enter, Modifiers::NONE);
         u.frame(vec![]);
-        assert_eq!(geom(&u, r), (0.0, 0.0, size, size), "{text}");
+        let at = 50.0 - size / 2.0;
+        assert_eq!(geom(&u, r), (at, at, size, size), "{text}");
     }
 }
 
