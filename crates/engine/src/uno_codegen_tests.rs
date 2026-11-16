@@ -565,7 +565,7 @@ fn fill_stretches_on_the_axis_it_fills_and_fixed_keeps_its_size() {
 }
 
 #[test]
-fn a_hugging_frame_has_no_size_of_its_own_and_the_root_keeps_its_size() {
+fn a_hugging_frame_has_no_size_of_its_own_the_root_included() {
     let mut s = Session::new();
     let outer = row(&mut s, json!({"layout": "vertical", "sizingH": "hug", "sizingV": "hug"}));
     let inner = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 50, "height": 50, "parent": outer, "name": "Inner"})));
@@ -574,7 +574,8 @@ fn a_hugging_frame_has_no_size_of_its_own_and_the_root_keeps_its_size() {
     let code = uno(&mut s, outer);
     let has = |c: &[String], p: &str| c.iter().any(|l| l.starts_with(p));
     let root = chain(&code, "row");
-    assert!(has(&root, ".Width(") && has(&root, ".Height("), "the root keeps its size: {code}");
+    // The root hugs too: its size follows its content, as FigCraft lays it out.
+    assert!(!has(&root, ".Width(") && !has(&root, ".Height("), "{code}");
     let nested = chain(&code, "inner");
     assert!(!has(&nested, ".Width(") && !has(&nested, ".Height("), "{code}");
 }
@@ -1080,4 +1081,36 @@ fn a_slice_writes_nothing_and_a_cut_subtree_keeps_its_name() {
     let lines: Vec<&str> = tree_text.lines().map(str::trim).collect();
     let cut = lines.iter().position(|l| l.ends_with(" …")).unwrap_or(0);
     assert!(lines.get(cut + 1).is_some_and(|l| l.starts_with("var ") && l.ends_with("new Border();")), "{code}");
+}
+
+#[test]
+fn a_root_that_hugs_its_content_keeps_hugging() {
+    let mut s = Session::new();
+    let f = frame(&mut s, "Card", 240.0, 200.0);
+    set(&mut s, f, json!({"layout": "vertical", "padding": 16, "gap": 8, "sizingH": "fixed", "sizingV": "hug", "fills": []}));
+    idv(&ex(&mut s, "text.create", json!({"parent": f, "text": "Hello", "x": 0, "y": 0})));
+    let code = uno(&mut s, f);
+    let root = tree(&code).split("// ").nth(1).unwrap_or_default().to_string();
+    // The width is fixed; the height follows the content, so a longer text or a larger gap grows it.
+    assert!(root.contains(".Width(240)"), "{code}");
+    assert!(!root.contains(".Height("), "{code}");
+    // A root fixed on both axes keeps both sizes.
+    set(&mut s, f, json!({"sizingV": "fixed"}));
+    let fixed = uno(&mut s, f);
+    assert!(fixed.contains(".Width(240)") && fixed.contains(".Height("), "{fixed}");
+}
+
+#[test]
+fn a_frame_that_hugs_or_fills_is_not_clipped_at_its_design_size() {
+    let mut s = Session::new();
+    let f = frame(&mut s, "Card", 240.0, 120.0);
+    set(&mut s, f, json!({"layout": "vertical", "sizingV": "hug", "clip": true, "fills": []}));
+    idv(&ex(&mut s, "text.create", json!({"parent": f, "text": "Hello", "x": 0, "y": 0})));
+    let code = uno(&mut s, f);
+    assert!(!code.contains(".Clip("), "{code}");
+    assert!(code.contains("// not mapped: clip content on a frame that hugs or fills"), "{code}");
+    // Fixed on both axes, the clip is the frame's box.
+    set(&mut s, f, json!({"sizingV": "fixed"}));
+    let fixed = uno(&mut s, f);
+    assert!(fixed.contains(".Clip(new RectangleGeometry().Rect(new Rect(0, 0, 240, "), "{fixed}");
 }

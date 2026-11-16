@@ -301,6 +301,9 @@ impl Element {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Place {
     Flow,
+    /// The layer the code is generated for: placed like `Flow`, but an auto layout frame that hugs
+    /// its content keeps hugging (its size then follows the content, as FigCraft's layout does).
+    Root,
     At(f64, f64),
     Line {
         vertical: bool,
@@ -344,7 +347,7 @@ pub(crate) fn uno(doc: &Document, id: NodeId) -> String {
     let Some(root) = doc.node(id) else { return String::new() };
     let ctx = Ctx::new(doc, id);
     let mut g = Gen { ctx: &ctx, assets: BTreeSet::new(), free_frames: 0, names: BTreeSet::new() };
-    let mut top = match g.layer(root, 0, Place::Flow) {
+    let mut top = match g.layer(root, 0, Place::Root) {
         Some(e) => e,
         None => {
             let mut e = Element::new("new Border()");
@@ -553,7 +556,7 @@ impl Gen<'_> {
             common(&mut outer, n);
         }
         if n.clip && n.corners.radii.iter().all(|r| *r <= 0.0) && !n.children.is_empty() {
-            outer.call(format!(".Clip(new RectangleGeometry().Rect(new Rect(0, 0, {}, {})))", num(n.width), num(n.height)));
+            clip(&mut outer, n, at);
         }
         outer
     }
@@ -598,7 +601,7 @@ impl Gen<'_> {
             common(&mut outer, n);
         }
         if n.clip && has_kids && n.corners.radii.iter().all(|r| *r <= 0.0) {
-            outer.call(format!(".Clip(new RectangleGeometry().Rect(new Rect(0, 0, {}, {})))", num(n.width), num(n.height)));
+            clip(&mut outer, n, at);
         }
         outer
     }
@@ -778,7 +781,7 @@ fn place(e: &mut Element, n: &Node, at: Place) {
         }
     };
     match at {
-        Place::Flow => {}
+        Place::Flow | Place::Root => {}
         // The offsets read as the element's address.
         Place::At(x, y) => lead.push(format!(".Canvas(left: {}, top: {})", num(x), num(y))),
         Place::Line { vertical, z: order } => {
@@ -863,10 +866,27 @@ fn cell_alignment(n: &Node, align: (CellAlign, CellAlign), lead: &mut Vec<String
     }
 }
 
-/// How a child sizes on each axis in its parent: fixed everywhere but in an auto layout flow.
+/// Clip content to the layer's box. The clip is a fixed rectangle, so it is written only for a
+/// layer that is fixed on both axes; one that hugs or fills would cut its content at the size it has
+/// in the design once it grows.
+fn clip(e: &mut Element, n: &Node, at: Place) {
+    if axes(n, at) == (Sizing::Fixed, Sizing::Fixed) {
+        e.call(format!(".Clip(new RectangleGeometry().Rect(new Rect(0, 0, {}, {})))", num(n.width), num(n.height)));
+    } else {
+        e.note("clip content on a frame that hugs or fills");
+    }
+}
+
+/// How a layer sizes on each axis: in an auto layout flow as its parent lays it out, as the root by its
+/// own hug, and fixed everywhere else.
 fn axes(n: &Node, at: Place) -> (Sizing, Sizing) {
     match at {
         Place::Line { .. } | Place::Cell { .. } => (n.child_layout.sizing_h, n.child_layout.sizing_v),
+        // With no parent to fill, only a hug of the root's own auto layout is kept.
+        Place::Root if n.layout.is_some() && n.kind.is_frame_like() => {
+            let own = |s: Sizing| if s == Sizing::Hug { Sizing::Hug } else { Sizing::Fixed };
+            (own(n.child_layout.sizing_h), own(n.child_layout.sizing_v))
+        }
         _ => (Sizing::Fixed, Sizing::Fixed),
     }
 }
