@@ -29,6 +29,7 @@ pub use density::{pixel_density, placed_size};
 pub use library::{is_valid_library_id, read_library, read_library_within};
 
 mod density;
+mod text_document;
 mod text_outlines;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -425,22 +426,16 @@ pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
     parse_json(text).map(|(doc, issues, _)| (doc, issues))
 }
 
-#[derive(Deserialize)]
-struct PortableHeader {
-    #[serde(rename = "textOutlines")]
-    outlines: Option<text_outlines::Pool>,
-}
 /// Parse `document.json` content; also returns its [`ImageIndex`]. The header is checked first
 /// (a newer file is refused before its document is read), then the document is deserialized
 /// straight from the text.
 fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatError> {
-    let (mut doc, header) = craft_figcraft_format::read_document_json::<Document>(text).map_err(|e| match e {
+    let (text_document::ReadDocument { mut doc, outlines }, header) = craft_figcraft_format::read_document_json(text).map_err(|e| match e {
         craft_figcraft_format::ReadDocumentError::Json(error) => FormatError::Corrupt(error.to_string()),
         craft_figcraft_format::ReadDocumentError::NewerVersion(error) => FormatError::Newer(error.0),
     })?;
     let images = header.images.map(|hashes| hashes.into_iter().collect());
-    let portable: PortableHeader = serde_json::from_str(text).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-    text_outlines::expand(&mut doc, portable.outlines.as_ref())?;
+    text_outlines::expand(&mut doc, outlines.as_ref())?;
     let issues = doc.validate();
     if !issues.is_empty() {
         doc.repair();

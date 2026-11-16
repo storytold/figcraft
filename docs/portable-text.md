@@ -442,3 +442,74 @@ metadata and pooling wrap its app-supplied payload, and a local wrapper adds the
 its archive reader. The opening-page and relative-library-link save behavior from main is kept.
 The earlier performance tables are historical results on their stated bases, not fresh timings
 for this integration. Working application packages, deployed services and artwork are unchanged.
+
+
+### Streaming native outline table, 2026-11-16
+
+After the current-main integration, opening made three passes over native document JSON: the
+shared envelope/version check, ordinary document deserialization, then a separate outline-table
+read. The app payload now intercepts only the root `textOutlines` field during the ordinary
+streaming document read. The shared header/version pass remains first. Pool expansion and all
+validation/session initialization still finish before reopen returns; no work is deferred.
+
+A MapAccess adapter forwards every other field/value directly to the existing Document reader.
+There is no serde-flatten/Value/Content tree buffering the nodes before their resource checks.
+Only root keys pass through the adapter; nested unrelated fields are ignored as before. The pool
+uses its existing bounded deserializer, including duplicate-key rejection even after null. Plain
+self-contained documents remain readable. Glyph codecs, exact numbers, native tables, writes,
+per-document geometry caps and shared eager-snapshot caps are unchanged.
+
+Regressions cover a pool before/after the document fields, escaped root keys, unrelated nested
+keys, precise values and signed-zero affines, duplicate tables including null, excessive table
+entry counts in either order, and the shared newer-version check before an invalid app payload.
+The existing native-save boundary/snapshot and missing-font checks remain part of full CI.
+
+
+Fresh release measurements on the same Windows x64 host, Rust 1.99.1 and embedded Inter input
+use the existing `cargo xtask bench text 1000,10000` corpus (117 chars/layer, no images/history).
+Before is production `9fe7c9a7`, already based on main `559c952d` with save-budget fixes.
+The harness is unchanged: one warm-up and medians of five samples, in-memory native save and
+complete decode/session initialization for reopen. After building both binaries, the repeated
+order was before/after/before without concurrent Rust builds. The first after sample follows its
+build; the initial before sample is listed to show host variation rather than hide it.
+
+| Text layers | Run | First save ms | Repeat save ms | Reopen ms | ZIP bytes | Appearances |
+|---:|---|---:|---:|---:|---:|---:|
+| 1,000 | initial before | 265.193 | 261.616 | 34.123 | 245,063 | 1,000 |
+| 1,000 | initial after | 245.230 | 244.593 | 30.429 | 245,063 | 1,000 |
+| 1,000 | paired before | 242.784 | 252.401 | 31.969 | 245,063 | 1,000 |
+| 1,000 | paired after | 234.495 | 232.817 | 29.911 | 245,063 | 1,000 |
+| 1,000 | before control | 259.559 | 249.425 | 34.115 | 245,063 | 1,000 |
+| 10,000 | initial before | 4256.658 | 4336.941 | 356.266 | 1,286,888 | 10,000 |
+| 10,000 | initial after | 4010.881 | 3968.139 | 310.363 | 1,286,888 | 10,000 |
+| 10,000 | paired before | 3932.824 | 4058.045 | 329.432 | 1,286,888 | 10,000 |
+| 10,000 | paired after | 2825.718 | 3258.381 | 327.243 | 1,286,888 | 10,000 |
+| 10,000 | before control | 4410.214 | 4329.622 | 354.115 | 1,286,888 | 10,000 |
+
+The adjacent 10,000-layer pair is **329.432 → 327.243 ms (0.66% less time)**.
+The first pair shows a larger difference, but before/control timings also move substantially.
+This is not evidence of a reliable double-digit reopen improvement. Writes are unchanged;
+the large save-time movements are not claimed as a benefit of this reader-only change.
+
+A separate read-only CLI probe uses the existing `run` command and the same native fixture:
+one warm-up process per variant, then six processes per variant in alternating AB/BA order.
+Each process performs 16 `file.open`/forced `file.close` pairs. Timings are process wall time
+per pair, including startup, filesystem reads, session/batch/cache work and close cleanup;
+they are not the in-memory reopen metric above. No document is saved by this probe. Its
+median of six process averages is:
+
+| Variant | Median ms per open/close | Min–max process average ms |
+|---|---:|---:|
+| before | 390.802 | 365.694–396.885 |
+| streaming | 364.096 | 350.570–452.869 |
+
+That probe's median is **6.83% lower**, but the ranges overlap.
+The extra JSON pass is removed structurally; a stable percentage speedup is **not established**
+on this noisy host. No fresh vanilla-main baseline or new default-path acceptance claim is made.
+
+All 10,000 appearances / 1,170,000 glyph placements remain in every storage benchmark.
+Reading and resaving the same fixture with each production binary produces **identical native
+archives (1,286,888 bytes)** and identical document JSON (21,222,910 bytes),
+SHA-256 `5b0dcb8274a55acba9d03252c6114115a637382e6eb82935b2bf68e32da47ec9`.
+This preserves all encoded glyph data, outlines, exact numeric values and other document fields.
+The native/wire versions, writer and working app/server packages are unchanged.

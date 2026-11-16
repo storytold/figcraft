@@ -192,6 +192,70 @@ mod tests {
         doc
     }
 
+    fn with_pool_at_edge(fields: &serde_json::Map<String, serde_json::Value>, pool: &serde_json::Value, key: &str, first: bool) -> String {
+        let body = serde_json::to_string(fields).unwrap();
+        if first {
+            format!("{{\"{key}\":{pool},{}", body.strip_prefix('{').unwrap())
+        } else {
+            format!("{},\"{key}\":{pool}}}", body.strip_suffix('}').unwrap())
+        }
+    }
+
+    #[test]
+    fn streaming_pool_reader_keeps_exact_geometry_in_any_root_field_order() {
+        let mut doc = document();
+        let id = doc.nodes().find(|n| n.kind.text().is_some()).unwrap().id;
+        let NodeKind::Text(text) = &mut doc.node_mut(id).unwrap().kind else { panic!() };
+        let glyph = &mut Arc::make_mut(text.appearance.as_mut().unwrap()).glyphs[0];
+        glyph.x = -0.0;
+        glyph.y = 15.123456789012345;
+        glyph.advance = 5.123456789123456;
+        glyph.transform = Some([0.5, -0.0, 0.0, 0.5, -0.0, glyph.y]);
+        let expected = crate::to_json(&doc).unwrap();
+        let mut fields = expected.as_object().unwrap().clone();
+        let pool = fields.remove("textOutlines").unwrap();
+        // Only root metadata is intercepted; an unrelated nested key is still ignored.
+        fields.insert("unrelated".into(), json!({"textOutlines": {"version": 999, "paths": [true]}}));
+        for first in [true, false] {
+            for key in ["textOutlines", r"text\u004futlines"] {
+                let input = with_pool_at_edge(&fields, &pool, key, first);
+                let (back, issues) = crate::from_json(&input).unwrap();
+                assert!(issues.is_empty(), "{issues:?}");
+                // Compare canonical JSON strings, retaining the sign of zero as well as all
+                // outlines, matrix coefficients, numeric values and document/layer metadata.
+                assert_eq!(crate::to_json(&back).unwrap().to_string(), expected.to_string());
+            }
+        }
+        let (plain, issues) = crate::from_json(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert!(issues.is_empty());
+        assert_eq!(crate::to_json(&plain).unwrap().to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn streaming_pool_reader_rejects_duplicate_tables_including_null() {
+        let mut fields = crate::to_json(&document()).unwrap().as_object().unwrap().clone();
+        let pool = fields.remove("textOutlines").unwrap();
+        for first in [json!(null), pool.clone()] {
+            let body = with_pool_at_edge(&fields, &first, "textOutlines", true);
+            let input = format!("{},\"textOutlines\":{pool}}}", body.strip_suffix('}').unwrap());
+            let error = crate::from_json(&input).unwrap_err();
+            assert!(error.to_string().contains("duplicate field `textOutlines`"));
+        }
+    }
+
+    #[test]
+    fn streaming_pool_reader_keeps_table_limits_and_header_version_checks() {
+        let mut fields = crate::to_json(&document()).unwrap().as_object().unwrap().clone();
+        fields.remove("textOutlines");
+        let oversized = json!({"version": 1, "paths": vec![""; MAX_ENTRIES + 1]});
+        for first in [true, false] {
+            let input = with_pool_at_edge(&fields, &oversized, "textOutlines", first);
+            assert!(crate::from_json(&input).unwrap_err().to_string().contains("file outline pool exceeds limit"));
+        }
+        // Reject the shared envelope version before interpreting an invalid app payload.
+        assert!(matches!(crate::from_json(r#"{"version": 999, "textOutlines": false}"#), Err(FormatError::Newer(999))));
+    }
+
     #[test]
     fn native_save_refuses_geometry_past_the_reopen_budget() {
         // The reviewer's small-limit reproducer: three nodes fit; four contain 4,352 bytes
