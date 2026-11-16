@@ -16,7 +16,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel}
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use figcraft_collab::message::{self, ClientMsg, HostInfo, Presence, ServerMsg};
+use figcraft_collab::message::{self, ClientMsg, HostInfo, Presence};
 use figcraft_doc::Document;
 use figcraft_engine::live::{Event, Published, Status};
 use tungstenite::protocol::frame::coding::CloseCode;
@@ -378,7 +378,7 @@ fn read_loop(mut ws: WebSocket<Duplex>, ctx: &ReaderCtx) {
     let mut seen = Seen::default();
     let outcome = loop {
         match ws.read() {
-            Ok(Message::Binary(b)) => match message::decode::<ServerMsg>(&b, ctx.cfg.limits.max_server_message) {
+            Ok(Message::Binary(b)) => match message::decode_server(&b, ctx.cfg.limits.max_server_message) {
                 Ok(m) => {
                     let welcomed = || {
                         let _ = ctx.tx.send(Cmd::Welcomed(ctx.epoch));
