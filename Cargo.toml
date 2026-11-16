@@ -35,8 +35,7 @@ figcraft-mcp = { path = "crates/mcp" }
 figcraft-collab-net = { path = "crates/collab-net" }
 figcraft-plugin = { path = "crates/plugin" }
 
-# Keep coupled craft-libs crates on one rev. craft-update has no sibling-crate
-# dependencies and is pinned separately for the suite updater rollout.
+# Keep every craft-libs crate on one rev.
 # Which paths stored in a document may be followed (craft-libs).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "3af2280ee3434a2c860012df2f440652621c2c81" }
 # Who draws the window frame on Linux — the compositor or the app — so every Craft app shows the
