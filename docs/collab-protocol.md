@@ -153,7 +153,9 @@ As built:
   `design-review`; a client that doesn't gets every batch, catch-up delta and snapshot without
   them, and an accepted batch still reaches it when nothing of it is left, so sequence numbers
   never skip; a snapshot saved with longer lists opens clamped to the limits `design.configure`
-  keeps) and library data (whole values); styles,
+  keeps, and a session restored from such a snapshot catches every resuming client up with that
+  snapshot, since its saved batches still hold the value past the limits; a host refuses to share
+  a file whose settings are already past the limits) and library data (whole values); styles,
   comment threads, variable collections and variables (one entry per id plus the order of ids;
   the whole list when ids aren't unique); dev-mode snapshots (per layer); images (per content
   hash, the encoded bytes as base64; as an entry applies the claim is checked: every key is

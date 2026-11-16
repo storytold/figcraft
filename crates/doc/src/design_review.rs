@@ -82,6 +82,20 @@ impl DesignReview {
     pub fn grid(&self) -> f64 {
         if self.grid.is_finite() && (GRID_MIN..=GRID_MAX).contains(&self.grid) { self.grid } else { 4.0 }
     }
+
+    /// The lists that hold more than this build keeps, as `(what, how many, the cap)`. Sharing a
+    /// file with any of these is refused (`collab.share`), an arriving edit is refused
+    /// (`figcraft_collab`), and a saved snapshot opens with what fits instead.
+    pub fn over_limits(&self) -> Vec<(&'static str, usize, usize)> {
+        [
+            ("corner radii", self.radii.len(), MAX_RADII),
+            ("brand colours", self.brand.len(), MAX_BRAND_COLORS),
+            ("disabled rules", self.disabled.len(), MAX_DISABLED),
+        ]
+        .into_iter()
+        .filter(|(_, have, max)| have > max)
+        .collect()
+    }
 }
 
 #[cfg(test)]
