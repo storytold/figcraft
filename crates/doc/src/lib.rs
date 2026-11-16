@@ -19,6 +19,7 @@ pub mod handoff;
 pub mod ids;
 pub mod library;
 pub mod node;
+mod node_read;
 pub mod props;
 pub mod proto;
 pub mod styles;
@@ -280,7 +281,7 @@ fn deserialize_nodes_limited<'de, D: serde::Deserializer<'de>>(d: D, limit: usiz
         fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
             let mut nodes = imbl::OrdMap::new();
             let mut bytes = 0usize;
-            while let Some((id, node)) = map.next_entry::<NodeId, Arc<Node>>()? {
+            while let Some((id, node_read::ReadNode(node))) = map.next_entry::<NodeId, node_read::ReadNode>()? {
                 if let Some(saved) = node.kind.text().and_then(|t| t.appearance.as_ref()) {
                     bytes = bytes.saturating_add(saved.glyphs.memory_bytes());
                     if bytes > self.0 {

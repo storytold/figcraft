@@ -612,3 +612,103 @@ Before/after native reread/resave archives are byte-identical (1,286,888 bytes),
 Tests retain precise/signed-zero eager placements, current metadata/source immutability,
 separate native pool scopes, invalid-input guards, independent cache byte/entry limits,
 counter overflow and uncached oversized paths. Working app/server packages are untouched.
+
+
+## Direct node appearance read follow-up, 2026-11-16
+
+The next coarse opening profile starts at PR revision `926a60bb` on unchanged main
+`559c952d`. Temporary timers bracket the shared header/typed document read, pool expansion,
+validation and the CLI's session construction; they are removed from production source before
+comparison builds. The same 10,000-layer fixture is fully decoded, with the first sample
+excluded and five remaining samples summarized below. These are nested stages: format load
+includes read/expand/validate and archive work; total includes format load and session setup.
+Do not add all rows or compare this instrumented run directly to production medians.
+
+| Instrumented stage | Median ms |
+|---|---:|
+| Header and typed JSON/model read | 273.627 |
+| Native pool expansion | 29.342 |
+| Document validation | 8.546 |
+| Session construction | 28.662 |
+| Whole format load | 337.971 |
+| Whole open | 366.634 |
+
+The typed JSON/header stage takes about three quarters of the instrumented opening time.
+The flattened `Node`/internally tagged `NodeKind` readers buffer the large `appearance`
+payload as Serde content before its bounded typed decoder builds the final glyph records.
+
+The document node-map reader now intercepts `appearance` only after seeing `type: text`
+(the order emitted by the existing writer), passing it directly to the existing bounded
+`TextAppearance` decoder. All common fields still pass through the ordinary Node reader.
+If appearance precedes the tag, the old flattened path remains available; arbitrary field
+order stays valid. Borrowed keys avoid new allocations on unescaped JSON, while escaped
+and owned/from-value keys forward their original spelling/value. Duplicate appearances,
+including null, are rejected. Non-text layers still ignore unknown appearance data.
+
+This removes an intermediate representation, not glyphs or validation. Document geometry
+accounting remains immediately after each loaded node; pool/layer/numeric/document/eager
+snapshot/archive limits are unchanged. All glyph records and exact affines materialize before
+opening returns. There is no new wire/file version, global context, numeric-codec change,
+rounding, font substitution or new lazy path. The writer is unchanged.
+
+### Production comparison and controls
+
+The unchanged `cargo xtask bench text 1000,10000` harness uses embedded Inter Regular/Bold
+14/20 px, unique 117-character paragraphs, no images/history, one warm-up and medians of five
+samples. Fonts are available in this workload; it does not measure missing-font restoration.
+First/repeat save include thumbnail/native ZIP encoding in memory, while reopen includes
+complete native decoding and session initialization. No builds run concurrently with timing.
+
+An existing production `926a60bb` executable is compared before/after and again as a control.
+Because save timings vary strongly, an exact `926a60bb` baseline is additionally rebuilt using
+the same current environment and shared target as the candidate. Its source is restored before
+comparison. Main is the already-built exact `559c952d` with only the identical benchmark CLI
+harness ported for measurement. All runs and both sizes follow:
+
+| Run | Layers | Prepare ms | First save ms | Repeat save ms | Reopen ms | ZIP bytes | Portable layers |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| before | 1,000 | 13.702 | 268.063 | 271.050 | 31.276 | 245,063 | 1,000 |
+| before | 10,000 | 737.120 | 2908.048 | 2894.957 | 313.830 | 1,286,888 | 10,000 |
+| after | 1,000 | 12.978 | 251.518 | 269.167 | 26.069 | 245,063 | 1,000 |
+| after | 10,000 | 791.761 | 4011.929 | 4121.561 | 268.902 | 1,286,888 | 10,000 |
+| before-control | 1,000 | 12.837 | 246.910 | 241.960 | 29.909 | 245,063 | 1,000 |
+| before-control | 10,000 | 712.201 | 2712.851 | 2715.347 | 296.232 | 1,286,888 | 10,000 |
+| after-repeat | 1,000 | 12.588 | 240.064 | 244.074 | 25.678 | 245,063 | 1,000 |
+| after-repeat | 10,000 | 814.473 | 4115.604 | 4391.817 | 277.999 | 1,286,888 | 10,000 |
+| main | 1,000 | 0.270 | 169.969 | 166.463 | 5.721 | 127,941 | 0 |
+| main | 10,000 | 3.736 | 2926.821 | 2803.728 | 68.075 | 265,409 | 0 |
+| fresh-before | 1,000 | 14.392 | 266.475 | 317.522 | 32.258 | 245,063 | 1,000 |
+| fresh-before | 10,000 | 838.213 | 4645.902 | 4789.965 | 339.122 | 1,286,888 | 10,000 |
+| after-fresh-control | 1,000 | 12.538 | 259.108 | 260.685 | 26.480 | 245,063 | 1,000 |
+| after-fresh-control | 10,000 | 781.318 | 4220.826 | 4214.702 | 267.898 | 1,286,888 | 10,000 |
+
+The fresh-build pair reopens **339.122 -> 267.898 ms (21.00% less)**.
+Earlier production pairs were 313.830 -> 268.902 ms (14.32%) and 296.232 -> 277.999 ms (6.15%).
+Host/build variation is material; no universal fixed percentage is claimed. Save/prepare times
+are reported rather than treated as an improvement from this reader change. Compared with
+main's 68.075 ms, the latest candidate is 3.94x slower to reopen.
+**The roughly +10% acceptance goal remains unmet; capture/opt-in policy is unchanged.**
+
+### Isolated node diagnostic and exactness
+
+`cargo test -p figcraft-doc --release portable_node_read_timings -- --ignored --nocapture`
+compares the original `Arc<Node>` reader against the adapter in the same process, with 10,000
+117-glyph nodes. Each variant fully decodes/drops its result. Three repeat processes each take
+one warm-up and medians of five samples; the table is the median and range of those process
+medians. Old then direct is the fixed within-sample order, so the production controls above
+remain the primary whole-open comparison. These are not extra times to sum with full opening.
+
+| Fixture | Original median ms (range) | Direct median ms (range) |
+|---|---:|---:|
+| No appearance | 30.288 (29.621–31.535) | 30.096 (29.207–31.172) |
+| Portable appearance | 177.140 (172.894–186.727) | 156.021 (153.758–157.109) |
+
+The repeated portable-node diagnostic is 11.92% lower; plain-node ranges overlap.
+The initial portable diagnostic was 176.181 -> 146.545 ms and is not presented as a stable 17% gain.
+
+Before/after reread/resave archives remain **byte-identical**: 1,286,888 bytes,
+archive SHA-256 `c46613c8b24708027ed58bc79a64688bcaeae455170570a30410aa1ee19ed66e`. The 21,222,910-byte document JSON has
+SHA-256 `5b0dcb8274a55acba9d03252c6114115a637382e6eb82935b2bf68e32da47ec9`. All 10,000 appearances and 1.17 million glyph placements remain.
+New regressions compare direct/fallback, escaped/from-value keys, null/duplicate and non-text
+behavior with the original reader, including precise and signed-zero affines. Working app
+packages, user artwork and live server are unchanged.
