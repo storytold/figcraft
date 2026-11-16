@@ -158,6 +158,17 @@ pub(super) fn variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel:
     if !crate::selection_cache::every(doc, sel, |n| n.kind.is_frame_like()) {
         return false;
     }
+    mode_section(app, ui, doc, sel, false)
+}
+
+/// The same section for the current page, with nothing selected: Auto there is the collection's
+/// default mode, and a pick sets the page's own (`variable.setMode` without layers).
+pub(super) fn page_variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId) -> bool {
+    mode_section(app, ui, doc, &[page], true)
+}
+
+/// The Variable modes section of `sel` (the page when `on_page`): one row per multi-mode collection.
+fn mode_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], on_page: bool) -> bool {
     let libs = crate::variable_ui::libraries(app, doc);
     let rows = crate::variable_ui::mode_rows(doc, &libs);
     if rows.is_empty() {
@@ -217,7 +228,7 @@ pub(super) fn variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel:
                     }
                 }
                 if let Some(mode) = pick {
-                    set_variable_mode(app, sel, r, mode);
+                    set_variable_mode(app, if on_page { &[] } else { sel }, r, mode);
                     ui.close();
                 }
             });
@@ -227,15 +238,23 @@ pub(super) fn variable_modes(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel:
     true
 }
 
-/// Set `sel`'s mode of the collection of `row` (`mode` null: Auto). A library collection goes
+/// Set `sel`'s mode of the collection of `row` (`mode` null: Auto; no `sel`: the page's). A library collection goes
 /// through `library.setVariableMode` (copying it in); Auto on one never used here is already so.
 fn set_variable_mode(app: &mut FigApp, sel: &[NodeId], row: &crate::variable_ui::ModeRow, mode: Value) {
     match (row.library, row.key, row.local) {
         (Some((lib, _)), Some(key), _) if !mode.is_null() => {
-            app.run("library.setVariableMode", json!({"library": lib, "collection": key, "ids": sel, "mode": mode}));
+            let mut p = json!({"library": lib, "collection": key, "mode": mode});
+            if !sel.is_empty() {
+                p["ids"] = json!(sel);
+            }
+            app.run("library.setVariableMode", p);
         }
         (_, _, Some(local)) => {
-            app.run("variable.setMode", json!({"ids": sel, "collection": local, "mode": mode}));
+            let mut p = json!({"collection": local, "mode": mode});
+            if !sel.is_empty() {
+                p["ids"] = json!(sel);
+            }
+            app.run("variable.setMode", p);
         }
         _ => {}
     }

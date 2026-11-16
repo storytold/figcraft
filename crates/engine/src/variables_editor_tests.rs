@@ -48,6 +48,18 @@ fn rename_describe_scope_and_duplicate() {
 }
 
 #[test]
+fn duplicate_by_id_copies_that_variable_even_when_an_earlier_one_is_named_like_its_id() {
+    let mut s = Session::new();
+    tokens(&mut s);
+    let brand = s.doc().unwrap().variables.get("brand").unwrap().id.clone();
+    // The first variable in the list takes the later one's id as its name.
+    ex(&mut s, "variable.update", json!({"variable": "space/sm", "name": brand.clone()}));
+    let id = ex(&mut s, "variable.duplicate", json!({"variable": brand.clone()}))["id"].as_str().unwrap().to_string();
+    let vars = &s.doc().unwrap().variables;
+    assert_eq!(vars.get(&id).unwrap().name, "brand copy");
+}
+
+#[test]
 fn modes_and_collections_rename_and_delete() {
     let mut s = Session::new();
     tokens(&mut s);

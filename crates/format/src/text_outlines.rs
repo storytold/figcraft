@@ -152,10 +152,14 @@ mod tests {
     use serde_json::json;
 
     fn document() -> Document {
+        document_with_nodes(4)
+    }
+
+    fn document_with_nodes(count: usize) -> Document {
         let mut doc = Document::new("Shared shapes");
         let page = doc.first_page().unwrap();
         let path: Arc<str> = "M0 0L20 0L20 30L0 30Z".repeat(20).into();
-        for _ in 0..4 {
+        for _ in 0..count {
             let mut text = TextData::new("AAAAAAAA");
             text.appearance = Some(Arc::new(TextAppearance {
                 fingerprint: "synthetic geometry".into(),
@@ -189,6 +193,69 @@ mod tests {
     }
 
     #[test]
+    fn native_save_refuses_geometry_past_the_reopen_budget() {
+        // The reviewer's small-limit reproducer: three nodes fit; four contain 4,352 bytes
+        // of glyph structs on 64-bit, even though the ZIP itself is under a kilobyte.
+        let limit = 32 * std::mem::size_of::<TextGlyph>() - 256;
+        let below = document_with_nodes(3);
+        let bytes = crate::save_bytes_limited(&below, None, &[], &[], limit).unwrap();
+        let (loaded, issues) = crate::load_bytes(&bytes).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        for n in below.nodes() {
+            assert_eq!(loaded.node(n.id).unwrap().kind, n.kind);
+        }
+        let above = document();
+        let before = serde_json::to_string(&above).unwrap();
+        let error = crate::save_bytes_limited(&above, None, &[], &[], limit).unwrap_err();
+        assert!(error.to_string().contains("portable glyph memory limit"));
+        assert_eq!(serde_json::to_string(&above).unwrap(), before);
+    }
+
+    #[test]
+    fn native_save_checks_the_encoded_dictionary_at_the_exact_boundary() {
+        let doc = document();
+        let (packed, _) = pack(&doc);
+        let memory: usize = packed.nodes().filter_map(|n| n.kind.text()?.appearance.as_ref()).map(|a| a.glyphs.serialized_memory_bytes()).sum();
+        // Count one @0 dictionary entry per layer, not every occurrence of the live SVG.
+        assert_eq!(memory, 32 * std::mem::size_of::<TextGlyph>() + 4 * "@0".len());
+        let bytes = crate::save_bytes_limited(&doc, None, &[], &[], memory).unwrap();
+        let (back, issues) = crate::load_bytes(&bytes).unwrap();
+        assert!(issues.is_empty());
+        for n in doc.nodes() {
+            assert_eq!(back.node(n.id).unwrap().kind, n.kind);
+        }
+        let error = crate::save_bytes_limited(&doc, None, &[], &[], memory - 1).unwrap_err();
+        assert!(error.to_string().contains("document portable geometry exceeds memory limit"));
+    }
+
+    #[test]
+    fn native_save_charges_eager_branch_snapshots_but_not_lazy_history() {
+        let doc = document();
+        let records = 32 * std::mem::size_of::<TextGlyph>();
+        let branch = crate::Branch {
+            id: "synthetic-branch".into(),
+            name: "Branch".into(),
+            time: 1,
+            client: 1,
+            state: crate::BranchState::Active,
+            base: Arc::new(doc.clone()),
+            head: Arc::new(doc.clone()),
+            versions: vec![],
+        };
+        let error = crate::save_bytes_limited(&doc, None, &[], std::slice::from_ref(&branch), records * 3 - 1).unwrap_err();
+        assert!(error.to_string().contains("file snapshots exceed portable glyph memory limit"));
+        let bytes = crate::save_bytes_limited(&doc, None, &[], &[branch], records * 3).unwrap();
+        let loaded = crate::load_bytes_with_versions(&bytes).unwrap();
+        assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+        assert_eq!(loaded.branches.len(), 1);
+        let version = crate::Version::new("history", "History", "", 1, Arc::new(doc.clone()));
+        let bytes = crate::save_bytes_limited(&doc, None, &[version], &[], records + 8).unwrap();
+        let loaded = crate::load_bytes_with_versions(&bytes).unwrap();
+        assert_eq!(loaded.versions.len(), 1);
+        assert!(loaded.versions[0].document().is_ok());
+    }
+
+    #[test]
     fn automatically_loaded_snapshots_share_an_expanded_glyph_budget() {
         let doc = document();
         let bytes = 32 * std::mem::size_of::<TextGlyph>();
@@ -196,6 +263,22 @@ mod tests {
         budget.glyphs_left = bytes * 2 - 1;
         budget.geometry(&doc).unwrap();
         assert!(budget.geometry(&doc).unwrap_err().to_string().contains("portable glyph memory limit"));
+    }
+
+    #[test]
+    fn native_save_charges_the_published_library_snapshot() {
+        let mut doc = document();
+        let records = 32 * std::mem::size_of::<TextGlyph>();
+        let library_doc = Arc::new(doc.clone());
+        doc.published = Some(Arc::new(figcraft_doc::PublishedLibrary {
+            manifest: figcraft_doc::LibraryManifest { id: "synthetic-library".into(), ..Default::default() },
+            doc: library_doc,
+        }));
+        assert!(crate::save_bytes_limited(&doc, None, &[], &[], records * 2 - 1).is_err());
+        let bytes = crate::save_bytes_limited(&doc, None, &[], &[], records * 2).unwrap();
+        let loaded = crate::load_bytes_with_versions(&bytes).unwrap();
+        assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+        assert!(loaded.doc.published.is_some());
     }
 
     #[test]

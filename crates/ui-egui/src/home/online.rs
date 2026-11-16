@@ -180,7 +180,7 @@ fn row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, f: &OnlineFile, busy: bool) {
     if mresp.hovered() {
         ui.painter().rect_filled(more, CornerRadius::same(5), t.pressed);
     }
-    icons::paint(ui.painter(), more.shrink(5.0), Icon::Dots, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(more), Icon::Dots, t.icon);
     let ctx = ui.ctx().clone();
     let at = (f.server.as_str(), f.file.as_str());
     crate::right::menu_popup(&mresp).width(240.0).show(|ui| {
@@ -302,7 +302,7 @@ fn team_row(app: &mut FigApp, ui: &mut Ui, t: &Tokens, server: &str, web: &str, 
     if mresp.hovered() {
         ui.painter().rect_filled(more, CornerRadius::same(5), t.pressed);
     }
-    icons::paint(ui.painter(), more.shrink(5.0), Icon::Dots, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(more), Icon::Dots, t.icon);
     crate::right::menu_popup(&mresp).width(240.0).show(|ui| {
         if crate::right::menu_item(ui, tr("Open"), "") {
             open_team(app, server, f);
@@ -426,4 +426,30 @@ pub fn inspect(app: &FigApp) -> Value {
         "confirmRemove": app.ui.online.remove.as_ref().map(|r| &r.2),
         "rename": app.ui.online.rename.as_ref().map(|r| &r.2),
     })
+}
+
+#[cfg(test)]
+mod icon_size_tests {
+    use super::*;
+    use crate::header_icon_size_tests::{painted_rects, paints_icon_at_button_size};
+    use figcraft_engine::figcraft_collab::message::Access;
+
+    /// The menu buttons of Online's file rows and team rows paint their dots at 16 pt (#2238).
+    #[test]
+    fn online_row_menus_paint_16pt() {
+        let t_app = || FigApp::new(figcraft_engine::Session::new(), Box::new(crate::NoServices));
+        let mut app = t_app();
+        let file = OnlineFile { server: "wss://share.example/".into(), file: "f".into(), name: "Trail".into(), ..OnlineFile::default() };
+        let rows = painted_rects(None, |ui| {
+            let t = Tokens::get(ui.ctx());
+            row(&mut app, ui, &t, &file, false);
+        });
+        assert!(paints_icon_at_button_size(&rows, Icon::Dots), "file row menu is not 16 pt");
+        let team = TeamFile { file: "f".into(), name: "Trail".into(), updated: 0, people: 0, access: Access::Edit };
+        let teams = painted_rects(None, |ui| {
+            let t = Tokens::get(ui.ctx());
+            team_row(&mut app, ui, &t, "wss://share.example/", "", &team);
+        });
+        assert!(paints_icon_at_button_size(&teams, Icon::Dots), "team row menu is not 16 pt");
+    }
 }

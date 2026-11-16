@@ -65,7 +65,7 @@ impl Session {
     /// Replace the document with `f(snapshot)` for a live preview during a gesture.
     pub fn preview(&mut self, f: impl FnOnce(&mut Document, &mut Vec<NodeId>) -> Result<()>) -> Result<()> {
         let ds = self.ds_mut()?;
-        let Some(it) = ds.interaction.clone() else { return Err(EngineError::Other("no gesture in progress".into())) };
+        let Some(it) = ds.interaction.clone() else { return Err(EngineError::NoGesture) };
         let mut doc = (*it.doc).clone();
         let mut sel = it.selection.clone();
         // What the gesture changes on the selected layers is an explicit edit.

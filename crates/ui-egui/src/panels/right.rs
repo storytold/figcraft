@@ -37,7 +37,7 @@ pub(crate) use menu::menu_row_width;
 pub(crate) use menu::preview_blend;
 pub use menu::{blend_menu, context_popup, menu_check, menu_icon_item, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
 pub(crate) use menu::{block, menu_row_lit, menu_style, row, row_rect};
-use paints::{appearance, paints, variable_modes};
+use paints::{appearance, page_variable_modes, paints, variable_modes};
 pub(crate) use stroke::{CAP_ART_W, cap_art, join_label};
 
 /// Common value of `f` across `ids` (None when mixed or empty).
@@ -374,6 +374,9 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
         }
     }
     widgets::separator(ui);
+    if page_variable_modes(app, ui, doc, page) {
+        widgets::separator(ui);
+    }
     widgets::section_header(ui, tr("Color profile"), &[], false);
     row(ui, 32.0, |ui| {
         let resp = widgets::dropdown(ui, doc.color_profile.label(), 140.0, None);
@@ -611,6 +614,8 @@ fn position(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, shown: &Arc<Docu
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PositionValues {
     pub can_align: bool,
+    /// Align is off because the one selected layer is placed by its auto layout frame.
+    pub align_blocked: bool,
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub rot: Option<f64>,
@@ -641,6 +646,7 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
     let parent = |n: &Node| n.parent.and_then(|p| doc.node(p));
     crate::selection_cache::cached(ctx, "position", doc, sel, &[], || PositionValues {
         can_align: figcraft_engine::cmd::arrange::can_align(doc, sel),
+        align_blocked: figcraft_engine::cmd::arrange::align_blocked_by_auto_layout(doc, sel),
         x: common(doc, sel, |n| x_of(doc, n)),
         y: common(doc, sel, |n| y_of(doc, n)),
         rot: common(doc, sel, |n| rot_of(doc, n)),
@@ -654,12 +660,18 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
     })
 }
 
+/// Whether the Design panel offers Tidy up for `sel`: three or more layers forming a row, a column
+/// or a full grid, none in an auto layout flow (`can_tidy`).
+pub(crate) fn tidy_available(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> bool {
+    crate::selection_cache::cached(ctx, "tidy", doc, sel, &[], || figcraft_engine::tidy::can_tidy(doc, sel))
+}
+
 /// Draw alignment and distribution, X/Y and rotation with flip/rotate controls, the
 /// absolute-position toggle and frame constraints.
 fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let pv = position_values(ui.ctx(), doc, sel);
     let col = widgets::col_width(ui.available_width());
-    align_row(app, ui, sel, pv.can_align, col);
+    align_row(app, ui, sel, pv.can_align, pv.align_blocked, col);
     position_row(app, ui, doc, sel, &pv, col);
     rotation_row(app, ui, doc, sel, pv.rot, col);
     if pv.in_frame {
@@ -668,7 +680,7 @@ fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[No
 }
 
 /// Alignment, and distribution and tidy up for three or more layers.
-fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col: f32) {
+fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, blocked: bool, col: f32) {
     let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Alignment"), None);
     row(ui, 32.0, |ui| {
@@ -688,19 +700,30 @@ fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col
             let v = widgets::segmented(ui, &items[3..], None, w).map(|i| i + 3);
             h.or(v)
         });
-        picked.response.on_disabled_hover_text(tr("A layer on its own aligns to its frame: select more layers, or one in a frame"));
+        let why = if blocked {
+            tr("A layer in an auto layout frame is placed by its frame")
+        } else {
+            tr("A layer on its own aligns to its frame: select more layers, or one in a frame")
+        };
+        picked.response.on_disabled_hover_text(why);
         if let Some(i) = picked.inner {
             app.run(cmds[i], json!({"ids": ids}));
         }
         if sel.len() > 2 {
             let more = icons::button(ui, Icon::DistributeH, 24.0, false, tr("Distribute and tidy"));
             menu_popup(&more).show(|ui| {
-                for (l, c) in [
-                    (tr("Distribute horizontal spacing"), "distribute.horizontal"),
-                    (tr("Distribute vertical spacing"), "distribute.vertical"),
-                    (tr("Tidy up"), "arrange.tidy"),
+                let can_tidy = app.session.ds().is_ok_and(|ds| tidy_available(ui.ctx(), &ds.doc, &ids));
+                for (l, c, on) in [
+                    (tr("Distribute horizontal spacing"), "distribute.horizontal", true),
+                    (tr("Distribute vertical spacing"), "distribute.vertical", true),
+                    (tr("Tidy up"), "arrange.tidy", can_tidy),
                 ] {
-                    if menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")) {
+                    let item = ui.add_enabled_ui(on, |ui| menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")));
+                    if !on {
+                        item.response
+                            .on_disabled_hover_text(tr("Select a row, a column or a full grid of three or more layers, outside an auto layout flow"));
+                    }
+                    if item.inner {
                         app.run(c, json!({"ids": ids}));
                         ui.close();
                     }

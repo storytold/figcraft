@@ -570,3 +570,18 @@ fn outline_stroke_outlines_every_selected_layer() {
         assert_eq!(s.selection(), ids, "the results are selected");
     }
 }
+
+#[test]
+fn node_set_non_numeric_miter_smoothing_paragraph_is_an_error() {
+    let mut s = Session::new();
+    let r = create(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 50}));
+    let t = create(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 100}));
+    ex(&mut s, "node.set", json!({"ids": [r], "props": {"miterLimit": 8, "cornerSmoothing": 0.5}}));
+    ex(&mut s, "node.set", json!({"ids": [t], "props": {"paragraphSpacing": 6, "paragraphIndent": 4}}));
+    for (id, key) in [(r, "miterLimit"), (r, "cornerSmoothing"), (t, "paragraphSpacing"), (t, "paragraphIndent")] {
+        let err = s.execute("node.set", &json!({"ids": [id], "props": {key: "abc"}})).expect_err(key);
+        assert!(err.to_string().contains("must be a number"), "{key}: {err}");
+    }
+    assert_eq!(node(&s, r).stroke.miter_limit, 8.0);
+    assert_eq!(node(&s, r).corners.smoothing, 0.5);
+}

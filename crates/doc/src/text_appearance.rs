@@ -319,6 +319,18 @@ mod tests {
     }
 
     #[test]
+    fn serialized_memory_accounting_matches_the_compact_reader() {
+        let mut a = appearance();
+        // Equal paths from separate allocations are one dictionary entry, just like shared Arcs.
+        a.glyphs[1].d = Arc::from(a.glyphs[0].d.to_string());
+        let read = |a: &TextAppearance| serde_json::from_slice::<TextAppearance>(&serde_json::to_vec(a).unwrap()).unwrap();
+        assert_eq!(a.glyphs.serialized_memory_bytes(), read(&a).glyphs.memory_bytes());
+        let path = a.glyphs[0].d.clone();
+        a.glyphs = a.glyphs.with_outline_references(Arc::new(crate::TextOutlineReferences::from(HashMap::from([(path, Arc::from("@0"))]))));
+        assert_eq!(a.glyphs.serialized_memory_bytes(), read(&a).glyphs.memory_bytes());
+    }
+
+    #[test]
     fn compressed_geometry_has_a_document_wide_memory_budget() {
         use crate::{Document, NodeKind, TextData};
         let mut doc = Document::new("Geometry budget");

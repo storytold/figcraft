@@ -995,6 +995,18 @@ pub fn disabled(resp: &Response) {
     node(resp, "", |n| n.set_disabled());
 }
 
+/// `resp`'s node also says `text` (a menu row's state, e.g. "locked"), after any description
+/// already set (joined with ", ").
+pub fn describe(resp: &Response, text: &str) {
+    node(resp, "", |n| {
+        let d = match n.description() {
+            Some(old) if !old.is_empty() => format!("{old}, {text}"),
+            _ => text.to_string(),
+        };
+        n.set_description(d);
+    });
+}
+
 /// What a layer row says besides its name.
 pub struct RowInfo<'a> {
     /// The layer's type ("Frame", "Text").

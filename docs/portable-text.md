@@ -412,3 +412,33 @@ there is no cross-machine guarantee. All 10,000 appearances / 1,170,000 glyph pl
 Versus fresh main, reopen is **5.47x**, repeat save **+20.9%**, and archive size **4.85x**.
 The approximately 10% default-path target remains unmet. No validation/materialization was
 deferred, and no geometry precision, source-font policy or capture behavior was changed.
+
+
+### Save/open memory consistency, 2026-11-16
+
+A native save now refuses portable geometry that the same reader would reject for its decoded
+memory budget. The document preflight runs on the actual encoding snapshot: glyph record bytes
+plus the distinct per-layer outline dictionary, using native references where pooling applies.
+It does not count every occurrence of a shared live SVG as a separate dictionary entry. The
+calculation uses the same record size and exact encoded string lengths as the compact reader.
+No appearance is removed to make the file fit, and the reader's existing caps remain unchanged.
+
+Before returning an archive, saving also charges the main document, published library and branch
+base/head snapshots against the same aggregate numeric glyph budget used during eager loading.
+In-memory version snapshots receive the per-document check when encoded; stored history JSON
+remains lazy. A refusal returns an error before native-file replacement, preserving unsaved edits
+and the prior disk file. This does not add recovery by dropping geometry or relax any load limit.
+
+Synthetic regressions use a small injected save budget rather than allocating a gigabyte: a
+below-budget control saves and reopens with unchanged geometry; a four-node document is refused;
+the exact pooled-dictionary boundary succeeds and one byte less fails; branch/library snapshots
+share the eager budget while history remains lazy. An accounting regression compares the writer's
+estimate with the actual compact decoder, including equal paths from separate allocations and
+native outline references.
+
+The branch is integrated with main `559c952d` (2026-11-15): native envelopes, image resources and
+archive byte budgets still use the newly shared `craft-figcraft-format` implementation. Portable
+metadata and pooling wrap its app-supplied payload, and a local wrapper adds the glyph budget to
+its archive reader. The opening-page and relative-library-link save behavior from main is kept.
+The earlier performance tables are historical results on their stated bases, not fresh timings
+for this integration. Working application packages, deployed services and artwork are unchanged.

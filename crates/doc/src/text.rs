@@ -276,6 +276,31 @@ pub enum TextDirection {
 /// Deepest list nesting (levels 0..=MAX_LIST_INDENT).
 pub const MAX_LIST_INDENT: u8 = 8;
 
+/// For each paragraph, whether it is an item where a list starts counting. Numbers count the items
+/// of one list at one level and restart after a plain paragraph, a shallower item or the other
+/// kind of list; the first item of such a run starts counting (and takes its own start number).
+/// The layout numbers by this rule.
+pub fn list_item_starts_counting(lists: &[ParaList]) -> Vec<bool> {
+    let mut run = [ListStyle::None; MAX_LIST_INDENT as usize + 1];
+    lists
+        .iter()
+        .map(|pl| {
+            if pl.list == ListStyle::None {
+                run.fill(ListStyle::None);
+                return false;
+            }
+            let d = usize::from(pl.indent).min(run.len() - 1);
+            for c in run.iter_mut().skip(d + 1) {
+                *c = ListStyle::None;
+            }
+            let Some(c) = run.get_mut(d) else { return false };
+            let starts = *c != pl.list;
+            *c = pl.list;
+            starts
+        })
+        .collect()
+}
+
 /// One paragraph's list settings and base direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -601,6 +626,24 @@ impl TextGlyphs {
     pub(crate) fn memory_bytes(&self) -> usize {
         let paths = self.decoded_path_bytes.unwrap_or_else(|| self.data.iter().fold(0usize, |sum, g| sum.saturating_add(g.d.len())));
         self.len().saturating_mul(std::mem::size_of::<TextGlyph>()).saturating_add(paths)
+    }
+    /// Memory charged by the compact reader for this serialized glyph list: records plus
+    /// its distinct outline dictionary. Native-file palettes substitute references here,
+    /// exactly as they do in the writer; the live, possibly shared SVGs are not counted twice.
+    pub fn serialized_memory_bytes(&self) -> usize {
+        let mut pointers = std::collections::HashSet::new();
+        let mut paths = std::collections::HashSet::new();
+        let mut bytes = self.len().saturating_mul(std::mem::size_of::<TextGlyph>());
+        for glyph in self.iter() {
+            let pointer = (glyph.d.as_ptr() as usize, glyph.d.len());
+            if pointers.insert(pointer) {
+                let path = self.serialized_outline(&glyph.d);
+                if paths.insert(path) {
+                    bytes = bytes.saturating_add(path.len());
+                }
+            }
+        }
+        bytes
     }
     /// Used only on an encoding snapshot. The logical glyphs and the source remain unchanged.
     pub fn with_outline_references(&self, references: std::sync::Arc<TextOutlineReferences>) -> Self {
@@ -1082,6 +1125,24 @@ impl TextData {
         self.fold_paragraph_lists();
     }
 
+    /// Keep a start number only on the item where a numbered list starts counting, and give every
+    /// item that goes on counting 0 (the rule the layout numbers by, [`list_item_starts_counting`]).
+    /// An imported file may carry the list's start on every line; once the list is split, the
+    /// items after the split must restart at 1, not at the old start.
+    pub fn keep_list_starts_where_counting_starts(&mut self) {
+        if self.paragraphs.iter().all(|p| p.start_offset == 0) {
+            return;
+        }
+        self.fill_paragraphs();
+        let starts = list_item_starts_counting(&self.paragraphs);
+        for (pl, starts) in self.paragraphs.iter_mut().zip(starts) {
+            if !starts {
+                pl.start_offset = 0;
+            }
+        }
+        self.fold_paragraph_lists();
+    }
+
     /// One style for all paragraphs with no nesting or start folds back into `list`.
     fn fold_paragraph_lists(&mut self) {
         if let Some(first) = self.paragraphs.first().copied()
@@ -1395,6 +1456,41 @@ mod case_tests {
         t.clear_list_starts(5, 9);
         t.clear_list_starts(0, 0);
         assert_eq!(t.para_list(0).start_offset, 0);
+    }
+
+    #[test]
+    fn list_starts_stay_only_where_counting_starts() {
+        use ListStyle::{Bulleted as B, None as P, Numbered as N};
+        let pl = |list, indent, start_offset| ParaList { list, indent, start_offset, ..ParaList::default() };
+        // (paragraphs, the starts kept, derivation)
+        let cases: Vec<(Vec<ParaList>, Vec<u32>, &str)> = vec![
+            (vec![pl(N, 0, 4), pl(N, 0, 4), pl(N, 0, 4)], vec![4, 0, 0], "items that go on counting lose theirs"),
+            (vec![pl(N, 0, 4), pl(P, 0, 0), pl(N, 0, 6)], vec![4, 0, 6], "a list after a plain paragraph keeps its own"),
+            (vec![pl(N, 0, 4), pl(B, 0, 0), pl(N, 0, 6)], vec![4, 0, 6], "and one after a bullet item"),
+            (
+                vec![pl(N, 0, 4), pl(N, 1, 2), pl(N, 1, 2), pl(N, 0, 4)],
+                vec![4, 2, 0, 0],
+                "a nested level keeps its first item's; the outer count goes on",
+            ),
+            (vec![pl(N, 0, 1), pl(N, 1, 2), pl(N, 0, 9), pl(N, 1, 3)], vec![1, 2, 0, 3], "a shallower item starts the deeper count again"),
+            (vec![pl(N, 255, 4), pl(N, 9, 4), pl(N, 8, 4)], vec![4, 0, 0], "levels past the deepest count as the deepest"),
+        ];
+        for (paragraphs, want, why) in cases {
+            let characters = vec!["x"; paragraphs.len()].join("\n");
+            let mut t = TextData { characters, paragraphs, ..TextData::new("") };
+            t.keep_list_starts_where_counting_starts();
+            let got: Vec<u32> = (0..t.paragraph_count()).map(|p| t.para_list(p).start_offset).collect();
+            assert_eq!(got, want, "{why}");
+        }
+        // No start anywhere: nothing is spelled out.
+        let mut t = TextData { list: N, ..TextData::new("a\nb") };
+        t.keep_list_starts_where_counting_starts();
+        assert!(t.paragraphs.is_empty());
+        // More entries than paragraphs, and an empty last paragraph.
+        let mut t = TextData { paragraphs: vec![pl(N, 0, 4); 5], ..TextData::new("a\n") };
+        t.keep_list_starts_where_counting_starts();
+        assert_eq!((t.para_list(0).start_offset, t.para_list(1).start_offset), (4, 0));
+        assert!(list_item_starts_counting(&[]).is_empty());
     }
 }
 

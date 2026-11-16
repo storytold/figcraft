@@ -436,3 +436,21 @@ fn smart_animate_frame_cost() {
     let per = t0.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
     eprintln!("smart animate: {per:.2} ms per frame (80 layers, 400x800 px)");
 }
+
+/// The preview pane's 24 pt bar buttons paint their glyphs at 16 pt (#2238).
+#[test]
+fn pane_bar_buttons_paint_16pt() {
+    use super::layout::Chrome;
+    use super::player::player;
+    use crate::header_icon_size_tests::{painted_rects, paints_icon_at_button_size};
+    use crate::icons::Icon;
+    let (d, a, ..) = device_doc();
+    let mut p = player_on(d, a);
+    let pane = Chrome { pane: true, bar_h: 32.0, pad: 12.0, round: 8, keys: false };
+    let painted = painted_rects(None, |ui| {
+        player(&mut p, ui, Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 500.0)), 0.0, pane);
+    });
+    for icon in [Icon::Close, Icon::Play, Icon::Reset] {
+        assert!(paints_icon_at_button_size(&painted, icon), "{icon:?} is not 16 pt");
+    }
+}

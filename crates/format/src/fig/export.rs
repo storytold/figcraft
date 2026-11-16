@@ -15,7 +15,6 @@
 //! (`docs/file-format-parity.md` says what was checked); other apps may not open every file.
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::sync::Arc;
 
 use figcraft_doc::color::{BlendMode, Color, GradientKind, ImageScaleMode, Paint, PaintKind};
@@ -33,9 +32,9 @@ use figcraft_doc::{
 use serde_json::Value;
 use sha1::Digest;
 
-use super::kiwi::{Kv, Schema, encode};
-use super::network;
 use crate::FormatError;
+use craft_fig::kiwi::{Kv, Schema, encode};
+use craft_fig::{network, path};
 
 mod assets;
 mod common;
@@ -50,18 +49,18 @@ mod shape;
 const MAX_NODES: usize = crate::rest::MAX_NODES;
 const MAX_DEPTH: usize = 256;
 /// Largest `canvas.fig` and image written (what the import reads).
-const MAX_CANVAS: u64 = super::MAX_CANVAS;
+const MAX_CANVAS: u64 = craft_fig::MAX_CANVAS;
 const MAX_IMAGE: u64 = super::MAX_IMAGE;
-/// Largest whole file written.
-const MAX_FILE: u64 = 2 * 1024 * 1024 * 1024;
 /// Most characters of one text layer, and vertices + segments + loop entries of one vector
 /// network (what the import reads).
 const MAX_CHARS: usize = 1 << 20;
 const MAX_NETWORK: usize = 200_000;
 /// Largest magnitude written for a float (the format stores 32-bit floats).
 const MAX_FLOAT: f64 = 1e30;
-/// The version number in the `canvas.fig` header.
-const VERSION: u32 = 101;
+/// Grid track values, and the scale factor of a scaled instance, that the import follows.
+const MAX_GRID_TRACK_VALUE: f64 = 1e6;
+const MIN_SCALE_FACTOR: f64 = 1e-3;
+const MAX_SCALE_FACTOR: f64 = 1e3;
 /// Session ids of the GUIDs: layers, and grid tracks and component properties.
 const LAYERS: u32 = 1;
 const AUX: u32 = 2;
@@ -72,7 +71,7 @@ const AUX: u32 = 2;
 pub(super) const SCHEMA: &str = "
 enum MessageType JOIN_START=0 NODE_CHANGES=1
 enum NodePhase CREATED=0 REMOVED=1
-enum NodeType NONE=0 DOCUMENT=1 CANVAS=2 GROUP=3 FRAME=4 BOOLEAN_OPERATION=5 VECTOR=6 STAR=7 LINE=8 ELLIPSE=9 RECTANGLE=10 REGULAR_POLYGON=11 ROUNDED_RECTANGLE=12 TEXT=13 SLICE=14 SYMBOL=15 INSTANCE=16 SECTION=25 VARIABLE=28 VARIABLE_SET=31
+enum NodeType NONE=0 DOCUMENT=1 CANVAS=2 GROUP=3 FRAME=4 BOOLEAN_OPERATION=5 VECTOR=6 STAR=7 LINE=8 ELLIPSE=9 RECTANGLE=10 REGULAR_POLYGON=11 ROUNDED_RECTANGLE=12 TEXT=13 SLICE=14 SYMBOL=15 INSTANCE=16 SECTION=25 VARIABLE=28 VARIABLE_SET=31 TEXT_PATH=41
 enum BlendMode PASS_THROUGH=0 NORMAL=1 DARKEN=2 MULTIPLY=3 LINEAR_BURN=4 COLOR_BURN=5 LIGHTEN=6 SCREEN=7 LINEAR_DODGE=8 COLOR_DODGE=9 OVERLAY=10 SOFT_LIGHT=11 HARD_LIGHT=12 DIFFERENCE=13 EXCLUSION=14 HUE=15 SATURATION=16 COLOR=17 LUMINOSITY=18
 enum PaintType SOLID=0 GRADIENT_LINEAR=1 GRADIENT_RADIAL=2 GRADIENT_ANGULAR=3 GRADIENT_DIAMOND=4 IMAGE=5
 enum ImageScaleMode STRETCH=0 FIT=1 FILL=2 TILE=3
@@ -100,6 +99,7 @@ enum TextCase ORIGINAL=0 UPPER=1 LOWER=2 TITLE=3 SMALL_CAPS=4
 enum TextDecoration NONE=0 UNDERLINE=1 STRIKETHROUGH=2
 enum NumberUnits RAW=0 PIXELS=1 PERCENT=2
 enum LineType PLAIN=0 ORDERED_LIST=1 UNORDERED_LIST=2
+enum LeadingTrim NONE=0 CAP_HEIGHT=1
 enum SourceDirectionality AUTO=0 LTR=1 RTL=2
 enum DocumentColorProfile LEGACY=0 SRGB=1 DISPLAY_P3=2
 enum EmojiImageSet APPLE=0 NOTO=1
@@ -141,7 +141,8 @@ message StyleId GUID guid=1
 message VariableID GUID guid=1
 message VariableSetID GUID guid=1
 message ColorStopVar Color color=1, VariableData colorVar=2, float position=3
-message Paint PaintType type=1, Color color=2, float opacity=3, bool visible=4, BlendMode blendMode=5, ColorStop[] stops=6, Matrix transform=7, Image image=8, ImageScaleMode imageScaleMode=10, float rotation=11, float scale=12, VariableData colorVar=21, ColorStopVar[] stopsVar=23
+message PaintFilterMessage float tint=1, float shadows=2, float highlights=3, float exposure=5, float temperature=7, float vibrance=8, float contrast=9
+message Paint PaintType type=1, Color color=2, float opacity=3, bool visible=4, BlendMode blendMode=5, ColorStop[] stops=6, Matrix transform=7, Image image=8, ImageScaleMode imageScaleMode=10, float rotation=11, float scale=12, PaintFilterMessage paintFilter=14, VariableData colorVar=21, ColorStopVar[] stopsVar=23
 message Effect EffectType type=1, Color color=2, Vector offset=3, float radius=4, bool visible=5, BlendMode blendMode=6, float spread=7, bool showShadowBehindNode=8, BlurOpType blurOpType=19, float startRadius=21, Vector startOffset=20, Vector endOffset=28, NoiseType noiseType=26, Vector noiseSize=22, float density=25, float opacity=27, Color secondaryColor=24, bool clipToShape=23, VariableData radiusVar=9, VariableData colorVar=10, VariableData spreadVar=11, VariableData xVar=12, VariableData yVar=13, VariableData startRadiusVar=45
 struct FontName string family, string style, string postscript
 struct Number float value, NumberUnits units
@@ -150,6 +151,7 @@ message TextLineData LineType lineType=1, int styleId=10, int indentationLevel=2
 message TextData string characters=1, uint[] characterStyleIDs=2, NodeChange[] styleOverrideTable=3, TextLineData[] lines=12
 message Path WindingRule windingRule=1, uint commandsBlob=2, uint styleID=3
 message VectorData uint vectorNetworkBlob=1, Vector normalizedSize=2, NodeChange[] styleOverrideTable=3
+message TextPathStart float tValue=1, bool forward=2
 message ArcData float startingAngle=1, float endingAngle=2, float innerRadius=3
 message OptionalVector Vector value=1
 message LayoutGrid LayoutGridType type=1, Axis axis=2, bool visible=3, int numSections=4, float offset=5, float sectionSize=6, float gutterSize=7, Color color=8, LayoutGridPattern pattern=9, VariableData numSectionsVar=10, VariableData offsetVar=11, VariableData sectionSizeVar=12, VariableData gutterSizeVar=13
@@ -189,7 +191,7 @@ message GridTrackSizingFunction GridTrackSizingType type=1, float value=2
 message GridTrackSize GridTrackSizingFunction minSizing=1, GridTrackSizingFunction maxSizing=2
 message GUIDGridTrackSizeMapEntry GUID id=1, GridTrackSize trackSize=2
 message GUIDGridTrackSizeMap GUIDGridTrackSizeMapEntry[] entries=1
-message NodeChange GUID guid=1, NodePhase phase=2, ParentIndex parentIndex=3, NodeType type=4, string name=5, bool visible=6, bool locked=7, float opacity=8, BlendMode blendMode=9, Vector size=11, Matrix transform=12, bool mask=16, MaskType maskType=317, float backgroundOpacity=19, bool backgroundEnabled=15, bool internalOnly=142, string description=318, StyleType styleType=163, string sortPosition=320, StyleId styleIdForFill=332, StyleId styleIdForStrokeFill=333, StyleId styleIdForText=334, StyleId styleIdForEffect=335, StyleId styleIdForGrid=336, VariableDataMap variableConsumptionMap=307, VariableModeBySetMap variableModeBySetMap=316, VariableSetMode[] variableSetModes=312, VariableSetID variableSetID=313, VariableResolvedDataType variableResolvedType=314, VariableDataValues variableDataValues=315, VariableScope[] variableScopes=353, DocumentColorProfile documentColorProfile=349, Paint[] fillPaints=38, Paint[] strokePaints=39, float strokeWeight=26, StrokeAlign strokeAlign=29, StrokeJoin strokeJoin=31, StrokeCap strokeCap=30, float[] dashPattern=13, float miterLimit=25, bool borderStrokeWeightsIndependent=299, float borderTopWeight=295, float borderRightWeight=298, float borderBottomWeight=296, float borderLeftWeight=297, Effect[] effects=43, float cornerRadius=20, float cornerSmoothing=160, bool rectangleCornerRadiiIndependent=149, float rectangleTopLeftCornerRadius=145, float rectangleTopRightCornerRadius=146, float rectangleBottomRightCornerRadius=148, float rectangleBottomLeftCornerRadius=147, ConstraintType horizontalConstraint=28, ConstraintType verticalConstraint=37, bool frameMaskDisabled=115, bool resizeToFit=117, bool isStateGroup=225, StateGroupPropertyValueOrder[] stateGroupPropertyValueOrders=238, bool sectionContentsHidden=283, Color backgroundColor=50, StackMode stackMode=105, float stackSpacing=107, float stackCounterSpacing=324, StackWrap stackWrap=323, StackCounterAlignContent stackCounterAlignContent=343, float stackHorizontalPadding=209, float stackVerticalPadding=210, float stackPaddingRight=233, float stackPaddingBottom=234, StackJustify stackPrimaryAlignItems=230, StackAlign stackCounterAlignItems=231, StackSize stackPrimarySizing=229, StackSize stackCounterSizing=221, bool bordersTakeSpace=294, bool stackReverseZIndex=271, float gridColumnGap=438, float gridRowGap=437, GUIDPositionMap gridColumns=436, GUIDPositionMap gridRows=435, GUIDGridTrackSizeMap gridColumnsSizing=474, GUIDGridTrackSizeMap gridRowsSizing=475, float stackChildPrimaryGrow=232, StackCounterAlign stackChildAlignSelf=236, StackPositioning stackPositioning=269, OptionalVector minSize=325, OptionalVector maxSize=326, GUID gridColumnAnchor=440, GUID gridRowAnchor=439, uint gridColumnSpan=442, uint gridRowSpan=441, LayoutGrid[] layoutGrids=47, ExportSettings[] exportSettings=45, TextData textData=42, FontName fontName=41, float fontSize=21, Number lineHeight=40, Number letterSpacing=165, TextCase textCase=34, TextDecoration textDecoration=35, TextAlignHorizontal textAlignHorizontal=32, TextAlignVertical textAlignVertical=33, TextAutoResize textAutoResize=46, TextTruncation textTruncation=280, int maxLines=351, float paragraphSpacing=23, float paragraphIndent=22, Hyperlink hyperlink=223, bool autoRename=14, bool fontVariantCommonLigatures=127, bool fontVariantContextualLigatures=128, string fontVersion=202, uint textUserLayoutVersion=203, uint textExplicitLayoutVersion=396, uint textBidiVersion=279, float textTracking=27, bool textDecorationSkipInk=412, EmojiImageSet emojiImageSet=391, uint styleID=49, Path[] fillGeometry=51, Path[] strokeGeometry=52, VectorData vectorData=48, VectorMirror handleMirroring=44, uint count=10, float starInnerScale=24, ArcData arcData=195, BooleanOperation booleanOperation=36, string symbolDescription=144, VariableWidthPoint[] variableWidthPoints=447, PluginData[] pluginData=204, SymbolData symbolData=113, NodeChange[] derivedSymbolData=125, GUID overriddenSymbolID=143, ComponentPropDef[] componentPropDefs=266, ComponentPropRef[] componentPropRefs=267, ComponentPropAssignment[] componentPropAssignments=268, VariantPropSpec[] variantPropSpecs=483, VariableDataMap parameterConsumptionMap=445, GUIDPath guidPath=111, PrototypeInteraction[] prototypeInteractions=226, PrototypeStartingPoint prototypeStartingPoint=249, ScrollDirection scrollDirection=159, ScrollBehavior scrollBehavior=186, OverlayPositionType overlayPositionType=198, OverlayBackgroundInteraction overlayBackgroundInteraction=200, OverlayBackgroundAppearance overlayBackgroundAppearance=201
+message NodeChange GUID guid=1, NodePhase phase=2, ParentIndex parentIndex=3, NodeType type=4, string name=5, bool visible=6, bool locked=7, float opacity=8, BlendMode blendMode=9, Vector size=11, Matrix transform=12, bool mask=16, MaskType maskType=317, float backgroundOpacity=19, bool backgroundEnabled=15, bool internalOnly=142, string description=318, StyleType styleType=163, string sortPosition=320, StyleId styleIdForFill=332, StyleId styleIdForStrokeFill=333, StyleId styleIdForText=334, StyleId styleIdForEffect=335, StyleId styleIdForGrid=336, VariableDataMap variableConsumptionMap=307, VariableModeBySetMap variableModeBySetMap=316, VariableSetMode[] variableSetModes=312, VariableSetID variableSetID=313, VariableResolvedDataType variableResolvedType=314, VariableDataValues variableDataValues=315, VariableScope[] variableScopes=353, DocumentColorProfile documentColorProfile=349, Paint[] fillPaints=38, Paint[] strokePaints=39, float strokeWeight=26, StrokeAlign strokeAlign=29, StrokeJoin strokeJoin=31, StrokeCap strokeCap=30, float[] dashPattern=13, float miterLimit=25, bool borderStrokeWeightsIndependent=299, float borderTopWeight=295, float borderRightWeight=298, float borderBottomWeight=296, float borderLeftWeight=297, Effect[] effects=43, float cornerRadius=20, float cornerSmoothing=160, bool rectangleCornerRadiiIndependent=149, float rectangleTopLeftCornerRadius=145, float rectangleTopRightCornerRadius=146, float rectangleBottomRightCornerRadius=148, float rectangleBottomLeftCornerRadius=147, ConstraintType horizontalConstraint=28, ConstraintType verticalConstraint=37, bool frameMaskDisabled=115, bool resizeToFit=117, bool isStateGroup=225, StateGroupPropertyValueOrder[] stateGroupPropertyValueOrders=238, bool sectionContentsHidden=283, Color backgroundColor=50, StackMode stackMode=105, float stackSpacing=107, float stackCounterSpacing=324, StackWrap stackWrap=323, StackCounterAlignContent stackCounterAlignContent=343, float stackHorizontalPadding=209, float stackVerticalPadding=210, float stackPaddingRight=233, float stackPaddingBottom=234, StackJustify stackPrimaryAlignItems=230, StackAlign stackCounterAlignItems=231, StackSize stackPrimarySizing=229, StackSize stackCounterSizing=221, bool bordersTakeSpace=294, bool stackReverseZIndex=271, float gridColumnGap=438, float gridRowGap=437, GUIDPositionMap gridColumns=436, GUIDPositionMap gridRows=435, GUIDGridTrackSizeMap gridColumnsSizing=474, GUIDGridTrackSizeMap gridRowsSizing=475, float stackChildPrimaryGrow=232, StackCounterAlign stackChildAlignSelf=236, StackPositioning stackPositioning=269, OptionalVector minSize=325, OptionalVector maxSize=326, GUID gridColumnAnchor=440, GUID gridRowAnchor=439, uint gridColumnSpan=442, uint gridRowSpan=441, LayoutGrid[] layoutGrids=47, ExportSettings[] exportSettings=45, TextData textData=42, FontName fontName=41, float fontSize=21, Number lineHeight=40, Number letterSpacing=165, TextCase textCase=34, TextDecoration textDecoration=35, TextAlignHorizontal textAlignHorizontal=32, TextAlignVertical textAlignVertical=33, TextAutoResize textAutoResize=46, TextTruncation textTruncation=280, int maxLines=351, float paragraphSpacing=23, float paragraphIndent=22, float listSpacing=264, LeadingTrim leadingTrim=322, bool hangingPunctuation=337, bool hangingList=339, Hyperlink hyperlink=223, bool autoRename=14, bool fontVariantCommonLigatures=127, bool fontVariantContextualLigatures=128, string fontVersion=202, uint textUserLayoutVersion=203, uint textExplicitLayoutVersion=396, uint textBidiVersion=279, float textTracking=27, bool textDecorationSkipInk=412, EmojiImageSet emojiImageSet=391, uint styleID=49, Path[] fillGeometry=51, Path[] strokeGeometry=52, VectorData vectorData=48, TextPathStart textPathStart=432, VectorMirror handleMirroring=44, uint count=10, float starInnerScale=24, ArcData arcData=195, BooleanOperation booleanOperation=36, string symbolDescription=144, VariableWidthPoint[] variableWidthPoints=447, PluginData[] pluginData=204, SymbolData symbolData=113, NodeChange[] derivedSymbolData=125, GUID overriddenSymbolID=143, ComponentPropDef[] componentPropDefs=266, ComponentPropRef[] componentPropRefs=267, ComponentPropAssignment[] componentPropAssignments=268, VariantPropSpec[] variantPropSpecs=483, VariableDataMap parameterConsumptionMap=445, GUIDPath guidPath=111, PrototypeInteraction[] prototypeInteractions=226, PrototypeStartingPoint prototypeStartingPoint=249, ScrollDirection scrollDirection=159, ScrollBehavior scrollBehavior=186, OverlayPositionType overlayPositionType=198, OverlayBackgroundInteraction overlayBackgroundInteraction=200, OverlayBackgroundAppearance overlayBackgroundAppearance=201, Color prototypeBackgroundColor=141
 struct Blob byte[] bytes
 message Message MessageType type=1, uint sessionID=2, NodeChange[] nodeChanges=4, Blob[] blobs=6
 ";
@@ -199,39 +201,17 @@ message Message MessageType type=1, uint sessionID=2, NodeChange[] nodeChanges=4
 pub fn export(doc: &Document, thumbnail: Option<&[u8]>) -> Result<(Vec<u8>, Vec<String>), FormatError> {
     let mut x = Exporter::new(doc);
     let message = x.message();
-    let fail = |e: super::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
+    let fail = |e: craft_fig::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
     let schema = Schema::parse(SCHEMA).map_err(fail)?;
     let root = schema.find("Message").ok_or_else(|| FormatError::Io(".fig export: the schema has no Message".into()))?;
     let body = encode::message(&schema, root, &message).map_err(fail)?;
-    let canvas = canvas(&encode::schema(&schema), &body)?;
+    let canvas = craft_fig::encode_canvas(&encode::schema(&schema), &body).map_err(super::fig_err)?;
     let background = doc.pages.first().and_then(|p| doc.node(*p)).and_then(|p| match &p.kind {
         NodeKind::Page { background, .. } => Some(*background),
         _ => None,
     });
     let bytes = archive(&doc.name, background.unwrap_or(Color::WHITE), &canvas, &x.files, thumbnail)?;
     Ok((bytes, x.warnings))
-}
-
-fn too_large() -> FormatError {
-    FormatError::Io("the document is too large for a .fig file".into())
-}
-
-/// `canvas.fig`: the magic, the version and the two deflated chunks, each after its length.
-pub(super) fn canvas(schema: &[u8], message: &[u8]) -> Result<Vec<u8>, FormatError> {
-    let mut out = b"fig-kiwi".to_vec();
-    out.extend_from_slice(&VERSION.to_le_bytes());
-    for chunk in [schema, message] {
-        let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-        z.write_all(chunk).map_err(crate::io_err)?;
-        let c = z.finish().map_err(crate::io_err)?;
-        let len = u32::try_from(c.len()).map_err(|_| too_large())?;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&c);
-    }
-    if out.len() as u64 > MAX_CANVAS {
-        return Err(too_large());
-    }
-    Ok(out)
 }
 
 /// The zip around `canvas.fig`.
@@ -242,33 +222,9 @@ fn archive(
     images: &[(String, Arc<Vec<u8>>)],
     thumbnail: Option<&[u8]>,
 ) -> Result<Vec<u8>, FormatError> {
-    let mut buf = std::io::Cursor::new(Vec::new());
-    {
-        let mut z = zip::ZipWriter::new(&mut buf);
-        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        crate::put(&mut z, "canvas.fig", stored, canvas)?;
-        if let Some(t) = thumbnail {
-            crate::put(&mut z, "thumbnail.png", stored, t)?;
-        }
-        let mut client = serde_json::json!({"background_color": {"r": background.r, "g": background.g, "b": background.b, "a": background.a}});
-        // A PNG says its size right after its signature and header chunk name.
-        let be = |at: usize| thumbnail.and_then(|t| t.get(at..at + 4)).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes);
-        if let (Some(w), Some(h)) = (be(16), be(20)) {
-            client["thumbnail_size"] = serde_json::json!({"width": w, "height": h});
-        }
-        let meta = serde_json::to_vec(&serde_json::json!({"client_meta": client, "file_name": name})).map_err(crate::io_err)?;
-        crate::put(&mut z, "meta.json", crate::json_options(), &meta)?;
-        let mut total = canvas.len() as u64;
-        for (hash, bytes) in images {
-            total += bytes.len() as u64;
-            if total > MAX_FILE {
-                return Err(too_large());
-            }
-            crate::put(&mut z, &format!("images/{hash}"), stored, bytes)?;
-        }
-        z.finish().map_err(crate::io_err)?;
-    }
-    Ok(buf.into_inner())
+    let images: Vec<(&str, &[u8])> = images.iter().map(|(hash, bytes)| (hash.as_str(), bytes.as_slice())).collect();
+    let background = [background.r, background.g, background.b, background.a].map(f64::from);
+    craft_fig::write_archive(&craft_fig::Package { file_name: name, background, canvas, images: &images, thumbnail }).map_err(super::fig_err)
 }
 
 type Fields = Vec<(&'static str, Kv<'static>)>;
@@ -303,7 +259,7 @@ fn b(x: bool) -> Kv<'static> {
 /// importer keeps only those). `None`: the format has no name for it, so an equal track stands in.
 fn grid_track_size(track: &GridTrack) -> Option<(&'static str, f64)> {
     let value = track.value;
-    let fits = value.is_finite() && (0.0..=crate::fig::map::MAX_GRID_TRACK_VALUE).contains(&value);
+    let fits = value.is_finite() && (0.0..=MAX_GRID_TRACK_VALUE).contains(&value);
     match track.sizing {
         Sizing::Fixed if fits => Some(("FIXED", value)),
         Sizing::Fill if fits && value > 0.0 => Some(("FLEX", value)),
@@ -416,27 +372,21 @@ fn join_name(j: StrokeJoin) -> &'static str {
     }
 }
 
-/// A geometry blob (the import's `svg_path` reads it): commands `0` close, `1` move, `2` line,
-/// `3` quadratic, `4` cubic, each followed by its points as little-endian `f32` pairs.
+/// A geometry blob (`craft_fig::path`), with every value finite.
 fn path_blob(p: &BezPath) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut put = |cmd: u8, pts: &[figcraft_doc::geom::Point]| {
-        out.push(cmd);
-        for q in pts {
-            out.extend_from_slice(&(finite(q.x) as f32).to_le_bytes());
-            out.extend_from_slice(&(finite(q.y) as f32).to_le_bytes());
-        }
-    };
-    for el in p.elements() {
-        match *el {
-            PathEl::MoveTo(a) => put(1, &[a]),
-            PathEl::LineTo(a) => put(2, &[a]),
-            PathEl::QuadTo(a, c) => put(3, &[a, c]),
-            PathEl::CurveTo(a, c, d) => put(4, &[a, c, d]),
-            PathEl::ClosePath => put(0, &[]),
-        }
-    }
-    out
+    let pt = |q: figcraft_doc::geom::Point| [finite(q.x) as f32, finite(q.y) as f32];
+    let commands: Vec<path::Command> = p
+        .elements()
+        .iter()
+        .map(|el| match *el {
+            PathEl::MoveTo(a) => path::Command::Move(pt(a)),
+            PathEl::LineTo(a) => path::Command::Line(pt(a)),
+            PathEl::QuadTo(a, c) => path::Command::Quad(pt(a), pt(c)),
+            PathEl::CurveTo(a, c, d) => path::Command::Cubic(pt(a), pt(c), pt(d)),
+            PathEl::ClosePath => path::Command::Close,
+        })
+        .collect();
+    path::encode(&commands)
 }
 
 /// Settings an overlay's destination carries.
