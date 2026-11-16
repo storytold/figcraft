@@ -1201,6 +1201,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-vectordrawable"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "kurbo",
+]
+
+[[package]]
 name = "craft-web-api"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=fd5e2feff6ea25bed371a99cc732b3968d621505#fd5e2feff6ea25bed371a99cc732b3968d621505"
@@ -1226,6 +1234,15 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 dependencies = [
  "wayland-client",
+]
+
+[[package]]
+name = "craft-xml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "quick-xml 0.41.0",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2133,6 +2150,7 @@ name = "figcraft-svg"
 version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
+ "craft-xml",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
@@ -2194,6 +2212,7 @@ dependencies = [
 name = "figcraft-vectordrawable"
 version = "0.18.1"
 dependencies = [
+ "craft-vectordrawable",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
