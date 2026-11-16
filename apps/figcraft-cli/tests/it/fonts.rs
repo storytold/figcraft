@@ -2,15 +2,21 @@
 //! `--no-system-fonts` or `FIGCRAFT_NO_SYSTEM_FONTS=1` opts out.
 
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Value, json};
 
 /// The result of one `figcraft-cli run` step (script file `name`); `opt_out` sets the environment
 /// variable.
 fn run_one(name: &str, step: Value, args: &[&str], opt_out: bool) -> Value {
+    static NEXT_SCRIPT: AtomicU64 = AtomicU64::new(0);
     let d = std::env::temp_dir().join(format!("figcraft-cli-fonts-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
-    let script = d.join(format!("{name}.json"));
+    // Tests in this binary run concurrently. `sketch_imports_keep_to_no_system_fonts` also calls
+    // `families`, so a shared `families.json` could be truncated while another child reads it;
+    // an empty script is valid and makes the CLI exit successfully without printing result JSON.
+    let sequence = NEXT_SCRIPT.fetch_add(1, Ordering::Relaxed);
+    let script = d.join(format!("{name}-{sequence}.json"));
     std::fs::write(&script, json!([step]).to_string()).unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_figcraft-cli"));
     cmd.arg("run").arg(&script).args(args);
@@ -20,8 +26,21 @@ fn run_one(name: &str, step: Value, args: &[&str], opt_out: bool) -> Value {
         cmd.env_remove("FIGCRAFT_NO_SYSTEM_FONTS");
     }
     let out = cmd.output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let line: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        out.status.success(),
+        "{name}: CLI status {:?}; stdout={:?}; stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let line: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|error| {
+        panic!(
+            "{name} {:?}: CLI returned success without JSON: {error}; stdout={:?}; stderr={}",
+            args,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        )
+    });
     line["result"].clone()
 }
 

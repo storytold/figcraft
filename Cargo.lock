@@ -253,7 +253,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1012,6 +1012,43 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 
 [[package]]
+name = "craft-fig"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "craft-figma-rest",
+ "craft-kiwi",
+ "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c)",
+ "flate2",
+ "kurbo",
+ "ruzstd",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-figcraft-format"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=976eb51c59edb0a37f24105850f52d921c8518ee#976eb51c59edb0a37f24105850f52d921c8518ee"
+dependencies = [
+ "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=976eb51c59edb0a37f24105850f52d921c8518ee)",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip 9.1.1",
+]
+
+[[package]]
+name = "craft-figma-rest"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
@@ -1077,6 +1114,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-kiwi"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+
+[[package]]
 name = "craft-menu"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
@@ -1134,7 +1176,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
+source = "git+https://github.com/storytold/craft-libs?rev=e98299546f5c5c3c22388d16507f8b5e61a5f280#e98299546f5c5c3c22388d16507f8b5e61a5f280"
 dependencies = [
  "chrono",
  "dunce",
@@ -1144,6 +1186,7 @@ dependencies = [
  "image",
  "log",
  "plist",
+ "rustix 1.1.5",
  "semver",
  "serde",
  "serde_json",
@@ -1155,6 +1198,14 @@ dependencies = [
  "winreg",
  "winsafe",
  "zip 9.1.1",
+]
+
+[[package]]
+name = "craft-vectordrawable"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "kurbo",
 ]
 
 [[package]]
@@ -1183,6 +1234,35 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 dependencies = [
  "wayland-client",
+]
+
+[[package]]
+name = "craft-xml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "quick-xml 0.41.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=976eb51c59edb0a37f24105850f52d921c8518ee#976eb51c59edb0a37f24105850f52d921c8518ee"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+ "zip 9.1.1",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+ "zip 9.1.1",
 ]
 
 [[package]]
@@ -1375,7 +1455,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1546,6 +1626,7 @@ dependencies = [
  "raw-window-handle",
  "smithay-clipboard",
  "web-time",
+ "webbrowser",
  "windows-sys 0.61.2",
  "winit",
 ]
@@ -1716,7 +1797,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1783,7 +1864,7 @@ checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 
 [[package]]
 name = "figcraft"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "arboard",
  "craft-menu",
@@ -1810,12 +1891,13 @@ dependencies = [
  "windows",
  "winit",
  "winresource",
+ "winsafe",
  "zbus",
 ]
 
 [[package]]
 name = "figcraft-cli"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1833,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-collab"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1851,7 +1933,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-collab-net"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab",
@@ -1874,7 +1956,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-color"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "kurbo",
  "serde",
@@ -1883,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-doc"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "figcraft-color",
  "figcraft-geom",
@@ -1896,7 +1978,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-engine"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "craft-docpath",
@@ -1930,8 +2012,11 @@ dependencies = [
 
 [[package]]
 name = "figcraft-format"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
+ "craft-fig",
+ "craft-figcraft-format",
+ "craft-figma-rest",
  "figcraft-doc",
  "figcraft-layout",
  "figcraft-pathops",
@@ -1947,7 +2032,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-geom"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "kurbo",
  "serde",
@@ -1955,7 +2040,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-layout"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -1963,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-mcp"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab-net",
@@ -1979,7 +2064,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-pathops"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -1988,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-pdf"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "figcraft-color",
  "figcraft-doc",
@@ -2005,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-plugin"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "figcraft-color",
  "serde",
@@ -2018,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-render"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "crc32fast",
  "figcraft-color",
@@ -2037,7 +2122,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-server"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "chrono",
  "crc32fast",
@@ -2062,9 +2147,10 @@ dependencies = [
 
 [[package]]
 name = "figcraft-svg"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
+ "craft-xml",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
@@ -2078,7 +2164,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-text"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "core-text",
  "craft-font-catalog",
@@ -2096,7 +2182,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-ui-egui"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2124,8 +2210,9 @@ dependencies = [
 
 [[package]]
 name = "figcraft-vectordrawable"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
+ "craft-vectordrawable",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
@@ -2138,7 +2225,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-web"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "craft-web-api",
@@ -3882,7 +3969,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4578,7 +4665,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4635,7 +4722,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5204,10 +5291,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6331,7 +6418,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6761,7 +6848,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.15.0"
+version = "0.18.1"
 dependencies = [
  "figcraft-engine",
  "serde_json",

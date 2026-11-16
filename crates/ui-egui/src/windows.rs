@@ -236,6 +236,8 @@ fn exchange(app: &mut FigApp, p: &mut Pane) {
     std::mem::swap(&mut app.ui, &mut p.ui);
     std::mem::swap(&mut app.ui.last_copy, &mut p.ui.last_copy);
     std::mem::swap(&mut app.ui.last_copy_generation, &mut p.ui.last_copy_generation);
+    // A paint or effect copied from its row is on the one clipboard every window pastes from.
+    std::mem::swap(&mut app.ui.property_copy, &mut p.ui.property_copy);
     std::mem::swap(&mut app.ui.quit, &mut p.ui.quit);
     std::mem::swap(&mut app.ui.dark, &mut p.ui.dark);
     std::mem::swap(&mut app.canvas, &mut p.canvas);

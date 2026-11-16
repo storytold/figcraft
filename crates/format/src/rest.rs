@@ -61,18 +61,18 @@ pub use variables::export as export_variables;
 pub const MAX_NODES: usize = 200_000;
 /// Deepest layer nesting followed.
 const MAX_DEPTH: usize = 256;
-/// Private .fig provenance, consumed only by the `.fig` import ([`import_with_networks`]).
-pub(crate) const FIG_SOURCE_FIELD: &str = "_figSource";
-/// Hidden .fig library context; accepted only by the `.fig` import ([`import_with_networks`]).
-pub(crate) const FIG_LIBRARY_CONTEXTS_FIELD: &str = "_figLibraryContexts";
-/// Ids of mains in a `.fig` file that its layer cap kept out; read only by the `.fig` import.
-pub(crate) const FIG_CAPPED_MAINS_FIELD: &str = "_figCappedMains";
+/// The `.fig` mapping's private handoffs, read only by the `.fig` import ([`import_with_networks`]).
+pub(crate) use craft_fig::rest::{FIG_CAPPED_MAINS_FIELD, FIG_LIBRARY_CONTEXTS_FIELD, FIG_SOURCE_FIELD};
 /// Longest SVG path string read from one geometry entry.
 const MAX_PATH_BYTES: usize = 4 << 20;
 /// Most path elements in one vector.
 const MAX_PATH_ELEMENTS: usize = 200_000;
-/// Most distinct warnings reported.
-pub(crate) const MAX_WARNINGS: usize = 200;
+#[cfg(test)]
+pub(crate) use craft_figma_rest::MAX_WARNINGS;
+/// Distinct warnings in first-seen order, with repeat counts (at most 200). The
+/// import report reads the `(×n)` suffix off before it looks the note up in the catalogue, so a
+/// counted note is still translated (`ui-egui`'s `note_text`).
+pub(crate) use craft_figma_rest::Warnings;
 /// Most shared style definitions read.
 const MAX_STYLES: usize = 10_000;
 /// Image key used for image fills without an `imageRef`.
@@ -348,41 +348,6 @@ fn children(v: &Value) -> &[Value] {
     v.get("children").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default()
 }
 
-/// Distinct warnings in first-seen order, with repeat counts. Shared with the `.fig` mapper
-/// (`crate::fig::map`), whose notes repeat per layer in the same way.
-#[derive(Default)]
-pub(crate) struct Warnings {
-    list: Vec<(String, usize)>,
-    index: BTreeMap<String, usize>,
-}
-
-impl Warnings {
-    pub(crate) fn add(&mut self, msg: String) {
-        if let Some(i) = self.index.get(&msg) {
-            if let Some(e) = self.list.get_mut(*i) {
-                e.1 += 1;
-            }
-        } else if self.list.len() < MAX_WARNINGS {
-            self.index.insert(msg.clone(), self.list.len());
-            self.list.push((msg, 1));
-        }
-    }
-
-    /// The notes met so far, without their counts, for the tests that ask whether one was met
-    /// (the product reads them through [`Self::finish`], with the counts).
-    #[cfg(test)]
-    pub(crate) fn seen(&self) -> impl Iterator<Item = &str> {
-        self.list.iter().map(|(msg, _)| msg.as_str())
-    }
-
-    /// The notes, each with `(×n)` after it where it was met more than once. The import report
-    /// reads that suffix off before it looks the note up in the catalogue, so a counted note is
-    /// still translated (`ui-egui`'s `note_text`).
-    pub(crate) fn finish(self) -> Vec<String> {
-        self.list.into_iter().map(|(m, n)| if n > 1 { format!("{m} (×{n})") } else { m }).collect()
-    }
-}
-
 /// The coordinate spaces a child is placed in: its parent's (`world`) and that of the nearest
 /// ancestor that is not a group or boolean (`frame`), both relative to the page.
 #[derive(Clone, Copy)]
@@ -442,6 +407,8 @@ pub(crate) struct Ctx<'a> {
     set_defs: BTreeMap<NodeId, BTreeMap<String, PropDef>>,
     /// Prototype starting points: (page, name, REST node id).
     flows: Vec<(NodeId, String, String)>,
+    /// Board connectors and labels, resolved once every layer is imported (their ends name layers).
+    pending_boards: Vec<(NodeId, &'a Value)>,
     /// Layers with prototype interactions, resolved once every layer is imported.
     protos: Vec<(NodeId, &'a Value)>,
     /// Layers that carry overlay settings (position, background, outside clicks), by REST id.
@@ -478,6 +445,7 @@ impl<'a> Ctx<'a> {
             swap_defaults: Vec::new(),
             set_defs: BTreeMap::new(),
             flows: Vec::new(),
+            pending_boards: Vec::new(),
             protos: Vec::new(),
             overlay_meta: BTreeMap::new(),
             var_kinds: BTreeMap::new(),
@@ -781,10 +749,43 @@ impl<'a> Ctx<'a> {
             self.overlay_meta.entry(rid).or_insert(j);
         }
         self.bindings(n, j);
+        if let Some(b) = j.get("board") {
+            self.board_item(n, b);
+        }
         let restored = j.get("outlinedStroke").is_some_and(|original| restore_stroke(n, original));
         // Styles and bindings were read against the stroke: they follow its paints to the fill.
         if outlined && !restored {
             outline_stroke(n);
+        }
+    }
+
+    /// The `board` field (a FigCraft extension): what the object is on a board. A sticky or shape
+    /// is set at once; anything else, or junk, is ignored with a warning.
+    fn board_item(&mut self, n: &mut Node, b: &'a Value) {
+        // A sticky or shape is a frame holding its layers: on anything else it is ignored.
+        let frame = n.kind.is_frame_like();
+        let item = match text(b, "type") {
+            Some("sticky") if frame => {
+                let author = text(b, "author").unwrap_or("").trim();
+                Some(figcraft_doc::BoardItem::Sticky { author: author.chars().filter(|c| !c.is_control()).take(64).collect() })
+            }
+            Some("shape") if frame => {
+                text(b, "shape").and_then(figcraft_doc::BoardShape::from_id).map(|shape| figcraft_doc::BoardItem::Shape { shape })
+            }
+            _ => None,
+        };
+        match item {
+            Some(item) => n.board = Some(item),
+            None => self.warn(format!("unknown board item on {} was ignored", n.name)),
+        }
+    }
+
+    /// Board items that name other layers (connector ends, a label's connector), once every
+    /// layer is imported and `ids` can resolve them.
+    fn resolve_boards(&mut self) {
+        for (id, _) in std::mem::take(&mut self.pending_boards) {
+            let name = self.doc.node(id).map(|n| n.name.clone()).unwrap_or_default();
+            self.warn(format!("unknown board item on {name} was ignored"));
         }
     }
 
@@ -1096,6 +1097,7 @@ impl<'a> Ctx<'a> {
             }
         }
         self.resolve_instances();
+        self.resolve_boards();
         if let Some(sources) = self.fig_sources.take() {
             let missing = sources.apply(&mut self.doc, &self.ids);
             if missing > 0 {

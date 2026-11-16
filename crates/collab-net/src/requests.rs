@@ -32,6 +32,15 @@ pub(crate) fn server_key(given: Option<String>, query: Vec<(String, String)>) ->
     given.or_else(|| query.into_iter().find(|(k, _)| k == "key").map(|(_, v)| v)).filter(|k| !k.trim().is_empty())
 }
 
+/// Refuse to send the server's key (its whole administrative authority, reusable) in the clear:
+/// `ws://` is only for a server on this machine; anywhere else needs `wss://`.
+pub(crate) fn key_over_tls(server: &Endpoint, key: Option<&str>) -> Result<(), String> {
+    if key.is_some_and(|k| !k.trim().is_empty()) && !server.secure && !server.loopback() {
+        return Err("the server's key is only sent over wss:// (or ws:// to this machine): it would be readable on the network".into());
+    }
+    Ok(())
+}
+
 /// Why asking `server` about its hosting failed with `e`: a server older than open hosting can't
 /// read the question.
 pub(crate) fn hosting_error(server: &Endpoint, e: String) -> String {
@@ -144,4 +153,22 @@ pub(crate) fn hosted(server: &Endpoint, reply: Option<AdminReply>) -> Option<Adm
         }
         other => other,
     })
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    #[test]
+    fn the_key_never_goes_over_plain_tcp_to_another_machine() {
+        let at = |url: &str| Endpoint::parse(url).unwrap().0;
+        assert!(key_over_tls(&at("ws://share.example:9000/"), Some("k")).is_err());
+        assert!(key_over_tls(&at("ws://10.0.0.5:9000/"), Some("k")).is_err());
+        assert!(key_over_tls(&at("wss://share.example/"), Some("k")).is_ok());
+        assert!(key_over_tls(&at("ws://127.0.0.1:9000/"), Some("k")).is_ok());
+        assert!(key_over_tls(&at("ws://localhost:9000/"), Some("k")).is_ok());
+        // Browsing or publishing as anyone sends no key, so plain is fine.
+        assert!(key_over_tls(&at("ws://share.example:9000/"), None).is_ok());
+        assert!(key_over_tls(&at("ws://share.example:9000/"), Some(" ")).is_ok());
+    }
 }

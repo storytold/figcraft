@@ -8,7 +8,7 @@ use figcraft_color::{ImageScaleMode, Paint};
 use figcraft_doc::{Document, ImageData, NodeId, NodeKind};
 use tiny_skia::Pixmap;
 
-use crate::images::{self, DISPLAY_SIDES, MAX_CACHED_BYTES};
+use crate::images::{self, MAX_CACHED_BYTES};
 use crate::{Options, View, render_view};
 
 const W: u32 = 6000;
@@ -63,12 +63,11 @@ fn sharp_stripes(p: &Pixmap, y: u32, black_first: bool, each: u32) -> bool {
 #[test]
 fn zoomed_out_the_canvas_draws_both_images_from_copies_that_stay_decoded() {
     let (d, page, keys) = doc("zoomed-out");
-    // At 25% each shows 1500 px long: drawn from 4096 px copies, not decoded in full.
     render_view(&d, page, &view(0.25), &canvas()).unwrap();
     let first = keys.each_ref().map(|k| shown(&d, k, 1500.0));
     for (k, p) in keys.iter().zip(&first) {
-        assert_eq!((p.width(), p.height()), (DISPLAY_SIDES[0], 5), "{k}");
-        assert_eq!(images::cached_sides(k), vec![DISPLAY_SIDES[0]], "{k}: only its copy is decoded");
+        assert_eq!((p.width(), p.height()), (2048, 3), "{k}");
+        assert_eq!(images::cached_sides(k), vec![2048], "{k}: only its copy is decoded");
     }
     // Drawn again (a drag, a pan), both are still the copies decoded the first time.
     render_view(&d, page, &view(0.25), &canvas()).unwrap();
@@ -93,13 +92,15 @@ fn exports_and_close_ups_draw_from_the_image_itself() {
 #[test]
 fn the_copy_is_the_smallest_that_holds_what_shows() {
     let side = |long, shown| images::display_side(long, shown);
-    assert_eq!(side(6000, 1500.0), 4096);
+    assert_eq!(side(6000, 1500.0), 2048);
     assert_eq!(side(16_000, 4096.0), 4096);
     assert_eq!(side(16_000, 4097.0), 8192);
+    assert_eq!(side(4096, 100.0), 256);
+    assert_eq!(side(3000, 20.0), 256);
     // Shown at more than the largest copy, or an image no larger than the copy: the image itself.
     assert_eq!(side(16_000, 9000.0), 16_384);
     assert_eq!(side(6000, 5000.0), 16_384);
-    assert_eq!(side(4096, 100.0), 16_384);
+    assert_eq!(side(200, 100.0), 16_384);
     // An unknown size or a meaningless scale: the image itself.
     assert_eq!(side(0, 100.0), 16_384);
     assert_eq!(side(16_000, f64::NAN), 16_384);

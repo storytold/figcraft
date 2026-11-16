@@ -10,7 +10,7 @@ use crate::layers_drag_tests::Ui;
 use crate::widgets::FIELD_H;
 
 /// The text painted this frame, with each piece's box.
-fn painted(u: &mut Ui) -> Vec<(String, Rect)> {
+pub(crate) fn painted(u: &mut Ui) -> Vec<(String, Rect)> {
     fn walk(shape: &Shape, out: &mut Vec<(String, Rect)>) {
         match shape {
             Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect())),

@@ -84,7 +84,7 @@ pub(super) fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
                 n.strokes = vec![Paint::solid(line_shade(color))];
             }
             BoardItem::Connector(_) | BoardItem::Ink => doc.get_mut(id)?.strokes = vec![Paint::solid(line_shade(color))],
-            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table => continue,
+            BoardItem::Label { .. } | BoardItem::Stamp { .. } | BoardItem::Table | BoardItem::MindNode => continue,
         }
         changed.push(id);
     }
@@ -130,9 +130,12 @@ impl Restyle {
             BoardItem::Connector(ref c) => self.restyle_connector(doc, id, c.clone())?,
             _ => false,
         };
-        // Text sizes: shapes' and labels' text (stickies size theirs to fit).
+        // Text sizes: the text of stickies, shapes, labels and mind nodes (a sticky's note grows taller
+        // when its text no longer fits, by its auto layout).
         let sized = match (self.size, &item) {
-            (Some(size), BoardItem::Shape { .. } | BoardItem::Label { .. }) => resize_text(doc, id, size),
+            (Some(size), BoardItem::Sticky { .. } | BoardItem::Shape { .. } | BoardItem::Label { .. } | BoardItem::MindNode) => {
+                resize_text(doc, id, size)
+            }
             _ => false,
         };
         Ok(changed || sized)
@@ -191,13 +194,19 @@ pub(super) fn set_style(s: &mut Session, p: &Value) -> Result<Value> {
     let restyle = Restyle::of(cmd, p)?;
     let doc = s.doc_mut()?;
     let mut changed = Vec::new();
+    let mut sticky_sized = false;
     for (id, item) in items(doc, &ids) {
+        let sticky = matches!(item, BoardItem::Sticky { .. });
         if restyle.apply(doc, id, item)? {
             changed.push(id);
+            sticky_sized |= sticky && restyle.size.is_some();
         }
     }
     if changed.is_empty() {
-        return Err(bad(cmd, "nothing selected takes these (shapes with text, connectors, labels)"));
+        return Err(bad(cmd, "nothing selected takes these (stickies, shapes with text, connectors, labels)"));
+    }
+    if let (true, Some(size)) = (sticky_sized, restyle.size) {
+        s.tool.board.sticky_size = size;
     }
     Ok(json!({"ids": changed}))
 }

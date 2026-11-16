@@ -276,6 +276,31 @@ pub enum TextDirection {
 /// Deepest list nesting (levels 0..=MAX_LIST_INDENT).
 pub const MAX_LIST_INDENT: u8 = 8;
 
+/// For each paragraph, whether it is an item where a list starts counting. Numbers count the items
+/// of one list at one level and restart after a plain paragraph, a shallower item or the other
+/// kind of list; the first item of such a run starts counting (and takes its own start number).
+/// The layout numbers by this rule.
+pub fn list_item_starts_counting(lists: &[ParaList]) -> Vec<bool> {
+    let mut run = [ListStyle::None; MAX_LIST_INDENT as usize + 1];
+    lists
+        .iter()
+        .map(|pl| {
+            if pl.list == ListStyle::None {
+                run.fill(ListStyle::None);
+                return false;
+            }
+            let d = usize::from(pl.indent).min(run.len() - 1);
+            for c in run.iter_mut().skip(d + 1) {
+                *c = ListStyle::None;
+            }
+            let Some(c) = run.get_mut(d) else { return false };
+            let starts = *c != pl.list;
+            *c = pl.list;
+            starts
+        })
+        .collect()
+}
+
 /// One paragraph's list settings and base direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -293,6 +318,10 @@ pub struct ParaList {
     /// The paragraph's base direction (Text ▸ Text direction); `Auto` follows its letters.
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub direction: TextDirection,
+    /// The paragraph's own wrap style (a wrap style can be set on the text layer, a paragraph or a
+    /// text style); `None` follows the layer's [`TextData::wrap_style`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<WrapStyle>,
 }
 
 /// Character style. In runs, every field is an override; `None` means "inherit the base".
@@ -337,6 +366,9 @@ pub struct ParagraphStyle {
     pub paragraph_indent: f64,
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub list: ListStyle,
+    /// The wrap style (Auto asks nothing).
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub wrap_style: WrapStyle,
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub features: std::collections::BTreeMap<String, bool>,
 }
@@ -838,6 +870,33 @@ impl TextData {
         self.paragraphs.get(p).copied().unwrap_or(ParaList { list: self.list, ..ParaList::default() })
     }
 
+    /// Paragraph `p`'s wrap style: its own, else the layer's.
+    pub fn para_wrap_style(&self, p: usize) -> WrapStyle {
+        self.paragraphs.get(p).and_then(|pl| pl.wrap).unwrap_or(self.wrap_style)
+    }
+
+    /// The layer level: every paragraph takes wrap style `w` (their own overrides go).
+    pub fn set_wrap_style(&mut self, w: WrapStyle) {
+        self.wrap_style = w;
+        // Every paragraph by index: `para_span` leaves out an empty one after a final newline.
+        let last = self.paragraph_count() - 1;
+        self.set_para_lists_between(0, last, false, |pl| pl.wrap = None);
+    }
+
+    /// The paragraph level: the paragraphs chars `start..end` touch take wrap style `w`; one equal
+    /// to the layer's is no override.
+    pub fn set_para_wrap_styles(&mut self, start: usize, end: usize, w: WrapStyle) {
+        let layer = self.wrap_style;
+        self.set_para_lists(start, end, |pl| pl.wrap = (w != layer).then_some(w));
+    }
+
+    /// The effective wrap style the paragraphs chars `start..end` touch share, or None when they differ.
+    pub fn common_wrap_style(&self, start: usize, end: usize) -> Option<WrapStyle> {
+        let (a, b) = self.para_span(start, end);
+        let first = self.para_wrap_style(a);
+        (a..=b).all(|p| self.para_wrap_style(p) == first).then_some(first)
+    }
+
     /// Spell out every paragraph's list settings in `paragraphs` (and drop extra entries).
     fn fill_paragraphs(&mut self) {
         let n = self.paragraph_count();
@@ -886,6 +945,43 @@ impl TextData {
             }
             pl.indent = pl.indent.min(MAX_LIST_INDENT);
         }
+        self.fold_paragraph_lists();
+    }
+
+    /// Give paragraphs `a..=b` (by index) no start number of their own, as an item made by Enter
+    /// has none. Touches nothing else: a plain paragraph keeps its level, a bullet its settings.
+    /// One pass over the range, and nothing at all when no paragraph carries a start.
+    pub fn clear_list_starts(&mut self, a: usize, b: usize) {
+        if self.paragraphs.iter().all(|p| p.start_offset == 0) {
+            return;
+        }
+        self.fill_paragraphs();
+        for pl in self.paragraphs.get_mut(a..=b).unwrap_or(&mut []) {
+            pl.start_offset = 0;
+        }
+        self.fold_paragraph_lists();
+    }
+
+    /// Keep a start number only on the item where a numbered list starts counting, and give every
+    /// item that goes on counting 0 (the rule the layout numbers by, [`list_item_starts_counting`]).
+    /// An imported file may carry the list's start on every line; once the list is split, the
+    /// items after the split must restart at 1, not at the old start.
+    pub fn keep_list_starts_where_counting_starts(&mut self) {
+        if self.paragraphs.iter().all(|p| p.start_offset == 0) {
+            return;
+        }
+        self.fill_paragraphs();
+        let starts = list_item_starts_counting(&self.paragraphs);
+        for (pl, starts) in self.paragraphs.iter_mut().zip(starts) {
+            if !starts {
+                pl.start_offset = 0;
+            }
+        }
+        self.fold_paragraph_lists();
+    }
+
+    /// One style for all paragraphs with no nesting or start folds back into `list`.
+    fn fold_paragraph_lists(&mut self) {
         if let Some(first) = self.paragraphs.first().copied()
             && first == (ParaList { list: first.list, ..ParaList::default() })
             && self.paragraphs.iter().all(|p| *p == first)
@@ -911,7 +1007,16 @@ impl TextData {
             Some(first) if self.paragraphs.iter().all(|p| p.list == first.list) => first.list,
             _ => self.list,
         };
-        ParagraphStyle { paragraph_spacing: self.paragraph_spacing, paragraph_indent: self.paragraph_indent, list, features: self.features.clone() }
+        // Every paragraph by index: `para_span` leaves out an empty one after a final newline.
+        let first = self.para_wrap_style(0);
+        let wrap_style = if (1..self.paragraph_count()).all(|p| self.para_wrap_style(p) == first) { first } else { self.wrap_style };
+        ParagraphStyle {
+            paragraph_spacing: self.paragraph_spacing,
+            paragraph_indent: self.paragraph_indent,
+            list,
+            wrap_style,
+            features: self.features.clone(),
+        }
     }
 
     /// Take what text style `ps` sets at the paragraph and layer level: the spacing, indent and
@@ -923,6 +1028,7 @@ impl TextData {
         // Every paragraph by index: `para_span` leaves out an empty one after a final newline.
         let last = self.paragraph_count() - 1;
         self.set_para_lists_between(0, last, false, |pl| pl.list = ps.list);
+        self.set_wrap_style(ps.wrap_style);
     }
 
     /// As [`take_paragraph_style`](Self::take_paragraph_style), with the list style going to the
@@ -933,6 +1039,7 @@ impl TextData {
         self.paragraph_indent = ps.paragraph_indent;
         self.features.clone_from(&ps.features);
         self.set_para_lists(start, end, |pl| pl.list = ps.list);
+        self.set_para_wrap_styles(start, end, ps.wrap_style);
     }
 
     /// Follow text style `id`'s paragraph-level definition wherever chars link to it.
@@ -951,6 +1058,7 @@ impl TextData {
             && self.paragraph_indent == ps.paragraph_indent
             && self.features == ps.features
             && self.common_para_list(start, end).is_some_and(|pl| pl.list == ps.list)
+            && self.common_wrap_style(start, end) == Some(ps.wrap_style)
     }
 
     /// Whether the whole text shows what text style `ps` sets at the paragraph and layer level.
@@ -1104,6 +1212,123 @@ mod case_tests {
         t.set_para_lists(0, 0, |p| p.list = P);
         assert_eq!(t.para_list(0), ParaList::default());
     }
+
+    #[test]
+    fn wrap_style_per_paragraph_loads_from_old_files_and_folds() {
+        use WrapStyle::{Auto, Balance, Pretty};
+        let old = r#"{"list":"numbered","indent":1}"#;
+        assert_eq!(serde_json::from_str::<ParaList>(old).unwrap().wrap, None);
+        let mut t = TextData::new("a\nb");
+        let key = t.layout_key();
+        t.set_para_wrap_styles(0, 0, Balance);
+        assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1)), (Balance, Auto));
+        assert_ne!(t.layout_key(), key);
+        let back: TextData = serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
+        assert_eq!(back, t);
+        t.set_para_wrap_styles(0, 0, Auto);
+        assert!(t.paragraphs.is_empty());
+        t.set_para_wrap_styles(0, 0, Balance);
+        t.set_wrap_style(Pretty);
+        assert!(t.paragraphs.is_empty());
+        assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1)), (Pretty, Pretty));
+    }
+
+    #[test]
+    fn wrap_style_loads_from_old_paragraph_styles_and_texts() {
+        use WrapStyle::Auto;
+        // A paragraph style saved before it carried a wrap style.
+        let old = r#"{"paragraph_spacing":4.0,"list":"bulleted"}"#;
+        let ps: ParagraphStyle = serde_json::from_str(old).unwrap();
+        assert_eq!((ps.wrap_style, ps.paragraph_spacing, ps.list), (Auto, 4.0, ListStyle::Bulleted));
+        assert!(!serde_json::to_string(&ParagraphStyle::default()).unwrap().contains("wrap_style"), "Auto is not saved");
+        // A text saved before its paragraphs carried a wrap style.
+        let mut t = TextData::new("a\nb");
+        t.set_para_lists(0, 0, |p| p.list = ListStyle::Bulleted);
+        let mut v = serde_json::to_value(&t).unwrap();
+        for p in v["paragraphs"].as_array_mut().unwrap() {
+            assert!(p.as_object_mut().unwrap().remove("wrap").is_none(), "Auto is not saved");
+        }
+        v.as_object_mut().unwrap().remove("wrap_style");
+        let old: TextData = serde_json::from_value(v).unwrap();
+        assert_eq!(old.wrap_style, Auto);
+        assert_eq!(old.paragraphs.len(), 2);
+        assert!(old.paragraphs.iter().all(|p| p.wrap.is_none()));
+        assert_eq!((old.para_wrap_style(0), old.para_wrap_style(1)), (Auto, Auto));
+        assert_eq!(old, t);
+    }
+
+    #[test]
+    fn set_wrap_style_clears_an_override_on_the_empty_last_paragraph() {
+        use WrapStyle::{Auto, Balance, Pretty};
+        let mut t = TextData::new("ab\n");
+        assert_eq!(t.paragraph_count(), 2);
+        // The empty paragraph after the final newline: a caret there reaches it.
+        t.set_para_wrap_styles(3, 3, Balance);
+        assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1)), (Auto, Balance));
+        t.set_wrap_style(Pretty);
+        assert!(t.paragraphs.is_empty(), "{:?}", t.paragraphs);
+        assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1)), (Pretty, Pretty));
+        // Back to the layer's own style: no override is left on either paragraph.
+        t.set_para_wrap_styles(3, 3, Auto);
+        assert_eq!(t.para_wrap_style(1), Auto);
+        t.set_wrap_style(Auto);
+        assert!(t.paragraphs.is_empty());
+        assert_eq!(t.common_wrap_style(0, t.char_count()), Some(Auto));
+    }
+
+    #[test]
+    fn clear_list_starts_touches_only_starts() {
+        use ListStyle::{None as P, Numbered as N};
+        let mut t = TextData { characters: "a\nb\nc".into(), ..Default::default() };
+        t.paragraphs = vec![
+            ParaList { list: N, start_offset: 4, ..ParaList::default() },
+            ParaList { list: P, indent: 1, ..ParaList::default() },
+            ParaList { list: N, indent: 2, start_offset: 7, ..ParaList::default() },
+        ];
+        t.clear_list_starts(1, 2);
+        assert_eq!(t.para_list(0).start_offset, 4, "outside the range");
+        assert_eq!(t.para_list(1), ParaList { list: P, indent: 1, ..ParaList::default() }, "a plain paragraph keeps its level");
+        assert_eq!(t.para_list(2), ParaList { list: N, indent: 2, start_offset: 0, ..ParaList::default() });
+        // Out of range and no-start cases leave it alone.
+        t.clear_list_starts(5, 9);
+        t.clear_list_starts(0, 0);
+        assert_eq!(t.para_list(0).start_offset, 0);
+    }
+
+    #[test]
+    fn list_starts_stay_only_where_counting_starts() {
+        use ListStyle::{Bulleted as B, None as P, Numbered as N};
+        let pl = |list, indent, start_offset| ParaList { list, indent, start_offset, ..ParaList::default() };
+        // (paragraphs, the starts kept, derivation)
+        let cases: Vec<(Vec<ParaList>, Vec<u32>, &str)> = vec![
+            (vec![pl(N, 0, 4), pl(N, 0, 4), pl(N, 0, 4)], vec![4, 0, 0], "items that go on counting lose theirs"),
+            (vec![pl(N, 0, 4), pl(P, 0, 0), pl(N, 0, 6)], vec![4, 0, 6], "a list after a plain paragraph keeps its own"),
+            (vec![pl(N, 0, 4), pl(B, 0, 0), pl(N, 0, 6)], vec![4, 0, 6], "and one after a bullet item"),
+            (
+                vec![pl(N, 0, 4), pl(N, 1, 2), pl(N, 1, 2), pl(N, 0, 4)],
+                vec![4, 2, 0, 0],
+                "a nested level keeps its first item's; the outer count goes on",
+            ),
+            (vec![pl(N, 0, 1), pl(N, 1, 2), pl(N, 0, 9), pl(N, 1, 3)], vec![1, 2, 0, 3], "a shallower item starts the deeper count again"),
+            (vec![pl(N, 255, 4), pl(N, 9, 4), pl(N, 8, 4)], vec![4, 0, 0], "levels past the deepest count as the deepest"),
+        ];
+        for (paragraphs, want, why) in cases {
+            let characters = vec!["x"; paragraphs.len()].join("\n");
+            let mut t = TextData { characters, paragraphs, ..TextData::new("") };
+            t.keep_list_starts_where_counting_starts();
+            let got: Vec<u32> = (0..t.paragraph_count()).map(|p| t.para_list(p).start_offset).collect();
+            assert_eq!(got, want, "{why}");
+        }
+        // No start anywhere: nothing is spelled out.
+        let mut t = TextData { list: N, ..TextData::new("a\nb") };
+        t.keep_list_starts_where_counting_starts();
+        assert!(t.paragraphs.is_empty());
+        // More entries than paragraphs, and an empty last paragraph.
+        let mut t = TextData { paragraphs: vec![pl(N, 0, 4); 5], ..TextData::new("a\n") };
+        t.keep_list_starts_where_counting_starts();
+        assert_eq!((t.para_list(0).start_offset, t.para_list(1).start_offset), (4, 0));
+        assert!(list_item_starts_counting(&[]).is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -1151,5 +1376,17 @@ mod whole_text_paragraph_style_tests {
         let mut plain = TextData::new("a\nb");
         plain.take_paragraph_style(&ps);
         assert_eq!((plain.list, plain.paragraphs.len()), (t.list, t.paragraphs.len()));
+    }
+
+    #[test]
+    fn a_style_made_from_the_whole_layer_counts_a_trailing_empty_paragraphs_wrap_style() {
+        // The first two paragraphs are Balance, the empty one after the final newline keeps the
+        // layer's Auto: they differ, so the style takes the layer's wrap style, not Balance.
+        let mut t = TextData::new("a\nb\n");
+        t.set_para_wrap_styles(0, 3, WrapStyle::Balance);
+        assert_eq!((t.para_wrap_style(0), t.para_wrap_style(1), t.para_wrap_style(2)), (WrapStyle::Balance, WrapStyle::Balance, WrapStyle::Auto));
+        assert_eq!(t.paragraph_style().wrap_style, WrapStyle::Auto);
+        t.set_para_wrap_styles(4, 4, WrapStyle::Balance);
+        assert_eq!(t.paragraph_style().wrap_style, WrapStyle::Balance, "all three Balance");
     }
 }
