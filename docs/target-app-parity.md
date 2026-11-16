@@ -11,6 +11,8 @@ summarizes it; [`gaps.md`](gaps.md) is the ranked work list; the measured menu c
 [`prototyping-parity.md`](prototyping-parity.md), [`dev-mode-parity.md`](dev-mode-parity.md),
 [`collaboration-parity.md`](collaboration-parity.md), [`boards-parity.md`](boards-parity.md).
 
+> SVG XML wire follow-up (2026-11-16): export escaping and XML 1.0 character checks delegate to pinned `craft-xml`. Attribute tab/LF/CR are emitted as references to survive XML normalization. Local SVG document/path serialization and import mapping remain; this scoped change does not raise the parity grade. Hosted validation is pending.
+
 ## Headline
 
 | Number | Value | Kind |
