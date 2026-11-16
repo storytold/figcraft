@@ -900,6 +900,41 @@ fn assert_refuses_a_scope_whose_measured_checks_were_capped() {
 }
 
 #[test]
+fn a_gate_naming_a_rule_the_file_skips_fails_unless_allowed() {
+    let mut s = Session::new();
+    ex(&mut s, "shape.rectangle", json!({"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0}));
+    // The file turns the clipping rule off; naming it asks for a check the run does not do.
+    ex(&mut s, "design.configure", json!({"disabled": ["layout.clipped"]}));
+    let named = json!(["layout.clipped"]);
+    let audit = ex(&mut s, "design.audit", json!({"scope": "page", "rules": &named}));
+    assert_eq!(audit["unchecked"][0], json!({"rule": "layout.clipped", "reason": "disabled"}), "{audit}");
+    let err = s.execute("design.assert", &json!({"scope": "page", "rules": &named})).unwrap_err().to_string();
+    assert!(err.contains("the file's settings skip layout.clipped"), "{err}");
+    // Deliberately allowing the skip passes, and the file's own whole review still passes
+    // without naming the rule — that is the file's choice, not the gate's.
+    assert!(s.execute("design.assert", &json!({"scope": "page", "rules": &named, "allowSkipped": true})).is_ok());
+    assert!(s.execute("design.assert", &json!({"scope": "page"})).is_ok());
+    // The same through the preset: `layout.no-auto-layout` is Strict-only.
+    let strict_only = json!(["layout.no-auto-layout"]);
+    let err = s.execute("design.assert", &json!({"scope": "page", "rules": &strict_only})).unwrap_err().to_string();
+    assert!(err.contains("the file's settings skip layout.no-auto-layout"), "{err}");
+    assert!(s.execute("design.assert", &json!({"scope": "page", "rules": &strict_only, "preset": "strict"})).is_ok());
+    // The allowance never waives unchecked evidence: on a scope whose measured checks were
+    // capped, `allowSkipped` still fails on the cap.
+    for i in 0..2_001 {
+        ex(
+            &mut s,
+            "text.create",
+            json!({"text": "Overflowing line of interface copy", "name": &format!("Box {i}"), "x": 0.0, "y": 0.0,
+                   "width": 60, "props": {"textAutoResize": "none"}}),
+        );
+    }
+    let both = json!(["layout.clipped", "layout.text-overflow"]);
+    let err = s.execute("design.assert", &json!({"scope": "page", "rules": &both, "allowSkipped": true})).unwrap_err().to_string();
+    assert!(err.contains("did not measure all of layout.text-overflow"), "{err}");
+}
+
+#[test]
 fn assert_refuses_an_explicit_empty_selection() {
     let mut s = Session::new();
     let f = id(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})));

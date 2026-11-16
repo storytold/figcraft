@@ -44,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "design.assert",
             "Assert design",
-            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes), failOn?: low|medium|high (default high), minScore?: 0-100 (default 0), limit?: 1000-1000000 (nodes before the audit says truncated; default 50000)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists, the score is below minScore, or the audit could not check a rule it asked for (truncated at the node limit it ran with, or past a measure cap: what it did not reach is unchecked, so narrow the scope, filter the rules or raise `limit`); read-only, for CI",
+            "{scope?: selection|page|document (default: selection when something is selected, else page), ids?: [layer ids] (instead of scope), rules?: [rule ids], preset?: recommended|strict|accessibility (default: the file's), modes?: {collection: mode} (resolve bound colours in these variable modes), failOn?: low|medium|high (default high), minScore?: 0-100 (default 0), limit?: 1000-1000000 (nodes before the audit says truncated; default 50000), allowSkipped?: bool (default false; passes a gate naming a rule the file disables or its preset excludes — never a truncated audit or a measure cap)} → {ok: true, score, counts}  fails with an error when a finding at or above failOn exists, the score is below minScore, or the audit could not check a rule it asked for (truncated at the node limit it ran with, past a measure cap, or skipped by the file's settings: what it did not reach is unchecked, so narrow the scope, filter the rules or raise `limit`); read-only, for CI",
             false,
             assert_cmd
         ),
@@ -136,6 +136,26 @@ fn assert_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         let nodes = report["nodes"].as_u64().unwrap_or(0);
         return Err(EngineError::Other(format!(
             "design review failed: the audit stopped at the {limit}-node limit after {nodes} nodes, so what it did not reach is unchecked; audit a smaller scope (selection, page or ids) or raise `limit`, then assert again"
+        )));
+    }
+    // A gate naming a rule the file disabled or its preset leaves out is asking for a check the
+    // run does not do: refused, unless the caller passes `allowSkipped` to accept exactly that —
+    // it does not waive a truncated audit or a measure cap, which stay unchecked evidence.
+    let allow_skipped = params::boolean(p, "allowSkipped").unwrap_or(false);
+    let skipped: Vec<&str> = report["unchecked"]
+        .as_array()
+        .map(|v| {
+            v.iter()
+                .filter(|e| matches!(e["reason"].as_str(), Some("disabled") | Some("preset")))
+                .filter_map(|e| e["rule"].as_str())
+                .filter(|rule| filter.as_ref().is_none_or(|set| set.contains(*rule)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !skipped.is_empty() && !allow_skipped {
+        return Err(EngineError::Other(format!(
+            "design review failed: the file's settings skip {} (disabled by the file, or not in the preset it checks with), so a gate naming it checked nothing for it; check the file's design.configure, gate with a preset that includes it, or pass allowSkipped to accept the skip",
+            skipped.join(", ")
         )));
     }
     // What the audit reported as unchecked, restricted to the rules this gate asked for. The

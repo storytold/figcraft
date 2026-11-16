@@ -373,6 +373,16 @@ pub(crate) fn run(
             }
         }
     }
+    // A gate that names a rule the file turned off, or that its preset leaves out, asks for a
+    // check the run does not do: named here, so the gate can refuse instead of passing on
+    // evidence it never gathered. Only explicitly named rules count — a run without a filter is
+    // the review under the file's own settings, the file's choice.
+    for id in filter.into_iter().flatten() {
+        if !settings.enabled(id) {
+            let reason = if settings.disabled.contains(id.as_str()) { "disabled" } else { "preset" };
+            unchecked.push(json!({"rule": id, "reason": reason}));
+        }
+    }
     let mut out = settings.json();
     if let Some(o) = out.as_object_mut() {
         o.insert("scope".into(), json!(scope));
