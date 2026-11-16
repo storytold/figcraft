@@ -1237,6 +1237,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "quick-xml 0.41.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-zip"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=976eb51c59edb0a37f24105850f52d921c8518ee#976eb51c59edb0a37f24105850f52d921c8518ee"
@@ -2141,6 +2150,7 @@ name = "figcraft-svg"
 version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
+ "craft-xml",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",

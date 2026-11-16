@@ -195,16 +195,9 @@ fn blend_style(b: figcraft_color::BlendMode) -> String {
     }
 }
 
-/// `s` escaped for XML text and attribute values; characters XML 1.0 forbids (control characters
-/// other than tab, newline and carriage return, U+FFFE and U+FFFF) are left out.
-fn esc(s: &str) -> String {
-    s.chars().filter(|&c| xml_char(c)).collect::<String>().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
-}
-
-/// Whether XML 1.0 allows `c` (see [`esc`]).
-fn xml_char(c: char) -> bool {
-    !matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}')
-}
+// Shared XML wire escaping and character validity; layer-name policy stays below.
+// Attribute escaping also preserves tabs/LF/CR through XML readers' whitespace normalization.
+use craft_xml::{esc_attr as esc, is_xml_char as xml_char};
 
 fn hex(c: Color) -> String {
     format!("#{}", c.to_hex())
