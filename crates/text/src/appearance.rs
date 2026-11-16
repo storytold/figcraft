@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use figcraft_doc::{Document, NodeKind, TextAppearance, TextAutoResize, TextData, TextDecorationPath, TextGlyph, TextLine};
-use figcraft_geom::{Affine, BezPath, Rect};
+use figcraft_geom::{Affine, Rect};
 use sha2::{Digest, Sha256};
 
 use crate::{Decoration, Glyph, Line, TextLayout, no_coords};
@@ -97,8 +97,8 @@ pub(crate) fn restore(t: &TextData, w: Option<f64>, h: Option<f64>) -> Option<Te
             {
                 return None;
             }
-            let path = parsed.entry(g.d.as_ref()).or_insert_with(|| BezPath::from_svg(&g.d).ok());
-            let mut path = path.as_ref()?.clone();
+            let path = parsed.entry(g.d.as_ref()).or_insert_with(|| crate::saved_paths::get(&g.d));
+            let mut path = (**path.as_ref()?).clone();
             if let Some(matrix) = g.transform {
                 if !matrix.iter().all(|v| v.is_finite()) {
                     return None;
@@ -418,6 +418,86 @@ mod tests {
             let height_matters = mode == TextAutoResize::Truncate;
             assert_eq!(has_saved(&t, Some(80.0), Some(90.0)), !height_matters);
             assert_eq!(restore(&t, Some(80.0), Some(90.0)).is_some(), !height_matters);
+        }
+    }
+
+    #[test]
+    #[ignore = "release timing: cargo test -p figcraft-text --release portable_restore_timings -- --ignored --nocapture"]
+    fn portable_restore_timings() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        crate::opt_out_of_system_fonts();
+        let paths: Vec<Arc<str>> = (0..32).map(|i| Arc::from(format!("M0 0C{i}.1234567890123 10 20 -10 30 0L30 40Q15 50 0 40Z").repeat(4))).collect();
+        let base = synthetic();
+        let template = base.appearance.as_ref().unwrap();
+        let glyphs: figcraft_doc::TextGlyphs = (0..117)
+            .map(|i| {
+                let mut g = template.glyphs[0].clone();
+                g.d = paths[i % paths.len()].clone();
+                g.x = i as f64 * 7.1250000000123;
+                g.advance = 7.1250000000123;
+                g.char_start = i;
+                g.char_end = i + 1;
+                g.transform = Some([0.125, -0.0, 0.03125, 0.125, g.x, g.y]);
+                g
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let texts: Vec<_> = (0..1000)
+            .map(|i| {
+                let mut t = base.clone();
+                t.characters = format!("{i:05}{}", "A".repeat(112));
+                let mut a = (**template).clone();
+                a.box_width = 1000.0;
+                a.width = 117.0 * 7.1250000000123;
+                a.glyphs = glyphs.clone();
+                a.lines[0].glyph_end = 117;
+                a.lines[0].char_end = 117;
+                a.lines[0].width = a.width;
+                a.fingerprint = fingerprint(&t, Some(1000.0), Some(40.0)).unwrap();
+                t.appearance = Some(Arc::new(a));
+                t
+            })
+            .collect();
+        let elements = figcraft_geom::BezPath::from_svg(&paths[0]).unwrap().elements().len();
+        let mut samples = vec![];
+        for sample in 0..6 {
+            crate::clear_layout_cache();
+            let start = Instant::now();
+            for t in &texts {
+                black_box(restore(t, Some(1000.0), Some(40.0)).unwrap());
+            }
+            if sample > 0 {
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        samples.sort_by(f64::total_cmp);
+        println!("PORTABLE_RESTORE layers=1000 glyphs=117000 path_elements_per_shape={elements} median_ms={:.3}", samples[2]);
+    }
+
+    #[test]
+    fn reused_curves_keep_exact_eager_placement_and_source_metadata() {
+        let source: Arc<str> = "M-0 0C1.123456789012345 2 3 4 5 6Q7 8 9 10Z".into();
+        for matrix in [
+            [0.125, -0.0, 0.03125, 0.125, 9.123456789012345, -0.0],
+            [-0.0, 1.125, -0.25, 0.0, 200.12345678901235, -10.0],
+            [1.0, 0.0, 0.0, 1.0, -0.0, 30.123456789012345],
+        ] {
+            let mut t = synthetic();
+            let g = &mut Arc::make_mut(t.appearance.as_mut().unwrap()).glyphs[0];
+            g.d = source.clone();
+            g.transform = Some(matrix);
+            g.x = -0.0;
+            g.y = 30.123456789012345;
+            let before = serde_json::to_string(&t).unwrap();
+            let restored = restore(&t, Some(80.0), Some(40.0)).unwrap();
+            let mut expected = figcraft_geom::BezPath::from_svg(&source).unwrap();
+            expected.apply_affine(Affine::new(matrix));
+            assert_eq!(restored.glyphs[0].path().to_svg(), expected.to_svg());
+            assert!(restored.glyphs[0].saved_path.is_some());
+            assert_eq!(restored.glyphs[0].x.to_bits(), (-0.0f64).to_bits());
+            assert_eq!(restored.glyphs[0].y.to_bits(), 30.123456789012345f64.to_bits());
+            assert_eq!(serde_json::to_string(&t).unwrap(), before);
         }
     }
 

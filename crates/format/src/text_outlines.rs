@@ -390,11 +390,18 @@ mod tests {
     fn version_documents_keep_their_own_outline_pool() {
         let doc = document();
         let id = doc.nodes().find(|n| n.kind.text().is_some()).unwrap().id;
-        let version = crate::Version::new("version-1", "Saved", "", 1, Arc::new(doc.clone()));
+        let mut version_doc = doc.clone();
+        let NodeKind::Text(text) = &mut version_doc.node_mut(id).unwrap().kind else { panic!() };
+        for glyph in &mut Arc::make_mut(text.appearance.as_mut().unwrap()).glyphs {
+            glyph.d = "M0 0C10 20 30 40 50 60Z".into();
+        }
+        let version = crate::Version::new("version-1", "Saved", "", 1, Arc::new(version_doc.clone()));
         let bytes = crate::save_bytes_with_versions(&doc, None, &[version]).unwrap();
         let loaded = crate::load_bytes_with_versions(&bytes).unwrap();
         assert_eq!(loaded.versions.len(), 1);
-        assert_eq!(loaded.versions[0].document().unwrap().node(id).unwrap().kind, doc.node(id).unwrap().kind);
+        assert_eq!(loaded.doc.node(id).unwrap().kind, doc.node(id).unwrap().kind);
+        assert_eq!(loaded.versions[0].document().unwrap().node(id).unwrap().kind, version_doc.node(id).unwrap().kind);
+        assert_ne!(loaded.doc.node(id).unwrap().kind, loaded.versions[0].document().unwrap().node(id).unwrap().kind);
     }
 
     #[test]

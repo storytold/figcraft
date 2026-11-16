@@ -26,6 +26,7 @@ pub mod text;
 mod text_appearance;
 mod text_appearance_meta;
 mod text_glyph_bytes;
+mod text_outline_tokens;
 pub mod vector;
 pub mod vector_faces;
 pub mod vector_regions;

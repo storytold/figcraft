@@ -513,3 +513,102 @@ archives (1,286,888 bytes)** and identical document JSON (21,222,910 bytes),
 SHA-256 `5b0dcb8274a55acba9d03252c6114115a637382e6eb82935b2bf68e32da47ec9`.
 This preserves all encoded glyph data, outlines, exact numeric values and other document fields.
 The native/wire versions, writer and working app/server packages are unchanged.
+
+
+### Fresh main and glyph-stage follow-up, 2026-11-16
+
+The current upstream main is `559c952d107f781c4f770041c7d5cc368ebc4fa0`; the production
+before revision is `175f58b8`. Both were built with the same release profile, Rust 1.99.1,
+Windows x64 host and craft-fonts input. Only the existing text-storage CLI harness/argument
+and dispatch files were backported to main for measurement: no portable behavior or model
+changes. The temporary checkout/harness edits were restored before changing feature code.
+The same target directory was reused. Measurements run sequentially without concurrent builds.
+
+The shipped changes reuse canonical short `@index` strings and parsed unplaced SVG paths.
+The first is a fixed table of at most 4,096 immutable tokens of at most five bytes each, plus
+fixed slot/Arc metadata. It stores no resolved geometry or document-specific context. Other
+strings, including noncanonical reference spellings, stay verbatim. Existing dictionary byte
+and entry charges still apply even when storage is shared. A root/version regression uses
+separate outline tables whose `@0` tokens mean different shapes.
+
+The parsed-path cache admits at most 2,048 entries and 8 MiB of charged data on 64-bit targets
+(2 MiB on 32-bit). Charges include actual parsed vector capacity, retained source bytes and a
+128-byte per-entry allowance; entry count separately bounds map overhead. Oversized paths are
+still parsed/placed without retention. Parsing happens outside the mutex. Clearing layouts
+also clears parsed paths. Every glyph still clones the immutable source curve and eagerly
+applies its original full affine, with the existing range, finite and work checks. No placement
+is moved past the restore/open timing boundary. File/document/snapshot caps are unchanged.
+
+The numeric byte-plane/predictor experiment regressed its isolated numeric microbenchmark and
+was discarded. The shipped numeric codec, float bits and wire/native versions are unchanged.
+
+#### Full storage/open benchmark
+
+The unchanged `cargo xtask bench text 1000,10000` workload uses unique 117-character paragraphs,
+embedded Inter Regular/Bold at 14/20 px and no images/history. One warm-up precedes five
+measured samples; reported values are medians. Reopen includes all validation, full geometry
+decoding/pool expansion and session initialization. Main stores no appearance records; the
+feature retains all 1,170,000 glyph placements. This available-font workload does **not**
+measure missing-font SVG restoration. Save includes thumbnail/native ZIP encoding in memory.
+
+| Text layers | Run | First save ms | Repeat save ms | Reopen ms | ZIP bytes | Appearances |
+|---:|---|---:|---:|---:|---:|---:|
+| 1,000 | fresh main | 162.383 | 160.204 | 5.477 | 127,941 | 0 |
+| 1,000 | initial before | 249.118 | 251.267 | 33.414 | 245,063 | 1,000 |
+| 1,000 | main control | 159.090 | 158.854 | 5.540 | 127,941 | 0 |
+| 1,000 | initial after | 245.253 | 247.934 | 30.883 | 245,063 | 1,000 |
+| 1,000 | paired before | 238.612 | 243.094 | 29.591 | 245,063 | 1,000 |
+| 1,000 | paired after | 240.270 | 241.112 | 29.025 | 245,063 | 1,000 |
+| 1,000 | fresh main repeat | 150.825 | 146.161 | 5.245 | 127,941 | 0 |
+| 10,000 | fresh main | 2852.012 | 2772.547 | 68.487 | 265,409 | 0 |
+| 10,000 | initial before | 4422.316 | 4409.570 | 341.927 | 1,286,888 | 10,000 |
+| 10,000 | main control | 2842.914 | 2818.195 | 69.878 | 265,409 | 0 |
+| 10,000 | initial after | 4257.725 | 4325.508 | 328.378 | 1,286,888 | 10,000 |
+| 10,000 | paired before | 4221.670 | 4236.802 | 330.635 | 1,286,888 | 10,000 |
+| 10,000 | paired after | 4204.020 | 4059.543 | 315.444 | 1,286,888 | 10,000 |
+| 10,000 | fresh main repeat | 2839.971 | 2699.317 | 64.838 | 265,409 | 0 |
+
+The adjacent feature pair reopens in **330.635 → 315.444 ms (4.59% less time)**;
+the first feature comparison is 341.927 → 328.378 ms. Both favor this change, but these are
+host samples, not a cross-machine guarantee. The writer is unchanged; save-time changes are
+not claimed as a new optimization. Versus the final fresh-main sample, reopen is **4.87x**,
+repeat save **+50.4%**, and saved size **4.85x**. The approximately 10%
+default-path acceptance target is still not met; no opt-in/capture policy changed.
+
+#### Isolated decode and missing-font restoration
+
+Two ignored release tests provide repeatable diagnostics:
+
+- `cargo test -p figcraft-doc --release portable_decode_timings -- --ignored --nocapture`
+  decodes 10,000 appearances of 117 glyphs (1,170,000 records), with short native-style reference
+  dictionaries. Numeric timing decodes compact records alone; appearance timing also includes
+  JSON metadata, bounded outline reading and final model records. These are nested/different
+  workloads, not extra times to sum with the full-open benchmark.
+- `cargo test -p figcraft-text --release portable_restore_timings -- --ignored --nocapture`
+  restores 1,000 unique missing-font texts, 117,000 glyphs, from 32 repeated curved SVG shapes
+  of 20 path elements each. Layout/parsed caches clear outside each timed batch; every placed
+  curve is fully materialized and transformed before return. This directly calls restoration
+  to avoid a layout-cache hit hiding the work. It is not comparable to main's substitute-font
+  output and is not the available-font reopen metric.
+
+After both test binaries are built, three before/after test-process pairs run in alternating
+order without compilation. Each process reports the median of five samples after one warm-up;
+the table reports the median and range of those three process medians. The earlier restore
+harness's literal `curves_per_shape=24` label was corrected to the actual 20 path elements;
+the generated shapes and timed workload did not change.
+
+| Diagnostic | Before ms (range) | After ms (range) | Median change |
+|---|---:|---:|---:|
+| Numeric records, 10k layers | 28.765 (28.428–28.772) | 28.283 (28.104–30.417) | -1.68% |
+| Complete appearance decode, 10k layers | 107.841 (105.627–110.055) | 89.137 (88.866–93.875) | -17.34% |
+| Eager missing-font restore, 1k layers | 62.502 (61.711–64.006) | 38.124 (38.066–38.186) | -39.00% |
+
+Numeric code is unchanged, so its small movement is not claimed as a speedup. The larger,
+non-overlapping appearance/restore ranges support the reuse changes for these fixtures.
+
+Before/after native reread/resave archives are byte-identical (1,286,888 bytes), including
+21,222,910 JSON bytes with SHA-256
+`5b0dcb8274a55acba9d03252c6114115a637382e6eb82935b2bf68e32da47ec9`.
+Tests retain precise/signed-zero eager placements, current metadata/source immutability,
+separate native pool scopes, invalid-input guards, independent cache byte/entry limits,
+counter overflow and uncached oversized paths. Working app/server packages are untouched.

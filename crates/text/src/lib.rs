@@ -13,6 +13,7 @@ pub mod display;
 pub mod fontdb;
 mod layout;
 mod onpath;
+mod saved_paths;
 
 pub use breaks::{backspace_step, grapheme_step};
 pub use color::{ColorBitmap, ColorInk, ColorLayer};
@@ -57,6 +58,7 @@ static LAYOUT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 /// Forget cached layouts (after fonts were added). Bumps [`layout_generation`].
 pub fn clear_layout_cache() {
     *layout_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = LayoutCache::default();
+    saved_paths::clear();
     LAYOUT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 

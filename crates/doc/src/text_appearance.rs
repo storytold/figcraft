@@ -144,7 +144,7 @@ fn read_outlines<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Arc<str>>, D::Er
                     if path.len() > MAX_PATH_BYTES {
                         return Err(E::custom("portable outline dictionary exceeds limit"));
                     }
-                    Ok(Outline(Arc::from(path)))
+                    Ok(Outline(crate::text_outline_tokens::get(path)))
                 }
             }
             d.deserialize_str(Path)
@@ -297,6 +297,46 @@ mod tests {
             styles: vec![TextStyle::default()],
             truncated: false,
         }
+    }
+
+    #[test]
+    #[ignore = "release timing: cargo test -p figcraft-doc --release portable_decode_timings -- --ignored --nocapture"]
+    fn portable_decode_timings() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        let mut a = appearance();
+        a.glyphs.truncate(117);
+        let paths: Vec<Arc<str>> = (0..64).map(|i| Arc::from(format!("@{i}"))).collect();
+        for (i, g) in a.glyphs.iter_mut().enumerate() {
+            g.d = paths[i % paths.len()].clone();
+            g.x = i as f64 * 7.1250000000123;
+            g.advance = 7.1250000000123;
+            g.transform = Some([0.125, 0.0, 0.0, 0.125, g.x, g.y]);
+        }
+        let wire = serde_json::to_string(&a).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&wire).unwrap();
+        let packed = value["glyphs"].as_str().unwrap();
+        let mut numbers = vec![];
+        let mut models = vec![];
+        for sample in 0..6 {
+            let start = Instant::now();
+            for _ in 0..10_000 {
+                black_box(crate::text_glyph_bytes::decode(packed, true).unwrap());
+            }
+            let decode = start.elapsed().as_secs_f64() * 1000.0;
+            let start = Instant::now();
+            for _ in 0..10_000 {
+                black_box(serde_json::from_str::<TextAppearance>(&wire).unwrap());
+            }
+            let model = start.elapsed().as_secs_f64() * 1000.0;
+            if sample > 0 {
+                numbers.push(decode);
+                models.push(model);
+            }
+        }
+        numbers.sort_by(f64::total_cmp);
+        models.sort_by(f64::total_cmp);
+        println!("PORTABLE_DECODE layers=10000 glyphs=1170000 numeric_ms={:.3} appearance_ms={:.3}", numbers[2], models[2]);
     }
 
     #[test]
