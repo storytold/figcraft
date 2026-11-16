@@ -59,7 +59,7 @@ inspection. It runs natively on macOS, Windows, Linux and FreeBSD, and in the br
 Siblings: `../vectorcraft` (Illustrator-class), `../photocraft` (Photoshop-class), `../designcraft`
 (InDesign-class) and the other Crafting Apps; same conventions.
 
-Repos don't share code.
+Share reusable code through craft-libs; do not depend on sibling application crates.
 
 ## Start every session here
 1. Read [`ROADMAP.md`](ROADMAP.md) (stage, headline numbers, estimates) and
