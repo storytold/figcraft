@@ -384,6 +384,15 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     {
         let mut fixed = serde_json::Map::new();
         fixed.insert("height".into(), json!(h));
+        // With the proportions locked, `apply` would treat a lone height as a linked resize and
+        // rescale the width; pin the current width so the box keeps it. The width key does not
+        // change a fixed text's mode (`fix_size` leaves None/Truncate alone).
+        if let Some(n) = doc.node(nid)
+            && n.constrain_proportions
+            && n.width.is_finite()
+        {
+            fixed.insert("width".into(), json!(n.width));
+        }
         super::props::apply(cmd, doc, nid, &fixed)?;
     }
     if boolean(p, "select").unwrap_or(true) {

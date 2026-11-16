@@ -357,6 +357,14 @@ fn a_fixed_size_text_keeps_the_height_it_is_created_with() {
         assert_eq!(size(&s, t), (200.0, 100.0), "mode {mode}");
         assert_eq!(resize_mode(&s, t), want, "mode {mode} stays");
     }
+    // #2184 follow-up: with the proportions locked, the height reapply must not rescale the
+    // top-level width (a lone height would be treated as a linked resize).
+    let mut props = style().as_object().unwrap().clone();
+    props.insert("textAutoResize".into(), json!("none"));
+    props.insert("constrainProportions".into(), json!(true));
+    let t = create(&mut s, json!({"type": "text", "text": "Title", "width": 200, "height": 100, "props": Value::Object(props)}));
+    assert_eq!(size(&s, t), (200.0, 100.0), "a locked height reapply keeps the width");
+    assert_eq!(resize_mode(&s, t), TextAutoResize::None);
     // A `height` inside `props` wins over the top-level one.
     let mut props = style().as_object().unwrap().clone();
     props.insert("textAutoResize".into(), json!("none"));
