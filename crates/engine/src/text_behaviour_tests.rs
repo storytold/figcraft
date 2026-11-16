@@ -383,6 +383,26 @@ fn a_fixed_size_text_keeps_the_height_it_is_created_with() {
 }
 
 #[test]
+fn a_locked_height_reapply_keeps_the_requested_horizontal_sizing() {
+    // The width pin re-fixes the horizontal axis; a `sizingH: "fill"` set by the props must
+    // survive it in an auto layout row that has another child (so fill is not inferred).
+    use figcraft_doc::Sizing;
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"width": 300, "height": 200})).unwrap());
+    s.execute("node.set", &json!({"id": f, "props": {"layout": "horizontal", "padding": 10, "gap": 10}})).unwrap();
+    let _sibling = id(s.execute("node.create", &json!({"type": "rect", "parent": f, "width": 50, "height": 50})).unwrap());
+    let t = id(s
+        .execute(
+            "node.create",
+            &json!({"type": "text", "parent": f, "text": "Title", "width": 120, "height": 80,
+                    "props": {"textAutoResize": "none", "sizingH": "fill", "constrainProportions": true}}),
+        )
+        .unwrap());
+    assert_eq!(s.doc().unwrap().node(t).unwrap().child_layout.sizing_h, Sizing::Fill, "the props' fill survives the height reapply");
+    assert_eq!(size(&s, t).1, 80.0, "the height still lands");
+}
+
+#[test]
 fn max_lines_on_auto_height_text_hugs_that_many_lines() {
     // #1377: an auto-height text with max lines grows up to that many lines and ends in an
     // ellipsis; the layer reports its max lines.

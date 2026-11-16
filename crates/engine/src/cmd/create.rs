@@ -393,7 +393,12 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
         {
             fixed.insert("width".into(), json!(n.width));
         }
+        // The width pin also re-fixes the horizontal sizing; keep what the props asked for.
+        let sizing_h = doc.node(nid).map(|n| n.child_layout.sizing_h);
         super::props::apply(cmd, doc, nid, &fixed)?;
+        if let Some(sizing_h) = sizing_h {
+            doc.get_mut(nid)?.child_layout.sizing_h = sizing_h;
+        }
     }
     if boolean(p, "select").unwrap_or(true) {
         ds.selection = vec![nid];
