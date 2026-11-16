@@ -403,28 +403,18 @@ pub(crate) fn apply(doc: &mut Document, change: &Change) -> Result<bool, Error> 
     apply_indexed(doc, change, &mut Index::default())
 }
 
-/// The review-settings lists that hold more than this build keeps, as (what, how many, the cap).
-fn review_lists_over_limit(c: &figcraft_doc::DesignReview) -> Vec<(&'static str, usize, usize)> {
-    [
-        ("radii", c.radii.len(), figcraft_doc::MAX_RADII),
-        ("brand colours", c.brand.len(), figcraft_doc::MAX_BRAND_COLORS),
-        ("disabled rules", c.disabled.len(), figcraft_doc::MAX_DISABLED),
-    ]
-    .into_iter()
-    .filter(|(_, have, max)| have > max)
-    .collect()
-}
-
-/// Clamp the review settings a snapshot carries to the limits this build keeps, in place: an
-/// older or looser snapshot may hold longer radii, brand or disabled lists, and the file opens
-/// with what fits — the preset, grid and the rest of each list exactly as saved. An ordinary edit
-/// is refused instead (`apply_indexed`), and a peer that can't read the settings at all gets them
-/// left out of what the server sends (`Change::without_design_review`).
-pub(crate) fn clamp_snapshot_design_review(changes: &mut Vec<Change>) {
+/// Clamp the review settings a snapshot carries to the limits this build keeps, in place, and say
+/// whether it changed them: an older or looser snapshot may hold longer radii, brand or disabled
+/// lists, and the file opens with what fits — the preset, grid and the rest of each list exactly
+/// as saved. An ordinary edit is refused instead (`apply_indexed`), and a peer that can't read the
+/// settings at all gets them left out of what the server sends
+/// (`Change::without_design_review`).
+pub(crate) fn clamp_snapshot_design_review(changes: &mut Vec<Change>) -> bool {
+    let mut clamped_any = false;
     for c in changes {
         if let Change::SetDoc { prop: DocProp::DesignReview, value } = c
             && let Ok(config) = value.read::<figcraft_doc::DesignReview>("design review")
-            && !review_lists_over_limit(&config).is_empty()
+            && !config.over_limits().is_empty()
         {
             let mut clamped = config;
             clamped.radii.truncate(figcraft_doc::MAX_RADII);
@@ -432,9 +422,11 @@ pub(crate) fn clamp_snapshot_design_review(changes: &mut Vec<Change>) {
             clamped.disabled.truncate(figcraft_doc::MAX_DISABLED);
             if let Ok(v) = Json::of(&clamped) {
                 *value = v;
+                clamped_any = true;
             }
         }
     }
+    clamped_any
 }
 
 /// Apply a document-level change, with the keyed lists' positions kept in `index` between the
@@ -449,7 +441,7 @@ pub(crate) fn apply_indexed(doc: &mut Document, change: &Change, index: &mut Ind
             // path clamps it (`clamp_snapshot_design_review`).
             if *prop == DocProp::DesignReview {
                 let config: figcraft_doc::DesignReview = value.read("design review")?;
-                if let Some((what, have, max)) = review_lists_over_limit(&config).first() {
+                if let Some((what, have, max)) = config.over_limits().first() {
                     return Err(Error::Invalid(format!("design review: {have} {what} pass the {max} limit `design.configure` keeps")));
                 }
             }

@@ -175,7 +175,7 @@ impl Server {
     /// reconnect with their ids). A log that doesn't lead up to the sequence number is dropped
     /// (clients then catch up with a snapshot).
     pub fn restore(state: SessionState, token: impl Into<String>, limits: Limits) -> Result<Server, Error> {
-        let (replica, left_out) = Replica::from_snapshot_leaving_out(&state.snapshot)?;
+        let (replica, left_out, review_clamped) = Replica::from_snapshot_leaving_out(&state.snapshot)?;
         let mut server = Server::new(replica.document().clone(), token, limits);
         server.state = replica;
         server.session = state.session;
@@ -195,9 +195,11 @@ impl Server {
         // History saved before the image checks may hold image entries they refuse. The snapshot
         // opens without them, and a saved log putting images may give a resuming client other
         // bytes under a key it holds, which this state can't check: either way resuming clients
-        // catch up with the snapshot.
+        // catch up with the snapshot. The same holds for review settings this build had to clamp:
+        // a saved batch still carries the value past the limits, and a resuming client would
+        // refuse it, so the clamped snapshot is what everyone catches up with.
         let puts_images = state.log.iter().flat_map(|a| &a.changes).any(Change::is_image);
-        server.resync = left_out > 0 || puts_images;
+        server.resync = left_out > 0 || puts_images || review_clamped;
         if contiguous && state.log.last().is_none_or(|a| a.seq == state.seq) {
             for a in state.log {
                 server.remember(a);
