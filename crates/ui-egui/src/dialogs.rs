@@ -256,15 +256,34 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             if app.services.reduce_motion() {
                 crate::widgets::label(ui, tr("Your system asks for reduced motion: animations stay off."), t.text_secondary);
             }
-            // The browser has no files to save to.
-            if !cfg!(target_arch = "wasm32") && crate::widgets::checkbox(ui, prefs.auto_save, tr("Save files automatically")) {
-                toggles.push("pref.autoSave");
+            // The browser has no files to save to. Mirror the actual native autosave
+            // control in Hebrew, not only its translated label, without changing EN.
+            if !cfg!(target_arch = "wasm32") {
+                let toggled = if crate::i18n::right_to_left() {
+                    let mut toggled = false;
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let mut on = prefs.auto_save;
+                            toggled = ui.checkbox(&mut on, tr("Save files automatically")).changed();
+                        });
+                    });
+                    toggled
+                } else {
+                    crate::widgets::checkbox(ui, prefs.auto_save, tr("Save files automatically"))
+                };
+                if toggled {
+                    toggles.push("pref.autoSave");
+                }
             }
             if !cfg!(target_arch = "wasm32") && crate::widgets::checkbox(ui, prefs.start_on_home, tr("Start on the Home screen")) {
                 toggles.push("pref.startOnHome");
             }
             for c in toggles {
-                app.run(c, json!({}));
+                if app.run(c, json!({})).is_some() && c == "pref.autoSave" {
+                    // The generic boolean preference command does not mark prefs_unsaved;
+                    // keep the user's actual autosave choice across a clean process restart.
+                    app.session.prefs_unsaved = true;
+                }
             }
             // Where the app registers itself as the opener of invite links (Windows).
             if let Some(on) = app.session.invite_links_on() {
