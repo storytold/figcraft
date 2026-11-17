@@ -19,6 +19,9 @@
 //! ([`figcraft_render::Steps`]), at least a band a frame and more while they fit in [`STEP_MS`],
 //! so input is handled while it draws (on a page whose render takes seconds, a band is a
 //! fraction of that: eight at most).
+//! On the desktop a third thread keeps a coarse image of the area around the view
+//! ([`Surround`]): where the canvas image doesn't reach (a pan past its edge before the strips are
+//! drawn, a zoom out) the canvas shows that, blurred, instead of the bare page colour.
 
 use std::sync::Arc;
 
@@ -32,9 +35,9 @@ use web_time::Instant;
 pub const PREVIEW_FACTOR: f64 = 4.0;
 /// Full renders quicker than this (about a frame) show without a preview.
 pub const PREVIEW_AFTER_MS: f64 = 12.0;
-/// The browser refines a zoom's preview only once no newer request came for this long (or for as
-/// long as the last full render took, when shorter): a full render there blocks the page, and one
-/// between every two wheel steps of a zoom held it up for seconds.
+/// A zoom's preview is refined only once no newer request came for this long (or for as long as
+/// the last full render took, when shorter): in the browser a full render blocks the page, and on
+/// the desktop it can't be stopped, so one between every two wheel steps of a zoom held it up.
 pub const SETTLE_MS: u64 = 120;
 /// The browser draws a full render a band at a time ([`figcraft_render::Steps`]): at least one
 /// band a frame, and more while they fit in this long, so input is handled while it draws. A
@@ -143,6 +146,78 @@ fn done(job: &Job, view: View, pix: &Pixmap, work: Work, ms: f64, coarse: bool) 
         mark_outside_srgb(&mut image, pix, job.doc.color_profile);
     }
     Done { image, view, ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0 }
+}
+
+/// The coarse image around the view is this many views wide and tall, centred on it.
+const SURROUND_SPAN: f64 = 3.0;
+
+/// The area [`SURROUND_SPAN`] times as wide and tall as `view`, centred on it, with
+/// [`PREVIEW_FACTOR`] times fewer pixels per page unit (`view` is at most as large as a texture,
+/// so this is too).
+pub fn surround_view(view: &View) -> View {
+    let c = coarse_view(view);
+    let s = c.scale.max(1e-9);
+    let (w, h) = (f64::from(c.width), f64::from(c.height));
+    let pad = (SURROUND_SPAN - 1.0) / 2.0;
+    let side = |n: f64| (n * SURROUND_SPAN).ceil().max(1.0) as u32;
+    View { origin: (view.origin.0 - pad * w / s, view.origin.1 - pad * h / s), scale: c.scale, width: side(w), height: side(h) }
+}
+
+/// Whether `around` reaches a third of `view`'s size past each of its sides: a pan that far shows
+/// no edge.
+fn reaches(around: &View, view: &View) -> bool {
+    let (a, v) = (around.page_rect(), view.page_rect());
+    let (mx, my) = (v.width() / 3.0, v.height() / 3.0);
+    a.x0 <= v.x0 - mx && a.y0 <= v.y0 - my && a.x1 >= v.x1 + mx && a.y1 >= v.y1 + my
+}
+
+/// Whether `a` and `b` are the same view, bit for bit.
+fn same_view(a: &View, b: &View) -> bool {
+    (a.origin.0.to_bits(), a.origin.1.to_bits(), a.scale.to_bits(), a.width, a.height)
+        == (b.origin.0.to_bits(), b.origin.1.to_bits(), b.scale.to_bits(), b.width, b.height)
+}
+
+/// The coarse image of the area around the view ([`surround_view`]), kept between requests.
+#[derive(Default)]
+pub struct Surround {
+    retained: Retained,
+    /// The file, page and view of the image handed over last, and whether it was soft-proofed
+    /// (marked after the render, so the kept image can't tell).
+    of: Option<(u64, NodeId, View, bool)>,
+}
+
+impl Surround {
+    /// The image around `job`'s view when the one handed over last no longer stands for it (of
+    /// another file, page or zoom, short of a third of a view past an edge, or the document
+    /// changed), drawn on the kept one: a pan shifts it and redraws the strips, an edit the areas
+    /// that changed. `None` in pixel preview, whose pixels are the point.
+    pub fn render(&mut self, job: &Job) -> Option<Done> {
+        if !job.zoom_preview {
+            return None;
+        }
+        let want = surround_view(&job.view);
+        let view = match &self.of {
+            Some((uid, page, have, _))
+                if *uid == job.uid && *page == job.page && have.scale.to_bits() == want.scale.to_bits() && reaches(have, &job.view) =>
+            {
+                have.clone()
+            }
+            _ => want,
+        };
+        let same = self
+            .of
+            .as_ref()
+            .is_some_and(|(uid, page, have, proof)| *uid == job.uid && *page == job.page && *proof == job.proof && same_view(have, &view));
+        let t0 = Instant::now();
+        let d = guarded(&mut self.retained, |r| {
+            let (snapped, pix, work) = r.render(&job.doc, job.page, &view, &options(job))?;
+            (!(same && work == Work::Reused)).then(|| done(job, snapped, pix, work, t0.elapsed().as_secs_f64() * 1000.0, true))
+        });
+        if d.is_some() {
+            self.of = Some((job.uid, job.page, view, job.proof));
+        }
+        d
+    }
 }
 
 /// `view` with [`PREVIEW_FACTOR`] times fewer pixels each way, showing at least the same area.
@@ -413,6 +488,12 @@ pub struct Worker {
     finished: Arc<std::sync::atomic::AtomicU64>,
     /// The watchdog is drawing a late preview, or has one to hand over and wake the UI for.
     previewing: Arc<std::sync::atomic::AtomicBool>,
+    /// The images around the view ([`Surround`]) from their thread.
+    surround_rx: std::sync::mpsc::Receiver<Done>,
+    /// The newest request handed to the surround thread, and the newest it is done with (its image
+    /// handed over and the UI woken, or none needed).
+    surround_asked: Arc<std::sync::atomic::AtomicU64>,
+    surround_done: Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -467,6 +548,33 @@ impl Worker {
         if let Err(e) = watchdog {
             log::error!("render preview thread: {e}");
         }
+        // The image around the view, on a thread of its own so it never holds up the canvas image:
+        // the render thread hands it each request it has refined, the newest queued one wins.
+        let (around_tx, around) = std::sync::mpsc::channel::<(u64, Job)>();
+        let (surround_tx, surround_rx) = std::sync::mpsc::channel::<Done>();
+        let surround_ctx = ctx.clone();
+        let surround_asked = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let surround_done = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (asked, surrounded) = (surround_asked.clone(), surround_done.clone());
+        let surrounding =
+            std::thread::Builder::new().name("figcraft-render-surround".into()).stack_size(figcraft_render::RENDER_STACK).spawn(move || {
+                let mut surround = Surround::default();
+                while let Ok((mut seq, mut job)) = around.recv() {
+                    while let Ok(newer) = around.try_recv() {
+                        (seq, job) = newer;
+                    }
+                    if let Some(d) = surround.render(&job) {
+                        if surround_tx.send(d).is_err() {
+                            break;
+                        }
+                        surround_ctx.request_repaint_of(viewport);
+                    }
+                    surrounded.store(seq, std::sync::atomic::Ordering::SeqCst);
+                }
+            });
+        if let Err(e) = surrounding {
+            log::error!("render surround thread: {e}");
+        }
         let spawned = std::thread::Builder::new().name("figcraft-render".into()).stack_size(figcraft_render::RENDER_STACK).spawn(move || {
             let mut renders = Renders::default();
             let mut next = None;
@@ -481,10 +589,19 @@ impl Worker {
                         break;
                     }
                     ctx.request_repaint_of(viewport);
-                    // A newer request makes refining this one moot: it gets its own preview.
-                    if let Ok(newer) = jobs.try_recv() {
-                        next = Some(newer);
-                        continue;
+                    // A newer request makes refining this one moot: it gets its own preview. Wait
+                    // for one as the browser does ([`SETTLE_MS`], or the last full render's time
+                    // when shorter): a full render can't be stopped, so one started between two
+                    // steps of a zoom held every later step up for as long as it took.
+                    let wait = std::time::Duration::try_from_secs_f64(renders.full_ms_so_far() / 1000.0)
+                        .map_or(std::time::Duration::ZERO, |full| full.min(std::time::Duration::from_millis(SETTLE_MS)));
+                    match jobs.recv_timeout(wait) {
+                        Ok(newer) => {
+                            next = Some(newer);
+                            continue;
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
                 if renders.wants_late_preview(&job) {
@@ -493,10 +610,20 @@ impl Worker {
                 }
                 let done = renders.refine(&job);
                 refined.store(seq, std::sync::atomic::Ordering::SeqCst);
+                let refined_job = done.is_some();
                 if let Some(d) = done
                     && done_tx.send(answering(d, seq)).is_err()
                 {
                     break;
+                }
+                if refined_job {
+                    // Asked before the send (and before this request counts as done), so `in_flight`
+                    // holds until the surround thread is done with it. Without that thread (it failed
+                    // to start) the page colour shows past the edge.
+                    asked.store(seq, std::sync::atomic::Ordering::SeqCst);
+                    if around_tx.send((seq, job)).is_err() {
+                        asked.store(0, std::sync::atomic::Ordering::SeqCst);
+                    }
                 }
                 ctx.request_repaint_of(viewport);
                 done_with.store(seq, std::sync::atomic::Ordering::SeqCst);
@@ -505,7 +632,7 @@ impl Worker {
         if let Err(e) = spawned {
             log::error!("render thread: {e}");
         }
-        Self { tx, rx, submitted: 0, finished, previewing }
+        Self { tx, rx, submitted: 0, finished, previewing, surround_rx, surround_asked, surround_done }
     }
 
     pub fn submit(&mut self, job: Job) {
@@ -515,9 +642,13 @@ impl Worker {
     }
 
     /// Whether a submitted job is still rendering or hasn't woken the UI yet, the watchdog's late
-    /// preview included (a finished image may still wait for [`Self::poll`]).
+    /// preview and the image around the view included (a finished image may still wait for
+    /// [`Self::poll`] or [`Self::surround`]).
     pub fn in_flight(&self) -> bool {
-        self.finished.load(std::sync::atomic::Ordering::SeqCst) < self.submitted || self.previewing.load(std::sync::atomic::Ordering::SeqCst)
+        use std::sync::atomic::Ordering::SeqCst;
+        self.finished.load(SeqCst) < self.submitted
+            || self.previewing.load(SeqCst)
+            || self.surround_done.load(SeqCst) < self.surround_asked.load(SeqCst)
     }
 
     /// The best of the renders finished since the last poll ([`better`]).
@@ -527,6 +658,11 @@ impl Worker {
             best = Some(better(best, d));
         }
         best
+    }
+
+    /// The newest image around the view ([`Surround`]) finished since the last call.
+    pub fn surround(&mut self) -> Option<Done> {
+        self.surround_rx.try_iter().last()
     }
 }
 
@@ -589,6 +725,11 @@ impl Inline {
     /// Whether a request is still to be refined (a preview's wait counts).
     pub fn in_flight(&self) -> bool {
         self.pending.is_some()
+    }
+    /// shortcut: the browser renders on the page's own thread, so it keeps no image around the view
+    /// (one would hold the page up); draw one there once the canvas renders on a wasm thread (#1500).
+    pub fn surround(&mut self) -> Option<Done> {
+        None
     }
     pub fn poll(&mut self) -> Option<Done> {
         self.poll_at(Instant::now())

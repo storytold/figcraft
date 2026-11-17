@@ -1390,3 +1390,48 @@ fn conditional_expression_depth_boundary_round_trips() {
         assert_eq!(trigger.interactions[0].actions, [nested_action(depth, operators, checked.id.clone())], "conditional depth {depth}");
     }
 }
+
+#[test]
+fn instance_override_conditions_respect_the_kiwi_depth_limit() {
+    use figcraft_doc::proto::{ConditionalBlock, Expr, ExprOp};
+
+    let (mut doc, [same, resized, _]) = sized();
+    doc.variables.collections.push(Collection {
+        id: "demo".into(),
+        name: "Demo".into(),
+        modes: vec![Mode { id: "default".into(), name: "Default".into() }],
+        extends: None,
+    });
+    doc.variables.variables.push(var("checked", "checked", "demo", VariableType::Boolean, &[("default", VariableValue::Boolean(true))]));
+    for (instance, operators) in [(same, 17), (resized, 18)] {
+        let child = doc.node(instance).unwrap().children[0];
+        let condition = (0..operators).fold(Expr::var("checked"), |inner, _| Expr::op(ExprOp::Not, vec![inner]));
+        doc.node_mut(child).unwrap().interactions.push(Interaction {
+            trigger: Trigger::OnClick,
+            actions: vec![
+                Action::Conditional {
+                    blocks: vec![ConditionalBlock {
+                        condition: Some(Expr::var("checked")),
+                        actions: vec![Action::Conditional {
+                            blocks: vec![ConditionalBlock { condition: Some(condition), actions: vec![Action::Back] }],
+                        }],
+                    }],
+                },
+                Action::Back,
+            ],
+            transition: Transition::Instant,
+            duration_ms: 300,
+            easing: Easing::EaseOut,
+            delay_ms: 0,
+        });
+    }
+
+    let (_, warnings) = export(&doc, None).unwrap();
+    assert!(warnings.iter().any(|w| w.contains("nesting")), "{warnings:?}");
+    let nodes = written(&doc);
+    for (name, expected) in [("Same", vec!["CONDITIONAL", "BACK"]), ("Resized", vec!["BACK"])] {
+        let rows = named(&nodes, name)["symbolData"]["symbolOverrides"].as_array().unwrap();
+        let actions = rows.iter().find_map(|row| row["prototypeInteractions"][0]["actions"].as_array()).unwrap();
+        assert_eq!(actions.iter().map(|action| action["connectionType"].as_str().unwrap()).collect::<Vec<_>>(), expected);
+    }
+}

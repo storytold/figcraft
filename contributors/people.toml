@@ -122,3 +122,6 @@ sync_github_name = true
 
 [people.GiovanniBot]
 sync_github_name = true
+
+[people.gmrmad1]
+real_name = "Madhav Agarwal"
