@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use figcraft_doc::{Collection, CollectionId, Document, Mode, ModeId, Variable, VariableId, VariableValue, Variables, trim_num};
+use figcraft_doc::{Collection, CollectionId, Document, Mode, ModeId, StyleKind, Variable, VariableId, VariableValue, Variables, trim_num};
 use serde_json::{Value, json};
 
 use super::CommandSpec;
@@ -18,14 +18,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "variable.export",
             "Export variables",
-            "{collections? [ids or names; default every collection of this file, not library copies], format? (json (default): the local variables JSON that variable.import reads, colour calculations as the colour they show in each mode with other collections in their default modes | css: custom properties, the default mode on :root and each other mode on [data-<collection>=\"<mode>\"], colour calculations as the colour they show in that mode with other collections in their default modes; numbers in px unless layers or scopes use them as opacity or font weight | tailwind: a Tailwind CSS v4 stylesheet, the default mode as an @theme block named the way inspect.code's tailwind utilities read them: --color-*, --radius-*, --text-*, --spacing-*, --font-*, unique per file; each other mode as in css; colour calculations as the colour they show in that mode, other collections in their default modes) | dart: a Dart file for Flutter, a class of constants per collection and mode (Color, double, String, bool), aliases and colour calculations resolved), path? (write it there)}  → {text}, or {path} when written",
+            "{collections? [ids or names; default every collection of this file, not library copies], format? (json (default): the local variables JSON that variable.import reads, colour calculations as the colour they show in each mode with other collections in their default modes | css: custom properties, the default mode on :root and each other mode on [data-<collection>=\"<mode>\"], colour calculations as the colour they show in that mode with other collections in their default modes; numbers in px unless layers or scopes use them as opacity or font weight | tailwind: a Tailwind CSS v4 stylesheet, the default mode as an @theme block named the way inspect.code's tailwind utilities read them: --color-*, --radius-*, --text-*, --spacing-*, --font-*, unique per file; each other mode as in css; colour calculations as the colour they show in that mode, other collections in their default modes) | dart: a Dart file for Flutter, a class of constants per collection and mode (Color, double, String, bool), aliases and colour calculations resolved), path? (write it there)}  → {text}, or {path} when written; the json format adds a top-level `textStyles` array (this file's text styles as style.list returns them, `bound` holding the ids `meta.variables` is keyed by), a FigCraft extension beside the REST-compatible `meta`",
             false,
             export
         ),
         spec!(
             "variable.import",
             "Import variables",
-            "{variables (the local variables JSON, as variable.export writes it: an object, JSON text or a path to a regular file of at most 256 MiB; `variableCollections` and `variables` under `meta` or at the top level)}  collections join this file's collection of the same name (values by mode name; new modes and variables are added, a variable of another type is skipped), others are added  → {collections (added), variables (added), updated, warnings (also when it holds no variables, or fewer than its collections list)}",
+            "{variables (the local variables JSON, as variable.export writes it: an object, JSON text or a path to a regular file of at most 256 MiB; `variableCollections` and `variables` under `meta` or at the top level; a top-level `textStyles` array, a FigCraft extension, adds this file's text styles by name with their variable bindings re-pointed)}  collections join this file's collection of the same name (values by mode name; new modes and variables are added, a variable of another type is skipped), others are added  → {collections (added), variables (added), updated, styles {added, updated}, warnings (also when it holds no variables, or fewer than its collections list)}",
             true,
             import
         ),
@@ -44,8 +44,13 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "collections: [collection ids or names]")),
     };
     let text = match string(p, "format").as_deref().unwrap_or("json") {
-        "json" => serde_json::to_string_pretty(&figcraft_format::rest::export_variables(&doc.variables, &colls))
-            .map_err(|e| EngineError::Other(e.to_string()))?,
+        "json" => {
+            let mut out = figcraft_format::rest::export_variables(&doc.variables, &colls);
+            if let Value::Object(m) = &mut out {
+                m.insert("textStyles".into(), text_styles(doc));
+            }
+            serde_json::to_string_pretty(&out).map_err(|e| EngineError::Other(e.to_string()))?
+        }
         "css" => css(doc, &colls, false),
         "tailwind" => css(doc, &colls, true),
         "dart" => dart(&doc.variables, &colls),
@@ -57,6 +62,108 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(json!({"path": path}))
         }
         None => Ok(json!({"text": text})),
+    }
+}
+
+/// This file's own text styles as `style.list {type: "text"}` returns them (values and `bound`,
+/// the variable ids being those `meta.variables` is keyed by): the `textStyles` of the variables
+/// JSON, a FigCraft extension beside the REST-compatible `meta`.
+fn text_styles(doc: &Document) -> Value {
+    let own = |st: &&figcraft_doc::Style| matches!(st.kind, StyleKind::Text { .. }) && !crate::library::is_remote_style(doc, &st.id);
+    Value::Array(doc.styles.iter().filter(own).filter_map(|st| serde_json::to_value(st).ok()).collect())
+}
+
+/// At most this many text styles are read from a variables JSON, this many bindings per style, and
+/// this many chars of a description.
+const MAX_TEXT_STYLES: usize = 10_000;
+const MAX_STYLE_BINDINGS: usize = 32;
+const MAX_STYLE_DESCRIPTION: usize = 10_000;
+
+/// Read `entries` (the `textStyles` of a variables JSON) into this file: a style joins this file's
+/// text style of the same name (the first one this import hasn't touched yet), others are added;
+/// bindings follow `ids` (imported variable id to this file's). Returns (added, updated); what
+/// can't be read is a warning.
+fn import_text_styles(doc: &mut Document, entries: &Value, ids: &BTreeMap<VariableId, VariableId>, warnings: &mut Vec<String>) -> (usize, usize) {
+    let Value::Array(list) = entries else {
+        warnings.push("`textStyles` should be an array of text styles: skipped".to_string());
+        return (0, 0);
+    };
+    if list.len() > MAX_TEXT_STYLES {
+        warnings.push(format!("`textStyles` holds {} entries: only the first {MAX_TEXT_STYLES} are read", list.len()));
+    }
+    let (mut added, mut updated) = (0, 0);
+    let mut touched = Vec::new();
+    for (i, e) in list.iter().take(MAX_TEXT_STYLES).enumerate() {
+        let name = e.get("name").and_then(Value::as_str).and_then(super::variables::clean_name);
+        let (Some(name), Some(style)) = (name, e.get("style").filter(|x| x.is_object())) else {
+            warnings.push(format!("`textStyles` entry {i} needs a `name` and a `style` object: skipped"));
+            continue;
+        };
+        let description: String = e.get("description").and_then(Value::as_str).unwrap_or_default().chars().take(MAX_STYLE_DESCRIPTION).collect();
+        let wanted = e.get("bound");
+        let bind = |doc: &Document, kind: &StyleKind, current: Option<&figcraft_doc::Style>| {
+            text_style_bindings(&name, wanted, ids, doc, kind, current, warnings)
+        };
+        let id = e.get("id").and_then(Value::as_str);
+        match super::styles::upsert_text_style(doc, &name, id, &description, style, e.get("paragraph").unwrap_or(&Value::Null), &touched, bind) {
+            Ok((sid, was)) => {
+                touched.push(sid);
+                if was {
+                    updated += 1;
+                } else {
+                    added += 1;
+                }
+            }
+            Err(EngineError::BadParams { msg, .. }) => warnings.push(format!("text style `{name}`: {msg}")),
+            Err(err) => warnings.push(format!("text style `{name}`: {err}")),
+        }
+    }
+    crate::style_vars::settle(doc);
+    for sid in touched {
+        super::styles::propagate_style(doc, &sid);
+    }
+    (added, updated)
+}
+
+/// The bindings an imported text style `name` keeps, as this file's variable ids: a variable
+/// follows `ids`, or stays when `current` (the style it replaces) already holds that same id for
+/// the field (a file's own export names variables the import doesn't carry); a field the style
+/// lacks or a variable of the wrong type is a warning, as are more than [`MAX_STYLE_BINDINGS`].
+fn text_style_bindings(
+    name: &str,
+    wanted: Option<&Value>,
+    ids: &BTreeMap<VariableId, VariableId>,
+    doc: &Document,
+    kind: &StyleKind,
+    current: Option<&figcraft_doc::Style>,
+    warnings: &mut Vec<String>,
+) -> BTreeMap<String, VariableId> {
+    let mut bound = BTreeMap::new();
+    let Some(Value::Object(m)) = wanted else { return bound };
+    if m.len() > MAX_STYLE_BINDINGS {
+        warnings.push(format!("text style `{name}`: {} bindings: only the first {MAX_STYLE_BINDINGS} are read", m.len()));
+    }
+    for (field, id) in m.iter().take(MAX_STYLE_BINDINGS) {
+        let held = current.and_then(|c| c.bound.get(field)).filter(|h| id.as_str() == Some(h.as_str()));
+        let local = id.as_str().and_then(|v| ids.get(v)).or(held);
+        match checked_binding(doc, kind, field, local) {
+            Ok(local) => {
+                bound.insert(field.clone(), local.clone());
+            }
+            Err(why) => warnings.push(format!("text style `{name}`: {why}: left unbound")),
+        }
+    }
+    bound
+}
+
+/// `local` when it is a variable of this file of the type a text style's `field` takes.
+fn checked_binding<'a>(doc: &Document, kind: &StyleKind, field: &str, local: Option<&'a VariableId>) -> std::result::Result<&'a VariableId, String> {
+    let local = local.ok_or_else(|| format!("`{field}` is bound to a variable the JSON doesn't hold"))?;
+    let want = crate::style_vars::field_type(kind, field).ok_or_else(|| format!("no field `{field}` to bind"))?;
+    match doc.variables.get_by_id(local).map(|v| v.kind) {
+        Some(k) if k == want => Ok(local),
+        Some(k) => Err(format!("`{field}` takes a {} variable, not a {} one", want.id(), k.id())),
+        None => Err(format!("`{field}` is bound to a variable this file lacks")),
     }
 }
 
@@ -362,5 +469,12 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    Ok(json!({"collections": added_colls, "variables": added, "updated": updated, "warnings": warnings}))
+    let (styles_added, styles_updated) = match v.get("textStyles") {
+        Some(entries) => import_text_styles(doc, entries, &ids, &mut warnings),
+        None => (0, 0),
+    };
+    Ok(json!({
+        "collections": added_colls, "variables": added, "updated": updated,
+        "styles": {"added": styles_added, "updated": styles_updated}, "warnings": warnings
+    }))
 }
