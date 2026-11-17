@@ -1016,7 +1016,7 @@ name = "craft-fig"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
 dependencies = [
- "craft-figma-rest",
+ "craft-figma-rest 0.1.0 (git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c)",
  "craft-kiwi",
  "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c)",
  "flate2",
@@ -1042,6 +1042,16 @@ dependencies = [
 name = "craft-figma-rest"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-figma-rest"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=ff142b3ad58aa7306676749428f4f2f9b277b5dd#ff142b3ad58aa7306676749428f4f2f9b277b5dd"
 dependencies = [
  "serde",
  "serde_json",
@@ -1165,6 +1175,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sketch"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=ff142b3ad58aa7306676749428f4f2f9b277b5dd#ff142b3ad58aa7306676749428f4f2f9b277b5dd"
+dependencies = [
+ "craft-figma-rest 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ff142b3ad58aa7306676749428f4f2f9b277b5dd)",
+ "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ff142b3ad58aa7306676749428f4f2f9b277b5dd)",
+ "kurbo",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
@@ -1280,6 +1302,16 @@ dependencies = [
 name = "craft-zip"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=8418f9a9e846d27bb4f5e854f370405fd013e9e3#8418f9a9e846d27bb4f5e854f370405fd013e9e3"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+ "zip 9.1.1",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=ff142b3ad58aa7306676749428f4f2f9b277b5dd#ff142b3ad58aa7306676749428f4f2f9b277b5dd"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
@@ -2037,8 +2069,9 @@ version = "0.18.1"
 dependencies = [
  "craft-fig",
  "craft-figcraft-format",
- "craft-figma-rest",
+ "craft-figma-rest 0.1.0 (git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c)",
  "craft-penpot",
+ "craft-sketch",
  "figcraft-doc",
  "figcraft-layout",
  "figcraft-pathops",
