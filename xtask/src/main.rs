@@ -266,6 +266,27 @@ fn parity() -> bool {
     true
 }
 
+/// Cargo versions require a numeric core and nonempty, ASCII prerelease/build identifiers.
+fn valid_version(v: &str) -> bool {
+    let (without_build, build) = v.split_once('+').map_or((v, None), |(version, build)| (version, Some(build)));
+    let (core, pre) = without_build.split_once('-').map_or((without_build, None), |(core, pre)| (core, Some(pre)));
+    let mut numbers = core.split('.');
+    if !(0..3).all(|_| {
+        numbers.next().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()) && (n.len() == 1 || !n.starts_with('0')) && n.parse::<u64>().is_ok())
+    }) || numbers.next().is_some()
+    {
+        return false;
+    }
+    let identifiers = |s: &str, allow_numeric_leading_zeroes: bool| {
+        s.split('.').all(|id| {
+            !id.is_empty()
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                && (allow_numeric_leading_zeroes || id.len() == 1 || !id.starts_with('0') || !id.bytes().all(|b| b.is_ascii_digit()))
+        })
+    };
+    pre.is_none_or(|p| identifiers(p, false)) && build.is_none_or(|b| identifiers(b, true))
+}
+
 fn version(sub: Option<&str>, value: Option<&str>) -> bool {
     let path = root().join("Cargo.toml");
     let Ok(text) = std::fs::read_to_string(&path) else { return false };
@@ -277,9 +298,7 @@ fn version(sub: Option<&str>, value: Option<&str>) -> bool {
         .to_string();
     match (sub, value) {
         (Some("set"), Some(v)) => {
-            let valid =
-                v.split(['-', '+']).next().is_some_and(|core| core.split('.').count() == 3 && core.split('.').all(|p| p.parse::<u64>().is_ok()));
-            if !valid {
+            if !valid_version(v) {
                 eprintln!("version must look like 1.2.3 or 1.2.3-rc.1");
                 return false;
             }
@@ -293,6 +312,52 @@ fn version(sub: Option<&str>, value: Option<&str>) -> bool {
         _ => {
             println!("{cur}");
             true
+        }
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::valid_version;
+
+    #[test]
+    fn accepts_cargo_versions_including_prerelease_and_build_metadata() {
+        for v in [
+            "0.0.0",
+            "1.2.3",
+            "18446744073709551615.0.0",
+            "1.2.3-0",
+            "1.2.3-01a",
+            "1.2.3-alpha-beta.1",
+            "1.2.3-18446744073709551616",
+            "1.2.3+001",
+            "1.2.3-rc.1+build.7",
+        ] {
+            assert!(valid_version(v), "{v}");
+        }
+    }
+
+    #[test]
+    fn rejects_versions_that_would_leave_the_manifest_invalid() {
+        for v in [
+            "",
+            "1.2",
+            "1.2.3.4",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "18446744073709551616.0.0",
+            "1.2.3-",
+            "1.2.3-01",
+            "1.2.3-rc.01",
+            "1.2.3-a..b",
+            "1.2.3-a_b",
+            "1.2.3+",
+            "1.2.3+meta+again",
+            "1.2.3-alpha\"",
+            "1.2.3-alpha\n",
+        ] {
+            assert!(!valid_version(v), "{v:?}");
         }
     }
 }
