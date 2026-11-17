@@ -111,6 +111,7 @@ fn registry() -> &'static Registry {
         list.extend(crate::branches::specs());
         list.extend(crate::plugins::specs());
         list.extend(crate::plugin_directory::specs());
+        list.extend(crate::plugin_store::specs());
         list.extend(crate::widgets::specs());
         list.extend(crate::live::specs());
         list.extend(crate::online::specs());

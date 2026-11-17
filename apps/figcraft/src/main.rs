@@ -199,7 +199,12 @@ fn main() -> eframe::Result {
     });
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
-    session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
+    // Plug-in catalogs and GitHub releases download with the HTTPS client the updater uses.
+    let link = figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)));
+    session.live.install(Box::new(match figcraft_ui_egui::plugin_http() {
+        Some(get) => link.with_http(get),
+        None => link,
+    }));
     // A file that won't open is said in the window too: it may have been double-clicked.
     let mut failed_open = None;
     for f in &args.files {
@@ -228,6 +233,10 @@ fn main() -> eframe::Result {
     *recovery::lock(&recovery) = copies;
     // Plugins installed from a server's plugin directory live with the user's settings.
     session.plugins.install_dir = services::config_dir().map(|d| d.join("Plugins"));
+    // Plugins installed from bundle files, catalogs and GitHub releases: the suite's plug-in store
+    // in the settings folder, listed again at every start.
+    session.plugins.store_dir = services::config_dir().map(|d| figcraft_engine::plugin_store::plugins_dir(&d));
+    figcraft_engine::plugin_store::load_store(&mut session);
     // Invite links open this app (Windows registers per user at run time; installed builds by
     // default, never a build from source unless asked).
     session.live.links = figcraft_collab_net::links::system();

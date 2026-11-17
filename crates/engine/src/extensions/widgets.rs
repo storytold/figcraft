@@ -13,12 +13,12 @@
 //! callback can open the plugin's panel, whose callbacks get the widget and can redraw it
 //! ([`panel_callback`]). See `docs/plugins.md`.
 
+use craft_plugin::widget::{MAX_IMAGE_BYTES, MAX_NODES, MAX_STATE_BYTES, check_menu, check_state, clean_field};
+use craft_plugin::{Instance, Manifest, RunOutput, UiChange, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
+pub use craft_plugin::{MenuItem, MenuKind};
 use figcraft_color::{ImageScaleMode, Paint};
 use figcraft_doc::{Document, Node, NodeId, NodeKind, TextData};
 use figcraft_geom::{Affine, Point};
-use figcraft_plugin::widget::{MAX_IMAGE_BYTES, MAX_NODES, MAX_STATE_BYTES, check_menu, check_state, clean_field};
-use figcraft_plugin::{Instance, Manifest, RunOutput, UiChange, WidgetHover, WidgetKind, WidgetNode, WidgetRender};
-pub use figcraft_plugin::{MenuItem, MenuKind};
 use serde_json::{Map, Value, json};
 
 use crate::cmd::CommandSpec;

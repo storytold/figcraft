@@ -71,6 +71,7 @@ pub use dev::devcompare;
 pub use dev::devinspect;
 pub use dev::tailwind;
 pub use extensions::plugin_directory;
+pub use extensions::plugin_store;
 pub use extensions::plugins;
 pub use extensions::widgets;
 pub use selection::rename;
@@ -501,6 +502,8 @@ mod plugin_data_tests;
 mod plugin_directory_tests;
 #[cfg(test)]
 mod plugin_panels_tests;
+#[cfg(test)]
+mod plugin_store_tests;
 #[cfg(test)]
 pub(crate) mod plugins_tests;
 #[cfg(test)]

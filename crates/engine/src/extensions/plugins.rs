@@ -1,5 +1,5 @@
 //! Plugins: WebAssembly modules that act on the document through the same commands as the menus,
-//! CLI and MCP server, inside the sandbox of `figcraft-plugin`. This module is the policy: which
+//! CLI and MCP server, inside the sandbox of `craft-plugin`. This module is the policy: which
 //! commands a plugin may call (its manifest's permissions, and never files, other documents, the
 //! undo history, dialogs or plugins), one undo step per run or panel callback, the panels plugins
 //! keep open, their settings and the installed-plugin list kept in the preferences. Widgets (plugin
@@ -7,9 +7,9 @@
 //! [`crate::plugin_directory`]. See `docs/plugins.md`.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use figcraft_plugin::{Instance, Limits, PluginError, RunOutput, UiChange};
+use craft_plugin::{AppInfo, Instance, Limits, PluginError, Policy, RunOutput, UiChange};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value, json};
 
@@ -17,7 +17,23 @@ use crate::cmd::{CommandSpec, find_command};
 use crate::params::{get, num, string};
 use crate::{EngineError, Result, Session, bad, spec};
 
-pub use figcraft_plugin::{Access, MANIFEST_FILE, Manifest, Panel, Param, ParamKind};
+pub use craft_plugin::{Access, LEGACY_MANIFEST_FILE, MANIFEST_FILE, MANIFEST_FILES, Manifest, Panel, Param, ParamKind};
+
+/// FigCraft as plug-ins name it (`apps.figcraft` in a manifest): command plug-ins (widgets are
+/// command plug-ins that also draw) of every API it has had, and manifests written before `apps`
+/// (`figcraft-plugin.json`), which run by their own `api`.
+pub const APP: AppInfo<'static> = AppInfo {
+    id: "figcraft",
+    version: env!("CARGO_PKG_VERSION"),
+    api: 1..=craft_plugin::API_VERSION,
+    kinds: &[craft_plugin::KIND_COMMAND],
+    accept_legacy: true,
+};
+
+/// Why FigCraft can't run the plugin `m` describes (another app's, another kind, a later API).
+pub(crate) fn check_target(m: &Manifest) -> std::result::Result<(), String> {
+    m.target(&APP).map(|_| ()).map_err(|why| format!("{} can't run here: {why}", m.name))
+}
 
 /// What one plugin may keep in its settings (keys and JSON values, in bytes), and its longest key.
 const MAX_SETTINGS_BYTES: usize = 64 * 1024;
@@ -31,12 +47,19 @@ pub struct InstalledPlugin {
     /// session only and isn't saved with the preferences).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// The plugin directory it was installed from (`ws://host:port/`), if any.
+    /// The plugin directory it was installed from (`ws://host:port/`), or for a plugin in the
+    /// plug-in store, where that one came from (`owner/repo@tag`, a catalog's package, a file's
+    /// name), if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// It lives in the plug-in store ([`crate::plugin_store`]), which lists it again at every start
+    /// (so it isn't saved with the preferences).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub store: bool,
 }
 
-/// Saves only the plugins imported from a manifest file (the others can't be loaded again).
+/// Saves only the plugins imported from a manifest file (the others can't be loaded again, or the
+/// plug-in store lists them).
 pub(crate) fn persisted<S: Serializer>(list: &[InstalledPlugin], s: S) -> std::result::Result<S::Ok, S::Error> {
     s.collect_seq(list.iter().filter(|p| p.path.is_some()))
 }
@@ -55,6 +78,15 @@ pub struct Runtime {
     pub install_dir: Option<std::path::PathBuf>,
     /// The plugin directory listed last (Plugins ▸ Manage plugins ▸ Browse shows it).
     pub directory: Option<crate::plugin_directory::Listing>,
+    /// The plug-in store's folder (`craft_plugin::store::plugins_dir` of the settings folder; the
+    /// app sets it): plugins installed from a bundle file, a catalog or a GitHub repository are
+    /// kept there. Without one they last for the session.
+    pub store_dir: Option<std::path::PathBuf>,
+    /// The bundle `plugin.install` downloaded or read last for its confirmation, so installing it
+    /// doesn't download it again.
+    pub pending: Option<crate::plugin_store::Pending>,
+    /// The catalogs listed last (Plugins ▸ Manage plugins ▸ Catalogs shows them).
+    pub catalogs: Option<crate::plugin_store::CatalogListing>,
     /// The installed plugins or their settings changed since the app last saved the preferences
     /// (it saves them at once, so a crash keeps them).
     pub unsaved: bool,
@@ -110,43 +142,49 @@ impl OpenPanel {
     }
 }
 
-/// Command prefixes no plugin may call, whatever its permissions: files and the app (plugins get
-/// no file system), other documents, version history, the undo history, plugins themselves and
-/// nested batches (a run already is one undo step), widgets (only a click calls one back).
-const DENIED: &[&str] = &[
-    "widget.",
-    "file.",
-    "doc.",
-    "version.",
-    "app.",
-    "pref.",
-    "help.",
-    "plugin.",
-    "plugins.",
-    "libraries.",
-    "library.add",
-    // Contacts the servers a file names, and remembers them as yours (#1097).
-    "library.check",
-    // Uploads the open document to a server.
-    "library.publishToServer",
-    "edit.undo",
-    "edit.redo",
-    "edit.repeat",
-    "command.batch",
-    // Runs other commands inside (duplicate, edit, export), past this policy, like a batch.
-    "data.fill",
-    // Network sessions, online files and their recovery copies on disk.
-    "collab.",
-    // Opens files in new windows.
-    "window.",
-    "view.theme",
-];
-/// Read-only exceptions to [`DENIED`].
-const ALLOWED: &[&str] = &["doc.list", "version.list"];
+/// Commands no plugin may call, whatever its permissions, on top of craft-plugin's
+/// [`craft_plugin::ALWAYS_DENIED`] (which this list repeats): files and the app (plugins get no
+/// file system), other documents, version history, the undo history, plugins themselves and nested
+/// batches (a run already is one undo step), widgets (only a click calls one back). Every entry is
+/// a prefix (`*`), as FigCraft's list always was; `doc.list` and `version.list` only list, so they
+/// stay allowed.
+pub(crate) static POLICY: LazyLock<Policy> = LazyLock::new(|| {
+    Policy::new(
+        &[
+            "widget.*",
+            "file.*",
+            "doc.*",
+            "version.*",
+            "app.*",
+            "pref.*",
+            "help.*",
+            "plugin.*",
+            "plugins.*",
+            "libraries.*",
+            "library.add*",
+            // Contacts the servers a file names, and remembers them as yours (#1097).
+            "library.check*",
+            // Uploads the open document to a server.
+            "library.publishToServer*",
+            "edit.undo*",
+            "edit.redo*",
+            "edit.repeat*",
+            "command.batch*",
+            // Runs other commands inside (duplicate, edit, export), past this policy, like a batch.
+            "data.fill*",
+            // Network sessions, online files and their recovery copies on disk.
+            "collab.*",
+            // Opens files in new windows.
+            "window.*",
+            "view.theme*",
+        ],
+        &["doc.list", "version.list"],
+    )
+});
 
 /// Why a plugin may not call `command` with `params` (before running it), if it may not.
 fn refusal(m: &Manifest, command: &str, params: &Value) -> Option<String> {
-    if DENIED.iter().any(|p| command.starts_with(p)) && !ALLOWED.contains(&command) {
+    if POLICY.refuses(command) {
         return Some(format!("`{command}` isn't available to plugins"));
     }
     // A preview runs its inner command, which the plugin's permissions and the denied list must cover too.
@@ -184,11 +222,14 @@ fn refusal(m: &Manifest, command: &str, params: &Value) -> Option<String> {
     if command == "dev.compare" && get(params, "version").is_some_and(|v| !v.is_null()) {
         return Some("plugins can't read saved versions: leave out `version`".into());
     }
-    if !m.permissions.allows(command) {
-        return Some(format!("`{command}` isn't in the commands {} asked permission for", m.name));
+    // The refused lists again, then the manifest's allowlist (craft-plugin's shared check).
+    if let Err(why) = craft_plugin::check_call(m, &POLICY, command) {
+        return Some(why);
     }
-    if m.permissions.access == Access::Read && find_command(command).is_some_and(|c| c.history) {
-        return Some(format!("`{command}` edits the document, and {} may only read it", m.name));
+    // FigCraft's registry knows which commands edit (they make an undo step): refused before
+    // they run. Whatever else changes the document is undone after the call (EngineHost::call).
+    if let Err(why) = craft_plugin::check_read_only(m, command, find_command(command).is_some_and(|c| c.history)) {
+        return Some(why);
     }
     // Branches live beside the document (not in its undo history or its `Arc`), so the write
     // checks below don't see them change.
@@ -250,7 +291,7 @@ fn sanitize_mime(mime: &str) -> String {
     }
 }
 
-impl figcraft_plugin::Host for EngineHost<'_> {
+impl craft_plugin::Host for EngineHost<'_> {
     fn call(&mut self, command: &str, params: &str) -> std::result::Result<String, String> {
         let params: Value = serde_json::from_str(params).map_err(|e| format!("params for `{command}` aren't JSON: {e}"))?;
         if let Some(why) = refusal(self.manifest, command, &params) {
@@ -377,17 +418,29 @@ pub(crate) fn read_file(path: &std::path::Path, max: usize) -> Result<Vec<u8>> {
     crate::file_access::read_capped(path, max as u64)
 }
 
-/// The manifest at `path` (the file, or the folder holding `figcraft-plugin.json`), its absolute
-/// path and its module.
+/// The manifest file `path` names: itself, or in a folder its `craft-plugin.json`, else its
+/// `figcraft-plugin.json` (the name before the manifest was shared).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn manifest_in(mut path: std::path::PathBuf) -> std::path::PathBuf {
+    if crate::file_access::is_dir(&path) {
+        let dir = path.clone();
+        path.push(MANIFEST_FILE);
+        if !crate::file_access::exists(&path) && crate::file_access::exists(dir.join(LEGACY_MANIFEST_FILE)) {
+            path = dir.join(LEGACY_MANIFEST_FILE);
+        }
+    }
+    path
+}
+
+/// The manifest at `path` (the file, or the folder holding `craft-plugin.json` or
+/// `figcraft-plugin.json`), its absolute path and its module.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_from_disk(cmd: &str, path: &str) -> Result<(Manifest, String, Vec<u8>)> {
-    let mut file = std::path::PathBuf::from(crate::library::absolute_path(path.trim()));
-    if crate::file_access::is_dir(&file) {
-        file.push(MANIFEST_FILE);
-    }
-    let text = read_file(&file, figcraft_plugin::manifest::MAX_MANIFEST_BYTES)?;
+    let file = manifest_in(std::path::PathBuf::from(crate::library::absolute_path(path.trim())));
+    let text = read_file(&file, craft_plugin::manifest::MAX_MANIFEST_BYTES)?;
     let text = String::from_utf8(text).map_err(|_| bad(cmd, "the manifest isn't UTF-8 text"))?;
     let manifest = Manifest::parse(&text).map_err(|e| bad(cmd, e))?;
+    check_target(&manifest).map_err(|e| bad(cmd, e))?;
     let wasm = module_file(&file, &manifest)?;
     Ok((manifest, file.to_string_lossy().into_owned(), wasm))
 }
@@ -449,6 +502,7 @@ fn describe(s: &Session, p: &InstalledPlugin) -> Value {
     let mut v = serde_json::to_value(&p.manifest).unwrap_or_else(|_| json!({"id": p.manifest.id}));
     v["path"] = json!(p.path);
     v["source"] = json!(p.source);
+    v["store"] = json!(p.store);
     v["loaded"] = json!(p.path.is_some() || s.plugins.modules.contains_key(&p.manifest.id));
     v
 }
@@ -472,6 +526,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                 other => Manifest::from_value(other),
             }
             .map_err(|e| bad(cmd, e))?;
+            check_target(&m).map_err(|e| bad(cmd, e))?;
             use base64::Engine as _;
             let b64 = string(p, "wasm").ok_or_else(|| bad(cmd, "pass the module as `wasm` (base64) with `manifest`"))?;
             if b64.len() > Limits::default().module_bytes / 3 * 4 + 4 {
@@ -480,11 +535,11 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             let wasm = base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| bad(cmd, format!("`wasm`: {e}")))?;
             (m, None, wasm)
         }
-        (None, None) => return Err(bad(cmd, "pass `path` (a figcraft-plugin.json or its folder), or `manifest` and `wasm`")),
+        (None, None) => return Err(bad(cmd, "pass `path` (a craft-plugin.json or figcraft-plugin.json, or its folder), or `manifest` and `wasm`")),
     };
-    figcraft_plugin::check_module(&wasm, &Limits::default()).map_err(|e| plugin_error(&manifest.name, e))?;
-    let mut out = describe(s, &InstalledPlugin { manifest: manifest.clone(), path: path.clone(), source: None });
-    out["replaced"] = json!(register(s, InstalledPlugin { manifest, path, source: None }, wasm));
+    craft_plugin::check_module(&wasm, &Limits::default()).map_err(|e| plugin_error(&manifest.name, e))?;
+    let mut out = describe(s, &InstalledPlugin { manifest: manifest.clone(), path: path.clone(), source: None, store: false });
+    out["replaced"] = json!(register(s, InstalledPlugin { manifest, path, source: None, store: false }, wasm));
     out["loaded"] = json!(true);
     Ok(out)
 }
@@ -503,6 +558,11 @@ pub(crate) fn register(s: &mut Session, entry: InstalledPlugin, wasm: Vec<u8>) -
     let list = &mut s.prefs.plugins;
     match list.iter_mut().find(|x| x.manifest.id == id) {
         Some(slot) => {
+            // One copy of a plugin: one imported or installed from a directory replaces the
+            // store's, which would otherwise come back at the next start.
+            if slot.store && !entry.store {
+                crate::plugin_store::forget(s.plugins.store_dir.as_deref(), &id);
+            }
             *slot = entry;
             s.prefs.plugin_settings.remove(&id);
             true
@@ -519,6 +579,9 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let id = string(p, "id").ok_or_else(|| bad(cmd, "`id` required"))?;
     let p = installed(s, cmd, &id)?.clone();
     crate::plugin_directory::delete_installed(s, &p);
+    if p.store {
+        crate::plugin_store::forget(s.plugins.store_dir.as_deref(), &id);
+    }
     s.prefs.plugins.retain(|x| x.manifest.id != id);
     s.prefs.plugin_settings.remove(&id);
     s.plugins.unsaved = true;
@@ -536,6 +599,7 @@ pub fn run(s: &mut Session, id: &str, command: Option<&str>, params: &Value, fue
     let mut p = installed(s, cmd, id)?.clone();
     // Checked again: the preferences file may have been edited by hand.
     p.manifest = Manifest::from_value(&json!(p.manifest)).map_err(|e| bad(cmd, e))?;
+    check_target(&p.manifest).map_err(|e| bad(cmd, e))?;
     let m = &p.manifest;
     let c = m.command(command).ok_or_else(|| bad(cmd, format!("{} has no command `{}`", m.name, command.unwrap_or_default())))?;
     let params = c.resolve_params(params).map_err(|e| bad(cmd, e))?;
@@ -688,7 +752,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "plugin.import",
             "Import plugin from manifest…",
-            "{path (figcraft-plugin.json or its folder) | manifest (object or JSON text), wasm (base64)} replaces a plugin with the same id",
+            "{path (craft-plugin.json or figcraft-plugin.json, or its folder) | manifest (object or JSON text), wasm (base64)} replaces a plugin with the same id",
             false,
             import
         ),

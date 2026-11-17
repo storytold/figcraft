@@ -1001,6 +1001,14 @@ dependencies = [
 [[package]]
 name = "craft-atomic"
 version = "0.1.0"
+source = "git+https://github.com/Dasemu/craft-libs?rev=77f66b33f7366abb9927113f1f5e427e2593ef84#77f66b33f7366abb9927113f1f5e427e2593ef84"
+dependencies = [
+ "rustix 1.1.5",
+]
+
+[[package]]
+name = "craft-atomic"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 dependencies = [
  "rustix 1.1.5",
@@ -1074,7 +1082,7 @@ name = "craft-font-store"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 dependencies = [
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545)",
  "craft-font-catalog",
  "flate2",
  "serde",
@@ -1153,6 +1161,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-plugin"
+version = "0.1.0"
+source = "git+https://github.com/Dasemu/craft-libs?rev=77f66b33f7366abb9927113f1f5e427e2593ef84#77f66b33f7366abb9927113f1f5e427e2593ef84"
+dependencies = [
+ "craft-atomic 0.1.0 (git+https://github.com/Dasemu/craft-libs?rev=77f66b33f7366abb9927113f1f5e427e2593ef84)",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "wasmi",
+]
+
+[[package]]
 name = "craft-quit"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
@@ -1168,7 +1189,7 @@ name = "craft-settings"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545#e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545"
 dependencies = [
- "craft-atomic",
+ "craft-atomic 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545)",
  "dirs",
  "serde",
  "toml_edit",
@@ -2037,6 +2058,7 @@ dependencies = [
  "craft-docpath",
  "craft-font-catalog",
  "craft-font-store",
+ "craft-plugin",
  "deunicode",
  "figcraft-collab",
  "figcraft-color",
@@ -2046,7 +2068,6 @@ dependencies = [
  "figcraft-layout",
  "figcraft-pathops",
  "figcraft-pdf",
- "figcraft-plugin",
  "figcraft-render",
  "figcraft-svg",
  "figcraft-text",
@@ -2144,19 +2165,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "figcraft-plugin"
-version = "0.18.1"
-dependencies = [
- "figcraft-color",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.21",
- "wasmi",
- "wat",
-]
-
-[[package]]
 name = "figcraft-render"
 version = "0.18.1"
 dependencies = [
@@ -2180,6 +2188,7 @@ name = "figcraft-server"
 version = "0.18.1"
 dependencies = [
  "chrono",
+ "craft-plugin",
  "crc32fast",
  "ctrlc",
  "env_logger",
@@ -2188,7 +2197,6 @@ dependencies = [
  "figcraft-doc",
  "figcraft-engine",
  "figcraft-format",
- "figcraft-plugin",
  "log",
  "rustix 1.1.5",
  "serde",

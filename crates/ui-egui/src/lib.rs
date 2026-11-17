@@ -14,6 +14,29 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     ..craft_update::suite::FIGCRAFT
 };
 
+/// GET for plug-in catalogs and GitHub releases (`craft_plugin::Fetch`'s contract: the body, at
+/// most `max` bytes, `None` for 404) over craft-update's HTTPS client, the one the update checks
+/// use (proxies, TLS); `None` when it can't be built. The app hands it to its network link.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::type_complexity)]
+pub fn plugin_http() -> Option<std::sync::Arc<dyn Fn(&str, usize) -> Result<Option<Vec<u8>>, String> + Send + Sync>> {
+    let http =
+        craft_update::Http::new(&format!("FigCraft/{}", env!("CARGO_PKG_VERSION"))).map_err(|e| log::warn!("plugins: no HTTPS client: {e}")).ok()?;
+    Some(std::sync::Arc::new(move |url: &str, max: usize| {
+        use craft_update::http::Fetched;
+        if url.starts_with("https://api.github.com/") {
+            return match http.get_api(url, None)? {
+                Fetched::Body { text, .. } if text.len() > max => Err(format!("GitHub's answer is larger than {max} bytes")),
+                Fetched::Body { text, .. } => Ok(Some(text.into_bytes())),
+                Fetched::NotFound => Ok(None),
+                Fetched::RateLimited { .. } => Err("GitHub's API limit for this hour is used up: try again later".into()),
+                Fetched::NotModified => Err("GitHub answered 304 Not Modified to a request without a cache".into()),
+            };
+        }
+        http.get_bytes(url, max)
+    }))
+}
+
 pub mod a11y;
 pub mod bidi;
 pub mod canvas;

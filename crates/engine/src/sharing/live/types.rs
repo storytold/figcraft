@@ -334,6 +334,9 @@ pub enum NetRequest {
     /// Ask the server at `server` about its hosting and, with a file's owner token, manage that
     /// file ([`LiveLink::hosting`]).
     Hosting { server: String, file: String, owner: String, req: Option<Admin> },
+    /// GET `url` over HTTPS (a plug-in catalog, a GitHub release or its API) and return at most
+    /// `max` bytes of the body ([`LiveLink::fetch`]).
+    Fetch { url: String, max: usize },
 }
 
 impl NetRequest {
@@ -343,6 +346,7 @@ impl NetRequest {
             NetRequest::Plugins { .. } => crate::plugin_directory::NO_DIRECTORY,
             NetRequest::Library { .. } | NetRequest::Upload(_) => NO_TEAM_LIBRARIES,
             NetRequest::Hosting { .. } | NetRequest::Share { .. } => NO_HOSTING,
+            NetRequest::Fetch { .. } => crate::plugin_store::NO_HTTP,
         }
     }
 
@@ -354,6 +358,7 @@ impl NetRequest {
             NetRequest::Upload(_) => |why| NetReply::Upload(Err(why)),
             NetRequest::Hosting { .. } => |why| NetReply::Hosting(Err(why)),
             NetRequest::Share { .. } => |why| NetReply::Share(Err(why)),
+            NetRequest::Fetch { .. } => |why| NetReply::Fetch(Err(why)),
         }
     }
 
@@ -371,6 +376,7 @@ impl NetRequest {
             (NetRequest::Share { server: a, file: f, create: x, .. }, NetRequest::Share { server: b, file: g, create: y, .. }) => {
                 a == b && f == g && x == y
             }
+            (NetRequest::Fetch { url: a, max: x }, NetRequest::Fetch { url: b, max: y }) => a == b && x == y,
             _ => false,
         }
     }
@@ -386,6 +392,8 @@ pub enum NetReply {
     Upload(std::result::Result<Published, String>),
     /// What the server says about its hosting, and its answer to the request, if one was sent.
     Hosting(std::result::Result<(HostInfo, Option<AdminReply>), String>),
+    /// The body (`None`: 404 Not Found).
+    Fetch(std::result::Result<Option<Vec<u8>>, String>),
 }
 
 /// What a session without the network says about servers' hosting.
@@ -484,6 +492,12 @@ pub trait LiveLink: Send {
     fn plugins(&mut self, _server: &str, _req: PluginReq) -> std::result::Result<PluginReply, String> {
         Err(crate::plugin_directory::NO_DIRECTORY.into())
     }
+    /// GET `url` over HTTPS, following redirects: at most `max` bytes of the body, `None` for 404
+    /// Not Found (installing plug-ins from catalogs and GitHub releases; see
+    /// `craft_plugin::Fetch`). Waits for the answer.
+    fn fetch(&mut self, _url: &str, _max: usize) -> std::result::Result<Option<Vec<u8>>, String> {
+        Err(crate::plugin_store::NO_HTTP.into())
+    }
     /// What the server at `server` says about its hosting, and with a file's owner token
     /// (`file` and `owner`) its answer to `req` about that file; waits for the server. Errors
     /// never echo the token.
@@ -508,6 +522,7 @@ pub trait LiveLink: Send {
             NetRequest::Library { link, req } => NetReply::Library(self.library(&link, req)),
             NetRequest::Upload(o) => NetReply::Upload(self.upload(o)),
             NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(self.hosting(&server, &file, &owner, req)),
+            NetRequest::Fetch { url, max } => NetReply::Fetch(self.fetch(&url, max)),
         }
     }
     /// Send `req` on a thread of its own and return at once: the answer arrives as [`Event::Net`]

@@ -776,7 +776,7 @@ pub enum PluginReq {
     List { query: String },
     /// A plugin's bundle: version `version`, or its latest.
     Fetch { id: String, version: Option<String> },
-    /// Keep a bundle (`figcraft_plugin::bundle`) as a new version of its plugin. Needs the key.
+    /// Keep a bundle (`craft_plugin::bundle`) as a new version of its plugin. Needs the key.
     Publish { bundle: Vec<u8> },
     /// Remove version `version` of a plugin, or all of them. Needs the key.
     Unpublish { id: String, version: Option<String> },

@@ -6,8 +6,8 @@
 
 use std::path::Path;
 
+use craft_plugin::bundle::{Asset, Bundle, sha256_hex};
 use figcraft_collab::message::{ClientMsg, OpenPlugins, PROTOCOL, PluginReply, PluginReq, ServerMsg};
-use figcraft_plugin::bundle::{Asset, Bundle, sha256_hex};
 use serde_json::json;
 
 use crate::cli::{self, Cli, Command};

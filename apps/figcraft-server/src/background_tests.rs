@@ -6,8 +6,8 @@
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
+use craft_plugin::bundle::Bundle;
 use figcraft_engine::Session;
-use figcraft_plugin::bundle::Bundle;
 use serde_json::{Value, json};
 
 use crate::store::Store;

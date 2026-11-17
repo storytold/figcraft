@@ -128,7 +128,7 @@ Do not ask for it, and do not stop when it is absent.
   incumbent's menu catalog in `crates/engine/src/catalog.rs` (the parity metric: `cargo xtask parity`).
 - **Programmatic calls never open dialogs.** Commands only *request* UI (`Session::request_ui`); the
   control channel drops dialog requests.
-- **Layering** is enforced by `cargo xtask layers`: geom/color (L0) → doc (L1) → layout/text/pathops/plugin/collab
+- **Layering** is enforced by `cargo xtask layers`: geom/color (L0) → doc (L1) → layout/text/pathops/collab
   (L2) → render/format (L3) → svg/pdf (L4) → engine (L5) → ui-egui/mcp (L6) → apps. Nothing below
   L6 depends on egui/eframe/rfd/winit. **The UI crate is swappable.**
 - **The UI is thin**: panels read engine state and act through `app.run(id, params)` /

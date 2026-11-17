@@ -227,7 +227,7 @@ fn fuzzed_frames_dont_hurt_the_server() {
         ClientMsg::Report { reason: "fuzz".into() },
         ClientMsg::Plugins(message::PluginReq::Fetch { id: "org.example.tiny".into(), version: None }),
         ClientMsg::Plugins(message::PluginReq::Publish {
-            bundle: figcraft_plugin::bundle::Bundle { manifest: "{}".into(), wasm: b"\0asm".to_vec(), assets: Vec::new() }.encode(),
+            bundle: craft_plugin::bundle::Bundle { manifest: "{}".into(), wasm: b"\0asm".to_vec(), assets: Vec::new() }.encode(),
         }),
         ClientMsg::Ping,
     ]

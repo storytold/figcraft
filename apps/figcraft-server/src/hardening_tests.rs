@@ -561,10 +561,10 @@ fn a_file_at_its_cap_is_compacted_at_most_once_a_minute() {
 /// A plugin directory with one plugin whose bundle is about `mib` MiB.
 fn plugin_store(dir: &std::path::Path, mib: usize) -> Store {
     let mut store = Store::open(dir, config(dir).store()).unwrap();
-    let bundle = figcraft_plugin::bundle::Bundle {
+    let bundle = craft_plugin::bundle::Bundle {
         manifest: crate::directory_tests::manifest("org.example.big", "1.0.0"),
         wasm: crate::directory_tests::wasm(),
-        assets: vec![figcraft_plugin::bundle::Asset { name: "data.bin".into(), data: vec![9; mib << 20] }],
+        assets: vec![craft_plugin::bundle::Asset { name: "data.bin".into(), data: vec![9; mib << 20] }],
     };
     store.directory().publish(&bundle.encode()).unwrap();
     store

@@ -53,18 +53,32 @@ pub struct NetLink {
     libraries: Inbox,
     /// Background library requests are out.
     fetching: Arc<AtomicBool>,
+    /// The app's HTTPS client, for plug-in catalogs and GitHub releases (`NetRequest::Fetch`);
+    /// without one those requests fail.
+    http: Option<HttpGet>,
 }
+
+/// An HTTPS GET as [`figcraft_engine::live::LiveLink::fetch`] describes it: the body (at most
+/// `max` bytes), `None` for 404.
+pub type HttpGet = Arc<dyn Fn(&str, usize) -> Result<Option<Vec<u8>>, String> + Send + Sync>;
 
 impl NetLink {
     /// `wake` is called (from network threads) whenever something arrives for the UI.
     pub fn new(wake: Waker) -> Self {
         let libraries = Inbox::new(wake.clone());
-        Self { limits: NetLimits::default(), sessions: Sessions::new(wake), guest: |c| c, libraries, fetching: Arc::default() }
+        Self { limits: NetLimits::default(), sessions: Sessions::new(wake), guest: |c| c, libraries, fetching: Arc::default(), http: None }
     }
 
     /// With other transport limits.
     pub fn with_limits(mut self, limits: NetLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// With an HTTPS client for installing plug-ins from catalogs and GitHub releases (the app's
+    /// own, with its proxies and TLS settings).
+    pub fn with_http(mut self, get: HttpGet) -> Self {
+        self.http = Some(get);
         self
     }
 
@@ -242,6 +256,10 @@ impl LiveLink for NetLink {
         plugins(server, req, &self.limits)
     }
 
+    fn fetch(&mut self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String> {
+        http_get(self.http.as_ref(), url, max)
+    }
+
     fn hosting(&mut self, server: &str, file: &str, owner: &str, req: Option<Admin>) -> Result<(HostInfo, Option<AdminReply>), String> {
         hosting(server, file, owner, req, &self.limits)
     }
@@ -251,7 +269,7 @@ impl LiveLink for NetLink {
     }
 
     fn background(&mut self, job: u64, req: NetRequest) -> bool {
-        let (inbox, limits) = (self.libraries.clone(), self.limits);
+        let (inbox, limits, http) = (self.libraries.clone(), self.limits, self.http.clone());
         let (failed, failure) = (inbox.clone(), req.failure());
         let spawned = std::thread::Builder::new().name("server-request".into()).spawn(move || {
             let reply = match req {
@@ -260,6 +278,7 @@ impl LiveLink for NetLink {
                 NetRequest::Upload(o) => NetReply::Upload(upload(o, &limits)),
                 NetRequest::Hosting { server, file, owner, req } => NetReply::Hosting(hosting(&server, &file, &owner, req, &limits)),
                 NetRequest::Share { server, file, owner, revoke, create } => NetReply::Share(share(&server, &file, &owner, &revoke, create, &limits)),
+                NetRequest::Fetch { url, max } => NetReply::Fetch(http_get(http.as_ref(), &url, max)),
             };
             inbox.push(Event::Net { job, reply: Box::new(reply) });
         });
@@ -377,5 +396,13 @@ impl Drop for NetLink {
         for id in self.sessions.ids() {
             self.leave(id);
         }
+    }
+}
+
+/// GET `url` with the app's HTTPS client, if it gave one.
+fn http_get(http: Option<&HttpGet>, url: &str, max: usize) -> Result<Option<Vec<u8>>, String> {
+    match http {
+        Some(get) => get(url, max),
+        None => Err(figcraft_engine::plugin_store::NO_HTTP.into()),
     }
 }

@@ -78,6 +78,10 @@ pub struct Prefs {
     /// The plugin directory browsed last (`ws://host:port/`, never with a key).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_directory: Option<String>,
+    /// The plug-in catalogs added (`plugin.catalog.add`): `index.json` URLs, `https://` on
+    /// GitHub's hosts or `file://`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub plugin_catalogs: Vec<String>,
     /// The server files are shared through online (Share ▸ Online, join codes; Publish to server
     /// suggests it too): `wss://host/`, never with a key. [`live::DEFAULT_SERVER`] unless the user
     /// chose another; empty: online sharing is off (saved as empty, so it stays off).
@@ -153,6 +157,7 @@ impl Default for Prefs {
             plugins: Vec::new(),
             plugin_settings: BTreeMap::new(),
             plugin_directory: None,
+            plugin_catalogs: Vec::new(),
             publish_server: live::DEFAULT_SERVER.into(),
             recent_files: Vec::new(),
             online_files: Vec::new(),

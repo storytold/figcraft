@@ -231,6 +231,6 @@ pub(crate) fn background(job: u64, req: NetRequest) -> Option<Next> {
                 share_links(Sharing { server, key, file, owner, revoke, create }, Box::new(move |r| answer(NetReply::Share(r))))
             }
         },
-        NetRequest::Plugins { .. } | NetRequest::Library { .. } | NetRequest::Upload(_) => return None,
+        NetRequest::Plugins { .. } | NetRequest::Library { .. } | NetRequest::Upload(_) | NetRequest::Fetch { .. } => return None,
     })
 }

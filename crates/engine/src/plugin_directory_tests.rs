@@ -7,8 +7,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use craft_plugin::bundle::{Asset, Bundle, sha256_hex};
 use figcraft_collab::message::{ClientMsg, PluginEntry, PluginReply, PluginReq};
-use figcraft_plugin::bundle::{Asset, Bundle, sha256_hex};
 use serde_json::{Value, json};
 
 use crate::live::{Event, HostOptions, LiveLink, Presence, SessionInfo};

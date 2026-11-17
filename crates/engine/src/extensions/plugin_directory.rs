@@ -12,17 +12,17 @@
 
 use std::cmp::Ordering;
 
+pub use craft_plugin::bundle;
+pub use craft_plugin::bundle::newer as newer_version;
+use craft_plugin::bundle::{Asset, Bundle, MAX_ASSETS, check_asset_name, compare_versions, newer, sha256_hex};
 pub use figcraft_collab::message::PluginEntry;
 use figcraft_collab::message::{PluginReply, PluginReq};
-pub use figcraft_plugin::bundle;
-pub use figcraft_plugin::bundle::newer as newer_version;
-use figcraft_plugin::bundle::{Asset, Bundle, MAX_ASSETS, check_asset_name, compare_versions, newer, sha256_hex};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::live::{NetReply, NetRequest};
 use crate::params::{get, string};
-use crate::plugins::{InstalledPlugin, MANIFEST_FILE, Manifest, installed, register};
+use crate::plugins::{InstalledPlugin, LEGACY_MANIFEST_FILE, Manifest, check_target, installed, register};
 use crate::{EngineError, Result, Session, bad, spec};
 
 /// Why there's no plugin directory here (the browser build, sessions without the network).
@@ -127,9 +127,10 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     if manifest.id != entry.id || manifest.version != entry.version {
         return Err(fail("its manifest doesn't match the directory's entry"));
     }
+    check_target(&manifest).map_err(|e| fail(&e))?;
     // What was shown and approved is the entry's access and commands: a bundle whose manifest
     // asks for more is refused, since the manifest is what the plugin then runs under.
-    if manifest.permissions.access == figcraft_plugin::manifest::Access::Write && !entry.access.trim().eq_ignore_ascii_case("write") {
+    if manifest.permissions.access == craft_plugin::manifest::Access::Write && !entry.access.trim().eq_ignore_ascii_case("write") {
         return Err(fail("its manifest asks to write the document, but the directory showed it as read-only"));
     }
     if !entry.commands.is_empty()
@@ -148,14 +149,15 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
         "path": path,
         "source": source,
     });
-    let replaced = register(s, InstalledPlugin { manifest, path, source: Some(source) }, bundle.wasm);
+    let replaced = register(s, InstalledPlugin { manifest, path, source: Some(source), store: false }, bundle.wasm);
     let mut out = out;
     out["replaced"] = json!(replaced);
     Ok(out)
 }
 
 /// Keep an installed plugin's files in its own folder under the install folder (named by the hash
-/// of its id, so no id reaches the file system), its module renamed; the manifest's path. Without
+/// of its id, so no id reaches the file system), its module renamed, its manifest under the name
+/// it has always had here (`figcraft-plugin.json`); the manifest's path. Without
 /// an install folder (the browser, the CLI and tests) the plugin lasts for the session.
 // The install folder is the app's own (set by the desktop app, never by a command), so automation
 // roots don't apply to it.
@@ -180,7 +182,7 @@ fn save(s: &Session, m: &mut Manifest, b: &Bundle) -> std::result::Result<Option
                     fs::write(partial.join(ASSETS).join(&a.name), &a.data)?;
                 }
             }
-            fs::write(partial.join(MANIFEST_FILE), serde_json::to_vec_pretty(&*m).map_err(std::io::Error::other)?)
+            fs::write(partial.join(LEGACY_MANIFEST_FILE), serde_json::to_vec_pretty(&*m).map_err(std::io::Error::other)?)
         };
         let done = write().and_then(|()| {
             if folder.exists() {
@@ -192,7 +194,7 @@ fn save(s: &Session, m: &mut Manifest, b: &Bundle) -> std::result::Result<Option
             let _ = fs::remove_dir_all(&partial);
             return Err(format!("couldn't write it to {}: {e}", root.display()));
         }
-        Ok(Some(folder.join(MANIFEST_FILE).to_string_lossy().into_owned()))
+        Ok(Some(folder.join(LEGACY_MANIFEST_FILE).to_string_lossy().into_owned()))
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -221,12 +223,9 @@ pub(crate) fn delete_installed(s: &Session, p: &InstalledPlugin) {
 #[cfg(not(target_arch = "wasm32"))]
 fn bundle_from_disk(cmd: &str, path: &str) -> Result<Bundle> {
     use crate::plugins::{module_file, read_file};
-    let mut file = std::path::PathBuf::from(crate::library::absolute_path(path.trim()));
-    if crate::file_access::is_dir(&file) {
-        file.push(MANIFEST_FILE);
-    }
+    let file = crate::plugins::manifest_in(std::path::PathBuf::from(crate::library::absolute_path(path.trim())));
     let text =
-        String::from_utf8(read_file(&file, figcraft_plugin::manifest::MAX_MANIFEST_BYTES)?).map_err(|_| bad(cmd, "the manifest isn't UTF-8 text"))?;
+        String::from_utf8(read_file(&file, craft_plugin::manifest::MAX_MANIFEST_BYTES)?).map_err(|_| bad(cmd, "the manifest isn't UTF-8 text"))?;
     let m = Manifest::parse(&text).map_err(|e| bad(cmd, e))?;
     let wasm = module_file(&file, &m)?;
     let mut assets = Vec::new();
@@ -282,7 +281,12 @@ fn publish(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
-        (None, None) => return Err(bad(cmd, "pass `path` (a plugin folder or its figcraft-plugin.json) or `plugin` (an installed plugin's id)")),
+        (None, None) => {
+            return Err(bad(
+                cmd,
+                "pass `path` (a plugin folder or its craft-plugin.json or figcraft-plugin.json) or `plugin` (an installed plugin's id)",
+            ));
+        }
     };
     // Checked here too, for a clear message before anything is sent.
     bundle.check().map_err(|e| bad(cmd, e))?;
@@ -323,7 +327,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "plugin.directory.publish",
             "Publish plugin to directory",
-            "{path (a plugin folder or its figcraft-plugin.json) | plugin (an installed plugin's id), server (ws://host:port/?key=…)} → {published: entry, server}",
+            "{path (a plugin folder or its craft-plugin.json or figcraft-plugin.json) | plugin (an installed plugin's id), server (ws://host:port/?key=…)} → {published: entry, server}",
             false,
             publish
         ),

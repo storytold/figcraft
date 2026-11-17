@@ -1,4 +1,4 @@
-//! The plugin directory: plugin bundles (`figcraft_plugin::bundle`) published to the server with
+//! The plugin directory: plugin bundles (`craft_plugin::bundle`) published to the server with
 //! its key, listed, searched and fetched by anyone who can reach it, and unpublished with the key
 //! (there are no accounts: whoever has the key is the publisher, and the operator moderates).
 //!
@@ -21,10 +21,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use craft_plugin::bundle::{Bundle, compare_versions, parse_version, sha256_hex};
+use craft_plugin::manifest::Access;
 use figcraft_collab::message::{PluginEntry, PluginReply, PluginReq};
 use figcraft_collab_net::net::Bucket;
-use figcraft_plugin::bundle::{Bundle, compare_versions, parse_version, sha256_hex};
-use figcraft_plugin::manifest::Access;
 
 use crate::disk;
 use crate::store::now;
