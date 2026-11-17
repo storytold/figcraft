@@ -222,15 +222,25 @@ fn gesture_open(app: &FigApp) -> bool {
 /// colour picker or a ruler, outside the window) ends as a release on the handle would: the edit
 /// commits now, instead of waiting, uncommitted, to move the handle to wherever the pointer next
 /// presses. So does one whose gesture Escape or Undo closed under the held button: it stops there
-/// rather than editing on with no gesture open, an undo step a frame. True when a drag ended.
+/// rather than editing on with no gesture open, an undo step a frame. True when the release was a
+/// handle drag's.
 pub fn end_released_drag(app: &mut FigApp, ctx: &egui::Context) -> bool {
     let stashed = ctx.data(|d| d.get_temp::<Drag>(drag_id())).is_some();
     if !stashed || (ctx.input(|i| i.pointer.primary_down()) && gesture_open(app)) {
         return false;
     }
-    let _ = app.session.commit_interaction();
-    ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+    commit_drag(app, ctx);
     true
+}
+
+/// End the handle drag: commit its gesture, then forget the drag. A commit that is refused (the
+/// frame replays another agent's input, and the gesture is not that agent's) keeps the drag: with
+/// the drag forgotten, the gesture would stay open with nothing left to end it, and hold the other
+/// agents back. The next frame that may end it does.
+fn commit_drag(app: &mut FigApp, ctx: &egui::Context) {
+    if app.session.commit_interaction().is_ok() {
+        ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+    }
 }
 
 /// The gradient being edited (single node, picker open on a gradient paint).
@@ -296,8 +306,11 @@ pub fn remove_selected_stop(app: &mut FigApp, ctx: &egui::Context) -> bool {
         return g.stops.len() <= 2;
     }
     g.stops.remove(sel);
+    // Refused (the document is held): the key is used up and nothing is touched.
+    if app.session.begin_interaction("Remove gradient stop").is_err() {
+        return true;
+    }
     ctx.data_mut(|d| d.insert_temp(crate::colorpicker::stop_id(), sel.saturating_sub(1)));
-    let _ = app.session.begin_interaction("Remove gradient stop");
     set_gradient(app, id, fills, index, g);
     let _ = app.session.commit_interaction();
     true
@@ -574,8 +587,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         if released || !down {
-            let _ = app.session.commit_interaction();
-            ctx.data_mut(|d| d.remove::<Drag>(drag_id()));
+            commit_drag(app, ctx);
         }
         return true;
     }
@@ -591,8 +603,10 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
             {
                 ctx.set_cursor_icon(egui::CursorIcon::Grab);
                 if pressed {
-                    let _ = app.session.begin_interaction("Edit gradient");
-                    ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gradient { id, fills, index, which }));
+                    // The drag state exists only when the gesture was granted.
+                    if app.session.begin_interaction("Edit gradient").is_ok() {
+                        ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gradient { id, fills, index, which }));
+                    }
                 }
                 return true;
             }
@@ -609,14 +623,18 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         if pressed {
             let stop = match stop_hit {
                 Some(i) => {
-                    let _ = app.session.begin_interaction("Edit gradient");
+                    if app.session.begin_interaction("Edit gradient").is_err() {
+                        return true;
+                    }
                     i
                 }
                 None => {
                     let pos01 = t.map(|(t, _)| t).unwrap_or(0.5) as f32;
                     let mut g2 = g.clone();
                     g2.stops.push(figcraft_color::ColorStop { position: pos01, color: g.sample(pos01) });
-                    let _ = app.session.begin_interaction("Add gradient stop");
+                    if app.session.begin_interaction("Add gradient stop").is_err() {
+                        return true;
+                    }
                     set_gradient(app, id, fills, index, g2);
                     g.stops.len()
                 }
@@ -630,8 +648,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         let hit = blur_points(app, id, &e).and_then(|pts| pts.iter().position(|p| (*p - pos).length() <= 8.0));
         if let Some(which) = hit {
             ctx.set_cursor_icon(egui::CursorIcon::Grab);
-            if pressed {
-                let _ = app.session.begin_interaction("Edit progressive blur");
+            if pressed && app.session.begin_interaction("Edit progressive blur").is_ok() {
                 ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Blur { id, index, which }));
             }
             return true;
@@ -664,8 +681,7 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         } else {
             egui::CursorIcon::ResizeNeSw
         });
-        if pressed {
-            let _ = app.session.begin_interaction("Crop image");
+        if pressed && app.session.begin_interaction("Crop image").is_ok() {
             ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Crop { id, fills, index, which, start, rect }));
         }
         return true;
@@ -678,8 +694,9 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         if r.contains(pos) {
             ctx.set_cursor_icon(if side % 2 == 0 { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
             if pressed {
-                let _ = app.session.begin_interaction("Padding");
-                ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side, start: pos, value: v }));
+                if app.session.begin_interaction("Padding").is_ok() {
+                    ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Padding { id, side, start: pos, value: v }));
+                }
                 return true;
             }
             return false;
@@ -689,8 +706,9 @@ pub fn input(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) -> bool {
         if g.rect.contains(pos) {
             ctx.set_cursor_icon(if g.vertical { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
             if pressed {
-                let _ = app.session.begin_interaction("Gap");
-                ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gap { id, start: pos, value: g.value, vertical: g.vertical, key: g.key }));
+                if app.session.begin_interaction("Gap").is_ok() {
+                    ctx.data_mut(|d| d.insert_temp(drag_id(), Drag::Gap { id, start: pos, value: g.value, vertical: g.vertical, key: g.key }));
+                }
                 return true;
             }
             return false;

@@ -39,13 +39,7 @@ pub fn config_dir() -> Option<PathBuf> {
 /// The platform's config folder, read from the environment as before: `%APPDATA%` on Windows,
 /// so a test's own `APPDATA` keeps the app away from the user's settings.
 fn platform_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
-    #[cfg(target_os = "windows")]
-    let base = std::env::var_os("APPDATA").map(PathBuf::from);
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
-    base
+    figcraft_engine::discovery::platform_config_dir()
 }
 
 /// The settings folder by the suite's rules (craft-settings), from what `probe` sees:

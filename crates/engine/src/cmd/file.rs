@@ -67,13 +67,19 @@ fn new_file(s: &mut Session, p: &Value, kind: FileKind) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        spec!("file.new", "New design file", "{name?}", false, |s, p| new_file(s, p, FileKind::Design)),
+        spec!("file.new", "New design file", "{name?}", false, |s, p| {
+            s.refuse_active_switch("file.new")?;
+            new_file(s, p, FileKind::Design)
+        }),
         spec!(
             "file.newBoard",
             "New board",
             "{name?}  a board: sticky notes, shapes with text, connectors, marker and stamps on a light page",
             false,
-            |s, p| new_file(s, p, FileKind::Board)
+            |s, p| {
+                s.refuse_active_switch("file.newBoard")?;
+                new_file(s, p, FileKind::Board)
+            }
         ),
         spec!(
             "file.open",
@@ -115,7 +121,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Mark saved",
             "{}  clears the unsaved changes of the active tab's file and its branch tabs: run it once the file from `file.saveAs {data: true}` was delivered (a refused download keeps them)",
             false,
-            mark_saved
+            mark_saved_kept
         ),
         spec!(
             "file.export",
@@ -186,6 +192,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{path | data (base64: the copy's bytes, as the browser keeps them)}  open a recovery copy (written while the app runs, read back after a crash) as a document with unsaved changes and no path: saving asks where → {index}",
             false,
             |s, p| {
+                s.refuse_active_switch("file.recover")?;
                 let ds = match string(p, "data") {
                     Some(d) => recovered_from(
                         &base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|e| bad("file.recover", format!("`data`: {e}")))?,
@@ -210,6 +217,7 @@ pub fn specs() -> Vec<CommandSpec> {
             color_profile
         ),
         spec!("file.duplicate", "Duplicate file", "{}", false, |s, _| {
+            s.refuse_active_switch("file.duplicate")?;
             let ds = s.ds()?;
             let mut d = (*ds.doc).clone();
             d.name = format!("{} (Copy)", d.name);
@@ -297,6 +305,7 @@ pub fn specs() -> Vec<CommandSpec> {
             autosave
         ),
         spec!("version.exitPreview", "Back to current version", "{}  end a version preview", false, |s, _| {
+            s.refuse_active_switch("version.exitPreview")?;
             Ok(json!({"ended": s.ds_mut()?.end_preview()}))
         }),
         spec!(
@@ -305,6 +314,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id | index}  open the version as a new document; returns its tab `index`",
             false,
             |s, p| {
+                s.refuse_active_switch("version.duplicate")?;
                 let ds = s.ds()?;
                 let v = ds.versions.get(version_index("version.duplicate", ds, p)?).ok_or_else(|| bad("version.duplicate", "no such version"))?;
                 let mut doc = (*read_version(v)?).clone();
@@ -316,6 +326,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         spec!("doc.switch", "Switch document", "{index}", false, |s, p| {
+            s.refuse_active_switch("doc.switch")?;
             let i = req_index("doc.switch", p, "index")?;
             if i >= s.docs.len() {
                 return Err(bad("doc.switch", "no such document"));
@@ -323,8 +334,14 @@ pub fn specs() -> Vec<CommandSpec> {
             s.active = i;
             ok()
         }),
-        spec!("doc.nextTab", "Next tab", "{}", false, |s, _| cycle_doc(s, 1)),
-        spec!("doc.previousTab", "Previous tab", "{}", false, |s, _| cycle_doc(s, -1)),
+        spec!("doc.nextTab", "Next tab", "{}", false, |s, _| {
+            s.refuse_active_switch("doc.nextTab")?;
+            cycle_doc(s, 1)
+        }),
+        spec!("doc.previousTab", "Previous tab", "{}", false, |s, _| {
+            s.refuse_active_switch("doc.previousTab")?;
+            cycle_doc(s, -1)
+        }),
         spec!(
             "doc.list",
             "List documents",
@@ -452,13 +469,41 @@ fn vd_compat_param(cmd: &str, p: &Value) -> Result<Option<VdCompat>> {
     }
 }
 
+/// Why `file.close {force}` and `file.revert` refuse while `Session::keep_unsaved` is set.
+const UNSAVED_KEPT: &str = "the document has unsaved changes and this caller may not discard them: save it first, or leave it open";
+
+/// `file.markSaved` makes the document look clean, which would let `file.close {force}` and `file.revert`
+/// through: a caller who may not discard unsaved changes may not mark them saved either.
+fn mark_saved_kept(s: &mut Session, p: &Value) -> Result<Value> {
+    if s.keep_unsaved {
+        let i = crate::branches::file_tab(s);
+        if s.docs.get(i).is_some_and(|d| d.is_dirty()) {
+            return Err(EngineError::Disabled("file.markSaved".into(), UNSAVED_KEPT.into()));
+        }
+    }
+    mark_saved(s, p)
+}
+
 fn close(s: &mut Session, p: &Value) -> Result<Value> {
     let i = if get(p, "index").is_none() { s.active } else { req_index("file.close", p, "index")? };
     let Some(ds) = s.docs.get(i) else { return Err(bad("file.close", "no such document")) };
+    // Closing another tab keeps the same document in front (the index is re-found by uid below);
+    // closing the one in front, or the main file of the branch tab in front, changes it.
+    let in_front = s.docs.get(s.active).is_some_and(|a| a.uid == ds.uid || a.branch_of.as_ref().is_some_and(|(m, _)| *m == ds.uid));
+    if in_front {
+        s.refuse_active_switch("file.close")?;
+    }
     // A branch tab's edits are in its main file already (which then has unsaved changes).
-    if ds.branch_of.is_none() && ds.is_dirty() && !boolean(p, "force").unwrap_or(false) {
-        s.request_ui("dialog.unsaved", json!({"index": i}));
-        return Err(EngineError::Disabled("file.close".into(), "the document has unsaved changes (pass force: true to discard)".into()));
+    if ds.branch_of.is_none() && ds.is_dirty() {
+        let force = boolean(p, "force").unwrap_or(false);
+        // `force` discards the changes: not for a caller who may not drop the user's work.
+        if force && s.keep_unsaved {
+            return Err(EngineError::Disabled("file.close".into(), UNSAVED_KEPT.into()));
+        }
+        if !force {
+            s.request_ui("dialog.unsaved", json!({"index": i}));
+            return Err(EngineError::Disabled("file.close".into(), "the document has unsaved changes (pass force: true to discard)".into()));
+        }
     }
     let uid = ds.uid;
     let active_uid = s.docs.get(s.active).map(|d| d.uid);
@@ -469,6 +514,8 @@ fn close(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+#[cfg(test)]
+mod keep_unsaved_tests;
 #[cfg(test)]
 mod tab_order_tests;
 

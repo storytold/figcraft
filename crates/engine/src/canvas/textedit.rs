@@ -87,11 +87,14 @@ fn text_of(s: &Session, id: NodeId) -> Result<TextData> {
     }
 }
 
+/// The label of the gesture [`begin`] opens: the one that goes with a text editor.
+pub(crate) const EDIT_TEXT: &str = "Edit text";
+
 /// Start editing text node `id` with the caret at `caret` (None = select all).
 pub fn begin(s: &mut Session, id: NodeId, caret: Option<usize>, created: bool) -> Result<()> {
     let t = text_of(s, id)?;
     let n = t.char_count();
-    s.begin_interaction("Edit text")?;
+    s.begin_interaction(EDIT_TEXT)?;
     let ds = s.ds_mut()?;
     // Editing the same layer again (a double-click into a text just made) keeps it new.
     let created = created || ds.text_edit.as_ref().is_some_and(|te| te.id == id && te.created);
@@ -227,6 +230,8 @@ pub enum ImeInsertion {
 /// Type (or paste) `text` replacing the selection. Line endings are normalised and other control
 /// characters dropped, so pasted plain text from any platform lands cleanly.
 pub fn insert(s: &mut Session, text: &str) -> Result<()> {
+    // An agent typing must not act in a gesture that is not its own, as the pointer and the tool keys.
+    s.refuse_foreign_gesture("textedit::insert")?;
     insert_model(s, text, false).map(|_| ())
 }
 
@@ -455,6 +460,8 @@ fn word_right(chars: &[char], mut i: usize) -> usize {
 /// `word` moves or deletes by word, `line` to the line's ends (Up/Down, Home/End: the text's ends);
 /// [`crate::keymap::text_motion`] gives them for the platform's keys. `ArrowLeft` etc. also work.
 pub fn key(s: &mut Session, key: &str, shift: bool, word: bool, line: bool) -> Result<()> {
+    // An agent's key must not act in, or end, a gesture that is not its own, as the tool keys.
+    s.refuse_foreign_gesture("textedit::key")?;
     let key = key.strip_prefix("Arrow").unwrap_or(key);
     let Some(te) = s.ds()?.text_edit.clone() else { return Err(EngineError::Other("not editing text".into())) };
     let t = text_of(s, te.id)?;

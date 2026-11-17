@@ -42,6 +42,8 @@ struct Pane {
     control_input: Vec<egui::Event>,
     /// The document the queued synthetic batch was injected for (dropped if it changed).
     control_input_doc: Option<u64>,
+    /// Who the queued synthetic batch was injected for (`FigApp::control_input_agent`).
+    control_input_agent: Option<figcraft_engine::agent::Asker>,
 }
 
 /// The app's other windows.
@@ -128,7 +130,9 @@ pub fn with_app<R>(f: impl FnOnce(&mut FigApp) -> R) -> Option<R> {
 /// keeps the copies instead, `apps/figcraft-web/src/recovery.rs`.)
 pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
     // Started with automation roots, everything the window and the control channel do is confined.
-    let roots = app.automation_roots.clone();
+    // The Preferences' folder for agents confines the control channel's work only (requests and
+    // the frames that apply injected input): the user still opens and saves files anywhere.
+    let roots = if app.automation_roots_for_agents && !app.control_synthetic { None } else { app.automation_roots.clone() };
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| figcraft_engine::file_access::confined(roots.as_ref(), || f(&mut *app))));
     if let Err(e) = res {
         let msg = e.downcast_ref::<&str>().map(ToString::to_string).or_else(|| e.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
@@ -142,16 +146,31 @@ pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
 /// Control-channel input events (`ui.input`) for the window `viewport` draws next. A batch queued
 /// for another document is dropped rather than replayed into the new one.
 pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event> {
-    let (events, tagged, current) = match app.windows.list.iter_mut().find(|w| viewport(w.id) == viewport_id) {
+    // One batch in flight at a time: the one a frame took and has not finished (its window was
+    // not drawn since) is played first, under its own agent. A second one handed over now would
+    // be played with it, under whichever agent came last.
+    if let Some(flying) = app.applied_frame {
+        if flying == ViewportId::ROOT || app.windows.list.iter().any(|w| viewport(w.id) == flying) {
+            return Vec::new();
+        }
+        // Its window closed before a frame played it: no frame will, and it must not keep every
+        // later batch waiting.
+        for ack in app.applied_acks.drain(..) {
+            let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err(WINDOW_GONE.into()) });
+        }
+        app.end_applied();
+    }
+    let (events, tagged, agent, current) = match app.windows.list.iter_mut().find(|w| viewport(w.id) == viewport_id) {
         Some(w) => {
             let events = std::mem::take(&mut w.pane.control_input);
-            (events, w.pane.control_input_doc.take(), w.active)
+            (events, w.pane.control_input_doc.take(), w.pane.control_input_agent.take(), w.active)
         }
         None if viewport_id == ViewportId::ROOT => {
             let events = std::mem::take(&mut app.control_input);
             let tagged = app.control_input_doc.take();
+            let agent = app.control_input_agent.take();
             let current = app.session.docs.get(app.session.active).map(|d| d.uid);
-            (events, tagged, current)
+            (events, tagged, agent, current)
         }
         None => return Vec::new(),
     };
@@ -160,7 +179,13 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
     if !events.is_empty() && tagged != current {
         // The file changed before the batch reached a frame: say so once instead of replaying it
         // into the new document. Only this window's own acknowledgements belong to the batch.
-        fail_input_acks(app, viewport_id);
+        fail_input_acks(app, viewport_id, DOCUMENT_CHANGED);
+        return Vec::new();
+    }
+    // The agent the batch was queued for left before its frame came, or its name is another
+    // client's by now: the batch is not replayed under that name, nor as the user's own input.
+    if !events.is_empty() && agent.as_ref().is_some_and(|a| !app.session.agent_still_there(a)) {
+        fail_input_acks(app, viewport_id, AGENT_GONE);
         return Vec::new();
     }
     if !events.is_empty() {
@@ -170,18 +195,26 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
         app.applied_acks.extend(acks);
         app.applied_input = Some(events.clone());
         app.applied_frame = Some(viewport_id);
+        app.applied_agent = agent;
+        app.applied_cancelled = false;
     }
     events
 }
 
-/// Error, once, the `ui.input` acknowledgements waiting for `viewport`'s batch: its file changed
-/// before a frame could apply it. Other windows' acknowledgements are left alone.
-pub(crate) fn fail_input_acks(app: &mut FigApp, viewport: ViewportId) {
+/// Why a queued `ui.input` batch is dropped: its file changed before a frame could apply it.
+pub(crate) const DOCUMENT_CHANGED: &str = "the document changed before the input could be applied";
+/// Why a queued `ui.input` batch is dropped: the agent it was queued for is no longer there.
+pub(crate) const AGENT_GONE: &str = "the agent left before its input could be applied";
+/// Why a `ui.input` batch a frame took is dropped: its window closed before that frame played it.
+const WINDOW_GONE: &str = "the window closed before the input could be applied";
+
+/// Error, once, the `ui.input` acknowledgements waiting for `viewport`'s batch, which is dropped
+/// for the reason `why`. Other windows' acknowledgements are left alone.
+pub(crate) fn fail_input_acks(app: &mut FigApp, viewport: ViewportId, why: &str) {
     let mut kept = Vec::new();
     for ack in app.input_acks.drain(..) {
         if ack.viewport == viewport {
-            let _ =
-                ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err("the document changed before the input could be applied".into()) });
+            let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err(why.into()) });
         } else {
             kept.push(ack);
         }
@@ -245,6 +278,7 @@ fn exchange(app: &mut FigApp, p: &mut Pane) {
     std::mem::swap(&mut app.field_focus, &mut p.field_focus);
     std::mem::swap(&mut app.control_input, &mut p.control_input);
     std::mem::swap(&mut app.control_input_doc, &mut p.control_input_doc);
+    std::mem::swap(&mut app.control_input_agent, &mut p.control_input_agent);
 }
 
 /// Open a window (`window.new`) with open file `index` moved into it, the file at `path`, or a new
@@ -333,11 +367,25 @@ pub(crate) fn requests(app: &mut FigApp, ctx: &Context) {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(on));
             continue;
         }
-        let res = if r.kind == "window.new" {
-            open(app, ctx, n("index").map(|i| i as usize), r.data.get("path").and_then(Value::as_str), None).map(|_| ())
-        } else {
-            focus(app, ctx, n("id").unwrap_or(u64::MAX)).map(|_| ())
-        };
+        // The agent that asked left since, or its name is another client's by now: nothing is
+        // opened under that name, nor as the user.
+        if r.agent.as_ref().is_some_and(|a| !app.session.agent_still_there(a)) {
+            app.toast(format!("{}: the agent that asked is no longer there", r.kind));
+            continue;
+        }
+        // As the agent that asked, and under the folders it was confined to: this pass is not the
+        // asker's. Run as nobody, the file the window opens would come in front past the rule that
+        // an agent working apart does not change the open document.
+        let agent = r.agent.as_ref().map(|a| a.agent());
+        let res = app.acting(agent, figcraft_engine::agent::Door::Window, |app| {
+            figcraft_engine::file_access::confined(r.roots.as_ref(), || {
+                if r.kind == "window.new" {
+                    open(app, ctx, n("index").map(|i| i as usize), r.data.get("path").and_then(Value::as_str), None).map(|_| ())
+                } else {
+                    focus(app, ctx, n("id").unwrap_or(u64::MAX)).map(|_| ())
+                }
+            })
+        });
         if let Err(e) = res {
             app.toast(e);
         }
@@ -447,9 +495,11 @@ pub(crate) fn confirm_close(app: &mut FigApp, ctx: &Context) {
         app.ui.confirm_close = false;
         return;
     }
+    take_back_injected_focus(ctx);
     if let Some(a) = unsaved_question(ctx, &names) {
         answer_close(app, ctx, a);
     }
+    drop_injected_focus(app, ctx);
 }
 
 /// The unsaved-changes question about files `names` (Don't Save / Cancel / Save, as the other
@@ -511,9 +561,48 @@ pub(crate) fn ask_close_tab(app: &mut FigApp, i: usize) {
     }
 }
 
+/// Whether this frame's answer to the unsaved-changes question comes from input a control client
+/// injected (`ui.input`) on the channel the user opened in Preferences. Such an answer is none:
+/// Don't Save would drop the user's work and Save would close their window, so the question stays
+/// for the user (as `dialogs::answer_agent_control` does). An app started with `--control PORT` is
+/// its script's own, which answers its questions.
+fn answered_by_a_control_client(app: &FigApp) -> bool {
+    app.control_synthetic && !app.agent_control_fixed
+}
+
+/// A frame of injected input leaves no button of the question with the keyboard: left there, the
+/// user's own Enter would answer with the button a control client chose (Don't Save), not Save.
+pub(crate) fn drop_injected_focus(app: &mut FigApp, ctx: &Context) {
+    if answered_by_a_control_client(app) {
+        crate::dialogs::leave_keyboard_mark(ctx, question_mark());
+    }
+}
+
+/// The frame after an injected one takes back a keyboard that frame left to the next (egui hands
+/// a Shift+Tab's target over at the start of the next pass), before the buttons read it.
+/// The mark is per window (viewport), so a frame of another window leaves it for this one.
+pub(crate) fn take_back_injected_focus(ctx: &Context) {
+    crate::dialogs::take_back_keyboard(ctx, question_mark());
+}
+
+/// The base key of the unsaved-changes question's keyboard mark (made per window by the dialogs helpers).
+fn question_mark() -> egui::Id {
+    egui::Id::unique("unsaved_question_injected_focus")
+}
+
+pub(crate) fn surrender_held_focus(ctx: &Context) {
+    if let Some(id) = ctx.memory(|m| m.focused()) {
+        ctx.memory_mut(|m| m.surrender_focus(id));
+    }
+}
+
 /// Act on the unsaved-changes question's answer for the tab it asks about: Cancel keeps the tab,
 /// Don't Save closes it and drops the changes, Save saves the file next frame, then closes it.
+/// An answer from input a control client injected is none on the channel opened in Preferences: the question stays.
 pub(crate) fn answer_close_tab(app: &mut FigApp, ctx: &Context, answer: CloseAnswer) {
+    if answered_by_a_control_client(app) {
+        return;
+    }
     let Some(TabClose::Ask(uid)) = app.ui.close_tab else { return };
     app.ui.close_tab = None;
     match answer {
@@ -554,9 +643,11 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
         }
         TabClose::Ask(_) => {
             let names: Vec<String> = app.session.docs.get(i).map(|d| d.doc.name.clone()).into_iter().collect();
+            take_back_injected_focus(ctx);
             if let Some(a) = unsaved_question(ctx, &names) {
                 answer_close_tab(app, ctx, a);
             }
+            drop_injected_focus(app, ctx);
         }
         TabClose::Save(_) => {
             app.ui.close_tab = None;
@@ -594,7 +685,11 @@ pub(crate) fn confirm_close_tab(app: &mut FigApp, ctx: &Context) {
 }
 
 /// Act on the unsaved-changes question's answer.
+/// An answer from input a control client injected is none on the channel opened in Preferences: the question stays.
 pub(crate) fn answer_close(app: &mut FigApp, ctx: &Context, answer: CloseAnswer) {
+    if answered_by_a_control_client(app) {
+        return;
+    }
     app.ui.confirm_close = false;
     match answer {
         CloseAnswer::Cancel => {}
@@ -794,6 +889,43 @@ impl Windows {
     /// need a forced paint for it).
     pub(crate) fn pending_input_viewports(&self) -> Vec<ViewportId> {
         self.list.iter().filter(|w| !w.pane.control_input.is_empty()).map(|w| viewport(w.id)).collect()
+    }
+
+    /// Drop the synthetic input no frame has taken yet, in every window
+    /// ([`FigApp::cancel_control_work`]).
+    pub(crate) fn forget_control_input(&mut self) {
+        for w in &mut self.list {
+            w.pane.control_input.clear();
+            w.pane.control_input_doc = None;
+            w.pane.control_input_agent = None;
+        }
+    }
+}
+
+/// Drop the synthetic input no frame has taken yet and that was queued for an agent that is no
+/// longer there, in every window, and answer whoever waits for it. For when an agent leaves: the
+/// frame would drop the batch too ([`take_input`]), but a window that is not drawn would keep it,
+/// and keep the other agents' input out meanwhile.
+pub(crate) fn forget_input_of_gone_agents(app: &mut FigApp) {
+    let mut dropped = Vec::new();
+    let asker = app.control_input_agent.clone();
+    if asker.is_some_and(|a| !app.session.agent_still_there(&a)) {
+        app.control_input.clear();
+        app.control_input_doc = None;
+        app.control_input_agent = None;
+        dropped.push(viewport(app.windows.current));
+    }
+    let FigApp { windows, session, .. } = &mut *app;
+    for w in &mut windows.list {
+        if w.pane.control_input_agent.as_ref().is_some_and(|a| !session.agent_still_there(a)) {
+            w.pane.control_input.clear();
+            w.pane.control_input_doc = None;
+            w.pane.control_input_agent = None;
+            dropped.push(viewport(w.id));
+        }
+    }
+    for window in dropped {
+        fail_input_acks(app, window, AGENT_GONE);
     }
 }
 

@@ -54,15 +54,11 @@ impl Headless {
         Self { session }
     }
 
+    /// A command for whoever `call` set as acting: the session notes the agent's presence itself.
     fn execute(&mut self, cmd: &str, params: &Value) -> Result<Value, String> {
-        self.execute_as(None, cmd, params)
-    }
-
-    /// A command for `agent` (an AI agent's name, `engine.execute {agent}`) or for the user.
-    fn execute_as(&mut self, agent: Option<&str>, cmd: &str, params: &Value) -> Result<Value, String> {
         // What happened in a live session since the last call (latest presence only).
         self.session.live_poll();
-        let r = self.session.execute_as(agent, cmd, params).map_err(|e| e.to_string());
+        let r = self.session.execute(cmd, params).map_err(|e| e.to_string());
         self.session.live_sync();
         // No UI: dialogs and panels requested by commands are dropped.
         self.session.ui_requests.clear();
@@ -213,7 +209,7 @@ impl Headless {
     fn render_to(&mut self, p: &Value) -> Result<Value, String> {
         let scale = f(p, "scale").unwrap_or(1.0);
         let ids: Vec<u64> = ids_of(p).into_iter().map(|i| i.0).collect();
-        let bytes = self.render_png(&ids, scale)?;
+        let bytes = self.render_bytes(&ids, scale)?;
         let (w, h) = crate::png_size(&bytes).unwrap_or((0, 0));
         match p.get("path").and_then(Value::as_str) {
             Some(path) => {
@@ -245,7 +241,7 @@ impl Headless {
                     None | Some(Value::Null) => json!({}),
                     Some(v) => v.clone(),
                 };
-                self.execute_as(p.get("agent").and_then(Value::as_str), &cmd, &params)
+                self.execute(&cmd, &params)
             }
             "engine.commands" => Ok(Value::Array(
                 figcraft_engine::all_commands().iter().map(|c| json!({"id": c.id, "label": c.label, "params": c.params, "menu": c.menu(), "shortcut": c.shortcut(), "undoable": c.history})).collect(),
@@ -296,33 +292,52 @@ impl Headless {
                 let result = self.session.events.poll(after, &topics, limit, std::time::Duration::ZERO);
                 serde_json::to_value(result).map_err(|e| e.to_string())
             }
+            "agent.join" | "agent.leave" => {
+                let agent = p.get("agent").and_then(Value::as_str).ok_or("`agent` required")?;
+                let key = figcraft_engine::agent::key_of(&p);
+                let r = if method == "agent.join" {
+                    self.session.agent_admit_join(agent, key).and_then(|()| self.session.agent_join(agent))
+                } else {
+                    self.session.agent_admit(Some(agent), key).and_then(|()| self.session.agent_leave(agent))
+                };
+                r.map_err(|e| e.to_string())
+            }
+            "agent.list" => Ok(self.session.agent_list()),
             "app.quit" => Ok(json!({"ok": true})),
             other => Err(format!("unknown method `{other}`")),
         }
     }
-}
 
-impl Backend for Headless {
-    /// With `document` (an `id` from `doc.list`, or an open file's path) the call acts on that
-    /// file, and the file in front stays in front.
-    fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
-        let Some(target) = p.get("document").filter(|d| !d.is_null()) else { return self.dispatch(method, p) };
-        let forward = self.session.bring_forward(target).map_err(|e| e.to_string())?;
-        let r = self.dispatch(method, p);
-        self.session.put_back(forward);
-        r
+    /// The one entry of a request: admitted (the method's door, and the name it gives), the
+    /// `document` it names in front, then `work` run as the agent it names. With `document` (an `id`
+    /// from `doc.list`, or an open file's path) the call acts on that file, and the file in front
+    /// stays in front.
+    fn entered<T>(&mut self, method: &str, p: Value, work: impl FnOnce(&mut Self, Value) -> Result<T, String>) -> Result<T, String> {
+        // First, so that a method nobody knows, or a name held with another key, does nothing at all.
+        let door = self.session.agent_admit_request(method, &p).map_err(|e| e.to_string())?;
+        // Before the identity, so the agent's page is the named file's and not the one in front.
+        let forward = match p.get("document").filter(|d| !d.is_null()) {
+            Some(target) => Some(self.session.bring_forward(target).map_err(|e| e.to_string())?),
+            None => None,
+        };
+        let agent = p.get("agent").and_then(Value::as_str).map(str::to_owned);
+        let acting = self.session.agent_begin(agent.as_deref(), door);
+        // Caught only so that `agent_end` and `put_back` always run; the panic goes on to the caller's guard.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(self, p)));
+        self.session.agent_end(acting);
+        if let Some(f) = forward {
+            self.session.put_back(f);
+        }
+        match r {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
-    fn has_ui(&self) -> bool {
-        false
-    }
-
-    fn describe(&self) -> String {
-        "headless (in-process engine session; no window)".into()
-    }
-
-    fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+    /// The PNG of `ids` (or of the current page) for whoever is acting already: no admission, no identity.
+    fn render_bytes(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
         let scale = if scale.is_finite() && scale > 0.0 { scale.min(64.0) } else { 1.0 };
+        // The page of the call in progress: the agent's own while several agents work apart.
         let page = self.session.page().map_err(|e| e.to_string())?;
         let doc = self.session.doc().map_err(|e| e.to_string())?;
         if !ids.is_empty() {
@@ -345,6 +360,30 @@ impl Backend for Headless {
         };
         let pix = figcraft_render::render_view(doc, page, &view, &Default::default()).ok_or("render failed")?;
         figcraft_render::encode_png(&pix)
+    }
+}
+
+impl Backend for Headless {
+    /// The one entry of a request (see [`Headless::entered`]).
+    fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
+        self.entered(method, p, |s, p| s.dispatch(method, p))
+    }
+
+    fn has_ui(&self) -> bool {
+        false
+    }
+
+    fn describe(&self) -> String {
+        "headless (in-process engine session; no window)".into()
+    }
+
+    fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+        self.render_png_as("", "", ids, scale)
+    }
+
+    fn render_png_as(&mut self, agent: &str, key: &str, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+        // The same entry as every request: admitted for its name, the page the agent's own.
+        self.entered("ui.render", json!({"agent": agent, "agentKey": key}), |s, _| s.render_bytes(ids, scale))
     }
 
     fn screenshot_png(&mut self) -> Result<Vec<u8>, String> {

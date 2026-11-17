@@ -27,13 +27,14 @@ fn the_users_own_calls_get_the_paths() {
 #[test]
 fn an_agent_gets_names_and_ids_but_no_paths() {
     let mut s = two_files();
-    let list = s.execute_as(Some("Claude"), "doc.list", &json!({})).unwrap();
+    let list = s.with_agent(Some("Claude"), |s| s.execute("doc.list", &json!({}))).unwrap();
     assert_eq!(list.as_array().unwrap().len(), 2);
     assert!(list[0]["id"].is_u64() && list[0]["name"].is_string());
     assert!(list.as_array().unwrap().iter().all(|e| e.get("path").is_none()), "{list}");
     // An agent with no name of its own is an agent too.
-    let list = s.execute_as(Some(""), "doc.list", &json!({})).unwrap();
+    let list = s.with_agent(Some(""), |s| s.execute("doc.list", &json!({}))).unwrap();
     assert!(!list.to_string().contains(SECRET));
+    assert!(list.as_array().unwrap().iter().all(|e| e.get("path").is_none()), "{list}");
 }
 
 #[test]

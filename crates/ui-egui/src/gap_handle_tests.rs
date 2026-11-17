@@ -73,3 +73,35 @@ fn dragging_an_auto_gap_between_items_fixes_it_too_and_fixed_gaps_drag_as_before
     let l = u.app.session.doc().unwrap().node(f).unwrap().layout.clone().unwrap();
     assert_eq!((l.main_align, l.gap), (MainAlign::Min, 56.0));
 }
+
+/// Agent `a` drags a gap handle with raw input, and the batch of agent `b` lets the button go.
+/// `b` may not end `a`'s gesture, but the drag is not forgotten for that: the next frame of the
+/// window ends it. Forgotten, `a`'s gesture stayed open with nothing left to end it, and held every
+/// other agent back.
+#[test]
+fn a_gap_drag_an_agent_began_is_ended_after_another_agents_release() {
+    let (mut u, _) = scene(json!({"wrap": true, "contentAlign": "spaceBetween"}));
+    // One batch of raw input of `who`, and the frame that plays it.
+    let input = |u: &mut Ui, who: &str, events: Value| {
+        let ctx = u.ctx.clone();
+        let p = json!({"events": events, "agent": who, "agentKey": format!("key {who}")});
+        crate::control::handle(&mut u.app, &ctx, "ui.input", &p).unwrap();
+        let events = crate::windows::take_input(&mut u.app, egui::ViewportId::ROOT);
+        u.frame(events);
+    };
+    // Whose gesture is open on the document, if one is.
+    let gesture = |u: &Ui| u.app.session.ds().unwrap().interaction.as_ref().map(|it| it.agent.clone());
+    // Between the rows, at the frame's middle, as in the first test.
+    let p = u.app.to_screen(250.0, 250.0);
+    let at = |dy: f32| json!([p.x, p.y + dy]);
+    input(&mut u, "a", json!([{"move": at(0.0)}]));
+    input(&mut u, "a", json!([{"move": at(0.0)}]));
+    input(&mut u, "a", json!([{"down": at(0.0)}]));
+    input(&mut u, "a", json!([{"move": at(10.0)}]));
+    assert_eq!(gesture(&u), Some(Some("a".to_string())), "calibration: a's drag of the gap is under way");
+
+    input(&mut u, "b", json!([{"up": at(10.0)}]));
+    assert_eq!(gesture(&u), Some(Some("a".to_string())), "calibration: b's release did not end a's gesture");
+    u.frame(vec![]);
+    assert_eq!(gesture(&u), None, "a's gesture was left open after b let the button go");
+}

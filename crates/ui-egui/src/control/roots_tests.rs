@@ -58,6 +58,23 @@ fn a_confined_app_writes_only_inside_its_write_root() {
 }
 
 #[test]
+fn the_folder_for_agents_confines_the_control_channel_but_not_the_user() {
+    let (mut app, d) = confined_app("agents-only");
+    app.automation_roots_for_agents = true;
+    let p = |rel: &str| d.0.join(rel).to_string_lossy().into_owned();
+    let export = |path: String| json!({"command": "file.export", "params": {"format": "svg", "path": path}});
+    // The user's own frame: nothing is confined.
+    handle(&mut app, "engine.execute", export(p("outside/user.svg"))).unwrap();
+    assert!(d.0.join("outside/user.svg").is_file());
+    // A control request (the flag the control channel sets around each one): confined.
+    app.control_synthetic = true;
+    let e = handle(&mut app, "engine.execute", export(p("outside/agent.svg"))).unwrap_err();
+    assert!(e.contains("automation path rejected"), "{e}");
+    assert!(!d.0.join("outside/agent.svg").exists());
+    handle(&mut app, "engine.execute", export(p("out/agent.svg"))).unwrap();
+}
+
+#[test]
 fn a_confined_app_saves_only_inside_its_write_root() {
     // #836: saving over the control channel, both as a new file and to the current one.
     let (mut app, d) = confined_app("save");

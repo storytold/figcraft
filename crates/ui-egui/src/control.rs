@@ -6,6 +6,9 @@
 //! - `engine.execute {command, params}` — run any command (no dialogs open)
 //! - `engine.commands {}` — every command with its params doc
 //! - `document.inspect {depth?, allPages?}` / `node.get {id, depth?}`
+//! - `agent.join {agent, agentKey}` / `agent.leave {agent, agentKey?}` / `agent.list {}` — several
+//!   named AI agents in one file, each on its own page and selection; `agentKey` (also next to
+//!   `agent` in `engine.execute` and `document.inspect`) is the key an agent holds its name with
 //! - `ui.inspect {}` — panel/tab/tool state, canvas rect, timings
 //! - `ui.pointer {kind: down|move|up|click|double|hover|drag, x, y (page) | sx, sy (screen), to?, shift?, alt?, cmd?}`
 //! - `ui.key {key, shift?, cmd?, alt?}` — a shortcut as if typed on the canvas
@@ -24,7 +27,8 @@
 //!   window), written to `path` or returned as base64 `data`
 //! - `window.new {path?, index?}` → `{window}` / `window.list {}` / `window.focus {id}` — several
 //!   windows (desktop)
-//! - `app.quit {}`
+//! - `app.quit {}` — only in an app started with its control port (`--control`); refused on the
+//!   channel opened in Preferences, where no request drops unsaved changes either
 //!
 //! Any method takes `window` (an id from `window.list`) to run in that window, with its tabs and
 //! panels; without it, requests go to the window last in front. `engine.execute`,
@@ -273,6 +277,10 @@ pub struct ShotRequest {
     pub id: Value,
     /// Where to write the PNG; `None`: return it as data.
     pub path: Option<String>,
+    /// The folders the app confined control clients to when the request was admitted. The PNG is
+    /// written by a later pass, which may be the user's own and unconfined: the write is held to
+    /// these.
+    pub roots: Option<Arc<figcraft_engine::file_access::Roots>>,
     pub reply: std::sync::mpsc::Sender<ControlReply>,
     /// The transport's timeout and this request's final write share this gate.
     pub state: RequestGate,
@@ -377,6 +385,14 @@ fn admit(app: &mut FigApp, r: ControlRequest, window: u64, now: f64) {
         }
         return;
     }
+    // A capture never reaches `handle`, so it is admitted here, once, on whichever path takes it:
+    // the name it gives must be its client's.
+    if let Err(e) = app.session.agent_admit_request("ui.screenshot", &params) {
+        if !canceled {
+            let _ = tx.send(ControlReply { id, result: Err(e.to_string()) });
+        }
+        return;
+    }
     let path = params.get("path").and_then(Value::as_str).map(str::to_string);
     let (document, presentation) = app.windows.presentation(&app.session, window);
     if let Err(e) = front_only(&app.session, Some(document), "ui.screenshot", &params) {
@@ -385,9 +401,23 @@ fn admit(app: &mut FigApp, r: ControlRequest, window: u64, now: f64) {
         }
         return;
     }
+    // A path outside the folders for control clients is refused now, with the engine's own words,
+    // not after the window was captured and encoded.
+    let roots = app.automation_roots.clone();
+    if let Some(path) = &path
+        && let Err(e) = figcraft_engine::file_access::confined(roots.as_ref(), || {
+            figcraft_engine::file_access::allow(path, figcraft_engine::file_access::Access::Write)
+        })
+    {
+        if !canceled {
+            let _ = tx.send(ControlReply { id, result: Err(e.to_string()) });
+        }
+        return;
+    }
     app.capture.shots.push(ShotRequest {
         id,
         path,
+        roots,
         reply: tx,
         state,
         deadline: now + SHOT_TIMEOUT,
@@ -430,6 +460,39 @@ fn expire(app: &mut FigApp, ctx: &Context, now: f64) {
             ctx.request_repaint();
         } else {
             i += 1;
+        }
+    }
+}
+
+impl FigApp {
+    /// Give up what control clients sent and no frame has finished: the requests waiting for a
+    /// frame, the screenshots in flight and the injected input no frame has applied, whether it
+    /// still waits for a frame or a frame has taken it already and not played it yet. Whoever
+    /// still waits for a reply gets `reason` as its error. For when the control server stops:
+    /// that work was sent under a confinement that ends with it, and must not run after it.
+    pub fn cancel_control_work(&mut self, reason: &str) {
+        let refused = |id: Value| ControlReply { id, result: Err(reason.to_string()) };
+        for r in std::mem::take(&mut self.control_queue) {
+            // Under the gate, like a final reply: the transport reads it, or had given up already.
+            let ControlRequest { id, reply, state, .. } = r;
+            let _ = state.commit(|| reply.send(refused(id)));
+        }
+        for mut r in std::mem::take(&mut self.capture.shots) {
+            r.release();
+            let _ = r.state.commit(|| r.reply.send(refused(r.id.clone())));
+        }
+        self.control_input.clear();
+        self.control_input_doc = None;
+        self.control_input_agent = None;
+        self.control_input_queued = false;
+        // The batch a frame already took is in that pass's raw input and cannot be taken back: it
+        // is marked, and the frame that carries it draws nothing (`FigApp::frame`). Without its
+        // events, a pass that is discarded does not queue it again.
+        self.applied_cancelled = self.applied_frame.is_some();
+        self.applied_input = None;
+        self.windows.forget_control_input();
+        for ack in self.input_acks.drain(..).chain(self.applied_acks.drain(..)) {
+            let _ = ack.tx.send(refused(ack.reply.id));
         }
     }
 }
@@ -747,7 +810,8 @@ fn settle_arrival(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, n
     // fresh clock read and final write happen under the gate, so a timeout that arrives while the
     // image is being encoded either wins (no file, no reply) or finds the committed reply.
     let encoded = encode_shot(image, r.path.as_deref());
-    commit_shot(&r.state, &r.id, &r.reply, r.deadline, &app.clock, encoded);
+    // The file is written under the folders the request was admitted with, whoever's pass this is.
+    figcraft_engine::file_access::confined(r.roots.as_ref(), || commit_shot(&r.state, &r.id, &r.reply, r.deadline, &app.clock, encoded));
 }
 
 /// Admit queued captures for the window drawing now; other windows keep waiting for their frame.
@@ -757,8 +821,9 @@ fn admit_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now
     }
 }
 
-/// Route one queued control request: retarget another window, admit a capture, or run a
-/// state-only request for the window drawing now.
+/// Route one queued control request: retarget another window, admit a capture (the only request
+/// admitted here: the rest is admitted by `handle`), or run a state-only request for the window
+/// drawing now.
 fn route_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now: f64, r: ControlRequest) {
     if r.is_cancelled() {
         return;
@@ -784,7 +849,10 @@ fn route_queued(app: &mut FigApp, ctx: &Context, viewport: egui::ViewportId, now
     // restored so a batch already in a frame's raw input keeps its own provenance).
     let before = app.control_synthetic;
     app.control_synthetic = true;
-    let res = handle(app, ctx, &r.method, &r.params);
+    // Confined here too: the frame around this request may be the user's own, which the
+    // Preferences' folder for agents leaves unconfined.
+    let roots = app.automation_roots.clone();
+    let res = figcraft_engine::file_access::confined(roots.as_ref(), || handle(app, ctx, &r.method, &r.params));
     app.control_synthetic = before;
     if r.method == "ui.input" && std::mem::take(&mut app.control_input_queued) {
         // Acknowledge once the pass that applies the batch is presented, never from a sizing
@@ -993,15 +1061,28 @@ fn b(p: &Value, k: &str) -> bool {
     p.get(k).and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// Run `f` the way the window does (a shortcut, a menu row): there a refused command only shows
+/// its error. A request made for an agent answers with that error, or the agent would read `ok`
+/// for a command the rules refused; any other client keeps the reply it had.
+fn as_the_window(app: &mut FigApp, f: impl FnOnce(&mut FigApp)) -> Result<(), String> {
+    let earlier = app.ui.last_error.take();
+    f(app);
+    let Some(error) = app.ui.last_error.clone() else {
+        app.ui.last_error = earlier;
+        return Ok(());
+    };
+    if app.session.agent.is_some() { Err(error) } else { Ok(()) }
+}
+
 fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
     let key = p.get("key").and_then(Value::as_str).ok_or("`key` required")?;
     let m = figcraft_engine::keymap::Mods { shift: b(p, "shift"), alt: b(p, "alt"), cmd: b(p, "cmd"), ctrl: b(p, "ctrl") };
     let platform = crate::shortcuts::platform();
-    use figcraft_engine::keymap::{Context, lookup, normalize};
+    use figcraft_engine::keymap::{Context as KeyContext, lookup, normalize};
     // Text editing keys go to the editor (after the shortcuts live while editing).
     if app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
-        if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
-            crate::menus::invoke(app, bd.id);
+        if let Some(bd) = lookup(platform, KeyContext::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
+            as_the_window(app, |app| crate::menus::invoke(app, bd.id))?;
             return Ok(json!({"command": bd.id}));
         }
         let (word, line) = figcraft_engine::keymap::text_motion(platform, key, m);
@@ -1024,8 +1105,8 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
         let r = crate::comments::step(app, ctx, if matches!(key, "ArrowUp" | "Up") { -1 } else { 1 });
         return Ok(json!({"comment": r.and_then(|v| v.get("id").cloned())}));
     }
-    if let Some(bd) = lookup(platform, Context::Canvas, key, m) {
-        crate::shortcuts::run_binding(app, bd.id);
+    if let Some(bd) = lookup(platform, KeyContext::Canvas, key, m) {
+        as_the_window(app, |app| crate::shortcuts::run_binding(app, bd.id))?;
         return Ok(json!({"command": bd.id}));
     }
     let (name, _) = normalize(key).ok_or_else(|| format!("unknown key `{key}`"))?;
@@ -1088,6 +1169,14 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
         let p = egui::pos2(a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32);
         p.is_finite().then_some(p)
     };
+    // A batch carries its agent: a second agent's input is not merged into one still waiting for
+    // its frame, nor does it replace it.
+    // It is kept with who asked, the name and the stay it was admitted in: the frame replays it
+    // only for that one, not for whoever holds the name by then.
+    let agent = app.session.agent_asker(p.get("agent").and_then(Value::as_str).filter(|a| !a.is_empty()));
+    if !app.control_input.is_empty() && app.control_input_agent != agent {
+        return Err("another agent's input is waiting for its frame: send it again".into());
+    }
     let mut events = Vec::new();
     let mut pads = Vec::new();
     for e in list.iter().take(256) {
@@ -1142,7 +1231,7 @@ fn ui_input(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String>
             (None, None) => return Err("controller buttons go to a prototype that is playing: run proto.present or proto.preview".into()),
         }
     }
-    app.control_input_queued = app.push_control_input(events);
+    app.control_input_queued = app.push_control_input(events, agent);
     ctx.request_repaint();
     Ok(json!({"queued": list.len().min(256)}))
 }
@@ -1438,16 +1527,6 @@ fn document_of(p: &Value) -> Option<&Value> {
     p.get("document").filter(|d| !d.is_null())
 }
 
-/// Run `f` with the request's `document` in front and the user's tab back afterwards, else on the
-/// tab in front (the same swap a command run in the background makes).
-fn in_document<T>(app: &mut FigApp, p: &Value, f: impl FnOnce(&mut Session) -> Result<T, String>) -> Result<T, String> {
-    let Some(target) = document_of(p) else { return f(&mut app.session) };
-    let forward = app.session.bring_forward(target).map_err(|e| e.to_string())?;
-    let r = f(&mut app.session);
-    app.session.put_back(forward);
-    r
-}
-
 /// A method that acts on the tab in front (`front`, a document uid) refuses a `document` naming
 /// another file instead of quietly acting on the wrong one.
 fn front_only(session: &Session, front: Option<u64>, method: &str, p: &Value) -> Result<(), String> {
@@ -1458,18 +1537,50 @@ fn front_only(session: &Session, front: Option<u64>, method: &str, p: &Value) ->
     Err(format!("`{method}` acts on the tab in front: `document` can name another open file only for {}", DOCUMENT_METHODS.join(", ")))
 }
 
-/// Handle one control method (also used by tests and the headless snapshot tool).
+/// Handle one control method (also used by tests and the headless snapshot tool). The one entry
+/// for every request: the agent is admitted first, then the `document` the request names comes to
+/// the front, and only then does the method run, as that agent.
 pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
-    if !DOCUMENT_METHODS.contains(&method) {
+    // Whether the name (`agent`, `agentKey`) is this client's, for every method and before anything
+    // else: a door that skipped it would let one client act under another's name.
+    let door = app.session.agent_admit_request(method, p).map_err(|e| e.to_string())?;
+    // A method that names its `document` runs on that file in front; the rest act on the tab in
+    // front and refuse a `document` that is another file.
+    let forward = if DOCUMENT_METHODS.contains(&method) {
+        match document_of(p) {
+            Some(target) => Some(app.session.bring_forward(target).map_err(|e| e.to_string())?),
+            None => None,
+        }
+    } else {
         front_only(&app.session, app.session.ds().ok().map(|d| d.uid), method, p)?;
+        None
+    };
+    // On the channel the user opened in Preferences the clients are agents at work in the user's
+    // own app: nothing a request runs drops unsaved changes (`file.close` with `force`,
+    // `file.revert`), whichever method gets to the command (`engine.execute`, a batch step, a
+    // menu row). An app started with `--control PORT` is its script's own and keeps both.
+    let keep = !app.agent_control_fixed;
+    // The identity covers the whole method, its reply and its reads included.
+    let agent = p.get("agent").and_then(Value::as_str);
+    let r = app.acting(agent, door, |app| app.keeping_unsaved(keep, |app| handle_method(app, ctx, method, p)));
+    if let Some(forward) = forward {
+        app.session.put_back(forward);
     }
+    r
+}
+
+/// [`handle`], once the caller is admitted, its document is in front and its identity is set.
+fn handle_method(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Result<Value, String> {
     match method {
         "engine.execute" => {
             let cmd = p.get("command").and_then(Value::as_str).ok_or("`command` required")?;
             let params = p.get("params").cloned().unwrap_or(json!({}));
             let layers_generation = app.session.clipboard.layers_generation;
             let agent = p.get("agent").and_then(Value::as_str);
-            let r = in_document(app, p, |s| s.execute_as(agent, cmd, &params).map_err(|e| e.to_string()));
+            let r = app.session.with_agent(agent, |s| s.execute(cmd, &params)).map_err(|e| e.to_string());
+            // An agent working apart leaves the window's page and selection as they were, yet the
+            // document changed: the canvas has to show it.
+            ctx.request_repaint();
             app.clear_comment_draft_after_tool_set(cmd, r.is_ok());
             app.invalidate_synthetic_copy(layers_generation);
             // Programmatic calls never open dialogs.
@@ -1489,15 +1600,34 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
         "document.inspect" => {
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(8).min(64) as usize;
             let options = figcraft_engine::inspect::InspectOptions::parse(p)?;
-            in_document(app, p, |s| Ok(figcraft_engine::inspect::document_with_options(s, depth, b(p, "allPages"), &options)))
+            Ok(figcraft_engine::inspect::document_with_options(&app.session, depth, b(p, "allPages"), &options))
         }
+        "agent.join" | "agent.leave" => {
+            let agent = p.get("agent").and_then(Value::as_str).ok_or("`agent` required")?;
+            let key = figcraft_engine::agent::key_of(p);
+            if method == "agent.join" {
+                return app.session.agent_admit_join(agent, key).and_then(|()| app.session.agent_join(agent)).map_err(|e| e.to_string());
+            }
+            app.session.agent_admit(Some(agent), key).map_err(|e| e.to_string())?;
+            // Its batch is already in this frame's input: the frame replays it under the agent's
+            // name once the requests are done. Gone now, the name would be nobody's by then (or
+            // another client's), and the input would still be played.
+            // (A cancelled batch is not played: it holds nobody back.)
+            if app.applied_frame.is_some() && !app.applied_cancelled && app.applied_agent.as_ref().is_some_and(|a| a.names(agent)) {
+                return Err("the agent's input is being applied in this frame: send `agent.leave` again".into());
+            }
+            let left = app.session.agent_leave(agent).map_err(|e| e.to_string())?;
+            // What it queued and no frame has taken is not played after it: not under a name that
+            // is free again, and not while it keeps the other agents' input waiting.
+            crate::windows::forget_input_of_gone_agents(app);
+            Ok(left)
+        }
+        "agent.list" => Ok(app.session.agent_list()),
         "node.get" => {
             let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required")?;
             let depth = p.get("depth").and_then(Value::as_u64).unwrap_or(1) as usize;
             let options = figcraft_engine::inspect::InspectOptions::parse(p)?;
-            in_document(app, p, |s| {
-                s.doc().map(|d| figcraft_engine::inspect::node_json_with_options(d, id, depth, &options)).map_err(|e| e.to_string())
-            })
+            app.session.doc().map(|d| figcraft_engine::inspect::node_json_with_options(d, id, depth, &options)).map_err(|e| e.to_string())
         }
         "window.new" => {
             let index = p.get("index").and_then(Value::as_u64).map(|i| i as usize);
@@ -1523,7 +1653,7 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
         }
         "ui.menu.invoke" => {
             let id = p.get("id").and_then(Value::as_str).ok_or("`id` required")?;
-            crate::menus::invoke(app, id);
+            as_the_window(app, |app| crate::menus::invoke(app, id))?;
             Ok(json!({"ok": true, "lastError": app.ui.last_error}))
         }
         "ui.set" => {
@@ -1545,9 +1675,16 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             if !ids.is_empty() {
                 params["ids"] = json!(ids);
             }
-            in_document(app, p, |s| s.execute("file.export", &params).map_err(|e| e.to_string()))
+            app.session.execute("file.export", &params).map_err(|e| e.to_string())
         }
         "app.quit" => {
+            // `app.quit` closes every window without asking about unsaved changes, and the recovery
+            // copy goes with them. That is for a script that started the app with its control port
+            // and ends it. On the channel the user opened in Preferences the clients are agents at
+            // work in the user's own app: none of them closes it.
+            if !app.agent_control_fixed {
+                return Err("`app.quit` is only for an app started with `--control PORT`: this one listens because of its Preferences, and its user closes it".into());
+            }
             app.ui.quit = true;
             ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
             Ok(json!({"ok": true}))
@@ -1625,3 +1762,21 @@ mod capture_tests;
 
 #[cfg(test)]
 mod document_tests;
+
+#[cfg(test)]
+mod agent_key_tests;
+
+#[cfg(test)]
+mod unsaved_tests;
+
+#[cfg(test)]
+mod agent_ui_undo_tests;
+
+#[cfg(test)]
+mod agent_doors_tests;
+
+#[cfg(test)]
+mod agent_doors_table_tests;
+
+#[cfg(test)]
+mod agent_left_tests;

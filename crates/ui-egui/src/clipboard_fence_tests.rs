@@ -182,7 +182,7 @@ fn a_synthetic_cut_deletes_the_selection_but_leaves_the_users_clipboard_alone() 
 
     // A control-channel gesture is fenced from the OS clipboard, but its Cut still edits the
     // document: the selection is deleted exactly as a user's Cut would delete it.
-    w.app.push_control_input(vec![Event::Cut]);
+    w.app.push_control_input(vec![Event::Cut], None);
     let events = crate::windows::take_input(&mut w.app, egui::ViewportId::ROOT);
     assert_eq!(events, [Event::Cut], "the production input path owns the synthetic frame");
     w.frame(events);

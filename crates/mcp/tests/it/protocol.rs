@@ -257,6 +257,61 @@ fn wait_for_changes_reads_comment_events_headless() {
 }
 
 #[test]
+fn an_agent_joins_is_listed_and_leaves_headless() {
+    let mut c = Client::new();
+    assert_eq!(c.ok("agent_join", json!({}))["agent"], "test");
+    let listed = c.ok("agent_list", json!({}));
+    assert_eq!(listed["agents"][0]["agent"], "test");
+    assert_eq!(listed["agents"][0]["apart"], true);
+    assert_eq!(c.ok("agent_leave", json!({}))["left"], "test");
+    let listed = c.ok("agent_list", json!({}));
+    assert!(!listed["agents"].as_array().unwrap().iter().any(|a| a["agent"] == "test"), "{listed}");
+}
+
+#[test]
+fn a_server_started_with_an_agent_name_keeps_it_over_the_clients() {
+    let mut c = Client::new();
+    c.server = Server::headless().with_agent("  Layout ");
+    let r = c.rpc("initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}));
+    assert!(r.get("result").is_some(), "initialize failed: {r}");
+    assert!(c.server.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+    assert_eq!(c.ok("agent_join", json!({}))["agent"], "Layout");
+}
+
+/// An agent working apart looks at its own page: `screenshot` without ids renders the page the
+/// agent is on, not the one the window shows.
+#[test]
+fn an_agents_screenshot_of_the_page_is_of_its_own_page() {
+    let mut c = Client::new();
+    c.ok("agent_join", json!({}));
+    // The page the window shows holds one wide layer.
+    c.create(json!({"type": "rectangle", "x": 0, "y": 0, "width": 300, "height": 50}));
+    // The agent goes to a new page, where it draws a tall one; the window stays on the first.
+    c.run("page.add", json!({}));
+    c.create(json!({"type": "rectangle", "x": 0, "y": 0, "width": 50, "height": 300}));
+
+    let shot = c.call("screenshot", json!({}));
+    assert_eq!(shot["isError"], false, "{shot}");
+    let (w, h) = common::png_dims(shot["content"][0]["data"].as_str().unwrap());
+    assert!(h > w, "the agent's page holds the tall layer and the window's the wide one: the image is {w}x{h}");
+}
+
+/// The schema of `wait_for_changes` names the `agents` topic the server takes: a client that
+/// follows the schema could not ask for the agents' events otherwise. Every topic it names is
+/// one the server takes.
+#[test]
+fn wait_for_changes_names_the_agents_topic_in_its_schema() {
+    let mut c = Client::new();
+    let r = c.rpc("tools/list", json!({}));
+    let tool = r["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "wait_for_changes").unwrap().clone();
+    let topics = tool["inputSchema"]["properties"]["topics"]["items"]["enum"].as_array().unwrap().clone();
+    assert!(topics.contains(&json!("agents")), "the topics the schema names: {topics:?}");
+    for topic in topics {
+        c.ok("wait_for_changes", json!({"topics": [topic], "timeoutMs": 0}));
+    }
+}
+
+#[test]
 fn list_commands_filters() {
     let mut c = Client::new();
     let all = c.ok("list_commands", json!({}));

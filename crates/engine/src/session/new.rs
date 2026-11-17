@@ -34,6 +34,8 @@ impl Session {
             pending_events: Vec::new(),
             agent: None,
             agent_presence: None,
+            agents: crate::agent::Agents::default(),
+            keep_unsaved: false,
         }
     }
 

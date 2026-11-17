@@ -8,6 +8,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use serde_json::{Value, json};
 
+use crate::server::AsAgent;
+
 /// Something that answers the FigCraft control-channel methods (`engine.execute`,
 /// `engine.commands`, `document.inspect`, `node.get`, `ui.pointer`, `ui.key`, `ui.type`,
 /// `ui.render`, `ui.screenshot`, `ui.inspect`). See `docs/control-protocol.md`.
@@ -24,18 +26,15 @@ pub trait Backend {
     /// PNG bytes of the document: `ids` (in page coordinates, their union) or, when empty, the
     /// current page's content. The default goes through `ui.render`, the PNG coming back as data.
     fn render_png(&mut self, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
-        let mut params = json!({"scale": scale});
-        if !ids.is_empty() {
-            params["ids"] = json!(ids);
-        } else {
-            // `ui.render` without ids exports the selection; pass the page's children instead.
-            let kids = page_children(self)?;
-            if kids.is_empty() {
-                return Err("the current page is empty: nothing to render".into());
-            }
-            params["ids"] = json!(kids);
-        }
-        decode_data(&self.call("ui.render", params)?)
+        render_by_requests(self, ids, scale)
+    }
+
+    /// [`Backend::render_png`] asked by the AI agent named `agent`: without `ids`, the page is the
+    /// one that agent works on (its own while several agents work apart), not the one the window
+    /// shows. The default makes its requests through [`AsAgent`], which names them with the `key`
+    /// the agent holds its name with: without it the app refuses the request once the name is held.
+    fn render_png_as(&mut self, agent: &str, key: &str, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+        render_by_requests(&mut AsAgent { inner: self, agent, key }, ids, scale)
     }
 
     /// PNG bytes of what the user sees: the app window when attached, the current viewport when
@@ -50,6 +49,22 @@ pub trait Backend {
     }
 }
 
+/// [`Backend::render_png`] by requests: the layers of the page, then `ui.render` of them.
+fn render_by_requests<B: Backend + ?Sized>(b: &mut B, ids: &[u64], scale: f64) -> Result<Vec<u8>, String> {
+    let mut params = json!({"scale": scale});
+    if !ids.is_empty() {
+        params["ids"] = json!(ids);
+    } else {
+        // `ui.render` without ids exports the selection; pass the page's children instead.
+        let kids = page_children(b)?;
+        if kids.is_empty() {
+            return Err("the current page is empty: nothing to render".into());
+        }
+        params["ids"] = json!(kids);
+    }
+    decode_data(&b.call("ui.render", params)?)
+}
+
 /// A window capture, the PNG coming back as data (no file: an app confined to automation roots
 /// writes none outside them).
 fn capture<B: Backend + ?Sized>(b: &mut B, params: Value) -> Result<Vec<u8>, String> {
@@ -58,7 +73,13 @@ fn capture<B: Backend + ?Sized>(b: &mut B, params: Value) -> Result<Vec<u8>, Str
 
 /// The ids of the current page's top-level layers.
 pub fn page_children<B: Backend + ?Sized>(b: &mut B) -> Result<Vec<u64>, String> {
-    let doc = b.call("document.inspect", json!({"depth": 1}))?;
+    children_of_page(b, json!({"depth": 1}))
+}
+
+/// The ids of the top-level layers of the page `document.inspect` reports as current for `params`
+/// (with an `agent`, the page that agent works on).
+fn children_of_page<B: Backend + ?Sized>(b: &mut B, params: Value) -> Result<Vec<u64>, String> {
+    let doc = b.call("document.inspect", params)?;
     let current = doc.get("currentPage").cloned().unwrap_or(Value::Null);
     let pages = doc.get("pages").and_then(Value::as_array).cloned().unwrap_or_default();
     let page = pages.iter().find(|p| p.get("id") == Some(&current)).or_else(|| pages.first());

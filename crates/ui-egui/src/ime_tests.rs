@@ -592,7 +592,7 @@ fn a_window_new_that_moves_the_edited_file_leaves_the_root_ime_idle() {
 
     // A `window.new` queued before the pass is applied after `windows::begin` picked the file
     // for the root: the root no longer shows the edited file when the pass ends.
-    u.app.window_requests.push(figcraft_engine::UiRequest { kind: "window.new".into(), data: json!({"index": a}) });
+    u.app.window_requests.push(figcraft_engine::UiRequest { kind: "window.new".into(), data: json!({"index": a}), roots: None, agent: None });
     let out = u.frame_raw(RawInput::default());
     assert_ne!(u.app.windows.of(uid), 0, "the file moved to its own window");
     assert!(out.platform_output.ime.is_none(), "the root must not emit a descriptor for a file it no longer shows");

@@ -4,6 +4,8 @@ impl Session {
     /// Keys the current mode handles before menu shortcuts (vector edit mode's tools and point
     /// keys, Enter to finish the shape builder). Returns whether the key was used.
     pub fn tool_key(&mut self, name: &str, shift: bool, alt: bool, cmd: bool) -> Result<bool> {
+        // A key would act on, or end, a gesture an agent did not start.
+        self.refuse_foreign_gesture("tool_key")?;
         // Dev Mode edits nothing: keys go to the commands (which it refuses in the app).
         if self.tool.dev_mode {
             return Ok(false);
@@ -104,6 +106,8 @@ impl Session {
     /// Keyboard Escape: cancel gestures, finish pens, leave text editing, then deselect (in the
     /// focus view, once the focused frame or nothing is selected, it ends the focus view).
     pub fn escape(&mut self) -> Result<()> {
+        // Escape cancels the gesture under way: an agent may only cancel its own.
+        self.refuse_foreign_gesture("escape")?;
         // Following someone in a live session: Escape stops that first.
         if self.live_unfollow() {
             return Ok(());

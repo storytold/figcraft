@@ -1,3 +1,4 @@
+use super::exec::GESTURE_IN_PROGRESS;
 use super::{
     Arc, BatchScope, BatchStep, DocState, Document, EngineError, HistoryEntry, Interaction, NodeId, PREVIEW_READ_ONLY, Result, Session, UiRequest,
     Value, cmd, figcraft_collab, json, normalize, textpreview,
@@ -46,24 +47,70 @@ impl Session {
         }
     }
 
+    /// Is a gesture open that the agent now calling did not start? An agent's own (the text it is
+    /// editing) takes its edits; the window's, or another agent's, would fold them in or lose them.
+    /// Covers the interaction of `ds` and the tool gesture under way. The user is never foreign.
+    pub(crate) fn in_foreign_gesture(&self, ds: &DocState) -> bool {
+        let Some(actor) = self.actor() else { return false };
+        ds.interaction.as_ref().is_some_and(|it| it.agent.as_deref() != Some(actor)) || self.foreign_tool_gesture(actor)
+    }
+
+    /// Is a tool gesture (a drag, a shape being drawn) under way that `actor` did not start?
+    fn foreign_tool_gesture(&self, actor: &str) -> bool {
+        self.tool.busy() && self.tool.held_by.as_deref() != Some(actor)
+    }
+
+    /// The one rule for gestures: an agent may not act on, continue or end a gesture that is not
+    /// its own (the document's interaction, or the tool gesture under way). The user never is refused.
+    pub(crate) fn refuse_foreign_gesture(&self, what: &str) -> Result<()> {
+        let Some(actor) = self.actor() else { return Ok(()) };
+        let foreign = match self.ds() {
+            Ok(ds) => self.in_foreign_gesture(ds),
+            Err(_) => self.foreign_tool_gesture(actor),
+        };
+        if foreign {
+            return Err(EngineError::Disabled(what.to_string(), GESTURE_IN_PROGRESS.into()));
+        }
+        Ok(())
+    }
+
     /// Start a gesture: later [`preview`](Self::preview) calls re-apply edits to this snapshot.
     pub fn begin_interaction(&mut self, label: &str) -> Result<()> {
+        // An agent must not join, in silence, a gesture someone else began: the document's, or the
+        // tool gesture under way (a pencil stroke, a pan and a marquee open no interaction). Without
+        // the second, it would open an interaction it may not go on with, and hold the other back.
+        self.refuse_foreign_gesture(label)?;
         textpreview::end(self);
         if let Some(why) = self.active_read_only() {
             return Err(EngineError::Disabled(label.to_string(), why.into()));
         }
+        let agent = self.actor().map(str::to_string);
         let ds = self.ds_mut()?;
         if ds.preview.is_some() {
             return Err(EngineError::Disabled(label.to_string(), PREVIEW_READ_ONLY.into()));
         }
-        if ds.interaction.is_none() {
-            ds.interaction = Some(Interaction { label: label.to_string(), doc: ds.doc.clone(), selection: ds.selection.clone(), moved_by: None });
+        match ds.interaction.as_mut() {
+            // The user goes on in a gesture an agent began (a press that takes its drag over): the
+            // gesture is the user's from now on. Left under the agent's name, it would be committed
+            // when that agent leaves, and the user's drag would have nothing under it. An agent
+            // gets here only in its own gesture.
+            Some(it) => {
+                if agent.is_none() {
+                    it.agent = None;
+                }
+            }
+            None => {
+                ds.interaction =
+                    Some(Interaction { label: label.to_string(), doc: ds.doc.clone(), selection: ds.selection.clone(), moved_by: None, agent });
+            }
         }
         Ok(())
     }
 
     /// Replace the document with `f(snapshot)` for a live preview during a gesture.
     pub fn preview(&mut self, f: impl FnOnce(&mut Document, &mut Vec<NodeId>) -> Result<()>) -> Result<()> {
+        // A preview rewrites the document from the gesture's snapshot: only the gesture's owner may.
+        self.refuse_foreign_gesture("preview")?;
         let ds = self.ds_mut()?;
         let Some(it) = ds.interaction.clone() else { return Err(EngineError::NoGesture) };
         let mut doc = (*it.doc).clone();
@@ -89,12 +136,21 @@ impl Session {
 
     /// Finish a gesture as one undo step (no step if nothing changed).
     pub fn commit_interaction(&mut self) -> Result<()> {
-        let ds = self.ds_mut()?;
+        // Ending someone else's gesture would keep or lose their work.
+        self.refuse_foreign_gesture("commit_interaction")?;
+        let uid = self.ds_mut()?.uid;
+        self.finish_interaction_of(uid)
+    }
+
+    /// Commit the interaction open on the document `uid`, whoever began it.
+    pub(crate) fn finish_interaction_of(&mut self, uid: u64) -> Result<()> {
+        let Some(ds) = self.docs.iter_mut().find(|d| d.uid == uid) else { return Ok(()) };
         let Some(it) = ds.interaction.take() else { return Ok(()) };
         let (uid, page) = (ds.uid, ds.page);
         ds.revision += 1;
         if !Arc::ptr_eq(&it.doc, &ds.doc) && *it.doc != *ds.doc {
-            self.record(uid, Some(&it.label), it.doc, it.selection, page);
+            // The step is the gesture's starter's, whoever ends the gesture.
+            self.record_by(uid, Some(&it.label), it.doc, it.selection, page, it.agent.as_deref());
         } else {
             ds.doc = it.doc;
         }
@@ -103,6 +159,8 @@ impl Session {
 
     /// Abandon a gesture, restoring the document.
     pub fn cancel_interaction(&mut self) -> Result<()> {
+        // Abandoning someone else's gesture would lose their work.
+        self.refuse_foreign_gesture("cancel_interaction")?;
         let ds = self.ds_mut()?;
         if let Some(it) = ds.interaction.take() {
             ds.doc = it.doc;
@@ -190,7 +248,8 @@ impl Session {
 
     /// Queue a UI request (dialogs etc.).
     pub fn request_ui(&mut self, kind: &str, data: Value) {
-        self.ui_requests.push(UiRequest { kind: kind.to_string(), data });
+        let agent = self.agent_asker(self.actor());
+        self.ui_requests.push(UiRequest { kind: kind.to_string(), data, roots: crate::file_access::current(), agent });
     }
 
     /// Run several commands as one undo step. A param value `{"$step": n}` is replaced by the `id`

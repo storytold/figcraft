@@ -3,6 +3,10 @@ use super::{
     components, events, find_command, guard, library, normalize, params, textpreview,
 };
 
+/// Why an agent's edit is refused while a gesture that is not its own is open on the document:
+/// the gesture would fold the edit into its own step, or lose it when cancelled.
+pub(super) const GESTURE_IN_PROGRESS: &str = "a drag or other gesture is in progress in the window: retry the edit once it ends";
+
 /// Whether a command, or a batch wrapping one, imports a file passed as Base64 `data`.
 fn command_carries_import_bytes(id: &str, params: &Value) -> bool {
     match id {
@@ -26,7 +30,7 @@ pub(crate) fn finite_check_candidates(doc: &Document, before: &Document) -> Vec<
 impl Session {
     /// Append a live event with the active document's identity (nothing without one). Inside a
     /// [`Session::grouped`] call the event is buffered and committed only when the group succeeds.
-    fn record_event(&mut self, kind: &str, data: Value) {
+    pub(crate) fn record_event(&mut self, kind: &str, data: Value) {
         let (document, path) = match self.ds() {
             Ok(d) => (d.doc.name.clone(), d.path.clone()),
             Err(_) => (String::new(), None),
@@ -52,26 +56,25 @@ impl Session {
         }
     }
 
-    /// [`Session::execute`] for an AI agent named `agent` (the client's name; empty when it gave
-    /// none), or for the user (`None`): the comments it makes are signed with the agent's name and
-    /// marked as an agent's, and the app shows where it works ([`Session::agent_presence_at`]).
-    pub fn execute_as(&mut self, agent: Option<&str>, id: &str, params: &Value) -> Result<Value> {
-        let was = std::mem::replace(&mut self.agent, agent.map(cmd::comment::agent_author));
-        let before = agent.and_then(|_| self.agent_before());
-        let r = self.execute(id, params);
-        if agent.is_some() {
-            self.note_agent(before);
-        }
-        self.agent = was;
+    /// Run a command by id. Mutations become one undo step; a failure or panic leaves the document
+    /// as it was.
+    ///
+    /// When an AI agent's call is running ([`Session::with_agent`]) the app shows where it works
+    /// ([`Session::agent_presence_at`]): noted when the outermost `execute` of the call ends, not
+    /// by the commands it runs in turn.
+    pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        let call = self.call_begin();
+        let r = self.run_command(id, params);
+        self.call_end(call);
         r
     }
 
-    /// Run a command by id. Mutations become one undo step; a failure or panic leaves the document
-    /// as it was.
-    pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+    fn run_command(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         crate::cmd::refuse_unknown_params(id, params)?;
         board::refuse_on_board(self, id)?;
+        self.refuse_shared_undo(id)?;
+        self.refuse_agent_edit_in_gesture(id, spec)?;
         // Revert replaces the document's uid: refuse before ending previews or syncing branches.
         if id == "file.revert" && self.live().doc_uid.is_some() {
             return Err(EngineError::Disabled(id.into(), "leave the live session before reverting to the saved file".into()));
@@ -105,6 +108,7 @@ impl Session {
             .and_then(|v| self.check_instance_structure(id, &before).map(|()| v))
             .and_then(|v| self.check_preview(id, &before).map(|()| v))
             .and_then(|v| self.check_live_access(id, &before).map(|()| v))
+            .and_then(|v| self.check_agent_edit_in_gesture(id, &before).map(|()| v))
             .and_then(|v| self.check_finite_geometry(id, &before).map(|()| v))
             // Normalising is part of the command: a panic in it rolls the edit back too (#1085).
             .and_then(|v| {
@@ -164,6 +168,29 @@ impl Session {
             Err(EngineError::Internal { .. }) => self.restore_after_internal_error(group_depth, pending_events),
             Err(_) => {}
         }
+    }
+
+    /// While a gesture that is not its own is open on the active document, an agent's edit is
+    /// refused before it runs. Undo and redo are refused too: they pop the history before any later
+    /// check.
+    fn refuse_agent_edit_in_gesture(&self, id: &str, spec: &CommandSpec) -> Result<()> {
+        let edits = spec.history || matches!(id, "edit.undo" | "edit.redo");
+        if edits {
+            // The same rule as every other way into a gesture: see `refuse_foreign_gesture`.
+            self.refuse_foreign_gesture(id)?;
+        }
+        Ok(())
+    }
+
+    /// An agent's command that changes the document during a gesture that is not its own is refused
+    /// (it is rolled back): the gesture would fold the change in, or lose it when cancelled.
+    fn check_agent_edit_in_gesture(&self, id: &str, before: &Option<(Arc<Document>, Vec<NodeId>, NodeId, u64)>) -> Result<()> {
+        let Some((bdoc, _, _, uid)) = before else { return Ok(()) };
+        let Some(ds) = self.docs.iter().find(|d| d.uid == *uid) else { return Ok(()) };
+        if !self.in_foreign_gesture(ds) || Arc::ptr_eq(&ds.doc, bdoc) {
+            return Ok(());
+        }
+        Err(EngineError::Disabled(id.to_string(), GESTURE_IN_PROGRESS.into()))
     }
 
     /// A version shown in place of the document is read-only: refuse an edit (it is rolled back).
@@ -260,6 +287,24 @@ impl Session {
     /// undo step called `label` (`None`: not undoable). On a live session's document the edit is
     /// synced and the step is the user's own ([`live`]); otherwise it is a snapshot of `before`.
     pub(crate) fn record(&mut self, uid: u64, label: Option<&str>, before: Arc<Document>, selection: Vec<NodeId>, page: NodeId) {
+        let by = self.actor().map(str::to_string);
+        self.record_by(uid, label, before, selection, page, by.as_deref());
+    }
+
+    /// [`record`](Self::record) for an edit `author` made (an agent's name, `None` for the user),
+    /// when that is not whoever calls: a gesture is its starter's, whoever ends it (an agent that
+    /// leaves has its gesture committed under another call).
+    pub(crate) fn record_by(
+        &mut self,
+        uid: u64,
+        label: Option<&str>,
+        before: Arc<Document>,
+        selection: Vec<NodeId>,
+        page: NodeId,
+        author: Option<&str>,
+    ) {
+        // First, and whatever the label: an edit that is no undo step changes the document too.
+        self.tool.edited_by(uid, author);
         if self.live_doc(uid) {
             return self.live_edit(uid, label);
         }

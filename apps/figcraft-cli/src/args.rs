@@ -36,6 +36,7 @@ pub enum Command {
     Run(RunArgs),
     Commands(CommandsArgs),
     Mcp(McpArgs),
+    Call(CallArgs),
     /// Publish plugins to a server's plugin directory
     Plugin {
         #[command(subcommand)]
@@ -198,6 +199,38 @@ pub struct CommandsArgs {
     pub filter: Option<String>,
 }
 
+/// Send one request to the running app, as an AI agent, and print its result
+///
+/// The app is the one that lets AI agents in (its Preferences), found by itself, unless --attach
+/// names it. The result is printed as JSON on standard output; a request the app refuses is an
+/// error (exit 1). Several commands go in one request with `command.batch`:
+/// `figcraft-cli call --agent Header --agent-key KEY engine.execute -` reads the parameters from
+/// standard input.
+#[derive(Args)]
+pub struct CallArgs {
+    /// The control method: engine.execute, document.inspect, node.get, agent.join… (see
+    /// docs/control-protocol.md)
+    pub method: String,
+    /// The request's parameters, a JSON object; `-` reads them from standard input
+    #[arg(default_value = "{}")]
+    pub params: String,
+    /// The app to reach: `auto` finds the one that lets AI agents in; else a port (127.0.0.1) or
+    /// host:port
+    #[arg(long, value_name = "PORT", value_parser = attach, default_value = ATTACH_AUTO)]
+    pub attach: String,
+    /// The name this agent works under: with several agents on one file, each keeps its own page
+    /// and selection. Needs --agent-key
+    #[arg(long, value_name = "NAME", requires = "agent_key")]
+    pub agent: Option<String>,
+    /// The key this agent holds its name with: any text only it knows, the same at each of its
+    /// calls. The app refuses a call under that name with another key, or with none
+    #[arg(long, value_name = "KEY", requires = "agent")]
+    pub agent_key: Option<String>,
+    /// How long the app may take over the request, in seconds (1–600; default 60)
+    #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..=600))]
+    pub timeout: Option<u64>,
+}
+
 /// Serve MCP on stdio: headless, or attached to a running app
 ///
 /// The automation roots confine the headless session's file access. A server started with
@@ -206,9 +239,13 @@ pub struct CommandsArgs {
 #[derive(Args)]
 pub struct McpArgs {
     /// Attach to the app started with `figcraft --control PORT`; a bare port means 127.0.0.1:PORT.
-    /// Refuses the automation roots
+    /// `auto` finds the app that lets AI agents in (its Preferences). Refuses the automation roots
     #[arg(long, value_name = "PORT", value_parser = attach, conflicts_with_all = ["automation_read_root", "automation_write_root"])]
     pub attach: Option<String>,
+    /// The name this server's agent works under, instead of the MCP client's own name: give each
+    /// of several agents on one file its own
+    #[arg(long, value_name = "NAME")]
+    pub agent: Option<String>,
     /// How long the attached app may take over each request, in seconds (1–600; default 60)
     #[arg(long, value_name = "SECONDS", requires = "attach", value_parser = clap::value_parser!(u64).range(1..=600))]
     pub timeout: Option<u64>,
@@ -285,7 +322,7 @@ enum ValueError {
     Format,
     #[error("expected whole numbers, like 1000,10_000")]
     WholeNumber,
-    #[error("expected a port number or host:port")]
+    #[error("expected a port number, host:port or auto")]
     Attach,
 }
 
@@ -314,9 +351,13 @@ fn whole_number(s: &str) -> Result<usize, ValueError> {
     s.trim().replace('_', "").parse().map_err(|_| ValueError::WholeNumber)
 }
 
-/// `mcp --attach`: `host:port` as given, or a bare port on 127.0.0.1.
+/// `mcp --attach auto`: the app is found when the server starts, from the state file it writes
+/// while it lets AI agents in.
+pub const ATTACH_AUTO: &str = "auto";
+
+/// `mcp --attach`: `host:port` or `auto` as given, or a bare port on 127.0.0.1.
 fn attach(s: &str) -> Result<String, ValueError> {
-    if s.contains(':') {
+    if s == ATTACH_AUTO || s.contains(':') {
         return Ok(s.to_owned());
     }
     let port: u16 = s.parse().map_err(|_| ValueError::Attach)?;
@@ -359,7 +400,7 @@ mod tests {
     use clap::CommandFactory;
     use clap::error::ErrorKind;
 
-    use super::{Cli, Command, ConnectCommand, PluginCommand, parse};
+    use super::{ATTACH_AUTO, Cli, Command, ConnectCommand, PluginCommand, parse};
 
     fn try_parse(args: &[&str]) -> Result<Cli, clap::Error> {
         parse(std::iter::once("figcraft-cli").chain(args.iter().copied()).map(Into::into).collect())
@@ -453,6 +494,13 @@ mod tests {
         assert_eq!((a.layers, a.instances), (vec![1000, 10_000, 50_000], vec![0]));
     }
 
+    /// An agent's call gives the key its name is held with: without one the name would be
+    /// anyone's, and another agent could work under it or make it leave.
+    #[test]
+    fn a_call_as_an_agent_needs_its_key() {
+        assert!(try_parse(&["call", "--agent", "Header", "agent.join"]).is_err(), "`call --agent` was accepted without `--agent-key`");
+    }
+
     #[test]
     fn mcp_and_plugin_publish() {
         let Command::Mcp(a) = ok(&["mcp"]) else { panic!("mcp") };
@@ -461,6 +509,19 @@ mod tests {
         assert_eq!(a.attach.as_deref(), Some("127.0.0.1:7979"));
         let Command::Mcp(a) = ok(&["mcp", "--attach=localhost:7979"]) else { panic!("mcp") };
         assert_eq!(a.attach.as_deref(), Some("localhost:7979"));
+        let Command::Mcp(a) = ok(&["mcp", "--attach", "auto", "--agent", "Layout"]) else { panic!("mcp") };
+        assert_eq!((a.attach.as_deref(), a.agent.as_deref()), (Some(ATTACH_AUTO), Some("Layout")));
+        let Command::Call(a) = ok(&["call", "agent.list"]) else { panic!("call") };
+        assert_eq!((a.method.as_str(), a.params.as_str(), a.attach.as_str(), a.agent), ("agent.list", "{}", ATTACH_AUTO, None));
+        let Command::Call(a) =
+            ok(&["call", "--agent", "Header", "--agent-key", "its key", "--attach", "7979", "engine.execute", r#"{"command":"select.all"}"#])
+        else {
+            panic!("call")
+        };
+        assert_eq!((a.params.as_str(), a.attach.as_str(), a.agent.as_deref()), (r#"{"command":"select.all"}"#, "127.0.0.1:7979", Some("Header")));
+        assert_eq!(a.agent_key.as_deref(), Some("its key"));
+        let Command::Call(a) = ok(&["call", "engine.execute", "-"]) else { panic!("call") };
+        assert_eq!(a.params, "-");
         let Command::Mcp(a) = ok(&["mcp", "--attach", "7979", "--timeout", "300"]) else { panic!("mcp") };
         assert_eq!(a.timeout, Some(300));
         let Command::Mcp(a) = ok(&["mcp", "--automation-read-root", "in", "--automation-write-root", "out"]) else { panic!("mcp") };

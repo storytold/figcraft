@@ -124,6 +124,21 @@ impl Session {
 
     /// Feed one pointer event to the current tool.
     pub fn pointer(&mut self, ev: &PointerEvent) -> Result<()> {
+        // An agent may not move, press or release inside a gesture that is not its own.
+        self.refuse_foreign_gesture("pointer")?;
+        // Whoever presses with the tool idle holds the gesture it starts; set before the event
+        // because the gesture's own interaction calls are checked against it. The user pressing
+        // during an agent's gesture takes it over: it is the user's from then on, so the agent's
+        // next events cannot pull at what the user drags. Only a press does: the window's pointer
+        // moving over the canvas leaves the gesture to its holder.
+        let user_press = self.actor().is_none() && matches!(ev.kind, PointerKind::Down | PointerKind::DoubleClick);
+        if !self.tool.busy() || user_press {
+            self.tool.held_by = self.actor().map(str::to_string);
+        }
+        self.pointer_event(ev)
+    }
+
+    fn pointer_event(&mut self, ev: &PointerEvent) -> Result<()> {
         // A held button sends the same move every frame: running the gesture again would only
         // rebuild the same preview (a new document, and a canvas render, every frame).
         if ev.kind != PointerKind::Move {

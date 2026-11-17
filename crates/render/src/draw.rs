@@ -1135,11 +1135,10 @@ fn draw_children_clipped(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, dept
         None
     } else {
         let own_box = (square_aligned && clip.is_none()).then(|| n.local_rect().to_path(0.1));
-        clip.or(own_box.as_ref()).and_then(ts_path).and_then(|cp| {
-            let mut m = Mask::new(ir.width(), ir.height())?;
-            m.fill_path(&cp, FillRule::Winding, true, ts_transform(lxf));
-            Some(m)
-        })
+        clip.or(own_box.as_ref())
+            .and_then(ts_path)
+            .and_then(|cp| cp.transform(ts_transform(lxf)))
+            .and_then(|cp| clip_mask(&cp, ir.width(), ir.height()))
     };
     if !rect_clip && mask.is_none() {
         return;
@@ -1149,6 +1148,24 @@ fn draw_children_clipped(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, dept
         draw_children(&Ctx { under: Some(&under), ..*ctx }, &mut layer, n, lxf, depth);
     }
     backdrop::replace(pix, (lx, ly), &layer, mask.as_ref().map(|m| (m, (0, 0))));
+}
+
+/// The widest or tallest a clip is and still lets nothing through: what the rasteriser takes as
+/// zero.
+const NO_AREA: f32 = 1.0 / 4096.0;
+
+/// The mask of a clip already in the layer's pixels, `width` by `height`. `None` when nothing
+/// shows through it: a clip with no width or no height (a frame resized to a line) has no area, so
+/// its children are not drawn at all, instead of being drawn and thrown away through an empty mask
+/// (which the rasteriser also logs as a warning, on every frame).
+pub(crate) fn clip_mask(clip: &tiny_skia::Path, width: u32, height: u32) -> Option<Mask> {
+    let bounds = clip.bounds();
+    if bounds.width() <= NO_AREA || bounds.height() <= NO_AREA {
+        return None;
+    }
+    let mut mask = Mask::new(width, height)?;
+    mask.fill_path(clip, FillRule::Winding, true, tiny_skia::Transform::identity());
+    Some(mask)
 }
 
 /// Colour ink of a text run, in the order the run paints it. Strokes follow the outlines only: a

@@ -1,4 +1,4 @@
-//! Comments from an AI agent (#1414): a command run as an agent (`Session::execute_as`, which the
+//! Comments from an AI agent (#1414): a command run as an agent (`Session::with_agent` around `Session::execute`, which the
 //! control channel's and MCP's `engine.execute {agent}` use) signs comments with the agent's own
 //! name and marks them as an agent's; the user's own comments stay as they were.
 
@@ -9,11 +9,11 @@ use crate::cmd::comment::agent_author;
 use crate::live::initials;
 
 fn as_agent(s: &mut Session, agent: &str, cmd: &str, p: Value) -> Value {
-    s.execute_as(Some(agent), cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"))
+    s.with_agent(Some(agent), |s| s.execute(cmd, &p)).unwrap_or_else(|e| panic!("{cmd}: {e}"))
 }
 
 fn thread(s: &mut Session, agent: Option<&str>) -> Value {
-    s.execute_as(agent, "comment.list", &json!({"filter": "all"})).unwrap()["comments"][0].clone()
+    s.with_agent(agent, |s| s.execute("comment.list", &json!({"filter": "all"}))).unwrap()["comments"][0].clone()
 }
 
 #[test]
@@ -34,6 +34,23 @@ fn an_agents_comments_carry_its_name_and_the_agent_marker() {
     assert_eq!(as_agent(&mut s, "Claude", "comment.people", json!({}))["you"], "Claude (agent)");
     assert_eq!(s.execute("comment.people", &json!({})).unwrap()["you"], "You", "the user's name never changes");
     assert_eq!(s.agent, None, "the agent acts only for its own call");
+}
+
+/// A panic that goes through an agent's call, outside the command's own guard, ends that call
+/// like any other end: what the user does next is the user's.
+#[test]
+fn after_an_agents_call_that_panicked_the_user_signs_as_the_user() {
+    let mut s = Session::new();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.with_agent::<()>(Some("Claude"), |_| panic!("a bug in Claude's call"))));
+    assert!(unwound.is_err(), "the panic goes on to the caller");
+    s.execute("comment.add", &json!({"x": 10, "y": 10, "text": "mine"})).unwrap();
+    let t = s.execute("comment.list", &json!({"filter": "all"})).unwrap()["comments"][0].clone();
+    assert_eq!(
+        (t["author"].as_str(), t["agent"].as_bool()),
+        (Some("You"), Some(false)),
+        "the user's comment is signed by the agent whose call panicked: {t}"
+    );
+    assert_eq!(s.agent, None, "the call that panicked is over: nobody acts as its agent");
 }
 
 #[test]
@@ -69,10 +86,36 @@ fn agent_names_are_cleaned() {
 }
 
 #[test]
+fn a_name_cut_at_a_space_is_the_name_it_is_found_under() {
+    use crate::cmd::comment::agent_name;
+    // The 64th character is a space: what is kept must not end with it, or the name `agent.join`
+    // gives back would name another agent when the client sends it again.
+    let long = format!("{} Z", "a".repeat(63));
+    let kept = agent_name(&long);
+    assert_eq!(kept, "a".repeat(63), "cut to 64 characters, then trimmed");
+    assert_eq!(agent_name(&kept), kept, "a kept name is kept as it is");
+}
+
+#[test]
 fn an_agents_avatar_shows_its_names_initial() {
     assert_eq!(initials("Claude (agent)"), "C");
     assert_eq!(initials("AI agent"), "AA");
     assert_eq!(initials("Ada Lovelace"), "AL");
     assert_eq!(initials("(x) [y]"), "([", "no word starts with a letter: as before");
     assert_eq!(initials("  "), "?");
+}
+
+/// An agent whose client gave no name signs as the default agent and still reads as an agent's;
+/// it is never the user, and it has no name of its own to be held under.
+#[test]
+fn a_client_without_a_name_signs_its_comments_as_the_default_agent() {
+    let mut s = Session::new();
+    let c = s.execute("comment.add", &json!({"x": 10, "y": 10, "text": "look"})).unwrap()["id"].as_u64().unwrap();
+    let signed = s.with_agent(Some(""), |s| (s.agent.clone(), s.execute("comment.reply", &json!({"id": c, "text": "Done"})).unwrap()));
+    assert_eq!(signed.0.as_deref(), Some(agent_author("").as_str()), "the call signs as the default agent");
+    let doc = s.doc().unwrap();
+    let m = &doc.comment(c).unwrap().replies[0];
+    assert_eq!(m.author, "AI agent");
+    assert!(m.agent, "marked as an agent's");
+    assert_eq!(s.agent, None, "the signature does not outlive the call");
 }

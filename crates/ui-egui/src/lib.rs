@@ -314,6 +314,8 @@ mod web_clipboard_tests;
 #[cfg(test)]
 mod web_save_tests;
 #[cfg(test)]
+mod windows_deferred_tests;
+#[cfg(test)]
 mod windows_qa_tests;
 #[cfg(test)]
 mod windows_tests;
@@ -474,6 +476,9 @@ pub struct UiState {
     /// The tab the About window shows.
     pub about_tab: dialogs::AboutTab,
     pub preferences: bool,
+    /// Preferences is asking before it lets AI agents in (`Some(true)`) or shuts them out
+    /// (`Some(false)`).
+    pub agent_control_ask: Option<bool>,
     /// A menu command that needs a value before the engine can run it.
     pub menu_input: Option<dialogs::MenuInput>,
     /// File ▸ Rename: the file name in the left panel starts its inline rename on the next frame.
@@ -687,6 +692,7 @@ impl Default for UiState {
             about: false,
             about_tab: dialogs::AboutTab::About,
             preferences: false,
+            agent_control_ask: None,
             menu_input: None,
             rename_file: false,
             ui_scale: ui_scale::plan(1.0, None, None),
@@ -830,9 +836,19 @@ pub struct FigApp {
     /// The automation roots the app was started with: every frame and control request runs
     /// confined to them ([`windows::guard`]).
     pub automation_roots: Option<Arc<figcraft_engine::file_access::Roots>>,
+    /// The roots are the Preferences' folder for agents, not launch options: they confine what
+    /// arrives through the control channel only, never the user's own work in the window.
+    pub automation_roots_for_agents: bool,
+    /// The launch named the control port: that server runs until exit, and the Preferences'
+    /// switch for agent control changes nothing.
+    pub agent_control_fixed: bool,
     /// The active-document id when synthetic input was queued: a batch is dropped when the file
     /// changed before a UI pass applied it.
     pub(crate) control_input_doc: Option<u64>,
+    /// Who the queued synthetic batch was injected for (`None`: no agent): the name it is replayed
+    /// under, with the stay it was admitted in. The name alone is not enough: the agent may leave
+    /// before the frame comes, and another client may hold the name by then.
+    pub(crate) control_input_agent: Option<figcraft_engine::agent::Asker>,
     /// This frame applies events injected through the control channel: no system clipboard
     /// read or write may happen for them.
     pub(crate) control_synthetic: bool,
@@ -848,6 +864,15 @@ pub struct FigApp {
     pub(crate) control_input_queued: bool,
     /// The viewport whose batch this frame took into its raw input (`applied_input`/`applied_acks`).
     pub(crate) applied_frame: Option<egui::ViewportId>,
+    /// The agent of the batch `applied_frame` applies, set and cleared with it.
+    pub(crate) applied_agent: Option<figcraft_engine::agent::Asker>,
+    /// The batch `applied_frame` took was cancelled since (`cancel_control_work`). Its events are
+    /// in that pass's raw input already and cannot be taken back: the frame that carries them
+    /// draws nothing (`FigApp::frame`). Set and cleared with `applied_frame`.
+    pub(crate) applied_cancelled: bool,
+    /// The identity the frame replaying an agent's input runs under, from the end of the control
+    /// requests to the end of the frame (`FigApp::frame` ends it however the frame ends).
+    pub(crate) frame_acting: Option<figcraft_engine::agent::Acting>,
     /// Monotonic time for background work and capture deadlines.
     pub(crate) clock: FrameClock,
     /// Screenshot requests admitted, settling and awaiting readback.
