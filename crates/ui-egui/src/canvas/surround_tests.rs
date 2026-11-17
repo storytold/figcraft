@@ -52,6 +52,10 @@ fn the_image_around_the_view_is_kept_for_small_pans_and_moved_for_far_ones() {
     let ds = s.ds().unwrap();
     let edited = job(&ds.doc, ds.page, ds.uid, view_at((570.0, 150.0), 1.0, 400, 300));
     assert!(matches!(around.render(&edited).expect("after an edit").work, Work::Partial { .. }));
+    // Soft proof marks the image after it renders: turning it on or off hands over a new one.
+    assert!(around.render(&Job { proof: true, ..edited.clone() }).is_some(), "proof on");
+    assert!(around.render(&Job { proof: true, ..edited.clone() }).is_none());
+    assert!(around.render(&edited).is_some(), "proof off");
     // Another zoom starts over; pixel preview has none.
     let zoomed = job(&ds.doc, ds.page, ds.uid, view_at((570.0, 150.0), 2.0, 400, 300));
     assert_eq!(around.render(&zoomed).expect("another zoom").work, Work::Full);

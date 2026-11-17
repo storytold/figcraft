@@ -181,8 +181,9 @@ fn same_view(a: &View, b: &View) -> bool {
 #[derive(Default)]
 pub struct Surround {
     retained: Retained,
-    /// The file, page and view of the image handed over last.
-    of: Option<(u64, NodeId, View)>,
+    /// The file, page and view of the image handed over last, and whether it was soft-proofed
+    /// (marked after the render, so the kept image can't tell).
+    of: Option<(u64, NodeId, View, bool)>,
 }
 
 impl Surround {
@@ -196,21 +197,24 @@ impl Surround {
         }
         let want = surround_view(&job.view);
         let view = match &self.of {
-            Some((uid, page, have))
+            Some((uid, page, have, _))
                 if *uid == job.uid && *page == job.page && have.scale.to_bits() == want.scale.to_bits() && reaches(have, &job.view) =>
             {
                 have.clone()
             }
             _ => want,
         };
-        let same = self.of.as_ref().is_some_and(|(uid, page, have)| *uid == job.uid && *page == job.page && same_view(have, &view));
+        let same = self
+            .of
+            .as_ref()
+            .is_some_and(|(uid, page, have, proof)| *uid == job.uid && *page == job.page && *proof == job.proof && same_view(have, &view));
         let t0 = Instant::now();
         let d = guarded(&mut self.retained, |r| {
             let (snapped, pix, work) = r.render(&job.doc, job.page, &view, &options(job))?;
             (!(same && work == Work::Reused)).then(|| done(job, snapped, pix, work, t0.elapsed().as_secs_f64() * 1000.0, true))
         });
         if d.is_some() {
-            self.of = Some((job.uid, job.page, view));
+            self.of = Some((job.uid, job.page, view, job.proof));
         }
         d
     }
