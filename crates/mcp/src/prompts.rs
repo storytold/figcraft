@@ -187,4 +187,30 @@ mod tests {
         assert!(out.contains(&bomb));
         assert!(out.len() < 3 * bomb.len(), "{}", out.len());
     }
+
+    /// Every command the server's instructions and the prompts name exists: an agent told to run a
+    /// renamed or misspelt one gets an error instead of the workflow.
+    #[test]
+    fn the_commands_the_instructions_and_prompts_name_exist() {
+        let ids: Vec<&str> = figcraft_engine::all_commands().iter().map(|c| c.id).collect();
+        let namespaces: Vec<&str> = ids.iter().filter_map(|id| id.split('.').next()).collect();
+        let texts = std::iter::once(crate::INSTRUCTIONS).chain(PROMPTS.iter().map(|p| p.template));
+        let mut named = 0;
+        for text in texts {
+            for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.')).map(|w| w.trim_end_matches('.')) {
+                let Some((ns, rest)) = word.split_once('.') else { continue };
+                // wait_for_changes events, which the prompts name too.
+                let event = matches!(word, "comment.added" | "comment.replied");
+                if event || rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_lowercase()) || !namespaces.contains(&ns) {
+                    continue;
+                }
+                named += 1;
+                assert!(ids.contains(&word), "`{word}` is not a command");
+            }
+        }
+        assert!(named > 10, "the check found the command ids ({named})");
+        for id in ["component.create", "instance.create", "component.addProperty", "instance.setProperties", "component.combineVariants"] {
+            assert!(crate::INSTRUCTIONS.contains(id), "the instructions name {id}");
+        }
+    }
 }
