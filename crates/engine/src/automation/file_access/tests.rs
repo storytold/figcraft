@@ -9,6 +9,27 @@ use serde_json::json;
 use super::{Access, Roots, allow, confined, current};
 use crate::Session;
 
+#[test]
+fn generated_export_paths_escape_device_components_and_preserve_other_names() {
+    for (path, expected) in [
+        ("CON", "_CON"),
+        ("CoN.txt", "_CoN.txt"),
+        ("nul.txt", "_nul.txt"),
+        ("PRN/icon", "_PRN/icon"),
+        ("folder/COM1", "folder/_COM1"),
+        ("LPT9.png", "_LPT9.png"),
+        ("COM¹", "_COM¹"),
+        ("LPT²/icon", "_LPT²/icon"),
+        ("CONIN$", "_CONIN$"),
+        ("HomeCON", "HomeCON"),
+        ("COM10", "COM10"),
+        ("CON@2x", "CON@2x"),
+        ("folder/.NUL", "folder/.NUL"),
+    ] {
+        assert_eq!(super::escape_device_names(path), expected, "{path}");
+    }
+}
+
 /// A fresh folder for one test: `<tmp>/figcraft-roots-<name>-<pid>`, holding `root/`, `root2/`
 /// (a sibling whose name starts like the root's) and `outside/`.
 struct Fixture(PathBuf);
@@ -229,6 +250,8 @@ fn spellings_of_other_computers_and_devices_are_refused() {
         r"C:\work\LPT³\x.png",
         r"C:\work\conout$",
         r"C:\work\aux:stream",
+        // A volume name that is not a GUID could be an alias of anything.
+        r"\\?\Volume{remote}\x.png",
         // After a name `craft_docpath` refuses for another reason.
         r"C:\work\a:b\prn.png",
     ];
@@ -402,6 +425,34 @@ fn a_parent_after_a_link_is_taken_by_name() {
     assert_eq!(std::fs::read(&through).unwrap(), b"in", "Windows opens the file in the root");
 }
 
+/// Comparing two files opens both, so a path the roots don't allow is not compared: it is not the
+/// same file as one inside, even when it is another name for it (a hard link outside the roots).
+#[test]
+fn same_file_does_not_open_a_path_outside_the_roots() {
+    let f = Fixture::new("same-file");
+    let inside = f.p("root/in.txt");
+    let outside = f.p("outside/linked.txt");
+    if std::fs::hard_link(&inside, &outside).is_err() {
+        eprintln!("skipped: hard links can't be made here");
+        return;
+    }
+    assert!(super::same_file(&inside, &outside), "unconfined, another name for a file is the same file");
+    let roots = Arc::new(f.rw());
+    confined(Some(&roots), || {
+        assert!(super::same_file(&inside, &outside), "a local path outside the roots is compared, and a hard link to a file inside is that file");
+        if cfg!(windows) {
+            assert!(
+                super::same_file(&inside, r"\\192.0.2.1\share\x"),
+                "a path on another computer is never opened, and counts as the same so that the guard keeps asking"
+            );
+        }
+        assert!(super::same_file(&inside, &inside), "a path is the same file as itself");
+        let other = f.p("root/sub/other.txt");
+        std::fs::write(&other, b"other").unwrap();
+        assert!(!super::same_file(&inside, &other), "two files inside are compared, and differ");
+    });
+}
+
 /// A path on another computer and a device path are refused before anything is opened: resolving
 /// them made Windows contact the server, which may send it the signed-in user's credentials
 /// (#1094). Each is refused with a message that only the check before resolving gives: had the
@@ -466,6 +517,59 @@ fn links_to_other_computers_are_refused_before_they_are_followed() {
     // A link to a folder in the root still leads there.
     assert!(symlink_dir(&f.0.join("root/sub"), &f.0.join("root/alias")));
     assert!(r.check(Path::new(&f.p("root/alias/x.png")), Access::Write).is_ok());
+}
+
+/// A native NT name is told with or without the separator after its first name: a link to `\Device` alone, with the
+/// rest of the path after it, reaches `\Device\Mup\...`.
+#[test]
+fn native_names_are_told_with_or_without_the_closing_separator() {
+    for p in
+        [r"\Device", r"\Device\Mup\203.0.113.5\s", r"\device\mup", r"\DosDevices", r"\GLOBAL??", r"\??", r"\??\UNC\x\y", r"\Sessions", r"\GLOBALROOT"]
+    {
+        assert!(super::is_native_name(Path::new(p)), "{p}");
+    }
+    for p in [r"\Devices", r"\Devicex\y", r"Device", r"\work\Device", r"\\server\share", r"\"] {
+        assert!(!super::is_native_name(Path::new(p)), "{p}");
+    }
+}
+
+/// A link target that starts with one separator and no drive names a root the system reads in its own object namespace or on the
+/// link's drive, whichever directory it names.
+#[test]
+fn rooted_link_targets_without_a_drive_are_refused() {
+    for p in [r"\Device\Mup\203.0.113.5\s", r"\RPC Control\remote", r"\BaseNamedObjects\x", r"\??\UNC\x\y", r"\work", r"\"] {
+        assert!(super::is_rooted_without_drive(Path::new(p)), "{p}");
+    }
+    for p in [r"Device", r"work\x", r"C:\x", r"\\server\share", r"\\?\C:\x", ""] {
+        assert!(!super::is_rooted_without_drive(Path::new(p)), "{p}");
+    }
+}
+
+/// A link whose text is a native NT name (`\Device\Mup\server\share`) or ends in a period, and a path with a name that ends in a
+/// space, are refused as written: joined onto the link's folder the first would keep that folder's drive, and Windows trims the
+/// others where it looks a name up but not where the kernel follows a link.
+#[test]
+#[cfg(windows)]
+fn native_names_and_names_windows_trims_are_refused_as_written() {
+    let f = Fixture::new("native-trimmed");
+    let r = f.rw();
+    if !symlink_dir(Path::new(r"\Device\Mup\192.0.2.1\share"), &f.0.join("root/native"))
+        || !symlink_dir(Path::new("remote."), &f.0.join("root/trimmed"))
+    {
+        eprintln!("skipped: this system doesn't let tests make symbolic links");
+        return;
+    }
+    let standard = |p: &str| format!("automation path rejected: {p} is outside the folders that may be");
+    // However the system stores the native name, the link is refused.
+    let native = f.p("root/native/x.png");
+    assert!(r.check(Path::new(&native), Access::Read).is_err(), "{native}");
+    let p = f.p("root/trimmed/x.png");
+    let e = r.check(Path::new(&p), Access::Read).expect_err(&p);
+    assert!(e.starts_with(&standard(&p)), "{p}: {e}");
+    let p = f.p("root/remote /x.png");
+    let e = r.check(Path::new(&p), Access::Write).expect_err(&p);
+    assert!(e.starts_with(&standard(&p)), "{p}: {e}");
+    assert_eq!(super::refused_spelling(r"\??\UNC\192.0.2.1\share\x", &[]), Some(craft_docpath::Refused::Device));
 }
 
 #[test]

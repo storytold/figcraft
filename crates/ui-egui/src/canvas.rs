@@ -62,6 +62,9 @@ pub struct CanvasState {
     /// shows its image at once while it renders again, instead of a blank canvas (and, where
     /// renders are slow, a coarse preview).
     kept: Vec<Kept>,
+    /// The coarse image of the area around the view ([`render_worker::Surround`]), shown where
+    /// the texture doesn't reach, and the file and page it is of.
+    surround: Option<(egui::TextureHandle, figcraft_render::View, (u64, NodeId))>,
     submitted: Option<JobKey>,
     /// The view of the last render asked for.
     want_view: Option<figcraft_render::View>,
@@ -71,6 +74,8 @@ pub struct CanvasState {
     /// canvas texture (ms; the texture is uploaded when that frame is painted).
     pub preview_latency_ms: Option<f64>,
     pub refine_latency_ms: Option<f64>,
+    /// The share of the canvas no render covered last frame: the page background showed there.
+    pub uncovered: f32,
     dragging: bool,
     space_pan: bool,
     middle_pan: Option<(Pos2, f64, f64)>,
@@ -104,11 +109,13 @@ impl Default for CanvasState {
             tex_coarse: false,
             tex_seq: 0,
             kept: Vec::new(),
+            surround: None,
             submitted: None,
             want_view: None,
             render_work: None,
             preview_latency_ms: None,
             refine_latency_ms: None,
+            uncovered: 0.0,
             dragging: false,
             space_pan: false,
             middle_pan: None,
@@ -339,6 +346,21 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         app.canvas.tex_coarse = done.coarse;
         app.canvas.tex_seq = done.seq;
     }
+    if let Some(around) = worker.surround()
+        && shown == Some((around.uid, around.page))
+    {
+        let of = (around.uid, around.page);
+        match &mut app.canvas.surround {
+            Some((t, view, at)) => {
+                t.set(around.image, egui::TextureOptions::LINEAR);
+                (*view, *at) = (around.view, of);
+            }
+            None => {
+                let t = ctx.load_texture("figcraft-canvas-surround", around.image, egui::TextureOptions::LINEAR);
+                app.canvas.surround = Some((t, around.view, of));
+            }
+        }
+    }
     let painter = ui.painter_at(rect);
     crate::theme::set_canvas_page(&ctx, bg);
     let image = if let (Some(tex), Some(v), true) = (&app.canvas.texture, &app.canvas.tex_view, shown.is_some() && app.canvas.tex_of == shown) {
@@ -351,7 +373,16 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     } else {
         None
     };
-    background::paint(&painter, rect, bg, image.map(|(_, r)| r));
+    // Not in pixel preview: its pixels are the point, and it keeps no image around the view.
+    let pixel_preview = app.session.ds().ok().and_then(|ds| ds.view.pixel_preview_scale()).is_some();
+    let surround = match (&app.canvas.surround, pixel_preview) {
+        (Some((tex, v, of)), false) if shown == Some(*of) => {
+            let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
+            Some((tex.id(), presented_image_rect(app.to_screen(v.origin.0, v.origin.1), v, zoom, ppp, false)))
+        }
+        _ => None,
+    };
+    app.canvas.uncovered = background::paint(&painter, rect, bg, image.map(|(_, r)| r), surround);
     if let Some((texture, image_rect)) = image {
         painter.image(texture, image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
@@ -460,6 +491,9 @@ mod wheel_zoom_tests;
 
 #[cfg(test)]
 mod zoom_preview_tests;
+
+#[cfg(test)]
+mod surround_tests;
 
 #[cfg(test)]
 mod tab_switch_tests;
