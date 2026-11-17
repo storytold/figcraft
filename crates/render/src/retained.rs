@@ -553,7 +553,7 @@ fn render_into(frame: FrameRender<'_>, d: &Px, margin: i64, pix: &mut Pixmap) ->
     let (rw, rh) = (u32::try_from(ex - ox).ok()?, u32::try_from(ey - oy).ok()?);
     // The same pixel grid as the frame: origin (px + offset) / scale.
     let sub = View { origin: ((px.0 + ox) as f64 / s, (px.1 + oy) as f64 / s), scale: s, width: rw, height: rh };
-    let part = render_view(doc, page, &sub, opts)?;
+    let part = crate::render_part(doc, page, &sub, opts)?;
     let inner = IntRect::from_xywh(
         i32::try_from(d.x0 - ox).ok()?,
         i32::try_from(d.y0 - oy).ok()?,
