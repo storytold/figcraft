@@ -384,7 +384,7 @@ fn tag_of(s: &str) -> Option<skrifa::Tag> {
     <[u8; 4]>::try_from(s.as_bytes()).ok().map(|b| skrifa::Tag::new(&b))
 }
 
-fn norm_style(s: &str) -> String {
+pub(crate) fn norm_style(s: &str) -> String {
     s.to_lowercase().replace([' ', '-', '_'], "")
 }
 
@@ -616,6 +616,7 @@ pub struct LocalFont {
 
 #[derive(Default)]
 pub struct FontDb {
+    named_available: HashMap<(String, String), bool>,
     faces: Vec<Arc<Face>>,
     /// Lower-case family → (display family, face indices).
     families: BTreeMap<String, (String, Vec<usize>)>,
@@ -713,6 +714,7 @@ fn raw_db() -> &'static RwLock<FontDb> {
 
 impl FontDb {
     pub fn add(&mut self, face: Face) -> Arc<Face> {
+        self.named_available.clear();
         self.generation += 1;
         let key = face.family.to_lowercase();
         let display = face.family.clone();
@@ -1016,6 +1018,38 @@ impl FontDb {
         }
     }
 
+    /// A warm exact-face check requires only the database read lock.
+    pub(crate) fn cached_named_face(&self, family: &str, style: &str) -> Option<bool> {
+        self.named_available.get(&(family.to_string(), style.to_string())).copied()
+    }
+
+    /// Check named styles without accepting a nearest-style substitute. Missing results are
+    /// cached too; adding fonts or rescanning invalidates both positive and negative entries.
+    pub(crate) fn named_face_available(&mut self, family: &str, style: &str) -> bool {
+        if let Some(v) = self.cached_named_face(family, style) {
+            return v;
+        }
+        let available = self.find(family, style).is_some_and(|f| {
+            let italic = style.to_lowercase().contains("italic");
+            let weight = f64::from(figcraft_doc::style_weight(style));
+            let variable_weight = f.axes.iter().any(|a| a.tag == "wght" && a.min <= weight && weight <= a.max);
+            let italic_value = if italic { 1.0 } else { 0.0 };
+            let variable_italic = f.italic == italic
+                || f.axes
+                    .iter()
+                    .any(|a| (a.tag == "ital" && a.min <= italic_value && italic_value <= a.max) || (italic && a.tag == "slnt" && a.min < 0.0));
+            norm_style(&f.style) == norm_style(style) || f.instance(style).is_some() || (variable_weight && variable_italic)
+        });
+        // Bound retained name bytes as well as the entry count for untrusted documents.
+        if family.len().saturating_add(style.len()) <= 1024 {
+            if self.named_available.len() >= 4096 {
+                self.named_available.clear();
+            }
+            self.named_available.insert((family.to_string(), style.to_string()), available);
+        }
+        available
+    }
+
     /// Font file `path`'s bytes: those its faces read already hold while the file keeps their
     /// length, else read now (a CJK collection is 15–20 MB, and several families name its faces).
     fn file_bytes(&mut self, path: &std::path::Path) -> Option<Arc<Vec<u8>>> {
@@ -1237,6 +1271,7 @@ impl FontDb {
     /// family not loaded yet takes the walk's files, and a loaded family keeps its faces and gets
     /// the files it hasn't read (styles installed since) as pending, read when it is next used.
     fn merge_rescan(&mut self, found: BTreeMap<String, (String, Vec<Pending>)>) -> Rescan {
+        self.named_available.clear();
         self.generation += 1;
         let mut out = Rescan::default();
         for (k, (display, entries)) in found {
@@ -1279,6 +1314,7 @@ impl FontDb {
     /// its faces, which win, and the installed styles it lacks wait beside them (#1246: release
     /// builds embed Poppins Regular, Italic and Bold, so an installed Poppins SemiBold went unseen).
     fn merge_scan(&mut self, found: BTreeMap<String, (String, Vec<Pending>)>) {
+        self.named_available.clear();
         self.generation += 1;
         for (k, (display, mut entries)) in found {
             if let Some((_, idx)) = self.families.get(&k) {

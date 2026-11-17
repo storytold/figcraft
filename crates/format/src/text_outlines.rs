@@ -1,0 +1,443 @@
+//! Native-file outline pooling. Only the serialization copy contains references; documents,
+//! collaboration changes and clipboard nodes keep their self-contained geometry.
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use figcraft_doc::{Document, NodeKind};
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::FormatError;
+
+const MAX_ENTRIES: usize = 100_000;
+const MAX_BYTES: usize = 64 * 1024 * 1024;
+const MAX_LAYER_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Pool {
+    version: u8,
+    #[serde(deserialize_with = "read_paths")]
+    paths: Vec<Arc<str>>,
+}
+
+fn read_paths<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Arc<str>>, D::Error> {
+    struct Paths;
+    impl<'de> serde::de::Visitor<'de> for Paths {
+        type Value = Vec<Arc<str>>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a bounded file outline pool")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut paths = Vec::new();
+            let mut bytes = 0usize;
+            while let Some(path) = seq.next_element::<Arc<str>>()? {
+                bytes = bytes.saturating_add(path.len());
+                if paths.len() >= MAX_ENTRIES || bytes > MAX_BYTES {
+                    return Err(serde::de::Error::custom("file outline pool exceeds limit"));
+                }
+                paths.push(path);
+            }
+            Ok(paths)
+        }
+    }
+    d.deserialize_seq(Paths)
+}
+
+pub(crate) fn pack(doc: &Document) -> (Cow<'_, Document>, Option<Pool>) {
+    let mut output = Cow::Borrowed(doc);
+    let mut ids: HashMap<Arc<str>, Arc<str>> = HashMap::new();
+    let mut pool = Pool { version: 1, paths: Vec::new() };
+    // Source Arcs stay alive throughout packing. Hash each shared SVG allocation only once.
+    let mut pointers = std::collections::HashSet::new();
+    let mut bytes = 0usize;
+    for node in doc.nodes() {
+        let Some(saved) = node.kind.text().and_then(|t| t.appearance.as_ref()) else { continue };
+        for glyph in &saved.glyphs {
+            // Inline short/empty shapes: their references would take more space than the path.
+            if glyph.d.len() <= 16 {
+                continue;
+            }
+            let pointer = (glyph.d.as_ptr() as usize, glyph.d.len());
+            if pointers.contains(&pointer) {
+                continue;
+            }
+            if pointers.len() < MAX_ENTRIES {
+                pointers.insert(pointer);
+            }
+            if ids.contains_key(&glyph.d) {
+                continue;
+            }
+            // Pool what fits; all remaining shapes stay inline, never discarded.
+            if pool.paths.len() >= MAX_ENTRIES || bytes.saturating_add(glyph.d.len()) > MAX_BYTES {
+                continue;
+            }
+            let id: Arc<str> = format!("@{}", pool.paths.len()).into();
+            bytes += glyph.d.len();
+            pool.paths.push(glyph.d.clone());
+            ids.insert(glyph.d.clone(), id);
+        }
+    }
+    if !pool.paths.is_empty() {
+        let references = Arc::new(figcraft_doc::TextOutlineReferences::from(ids));
+        for node in doc.nodes() {
+            let Some(saved) = node.kind.text().and_then(|t| t.appearance.as_ref()) else { continue };
+            let mut appearance = (**saved).clone();
+            appearance.glyphs = saved.glyphs.with_outline_references(references.clone());
+            if let Some(n) = output.to_mut().node_mut(node.id)
+                && let NodeKind::Text(t) = &mut n.kind
+            {
+                t.appearance = Some(Arc::new(appearance));
+            }
+        }
+    }
+    let pool = (!pool.paths.is_empty()).then_some(pool);
+    (output, pool)
+}
+
+pub(crate) fn expand(doc: &mut Document, pool: Option<&Pool>) -> Result<(), FormatError> {
+    let corrupt = |s: &str| FormatError::Corrupt(s.into());
+    if pool.is_some_and(|p| p.version != 1) {
+        return Err(corrupt("unsupported file outline pool version"));
+    }
+    let ids: Vec<_> = doc.ids().collect();
+    let mut expanded = 0u64;
+    for id in ids {
+        let needs_pool = doc
+            .node(id)
+            .and_then(|n| n.kind.text())
+            .and_then(|t| t.appearance.as_ref())
+            .is_some_and(|a| a.glyphs.iter().any(|g| g.d.starts_with('@')));
+        if !needs_pool {
+            if let Some(saved) = doc.node(id).and_then(|n| n.kind.text()).and_then(|t| t.appearance.as_ref()) {
+                for glyph in &saved.glyphs {
+                    charge_total(&mut expanded, glyph.d.len())?;
+                }
+            }
+            continue;
+        }
+        let Some(NodeKind::Text(t)) = doc.node_mut(id).map(|n| &mut n.kind) else { continue };
+        let Some(saved) = &mut t.appearance else { continue };
+        let mut bytes = 0usize;
+        for glyph in &mut Arc::make_mut(saved).glyphs {
+            if let Some(index) = glyph.d.strip_prefix('@') {
+                let path = index
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|i| pool.and_then(|p| p.paths.get(i)))
+                    .ok_or_else(|| corrupt("missing file outline reference"))?;
+                glyph.d = path.clone();
+            }
+            bytes = bytes.saturating_add(glyph.d.len());
+            charge_total(&mut expanded, glyph.d.len())?;
+            if bytes > MAX_LAYER_BYTES {
+                return Err(corrupt("expanded portable outlines exceed layer byte limit"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn charge_total(total: &mut u64, bytes: usize) -> Result<(), FormatError> {
+    *total = total.saturating_add(bytes as u64);
+    if *total > crate::MAX_DOCUMENT {
+        return Err(FormatError::Corrupt("expanded portable outlines exceed document work limit".into()));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use figcraft_doc::{TextAppearance, TextData, TextGlyph};
+    use serde_json::json;
+
+    fn document() -> Document {
+        document_with_nodes(4)
+    }
+
+    fn document_with_nodes(count: usize) -> Document {
+        let mut doc = Document::new("Shared shapes");
+        let page = doc.first_page().unwrap();
+        let path: Arc<str> = "M0 0L20 0L20 30L0 30Z".repeat(20).into();
+        for _ in 0..count {
+            let mut text = TextData::new("AAAAAAAA");
+            text.appearance = Some(Arc::new(TextAppearance {
+                fingerprint: "synthetic geometry".into(),
+                box_width: 100.0,
+                box_height: 20.0,
+                width: 100.0,
+                height: 20.0,
+                glyphs: (0..8)
+                    .map(|i| TextGlyph {
+                        d: path.clone(),
+                        transform: Some([0.5, 0.0, 0.0, 0.5, i as f64, 15.0]),
+                        x: i as f64,
+                        y: 15.0,
+                        size: 12.0,
+                        advance: 5.0,
+                        char_start: i,
+                        char_end: i + 1,
+                        style: 0,
+                        rtl: false,
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                lines: vec![],
+                decorations: vec![],
+                styles: vec![text.style.clone()],
+                truncated: false,
+            }));
+            doc.create(page, NodeKind::Text(text), "Text", 0.0, 0.0, 100.0, 20.0).unwrap();
+        }
+        doc
+    }
+
+    fn with_pool_at_edge(fields: &serde_json::Map<String, serde_json::Value>, pool: &serde_json::Value, key: &str, first: bool) -> String {
+        let body = serde_json::to_string(fields).unwrap();
+        if first {
+            format!("{{\"{key}\":{pool},{}", body.strip_prefix('{').unwrap())
+        } else {
+            format!("{},\"{key}\":{pool}}}", body.strip_suffix('}').unwrap())
+        }
+    }
+
+    #[test]
+    fn streaming_pool_reader_keeps_exact_geometry_in_any_root_field_order() {
+        let mut doc = document();
+        let id = doc.nodes().find(|n| n.kind.text().is_some()).unwrap().id;
+        let NodeKind::Text(text) = &mut doc.node_mut(id).unwrap().kind else { panic!() };
+        let glyph = &mut Arc::make_mut(text.appearance.as_mut().unwrap()).glyphs[0];
+        glyph.x = -0.0;
+        glyph.y = 15.123456789012345;
+        glyph.advance = 5.123456789123456;
+        glyph.transform = Some([0.5, -0.0, 0.0, 0.5, -0.0, glyph.y]);
+        let expected = crate::to_json(&doc).unwrap();
+        let mut fields = expected.as_object().unwrap().clone();
+        let pool = fields.remove("textOutlines").unwrap();
+        // Only root metadata is intercepted; an unrelated nested key is still ignored.
+        fields.insert("unrelated".into(), json!({"textOutlines": {"version": 999, "paths": [true]}}));
+        for first in [true, false] {
+            for key in ["textOutlines", r"text\u004futlines"] {
+                let input = with_pool_at_edge(&fields, &pool, key, first);
+                let (back, issues) = crate::from_json(&input).unwrap();
+                assert!(issues.is_empty(), "{issues:?}");
+                // Compare canonical JSON strings, retaining the sign of zero as well as all
+                // outlines, matrix coefficients, numeric values and document/layer metadata.
+                assert_eq!(crate::to_json(&back).unwrap().to_string(), expected.to_string());
+            }
+        }
+        let (plain, issues) = crate::from_json(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert!(issues.is_empty());
+        assert_eq!(crate::to_json(&plain).unwrap().to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn streaming_pool_reader_rejects_duplicate_tables_including_null() {
+        let mut fields = crate::to_json(&document()).unwrap().as_object().unwrap().clone();
+        let pool = fields.remove("textOutlines").unwrap();
+        for first in [json!(null), pool.clone()] {
+            let body = with_pool_at_edge(&fields, &first, "textOutlines", true);
+            let input = format!("{},\"textOutlines\":{pool}}}", body.strip_suffix('}').unwrap());
+            let error = crate::from_json(&input).unwrap_err();
+            assert!(error.to_string().contains("duplicate field `textOutlines`"));
+        }
+    }
+
+    #[test]
+    fn streaming_pool_reader_keeps_table_limits_and_header_version_checks() {
+        let mut fields = crate::to_json(&document()).unwrap().as_object().unwrap().clone();
+        fields.remove("textOutlines");
+        let oversized = json!({"version": 1, "paths": vec![""; MAX_ENTRIES + 1]});
+        for first in [true, false] {
+            let input = with_pool_at_edge(&fields, &oversized, "textOutlines", first);
+            assert!(crate::from_json(&input).unwrap_err().to_string().contains("file outline pool exceeds limit"));
+        }
+        // Reject the shared envelope version before interpreting an invalid app payload.
+        assert!(matches!(crate::from_json(r#"{"version": 999, "textOutlines": false}"#), Err(FormatError::Newer(999))));
+    }
+
+    #[test]
+    fn native_save_refuses_geometry_past_the_reopen_budget() {
+        // The reviewer's small-limit reproducer: three nodes fit; four contain 4,352 bytes
+        // of glyph structs on 64-bit, even though the ZIP itself is under a kilobyte.
+        let limit = 32 * std::mem::size_of::<TextGlyph>() - 256;
+        let below = document_with_nodes(3);
+        let bytes = crate::save_bytes_limited(&below, None, &[], &[], limit).unwrap();
+        let (loaded, issues) = crate::load_bytes(&bytes).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        for n in below.nodes() {
+            assert_eq!(loaded.node(n.id).unwrap().kind, n.kind);
+        }
+        let above = document();
+        let before = serde_json::to_string(&above).unwrap();
+        let error = crate::save_bytes_limited(&above, None, &[], &[], limit).unwrap_err();
+        assert!(error.to_string().contains("portable glyph memory limit"));
+        assert_eq!(serde_json::to_string(&above).unwrap(), before);
+    }
+
+    #[test]
+    fn native_save_checks_the_encoded_dictionary_at_the_exact_boundary() {
+        let doc = document();
+        let (packed, _) = pack(&doc);
+        let memory: usize = packed.nodes().filter_map(|n| n.kind.text()?.appearance.as_ref()).map(|a| a.glyphs.serialized_memory_bytes()).sum();
+        // Count one @0 dictionary entry per layer, not every occurrence of the live SVG.
+        assert_eq!(memory, 32 * std::mem::size_of::<TextGlyph>() + 4 * "@0".len());
+        let bytes = crate::save_bytes_limited(&doc, None, &[], &[], memory).unwrap();
+        let (back, issues) = crate::load_bytes(&bytes).unwrap();
+        assert!(issues.is_empty());
+        for n in doc.nodes() {
+            assert_eq!(back.node(n.id).unwrap().kind, n.kind);
+        }
+        let error = crate::save_bytes_limited(&doc, None, &[], &[], memory - 1).unwrap_err();
+        assert!(error.to_string().contains("document portable geometry exceeds memory limit"));
+    }
+
+    #[test]
+    fn native_save_charges_eager_branch_snapshots_but_not_lazy_history() {
+        let doc = document();
+        let records = 32 * std::mem::size_of::<TextGlyph>();
+        let branch = crate::Branch {
+            id: "synthetic-branch".into(),
+            name: "Branch".into(),
+            time: 1,
+            client: 1,
+            state: crate::BranchState::Active,
+            base: Arc::new(doc.clone()),
+            head: Arc::new(doc.clone()),
+            versions: vec![],
+        };
+        let error = crate::save_bytes_limited(&doc, None, &[], std::slice::from_ref(&branch), records * 3 - 1).unwrap_err();
+        assert!(error.to_string().contains("file snapshots exceed portable glyph memory limit"));
+        let bytes = crate::save_bytes_limited(&doc, None, &[], &[branch], records * 3).unwrap();
+        let loaded = crate::load_bytes_with_versions(&bytes).unwrap();
+        assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+        assert_eq!(loaded.branches.len(), 1);
+        let version = crate::Version::new("history", "History", "", 1, Arc::new(doc.clone()));
+        let bytes = crate::save_bytes_limited(&doc, None, &[version], &[], records + 8).unwrap();
+        let loaded = crate::load_bytes_with_versions(&bytes).unwrap();
+        assert_eq!(loaded.versions.len(), 1);
+        assert!(loaded.versions[0].document().is_ok());
+    }
+
+    #[test]
+    fn automatically_loaded_snapshots_share_an_expanded_glyph_budget() {
+        let doc = document();
+        let bytes = 32 * std::mem::size_of::<TextGlyph>();
+        let mut budget = crate::Unpacked::new(crate::MAX_UNPACKED);
+        budget.glyphs_left = bytes * 2 - 1;
+        budget.geometry(&doc).unwrap();
+        assert!(budget.geometry(&doc).unwrap_err().to_string().contains("portable glyph memory limit"));
+    }
+
+    #[test]
+    fn native_save_charges_the_published_library_snapshot() {
+        let mut doc = document();
+        let records = 32 * std::mem::size_of::<TextGlyph>();
+        let library_doc = Arc::new(doc.clone());
+        doc.published = Some(Arc::new(figcraft_doc::PublishedLibrary {
+            manifest: figcraft_doc::LibraryManifest { id: "synthetic-library".into(), ..Default::default() },
+            doc: library_doc,
+        }));
+        assert!(crate::save_bytes_limited(&doc, None, &[], &[], records * 2 - 1).is_err());
+        let bytes = crate::save_bytes_limited(&doc, None, &[], &[], records * 2).unwrap();
+        let loaded = crate::load_bytes_with_versions(&bytes).unwrap();
+        assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+        assert!(loaded.doc.published.is_some());
+    }
+
+    #[test]
+    fn native_encoding_shares_glyph_storage_and_mutation_detaches() {
+        let doc = document();
+        let id = doc.nodes().find(|n| n.kind.text().is_some()).unwrap().id;
+        let (mut snapshot, pool) = pack(&doc);
+        let source = doc.node(id).unwrap().kind.text().unwrap().appearance.as_ref().unwrap();
+        let packed = snapshot.node(id).unwrap().kind.text().unwrap().appearance.as_ref().unwrap();
+        assert!(std::ptr::eq(source.glyphs.as_ptr(), packed.glyphs.as_ptr()));
+        assert_eq!(source.glyphs[0].d, packed.glyphs[0].d);
+        assert_eq!(serde_json::to_value(packed).unwrap()["outlines"][0], "@0");
+        assert!(pool.is_some());
+        let NodeKind::Text(text) = &mut snapshot.to_mut().node_mut(id).unwrap().kind else { panic!() };
+        let appearance = Arc::make_mut(text.appearance.as_mut().unwrap());
+        appearance.glyphs[0].x = 99.0;
+        assert_eq!(source.glyphs[0].x, 0.0);
+        assert_ne!(serde_json::to_value(appearance).unwrap()["outlines"][0], "@0");
+    }
+
+    #[test]
+    fn native_pool_is_shared_across_nodes_without_mutating_the_document() {
+        let doc = document();
+        let id = doc.nodes().find(|n| n.kind.text().is_some()).unwrap().id;
+        let before = doc.node_arc(id).unwrap().clone();
+        let encoded = crate::to_json(&doc).unwrap();
+        assert_eq!(encoded["textOutlines"]["paths"].as_array().unwrap().len(), 1);
+        assert!(Arc::ptr_eq(&before, doc.node_arc(id).unwrap()));
+        let (back, issues) = crate::load_bytes(&crate::save_bytes(&doc, None).unwrap()).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        let paths: Vec<_> = back.nodes().filter_map(|n| n.kind.text()?.appearance.as_ref()).map(|a| &a.glyphs[0].d).collect();
+        assert_eq!(paths.len(), 4);
+        assert!(paths.iter().all(|p| Arc::ptr_eq(p, paths[0])));
+        for n in doc.nodes() {
+            assert_eq!(back.node(n.id).unwrap().kind, n.kind);
+        }
+        // A plain collaboration/clipboard document stays self-contained, without the file table.
+        let plain = serde_json::to_string(&doc).unwrap();
+        assert!(!plain.contains("\"@0\""));
+        let (old, _) = crate::from_json(&plain).unwrap();
+        assert_eq!(old.node(id).unwrap().kind, doc.node(id).unwrap().kind);
+    }
+
+    #[test]
+    fn version_documents_keep_their_own_outline_pool() {
+        let doc = document();
+        let id = doc.nodes().find(|n| n.kind.text().is_some()).unwrap().id;
+        let mut version_doc = doc.clone();
+        let NodeKind::Text(text) = &mut version_doc.node_mut(id).unwrap().kind else { panic!() };
+        for glyph in &mut Arc::make_mut(text.appearance.as_mut().unwrap()).glyphs {
+            glyph.d = "M0 0C10 20 30 40 50 60Z".into();
+        }
+        let version = crate::Version::new("version-1", "Saved", "", 1, Arc::new(version_doc.clone()));
+        let bytes = crate::save_bytes_with_versions(&doc, None, &[version]).unwrap();
+        let loaded = crate::load_bytes_with_versions(&bytes).unwrap();
+        assert_eq!(loaded.versions.len(), 1);
+        assert_eq!(loaded.doc.node(id).unwrap().kind, doc.node(id).unwrap().kind);
+        assert_eq!(loaded.versions[0].document().unwrap().node(id).unwrap().kind, version_doc.node(id).unwrap().kind);
+        assert_ne!(loaded.doc.node(id).unwrap().kind, loaded.versions[0].document().unwrap().node(id).unwrap().kind);
+    }
+
+    #[test]
+    fn malformed_file_references_and_pool_versions_are_refused() {
+        let mut wire = crate::to_json(&document()).unwrap();
+        wire["textOutlines"]["paths"] = json!([]);
+        assert!(crate::from_json(&wire.to_string()).is_err());
+        wire.as_object_mut().unwrap().remove("textOutlines");
+        assert!(crate::from_json(&wire.to_string()).is_err());
+        let mut wire = crate::to_json(&document()).unwrap();
+        wire["textOutlines"]["version"] = json!(2);
+        assert!(crate::from_json(&wire.to_string()).is_err());
+    }
+
+    #[test]
+    fn a_small_pool_cannot_expand_one_layer_past_the_work_budget() {
+        let mut wire = crate::to_json(&document()).unwrap();
+        wire["textOutlines"]["paths"] = json!(["x".repeat(MAX_LAYER_BYTES / 4 + 1)]);
+        assert!(crate::from_json(&wire.to_string()).is_err());
+    }
+
+    #[test]
+    fn a_small_file_cannot_hide_unbounded_outline_work_across_layers() {
+        let mut doc = document();
+        let page = doc.first_page().unwrap();
+        let mut text = doc.nodes().find_map(|n| n.kind.text()).unwrap().clone();
+        let path: Arc<str> = "x".repeat(1024 * 1024).into();
+        for g in &mut Arc::make_mut(text.appearance.as_mut().unwrap()).glyphs {
+            g.d = path.clone();
+        }
+        // Each layer is under 16 MiB, but the combined expanded work passes the document cap.
+        for _ in 0..=crate::MAX_DOCUMENT / (8 * 1024 * 1024) {
+            doc.create(page, NodeKind::Text(text.clone()), "Text", 0.0, 0.0, 100.0, 20.0).unwrap();
+        }
+        let wire = crate::to_json(&doc).unwrap();
+        assert_eq!(wire["textOutlines"]["paths"].as_array().unwrap().len(), 2);
+        assert!(crate::from_json(&wire.to_string()).is_err());
+    }
+}

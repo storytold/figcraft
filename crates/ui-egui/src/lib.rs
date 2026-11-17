@@ -556,6 +556,7 @@ pub struct UiState {
     pub import_report: Option<import_report::Report>,
     /// Files the user opened whose fonts are yet to be checked (by document uid).
     pub font_checks: Vec<u64>,
+    pub font_checked: std::collections::HashSet<u64>,
     pub missing_fonts: Option<missing_fonts::Shown>,
     /// The eyedropper's Cmd/Ctrl+Shift pick, to make a colour style or variable of.
     pub sampled_color: Option<sampled_color::SampledColor>,
@@ -729,6 +730,7 @@ impl Default for UiState {
             pending_open_frames: 0,
             import_report: None,
             font_checks: Vec::new(),
+            font_checked: Default::default(),
             missing_fonts: None,
             sampled_color: None,
             screenshot_requests: Vec::new(),

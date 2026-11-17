@@ -29,6 +29,8 @@ pub use density::{pixel_density, placed_size};
 pub use library::{is_valid_library_id, read_library, read_library_within};
 
 mod density;
+mod text_document;
+mod text_outlines;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -182,6 +184,39 @@ pub(crate) fn image_data(data: Vec<u8>) -> ImageData {
     let (w, h) =
         image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok()).unwrap_or((0, 0));
     ImageData { bytes: Arc::new(data), width: w, height: h }
+}
+
+/// App-specific native payload; the shared writer supplies the format header/image index.
+#[derive(Serialize)]
+struct DocumentJson<'a> {
+    #[serde(flatten)]
+    doc: std::borrow::Cow<'a, Document>,
+    #[serde(rename = "textOutlines", skip_serializing_if = "Option::is_none")]
+    outlines: Option<text_outlines::Pool>,
+}
+
+impl<'a> DocumentJson<'a> {
+    fn new(doc: &'a Document) -> Result<Self, FormatError> {
+        Self::limited(doc, figcraft_doc::MAX_PORTABLE_MEMORY)
+    }
+
+    fn limited(doc: &'a Document, limit: usize) -> Result<Self, FormatError> {
+        let (packed, outlines) = text_outlines::pack(doc);
+        // Check the dictionary actually written, including native references, rather than
+        // repeated live SVGs. A successful save must not cross the reader's document cap.
+        let mut bytes = 0usize;
+        for node in packed.nodes() {
+            if let Some(saved) = node.kind.text().and_then(|t| t.appearance.as_ref()) {
+                bytes = bytes.saturating_add(saved.glyphs.serialized_memory_bytes());
+                if bytes > limit {
+                    return Err(FormatError::Io(
+                        "document portable geometry exceeds memory limit; saving it would produce a file that cannot be reopened".into(),
+                    ));
+                }
+            }
+        }
+        Ok(Self { doc: packed, outlines })
+    }
 }
 
 /// The image hashes a `document.json` lists in its `imageIndex` (`None` without one).
@@ -376,7 +411,7 @@ impl<S: serde::ser::SerializeStructVariant> serde::ser::SerializeStructVariant f
 pub fn to_json(doc: &Document) -> Result<Value, FormatError> {
     {
         let mut bytes = Vec::new();
-        craft_figcraft_format::write_document_json(&FiniteValue(doc), &native_image_index(doc), &mut bytes).map_err(io_err)?;
+        craft_figcraft_format::write_document_json(&FiniteValue(&DocumentJson::new(doc)?), &native_image_index(doc), &mut bytes).map_err(io_err)?;
         serde_json::from_slice(&bytes).map_err(io_err)
     }
 }
@@ -384,7 +419,7 @@ pub fn to_json(doc: &Document) -> Result<Value, FormatError> {
 /// Write the document (without images) as `document.json` content to `w`.
 /// NaN and infinite numbers are written as `0`.
 pub fn write_json(doc: &Document, w: impl Write) -> Result<(), FormatError> {
-    craft_figcraft_format::write_document_json(&FiniteValue(doc), &native_image_index(doc), w).map_err(io_err)
+    craft_figcraft_format::write_document_json(&FiniteValue(&DocumentJson::new(doc)?), &native_image_index(doc), w).map_err(io_err)
 }
 
 /// Parse `document.json` content.
@@ -396,11 +431,12 @@ pub fn from_json(text: &str) -> Result<(Document, Vec<String>), FormatError> {
 /// (a newer file is refused before its document is read), then the document is deserialized
 /// straight from the text.
 fn parse_json(text: &str) -> Result<(Document, Vec<String>, ImageIndex), FormatError> {
-    let (mut doc, header) = craft_figcraft_format::read_document_json::<Document>(text).map_err(|e| match e {
+    let (text_document::ReadDocument { mut doc, outlines }, header) = craft_figcraft_format::read_document_json(text).map_err(|e| match e {
         craft_figcraft_format::ReadDocumentError::Json(error) => FormatError::Corrupt(error.to_string()),
         craft_figcraft_format::ReadDocumentError::NewerVersion(error) => FormatError::Newer(error.0),
     })?;
     let images = header.images.map(|hashes| hashes.into_iter().collect());
+    text_outlines::expand(&mut doc, outlines.as_ref())?;
     let issues = doc.validate();
     if !issues.is_empty() {
         doc.repair();
@@ -441,7 +477,7 @@ pub fn zip_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Re
 
 /// Add `doc` as a `document.json`-style member, serialized straight into the compressor.
 fn put_json(z: &mut craft_figcraft_format::ArchiveWriter, name: &str, doc: &Document) -> Result<(), FormatError> {
-    z.add_document_json(name, &FiniteValue(doc), &native_image_index(doc)).map_err(io_err)
+    z.add_document_json(name, &FiniteValue(&DocumentJson::new(doc)?), &native_image_index(doc)).map_err(io_err)
 }
 
 /// Write a `.figcraft` archive to bytes.
@@ -461,9 +497,32 @@ pub fn save_bytes_with_history(
     versions: &[Version],
     branches: &[Branch],
 ) -> Result<Vec<u8>, FormatError> {
+    save_bytes_limited(doc, thumbnail_png, versions, branches, figcraft_doc::MAX_PORTABLE_MEMORY)
+}
+
+fn save_bytes_limited(
+    doc: &Document,
+    thumbnail_png: Option<&[u8]>,
+    versions: &[Version],
+    branches: &[Branch],
+    limit: usize,
+) -> Result<Vec<u8>, FormatError> {
+    // Charge every eagerly opened snapshot before producing an archive. Lazy version JSON
+    // has its own per-document cap when written, and is not retained on the initial open.
+    let mut memory = Unpacked::new(MAX_UNPACKED);
+    memory.glyphs_left = limit;
+    memory.geometry(doc)?;
+    if let Some(lib) = &doc.published {
+        memory.geometry(&lib.doc)?;
+    }
+    for branch in branches {
+        memory.geometry(&branch.base)?;
+        memory.geometry(&branch.head)?;
+    }
+    let root = DocumentJson::limited(doc, limit)?;
     let mut z = craft_figcraft_format::ArchiveWriter::new();
     let stored = craft_figcraft_format::Compression::Stored;
-    put_json(&mut z, "document.json", doc)?;
+    z.add_document_json("document.json", &FiniteValue(&root), &native_image_index(doc)).map_err(io_err)?;
     // Every image once, whether the document, a version or a branch uses it.
     let mut written = BTreeSet::new();
     let branch_images = branches.iter().flat_map(|b| [&b.base.images, &b.head.images].into_iter().chain(b.versions.iter().map(Version::images)));
@@ -568,8 +627,41 @@ pub(crate) fn read_member<R: Read + std::io::Seek>(z: &mut zip::ZipArchive<R>, n
     Ok(data)
 }
 
-/// The remaining archive-wide expansion budget while the app maps native records.
-pub(crate) type Unpacked = ReadBudget;
+/// Archive-wide byte expansion plus app-specific decoded glyph memory.
+pub(crate) struct Unpacked {
+    archive: ReadBudget,
+    glyphs_left: usize,
+}
+impl std::ops::Deref for Unpacked {
+    type Target = ReadBudget;
+    fn deref(&self) -> &ReadBudget {
+        &self.archive
+    }
+}
+impl std::ops::DerefMut for Unpacked {
+    fn deref_mut(&mut self) -> &mut ReadBudget {
+        &mut self.archive
+    }
+}
+impl Unpacked {
+    pub(crate) fn new(total: u64) -> Self {
+        Self { archive: ReadBudget::new(total), glyphs_left: figcraft_doc::MAX_PORTABLE_MEMORY }
+    }
+    // Share the expanded glyph budget between the main document, parsed branch snapshots
+    // and published library. History JSON remains lazy, so opening a file cannot retain a
+    // fresh per-document allowance for every automatically decoded snapshot.
+    pub(crate) fn geometry(&mut self, doc: &Document) -> Result<(), FormatError> {
+        let bytes = doc
+            .nodes()
+            .filter_map(|n| n.kind.text()?.appearance.as_ref())
+            .fold(0usize, |sum, a| sum.saturating_add(a.glyphs.len().saturating_mul(std::mem::size_of::<figcraft_doc::TextGlyph>())));
+        if bytes > self.glyphs_left {
+            return Err(FormatError::Corrupt("file snapshots exceed portable glyph memory limit".into()));
+        }
+        self.glyphs_left -= bytes;
+        Ok(())
+    }
+}
 
 /// Read a `.figcraft` archive (or bare JSON) with its version history.
 pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
@@ -601,6 +693,7 @@ fn load_archive(z: &mut impl craft_figcraft_format::NativeArchive, budget: Image
     let mut unpacked = Unpacked::new(total);
     let text = String::from_utf8(unpacked.read(z, "document.json", limit)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
+    unpacked.geometry(&doc)?;
     let ImagesRead { images, unread, past_budget } = read_images(z, own_images.as_ref(), budget, &mut unpacked);
     report_lost_images(&mut issues, &unread, &past_budget, own_images.as_ref(), &images);
     let images_past_budget = past_budget.len();
@@ -817,6 +910,7 @@ fn read_branches(
             let json = unpacked.read(z, &format!("branches/{id}/{part}.json"), budget.min(MAX_MEMBER))?;
             budget = budget.saturating_sub(json.len() as u64);
             let (mut doc, _) = from_json(std::str::from_utf8(&json).map_err(|e| FormatError::Corrupt(e.to_string()))?)?;
+            unpacked.geometry(&doc)?;
             doc.images = hashes.iter().filter_map(|h| images.get(h).map(|i| (h.clone(), i.clone()))).collect();
             Ok(Arc::new(doc))
         };

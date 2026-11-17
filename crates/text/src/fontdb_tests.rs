@@ -684,3 +684,24 @@ fn a_collection_header_naming_billions_of_faces_loads_a_bounded_few() {
     assert!(faces.len() <= 64, "{}", faces.len());
     assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
 }
+
+#[test]
+fn named_face_checks_cache_missing_results_and_invalidate_after_scan() {
+    let mut db = FontDb::default();
+    assert_eq!(db.cached_named_face("Missing portable font", "Regular"), None);
+    assert!(!db.named_face_available("Missing portable font", "Regular"));
+    assert_eq!(db.cached_named_face("Missing portable font", "Regular"), Some(false));
+    db.merge_scan(BTreeMap::new());
+    assert_eq!(db.cached_named_face("Missing portable font", "Regular"), None);
+    assert!(!db.named_face_available("Missing portable font", "Regular"));
+    db.merge_rescan(BTreeMap::new());
+    assert_eq!(db.cached_named_face("Missing portable font", "Regular"), None);
+}
+
+#[test]
+fn named_face_cache_does_not_retain_oversized_names() {
+    let mut db = FontDb::default();
+    let family = "X".repeat(1025);
+    assert!(!db.named_face_available(&family, "Regular"));
+    assert!(db.named_available.is_empty());
+}

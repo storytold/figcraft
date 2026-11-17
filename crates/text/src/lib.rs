@@ -6,12 +6,14 @@
 //! fills [`Glyph::path`]s and the editor uses [`TextLayout::caret`] / [`TextLayout::hit`].
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod appearance;
 mod breaks;
 pub mod color;
 pub mod display;
 pub mod fontdb;
 mod layout;
 mod onpath;
+mod saved_paths;
 
 pub use breaks::{backspace_step, grapheme_step};
 pub use color::{ColorBitmap, ColorInk, ColorLayer};
@@ -56,6 +58,7 @@ static LAYOUT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 /// Forget cached layouts (after fonts were added). Bumps [`layout_generation`].
 pub fn clear_layout_cache() {
     *layout_cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = LayoutCache::default();
+    saved_paths::clear();
     LAYOUT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -132,6 +135,12 @@ pub fn auto_size(n: &Node) -> Option<(f64, f64)> {
     let NodeKind::Text(t) = &n.kind else { return None };
     if t.path.is_some() {
         return None;
+    }
+    if appearance::has_saved(t, Some(n.width), Some(n.height)) && !appearance::fonts_available(t) {
+        return match t.auto_resize {
+            TextAutoResize::WidthAndHeight | TextAutoResize::Height => Some((n.width, n.height)),
+            TextAutoResize::None | TextAutoResize::Truncate => None,
+        };
     }
     match t.auto_resize {
         TextAutoResize::WidthAndHeight => {

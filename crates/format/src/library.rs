@@ -110,7 +110,7 @@ pub(crate) fn write(z: &mut craft_figcraft_format::ArchiveWriter, lib: &Publishe
     native::write_members(
         z,
         &to_native_manifest(&lib.manifest),
-        &crate::FiniteValue(&lib.doc),
+        &crate::FiniteValue(&crate::DocumentJson::new(&lib.doc)?),
         &crate::native_image_index(&lib.doc),
         &already_written,
         images,
@@ -136,6 +136,7 @@ pub(crate) fn read(
     }
     let text = String::from_utf8(unpacked.read(z, native::DOCUMENT, MAX_MEMBER)?).map_err(corrupt)?;
     let (mut doc, _) = from_json(&text)?;
+    unpacked.geometry(&doc)?;
     let available: BTreeSet<String> = own.keys().cloned().collect();
     let images = native::read_image_resources(z, used_images(&doc), &available, unpacked);
     for (hash, data) in images {

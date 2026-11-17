@@ -45,7 +45,7 @@ fn marker(l: &TextLayout, li: usize) -> Vec<&crate::Glyph> {
 /// The left and right ends of line `li`'s visible text glyphs (not spaces).
 fn text_span(l: &TextLayout, li: usize) -> (f64, f64) {
     let ln = &l.lines[li];
-    let g = l.glyphs[ln.glyph_start..ln.glyph_end].iter().filter(|g| g.char_end > g.char_start && g.gid != g.face.glyph_for(' '));
+    let g = l.glyphs[ln.glyph_start..ln.glyph_end].iter().filter(|g| g.char_end > g.char_start && g.gid != g.face.as_ref().unwrap().glyph_for(' '));
     g.fold((f64::MAX, f64::MIN), |(a, b), g| (a.min(g.x), b.max(g.x + g.advance)))
 }
 
@@ -83,8 +83,8 @@ fn numbers_read_with_the_full_stop_on_their_left() {
         let m = marker(&l, li);
         // ".1", ".2", ".3": the full stop first from the left, then the digit.
         assert_eq!(m.len(), 2);
-        assert_eq!(m[0].gid, m[0].face.glyph_for('.'));
-        assert_eq!(m[1].gid, m[1].face.glyph_for(char::from(b'1' + li as u8)));
+        assert_eq!(m[0].gid, m[0].face.as_ref().unwrap().glyph_for('.'));
+        assert_eq!(m[1].gid, m[1].face.as_ref().unwrap().glyph_for(char::from(b'1' + li as u8)));
         assert!(m[0].x < m[1].x);
         // Half an em between the text and the number; the numbers start at one x.
         let (_, text_right) = text_span(&l, li);

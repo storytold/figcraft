@@ -323,6 +323,8 @@ and hover, single-layer edits through the engine (fill, move, text in auto layou
 with all its instances), undo/redo, a drag preview frame, `normalize` after a one-node edit,
 `document.inspect` and select-all + move. Use a release build for meaningful numbers;
 `cargo xtask bench` runs it at 1k/10k/50k layers together with the UI frame benchmarks.
+`cargo xtask bench text 1000,10000` instead measures text-heavy native save/load and file sizes
+with embedded fonts; see [portable text](portable-text.md#reproducible-text-heavy-storage-benchmark) for the sampling boundaries.
 
 `--layers` picks the document sizes (each value is clamped to 10 to 2,000,000 layers). `--instances`
 picks the component workloads (default `2000`): for each count the command builds a synthetic design

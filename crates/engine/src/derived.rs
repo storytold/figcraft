@@ -31,6 +31,11 @@ fn test_panic() {}
 /// Keep derived state consistent after edits: text boxes resize to their content, groups wrap
 /// their children, instances follow their main components, auto layout re-flows.
 pub fn normalize(doc: &mut Document, before: &Document) {
+    normalize_with_capture(doc, before, true);
+}
+
+/// Gesture previews are local and disposable; capture their final geometry at commit.
+pub(super) fn normalize_with_capture(doc: &mut Document, before: &Document, capture: bool) {
     test_panic();
     // Only what was touched since the last normalisation (edited, added or removed).
     let mut touched: BTreeSet<NodeId> = doc.take_dirty();
@@ -171,6 +176,9 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     board::settle_routes(doc, before, &touched);
     board::settle_stamps(doc, before, &touched);
     touched.extend(doc.take_dirty());
+    if capture {
+        figcraft_text::appearance::capture(doc, Some(&touched.iter().copied().collect::<Vec<_>>()));
+    }
     // 5. Ready-for-dev layers whose contents changed show "Changed".
     mark_dev_changes(doc, before, &touched);
     doc.take_dirty();
