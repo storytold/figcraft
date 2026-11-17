@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Cursor;
 
 use figcraft_doc::color::{BlendMode, Color, Gradient, GradientKind, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::geom::kurbo::PathEl;
