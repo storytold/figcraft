@@ -243,7 +243,7 @@ pub enum ConnectCommand {
 
 /// Link a design file's components to their code as a figcraft.connect.json says, and save it
 ///
-/// The mappings are what Dev Mode's Export code connections writes, kept in the code repository:
+/// The mappings are what Developer Mode's Export code connections writes, kept in the code repository:
 /// each links a component (or component set) of that name to its code component for a language.
 /// Entries that don't fit (an unknown component, a bad template) are reported and skipped.
 #[derive(Args)]

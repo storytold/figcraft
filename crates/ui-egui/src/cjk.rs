@@ -131,6 +131,11 @@ fn shows(code: &str, web: bool) -> bool {
         // Arabic; keep the catalog out until an embedded Arabic fallback is supplied.
         return figcraft_text::face_with_char('ع', &["Noto Sans Arabic"]).is_some();
     }
+    if code.split('-').next() == Some("ta") {
+        // Desktop draws Tamil with a system face (#2018); the web has none until craft-fonts
+        // carries Noto Sans Tamil.
+        return figcraft_text::face_with_char('த', &["Noto Sans Tamil"]).is_some();
+    }
     let need = language(code);
     need == 0 || samples(need, 0, traditional(code)).iter().all(|(c, families)| figcraft_text::face_with_char(*c, families).is_some())
 }
@@ -226,6 +231,14 @@ mod tests {
         let face = figcraft_text::face_with_char('ع', &["Noto Sans Arabic"]).is_some();
         assert_eq!(shows("ar", true), face);
         assert_eq!(shows("ar-SA", true), face);
+    }
+
+    #[test]
+    fn the_web_offers_tamil_only_with_its_face() {
+        assert!(shows("ta", false), "desktop always lists Tamil");
+        let face = figcraft_text::face_with_char('த', &["Noto Sans Tamil"]).is_some();
+        assert_eq!(shows("ta", true), face);
+        assert_eq!(shows("ta-IN", true), face);
     }
 
     /// The UI language's script leads the fallback order; the others follow.

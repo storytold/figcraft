@@ -215,9 +215,12 @@ fn corner_radius_mirroring_and_delete(s: &mut Session, a: NodeId, b: NodeId, atl
 
 fn bend_select_all_pen_and_clicks(s: &mut Session, a: NodeId, b: NodeId) {
     // The Bend tool (held with Cmd/Ctrl) bends the segment under the pointer, in its own layer.
+    // (The earlier mirroring step already turned the selected corners smooth, #2110.)
+    let a_before = net(s, a).segments;
+    let b_before = net(s, b).segments;
     drag(s, (250.0, 100.0), (250.0, 130.0), CMD);
-    assert!(net(s, b).segments.iter().any(|sg| !sg.is_straight()), "the bend lands on the layer under the pointer");
-    assert!(net(s, a).segments.iter().all(|sg| sg.is_straight()), "other layers keep their segments");
+    assert!(net(s, b).segments != b_before, "the bend lands on the layer under the pointer");
+    assert!(net(s, a).segments == a_before, "other layers keep their segments");
     // Select all takes every edited layer's points.
     let r = ex(s, "vector.edit.selectAll", json!({}));
     assert_eq!(r["count"], json!(8), "silent: select all takes the points of every edited layer (pinned)");

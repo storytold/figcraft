@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Cursor, Write};
+use std::io::Cursor;
 
 use figcraft_doc::color::{BlendMode, Color, Gradient, GradientKind, ImageScaleMode, Paint, PaintKind};
 use figcraft_doc::geom::kurbo::PathEl;
@@ -13,7 +13,7 @@ use figcraft_doc::{
 use serde_json::{Map, Value, json};
 
 use super::{ROOT_ID, fingerprint, layout_fingerprint, strokes_fingerprint, text_fingerprint, tokens_fingerprint, uuid};
-use crate::{FormatError, io_err, json_options};
+use crate::{FormatError, io_err};
 
 const DEFAULT_FEATURES: &[&str] = &["fdata/path-data", "design-tokens/v1", "variants/v1", "layout/grid", "components/v2", "fdata/shape-data-type"];
 
@@ -144,6 +144,7 @@ struct Exporter<'a> {
     unchanged_layouts: BTreeSet<NodeId>,
     components: Vec<Value>,
     warnings: Vec<String>,
+    asset_error: Option<String>,
 }
 
 /// Write an offline Penpot 2.x archive and warnings for unsupported native features.
@@ -404,6 +405,7 @@ impl<'a> Exporter<'a> {
                 .collect(),
             components: Vec::new(),
             warnings: Vec::new(),
+            asset_error: None,
         }
     }
 
@@ -546,6 +548,9 @@ impl<'a> Exporter<'a> {
             }
         }
         let mut blobs: Vec<(String, Vec<u8>)> = Vec::new();
+        if let Some(error) = self.asset_error.take() {
+            return Err(FormatError::Io(error));
+        }
         for media in self.media.values() {
             entries.push((
                 format!("{base}/media/{}.json", media.id),
@@ -565,27 +570,19 @@ impl<'a> Exporter<'a> {
             "files": [{"id": self.file_id, "name": name, "features": file.get("features").cloned().unwrap_or(Value::Null)}],
             "relations": [],
         });
-        let mut buf = Cursor::new(Vec::new());
-        {
-            let mut z = zip::ZipWriter::new(&mut buf);
-            let mut put = |path: &str, bytes: &[u8]| -> Result<(), FormatError> {
-                z.start_file(path, json_options()).map_err(io_err)?;
-                z.write_all(bytes).map_err(io_err)
-            };
-            put("manifest.json", &serde_json::to_vec_pretty(&manifest).map_err(io_err)?)?;
-            put(&format!("{base}.json"), &serde_json::to_vec_pretty(&file).map_err(io_err)?)?;
-            if let Some(tokens) = tokens {
-                put(&format!("{base}/tokens.json"), tokens.as_bytes())?;
-            }
-            for (path, value) in &entries {
-                put(path, &serde_json::to_vec_pretty(value).map_err(io_err)?)?;
-            }
-            for (path, bytes) in &blobs {
-                put(path, bytes)?;
-            }
-            z.finish().map_err(io_err)?;
+        let mut writer = craft_penpot::Writer::new();
+        writer.add("manifest.json", &serde_json::to_vec_pretty(&manifest).map_err(io_err)?).map_err(io_err)?;
+        writer.add(&format!("{base}.json"), &serde_json::to_vec_pretty(&file).map_err(io_err)?).map_err(io_err)?;
+        if let Some(tokens) = tokens {
+            writer.add(&format!("{base}/tokens.json"), tokens.as_bytes()).map_err(io_err)?;
         }
-        Ok((buf.into_inner(), self.warnings))
+        for (path, value) in &entries {
+            writer.add(path, &serde_json::to_vec_pretty(value).map_err(io_err)?).map_err(io_err)?;
+        }
+        for (path, bytes) in &blobs {
+            writer.add(path, bytes).map_err(io_err)?;
+        }
+        Ok((writer.finish().map_err(io_err)?, self.warnings))
     }
 
     fn page_json(&self, page: NodeId, page_id: &str, index: usize, background: Color) -> Value {
@@ -904,13 +901,20 @@ impl<'a> Exporter<'a> {
     fn image_fill(&mut self, hash: &str, keep_aspect: bool) -> Option<Value> {
         if !self.media.contains_key(hash) {
             let data = self.doc.images.get(hash)?;
-            let (mtype, ext, bytes) = match image::guess_format(&data.bytes) {
-                Ok(image::ImageFormat::Png) => ("image/png", "png", data.bytes.to_vec()),
-                Ok(image::ImageFormat::Jpeg) => ("image/jpeg", "jpg", data.bytes.to_vec()),
-                Ok(image::ImageFormat::WebP) => ("image/webp", "webp", data.bytes.to_vec()),
-                Ok(image::ImageFormat::Gif) => ("image/gif", "gif", data.bytes.to_vec()),
+            let encoded = match figcraft_assets::require(&data.bytes, data.asset.as_ref()) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    self.asset_error = Some(error);
+                    return None;
+                }
+            };
+            let (mtype, ext, bytes) = match image::guess_format(&encoded) {
+                Ok(image::ImageFormat::Png) => ("image/png", "png", encoded.to_vec()),
+                Ok(image::ImageFormat::Jpeg) => ("image/jpeg", "jpg", encoded.to_vec()),
+                Ok(image::ImageFormat::WebP) => ("image/webp", "webp", encoded.to_vec()),
+                Ok(image::ImageFormat::Gif) => ("image/gif", "gif", encoded.to_vec()),
                 _ => {
-                    let decoded = image::load_from_memory(&data.bytes).ok()?;
+                    let decoded = image::load_from_memory(&encoded).ok()?;
                     let mut out = Cursor::new(Vec::new());
                     decoded.write_to(&mut out, image::ImageFormat::Png).ok()?;
                     ("image/png", "png", out.into_inner())

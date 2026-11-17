@@ -1,5 +1,4 @@
-//! Arc handles: the on-canvas handles of a selected ellipse's arc (as public documentation of
-//! Figma-class tools describes them).
+//! Arc handles: on-canvas controls for a selected ellipse's arc.
 //!
 //! - **Sweep** starts on the ellipse's right edge, on its centre line. Dragging it around the
 //!   ellipse opens it into an arc: the sweep is a signed share of a full turn, positive dragging up

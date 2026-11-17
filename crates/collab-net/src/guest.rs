@@ -42,6 +42,10 @@ pub struct Guest {
 enum Cmd {
     Fetch(u64, figcraft_assets::AssetRef),
     AssetDone(u64),
+    #[cfg(test)]
+    Hold(Sender<()>, Receiver<()>),
+    #[cfg(test)]
+    ExpireAssetWait,
     Presence(Presence),
     /// For the server, in order (document changes).
     Send(ClientMsg),
@@ -55,6 +59,20 @@ enum Cmd {
 }
 
 impl Guest {
+    #[cfg(test)]
+    pub(crate) fn hold_writer(&self) -> io::Result<Sender<()>> {
+        let (ready, ack) = channel();
+        let (release, gate) = channel();
+        self.cmd.send(Cmd::Hold(ready, gate)).map_err(|e| io::Error::other(e.to_string()))?;
+        ack.recv_timeout(Duration::from_secs(5)).map_err(io::Error::other)?;
+        Ok(release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_asset_wait(&self) {
+        let _ = self.cmd.send(Cmd::ExpireAssetWait);
+    }
+
     /// Start joining (returns at once; progress arrives in `inbox`).
     pub fn start(mut cfg: GuestConfig, inbox: Inbox) -> io::Result<Guest> {
         let (tx, rx) = channel();
@@ -286,13 +304,17 @@ fn session(
     let mut welcomed = false;
     let mut throttle = Throttle::new(PRESENCE_INTERVAL);
     let mut asset_queue = std::collections::VecDeque::new();
+    let mut deferred = None;
+    let mut retry_at = None;
+    let mut asset_wait = AssetWait::default();
     let scope = session_scope(cfg);
     // Sync messages waiting their turn (a long queue from while offline).
     let mut paced: Paced<ClientMsg> = Paced::new(Instant::now());
     let outcome = if send(&mut writer, &hello, &requests) {
         loop {
             let ping_at = last_ping + cfg.limits.keepalive;
-            let wake = earliest([throttle.due(), Some(ping_at), paced.due()]).unwrap_or(ping_at);
+            let edit_at = if deferred.is_some() { retry_at } else { paced.due() };
+            let wake = earliest([throttle.due(), Some(ping_at), edit_at]).unwrap_or(ping_at);
             let mut out = None;
             match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
                 Ok(Cmd::Fetch(e, asset)) if e == epoch && writer.get_ref().assets => {
@@ -307,6 +329,13 @@ fn session(
                         }
                     }
                 }
+                #[cfg(test)]
+                Ok(Cmd::Hold(ready, gate)) => {
+                    let _ = ready.send(());
+                    let _ = gate.recv_timeout(Duration::from_secs(5));
+                }
+                #[cfg(test)]
+                Ok(Cmd::ExpireAssetWait) => asset_wait.deadline = Some(Instant::now()),
                 Ok(Cmd::AssetDone(e)) if e == epoch => {}
                 Ok(Cmd::Fetch(_, asset)) => figcraft_assets::cache::failed(&asset, "the image's connection changed or does not support downloads"),
                 Ok(Cmd::AssetDone(_)) => {}
@@ -325,6 +354,9 @@ fn session(
                 }
                 Ok(Cmd::Lost(e, o)) if e == epoch => break o,
                 Ok(Cmd::Leave) | Err(RecvTimeoutError::Disconnected) => {
+                    if let Some(m) = deferred.take() {
+                        let _ = send_edit(&mut writer, &m, &requests, inbox, &scope);
+                    }
                     leave_paced(&mut writer, &mut paced, &requests, inbox, &scope);
                     let _ = writer.close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }));
                     break Outcome::Left;
@@ -334,9 +366,29 @@ fn session(
                 Err(RecvTimeoutError::Timeout) => {}
             }
             let now = Instant::now();
+            // Pongs alone cannot keep a missing original (and its edit) waiting forever.
+            // Retain the old blocking require's 30-second bound without blocking this loop.
+            if asset_wait.expired(now) {
+                break Outcome::Retry("the image download timed out".into());
+            }
             let mut sent = true;
-            while sent && let Some(m) = paced.take_due(now) {
-                sent = send_edit(&mut writer, &m, &requests, inbox, &scope);
+            while sent {
+                let Some(m) = deferred.take().or_else(|| paced.take_due(now)) else { break };
+                match send_edit(&mut writer, &m, &requests, inbox, &scope) {
+                    EditSend::Sent => {
+                        retry_at = None;
+                        asset_wait.deadline = None;
+                    }
+                    EditSend::Deferred => {
+                        asset_wait.defer(now);
+                        // Keep edits ordered, but let the same writer drain the fetch commands
+                        // holding admission reservations and continue presence/keepalive work.
+                        deferred = Some(m);
+                        retry_at = Some(now + Duration::from_millis(10));
+                        break;
+                    }
+                    EditSend::Disconnected => sent = false,
+                }
             }
             if !sent {
                 break Outcome::Retry("the connection dropped".into());
@@ -385,7 +437,7 @@ fn leave_paced(writer: &mut WebSocket<Duplex>, paced: &mut Paced<ClientMsg>, req
             return;
         }
         if let Some(m) = paced.take_due(now) {
-            if !send_edit(writer, &m, requests, inbox, scope) {
+            if !matches!(send_edit(writer, &m, requests, inbox, scope), EditSend::Sent) {
                 return;
             }
         } else if let Some(at) = paced.due().filter(|at| *at < give_up) {
@@ -396,21 +448,42 @@ fn leave_paced(writer: &mut WebSocket<Duplex>, paced: &mut Paced<ClientMsg>, req
     }
 }
 
-/// Send one message; false when the connection is gone.
+/// Original-image requests sent on this socket and matched by its reader.
 type Requests = Arc<std::sync::Mutex<std::collections::BTreeSet<figcraft_assets::AssetRef>>>;
 
-fn send_edit(ws: &mut WebSocket<Duplex>, msg: &ClientMsg, requests: &Requests, inbox: &Inbox, scope: &str) -> bool {
+/// One deadline for the deferred edit, not a fresh timeout on every retry.
+#[derive(Default)]
+struct AssetWait {
+    deadline: Option<Instant>,
+}
+impl AssetWait {
+    fn defer(&mut self, now: Instant) {
+        self.deadline.get_or_insert(now + Duration::from_secs(30));
+    }
+    fn expired(&self, now: Instant) -> bool {
+        self.deadline.is_some_and(|deadline| now >= deadline)
+    }
+}
+
+enum EditSend {
+    Sent,
+    Deferred,
+    Disconnected,
+}
+
+fn send_edit(ws: &mut WebSocket<Duplex>, msg: &ClientMsg, requests: &Requests, inbox: &Inbox, scope: &str) -> EditSend {
     match send_result(ws, msg, requests, Some(scope)) {
-        Ok(()) => true,
+        Ok(()) => EditSend::Sent,
+        Err(SendError::Deferred) => EditSend::Deferred,
         Err(SendError::Unavailable(reason)) => {
             if let ClientMsg::Changes { batch_id, .. } = msg {
                 inbox.push(Event::Sync(ServerMsg::Reject { batch_id: *batch_id, reason, fixes: Vec::new() }));
-                true
+                EditSend::Sent
             } else {
-                false
+                EditSend::Disconnected
             }
         }
-        Err(SendError::Disconnected) => false,
+        Err(SendError::Disconnected) => EditSend::Disconnected,
     }
 }
 
@@ -419,6 +492,7 @@ fn send(ws: &mut WebSocket<Duplex>, msg: &ClientMsg, requests: &Requests) -> boo
 }
 
 enum SendError {
+    Deferred,
     Disconnected,
     Unavailable(String),
 }
@@ -427,29 +501,31 @@ fn session_scope(cfg: &GuestConfig) -> String {
     figcraft_assets::file_scope(&cfg.invite.server.url(), &cfg.invite.file)
 }
 
-fn send_result(ws: &mut WebSocket<Duplex>, msg: &ClientMsg, requests: &Requests, scope: Option<&str>) -> Result<(), SendError> {
+fn send_result(ws: &mut WebSocket<Duplex>, msg: &ClientMsg, _requests: &Requests, scope: Option<&str>) -> Result<(), SendError> {
     if ws.get_ref().assets
         && let Some(scope) = scope
     {
         crate::assets_wire::remember_uploads(msg, scope).map_err(SendError::Unavailable)?;
     }
     let missing = crate::assets_wire::missing(msg).map_err(SendError::Unavailable)?;
-    // Undo can reference an image the viewport never needed. Request it directly before
-    // waiting: queueing it to this same writer thread would deadlock the upload.
-    for asset in missing {
+    // Undo can reference originals the viewport never requested. Admission only queues
+    // work; never wait here, because this writer must drain those very fetch commands.
+    for asset in &missing {
         if !ws.get_ref().assets {
             return Err(SendError::Unavailable("this server cannot supply a deferred image; reconnect with an updated server".into()));
         }
         let asset_error =
-            |reason| if figcraft_assets::cache::is_unavailable(&asset) { SendError::Unavailable(reason) } else { SendError::Disconnected };
-        figcraft_assets::cache::enqueue(&asset).map_err(asset_error)?;
-        if requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(asset.clone()) {
-            let bytes = crate::assets_wire::client(&ClientMsg::FetchAsset(asset.clone()), true).map_err(SendError::Unavailable)?;
-            crate::net::send_binary(ws, &bytes).map_err(|_| SendError::Disconnected)?;
+            |reason| if figcraft_assets::cache::is_unavailable(asset) { SendError::Unavailable(reason) } else { SendError::Disconnected };
+        if !figcraft_assets::cache::try_enqueue(asset).map_err(asset_error)? {
+            break;
         }
-        figcraft_assets::cache::require(&asset).map_err(asset_error)?;
     }
-    let bytes = crate::assets_wire::client(msg, ws.get_ref().assets).map_err(SendError::Unavailable)?;
+    if !missing.is_empty() {
+        return Err(SendError::Deferred);
+    }
+    let bytes = crate::assets_wire::client(msg, ws.get_ref().assets).map_err(|reason| {
+        if crate::assets_wire::missing(msg).is_ok_and(|assets| !assets.is_empty()) { SendError::Deferred } else { SendError::Unavailable(reason) }
+    })?;
     crate::net::send_binary(ws, &bytes).map_err(|_| SendError::Disconnected)
 }
 
@@ -569,5 +645,20 @@ mod asset_request_tests {
         check(1, "reconnecting");
         guest.leave();
         host.stop();
+    }
+}
+
+#[cfg(test)]
+mod asset_wait_tests {
+    use super::*;
+    #[test]
+    fn retries_preserve_the_first_download_deadline() {
+        let at = Instant::now();
+        let mut wait = AssetWait::default();
+        assert!(!wait.expired(at + Duration::from_secs(90)));
+        wait.defer(at);
+        wait.defer(at + Duration::from_secs(29));
+        assert!(!wait.expired(at + Duration::from_secs(29)));
+        assert!(wait.expired(at + Duration::from_secs(30)));
     }
 }

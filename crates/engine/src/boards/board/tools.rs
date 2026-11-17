@@ -171,7 +171,7 @@ impl Session {
     /// or free point under the pointer.
     pub(crate) fn connect_drag(&mut self, ev: &PointerEvent, from: End, start: Point) {
         self.tool.gesture = Gesture::Connect { from, start };
-        let c = self.drag_end(ev, from, start).map(|to| Connector { from, to, routing: self.tool.board.routing, path: None });
+        let c = self.drag_end(ev, from, start).map(|to| Connector { from, to, routing: self.tool.board.routing, path: None, branch: false });
         if let Ok(page) = self.page() {
             // One that can't be placed shows nothing, as none would be made.
             let _ = self.preview(|d, _| {

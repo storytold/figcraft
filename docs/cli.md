@@ -126,7 +126,7 @@ page 1 "Screens": 380 nodes, 4 top-level
   written from public format notes, including variables with their modes and bindings and shared
   styles with their layer links. Checked by opening it again in FigCraft and, on the example
   documents and small test files, in other software; other apps may not open every file. What was
-  left out (comments, Dev Mode data, some bindings and settings…) is printed as `note:` lines;
+  left out (comments, Developer Mode data, some bindings and settings…) is printed as `note:` lines;
   `docs/file-format-parity.md` lists what was checked and what is unchecked.
 - `--format xml` (or an `<out>` ending in `.xml`) writes an Android Vector Drawable, e.g.
   `figcraft-cli export app.figcraft --node Icon -o ic_icon.xml`. What the format can't draw is
@@ -299,7 +299,7 @@ lists); it is never printed. The bundle is checked before it is sent and again b
 ### `connect publish <file.figcraft> [--mappings FILE] [--dry-run]`
 
 Publishes a code repository's component mappings to a design file: each link in the mappings file
-(default `figcraft.connect.json` in the current folder, the file Dev Mode's **Export code
+(default `figcraft.connect.json` in the current folder, the file Developer Mode's **Export code
 connections** and `codeConnect.export` write) connects every component or component set of that
 name to its code component for a language, replacing its link for that language, and the file is
 saved in place, written whole or not at all, with its version history. Links that don't fit (no

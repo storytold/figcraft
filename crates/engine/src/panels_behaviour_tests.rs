@@ -201,6 +201,22 @@ fn reparent_index_is_the_final_position_in_auto_layout_and_across_parents() {
 }
 
 #[test]
+fn reparent_rejects_a_negative_or_fractional_index() {
+    let mut s = Session::new();
+    let frame = id(&ex(&mut s, "node.create", json!({"type": "frame", "name": "F"})));
+    let rect = |s: &mut Session, n: &str, parent: NodeId| id(&ex(s, "node.create", json!({"type": "rectangle", "name": n, "parent": parent})));
+    let (a, b) = (rect(&mut s, "a", frame), rect(&mut s, "b", frame));
+    let free = id(&ex(&mut s, "node.create", json!({"type": "rectangle", "name": "free"})));
+    for bad in [json!(-1), json!(1.5), json!("x")] {
+        let r = s.execute("node.reparent", &json!({"ids": [free], "parent": frame, "index": bad}));
+        assert!(r.is_err(), "index {bad} accepted");
+        assert_eq!(kids(&s, frame), [a, b], "the tree is unchanged for index {bad}");
+    }
+    ex(&mut s, "node.reparent", json!({"ids": [free], "parent": frame, "index": 0}));
+    assert_eq!(kids(&s, frame), [free, a, b]);
+}
+
+#[test]
 fn renaming_several_layers_by_the_documented_codes() {
     // Three layers named `names`, bottom to top; (names, params, new names, derivation).
     let rows: Vec<([&str; 3], Value, [&str; 3], &str)> = vec![

@@ -319,7 +319,7 @@ fn drop_on_canvas(u: &mut crate::layers_drag_tests::Ui, names: &[&str], bytes: &
 #[test]
 fn dev_mode_imports_no_dropped_file_into_the_design_and_says_why() {
     let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="red"/></svg>"#;
-    let refusal = "Dev Mode only inspects: switch to Design (Shift+D) to edit";
+    let refusal = "Developer Mode only inspects: switch to Design (Shift+D) to edit";
     let mut u = crate::layers_drag_tests::Ui::new(Session::new());
     let layers = |u: &crate::layers_drag_tests::Ui| u.app.session.doc().unwrap().node(u.app.session.page().unwrap()).unwrap().children.len();
     u.app.ui.right_tab = crate::RightTab::Inspect;

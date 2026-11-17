@@ -1,7 +1,7 @@
 //! Pages.
 
 use figcraft_doc::proto::Flow;
-use figcraft_doc::{Guide, NodeId, NodeKind};
+use figcraft_doc::{Document, Guide, NodeId, NodeKind};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, ok};
@@ -109,8 +109,8 @@ pub fn specs() -> Vec<CommandSpec> {
             // The copy keeps the page's colour, flows (pointing at the copied frames), prototype settings and guides.
             let guides = doc.get(src)?.guides.clone();
             doc.get_mut(np)?.guides = guides;
-            if let NodeKind::Page { background, flows, prototype } = doc.get(src)?.kind.clone()
-                && let NodeKind::Page { background: b, flows: f, prototype: pr } = &mut doc.get_mut(np)?.kind
+            if let NodeKind::Page { background, flows, prototype, .. } = doc.get(src)?.kind.clone()
+                && let NodeKind::Page { background: b, flows: f, prototype: pr, .. } = &mut doc.get_mut(np)?.kind
             {
                 *b = background;
                 *f = flows
@@ -147,6 +147,38 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             ok()
         }),
+        spec!(
+            "page.setOpening",
+            "Set as opening page",
+            "{id?} (the page the file opens on, for everyone who opens or joins it; the current page when none is named)",
+            true,
+            |s, p| {
+                // A document property (#1817), so it syncs in a live session and undoes; nobody's
+                // own page moves (`page.select` is each viewer's).
+                let id = page_target(s, "page.setOpening", p)?;
+                if s.doc()?.is_divider(id) {
+                    return Err(bad("page.setOpening", "a divider isn't a page to open on"));
+                }
+                let is_opening = |doc: &Document, p: NodeId| matches!(doc.get(p).map(|n| &n.kind), Ok(NodeKind::Page { opening: true, .. }));
+                if s.doc()?.current_page == Some(id) && is_opening(s.doc()?, id) {
+                    // Already the opening page: nothing changes, so no undo step.
+                    return ok();
+                }
+                let doc = s.doc_mut()?;
+                doc.current_page = Some(id);
+                // The flag lives on the page node (so it syncs with the node's kind): one page has it.
+                for page in doc.pages.clone() {
+                    let want = page == id;
+                    if is_opening(doc, page) != want
+                        && let NodeKind::Page { opening, .. } = &mut doc.get_mut(page)?.kind
+                    {
+                        *opening = want;
+                    }
+                }
+                settle(s, "page.setOpening")?;
+                ok()
+            }
+        ),
         spec!("page.list", "List pages", "{}", false, |s, _| {
             let doc = s.doc()?;
             let cur = s.page()?;

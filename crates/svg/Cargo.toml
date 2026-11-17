@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 figcraft-assets.workspace = true
+craft-xml = { workspace = true }
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }

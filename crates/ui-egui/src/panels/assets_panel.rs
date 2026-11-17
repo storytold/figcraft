@@ -818,7 +818,7 @@ fn libraries_view(app: &mut FigApp, ui: &mut Ui) {
     if bresp.hovered() {
         ui.painter().rect_filled(back, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), back.shrink(5.0), Icon::ChevronLeft, t.icon);
+    icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(back), Icon::ChevronLeft, t.icon);
     ui.painter().text(pos2(back.max.x + 6.0, hr.center().y), Align2::LEFT_CENTER, tr("Libraries"), semibold(12.0), t.text);
     if bresp.clicked() {
         app.ui.libraries = false;
@@ -1157,7 +1157,7 @@ fn enabled_libraries(app: &mut FigApp, ui: &mut Ui, w: f32, doc: &Document) {
         if xr.hovered() {
             ui.painter().rect_filled(x, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), x.shrink(6.0), Icon::Close, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(x), Icon::Close, t.icon);
         if xr.clicked() {
             remove = Some(l.id.clone());
         }
@@ -1169,7 +1169,7 @@ fn enabled_libraries(app: &mut FigApp, ui: &mut Ui, w: f32, doc: &Document) {
             if sr.hovered() {
                 ui.painter().rect_filled(sw, CornerRadius::same(5), t.hover);
             }
-            icons::paint(ui.painter(), sw.shrink(6.0), Icon::Swap, t.icon);
+            icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(sw), Icon::Swap, t.icon);
             crate::right::menu_popup(&sr).show(|ui| {
                 for other in doc.libraries.enabled.iter().filter(|o| o.id != l.id) {
                     if crate::right::menu_item(ui, &trf("Swap to {name}", &[("name", &other.name)]), "") {

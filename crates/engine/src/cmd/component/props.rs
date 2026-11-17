@@ -8,7 +8,7 @@ use super::{
     req_string, req_targets, set_boolean_default, slot_edited, slots_of, string, takes_value, targets, variant_conflicts, variant_name,
     variant_options, variant_props, variant_set,
 };
-use crate::components::prop_list;
+use crate::components::{instance_prop_list, prop_list};
 
 /// Whether instance `id` has a component property `name` that a `kind` variable can drive (a
 /// boolean property takes a boolean variable, a text or variant property a string one).
@@ -606,7 +606,8 @@ pub(crate) fn describe_props(doc: &Document, id: NodeId) -> Value {
     }
     // Slots: the frames (on a main) or this instance's copy, with whether it holds its own content.
     let slots = slots_of(doc, if values.is_some() { id } else { variant_set(doc, comp).unwrap_or(comp) });
-    for (k, d) in prop_list(doc, comp) {
+    let defs = if values.is_some() { instance_prop_list(doc, comp) } else { prop_list(doc, comp) };
+    for (k, d) in defs {
         let mut v = def_json(&k, &d);
         if !takes_value(&d) {
             let layers: Vec<NodeId> = slots.iter().filter(|(_, n)| *n == k).map(|(l, _)| *l).collect();

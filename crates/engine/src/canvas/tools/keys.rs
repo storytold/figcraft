@@ -1,4 +1,4 @@
-use super::{Document, Gesture, Node, NodeId, Overlay, Point, PointerEvent, PointerKind, Result, Session, ShapeHandle, ToolId, json, textedit};
+use super::{Document, Gesture, NodeId, Overlay, Point, PointerEvent, PointerKind, Result, Session, ShapeHandle, ToolId, json, textedit};
 
 impl Session {
     /// Keys the current mode handles before menu shortcuts (vector edit mode's tools and point
@@ -146,21 +146,9 @@ impl Session {
             self.ds_mut()?.focus = None;
             return Ok(());
         }
-        // Escape selects the parent, then nothing.
-        let doc = self.doc()?;
-        let parents: Vec<NodeId> =
-            sel.iter().filter_map(|i| doc.node(*i).and_then(|n| n.parent)).filter(|p| !doc.node(*p).is_some_and(Node::is_page)).collect();
-        if !parents.is_empty() {
-            let mut uniq = Vec::new();
-            for p in parents {
-                if !uniq.contains(&p) {
-                    uniq.push(p);
-                }
-            }
-            self.set_selection(uniq);
-        } else {
-            self.set_selection(vec![]);
-        }
+        // Escape clears the selection whatever its nesting (measured in Figma: it never selects the
+        // parent).
+        self.set_selection(vec![]);
         Ok(())
     }
 

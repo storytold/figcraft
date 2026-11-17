@@ -1,6 +1,6 @@
 use super::handles::{
     SNAP_PX, handle_at, in_quad, label_at, locked_in, on_corner_square, paints_below, resized_box, scale_factor, selection_box, selection_frame,
-    shape_hint,
+    shape_hint, shared_rotation_degrees,
 };
 use super::{
     Affine, ArcHandle, ArcHint, Cursor, Document, Gesture, Guide, Handle, ImageScaleMode, LayoutMode, NodeId, NodeKind, PaintKind, Point,
@@ -58,7 +58,8 @@ impl Session {
                     .moved_origin()
                     .unwrap_or_else(|| Point::new(b.iter().map(|c| c.x).sum::<f64>() / 4.0, b.iter().map(|c| c.y).sum::<f64>() / 4.0));
                 self.begin_interaction("Rotate")?;
-                self.tool.gesture = Gesture::Rotate { center, start_angle: (ev.p() - center).atan2(), ids };
+                self.tool.gesture =
+                    Gesture::Rotate { center, start_angle: (ev.p() - center).atan2(), base: shared_rotation_degrees(&doc, &ids), ids };
                 return Ok(());
             }
             let nodes: Vec<(NodeId, Affine, f64, f64)> =
@@ -216,6 +217,8 @@ impl Session {
                     }
                 }
                 // Cmd/Ctrl (and Control on macOS) held while dragging suspends snapping.
+                // The pointer's own drag, before snapping: a reorder in auto layout follows it.
+                let raw = d;
                 let snap_on = self.ds().map(|ds| ds.view.snap_objects).unwrap_or(true) && !ev.cmd && !ev.ctrl;
                 let mut guides = Vec::new();
                 if self.ds().map(|ds| ds.view.snap_pixel).unwrap_or(true) {
@@ -268,8 +271,18 @@ impl Session {
                         // cell) under the pointer, as the frame shows it now. A frame other than the
                         // one they come from is outlined too.
                         let cell = if mode == LayoutMode::Grid { crate::drop::grid_cell_at(doc, target, p) } else { None };
-                        let idx =
-                            if mode == LayoutMode::Grid { 0 } else { crate::drop::auto_layout_slot(doc, target, p, &moving).map_or(0, |(i, _)| i) };
+                        // Within the frame they came from, the slot follows the leading edge of the
+                        // box they would fill (their combined start bounds moved by the drag), not
+                        // the pointer. The preview starts from the document as the drag began.
+                        let within = moving.iter().all(|m| doc.node(*m).is_some_and(|n| n.parent == Some(target)));
+                        let idx = if mode == LayoutMode::Grid {
+                            0
+                        } else if let (true, Some(b)) = (within, doc.bounds_of(&moving)) {
+                            let moved = Rect::new(b.x0 + raw.x, b.y0 + raw.y, b.x1 + raw.x, b.y1 + raw.y);
+                            crate::drop::auto_layout_slot_within(doc, target, p, &moving, moved, Point::new(raw.x, raw.y)).map_or(0, |(i, _)| i)
+                        } else {
+                            crate::drop::auto_layout_slot(doc, target, p, &moving).map_or(0, |(i, _)| i)
+                        };
                         for m in &moving {
                             if doc.get(*m)?.parent != Some(target) {
                                 doc.reparent(*m, target, None)?;
@@ -350,10 +363,11 @@ impl Session {
                 }
                 return res;
             }
-            Gesture::Rotate { center, start_angle, ids } => {
+            Gesture::Rotate { center, start_angle, base, ids } => {
                 let mut a = ((ev.p() - *center).atan2() - start_angle).to_degrees();
                 if ev.shift {
-                    a = (a / 15.0).round() * 15.0;
+                    // The panel rotation is base - a; Shift lands it on a multiple of 15 degrees.
+                    a = base - ((base - a) / 15.0).round() * 15.0;
                 }
                 let (c, ids) = (*center, ids.clone());
                 self.preview(|doc, _| {
@@ -626,7 +640,7 @@ impl Session {
     /// text included, children by the same factor whatever their constraints.
     fn scale_drag(&mut self, ev: &PointerEvent, r: &ResizeStart, q: Point, guides: Vec<Guide>) -> Result<()> {
         let (frame, w0, h0) = r.frame;
-        let Some((k, pivot)) = scale_factor(r.handle, q, w0, h0, self.tool.scale_anchor, ev.alt) else { return Ok(()) };
+        let Some((k, pivot)) = scale_factor(r.handle, q, w0, h0, ev.alt) else { return Ok(()) };
         let nodes = r.nodes.clone();
         let inv = frame.inverse();
         // A layer's place in the box scales about the pivot; a negative factor turns it over.

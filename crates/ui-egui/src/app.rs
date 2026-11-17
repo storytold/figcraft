@@ -22,7 +22,11 @@ impl FigApp {
     /// state.
     pub fn new(session: Session, services: Box<dyn Services>) -> Self {
         // The main window's panels open as wide as they were left.
+        // Widths saved under other limits are clamped to the current ones, not rejected; one that
+        // isn't finite falls back to the default.
         let (left_width, right_width) = session.prefs.panel_widths;
+        let within = |w: f32, range: std::ops::RangeInclusive<f32>| if w.is_finite() { w.clamp(*range.start(), *range.end()) } else { PANEL_DEFAULT };
+        let (left_width, right_width) = (within(left_width, LEFT_PANEL), within(right_width, RIGHT_PANEL));
         let pages_height = session.prefs.pages_height;
         Self {
             ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
@@ -268,10 +272,16 @@ impl FigApp {
             return;
         }
         if !self.has_files() || self.ui.home {
+            let docs = &self.session.docs;
+            self.canvas.drop_closed(|uid| docs.iter().any(|d| d.uid == uid));
             home::show(self, ui);
             // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
             // (cleared after the home widgets, which may have just asked for it).
             self.ui.shortcuts_panel = false;
+            // The keymap runs with the canvas; here the one shortcut that still applies is read directly.
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
+                self.run("app.preferences", serde_json::json!({}));
+            }
             dialogs::keys(self, &ctx);
             dialogs::show(self, &ctx);
             updates_ui::show(self, &ctx);
@@ -296,6 +306,8 @@ impl FigApp {
         self.ui.narrow = narrow;
         // A narrow window shows the right panel when its button asks for it, a board's too.
         let right_open = (self.right_panel_shown(hidden) && !narrow && !right_minimized) || mobile == Some(MobilePanel::Right);
+        // A highlighted fill, stroke or effect row goes with the panel it's in, before it draws.
+        crate::property_rows::reconcile(self, &ctx, right_open);
         // A right-to-left UI language mirrors the window: the "left" rail and panel go on the
         // right, the "right" (Design) panel on the left. Their ids and widths stay as they are.
         let mirrored = self.ui.mirrored;
@@ -358,11 +370,7 @@ impl FigApp {
                 // each side of the panel (240 pt by default). The edge is drawn in `right_panel`.
                 .frame(egui::Frame::NONE.fill(t.panel))
                 .show(ui, |ui| {
-                    let label = match self.ui.right_tab {
-                        RightTab::Design => i18n::tr("Design"),
-                        RightTab::Prototype => i18n::tr("Prototype"),
-                        RightTab::Inspect => i18n::tr("Dev Mode"),
-                    };
+                    let label = right_tab_label(self.ui.right_tab);
                     a11y::region(&mut self.ui.nav, ui, a11y::Region::Properties, egui::accesskit::Role::Pane, label);
                     right::right_panel(self, ui)
                 });
@@ -371,6 +379,12 @@ impl FigApp {
             let worker = self.worker.take();
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
             canvas::show(self, ui, &mut worker);
+            // The strip the floating bottom toolbar covers, for Zoom to selection (0 when it's hidden).
+            let inset =
+                if !hidden && mobile.is_none() { f64::from(self.canvas.rect.max.y - toolbar::pill_rect(self.canvas.rect, 0.0).min.y) } else { 0.0 };
+            if let Ok(ds) = self.session.ds_mut() {
+                ds.view.bottom_inset = inset;
+            }
             self.worker = Some(worker);
             if !hidden && mobile.is_none() {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
@@ -441,5 +455,14 @@ impl FigApp {
         // field or an open palette owns the platform IME instead; the early `home`/present paths
         // above make the same single idle observation.
         self.observe_ime(&ctx, !typing && !self.field_focus && self.ui.palette.is_none());
+    }
+}
+
+/// The right panel's tab name, which its accessibility region reads.
+pub(crate) fn right_tab_label(tab: RightTab) -> &'static str {
+    match tab {
+        RightTab::Design => i18n::tr("Design"),
+        RightTab::Prototype => i18n::tr("Prototype"),
+        RightTab::Inspect => i18n::tr("Developer Mode"),
     }
 }

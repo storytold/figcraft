@@ -107,7 +107,11 @@ fn prepare(changes: &mut [Change], mode: Mode) -> Result<(), String> {
             }
             Mode::Binary => {
                 if image.bytes.is_none() {
-                    image.bytes = Some(Blob(cache::require(&image.asset)?));
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let bytes = cache::load(&image.asset)?;
+                    #[cfg(target_arch = "wasm32")]
+                    let bytes = cache::require(&image.asset)?;
+                    image.bytes = Some(Blob(bytes));
                 }
                 image.asset.scope.clear();
                 *change = Change::Image(image);
