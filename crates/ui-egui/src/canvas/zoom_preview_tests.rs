@@ -27,7 +27,7 @@ use crate::render_worker::{
 /// scanned first (once per process, and a concurrent caller waits for it): the scan another test
 /// starts bumps the global font generation, and a render kept from before it is stale, so a pan
 /// or an edit meanwhile would redraw in full instead of patching.
-fn document() -> (Session, NodeId) {
+pub(super) fn document() -> (Session, NodeId) {
     figcraft_text::scan_system_fonts();
     let mut s = Session::new();
     for k in 0..12 {
@@ -69,11 +69,11 @@ fn slow_scene(views: &[View], ms: f64) -> Session {
 }
 
 /// A `w` × `h` device-pixel view at `scale` centred on page point `c`.
-fn view_at(c: (f64, f64), scale: f64, w: u32, h: u32) -> View {
+pub(super) fn view_at(c: (f64, f64), scale: f64, w: u32, h: u32) -> View {
     View { origin: (c.0 - f64::from(w) / scale / 2.0, c.1 - f64::from(h) / scale / 2.0), scale, width: w, height: h }
 }
 
-fn job(doc: &Arc<Document>, page: NodeId, uid: u64, view: View) -> Job {
+pub(super) fn job(doc: &Arc<Document>, page: NodeId, uid: u64, view: View) -> Job {
     Job {
         doc: doc.clone(),
         page,
