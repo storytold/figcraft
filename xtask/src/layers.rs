@@ -8,6 +8,7 @@ use std::process::Command;
 const TABLE: &[(&str, u8)] = &[
     ("geom", 0),
     ("color", 0),
+    ("assets", 0),
     ("doc", 1),
     ("layout", 2),
     ("text", 2),

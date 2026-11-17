@@ -55,6 +55,6 @@ fn the_placeholder_reads_as_missing_not_as_grey() {
     let (ground, stripe) = (count(0xE6), count(0xB4));
     assert!(ground > all / 2 && stripe > all / 8 && ground + stripe > all * 3 / 4, "{ground} ground, {stripe} stripe of {all}");
     // A real image of one colour is never taken for the placeholder.
-    let flat = figcraft_doc::ImageData { bytes: std::sync::Arc::new(vec![1, 2, 3]), width: 64, height: 64 };
+    let flat = figcraft_doc::ImageData { asset: None, bytes: std::sync::Arc::new(vec![1, 2, 3]), width: 64, height: 64 };
     assert!(!is_missing_image(&flat));
 }

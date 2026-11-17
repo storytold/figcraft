@@ -22,7 +22,7 @@ fn scene(circle: bool, effect: EffectKind) -> (Document, NodeId) {
     // Image ids key the renderer's shared caches: fixtures running in parallel need ids of their own.
     let id = if circle { "svg-image-shadow-circle" } else { "svg-image-shadow-opaque" };
     let bytes = figcraft_render::encode_png(&pm).unwrap();
-    d.images.insert(id.into(), ImageData { bytes: std::sync::Arc::new(bytes), width: 100, height: 100 });
+    d.images.insert(id.into(), ImageData { asset: None, bytes: std::sync::Arc::new(bytes), width: 100, height: 100 });
     let n = d.create(p, NodeKind::Rectangle, "R", 10.0, 10.0, 100.0, 100.0).unwrap();
     let node = d.get_mut(n).unwrap();
     node.fills = vec![Paint::image(id, ImageScaleMode::Fill)];

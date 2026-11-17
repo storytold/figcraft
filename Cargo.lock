@@ -1949,6 +1949,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "figcraft-assets"
+version = "0.18.1"
+dependencies = [
+ "postcard",
+ "serde",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "figcraft-cli"
 version = "0.18.1"
 dependencies = [
@@ -1972,6 +1982,7 @@ version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "figcraft-assets",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
@@ -1989,15 +2000,19 @@ name = "figcraft-collab-net"
 version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
+ "figcraft-assets",
  "figcraft-collab",
  "figcraft-doc",
  "figcraft-engine",
+ "figcraft-format",
+ "figcraft-render",
  "getrandom 0.4.3",
  "js-sys",
  "log",
  "proptest",
  "rustls",
  "rustls-pki-types",
+ "serde",
  "serde_json",
  "tungstenite",
  "wasm-bindgen",
@@ -2020,6 +2035,7 @@ dependencies = [
 name = "figcraft-doc"
 version = "0.18.1"
 dependencies = [
+ "figcraft-assets",
  "figcraft-color",
  "figcraft-geom",
  "imbl",
@@ -2038,6 +2054,7 @@ dependencies = [
  "craft-font-catalog",
  "craft-font-store",
  "deunicode",
+ "figcraft-assets",
  "figcraft-collab",
  "figcraft-color",
  "figcraft-doc",
@@ -2072,6 +2089,7 @@ dependencies = [
  "craft-figma-rest 0.1.0 (git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c)",
  "craft-penpot",
  "craft-sketch",
+ "figcraft-assets",
  "figcraft-doc",
  "figcraft-layout",
  "figcraft-pathops",
@@ -2130,6 +2148,7 @@ dependencies = [
 name = "figcraft-pdf"
 version = "0.18.1"
 dependencies = [
+ "figcraft-assets",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
@@ -2161,6 +2180,7 @@ name = "figcraft-render"
 version = "0.18.1"
 dependencies = [
  "crc32fast",
+ "figcraft-assets",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-format",
@@ -2183,6 +2203,7 @@ dependencies = [
  "crc32fast",
  "ctrlc",
  "env_logger",
+ "figcraft-assets",
  "figcraft-collab",
  "figcraft-collab-net",
  "figcraft-doc",
@@ -2206,6 +2227,7 @@ version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "craft-xml",
+ "figcraft-assets",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",

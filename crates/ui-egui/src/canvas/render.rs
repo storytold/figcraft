@@ -14,6 +14,7 @@ pub(super) struct JobKey {
     solo: Option<NodeId>,
     /// Text lays out anew when fonts arrive (system fonts load in the background).
     fonts: u64,
+    assets: u64,
     proof: bool,
     dots: Option<figcraft_render::Dots>,
 }
@@ -84,6 +85,7 @@ pub(super) fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, ma
         skip: vec![],
         solo: ds.focused(),
         fonts: figcraft_text::layout_generation(),
+        assets: figcraft_render::images::generation(),
         proof,
         dots,
     };

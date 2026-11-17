@@ -256,3 +256,20 @@ fn a_snapshot_with_a_broken_layer_change_still_fails_to_open() {
     snapshot.push(Change::Set { id: missing, prop: crate::change::Prop::Name, value: Json(json!("x")) });
     assert!(crate::Replica::from_snapshot(&snapshot).is_err());
 }
+
+#[test]
+fn review_manifest_images_obey_a_smaller_caller_budget() {
+    let bytes = std::sync::Arc::new(vec![7; 1024]);
+    let manifest = crate::change::ImageChange {
+        key: "budget".into(),
+        width: 1,
+        height: 1,
+        asset: figcraft_assets::AssetRef::of_arc(&bytes),
+        bytes: Some(figcraft_assets::Blob(bytes)),
+    };
+    for bytes in [manifest.bytes.clone(), None] {
+        let value = Json(serde_json::to_value(crate::change::ImageChange { bytes, ..manifest.clone() }).unwrap());
+        assert!(image_within("budget", &value, 1023).is_err());
+        assert!(image_within("budget", &value, 1024).is_ok());
+    }
+}

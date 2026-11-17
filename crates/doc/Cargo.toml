@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
+figcraft-assets.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
