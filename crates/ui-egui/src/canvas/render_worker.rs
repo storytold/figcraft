@@ -32,9 +32,9 @@ use web_time::Instant;
 pub const PREVIEW_FACTOR: f64 = 4.0;
 /// Full renders quicker than this (about a frame) show without a preview.
 pub const PREVIEW_AFTER_MS: f64 = 12.0;
-/// The browser refines a zoom's preview only once no newer request came for this long (or for as
-/// long as the last full render took, when shorter): a full render there blocks the page, and one
-/// between every two wheel steps of a zoom held it up for seconds.
+/// A zoom's preview is refined only once no newer request came for this long (or for as long as
+/// the last full render took, when shorter): in the browser a full render blocks the page, and on
+/// the desktop it can't be stopped, so one between every two wheel steps of a zoom held it up.
 pub const SETTLE_MS: u64 = 120;
 /// The browser draws a full render a band at a time ([`figcraft_render::Steps`]): at least one
 /// band a frame, and more while they fit in this long, so input is handled while it draws. A
@@ -481,10 +481,19 @@ impl Worker {
                         break;
                     }
                     ctx.request_repaint_of(viewport);
-                    // A newer request makes refining this one moot: it gets its own preview.
-                    if let Ok(newer) = jobs.try_recv() {
-                        next = Some(newer);
-                        continue;
+                    // A newer request makes refining this one moot: it gets its own preview. Wait
+                    // for one as the browser does ([`SETTLE_MS`], or the last full render's time
+                    // when shorter): a full render can't be stopped, so one started between two
+                    // steps of a zoom held every later step up for as long as it took.
+                    let wait = std::time::Duration::try_from_secs_f64(renders.full_ms_so_far() / 1000.0)
+                        .map_or(std::time::Duration::ZERO, |full| full.min(std::time::Duration::from_millis(SETTLE_MS)));
+                    match jobs.recv_timeout(wait) {
+                        Ok(newer) => {
+                            next = Some(newer);
+                            continue;
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
                 if renders.wants_late_preview(&job) {
