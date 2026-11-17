@@ -69,16 +69,37 @@ impl<'a> Bounds<'a> {
 }
 
 /// A hash map keyed by node ids, which need no SipHash: they are counters (or a peer's range of
-/// them), and SipHash took a good part of a render.
-type IdMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<IdHash>>;
+/// them), and SipHash took a good part of a render. A file can choose its ids, so each map is
+/// seeded at random and the hash mixes its high bits down (ids differing only up high would
+/// otherwise share a bucket).
+type IdMap<K, V> = HashMap<K, V, IdState>;
+
+/// Builds [`IdHash`]es from a per-map random seed.
+#[derive(Clone)]
+pub(crate) struct IdState(u64);
+
+impl Default for IdState {
+    fn default() -> Self {
+        use std::hash::BuildHasher;
+        IdState(std::collections::hash_map::RandomState::new().hash_one(0u8))
+    }
+}
+
+impl std::hash::BuildHasher for IdState {
+    type Hasher = IdHash;
+    fn build_hasher(&self) -> IdHash {
+        IdHash(self.0)
+    }
+}
 
 /// Mixes each word in with a multiply (Fibonacci hashing), so ids that differ in low bits spread.
-#[derive(Default)]
 pub(crate) struct IdHash(u64);
 
 impl Hasher for IdHash {
     fn finish(&self) -> u64 {
-        self.0
+        // The multiply's low bits depend only on the input's low bits: mix the high ones down.
+        let h = (self.0 ^ (self.0 >> 32)).wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+        h ^ (h >> 29)
     }
     fn write(&mut self, bytes: &[u8]) {
         for b in bytes {
@@ -326,8 +347,9 @@ fn node_outline_at(doc: &Document, n: &Node, depth: usize) -> Option<(BezPath, F
                     Some((p, c.bool_op.unwrap_or(*op)))
                 })
                 .collect();
-            // Past the path operations' caps the group has no outline: it draws without its result.
-            crate::boolean::fold_cached(&operands).map(|p| (p, FillRule::EvenOdd))
+            // Past the path operations' caps the group has no outline: it draws without its result. The
+            // group's corner radius rounds what is still sharp in the fold.
+            crate::boolean::result_cached(&operands, n.corners.radii[0], n.corners.smoothing).map(|p| (p, FillRule::EvenOdd))
         }
         NodeKind::Text(_) => {
             let (l, dy) = figcraft_text::layout_node(n)?;

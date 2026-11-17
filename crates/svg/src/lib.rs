@@ -96,6 +96,8 @@ struct W<'a> {
     used_ids: std::collections::BTreeSet<String>,
     /// The next `_k` suffix to try per base id, so repeated names don't rescan from `_2`.
     next_suffix: std::collections::HashMap<String, usize>,
+    /// The `<image>` written to `defs` per image key, so paints of one image share its bytes.
+    images: std::collections::HashMap<String, String>,
 }
 
 /// ` clip-path="url(#…)"` for a clip path id (else nothing).
@@ -196,16 +198,9 @@ fn blend_style(b: figcraft_color::BlendMode) -> String {
     }
 }
 
-/// `s` escaped for XML text and attribute values; characters XML 1.0 forbids (control characters
-/// other than tab, newline and carriage return, U+FFFE and U+FFFF) are left out.
-fn esc(s: &str) -> String {
-    s.chars().filter(|&c| xml_char(c)).collect::<String>().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
-}
-
-/// Whether XML 1.0 allows `c` (see [`esc`]).
-fn xml_char(c: char) -> bool {
-    !matches!(c, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}')
-}
+// Shared XML wire escaping and character validity; layer-name policy stays below.
+// Attribute escaping also preserves tabs/LF/CR through XML readers' whitespace normalization.
+use craft_xml::{esc_attr as esc, is_xml_char as xml_char};
 
 fn hex(c: Color) -> String {
     format!("#{}", c.to_hex())
@@ -279,17 +274,29 @@ impl W<'_> {
                     }
                 };
                 let pid = self.id("pattern");
-                let iid = self.id("image");
-                // Formats SVG viewers don't show (TIFF, BMP) go in as PNG.
-                let png;
-                let (mime, bytes) = match sniff_mime(&encoded) {
-                    "application/octet-stream" => {
-                        png = figcraft_render::images::decode(&encoded).and_then(|p| figcraft_render::encode_png(&p).ok())?;
-                        ("image/png", png.as_slice())
+                let iid = match self.images.get(&img.image) {
+                    Some(iid) => iid.clone(),
+                    None => {
+                        let iid = self.id("image");
+                        // Formats SVG viewers don't show (TIFF, BMP) go in as PNG.
+                        let png;
+                        let (mime, bytes) = match sniff_mime(&encoded) {
+                            "application/octet-stream" => {
+                                png = figcraft_render::images::decode(&encoded).and_then(|p| figcraft_render::encode_png(&p).ok())?;
+                                ("image/png", png.as_slice())
+                            }
+                            m => (m, encoded.as_slice()),
+                        };
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                        let _ = write!(
+                            self.defs,
+                            "<image id=\"{iid}\" width=\"{}\" height=\"{}\" href=\"data:{mime};base64,{b64}\"/>",
+                            data.width, data.height
+                        );
+                        self.images.insert(img.image.clone(), iid.clone());
+                        iid
                     }
-                    m => (m, encoded.as_slice()),
                 };
-                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
                 let t = figcraft_render::paint::image_transform(img, f64::from(data.width), f64::from(data.height), w, h);
                 let m = Affine::new([f64::from(t.sx), f64::from(t.ky), f64::from(t.kx), f64::from(t.sy), f64::from(t.tx), f64::from(t.ty)]);
                 let (pw, ph) = if img.scale_mode == figcraft_color::ImageScaleMode::Tile {
@@ -299,12 +306,10 @@ impl W<'_> {
                 };
                 let _ = write!(
                     self.defs,
-                    "<pattern id=\"{pid}\" patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\" patternTransform=\"{}\"><image id=\"{iid}\" width=\"{}\" height=\"{}\" href=\"data:{mime};base64,{b64}\"/></pattern>",
+                    "<pattern id=\"{pid}\" patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\" patternTransform=\"{}\"><use href=\"#{iid}\"/></pattern>",
                     num(pw),
                     num(ph),
-                    matrix(m),
-                    data.width,
-                    data.height
+                    matrix(m)
                 );
                 let op = if p.opacity < 0.999 { format!(" fill-opacity=\"{}\"", num(f64::from(p.opacity))) } else { String::new() };
                 Some(format!("fill=\"url(#{pid})\"{op}{blend}"))
@@ -1160,6 +1165,7 @@ pub fn try_export_svg(doc: &Document, ids: &[NodeId], opts: &SvgOptions) -> Resu
         clip: None,
         used_ids: Default::default(),
         next_suffix: Default::default(),
+        images: Default::default(),
     };
     for id in ids {
         let parent_xf = doc.node(*id).and_then(|n| n.parent).map(|p| doc.world_transform(p)).unwrap_or(Affine::IDENTITY);

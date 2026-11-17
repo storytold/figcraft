@@ -300,6 +300,18 @@ fn ready(asset: &AssetRef) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Admit a download without waiting for other requests to release their byte budget.
+/// Event-loop callers must service queued work and retry when this returns `false`.
+pub fn try_enqueue(asset: &AssetRef) -> Result<bool, String> {
+    match request_status(asset) {
+        Request::Accepted => Ok(true),
+        Request::Busy => Ok(false),
+        Request::Unavailable => Err("an image is not cached and its session is unavailable; reconnect before saving or exporting".into()),
+        Request::Failed(reason) => Err(reason),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn enqueue(asset: &AssetRef) -> Result<(), String> {
     let until = Instant::now() + Duration::from_secs(30);
     loop {
@@ -626,8 +638,18 @@ fn read_bytes(path: &std::path::Path, asset: &AssetRef) -> Result<Arc<Vec<u8>>, 
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    fn isolated() -> std::sync::MutexGuard<'static, ()> {
+        static TEST: Mutex<()> = Mutex::new(());
+        let guard = TEST.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = state().0.lock().unwrap_or_else(PoisonError::into_inner);
+        let epoch = state.epoch.wrapping_add(1);
+        *state = State { epoch, ..Default::default() };
+        guard
+    }
+
     #[test]
     fn review_followup_verified_downloads_survive_disk_failure_but_corruption_does_not() {
+        let _cache = isolated();
         let file = tempfile::NamedTempFile::new().unwrap();
         let cache = DiskCache::new(file.path().into(), 1024); // A file cannot be a cache directory.
         let bytes = b"synthetic memory-only download after disk error";
@@ -642,6 +664,7 @@ mod tests {
 
     #[test]
     fn review_clear_failure_still_discards_memory_and_invalidates_reads() {
+        let _cache = isolated();
         let file = tempfile::NamedTempFile::new().unwrap();
         let cache = DiskCache::new(file.path().into(), 1024);
         let bytes = b"synthetic clear failure memory";
@@ -658,6 +681,7 @@ mod tests {
 
     #[test]
     fn warming_host_sources_does_not_signal_a_download_but_valid_downloads_do() {
+        let _cache = isolated();
         use std::sync::atomic::{AtomicUsize, Ordering};
         let count = Arc::new(AtomicUsize::new(0));
         let changed = count.clone();
@@ -678,6 +702,7 @@ mod tests {
 
     #[test]
     fn smaller_budget_trims_old_cache_and_clear_preserves_unrelated_files() {
+        let _cache = isolated();
         let dir = tempfile::tempdir().unwrap();
         let a = AssetRef::of(b"first-image");
         let b = AssetRef::of(b"next-image");
@@ -698,6 +723,7 @@ mod tests {
 
     #[test]
     fn display_returns_while_disk_reader_is_blocked_and_wakes_on_completion() {
+        let _cache = isolated();
         let bytes = b"synthetic cold disk-only image";
         let mut asset = AssetRef::of(bytes);
         asset.scope = AssetRef::of(b"paint IO test scope").sha256;
@@ -720,6 +746,7 @@ mod tests {
 
     #[test]
     fn immutable_resident_inserts_are_cheap_and_missing_or_damaged_entries_are_repaired() {
+        let _cache = isolated();
         let dir = tempfile::tempdir().unwrap();
         let cache = DiskCache::new(dir.path().to_path_buf(), 1024);
         let bytes = Arc::new(b"synthetic resident cache source".to_vec());
@@ -738,6 +765,7 @@ mod tests {
     }
     #[test]
     fn separate_cache_instances_can_insert_identical_content_concurrently() {
+        let _cache = isolated();
         let dir = tempfile::tempdir().unwrap();
         let barrier = Arc::new(std::sync::Barrier::new(8));
         let mut threads = Vec::new();
@@ -760,6 +788,7 @@ mod tests {
     }
     #[test]
     fn requests_are_deduplicated_and_reserve_a_bounded_encoded_byte_budget() {
+        let _cache = isolated();
         use std::sync::atomic::{AtomicUsize, Ordering};
         let calls = Arc::new(AtomicUsize::new(0));
         let count = calls.clone();
@@ -781,6 +810,7 @@ mod tests {
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert!(request(&b), "registration covers the authenticated file scope");
         assert!(!request(&c), "queue must reserve encoded bytes before starting more downloads");
+        assert!(!try_enqueue(&c).unwrap(), "busy admission must return rather than wait");
         unavailable(&a, "synthetic missing");
         assert!(is_unavailable(&a));
         assert!(request(&c));
@@ -789,6 +819,7 @@ mod tests {
     }
     #[test]
     fn disk_cache_is_bounded_and_checks_content_not_just_names() {
+        let _cache = isolated();
         let dir = tempfile::tempdir().unwrap();
         let c = DiskCache::new(dir.path().to_path_buf(), 12);
         let a = AssetRef::of(b"first-image");
@@ -808,6 +839,7 @@ mod tests {
 
     #[test]
     fn identical_content_in_another_file_scope_is_not_authority_to_read_it() {
+        let _cache = isolated();
         let dir = tempfile::tempdir().unwrap();
         let c = DiskCache::new(dir.path().to_path_buf(), 1024);
         let mut a = AssetRef::of(b"private synthetic image");

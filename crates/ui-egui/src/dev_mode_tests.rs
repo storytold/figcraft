@@ -196,3 +196,47 @@ fn the_playground_swaps_an_instance_in_the_preview_only() {
     let props = u.app.session.execute("component.properties", &json!({"id": inst})).unwrap();
     assert_eq!(props["properties"][0]["value"], json!(heart.0), "{star:?}");
 }
+
+#[test]
+fn the_annotation_tool_opens_the_inspect_tab_with_the_note_field_focused() {
+    let (mut u, _, r) = setup();
+    u.app.ui.right_tab = crate::RightTab::Design;
+    u.frames(2, Vec::new);
+    u.run("tool.annotation", json!({"id": r}));
+    u.frames(2, Vec::new);
+    assert_eq!(u.app.ui.right_tab, crate::RightTab::Inspect, "the request shows the Inspect tab");
+    let field = egui::Id::unique(("annot_new", r)).with("te");
+    assert!(u.ctx.memory(|m| m.has_focus(field)), "the layer's new-note field has the caret");
+    assert_eq!(u.app.ui.dev.focus_new_note, None, "the focus request is spent");
+    // Asking again while already on the Inspect tab does not toggle it away.
+    u.run("tool.annotation", json!({"id": r}));
+    u.frames(2, Vec::new);
+    assert_eq!(u.app.ui.right_tab, crate::RightTab::Inspect);
+    assert!(u.ctx.memory(|m| m.has_focus(field)), "the field has the caret again");
+    assert_eq!(u.app.ui.dev.focus_new_note, None, "and the request is spent");
+}
+
+/// A request for a layer that isn't selected (or is gone) does not wait to take the keyboard later.
+#[test]
+fn a_note_request_for_a_layer_that_is_not_selected_is_dropped() {
+    let (mut u, _, r) = setup();
+    u.app.session.execute("select.set", &json!({"ids": []})).unwrap();
+    u.frames(2, Vec::new);
+    u.app.session.request_ui("annotation.new", json!({"id": r}));
+    u.frames(2, Vec::new);
+    assert_eq!(u.app.ui.dev.focus_new_note, None);
+}
+
+/// Choosing the Annotation tool from the toolbar on the Inspect tab keeps the tab (an editing tool
+/// would leave it for Design) and asks for the selected layer's note.
+#[test]
+fn the_toolbar_keeps_the_inspect_tab_for_the_annotation_tool() {
+    let (mut u, _, r) = setup();
+    u.app.session.execute("select.set", &json!({"ids": [r]})).unwrap();
+    crate::toolbar::choose(&mut u.app, figcraft_engine::ToolId::Annotation);
+    u.frames(2, Vec::new);
+    assert_eq!(u.app.ui.right_tab, crate::RightTab::Inspect);
+    assert!(u.ctx.memory(|m| m.has_focus(egui::Id::unique(("annot_new", r)).with("te"))), "the note field has the caret");
+    crate::toolbar::choose(&mut u.app, figcraft_engine::ToolId::Rectangle);
+    assert_eq!(u.app.ui.right_tab, crate::RightTab::Design, "a drawing tool leaves it");
+}

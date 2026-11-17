@@ -362,8 +362,18 @@ fn text_variables_session(bind: bool) -> crate::layers_drag_tests::Ui {
         ("Body tracking", "number", json!(1)),
         ("Body font", "string", json!("Inter")),
         ("Body weight", "string", json!("Bold")),
+        ("Body weight number", "number", json!(700)),
     ] {
         s.execute("variable.create", &json!({"collection": "Type", "name": name, "type": ty, "values": {"Base": value}})).unwrap();
+    }
+    for (name, scope) in [
+        ("Body size", "FONT_SIZE"),
+        ("Body leading", "LINE_HEIGHT"),
+        ("Body tracking", "LETTER_SPACING"),
+        ("Body font", "FONT_FAMILY"),
+        ("Body weight number", "FONT_WEIGHT"),
+    ] {
+        s.execute("variable.update", &json!({"variable": name, "scopes": [scope]})).unwrap();
     }
     if bind {
         for (field, var) in [
@@ -455,6 +465,54 @@ fn text_style_editor_shows_bound_fields_as_variables_and_detaches_them() {
 }
 
 #[test]
+fn the_weight_menu_binds_a_number_variable_as_font_weight() {
+    let mut u = text_variables_session(false);
+    let left = editor_left(&mut u);
+    let in_editor = |u: &mut crate::layers_drag_tests::Ui| -> Vec<(String, Pos2)> {
+        drawn_texts(u).into_iter().filter(|(_, p)| p.x > left && p.x < left + W).collect()
+    };
+    let texts = in_editor(&mut u);
+    click(&mut u, text_at(&texts, "Regular"));
+    let texts = drawn_texts(&mut u);
+    click(&mut u, text_at(&texts, "Apply variable"));
+    assert!(crate::variable_ui::picker_open(&u.ctx), "the variable picker opens");
+    let texts = drawn_texts(&mut u);
+    assert!(texts.iter().any(|(t, _)| t == "Body weight"), "string variables are offered");
+    assert!(!texts.iter().any(|(t, _)| t == "Body font" || t == "Body leading"), "other fields' variables are not");
+    click(&mut u, text_at(&texts, "Body weight number"));
+    assert_eq!(bound_to(&u, "fontWeight").as_deref(), Some("Body weight number"));
+    assert_eq!(bound_to(&u, "fontStyle"), None);
+    let font_style = || {
+        let doc = u.app.session.doc().unwrap();
+        let Some(StyleKind::Text { style: def, .. }) = doc.style("Body").map(|s| s.kind.clone()) else { panic!("a text style") };
+        def.font_style
+    };
+    assert_eq!(font_style(), "Bold");
+    // The chip shows it in the style slot; clicking it lists the string variable too, and picking that
+    // replaces the number: fontStyle is bound and fontWeight is not.
+    for _ in 0..2 {
+        u.frame(vec![]);
+    }
+    let texts = in_editor(&mut u);
+    click(&mut u, text_at(&texts, "Body weight number"));
+    assert!(crate::variable_ui::picker_open(&u.ctx), "the chip opens the weight picker");
+    let texts = drawn_texts(&mut u);
+    assert!(texts.iter().any(|(t, _)| t == "Body weight"), "the string variable is offered beside the number one");
+    click(&mut u, text_at(&texts, "Body weight"));
+    assert_eq!(bound_to(&u, "fontStyle").as_deref(), Some("Body weight"));
+    assert_eq!(bound_to(&u, "fontWeight"), None, "the name replaced the number");
+    // The chip's detach button clears the binding.
+    for _ in 0..2 {
+        u.frame(vec![]);
+    }
+    let texts = in_editor(&mut u);
+    let chip = text_at(&texts, "Body weight");
+    click(&mut u, Pos2::new(left + (W - 8.0) / 2.0 - 11.0, chip.y));
+    assert_eq!(bound_to(&u, "fontStyle"), None, "the face name is detached");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+#[test]
 fn text_style_editor_binds_variables_from_its_fields() {
     let mut u = text_variables_session(false);
     let left = editor_left(&mut u);
@@ -477,7 +535,7 @@ fn text_style_editor_binds_variables_from_its_fields() {
         click(&mut u, Pos2::new(x, y));
         assert!(crate::variable_ui::picker_open(&u.ctx), "{field}: the variable picker opens");
         let texts = drawn_texts(&mut u);
-        assert!(!texts.iter().any(|(t, _)| t == "Body font"), "{field} offers number variables only");
+        assert!(!texts.iter().any(|(t, _)| t == "Body weight"), "{field} offers number variables only");
         click(&mut u, text_at(&texts, name));
         assert_eq!(bound_to(&u, field).as_deref(), Some(name));
     }
@@ -491,7 +549,7 @@ fn text_style_editor_binds_variables_from_its_fields() {
         assert!(crate::variable_ui::picker_open(&u.ctx), "{field}: the variable picker opens");
         let texts = drawn_texts(&mut u);
         // "Body size" shows once, on the size field's chip: the picker doesn't list it.
-        assert_eq!(texts.iter().filter(|(t, _)| t == "Body size").count(), 1, "{field} offers string variables only");
+        assert_eq!(texts.iter().filter(|(t, _)| t == "Body size").count(), 1, "{field} does not offer the size variable");
         click(&mut u, text_at(&texts, name));
         assert_eq!(bound_to(&u, field).as_deref(), Some(name));
     }
@@ -499,4 +557,18 @@ fn text_style_editor_binds_variables_from_its_fields() {
     let Some(StyleKind::Text { style: def, .. }) = doc.style("Body").map(|s| &s.kind) else { panic!("a text style") };
     assert_eq!((def.font_size, def.font_style.as_str()), (18.0, "Bold"), "the style takes the variables' values");
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+/// The picker's 24 pt icon buttons paint their glyphs at 16 pt; a smaller button keeps a smaller one
+/// (#2238).
+#[test]
+fn style_picker_icon_buttons_paint_16pt() {
+    use crate::header_icon_size_tests::{painted_rects, paints_icon_at_button_size};
+    use crate::icons::Icon;
+    for icon in [Icon::Plus, Icon::Detach, Icon::ChevronLeft] {
+        let painted = painted_rects(None, |ui| {
+            menu_icon(ui, Rect::from_min_size(egui::pos2(20.0, 20.0), vec2(24.0, 24.0)), icon, "x", false);
+        });
+        assert!(paints_icon_at_button_size(&painted, icon), "{icon:?} is not 16 pt");
+    }
 }

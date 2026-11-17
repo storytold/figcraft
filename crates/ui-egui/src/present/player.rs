@@ -173,7 +173,7 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
             resp = resp.tip(tr("Inspect the layer under the pointer: size, colours, typography"));
         }
         if chrome.pane {
-            icons::paint(ui.painter(), br.shrink(5.0), *icon, if on { t.accent_on } else { t.icon });
+            icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(br), *icon, if on { t.accent_on } else { t.icon });
         } else {
             ui.painter().text(br.center(), Align2::CENTER_CENTER, shown, regular(11.5), if on { t.accent_on } else { text });
         }

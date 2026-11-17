@@ -23,8 +23,12 @@ use crate::render_worker::{
     Done, Inline, Job, PREVIEW_AFTER_MS, PREVIEW_FACTOR, Refined, Renders, SETTLE_MS, Worker, better, coarse_view, preview_with, render_now,
 };
 
-/// A page of ellipses with a rectangle on top; the session and the rectangle.
-fn document() -> (Session, NodeId) {
+/// A page of ellipses with a rectangle on top; the session and the rectangle. The system fonts are
+/// scanned first (once per process, and a concurrent caller waits for it): the scan another test
+/// starts bumps the global font generation, and a render kept from before it is stale, so a pan
+/// or an edit meanwhile would redraw in full instead of patching.
+pub(super) fn document() -> (Session, NodeId) {
+    figcraft_text::scan_system_fonts();
     let mut s = Session::new();
     for k in 0..12 {
         let k = f64::from(k);
@@ -65,11 +69,11 @@ fn slow_scene(views: &[View], ms: f64) -> Session {
 }
 
 /// A `w` × `h` device-pixel view at `scale` centred on page point `c`.
-fn view_at(c: (f64, f64), scale: f64, w: u32, h: u32) -> View {
+pub(super) fn view_at(c: (f64, f64), scale: f64, w: u32, h: u32) -> View {
     View { origin: (c.0 - f64::from(w) / scale / 2.0, c.1 - f64::from(h) / scale / 2.0), scale, width: w, height: h }
 }
 
-fn job(doc: &Arc<Document>, page: NodeId, uid: u64, view: View) -> Job {
+pub(super) fn job(doc: &Arc<Document>, page: NodeId, uid: u64, view: View) -> Job {
     Job {
         doc: doc.clone(),
         page,
@@ -399,6 +403,34 @@ fn a_slow_first_render_gets_a_preview_beside_it_and_a_quick_one_none() {
     let mut w = Worker::new(egui::Context::default());
     w.submit(job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), 0.5, 120, 90)));
     assert_eq!(drain(&mut w), [(1, false)], "done before the threshold: no preview");
+}
+
+#[test]
+fn the_render_thread_refines_a_zoom_only_once_it_pauses() {
+    // A full render can't be stopped: a zoom step's started as soon as its preview was out held the
+    // next step up for as long as it took. The next step coming while the preview shows skips it.
+    let views: Vec<View> = [1.0, 0.5, 0.25].into_iter().map(|s| view_at((300.0, 200.0), s, 1200, 1200)).collect();
+    let s = slow_scene(&views, 4.0 * PREVIEW_AFTER_MS);
+    let ds = s.ds().unwrap();
+    let at = |i: usize| job(&ds.doc, ds.page, ds.uid, views[i].clone());
+    let mut w = Worker::new(egui::Context::default());
+    w.submit(at(0));
+    drain(&mut w);
+    // A zoom out: its preview, then the next step while that preview is on screen.
+    w.submit(at(1));
+    let start = std::time::Instant::now();
+    let preview = loop {
+        assert!(start.elapsed() < Duration::from_secs(60), "no preview came");
+        if let Some(d) = w.poll() {
+            break d;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!((preview.seq, preview.coarse), (2, true));
+    w.submit(at(2));
+    let got = drain(&mut w);
+    assert!(!got.contains(&(2, false)), "the step zoomed past is never refined: {got:?}");
+    assert_eq!(got.last(), Some(&(3, false)), "the last step is: {got:?}");
 }
 
 #[test]

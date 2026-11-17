@@ -11,9 +11,14 @@ use figcraft_doc::{
     Document, ImageData, NodeKind,
     color::{ImageScaleMode, Paint},
 };
-use figcraft_engine::live::Event;
+use figcraft_engine::live::{Event, Status};
 use std::sync::Arc;
 use std::time::Duration;
+
+fn isolated() -> std::sync::MutexGuard<'static, ()> {
+    static TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TEST.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -59,8 +64,12 @@ fn host(doc: Document) -> std::io::Result<(Host, Invite)> {
 }
 
 fn joined(invite: Invite) -> TestResult<(Guest, Probe, Client)> {
+    joined_config(GuestConfig::new(invite, "Guest".into()))
+}
+
+fn joined_config(config: GuestConfig) -> TestResult<(Guest, Probe, Client)> {
     let mut probe = Probe::new();
-    let guest = Guest::start(GuestConfig::new(invite, "Guest".into()), probe.inbox.clone())?;
+    let guest = Guest::start(config, probe.inbox.clone())?;
     probe.wait("manifest welcome", |events| events.iter().any(|e| matches!(e, Event::Sync(ServerMsg::Welcome { .. }))));
     let at = probe.events.iter().position(|event| matches!(event, Event::Sync(ServerMsg::Welcome { .. }))).ok_or("no welcome")?;
     let Event::Sync(welcome) = probe.events.remove(at) else {
@@ -71,6 +80,7 @@ fn joined(invite: Invite) -> TestResult<(Guest, Probe, Client)> {
 
 #[test]
 fn viewport_fetches_only_visible_images_and_save_is_self_contained() {
+    let _cache = isolated();
     let source = document().unwrap();
     let (_host, invite) = host(source.clone()).unwrap();
     let (_guest, mut probe, client) = joined(invite).unwrap();
@@ -101,6 +111,7 @@ fn viewport_fetches_only_visible_images_and_save_is_self_contained() {
 
 #[test]
 fn crash_recovery_keeps_references_without_downloading_and_untrusted_files_cannot_use_them() {
+    let _cache = isolated();
     let (_host, invite) = host(document().unwrap()).unwrap();
     let (_guest, _probe, client) = joined(invite).unwrap();
     let bytes = figcraft_format::save_recovery_bytes_with_history(client.document(), &[], &[]).unwrap();
@@ -141,6 +152,7 @@ fn receive(ws: &mut tungstenite::WebSocket<Duplex>) -> TestResult<ServerMsg> {
 
 #[test]
 fn joining_one_file_does_not_grant_access_to_other_cached_assets() {
+    let _cache = isolated();
     let (_host, invite) = host(document().unwrap()).unwrap();
     let secret = b"other file synthetic bytes";
     let foreign = AssetRef::of(secret);
@@ -165,6 +177,7 @@ fn joining_one_file_does_not_grant_access_to_other_cached_assets() {
 
 #[test]
 fn small_view_downloads_a_preview_and_zoom_and_save_keep_the_original() {
+    let _cache = isolated();
     use figcraft_assets::preview::{self, Request};
     let mut source = Document::new("Synthetic preview image");
     let mut pix = figcraft_render::Pixmap::new(1600, 2400).unwrap();
@@ -214,6 +227,7 @@ fn small_view_downloads_a_preview_and_zoom_and_save_keep_the_original() {
 
 #[test]
 fn hundreds_of_warm_previews_do_not_trip_the_host_message_rate_limit() {
+    let _cache = isolated();
     use figcraft_assets::preview::{self, Request};
     let mut doc = Document::new("Synthetic warm preview gallery");
     for i in 0..501u32 {
@@ -245,6 +259,7 @@ fn hundreds_of_warm_previews_do_not_trip_the_host_message_rate_limit() {
 
 #[test]
 fn a_host_without_asset_negotiation_cannot_introduce_foreign_cache_references() {
+    let _cache = isolated();
     for (legacy_json, packed) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut foreign = AssetRef::of(&picture(73).unwrap());
         foreign.scope = AssetRef::of(b"synthetic foreign session").sha256;
@@ -357,6 +372,7 @@ fn corrupt_and_unsolicited_asset_responses_are_refused() {
 
 #[test]
 fn resource_negotiation_uses_one_complete_message_above_a_mebibyte_without_chunk_headers() {
+    let _cache = isolated();
     let mut source = document().unwrap();
     source.name = "synthetic title ".repeat(100_000);
     let (_host, invite) = host(source.clone()).unwrap();
@@ -386,6 +402,7 @@ fn resource_negotiation_uses_one_complete_message_above_a_mebibyte_without_chunk
 #[test]
 #[allow(clippy::result_large_err)]
 fn review_uploading_a_cold_reference_fetches_its_original_only_once() {
+    let _cache = isolated();
     use tungstenite::handshake::server::{Request, Response};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let invite = Invite::new(listener.local_addr().unwrap().to_string(), crate::token::file_id().unwrap(), "SyntheticAssetSessionSecret");
@@ -451,6 +468,7 @@ fn review_uploading_a_cold_reference_fetches_its_original_only_once() {
 
 #[test]
 fn packed_welcomes_defer_originals_and_keep_resource_fetches_authorized() {
+    let _cache = isolated();
     let source = document().unwrap();
     let (_host, invite) = host(source.clone()).unwrap();
     let (mut ws, _, _) = crate::net::connect_websocket(&invite.server, Duration::from_secs(5), &NetLimits::default()).unwrap();
@@ -477,6 +495,7 @@ fn packed_welcomes_defer_originals_and_keep_resource_fetches_authorized() {
 
 #[test]
 fn team_lookup_keeps_the_upstream_wire_discriminant() {
+    let _cache = isolated();
     let msg = message::ClientMsg::ResolveTeam(message::ResolveTeam {
         protocol: message::PROTOCOL,
         client_version: String::new(),
@@ -487,8 +506,173 @@ fn team_lookup_keeps_the_upstream_wire_discriminant() {
 }
 
 #[test]
+#[allow(clippy::result_large_err)]
+fn saturated_unsent_downloads_do_not_block_edits_or_keepalive() {
+    use tungstenite::handshake::server::{Request, Response};
+    let _cache = isolated();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let invite = Invite::new(listener.local_addr().unwrap().to_string(), crate::token::file_id().unwrap(), "SyntheticAssetSessionSecret");
+    let (done, uploaded) = std::sync::mpsc::channel();
+    let (finish, stop) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut ws = tungstenite::accept_hdr(socket, |_: &Request, mut response: Response| {
+            response.headers_mut().insert("X-FigCraft-Assets", crate::assets_wire::PROTOCOL.parse().unwrap());
+            Ok(response)
+        })
+        .unwrap();
+        let tungstenite::Message::Binary(bytes) = ws.read().unwrap() else { panic!("no hello") };
+        let message::ClientMsg::Hello(hello) = message::decode(&bytes, 1 << 20).unwrap() else { panic!("no hello") };
+        let source = document().unwrap();
+        let payload = source.images["left"].bytes.clone();
+        let target = source.images["left"].reference();
+        let mut core = figcraft_collab::Server::new(source, "SyntheticAssetSessionSecret", Limits::default());
+        let (_, outs) = core.join_as(hello, message::Access::Edit).unwrap();
+        for out in outs {
+            if let figcraft_collab::Outgoing::To(_, welcome @ ServerMsg::Welcome { .. }) = out {
+                ws.send(tungstenite::Message::Binary(crate::assets_wire::server(&welcome, true, true).unwrap().into())).unwrap();
+            }
+        }
+        let mut pending = Vec::new();
+        let mut ping = false;
+        let mut fetched = 0;
+        loop {
+            let tungstenite::Message::Binary(bytes) = ws.read().unwrap() else { continue };
+            match message::decode::<message::ClientMsg>(&bytes, 1 << 20).unwrap() {
+                message::ClientMsg::FetchAsset(asset) if asset.sha256 == target.sha256 => {
+                    fetched += 1;
+                    assert!(ping, "the writer must keep the healthy socket alive while admission is saturated");
+                    let reply = ServerMsg::Asset { asset, bytes: Some(figcraft_assets::Blob(payload.clone())), error: None };
+                    ws.send(tungstenite::Message::Binary(message::encode(&reply).unwrap().into())).unwrap();
+                }
+                message::ClientMsg::FetchAsset(asset) => pending.push(asset),
+                message::ClientMsg::Ping => {
+                    ws.send(tungstenite::Message::Binary(message::encode(&ServerMsg::Pong).unwrap().into())).unwrap();
+                    if pending.len() == 2 {
+                        ping = true;
+                        // Release reservations only after queued fetches AND a keepalive arrive.
+                        for asset in pending.drain(..) {
+                            let reply = ServerMsg::Asset { asset, bytes: None, error: Some("synthetic reservation released".into()) };
+                            ws.send(tungstenite::Message::Binary(message::encode(&reply).unwrap().into())).unwrap();
+                        }
+                    }
+                }
+                message::ClientMsg::Changes { batch_id, changes, .. } => {
+                    assert_eq!(batch_id, 42);
+                    assert!(changes.iter().any(
+                        |change| matches!(change, figcraft_collab::Change::Image(image) if image.bytes.as_ref().is_some_and(|b| b.0 == payload))
+                    ));
+                    done.send((ping, fetched)).unwrap();
+                    let _ = stop.recv_timeout(Duration::from_secs(5));
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+    let mut config = GuestConfig::new(invite, "Guest".into());
+    config.limits.keepalive = Duration::from_millis(50);
+    let (guest, mut probe, client) = joined_config(config).unwrap();
+    let target = &client.document().images["left"];
+    let scope = target.asset.as_ref().unwrap().scope.clone();
+    assert!(cache::load(target.asset.as_ref().unwrap()).is_err());
+    let release = guest.hold_writer().unwrap();
+    // Edit precedes its own queued viewport fetches. No image buffers need allocating:
+    // these two synthetic capabilities reserve 128 MiB before any bytes are sent.
+    guest.send(message::ClientMsg::Changes {
+        base_seq: 0,
+        batch_id: 42,
+        changes: vec![figcraft_collab::Change::Image(figcraft_collab::change::ImageChange::of("left", target))],
+    });
+    let mut first = AssetRef::of(format!("{scope}:first reservation").as_bytes());
+    first.scope = scope.clone();
+    first.len = 64 << 20;
+    let mut second = AssetRef::of(format!("{scope}:second reservation").as_bytes());
+    second.scope = scope;
+    second.len = 64 << 20;
+    assert!(cache::request(&first));
+    assert!(cache::request(&second));
+    release.send(()).unwrap();
+    let result = uploaded.recv_timeout(Duration::from_secs(5));
+    probe.events.extend(probe.inbox.drain());
+    assert!(!probe.events.iter().any(|event| matches!(event, Event::Status(Status::Reconnecting { .. } | Status::Failed { .. }))));
+    let _ = finish.send(());
+    assert_eq!(result.unwrap(), (true, 1));
+    drop(guest);
+    server.join().unwrap();
+}
+
+#[test]
+#[allow(clippy::result_large_err)]
+fn a_cold_original_times_out_even_when_keepalives_are_answered() {
+    use tungstenite::handshake::server::{Request, Response};
+    let _cache = isolated();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let invite = Invite::new(listener.local_addr().unwrap().to_string(), crate::token::file_id().unwrap(), "SyntheticAssetSessionSecret");
+    let (ready, pong) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut ws = tungstenite::accept_hdr(socket, |_: &Request, mut response: Response| {
+            response.headers_mut().insert("X-FigCraft-Assets", crate::assets_wire::PROTOCOL.parse().unwrap());
+            Ok(response)
+        })
+        .unwrap();
+        let tungstenite::Message::Binary(bytes) = ws.read().unwrap() else { panic!("no hello") };
+        let message::ClientMsg::Hello(hello) = message::decode(&bytes, 1 << 20).unwrap() else { panic!("no hello") };
+        let mut core = figcraft_collab::Server::new(document().unwrap(), "SyntheticAssetSessionSecret", Limits::default());
+        let (_, outs) = core.join_as(hello, message::Access::Edit).unwrap();
+        for out in outs {
+            if let figcraft_collab::Outgoing::To(_, welcome @ ServerMsg::Welcome { .. }) = out {
+                ws.send(tungstenite::Message::Binary(crate::assets_wire::server(&welcome, true, true).unwrap().into())).unwrap();
+            }
+        }
+        let mut requested = false;
+        let mut answered = false;
+        loop {
+            let Ok(tungstenite::Message::Binary(bytes)) = ws.read() else { break };
+            match message::decode::<message::ClientMsg>(&bytes, 1 << 20).unwrap() {
+                message::ClientMsg::FetchAsset(_) => requested = true, // Deliberately never answers the original.
+                message::ClientMsg::Ping => {
+                    ws.send(tungstenite::Message::Binary(message::encode(&ServerMsg::Pong).unwrap().into())).unwrap();
+                    if requested && !answered {
+                        ready.send(()).unwrap();
+                        answered = true;
+                    }
+                }
+                message::ClientMsg::Changes { .. } => panic!("cannot upload without the original"),
+                _ => {}
+            }
+        }
+        answered
+    });
+    let mut config = GuestConfig::new(invite, "Guest".into());
+    config.limits.keepalive = Duration::from_millis(50);
+    let (guest, mut probe, client) = joined_config(config).unwrap();
+    let image = &client.document().images["left"];
+    guest.send(message::ClientMsg::Changes {
+        base_seq: 0,
+        batch_id: 43,
+        changes: vec![figcraft_collab::Change::Image(figcraft_collab::change::ImageChange::of("left", image))],
+    });
+    pong.recv_timeout(Duration::from_secs(3)).unwrap();
+    // Advance only the pending asset deadline, without a 30-second CI sleep or expiring
+    // socket liveness. The server has just answered a ping and keeps doing so.
+    guest.expire_asset_wait();
+    probe.wait("the asset response deadline", |events| events.iter().any(|event| matches!(event, Event::Status(Status::Reconnecting { .. }))));
+    assert!(
+        !probe.events.iter().any(|event| matches!(event, Event::Sync(ServerMsg::Reject { batch_id: 43, .. }))),
+        "retry retains the unacknowledged edit"
+    );
+    drop(guest);
+    assert!(server.join().unwrap());
+}
+
+#[test]
 #[allow(clippy::result_large_err)] // tungstenite's handshake callback has this fixed error type.
 fn unrequested_previews_are_terminal_protocol_errors_after_joining() {
+    let _cache = isolated();
     use figcraft_engine::live::Status;
     use tungstenite::handshake::server::{Request, Response};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

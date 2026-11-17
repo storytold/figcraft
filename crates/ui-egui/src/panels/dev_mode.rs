@@ -92,6 +92,9 @@ impl CategoryFilter {
 /// revision), the page or the choice change.
 #[derive(Default)]
 pub struct DevUi {
+    /// The layer whose new-note field takes the keyboard focus once its section draws (the
+    /// Annotation tool asked for that layer's note).
+    pub focus_new_note: Option<NodeId>,
     pub filter: usize,
     pub categories: CategoryFilter,
     pub compare: Option<crate::dev_compare::CompareView>,
@@ -617,6 +620,11 @@ pub fn annotations_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: No
             }
         }
         ui.add_space(6.0);
+    }
+    // The Annotation tool asked for this layer's note: put the caret in the new-note field, once.
+    if app.ui.dev.focus_new_note == Some(id) {
+        app.ui.dev.focus_new_note = None;
+        ui.memory_mut(|m| m.request_focus(Id::unique(("annot_new", id)).with("te")));
     }
     // A new annotation starts as a note; properties are pinned to it afterwards.
     if n.annotations.len() < annotations::MAX_PER_LAYER

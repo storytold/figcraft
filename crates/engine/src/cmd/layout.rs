@@ -270,6 +270,13 @@ mod tests {
         assert_eq!(info["gridCell"]["column"], json!(2));
         assert_eq!(info["gridCell"]["row"], json!(1));
         assert_eq!(info["gridCell"]["anchored"], json!(true));
+        // Inspected together with the frame, each child still gets its own cell.
+        let all = crate::inspect::node_json(s.doc().unwrap(), f, 1);
+        let cells: Vec<(Value, Value)> =
+            all["children"].as_array().unwrap().iter().map(|c| (c["gridCell"]["column"].clone(), c["gridCell"]["row"].clone())).collect();
+        assert_eq!(cells[3], (json!(2), json!(1)));
+        assert_eq!(cells[0].0, json!(0));
+        assert!(cells.iter().all(|(c, r)| c.is_number() && r.is_number()), "{cells:?}");
         ex(&mut s, "node.set", json!({"id": kids[3], "props": {"gridColumn": "auto", "gridRow": null}}));
         assert_eq!(node(&s, kids[3]).child_layout.grid_column, None);
         // Fewer columns drop the extra tracks.

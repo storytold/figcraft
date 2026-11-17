@@ -869,7 +869,7 @@ fn line_width(items: &[Item], (start, end, _, _): LineRange) -> f64 {
 /// to give a word to the lines after it ("keeps each line full, but adjusts the last four lines to
 /// avoid an orphan"). `rebreak` lays the text out again with a width per paragraph and line.
 fn restyle_breaks(
-    style: WrapStyle,
+    style_of: &dyn Fn(usize) -> WrapStyle,
     w: f64,
     lines: Vec<LineRange>,
     items: &[Item],
@@ -905,7 +905,7 @@ fn restyle_breaks(
         }
         // Words wider than the box break where they must; the re-breaking adds no such break.
         let base = emergency_breaks(items, word_breaks, &para);
-        match style {
+        match style_of(p) {
             WrapStyle::Auto => {}
             WrapStyle::Balance => {
                 // The narrowest width that still gives `n` lines, to half a pixel.
@@ -992,8 +992,8 @@ fn wrapped_lines(
     let lines = from_saved.or_else(|| breaks(&|_, _| wrap, None)).unwrap_or_default();
     // Balance and Pretty re-break the paragraphs at narrower widths (never saved breaks).
     match wrap {
-        Some(w) if !followed && text.wrap_style != WrapStyle::Auto => {
-            restyle_breaks(text.wrap_style, w, lines, items, word_breaks, line_indent_of, hung_of, &|wrap_of| {
+        Some(w) if !followed && (0..text.paragraph_count()).any(|p| text.para_wrap_style(p) != WrapStyle::Auto) => {
+            restyle_breaks(&|p| text.para_wrap_style(p), w, lines, items, word_breaks, line_indent_of, hung_of, &|wrap_of| {
                 breaks(wrap_of, None).unwrap_or_default()
             })
         }
@@ -1469,25 +1469,27 @@ pub(crate) fn list_markers(lists: &[ParaList]) -> Vec<String> {
     // "Figma bullets will keep the same styling at all levels of indentation." (Create bulleted
     // and numbered lists)
     const BULLET: &str = "\u{2022}";
-    let mut count = [(ListStyle::None, 0usize); figcraft_doc::MAX_LIST_INDENT as usize + 1];
+    let starts = figcraft_doc::list_item_starts_counting(lists);
+    let mut count = [0usize; figcraft_doc::MAX_LIST_INDENT as usize + 1];
     lists
         .iter()
-        .map(|pl| {
+        .zip(starts)
+        .map(|(pl, starts)| {
             if pl.list == ListStyle::None {
-                count.fill((ListStyle::None, 0));
+                count.fill(0);
                 return String::new();
             }
             let d = usize::from(pl.indent).min(count.len() - 1);
             for c in count.iter_mut().skip(d + 1) {
-                *c = (ListStyle::None, 0);
+                *c = 0;
             }
             let Some(c) = count.get_mut(d) else { return String::new() };
             let first = usize::try_from(pl.start_offset).unwrap_or(usize::MAX).saturating_add(1);
-            *c = if c.0 == pl.list { (pl.list, c.1.saturating_add(1)) } else { (pl.list, first) };
+            *c = if starts { first } else { c.saturating_add(1) };
             match (pl.list, d % 3) {
-                (ListStyle::Numbered, 1) => format!("{}.", alpha(c.1)),
-                (ListStyle::Numbered, 2) => format!("{}.", roman(c.1)),
-                (ListStyle::Numbered, _) => format!("{}.", c.1),
+                (ListStyle::Numbered, 1) => format!("{}.", alpha(*c)),
+                (ListStyle::Numbered, 2) => format!("{}.", roman(*c)),
+                (ListStyle::Numbered, _) => format!("{}.", *c),
                 _ => BULLET.to_string(),
             }
         })

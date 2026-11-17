@@ -395,8 +395,11 @@ fn unbind_delete_and_vary(s: &mut Session, c: NodeId, i: NodeId, title: NodeId, 
     ex(s, "component.deleteProperty", json!({"id": c, "name": "Heading"}));
     assert!(node(s, title).prop_refs.is_empty());
     assert!(matches!(&node(s, i).kind, NodeKind::Instance { props, .. } if !props.contains_key("Heading")));
-    let desc = ex(s, "component.properties", json!({"id": i}));
+    // "Show dot" is still defined but no layer reads it any more: the main lists it, the instance doesn't (#2022).
+    let desc = ex(s, "component.properties", json!({"id": c}));
     assert_eq!(desc["properties"].as_array().unwrap().len(), 1);
+    let desc = ex(s, "component.properties", json!({"id": i}));
+    assert!(desc["properties"].as_array().unwrap().is_empty());
     // A variant property on a lone component makes it a component set.
     let set = idv(&ex(s, "component.addProperty", json!({"id": c, "name": "Theme", "type": "variant", "default": "Light"})));
     assert!(matches!(node(s, set).kind, NodeKind::ComponentSet { .. }));

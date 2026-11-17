@@ -152,6 +152,11 @@ pub struct LibraryLink {
     pub name: String,
     /// Where the library file is.
     pub path: String,
+    /// Where the library file is from the folder of the document that links it ('/'-separated;
+    /// written on save): followed first when the document is opened, so the link survives moving
+    /// or cloning the folder that holds both. Empty for server links and older files.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub relative: String,
     /// The library version this document last saw (when it was added or its updates accepted).
     pub version: u64,
 }
@@ -307,7 +312,7 @@ impl Document {
         let id = self.alloc_id();
         let node = Node::new(
             id,
-            NodeKind::Page { background: figcraft_color::Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default() },
+            NodeKind::Page { background: figcraft_color::Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default(), opening: false },
             STORE_NAME,
             0.0,
             0.0,

@@ -285,3 +285,16 @@ fn vue_layer_trees_import_connected_components_in_script_setup() {
     assert!(code.starts_with(want), "{code}");
     assert_eq!(code.matches("import Card").count(), 1, "{code}");
 }
+
+#[test]
+fn many_entries_for_one_component_each_link() {
+    let mut s = Session::new();
+    let (_, hover) = button(&mut s);
+    let links: Vec<Value> = (0..crate::code_connect::MAX_FILE_LINKS)
+        .map(|i| json!({"component": "Button", "language": if i % 2 == 0 { "react" } else { "vue" }, "name": "Button", "template": "<Button />"}))
+        .collect();
+    let r = ex(&mut s, "codeConnect.import", json!({"json": {"version": 1, "links": links}}));
+    assert_eq!(r["linked"], crate::code_connect::MAX_FILE_LINKS, "{r}");
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": hover, "x": 0, "y": 500})));
+    assert_eq!(code(&mut s, i, "react"), "<Button />\n");
+}
