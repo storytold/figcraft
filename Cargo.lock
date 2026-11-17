@@ -1165,6 +1165,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-penpot"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=453b0da782ccef39be9a6dac8d27c80b553ef1cc#453b0da782ccef39be9a6dac8d27c80b553ef1cc"
+dependencies = [
+ "craft-zip",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-quit"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=453b0da782ccef39be9a6dac8d27c80b553ef1cc#453b0da782ccef39be9a6dac8d27c80b553ef1cc"
@@ -2053,6 +2064,7 @@ dependencies = [
  "craft-fig",
  "craft-figcraft-format",
  "craft-figma-rest",
+ "craft-penpot",
  "craft-sketch",
  "figcraft-doc",
  "figcraft-layout",
