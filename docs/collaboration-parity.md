@@ -114,3 +114,6 @@ private recovery references remain scoped. Library saves resolve/write originals
 Penpot export likewise embeds a deferred original and fails if it cannot obtain it, rather than
 silently omitting its image. Regression coverage retains self-contained saves, private recovery,
 untrusted-reference refusal, scoped original authority and the new Penpot resource path.
+
+The main refresh also retains current per-page views and pan-edge rendering behavior;
+scoped image generation remains part of the retained-frame cache signature.

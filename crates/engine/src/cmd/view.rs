@@ -187,9 +187,8 @@ fn page_step(s: &mut Session, dir: i64) -> Result<Value> {
         }
     };
     let ds = s.ds_mut()?;
-    ds.page = pg;
+    ds.open_page(pg);
     ds.selection.clear();
-    ds.zoom_to_fit();
     Ok(json!({"page": pg}))
 }
 
