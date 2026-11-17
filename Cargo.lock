@@ -1144,9 +1144,9 @@ dependencies = [
 [[package]]
 name = "craft-penpot"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=8418f9a9e846d27bb4f5e854f370405fd013e9e3#8418f9a9e846d27bb4f5e854f370405fd013e9e3"
+source = "git+https://github.com/storytold/craft-libs?rev=064afccce82b01cbf85da5e265bcf897553bea2a#064afccce82b01cbf85da5e265bcf897553bea2a"
 dependencies = [
- "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=8418f9a9e846d27bb4f5e854f370405fd013e9e3)",
+ "craft-zip 0.1.0 (git+https://github.com/storytold/craft-libs?rev=064afccce82b01cbf85da5e265bcf897553bea2a)",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1281,6 +1281,16 @@ dependencies = [
 [[package]]
 name = "craft-zip"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=064afccce82b01cbf85da5e265bcf897553bea2a#064afccce82b01cbf85da5e265bcf897553bea2a"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+ "zip 9.1.1",
+]
+
+[[package]]
+name = "craft-zip"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=976eb51c59edb0a37f24105850f52d921c8518ee#976eb51c59edb0a37f24105850f52d921c8518ee"
 dependencies = [
  "flate2",
@@ -1292,16 +1302,6 @@ dependencies = [
 name = "craft-zip"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
-dependencies = [
- "flate2",
- "thiserror 2.0.21",
- "zip 9.1.1",
-]
-
-[[package]]
-name = "craft-zip"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=8418f9a9e846d27bb4f5e854f370405fd013e9e3#8418f9a9e846d27bb4f5e854f370405fd013e9e3"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
