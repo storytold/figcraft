@@ -206,3 +206,21 @@ fn members_over_budget_are_skipped() {
     assert!(warnings.iter().any(|w| w.contains("too large")), "{warnings:?}");
     assert!(!page_names(&doc).contains(&"Big".to_string()));
 }
+
+/// The shared container refuses ambiguous member names instead of selecting one silently.
+#[test]
+fn duplicate_archive_members_are_refused() {
+    let mut z = sketch_zip("50.2", 103, document(&["A", "B"]), &[page("A", "Alpha", vec![]), page("B", "Beta", vec![])], &[]);
+    let from = b"pages/B.json";
+    let to = b"pages/A.json";
+    let mut replaced = 0;
+    for i in 0..z.len().saturating_sub(from.len()).saturating_add(1) {
+        if z.get(i..i + from.len()) == Some(from.as_slice()) {
+            z[i..i + from.len()].copy_from_slice(to);
+            replaced += 1;
+        }
+    }
+    assert_eq!(replaced, 2, "local and central directory names changed");
+    let error = import(&z, "ambiguous").unwrap_err().to_string();
+    assert!(error.contains("two entries of the archive share a name"), "{error}");
+}
