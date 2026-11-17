@@ -5,80 +5,19 @@
 use std::fmt::Write as _;
 
 use figcraft_color::Color;
-use figcraft_geom::BezPath;
-use figcraft_geom::kurbo::PathEl;
 
 use crate::model::{Fill, GradKind, GroupItem, Item, ItemKind, NativeStroke, PathItem};
 
 const ANDROID: &str = "http://schemas.android.com/apk/res/android";
 const AAPT: &str = "http://schemas.android.com/aapt";
 
-/// A number as Android reads it: rounded to 3 decimals, no trailing zeros, `0` for anything
-/// non-finite (the walk leaves out shapes whose numbers aren't finite).
-pub(crate) fn num(v: f64) -> String {
-    if !v.is_finite() {
-        return "0".into();
-    }
-    // Android reads these as 32-bit floats, so clamp to that range; this also keeps the scaling
-    // below from overflowing to infinity.
-    let v = v.clamp(-f64::from(f32::MAX), f64::from(f32::MAX));
-    let r = (v * 1000.0).round() / 1000.0;
-    let s = format!("{r}");
-    if s == "-0" { "0".into() } else { s }
-}
-
-/// `s` for an attribute value: markup escaped, whitespace that parsers would fold kept as
-/// character references, and characters XML 1.0 forbids dropped.
-pub(crate) fn esc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            '\t' => out.push_str("&#9;"),
-            '\n' => out.push_str("&#10;"),
-            '\r' => out.push_str("&#13;"),
-            c if (c as u32) < 0x20 || c == '\u{FFFE}' || c == '\u{FFFF}' => {}
-            c => out.push(c),
-        }
-    }
-    out
-}
+// Shared wire primitives; app-specific drawable projection and colour policy stay here.
+pub(crate) use craft_vectordrawable::write::{esc, num, path_data};
 
 /// `#RRGGBB`, or `#AARRGGBB` when not opaque.
 pub(crate) fn color(c: Color) -> String {
     let [r, g, b, a] = c.sanitized().to_rgba8();
     if a == 255 { format!("#{r:02X}{g:02X}{b:02X}") } else { format!("#{a:02X}{r:02X}{g:02X}{b:02X}") }
-}
-
-/// SVG path syntax, absolute commands.
-pub(crate) fn path_data(p: &BezPath) -> String {
-    let mut s = String::new();
-    let pt = |x: f64, y: f64| format!("{},{}", num(x), num(y));
-    for el in p.elements() {
-        if !s.is_empty() {
-            s.push(' ');
-        }
-        match *el {
-            PathEl::MoveTo(a) => {
-                let _ = write!(s, "M{}", pt(a.x, a.y));
-            }
-            PathEl::LineTo(a) => {
-                let _ = write!(s, "L{}", pt(a.x, a.y));
-            }
-            PathEl::QuadTo(a, b) => {
-                let _ = write!(s, "Q{} {}", pt(a.x, a.y), pt(b.x, b.y));
-            }
-            PathEl::CurveTo(a, b, c) => {
-                let _ = write!(s, "C{} {} {}", pt(a.x, a.y), pt(b.x, b.y), pt(c.x, c.y));
-            }
-            PathEl::ClosePath => s.push('Z'),
-        }
-    }
-    s
 }
 
 struct Out {
@@ -243,4 +182,30 @@ fn path(o: &mut Out, depth: usize, p: &PathItem) {
     o.close(depth + 2, "gradient");
     o.close(depth + 1, "aapt:attr");
     o.close(depth, "path");
+}
+
+#[cfg(test)]
+mod shared_wire_tests {
+    use super::*;
+    use figcraft_geom::BezPath;
+
+    #[test]
+    fn shared_attributes_preserve_exact_xml() {
+        assert_eq!(esc("<&>\"'\t\n\r\0\u{ffff}é𝄞&#9;"), "&lt;&amp;&gt;&quot;&apos;&#9;&#10;&#13;é𝄞&amp;#9;");
+    }
+
+    #[test]
+    fn shared_numbers_and_paths_preserve_android_syntax() {
+        assert_eq!(num(-0.0001), "0");
+        assert_eq!(num(f64::NAN), "0");
+        assert_eq!(num(f64::INFINITY), "0");
+        assert_eq!(num(1.23456), "1.235");
+        let mut p = BezPath::new();
+        p.move_to((0.0, -0.0));
+        p.line_to((1.23456, 2.0));
+        p.quad_to((3.0, 4.0), (5.0, 6.0));
+        p.curve_to((7.0, 8.0), (9.0, 10.0), (11.0, 12.0));
+        p.close_path();
+        assert_eq!(path_data(&p), "M0,0 L1.235,2 Q3,4 5,6 C7,8 9,10 11,12 Z");
+    }
 }

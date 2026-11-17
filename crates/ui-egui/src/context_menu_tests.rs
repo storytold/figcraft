@@ -127,3 +127,102 @@ fn copying_a_link_from_a_frames_name_label_links_that_frame() {
     crate::menus::invoke(&mut u.app, "edit.copyLink");
     assert_eq!(copied.lock().unwrap().last().cloned(), Some(format!("figcraft://node/{}", a.0)));
 }
+
+/// Two overlapping rectangles, the upper one locked; the menu opens on the overlap with nothing
+/// selected. Returns the app's UI and the ids (lower, locked).
+fn overlap_ui() -> (Ui, figcraft_doc::NodeId, figcraft_doc::NodeId) {
+    let mut s = Session::new();
+    let lower = id(&s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 80, "height": 80, "name": "Lower"})).unwrap());
+    let upper = id(&s.execute("shape.rectangle", &json!({"x": 120, "y": 120, "width": 80, "height": 80, "name": "Upper"})).unwrap());
+    s.execute("object.toggleLock", &json!({"ids": [upper], "locked": true})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    (u, lower, upper)
+}
+
+/// Measured in Figma's web app, 2026-11-10 (Lock and unlock layers: locked layers are listed in Select layer).
+#[test]
+fn select_layer_marks_locked_layers_with_a_padlock_and_picks_them() {
+    let (mut u, lower, upper) = overlap_ui();
+    let at = u.app.to_screen(150.0, 150.0);
+    crate::canvas::open_context_menu(&mut u.app, at, false);
+    u.app.session.set_selection(vec![]);
+    crate::menus::open_select_layer(&u.ctx, true);
+    u.frame(vec![]);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    // The Layers panel lists the same names; the menu's rows are the right-most copies.
+    let menu_row = |name: &str| {
+        let (_, pos, size) = crate::live_tests::texts(&shapes)
+            .into_iter()
+            .filter(|(t, _, _)| t == name)
+            .max_by(|a, b| a.1.x.total_cmp(&b.1.x))
+            .unwrap_or_else(|| panic!("no row {name:?}"));
+        (pos, size)
+    };
+    let (lower_at, upper_at) = (menu_row("Lower"), menu_row("Upper"));
+    assert!(lower_at.0.x > 300.0 && upper_at.0.x > 300.0, "both layers are listed in the menu");
+    let in_leading = |(pos, size): (Pos2, egui::Vec2)| {
+        let c = pos + size / 2.0;
+        shapes
+            .iter()
+            .filter(|s| !matches!(s, egui::Shape::Text(_)))
+            .filter(|s| {
+                let r = s.visual_bounding_rect();
+                r.is_positive()
+                    && (r.center().y - c.y).abs() < 8.0
+                    && r.max.x < c.x - size.x / 2.0 - 4.0
+                    && r.min.x > c.x - size.x / 2.0 - 40.0
+                    && r.width() < 20.0
+            })
+            .count()
+    };
+    assert!(in_leading(upper_at) > 0, "the locked row has a padlock in its leading column");
+    assert_eq!(in_leading(lower_at), 0, "the other row has nothing there");
+    let p = upper_at.0 + upper_at.1 / 2.0;
+    for pressed in [true, false] {
+        u.frame(vec![
+            egui::Event::PointerMoved(p),
+            egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE },
+        ]);
+    }
+    assert_eq!(u.app.session.selection(), vec![upper], "picking the locked row selects it");
+    let _ = lower;
+}
+
+/// The padlock is only paint: the locked row says "locked" to assistive technology too.
+#[test]
+fn select_layer_locked_row_is_described_as_locked() {
+    let (mut u, _, _) = overlap_ui();
+    let at = u.app.to_screen(150.0, 150.0);
+    crate::canvas::open_context_menu(&mut u.app, at, false);
+    u.app.session.set_selection(vec![]);
+    crate::menus::open_select_layer(&u.ctx, true);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let nodes: Vec<egui::accesskit::Node> =
+        u.frame_output(vec![]).platform_output.accesskit_update.expect("an AccessKit update").nodes.into_iter().map(|(_, n)| n).collect();
+    let row = |name: &str| {
+        nodes
+            .iter()
+            .find(|n| n.role() == egui::accesskit::Role::MenuItem && n.label() == Some(name))
+            .unwrap_or_else(|| panic!("no menu row {name:?}"))
+    };
+    assert!(row("Upper").description().is_some_and(|d| d.contains("locked")), "the locked row says locked");
+    assert!(!row("Lower").description().is_some_and(|d| d.contains("locked")), "the other row doesn't");
+}
+
+/// Measured on a single locked layer only (Figma's web app, 2026-11-10): the least certain rule.
+#[test]
+fn select_layer_needs_more_than_one_layer_under_the_pointer() {
+    let (mut u, _, _) = overlap_ui();
+    let one = u.app.to_screen(105.0, 105.0);
+    crate::canvas::open_context_menu(&mut u.app, one, false);
+    u.frame(vec![]);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(!has_text(&shapes, "Select layer"), "one layer under the pointer: no Select layer");
+    let two = u.app.to_screen(150.0, 150.0);
+    crate::canvas::open_context_menu(&mut u.app, two, false);
+    u.frame(vec![]);
+    let shapes = flat(&u.frame_output(vec![]).shapes);
+    assert!(has_text(&shapes, "Select layer"), "two layers: it shows");
+}

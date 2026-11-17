@@ -410,7 +410,11 @@ fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
         app.canvas.pressure = None;
     }
     app.canvas.last_pointer = Some(Point::new(ev.x, ev.y));
-    if let Err(e) = app.session.pointer(&ev) {
+    // A gesture something else committed under the held button (a colour picker closing on this
+    // press) leaves the rest of its drag with nothing to edit: that is not worth saying.
+    if let Err(e) = app.session.pointer(&ev)
+        && !matches!(e, figcraft_engine::EngineError::NoGesture)
+    {
         app.toast(e.to_string());
     }
     app.canvas.last_hover = hover.then(|| HoverKey::of(app, ev));

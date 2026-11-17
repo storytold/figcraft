@@ -379,6 +379,12 @@ impl FigApp {
             let worker = self.worker.take();
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
             canvas::show(self, ui, &mut worker);
+            // The strip the floating bottom toolbar covers, for Zoom to selection (0 when it's hidden).
+            let inset =
+                if !hidden && mobile.is_none() { f64::from(self.canvas.rect.max.y - toolbar::pill_rect(self.canvas.rect, 0.0).min.y) } else { 0.0 };
+            if let Ok(ds) = self.session.ds_mut() {
+                ds.view.bottom_inset = inset;
+            }
             self.worker = Some(worker);
             if !hidden && mobile.is_none() {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {

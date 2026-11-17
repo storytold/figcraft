@@ -166,9 +166,9 @@ fn styles_labels_and_their_refusals() {
     assert!(s.execute("board.label", &json!({"id": c, "text": ""})).unwrap()["label"].is_null());
     assert!(!s.doc().unwrap().contains(l));
     // What doesn't take a style or colour says so.
-    assert!(s.execute("board.setStyle", &json!({"ids": [a], "fontSize": 30})).is_err(), "stickies size their own text");
     assert!(s.execute("board.setStyle", &json!({"ids": [c], "fontSize": 0})).is_err());
     let st = id(&s.execute("board.stamp", &json!({"x": 0, "y": 0, "stamp": "check"})).unwrap(), "id");
+    assert!(s.execute("board.setStyle", &json!({"ids": [st], "fontSize": 30})).is_err(), "a stamp has no text to size");
     assert!(s.execute("board.setColor", &json!({"ids": [st], "color": "blue"})).is_err());
     assert!(s.execute("board.setColor", &json!({"ids": [a]})).is_err());
     assert!(s.execute("board.label", &json!({"id": a, "text": "x"})).is_err());
