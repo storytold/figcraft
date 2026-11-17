@@ -70,29 +70,30 @@ fn item(it: Item) -> wire::Item {
 
 // Explicit iterator frames keep traversal scratch proportional to depth, not sibling count.
 fn items(input: Vec<Item>) -> Vec<wire::Item> {
-    let mut frames = vec![(input.into_iter(), Vec::new(), None::<wire::Item>)];
+    let mut parents = Vec::new();
+    let mut current = (input.into_iter(), Vec::new());
     loop {
-        let depth = frames.len();
-        let frame = frames.last_mut().unwrap();
-        if let Some(mut source) = frame.0.next() {
+        let depth = parents.len() + 1;
+        if let Some(mut source) = current.0.next() {
             let children = match &mut source.kind {
                 ItemKind::Group(g) => std::mem::take(&mut g.children),
                 ItemKind::Path(_) => Vec::new(),
             };
             let mapped = item(source);
             if !children.is_empty() && depth < XML_DEPTH {
-                frames.push((children.into_iter(), Vec::new(), Some(mapped)));
+                let previous = std::mem::replace(&mut current, (children.into_iter(), Vec::new()));
+                parents.push((previous, mapped));
             } else {
                 discard_items(children);
-                frame.1.push(mapped);
+                current.1.push(mapped);
             }
         } else {
-            let (_, children, parent) = frames.pop().unwrap();
-            let Some(mut parent) = parent else { return children };
+            let Some((mut previous, mut parent)) = parents.pop() else { return current.1 };
             if let wire::ItemKind::Group(g) = &mut parent.kind {
-                g.children = children;
+                g.children = current.1;
             }
-            frames.last_mut().unwrap().1.push(parent);
+            previous.1.push(parent);
+            current = previous;
         }
     }
 }
