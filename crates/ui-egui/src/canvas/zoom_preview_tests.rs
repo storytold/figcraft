@@ -406,6 +406,34 @@ fn a_slow_first_render_gets_a_preview_beside_it_and_a_quick_one_none() {
 }
 
 #[test]
+fn the_render_thread_refines_a_zoom_only_once_it_pauses() {
+    // A full render can't be stopped: a zoom step's started as soon as its preview was out held the
+    // next step up for as long as it took. The next step coming while the preview shows skips it.
+    let views: Vec<View> = [1.0, 0.5, 0.25].into_iter().map(|s| view_at((300.0, 200.0), s, 1200, 1200)).collect();
+    let s = slow_scene(&views, 4.0 * PREVIEW_AFTER_MS);
+    let ds = s.ds().unwrap();
+    let at = |i: usize| job(&ds.doc, ds.page, ds.uid, views[i].clone());
+    let mut w = Worker::new(egui::Context::default());
+    w.submit(at(0));
+    drain(&mut w);
+    // A zoom out: its preview, then the next step while that preview is on screen.
+    w.submit(at(1));
+    let start = std::time::Instant::now();
+    let preview = loop {
+        assert!(start.elapsed() < Duration::from_secs(60), "no preview came");
+        if let Some(d) = w.poll() {
+            break d;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!((preview.seq, preview.coarse), (2, true));
+    w.submit(at(2));
+    let got = drain(&mut w);
+    assert!(!got.contains(&(2, false)), "the step zoomed past is never refined: {got:?}");
+    assert_eq!(got.last(), Some(&(3, false)), "the last step is: {got:?}");
+}
+
+#[test]
 fn a_preview_replaces_a_refined_image_of_the_same_zoom_elsewhere_on_the_page() {
     // 800 × 600: A at 100% from the page origin, B at 800% about its top-left, A' back at 100%
     // about B's bottom-right corner. A shows 100 × 75 of A', 1/64 of it.
