@@ -1,7 +1,10 @@
 //! Property mapping for the REST file JSON: JSON readers, enums, paints, effects, strokes,
 //! corners, constraints, auto layout, layout grids and export settings.
 
-use figcraft_doc::color::{BlendMode, Color, ColorStop, Gradient, GradientKind, ImageFilters, ImagePaint, ImageScaleMode, Paint, PaintKind};
+use figcraft_doc::color::{
+    BlendMode, Color, ColorStop, Gradient, GradientKind, ImageFilters, ImagePaint, ImageScaleMode, Paint, PaintKind, PatternAlign, PatternPaint,
+    PatternTile,
+};
 use figcraft_doc::geom::Affine;
 use figcraft_doc::{
     AutoLayout, Blur, BlurType, CellAlign, ChildLayout, Constraints, ContentAlign, CrossAlign, Effect, EffectKind, ExportFormat, ExportSetting,
@@ -137,6 +140,7 @@ fn paint(cx: &mut Ctx, p: &Value) -> Option<Paint> {
         "GRADIENT_ANGULAR" => PaintKind::Gradient(gradient(GradientKind::Angular, p)),
         "GRADIENT_DIAMOND" => PaintKind::Gradient(gradient(GradientKind::Diamond, p)),
         "IMAGE" => PaintKind::Image(image(cx, p)),
+        "PATTERN" => PaintKind::Pattern(pattern(cx, p)?),
         other => {
             cx.warn(format!("{} paints are not supported and were skipped", clip_str(other)));
             return None;
@@ -217,6 +221,33 @@ fn image(cx: &mut Ctx, p: &Value) -> ImagePaint {
             shadows: filter("shadows"),
         },
     }
+}
+
+/// A pattern paint. Until every layer is imported its `source` is its place in
+/// `cx.pattern_sources`, which holds the REST id of the layer it tiles; [`Ctx::link_patterns`]
+/// then points it at that layer.
+fn pattern(cx: &mut Ctx, p: &Value) -> Option<PatternPaint> {
+    let Some(source) = text(p, "sourceNodeId") else {
+        cx.warn("pattern paints without a source layer were skipped");
+        return None;
+    };
+    let mut pattern = PatternPaint::new(cx.pattern_sources.len() as u64);
+    cx.pattern_sources.push(source.to_string());
+    pattern.tile = match text(p, "tileType") {
+        Some("HORIZONTAL_HEXAGONAL") => PatternTile::HorizontalHex,
+        Some("VERTICAL_HEXAGONAL") => PatternTile::VerticalHex,
+        _ => PatternTile::Grid,
+    };
+    let (lo, hi) = PatternPaint::SCALE_RANGE;
+    pattern.scale = num(p, "scalingFactor").map_or(1.0, |s| s.clamp(lo, hi));
+    let gap = |k: &str| p.get("spacing").and_then(|g| num(g, k)).map_or(0.0, |v| v.clamp(0.0, PatternPaint::MAX_SPACING));
+    pattern.spacing = (gap("x"), gap("y"));
+    pattern.align = match text(p, "horizontalAlignment") {
+        Some("CENTER") => PatternAlign::Center,
+        Some("END") => PatternAlign::End,
+        _ => PatternAlign::Start,
+    };
+    Some(pattern)
 }
 
 // ---- effects ----
