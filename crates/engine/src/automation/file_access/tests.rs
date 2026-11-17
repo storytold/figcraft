@@ -9,6 +9,27 @@ use serde_json::json;
 use super::{Access, Roots, allow, confined, current};
 use crate::Session;
 
+#[test]
+fn generated_export_paths_escape_device_components_and_preserve_other_names() {
+    for (path, expected) in [
+        ("CON", "_CON"),
+        ("CoN.txt", "_CoN.txt"),
+        ("nul.txt", "_nul.txt"),
+        ("PRN/icon", "_PRN/icon"),
+        ("folder/COM1", "folder/_COM1"),
+        ("LPT9.png", "_LPT9.png"),
+        ("COM¹", "_COM¹"),
+        ("LPT²/icon", "_LPT²/icon"),
+        ("CONIN$", "_CONIN$"),
+        ("HomeCON", "HomeCON"),
+        ("COM10", "COM10"),
+        ("CON@2x", "CON@2x"),
+        ("folder/.NUL", "folder/.NUL"),
+    ] {
+        assert_eq!(super::escape_device_names(path), expected, "{path}");
+    }
+}
+
 /// A fresh folder for one test: `<tmp>/figcraft-roots-<name>-<pid>`, holding `root/`, `root2/`
 /// (a sibling whose name starts like the root's) and `outside/`.
 struct Fixture(PathBuf);

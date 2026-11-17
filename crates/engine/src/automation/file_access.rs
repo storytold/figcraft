@@ -397,6 +397,12 @@ fn device_name(n: &str) -> bool {
             && stem.chars().last().is_some_and(|c| c.is_ascii_digit() || matches!(c, '¹' | '²' | '³')))
 }
 
+/// Prefix Windows device-name components of a generated export path with `_`.
+/// Apply after character filtering and suffix construction, so a safe suffix stays unchanged.
+pub fn escape_device_names(path: &str) -> String {
+    path.split('/').map(|name| if device_name(name) { format!("_{name}") } else { name.to_string() }).collect::<Vec<_>>().join("/")
+}
+
 thread_local! {
     static ROOTS: RefCell<Option<Arc<Roots>>> = const { RefCell::new(None) };
 }
