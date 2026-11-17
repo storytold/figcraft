@@ -12,7 +12,7 @@ use crate::{CliError, CliResult};
 
 /// A document's or plugin's text as a terminal should show it: control characters escaped, and
 /// everything else (quotes, backslashes in paths) left as it is.
-fn plain(text: &str) -> String {
+pub(crate) fn plain(text: &str) -> String {
     text.chars().map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() }).collect()
 }
 
