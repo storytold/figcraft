@@ -25,7 +25,7 @@ pub(crate) fn color(c: Color) -> String {
     craft_vectordrawable::write::color(wire_color(c))
 }
 
-fn item(it: Item, depth: usize) -> wire::Item {
+fn item(it: Item) -> wire::Item {
     let kind = match it.kind {
         ItemKind::Path(p) => wire::ItemKind::Path(wire::Path {
             name: p.name,
@@ -62,17 +62,69 @@ fn item(it: Item, depth: usize) -> wire::Item {
             name: g.name,
             clip: g.clip,
             transform: g.xf.map(|x| wire::GroupTransform { translate: x.translate, rotation: x.rotation, scale: x.scale }),
-            // Bound adaptation as well as writing. Production trees are bounded by the source
-            // layer guard and generated wrappers; don't recurse beyond that invariant.
-            children: if depth < XML_DEPTH { g.children.into_iter().map(|it| item(it, depth + 1)).collect() } else { Vec::new() },
+            children: Vec::new(),
         }),
     };
     wire::Item { kind, bbox: it.bbox }
 }
 
-pub(crate) fn document(width: f64, height: f64, items: Vec<Item>) -> String {
-    let items: Vec<_> = items.into_iter().map(|it| item(it, 1)).collect();
-    craft_vectordrawable::write::document_with_depth_limit(width, height, &items, XML_DEPTH)
+// Explicit iterator frames keep traversal scratch proportional to depth, not sibling count.
+fn items(input: Vec<Item>) -> Vec<wire::Item> {
+    let mut frames = vec![(input.into_iter(), Vec::new(), None::<wire::Item>)];
+    loop {
+        let depth = frames.len();
+        let frame = frames.last_mut().unwrap();
+        if let Some(mut source) = frame.0.next() {
+            let children = match &mut source.kind {
+                ItemKind::Group(g) => std::mem::take(&mut g.children),
+                ItemKind::Path(_) => Vec::new(),
+            };
+            let mapped = item(source);
+            if !children.is_empty() && depth < XML_DEPTH {
+                frames.push((children.into_iter(), Vec::new(), Some(mapped)));
+            } else {
+                discard_items(children);
+                frame.1.push(mapped);
+            }
+        } else {
+            let (_, children, parent) = frames.pop().unwrap();
+            let Some(mut parent) = parent else { return children };
+            if let wire::ItemKind::Group(g) = &mut parent.kind {
+                g.children = children;
+            }
+            frames.last_mut().unwrap().1.push(parent);
+        }
+    }
+}
+
+fn discard_items(items: Vec<Item>) {
+    let mut frames = vec![items.into_iter()];
+    while let Some(frame) = frames.last_mut() {
+        if let Some(mut item) = frame.next() {
+            if let ItemKind::Group(g) = &mut item.kind {
+                frames.push(std::mem::take(&mut g.children).into_iter());
+            }
+        } else {
+            frames.pop();
+        }
+    }
+}
+
+pub(crate) fn document(width: f64, height: f64, input: Vec<Item>) -> String {
+    let items = items(input);
+    let output = craft_vectordrawable::write::document_with_depth_limit(width, height, &items, XML_DEPTH);
+    // Recursive enum destruction also consumes stack, even with an iterative writer.
+    let mut frames = vec![items.into_iter()];
+    while let Some(frame) = frames.last_mut() {
+        if let Some(mut item) = frame.next() {
+            if let wire::ItemKind::Group(g) = &mut item.kind {
+                frames.push(std::mem::take(&mut g.children).into_iter());
+            }
+        } else {
+            frames.pop();
+        }
+    }
+    output
 }
 
 #[cfg(test)]

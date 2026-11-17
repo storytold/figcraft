@@ -134,3 +134,22 @@ fn mixed_siblings_nested_empty_and_clipped_groups_keep_closing_order() {
     ];
     parity(48.0, 32.0, &items);
 }
+
+#[test]
+fn over_depth_input_is_discarded_without_recursive_destruction() {
+    std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            let mut leaf = path(Some(Fill::Solid(Color::BLACK)), "butt", "miter", Color::BLACK);
+            for _ in 0..XML_DEPTH * 3 {
+                leaf = Item { bbox: Rect::ZERO, kind: ItemKind::Group(GroupItem { name: None, xf: None, clip: None, children: vec![leaf] }) };
+            }
+            let output = document(1.0, 1.0, vec![leaf]);
+            assert_eq!(output.matches("<group").count(), XML_DEPTH);
+            assert_eq!(output.matches("</group>").count(), XML_DEPTH - 1);
+            assert!(!output.contains("<path"));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
