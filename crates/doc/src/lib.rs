@@ -1355,6 +1355,8 @@ mod proto_overlay_anchor_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod vector_radius_tests;
+#[cfg(test)]
 mod vector_regions_tests;
 #[cfg(test)]
 mod width_sides_tests;
