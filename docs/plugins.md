@@ -1,6 +1,10 @@
 # FigCraft plugins
 
-A FigCraft plugin is a WebAssembly module with a small JSON manifest. It acts on the document only
+A FigCraft plugin is a WebAssembly module with a small JSON manifest. FigCraft runs plugins with the
+Craft suite's shared plug-in runtime, [`craft-plugin`](https://github.com/storytold/craft-libs/tree/main/crates/plugin)
+(RFC-0041), which was extracted from FigCraft: the same sandbox, manifest and ABI serve every Craft
+app that hosts plugins, and plugins written for FigCraft before it was shared keep working
+unchanged. A plugin acts on the document only
 through FigCraft's commands, the same ones the menus, the CLI, the control channel and the MCP
 server run (`figcraft-cli commands` lists them), so a plugin can do what a script can do, within the
 permissions its manifest asks for, and nothing more.
@@ -24,10 +28,12 @@ permissions its manifest asks for, and nothing more.
   lines and SVG pictures.
 - **Permissions.** The manifest says whether the plugin only reads the document or may edit it, and
   can narrow the commands it may call. FigCraft enforces both.
-- **Distribution.** A team's own `figcraft-server` can keep a plugin directory: plugins are
-  published to it with the server's key, browsed and installed from Plugins ▸ Manage plugins, and
-  updated when a newer version is published (see [Plugin directories](#plugin-directories)). No
-  third-party service is involved.
+- **Distribution.** A plugin is a `.craftplugin` bundle. It can be installed from a file, from a
+  GitHub repository's releases, or from a catalog (an `index.json` that pins each release by
+  SHA-256), the same way in every Craft app (see [Catalogs and GitHub](#catalogs-and-github)). A
+  team's own `figcraft-server` can also keep a plugin directory: plugins are published to it with
+  the server's key, browsed and installed from Plugins ▸ Manage plugins, and updated when a newer
+  version is published (see [Plugin directories](#plugin-directories)).
 
 ## Logging limits
 
@@ -52,7 +58,9 @@ large data instead of logging it in full.
 
 ## Using plugins
 
-- **Plugins ▸ Development ▸ Import plugin from manifest…** picks a `figcraft-plugin.json`. The
+- **Plugins ▸ Development ▸ Import plugin from manifest…** picks a `craft-plugin.json` (or a
+  `figcraft-plugin.json`, the name before the manifest was shared; a folder with both uses
+  `craft-plugin.json`). The
   plugin is kept in the preferences and its module is read again on every run, so a rebuilt
   development plugin runs its new code without importing it again.
 - The desktop app saves the preferences the moment a plugin is imported, installed, updated or
@@ -63,9 +71,12 @@ large data instead of logging it in full.
   with a field per parameter, drawn with FigCraft's own widgets; **Run** runs it.
 - **Plugins ▸ Run last plugin** (⌥⌘P on macOS, Ctrl+Alt+Shift+P on Windows and Linux, where
   Ctrl+Alt+P is Pixel preview) runs the last plugin command again with the same parameters.
-- **Plugins ▸ Manage plugins…** has two tabs. **Installed** lists the installed plugins (version,
-  access, where each comes from: its manifest path or the server it was installed from) with a
-  Remove button for each, and an Import button. **Browse** shows a server's plugin directory, with
+- **Plugins ▸ Manage plugins…** has three tabs. **Installed** lists the installed plugins (version,
+  access, where each comes from: its manifest path, the server, catalog, repository or file it was
+  installed from) with a Remove button for each, **Install from file…** (a `.craftplugin` bundle),
+  the Import button, and **Check for updates** for plugins from catalogs and GitHub. **Catalogs**
+  installs from a GitHub repository and lists the catalogs you added and what they offer (see
+  [Catalogs and GitHub](#catalogs-and-github)). **Browse** shows a server's plugin directory, with
   Install, Update and Remove (see [Plugin directories](#plugin-directories)).
 - **Plugins ▸ Widgets** lists the installed widget plugins; picking one puts its widget in the
   middle of the view.
@@ -150,8 +161,13 @@ plugins: import them in the script.
 | Command | Params | Does |
 |---|---|---|
 | `plugin.list` | `{}` | `{plugins: [{id, name, version, description, main, api, permissions, commands, path, loaded}], last: {id, command}}` |
-| `plugin.import` | `{path}` or `{manifest, wasm}` | `path` is a `figcraft-plugin.json` or its folder. Without files (the browser, tests), pass the manifest (an object or JSON text) and the module as base64 `wasm`; such a plugin lasts for the session only. A plugin with the same id is replaced. The module is checked first. |
-| `plugin.remove` | `{id}` | Uninstalls it. |
+| `plugin.import` | `{path}` or `{manifest, wasm}` | `path` is a `craft-plugin.json` or `figcraft-plugin.json`, or its folder. Without files (the browser, tests), pass the manifest (an object or JSON text) and the module as base64 `wasm`; such a plugin lasts for the session only. A plugin with the same id is replaced. The module is checked first. |
+| `plugin.remove` | `{id}` | Uninstalls it (and deletes it from the plug-in store when it is there). |
+| `plugin.install` | `{path \| data, name? \| repo \| catalog, id, version?; confirm, sha256?}` | Installs a `.craftplugin` bundle: from a file (`path`), as base64 (`data`), the latest release of a GitHub repository (`repo`: `owner/repo`, or `owner/repo@tag` for a given release), or a catalog's package (`catalog`: its `index.json` URL, `id`; `version` defaults to the newest that runs in this FigCraft). Without `confirm: true` it only downloads or reads the plugin, checks it and describes it, writing nothing: `{id, name, version, kind, permissions, sha256, source, from, inCatalog, installedVersion, permissionsChanged, installed: false}` (`inCatalog: false`: the repository is in no catalog you added). With `confirm: true` it installs it (`sha256`, the one shown, must match; the bundle just shown isn't downloaded again): `{…, installed: true, store, replaced}`. |
+| `plugin.update` | `{id?, confirm?, sha256?}` | Without `id`: the plugins from catalogs and GitHub that have a newer release, `{updates: [{id, name, installedVersion, version \| tag, sha256, from}], errors}`. With `id`: like `plugin.install` for that plugin's newest release (`confirm: true` installs it; `permissionsChanged` says whether to show the confirmation again). |
+| `plugin.catalog.list` | `{catalog?, query?}` | Reads the catalogs you added (or `catalog`) and lists the plugins they offer that run here: `{catalogs, plugins: [{catalog, id, name, author, description, license, repo, kind, version, sha256, bytes, installed, update}], errors, warnings}`. |
+| `plugin.catalog.add` | `{url}` | Reads the catalog at `url` (`https://` on GitHub's hosts, or `file://`) and remembers it: `{catalog, added, packages, warnings, catalogs}`. |
+| `plugin.catalog.remove` | `{url}` | Forgets a catalog: `{removed, catalogs}`. |
 | `plugin.run` | `{id, command?, params?, fuel?}` | Runs a command (default: the first) with its parameters checked against the manifest and the missing ones filled with their defaults; `fuel` lowers the instruction budget (for the panel's callbacks too). Returns `{plugin, command, output, logs, calls, fuel, panel}`; `output` is the plugin's result, parsed as JSON when it is JSON; `panel` is the plugin's open panel (as `plugin.ui` returns it) or null. |
 | `plugin.ui` | `{id?}` | Plugin `id`'s open panel: `{plugin, command, title, controls, values}` (`values`: every field's current value by name), or null. Without `id`, the panel opened last. |
 | `plugin.event` | `{id, control, value?}` | Uses a control of plugin `id`'s open panel, as a click would: a button (no `value`), or a field set to `value` (checked like a parameter: a number is clamped, a list or menu value must be one of its options, a colour must be hex). The plugin is called back; returns like `plugin.run`. |
@@ -168,6 +184,42 @@ plugins: import them in the script.
 | `plugin.directory.install` | `{id, version?, confirm, server?, sha256?}` | Downloads version `version` (default: the latest) and installs it, or updates the installed one. `confirm` must be `true` (installing runs the plugin's code: show its permissions first); without it nothing is downloaded. The download must match the SHA-256 the directory lists (and `sha256`, the one shown, when given). Returns `{installed, name, version, permissions, sha256, path, source, replaced}`. |
 | `plugin.directory.publish` | `{path \| plugin, server}` | Publishes a plugin folder (or its `figcraft-plugin.json`), or an installed plugin, as a new version. `server` carries the server's key: `ws://host:port/?key=…`. Returns `{published, server}`. |
 | `plugin.directory.unpublish` | `{id, version?, server}` | Removes one version (default: every version) from the directory; needs the key. Returns `{id, removed}`. |
+
+## Catalogs and GitHub
+
+The suite's shared way to publish plugins (RFC-0041): a plugin's author attaches its
+`.craftplugin` bundle and a `SHA256SUMS` file to a GitHub release, and anyone can install it from
+the repository, or from a catalog that lists it, without a pull request to FigCraft.
+
+- **From a GitHub repository.** In **Plugins ▸ Manage plugins… ▸ Catalogs**, type `owner/repo`
+  (or `owner/repo@tag` for a given release) and press **Get**. FigCraft reads the release through
+  GitHub's API, takes its one `.craftplugin` asset and its SHA-256 from the release's `SHA256SUMS`
+  (or GitHub's own digest), downloads it and checks it. A release without a checksum isn't
+  installed.
+- **From a catalog.** Add a catalog's address (an `index.json`, `https://` on GitHub's hosts, or
+  `file://` for a local one) under Catalogs; **Refresh** lists the plugins it offers that run in
+  this FigCraft, with **Install** or **Update**. Each release in a catalog is pinned by URL,
+  SHA-256 and size, and must be an asset of the package's own repository.
+- **From a file.** **Installed ▸ Install from file…** picks a `.craftplugin` bundle.
+
+Every source ends in the same checks before anything is written: `https://` on GitHub's hosts only,
+size caps, the SHA-256, the manifest, that the plugin names FigCraft in its `apps` (or is a legacy
+manifest naming no app), a plugin API FigCraft runs, its kind (`command`), and its module compiled
+but not run. Then a confirmation shows its permissions, kind, where it comes from and its full
+SHA-256, and says plainly when a repository is **in no catalog you use**; only **Install** installs
+it. The download happens while the window keeps working ("Downloading…"); scripts, the CLI and the
+MCP server wait for it.
+
+The desktop app keeps these plugins in the suite's plug-in store, `Plug-ins/` in FigCraft's
+settings folder (one folder per plugin named by a hash of its id, holding the bundle named by its
+SHA-256 and a `source.json` record of where it came from). The store is read at every start, so
+these plugins aren't listed in the preferences file. Downloading needs the desktop app: the CLI and
+the MCP server can install bundle files (`path`, `data`) for the session, and say that GitHub and
+catalogs need the desktop app.
+
+**Updating.** **Check for updates** (or `plugin.update`) asks each plugin's catalog or repository
+for a newer release; nothing checks in the background. **Update** shows the confirmation again,
+saying when the new version asks for different permissions.
 
 ## Plugin directories
 
@@ -218,7 +270,20 @@ remove`) takes a version, or the whole plugin, down; installed copies keep worki
 plugin directory requests (`plugin.directory.*` says so). Import plugins with `plugin.import
 {manifest, wasm}` there.
 
-## The manifest: `figcraft-plugin.json`
+## The manifest: `craft-plugin.json`
+
+The manifest is the suite's shared one, `craft-plugin.json`. FigCraft also reads it under its
+earlier name, `figcraft-plugin.json`, with the same fields; plugins installed from a server's plugin
+directory keep theirs under that name. A manifest may add:
+
+- `kind`: `command` (the default), the shared kind FigCraft runs; another app's own kind is refused.
+- `apps`: the apps it was written for, with the API each needs, `{"figcraft": {"api": 6}}`. A
+  manifest that names apps but not `figcraft` is refused; one without `apps` (every manifest
+  written before the manifest was shared) runs by its top-level `api`.
+- `license` (SPDX) and `repo` (`https://github.com/<owner>/<repo>`), shown when installing.
+
+The [craft-plugin README](https://github.com/storytold/craft-libs/blob/main/crates/plugin/README.md)
+describes the shared manifest, bundle and catalog formats.
 
 ```json
 {
@@ -311,21 +376,22 @@ is one with a line or an SVG from a manifest that says less than `6`,
 and a FigCraft that runs an older API refuses a manifest that asks for `4` when it's imported. Strings are UTF-8 `(ptr, len)` pairs in the plugin's linear memory; all values
 are `i32`.
 
-The module **exports** `memory` and `figcraft_run(input_len) -> status`. When `figcraft_run` starts,
+The module **exports** `memory` and `craft_run(input_len) -> status` (or, as FigCraft plugins did
+before the ABI was shared, `figcraft_run`; a module with both runs `craft_run`). When it starts,
 the reply buffer holds the input JSON, `input_len` bytes:
 
 ```json
 {"api": 1, "command": "grid", "params": {"palette": "#FF5A5F", "columns": 3, "labels": true}, "selection": [12, 15]}
 ```
 
-`api` is the manifest's. When the plugin's panel calls it back, `figcraft_run` runs again in the
+`api` is the manifest's. When the plugin's panel calls it back, the entry point runs again in the
 same instance (its memory as the last call left it) with the event and every field's value added:
 
 ```json
 {"api": 2, "command": "panel", "params": {}, "selection": [], "event": {"control": "generate", "value": null}, "values": {"palette": "Ocean", "columns": 3, "labels": true}}
 ```
 
-When its widget is inserted or clicked, `figcraft_run` runs in a fresh instance (nothing is kept
+When its widget is inserted or clicked, the entry point runs in a fresh instance (nothing is kept
 from one call to the next: a widget's state is all it remembers, so the same state and click
 always give the same widget) with `widget` added: the widget's layer id, its state (an empty object
 for a new widget) and what was clicked (`event` is null when it's inserted):
@@ -353,8 +419,9 @@ widget's id and state:
 It returns `0` for success; anything else fails the run (and rolls it back), with the text passed
 to `set_output` as the error message.
 
-The module may **import** these functions from the module `figcraft` (anything else, WASI
-included, is refused when the plugin is imported):
+The module may **import** these functions from the module `craft`, or under its earlier name
+`figcraft` (the same functions; anything else, WASI included, is refused when the plugin is
+imported):
 
 | Import | Signature | Does |
 |---|---|---|
@@ -374,7 +441,7 @@ included, is refused when the plugin is imported):
 | `widget_render` | `(ptr, len) -> status` | API 3. Draws the widget being inserted or clicked, or (API 5) the widget whose panel called back (the widget description below, as JSON). `1`: the description is invalid, the reply says why. A widget call that doesn't draw keeps the widget as it was (inserting one must draw it). |
 
 A pointer or length outside the plugin's memory traps, which fails the run. Host functions can only
-be called while `figcraft_run` runs (not from a start function). Settings are forgotten when the
+be called while the entry point runs (not from a start function). Settings are forgotten when the
 plugin is removed.
 
 ### Panel spec
@@ -540,15 +607,17 @@ description may have fields and a `menu`; with `"permissions": {"saveFile": true
 never learns a path. Outside
 WebAssembly every host call fails, so the plugin's own logic can be unit-tested with `cargo test`.
 
-Any language that compiles to WebAssembly works the same way: export `memory` and `figcraft_run`,
-import what you need from `figcraft`.
+Any language that compiles to WebAssembly works the same way: export `memory` and `craft_run`
+(or `figcraft_run`), import what you need from `craft` (or `figcraft`).
 
 ## Not yet
 
-- Distribution: directories live on your own `figcraft-server`; there is no public catalogue,
-  no publisher accounts or signatures (the server's key is the publisher), no ratings, reviews or
-  install counts, and updates are found when you browse, not in the background. The browser build
-  can't use a directory yet.
+- Distribution: there is no default community catalog yet (RFC-0041 leaves where it lives open):
+  add catalogs yourself. No publisher signatures or build attestations beyond the SHA-256 (a
+  directory's publisher is whoever has the server's key), no ratings, reviews or install counts,
+  and updates are found when you ask, not in the background. The browser build can't use a
+  directory, a catalog or GitHub yet, and the CLI and MCP server can't download from catalogs or
+  GitHub.
 - Plugins written for other apps (JavaScript plugins) don't run.
 - Widgets: clicks, field edits and menu items are their only events (no hover or timers), a field
   is plain text (no placeholder, length or single-line setting), and their layers are frames, text, rectangles, ellipses and images only (no

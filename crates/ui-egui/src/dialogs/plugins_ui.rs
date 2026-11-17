@@ -1,7 +1,8 @@
 //! Plugins in the UI: the installed plugins in the Plugins menu (widgets in Plugins ▸ Widgets), the
 //! parameters form a command with parameters asks for before it runs, the panels running plugins
-//! show, and the Manage plugins window (installed plugins, and a server's plugin directory to
-//! browse, install from and update from). Everything runs through the engine's `plugin.*`,
+//! show, and the Manage plugins window (installed plugins and their updates, plug-in catalogs and
+//! GitHub repositories to install from, and a server's plugin directory to browse, install from
+//! and update from). Everything runs through the engine's `plugin.*`, `plugin.catalog.*`,
 //! `plugin.directory.*` and `widget.*` commands.
 
 use egui::{Align2, Context, Id, RichText, Ui};
@@ -29,18 +30,31 @@ pub struct PluginForm {
 pub enum PluginsTab {
     #[default]
     Installed,
+    /// Plug-in catalogs and GitHub repositories.
+    Catalogs,
+    /// A figcraft-server's plugin directory.
     Browse,
 }
 
 impl PluginsTab {
-    pub const ALL: [PluginsTab; 2] = [PluginsTab::Installed, PluginsTab::Browse];
+    pub const ALL: [PluginsTab; 3] = [PluginsTab::Installed, PluginsTab::Catalogs, PluginsTab::Browse];
 
     fn label(self) -> &'static str {
         match self {
             PluginsTab::Installed => tr("Installed"),
+            PluginsTab::Catalogs => tr("Catalogs"),
             PluginsTab::Browse => tr("Browse"),
         }
     }
+}
+
+/// A plugin read for its install confirmation (`plugin.install` or `plugin.update` without
+/// `confirm`): the command, what it was asked, and what it said about the plugin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoreInstall {
+    pub command: String,
+    pub request: Value,
+    pub preview: Value,
 }
 
 /// The Manage plugins window's state: its tab, the Browse tab's fields and the plugin waiting for
@@ -52,6 +66,13 @@ pub struct PluginsWindow {
     pub server: Option<String>,
     pub query: String,
     pub confirm: Option<String>,
+    /// The Catalogs tab's fields: a GitHub repository and a catalog's address.
+    pub repo: String,
+    pub catalog: String,
+    /// The plugin from a file, a catalog or a repository waiting for the user to confirm.
+    pub install: Option<StoreInstall>,
+    /// The updates found by Check for updates (`plugin.update`'s `updates`).
+    pub updates: Option<Vec<Value>>,
 }
 
 /// Width of the plugin windows' fields.
@@ -157,7 +178,8 @@ fn run(app: &mut FigApp, cmd: &str, params: Value) {
     }
 }
 
-/// Plugins ▸ Development ▸ Import plugin from manifest…: pick a `figcraft-plugin.json`.
+/// Plugins ▸ Development ▸ Import plugin from manifest…: pick a `craft-plugin.json` (or a
+/// `figcraft-plugin.json`).
 pub fn import_dialog(app: &mut FigApp) {
     app.pick_open(tr("Import plugin from manifest"), &["json"], |app, p| {
         if let Some(v) = app.run("plugin.import", json!({"path": p.to_string_lossy()})) {
@@ -266,6 +288,15 @@ fn panel_windows(app: &mut FigApp, ctx: &Context) {
 enum Manage {
     Remove(String),
     Import,
+    /// Install a `.craftplugin` file.
+    InstallFile,
+    /// Read a plugin for its install confirmation: `plugin.install` (or `plugin.update`) with these
+    /// parameters.
+    Get(&'static str, Value),
+    AddCatalog(String),
+    RemoveCatalog(String),
+    ListCatalogs,
+    CheckUpdates,
     Browse(String),
     Confirm(String),
     /// Stop waiting for the directory's listing.
@@ -275,6 +306,11 @@ enum Manage {
 /// The directory requests the window sends without waiting (the server answers later).
 const LIST: &str = "plugin.directory.list";
 const INSTALL: &str = "plugin.directory.install";
+/// The plug-in store's requests (catalogs and GitHub), also sent without waiting.
+const STORE_INSTALL: &str = "plugin.install";
+const STORE_UPDATE: &str = "plugin.update";
+const CATALOGS: &str = "plugin.catalog.list";
+const ADD_CATALOG: &str = "plugin.catalog.add";
 
 /// Width of the Manage plugins window, and of a plugin's text beside its button.
 const MANAGE_W: f32 = 400.0;
@@ -294,6 +330,7 @@ fn manage_window(app: &mut FigApp, ctx: &Context) {
         ui.add_space(12.0);
         asked = match tab {
             PluginsTab::Installed => installed_tab(app, ui, &t),
+            PluginsTab::Catalogs => catalogs_tab(app, ui, &t),
             PluginsTab::Browse => browse_tab(app, ui, &t),
         };
     });
@@ -304,6 +341,33 @@ fn manage_window(app: &mut FigApp, ctx: &Context) {
             app.run("plugin.remove", json!({"id": id}));
         }
         Some(Manage::Import) => import_dialog(app),
+        Some(Manage::InstallFile) => install_file_dialog(app),
+        Some(Manage::Get(command, request)) => get(app, ctx, command, request),
+        Some(Manage::AddCatalog(url)) => app.run_background(
+            ctx,
+            ADD_CATALOG,
+            json!({"url": url}),
+            Box::new(|app, ctx, _| {
+                app.ui.plugins_manage.catalog.clear();
+                app.run_background(ctx, CATALOGS, json!({}), Box::new(|_, _, _| {}));
+            }),
+        ),
+        Some(Manage::RemoveCatalog(url)) => {
+            app.run("plugin.catalog.remove", json!({"url": url}));
+        }
+        Some(Manage::ListCatalogs) => app.run_background(ctx, CATALOGS, json!({}), Box::new(|_, _, _| {})),
+        Some(Manage::CheckUpdates) => app.run_background(
+            ctx,
+            STORE_UPDATE,
+            json!({}),
+            Box::new(|app, _, v| {
+                let updates = v["updates"].as_array().cloned().unwrap_or_default();
+                if updates.is_empty() {
+                    app.toast(tr("Every plugin is up to date"));
+                }
+                app.ui.plugins_manage.updates = Some(updates);
+            }),
+        ),
         Some(Manage::Browse(server)) => {
             app.ui.plugins_manage.confirm = None;
             app.cancel_background(INSTALL);
@@ -317,11 +381,43 @@ fn manage_window(app: &mut FigApp, ctx: &Context) {
         // Closing the window stops waiting for its server.
         app.cancel_background(LIST);
         app.cancel_background(INSTALL);
+        for id in [STORE_INSTALL, STORE_UPDATE, CATALOGS, ADD_CATALOG] {
+            app.cancel_background(id);
+        }
         app.ui.plugins_manage.confirm = None;
+        app.ui.plugins_manage.install = None;
     }
     if app.ui.plugins_manage.confirm.is_some() {
         confirm_window(app, ctx, &t);
     }
+    if app.ui.plugins_manage.install.is_some() {
+        store_confirm_window(app, ctx, &t);
+    }
+}
+
+/// Read a plugin (`command` is `plugin.install` or `plugin.update`, without `confirm`) and show
+/// its install confirmation when it's in.
+fn get(app: &mut FigApp, ctx: &Context, command: &'static str, request: Value) {
+    app.ui.plugins_manage.install = None;
+    let req = request.clone();
+    app.run_background(
+        ctx,
+        command,
+        request,
+        Box::new(move |app, _, v| {
+            app.ui.plugins_manage.install = Some(StoreInstall { command: command.to_string(), request: req, preview: v });
+        }),
+    );
+}
+
+/// Install plugin ▸ From file…: pick a `.craftplugin` bundle; its confirmation follows.
+pub fn install_file_dialog(app: &mut FigApp) {
+    app.pick_open(tr("Install plugin from file"), &["craftplugin"], |app, p| {
+        let request = json!({"path": p.to_string_lossy()});
+        if let Some(v) = app.run(STORE_INSTALL, request.clone()) {
+            app.ui.plugins_manage.install = Some(StoreInstall { command: STORE_INSTALL.into(), request, preview: v });
+        }
+    });
 }
 
 fn installed_tab(app: &FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
@@ -348,10 +444,230 @@ fn installed_tab(app: &FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
         });
     }
     ui.add_space(12.0);
-    if widgets::button(ui, tr("Import plugin from manifest…"), true, true).clicked() {
-        asked = Some(Manage::Import);
+    ui.horizontal(|ui| {
+        if widgets::button(ui, tr("Install from file…"), true, true).clicked() {
+            asked = Some(Manage::InstallFile);
+        }
+        if widgets::button(ui, tr("Import plugin from manifest…"), false, true).clicked() {
+            asked = Some(Manage::Import);
+        }
+    });
+    // Updates of plugins from catalogs and GitHub: checked only when asked.
+    if plugins.iter().any(|p| p.store) {
+        ui.add_space(8.0);
+        let checking = app.session.waiting_for(STORE_UPDATE);
+        if widgets::button(ui, if checking { tr("Checking…") } else { tr("Check for updates") }, false, !checking).clicked() {
+            asked = Some(Manage::CheckUpdates);
+        }
+        for u in app.ui.plugins_manage.updates.iter().flatten() {
+            let (id, name) = (u["id"].as_str().unwrap_or_default(), u["name"].as_str().unwrap_or_default());
+            let to = u["version"].as_str().or(u["tag"].as_str()).unwrap_or_default();
+            ui.horizontal(|ui| {
+                widgets::label(ui, &trf("{name}: {version} is out", &[("name", &name), ("version", &to)]), t.text);
+                if widgets::button(ui, tr("Update"), true, !app.session.waiting_for(STORE_INSTALL)).clicked() {
+                    asked = Some(Manage::Get(STORE_UPDATE, json!({"id": id})));
+                }
+            });
+        }
     }
     asked
+}
+
+/// Plug-ins from GitHub repositories and catalogs: a repository to install from, the catalogs added
+/// and what they offer. Nothing is fetched until a button is pressed.
+fn catalogs_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
+    let mut asked = None;
+    let busy = app.session.waiting_for(STORE_INSTALL) || app.session.waiting_for(STORE_UPDATE);
+    ui.label(RichText::new(tr("From a GitHub repository")).font(semibold(11.0)).color(t.text));
+    ui.horizontal(|ui| {
+        let mut enter = false;
+        let repo = app.ui.plugins_manage.repo.clone();
+        if let Some(r) = widgets::text_field(ui, Id::unique("plugin_repo"), &repo, MANAGE_W - 90.0, tr("owner/repository or owner/repository@tag")) {
+            enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            app.ui.plugins_manage.repo = r;
+        }
+        let repo = app.ui.plugins_manage.repo.trim().to_string();
+        if (widgets::button(ui, tr("Get"), true, !busy).clicked() || enter) && !repo.is_empty() && !busy {
+            asked = Some(Manage::Get(STORE_INSTALL, json!({"repo": repo})));
+        }
+    });
+    if busy {
+        ui.add_space(4.0);
+        widgets::label(ui, tr("Downloading…"), t.text_secondary);
+    }
+    ui.add_space(12.0);
+    ui.label(RichText::new(tr("Catalogs")).font(semibold(11.0)).color(t.text));
+    let catalogs = app.session.prefs.plugin_catalogs.clone();
+    if catalogs.is_empty() {
+        widgets::label(ui, tr("Add a catalog's address (its index.json) to see the plugins it lists."), t.text_secondary);
+    }
+    for url in &catalogs {
+        ui.horizontal(|ui| {
+            ui.add(egui::Label::new(RichText::new(url).font(regular(11.0)).color(t.text)).truncate());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if widgets::button(ui, tr("Remove"), false, true).clicked() {
+                    asked = Some(Manage::RemoveCatalog(url.clone()));
+                }
+            });
+        });
+    }
+    ui.horizontal(|ui| {
+        let mut enter = false;
+        let url = app.ui.plugins_manage.catalog.clone();
+        if let Some(u) =
+            widgets::text_field(ui, Id::unique("plugin_catalog_url"), &url, MANAGE_W - 90.0, tr("Catalog address (https://…/index.json)"))
+        {
+            enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            app.ui.plugins_manage.catalog = u;
+        }
+        let url = app.ui.plugins_manage.catalog.trim().to_string();
+        if (widgets::button(ui, tr("Add"), false, !app.session.waiting_for(ADD_CATALOG)).clicked() || enter) && !url.is_empty() {
+            asked = Some(Manage::AddCatalog(url));
+        }
+    });
+    if catalogs.is_empty() {
+        return asked;
+    }
+    ui.add_space(8.0);
+    let loading = app.session.waiting_for(CATALOGS);
+    if widgets::button(ui, if loading { tr("Fetching…") } else { tr("Refresh") }, false, !loading).clicked() {
+        asked = Some(Manage::ListCatalogs);
+    }
+    let Some(listing) = app.session.plugins.catalogs.as_ref() else { return asked };
+    for (url, why) in &listing.errors {
+        widgets::label(ui, &trf("{catalog}: {error}", &[("catalog", url), ("error", why)]), t.text_secondary);
+    }
+    ui.add_space(8.0);
+    egui::ScrollArea::vertical().id_salt("plugin_catalog_offers").max_height(300.0).show(ui, |ui| {
+        for (i, o) in listing.offers.iter().enumerate() {
+            if i > 0 {
+                ui.add_space(10.0);
+            }
+            let p = &o.package;
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(ROW_TEXT_W);
+                    ui.label(RichText::new(&p.name).font(semibold(12.0)).color(t.text));
+                    let mut parts = vec![o.release.version.clone()];
+                    if !p.author.is_empty() {
+                        parts.push(trf("by {author}", &[("author", &p.author)]));
+                    }
+                    if let Some(b) = o.release.size {
+                        parts.push(size(b));
+                    }
+                    widgets::label(ui, &parts.join(" · "), t.text_secondary);
+                    if !p.description.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(&p.description).font(regular(11.0)).color(t.text)).wrap());
+                    }
+                });
+                let label = match installed_version(&app.session, &p.id) {
+                    None => Some(tr("Install")),
+                    Some(have) if newer_version(&o.release.version, have) => Some(tr("Update")),
+                    Some(_) => None,
+                };
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if let Some(label) = label
+                        && widgets::button(ui, label, true, !busy).clicked()
+                    {
+                        asked = Some(Manage::Get(STORE_INSTALL, json!({"catalog": o.catalog, "id": p.id})));
+                    }
+                });
+            });
+        }
+    });
+    asked
+}
+
+/// Installing runs a plugin's code: what a plugin from a file, a catalog or a repository asks
+/// permission for, its kind, where it comes from (and when that is in no catalog the user reads)
+/// and its SHA-256. It is installed only when Install is pressed.
+fn store_confirm_window(app: &mut FigApp, ctx: &Context, t: &Tokens) {
+    let Some(pending) = app.ui.plugins_manage.install.clone() else { return };
+    let v = &pending.preview;
+    let update = v["installedVersion"].is_string();
+    let installing = app.session.waiting_for(&pending.command);
+    let title = if update { tr("Update plugin") } else { tr("Install plugin") };
+    let (mut open, mut install, mut cancel) = (true, false, false);
+    window(title, ctx).id(Id::unique("plugin_store_confirm")).open(&mut open).show(ctx, |ui| {
+        ui.set_width(360.0);
+        let s = |k: &str| v[k].as_str().unwrap_or_default().to_string();
+        ui.label(RichText::new(format!("{} {}", s("name"), s("version"))).font(semibold(13.0)).color(t.text));
+        widgets::label(ui, &trf("From {source}", &[("source", &s("from"))]), t.text_secondary);
+        if v["inCatalog"] == json!(false) {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(tr("Not in any catalog you use: nobody has listed this plugin. Install it only if you trust its author."))
+                        .font(semibold(11.0))
+                        .color(t.text),
+                )
+                .wrap(),
+            );
+        }
+        widgets::label(ui, &trf("Kind: {kind}", &[("kind", &s("kind"))]), t.text_secondary);
+        if update && v["permissionsChanged"] == json!(true) {
+            widgets::label(ui, tr("This version asks for different permissions."), t.text);
+        }
+        ui.add_space(10.0);
+        ui.label(RichText::new(tr("It asks permission to:")).font(semibold(11.0)).color(t.text));
+        let perms = &v["permissions"];
+        let mut asks = vec![if perms["access"] == json!("write") { tr("read and edit the document") } else { tr("read the document") }.to_string()];
+        let commands: Vec<&str> = perms["commands"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        asks.push(if commands.is_empty() {
+            tr("call any command its access allows").to_string()
+        } else {
+            trf("call only: {commands}", &[("commands", &commands.join(", "))])
+        });
+        if v["widget"] == json!(true) {
+            asks.push(tr("put a widget on the canvas").to_string());
+        }
+        if perms["saveFile"] == json!(true) {
+            asks.push(tr("offer files to save if it asks to (you choose where each one goes)").to_string());
+        }
+        for a in asks {
+            ui.add(egui::Label::new(RichText::new(format!("•  {a}")).font(regular(11.0)).color(t.text)).wrap());
+        }
+        ui.add_space(8.0);
+        widgets::label(
+            ui,
+            tr("Plugins run in FigCraft's sandbox, without files, network or clock. Install only plugins you trust."),
+            t.text_secondary,
+        );
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(RichText::new(trf("SHA-256: {sha}", &[("sha", &s("sha256"))])).font(regular(10.0)).color(t.text_secondary)).wrap());
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            if installing {
+                widgets::label(ui, tr("Installing…"), t.text_secondary);
+            } else {
+                install = widgets::button(ui, if update { tr("Update") } else { tr("Install") }, true, true).clicked();
+            }
+            cancel = widgets::button(ui, tr("Cancel"), false, true).clicked();
+        });
+    });
+    if !open || cancel {
+        app.cancel_background(&pending.command);
+        app.ui.plugins_manage.install = None;
+    }
+    if install {
+        let mut params = pending.request.clone();
+        params["confirm"] = json!(true);
+        params["sha256"] = v["sha256"].clone();
+        let command = pending.command.clone();
+        app.run_background(
+            ctx,
+            &command,
+            params,
+            Box::new(move |app, _, v| {
+                app.ui.plugins_manage.install = None;
+                if let Some(list) = app.ui.plugins_manage.updates.as_mut() {
+                    list.retain(|u| u["id"] != v["id"]);
+                }
+                let name = v["name"].as_str().unwrap_or(tr("the plugin")).to_string();
+                let args: &[(&str, &dyn std::fmt::Display)] = &[("name", &name)];
+                app.toast(if update { trf("Updated {name}", args) } else { trf("Installed {name}", args) });
+            }),
+        );
+    }
 }
 
 /// A server's plugin directory: its address, a search, and its plugins with Install, Update or
@@ -549,6 +865,7 @@ fn summary(p: &InstalledPlugin) -> String {
         parts.push(tr("can save files").to_string());
     }
     parts.push(match (&p.source, &p.path) {
+        (Some(from), _) if p.store => trf("from {source}", &[("source", from)]),
         (Some(server), _) => trf("from {server}", &[("server", server)]),
         (None, Some(path)) => trf("development: {path}", &[("path", path)]),
         (None, None) => tr("this session only").into(),
