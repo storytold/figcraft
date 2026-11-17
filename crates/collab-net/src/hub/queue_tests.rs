@@ -19,6 +19,7 @@ fn line(block: &Arc<AtomicUsize>, all: &Arc<AtomicUsize>, max_block: usize, max_
     let (tx, rx) = sync_channel(64);
     (
         Line {
+            assets: false,
             tx,
             queued: Arc::default(),
             waiting: Arc::default(),
@@ -79,7 +80,7 @@ fn the_biggest_consumer_is_shed_when_the_budget_runs_out() {
     for id in 1..=3u64 {
         let (l, rx) = line(&Arc::default(), &all, usize::MAX, 10_000);
         receivers.push(rx);
-        conns.insert(id, Conn { out: l, sock: socket(), kind: Kind::Managing { comments: true }, ip });
+        conns.insert(id, Conn { out: l, sock: socket(), kind: Kind::Managing { comments: true }, ip, packed: false });
     }
     // Connection 1 doesn't read: it holds most of the budget.
     let big = Bytes::from(vec![0u8; 9_000]);

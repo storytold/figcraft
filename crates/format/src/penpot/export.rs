@@ -144,6 +144,7 @@ struct Exporter<'a> {
     unchanged_layouts: BTreeSet<NodeId>,
     components: Vec<Value>,
     warnings: Vec<String>,
+    asset_error: Option<String>,
 }
 
 /// Write an offline Penpot 2.x archive and warnings for unsupported native features.
@@ -404,6 +405,7 @@ impl<'a> Exporter<'a> {
                 .collect(),
             components: Vec::new(),
             warnings: Vec::new(),
+            asset_error: None,
         }
     }
 
@@ -546,6 +548,9 @@ impl<'a> Exporter<'a> {
             }
         }
         let mut blobs: Vec<(String, Vec<u8>)> = Vec::new();
+        if let Some(error) = self.asset_error.take() {
+            return Err(FormatError::Io(error));
+        }
         for media in self.media.values() {
             entries.push((
                 format!("{base}/media/{}.json", media.id),
@@ -896,13 +901,20 @@ impl<'a> Exporter<'a> {
     fn image_fill(&mut self, hash: &str, keep_aspect: bool) -> Option<Value> {
         if !self.media.contains_key(hash) {
             let data = self.doc.images.get(hash)?;
-            let (mtype, ext, bytes) = match image::guess_format(&data.bytes) {
-                Ok(image::ImageFormat::Png) => ("image/png", "png", data.bytes.to_vec()),
-                Ok(image::ImageFormat::Jpeg) => ("image/jpeg", "jpg", data.bytes.to_vec()),
-                Ok(image::ImageFormat::WebP) => ("image/webp", "webp", data.bytes.to_vec()),
-                Ok(image::ImageFormat::Gif) => ("image/gif", "gif", data.bytes.to_vec()),
+            let encoded = match figcraft_assets::require(&data.bytes, data.asset.as_ref()) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    self.asset_error = Some(error);
+                    return None;
+                }
+            };
+            let (mtype, ext, bytes) = match image::guess_format(&encoded) {
+                Ok(image::ImageFormat::Png) => ("image/png", "png", encoded.to_vec()),
+                Ok(image::ImageFormat::Jpeg) => ("image/jpeg", "jpg", encoded.to_vec()),
+                Ok(image::ImageFormat::WebP) => ("image/webp", "webp", encoded.to_vec()),
+                Ok(image::ImageFormat::Gif) => ("image/gif", "gif", encoded.to_vec()),
                 _ => {
-                    let decoded = image::load_from_memory(&data.bytes).ok()?;
+                    let decoded = image::load_from_memory(&encoded).ok()?;
                     let mut out = Cursor::new(Vec::new());
                     decoded.write_to(&mut out, image::ImageFormat::Png).ok()?;
                     ("image/png", "png", out.into_inner())

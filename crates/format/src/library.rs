@@ -106,16 +106,24 @@ fn from_native_manifest(m: native::Manifest) -> LibraryManifest {
 /// Write the published library's entries. `written` are the images already in `images/`.
 pub(crate) fn write(z: &mut craft_figcraft_format::ArchiveWriter, lib: &PublishedLibrary, written: &BTreeSet<&String>) -> Result<(), FormatError> {
     let already_written = written.iter().map(|hash| (*hash).clone()).collect();
-    let images = lib.doc.images.iter().map(|(hash, image)| (hash.as_str(), image.bytes.as_slice()));
     native::write_members(
         z,
         &to_native_manifest(&lib.manifest),
-        &crate::FiniteValue(&lib.doc),
+        &crate::FiniteValue(&crate::DocumentJson::new(&lib.doc, false)),
         &crate::native_image_index(&lib.doc),
         &already_written,
-        images,
+        std::iter::empty(),
     )
-    .map_err(io_err)
+    .map_err(io_err)?;
+    // Resolve/write one original at a time; retaining all deferred library images here
+    // would turn a self-contained save into an unbounded cache-sized allocation.
+    for (hash, image) in &lib.doc.images {
+        if !written.contains(hash) && ImageData::is_valid_key(hash) {
+            let bytes = figcraft_assets::require(&image.bytes, image.asset.as_ref()).map_err(FormatError::Io)?;
+            crate::put(z, &format!("{}{hash}", native::IMAGES_PREFIX), craft_figcraft_format::Compression::Stored, &bytes)?;
+        }
+    }
+    Ok(())
 }
 
 /// The published library in an archive (`None` when the file was never published). `own` are
@@ -136,10 +144,20 @@ pub(crate) fn read(
     }
     let text = String::from_utf8(unpacked.read(z, native::DOCUMENT, MAX_MEMBER)?).map_err(corrupt)?;
     let (mut doc, _) = from_json(&text)?;
+    // The archive itself may not introduce external cache capabilities. App-owned recovery
+    // images merged below are already authorized by the containing document.
+    if doc.images.values().any(|image| image.asset.is_some()) {
+        return Err(crate::external_images());
+    }
     let available: BTreeSet<String> = own.keys().cloned().collect();
     let images = native::read_image_resources(z, used_images(&doc), &available, unpacked);
     for (hash, data) in images {
         doc.images.insert(hash, image_data(data));
+    }
+    for hash in used_images(&doc) {
+        if let Some(image) = own.get(&hash) {
+            doc.images.insert(hash, image.clone());
+        }
     }
     // Keep what the snapshot really holds; clip what people see.
     manifest.components.retain(|a| doc.node(a.id).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. })));

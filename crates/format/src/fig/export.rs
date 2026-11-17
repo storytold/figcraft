@@ -201,6 +201,9 @@ message Message MessageType type=1, uint sessionID=2, NodeChange[] nodeChanges=4
 pub fn export(doc: &Document, thumbnail: Option<&[u8]>) -> Result<(Vec<u8>, Vec<String>), FormatError> {
     let mut x = Exporter::new(doc);
     let message = x.message();
+    if let Some(error) = x.asset_error.take() {
+        return Err(FormatError::Io(error));
+    }
     let fail = |e: craft_fig::kiwi::KiwiError| FormatError::Io(format!(".fig export: {e}"));
     let schema = Schema::parse(SCHEMA).map_err(fail)?;
     let root = schema.find("Message").ok_or_else(|| FormatError::Io(".fig export: the schema has no Message".into()))?;
@@ -397,6 +400,7 @@ struct Overlay {
 }
 
 struct Exporter<'d> {
+    asset_error: Option<String>,
     doc: &'d Document,
     /// Layer → local id of its GUID (session [`LAYERS`]).
     ids: BTreeMap<NodeId, u32>,
@@ -447,6 +451,7 @@ struct Bound {
 impl<'d> Exporter<'d> {
     fn new(doc: &'d Document) -> Self {
         Self {
+            asset_error: None,
             doc,
             ids: BTreeMap::new(),
             nodes: Vec::new(),

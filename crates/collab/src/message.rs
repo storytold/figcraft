@@ -850,6 +850,8 @@ pub enum ClientMsg {
     /// Ask for the link of a file on the server's team list (the first message on a connection,
     /// instead of `Hello`).
     ResolveTeam(ResolveTeam),
+    /// Only after negotiating binary assets: request one image from this joined file.
+    FetchAsset(figcraft_assets::AssetRef),
 }
 
 /// Server → client.
@@ -920,6 +922,12 @@ pub enum ServerMsg {
     Resolved {
         file: String,
         token: String,
+    },
+    /// The response to FetchAsset. Immutable binary data is separate from document operations.
+    Asset {
+        asset: figcraft_assets::AssetRef,
+        bytes: Option<figcraft_assets::Blob>,
+        error: Option<String>,
     },
 }
 

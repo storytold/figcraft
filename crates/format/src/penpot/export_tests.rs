@@ -1043,3 +1043,31 @@ fn shared_writer_keeps_manifest_first_and_deflated_members() {
     assert_eq!(archive.manifest["generatedBy"], format!("figcraft/{}", env!("CARGO_PKG_VERSION")));
     assert!(import(&bytes).is_ok());
 }
+
+#[test]
+fn deferred_originals_are_embedded_in_penpot_and_missing_ones_refuse_export() {
+    use std::sync::Arc;
+    let mut png = Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([19, 37, 71, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let png = png.into_inner();
+    let mut asset = figcraft_assets::AssetRef::of(&png);
+    asset.scope = crate::image_hash(b"synthetic scoped penpot original");
+    figcraft_assets::cache::store(&asset, &png).unwrap();
+    let mut doc = Document::new("Synthetic scoped original export");
+    let page = doc.first_page().unwrap();
+    let node = doc.create(page, NodeKind::Rectangle, "Original", 0.0, 0.0, 10.0, 10.0).unwrap();
+    doc.get_mut(node).unwrap().fills = vec![Paint::image("original", ImageScaleMode::Fill)];
+    doc.images.insert("original".into(), figcraft_doc::ImageData { bytes: Arc::new(Vec::new()), asset: Some(asset.clone()), width: 1, height: 1 });
+    let (bytes, _) = export(&doc).unwrap();
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let name = zip.file_names().find(|name| name.starts_with("objects/") && name.ends_with(".png")).unwrap().to_owned();
+    let mut actual = Vec::new();
+    zip.by_name(&name).unwrap().read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, png);
+    assert!(doc.images["original"].bytes.is_empty());
+    assert_eq!(doc.images["original"].asset.as_ref(), Some(&asset));
+    let mut absent = figcraft_assets::AssetRef::of(b"synthetic unavailable penpot original");
+    absent.scope = asset.scope;
+    doc.images.get_mut("original").unwrap().asset = Some(absent);
+    assert!(export(&doc).is_err(), "a missing original must not silently become an image-less archive");
+}
