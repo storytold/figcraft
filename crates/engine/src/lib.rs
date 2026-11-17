@@ -460,6 +460,8 @@ mod page_clipboard_tests;
 #[cfg(test)]
 mod page_copy_navigation_tests;
 #[cfg(test)]
+mod page_opening_tests;
+#[cfg(test)]
 mod page_target_tests;
 #[cfg(test)]
 mod paint_index_tests;
@@ -666,6 +668,8 @@ mod widget_shapes_tests;
 #[cfg(test)]
 mod widgets_tests;
 
+#[cfg(test)]
+mod page_view_tests;
 #[cfg(test)]
 mod selection_reorder_tests;
 #[cfg(test)]

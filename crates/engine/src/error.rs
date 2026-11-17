@@ -43,6 +43,8 @@ impl EngineError {
         match self {
             EngineError::BadParams { cmd, msg } => EngineError::BadParams { cmd, msg: format!("step {step}: {msg}") },
             EngineError::Other(msg) => EngineError::Other(format!("step {step}: {msg}")),
+            EngineError::Disabled(cmd, msg) => EngineError::Disabled(cmd, format!("step {step}: {msg}")),
+            EngineError::Internal { cmd, msg } => EngineError::Internal { cmd, msg: format!("step {step}: {msg}") },
             e => e,
         }
     }

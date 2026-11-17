@@ -94,8 +94,14 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   (writing through it would create its target, wherever that is). A path outside the roots gets
   the same refusal whatever exists there, so a refusal doesn't tell what is outside. Folders are
   compared by whole names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
-  inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
-  and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+  inside `C:\work`), `\\?\C:\…` paths are resolved like drive-letter ones, and
+  new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+  A path on another computer (`\\server\share\…`, `\\?\UNC\…`, WebDAV's `\\host@SSL\share\…`) or a device
+  path (`\\.\pipe\…`, `\\?\GLOBALROOT\…`) is refused by its spelling before anything looks it up, since looking
+  it up would contact that host, unless a root is on the same share; a link whose target is one of those is
+  refused too. A local volume's `\\?\Volume{…}\` path is let through. A link whose text is a native NT name
+  (`\Device\…`, `\??\…`, `\GLOBAL??\…`) is refused as a device path, and so is a name that ends in a period or a space, in a
+  path or as a link's target, since Windows trims it where it looks a name up.
 - **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
   document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
   `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
@@ -182,6 +188,18 @@ Or in a project's `.mcp.json`:
   leaves its contents where they are, and so does resizing a frame with `cmd` held (constraints
   ignored); a layer a mask hides can't be clicked there, and a mask group's box and exports are
   the mask's (plus any layers under the mask).
+- Repeated UI (buttons, inputs, cards, list rows, tab bars, icons) is a component and its copies
+  are instances: make it once with `component.create` (or `create_node` type `component`) and place
+  each other copy with `instance.create {component, parent?, x?, y?}` rather than duplicating the
+  layers, so every copy follows the main. States and sizes are variants of one set: name the mains
+  `Property=value` (`State=Default`, `State=Hover`) and run `component.combineVariants` on them;
+  `component.addVariant {id}` adds one more. What changes per copy is a component property:
+  `component.addProperty {id, name, type: text|boolean|instanceSwap, layer}` on the component, or
+  on the set once its variants are combined, then `component.bindProperty {layer, property}` for
+  each other variant's layer (a property added to one variant before combining stays that
+  variant's, so an instance switched to another variant loses it); `instance.setProperties {ids,
+  properties}` sets it on each copy. The server's `initialize` instructions say this too, since
+  agents otherwise tend to copy layers.
 - Children of an auto-layout frame are positioned by the layout: set `layout`, `gap`, `padding`,
   `mainAlign`, `crossAlign`, `sizingH`/`sizingV` instead of x/y. In one call, `layout` applies
   before the keys that tune it, so `{"layout": {"mode": "vertical"}, "gap": 8}` keeps the gap;
@@ -691,7 +709,10 @@ on; `key` resolves keys the way the canvas does. Commands behind keys:
   in the pages list, never opened and holding no layers), `page.list` (each page's `divider`),
   `page.rename`, `page.move {id, index}`, `page.duplicate` ("Copy of …", after its source, with its colour,
   flows (starting at the copied frames), prototype settings and guides),
-  `page.delete` (the last page that isn't a divider stays).
+  `page.delete` (the last page that isn't a divider stays), `page.setOpening {id?}` (the page the
+  file opens on for everyone who opens or joins it, the current page when none is named, a divider
+  refused: a document change, so it syncs in a live session and undoes, #1817; the choice is saved
+  with the file and opens it for everyone, whichever page the saver was on).
 - `component.list`: each component's `folder` (the Assets panel's folders: its page, the frames
   holding it, then its name's slash parts) and `label` (the name on its tile).
 - `view.contextMenu` (`Shift+F10`): the selection's context menu, at its layer row when the layers
