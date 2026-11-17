@@ -1027,3 +1027,19 @@ fn stored_variable_ids_keep_penpot_token_identity() {
         assert_eq!(width, &expected);
     }
 }
+
+#[test]
+fn shared_writer_keeps_manifest_first_and_deflated_members() {
+    let doc = Document::new("Shared container");
+    let (bytes, _) = export(&doc).unwrap();
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+    assert_eq!(zip.by_index(0).unwrap().name(), "manifest.json");
+    for index in 0..zip.len() {
+        assert_eq!(zip.by_index(index).unwrap().compression(), zip::CompressionMethod::Deflated);
+    }
+    let archive = craft_penpot::Archive::open(&bytes).unwrap();
+    assert_eq!(archive.files.len(), 1);
+    assert_eq!(archive.files[0].name.as_deref(), Some("Shared container"));
+    assert_eq!(archive.manifest["generatedBy"], format!("figcraft/{}", env!("CARGO_PKG_VERSION")));
+    assert!(import(&bytes).is_ok());
+}

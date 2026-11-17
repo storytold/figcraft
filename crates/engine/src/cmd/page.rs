@@ -53,9 +53,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Ok(json!({"id": id, "divider": true}));
             }
             let ds = s.ds_mut()?;
-            ds.page = id;
+            ds.open_page(id);
             ds.selection.clear();
-            ds.zoom_to_fit();
             Ok(json!({"id": id}))
         }),
         spec!("page.select", "Go to page", "{id | index}", false, |s, p| {
@@ -74,10 +73,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Err(bad("page.select", "a divider isn't a page to open"));
             }
             let ds = s.ds_mut()?;
-            ds.page = id;
+            ds.open_page(id);
             ds.selection.clear();
             ds.text_edit = None;
-            ds.zoom_to_fit();
             ok()
         }),
         spec!("page.rename", "Rename page", "{id?, name} (an empty page named with a leading hyphen becomes a divider)", true, |s, p| {
