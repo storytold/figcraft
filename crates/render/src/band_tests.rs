@@ -163,3 +163,75 @@ fn huge_backdrop_blur_renders_in_one_piece() {
     assert!(render_bands(&d, p, &view(1.0), &Options::default(), 4).is_none());
     assert!(render_view(&d, p, &view(1.0), &Options::default()).is_some());
 }
+
+/// [`row_diffs`] down the columns: an artifact of column bands runs down a whole column.
+fn col_diffs(a: &Pixmap, b: &Pixmap) -> Vec<(f64, usize)> {
+    let (w, h) = (a.width() as usize, a.height() as usize);
+    let column = |p: &Pixmap, x: usize| -> Vec<u8> { (0..h).flat_map(|y| p.data()[(y * w + x) * 4..(y * w + x) * 4 + 4].to_vec()).collect() };
+    (0..w).map(|x| row_stats(&column(a, x), &column(b, x))).collect()
+}
+
+#[test]
+fn columns_match_one_piece_rendering() {
+    let (d, p) = scene(true, true);
+    for scale in [1.0, 2.0] {
+        let v = view(scale);
+        let one = render_view_single(&d, p, &v, &Options::default()).unwrap();
+        for bands in [2, 3, 7] {
+            let banded = render_columns(&d, p, &v, &Options::default(), bands).unwrap();
+            assert_eq!((banded.width(), banded.height()), (one.width(), one.height()));
+            for (x, (mean, off)) in col_diffs(&one, &banded).into_iter().enumerate() {
+                assert!(
+                    row_ok(mean, off, v.height as usize),
+                    "scale {scale}, {bands} columns: column {x} differs ({off} pixels, {mean:.2} on average)"
+                );
+            }
+        }
+    }
+    let (mut d, p) = scene(true, true);
+    let g = d.find_by_name("Glass", None)[0];
+    d.get_mut(g).unwrap().effects = vec![Effect { kind: EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(1e6)), visible: true }];
+    assert!(render_columns(&d, p, &view(1.0), &Options::default(), 4).is_none(), "a blur past a whole column: in one piece");
+}
+
+/// The strips a pan uncovers render in bands along their longer side, and match one piece: no row
+/// or column where a band's edge shows (a seam differs along all of it). A strip is too narrow for
+/// [`row_ok`]'s mean: the edge antialiasing every band render has (a few pixels along a curve)
+/// outweighs it there, so this counts the pixels that differ at all.
+#[test]
+fn a_tall_or_wide_part_of_a_view_matches_one_piece_rendering() {
+    let (d, p) = scene(true, true);
+    for (w, h) in [(60, 480), (880, 60), (200, 200)] {
+        let v = View { origin: (35.0, -10.0), scale: 2.0, width: w, height: h };
+        let one = render_view_single(&d, p, &v, &Options::default()).unwrap();
+        let part = render_part(&d, p, &v, &Options::default()).unwrap();
+        assert_eq!((part.width(), part.height()), (w, h));
+        for (y, (_, off)) in row_diffs(&one, &part).into_iter().enumerate() {
+            assert!(off * 20 <= w as usize, "{w} x {h}: row {y} differs in {off} pixels");
+        }
+        for (x, (_, off)) in col_diffs(&one, &part).into_iter().enumerate() {
+            assert!(off * 20 <= h as usize, "{w} x {h}: column {x} differs in {off} pixels");
+        }
+    }
+}
+/// A textured layer scatters its pixels up to the texture's radius, past where a band cuts the
+/// view; it is drawn off screen whole before it is cut, so column and row bands show it exactly as
+/// one piece does, clipped to its shape or not.
+#[test]
+fn a_textured_layer_renders_the_same_in_bands() {
+    for clip_to_shape in [false, true] {
+        let mut d = Document::new("texture");
+        let p = d.first_page().unwrap();
+        let r = d.create(p, NodeKind::Rectangle, "T", 20.0, 20.0, 400.0, 200.0).unwrap();
+        let n = d.get_mut(r).unwrap();
+        n.fills = vec![Paint::solid(Color::from_hex("E03030").unwrap())];
+        let texture = figcraft_doc::Texture { size: 0.5, radius: 12.0, clip_to_shape, ..Default::default() };
+        n.effects = vec![Effect { kind: EffectKind::Texture(texture), visible: true }];
+        let v = View { origin: (0.0, 0.0), scale: 1.7, width: 760, height: 400 };
+        let one = render_view_single(&d, p, &v, &Options::default()).unwrap();
+        for bands in [2, 3, 7] {
+            assert!(render_columns(&d, p, &v, &Options::default(), bands).unwrap().data() == one.data(), "{bands} columns");
+            assert!(render_bands(&d, p, &v, &Options::default(), bands).unwrap().data() == one.data(), "{bands} rows");
+        }
+    }
+}

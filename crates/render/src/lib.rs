@@ -138,6 +138,58 @@ pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) ->
     render_one(doc, page, view, opts)
 }
 
+/// [`render_view`] for a part of a view a retained render redraws (the strips a pan uncovers, the
+/// area of an edit): in parallel bands however few pixels it has, along its longer side (rows of a
+/// tall strip, columns of a wide one), since what it costs is the layers it crosses (a shadow is
+/// drawn whole for a sliver of it), not its pixels.
+pub(crate) fn render_part(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+    start_render();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(pool) = band_pool() {
+        let threads = pool.current_num_threads().clamp(1, 16) as u32;
+        let rendered = if view.height >= view.width {
+            let bands = threads.min(view.height / 96);
+            (bands > 1).then(|| pool.install(|| render_bands(doc, page, view, opts, bands))).flatten()
+        } else {
+            let bands = threads.min(view.width / 96);
+            (bands > 1).then(|| pool.install(|| render_columns(doc, page, view, opts, bands))).flatten()
+        };
+        if rendered.is_some() {
+            return rendered;
+        }
+    }
+    render_one(doc, page, view, opts)
+}
+
+/// [`render_bands`] across: `bands` columns, overlapping by what background blurs read.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_columns(doc: &Document, page: NodeId, view: &View, opts: &Options, bands: u32) -> Option<Pixmap> {
+    use rayon::prelude::*;
+    let band_w = view.width.div_ceil(bands.max(1));
+    let overlap = band_overlap(doc, view, band_w)?;
+    let s = view.scale.max(1e-9);
+    let parts: Vec<(u32, Option<Pixmap>)> = (0..bands)
+        .into_par_iter()
+        .map(|i| {
+            let x0 = i * band_w;
+            let w = band_w.min(view.width.saturating_sub(x0)).max(1);
+            let left = x0.saturating_sub(overlap);
+            let right = (x0 + w + overlap).min(view.width).max(x0 + w);
+            let v =
+                View { origin: (view.origin.0 + f64::from(left) / s, view.origin.1), scale: view.scale, width: right - left, height: view.height };
+            let own = tiny_skia::IntRect::from_xywh((x0 - left) as i32, 0, w, view.height.clamp(1, 16_384));
+            (x0, render_one(doc, page, &v, opts).zip(own).and_then(|(p, r)| p.clone_rect(r)))
+        })
+        .collect();
+    let mut out = new_pixmap(view.width, view.height)?;
+    let copy = tiny_skia::PixmapPaint { blend_mode: tiny_skia::BlendMode::Source, ..Default::default() };
+    for (x0, part) in parts {
+        let part = part?;
+        out.draw_pixmap(x0 as i32, 0, part.as_ref(), &copy, tiny_skia::Transform::identity(), None);
+    }
+    Some(out)
+}
+
 /// The stack a thread that renders needs (#1082). A level of the layer tree takes about 6.5 KB of
 /// stack in a render (6.8 KB in a debug build), so the deepest render [`MAX_EXPORT_DEPTH`] allows,
 /// pattern sources included, needs about 1.7 MB: more than the 2 MiB threads get by default once
@@ -589,6 +641,8 @@ mod magnified_image_tests;
 mod mask_bounds_tests;
 #[cfg(test)]
 mod paint_behaviour_tests;
+#[cfg(test)]
+mod pan_bench_tests;
 #[cfg(test)]
 mod progressive_tests;
 #[cfg(test)]
