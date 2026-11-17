@@ -106,6 +106,22 @@ fn bad_arguments_exit_2_without_panicking() {
     assert_eq!(out.status.code(), Some(1));
 }
 
+#[test]
+fn post_parse_errors_escape_terminal_controls() {
+    let missing = format!("__figcraft_missing_diagnostic_{}_\u{1b}[31m\n.figcraft", std::process::id());
+    let failed = ["info", missing.as_str()];
+    let usage = ["connect", "publish", "invalid-\u{1b}[31m\n.txt"];
+    for (args, expected) in [(&failed[..], 1), (&usage[..], 2)] {
+        let out = bin().arg("--no-system-fonts").args(args).output().unwrap();
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(expected), "{args:?}: {error:?}");
+        assert!(error.starts_with("error: "), "{args:?}: {error:?}");
+        assert!(!error.contains('\u{1b}'), "{args:?}: {error:?}");
+        assert!(error.contains(r"\u{1b}[31m\n"), "{args:?}: {error:?}");
+        assert!(out.stdout.is_empty(), "{args:?}");
+    }
+}
+
 /// `--help` / `-h` after a subcommand prints that subcommand's help on stdout and exits 0, as it
 /// does first (#1155), whatever else is on the line; nothing runs.
 #[test]
