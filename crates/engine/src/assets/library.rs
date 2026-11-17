@@ -1158,10 +1158,12 @@ pub fn prune(doc: &mut Document, library: &str) -> Result<()> {
         doc.styles.retain(|s| !unused.contains(&s.id));
         doc.libraries_mut().styles.retain(|r| !unused.contains(&r.local));
     }
-    // Variables layers bind or set, local variables alias or extend (with what those alias).
+    // Variables layers bind or set, styles bind, local variables alias or extend (with what those
+    // alias).
     let seeds = doc
         .nodes()
         .flat_map(|n| n.bound.values().map(String::as_str).chain(action_variables(n)))
+        .chain(doc.styles.iter().flat_map(|s| s.bound.values().map(String::as_str)))
         .chain(doc.variables.variables.iter().filter_map(|v| v.extends.as_deref()))
         .map(str::to_string)
         .chain(
