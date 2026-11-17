@@ -119,35 +119,43 @@ struct Clicks {
 
 fn body(ui: &mut egui::Ui, t: &Tokens, shown: &Shown) -> Clicks {
     let mut clicks = Clicks::default();
+    let rtl = crate::i18n::right_to_left();
     ui.set_width(380.0);
-    if shown.indexing {
-        ui.label(tr("Checking the fonts installed on this computer…"));
-    } else if shown.families.is_empty() {
-        ui.label(tr("All the fonts this file uses are installed"));
-    } else {
-        ui.label(
-            RichText::new(tr(
-                "This file uses fonts that aren't installed on this computer. Their text is drawn in a fallback font until you install them.",
-            ))
-            .color(t.text_secondary)
-            .font(regular(11.0)),
-        );
-        ui.add_space(6.0);
-        let jobs = downloads();
-        egui::ScrollArea::vertical().id_salt("missing_fonts").max_height(260.0).show(ui, |ui| {
-            for m in &shown.families {
-                let job = jobs.iter().find(|(f, _)| f.eq_ignore_ascii_case(&m.family)).map(|(_, d)| d);
-                if row(ui, t, m, job) {
-                    clicks.download = Some(m.family.clone());
-                }
+    // This window is part of native file recovery. Put explanations, font families and
+    // the close action on the reading edge, without changing any download decisions.
+    ui.with_layout(
+        egui::Layout::top_down(if rtl { egui::Align::RIGHT } else { egui::Align::LEFT }),
+        |ui| {
+            if shown.indexing {
+                ui.label(tr("Checking the fonts installed on this computer…"));
+            } else if shown.families.is_empty() {
+                ui.label(tr("All the fonts this file uses are installed"));
+            } else {
+                ui.label(
+                    RichText::new(tr(
+                        "This file uses fonts that aren't installed on this computer. Their text is drawn in a fallback font until you install them.",
+                    ))
+                    .color(t.text_secondary)
+                    .font(regular(11.0)),
+                );
+                ui.add_space(6.0);
+                let jobs = downloads();
+                egui::ScrollArea::vertical().id_salt("missing_fonts").max_height(260.0).show(ui, |ui| {
+                    for m in &shown.families {
+                        let job = jobs.iter().find(|(f, _)| f.eq_ignore_ascii_case(&m.family)).map(|(_, d)| d);
+                        if row(ui, t, m, job, rtl) {
+                            clicks.download = Some(m.family.clone());
+                        }
+                    }
+                });
             }
-        });
-    }
-    if shown.consent.is_some() {
-        clicks.consent = consent_prompt(ui, t);
-    }
-    ui.add_space(12.0);
-    clicks.close = crate::widgets::button(ui, tr("Close"), true, true).clicked();
+            if shown.consent.is_some() {
+                clicks.consent = consent_prompt(ui, t, rtl);
+            }
+            ui.add_space(12.0);
+            clicks.close = crate::widgets::button(ui, tr("Close"), true, true).clicked();
+        },
+    );
     clicks
 }
 
@@ -174,14 +182,26 @@ fn act(app: &mut FigApp, clicks: Clicks) {
 /// One missing family: its name, where the file uses it, and for a family the font store has,
 /// where it comes from and its Download button (its progress while it downloads, and why it
 /// failed). Returns whether Download was clicked.
-fn row(ui: &mut egui::Ui, t: &Tokens, m: &Missing, job: Option<&Download>) -> bool {
+fn row(ui: &mut egui::Ui, t: &Tokens, m: &Missing, job: Option<&Download>, rtl: bool) -> bool {
     let mut clicked = false;
-    ui.horizontal(|ui| {
+    // Family and layer count begin at the locale's reading edge; the source and
+    // optional download action stay at the opposite edge in both directions.
+    let reading_edge = if rtl {
+        egui::Layout::right_to_left(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    };
+    let action_edge = if rtl {
+        egui::Layout::left_to_right(egui::Align::Center)
+    } else {
+        egui::Layout::right_to_left(egui::Align::Center)
+    };
+    ui.with_layout(reading_edge, |ui| {
         ui.label(RichText::new(&m.family).strong());
         let used = if m.layers == 0 { tr("only in a text style or variable").to_string() } else { trn("{n} text layers", m.layers, &[]) };
         ui.label(RichText::new(used).color(t.text_secondary));
         let Some(source) = &m.source else { return };
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(action_edge, |ui| {
             match job {
                 Some(Download::Running { done, total }) => {
                     let percent = if *total == 0 { 0 } else { done.saturating_mul(100) / total };
@@ -202,7 +222,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, m: &Missing, job: Option<&Download>) -> bo
 
 /// Asks the user to turn downloading fonts on (the setting every Craft app shares): `Some(true)`
 /// when they allow it, `Some(false)` for Not now.
-fn consent_prompt(ui: &mut egui::Ui, t: &Tokens) -> Option<bool> {
+fn consent_prompt(ui: &mut egui::Ui, t: &Tokens, rtl: bool) -> Option<bool> {
     ui.add_space(10.0);
     crate::widgets::separator(ui);
     ui.add_space(6.0);
@@ -218,7 +238,14 @@ fn consent_prompt(ui: &mut egui::Ui, t: &Tokens) -> Option<bool> {
         .wrap(),
     );
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    // The approval remains an explicit click. Mirroring the button positions
+    // must not turn a font download on or change the meaning of either answer.
+    let layout = if rtl {
+        egui::Layout::right_to_left(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    };
+    ui.with_layout(layout, |ui| {
         if crate::widgets::button(ui, tr("Allow and download"), true, true).clicked() {
             Some(true)
         } else if crate::widgets::button(ui, tr("Not now"), false, true).clicked() {
