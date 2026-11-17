@@ -214,3 +214,24 @@ fn a_tall_or_wide_part_of_a_view_matches_one_piece_rendering() {
         }
     }
 }
+/// A textured layer scatters its pixels up to the texture's radius, past where a band cuts the
+/// view; it is drawn off screen whole before it is cut, so column and row bands show it exactly as
+/// one piece does, clipped to its shape or not.
+#[test]
+fn a_textured_layer_renders_the_same_in_bands() {
+    for clip_to_shape in [false, true] {
+        let mut d = Document::new("texture");
+        let p = d.first_page().unwrap();
+        let r = d.create(p, NodeKind::Rectangle, "T", 20.0, 20.0, 400.0, 200.0).unwrap();
+        let n = d.get_mut(r).unwrap();
+        n.fills = vec![Paint::solid(Color::from_hex("E03030").unwrap())];
+        let texture = figcraft_doc::Texture { size: 0.5, radius: 12.0, clip_to_shape, ..Default::default() };
+        n.effects = vec![Effect { kind: EffectKind::Texture(texture), visible: true }];
+        let v = View { origin: (0.0, 0.0), scale: 1.7, width: 760, height: 400 };
+        let one = render_view_single(&d, p, &v, &Options::default()).unwrap();
+        for bands in [2, 3, 7] {
+            assert!(render_columns(&d, p, &v, &Options::default(), bands).unwrap().data() == one.data(), "{bands} columns");
+            assert!(render_bands(&d, p, &v, &Options::default(), bands).unwrap().data() == one.data(), "{bands} rows");
+        }
+    }
+}
