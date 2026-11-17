@@ -1236,7 +1236,7 @@ dependencies = [
 [[package]]
 name = "craft-vectordrawable"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=d13ac58a15c45d618f25910772502e38c4ce1d4c#d13ac58a15c45d618f25910772502e38c4ce1d4c"
+source = "git+https://github.com/storytold/craft-libs?rev=1d5255e07f2463ea784860505e1f7ce68d6adffd#1d5255e07f2463ea784860505e1f7ce68d6adffd"
 dependencies = [
  "kurbo",
 ]
