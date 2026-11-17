@@ -182,6 +182,18 @@ Or in a project's `.mcp.json`:
   leaves its contents where they are, and so does resizing a frame with `cmd` held (constraints
   ignored); a layer a mask hides can't be clicked there, and a mask group's box and exports are
   the mask's (plus any layers under the mask).
+- Repeated UI (buttons, inputs, cards, list rows, tab bars, icons) is a component and its copies
+  are instances: make it once with `component.create` (or `create_node` type `component`) and place
+  each other copy with `instance.create {component, parent?, x?, y?}` rather than duplicating the
+  layers, so every copy follows the main. States and sizes are variants of one set: name the mains
+  `Property=value` (`State=Default`, `State=Hover`) and run `component.combineVariants` on them;
+  `component.addVariant {id}` adds one more. What changes per copy is a component property:
+  `component.addProperty {id, name, type: text|boolean|instanceSwap, layer}` on the component, or
+  on the set once its variants are combined, then `component.bindProperty {layer, property}` for
+  each other variant's layer (a property added to one variant before combining stays that
+  variant's, so an instance switched to another variant loses it); `instance.setProperties {ids,
+  properties}` sets it on each copy. The server's `initialize` instructions say this too, since
+  agents otherwise tend to copy layers.
 - Children of an auto-layout frame are positioned by the layout: set `layout`, `gap`, `padding`,
   `mainAlign`, `crossAlign`, `sizingH`/`sizingV` instead of x/y. In one call, `layout` applies
   before the keys that tune it, so `{"layout": {"mode": "vertical"}, "gap": 8}` keeps the gap;
