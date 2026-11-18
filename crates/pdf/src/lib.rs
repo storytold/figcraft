@@ -78,6 +78,12 @@ pub enum PdfError {
     Write(String),
 }
 
+impl From<craft_pdf::write::WriteError> for PdfError {
+    fn from(e: craft_pdf::write::WriteError) -> Self {
+        Self::Write(e.to_string())
+    }
+}
+
 /// Largest page side, in points (PDF 1.7 has no hard limit; viewers cope with this).
 pub const MAX_PAGE_SIDE: f64 = 200_000.0;
 
@@ -149,7 +155,7 @@ fn link_annotation(r: Rect, url: String, w: f64, h: f64) -> Option<krilla::annot
     }
     let r = r.intersect(Rect::new(0.0, 0.0, w, h));
     let url = url.trim();
-    if !(r.width() > 0.0 && r.height() > 0.0) || url.is_empty() || url.len() > MAX_URL {
+    if !(r.width() > 0.0 && r.height() > 0.0) || url.is_empty() || url.len() > MAX_URL || !craft_pdf::safe_url(url) {
         return None;
     }
     let rect = krilla::geom::Rect::from_ltrb(r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32)?;
@@ -162,6 +168,10 @@ fn rect_finite(r: Rect) -> bool {
 }
 
 fn write(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
+    craft_pdf::write::guard(|| write_inner(doc, pages, opts))
+}
+
+fn write_inner(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
     let mut pdf = krilla::Document::new();
     let mut meta = krilla::metadata::Metadata::new().creator("FigCraft".into()).producer("FigCraft".into());
     if let Some(t) = opts.title.as_ref().filter(|t| !t.trim().is_empty()) {
