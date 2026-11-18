@@ -8,6 +8,17 @@ name = "עברית"
 status = "draft — needs native review"
 
 [ui]
+# 18 Nov 2026 DAY-02 10:00: collaboration, review state and connection recovery UI; English source-matched Hebrew draft.
+"Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…" = "החיבור נותק. העריכות שלך יישמרו כאן ויסונכרנו כשהחיבור יחודש. מנסים להתחבר מחדש…"
+"Resolve" = "סימון כטופל"
+"Resolve change" = "סימון השינוי כטופל"
+"Resolved" = "טופל"
+"Unresolve" = "ביטול סימון כטופל"
+"Only the first changed layers are listed." = "מוצגות רק השכבות הראשונות שהשתנו."
+"Updated {components} and {styles}" = "עודכנו {components} ו־{styles}"
+"What this changed from isn't known: it changed before FigCraft kept a copy of ready-for-dev frames. Resolve the change (or mark it ready again) to compare from now on." = "לא ידוע מה היה המצב לפני השינוי: הוא בוצע לפני ש־FigCraft החל לשמור עותקים של מסגרות מוכנות לפיתוח. יש לסמן את השינוי כטופל (או לסמן את המסגרת שוב כמוכנה לפיתוח) כדי להשוות שינויים מעתה ואילך."
+"Toggle visibility" = "הצגה או הסתרה"
+"In an instance, this comes from the main component" = "במופע, הערך הזה מגיע מהרכיב הראשי"
 # 18 Nov 2026 DAY-01 09:55: component/instance import diagnostics, source-exact Hebrew draft.
 "instances without a main component were imported as empty frames" = "מופעים ללא רכיב ראשי יובאו כמסגרות ריקות"
 "instances that would nest a component inside itself were imported as frames" = "מופעים שהיו גורמים לרכיב להכיל את עצמו יובאו כמסגרות"
