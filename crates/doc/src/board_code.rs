@@ -50,45 +50,33 @@ impl CodeLanguage {
 
     /// The id used in commands and saved files ("cpp", "plainText", "typescript").
     pub fn id(self) -> &'static str {
-        match self {
-            CodeLanguage::Bash => "bash",
-            CodeLanguage::Cpp => "cpp",
-            CodeLanguage::Css => "css",
-            CodeLanguage::Go => "go",
-            CodeLanguage::Graphql => "graphql",
-            CodeLanguage::Html => "html",
-            CodeLanguage::Javascript => "javascript",
-            CodeLanguage::Json => "json",
-            CodeLanguage::Kotlin => "kotlin",
-            CodeLanguage::PlainText => "plainText",
-            CodeLanguage::Python => "python",
-            CodeLanguage::Ruby => "ruby",
-            CodeLanguage::Rust => "rust",
-            CodeLanguage::Sql => "sql",
-            CodeLanguage::Swift => "swift",
-            CodeLanguage::Typescript => "typescript",
-        }
+        self.names().0
     }
 
     /// The name shown in the UI ("C++", "Plain text", "TypeScript").
     pub fn label(self) -> &'static str {
+        self.names().1
+    }
+
+    /// The id and the name shown.
+    fn names(self) -> (&'static str, &'static str) {
         match self {
-            CodeLanguage::Bash => "Bash",
-            CodeLanguage::Cpp => "C++",
-            CodeLanguage::Css => "CSS",
-            CodeLanguage::Go => "Go",
-            CodeLanguage::Graphql => "GraphQL",
-            CodeLanguage::Html => "HTML",
-            CodeLanguage::Javascript => "JavaScript",
-            CodeLanguage::Json => "JSON",
-            CodeLanguage::Kotlin => "Kotlin",
-            CodeLanguage::PlainText => "Plain text",
-            CodeLanguage::Python => "Python",
-            CodeLanguage::Ruby => "Ruby",
-            CodeLanguage::Rust => "Rust",
-            CodeLanguage::Sql => "SQL",
-            CodeLanguage::Swift => "Swift",
-            CodeLanguage::Typescript => "TypeScript",
+            CodeLanguage::Bash => ("bash", "Bash"),
+            CodeLanguage::Cpp => ("cpp", "C++"),
+            CodeLanguage::Css => ("css", "CSS"),
+            CodeLanguage::Go => ("go", "Go"),
+            CodeLanguage::Graphql => ("graphql", "GraphQL"),
+            CodeLanguage::Html => ("html", "HTML"),
+            CodeLanguage::Javascript => ("javascript", "JavaScript"),
+            CodeLanguage::Json => ("json", "JSON"),
+            CodeLanguage::Kotlin => ("kotlin", "Kotlin"),
+            CodeLanguage::PlainText => ("plainText", "Plain text"),
+            CodeLanguage::Python => ("python", "Python"),
+            CodeLanguage::Ruby => ("ruby", "Ruby"),
+            CodeLanguage::Rust => ("rust", "Rust"),
+            CodeLanguage::Sql => ("sql", "SQL"),
+            CodeLanguage::Swift => ("swift", "Swift"),
+            CodeLanguage::Typescript => ("typescript", "TypeScript"),
         }
     }
 
