@@ -8,6 +8,17 @@ name = "עברית"
 status = "draft — needs native review"
 
 [ui]
+# 18 Nov 2026 DAY-01 09:55: component/instance import diagnostics, source-exact Hebrew draft.
+"instances without a main component were imported as empty frames" = "מופעים ללא רכיב ראשי יובאו כמסגרות ריקות"
+"instances that would nest a component inside itself were imported as frames" = "מופעים שהיו גורמים לרכיב להכיל את עצמו יובאו כמסגרות"
+"instances inside their own main component were imported as frames" = "מופעים בתוך הרכיב הראשי שלהם יובאו כמסגרות"
+"instances of components that aren't in the file show no layers" = "מופעים של רכיבים שאינם בקובץ מוצגים ללא שכבות"
+"instances whose component was past the layer limit were imported as frames" = "מופעים שהרכיב שלהם חרג ממגבלת השכבות יובאו כמסגרות"
+"instance swap properties whose default component isn't in the file were skipped" = "דולגו מאפייני החלפת רכיב שרכיב ברירת המחדל שלהם אינו בקובץ"
+"instance swap properties whose default component was past the layer limit were skipped" = "דולגו מאפייני החלפת רכיב שרכיב ברירת המחדל שלהם חרג ממגבלת השכבות"
+"swapped instances whose previous component isn't in the file took the new component's look" = "מופעים שהוחלפו והרכיב הקודם שלהם אינו בקובץ קיבלו את מראה הרכיב החדש"
+"unknown component property types were skipped" = "דולגו סוגים לא מוכרים של מאפייני רכיב"
+"slot layers without a matching slot property were imported as frames" = "שכבות של משבצות ללא מאפיין משבצת מתאים יובאו כמסגרות"
 # 18 Nov 2026 DAY-02: source-matched Variables UI strings; independent Hebrew draft.
 "CSS custom properties…" = "מאפייני CSS מותאמים אישית…"
 "Dart constants for Flutter…" = "קבועי Dart עבור Flutter…"
