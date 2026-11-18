@@ -183,7 +183,7 @@ fn inserts_and_detaches_count_per_style_and_variable_in_the_period() {
     ex(&mut b, "edit.undo", json!({}));
     ex(&mut b, "edit.redo", json!({}));
     ex(&mut b, "style.detach", json!({"ids": [one.0], "which": "fill"}));
-    let u = usage_when(&mut a, &mut b, |u| u["styles"][0]["detachments"] == 2);
+    let u = usage_when(&mut a, &mut b, |u| u["styles"][0]["detachments"] == 2 && u["styles"][0]["layers"] == 0);
     assert_eq!((u["styles"][0]["insertions"].clone(), u["styles"][0]["layers"].clone()), (json!(2), json!(0)), "{u}");
     assert_eq!(u["variables"][0]["insertions"], 1, "{u}");
     server.stop();
