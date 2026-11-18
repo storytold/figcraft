@@ -256,7 +256,13 @@ impl Store {
             let mut grown = Vec::new();
             self.report(file, &actions.file, known_assets(counts), |e, counts| {
                 grown = grow(&mut e.asset_peaks, &counts, kind, |_| 0);
-                !grown.is_empty()
+                if grown.is_empty() {
+                    return false;
+                }
+                // Heard from for retention: evicting the row would drop asset_peaks, the
+                // baseline grow uses so a later identical report is not counted twice.
+                e.asset_updated = now();
+                true
             })?;
             if let (false, Some(u)) = (grown.is_empty(), self.usage.get_mut(file)) {
                 add_to_week(&mut u.asset_weeks, &grown, kind, now());
@@ -329,7 +335,7 @@ impl Store {
         let at = match u.list.iter().position(|e| e.usage.file == name) {
             Some(at) => at,
             None => {
-                u.list.push(UsageEntry { usage: Usage { file: name, components: Vec::new() }, ..UsageEntry::default() });
+                u.list.push(UsageEntry { usage: Usage { file: name.clone(), components: Vec::new() }, ..UsageEntry::default() });
                 u.list.len() - 1
             }
         };
@@ -338,7 +344,13 @@ impl Store {
             return Ok(());
         }
         if u.list.len() > MAX_USERS {
-            u.list.sort_by_key(|e| std::cmp::Reverse(e.updated.max(e.detached_updated)));
+            // The file just heard from stays, even when several share a timestamp (now() is
+            // seconds). Asset-action reports use asset_updated so their peaks are not dropped
+            // in favour of a usage-only row from the same second.
+            u.list.sort_by_key(|e| {
+                let recent = e.usage.file == name;
+                std::cmp::Reverse((e.updated.max(e.detached_updated).max(e.asset_updated), recent))
+            });
             u.list.truncate(MAX_USERS);
         }
         u.dirty = true;
