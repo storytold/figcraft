@@ -114,7 +114,7 @@ sha2 = "0.10"
 base64 = "0.22"
 crc32fast = "1"
 
-# plugins: the suite's shared WebAssembly plug-in runtime (RFC-0041; craft-libs), extracted from
+# plugins: the suite's shared WebAssembly plug-in runtime (RFC-0046; craft-libs), extracted from
 # FigCraft's own crate: the sandbox (wasmi, a metered interpreter with no JIT, also in the web
 # build), the manifest, permissions, bundles, the per-user plug-in store, catalogs and installing
 # from GitHub releases. Pinned to the fork commit until the upstream pull request lands.

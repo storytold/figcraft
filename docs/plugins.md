@@ -2,7 +2,7 @@
 
 A FigCraft plugin is a WebAssembly module with a small JSON manifest. FigCraft runs plugins with the
 Craft suite's shared plug-in runtime, [`craft-plugin`](https://github.com/storytold/craft-libs/tree/main/crates/plugin)
-(RFC-0041), which was extracted from FigCraft: the same sandbox, manifest and ABI serve every Craft
+(RFC-0046), which was extracted from FigCraft: the same sandbox, manifest and ABI serve every Craft
 app that hosts plugins, and plugins written for FigCraft before it was shared keep working
 unchanged. A plugin acts on the document only
 through FigCraft's commands, the same ones the menus, the CLI, the control channel and the MCP
@@ -187,7 +187,7 @@ plugins: import them in the script.
 
 ## Catalogs and GitHub
 
-The suite's shared way to publish plugins (RFC-0041): a plugin's author attaches its
+The suite's shared way to publish plugins (RFC-0046): a plugin's author attaches its
 `.craftplugin` bundle and a `SHA256SUMS` file to a GitHub release, and anyone can install it from
 the repository, or from a catalog that lists it, without a pull request to FigCraft.
 
@@ -612,7 +612,7 @@ Any language that compiles to WebAssembly works the same way: export `memory` an
 
 ## Not yet
 
-- Distribution: there is no default community catalog yet (RFC-0041 leaves where it lives open):
+- Distribution: there is no default community catalog yet (RFC-0046 leaves where it lives open):
   add catalogs yourself. No publisher signatures or build attestations beyond the SHA-256 (a
   directory's publisher is whoever has the server's key), no ratings, reviews or install counts,
   and updates are found when you ask, not in the background. The browser build can't use a

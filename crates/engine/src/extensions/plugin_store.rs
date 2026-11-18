@@ -1,5 +1,5 @@
 //! Plugins from bundle files, catalogs and GitHub releases, kept in the suite's plug-in store
-//! (`craft_plugin::store`, RFC-0041): `plugin.install`, `plugin.update` and the `plugin.catalog.*`
+//! (`craft_plugin::store`, RFC-0046): `plugin.install`, `plugin.update` and the `plugin.catalog.*`
 //! commands. A figcraft-server's plugin directory is [`crate::plugin_directory`]; manifests under
 //! development are `plugin.import`. See `docs/plugins.md`.
 //!

@@ -271,7 +271,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
   whose callbacks get the widget's id and state and redraw it, one undo step each.
   Lines and SVG (plugin API 6, 2026-10-31): a widget layer can be a `line` or an `svg`, whose
   picture comes in as locked layers, scaled to fit a size.
-  The suite's shared plug-in runtime (RFC-0041, 2026-11-17): FigCraft's plugin crate moved to
+  The suite's shared plug-in runtime (RFC-0046, 2026-11-17): FigCraft's plugin crate moved to
   craft-libs as `craft-plugin` and FigCraft runs on it, unchanged for existing plugins
   (`figcraft-plugin.json`, `figcraft` imports, `figcraft_run`); the shared `craft-plugin.json`,
   `craft` imports and `craft_run` work too. Plugins install from a `.craftplugin` file, a GitHub
@@ -625,7 +625,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-17 | minor | Gap 6: FigCraft runs on the suite's shared plug-in runtime (`craft-plugin`, RFC-0041) with its own crate removed, existing plugins unchanged; plugins install from bundle files, GitHub releases and catalogs into the shared plug-in store (`plugin.install`, `plugin.update`, `plugin.catalog.*`, Manage plugins ▸ Catalogs). Estimate unchanged. Tests: `plugin_store_tests` |
+| 2026-11-17 | minor | Gap 6: FigCraft runs on the suite's shared plug-in runtime (`craft-plugin`, RFC-0046) with its own crate removed, existing plugins unchanged; plugins install from bundle files, GitHub releases and catalogs into the shared plug-in store (`plugin.install`, `plugin.update`, `plugin.catalog.*`, Manage plugins ▸ Catalogs). Estimate unchanged. Tests: `plugin_store_tests` |
 | 2026-11-17 | minor | Gap 7: a pan past the canvas image shows a coarse image of the area around the view (desktop), not the bare page colour; `canvas.uncovered` in `ui.inspect`. Numbers unchanged. Tests: `surround_tests`, `background::tests::the_image_around_the_view_fills_what_the_render_leaves_and_the_page_colour_the_rest` |
 | 2026-11-17 | minor | Gap 7: the strips a pan uncovers render in parallel bands (rows of a tall strip, columns of a wide one), 3–5× quicker pans on effect-heavy pages. Numbers unchanged. Tests: `band_tests::columns_match_one_piece_rendering`, `band_tests::a_tall_or_wide_part_of_a_view_matches_one_piece_rendering`; timings: `pan_bench_tests` |
 | 2026-11-17 | minor | Gap 7: the desktop refines a zoom's preview only once the zoom has paused, as the browser does, so a full render that can't be stopped no longer holds up the next steps of a held zoom. Numbers unchanged. Test: `zoom_preview_tests::the_render_thread_refines_a_zoom_only_once_it_pauses` |
