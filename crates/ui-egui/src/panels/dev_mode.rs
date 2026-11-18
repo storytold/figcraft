@@ -7,7 +7,7 @@
 //! document.
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use figcraft_doc::{Annotation, AnnotationCategory, CodeLink, DevStatus, Document, NodeId};
+use figcraft_doc::{Annotation, AnnotationCategory, CodeLink, DevStatus, Document, NodeId, NodeKind};
 use figcraft_engine::annotations::{self, PINNABLE, Pinnable};
 use figcraft_engine::code_connect;
 use figcraft_engine::codegen::{CodeLang, code_for};
@@ -15,7 +15,7 @@ use figcraft_engine::dev_measurements::{self, Placed};
 use figcraft_engine::devinspect::{self, DevItem, Prop};
 use figcraft_engine::plugins::Access;
 use figcraft_engine::snap::Guide;
-use figcraft_engine::{components, dev_resources};
+use figcraft_engine::{components, dev_resources, responsive};
 use serde_json::json;
 
 use crate::a11y::Tip;
@@ -497,6 +497,50 @@ pub fn connect_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId
         }
     }
     ui.add_space(4.0);
+}
+
+/// Screen sizes for a frame: which version of a design it is, and rules for other sizes. What's
+/// here is the designer's word: agents read it instead of guessing.
+pub fn responsive_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
+    // Screens are frames: a component isn't a version of one.
+    let Some(n) = doc.node(id).filter(|n| matches!(n.kind, NodeKind::Frame)) else { return };
+    let t = Tokens::get(ui.ctx());
+    let current = n.plugin_data.get(responsive::VIEWPORT_KEY).map(String::as_str);
+    widgets::separator(ui);
+    widgets::section_header(ui, tr("Screen sizes"), &[], current.is_none());
+    let labels = [(tr("Mobile"), "mobile"), (tr("Tablet"), "tablet"), (tr("Desktop"), "desktop")];
+    row(ui, 32.0, |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (label, viewport) in labels {
+            let on = current == Some(viewport);
+            if widgets::button(ui, label, on, true).clicked() {
+                app.run("responsive.set", json!({"id": id, "viewport": if on { json!(null) } else { json!(viewport) }}));
+            }
+        }
+    });
+    if current.is_some() {
+        widgets::sublabels(ui, tr("Design it's a version of"), None);
+        let group = n.plugin_data.get(responsive::GROUP_KEY).unwrap_or(&n.name);
+        row(ui, 32.0, |ui| {
+            let width = ui.available_width() - 2.0 * PAD;
+            if let Some(v) = widgets::text_field(ui, Id::unique(("responsive_group", id)), group, width, tr("Design it's a version of")) {
+                app.run("responsive.set", json!({"id": id, "viewport": current, "group": v}));
+            }
+        });
+    }
+    let field = Id::unique(("responsive_rule", id));
+    let draft = ui.data(|d| d.get_temp::<String>(field)).unwrap_or_default();
+    widgets::sublabels(ui, tr("Add a rule"), None);
+    if let Some(v) = widgets::multiline_field(ui, field, &draft, tr("Sidebar becomes a drawer below 768 px"), 3) {
+        ui.data_mut(|d| d.insert_temp(field, v));
+    }
+    row(ui, 32.0, |ui| {
+        if widgets::button(ui, tr("Add rule"), false, !draft.trim().is_empty()).clicked() {
+            app.run("responsive.rule", json!({"id": id, "text": draft}));
+            ui.data_mut(|d| d.remove_temp::<String>(field));
+        }
+    });
+    widgets::note(ui, tr("Rules appear under Annotations, in the Responsive category."), t.text_secondary);
 }
 
 /// Dev Mode plugins: the installed plugins that only read the document, run from the Inspect tab.

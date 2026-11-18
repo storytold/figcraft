@@ -1922,6 +1922,17 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   the defaults (old files open with the defaults). In the app, with nothing selected, the Inspect
   tab filters the callouts by category and edits the categories (colour, name, delete, add); each
   note has a category menu.
+- **Screen sizes:** a file has no breakpoints, so the designer states what happens at other sizes and
+  agents read that rather than guess. Undoable `responsive.set {ids?, viewport, group?}` marks frames
+  as the `mobile`, `tablet` or `desktop` version of a design (`null` clears the mark; `group` names the
+  design, by default each frame's name). Undoable `responsive.rule {id?, text}` adds a note to the
+  **Responsive** annotation category, making the category if the file lacks it; the note keeps to
+  `annotation.add`'s limits. `responsive.list {}` → `{versions: [{group, frames: [{id, name, viewport,
+  width, height, page}]}]}`, narrowest first; with `ids` or `id`, what is stated about those layers,
+  the layers above them and those inside them: `{explicit, versions, rules: [{id, layer, text}],
+  truncated?}` (`truncated`: too many layers to read every rule). Nothing is inferred from names or
+  sizes. Marks are layer data (`figcraft.viewport`, `figcraft.viewportGroup`), so they save and sync
+  with no change to the file format. In the app, a frame's Inspect tab has a **Screen sizes** section.
 - **Ready for dev:** frames at the top of a page or section, and sections, carry a handoff status
   (`node.set {devStatus: none|readyForDev|completed}`; other layers are refused a status).
   `inspect.readyForDev {status?: readyForDev|changed|completed|any, page?}` lists them across pages
