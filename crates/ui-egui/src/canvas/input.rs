@@ -283,9 +283,15 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     if !app.canvas.dragging && resp.hovered() && crate::guides::input(app, &ctx, pos) {
         return false;
     }
-    if !app.canvas.dragging && resp.hovered() && crate::handles::input(app, &ctx, pos) {
-        return false;
-    }
+    let handle_cursor = if !app.canvas.dragging && resp.hovered() {
+        match crate::handles::input(app, &ctx, pos) {
+            crate::handles::Input::Captured => return false,
+            crate::handles::Input::Hover(cursor) => Some(cursor),
+            crate::handles::Input::Ignored => None,
+        }
+    } else {
+        None
+    };
     if resp.secondary_clicked() {
         open_context_menu(app, pos, mods.command);
         return true;
@@ -382,7 +388,13 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
             send(app, PointerKind::Up, release_pos.unwrap_or(pos), &mods);
         }
     }
-    true
+    // Padding hover changes the cursor without skipping the normal hover and context-menu paths.
+    if let Some(cursor) = handle_cursor {
+        ctx.set_cursor_icon(cursor);
+        false
+    } else {
+        true
+    }
 }
 
 /// Pointer event `kind` at screen point `pos`, to the tools.
