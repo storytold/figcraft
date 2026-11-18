@@ -562,3 +562,71 @@ fn shift_click_takes_a_layer_out_where_nothing_can_move() {
     s.pointer(&ev(PointerKind::Up, 520.0, 20.0, SHIFT)).unwrap();
     assert_eq!(s.selection(), vec![k.empty], "Shift-click still takes the layer out");
 }
+
+/// A top-level 300 x 300 frame with a filled 100 x 100 rectangle at (50, 50) and a nested 100 x 100
+/// frame at (180, 180) holding a 40 x 40 rectangle at (200, 200).
+fn frame_with_child(s: &mut Session) -> (NodeId, NodeId, NodeId, NodeId) {
+    let f = id(&ex(s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 300})));
+    let c = id(&ex(s, "shape.rectangle", json!({"x": 50, "y": 50, "width": 100, "height": 100, "parent": f})));
+    let n = id(&ex(s, "frame.create", json!({"x": 180, "y": 180, "width": 100, "height": 100, "parent": f})));
+    let gc = id(&ex(s, "shape.rectangle", json!({"x": 200, "y": 200, "width": 40, "height": 40, "parent": n})));
+    (f, c, n, gc)
+}
+
+#[test]
+fn a_drag_from_a_child_of_a_selected_frame_moves_the_frame() {
+    let mut s = Session::new();
+    let (f, c, _n, gc) = frame_with_child(&mut s);
+    let sib = id(&ex(&mut s, "shape.rectangle", json!({"x": 90, "y": 90, "width": 30, "height": 30})));
+    let at = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap().origin();
+    let local = |s: &Session, i: NodeId| {
+        let d = s.doc().unwrap();
+        let n = d.node(i).unwrap();
+        let c = n.transform.as_coeffs();
+        (c[4], c[5])
+    };
+    let c_local = local(&s, c);
+    // (selection before, press point, modifiers, selection after, the layers that move by (10, 10), derivation)
+    let rows: Vec<(Vec<NodeId>, (f64, f64), Mods, Vec<NodeId>, Vec<NodeId>, &str)> = vec![
+        (vec![f], (60.0, 60.0), NONE, vec![f], vec![f, c, gc], "a drag from a child of the selected frame moves the frame"),
+        (vec![f], (220.0, 220.0), NONE, vec![f], vec![f, c, gc], "a drag from a grandchild moves the top-level frame"),
+        (vec![], (60.0, 60.0), NONE, vec![c], vec![c], "with nothing selected the child is picked and moved"),
+        (vec![f], (60.0, 60.0), CMD, vec![c], vec![c], "Cmd picks the deepest layer and moves it"),
+        (vec![f], (100.0, 100.0), NONE, vec![sib], vec![sib], "a sibling painted above the frame takes the press"),
+    ];
+    for (before, from, m, after, moved, why) in rows {
+        let all = [f, c, gc, sib];
+        let home: Vec<Point> = all.iter().map(|i| at(&s, *i)).collect();
+        ex(&mut s, "select.set", json!({"ids": before}));
+        drag(&mut s, from, (from.0 + 10.0, from.1 + 10.0), m);
+        assert_eq!(sorted(s.selection()), sorted(after), "{why}");
+        for (i, h) in all.iter().zip(&home) {
+            // The frame carries its children: they move in the world, not in their local space.
+            let d = if moved.contains(i) { 10.0 } else { 0.0 };
+            assert_eq!(at(&s, *i), Point::new(h.x + d, h.y + d), "{why}");
+        }
+        assert_eq!(local(&s, c), if moved == [c] { (c_local.0 + 10.0, c_local.1 + 10.0) } else { c_local }, "{why}: the child's local position");
+        assert!(s.undo().unwrap(), "{why}: one undo step");
+        for (i, h) in all.iter().zip(&home) {
+            assert_eq!(at(&s, *i), *h, "{why}: undo restores");
+        }
+    }
+}
+
+#[test]
+fn a_click_on_a_child_of_a_selected_frame_selects_the_child() {
+    let mut s = Session::new();
+    let (f, c, n, gc) = frame_with_child(&mut s);
+    let home = s.doc().unwrap().world_bounds(c).unwrap().origin();
+    for (p, want) in [((60.0, 60.0), c), ((190.0, 190.0), n)] {
+        ex(&mut s, "select.set", json!({"ids": [f]}));
+        click(&mut s, p.0, p.1, NONE);
+        assert_eq!(s.selection(), vec![want], "a click selects the layer inside the selected frame");
+    }
+    assert_eq!(s.doc().unwrap().world_bounds(c).unwrap().origin(), home, "nothing moved");
+    let _ = gc;
+    s.tool.dev_mode = true;
+    ex(&mut s, "select.set", json!({"ids": [f]}));
+    click(&mut s, 60.0, 60.0, NONE);
+    assert_eq!(s.selection(), vec![c], "in Dev Mode too");
+}

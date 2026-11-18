@@ -444,8 +444,8 @@ pub(crate) enum Gesture {
         /// A Shift-press on this selected layer: it leaves the selection on release, unless the
         /// press became a drag.
         deselect: Option<NodeId>,
-        /// A press on one layer of a multi-selection that keeps the selection to drag it all: a
-        /// release without a drag selects just this layer.
+        /// A press on one layer of a multi-selection, or on a layer inside a selected one, that
+        /// keeps the selection to drag it all: a release without a drag selects just this layer.
         keep: Option<NodeId>,
     },
     Resize {
