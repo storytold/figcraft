@@ -333,6 +333,12 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                     }
                     ui.close();
                 }
+                // Copy link to page (#2379); a divider can't be linked.
+                if !divider && ui.button(tr("Copy link to page")).clicked() {
+                    app.clipboard_set_text(&format!("figcraft://node/{}", id.0));
+                    app.toast(tr("Link copied"));
+                    ui.close();
+                }
                 // The page the file opens on, for everyone (#1817); a divider can't be one.
                 if !divider && ui.button(tr("Set as opening page")).clicked() {
                     if !crate::menus::dev_mode_refuses(app, "page.setOpening") {
