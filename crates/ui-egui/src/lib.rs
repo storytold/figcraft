@@ -78,6 +78,8 @@ mod colorpicker_selection_tests;
 #[cfg(test)]
 mod comments_tests;
 #[cfg(test)]
+mod component_header_tests;
+#[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
 mod component_set_narrow_tests;
