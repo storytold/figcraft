@@ -54,3 +54,31 @@ fn a_selected_variants_dropdown_shows_and_sets_its_own_value() {
     assert_eq!(names, ["Looking=Top right, Size=S", "Looking=Down left, Size=L", "Looking=Top right, Size=L"]);
     assert_eq!(place(&u), before, "no variant moves");
 }
+
+#[test]
+fn a_selected_variant_shows_its_current_values_and_the_set_edits_the_properties() {
+    // #2346: one variant shows a Current variant section, not the set's property editor; its
+    // button selects the set, which has the editor.
+    let mut s = Session::new();
+    let mut variants = Vec::new();
+    for (k, name) in ["Looking=Top right", "Looking=Down left"].iter().enumerate() {
+        let f = id(s.execute("frame.create", &json!({"x": 0, "y": 20 + k * 44, "width": 80, "height": 30, "name": name})).unwrap());
+        variants.push(id(s.execute("component.create", &json!({"ids": [f]})).unwrap()));
+    }
+    let set = id(s.execute("component.combineVariants", &json!({"ids": variants})).unwrap());
+    s.execute("select.set", &json!({"ids": [variants[1]]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    let labels = |nodes: &[Node]| nodes.iter().filter_map(|n| n.label().map(str::to_string)).collect::<Vec<_>>();
+    let nodes = tree(&mut u);
+    let shown = labels(&nodes);
+    assert!(!shown.iter().any(|l| l == "Delete property" || l == "Add variant with a new value"), "no set editor: {shown:?}");
+    let values = combos(&nodes);
+    assert!(values.contains(&"Down left".to_string()) && !values.contains(&"Top right".to_string()), "this variant's value: {values:?}");
+    let to_set = nodes.iter().find(|n| n.label() == Some("Select component set") && n.bounds().is_some()).expect("the button");
+    click(&mut u, centre(to_set));
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), [set]);
+    let shown = labels(&tree(&mut u));
+    assert!(shown.iter().any(|l| l == "Delete property"), "the set has the editor: {shown:?}");
+}

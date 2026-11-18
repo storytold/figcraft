@@ -37,12 +37,14 @@ pub fn instance_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[No
     match &n.kind {
         NodeKind::Instance { .. } => instance_ui(app, ui, doc, n),
         NodeKind::ComponentSet { description } => {
-            properties_ui(app, ui, doc, n.id, None);
+            properties_ui(app, ui, doc, n.id);
             description_ui(app, ui, n.id, description);
         }
         NodeKind::Component { description, .. } => {
-            let set = variant_set(doc, n.id);
-            properties_ui(app, ui, doc, set.unwrap_or(n.id), set.map(|_| n.id));
+            match variant_set(doc, n.id) {
+                Some(set) => current_variant_ui(app, ui, doc, n, set),
+                None => properties_ui(app, ui, doc, n.id),
+            }
             description_ui(app, ui, n.id, description);
         }
         _ => {}
@@ -225,8 +227,43 @@ fn name_width(ui: &Ui, default_w: f32, max: f32) -> f32 {
     (ui.available_width() - default_w - BUTTON - 2.0 * widgets::GUTTER).clamp(48.0, max)
 }
 
-/// Properties of a component or component set (`variant`: the set's variant that is selected).
-fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId, variant: Option<NodeId>) {
+/// One variant of a set selected: a Current variant section, a dropdown of each variant property
+/// set to this variant's value; choosing another renames this variant only, so nothing moves
+/// (#2349). The set's properties are edited on the set, which the section's button selects (#2346).
+fn current_variant_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, variant: &Node, set: NodeId) {
+    let t = Tokens::get(ui.ctx());
+    widgets::separator(ui);
+    if widgets::section_header(ui, tr("Current variant"), &[(Icon::ComponentSet, tr("Select component set"))], false) == Some(0) {
+        app.run("select.set", json!({"ids": [set]}));
+    }
+    let pairs = variant_props(&variant.name);
+    let options = variant_options(doc, set);
+    let order: Vec<String> = options.iter().map(|(k, _)| k.clone()).collect();
+    for (k, vals) in &options {
+        let cur = pairs.get(k).cloned().unwrap_or_default();
+        row(ui, 32.0, |ui| {
+            prop_label(ui, k, Icon::ComponentSet);
+            let w = ui.available_width().max(60.0);
+            let resp = widgets::dropdown(ui, &cur, w, None);
+            menu_popup(&resp).show(|ui| {
+                for v in vals {
+                    if menu_item(ui, v, "") {
+                        let mut pairs = pairs.clone();
+                        pairs.insert(k.clone(), v.clone());
+                        app.run("node.set", json!({"ids": [variant.id], "props": {"name": variant_name(&pairs, &order)}}));
+                        ui.close();
+                    }
+                }
+            });
+        });
+    }
+    if variant_conflicts(doc, set).iter().any(|g| g.contains(&variant.id)) {
+        widgets::note(ui, tr("Some variants have the same property values: give each one a unique combination"), t.warning);
+    }
+}
+
+/// Properties of a component or component set.
+fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
     let t = Tokens::get(ui.ctx());
     let is_set = matches!(doc.node(owner).map(|n| &n.kind), Some(NodeKind::ComponentSet { .. }));
     // Shared (non-variant) properties live on every variant; read them from the first.
@@ -272,9 +309,6 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId, v
     } else {
         Default::default()
     };
-    // A selected variant's dropdowns show and set its own values (#2349); the set's, its default.
-    let own = variant.and_then(|v| doc.node(v)).map(|n| (n.id, variant_props(&n.name)));
-    let order: Vec<String> = variants.iter().map(|(k, _)| k.clone()).collect();
     // Variant properties: name, values (the matrix), add value, delete. Dragged by their left
     // margin to reorder them (only among themselves: the shared ones keep the engine's order).
     let mut drag = ListDrag::in_order(ui, ("variant_props", owner));
@@ -290,22 +324,12 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId, v
             if let Some(nn) = widgets::text_field(ui, Id::unique(("vprop_name", owner, k.as_str())), k, name_w, tr("Name")) {
                 app.run("component.editProperty", json!({"id": owner, "name": k, "newName": nn}));
             }
-            let def = own.as_ref().map_or(&defaults, |(_, pairs)| pairs).get(k).or(vals.first()).cloned().unwrap_or_default();
-            let hint = if own.is_some() { tr("This variant's value") } else { tr("Default value (the top-left variant)") };
-            let resp = widgets::dropdown(ui, &def, DEFAULT_W, None).on_hover_text(hint);
+            let def = defaults.get(k).or(vals.first()).cloned().unwrap_or_default();
+            let resp = widgets::dropdown(ui, &def, DEFAULT_W, None).on_hover_text(tr("Default value (the top-left variant)"));
             menu_popup(&resp).show(|ui| {
                 for v in vals {
                     if menu_item(ui, v, "") {
-                        match &own {
-                            Some((id, pairs)) => {
-                                let mut pairs = pairs.clone();
-                                pairs.insert(k.clone(), v.clone());
-                                app.run("node.set", json!({"ids": [id], "props": {"name": variant_name(&pairs, &order)}}));
-                            }
-                            None => {
-                                app.run("component.editProperty", json!({"id": owner, "name": k, "default": v}));
-                            }
-                        }
+                        app.run("component.editProperty", json!({"id": owner, "name": k, "default": v}));
                         ui.close();
                     }
                 }
