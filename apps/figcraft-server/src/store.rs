@@ -103,7 +103,7 @@ pub const NO_PUBLIC_LIBRARY: &str = "on this public server only files published 
 
 /// Most files whose usage of one library is kept (the least recently changed go first), and most
 /// components one file's report keeps.
-const MAX_USERS: usize = 200;
+pub(crate) const MAX_USERS: usize = 200;
 const MAX_REPORTED: usize = 1_000;
 /// Largest `usage.json` (and `actions.json`) read.
 const MAX_USAGE_FILE: u64 = 16 << 20;
@@ -325,6 +325,9 @@ struct UsageEntry {
     variables: Vec<(String, u32)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     asset_peaks: Vec<(String, u32, u32)>,
+    /// When this file last reported style or variable insertions or detachments (seconds since 1970, UTC).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    asset_updated: u64,
 }
 
 fn is_zero(n: &u64) -> bool {

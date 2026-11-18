@@ -7,8 +7,9 @@ use serde_json::{Value, json};
 
 use crate::Session;
 use crate::components::tests::{ex, idv};
-use crate::library_server::asset_actions;
-use figcraft_doc::{AssetCount, NodeId, NodeKind, PublishedLibrary};
+use crate::library_server::{asset_action_reports, asset_actions};
+use figcraft_collab::message::MAX_ASSET_USAGE;
+use figcraft_doc::{AssetCount, Document, NodeId, NodeKind, PublishedLibrary};
 
 /// A file with a published library holding a paint style, a colour variable and a Card, and a
 /// second file that uses it: the second session, the library's id and its keys.
@@ -151,4 +152,32 @@ fn local_styles_count_nothing_and_undo_takes_a_count_back() {
     assert_eq!((report.inserted.len(), report.detached.len()), (1, 0));
     ex(&mut s, "edit.undo", json!({}));
     assert_eq!(counts(&s).0, (0, 0));
+}
+
+#[test]
+fn asset_action_reports_cover_every_count_past_the_message_cap() {
+    let mut doc = Document::new("File");
+    let n = MAX_ASSET_USAGE + 1;
+    let libraries = std::sync::Arc::make_mut(&mut doc.libraries);
+    for i in 0..n {
+        let key = format!("s{i}");
+        libraries.count_asset("Lib", &key, false, 1);
+        libraries.count_asset("Lib", &key, true, 2);
+    }
+    // Another library's counts do not belong in these reports.
+    libraries.count_asset("Other", "x", false, 9);
+    libraries.count_asset("Other", "x", true, 9);
+
+    let full = asset_actions(&doc, "Lib").unwrap();
+    assert_eq!(full.inserted.len(), n, "the document's counts are not truncated");
+    assert_eq!(full.detached.len(), n);
+
+    let reports = asset_action_reports(&doc, "Lib");
+    assert!(reports.len() >= 2, "one message cannot carry {n} counts");
+    assert!(reports.iter().all(|r| r.file == "File" && r.inserted.len() <= MAX_ASSET_USAGE && r.detached.len() <= MAX_ASSET_USAGE));
+    let inserted: Vec<_> = reports.iter().flat_map(|r| r.inserted.iter().cloned()).collect();
+    let detached: Vec<_> = reports.iter().flat_map(|r| r.detached.iter().cloned()).collect();
+    assert_eq!(inserted, full.inserted);
+    assert_eq!(detached, full.detached);
+    assert!(asset_action_reports(&doc, "Missing").is_empty());
 }

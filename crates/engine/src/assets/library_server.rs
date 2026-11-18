@@ -124,12 +124,40 @@ pub fn asset_usage(doc: &Document, library: &str) -> Option<AssetUsage> {
 }
 
 /// How many times `doc` has inserted and detached `library`'s styles and variables, its totals;
-/// `None` when it has done neither.
+/// `None` when it has done neither. Every count the document keeps is included (up to
+/// [`figcraft_doc::MAX_DETACH_COUNTS`]); the wire message is capped at [`MAX_ASSET_USAGE`], so
+/// [`asset_action_reports`] splits them into batches an older server still accepts.
 pub fn asset_actions(doc: &Document, library: &str) -> Option<AssetActions> {
     let counts: Vec<_> = doc.libraries.asset_counts.iter().filter(|c| c.library == library).collect();
-    let totals =
-        |n: fn(&figcraft_doc::AssetCount) -> u32| counts.iter().filter(|c| n(c) > 0).map(|c| (c.key.clone(), n(c))).take(MAX_ASSET_USAGE).collect();
+    let totals = |n: fn(&figcraft_doc::AssetCount) -> u32| counts.iter().filter(|c| n(c) > 0).map(|c| (c.key.clone(), n(c))).collect();
     (!counts.is_empty()).then(|| AssetActions { file: doc.name.clone(), inserted: totals(|c| c.inserted), detached: totals(|c| c.detached) })
+}
+
+/// Reports for the server, each with at most [`MAX_ASSET_USAGE`] inserted and detached counts.
+pub fn asset_action_reports(doc: &Document, library: &str) -> Vec<AssetActions> {
+    let Some(full) = asset_actions(doc, library) else { return Vec::new() };
+    chunk_asset_actions(full)
+}
+
+fn chunk_asset_actions(actions: AssetActions) -> Vec<AssetActions> {
+    let AssetActions { file, inserted, detached } = actions;
+    if inserted.is_empty() && detached.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut d = 0;
+    loop {
+        let ins: Vec<_> = inserted.get(i..).unwrap_or(&[]).iter().take(MAX_ASSET_USAGE).cloned().collect();
+        let det: Vec<_> = detached.get(d..).unwrap_or(&[]).iter().take(MAX_ASSET_USAGE).cloned().collect();
+        if ins.is_empty() && det.is_empty() {
+            break;
+        }
+        i += ins.len();
+        d += det.len();
+        out.push(AssetActions { file: file.clone(), inserted: ins, detached: det });
+    }
+    out
 }
 
 /// `counts`, the most used first, at most [`MAX_ASSET_USAGE`].
@@ -279,10 +307,10 @@ impl Session {
                     detached(doc, &l.id).map(LibraryReq::ReportDetached),
                     inserted(doc, &l.id).map(LibraryReq::ReportInserted),
                     asset_usage(doc, &l.id).map(LibraryReq::ReportAssets),
-                    asset_actions(doc, &l.id).map(LibraryReq::ReportAssetActions),
                 ];
+                let asset_reports = asset_action_reports(doc, &l.id).into_iter().map(LibraryReq::ReportAssetActions);
                 let fetch = LibraryReq::Fetch { have, usage: Some(usage(doc, &l.id)) };
-                std::iter::once(fetch).chain(reports.into_iter().flatten()).map(|req| (l.path.clone(), req))
+                std::iter::once(fetch).chain(reports.into_iter().flatten()).chain(asset_reports).map(|req| (l.path.clone(), req))
             })
             .collect();
         // Confined to automation roots, nothing reaches a server (#1095).
