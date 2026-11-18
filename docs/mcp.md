@@ -1255,8 +1255,8 @@ layer; text on one `<textPath>` as text on a path, with its start offset and anc
 image fills, and SVG images imported in place. CSS, `<use>`/`<symbol>`, units
 and `viewBox`/`preserveAspectRatio` are resolved. The result's `warnings` list what was left out
 (filters that aren't shadows or blurs, rotated repeating patterns, a clip path's own clip path).
-Linked files are never read, only data URIs; documents nested more than 512 elements deep are
-refused.
+Linked files are never read, only data URIs; documents nested more than 256 elements deep
+(references followed) are refused.
 
 ### Importing `.fig` files
 
