@@ -208,7 +208,7 @@ fn variables_bound_to_stroke_sides_bind_each_sides_weight() {
             rect("1:1", "Row", json!({"BORDER_BOTTOM_WEIGHT": alias(SPACE)})),
             rect("1:2", "Card", json!({"BORDER_TOP_WEIGHT": alias(TOP), "BORDER_RIGHT_WEIGHT": alias(RIGHT),
                                        "BORDER_BOTTOM_WEIGHT": alias(BOTTOM), "BORDER_LEFT_WEIGHT": alias(LEFT)})),
-            rect("1:3", "Spec", json!({"top": alias(SPACE), "left": alias(SPACE)})),
+            rect("1:3", "Spec", json!({"top": alias(TOP), "right": alias(RIGHT), "bottom": alias(BOTTOM), "left": alias(LEFT)})),
             rect("1:4", "Colour", json!({"BORDER_LEFT_WEIGHT": alias(BRAND)}))
         ]}
     ]}});
@@ -233,7 +233,11 @@ fn variables_bound_to_stroke_sides_bind_each_sides_weight() {
         sides("Card"),
         [on("strokeTopWeight", TOP), on("strokeRightWeight", RIGHT), on("strokeBottomWeight", BOTTOM), on("strokeLeftWeight", LEFT)]
     );
-    assert_eq!(sides("Spec"), [b("strokeTopWeight"), b("strokeLeftWeight")], "the spec's names");
+    assert_eq!(
+        sides("Spec"),
+        [on("strokeTopWeight", TOP), on("strokeRightWeight", RIGHT), on("strokeBottomWeight", BOTTOM), on("strokeLeftWeight", LEFT)],
+        "the spec's names"
+    );
     assert_eq!(sides("Colour"), [], "a colour variable can't be a weight");
     assert!(!has(&warnings, "`individualStrokeWeights`"), "{warnings:?}");
     assert!(has(&warnings, "type doesn't fit"), "{warnings:?}");
