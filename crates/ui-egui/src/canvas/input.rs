@@ -226,6 +226,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
                 send(app, PointerKind::Up, at, &mods);
             }
         }
+        pan_past_edge(app, &ctx, &mods);
         // Leaving the canvas: nothing is hovered there any more.
         if !app.canvas.dragging && std::mem::take(&mut app.canvas.hovering) {
             left(app);
@@ -377,6 +378,11 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     if force.is_some() {
         app.canvas.pressure = force;
     }
+    // A drag held near the edge pans before the move goes out, so it lands on the document point
+    // now under the pointer (and the pan goes on while the pointer is still: it asks for frames).
+    if kind == Some(PointerKind::Move) && super::autopan::wanted(app, &ctx) {
+        super::autopan::pan(app, &ctx, pos);
+    }
     if let Some(k) = kind {
         let at = if matches!(k, PointerKind::Down) { press_pos.unwrap_or(pos) } else { pos };
         send(app, k, at, &mods);
@@ -398,6 +404,16 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
 }
 
 /// Pointer event `kind` at screen point `pos`, to the tools.
+/// A drag held past the edge pans toward it, the layer or box going with the pointer.
+fn pan_past_edge(app: &mut FigApp, ctx: &egui::Context, mods: &egui::Modifiers) {
+    if super::autopan::wanted(app, ctx)
+        && let Some(at) = ctx.input(|i| i.pointer.latest_pos())
+        && super::autopan::pan(app, ctx, at)
+    {
+        send(app, PointerKind::Move, at, mods);
+    }
+}
+
 fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
     let ev = pointer_event(app, kind, pos, m);
     // A hover where nothing changed since the last one finds what that one found (the state is
