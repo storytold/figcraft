@@ -408,6 +408,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `set_properties {ids, props}` | `node.set` on layers (geometry, fills, strokes, effects, corner radius, auto layout, sizing, constraints, masks (`isMask`, `maskType: alpha\|vector\|luminance`), handoff status (`devStatus: none\|readyForDev\|completed`; marking again clears "Changed"), a section's `sectionContentsHidden`, text…); returns the updated layers. |
 | `inspect_document {depth, allPages, fields?, outline?}` | The document as JSON (its `id`, layer tree, styles, selection, history); `fields` selects layer properties, `outline: true` gives a compact tree (below). The tools that act on a document also take `document` (see Naming the document below). |
 | `get_node {id, depth, fields?, outline?}` | One layer as JSON; takes the same `fields` and `outline` options; `pluginData` (`{key: value}`, values as strings) when the layer or page has layer data written with `set_properties {props: {pluginData}}`. |
+| `design_context {ids?, scope?, depth?, maxNodes?, maxBytes?}` | Everything needed to build a design in one read: see [Design context](#design-context). |
 | `select {ids}` | Replace the selection (`[]` deselects). |
 | `export {ids, format, scale \| size, path?, bleed?, cropMarks?, bleedMarks?, cmyk?, contentsOnly?, includeBoundingBox?, svgOutlineText?, svgIdAttribute?, svgSimplifyStroke?, vdCompat?, colorProfile?, quality?}` | png, jpg, svg, webp, pdf, xml (an Android Vector Drawable: `svgIdAttribute` writes `android:name`, `vdCompat` is `bestEffort` (default: approximated with a warning), `exact` (left out with a warning) or `ignore` (no warnings: overlapping layer opacity dropped, even-odd fills kept as `fillType="evenOdd"`, diamond gradients left out), and the result lists `warnings` for what was changed or left out), or `fig`: the whole file as `.fig`, experimental (see Exporting `.fig` files below); `size` is `2x`, `512w` or `512h`; `quality` is the JPG quality, 1 to 100 (default 90). The image covers what the layers paint (shadows towards their offset, strokes, unclipped children, a mask group's mask; hidden layers take no room; a slice is its area with everything under it, or only the frame or group it sits in while `contentsOnly` is on); `contentsOnly: false` also draws every other layer showing in that area, `includeBoundingBox` exports the layers' own boxes; SVG: `svgOutlineText: false` keeps `<text>`, `svgIdAttribute` writes unique ids from layer names, `svgSimplifyStroke: false` writes every stroke as an outline; png, jpg and webp: `colorProfile` is `sameAsFile` (default: the document's profile), `srgb` or `displayP3`, the pixels converted (out-of-gamut colors clip) and the file tagged for it (PNG: `sRGB` chunk, or ICC and `cICP` for Display P3; JPG: ICC profile; WebP: ICC profile for Display P3, none for sRGB) (SVG, XML and RGB PDF output are always sRGB; PDF with `cmyk` is DeviceCMYK). The same options go in export settings (`export.add` / `export.update`). PDF: frames one page each (sized in points), anything else together on one page; print options: `bleed` (points or a length like `"3mm"`, `"0.125in"`), crop and bleed marks, CMYK colour (see Exports below), also taken by `file.export`, `file.exportLayers`, `file.exportFramesPdf` and stored per export setting by `export.add` / `export.update`; `run_command` `file.exportFramesPdf {page?, path?}` writes every top-level frame of a page. Without `path`, images come back as MCP image content, SVG as text, XML as text followed by `{format, bytes, warnings}`. Layers' own export settings: `run_command` with `export.add` / `export.update {index, size?, suffix?, format?}` / `export.remove` and `file.exportLayers {ids?, dir?, assets?}` (every layer once per setting, named `<layer><suffix>.<format>`, a slash in a layer name making a folder; `assets: true` exports the Inspect tab's assets instead: icons as SVG, images as PNG). |
 | `screenshot {ids?, scale?, maxSize?, window?}` | PNG of the page (with background) or of layers, scaled to fit `maxSize` (default 1600). `window: true` captures the app window in front when attached, a window id (see Windows below) that window. |
@@ -418,6 +419,41 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `type_text {text, id?}` | Type into the text being edited, or replace the contents of text layer `id`. |
 | `inspect_ui {}` | Tool, view and status (and panels, timings and the app's `windows` when attached). |
 | `wait_for_changes {after?, timeoutMs?, topics?, limit?}` | Wait for new comment events in the attached app; returns pending events at once, else waits up to `timeoutMs` (default 20 s, max 25 s). Pass the returned `cursor` back to keep watching. Headless returns immediately. |
+
+### Design context
+
+`design_context` (the command `inspect.designContext`) reads the selection, or `ids`, or `scope`
+(`selection`, `page`, `document`; with nothing selected, the page). The result is one JSON object:
+
+| Key | What it holds |
+|---|---|
+| `version` | The format's version; fields can be added without changing it |
+| `document` | `name`, `page`, `colorProfile` |
+| `target` | `source` (`selection`, `ids`, `page`, `document`), `ids`, `layers` in the tree |
+| `nodes` | The tree, below |
+| `variables` | By id: `name`, `collection`, `type`, `codeSyntax`, and `modes` with each `mode`'s stored `value` and `resolved` value |
+| `styles` | By id: the shared styles the tree uses |
+| `components` | By id: `name`, `type`, `properties` with variants, `codeLinks` |
+| `fonts` | `family`, `styles`, and whether it's `installed` |
+| `assets` | What `inspect.assets` lists for the same layers |
+| `missing` | `{what, why}`: what the design doesn't specify. Always says that the file stores no breakpoints |
+| `truncated` | When `depth` or `maxNodes` cut the tree, or `maxBytes` made the tool ask for fewer layers |
+
+Each layer in `nodes` has `id`, `name`, `type` and:
+
+- `explicit`: what the designer set, with the keys of `get_node`.
+- `derived`: what the file worked out: `absoluteBounds`, `rotation`, `gridCell`, a position in an auto
+  layout flow, and a size that Hug, Fill or auto-sizing text decides.
+- `tokens`: bound variables by field, and shared styles as `style.fill`, `style.text[0..5]` and so on,
+  with the `name` of each. `explicit` holds the value they resolved to.
+- `unsupported`: `{property, why}` for what has no direct CSS equivalent. The value stays in `explicit`.
+- `code`: for a component or instance connected to code, per language, `{language, importPath, name,
+  code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
+  says what it holds, and `get_node` reads it.
+- `children`, or `childCount` where the tree stops.
+
+Values are the file's own. Nothing is converted to CSS or guessed. Hidden layers are in the tree, with
+`visible: false` in `explicit`.
 
 ### Compact layer trees
 
