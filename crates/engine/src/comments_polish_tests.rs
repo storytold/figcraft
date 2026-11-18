@@ -90,14 +90,49 @@ fn only_authors_edit_and_delete_their_messages() {
     assert_eq!(comment(&s, c).replies[0].text, "Second!");
     s.execute("comment.delete", &json!({"id": c, "reply": 0, "author": "Sam"})).unwrap();
     assert!(comment(&s, c).replies.is_empty());
-    // Your name from Preferences signs and owns your comments.
+    // Your name from Preferences signs and owns your comments, including ones the old default
+    // signed before the real name arrived.
     s.execute("pref.userName", &json!({"name": "  Ada  "})).unwrap();
     let d = s.execute("comment.add", &json!({"x": 0, "y": 0, "text": "Mine"})).unwrap()["id"].as_u64().unwrap();
     assert_eq!(comment(&s, d).first.author, "Ada");
-    assert!(s.execute("comment.delete", &json!({"id": c})).is_err());
+    s.execute("comment.delete", &json!({"id": c})).unwrap();
+    assert!(s.doc().unwrap().comment(c).is_none());
     s.execute("comment.delete", &json!({"id": d})).unwrap();
     s.execute("pref.userName", &json!({"name": " "})).unwrap();
     assert_eq!(s.prefs.user_name, "You");
+}
+
+#[test]
+fn default_authored_comments_stay_mine_after_the_person_is_renamed() {
+    let mut s = Session::new();
+    let c = add(&mut s, 0.0, 0.0, "First", "You");
+    s.execute("comment.reply", &json!({"id": c, "text": "Mine too"})).unwrap();
+
+    // The desktop start-up hook fills in the real name; the saved message authors stay as they
+    // were, so ownership has to recognize the old placeholder.
+    s.execute("pref.userName", &json!({"name": "Ada"})).unwrap();
+    let mine = list(&mut s, json!({"page": "all", "filter": "mine"}));
+    assert_eq!(mine, vec![c], "a legacy You thread is still Mine for the renamed person");
+    assert!(!comment(&s, c).is_unread_as("Ada", Some("You")), "read under You stays read");
+
+    // Neither another named person nor an AI agent inherits the placeholder's messages.
+    assert!(s.execute("comment.edit", &json!({"id": c, "text": "No", "author": "Sam"})).is_err());
+    s.agent = Some("Claude".into());
+    assert!(s.execute("comment.edit", &json!({"id": c, "text": "No"})).is_err());
+    s.agent = None;
+
+    s.execute("comment.edit", &json!({"id": c, "text": "First, edited"})).unwrap();
+    s.execute("comment.edit", &json!({"id": c, "reply": 0, "text": "Mine too, edited"})).unwrap();
+    s.execute("comment.delete", &json!({"id": c, "reply": 0})).unwrap();
+
+    // Marking the renamed person unread does not resurrect the placeholder as a separate reader.
+    s.execute("comment.markRead", &json!({"id": c, "read": false})).unwrap();
+    assert!(comment(&s, c).is_unread_as("Ada", Some("You")));
+    s.execute("comment.markRead", &json!({"id": c})).unwrap();
+    assert!(!comment(&s, c).is_unread_as("Ada", Some("You")));
+
+    s.execute("comment.delete", &json!({"id": c})).unwrap();
+    assert!(s.doc().unwrap().comment(c).is_none());
 }
 
 #[test]

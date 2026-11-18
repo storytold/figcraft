@@ -541,6 +541,39 @@ mod system_name_tests {
     }
 
     #[test]
+    fn comments_saved_as_you_stay_mine_after_the_system_name_arrives() {
+        // The upgrade regression: a file written under the old default keeps its authors on disk,
+        // and the renamed person keeps edit, delete, Mine and read state for those threads.
+        let dir = std::env::temp_dir().join(format!("figcraft-system-name-upgrade-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("comments.figcraft").to_string_lossy().into_owned();
+
+        let mut before = Session::new();
+        let c = before.execute("comment.add", &json!({"x": 0, "y": 0, "text": "Old note"})).unwrap()["id"].as_u64().unwrap();
+        before.execute("comment.reply", &json!({"id": c, "text": "Old reply"})).unwrap();
+        before.execute("file.saveAs", &json!({"path": path})).unwrap();
+
+        let mut s = Session::new();
+        use_system_user_name(&mut s, true, || Some("Ada Lovelace".into()));
+        assert_eq!(s.prefs.user_name, "Ada Lovelace");
+        s.execute("file.open", &json!({"path": path})).unwrap();
+        let saved = s.doc().unwrap().comment(c).unwrap().clone();
+        assert_eq!(saved.first.author, DEFAULT, "opening the file does not rewrite its author");
+        assert_eq!(saved.replies[0].author, DEFAULT, "nor its replies");
+        assert!(!saved.is_unread_as("Ada Lovelace", Some(DEFAULT)), "read under You stays read");
+
+        let mine = s.execute("comment.list", &json!({"page": "all", "filter": "mine"})).unwrap();
+        assert!(mine["comments"].as_array().unwrap().iter().any(|comment| comment["id"] == c), "the old thread is Mine");
+        assert!(s.execute("comment.edit", &json!({"id": c, "text": "Not yours", "author": "Sam"})).is_err());
+        s.execute("comment.edit", &json!({"id": c, "text": "Updated"})).unwrap();
+        s.execute("comment.edit", &json!({"id": c, "reply": 0, "text": "Updated reply"})).unwrap();
+        s.execute("comment.delete", &json!({"id": c, "reply": 0})).unwrap();
+        s.execute("comment.delete", &json!({"id": c})).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn only_a_run_with_a_settings_folder_and_no_agent_asks() {
         assert!(asks_for_user_name(true, false), "a desktop run with somewhere to keep the name");
         assert!(!asks_for_user_name(false, false), "nowhere to keep a name");
