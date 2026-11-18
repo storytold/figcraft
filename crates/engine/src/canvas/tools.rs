@@ -544,6 +544,27 @@ fn at_45_degrees(last: Point, p: Point) -> Point {
     last + Vec2::from_angle(ang) * v.hypot()
 }
 
+/// Add where the pointer is to a Pencil (Marker, Highlighter) stroke: a sample once it has moved
+/// half a screen pixel, or with Shift one straight segment from where the stroke started, at the
+/// nearest 45° step, as the Line tool and the Pen keep theirs (#2447).
+fn pencil_add(points: &mut Vec<Point>, pressure: &mut Vec<Option<f32>>, ev: &PointerEvent) {
+    let min = 0.5 / ev.zoom.max(1e-6);
+    if ev.shift
+        && let (Some(&start), Some(&first)) = (points.first(), pressure.first())
+    {
+        let end = at_45_degrees(start, ev.p());
+        points.truncate(1);
+        pressure.truncate(1);
+        if (end - start).hypot() > min {
+            points.push(end);
+            pressure.push(ev.pressure.or(first));
+        }
+    } else if points.last().is_none_or(|l| (*l - ev.p()).hypot() > min) {
+        points.push(ev.p());
+        pressure.push(ev.pressure);
+    }
+}
+
 /// The handles a pen path shows while it is drawn ([`Overlay::pen_handles`]): the last anchor's in
 /// and out handles and the one before's out handle, those that aren't zero.
 fn pen_handles(points: &[(Point, Vec2, Vec2)]) -> Vec<[f64; 4]> {

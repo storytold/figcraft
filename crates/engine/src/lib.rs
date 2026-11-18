@@ -497,6 +497,8 @@ mod pen_undo_tests;
 #[cfg(test)]
 mod pen_vector_edit_tests;
 #[cfg(test)]
+mod pencil_shift_tests;
+#[cfg(test)]
 mod penpot_export_tests;
 #[cfg(test)]
 mod pixel_preview_tests;
