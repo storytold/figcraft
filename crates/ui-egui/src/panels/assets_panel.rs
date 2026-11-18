@@ -1008,10 +1008,16 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
         });
         app.run_background(&ui.ctx().clone(), USAGE, json!({"days": period.unwrap_or(days)}), done);
     }
-    let Some(v) = shown else {
-        ui.add_space(8.0);
-        return;
-    };
+    match shown {
+        Some(v) => usage_answer(ui, w, usage_id, &v),
+        None => ui.add_space(8.0),
+    }
+}
+
+/// Show usage's answer `v`: what uses the library, the period's insertions and detachments and
+/// the rows of the list chosen (the choice kept with `id`).
+pub(crate) fn usage_answer(ui: &mut Ui, w: f32, id: Id, v: &Value) {
+    let days = v["days"].as_u64().unwrap_or(USAGE_PERIODS[0].0);
     let files = v["files"].as_array().map_or(0, Vec::len);
     let instances = v["instances"].as_u64().unwrap_or(0);
     let known = v["detachesKnown"].as_bool().unwrap_or(false);
@@ -1020,11 +1026,11 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
     if !known {
         hint(ui, tr("This server doesn't count detached instances"));
     }
-    let Some(kind) = usage_kind(ui, w, usage_id, &v) else {
+    let Some(kind) = usage_kind(ui, w, id, v) else {
         ui.add_space(8.0);
         return;
     };
-    if let Some((i, d)) = period_totals(&v, kind) {
+    if let Some((i, d)) = period_totals(v, kind) {
         let label = USAGE_PERIODS.iter().find(|p| p.0 == days).map_or(USAGE_PERIODS[0].2, |p| p.2);
         let counts = trf("{insertions} · {detachments}", &[("insertions", &inserted_n(i)), ("detachments", &detached_n(d))]);
         hint(ui, &trf("{period}: {counts}", &[("period", &tr(label)), ("counts", &counts)]));
@@ -1035,9 +1041,9 @@ fn usage(app: &mut FigApp, ui: &mut Ui, w: f32, link: &str) {
         hint(ui, tr("Nothing counted yet"));
     }
     if kind == "components" {
-        component_rows(ui, w, &v, known);
+        component_rows(ui, w, v, known);
     } else {
-        asset_rows(ui, w, &v, kind);
+        asset_rows(ui, w, v, kind);
     }
     ui.add_space(8.0);
 }
