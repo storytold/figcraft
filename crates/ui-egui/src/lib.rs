@@ -302,6 +302,8 @@ mod variables_select_tests;
 #[cfg(test)]
 mod variables_window_resize_tests;
 #[cfg(test)]
+mod variant_own_value_tests;
+#[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]
 mod vector_align_tests;
