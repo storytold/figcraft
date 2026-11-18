@@ -114,10 +114,15 @@ fn key_steps(ctx: &egui::Context, suffix: &str, step: f64) -> (f64, f64) {
     }
 }
 
-/// How far a scrub of `dx` points moves a value whose field steps by `step`: 1 step a point, ten
-/// with Shift, a tenth with Alt (fine).
+/// The steps a point of scrubbing moves a field by: half, as measured in Figma (12.2 px moved X
+/// by 6, 61.2 px by 31).
+pub const SCRUB_STEPS_PER_POINT: f64 = 0.5;
+
+/// How far a scrub of `dx` points moves a value whose field steps by `step`: half a step a point
+/// ([`SCRUB_STEPS_PER_POINT`]), ten times that with Shift (5 steps a point), a tenth of that with Alt (0.05 steps a point, fine).
 pub fn scrub_amount(dx: f64, step: f64, shift: bool, alt: bool) -> f64 {
     dx * step
+        * SCRUB_STEPS_PER_POINT
         * match (shift, alt) {
             (true, false) => 10.0,
             (false, true) => 0.1,
@@ -1381,7 +1386,10 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
         Some(mut text) => {
             ui.painter().rect_filled(rect.expand(2.0), CornerRadius::same(4), t.panel);
             ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(4), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            // The editor is at least the theme's field height; centred on a shorter row it
+            // keeps its text on the row's middle line instead of hanging below it (#2318).
+            let edit = Rect::from_center_size(rect.center(), vec2(rect.width(), rect.height().max(FIELD_H)));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit));
             let r = crate::bidi::single_line(&mut child, te_id, &mut text, font, rect.width());
             a11y::own_focus(&r);
             keep_focus(&r, started);

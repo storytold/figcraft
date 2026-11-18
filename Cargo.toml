@@ -14,7 +14,7 @@ repository = "https://github.com/storytold/figcraft"
 
 [workspace.dependencies]
 craft-xml = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "d13ac58a15c45d618f25910772502e38c4ce1d4c" }
-craft-vectordrawable = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "d13ac58a15c45d618f25910772502e38c4ce1d4c" }
+craft-vectordrawable = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "5cd16f2b9ac2a84c4c0794e609914e2bbf848bd7" }
 # internal
 figcraft-geom = { path = "crates/geom" }
 figcraft-color = { path = "crates/color" }
