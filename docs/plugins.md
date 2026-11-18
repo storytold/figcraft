@@ -214,9 +214,10 @@ whole bundle before keeping it, refuses a version that isn't newer than the one 
 the new version at once. `plugin.directory.unpublish` (or the operator's `figcraft-server plugins
 remove`) takes a version, or the whole plugin, down; installed copies keep working.
 
-**In the browser** the directory isn't available yet: the browser build's network link has no
-plugin directory requests (`plugin.directory.*` says so). Import plugins with `plugin.import
-{manifest, wasm}` there.
+**In the browser** Manage plugins browses a directory and installs from it as the desktop app
+does, but there is no folder to keep a plugin in, so it lasts as long as the page. Scripts through
+`window.figcraft` can't reach a directory (commands there don't wait for the server, and
+`plugin.directory.*` says so): import plugins with `plugin.import {manifest, wasm}` there.
 
 ## The manifest: `figcraft-plugin.json`
 
@@ -256,7 +257,7 @@ plugin directory requests (`plugin.directory.*` says so). Import plugins with `p
 | `api` | The plugin API version the plugin was written for: `1` (the default), `2` (panels and settings), `3` (widgets), `4` (saving files, widget fields and property menus) or `5` (panels from widgets). A manifest asking for a newer one than FigCraft runs is refused, so a plugin that needs panels, widgets or `saveFile` fails clearly on an older FigCraft. |
 | `permissions.saveFile` | API 4: `true` lets the plugin offer a file to save (an exporter's output). FigCraft asks the user where it goes with its own Save dialog (a download in the browser); the plugin never gets a path. Manage plugins lists it ("can save files"). A plugin directory's entries don't carry it (their wire format stays as it is), so installing any API 4 plugin from one says it may offer files to save. |
 | `widget` | API 3: `true` when the plugin draws a widget (it's listed in Plugins ▸ Widgets). |
-| `permissions.access` | `read` (the default): commands that leave the document as it is; such plugins also run from Dev Mode's Inspect tab. `write`: edits too. |
+| `permissions.access` | `read` (the default): commands that leave the document as it is; such plugins also run from Developer Mode's Inspect tab. `write`: edits too. |
 | `permissions.commands` | Optional allowlist: exact command ids or prefixes ending in `*` (`node.*`). Empty: any command the access allows. |
 | `commands` | The menu commands, each `{id, label, params?}`. Without any, the plugin has one, `run`, unless it's a widget (a widget needs no command). |
 | `params[]` | `{name, label?, type, default?, options?, min?, max?}`; `type` is `text`, `number` (clamped to `min`/`max`), `boolean`, `select` (one of `options`, a menu), `list` (one of `options`, shown as a list), `slider` (a number between `min` and `max`, both required, shown as a slider with its value beside it) or `color` (hex, `#RRGGBB` or `#RRGGBBAA`). A default that doesn't fit is dropped. |
@@ -548,7 +549,7 @@ import what you need from `figcraft`.
 - Distribution: directories live on your own `figcraft-server`; there is no public catalogue,
   no publisher accounts or signatures (the server's key is the publisher), no ratings, reviews or
   install counts, and updates are found when you browse, not in the background. The browser build
-  can't use a directory yet.
+  keeps what it installs only as long as the page.
 - Plugins written for other apps (JavaScript plugins) don't run.
 - Widgets: clicks, field edits and menu items are their only events (no hover or timers), a field
   is plain text (no placeholder, length or single-line setting), and their layers are frames, text, rectangles, ellipses and images only (no

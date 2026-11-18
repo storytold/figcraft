@@ -19,12 +19,19 @@ fn id(v: serde_json::Value) -> NodeId {
 fn setup() -> (Ui, NodeId, NodeId) {
     let mut s = Session::new();
     let mut variants = Vec::new();
+    let mut icons = Vec::new();
     for (k, name) in ["Size=Small, State=Default", "Size=Large, State=Default", "Size=Small, State=Hover"].iter().enumerate() {
         let f = id(s.execute("frame.create", &json!({"x": 0, "y": k * 60, "width": 80, "height": 40, "name": name})).unwrap());
+        // A layer in every variant reads "Icon": an instance lists only the properties its variant uses.
+        let icon = id(s.execute("shape.rectangle", &json!({"x": 4, "y": 4, "width": 10, "height": 10, "parent": f})).unwrap());
+        icons.push(icon);
         variants.push(id(s.execute("component.create", &json!({"ids": [f]})).unwrap()));
     }
     let set = id(s.execute("component.combineVariants", &json!({"ids": variants})).unwrap());
-    s.execute("component.addProperty", &json!({"id": set, "name": "Icon", "type": "boolean", "default": true})).unwrap();
+    s.execute("component.addProperty", &json!({"id": set, "name": "Icon", "type": "boolean", "default": true, "layer": icons[0]})).unwrap();
+    for icon in &icons[1..] {
+        s.execute("component.bindProperty", &json!({"layer": icon, "property": "Icon"})).unwrap();
+    }
     let inst = id(s.execute("instance.create", &json!({"component": set, "x": 400, "y": 0})).unwrap());
     s.execute("select.set", &json!({"ids": [set]})).unwrap();
     (Ui::new(s), set, inst)
@@ -122,4 +129,26 @@ fn escape_cancels_a_property_drag_and_keeps_the_selection() {
     assert_eq!(names(&mut u, set), ["Size", "State", "Icon"]);
     assert_eq!(undo_len(&u), undo);
     assert_eq!(u.app.session.ds().unwrap().selection, [set], "the Escape only cancels the drag");
+}
+
+/// A long property name is cut to one line inside its label box instead of wrapping over the rows
+/// above and below (#2022); the name itself stays whole.
+#[test]
+fn a_long_property_name_stays_on_one_line() {
+    let long = "Flag Default label with a long name";
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 120, "height": 40, "name": "Chip"})).unwrap());
+    let t = id(s.execute("text.create", &json!({"text": "Label", "x": 4, "y": 4, "parent": f})).unwrap());
+    let c = id(s.execute("component.create", &json!({"ids": [f]})).unwrap());
+    s.execute("component.addProperty", &json!({"id": c, "name": long, "type": "text", "layer": t})).unwrap();
+    let inst = id(s.execute("instance.create", &json!({"component": c, "x": 400, "y": 0})).unwrap());
+    s.execute("select.set", &json!({"ids": [inst]})).unwrap();
+    let mut u = Ui::new(s);
+    let texts = crate::export_name_tests::painted(&mut u);
+    let panel = u.app.ui.right_panel_rect.expect("the right panel shows");
+    let labels: Vec<(String, egui::Rect)> = texts.into_iter().filter(|(t, r)| t.starts_with("Flag") && r.min.x >= panel.min.x).collect();
+    let [(text, rect)] = labels.as_slice() else { panic!("one property label: {labels:?}") };
+    assert!(text.ends_with('…'), "cut with an ellipsis, not {text:?}");
+    assert!(rect.height() <= crate::widgets::FIELD_H, "one line, not {} tall", rect.height());
+    assert_eq!(names(&mut u, inst), [long], "the name itself stays whole");
 }

@@ -360,8 +360,13 @@ impl Session {
     pub(super) fn eyedrop(&mut self, ev: &PointerEvent) -> Result<()> {
         let ds = self.ds()?;
         let doc = ds.doc.clone();
-        let view = figcraft_render::View { origin: (ev.x, ev.y), scale: ev.zoom.max(0.01), width: 1, height: 1 };
-        let Some(pix) = figcraft_render::render_view(&doc, ds.page, &view, &Default::default()) else { return Ok(()) };
+        // One screen pixel centred on the pointer (its top left half a pixel up and to the left).
+        let scale = ev.zoom.max(0.01);
+        let view = figcraft_render::View { origin: (ev.x - 0.5 / scale, ev.y - 0.5 / scale), scale, width: 1, height: 1 };
+        // As the canvas draws it: an image magnified past 2x shows its pixels, so the colour picked
+        // is the pixel under the pointer, not a blend with its neighbours (#2189).
+        let opts = figcraft_render::Options { magnified_image_pixels: true, ..Default::default() };
+        let Some(pix) = figcraft_render::render_view(&doc, ds.page, &view, &opts) else { return Ok(()) };
         let rgba = figcraft_render::to_rgba8(&pix);
         let c = figcraft_color::Color::from_rgba8(
             rgba.first().copied().unwrap_or(0),

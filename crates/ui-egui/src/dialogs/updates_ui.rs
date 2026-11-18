@@ -5,7 +5,7 @@ use crate::FigApp;
 #[cfg(target_arch = "wasm32")]
 use crate::i18n::tr;
 #[cfg(not(target_arch = "wasm32"))]
-use craft_update::updater::{Action, Updater};
+use craft_update::updater::{Action, Status, Updater};
 #[cfg(not(target_arch = "wasm32"))]
 use craft_update::{CheckResultDialog, CheckResultResponse};
 
@@ -21,6 +21,7 @@ pub(crate) struct Runtime {
     #[cfg(not(target_arch = "wasm32"))]
     repaint: Option<egui::Context>,
     /// The result dialog of a manual check is open.
+    #[cfg(target_arch = "wasm32")]
     pub(crate) manual_window_open: bool,
     /// The web build has no updater; its only result is that checks are unsupported.
     #[cfg(target_arch = "wasm32")]
@@ -38,6 +39,7 @@ impl Default for Runtime {
             check_requested: false,
             #[cfg(not(target_arch = "wasm32"))]
             repaint: None,
+            #[cfg(target_arch = "wasm32")]
             manual_window_open: false,
             #[cfg(target_arch = "wasm32")]
             status_message: None,
@@ -51,13 +53,19 @@ impl FigApp {
     pub fn set_startup_update_check(&mut self, on: bool) {
         self.updates_rt.startup_check = on;
     }
+
+    /// Start the install of an update that waits for the app to close. The desktop app calls this
+    /// when it exits, before it ends the process; later calls do nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_pending_update(&mut self) {
+        self.updates_rt.updater.start_pending_update();
+    }
 }
 
 pub(crate) fn check(app: &mut FigApp) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         app.updates_rt.check_requested = true;
-        app.updates_rt.manual_window_open = true;
         if let Some(ctx) = &app.updates_rt.repaint {
             ctx.request_repaint();
         }
@@ -85,10 +93,18 @@ pub(crate) fn tick(app: &mut FigApp, ctx: &egui::Context) {
     let _ = (app, ctx);
 }
 
+/// Whether the check result window shows: for every status but idle (a requested check, and the
+/// first start after an update, which reports that it installed or why it failed), and never over
+/// the startup prompt.
+#[cfg(not(target_arch = "wasm32"))]
+fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
+    !prompt_open && !matches!(status, Status::Idle)
+}
+
 pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
+        // The updater asks to close only when no document has unsaved changes; the install starts when the app exits.
         let clean = !app.session.docs.iter().any(|d| d.is_dirty());
         match app.updates_rt.updater.show_if(ctx, clean) {
             Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
@@ -97,14 +113,13 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
             Action::None => {}
         }
         let rt = &mut app.updates_rt;
-        if rt.manual_window_open {
+        if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
             match CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).show(ctx, rt.updater.status()) {
                 CheckResultResponse::None => {}
-                CheckResultResponse::Close => {
-                    rt.manual_window_open = false;
-                    rt.updater.dismiss_status();
-                }
+                CheckResultResponse::Close => rt.updater.dismiss_status(),
                 CheckResultResponse::CheckAgain => rt.check_requested = true,
+                // The next `show_if` asks the window to close once no document has unsaved changes.
+                CheckResultResponse::RestartToUpdate => rt.updater.restart_to_update(),
             }
         }
     }
@@ -133,5 +148,29 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
             app.updates_rt.manual_window_open = false;
             app.updates_rt.status_message = None;
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_window_shows_every_status_but_idle() {
+        let shown = [
+            Status::Checking,
+            Status::UpToDate,
+            Status::Failed("no network".into()),
+            Status::Installing,
+            Status::Ready,
+            Status::Managed,
+            Status::Updated("0.2.0".into()),
+            Status::InstallFailed("disk full".into()),
+        ];
+        for status in &shown {
+            assert!(result_window_shows(status, false), "{status:?}");
+            assert!(!result_window_shows(status, true), "{status:?} over the prompt");
+        }
+        assert!(!result_window_shows(&Status::Idle, false));
     }
 }

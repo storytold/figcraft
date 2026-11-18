@@ -29,7 +29,11 @@ jobs:
     name: Windows installation policy (no app build)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Install the pinned packaging toolchain

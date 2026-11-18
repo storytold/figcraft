@@ -114,10 +114,15 @@ fn key_steps(ctx: &egui::Context, suffix: &str, step: f64) -> (f64, f64) {
     }
 }
 
-/// How far a scrub of `dx` points moves a value whose field steps by `step`: 1 step a point, ten
-/// with Shift, a tenth with Alt (fine).
+/// The steps a point of scrubbing moves a field by: half, as measured in Figma (12.2 px moved X
+/// by 6, 61.2 px by 31).
+pub const SCRUB_STEPS_PER_POINT: f64 = 0.5;
+
+/// How far a scrub of `dx` points moves a value whose field steps by `step`: half a step a point
+/// ([`SCRUB_STEPS_PER_POINT`]), ten times that with Shift (5 steps a point), a tenth of that with Alt (0.05 steps a point, fine).
 pub fn scrub_amount(dx: f64, step: f64, shift: bool, alt: bool) -> f64 {
     dx * step
+        * SCRUB_STEPS_PER_POINT
         * match (shift, alt) {
             (true, false) => 10.0,
             (false, true) => 0.1,
@@ -221,6 +226,16 @@ pub enum BindEvent {
 /// after the number. Typing supports simple math (`10+5`, `*2`).
 pub fn number_field(ui: &mut Ui, id: Id, lead: Lead, value: Option<f64>, suffix: &str, width: f32, step: f64) -> Option<FieldEdit> {
     number_field_mixed(ui, id, lead, value, suffix, width, step)?.settled()
+}
+
+/// Ask number field `id` to open for typing on its next frame, its text selected (a tool that
+/// opens with its field focused, such as Scale). An edit left over from when the field was last
+/// shown (it went away with the keyboard on it) is dropped first, or the request would be ignored.
+pub fn request_edit(ui: &Ui, id: Id) {
+    ui.data_mut(|d| {
+        d.remove::<String>(id.with("editing"));
+        d.insert_temp(id.with("beginedit"), true);
+    });
 }
 
 /// Whether the edit of number field `id` began with a Cmd/Ctrl-click. A padding field edited
@@ -400,7 +415,8 @@ fn number_field_impl(
     }
     // Typing on a field the keyboard reached (Tab) edits it: the editor takes the typed text.
     let typed_now = editing.is_none() && on_field && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))));
-    let started = editing.is_none() && ((field_resp.clicked() && !alt_now) || typed_now);
+    let requested = ui.data_mut(|d| d.remove_temp::<bool>(id.with("beginedit"))).unwrap_or(false);
+    let started = editing.is_none() && ((field_resp.clicked() && !alt_now) || typed_now || requested);
     // The text the field would commit to no effect: what it showed when the edit began, or the
     // value the arrows last stepped it to.
     let kept_id = id.with("kept");
@@ -1013,7 +1029,7 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), r.shrink(6.0), *icon, t.icon);
+        icons::paint(ui.painter(), icon_glyph_rect(r), *icon, t.icon);
         if resp.clicked() {
             out = Some(i);
         }
@@ -1045,6 +1061,16 @@ pub fn tight_end_n<R>(ui: &mut Ui, count: usize, add: impl FnOnce(&mut Ui) -> R)
     add(&mut child)
 }
 
+/// Inset of the glyph inside a 24 pt icon button: a 16 pt glyph, the icons' native size and what
+/// `icons::button` draws (a fill row's eye), so every 24 pt icon button in the panels matches it
+/// (section header buttons included).
+pub const ICON_BUTTON_INSET: f32 = 4.0;
+
+/// The rect a 24 pt icon button paints its glyph in.
+pub fn icon_glyph_rect(button: Rect) -> Rect {
+    button.shrink(ICON_BUTTON_INSET)
+}
+
 /// An icon button at `rect` (hover highlight, tooltip); true when clicked.
 pub fn icon_button_at(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -1052,7 +1078,7 @@ pub fn icon_button_at(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) ->
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), rect.shrink(5.0), icon, t.icon);
+    icons::paint(ui.painter(), icon_glyph_rect(rect), icon, t.icon);
     resp.clicked()
 }
 
@@ -1130,7 +1156,7 @@ pub fn checker(painter: &egui::Painter, rect: Rect, cell: f32) {
     }
 }
 
-/// Shared Fill/Stroke/Selection colors control: one background, a 16 pt swatch,
+/// Shared sidebar paint control: one background, a 16 pt swatch,
 /// caller-provided colour content, and a separated, scrubbable opacity field.
 /// The caller owns picker routing and commands; this widget only draws and reports edits.
 pub fn paint_field(
@@ -1274,13 +1300,19 @@ pub fn paint_swatch(painter: &egui::Painter, rect: Rect, paint: &figcraft_color:
 
 /// A small checkbox with label.
 pub fn checkbox(ui: &mut Ui, on: bool, label: &str) -> bool {
+    checkbox_tri(ui, Some(on), label)
+}
+
+/// A checkbox that can show a mixed state (`None`: a dash, for a setting that differs across a
+/// selection); returns whether it was clicked.
+pub fn checkbox_tri(ui: &mut Ui, state: Option<bool>, label: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(200.0), FIELD_H), Sense::click());
-    a11y::checkbox(&resp, label, on);
+    a11y::checkbox_tri(&resp, label, state);
     let b = Rect::from_min_size(pos2(rect.min.x, rect.center().y - 7.0), vec2(14.0, 14.0));
-    if on {
+    if state != Some(false) {
         ui.painter().rect_filled(b, CornerRadius::same(3), t.accent);
-        icons::paint(ui.painter(), b.shrink(1.5), Icon::Check, t.accent_on);
+        icons::paint(ui.painter(), b.shrink(1.5), if state.is_some() { Icon::Check } else { Icon::Minus }, t.accent_on);
     } else {
         ui.painter().rect_stroke(b, CornerRadius::same(3), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
     }
@@ -1354,7 +1386,10 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
         Some(mut text) => {
             ui.painter().rect_filled(rect.expand(2.0), CornerRadius::same(4), t.panel);
             ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(4), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            // The editor is at least the theme's field height; centred on a shorter row it
+            // keeps its text on the row's middle line instead of hanging below it (#2318).
+            let edit = Rect::from_center_size(rect.center(), vec2(rect.width(), rect.height().max(FIELD_H)));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit));
             let r = crate::bidi::single_line(&mut child, te_id, &mut text, font, rect.width());
             a11y::own_focus(&r);
             keep_focus(&r, started);

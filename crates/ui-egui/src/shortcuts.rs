@@ -178,7 +178,7 @@ pub(crate) fn handle_input(
                 let props = ctx.input(|i| i.modifiers.alt);
                 crate::menus::invoke(app, if props { "edit.copyProperties" } else { "edit.copy" });
             }
-            Event::Cut => cut(app),
+            Event::Cut => cut(app, ctx.input(|i| i.modifiers)),
             Event::Paste(text) if !paste.drop_text => crate::menus::paste(app, Some(text), None),
             Event::Key { key, physical_key, pressed: true, modifiers, repeat }
                 if key_event(app, *key, *physical_key, *modifiers, *repeat, now, ctx) =>
@@ -192,13 +192,18 @@ pub(crate) fn handle_input(
 
 /// Cut: usually the layers. Windows sends Shift+Delete (remove the points and heal the path)
 /// as a cut command and never as a key, so in vector edit mode the selection is points: they are
-/// removed, a heal joining the path through them.
-fn cut(app: &mut FigApp) {
+/// removed, a heal joining the path through them. Ctrl/Cmd+X is the real Cut: with points or
+/// segments selected the engine copies them and removes them, staying in edit mode (#1875).
+fn cut(app: &mut FigApp, modifiers: egui::Modifiers) {
     let Some(ve) = app.session.ds().ok().and_then(|d| d.vector_edit.clone()) else {
         crate::menus::invoke(app, "edit.cut");
         return;
     };
-    if ve.parts().iter().any(|p| !p.vertices.is_empty()) {
+    if modifiers.command {
+        if ve.parts().iter().any(|p| !p.vertices.is_empty() || !p.segments.is_empty()) {
+            crate::menus::invoke(app, "edit.cut");
+        }
+    } else if ve.parts().iter().any(|p| !p.vertices.is_empty()) {
         app.run("vector.deleteHeal", json!({}));
     } else if ve.parts().iter().any(|p| !p.segments.is_empty()) {
         app.run("vector.edit.delete", json!({}));
@@ -428,6 +433,11 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if key == Key::Escape && !egui::Popup::is_any_open(ctx) && crate::colorpicker::close_if_open(app) {
         return true;
     }
+    // A fill, stroke or effect row highlighted in the Design panel: Escape lets it go, before the
+    // binding deselects the layers.
+    if key == Key::Escape && m.is_none() && !egui::Popup::is_any_open(ctx) && crate::property_rows::escape(app) {
+        return true;
+    }
     if key_pick(app, key, m) || key_box(app, key, m) {
         return true;
     }
@@ -511,10 +521,7 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
         }
         return true;
     }
-    if m.is_none() && !repeat && opacity_digit(app, key, now) {
-        return true;
-    }
-    false
+    m.is_none() && !repeat && opacity_digit(app, key, now)
 }
 
 /// Keys while a selection box drawn from the keyboard shows (`select.area`, Alt+Space or Ctrl+Space,

@@ -98,6 +98,15 @@ fn set_direction(s: &mut Session, p: &Value, d: TextDirection) -> Result<Value> 
     para_range(s, p, |t, a, b| t.set_para_lists(a, b, |pl| pl.direction = d))
 }
 
+/// The wrap style of the targeted texts: the edited paragraphs while editing (the paragraph
+/// level), else the whole layer (the layer level: every paragraph, overrides included).
+fn set_wrap_style(s: &mut Session, p: &Value, w: figcraft_doc::WrapStyle) -> Result<Value> {
+    match textedit::selected_range(s) {
+        Some((_, a, b)) => para(s, p, |t| t.set_para_wrap_styles(a, b, w)),
+        None => para(s, p, |t| t.set_wrap_style(w)),
+    }
+}
+
 /// Whether every targeted char has `pred` (to decide toggle direction).
 fn all_have(s: &Session, p: &Value, pred: impl Fn(&TextStyle) -> bool) -> bool {
     let Ok(doc) = s.doc() else { return false };
@@ -445,12 +454,12 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.wrapStyle",
             "Wrap style",
-            "{style: auto|balance|pretty, ids?}  where lines break when the text wraps: Auto fits as many words as fit on each line, Balance makes the lines close to the same length, Pretty keeps lines full but leaves no one word alone on the last",
+            "{style: auto|balance|pretty, ids?}  where lines break when the text wraps (while editing: the selected paragraphs; else the whole layer): Auto fits as many words as fit on each line, Balance makes the lines close to the same length, Pretty keeps lines full but leaves no one word alone on the last",
             true,
             |s, p| {
                 let w: figcraft_doc::WrapStyle =
                     get(p, "style").and_then(super::props::enum_of).ok_or_else(|| bad("text.wrapStyle", "`style`: auto|balance|pretty"))?;
-                para(s, p, |t| t.wrap_style = w)
+                set_wrap_style(s, p, w)
             }
         ),
         spec!(

@@ -81,10 +81,18 @@ fn wheel_zoom(app: &mut FigApp, ctx: &egui::Context, zoom: f32, shift: bool) -> 
     if let Some(mouse) = latest {
         app.canvas.wheel_is_mouse = mouse;
     }
+    let invert = app.session.prefs.invert_zoom && !pinch;
     if !app.session.prefs.scroll_wheel_zoom || !app.canvas.wheel_is_mouse || pinch {
-        return (wheel, zoom);
+        return (wheel, if invert { invert_zoom_factor(zoom) } else { zoom });
     }
-    swap_wheel(wheel, zoom, shift, speed)
+    let (scroll, zoom) = swap_wheel(wheel, zoom, shift, speed);
+    (scroll, if invert { invert_zoom_factor(zoom) } else { zoom })
+}
+
+/// The zoom factor for the opposite direction (Preferences ▸ Invert zoom direction): its
+/// reciprocal. A factor that is zero, negative or not finite is left as it is.
+pub(crate) fn invert_zoom_factor(zoom: f32) -> f32 {
+    if zoom.is_finite() && zoom > 0.0 { 1.0 / zoom } else { zoom }
 }
 
 /// Whether a scroll event came from a mouse wheel. Only macOS says which device scrolled; elsewhere
@@ -275,9 +283,15 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     if !app.canvas.dragging && resp.hovered() && crate::guides::input(app, &ctx, pos) {
         return false;
     }
-    if !app.canvas.dragging && resp.hovered() && crate::handles::input(app, &ctx, pos) {
-        return false;
-    }
+    let handle_cursor = if !app.canvas.dragging && resp.hovered() {
+        match crate::handles::input(app, &ctx, pos) {
+            crate::handles::Input::Captured => return false,
+            crate::handles::Input::Hover(cursor) => Some(cursor),
+            crate::handles::Input::Ignored => None,
+        }
+    } else {
+        None
+    };
     if resp.secondary_clicked() {
         open_context_menu(app, pos, mods.command);
         return true;
@@ -374,7 +388,13 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
             send(app, PointerKind::Up, release_pos.unwrap_or(pos), &mods);
         }
     }
-    true
+    // Padding hover changes the cursor without skipping the normal hover and context-menu paths.
+    if let Some(cursor) = handle_cursor {
+        ctx.set_cursor_icon(cursor);
+        false
+    } else {
+        true
+    }
 }
 
 /// Pointer event `kind` at screen point `pos`, to the tools.
@@ -390,7 +410,11 @@ fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
         app.canvas.pressure = None;
     }
     app.canvas.last_pointer = Some(Point::new(ev.x, ev.y));
-    if let Err(e) = app.session.pointer(&ev) {
+    // A gesture something else committed under the held button (a colour picker closing on this
+    // press) leaves the rest of its drag with nothing to edit: that is not worth saying.
+    if let Err(e) = app.session.pointer(&ev)
+        && !matches!(e, figcraft_engine::EngineError::NoGesture)
+    {
         app.toast(e.to_string());
     }
     app.canvas.last_hover = hover.then(|| HoverKey::of(app, ev));

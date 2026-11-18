@@ -248,6 +248,12 @@ struct Snapshot {
     overlays: Vec<OverlayState>,
     history: Vec<Visit>,
     scroll: HashMap<NodeId, (f64, f64)>,
+    /// When each instance last changed variant: a temporary change that reverts restores it, so
+    /// the variant shown again keeps its After delay deadline.
+    swapped: HashMap<NodeId, f64>,
+    /// The After delays that had fired: a temporary variant change clears the swapped instance's,
+    /// and the revert puts them back so a delay that already ran doesn't run again.
+    delays_fired: HashSet<(NodeId, usize)>,
 }
 
 /// A "while hovering / while pressing" state that reverts when the pointer leaves / lifts.
@@ -290,6 +296,8 @@ pub struct Presenter {
     bar_thumb: Option<(NodeId, usize, egui::TextureHandle)>,
     arrived: f64,
     delays_fired: HashSet<(NodeId, usize)>,
+    /// When each instance last changed variant (Change to): its After delay timers count from then.
+    swapped: HashMap<NodeId, f64>,
     /// Mouse triggers waiting out their delay.
     waiting: Vec<Waiting>,
     hovered: Vec<NodeId>,
@@ -370,6 +378,7 @@ impl Presenter {
             bar_thumb: None,
             arrived: -1.0,
             delays_fired: HashSet::new(),
+            swapped: HashMap::new(),
             waiting: Vec::new(),
             hovered: Vec::new(),
             press: None,
@@ -459,6 +468,9 @@ mod tail_tests;
 
 #[cfg(test)]
 mod delay_tests;
+
+#[cfg(test)]
+mod afterdelay_chain_tests;
 
 #[cfg(test)]
 mod overlay_anchor_tests;

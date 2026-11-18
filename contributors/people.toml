@@ -115,3 +115,9 @@ display_name = "Hamza0101"
 
 [people.ashokram-si]
 real_name = "Ashok Ram"
+
+[people.GiovanniBot]
+sync_github_name = true
+
+[people.gmrmad1]
+real_name = "Madhav Agarwal"

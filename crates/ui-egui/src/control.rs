@@ -1062,7 +1062,7 @@ fn ui_key(app: &mut FigApp, ctx: &Context, p: &Value) -> Result<Value, String> {
             };
             // Dev Mode only inspects, as the window's key path says.
             if crate::menus::dev_mode_refuses(app, cmd) {
-                return Err("Dev Mode only inspects: switch to Design to edit".into());
+                return Err("Developer Mode only inspects: switch to Design to edit".into());
             }
             app.session.execute(cmd, &params).map_err(|e| e.to_string())
         }

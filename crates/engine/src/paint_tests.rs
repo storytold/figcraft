@@ -136,6 +136,16 @@ fn image_adjust_refuses_what_it_cannot_do() {
 }
 
 #[test]
+fn save_preset_rejects_bad_index() {
+    let mut s = Session::new();
+    let r = image_rect(&mut s);
+    assert!(s.execute("image.savePreset", &json!({"ids": [r], "name": "B", "index": 0})).is_err());
+    assert!(s.execute("image.savePreset", &json!({"ids": [r], "name": "B", "index": -1})).is_err(), "negative index accepted");
+    assert!(s.execute("image.savePreset", &json!({"ids": [r], "name": "B", "index": 1.5})).is_err(), "fractional index accepted");
+    assert!(s.execute("image.savePreset", &json!({"ids": [r], "name": "B", "index": 1})).is_ok());
+}
+
+#[test]
 fn saved_image_presets() {
     let mut s = Session::new();
     let r = image_rect(&mut s);

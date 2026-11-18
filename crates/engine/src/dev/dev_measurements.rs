@@ -200,7 +200,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "devMode.addMeasurement",
             "Add measurement",
-            "{from? (default the first selected layer), to? (a layer on the same page), side? (top|right|bottom|left)}  keeps a measurement on the canvas: between `from` and `to`, across one side of `from`, or (neither) to the layer around it; Dev Mode draws it and it follows the layers → {from, index, lines}",
+            "{from? (default the first selected layer), to? (a layer on the same page), side? (top|right|bottom|left)}  keeps a measurement on the canvas: between `from` and `to`, across one side of `from`, or (neither) to the layer around it; Developer Mode draws it and it follows the layers → {from, index, lines}",
             true,
             add
         ),

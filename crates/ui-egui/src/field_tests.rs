@@ -111,17 +111,17 @@ fn typed_text_is_a_number_arithmetic_or_an_edit_relative_to_the_value() {
 }
 
 #[test]
-fn a_scrub_moves_a_step_a_point_ten_with_shift_and_a_tenth_with_alt() {
+fn a_scrub_moves_half_a_step_a_point_ten_times_that_with_shift_and_a_tenth_with_alt() {
     // (points dragged, the field's step, Shift, Alt) → how far the value moves
     let rows = [
-        ((25.0, 1.0, false, false), 25.0),
-        ((-25.0, 1.0, false, false), -25.0),
-        ((10.0, 1.0, true, false), 100.0),
-        ((20.0, 1.0, false, true), 2.0),
-        ((20.0, 1.0, true, true), 20.0),
-        ((10.0, 0.1, false, false), 1.0),
-        ((10.0, 0.1, true, false), 10.0),
-        ((10.0, 10.0, false, false), 100.0),
+        ((25.0, 1.0, false, false), 12.5),
+        ((-25.0, 1.0, false, false), -12.5),
+        ((10.0, 1.0, true, false), 50.0),
+        ((20.0, 1.0, false, true), 1.0),
+        ((20.0, 1.0, true, true), 10.0),
+        ((10.0, 0.1, false, false), 0.5),
+        ((10.0, 0.1, true, false), 5.0),
+        ((10.0, 10.0, false, false), 50.0),
         ((0.0, 1.0, true, false), 0.0),
     ];
     for ((dx, step, shift, alt), want) in rows {
@@ -189,7 +189,7 @@ fn setup() -> (Ui, NodeId, NodeId) {
 
 /// The topmost field named `name` in the Design panel: its value centre and displayed text.
 /// Layer opacity precedes the equally named opacity fields in paint rows.
-fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
+pub(crate) fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
@@ -234,7 +234,7 @@ fn geom(u: &Ui, n: NodeId) -> (f64, f64, f64, f64) {
     (b.x0, b.y0, b.width(), b.height())
 }
 
-fn undo_steps(u: &Ui) -> usize {
+pub(crate) fn undo_steps(u: &Ui) -> usize {
     u.app.session.ds().unwrap().history.undo.len()
 }
 
@@ -252,7 +252,7 @@ fn click(u: &mut Ui, p: Pos2) {
 }
 
 /// Click into field `name`, type `text` over what it shows and press `end`.
-fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
+pub(crate) fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
     let (p, _) = field(u, name);
     click(u, p);
     u.frame(vec![Event::Text(text.into())]);
@@ -261,7 +261,7 @@ fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
 }
 
 /// Scrub field `name` by its label: `dx` points with `modifiers` held, then let go.
-fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
+pub(crate) fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
     let from = label(u, name);
     drag(u, from, dx, modifiers);
 }
@@ -308,7 +308,7 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
     let (mut u, a, _) = setup();
     let toast = |u: &Ui| u.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
     // (rise in points, how far 40 points of scrub move X, the notice)
-    for (rise, want, notice) in [(150.0, 80.0, "2x"), (0.0, 40.0, ""), (-150.0, 20.0, "1/2"), (-300.0, 10.0, "1/4"), (40.0, 40.0, "")] {
+    for (rise, want, notice) in [(150.0, 40.0, "2x"), (0.0, 20.0, ""), (-150.0, 10.0, "1/2"), (-300.0, 5.0, "1/4"), (40.0, 20.0, "")] {
         let x0 = geom(&u, a).0;
         u.app.ui.toast = None;
         scrub_at_height(&mut u, "X", rise, 40.0);
@@ -319,7 +319,7 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
             assert!(toast(&u).contains(notice), "rise {rise}: the notice says {}", toast(&u));
         }
     }
-    // Speeds compose with the modifiers' rates: 2x with Shift is twenty steps a point.
+    // Speeds compose with the modifiers' rates: 2x with Shift is ten steps a point.
     let x0 = geom(&u, a).0;
     let from = label(&mut u, "X");
     let shift = Modifiers { shift: true, ..Modifiers::NONE };
@@ -333,7 +333,7 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
     let to = pos2(up.x + 10.0, up.y);
     u.frame_with(vec![Event::PointerMoved(to), press(false, to)], shift);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0 - x0, 200.0, "ten points at 2x with Shift");
+    assert_eq!(geom(&u, a).0 - x0, 100.0, "ten points at 2x with Shift");
     // The pointer reported gone from the window (egui's PointerGone) with the button still down
     // keeps the speed it had: no notice of 1x, and the scrub goes on at 2x once it is back.
     let x0 = geom(&u, a).0;
@@ -356,7 +356,7 @@ fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
     let to = pos2(up.x + 30.0, up.y);
     u.frame_with(vec![Event::PointerMoved(to), press(false, to)], m);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0 - x0, 40.0, "ten points before and ten after the pointer was gone, at 2x both");
+    assert_eq!(geom(&u, a).0 - x0, 20.0, "ten points before and ten after the pointer was gone, at 2x both");
 }
 
 #[test]
@@ -366,11 +366,11 @@ fn scrubbing_the_label_moves_the_value_and_is_one_undo_step() {
     let alt = Modifiers { alt: true, ..Modifiers::NONE };
     // (field, points, modifiers, x after): X starts at 10.
     let rows = [
-        ("X", 25.0, Modifiers::NONE, 35.0),
-        ("X", 10.0, shift, 135.0),
-        ("X", 20.0, alt, 137.0),
-        ("X", -37.0, Modifiers::NONE, 100.0),
-        ("X", -8.0, shift, 20.0),
+        ("X", 24.0, Modifiers::NONE, 22.0),
+        ("X", 10.0, shift, 72.0),
+        ("X", 20.0, alt, 73.0),
+        ("X", -36.0, Modifiers::NONE, 55.0),
+        ("X", -8.0, shift, 15.0),
     ];
     for (name, dx, m, want) in rows {
         let steps = undo_steps(&u);
@@ -379,18 +379,18 @@ fn scrubbing_the_label_moves_the_value_and_is_one_undo_step() {
         assert_eq!(undo_steps(&u), steps + 1, "one undo step for the whole scrub");
     }
     u.app.run("edit.undo", json!({}));
-    assert_eq!(geom(&u, a).0, 100.0, "undo takes back the last scrub alone");
+    assert_eq!(geom(&u, a).0, 55.0, "undo takes back the last scrub alone");
     // A few points aren't a drag yet (a click on the label), then it counts from the press.
     // Alt gives tenths (the field shows them); the fraction stays under a plain scrub.
     let width = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().width;
-    scrub(&mut u, "Width", 7.0, alt);
-    assert_eq!(width(&u), 40.7);
+    scrub(&mut u, "Width", 8.0, alt);
+    assert_eq!(width(&u), 40.4);
     scrub(&mut u, "Width", 8.0, Modifiers::NONE);
-    assert_eq!(width(&u), 48.7);
-    // Fractional fields: opacity moves a percent a point, rotation a degree.
-    scrub(&mut u, "Opacity", -30.0, Modifiers::NONE);
+    assert_eq!(width(&u), 44.4);
+    // Fractional fields: opacity moves half a percent a point, rotation half a degree.
+    scrub(&mut u, "Opacity", -60.0, Modifiers::NONE);
     assert_eq!(u.app.session.doc().unwrap().node(a).unwrap().opacity, 0.7);
-    scrub(&mut u, "Rotation", 15.0, Modifiers::NONE);
+    scrub(&mut u, "Rotation", 30.0, Modifiers::NONE);
     let rot = figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(a).unwrap().transform);
     assert!((rot.abs() - 15.0).abs() < 1e-6, "rotation {rot}");
     // A press on the label that doesn't move changes nothing.
@@ -439,6 +439,68 @@ fn the_arrow_keys_step_by_the_nudge_amounts_and_fractional_fields_by_their_own()
     key(&mut u, Key::Escape, Modifiers::NONE);
     let rot = figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(a).unwrap().transform);
     assert!((rot.abs() - 11.0).abs() < 1e-6, "rotation {rot}: the steps stay after Escape");
+}
+
+#[test]
+fn the_rotation_field_shows_and_sets_the_rotation_on_the_page() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 100, "width": 400, "height": 400})).unwrap());
+    s.execute("node.set", &json!({"ids": [f], "props": {"rotation": 10}})).unwrap();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 120, "height": 80, "parent": f})).unwrap());
+    s.execute("node.set", &json!({"ids": [r], "props": {"rotation": -10}})).unwrap();
+    let b = id(s.execute("shape.rectangle", &json!({"x": 600, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().world_transform(n));
+    let local = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(n).unwrap().transform);
+    assert_eq!(field(&mut u, "Rotation").1, "0°");
+    type_into(&mut u, "Rotation", "7", Key::Enter);
+    assert!((page(&u, r) - 7.0).abs() < 1e-6 && (local(&u, r) + 3.0).abs() < 1e-6, "{} {}", page(&u, r), local(&u, r));
+    assert_eq!(field(&mut u, "Rotation").1, "7°");
+    // Arrows step the shown value.
+    let shift = Modifiers { shift: true, ..Modifiers::NONE };
+    let (p, _) = field(&mut u, "Rotation");
+    click(&mut u, p);
+    key(&mut u, Key::ArrowUp, Modifiers::NONE);
+    key(&mut u, Key::ArrowUp, shift);
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    assert!((page(&u, r) - 18.0).abs() < 1e-6, "{}", page(&u, r));
+    assert_eq!(field(&mut u, "Rotation").1, "18°");
+    // Scrubbing is one undo step.
+    let steps = undo_steps(&u);
+    scrub(&mut u, "Rotation", 30.0, Modifiers::NONE);
+    assert!((page(&u, r) - 33.0).abs() < 1e-6, "{}", page(&u, r));
+    assert_eq!(undo_steps(&u), steps + 1);
+    // Mixed: layers in differently turned parents agree when their page angles do.
+    u.app.session.execute("node.set", &json!({"ids": [b], "props": {"rotation": 33}})).unwrap();
+    u.app.session.execute("select.set", &json!({"ids": [r, b]})).unwrap();
+    assert_eq!(field(&mut u, "Rotation").1, "33°");
+    u.app.session.execute("node.set", &json!({"ids": [b], "props": {"rotation": 20}})).unwrap();
+    assert_eq!(field(&mut u, "Rotation").1, "Mixed");
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Rotation", "+10", Key::Enter);
+    assert!((page(&u, r) - 43.0).abs() < 1e-6 && (page(&u, b) - 30.0).abs() < 1e-6, "{} {}", page(&u, r), page(&u, b));
+    assert_eq!(undo_steps(&u), steps + 1);
+}
+
+#[test]
+fn a_relative_rotation_edit_turns_a_selected_parent_before_its_child_whatever_the_selection_order() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 400, "height": 400})).unwrap());
+    let c = id(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 120, "height": 80, "parent": f})).unwrap());
+    s.execute("node.set", &json!({"ids": [f], "props": {"rotation": 10}})).unwrap();
+    s.execute("node.set", &json!({"ids": [c], "props": {"absoluteRotation": 30}})).unwrap();
+    // The child first, then its parent.
+    s.execute("select.set", &json!({"ids": [c, f]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().world_transform(n));
+    assert_eq!(field(&mut u, "Rotation").1, "Mixed");
+    type_into(&mut u, "Rotation", "+10", Key::Enter);
+    assert!((page(&u, f) - 20.0).abs() < 1e-6 && (page(&u, c) - 40.0).abs() < 1e-6, "{} {}", page(&u, f), page(&u, c));
 }
 
 #[test]
@@ -607,7 +669,7 @@ fn scrubbing_colour_picker_fields_is_live_and_one_undo_step() {
     let steps = undo_steps(&u);
     let from = lead(&u, Id::unique(("cp_f", "r")));
     drag(&mut u, from, -20.0, Modifiers::NONE);
-    assert_eq!((rgba(&u)[0], undo_steps(&u)), (r0 - 20, steps + 1), "R");
+    assert_eq!((rgba(&u)[0], undo_steps(&u)), (r0 - 10, steps + 1), "R");
     // Committing adds a recent colour row and can lift the anchored picker. Settle its layout.
     for _ in 0..3 {
         u.frame(vec![]);
@@ -721,7 +783,7 @@ fn scrubbing_a_prototype_delay_sets_it_once_when_let_go() {
         figcraft_doc::proto::Trigger::AfterDelay { ms } => ms,
         _ => panic!("still after a delay"),
     };
-    assert_eq!((ms, undo_steps(&u)), (800, steps + 1));
+    assert_eq!((ms, undo_steps(&u)), (650, steps + 1));
 }
 
 /// Asserts scrubbing the scale panel's width scales the layer live in one undo step.
@@ -734,7 +796,201 @@ fn scrubbing_the_scale_panel_width_scales_live_in_one_undo_step() {
     let from = lead(&u, Id::unique("scale_w"));
     drag(&mut u, from, 20.0, Modifiers::NONE);
     let (_, _, w, h) = geom(&u, a);
-    assert_eq!((w, h, undo_steps(&u)), (60.0, 45.0, steps + 1), "40×30 scaled to a width of 60");
+    assert_eq!((w, h, undo_steps(&u)), (50.0, 37.5, steps + 1), "40×30 scaled to a width of 50");
+}
+
+/// A 100 x 100 rectangle at the origin, selected, in a Ui with the Move tool.
+fn scale_setup() -> (Ui, NodeId) {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    u.frame(vec![]);
+    (u, r)
+}
+
+fn scale_field_focused(u: &Ui) -> bool {
+    u.ctx.memory(|m| m.has_focus(Id::unique("scale_k").with("te")))
+}
+
+/// Measured in Figma's web app (2026-11-09): K opens the Scale section with its input focused.
+#[test]
+fn pressing_k_focuses_the_scale_field_with_its_text_selected() {
+    let (mut u, _) = scale_setup();
+    assert!(!scale_field_focused(&u));
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+    assert!(scale_field_focused(&u), "the scale field has the keyboard");
+    let state = egui::TextEdit::load_state(&u.ctx, Id::unique("scale_k").with("te")).expect("the editor exists");
+    let range = state.cursor.char_range().expect("a selection");
+    let shown = u.ctx.data(|d| d.get_temp::<String>(Id::unique("scale_k").with("editing"))).expect("the field is being edited");
+    let (lo, hi) = (range.primary.index.min(range.secondary.index), range.primary.index.max(range.secondary.index));
+    assert_eq!((lo, hi), (egui::text::CCursor::new(0).index, egui::text::CCursor::new(shown.chars().count()).index), "all of its text is selected");
+}
+
+/// K with nothing selected, then a selection: the field doesn't take the keyboard from the canvas.
+#[test]
+fn a_selection_after_k_does_not_move_the_keyboard_to_the_scale_field() {
+    let (mut u, r) = scale_setup();
+    u.app.run("select.set", json!({"ids": []}));
+    u.frame(vec![]);
+    key(&mut u, Key::K, Modifiers::NONE);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    u.app.run("select.set", json!({"ids": [r]}));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+    assert!(!scale_field_focused(&u), "the canvas keeps the keyboard");
+}
+
+/// Ctrl+Enter in the factor field is not the tool's exit.
+#[test]
+fn ctrl_enter_in_the_scale_field_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    key(&mut u, Key::Enter, Modifiers::CTRL);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// An Enter on the first frame the panel is back from another tab (the field not yet focused again)
+/// doesn't end the tool on a stale "had the keyboard" flag.
+#[test]
+fn enter_on_the_first_frame_back_from_another_tab_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// The Scale tool chosen again while the Design tab was away (Prototype tab, Move, then K): the
+/// field takes the keyboard again when the Design tab comes back.
+#[test]
+fn the_scale_field_takes_the_keyboard_again_after_another_tab() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.app.run("tool.set", json!({"tool": "move"}));
+    u.frame(vec![]);
+    u.app.run("tool.set", json!({"tool": "scale"}));
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u), "the field has the keyboard again");
+}
+
+/// A value typed and left unsettled when the panel went away is dropped: back again, the field
+/// shows the fresh value with all of its text selected, so typing replaces it.
+#[test]
+fn the_scale_field_comes_back_fresh_with_its_text_selected() {
+    let (mut u, r) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("7".to_string())]);
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    let shown = u.ctx.data(|d| d.get_temp::<String>(Id::unique("scale_k").with("editing"))).expect("the field is being edited");
+    assert_ne!(shown, "7", "the leftover edit is gone");
+    let state = egui::TextEdit::load_state(&u.ctx, Id::unique("scale_k").with("te")).expect("the editor exists");
+    let range = state.cursor.char_range().expect("a selection");
+    let (lo, hi) = (range.primary.index.min(range.secondary.index), range.primary.index.max(range.secondary.index));
+    assert_eq!((lo, hi), (egui::text::CCursor::new(0).index, egui::text::CCursor::new(shown.chars().count()).index));
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+}
+
+/// Tab moves the keyboard from the factor field to the next one; an Enter there leaves the
+/// Scale tool on.
+#[test]
+fn enter_in_another_field_after_tab_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    // Tab, then Enter on the very next frame (as a quick Tab, Enter or a click and Enter would).
+    let ev = |key, pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    u.frame(vec![ev(Key::Tab, true), ev(Key::Tab, false)]);
+    assert!(!scale_field_focused(&u), "Tab moved the keyboard on");
+    for _ in 0..4 {
+        u.frame(vec![]);
+        assert!(!scale_field_focused(&u), "the field doesn't take the keyboard back");
+    }
+    u.frame(vec![ev(Key::Enter, true), ev(Key::Enter, false)]);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// K, 2, Enter: 100 x 100 becomes 200 x 200 about the panel's origin (the centre), the tool is Move, one undo step.
+#[test]
+fn k_two_enter_scales_the_selection_by_two() {
+    let (mut u, r) = scale_setup();
+    let steps = undo_steps(&u);
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("2".to_string())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![]);
+    // About the panel's origin, which starts at the centre as Figma's grid does.
+    assert_eq!(geom(&u, r), (-50.0, -50.0, 200.0, 200.0));
+    assert!(!scale_field_focused(&u), "the field let go of the keyboard");
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
+    assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
+    assert_eq!(undo_steps(&u), steps + 1);
+    u.app.run("edit.undo", json!({}));
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+}
+
+/// "2x" and "1.5" are factors too.
+#[test]
+fn the_scale_field_takes_2x_and_1_5() {
+    for (text, size) in [("2x", 200.0), ("1.5", 150.0)] {
+        let (mut u, r) = scale_setup();
+        key(&mut u, Key::K, Modifiers::NONE);
+        u.frame(vec![]);
+        u.frame(vec![Event::Text(text.to_string())]);
+        key(&mut u, Key::Enter, Modifiers::NONE);
+        u.frame(vec![]);
+        let at = 50.0 - size / 2.0;
+        assert_eq!(geom(&u, r), (at, at, size, size), "{text}");
+    }
+}
+
+/// Escape in the scale field closes it and changes nothing.
+#[test]
+fn escape_in_the_scale_field_closes_it_and_changes_nothing() {
+    let (mut u, r) = scale_setup();
+    let steps = undo_steps(&u);
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("3".to_string())]);
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+    assert!(!scale_field_focused(&u), "the field let go of the keyboard");
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
+    assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
+    assert_eq!(undo_steps(&u), steps);
 }
 
 /// The texts painted in the last frame: what they say, whether they end in an ellipsis, and where
@@ -1292,6 +1548,80 @@ fn sidebar_field_text_stays_in_place_on_focus() {
     }
 }
 
+/// The shared paint control shows the same precision as Fill and keeps the picker toggle.
+#[test]
+fn page_background_shows_fractional_opacity_like_fill_and_keeps_it_when_opening_the_picker() {
+    let mut u = Ui::new(Session::new());
+    u.ctx.enable_accesskit();
+    u.app.run("page.setBackground", json!({"color": "#FF000080"}));
+    u.frame(vec![]);
+    assert_eq!(field(&mut u, "Opacity").1, "50.2%");
+    let page = u.app.session.page().unwrap();
+    let background = |u: &Ui| match u.app.session.doc().unwrap().node(page).unwrap().kind {
+        figcraft_doc::NodeKind::Page { background, .. } => background,
+        _ => panic!("the page"),
+    };
+    let original = background(&u);
+    let steps = undo_steps(&u);
+    let swatch = u.ctx.read_response(Id::unique("pagebg_swatch")).expect("shared page swatch").rect.center();
+    click(&mut u, swatch);
+    assert!(matches!(u.app.ui.picker, Some(crate::colorpicker::PickerTarget::PageBackground)));
+    assert_eq!(undo_steps(&u), steps, "opening the picker does not edit the colour");
+    assert_eq!(background(&u), original, "opening preserves the stored alpha");
+    assert_eq!(field(&mut u, "Opacity").1, "50.2%");
+    click(&mut u, swatch);
+    assert!(u.app.ui.picker.is_none(), "the swatch toggles the picker closed");
+    assert_eq!(background(&u), original, "closing preserves the stored alpha");
+    assert_eq!(field(&mut u, "Opacity").1, "50.2%");
+    assert_eq!(undo_steps(&u), steps, "neither toggle creates an edit");
+}
+
+/// The shared page colour row uses the sidebar's width without hiding either field.
+#[test]
+fn page_background_colour_and_opacity_fit_a_resized_sidebar() {
+    // Find the whole galley, rather than its already-clipped bounding box.
+    fn hex_text(shape: &egui::Shape) -> Option<&egui::epaint::TextShape> {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(hex_text),
+            egui::Shape::Text(text) if text.galley.text() == "123ABC" => Some(text),
+            _ => None,
+        }
+    }
+    let mut widths = Vec::new();
+    for width in [240.0, 500.0] {
+        let mut session = Session::new();
+        session.prefs.panel_widths.1 = width;
+        session.execute("page.setBackground", &json!({"color": "#123ABC80"})).unwrap();
+        let mut u = Ui::new(session);
+        let mut previous = None;
+        let mut settled = None;
+        // Stop at stable geometry, with a bound so a layout regression cannot hang the test.
+        for _ in 0..16 {
+            let out = u.frame_output(vec![]);
+            let hex = u.ctx.read_response(Id::unique("pagebg").with("click")).unwrap().rect;
+            let alpha = u.ctx.read_response(Id::unique("pagebg_a").with("field")).unwrap().rect;
+            let panel = u.app.ui.right_panel_rect.unwrap();
+            if previous == Some((hex, alpha, panel)) {
+                settled = Some((out, hex, alpha, panel));
+                break;
+            }
+            previous = Some((hex, alpha, panel));
+        }
+        let (out, hex, alpha, panel) = settled.expect("the page row settles");
+        assert!(hex.left() >= u.app.canvas.rect.right(), "the colour stays in the sidebar");
+        assert!(hex.right() < alpha.left(), "the colour and opacity never overlap");
+        // Half a point permits device-pixel rounding, not an arbitrary gap from the panel edge.
+        assert!((alpha.right() - (panel.right() - crate::widgets::PAD_RIGHT)).abs() <= 0.5, "opacity stays at the right edge");
+        assert!((hex.center().y - alpha.center().y).abs() <= 0.5, "both fields stay on the same row");
+        let (text, clip) = out.shapes.iter().find_map(|s| hex_text(&s.shape).map(|text| (text, s.clip_rect))).expect("the HEX text");
+        assert!(!text.galley.elided, "the whole HEX value fits at {width} pt");
+        assert!(hex.expand(0.5).contains_rect(text.visual_bounding_rect()), "the HEX text fits its field");
+        assert!(clip.expand(0.5).contains_rect(text.visual_bounding_rect()), "the HEX text is not clipped");
+        widths.push(hex.width());
+    }
+    assert!(widths[1] > widths[0], "a wider sidebar gives the colour field more room");
+}
+
 /// The Page section's opacity field edits the page background's alpha (#1748; it was a label),
 /// one undo step per commit, and the hex field keeps that opacity unless the typed colour
 /// carries its own.
@@ -1314,10 +1644,10 @@ fn the_page_background_opacity_field_sets_the_page_colour_alpha() {
     type_into(&mut u, "Opacity", "50", Key::Enter);
     assert!(near(page_bg(&u).a, 0.5), "{:?}", page_bg(&u));
     assert_eq!(undo_steps(&u), steps + 1, "one undo step for the commit");
-    // No label is drawn, so the field's leading strip scrubs it: a percent a point, live, and one
+    // No label is drawn, so the field's leading strip scrubs it: half a percent a point, live, and one
     // undo step for the whole drag.
     let edge = lead(&u, Id::unique("pagebg_a"));
-    drag(&mut u, edge, -25.0, Modifiers::NONE);
+    drag(&mut u, edge, -50.0, Modifiers::NONE);
     assert!(near(page_bg(&u).a, 0.25), "{:?}", page_bg(&u));
     assert_eq!(undo_steps(&u), steps + 2, "one undo step for the whole scrub");
     u.app.run("edit.undo", json!({}));
@@ -1350,7 +1680,7 @@ fn the_page_background_opacity_field_sets_the_page_colour_alpha() {
 
 /// "You can also hover the input field itself and hold down the modifier key: Mac: ⌥ Option
 /// Windows: Alt" to scrub it (Adjust alignment, rotation, position, and dimensions). Alt is what
-/// makes the drag a scrub there, not the fine rate: a point moves a step, as on the label. Without
+/// makes the drag a scrub there, not the fine rate: a point moves half a step, as on the label. Without
 /// Alt a drag on the field is no click, so it neither edits nor moves anything.
 #[test]
 fn alt_held_over_a_field_scrubs_it() {
@@ -1361,13 +1691,13 @@ fn alt_held_over_a_field_scrubs_it() {
     // a drag only once it has seen Alt; egui assigns a press by the frame before it).
     let alt = Modifiers { alt: true, ..Modifiers::NONE };
     u.frame_with(vec![Event::PointerMoved(at)], alt);
-    drag(&mut u, at, 25.0, alt);
-    assert_eq!(geom(&u, a).0, 35.0, "a step a point: X from 10");
+    drag(&mut u, at, 24.0, alt);
+    assert_eq!(geom(&u, a).0, 22.0, "half a step a point: X from 10");
     assert_eq!(undo_steps(&u), steps + 1, "one undo step for the whole scrub");
-    assert_eq!(field(&mut u, "X").1, "35", "the field shows it and isn't editing");
+    assert_eq!(field(&mut u, "X").1, "22", "the field shows it and isn't editing");
     let (at, _) = field(&mut u, "X");
     drag(&mut u, at, 25.0, Modifiers::NONE);
-    assert_eq!(geom(&u, a).0, 35.0, "without Alt the field doesn't scrub");
+    assert_eq!(geom(&u, a).0, 22.0, "without Alt the field doesn't scrub");
     assert_eq!(undo_steps(&u), steps + 1);
     // Alt let go before the button still ends the scrub with its undo step.
     let (at, _) = field(&mut u, "X");
@@ -1380,7 +1710,7 @@ fn alt_held_over_a_field_scrubs_it() {
     let to = pos2(at.x + 20.0, at.y);
     u.frame_with(vec![Event::PointerMoved(to), press(false, Modifiers::NONE, to)], Modifiers::NONE);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0, 55.0, "twenty more");
+    assert_eq!(geom(&u, a).0, 32.0, "ten more");
     assert_eq!(undo_steps(&u), steps + 2, "committed when the button went up, without Alt");
     // Without Alt the field doesn't take the drag at all (a touch swipe over it is the panel's to
     // scroll): the press is a click of the field's, not a drag.
@@ -1392,7 +1722,7 @@ fn alt_held_over_a_field_scrubs_it() {
     assert!(!u.ctx.is_being_dragged(field_id), "a plain press on the field isn't a drag of the field's");
     u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y)), press(false, Modifiers::NONE, pos2(at.x + 10.0, at.y))], Modifiers::NONE);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0, 55.0, "nothing scrubbed");
+    assert_eq!(geom(&u, a).0, 32.0, "nothing scrubbed");
     // With Alt held over it, the field does take the drag.
     let (at, _) = field(&mut u, "X");
     u.frame_with(vec![Event::PointerMoved(at)], alt);
@@ -1401,5 +1731,37 @@ fn alt_held_over_a_field_scrubs_it() {
     assert!(u.ctx.is_being_dragged(field_id), "with Alt the drag is the field's");
     u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y)), press(false, alt, pos2(at.x + 10.0, at.y))], alt);
     u.frame(vec![]);
-    assert_eq!(geom(&u, a).0, 65.0, "ten more");
+    assert_eq!(geom(&u, a).0, 37.0, "five more");
+}
+
+#[test]
+fn a_boolean_group_has_one_corner_radius_field_and_a_mixed_selection_reads_mixed() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let r = id(u.app.session.execute("shape.rectangle", &json!({"x": 400, "y": 0, "width": 50, "height": 50})).unwrap());
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0");
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Corner radius", "20", Key::Enter);
+    let radii = |u: &Ui, n: NodeId| u.app.session.doc().unwrap().node(n).unwrap().corners.radii;
+    assert_eq!(radii(&u, g), [20.0; 4]);
+    assert_eq!(undo_steps(&u), steps + 1, "one undo step");
+    u.app.run("select.set", json!({"ids": [g, r]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "Mixed");
+    type_into(&mut u, "Corner radius", "8", Key::Enter);
+    assert_eq!((radii(&u, g), radii(&u, r)), ([8.0; 4], [8.0; 4]));
+}
+
+/// A boolean group draws its first radius; per-corner values a script or a file left behind don't
+/// make its field read Mixed, and a relative edit starts from the radius it draws.
+#[test]
+fn a_boolean_groups_field_shows_the_radius_it_draws() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let corners = json!({"topRightRadius": 30, "bottomRightRadius": 30, "bottomLeftRadius": 30});
+    u.app.session.execute("node.set", &json!({"ids": [g], "props": corners})).unwrap();
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0", "the radius it draws");
+    type_into(&mut u, "Corner radius", "+10", Key::Enter);
+    assert_eq!(u.app.session.doc().unwrap().node(g).unwrap().corners.radii, [10.0; 4], "0 + 10, not 30 + 10");
 }

@@ -76,8 +76,21 @@ impl<'d> Exporter<'d> {
                 if let (ImageScaleMode::Crop, Some(c)) = (img.scale_mode, img.crop) {
                     f.push(("transform", matrix(Affine::new(c))));
                 }
-                if img.filters != Default::default() {
-                    self.warn("image adjustments (exposure, contrast, …) were left out");
+                let x = img.filters.sanitized();
+                if !x.is_identity() {
+                    // The file's tint is positive towards magenta, ours towards green; `0.0 -` keeps zero positive.
+                    f.push((
+                        "paintFilter",
+                        o(vec![
+                            ("exposure", fl(f64::from(x.exposure))),
+                            ("contrast", fl(f64::from(x.contrast))),
+                            ("vibrance", fl(f64::from(x.saturation))),
+                            ("temperature", fl(f64::from(x.temperature))),
+                            ("tint", fl(0.0 - f64::from(x.tint))),
+                            ("highlights", fl(f64::from(x.highlights))),
+                            ("shadows", fl(f64::from(x.shadows))),
+                        ]),
+                    ));
                 }
             }
             PaintKind::Pattern(_) => {

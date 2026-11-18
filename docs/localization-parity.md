@@ -26,7 +26,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   a missing translation shows English, never a raw key. One English text that needs two
   translations takes a context (`"Fill|sizing"`).
 - **Strings:** 1,747 UI keys in `en.toml` (42 with plural forms; ~110 are labels from engine and
-  document data, such as tool names, blend modes and Dev Mode properties) plus 574 command labels
+  document data, such as tool names, blend modes and Developer Mode properties) plus 574 command labels
   and 31 menu wordings by command id: 2,352 entries (counted against `en.toml` and the complete
   Spanish catalog's command and menu tables). Command ids, the CLI, MCP and the control
   channel stay English. Accessibility names come from the same strings.
@@ -51,7 +51,7 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
   added later shows English until someone translates it, and `cargo xtask i18n-report` (part of
   `cargo xtask ci`) lists what each language lacks. Every draft translated every string on
   2026-10-12; by 2026-10-17 the strings added since left them at 95–99% (table below).
-- **Not yet localized:** messages the engine writes (errors, a few toasts, Dev Mode property values
+- **Not yet localized:** messages the engine writes (errors, a few toasts, Developer Mode property values
   such as "inside"), number formatting (decimal points stay `.`), and decimal plural rules
   (`trn` takes integers: Czech and Bosnian use one/few/other and Russian one/few/many; French and Brazilian
   Portuguese take the singular for 0 as well; Japanese, Korean, Chinese and Vietnamese have one form;
@@ -113,9 +113,8 @@ supported by both apps (CJK, Arabic and Devanagari shaping, IME); Figma has no v
 | Simplified Chinese (Mandarin) | zh-Hans | 2,216 / 2,352 (94.2%, draft) | yes | CJK text and IME in documents; UI text in an installed Chinese face, ahead of Japanese ones (web: the `FIGCRAFT_EMBED_CJK` build) | no | draft | 1–2 (after native review) |
 | Traditional Chinese (Taiwan) | zh-Hant | 2,647 / 2,647 (100%: 1,975 UI strings, 641 command labels, 31 menu wordings; draft, counted 2026-11-03) | yes | CJK text and IME in documents; UI text in an installed Noto Sans CJK TC, then Microsoft JhengHei, PingFang TC or Heiti TC (web: only with a built-in TC face); zh-TW, zh-HK, zh-MO and zh-Hant read it, an explicit Hans stays Simplified | no | draft | 1–2 (after native review) |
 | Spanish | es, es-419 | 2,352 / 2,352 (100%, draft); es-419 overlays 104 Latin American wordings (draft) | yes | Latin | no | draft | 0–1 (after native review) |
-| Hindi | hi | 0 (0%) | no | Devanagari shaping works in documents; UI font fallback to check | no | none | 4–7 |
-| Arabic | ar | 1,857 / 1,857 UI strings, 620 command labels, 31 menu wordings (draft, counted 2026-10-28) | catalog complete; native review pending | Existing bidi/shaping and Arabic system fallback; web builds with craft-fonts embed Noto Sans Arabic by default for documents and the Arabic UI (#1902); the window mirrors (panels swap sides), rows inside the panels do not | no | draft | review + mirrored panel rows (not re-estimated) |
 | Hindi | hi | 0 (0%) | no | Devanagari shaping works in documents; the desktop UI takes an installed Devanagari face (Nirmala UI, Kohinoor Devanagari, Noto Sans Devanagari, Lohit) for names and values (#2014); no UI catalog | no | none | 4–7 |
+| Arabic | ar | 1,857 / 1,857 UI strings, 620 command labels, 31 menu wordings (draft, counted 2026-10-28) | catalog complete; native review pending | Existing bidi/shaping and Arabic system fallback; web builds with craft-fonts embed Noto Sans Arabic by default for documents and the Arabic UI (#1902); the window mirrors (panels swap sides), rows inside the panels do not | no | draft | review + mirrored panel rows (not re-estimated) |
 | French | fr | 2,328 / 2,352 (99.0%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
 | Portuguese | pt-BR | 2,331 / 2,352 (99.1%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
 | Indonesian | id | 2,292 / 2,352 (97.4%, draft) | yes | Latin | no | draft | 1–2 (after native review) |
@@ -150,6 +149,7 @@ Hindi and Arabic.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | patch | Rows that recent merges had duplicated or garbled are merged back into one row each (no behaviour change): Hindi, Arabic. |
 | 2026-11-07 | patch | M10, #1902: Noto Sans Arabic Regular joins the default web font catalog, so Persian and Arabic documents no longer need `FIGCRAFT_EMBED_SCRIPTS=Arab`. Required web builds fail if the face is missing; web fonts are packed losslessly and restored once at runtime to preserve the WASM size budget. Failed decoding reports the face once; generated catalog initialization is covered by a compiler regression. Other script fonts stay optional. Exact Iran Sans rendering requires that installed font through supported browsers' local font access. Existing duplicate Arabic rows and the repeated web-font paragraph are consolidated, preserving the mirrored window and pending panel-row mirroring. Grades and estimates unchanged. |
 | 2026-11-03 | minor | Traditional Chinese (Taiwan) (`zh-Hant`, 繁體中文（台灣）) draft catalog: every UI string (1,975), command label (641) and menu wording (31), translated clean-room from the English source and marked as a draft awaiting native review. `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant` read it; an explicit Hans still reads Simplified Chinese. The desktop UI prefers an installed Noto Sans CJK TC, then Microsoft JhengHei, PingFang TC and Heiti TC; no font is bundled. No plural forms. Localization grade and estimates unchanged |
 | 2026-11-03 | patch | M10, #1902: the web build drew Persian and Arabic text as missing-glyph boxes. The browser has no system fonts, and `crates/text/build.rs` keeps the web catalog to Inter, Noto Sans Georgian, the wordmark and (with `FIGCRAFT_EMBED_CJK`) Noto Sans CJK, so craft-fonts' Noto Sans Arabic never reached it. `FIGCRAFT_EMBED_SCRIPTS=Arab,Hebr,…` (script tags as the manifest's scripts column lists them) now embeds those scripts' faces in a web build; the default build and its size are unchanged, and with `Arab` embedded the picker offers the Arabic UI as well (`cjk::can_show`, as on the desktop). Noto Sans Hebrew, Devanagari and Georgian join Arabic and Thai among the document fallbacks, so an embedded face draws its script in an Inter document. Tests: `web_embeds_other_scripts_faces_only_when_asked` in the build script, `every_embeddable_script_face_is_a_document_fallback`. |
