@@ -192,3 +192,22 @@ fn a_malformed_target_is_refused_rather_than_read_as_the_selection() {
         assert!(s.execute("file.exportAssets", &p).is_err(), "{p}");
     }
 }
+
+/// A rotation is reported as the renderer draws it: whole quarter turns, `rem_euclid(4)` of them.
+#[test]
+fn a_rotation_is_reported_as_it_is_drawn() {
+    let mut s = session();
+    let id = place(&mut s, &image_bytes(image::ImageFormat::Png, 12));
+    let rotated = |s: &mut Session, quarter_turns: i32| {
+        let node = s.doc_mut().unwrap().get_mut(figcraft_doc::NodeId(id)).unwrap();
+        if let Some(figcraft_color::PaintKind::Image(i)) = node.fills.first_mut().map(|p| &mut p.kind) {
+            i.rotation = quarter_turns;
+        }
+        export(s, json!({"ids": [id]}))["assets"][0]["adjustments"].clone()
+    };
+    assert!(rotated(&mut s, 4).is_null(), "four quarter turns draw unrotated");
+    assert_eq!(rotated(&mut s, -1)[0]["changes"]["rotation"], 270);
+    assert_eq!(rotated(&mut s, 1)[0]["changes"]["rotation"], 90);
+    assert_eq!(rotated(&mut s, 30_000_001)[0]["changes"]["rotation"], 90, "no overflow");
+    assert!(rotated(&mut s, i32::MIN).is_null(), "i32::MIN is whole turns");
+}

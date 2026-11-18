@@ -16,7 +16,7 @@ use crate::cmd::CommandSpec;
 use crate::cmd::file::{export_file, export_scale};
 use crate::devinspect::{Asset, AssetKind, MAX_ASSETS, assets};
 use crate::file_access;
-use crate::params::{get, targets};
+use crate::params::{get, req_targets};
 use crate::{Result, Session, bad, spec};
 
 /// How much of the content hash names a file: 64 bits, far past a project's assets.
@@ -63,8 +63,10 @@ fn adjustments(p: &Paint) -> Option<Value> {
     if let Some(crop) = i.crop {
         changed.insert("crop".into(), json!(crop));
     }
-    if i.rotation != 0 {
-        changed.insert("rotation".into(), json!(i.rotation * 90));
+    // The renderer draws whole quarter turns, `rem_euclid(4)` of them (the stored value is unbounded).
+    let quarter_turns = i.rotation.rem_euclid(4);
+    if quarter_turns != 0 {
+        changed.insert("rotation".into(), json!(quarter_turns * 90));
     }
     if p.opacity < 1.0 {
         changed.insert("opacity".into(), json!(p.opacity));
@@ -168,21 +170,9 @@ fn export_assets(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "dir: a folder")),
     };
     let doc = s.doc()?;
-    // Explicit targets are all layers, or the call is refused: never the selection instead.
-    let malformed = || bad(cmd, "ids: a list of layer ids (or id: one)");
-    match (get(p, "ids"), get(p, "id")) {
-        (Some(Value::Array(list)), _) if list.iter().all(|i| crate::params::id_of(i).is_some()) => {}
-        (Some(_), _) => return Err(malformed()),
-        (None, Some(one)) if crate::params::id_of(one).is_none() => return Err(malformed()),
-        _ => {}
-    }
-    let mut ids = targets(s, p);
-    if let Some(gone) = ids.iter().find(|i| !doc.contains(**i)) {
-        return Err(bad(cmd, format!("no layer {gone}")));
-    }
-    if ids.is_empty() {
-        ids = vec![s.page()?];
-    }
+    // Nothing named and nothing selected: the whole page. Anything named must be layers.
+    let named = get(p, "ids").is_some() || get(p, "id").is_some();
+    let ids = if !named && s.selection().is_empty() { vec![s.page()?] } else { req_targets(cmd, s, p)? };
     let found = assets(doc, &ids);
     let (files, skipped) = collect(doc, &found);
     let mut listed = Vec::with_capacity(files.len());
