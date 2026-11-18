@@ -390,3 +390,17 @@ fn library_file(dir: &Path, version: u64) -> PathBuf {
     let path = dir.join(library_name(version));
     if path.exists() { path } else { dir.join(LIBRARY) }
 }
+
+#[cfg(test)]
+mod grow_tests {
+    use super::*;
+
+    #[test]
+    fn a_new_key_is_dropped_once_peaks_are_full() {
+        let mut peaks: Vec<(u32, u32, u32)> = (0..MAX_REPORTED as u32).map(|i| (i, 1, 0)).collect();
+        let grown = grow(&mut peaks, &[(MAX_REPORTED as u32, 3)], Count::Inserted, |_| 0);
+        assert!(grown.is_empty(), "a key past the cap must not start a peak or count as growth");
+        assert_eq!(peaks.len(), MAX_REPORTED);
+        assert!(peaks.iter().all(|p| p.0 < MAX_REPORTED as u32));
+    }
+}
