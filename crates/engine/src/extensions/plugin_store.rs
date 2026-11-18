@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use craft_plugin::catalog::{Catalog, Package, Release};
-use craft_plugin::{Fetch, Manifest, bundle, catalog, fetch, github, newer, sha256_hex};
+use craft_plugin::{Fetch, Manifest, Source, bundle, catalog, fetch, github, newer, sha256_hex};
 use serde_json::{Value, json};
 
 use crate::cmd::CommandSpec;
@@ -39,56 +39,25 @@ pub const NO_HTTP: &str = "installing plugins from catalogs and GitHub needs the
 /// Most catalogs one person adds.
 const MAX_CATALOGS: usize = 32;
 
-/// Where a plugin in the store came from (craft-plugin's `store::Source`, which only native builds
-/// have).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Origin {
-    /// A bundle file (its name, never its folder).
-    File { name: String },
-    /// Package `package` of the catalog at `catalog`.
-    Catalog { catalog: String, package: String },
-    /// Asset `asset` of release `tag` of GitHub repository `repo` (`owner/name`).
-    Github { repo: String, tag: String, asset: String },
+/// How the Plugins window and `plugin.list` show where a plugin came from.
+pub fn source_label(source: &Source) -> String {
+    match source {
+        Source::File { path } if path.is_empty() => "a bundle file".into(),
+        Source::File { path } => path.clone(),
+        Source::Catalog { catalog, package } => format!("{package} in {catalog}"),
+        Source::Github { repo, tag, .. } if tag.is_empty() => format!("github.com/{repo}"),
+        Source::Github { repo, tag, .. } => format!("github.com/{repo}@{tag}"),
+        Source::Other { location, .. } => location.clone(),
+    }
 }
 
-impl Origin {
-    /// How the Plugins window and `plugin.list` show it.
-    pub fn label(&self) -> String {
-        match self {
-            Origin::File { name } if name.is_empty() => "a bundle file".into(),
-            Origin::File { name } => name.clone(),
-            Origin::Catalog { catalog, package } => format!("{package} in {catalog}"),
-            Origin::Github { repo, tag, .. } if tag.is_empty() => format!("github.com/{repo}"),
-            Origin::Github { repo, tag, .. } => format!("github.com/{repo}@{tag}"),
-        }
-    }
-
-    fn describe(&self) -> Value {
-        match self {
-            Origin::File { name } => json!({"type": "file", "name": name}),
-            Origin::Catalog { catalog, package } => json!({"type": "catalog", "catalog": catalog, "package": package}),
-            Origin::Github { repo, tag, asset } => json!({"type": "github", "repo": repo, "tag": tag, "asset": asset}),
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn to_source(&self) -> craft_plugin::store::Source {
-        use craft_plugin::store::Source;
-        match self.clone() {
-            Origin::File { name } => Source::File { path: name },
-            Origin::Catalog { catalog, package } => Source::Catalog { catalog, package },
-            Origin::Github { repo, tag, asset } => Source::Github { repo, tag, asset },
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn from_source(source: &craft_plugin::store::Source) -> Origin {
-        use craft_plugin::store::Source;
-        match source.clone() {
-            Source::File { path } => Origin::File { name: path },
-            Source::Catalog { catalog, package } => Origin::Catalog { catalog, package },
-            Source::Github { repo, tag, asset } => Origin::Github { repo, tag, asset },
-        }
+/// A plugin's source as an install confirmation describes it.
+fn describe(source: &Source) -> Value {
+    match source {
+        Source::File { path } => json!({"type": "file", "name": path}),
+        Source::Catalog { catalog, package } => json!({"type": "catalog", "catalog": catalog, "package": package}),
+        Source::Github { repo, tag, asset } => json!({"type": "github", "repo": repo, "tag": tag, "asset": asset}),
+        Source::Other { kind, location } => json!({"type": "other", "kind": kind, "location": location}),
     }
 }
 
@@ -97,7 +66,7 @@ impl Origin {
 pub struct Pending {
     pub sha256: String,
     pub bytes: Arc<Vec<u8>>,
-    pub origin: Origin,
+    pub origin: Source,
 }
 
 /// One plugin a catalog offers this FigCraft: its newest release that runs here.
@@ -136,6 +105,19 @@ impl Fetch for NetFetch<'_> {
             Err(e) => Err(e.to_string()),
         }
     }
+
+    /// A local catalog, and the files it names, are read only where this session may read files
+    /// (automation roots apply).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_local(&mut self, path: &std::path::Path, max: usize) -> std::result::Result<Vec<u8>, String> {
+        crate::file_access::allow(path, crate::file_access::Access::Read).map_err(|e| e.to_string())?;
+        fetch::read_local_file(path, max)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn read_local(&mut self, _: &std::path::Path, _: usize) -> std::result::Result<Vec<u8>, String> {
+        Err("there are no files in the browser: use an https:// catalog".into())
+    }
 }
 
 /// Run `f` with the session's link as its HTTPS client: its error as a sentence, or
@@ -149,32 +131,14 @@ fn fetching<T>(s: &mut Session, f: impl FnOnce(&mut dyn Fetch) -> std::result::R
     Ok(r)
 }
 
-/// A `file://` URL (a local catalog, or a file it names) may be read only where this session may
-/// read files (automation roots apply); `https://` URLs pass.
-fn local_allowed(url: &str) -> std::result::Result<(), String> {
-    if !url.trim_start().to_ascii_lowercase().starts_with("file:") {
-        return Ok(());
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let path = catalog::file_url_path(url.trim())?;
-        crate::file_access::allow(&path, crate::file_access::Access::Read).map(|_| ()).map_err(|e| e.to_string())
-    }
-    #[cfg(target_arch = "wasm32")]
-    Err("there are no files in the browser: use an https:// catalog".into())
-}
-
 /// Read the catalog at `url`.
 fn read_catalog(s: &mut Session, url: &str) -> Result<std::result::Result<(Catalog, Vec<String>), String>> {
-    if let Err(why) = local_allowed(url) {
-        return Ok(Err(why));
-    }
     fetching(s, |f| fetch::fetch_catalog(f, url))
 }
 
 /// Get the bundle `p` names (`path`, `data`, `repo`, or `catalog` + `id`), checked as far as its
 /// source allows; a catalog's release is checked against its manifest too.
-fn obtain(s: &mut Session, cmd: &str, p: &Value) -> Result<(Arc<Vec<u8>>, Origin)> {
+fn obtain(s: &mut Session, cmd: &str, p: &Value) -> Result<(Arc<Vec<u8>>, Source)> {
     let failed = |e: String| EngineError::Other(format!("{cmd}: {e}"));
     if let Some(path) = string(p, "path") {
         return read_bundle_file(cmd, &path);
@@ -186,13 +150,13 @@ fn obtain(s: &mut Session, cmd: &str, p: &Value) -> Result<(Arc<Vec<u8>>, Origin
         }
         let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|e| bad(cmd, format!("`data`: {e}")))?;
         let name: String = string(p, "name").unwrap_or_default().chars().filter(|c| !c.is_control()).take(200).collect();
-        return Ok((Arc::new(bytes), Origin::File { name }));
+        return Ok((Arc::new(bytes), Source::File { path: name }));
     }
     if let Some(spec) = string(p, "repo") {
         let repo = github::parse_repo_spec(&spec).map_err(|e| bad(cmd, e))?;
         let plan = fetching(s, |f| fetch::resolve_repo(f, &repo))?.map_err(failed)?;
         let bytes = fetching(s, |f| fetch::download_repo(f, &plan))?.map_err(failed)?;
-        let origin = Origin::Github { repo: plan.repo.slug(), tag: plan.repo.tag.clone().unwrap_or_default(), asset: plan.asset };
+        let origin = Source::Github { repo: plan.repo.slug(), tag: plan.repo.tag.clone().unwrap_or_default(), asset: plan.asset };
         return Ok((Arc::new(bytes), origin));
     }
     if let Some(url) = string(p, "catalog") {
@@ -205,30 +169,27 @@ fn obtain(s: &mut Session, cmd: &str, p: &Value) -> Result<(Arc<Vec<u8>>, Origin
         }
         .clone();
         release.target(&package.kind, &APP).map_err(|e| failed(format!("{} can't run here: {e}", package.name)))?;
-        if let Err(why) = local_allowed(&release.url) {
-            return Err(failed(why));
-        }
         let bytes = fetching(s, |f| fetch::download_release(f, &url, &package, &release))?.map_err(failed)?;
         let (_, manifest) = bundle::open(&bytes).map_err(failed)?;
         package.check_manifest(&release, &manifest).map_err(failed)?;
-        return Ok((Arc::new(bytes), Origin::Catalog { catalog: url, package: package.id }));
+        return Ok((Arc::new(bytes), Source::Catalog { catalog: url, package: package.id }));
     }
     Err(bad(cmd, "pass `path` (a .craftplugin file), `data` (one as base64), `repo` (owner/repo or owner/repo@tag), or `catalog` and `id`"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_bundle_file(cmd: &str, path: &str) -> Result<(Arc<Vec<u8>>, Origin)> {
+fn read_bundle_file(cmd: &str, path: &str) -> Result<(Arc<Vec<u8>>, Source)> {
     let file = std::path::PathBuf::from(crate::library::absolute_path(path.trim()));
     if crate::file_access::is_dir(&file) || file.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) {
         return Err(bad(cmd, "that's a plugin under development: import its manifest with plugin.import"));
     }
     let bytes = crate::file_access::read_capped(&file, craft_plugin::MAX_BUNDLE_BYTES as u64)?;
     let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    Ok((Arc::new(bytes), Origin::File { name }))
+    Ok((Arc::new(bytes), Source::File { path: name }))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_bundle_file(cmd: &str, _path: &str) -> Result<(Arc<Vec<u8>>, Origin)> {
+fn read_bundle_file(cmd: &str, _path: &str) -> Result<(Arc<Vec<u8>>, Source)> {
     Err(bad(cmd, "there are no files in the browser: pass the bundle as `data` (base64)"))
 }
 
@@ -248,13 +209,13 @@ fn in_catalogs(s: &mut Session, slug: &str) -> Result<bool> {
 
 /// Keep `bytes` in the store, when the session has one; whether it did.
 #[cfg(not(target_arch = "wasm32"))]
-fn keep(s: &Session, bytes: &[u8], origin: &Origin) -> std::result::Result<bool, String> {
+fn keep(s: &Session, bytes: &[u8], origin: &Source) -> std::result::Result<bool, String> {
     let Some(dir) = &s.plugins.store_dir else { return Ok(false) };
-    craft_plugin::store::Store::new(dir.clone()).install(bytes, origin.to_source()).map(|_| true)
+    craft_plugin::store::Store::new(dir.clone()).install(bytes, origin.clone()).map(|_| true)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn keep(_: &Session, _: &[u8], _: &Origin) -> std::result::Result<bool, String> {
+fn keep(_: &Session, _: &[u8], _: &Source) -> std::result::Result<bool, String> {
     Ok(false)
 }
 
@@ -290,7 +251,7 @@ pub fn load_store(s: &mut Session) -> usize {
                 log::warn!("plugins: {why}");
                 continue;
             }
-            let label = Origin::from_source(&i.record.source).label();
+            let label = source_label(&i.record.source);
             s.plugins.modules.insert(i.manifest.id.clone(), Arc::new(i.bundle.wasm));
             s.prefs.plugins.push(InstalledPlugin { manifest: i.manifest, path: None, source: Some(label), store: true });
             n += 1;
@@ -305,7 +266,7 @@ pub fn load_store(s: &mut Session) -> usize {
 }
 
 /// What a confirmation shows of a plugin about to be installed.
-fn preview(s: &Session, m: &Manifest, sha256: &str, origin: &Origin, bytes: usize) -> Value {
+fn preview(s: &Session, m: &Manifest, sha256: &str, origin: &Source, bytes: usize) -> Value {
     let installed = s.prefs.plugins.iter().find(|p| p.manifest.id == m.id);
     json!({
         "id": m.id,
@@ -321,8 +282,8 @@ fn preview(s: &Session, m: &Manifest, sha256: &str, origin: &Origin, bytes: usiz
         "commands": m.commands.iter().map(|c| &c.label).collect::<Vec<_>>(),
         "sha256": sha256,
         "bytes": bytes,
-        "source": origin.describe(),
-        "from": origin.label(),
+        "source": describe(origin),
+        "from": source_label(origin),
         "installedVersion": installed.map(|p| &p.manifest.version),
         "permissionsChanged": installed.is_some_and(|p| craft_plugin::permissions::changed(&p.manifest, m)),
     })
@@ -349,9 +310,9 @@ fn install_from(s: &mut Session, cmd: &str, p: &Value) -> Result<Value> {
     if !confirm {
         // A plugin from a repository may be in no catalog the user reads: the confirmation says so.
         out["inCatalog"] = match &origin {
-            Origin::Github { repo, .. } => json!(in_catalogs(s, repo)?),
-            Origin::Catalog { .. } => json!(true),
-            Origin::File { .. } => Value::Null,
+            Source::Github { repo, .. } => json!(in_catalogs(s, repo)?),
+            Source::Catalog { .. } => json!(true),
+            Source::File { .. } | Source::Other { .. } => Value::Null,
         };
         out["installed"] = json!(false);
         out["confirm"] =
@@ -361,7 +322,7 @@ fn install_from(s: &mut Session, cmd: &str, p: &Value) -> Result<Value> {
     }
     let stored = keep(s, &bytes, &origin).map_err(fail)?;
     s.plugins.pending = None;
-    let entry = InstalledPlugin { manifest, path: None, source: Some(origin.label()), store: stored };
+    let entry = InstalledPlugin { manifest, path: None, source: Some(source_label(&origin)), store: stored };
     out["replaced"] = json!(register(s, entry, bundle.wasm));
     out["installed"] = json!(true);
     out["store"] = json!(stored);
@@ -370,13 +331,13 @@ fn install_from(s: &mut Session, cmd: &str, p: &Value) -> Result<Value> {
 
 /// Whether `p` asks for the bundle that `origin` describes (a kept bundle answers only the same
 /// request).
-fn same_request(origin: &Origin, p: &Value) -> bool {
+fn same_request(origin: &Source, p: &Value) -> bool {
     match origin {
-        Origin::File { .. } => false,
-        Origin::Catalog { catalog, package } => {
+        Source::File { .. } | Source::Other { .. } => false,
+        Source::Catalog { catalog, package } => {
             string(p, "catalog").as_deref() == Some(catalog.as_str()) && string(p, "id").is_some_and(|id| id.eq_ignore_ascii_case(package))
         }
-        Origin::Github { repo, .. } => {
+        Source::Github { repo, .. } => {
             string(p, "repo").and_then(|r| github::parse_repo_spec(&r).ok()).is_some_and(|r| r.slug().eq_ignore_ascii_case(repo))
         }
     }
@@ -388,37 +349,37 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Where plugin `id` came from, if it is in the store.
 #[cfg(not(target_arch = "wasm32"))]
-fn stored(s: &Session, id: &str) -> std::result::Result<Option<(Origin, String)>, String> {
+fn stored(s: &Session, id: &str) -> std::result::Result<Option<(Source, String)>, String> {
     let Some(dir) = &s.plugins.store_dir else { return Ok(None) };
-    Ok(craft_plugin::store::Store::new(dir.clone()).load(id)?.map(|i| (Origin::from_source(&i.record.source), i.record.sha256)))
+    Ok(craft_plugin::store::Store::new(dir.clone()).load(id)?.map(|i| (i.record.source, i.record.sha256)))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn stored(_: &Session, _: &str) -> std::result::Result<Option<(Origin, String)>, String> {
+fn stored(_: &Session, _: &str) -> std::result::Result<Option<(Source, String)>, String> {
     Ok(None)
 }
 
 /// `plugin.install`'s parameters for the latest release of where `origin` points (`None`: a
 /// bundle file, which has no updates).
-fn latest_request(origin: &Origin) -> Option<Value> {
+fn latest_request(origin: &Source) -> Option<Value> {
     match origin {
-        Origin::File { .. } => None,
-        Origin::Catalog { catalog, package } => Some(json!({"catalog": catalog, "id": package})),
-        Origin::Github { repo, .. } => Some(json!({"repo": repo})),
+        Source::File { .. } | Source::Other { .. } => None,
+        Source::Catalog { catalog, package } => Some(json!({"catalog": catalog, "id": package})),
+        Source::Github { repo, .. } => Some(json!({"repo": repo})),
     }
 }
 
 /// The update of a plugin from a catalog or a repository, if there is one: what it would install.
-fn check_update(s: &mut Session, id: &str, origin: &Origin, sha256: &str, version: &str) -> Result<Option<Value>> {
+fn check_update(s: &mut Session, id: &str, origin: &Source, sha256: &str, version: &str) -> Result<Option<Value>> {
     let failed = |e: String| EngineError::Other(format!("plugin.update: {id}: {e}"));
     match origin {
-        Origin::File { .. } => Ok(None),
-        Origin::Catalog { catalog, package } => {
+        Source::File { .. } | Source::Other { .. } => Ok(None),
+        Source::Catalog { catalog, package } => {
             let (cat, _) = read_catalog(s, catalog)?.map_err(failed)?;
             let Some(release) = cat.package(package).and_then(|p| p.latest_for(&APP)) else { return Ok(None) };
             Ok(newer(&release.version, version).then(|| json!({"version": release.version, "sha256": release.sha256})))
         }
-        Origin::Github { repo, .. } => {
+        Source::Github { repo, .. } => {
             let r = github::parse_repo_spec(repo).map_err(failed)?;
             let plan = fetching(s, |f| fetch::resolve_repo(f, &r))?.map_err(failed)?;
             Ok((!plan.sha256.eq_ignore_ascii_case(sha256)).then(|| json!({"tag": plan.repo.tag, "sha256": plan.sha256})))
@@ -465,7 +426,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
                 u["id"] = json!(id);
                 u["name"] = json!(name);
                 u["installedVersion"] = json!(version);
-                u["from"] = json!(origin.label());
+                u["from"] = json!(source_label(&origin));
                 updates.push(u);
             }
             Ok(None) => {}

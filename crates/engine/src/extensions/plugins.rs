@@ -28,6 +28,7 @@ pub const APP: AppInfo<'static> = AppInfo {
     api: 1..=craft_plugin::API_VERSION,
     kinds: &[craft_plugin::KIND_COMMAND],
     accept_legacy: true,
+    kind_api: &[],
 };
 
 /// Why FigCraft can't run the plugin `m` describes (another app's, another kind, a later API).

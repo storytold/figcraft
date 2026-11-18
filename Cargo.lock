@@ -1001,7 +1001,7 @@ dependencies = [
 [[package]]
 name = "craft-atomic"
 version = "0.1.0"
-source = "git+https://github.com/Dasemu/craft-libs?rev=77f66b33f7366abb9927113f1f5e427e2593ef84#77f66b33f7366abb9927113f1f5e427e2593ef84"
+source = "git+https://github.com/Dasemu/craft-libs?rev=b9821a27936e4f8a5ef3ad30a9559ecb897c5cc4#b9821a27936e4f8a5ef3ad30a9559ecb897c5cc4"
 dependencies = [
  "rustix 1.1.5",
 ]
@@ -1163,9 +1163,9 @@ dependencies = [
 [[package]]
 name = "craft-plugin"
 version = "0.1.0"
-source = "git+https://github.com/Dasemu/craft-libs?rev=77f66b33f7366abb9927113f1f5e427e2593ef84#77f66b33f7366abb9927113f1f5e427e2593ef84"
+source = "git+https://github.com/Dasemu/craft-libs?rev=b9821a27936e4f8a5ef3ad30a9559ecb897c5cc4#b9821a27936e4f8a5ef3ad30a9559ecb897c5cc4"
 dependencies = [
- "craft-atomic 0.1.0 (git+https://github.com/Dasemu/craft-libs?rev=77f66b33f7366abb9927113f1f5e427e2593ef84)",
+ "craft-atomic 0.1.0 (git+https://github.com/Dasemu/craft-libs?rev=b9821a27936e4f8a5ef3ad30a9559ecb897c5cc4)",
  "serde",
  "serde_json",
  "sha2",

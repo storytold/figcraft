@@ -118,7 +118,7 @@ crc32fast = "1"
 # FigCraft's own crate: the sandbox (wasmi, a metered interpreter with no JIT, also in the web
 # build), the manifest, permissions, bundles, the per-user plug-in store, catalogs and installing
 # from GitHub releases. Pinned to the fork commit until the upstream pull request lands.
-craft-plugin = { git = "https://github.com/Dasemu/craft-libs", rev = "77f66b33f7366abb9927113f1f5e427e2593ef84" }
+craft-plugin = { git = "https://github.com/Dasemu/craft-libs", rev = "b9821a27936e4f8a5ef3ad30a9559ecb897c5cc4" }
 wat = "1.261"
 
 # ui
