@@ -37,10 +37,10 @@ fail() {
 
 # 1. Launch works and passes arguments through.
 out="$("$APPDIR/AppRun" open file.png)" || fail "AppRun exited non-zero"
-[ "$out" = "stub: open file.png" ] || fail "arguments not forwarded: $out"
+[[ "$out" = "stub: open file.png" ]] || fail "arguments not forwarded: $out"
 
 DESKTOP="$XDG_DATA_HOME/applications/$APP_ID.desktop"
-[ -f "$DESKTOP" ] || fail "desktop entry not installed"
+[[ -f "$DESKTOP" ]] || fail "desktop entry not installed"
 
 # 2. Exec rewritten to the AppImage (quoted, spaces intact), TryExec dropped,
 #    everything else preserved from the packaged entry.
@@ -55,15 +55,15 @@ fi
 
 # 3. Icons landed under the name the .desktop entry references.
 for f in "16x16/apps/$APP_ID.png" "256x256/apps/$APP_ID.png" "scalable/apps/$APP_ID.svg"; do
-  [ -f "$XDG_DATA_HOME/icons/hicolor/$f" ] || fail "icon missing: $f"
+  [[ -f "$XDG_DATA_HOME/icons/hicolor/$f" ]] || fail "icon missing: $f"
 done
 
 # 4. Idempotent: a second launch must not rewrite anything (inode unchanged).
 before="$(stat -c %i "$DESKTOP")"
 out="$("$APPDIR/AppRun")" || fail "second launch exited non-zero"
-[ "$out" = "stub: " ] || fail "second launch output: $out"
+[[ "$out" = "stub: " ]] || fail "second launch output: $out"
 after="$(stat -c %i "$DESKTOP")"
-[ "$before" = "$after" ] || fail "desktop entry rewritten although unchanged"
+[[ "$before" = "$after" ]] || fail "desktop entry rewritten although unchanged"
 
 # 5. Moving the AppImage refreshes Exec.
 mv "$APPIMAGE" "$TMP/moved.AppImage"
@@ -74,40 +74,40 @@ grep -Fxq "Exec=\"$(readlink -f "$APPIMAGE")\" %U" "$DESKTOP" || fail "Exec not 
 # 6. Opt-out installs nothing.
 rm -rf "$XDG_DATA_HOME"
 FIGCRAFT_NO_DESKTOP_INTEGRATION=1 "$APPDIR/AppRun" >/dev/null || fail "opt-out launch exited non-zero"
-[ ! -e "$XDG_DATA_HOME" ] || fail "opt-out still integrated"
+[[ ! -e "$XDG_DATA_HOME" ]] || fail "opt-out still integrated"
 
 # 7. An unwritable data dir never blocks the launch.
 mkdir -p "$TMP/ro" && chmod a-w "$TMP/ro"
 out="$(XDG_DATA_HOME="$TMP/ro/data" "$APPDIR/AppRun" out.txt)" || fail "launch blocked by unwritable data dir"
-[ "$out" = "stub: out.txt" ] || fail "stub not run against unwritable data dir: $out"
+[[ "$out" = "stub: out.txt" ]] || fail "stub not run against unwritable data dir: $out"
 chmod u+w "$TMP/ro"
 
 # 8. No $APPIMAGE (extracted AppDir): launch only, nothing installed.
 rm -rf "$XDG_DATA_HOME"
 env -u APPIMAGE "$APPDIR/AppRun" >/dev/null || fail "extracted-AppDir launch exited non-zero"
-[ ! -e "$XDG_DATA_HOME" ] || fail "integrated without $APPIMAGE"
+[[ ! -e "$XDG_DATA_HOME" ]] || fail "integrated without $APPIMAGE"
 
 # 9. A path that would need Exec escaping (here a `$`): launch only, nothing installed.
 rm -rf "$XDG_DATA_HOME"
 odd="$TMP/odd\$(id).AppImage"
 : >"$odd"
 out="$(APPIMAGE="$odd" "$APPDIR/AppRun" x)" || fail "launch with an odd path exited non-zero"
-[ "$out" = "stub: x" ] || fail "odd path: $out"
-[ ! -e "$XDG_DATA_HOME" ] || fail "integrated an AppImage path that needs escaping"
+[[ "$out" = "stub: x" ]] || fail "odd path: $out"
+[[ ! -e "$XDG_DATA_HOME" ]] || fail "integrated an AppImage path that needs escaping"
 
 # 10. `cli <args>` runs figcraft-cli with the remaining arguments and integrates nothing.
 rm -rf "$XDG_DATA_HOME"
 out="$("$APPDIR/AppRun" cli mcp --attach 7979 2>&1)" && fail "cli ran without figcraft-cli in the AppDir"
-[ "$out" = "figcraft: this AppImage was built without figcraft-cli" ] || fail "missing cli: $out"
+[[ "$out" = "figcraft: this AppImage was built without figcraft-cli" ]] || fail "missing cli: $out"
 printf '#!/bin/sh\necho "cli stub: $*"\n' >"$APPDIR/usr/bin/figcraft-cli"
 chmod +x "$APPDIR/usr/bin/figcraft-cli"
 out="$("$APPDIR/AppRun" cli mcp --attach 7979)" || fail "cli launch exited non-zero"
-[ "$out" = "cli stub: mcp --attach 7979" ] || fail "cli arguments not forwarded: $out"
+[[ "$out" = "cli stub: mcp --attach 7979" ]] || fail "cli arguments not forwarded: $out"
 out="$("$APPDIR/AppRun" cli)" || fail "bare cli launch exited non-zero"
-[ "$out" = "cli stub: " ] || fail "bare cli output: $out"
-[ ! -e "$XDG_DATA_HOME" ] || fail "cli launch integrated the desktop"
+[[ "$out" = "cli stub: " ]] || fail "bare cli output: $out"
+[[ ! -e "$XDG_DATA_HOME" ]] || fail "cli launch integrated the desktop"
 # Only the first argument selects the CLI.
 out="$("$APPDIR/AppRun" file.figcraft cli)" || fail "app launch with a later cli argument exited non-zero"
-[ "$out" = "stub: file.figcraft cli" ] || fail "later cli argument hijacked the launch: $out"
+[[ "$out" = "stub: file.figcraft cli" ]] || fail "later cli argument hijacked the launch: $out"
 
 echo "AppRun desktop integration ok"

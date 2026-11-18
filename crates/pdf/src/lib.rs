@@ -222,6 +222,8 @@ mod export_tests;
 #[cfg(test)]
 mod group_effects_tests;
 #[cfg(test)]
+mod pattern_depth_tests;
+#[cfg(test)]
 mod print_tests;
 #[cfg(test)]
 mod tests;

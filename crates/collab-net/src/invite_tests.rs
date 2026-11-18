@@ -123,3 +123,19 @@ proptest! {
         prop_assert_eq!(Invite::parse(&i.url()), Ok(i));
     }
 }
+
+#[test]
+fn plus_or_sign_inside_a_percent_escape_is_broken() {
+    assert!(Endpoint::parse("ws://example.org/a/?key=%41").is_ok());
+    for bad in ["%+1", "%-1", "%1", "%+a"] {
+        assert!(Endpoint::parse(&format!("ws://example.org/a/?key={bad}")).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn port_must_be_all_digits() {
+    assert!(Endpoint::parse("ws://localhost:80/").is_ok());
+    for bad in ["ws://localhost:+80/", "ws://localhost:-80/", "ws://localhost:/"] {
+        assert!(Endpoint::parse(bad).is_err(), "accepted {bad}");
+    }
+}

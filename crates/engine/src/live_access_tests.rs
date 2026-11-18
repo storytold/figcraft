@@ -105,6 +105,13 @@ fn a_view_link_makes_the_file_read_only() {
     refused(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 5, "height": 5}), VIEW_ONLY);
     refused(&mut s, "node.set", json!({"ids": [card.0], "props": {"name": "Mine"}}), VIEW_ONLY);
     refused(&mut s, "edit.delete", json!({"ids": [card.0]}), VIEW_ONLY);
+    // Refused before it makes copies or writes files, which no rollback takes back.
+    let dir = std::env::temp_dir().join(format!("figcraft-view-fill-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    refused(&mut s, "data.fill", json!({"id": card.0, "rows": [{"name": "Copy"}], "dir": dir.to_string_lossy()}), VIEW_ONLY);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "no file was written");
+    let _ = std::fs::remove_dir_all(&dir);
     refused(&mut s, "tool.set", json!({"tool": "text"}), VIEW_ONLY);
     assert!(matches!(s.begin_interaction("Move"), Err(EngineError::Disabled(..))));
     assert_eq!(*s.doc().unwrap(), before);
@@ -265,7 +272,7 @@ fn revert_offline_file_works_while_another_file_is_live_and_after_leaving() {
     s.execute("file.new", &json!({})).unwrap();
     let offline_path = saved_file(&mut s);
     s.execute("file.revert", &json!({})).unwrap();
-    assert_eq!(s.doc().unwrap().name, "Untitled");
+    assert_eq!(s.doc().unwrap().name, offline_path.file_stem().unwrap().to_string_lossy());
     assert!(!s.ds().unwrap().is_dirty());
     assert_eq!(s.ds().unwrap().versions.len(), 1);
     assert_eq!(s.live_of(uid).doc_uid, Some(uid));
@@ -273,7 +280,7 @@ fn revert_offline_file_works_while_another_file_is_live_and_after_leaving() {
     s.execute("doc.switch", &json!({"index": 0})).unwrap();
     s.execute("collab.leave", &json!({})).unwrap();
     s.execute("file.revert", &json!({})).unwrap();
-    assert_eq!(s.doc().unwrap().name, "Untitled");
+    assert_eq!(s.doc().unwrap().name, path.file_stem().unwrap().to_string_lossy());
     assert!(!s.ds().unwrap().is_dirty());
     assert_eq!(s.ds().unwrap().versions.len(), 1);
     assert_eq!(s.live().doc_uid, None);

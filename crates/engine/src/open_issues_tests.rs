@@ -49,3 +49,16 @@ fn an_intact_file_opens_without_a_message() {
     assert!(s.message.is_none());
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+#[test]
+fn file_close_rejects_a_bad_index_instead_of_closing_another_document() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    s.execute("file.new", &json!({})).unwrap();
+    let docs = s.docs.len();
+    for index in [json!(-1), json!(1.5), json!(99)] {
+        let r = s.execute("file.close", &json!({"index": index, "force": true}));
+        assert!(r.is_err(), "index {index} must be rejected, got {r:?}");
+        assert_eq!(s.docs.len(), docs, "index {index} closed a document");
+    }
+}

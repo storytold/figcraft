@@ -287,6 +287,48 @@ fn padding_and_included_strokes() {
     assert_eq!(pos(&d, c), (15.0, 15.0, 70.0, 20.0));
 }
 
+/// "Figma distributes space amongst fill container children by the children's content area
+/// instead of by their size, matching the CSS border-box model. A layer with a thicker stroke will
+/// take up slightly more of the available width or height, so that its inner content area matches
+/// its sibling's." (Use auto layout with CSS Flexbox in mind)
+#[test]
+fn fill_children_share_by_content_area() {
+    let mut d = Document::new("t");
+    let p = page(&d);
+    let f = al(&mut d, p, LayoutMode::Horizontal, (200.0, 50.0), (Sizing::Fixed, Sizing::Fixed));
+    layout_mut(&mut d, f).gap = 0.0;
+    let a = al(&mut d, f, LayoutMode::Horizontal, (10.0, 50.0), (Sizing::Fill, Sizing::Fixed));
+    let b = al(&mut d, f, LayoutMode::Horizontal, (10.0, 50.0), (Sizing::Fill, Sizing::Fixed));
+    layout_mut(&mut d, b).padding = [0.0, 20.0, 0.0, 20.0];
+    layout_frame(&mut d, f, &NoMeasure);
+    // 200 less b's 40 of padding leaves 160 of content, 80 each: a is 80 wide, b 120.
+    assert_eq!((size(&d, a).0, size(&d, b).0), (80.0, 120.0));
+    assert_eq!(pos(&d, b).0, 80.0);
+    // A 10 px inside stroke counted in b's layout instead: 90 and 110.
+    layout_mut(&mut d, b).padding = [0.0; 4];
+    {
+        let n = d.get_mut(b).unwrap();
+        n.strokes = vec![figcraft_doc::color::Paint::solid(figcraft_doc::color::Color::BLACK)];
+        n.stroke.weight = 10.0;
+        n.stroke.align = StrokeAlign::Inside;
+    }
+    layout_mut(&mut d, b).strokes_included = true;
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!((size(&d, a).0, size(&d, b).0), (90.0, 110.0));
+    // A stroke not counted in the layout is no inset: an even split, as before.
+    layout_mut(&mut d, b).strokes_included = false;
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!((size(&d, a).0, size(&d, b).0), (100.0, 100.0));
+    // Equal insets: still even. A max on a freezes it there and b takes the rest, insets kept.
+    layout_mut(&mut d, a).padding = [0.0, 20.0, 0.0, 20.0];
+    layout_mut(&mut d, b).padding = [0.0, 20.0, 0.0, 20.0];
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!((size(&d, a).0, size(&d, b).0), (100.0, 100.0));
+    d.get_mut(a).unwrap().child_layout.max_w = Some(60.0);
+    layout_frame(&mut d, f, &NoMeasure);
+    assert_eq!((size(&d, a).0, size(&d, b).0), (60.0, 140.0));
+}
+
 #[test]
 fn grid_hug_tracks_and_wrapping_text_rows() {
     use figcraft_doc::GridTrack;

@@ -12,7 +12,9 @@ pub struct NetLimits {
     /// before: its hello.
     pub max_client_message: usize,
     pub max_hello: usize,
-    /// Largest message a client accepts from the host (a welcome carries the whole document).
+    /// Largest message a client accepts from the host (a welcome carries the whole document): 1 GiB,
+    /// room for any file up to 1023 MiB and well past the servers' defaults, while a hostile server
+    /// (any link can name one) can't make the app or a browser tab buffer more than that.
     pub max_server_message: usize,
     /// Messages a client may send per second on average, and in a burst; beyond that it is
     /// disconnected.
@@ -22,7 +24,13 @@ pub struct NetLimits {
     pub hello_timeout: Duration,
     /// A connection with no traffic for this long is dead.
     pub idle_timeout: Duration,
-    /// A quiet client pings this often (keeps it under `idle_timeout`).
+    /// How long a one-shot request connection (hosting, a library, a plugin directory — and, most
+    /// importantly, publishing a file) waits for the server's reply before giving up. Publishing
+    /// uploads a whole file and a large one on a slow link takes the server a while to receive and
+    /// answer, so this is longer than `idle_timeout` (a large project on a slow connection can
+    /// easily need several minutes).
+    pub request_reply_timeout: Duration,
+    /// A client pings this often, whatever else it sends (keeps it under `idle_timeout`).
     pub keepalive: Duration,
     /// Messages queued for one client before it counts as stuck and is disconnected.
     pub queue: usize,
@@ -61,11 +69,12 @@ impl Default for NetLimits {
             max_connections: 64,
             max_client_message: figcraft_collab::Limits::default().max_message_bytes,
             max_hello: 64 << 10,
-            max_server_message: figcraft_collab::Limits::default().max_message_bytes,
+            max_server_message: 1 << 30,
             rate: 100.0,
             burst: 400.0,
             hello_timeout: Duration::from_secs(10),
             idle_timeout: Duration::from_secs(45),
+            request_reply_timeout: Duration::from_secs(300),
             keepalive: Duration::from_secs(15),
             queue: 1024,
             write_timeout: Duration::from_secs(10),
@@ -81,5 +90,18 @@ impl Default for NetLimits {
             reserve_for_sessions: 0,
             request_idle: Duration::from_secs(45),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_reply_wait_is_longer_than_idle() {
+        let d = NetLimits::default();
+        // Publishing uploads a whole file; a slow link must not cut it off at the session idle
+        // timeout. Keep the reply wait comfortably above it.
+        assert!(d.request_reply_timeout > d.idle_timeout);
     }
 }

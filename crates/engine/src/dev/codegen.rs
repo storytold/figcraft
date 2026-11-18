@@ -1,0 +1,1040 @@
+//! Code for a layer, as shown by the Inspect panel and returned by `inspect.code`: CSS for the
+//! layer itself, HTML or React for its subtree, and SwiftUI, Jetpack Compose, ArkUI (HarmonyOS) or
+//! Flutter (stacks for auto layout, absolute offsets otherwise). Components become components
+//! whose properties are parameters and instances become calls passing their values (see
+//! [`crate::component_codegen`]); variables bound to a layer become CSS custom properties, and
+//! their iOS and Android code syntax in SwiftUI and Compose. The output is a starting point, not a
+//! pixel-exact translation.
+
+use figcraft_color::{Color, Gradient, GradientKind, Paint, PaintKind};
+use figcraft_doc::{
+    ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, Shadow, Sizing,
+    TextAlignH, TextCase, TextDecoration, Variable,
+};
+use serde_json::json;
+
+use crate::cmd::CommandSpec;
+use crate::component_codegen::{Component, Param};
+use crate::params::{get, id_of, num_or, string, targets};
+use crate::{bad, spec};
+
+mod arkui;
+mod compose;
+mod css;
+mod flutter;
+mod html;
+mod swift;
+
+pub(crate) use arkui::arkui;
+pub(crate) use compose::{compose, kotlin_color};
+pub(crate) use css::Tokens;
+#[cfg(test)]
+pub(crate) use css::css_decls;
+pub use css::{CssNames, css_var_name, css_var_of};
+use css::{css, tok};
+pub(crate) use flutter::{FLUTTER_IMPORT, Place, flutter, flutter_indent};
+use html::html;
+pub(crate) use html::{Markup, Names, class_name};
+pub(crate) use swift::swift;
+
+pub fn specs() -> Vec<CommandSpec> {
+    vec![spec!(
+        "inspect.code",
+        "Code for layer",
+        "{id?, language?: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui|flutter (default css; html, react, leptos and vue are the whole layer tree; components take their properties as parameters, instances pass their values; a component connected to code (codeConnect.set) gives its import and snippet instead; tailwind is React with Tailwind CSS v4 utilities for pages: fluid auto layout boxes, instances inlined with their overrides, bound variables as theme utilities), mobile? (tailwind: a mobile frame with the same layer names; the code is mobile first with the desktop layer's classes behind lg:), unit?: px|rem (CSS, HTML, React, Leptos and Vue; default px), rootFontSize? (rem: pixels per rem, default 16)} → {code, language, connected}",
+        false,
+        |s, p| {
+            let cmd = "inspect.code";
+            let id = targets(s, p).first().copied().ok_or_else(|| bad(cmd, "select a layer"))?;
+            let lang = match string(p, "language") {
+                Some(l) => {
+                    CodeLang::from_id(&l).ok_or_else(|| bad(cmd, "language: css|html|react|leptos|vue|tailwind|swiftui|compose|arkui|flutter"))?
+                }
+                None => CodeLang::Css,
+            };
+            let rem = match string(p, "unit").map(|u| u.to_ascii_lowercase()).as_deref() {
+                None | Some("px") => None,
+                Some("rem") => Some(num_or(p, "rootFontSize", 16.0)).filter(|r| r.is_finite() && *r > 0.0 && *r <= 1000.0),
+                Some(_) => return Err(bad(cmd, "unit: px|rem")),
+            };
+            if string(p, "unit").is_some_and(|u| u.eq_ignore_ascii_case("rem")) && rem.is_none() {
+                return Err(bad(cmd, "rootFontSize: a positive number of pixels (up to 1000)"));
+            }
+            let doc = s.doc()?;
+            if !doc.contains(id) {
+                return Err(bad(cmd, "no such layer"));
+            }
+            let connected = crate::code_connect::link(doc, id, lang).is_some();
+            let mobile = match get(p, "mobile") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(v) => Some(id_of(v).filter(|m| doc.contains(*m)).ok_or_else(|| bad(cmd, "mobile: the id of a mobile frame"))?),
+            };
+            let code = match (lang, mobile) {
+                (CodeLang::Tailwind, Some(m)) => crate::tailwind::code(doc, id, Some(m)),
+                _ => code_for(doc, id, lang),
+            };
+            let code = match rem {
+                Some(root) if lang.is_web() => px_to_rem(&code, root),
+                _ => code,
+            };
+            Ok(json!({"code": code, "language": lang.id(), "connected": connected}))
+        }
+    )]
+}
+
+/// Languages the Inspect panel offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CodeLang {
+    #[default]
+    Css,
+    /// The whole layer tree as nested HTML elements with a stylesheet.
+    Html,
+    /// A React function component (TSX) with its stylesheet.
+    React,
+    /// A Leptos component (`view!` markup) with its stylesheet.
+    Leptos,
+    /// A Vue single-file component (`<template>`, `<script setup>`, `<style scoped>`).
+    Vue,
+    /// A React function component styled with Tailwind CSS v4 utilities (no stylesheet).
+    Tailwind,
+    SwiftUi,
+    Compose,
+    /// HarmonyOS ArkUI: an ArkTS struct (`@Component`, `build`).
+    ArkUi,
+    /// A Flutter `StatelessWidget` (Dart) with its widget tree.
+    Flutter,
+}
+
+impl CodeLang {
+    pub const ALL: [CodeLang; 10] = [
+        CodeLang::Css,
+        CodeLang::Html,
+        CodeLang::React,
+        CodeLang::Leptos,
+        CodeLang::Vue,
+        CodeLang::Tailwind,
+        CodeLang::SwiftUi,
+        CodeLang::Compose,
+        CodeLang::ArkUi,
+        CodeLang::Flutter,
+    ];
+    pub fn id(self) -> &'static str {
+        match self {
+            CodeLang::Css => "css",
+            CodeLang::Html => "html",
+            CodeLang::React => "react",
+            CodeLang::Leptos => "leptos",
+            CodeLang::Vue => "vue",
+            CodeLang::Tailwind => "tailwind",
+            CodeLang::SwiftUi => "swiftui",
+            CodeLang::Compose => "compose",
+            CodeLang::ArkUi => "arkui",
+            CodeLang::Flutter => "flutter",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            CodeLang::Css => "CSS",
+            CodeLang::Html => "HTML + CSS",
+            CodeLang::React => "React",
+            CodeLang::Leptos => "Leptos",
+            CodeLang::Vue => "Vue",
+            CodeLang::Tailwind => "React + Tailwind",
+            CodeLang::SwiftUi => "SwiftUI",
+            CodeLang::Compose => "Compose",
+            CodeLang::ArkUi => "ArkUI",
+            CodeLang::Flutter => "Flutter",
+        }
+    }
+    /// Languages whose lengths are CSS pixels that can be shown in rem (not Tailwind: its lengths
+    /// are utility classes).
+    pub fn is_web(self) -> bool {
+        matches!(self, CodeLang::Css | CodeLang::Html | CodeLang::React | CodeLang::Leptos | CodeLang::Vue)
+    }
+    /// Languages whose strings interpolate `$` (Kotlin's `$name`, Dart's `$name`), where a literal
+    /// `$` has to be escaped.
+    pub fn escapes_dollar(self) -> bool {
+        matches!(self, CodeLang::Compose | CodeLang::Flutter)
+    }
+    pub fn from_id(s: &str) -> Option<CodeLang> {
+        if s.eq_ignore_ascii_case("tsx") || s.eq_ignore_ascii_case("jsx") {
+            return Some(CodeLang::React);
+        }
+        if s.eq_ignore_ascii_case("sfc") || s.eq_ignore_ascii_case("vue3") {
+            return Some(CodeLang::Vue);
+        }
+        if s.eq_ignore_ascii_case("arkts") {
+            return Some(CodeLang::ArkUi);
+        }
+        if s.eq_ignore_ascii_case("dart") {
+            return Some(CodeLang::Flutter);
+        }
+        CodeLang::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(s) || l.label().eq_ignore_ascii_case(s))
+    }
+}
+
+/// Layers deeper than this (or past this many children) are summarised.
+const MAX_DEPTH: usize = 12;
+const MAX_CHILDREN: usize = 200;
+
+/// `v` without trailing zeros (2 decimals).
+pub(crate) fn num(v: f64) -> String {
+    if !v.is_finite() {
+        return "0".into();
+    }
+    let scaled = v * 100.0;
+    // Past the x100 overflow every value is whole anyway, so keep it as is.
+    let r = if scaled.is_finite() { scaled.round() / 100.0 } else { v };
+    if (r - r.round()).abs() < 1e-9 {
+        // `as i64` saturates past 2^63, so larger whole values are printed from the float.
+        if r.abs() < 9e18 { format!("{}", r.round() as i64) } else { format!("{:.0}", r.round()) }
+    } else {
+        format!("{r}")
+    }
+}
+
+/// `v` without trailing zeros (6 decimals), for lengths that must convert back to the same pixels.
+fn num6(v: f64) -> String {
+    let scaled = v * 1_000_000.0;
+    // Past the x1e6 overflow every value is whole anyway, so keep it as is.
+    let r = if scaled.is_finite() { scaled.round() / 1_000_000.0 } else { v };
+    if r.is_finite() && r != 0.0 { format!("{r}") } else { "0".into() }
+}
+
+/// `code` with every pixel length (`12px`) in rem of `root` pixels (`0.75rem`); names that end
+/// in "px", markup lines (layer text), string literals and comments are left alone.
+pub fn px_to_rem(code: &str, root: f64) -> String {
+    let mut out = String::with_capacity(code.len());
+    let mut in_comment = false;
+    for line in code.split_inclusive('\n') {
+        if !in_comment && line.trim_start().starts_with('<') {
+            out.push_str(line);
+            continue;
+        }
+        // Lengths outside strings and comments convert; `plain` is where that stretch starts.
+        let mut plain = 0;
+        let mut chars = line.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            if in_comment {
+                if c == '*' && chars.peek().is_some_and(|(_, n)| *n == '/') {
+                    chars.next();
+                    out.push_str(line.get(plain..i + 2).unwrap_or(""));
+                    plain = i + 2;
+                    in_comment = false;
+                }
+            } else if c == '/' && chars.peek().is_some_and(|(_, n)| *n == '*') {
+                chars.next();
+                out.push_str(&lengths_to_rem(line.get(plain..i).unwrap_or(""), root));
+                plain = i;
+                in_comment = true;
+            } else if c == '"' {
+                out.push_str(&lengths_to_rem(line.get(plain..i).unwrap_or(""), root));
+                let mut end = line.len();
+                while let Some((j, s)) = chars.next() {
+                    if s == '\\' {
+                        chars.next();
+                    } else if s == '"' {
+                        end = j + 1;
+                        break;
+                    }
+                }
+                out.push_str(line.get(i..end).unwrap_or(""));
+                plain = end;
+            }
+        }
+        let rest = line.get(plain..).unwrap_or("");
+        if in_comment {
+            out.push_str(rest);
+        } else {
+            out.push_str(&lengths_to_rem(rest, root));
+        }
+    }
+    out
+}
+
+/// `code` with every pixel length in rem of `root` pixels; names that end in "px" are left alone.
+fn lengths_to_rem(code: &str, root: f64) -> String {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(code.len());
+    let mut rest = code;
+    while let Some(i) = rest.find("px") {
+        let (head, tail) = (rest.get(..i).unwrap_or(""), rest.get(i + 2..).unwrap_or(""));
+        // The number right before "px".
+        let start = head.char_indices().rev().take_while(|(_, c)| c.is_ascii_digit() || *c == '.' || *c == '-').last().map_or(head.len(), |(j, _)| j);
+        let (before, number) = (head.get(..start).unwrap_or(""), head.get(start..).unwrap_or(""));
+        let free = !before.chars().next_back().is_some_and(ident) && !tail.chars().next().is_some_and(|c| ident(c) || c == '-');
+        match number.parse::<f64>() {
+            Ok(v) if free && v.is_finite() => {
+                out.push_str(before);
+                out.push_str(&format!("{}rem", num6(v / root)));
+            }
+            _ => {
+                out.push_str(head);
+                out.push_str("px");
+            }
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+pub fn code_for(doc: &Document, id: NodeId, lang: CodeLang) -> String {
+    match lang {
+        CodeLang::Css => css(doc, id),
+        CodeLang::Html => html(doc, id),
+        CodeLang::Tailwind => crate::tailwind::code(doc, id, None),
+        CodeLang::React | CodeLang::Leptos | CodeLang::Vue | CodeLang::SwiftUi | CodeLang::Compose | CodeLang::ArkUi | CodeLang::Flutter => {
+            crate::component_codegen::code(doc, id, lang)
+        }
+    }
+}
+
+/// What a tree walk generates for: the document, the layer the code is for (instances under it
+/// become calls), and the component whose properties are parameters.
+pub(crate) struct Ctx<'a> {
+    pub doc: &'a Document,
+    pub root: NodeId,
+    pub comp: Option<&'a Component>,
+    /// Indentation the walk starts at (the depth cap counts from it).
+    pub base: usize,
+}
+
+impl<'a> Ctx<'a> {
+    pub fn new(doc: &'a Document, root: NodeId) -> Self {
+        Ctx { doc, root, comp: None, base: 0 }
+    }
+
+    /// The component parameter controlling `field` ("visible", "characters", "mainComponent",
+    /// "slot") of `n`.
+    pub fn param(&self, n: &Node, field: &str) -> Option<&'a Param> {
+        let name = n.prop_refs.get(field)?;
+        self.comp?.params.iter().find(|p| &p.prop == name)
+    }
+
+    /// Visible children in paint order (bottom first), capped; in component code, hidden layers a
+    /// boolean parameter shows are included.
+    pub fn kids(&self, n: &Node) -> Vec<NodeId> {
+        n.children
+            .iter()
+            .copied()
+            .filter(|c| self.doc.node(*c).is_some_and(|k| k.visible || self.param(k, "visible").is_some()))
+            .take(MAX_CHILDREN)
+            .collect()
+    }
+
+    pub(crate) fn too_deep(&self, depth: usize) -> bool {
+        depth > self.base + MAX_DEPTH
+    }
+
+    /// A call for an instance below the root (`None` for other layers, or a missing main), with
+    /// the CSS its slot content generated.
+    fn call(&self, n: &Node, lang: CodeLang, depth: usize) -> Option<(String, String)> {
+        if n.id == self.root || !matches!(n.kind, NodeKind::Instance { .. }) {
+            return None;
+        }
+        crate::component_codegen::usage_with_styles(self.doc, n.id, lang, depth)
+    }
+}
+
+fn first_fill(n: &Node) -> Option<Color> {
+    n.fills.iter().filter(|p| p.visible).find_map(|p| match &p.kind {
+        PaintKind::Solid { color } => Some(color.with_alpha(color.a * p.opacity)),
+        PaintKind::Gradient(g) => g.sorted_stops().first().map(|s| s.color),
+        PaintKind::Image(_) | PaintKind::Pattern(_) => None,
+    })
+}
+
+/// A layer's visible fills with their place in the document. Document order is bottom first, as
+/// the renderer paints them; the index tells a target which paint is the bottom one.
+fn visible_fills(n: &Node) -> impl DoubleEndedIterator<Item = (usize, &Paint)> {
+    n.fills.iter().enumerate().filter(|(_, p)| p.visible)
+}
+
+/// A gradient's sorted stops as (position, colour), the paint's opacity folded into each colour.
+/// A lone stop is written twice (at 1 as well), since Android and Flutter need two colours.
+fn gradient_stops(g: &Gradient, opacity: f32) -> Vec<(f64, Color)> {
+    let mut stops: Vec<(f64, Color)> = g.sorted_stops().iter().map(|s| (f64::from(s.position), s.color.with_alpha(s.color.a * opacity))).collect();
+    if let [(_, only)] = stops[..] {
+        stops.push((1.0, only));
+    }
+    stops
+}
+
+/// A gradient's main axis in pixels on a `w` x `h` box.
+fn gradient_axis(g: &Gradient, w: f64, h: f64) -> (f64, f64) {
+    ((g.to.0 - g.from.0) * w, (g.to.1 - g.from.1) * h)
+}
+
+/// The kind a native target writes: a diamond reads as a radial gradient.
+fn native_gradient_kind(g: &Gradient) -> GradientKind {
+    match g.kind {
+        GradientKind::Diamond => GradientKind::Radial,
+        k => k,
+    }
+}
+
+fn stroke_color(n: &Node) -> Option<Color> {
+    if !n.has_visible_stroke() {
+        return None;
+    }
+    n.strokes.iter().filter(|p| p.visible).find_map(|p| p.solid_color())
+}
+
+/// The CSS borders a solid stroke makes: one `border`, or with individual stroke sides a border
+/// on each side that has a weight.
+fn css_borders(doc: &Document, n: &Node, t: &mut Tokens) -> Vec<(String, String)> {
+    let Some(c) = stroke_color(n) else { return Vec::new() };
+    let Some(sides) = n.stroke.sides else {
+        let weight = tok(doc, n, &["strokeWeight"], format!("{}px", num(n.stroke.weight)), t);
+        return vec![("border".into(), format!("{weight} solid {}", tok(doc, n, &["stroke"], c.to_css(), t)))];
+    };
+    let color = tok(doc, n, &["stroke"], c.to_css(), t);
+    let named = ["top", "right", "bottom", "left"].into_iter().zip(crate::cmd::props::STROKE_SIDES);
+    named
+        .zip(sides)
+        .filter(|(_, weight)| *weight > 0.0)
+        .map(|((side, field), weight)| {
+            (format!("border-{side}"), format!("{} solid {color}", tok(doc, n, &[field], format!("{}px", num(weight)), t)))
+        })
+        .collect()
+}
+
+fn drop_shadow(n: &Node) -> Option<&Shadow> {
+    n.effects.iter().filter(|e| e.visible).find_map(|e| match &e.kind {
+        EffectKind::DropShadow(s) => Some(s),
+        _ => None,
+    })
+}
+
+/// The fields a padding's top, right, bottom and left can be bound through, closest first.
+const PADDING: [[&str; 3]; 4] = [
+    ["paddingTop", "paddingVertical", "padding"],
+    ["paddingRight", "paddingHorizontal", "padding"],
+    ["paddingBottom", "paddingVertical", "padding"],
+    ["paddingLeft", "paddingHorizontal", "padding"],
+];
+
+/// What code for `platform` (a [`figcraft_doc::CODE_PLATFORMS`] key) writes for a value of `n`: the
+/// code syntax of the variable bound to the first of `fields` that has one, else `value`. Without a
+/// code syntax the value stays: a name made up here wouldn't exist in the code it lands in.
+fn named(doc: &Document, n: &Node, platform: &str, fields: &[&str], value: String) -> String {
+    fields
+        .iter()
+        .find_map(|f| crate::devinspect::bound_variable(doc, n, f))
+        .and_then(|v| v.code_syntax.get(platform))
+        .map(|name| name.trim().chars().filter(|c| !c.is_control()).collect::<String>())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(value)
+}
+
+fn radius(n: &Node) -> f64 {
+    n.corners.uniform().unwrap_or_else(|| n.corners.radii.iter().copied().fold(0.0, f64::max))
+}
+
+/// Text content as a string literal (escaped for Swift; Kotlin also escapes `$`).
+pub(crate) fn literal(s: &str, kotlin: bool) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars().take(10_000) {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' | '\u{2028}' => out.push_str("\\n"),
+            '\r' => {}
+            '\t' => out.push_str("\\t"),
+            '$' if kotlin => out.push_str("\\$"),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+pub(crate) fn indent(depth: usize) -> String {
+    "    ".repeat(depth)
+}
+
+/// The index of `markup`'s first tag-closing `>`, skipping `>` inside quoted attribute values.
+fn tag_end(markup: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in markup.char_indices() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '>' => return Some(i),
+                _ => {}
+            },
+        }
+    }
+    None
+}
+
+/// `markup`'s first element with a Vue `v-if` attribute (a call with no placing wrapper).
+fn with_v_if(markup: &str, guard: Option<&str>) -> String {
+    let Some(guard) = guard else { return markup.to_string() };
+    let Some(end) = tag_end(markup) else { return markup.to_string() };
+    let before = markup[..end].trim_end();
+    let at = if before.ends_with('/') { before.len() - 1 } else { end };
+    format!("{} v-if=\"{guard}\"{}", &markup[..at], &markup[at..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Session;
+    use crate::params::id_of;
+    use serde_json::json;
+
+    #[test]
+    fn num_keeps_finite_values_past_the_x100_overflow() {
+        for v in [1e307, -1e307, f64::MAX] {
+            let s = num(v);
+            assert_eq!(s, format!("{v:.0}"));
+            assert_eq!(s.parse::<f64>(), Ok(v));
+        }
+    }
+
+    #[test]
+    fn num6_keeps_finite_values_past_the_x1e6_overflow() {
+        assert_eq!(num6(1e305).parse::<f64>(), Ok(1e305));
+        assert_eq!(num6(0.1234567), "0.123457");
+    }
+
+    #[test]
+    fn num_keeps_huge_whole_numbers() {
+        assert_eq!(num(1e20), "100000000000000000000");
+        assert_eq!(num(-1e20), "-100000000000000000000");
+        assert_eq!(num(1e18), "1000000000000000000");
+        assert_eq!(num(-0.0), "0");
+    }
+
+    fn card(s: &mut Session) -> NodeId {
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100, "name": "Card"})).unwrap()["id"]).unwrap();
+        s.execute("node.set", &json!({"id": f, "props": {"fills": ["#FFFFFF"], "cornerRadius": 12}})).unwrap();
+        s.execute("text.create", &json!({"text": "Say \"hi\" $5\nnow", "x": 0, "y": 0, "parent": f})).unwrap();
+        s.execute("shape.ellipse", &json!({"x": 0, "y": 0, "width": 24, "height": 24, "parent": f})).unwrap();
+        s.execute("layout.add", &json!({"ids": [f]})).unwrap();
+        f
+    }
+
+    #[test]
+    fn css_gradient_folds_in_paint_opacity() {
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        let mut p = figcraft_color::Paint::gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, Color::BLACK));
+        p.opacity = 0.5;
+        s.doc_mut().unwrap().get_mut(f).unwrap().fills = vec![p];
+        let css = code_for(s.doc().unwrap(), f, CodeLang::Css);
+        assert!(css.contains("rgba(0, 0, 0, 0.50) 0%"), "{css}");
+        assert!(!css.contains("#000000 0%"), "{css}");
+    }
+
+    /// The measured frame: white at the bottom, a 20% gradient above it, 50% black on top.
+    fn layered_frame(s: &mut Session) -> figcraft_doc::NodeId {
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 120})).unwrap()["id"]).unwrap();
+        let mut g = figcraft_color::Paint::gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, Color::BLACK));
+        g.opacity = 0.2;
+        let mut top = figcraft_color::Paint::solid(Color::BLACK);
+        top.opacity = 0.5;
+        s.doc_mut().unwrap().get_mut(f).unwrap().fills = vec![figcraft_color::Paint::solid(Color::WHITE), g, top];
+        f
+    }
+
+    #[test]
+    fn several_fills_are_one_layered_background_top_first() {
+        let mut s = Session::new();
+        let f = layered_frame(&mut s);
+        let css = code_for(s.doc().unwrap(), f, CodeLang::Css);
+        let bg: Vec<&str> = css.lines().filter(|l| l.starts_with("background:")).collect();
+        assert_eq!(bg.len(), 1, "{css}");
+        let v = bg[0];
+        assert!(
+            v.starts_with(
+                "background: linear-gradient(0deg, rgba(0, 0, 0, 0.50), rgba(0, 0, 0, 0.50)), linear-gradient(180deg, rgba(0, 0, 0, 0.20) 0%, "
+            ),
+            "{v}"
+        );
+        assert!(v.ends_with(", #FFFFFF;"), "{v}");
+    }
+
+    #[test]
+    fn one_solid_fill_stays_a_plain_colour() {
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        s.doc_mut().unwrap().get_mut(f).unwrap().fills = vec![figcraft_color::Paint::solid(Color::WHITE)];
+        let css = code_for(s.doc().unwrap(), f, CodeLang::Css);
+        assert!(css.contains("background: #FFFFFF;\n"), "{css}");
+        assert!(!css.contains("gradient"), "{css}");
+    }
+
+    #[test]
+    fn swiftui_and_compose_for_an_auto_layout_card() {
+        let mut s = Session::new();
+        let f = card(&mut s);
+        let doc = s.doc().unwrap();
+        let sw = code_for(doc, f, CodeLang::SwiftUi);
+        assert!(sw.contains("Stack(alignment:"), "{sw}");
+        assert!(sw.contains("Text(\"Say \\\"hi\\\" $5\\nnow\")"), "escaped: {sw}");
+        assert!(sw.contains("Ellipse()"));
+        assert!(sw.contains(".clipShape(RoundedRectangle(cornerRadius: 12))"));
+        let kt = code_for(doc, f, CodeLang::Compose);
+        assert!(kt.contains("Arrangement.spacedBy("), "{kt}");
+        assert!(kt.contains("\\$5"), "Kotlin escapes $: {kt}");
+        assert!(kt.contains("CircleShape"));
+        assert!(kt.contains("RoundedCornerShape(12.dp)"));
+        let css = code_for(doc, f, CodeLang::Css);
+        assert!(css.contains("display: flex;") && css.contains("border-radius: 12px;"));
+        // Through the command.
+        let v = s.execute("inspect.code", &json!({"id": f, "language": "compose"})).unwrap();
+        assert_eq!(v["code"].as_str().unwrap(), kt);
+        assert!(s.execute("inspect.code", &json!({"id": f, "language": "cobol"})).is_err());
+    }
+
+    #[test]
+    fn arkui_for_an_auto_layout_card() {
+        let mut s = Session::new();
+        let f = card(&mut s);
+        let doc = s.doc().unwrap();
+        let ark = code_for(doc, f, CodeLang::ArkUi);
+        for want in [
+            "Row({ space: ",
+            "Text(\"Say \\\"hi\\\" $5\\nnow\")",
+            ".fontSize(",
+            ".fontWeight(",
+            "Ellipse({ width: 24, height: 24 })",
+            ".backgroundColor('#FFFFFF')",
+            ".borderRadius(12)",
+            ".width(",
+            ".height(100)",
+            ".clip(true)",
+        ] {
+            assert!(ark.contains(want), "ArkUI has {want:?}:\n{ark}");
+        }
+        // Through the command, and "arkts" reads as ArkUI too.
+        let v = s.execute("inspect.code", &json!({"id": f, "language": "arkui"})).unwrap();
+        assert_eq!(v["code"].as_str().unwrap(), ark);
+        assert_eq!(v["language"], "arkui");
+        assert_eq!(s.execute("inspect.code", &json!({"id": f, "language": "arkts"})).unwrap()["language"], "arkui");
+    }
+
+    #[test]
+    fn free_children_get_offsets_and_deep_trees_are_capped() {
+        let mut s = Session::new();
+        let mut parent = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap()["id"]).unwrap();
+        let root = parent;
+        s.execute("shape.rectangle", &json!({"x": 7, "y": 9, "width": 5, "height": 5, "parent": root})).unwrap();
+        for _ in 0..20 {
+            parent = id_of(&s.execute("frame.create", &json!({"x": 1, "y": 1, "width": 40, "height": 40, "parent": parent})).unwrap()["id"]).unwrap();
+        }
+        let doc = s.doc().unwrap();
+        let sw = code_for(doc, root, CodeLang::SwiftUi);
+        assert!(sw.contains(".offset(x: 7, y: 9)"), "{sw}");
+        assert!(sw.contains("…"), "depth capped");
+        let kt = code_for(doc, root, CodeLang::Compose);
+        assert!(kt.contains("Modifier.offset(7.dp, 9.dp)"));
+        let ark = code_for(doc, root, CodeLang::ArkUi);
+        assert!(ark.contains(".position({ x: 7, y: 9 })"), "{ark}");
+        assert!(ark.contains("…"), "depth capped");
+        assert!(code_for(doc, NodeId(999_999), CodeLang::Css).is_empty());
+    }
+
+    #[test]
+    fn arkui_aligned_text_gets_the_layers_width() {
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        let t = id_of(&s.execute("text.create", &json!({"text": "Hi", "x": 0, "y": 0, "parent": f})).unwrap()["id"]).unwrap();
+        s.execute("node.set", &json!({"id": t, "props": {"textAlign": "center", "width": 120.0}})).unwrap();
+        let doc = s.doc().unwrap();
+        let ark = code_for(doc, f, CodeLang::ArkUi);
+        assert!(ark.contains(".textAlign(TextAlign.Center)"), "{ark}");
+        let width = doc.node(t).map(|n| n.width).unwrap_or_default();
+        assert!(ark.contains(&format!(".width({})", num(width))), "the alignment has a box: {ark}");
+    }
+
+    #[test]
+    fn arkui_percent_line_height_and_letter_spacing_are_absolute_numbers() {
+        // ArkUI's `letterSpacing` falls back to the default for a percent string, and `lineHeight`
+        // takes no percent at all: both are numbers of vp, a percent being of the font size.
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        let t = id_of(&s.execute("text.create", &json!({"text": "Hi", "x": 0, "y": 0, "parent": f})).unwrap()["id"]).unwrap();
+        s.execute("node.set", &json!({"id": t, "props": {"fontSize": 20.0, "lineHeight": "150%", "letterSpacing": "10%"}})).unwrap();
+        let doc = s.doc().unwrap();
+        let ark = code_for(doc, f, CodeLang::ArkUi);
+        assert!(ark.contains(".lineHeight(30)"), "{ark}");
+        assert!(ark.contains(".letterSpacing(2)"), "{ark}");
+        assert!(!ark.contains('%'), "no percent strings: {ark}");
+    }
+
+    #[test]
+    fn arkui_places_a_child_that_ignores_its_auto_layout_parent() {
+        let mut s = Session::new();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap()["id"]).unwrap();
+        let c = id_of(&s.execute("shape.rectangle", &json!({"x": 7, "y": 9, "width": 20, "height": 20, "parent": f})).unwrap()["id"]).unwrap();
+        s.execute("node.set", &json!({"id": c, "props": {"absolute": true}})).unwrap();
+        s.execute("layout.add", &json!({"ids": [f]})).unwrap();
+        let doc = s.doc().unwrap();
+        let [_, _, _, _, x, y] = doc.node(c).unwrap().transform.as_coeffs();
+        let ark = code_for(doc, f, CodeLang::ArkUi);
+        assert!(ark.contains("Row(") || ark.contains("Column("), "the parent is still auto layout: {ark}");
+        assert!(ark.contains(&format!(".position({{ x: {}, y: {} }})", num(x), num(y))), "the absolute child keeps its place: {ark}");
+    }
+
+    #[test]
+    fn flutter_builds_a_widget_tree() {
+        let mut s = Session::new();
+        let f = card(&mut s);
+        let doc = s.doc().unwrap();
+        let dart = code_for(doc, f, CodeLang::Flutter);
+        // The card hugs its content, so its width is the layout's, not the 200 it was created with.
+        let w = doc.node(f).map(|n| n.width).unwrap_or_default();
+        assert!(dart.starts_with(&format!("Container(\n  width: {},\n  height: 100,\n", num(w))), "{dart}");
+        assert!(dart.contains("borderRadius: BorderRadius.circular(12)"), "{dart}");
+        assert!(dart.contains("child: Row(\n"), "{dart}");
+        assert!(dart.contains("      Text(\n        \"Say \\\"hi\\\" \\$5\\nnow\",\n"), "escaped: {dart}");
+        assert!(dart.contains("fontWeight: FontWeight.w400,"), "{dart}");
+        assert!(dart.contains("shape: BoxShape.circle"), "{dart}");
+        assert!(dart.ends_with(')'), "a bare expression, like the other native targets: {dart}");
+        // Through the command: `dart` names the same language, and rem is for the web only.
+        let v = s.execute("inspect.code", &json!({"id": f, "language": "flutter"})).unwrap();
+        assert_eq!(v["code"].as_str().unwrap(), dart);
+        assert_eq!(v["language"], "flutter");
+        assert_eq!(s.execute("inspect.code", &json!({"id": f, "language": "dart"})).unwrap()["language"], "flutter");
+        let rem = s.execute("inspect.code", &json!({"id": f, "language": "flutter", "unit": "rem"})).unwrap();
+        assert_eq!(rem["code"].as_str().unwrap(), dart, "rem doesn't apply to Dart");
+    }
+
+    #[test]
+    fn flutter_positions_free_children_and_bounds_the_tree() {
+        let mut s = Session::new();
+        let root = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap()["id"]).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 7, "y": 9, "width": 5, "height": 5, "parent": root})).unwrap();
+        let mut parent = root;
+        for _ in 0..20 {
+            parent = id_of(&s.execute("frame.create", &json!({"x": 1, "y": 1, "width": 40, "height": 40, "parent": parent})).unwrap()["id"]).unwrap();
+        }
+        let dart = code_for(s.doc().unwrap(), root, CodeLang::Flutter);
+        assert!(dart.contains("Stack(\n    alignment: Alignment.topLeft,\n"), "{dart}");
+        assert!(dart.contains("Positioned(\n        left: 7,\n        top: 9,\n"), "{dart}");
+        // A wrapper's closing parenthesis sits on its own line, not glued to the widget's.
+        assert!(dart.contains("        )\n      ),\n"), "{dart}");
+        assert!(dart.contains("…"), "the depth is capped: {dart}");
+        assert!(dart.contains("const SizedBox()"), "a capped layer is still a widget in the list: {dart}");
+    }
+
+    #[test]
+    fn flutter_keeps_a_capped_layers_name_on_its_comment_line() {
+        let mut s = Session::new();
+        let root = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 50})).unwrap()["id"]).unwrap();
+        let mut parent = root;
+        for _ in 0..20 {
+            let p = json!({"x": 1, "y": 1, "width": 40, "height": 40, "parent": parent, "name": "deep\nvoid main() {}"});
+            parent = id_of(&s.execute("frame.create", &p).unwrap()["id"]).unwrap();
+        }
+        let dart = code_for(s.doc().unwrap(), root, CodeLang::Flutter);
+        assert!(dart.contains("…"), "the depth is capped: {dart}");
+        assert!(!dart.lines().any(|l| l.trim_start().starts_with("void main()")), "a name never leaves its comment: {dart}");
+    }
+
+    #[test]
+    fn flutter_writes_no_spacing_for_the_space_distributions() {
+        // The space distributions spread the children themselves; a `spacing:` beside them would
+        // add the gap on top.
+        let mut s = Session::new();
+        let row = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 40})).unwrap()["id"]).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 60, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap();
+        s.execute("layout.add", &json!({"ids": [row], "direction": "horizontal"})).unwrap();
+        for (align, flutter) in [("spaceBetween", "spaceBetween"), ("spaceAround", "spaceAround"), ("spaceEvenly", "spaceEvenly")] {
+            s.execute("node.set", &json!({"id": row, "props": {"gap": 10, "mainAlign": align}})).unwrap();
+            let dart = code_for(s.doc().unwrap(), row, CodeLang::Flutter);
+            assert!(dart.contains(&format!("mainAxisAlignment: MainAxisAlignment.{flutter},")), "{dart}");
+            assert!(!dart.contains("spacing:"), "{align} spreads the children itself: {dart}");
+        }
+        // A packed line keeps its gap.
+        s.execute("node.set", &json!({"id": row, "props": {"gap": 10, "mainAlign": "center"}})).unwrap();
+        let dart = code_for(s.doc().unwrap(), row, CodeLang::Flutter);
+        assert!(dart.contains("spacing: 10,"), "{dart}");
+    }
+
+    #[test]
+    fn flutter_expands_and_stretches_fill_children() {
+        let mut s = Session::new();
+        let row = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 40})).unwrap()["id"]).unwrap();
+        let a = id_of(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap()["id"]).unwrap();
+        s.execute("shape.rectangle", &json!({"x": 60, "y": 0, "width": 50, "height": 20, "parent": row})).unwrap();
+        s.execute("layout.add", &json!({"ids": [row], "direction": "horizontal"})).unwrap();
+        s.execute("node.set", &json!({"id": a, "props": {"sizingH": "fill", "sizingV": "fill"}})).unwrap();
+        let dart = code_for(s.doc().unwrap(), row, CodeLang::Flutter);
+        assert!(dart.contains("child: Row(\n"), "{dart}");
+        assert!(dart.contains("Expanded(\n"), "a child filling the main axis takes the room left: {dart}");
+        assert!(dart.contains("crossAxisAlignment: CrossAxisAlignment.stretch,"), "a child filling the cross axis stretches the line: {dart}");
+    }
+
+    #[test]
+    fn flutter_lifts_a_child_that_ignores_its_auto_layout_parent_out_of_the_line() {
+        let mut s = Session::new();
+        let row = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 40})).unwrap()["id"]).unwrap();
+        let flow = id_of(&s.execute("shape.rectangle", &json!({"x": 4, "y": 4, "width": 50, "height": 20, "parent": row})).unwrap()["id"]).unwrap();
+        let over = id_of(&s.execute("shape.ellipse", &json!({"x": 150, "y": 6, "width": 30, "height": 30, "parent": row})).unwrap()["id"]).unwrap();
+        s.execute("layout.add", &json!({"ids": [row], "direction": "horizontal"})).unwrap();
+        s.execute("node.set", &json!({"id": row, "props": {"padding": [4, 4, 4, 4]}})).unwrap();
+        // It asks for both axes, which the line would read as "stretch me and take the room left".
+        s.execute("node.set", &json!({"id": over, "props": {"absolute": true, "sizingH": "fill", "sizingV": "fill"}})).unwrap();
+        let doc = s.doc().unwrap();
+        let dart = code_for(doc, row, CodeLang::Flutter);
+        let at = |needle: &str| dart.find(needle).unwrap_or_else(|| panic!("no {needle:?}: {dart}"));
+        // Over the line, in a Stack at the parent's own box, at its own offsets.
+        let [_, _, _, _, x, y] = doc.node(over).unwrap().transform.as_coeffs();
+        assert!(
+            dart.contains(&format!("Positioned(\n        left: {},\n        top: {},\n", num(x), num(y))),
+            "the absolute child keeps its place: {dart}"
+        );
+        let stack = at("child: Stack(\n");
+        let fill = at("Positioned.fill(\n");
+        let padding = at("padding: EdgeInsets.all(4),");
+        let line = at("child: Row(\n");
+        assert!(stack < fill && fill < padding && padding < line, "the line sits in the Stack, padded: {dart}");
+        assert!(!dart[..padding].contains("padding: "), "the parent's padding would offset the absolute child: {dart}");
+        // Only the flow child is in the line, so neither `Expanded` nor a stretch comes from it.
+        let over_at = at("\n      Positioned(\n");
+        let line_part = &dart[line..over_at];
+        assert!(line_part.contains("width: 50,"), "the flow child is in the line: {dart}");
+        assert!(!line_part.contains("width: 30,"), "the absolute child left the line: {dart}");
+        assert!(!dart.contains("Expanded(\n"), "it takes no room in the line either: {dart}");
+        assert!(dart.contains("crossAxisAlignment: CrossAxisAlignment.start,"), "{dart}");
+        assert!(doc.node(flow).is_some());
+    }
+
+    #[test]
+    fn arkui_wraps_a_positioned_instance_swap_so_the_position_lands_on_a_container() {
+        let mut s = Session::new();
+        let icon = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 400, "width": 24, "height": 24, "name": "Icon"})).unwrap()["id"]).unwrap();
+        s.execute("shape.star", &json!({"x": 0, "y": 0, "width": 24, "height": 24, "parent": icon})).unwrap();
+        let heart = id_of(&s.execute("component.create", &json!({"ids": [icon]})).unwrap()["id"]).unwrap();
+        let f = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 120, "height": 40, "name": "Chip"})).unwrap()["id"]).unwrap();
+        let nested = id_of(&s.execute("instance.create", &json!({"component": heart, "x": 8, "y": 8, "parent": f})).unwrap()["id"]).unwrap();
+        let chip = id_of(&s.execute("component.create", &json!({"ids": [f]})).unwrap()["id"]).unwrap();
+        s.execute("component.addProperty", &json!({"id": chip, "name": "Icon", "type": "instanceSwap", "default": heart, "layer": nested})).unwrap();
+        let doc = s.doc().unwrap();
+        let ark = code_for(doc, chip, CodeLang::ArkUi);
+        assert!(ark.contains("Stack() {\n"), "the builder is wrapped: {ark}");
+        assert!(ark.contains("this.icon()"), "{ark}");
+        // The position follows the wrapper's closing brace, not the void builder call.
+        let lines: Vec<&str> = ark.lines().collect();
+        let at = lines.iter().position(|l| l.contains(".position({ x: 8, y: 8 })")).unwrap_or_else(|| panic!("no position: {ark}"));
+        assert_eq!(lines[at - 1].trim(), "}", "the position is on a container: {ark}");
+    }
+
+    #[test]
+    fn too_deep_placeholder_keeps_a_multiline_layer_name_in_the_comment() {
+        let mut s = Session::new();
+        let name = "deep\nevil()\r\u{2028}more()";
+        let mut parent = id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 50, "height": 50, "name": name})).unwrap()["id"]).unwrap();
+        let root = parent;
+        for _ in 0..16 {
+            parent =
+                id_of(&s.execute("frame.create", &json!({"x": 1, "y": 1, "width": 40, "height": 40, "parent": parent, "name": name})).unwrap()["id"])
+                    .unwrap();
+        }
+        let doc = s.doc().unwrap();
+        for lang in [CodeLang::SwiftUi, CodeLang::Compose, CodeLang::ArkUi] {
+            let code = code_for(doc, root, lang);
+            assert!(code.contains("// deep evil()  more() …\n"), "{code}");
+            for line in code.lines() {
+                let t = line.trim_start();
+                assert!(!t.starts_with("evil()") && !t.starts_with("more()"), "layer name leaked as code:\n{code}");
+            }
+        }
+    }
+
+    /// White, a 20% default linear gradient of black, then 50% black: bottom to top.
+    fn three_fills() -> Vec<figcraft_color::Paint> {
+        let mut gradient = figcraft_color::Paint::gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, Color::BLACK));
+        gradient.opacity = 0.2;
+        let mut top = figcraft_color::Paint::solid(Color::BLACK);
+        top.opacity = 0.5;
+        vec![figcraft_color::Paint::solid(Color::WHITE), gradient, top]
+    }
+
+    /// A 200 x `h` layer of `kind` (`frame`, `rectangle` or `ellipse`, a rectangle with corner
+    /// radius 8) with exactly `fills`.
+    fn fill_layer(s: &mut Session, kind: &str, h: f64, fills: Vec<figcraft_color::Paint>) -> NodeId {
+        let id = match kind {
+            "frame" => id_of(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": h})).unwrap()["id"]).unwrap(),
+            _ => id_of(&s.execute(&format!("shape.{kind}"), &json!({"x": 0, "y": 0, "width": 200, "height": h})).unwrap()["id"]).unwrap(),
+        };
+        if kind == "rectangle" {
+            s.execute("node.set", &json!({"id": id, "props": {"cornerRadius": 8}})).unwrap();
+        }
+        s.doc_mut().unwrap().get_mut(id).unwrap().fills = fills;
+        id
+    }
+
+    fn one_gradient(s: &mut Session, g: figcraft_color::Gradient) -> NodeId {
+        fill_layer(s, "frame", 120.0, vec![figcraft_color::Paint::gradient(g)])
+    }
+
+    const SWIFT_WHITE: &str = "Color(red: 1, green: 1, blue: 1, opacity: 1)";
+    const SWIFT_HALF: &str = "Color(red: 0, green: 0, blue: 0, opacity: 0.5)";
+    const SWIFT_GRADIENT: &str = "LinearGradient(stops: [Gradient.Stop(color: Color(red: 0, green: 0, blue: 0, opacity: 0.2), location: 0), Gradient.Stop(color: Color(red: 0, green: 0, blue: 0, opacity: 0), location: 1)], startPoint: UnitPoint(x: 0.5, y: 0), endPoint: UnitPoint(x: 0.5, y: 1))";
+
+    #[test]
+    fn swiftui_writes_every_fill_top_first() {
+        let mut s = Session::new();
+        let f = fill_layer(&mut s, "frame", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), f, CodeLang::SwiftUi);
+        let backgrounds: Vec<&str> = code.lines().map(str::trim).filter(|l| l.starts_with(".background(")).collect();
+        let want = [format!(".background({SWIFT_HALF})"), format!(".background({SWIFT_GRADIENT})"), format!(".background({SWIFT_WHITE})")];
+        assert_eq!(backgrounds, want.iter().map(String::as_str).collect::<Vec<_>>(), "{code}");
+    }
+
+    #[test]
+    fn swiftui_shapes_fill_with_the_bottom_paint_and_overlay_the_rest() {
+        let mut s = Session::new();
+        let r = fill_layer(&mut s, "rectangle", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), r, CodeLang::SwiftUi);
+        let mods: Vec<&str> = code.lines().map(str::trim).filter(|l| l.starts_with('.')).collect();
+        let want = [
+            format!(".fill({SWIFT_WHITE})"),
+            format!(".overlay(RoundedRectangle(cornerRadius: 8).fill({SWIFT_GRADIENT}))"),
+            format!(".overlay(RoundedRectangle(cornerRadius: 8).fill({SWIFT_HALF}))"),
+            ".frame(width: 200, height: 120)".to_string(),
+        ];
+        assert_eq!(mods, want.iter().map(String::as_str).collect::<Vec<_>>(), "{code}");
+        assert!(!code.contains(".background("), "{code}");
+        let mut half = figcraft_color::Paint::solid(Color::BLACK);
+        half.opacity = 0.5;
+        let e = fill_layer(&mut s, "ellipse", 120.0, vec![figcraft_color::Paint::solid(Color::WHITE), half]);
+        let code = code_for(s.doc().unwrap(), e, CodeLang::SwiftUi);
+        assert!(code.contains(&format!(".overlay(Ellipse().fill({SWIFT_HALF}))")), "{code}");
+    }
+
+    #[test]
+    fn compose_writes_every_fill_bottom_first() {
+        let mut s = Session::new();
+        let f = fill_layer(&mut s, "frame", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), f, CodeLang::Compose);
+        let want = "Modifier.size(200.dp, 120.dp).background(Color(0xFFFFFFFF), RectangleShape).background(Brush.linearGradient(0f to Color(0x33000000), 1f to Color(0x00000000), start = Offset(0f, 0f), end = Offset(0f, Float.POSITIVE_INFINITY)), RectangleShape).background(Color(0x80000000), RectangleShape)";
+        assert!(code.contains(want), "{code}");
+        let r = fill_layer(&mut s, "rectangle", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), r, CodeLang::Compose);
+        assert_eq!(code.matches(".background(").count(), 3, "{code}");
+        assert_eq!(code.matches(", RoundedCornerShape(8.dp))").count(), 3, "{code}");
+        assert!(code.contains(".background(Color(0xFFFFFFFF), RoundedCornerShape(8.dp)).background(Brush."), "{code}");
+    }
+
+    #[test]
+    fn flutter_nests_a_box_per_fill_bottom_outermost() {
+        let mut s = Session::new();
+        let f = fill_layer(&mut s, "frame", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), f, CodeLang::Flutter);
+        let want = "DecoratedBox(
+  decoration: BoxDecoration(
+    color: Color(0xFFFFFFFF),
+  ),
+  child: DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: LinearGradient(begin: Alignment(0, -1), end: Alignment(0, 1), colors: [Color(0x33000000), Color(0x00000000)], stops: [0, 1]),
+    ),
+    child: Container(
+      width: 200,
+      height: 120,
+      decoration: BoxDecoration(
+        color: Color(0x80000000),
+      ),
+    )
+  )
+)";
+        assert_eq!(code, want);
+    }
+
+    #[test]
+    fn flutter_keeps_the_shadow_under_every_fill() {
+        let mut s = Session::new();
+        let f = fill_layer(&mut s, "frame", 120.0, three_fills());
+        s.execute("effect.add", &json!({"ids": [f], "type": "dropShadow"})).unwrap();
+        let code = code_for(s.doc().unwrap(), f, CodeLang::Flutter);
+        assert_eq!(code.matches("boxShadow:").count(), 1, "{code}");
+        let (shadow, gradient) = (code.find("boxShadow:").unwrap(), code.find("gradient:").unwrap());
+        assert!(shadow < gradient, "the shadow is on the outermost box: {code}");
+        let r = fill_layer(&mut s, "rectangle", 120.0, three_fills());
+        let code = code_for(s.doc().unwrap(), r, CodeLang::Flutter);
+        assert_eq!(code.matches("borderRadius: BorderRadius.circular(8)").count(), 3, "{code}");
+    }
+
+    #[test]
+    fn native_gradients_are_written_as_gradients() {
+        use figcraft_color::{Gradient, GradientKind};
+        let mut s = Session::new();
+        let radial = one_gradient(&mut s, Gradient::default_for(GradientKind::Radial, Color::BLACK));
+        let doc = s.doc().unwrap();
+        let sw = code_for(doc, radial, CodeLang::SwiftUi);
+        assert!(sw.contains("RadialGradient(stops: ["), "{sw}");
+        assert!(sw.contains("center: UnitPoint(x: 0.5, y: 0.5), startRadius: 0, endRadius: 60)"), "{sw}");
+        let kt = code_for(doc, radial, CodeLang::Compose);
+        assert!(kt.contains(".background(Brush.radialGradient(0f to Color(0xFF000000), 1f to Color(0x00000000)), RectangleShape)"), "{kt}");
+        let dart = code_for(doc, radial, CodeLang::Flutter);
+        assert!(
+            dart.contains(
+                "gradient: RadialGradient(center: Alignment(0, 0), radius: 0.5, colors: [Color(0xFF000000), Color(0x00000000)], stops: [0, 1])"
+            ),
+            "{dart}"
+        );
+        let angular = one_gradient(&mut s, Gradient::default_for(GradientKind::Angular, Color::BLACK));
+        let doc = s.doc().unwrap();
+        assert!(code_for(doc, angular, CodeLang::SwiftUi).contains("angle: .degrees(90))"));
+        assert!(code_for(doc, angular, CodeLang::Compose).contains("Brush.sweepGradient("));
+        assert!(code_for(doc, angular, CodeLang::Flutter).contains("transform: GradientRotation(1.57))"));
+        // Compose snaps a linear gradient to one of eight directions.
+        let mut directed = |from: (f64, f64), to: (f64, f64)| {
+            let mut g = Gradient::default_for(GradientKind::Linear, Color::BLACK);
+            (g.from, g.to) = (from, to);
+            let id = one_gradient(&mut s, g);
+            code_for(s.doc().unwrap(), id, CodeLang::Compose)
+        };
+        let up = directed((0.5, 1.0), (0.5, 0.0));
+        assert!(up.contains("start = Offset(0f, Float.POSITIVE_INFINITY), end = Offset(0f, 0f)"), "{up}");
+        let right = directed((0.0, 0.5), (1.0, 0.5));
+        assert!(right.contains("end = Offset(Float.POSITIVE_INFINITY, 0f)"), "{right}");
+        let corner = directed((0.0, 0.0), (1.0, 1.0));
+        assert!(corner.contains("end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)"), "{corner}");
+        // A single stop is written twice, since a brush needs two colours.
+        let mut one = Gradient::default_for(GradientKind::Linear, Color::BLACK);
+        one.stops.truncate(1);
+        let id = one_gradient(&mut s, one);
+        let kt = code_for(s.doc().unwrap(), id, CodeLang::Compose);
+        assert_eq!(kt.matches(" to Color(").count(), 2, "{kt}");
+    }
+
+    #[test]
+    fn one_solid_fill_is_unchanged_in_native_code() {
+        let mut hidden = figcraft_color::Paint::solid(Color::BLACK);
+        hidden.visible = false;
+        let mut s = Session::new();
+        for fills in [vec![figcraft_color::Paint::solid(Color::WHITE)], vec![figcraft_color::Paint::solid(Color::WHITE), hidden]] {
+            let f = fill_layer(&mut s, "frame", 100.0, fills);
+            let doc = s.doc().unwrap();
+            let sw = code_for(doc, f, CodeLang::SwiftUi);
+            let backgrounds: Vec<&str> = sw.lines().map(str::trim).filter(|l| l.starts_with(".background(")).collect();
+            assert_eq!(backgrounds, [format!(".background({SWIFT_WHITE})")], "{sw}");
+            assert!(!sw.contains("Gradient"), "{sw}");
+            let kt = code_for(doc, f, CodeLang::Compose);
+            assert!(kt.contains("Modifier.size(200.dp, 100.dp).background(Color(0xFFFFFFFF), RectangleShape))"), "{kt}");
+            assert!(!kt.contains("Brush"), "{kt}");
+            let dart = code_for(doc, f, CodeLang::Flutter);
+            assert!(
+                dart.starts_with("Container(\n  width: 200,\n  height: 100,\n  decoration: BoxDecoration(\n    color: Color(0xFFFFFFFF),\n  ),\n)"),
+                "{dart}"
+            );
+            assert!(!dart.contains("DecoratedBox"), "{dart}");
+            assert!(code_for(doc, f, CodeLang::ArkUi).contains(".backgroundColor('#FFFFFF')"));
+        }
+    }
+}

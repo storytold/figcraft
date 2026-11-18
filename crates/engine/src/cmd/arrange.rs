@@ -1,12 +1,12 @@
 //! Arrange: align, distribute, tidy, z-order, flips, rotations and numeric transforms.
 
-use figcraft_doc::*;
+use figcraft_doc::{Document, EffectKind, LetterSpacing, LineHeight, Node, NodeId, NodeKind, Sizing, TextAutoResize, TextStyle};
 use figcraft_geom::{Affine, Point, Rect};
 use serde_json::{Value, json};
 
 use super::edit::{roots, z_sorted};
 use super::{CommandSpec, ok};
-use crate::params::*;
+use crate::params::{boolean, get, num, num_or, req_id, req_num, req_targets, string};
 use crate::{Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -19,7 +19,21 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("align.bottom", "Align bottom", "{ids?}", true, |s, p| align(s, p, Al::Bottom)),
         spec!("distribute.horizontal", "Distribute horizontal spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, true)),
         spec!("distribute.vertical", "Distribute vertical spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, false)),
+        spec!(
+            "arrange.spacing",
+            "Spacing",
+            "{ids?, horizontal?, vertical?, fromGesture?} (page units; fromGesture uses the interaction snapshot)",
+            true,
+            spacing
+        ),
         spec!("arrange.tidy", "Tidy up", "{ids?, spacing?}", true, tidy),
+        spec!(
+            "arrange.reorder",
+            "Reorder selection",
+            "{ids?, source, target, swap?, fromGesture?} (insert at target's visual slot; no hierarchy changes)",
+            true,
+            reorder
+        ),
         spec!("arrange.packH", "Pack horizontal", "{ids?}", true, |s, p| pack(s, p, true)),
         spec!("arrange.packV", "Pack vertical", "{ids?}", true, |s, p| pack(s, p, false)),
         spec!("arrange.roundToPixels", "Round to pixels", "{ids?}", true, round_px),
@@ -150,12 +164,27 @@ pub fn can_align(doc: &Document, ids: &[NodeId]) -> bool {
     align_target(doc, &roots(doc, ids)).is_some()
 }
 
+/// Whether `ids` is one layer that its auto layout frame places: Figma greys out Align for it,
+/// since the frame decides where it goes (measured in Figma's web app, 2026-11-12).
+pub fn align_blocked_by_auto_layout(doc: &Document, ids: &[NodeId]) -> bool {
+    matches!(roots(doc, ids).as_slice(), [id] if in_auto_layout_flow(doc, *id))
+}
+
+/// Whether the layer sits in an auto layout frame and takes part in its flow (not absolutely positioned).
+fn in_auto_layout_flow(doc: &Document, id: NodeId) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+}
+
 /// What `roots` align to: one layer to its parent frame, several to their combined bounds.
 fn align_target(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
     match roots {
         [] => None,
         [id] => {
             let parent = doc.node(*id)?.parent.filter(|pp| !doc.node(*pp).is_some_and(Node::is_page))?;
+            if in_auto_layout_flow(doc, *id) {
+                return None;
+            }
             Some(doc.world_bounds(parent).unwrap_or_default())
         }
         _ => Some(doc.bounds_of(roots).unwrap_or_default()),
@@ -192,8 +221,9 @@ fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
     let mut items: Vec<(NodeId, Rect)> = ids.iter().filter_map(|i| doc.world_bounds(*i).map(|b| (*i, b))).collect();
     items.sort_by(|a, b| if horizontal { a.1.x0.total_cmp(&b.1.x0) } else { a.1.y0.total_cmp(&b.1.y0) });
     let total: f64 = items.iter().map(|(_, b)| if horizontal { b.width() } else { b.height() }).sum();
-    let (Some(first), Some(last)) = (items.first(), items.last()) else { return ok() };
-    let span = if horizontal { last.1.x1 - first.1.x0 } else { last.1.y1 - first.1.y0 };
+    let Some(first) = items.first() else { return ok() };
+    let end = items.iter().map(|(_, b)| if horizontal { b.x1 } else { b.y1 }).fold(f64::MIN, f64::max);
+    let span = if horizontal { end - first.1.x0 } else { end - first.1.y0 };
     let gap = num(p, "spacing").unwrap_or((span - total) / (items.len().saturating_sub(1).max(1)) as f64);
     let mut pos = if horizontal { first.1.x0 } else { first.1.y0 };
     for (i, b) in items.clone() {
@@ -208,53 +238,25 @@ fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
     ok()
 }
 
-/// Tidy up: snap the selection into a grid of rows/columns with even spacing.
+/// Tidy up: even the gaps of a row, a column or a grid, keeping the order and sizes (see
+/// `selection::tidy`). Nothing moves, and no undo step is added, when it is unavailable.
 fn tidy(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("arrange.tidy", s, p)?;
+    let spacing = num(p, "spacing");
+    if spacing.is_some_and(|v| !v.is_finite() || v.abs() > 1_000_000.0) {
+        return Err(bad("arrange.tidy", "spacing out of range"));
+    }
+    let snap = s.ds()?.view.snap_pixel;
+    let moves = crate::tidy::tidy_moves(s.doc()?, &ids, spacing, snap);
+    if moves.is_empty() {
+        return ok();
+    }
+    if moves.iter().any(|(_, dx, dy)| !dx.is_finite() || !dy.is_finite()) {
+        return Err(bad("arrange.tidy", "non-finite result"));
+    }
     let doc = s.doc_mut()?;
-    let ids = roots(doc, &ids);
-    let mut items: Vec<(NodeId, Rect)> = ids.iter().filter_map(|i| doc.world_bounds(*i).map(|b| (*i, b))).collect();
-    if items.len() < 2 {
-        return ok();
-    }
-    // Group into rows by vertical centre overlap.
-    items.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0));
-    let mut rows: Vec<Vec<(NodeId, Rect)>> = Vec::new();
-    for it in items {
-        match rows.last_mut() {
-            Some(row) if row.iter().any(|(_, b)| it.1.center().y < b.y1 && it.1.center().y > b.y0) => row.push(it),
-            _ => rows.push(vec![it]),
-        }
-    }
-    let all: Vec<Rect> = rows.iter().flatten().map(|(_, b)| *b).collect();
-    let (Some(origin), maxw, maxh) = (
-        all.iter().copied().reduce(|a, b| a.union(b)),
-        all.iter().map(Rect::width).fold(0.0, f64::max),
-        all.iter().map(Rect::height).fold(0.0, f64::max),
-    ) else {
-        return ok();
-    };
-    let gap = num(p, "spacing").unwrap_or_else(|| {
-        // Keep the average existing horizontal gap (min 10).
-        10f64.max(
-            rows.iter()
-                .filter(|r| r.len() > 1)
-                .map(|r| {
-                    (r.iter().map(|(_, b)| b.x1).fold(f64::MIN, f64::max)
-                        - r.iter().map(|(_, b)| b.x0).fold(f64::MAX, f64::min)
-                        - r.iter().map(|(_, b)| b.width()).sum::<f64>())
-                        / (r.len() - 1) as f64
-                })
-                .fold(0.0, f64::max),
-        )
-    });
-    for (ri, row) in rows.iter_mut().enumerate() {
-        row.sort_by(|a, b| a.1.x0.total_cmp(&b.1.x0));
-        for (ci, (id, b)) in row.iter().enumerate() {
-            let x = origin.x0 + ci as f64 * (maxw + gap);
-            let y = origin.y0 + ri as f64 * (maxh + gap);
-            move_world(doc, *id, x - b.x0, y - b.y0)?;
-        }
+    for (id, dx, dy) in moves {
+        move_world(doc, id, dx, dy)?;
     }
     ok()
 }
@@ -390,6 +392,11 @@ fn turn_pivot(s: &Session, ids: &[NodeId]) -> Result<Option<Point>> {
 pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     let k = if k.is_finite() && k > 0.0 { k } else { return Ok(()) };
     let sub = doc.subtree(id);
+    // The layers below `id` scale whatever their constraints, so where they are layers of an
+    // instance their new size and place are overrides. The edit's own diff takes geometry that
+    // changed with an ancestor's size for what constraints give, so the next rebuild of the
+    // instance would put them back at their main's size (#922).
+    let in_instance: Vec<bool> = sub.iter().enumerate().map(|(depth, i)| depth > 0 && crate::components::inside_instance(doc, *i)).collect();
     let tiles = |paints: &mut Vec<figcraft_color::Paint>| {
         for p in paints {
             if let figcraft_color::PaintKind::Image(img) = &mut p.kind
@@ -401,6 +408,7 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     };
     for (depth, i) in sub.iter().enumerate() {
         let n = doc.get_mut(*i)?;
+        let (w0, h0, t0) = (n.width, n.height, n.transform);
         tiles(&mut n.fills);
         tiles(&mut n.strokes);
         let cl = &mut n.child_layout;
@@ -444,7 +452,8 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
                 }
                 EffectKind::Glass(g) => {
                     g.depth *= k;
-                    g.frost *= k;
+                    // From the frost it draws with (an older file's past 100 draws at 100).
+                    g.frost = (g.sanitized().frost * k).min(figcraft_doc::Glass::MAX_FROST);
                 }
             }
         }
@@ -480,15 +489,29 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
             t.paragraph_spacing *= k;
             t.paragraph_indent *= k;
             t.list_spacing *= k;
+            if let Some(tp) = &mut t.path {
+                tp.scale(k, k);
+            }
         }
         if let NodeKind::Vector { network } = &mut n.kind {
             network.scale(k, k);
+            for v in &mut network.vertices {
+                v.radius *= k;
+            }
         }
         n.width *= k;
         n.height *= k;
         if depth > 0 {
             let c = n.transform.as_coeffs();
             n.transform = Affine::new([c[0], c[1], c[2], c[3], c[4] * k, c[5] * k]);
+        }
+        if in_instance.get(depth).copied().unwrap_or(false) {
+            if n.width != w0 || n.height != h0 {
+                n.overrides.insert("size".into());
+            }
+            if n.transform != t0 {
+                n.overrides.insert("position".into());
+            }
         }
     }
     Ok(())
@@ -521,6 +544,7 @@ pub(crate) fn resize_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let (col, row) = string(p, "anchor").and_then(|a| crate::tools::anchor_of(&a)).unwrap_or((0, 0));
     let (ax, ay) = (f64::from(col) / 2.0, f64::from(row) / 2.0);
     let doc = s.doc_mut()?;
+    let before = super::styles::bound_before(doc, &ids);
     for i in ids {
         let n = doc.get(i)?;
         let (ow, oh) = (n.width, n.height);
@@ -533,16 +557,114 @@ pub(crate) fn resize_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         let n = doc.get_mut(i)?;
         let after = n.transform * Point::new(w * ax, h * ay);
         n.transform = Affine::translate(before - after) * n.transform;
+        if let NodeKind::Text(t) = &mut n.kind {
+            if num(p, "height").is_some() {
+                t.fix_size(num(p, "width").is_some(), true);
+            } else if t.auto_resize != TextAutoResize::Truncate {
+                t.auto_resize = TextAutoResize::Height;
+            }
+        }
+        // A side given is fixed, or fills its auto layout parent when it is the full space there.
         if num(p, "width").is_some() {
-            n.child_layout.sizing_h = Sizing::Fixed;
+            super::props::fix_axis(doc, i, true)?;
         }
         if num(p, "height").is_some() {
-            n.child_layout.sizing_v = Sizing::Fixed;
-        }
-        if let NodeKind::Text(t) = &mut n.kind {
-            t.auto_resize = if num(p, "height").is_some() { TextAutoResize::None } else { TextAutoResize::Height };
+            super::props::fix_axis(doc, i, false)?;
         }
         super::props::restore_worlds(doc, &kept)?;
+    }
+    super::styles::detach_edited(doc, &before);
+    ok()
+}
+
+/// Reorder visual slots without rebuilding or reparenting layers.
+fn reorder(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "arrange.reorder";
+    let ids = req_targets(cmd, s, p)?;
+    let source = req_id(cmd, p, "source")?;
+    let target = req_id(cmd, p, "target")?;
+    let ds = s.ds()?;
+    let base = ds.interaction.as_ref().filter(|_| boolean(p, "fromGesture") == Some(true)).map(|i| i.doc.clone()).unwrap_or_else(|| ds.doc.clone());
+    let layout =
+        crate::selection_reorder::ReorderLayout::new(&base, &ids).ok_or_else(|| bad(cmd, "select a regular row, column or complete aligned grid"))?;
+    let positions = layout
+        .positions(source, target, boolean(p, "swap") == Some(true))
+        .ok_or_else(|| bad(cmd, "source and target must belong to the selection"))?;
+    // Validate every delta before editing; absolute targets always come from the gesture's
+    // snapshot so crossing several slots and returning to the start does not accumulate edits.
+    let doc = s.doc()?;
+    let mut moves = Vec::new();
+    for (id, at) in positions {
+        let now = doc.world_bounds(id).ok_or_else(|| bad(cmd, "layer is no longer available"))?;
+        let (dx, dy) = (at.x - now.x0, at.y - now.y0);
+        if !dx.is_finite() || !dy.is_finite() {
+            return Err(bad(cmd, "non-finite reorder result"));
+        }
+        if dx.abs() > 1e-9 || dy.abs() > 1e-9 {
+            let node = doc.get(id)?;
+            let parent = node.parent.map(|p| doc.world_transform(p)).unwrap_or(Affine::IDENTITY);
+            let transform = parent.inverse() * Affine::translate((dx, dy)) * parent * node.transform;
+            if !transform.as_coeffs().iter().all(|v| v.is_finite()) {
+                return Err(bad(cmd, "non-finite local transform"));
+            }
+            moves.push((id, dx, dy));
+        }
+    }
+    if !moves.is_empty() {
+        let doc = s.doc_mut()?;
+        for (id, dx, dy) in moves {
+            move_world(doc, id, dx, dy)?;
+        }
+    }
+    ok()
+}
+
+/// Set the distances between smart-selection tracks without rebuilding/reparenting the layers.
+fn spacing(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = req_targets("arrange.spacing", s, p)?;
+    // A scrub is absolute from the interaction snapshot, even if tracks overlap or cross.
+    let ds = s.ds()?;
+    let base = ds.interaction.as_ref().filter(|_| boolean(p, "fromGesture") == Some(true)).map(|i| i.doc.clone()).unwrap_or_else(|| ds.doc.clone());
+    let layout = crate::selection_spacing::selection_spacing(&base, &ids);
+    let mut offsets = std::collections::BTreeMap::<NodeId, (Option<f64>, Option<f64>)>::new();
+    let mut any = false;
+    for (key, axis, vertical) in [("horizontal", &layout.horizontal, false), ("vertical", &layout.vertical, true)] {
+        if get(p, key).is_none() {
+            continue;
+        }
+        let value = req_num("arrange.spacing", p, key)?;
+        if value.abs() > 1_000_000.0 {
+            return Err(bad("arrange.spacing", "spacing out of range"));
+        }
+        let axis = axis.as_ref().ok_or_else(|| bad("arrange.spacing", "selection has no spacing on this axis"))?;
+        any = true;
+        for (id, delta) in axis.offsets(value) {
+            if !delta.is_finite() {
+                return Err(bad("arrange.spacing", "non-finite spacing result"));
+            }
+            let pair = offsets.entry(id).or_default();
+            if vertical {
+                pair.1 = Some(delta);
+            } else {
+                pair.0 = Some(delta);
+            }
+        }
+    }
+    if !any {
+        return Err(bad("arrange.spacing", "pass horizontal or vertical spacing"));
+    }
+    let doc = s.doc_mut()?;
+    let mut moves = Vec::new();
+    for (id, (dx, dy)) in offsets {
+        let (Some(before), Some(now)) = (base.world_bounds(id), doc.world_bounds(id)) else { continue };
+        let (dx, dy) = (dx.map_or(0.0, |d| before.x0 + d - now.x0), dy.map_or(0.0, |d| before.y0 + d - now.y0));
+        if !dx.is_finite() || !dy.is_finite() {
+            return Err(bad("arrange.spacing", "non-finite spacing result"));
+        }
+        moves.push((id, dx, dy));
+    }
+    for (id, dx, dy) in moves {
+        move_world(doc, id, dx, dy)?;
     }
     ok()
 }

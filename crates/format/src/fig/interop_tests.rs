@@ -403,10 +403,10 @@ fn the_schema_numbers_what_the_format_numbers() {
 
 #[test]
 fn schema_text_takes_numbers_and_refuses_bad_ones() {
-    let s = Schema::parse("enum E A=3 B C=9\nmessage M uint a=7, E b, string c=2").unwrap();
+    let s = Schema::parse("enum E A=3 B C=9\nmessage M uint a=7, E b, string c=5").unwrap();
     let values = |i: usize| s.defs[i].fields.iter().map(|f| (f.name.as_str(), f.value)).collect::<Vec<_>>();
     assert_eq!(values(0), [("A", 3), ("B", 1), ("C", 9)]);
-    assert_eq!(values(1), [("a", 7), ("b", 2), ("c", 2)]);
+    assert_eq!(values(1), [("a", 7), ("b", 2), ("c", 5)]);
     for bad in ["enum E A=", "enum E A=x", "enum E A=-1", "message M uint a=1.5", "message M uint a=99999999999", "enum E =", "message M uint ="] {
         assert!(Schema::parse(bad).is_err() || bad.ends_with('='), "{bad}");
     }
@@ -448,4 +448,35 @@ fn local_samples_agree_with_the_written_schema() {
             }
         }
     }
+}
+
+/// An ellipse drawn the other way round (a sweep of −2π) is whole: its inside stroke is written
+/// as the same ring a forward one's is, path and winding rule alike.
+#[test]
+fn a_whole_ellipse_drawn_backwards_carries_its_stroke_ring() {
+    let ring = |sweep: f64| {
+        let mut doc = sample();
+        let ids: Vec<NodeId> = doc.ids().collect();
+        for id in ids {
+            if let Some(n) = doc.node_mut(id)
+                && let NodeKind::Ellipse { sweep: s, .. } = &mut n.kind
+            {
+                *s = sweep;
+            }
+        }
+        let out = std::cell::RefCell::new(None);
+        with_changes(&doc, |of, msg| {
+            let blobs = msg.get("blobs").unwrap().list();
+            let geometry = of("ELLIPSE").get("strokeGeometry").map(|g| {
+                let p = g.list().first().unwrap().clone();
+                let bytes = blobs.get(num(&p, "commandsBlob") as usize).and_then(|b| b.get("bytes")).and_then(Kv::bytes).unwrap();
+                (name(&p, "windingRule").to_string(), bytes.to_vec())
+            });
+            *out.borrow_mut() = geometry;
+        });
+        out.into_inner()
+    };
+    let forwards = ring(std::f64::consts::TAU).expect("a forward ellipse writes its stroke ring");
+    assert_eq!(forwards.0, "ODD");
+    assert_eq!(ring(-std::f64::consts::TAU), Some(forwards));
 }

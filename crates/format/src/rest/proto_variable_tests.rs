@@ -73,7 +73,7 @@ fn file_json() -> Value {
         {"trigger": {"type": "AFTER_TIMEOUT", "timeout": 800}, "actions": [node_action("1:30", "OVERLAY", json!({"type": "MOVE_IN", "direction": "RIGHT",
             "duration": 250, "matchLayers": false, "easing": {"type": "CUSTOM_SPRING", "easingFunctionSpring": {"mass": 1, "stiffness": 200, "damping": 20}}}))]},
         {"trigger": {"type": "ON_KEY_DOWN", "device": "KEYBOARD", "keyCodes": [16, 65]}, "actions": [{"type": "BACK"}]},
-        {"trigger": {"type": "MOUSE_ENTER", "delay": 0}, "actions": [{"type": "URL", "url": "https://example.com"}]},
+        {"trigger": {"type": "MOUSE_ENTER", "delay": 0}, "actions": [{"type": "URL", "url": "https://example.com"}, {"type": "URL", "url": "https://example.org", "openInNewTab": false}]},
         {"trigger": {"type": "ON_HOVER"}, "actions": [{"type": "SET_VARIABLE", "variableId": FLAG, "variableValue": {"type": "BOOLEAN", "value": false}}]},
         {"trigger": {"type": "ON_PRESS"}, "actions": [{"type": "CONDITIONAL", "conditionalBlocks": [{"actions": [{"type": "CLOSE"}]}]}]},
         {"trigger": {"type": "ON_DRAG"}, "actions": [{"type": "SET_VARIABLE_MODE", "variableCollectionId": THEME, "variableModeId": "1:0"}]},
@@ -209,8 +209,14 @@ fn embedded_variables_match_separate_ones() {
 #[test]
 fn interactions_triggers_actions_and_transitions() {
     let (doc, warnings) = import_with(&file_json(), Some(&variables_json()), &no_images).unwrap();
-    let id = |n: &str| named(&doc, n).id;
-    let button = named(&doc, "Button");
+    assert_interactions(&doc, &warnings);
+    assert_legacy_transition(&doc);
+    assert_interactions_without_variables();
+}
+
+fn assert_interactions(doc: &Document, warnings: &[String]) {
+    let id = |n: &str| named(doc, n).id;
+    let button = named(doc, "Button");
     let its = &button.interactions;
     assert_eq!(its.len(), 8, "{its:#?}");
 
@@ -229,7 +235,13 @@ fn interactions_triggers_actions_and_transitions() {
     assert_eq!(its[2].trigger, Trigger::KeyPress { key: "Shift+A".into() }, "modifier keys make a combination");
     assert_eq!(its[2].actions, [Action::Back]);
     assert_eq!(its[3].trigger, Trigger::MouseEnter);
-    assert_eq!(its[3].actions, [Action::OpenUrl { url: "https://example.com".into() }]);
+    let in_place = Action::OpenUrl { url: "https://example.org".into(), new_tab: false };
+    assert_eq!(its[3].actions, [Action::OpenUrl { url: "https://example.com".into(), new_tab: true }, in_place.clone()]);
+    // Saved only when off, so files from before the option open with links in a new tab.
+    assert_eq!(serde_json::to_value(&its[3].actions[0]).unwrap(), json!({"type": "openUrl", "url": "https://example.com"}));
+    let saved = serde_json::to_value(&in_place).unwrap();
+    assert_eq!(saved["new_tab"], json!(false));
+    assert_eq!(serde_json::from_value::<Action>(saved).unwrap(), in_place);
     assert_eq!(its[4].trigger, Trigger::OnHover);
     assert_eq!(its[4].actions, [Action::SetVariable { variable: FLAG.into(), value: json!(false), expr: None }]);
     assert_eq!((its[4].transition, its[4].duration_ms), (Transition::Instant, 300));
@@ -239,18 +251,22 @@ fn interactions_triggers_actions_and_transitions() {
     assert_eq!(its[7].trigger, Trigger::MouseUp);
     assert_eq!(its[7].actions, [Action::ScrollTo { dest: id("Home"), offset: [0.0, 0.0] }], "unresolved destinations are dropped");
 
-    // The legacy single transition.
-    let details = named(&doc, "Details");
+    assert!(!has(warnings, "modifier keys"), "{warnings:?}");
+    for w in ["video triggers", "without a destination"] {
+        assert!(has(warnings, w), "{w}: {warnings:?}");
+    }
+}
+
+fn assert_legacy_transition(doc: &Document) {
+    let id = |n: &str| named(doc, n).id;
+    let details = named(doc, "Details");
     assert_eq!(details.interactions.len(), 1);
     let legacy = &details.interactions[0];
     assert_eq!((&legacy.trigger, &legacy.actions[..]), (&Trigger::OnClick, &[Action::Navigate { dest: id("Home"), preserve_scroll: false }][..]));
     assert_eq!((legacy.transition, legacy.duration_ms, legacy.easing), (Transition::Dissolve, 200, Easing::EaseIn));
+}
 
-    assert!(!has(&warnings, "modifier keys"), "{warnings:?}");
-    for w in ["video triggers", "without a destination"] {
-        assert!(has(&warnings, w), "{w}: {warnings:?}");
-    }
-    // Without variables, set-variable actions have nothing to set.
+fn assert_interactions_without_variables() {
     let (doc, warnings) = import(&file_json(), &no_images).unwrap();
     assert_eq!(named(&doc, "Button").interactions.len(), 6);
     assert!(has(&warnings, "set-variable actions") && has(&warnings, "set-variable-mode actions"), "{warnings:?}");

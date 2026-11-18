@@ -195,3 +195,49 @@ fn names_that_look_like_literals_read_back_as_variables() {
     assert_eq!(parse("1"), n(1.0));
     assert_eq!(parse("\"q\""), Expr::Value(VariableValue::String("q".into())));
 }
+
+#[test]
+fn not_of_a_variable_reads_back_when_a_name_starts_with_not() {
+    use ExprOp::*;
+    let mut v = vars();
+    let b = v.variables.iter().find(|x| x.id == "b").unwrap().clone();
+    for (id, name) in [("done", "done"), ("nd", "not done")] {
+        let mut x = b.clone();
+        x.id = id.into();
+        x.name = name.into();
+        v.variables.push(x);
+    }
+    let not_done = Expr::op(Not, vec![Expr::var("done")]);
+    for e in [
+        not_done.clone(),
+        Expr::op(And, vec![Expr::var("b"), not_done.clone()]),
+        Expr::op(Equals, vec![not_done.clone(), Expr::Value(VariableValue::Boolean(true))]),
+        Expr::op(Not, vec![not_done.clone()]),
+    ] {
+        let shown = e.display(&v);
+        assert_eq!(Expr::parse(&shown, &v), Ok(e.clone()), "shown as {shown:?}");
+    }
+    assert_eq!(Expr::op(Not, vec![Expr::var("b")]).display(&vars()), "not b-name", "plain names stay bare");
+}
+
+#[test]
+fn literal_true_false_survive_variables_named_true_false() {
+    use ExprOp::*;
+    let lit = |x: bool| Expr::Value(VariableValue::Boolean(x));
+    for name in ["true", "false", "TRUE"] {
+        let mut v = vars();
+        if let Some(var) = v.variables.iter_mut().find(|x| x.id == "b") {
+            var.name = name.into();
+        }
+        for e in [
+            Expr::op(Equals, vec![Expr::var("b"), lit(true)]),
+            Expr::op(Equals, vec![Expr::var("b"), lit(false)]),
+            Expr::op(Not, vec![lit(false)]),
+            Expr::var("b"),
+        ] {
+            let shown = e.display(&v);
+            assert_eq!(Expr::parse(&shown, &v), Ok(e.clone()), "{name:?} shown as {shown:?}");
+        }
+        assert_eq!(Expr::parse(&format!("{{{name}}}"), &v), Ok(Expr::var("b")));
+    }
+}

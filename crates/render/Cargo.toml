@@ -12,6 +12,7 @@ workspace = true
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }
+figcraft-format = { workspace = true }
 figcraft-text = { workspace = true }
 figcraft-pathops = { workspace = true }
 tiny-skia = { workspace = true }

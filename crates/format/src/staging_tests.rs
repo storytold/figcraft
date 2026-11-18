@@ -123,3 +123,17 @@ fn a_failed_write_leaves_the_destination_alone_and_cleans_up() {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_replaced_file_keeps_its_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = dir("mode");
+    let path = d.join("a.figcraft");
+    std::fs::write(&path, b"old").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    write_file_atomic(&path, b"new").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    let _ = std::fs::remove_dir_all(&d);
+}

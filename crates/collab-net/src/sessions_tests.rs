@@ -89,6 +89,9 @@ fn rect(s: &mut Session) -> u64 {
     s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 40, "height": 30})).unwrap()["id"].as_u64().unwrap()
 }
 
+/// Asserts two files are hosted and joined independently: each has its own port, session and
+/// edits, presence stays in its file's session, and closing one file's session leaves the
+/// other live.
 #[test]
 fn two_files_are_hosted_and_joined_independently() {
     let mut host = session("Hana");
@@ -123,8 +126,14 @@ fn two_files_are_hosted_and_joined_independently() {
     host.execute("doc.switch", &json!({"index": 0})).unwrap();
     assert_eq!(host.live_summary()["link"], a["link"]);
     assert_eq!(host.live_summary()["document"], 0);
+    // Each joined file opens in front when its welcome arrives, and the two joins race: the file
+    // whose welcome came last is in front.
+    assert_eq!(guest.ds().unwrap().uid, guest.docs[2].uid, "the file that arrived last is in front");
+    // Concurrent joins may complete in either order. Put B in front explicitly so the following
+    // assertions exercise A's background session independent of network timing.
+    guest.execute("doc.switch", &json!({"index": guest.docs.iter().position(|d| d.uid == gb).unwrap()})).unwrap();
+    assert_eq!(guest.ds().unwrap().uid, gb, "B is in front while A receives edits");
     // An edit in A reaches the guest's copy of A only, while B is in front at the guest.
-    assert_eq!(guest.ds().unwrap().uid, gb, "the file joined last is in front");
     let in_a = rect(&mut host);
     host.execute("doc.switch", &json!({"index": 1})).unwrap();
     let in_b = rect(&mut host);
@@ -149,8 +158,8 @@ fn two_files_are_hosted_and_joined_independently() {
     assert!(host.live_of(hb).presence.get(&ada(&host, hb)).is_none_or(|p| p.cursor.is_none()), "no cursor in the file that isn't in front");
     // The host closes B: its session ends for everyone, A's goes on.
     host.execute("file.close", &json!({"index": 1, "force": true})).unwrap();
-    pump(&mut [&mut host, &mut guest], "B's session ending", |s| s[0].live.iter().count() == 1 && s[1].live.iter().count() == 1);
-    assert_eq!(guest.live_of(gb).status, Status::Off);
+    pump(&mut [&mut host, &mut guest], "B's session ending", |s| s[0].live.iter().count() == 1 && s[1].live_of(gb).rejoinable());
+    assert!(guest.live_of(gb).disconnected(), "the guest's tab says so");
     assert_eq!(guest.docs.len(), 3, "the guest keeps its copy of B");
     assert_eq!((host.live_of(ha).status.clone(), host.live_of(ha).peers.len()), (Status::Live, 1));
     assert_eq!(guest.live_of(ga).status, Status::Live);

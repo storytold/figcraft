@@ -4,8 +4,10 @@
 //! it, shadows cut into it, or blurred, maps exactly onto drop shadows, inner shadows and a layer
 //! blur: `feDropShadow`; `feOffset` + `feGaussianBlur` + `feFlood` + `feComposite` + `feMerge`;
 //! the colour-matrix form (alpha → offset → blur → matrix tint → blend), with `feMorphology` as
-//! spread and arithmetic or `out` composites for inner shadows. Anything else is reported back as
-//! unsupported and the layer is drawn without it.
+//! spread and arithmetic or `out` composites for inner shadows. A shadow made from the blurred
+//! layer's tinted alpha, and cut out by that layer (what our exports write, as the canvas casts
+//! drop shadows from what the layer blurs leave), is a drop shadow of that blurred layer. Anything
+//! else is reported back as unsupported and the layer is drawn without it.
 
 use std::collections::HashMap;
 
@@ -32,11 +34,14 @@ struct Sh {
     /// Everything but the shadow (a flood with the shadow cut out): becomes an inner shadow once
     /// it's cut to the layer.
     inverted: bool,
+    /// Cast from the layer blurred by this sigma rather than from its alpha (our exports: a drop
+    /// shadow is cast from the layer its layer blurs leave).
+    cast: f64,
 }
 
 impl Sh {
     fn alpha() -> Self {
-        Sh { dx: 0.0, dy: 0.0, sigma: 0.0, spread: 0.0, color: Color::BLACK, knockout: false, inner: false, inverted: false }
+        Sh { dx: 0.0, dy: 0.0, sigma: 0.0, spread: 0.0, color: Color::BLACK, knockout: false, inner: false, inverted: false, cast: 0.0 }
     }
     /// Still exactly the layer's alpha.
     fn is_plain(&self) -> bool {
@@ -65,10 +70,15 @@ impl Img {
     }
 }
 
-fn stack(bottom: Img, top: Img) -> Img {
+/// The most layers a stack may hold. Results that name earlier results can double a stack at each
+/// of up to 64 primitives; real shadow chains hold a handful of layers, and a longer stack isn't
+/// an effect list anyone wrote.
+const MAX_STACK: usize = 64;
+
+fn stack(bottom: Img, top: Img) -> Option<Img> {
     let mut v = bottom.into_layers();
     v.extend(top.into_layers());
-    Img::Stack(v)
+    (v.len() <= MAX_STACK).then_some(Img::Stack(v))
 }
 
 /// The effects `filters` amount to on a layer whose user space maps to the page by `world`; `None`
@@ -132,6 +142,8 @@ fn primitive(k: &Kind, get: &dyn Fn(&Input) -> Option<Img>) -> Option<Img> {
             let s = match get(cm.input())? {
                 Img::Shadow(s) => s,
                 Img::Layer(0.0) => Sh::alpha(),
+                // A tint of the blurred layer: a shadow cast from it.
+                Img::Layer(b) => Sh { cast: b, ..Sh::alpha() },
                 _ => return None,
             };
             tint(v, s)?
@@ -141,13 +153,16 @@ fn primitive(k: &Kind, get: &dyn Fn(&Input) -> Option<Img>) -> Option<Img> {
             let mut v = Vec::new();
             for i in m.inputs() {
                 v.extend(get(i)?.into_layers());
+                if v.len() > MAX_STACK {
+                    return None;
+                }
             }
             Img::Stack(v)
         }
         Kind::Blend(b) => {
             let (top, bottom) = (get(b.input1())?, get(b.input2())?);
             match b.mode() {
-                usvg::BlendMode::Normal => stack(bottom, top),
+                usvg::BlendMode::Normal => stack(bottom, top)?,
                 _ => return None,
             }
         }
@@ -155,7 +170,7 @@ fn primitive(k: &Kind, get: &dyn Fn(&Input) -> Option<Img>) -> Option<Img> {
             let sigma = (f64::from(d.std_dev_x().get()) + f64::from(d.std_dev_y().get())) / 2.0;
             let s = Sh { dx: f64::from(d.dx()), dy: f64::from(d.dy()), sigma, color: color(d.color(), d.opacity().get()), ..Sh::alpha() };
             match get(d.input())? {
-                Img::Layer(b) => stack(Img::Shadow(s), Img::Layer(b)),
+                Img::Layer(b) => stack(Img::Shadow(s), Img::Layer(b))?,
                 _ => return None,
             }
         }
@@ -183,7 +198,7 @@ fn tint(v: &[f32], s: Sh) -> Option<Img> {
 fn composite(a: Img, b: Img, op: CompositeOperator) -> Option<Img> {
     let tinted = |s: Sh, c: Color| Sh { color: Color::new(c.r, c.g, c.b, (c.a * s.color.a).clamp(0.0, 1.0)), ..s };
     Some(match (op, a, b) {
-        (CompositeOperator::Over, a, b) => stack(b, a),
+        (CompositeOperator::Over, a, b) => stack(b, a)?,
         (CompositeOperator::In, Img::Flood(c), Img::Shadow(s)) | (CompositeOperator::In, Img::Shadow(s), Img::Flood(c)) => Img::Shadow(tinted(s, c)),
         // A flood cut to everything but a shadow, then cut to the layer: an inner shadow.
         (CompositeOperator::Out, Img::Flood(c), Img::Shadow(s)) if !s.inner && !s.inverted => Img::Shadow(Sh { inverted: true, ..tinted(s, c) }),
@@ -191,6 +206,10 @@ fn composite(a: Img, b: Img, op: CompositeOperator) -> Option<Img> {
             Img::Shadow(Sh { inverted: false, inner: true, ..s })
         }
         (CompositeOperator::Out, Img::Shadow(s), Img::Shadow(l)) if l.is_plain() && !s.inner && !s.inverted => {
+            Img::Shadow(Sh { knockout: true, ..s })
+        }
+        // Cut out where the blurred layer it was cast from is.
+        (CompositeOperator::Out, Img::Shadow(s), Img::Layer(b)) if b > 0.0 && b == s.cast && !s.inner && !s.inverted => {
             Img::Shadow(Sh { knockout: true, ..s })
         }
         // layer − shadow: inside the layer where the offset copy isn't.
@@ -211,6 +230,14 @@ fn to_effects(img: Img, world: Affine) -> Option<Vec<Effect>> {
         return None;
     }
     let k = length_scale(world);
+    // A shadow cast from a blurred layer is one of its drop shadows only when that is the layer drawn.
+    let drawn = match layers.get(at) {
+        Some(Img::Layer(b)) => *b,
+        _ => 0.0,
+    };
+    if layers.iter().any(|l| matches!(l, Img::Shadow(s) if s.cast > 0.0 && (s.cast != drawn || s.inner || s.inverted))) {
+        return None;
+    }
     let mut out = Vec::new();
     for (i, l) in layers.iter().enumerate() {
         match l {

@@ -29,8 +29,10 @@ const MAX_RASTER_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RASTER_ENTRIES: usize = 8192;
 /// COLR layer lists kept per face (24 bytes a layer, so a count is enough).
 const MAX_LAYERS: usize = 4096;
+/// Most COLR layers read for one glyph.
+const MAX_COLR_LAYERS: usize = 256;
 /// Widest and tallest PNG strike decoded (strikes are at most a few hundred pixels).
-const MAX_PNG_SIDE: u32 = 4096;
+const MAX_PNG_SIDE: u32 = 1024;
 /// Largest colour raster per em (device pixels). Past this the renderer scales one up instead.
 pub const MAX_PX_PER_EM: f64 = 512.0;
 
@@ -171,6 +173,9 @@ impl Face {
         let colors = palette.as_ref().map(|p| p.colors()).unwrap_or(&[]);
         let mut out = Vec::new();
         for index in range {
+            if out.len() >= MAX_COLR_LAYERS {
+                break;
+            }
             let (layer, color_index) = colr.v0_layer(index)?;
             let rgba = colors.get(usize::from(color_index)).map(|c| [c.red(), c.green(), c.blue(), c.alpha()]).unwrap_or([0, 0, 0, 255]);
             out.push(ColorLayer { gid: layer.to_u32(), rgba });
@@ -230,7 +235,11 @@ fn decode_png(png: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     if w == 0 || h == 0 || w > MAX_PNG_SIDE || h > MAX_PNG_SIDE {
         return None;
     }
-    let mut buf = vec![0u8; reader.output_buffer_size()?];
+    let buf_size = reader.output_buffer_size()?;
+    if buf_size > 4 * 1024 * 1024 {
+        return None;
+    }
+    let mut buf = vec![0u8; buf_size];
     let info = reader.next_frame(&mut buf).ok()?;
     let (width, height) = (info.width, info.height);
     let data = buf.get(..info.buffer_size())?;

@@ -30,6 +30,10 @@ impl Fields {
         f
     }
     fn frame(&mut self, events: Vec<Event>, modifiers: Modifiers) -> egui::CursorIcon {
+        self.frame_output(events, modifiers).platform_output.cursor_icon
+    }
+    /// Draws the real typography controls, retaining their shapes for position assertions.
+    fn frame_output(&mut self, events: Vec<Event>, modifiers: Modifiers) -> egui::FullOutput {
         self.time += 1.0 / 60.0;
         let mut events = events;
         events.insert(0, Event::ModifiersChanged(modifiers));
@@ -42,10 +46,11 @@ impl Fields {
             crate::typography::typography(&mut self.app, ui, &doc, &sel);
         });
         out.textures_delta.clear();
-        out.platform_output.cursor_icon
+        out
     }
+    /// Screen position of a typography field's label/lead, used to start a scrub.
     fn lead(&self, key: &str) -> Pos2 {
-        let rect = self.ctx.read_response(Id::new(key).with("click")).unwrap().rect;
+        let rect = self.ctx.read_response(Id::unique(key).with("click")).unwrap().rect;
         Pos2::new(rect.min.x + 12.0, rect.center().y)
     }
     fn drag(&mut self, key: &str, by: f32, modifiers: Modifiers) {
@@ -79,18 +84,18 @@ fn typography_icon_drag_changes_each_spacing_field_in_one_undo_step() {
         let mut f = Fields::new();
         let undo = f.app.session.undo_depth().0;
         f.drag(key, 16.0, Modifiers::NONE);
-        assert_eq!(f.value(key), before + 16.0, "{key}: dragging the icon must change the value");
+        assert_eq!(f.value(key), before + 8.0, "{key}: dragging the icon must change the value");
         assert_eq!(f.app.session.undo_depth().0, undo + 1, "{key}: one gesture, one undo step");
         f.app.session.undo().unwrap();
         assert_eq!(f.value(key), before);
         f.app.session.redo().unwrap();
-        assert_eq!(f.value(key), before + 16.0);
+        assert_eq!(f.value(key), before + 8.0);
     }
 }
 
 #[test]
 fn typography_icon_scrub_uses_shift_and_alt_rates_and_the_resize_cursor() {
-    for (modifiers, delta) in [(Modifiers::SHIFT, 160.0), (Modifiers::ALT, 1.6)] {
+    for (modifiers, delta) in [(Modifiers::SHIFT, 80.0), (Modifiers::ALT, 0.8)] {
         for (key, start) in [("ty_lh", 24.0), ("ty_ls", 0.0), ("ty_ps", 12.0)] {
             let mut f = Fields::new();
             let p = f.lead(key);
@@ -109,10 +114,10 @@ fn typography_icon_scrub_preserves_units_and_clamps_only_nonnegative_fields() {
     f.drag("ty_lh", 16.0, Modifiers::NONE);
     f.drag("ty_ls", -16.0, Modifiers::NONE);
     let t = f.app.session.doc().unwrap().node(f.text).unwrap().kind.text().unwrap();
-    assert_eq!(t.style.line_height, LineHeight::Percent(166.0));
-    assert_eq!(t.style.letter_spacing, LetterSpacing::Pixels(-14.0));
-    f.drag("ty_lh", -200.0, Modifiers::NONE);
-    f.drag("ty_ps", -200.0, Modifiers::NONE);
+    assert_eq!(t.style.line_height, LineHeight::Percent(158.0));
+    assert_eq!(t.style.letter_spacing, LetterSpacing::Pixels(-6.0));
+    f.drag("ty_lh", -320.0, Modifiers::NONE);
+    f.drag("ty_ps", -320.0, Modifiers::NONE);
     assert_eq!(f.value("ty_lh"), 0.0);
     assert_eq!(f.value("ty_ps"), 0.0);
     assert!(f.app.ui.last_error.is_none(), "{:?}", f.app.ui.last_error);
@@ -147,7 +152,7 @@ fn typography_icon_scrub_changes_only_the_selected_characters_without_ending_tex
     f.drag("ty_ls", 16.0, Modifiers::NONE);
     let t = f.app.session.doc().unwrap().node(f.text).unwrap().kind.text().unwrap();
     assert_eq!(t.style_at(0).letter_spacing, LetterSpacing::Pixels(0.0));
-    assert_eq!(t.style_at(1).letter_spacing, LetterSpacing::Pixels(16.0));
+    assert_eq!(t.style_at(1).letter_spacing, LetterSpacing::Pixels(8.0));
     assert_eq!(t.style_at(4).letter_spacing, LetterSpacing::Pixels(0.0));
     assert!(f.app.session.ds().unwrap().text_edit.is_some());
     assert_eq!(f.app.session.undo_depth().0, undo);
@@ -157,26 +162,42 @@ fn typography_icon_scrub_changes_only_the_selected_characters_without_ending_tex
     assert_eq!(f.value("ty_ls"), 0.0);
 }
 
+/// Asserts typography spacing fields accept typed percent units, commit on Enter, and
+/// Escape restores the previous value without adding an undo step. Focusing the editor must
+/// also leave the painted value at the same vertical position.
 #[test]
 fn typography_spacing_fields_still_accept_typed_units_and_escape_cancels() {
     let mut f = Fields::new();
     let p = f.lead("ty_lh") + vec2(36.0, 0.0);
+    let field = f.ctx.read_response(Id::unique("ty_lh").with("click")).unwrap().rect;
+    let text_bounds = |out: egui::FullOutput| {
+        out.shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "24" && field.contains(text.pos) => Some(text.visual_bounding_rect()),
+                _ => None,
+            })
+            .expect("the line-height value is painted inside its field")
+    };
+    let before = text_bounds(f.frame_output(vec![], Modifiers::NONE));
     for pressed in [true, false] {
         f.frame(
             vec![Event::PointerMoved(p), Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }],
             Modifiers::NONE,
         );
     }
-    f.frame(vec![], Modifiers::NONE);
-    assert!(f.ctx.data(|d| d.get_temp::<String>(Id::new("ty_lh").with("editing"))).is_some(), "click starts typing");
-    f.ctx.memory_mut(|m| m.request_focus(Id::new("ty_lh").with("te")));
+    f.ctx.memory_mut(|m| m.request_focus(Id::unique("ty_lh").with("te")));
+    let after = text_bounds(f.frame_output(vec![], Modifiers::NONE));
+    assert!((before.top() - after.top()).abs() <= 0.5 && (before.bottom() - after.bottom()).abs() <= 0.5, "before={before:?}, after={after:?}");
+    assert!(f.ctx.memory(|m| m.has_focus(Id::unique("ty_lh").with("te"))), "line-height editor is focused");
+    assert!(f.ctx.data(|d| d.get_temp::<String>(Id::unique("ty_lh").with("editing"))).is_some(), "click starts typing");
     f.frame(
         vec![Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND }],
         Modifiers::COMMAND,
     );
     f.frame(vec![Event::Text("150%".into())], Modifiers::NONE);
     assert_eq!(
-        f.ctx.data(|d| d.get_temp::<String>(Id::new("ty_lh").with("editing"))).as_deref(),
+        f.ctx.data(|d| d.get_temp::<String>(Id::unique("ty_lh").with("editing"))).as_deref(),
         Some("150%"),
         "keyboard selects and replaces the field text"
     );
@@ -192,7 +213,7 @@ fn typography_spacing_fields_still_accept_typed_units_and_escape_cancels() {
             Modifiers::NONE,
         );
     }
-    f.ctx.memory_mut(|m| m.request_focus(Id::new("ty_lh").with("te")));
+    f.ctx.memory_mut(|m| m.request_focus(Id::unique("ty_lh").with("te")));
     f.frame(vec![Event::Text("999".into())], Modifiers::NONE);
     f.frame(
         vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],

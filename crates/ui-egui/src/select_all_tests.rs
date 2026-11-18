@@ -45,10 +45,11 @@ fn selection(ctx: &egui::Context, te: Id) -> Option<(usize, usize)> {
     Some((a.min(b), a.max(b)))
 }
 
+/// Asserts clicking a hex field focuses it and selects all six characters.
 #[test]
 fn a_click_into_a_hex_field_selects_it_all() {
     let ctx = egui::Context::default();
-    let id = Id::new("hex");
+    let id = Id::unique("hex");
     let mut f = |ui: &mut Ui| {
         widgets::text_field(ui, id, "D9D9D9", 120.0, "");
     };
@@ -57,11 +58,12 @@ fn a_click_into_a_hex_field_selects_it_all() {
     assert_eq!(selection(&ctx, id.with("te")), Some((0, 6)));
 }
 
+/// Asserts clicking an inline field selects it all and typing replaces the selection.
 #[test]
 fn a_click_into_an_inline_field_selects_it_all() {
     // A fill's hex in the Design panel, a variable's value, a rename.
     let ctx = egui::Context::default();
-    let id = Id::new("fill_hex");
+    let id = Id::unique("fill_hex");
     let mut f = |ui: &mut Ui| {
         widgets::text_field_inline(ui, id, "0D99FF", FIELD.shrink2(vec2(8.0, 4.0)), egui::FontId::proportional(11.0));
     };
@@ -75,10 +77,11 @@ fn a_click_into_an_inline_field_selects_it_all() {
     assert_eq!(out.as_deref(), Some("red"));
 }
 
+/// Asserts clicking a search box selects its whole query.
 #[test]
 fn a_click_into_a_search_box_selects_its_query() {
     let ctx = egui::Context::default();
-    let id = Id::new("search");
+    let id = Id::unique("search");
     let mut q = String::from("button");
     let mut f = |ui: &mut Ui| {
         widgets::text_input(ui, id, &mut q, 120.0, "Search");
@@ -87,10 +90,11 @@ fn a_click_into_a_search_box_selects_its_query() {
     assert_eq!(selection(&ctx, id), Some((0, 6)));
 }
 
+/// Asserts Tab focus selects a field's whole value.
 #[test]
 fn tab_into_a_field_selects_it_all() {
     let ctx = egui::Context::default();
-    let id = Id::new("tabbed");
+    let id = Id::unique("tabbed");
     let mut q = String::from("Frame 1");
     let mut f = |ui: &mut Ui| {
         let r = widgets::text_input(ui, id, &mut q, 120.0, "");
@@ -106,10 +110,11 @@ fn tab_into_a_field_selects_it_all() {
     assert_eq!(selection(&ctx, id), Some((0, 7)));
 }
 
+/// Asserts a drag selects a non-empty proper subrange rather than the whole value.
 #[test]
 fn a_drag_selects_only_what_it_covers() {
     let ctx = egui::Context::default();
-    let id = Id::new("dragged");
+    let id = Id::unique("dragged");
     let mut q = String::from("a long search query");
     let mut f = |ui: &mut Ui| {
         widgets::text_input(ui, id, &mut q, 120.0, "");
@@ -120,10 +125,11 @@ fn a_drag_selects_only_what_it_covers() {
     assert!(!(a == 0 && b == q.chars().count()), "not all of it: {a}..{b}");
 }
 
+/// Asserts re-clicking a field after focus was lost mid-edit selects all.
 #[test]
 fn a_field_left_mid_edit_selects_all_on_the_next_click() {
     let ctx = egui::Context::default();
-    let id = Id::new("fill_hex");
+    let id = Id::unique("fill_hex");
     let mut f = |ui: &mut Ui| {
         widgets::text_field_inline(ui, id, "0D99FF", FIELD.shrink2(vec2(8.0, 4.0)), egui::FontId::proportional(11.0));
     };
@@ -133,4 +139,84 @@ fn a_field_left_mid_edit_selects_all_on_the_next_click() {
     click(&ctx, pos2(70.0, 32.0), None, &mut f);
     assert!(ctx.memory(|m| m.has_focus(id.with("te"))));
     assert_eq!(selection(&ctx, id.with("te")), Some((0, 6)));
+}
+
+/// The vertical middle of the first painted text that contains `needle`, from one frame's shapes.
+fn text_mid_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
+    fn find(s: &egui::Shape, needle: &str) -> Option<f32> {
+        match s {
+            egui::Shape::Text(t) if t.galley.text().contains(needle) => Some(t.pos.y + t.galley.rect.center().y),
+            egui::Shape::Vec(v) => v.iter().find_map(|s| find(s, needle)),
+            _ => None,
+        }
+    }
+    shapes.iter().find_map(|c| find(&c.shape, needle))
+}
+
+/// Runs one more quiet frame of `f` and returns its shapes.
+fn shapes_of(ctx: &egui::Context, f: &mut impl FnMut(&mut Ui)) -> Vec<egui::epaint::ClippedShape> {
+    let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))), ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| {
+        let mut child = ui.new_child(UiBuilder::new().max_rect(FIELD));
+        f(&mut child);
+    });
+    out.textures_delta.clear();
+    out.shapes
+}
+
+/// A rename in a row one line tall (the Layers panel's rows, a frame's name label): the typed text
+/// sits in the middle of the row, not hanging below it (#2318). The theme's least height for an
+/// editor is more than that row, which pushed the text down by the difference.
+#[test]
+fn a_rename_field_in_a_short_row_centres_its_text() {
+    let ctx = egui::Context::default();
+    let id = Id::unique("short_rename");
+    let row = Rect::from_min_size(pos2(20.0, 20.0), vec2(120.0, 16.0));
+    let mut f = |ui: &mut Ui| {
+        widgets::rename_field(ui, id, "Frame 1", row, egui::FontId::proportional(11.0), false);
+    };
+    click(&ctx, pos2(60.0, 28.0), None, &mut f);
+    assert!(ctx.memory(|m| m.has_focus(id.with("te"))));
+    let mid = text_mid_y(&shapes_of(&ctx, &mut f), "Frame 1").expect("the text is painted");
+    assert!((mid - row.center().y).abs() <= 1.0, "text centre {mid} vs row centre {}", row.center().y);
+}
+
+/// The font menu's search box shows its hint (and what is typed) in the middle of the box, not
+/// along its top edge (#2318).
+#[test]
+fn the_font_search_box_centres_its_hint() {
+    let ctx = egui::Context::default();
+    let mut q = String::new();
+    let id = Id::unique("font_search");
+    let mut mid_box = 0.0;
+    let mut f = |ui: &mut Ui| {
+        let (field, _) = ui.allocate_exact_size(vec2(120.0, widgets::FIELD_H), egui::Sense::hover());
+        widgets::search_box(ui, field, id, &mut q, "Search fonts");
+        mid_box = field.center().y;
+    };
+    let shapes = shapes_of(&ctx, &mut f);
+    let mid = text_mid_y(&shapes, "Search fonts").expect("the hint is painted");
+    assert!((mid - mid_box).abs() <= 1.0, "hint centre {mid} vs box centre {mid_box}");
+}
+
+/// The font menu's search field is the shared search box: its text starts after the magnifier,
+/// not at the field's left edge as a bare editor's would (#2318).
+#[test]
+fn the_font_search_box_leaves_room_for_the_magnifier() {
+    fn left(s: &egui::Shape) -> Option<f32> {
+        match s {
+            egui::Shape::Text(t) if t.galley.text().contains("Search fonts") => Some(t.pos.x),
+            egui::Shape::Vec(v) => v.iter().find_map(left),
+            _ => None,
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut q = String::new();
+    let id = Id::unique("font_search_icon");
+    let mut f = |ui: &mut Ui| {
+        let (field, _) = ui.allocate_exact_size(vec2(120.0, widgets::FIELD_H), egui::Sense::hover());
+        widgets::search_box(ui, field, id, &mut q, "Search fonts");
+    };
+    let x = shapes_of(&ctx, &mut f).iter().find_map(|c| left(&c.shape)).expect("the hint is painted");
+    assert!(x >= FIELD.min.x + 20.0, "hint starts at {x}, field at {}", FIELD.min.x);
 }

@@ -10,7 +10,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 FAILED=0
 
-main() { bash "$HERE/install.sh" --caddy-main "$1" ops@example.com; }
+main() { local caddyfile="$1"; bash "$HERE/install.sh" --caddy-main "$caddyfile" ops@example.com; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; FAILED=1; }
 
 # Missing: ours.
@@ -28,7 +28,7 @@ printf 'shop.example.com {\n\treverse_proxy 127.0.0.1:8080\n}\n' >"$WORK/theirs"
 cp "$WORK/theirs" "$WORK/run1"
 main "$WORK/run1" >"$WORK/run2"
 grep -q 'shop.example.com' "$WORK/run2" || fail "the operator's site is kept"
-[ "$(grep -c 'import figcraft-server.caddy' "$WORK/run2")" = 1 ] || fail "one import line is added"
+[[ "$(grep -c 'import figcraft-server.caddy' "$WORK/run2")" = 1 ]] || fail "one import line is added"
 main "$WORK/run2" >"$WORK/run3"
 cmp -s "$WORK/run2" "$WORK/run3" || fail "running again leaves a Caddyfile with other sites as it is"
 main "$WORK/run3" >"$WORK/run4"
@@ -39,5 +39,5 @@ main "$WORK/none" >"$WORK/ours1"
 main "$WORK/ours1" >"$WORK/ours2"
 cmp -s "$WORK/ours1" "$WORK/ours2" || fail "our own Caddyfile stays the same"
 
-if [ "$FAILED" = 0 ]; then echo "install.sh Caddyfile handling: ok"; fi
+if [[ "$FAILED" = 0 ]]; then echo "install.sh Caddyfile handling: ok"; fi
 exit "$FAILED"

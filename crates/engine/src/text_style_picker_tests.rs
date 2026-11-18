@@ -86,7 +86,7 @@ fn editing_text_applies_to_the_selected_chars() {
     s.execute("text.style", &json!({"id": t, "start": 6, "end": 11, "fontSize": 20})).unwrap();
     let c = s.execute("style.create", &json!({"type": "text", "name": "Type/Caption"})).unwrap()["id"].as_str().unwrap().to_string();
     let style = s.doc().unwrap().style(&c).cloned().unwrap();
-    let StyleKind::Text { style: def } = style.kind else { panic!("not a text style") };
+    let StyleKind::Text { style: def, .. } = style.kind else { panic!("not a text style") };
     assert_eq!(def.font_size, 20.0);
     assert_eq!(def.style_id, None, "definitions link to nothing");
     assert_eq!(links(&s, t)[8].as_deref(), Some(c.as_str()));
@@ -117,7 +117,7 @@ fn edits_unlink_and_style_edits_follow() {
     assert_eq!(layer_link(&s, a).as_deref(), Some(h.as_str()));
     // Redefining the style moves linked chars only.
     let mut def = match &s.doc().unwrap().style(&h).unwrap().kind {
-        StyleKind::Text { style } => style.clone(),
+        StyleKind::Text { style, .. } => style.clone(),
         _ => panic!("not a text style"),
     };
     def.font_size = 40.0;
@@ -210,6 +210,31 @@ fn previews_while_editing_keep_the_edit() {
     s.execute("text.edit.insert", &json!({"text": "Bye"})).unwrap();
     assert_eq!(data(&s, t).characters, "Bye world");
     assert!(links(&s, t).iter().all(Option::is_none));
+}
+
+#[test]
+fn previews_show_a_hovered_font_family() {
+    let mut s = new_session();
+    let t = text(&mut s, "Preview me");
+    s.ds_mut().unwrap().mark_saved();
+    let before = s.doc().unwrap().clone();
+    let undo = s.ds().unwrap().history.undo.len();
+    // Hovering a font family shows it on the canvas: no undo step, not dirty.
+    s.execute("text.preview", &json!({"command": "text.style", "params": {"ids": [t], "fontFamily": "Arial"}})).unwrap();
+    assert_eq!(data(&s, t).style_at(0).font_family, "Arial");
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo);
+    assert!(!s.ds().unwrap().is_dirty());
+    // Moving to another family replaces the preview, from the document itself.
+    s.execute("text.preview", &json!({"command": "text.style", "params": {"ids": [t], "fontFamily": "Georgia"}})).unwrap();
+    assert_eq!(data(&s, t).style_at(0).font_family, "Georgia");
+    // Closing without picking puts the document back as it was.
+    assert_eq!(s.execute("text.endPreview", &json!({})).unwrap()["ended"], json!(true));
+    assert_eq!(*s.doc().unwrap(), before);
+    // Clicking commits it as one undo step.
+    s.execute("text.style", &json!({"ids": [t], "fontFamily": "Georgia"})).unwrap();
+    assert_eq!(data(&s, t).style_at(0).font_family, "Georgia");
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo + 1);
+    assert!(s.ds().unwrap().text_preview.is_none());
 }
 
 #[test]

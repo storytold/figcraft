@@ -97,3 +97,31 @@ fn explicit_variable_modes_go_back_to_auto() {
     assert!(s.execute("variable.setMode", &json!({"ids": [f], "collection": "Tokens", "mode": "Dusk"})).is_err());
     assert!(s.execute("variable.setMode", &json!({"ids": [f], "collection": "Tokens"})).is_err(), "a mode, or null for Auto");
 }
+
+/// #2027: an unknown device is refused with the devices to pick from, as an unknown colour is, and
+/// nothing changes; a known one is taken whatever its case and stored as the picker names it; the
+/// settings read back from `proto.settings` without parameters.
+#[test]
+fn unknown_devices_are_refused_and_settings_read_back() {
+    let mut s = Session::new();
+    let before = settings(&s);
+    for junk in [json!("Pixel Nonexistent"), json!(""), json!(42), json!(["iPhone 16"])] {
+        let err = s.execute("proto.settings", &json!({"device": junk, "responsive": true})).unwrap_err().to_string();
+        assert!(err.contains("unknown device") && err.contains("iPhone 17|") && err.contains("Custom size"), "{junk}: {err}");
+        assert_eq!(settings(&s), before, "{junk}: nothing changes");
+    }
+    let set = s.execute("proto.settings", &json!({"device": " iphone 16 ", "color": "black"})).unwrap();
+    assert_eq!(settings(&s).device, "iPhone 16", "stored as the picker names it");
+    assert_eq!((&set["device"], &set["color"]), (&json!("iPhone 16"), &json!("Black")));
+    let read = s.execute("proto.settings", &json!({})).unwrap();
+    assert_eq!(read, set, "a call without parameters reads the settings");
+    assert_eq!((&read["ok"], &read["rotation"], &read["responsive"]), (&json!(true), &json!("portrait"), &json!(false)));
+    assert_eq!(read["screen"], json!({"width": 393.0, "height": 852.0}));
+    assert!(read["background"].as_str().is_some_and(|c| c.starts_with('#')), "{read}");
+    // "None" and "Custom size" in any case; no device has no screen or colour.
+    s.execute("proto.settings", &json!({"device": "custom SIZE", "width": 800, "height": 600})).unwrap();
+    assert_eq!(settings(&s).device, PrototypeSettings::CUSTOM_DEVICE);
+    let none = s.execute("proto.settings", &json!({"device": "none"})).unwrap();
+    assert_eq!((&none["device"], &none["screen"], &none["color"]), (&json!("None"), &json!(null), &json!(null)));
+    assert_eq!(none["customSize"], json!({"width": 800.0, "height": 600.0}));
+}

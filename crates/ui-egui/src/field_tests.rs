@@ -111,17 +111,17 @@ fn typed_text_is_a_number_arithmetic_or_an_edit_relative_to_the_value() {
 }
 
 #[test]
-fn a_scrub_moves_a_step_a_point_ten_with_shift_and_a_tenth_with_alt() {
+fn a_scrub_moves_half_a_step_a_point_ten_times_that_with_shift_and_a_tenth_with_alt() {
     // (points dragged, the field's step, Shift, Alt) → how far the value moves
     let rows = [
-        ((25.0, 1.0, false, false), 25.0),
-        ((-25.0, 1.0, false, false), -25.0),
-        ((10.0, 1.0, true, false), 100.0),
-        ((20.0, 1.0, false, true), 2.0),
-        ((20.0, 1.0, true, true), 20.0),
-        ((10.0, 0.1, false, false), 1.0),
-        ((10.0, 0.1, true, false), 10.0),
-        ((10.0, 10.0, false, false), 100.0),
+        ((25.0, 1.0, false, false), 12.5),
+        ((-25.0, 1.0, false, false), -12.5),
+        ((10.0, 1.0, true, false), 50.0),
+        ((20.0, 1.0, false, true), 1.0),
+        ((20.0, 1.0, true, true), 10.0),
+        ((10.0, 0.1, false, false), 0.5),
+        ((10.0, 0.1, true, false), 5.0),
+        ((10.0, 10.0, false, false), 50.0),
         ((0.0, 1.0, true, false), 0.0),
     ];
     for ((dx, step, shift, alt), want) in rows {
@@ -148,6 +148,33 @@ fn id(v: serde_json::Value) -> NodeId {
     NodeId(v["id"].as_u64().unwrap())
 }
 
+#[test]
+fn layout_add_button_requires_every_selected_container_to_have_no_layout() {
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"width": 40, "height": 20})).unwrap());
+    let group = id(s.execute("object.group", &json!({"ids": [rect]})).unwrap());
+    let frame = id(s.execute("frame.create", &json!({"x": 200, "width": 100, "height": 60})).unwrap());
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    for (selection, layout, expected) in [
+        (vec![group], false, true),
+        (vec![frame, group], false, true),
+        (vec![frame, group], true, false),
+        (vec![frame], true, false),
+        (vec![], true, false),
+    ] {
+        if layout {
+            u.app.session.execute("node.set", &json!({"id": frame, "props": {"layout": "horizontal"}})).unwrap();
+        }
+        u.app.session.execute("select.set", &json!({"ids": selection})).unwrap();
+        u.frame(vec![]);
+        let output = u.frame_output(vec![]);
+        let nodes = output.platform_output.accesskit_update.unwrap().nodes;
+        let has_add = nodes.iter().any(|(_, n)| n.role() == Role::Button && n.label() == Some("Add auto layout"));
+        assert_eq!(has_add, expected, "selection: {selection:?}, frame has layout: {layout}");
+    }
+}
+
 /// Rectangles A (10, 20, 40×30) and B (100, 50, 20×20); A is selected.
 fn setup() -> (Ui, NodeId, NodeId) {
     let mut s = Session::new();
@@ -160,13 +187,18 @@ fn setup() -> (Ui, NodeId, NodeId) {
     (u, a, b)
 }
 
-/// The field named `name` in the Design panel: the middle of its value, and what it shows.
-fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
+/// The topmost field named `name` in the Design panel: its value centre and displayed text.
+/// Layer opacity precedes the equally named opacity fields in paint rows.
+pub(crate) fn field(u: &mut Ui, name: &str) -> (Pos2, String) {
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
-    let n =
-        nodes.iter().map(|(_, n)| n).find(|n| n.role() == Role::SpinButton && n.label() == Some(name)).unwrap_or_else(|| panic!("no field {name:?}"));
+    let n = nodes
+        .iter()
+        .map(|(_, n)| n)
+        .filter(|n| n.role() == Role::SpinButton && n.label() == Some(name))
+        .min_by(|a, b| a.bounds().map_or(f64::INFINITY, |r| r.y0).total_cmp(&b.bounds().map_or(f64::INFINITY, |r| r.y0)))
+        .unwrap_or_else(|| panic!("no field {name:?}"));
     let b = n.bounds().expect("bounds");
     (pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32), n.value().unwrap_or_default().to_string())
 }
@@ -176,9 +208,24 @@ fn label(u: &mut Ui, name: &str) -> Pos2 {
     u.frame(vec![]);
     let out = u.frame_output(vec![]);
     let nodes = out.platform_output.accesskit_update.expect("an AccessKit update").nodes;
-    let n = nodes.iter().map(|(_, n)| n).find(|n| n.role() == Role::SpinButton && n.label() == Some(name)).unwrap();
+    let n = nodes
+        .iter()
+        .map(|(_, n)| n)
+        .filter(|n| n.role() == Role::SpinButton && n.label() == Some(name))
+        .min_by(|a, b| a.bounds().map_or(f64::INFINITY, |r| r.y0).total_cmp(&b.bounds().map_or(f64::INFINITY, |r| r.y0)))
+        .unwrap();
     let b = n.bounds().unwrap();
     pos2(b.x0 as f32 - 12.0, ((b.y0 + b.y1) / 2.0) as f32)
+}
+
+/// Layer and fill opacity are both named for assistive technology, even without a visible lead.
+#[test]
+fn paint_opacity_has_an_accessible_name() {
+    let (mut u, _, _) = setup();
+    let output = u.frame_output(vec![]);
+    let nodes = output.platform_output.accesskit_update.unwrap().nodes;
+    let opacity_fields = nodes.iter().filter(|(_, n)| n.role() == Role::SpinButton && n.label() == Some("Opacity")).count();
+    assert_eq!(opacity_fields, 2, "both layer and fill opacity must have an accessible name");
 }
 
 fn geom(u: &Ui, n: NodeId) -> (f64, f64, f64, f64) {
@@ -187,7 +234,7 @@ fn geom(u: &Ui, n: NodeId) -> (f64, f64, f64, f64) {
     (b.x0, b.y0, b.width(), b.height())
 }
 
-fn undo_steps(u: &Ui) -> usize {
+pub(crate) fn undo_steps(u: &Ui) -> usize {
     u.app.session.ds().unwrap().history.undo.len()
 }
 
@@ -205,7 +252,7 @@ fn click(u: &mut Ui, p: Pos2) {
 }
 
 /// Click into field `name`, type `text` over what it shows and press `end`.
-fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
+pub(crate) fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
     let (p, _) = field(u, name);
     click(u, p);
     u.frame(vec![Event::Text(text.into())]);
@@ -214,9 +261,28 @@ fn type_into(u: &mut Ui, name: &str, text: &str, end: Key) {
 }
 
 /// Scrub field `name` by its label: `dx` points with `modifiers` held, then let go.
-fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
+pub(crate) fn scrub(u: &mut Ui, name: &str, dx: f32, modifiers: Modifiers) {
     let from = label(u, name);
     drag(u, from, dx, modifiers);
+}
+
+/// Press at field `name`'s label, move `rise` points up (down when negative), then `dx` sideways
+/// in small steps at that height, and let go.
+fn scrub_at_height(u: &mut Ui, name: &str, rise: f32, dx: f32) {
+    let from = label(u, name);
+    let m = Modifiers::NONE;
+    let press = |pressed, pos| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: m };
+    u.frame_with(vec![Event::PointerMoved(from), press(true, from)], m);
+    for k in 1..=5 {
+        u.frame_with(vec![Event::PointerMoved(pos2(from.x, from.y - rise * k as f32 / 5.0))], m);
+    }
+    let up = pos2(from.x, from.y - rise);
+    for k in 1..=10 {
+        u.frame_with(vec![Event::PointerMoved(pos2(up.x + dx * k as f32 / 10.0, up.y))], m);
+    }
+    let to = pos2(up.x + dx, up.y);
+    u.frame_with(vec![Event::PointerMoved(to), press(false, to)], m);
+    u.frame(vec![]);
 }
 
 /// Press at `from`, move `dx` points sideways in small steps with `modifiers` held, then let go.
@@ -235,6 +301,64 @@ fn drag(u: &mut Ui, from: Pos2, dx: f32, modifiers: Modifiers) {
     u.frame(vec![]);
 }
 
+/// Scrub speed follows the pointer's height, with a notice of the speed (#1837): more than 100
+/// points above where the scrub began is 2x, that far below 1/2, twice as far 1/4.
+#[test]
+fn moving_up_or_down_while_scrubbing_changes_the_speed_and_says_so() {
+    let (mut u, a, _) = setup();
+    let toast = |u: &Ui| u.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+    // (rise in points, how far 40 points of scrub move X, the notice)
+    for (rise, want, notice) in [(150.0, 40.0, "2x"), (0.0, 20.0, ""), (-150.0, 10.0, "1/2"), (-300.0, 5.0, "1/4"), (40.0, 20.0, "")] {
+        let x0 = geom(&u, a).0;
+        u.app.ui.toast = None;
+        scrub_at_height(&mut u, "X", rise, 40.0);
+        assert_eq!(geom(&u, a).0 - x0, want, "rise {rise}");
+        if notice.is_empty() {
+            assert!(toast(&u).is_empty(), "no notice at the usual speed: {}", toast(&u));
+        } else {
+            assert!(toast(&u).contains(notice), "rise {rise}: the notice says {}", toast(&u));
+        }
+    }
+    // Speeds compose with the modifiers' rates: 2x with Shift is ten steps a point.
+    let x0 = geom(&u, a).0;
+    let from = label(&mut u, "X");
+    let shift = Modifiers { shift: true, ..Modifiers::NONE };
+    let press = |pressed, pos| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: shift };
+    u.frame_with(vec![Event::PointerMoved(from), press(true, from)], shift);
+    let up = pos2(from.x, from.y - 150.0);
+    u.frame_with(vec![Event::PointerMoved(up)], shift);
+    for k in 1..=5 {
+        u.frame_with(vec![Event::PointerMoved(pos2(up.x + 2.0 * k as f32, up.y))], shift);
+    }
+    let to = pos2(up.x + 10.0, up.y);
+    u.frame_with(vec![Event::PointerMoved(to), press(false, to)], shift);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, a).0 - x0, 100.0, "ten points at 2x with Shift");
+    // The pointer reported gone from the window (egui's PointerGone) with the button still down
+    // keeps the speed it had: no notice of 1x, and the scrub goes on at 2x once it is back.
+    let x0 = geom(&u, a).0;
+    let from = label(&mut u, "X");
+    let m = Modifiers::NONE;
+    let press = |pressed, pos| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: m };
+    u.frame_with(vec![Event::PointerMoved(from), press(true, from)], m);
+    let up = pos2(from.x, from.y - 150.0);
+    u.frame_with(vec![Event::PointerMoved(up)], m);
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 10.0, up.y))], m);
+    assert!(toast(&u).contains("2x"), "{}", toast(&u));
+    u.app.ui.toast = None;
+    u.frame_with(vec![Event::PointerGone], m);
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 20.0, up.y))], m);
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 30.0, up.y))], m);
+    assert!(toast(&u).is_empty(), "no notice while the pointer was gone or back at the same height: {}", toast(&u));
+    // Back down to the press height and gone in the same frame: that last position counts (1x).
+    u.frame_with(vec![Event::PointerMoved(pos2(up.x + 30.0, from.y)), Event::PointerGone], m);
+    assert!(toast(&u).contains("1x"), "{}", toast(&u));
+    let to = pos2(up.x + 30.0, up.y);
+    u.frame_with(vec![Event::PointerMoved(to), press(false, to)], m);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, a).0 - x0, 20.0, "ten points before and ten after the pointer was gone, at 2x both");
+}
+
 #[test]
 fn scrubbing_the_label_moves_the_value_and_is_one_undo_step() {
     let (mut u, a, _) = setup();
@@ -242,11 +366,11 @@ fn scrubbing_the_label_moves_the_value_and_is_one_undo_step() {
     let alt = Modifiers { alt: true, ..Modifiers::NONE };
     // (field, points, modifiers, x after): X starts at 10.
     let rows = [
-        ("X", 25.0, Modifiers::NONE, 35.0),
-        ("X", 10.0, shift, 135.0),
-        ("X", 20.0, alt, 137.0),
-        ("X", -37.0, Modifiers::NONE, 100.0),
-        ("X", -8.0, shift, 20.0),
+        ("X", 24.0, Modifiers::NONE, 22.0),
+        ("X", 10.0, shift, 72.0),
+        ("X", 20.0, alt, 73.0),
+        ("X", -36.0, Modifiers::NONE, 55.0),
+        ("X", -8.0, shift, 15.0),
     ];
     for (name, dx, m, want) in rows {
         let steps = undo_steps(&u);
@@ -255,18 +379,18 @@ fn scrubbing_the_label_moves_the_value_and_is_one_undo_step() {
         assert_eq!(undo_steps(&u), steps + 1, "one undo step for the whole scrub");
     }
     u.app.run("edit.undo", json!({}));
-    assert_eq!(geom(&u, a).0, 100.0, "undo takes back the last scrub alone");
+    assert_eq!(geom(&u, a).0, 55.0, "undo takes back the last scrub alone");
     // A few points aren't a drag yet (a click on the label), then it counts from the press.
     // Alt gives tenths (the field shows them); the fraction stays under a plain scrub.
     let width = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().width;
-    scrub(&mut u, "Width", 7.0, alt);
-    assert_eq!(width(&u), 40.7);
+    scrub(&mut u, "Width", 8.0, alt);
+    assert_eq!(width(&u), 40.4);
     scrub(&mut u, "Width", 8.0, Modifiers::NONE);
-    assert_eq!(width(&u), 48.7);
-    // Fractional fields: opacity moves a percent a point, rotation a degree.
-    scrub(&mut u, "Opacity", -30.0, Modifiers::NONE);
+    assert_eq!(width(&u), 44.4);
+    // Fractional fields: opacity moves half a percent a point, rotation half a degree.
+    scrub(&mut u, "Opacity", -60.0, Modifiers::NONE);
     assert_eq!(u.app.session.doc().unwrap().node(a).unwrap().opacity, 0.7);
-    scrub(&mut u, "Rotation", 15.0, Modifiers::NONE);
+    scrub(&mut u, "Rotation", 30.0, Modifiers::NONE);
     let rot = figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(a).unwrap().transform);
     assert!((rot.abs() - 15.0).abs() < 1e-6, "rotation {rot}");
     // A press on the label that doesn't move changes nothing.
@@ -315,6 +439,68 @@ fn the_arrow_keys_step_by_the_nudge_amounts_and_fractional_fields_by_their_own()
     key(&mut u, Key::Escape, Modifiers::NONE);
     let rot = figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(a).unwrap().transform);
     assert!((rot.abs() - 11.0).abs() < 1e-6, "rotation {rot}: the steps stay after Escape");
+}
+
+#[test]
+fn the_rotation_field_shows_and_sets_the_rotation_on_the_page() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 100, "width": 400, "height": 400})).unwrap());
+    s.execute("node.set", &json!({"ids": [f], "props": {"rotation": 10}})).unwrap();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 120, "height": 80, "parent": f})).unwrap());
+    s.execute("node.set", &json!({"ids": [r], "props": {"rotation": -10}})).unwrap();
+    let b = id(s.execute("shape.rectangle", &json!({"x": 600, "y": 0, "width": 50, "height": 50})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().world_transform(n));
+    let local = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().node(n).unwrap().transform);
+    assert_eq!(field(&mut u, "Rotation").1, "0°");
+    type_into(&mut u, "Rotation", "7", Key::Enter);
+    assert!((page(&u, r) - 7.0).abs() < 1e-6 && (local(&u, r) + 3.0).abs() < 1e-6, "{} {}", page(&u, r), local(&u, r));
+    assert_eq!(field(&mut u, "Rotation").1, "7°");
+    // Arrows step the shown value.
+    let shift = Modifiers { shift: true, ..Modifiers::NONE };
+    let (p, _) = field(&mut u, "Rotation");
+    click(&mut u, p);
+    key(&mut u, Key::ArrowUp, Modifiers::NONE);
+    key(&mut u, Key::ArrowUp, shift);
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    assert!((page(&u, r) - 18.0).abs() < 1e-6, "{}", page(&u, r));
+    assert_eq!(field(&mut u, "Rotation").1, "18°");
+    // Scrubbing is one undo step.
+    let steps = undo_steps(&u);
+    scrub(&mut u, "Rotation", 30.0, Modifiers::NONE);
+    assert!((page(&u, r) - 33.0).abs() < 1e-6, "{}", page(&u, r));
+    assert_eq!(undo_steps(&u), steps + 1);
+    // Mixed: layers in differently turned parents agree when their page angles do.
+    u.app.session.execute("node.set", &json!({"ids": [b], "props": {"rotation": 33}})).unwrap();
+    u.app.session.execute("select.set", &json!({"ids": [r, b]})).unwrap();
+    assert_eq!(field(&mut u, "Rotation").1, "33°");
+    u.app.session.execute("node.set", &json!({"ids": [b], "props": {"rotation": 20}})).unwrap();
+    assert_eq!(field(&mut u, "Rotation").1, "Mixed");
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Rotation", "+10", Key::Enter);
+    assert!((page(&u, r) - 43.0).abs() < 1e-6 && (page(&u, b) - 30.0).abs() < 1e-6, "{} {}", page(&u, r), page(&u, b));
+    assert_eq!(undo_steps(&u), steps + 1);
+}
+
+#[test]
+fn a_relative_rotation_edit_turns_a_selected_parent_before_its_child_whatever_the_selection_order() {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 400, "height": 400})).unwrap());
+    let c = id(s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 120, "height": 80, "parent": f})).unwrap());
+    s.execute("node.set", &json!({"ids": [f], "props": {"rotation": 10}})).unwrap();
+    s.execute("node.set", &json!({"ids": [c], "props": {"absoluteRotation": 30}})).unwrap();
+    // The child first, then its parent.
+    s.execute("select.set", &json!({"ids": [c, f]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page = |u: &Ui, n: NodeId| figcraft_geom::rotation_degrees(u.app.session.doc().unwrap().world_transform(n));
+    assert_eq!(field(&mut u, "Rotation").1, "Mixed");
+    type_into(&mut u, "Rotation", "+10", Key::Enter);
+    assert!((page(&u, f) - 20.0).abs() < 1e-6 && (page(&u, c) - 40.0).abs() < 1e-6, "{} {}", page(&u, f), page(&u, c));
 }
 
 #[test]
@@ -370,6 +556,58 @@ fn arithmetic_commits_tab_moves_on_and_escape_restores() {
     assert_eq!(geom(&u, a).0, 78.0);
 }
 
+/// Answers a Save as dialog with `path`, once, and counts the dialogs asked for.
+struct SaveAsPicker {
+    path: Option<std::path::PathBuf>,
+    asked: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl crate::Services for SaveAsPicker {
+    fn pick_save(&mut self, _title: &str, _name: &str, _exts: &[&str]) -> crate::DialogFuture {
+        self.asked.set(self.asked.get() + 1);
+        Box::pin(std::future::ready(self.path.take()))
+    }
+}
+
+/// The x of layer `a` in the file at `path`, opened again.
+fn saved_x(path: &std::path::Path, a: NodeId) -> f64 {
+    let mut back = Session::new();
+    back.execute("file.open", &json!({"path": path.to_string_lossy()})).unwrap();
+    back.doc().unwrap().world_bounds(a).unwrap().x0
+}
+
+#[test]
+fn the_save_shortcut_saves_from_a_field_with_what_was_typed() {
+    // Cmd/Ctrl+S with the keyboard in a panel field saved nothing (#1157). It commits the field
+    // first (as clicking away does), then saves; the field lets go of the keyboard.
+    // Shift+Cmd/Ctrl+S does the same through Save as.
+    let cmd = if cfg!(target_os = "macos") { Modifiers::COMMAND } else { Modifiers::COMMAND.plus(Modifiers::CTRL) };
+    let (mut u, a, _) = setup();
+    let dir = std::env::temp_dir().join(format!("figcraft-save-from-field-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (path, copy) = (dir.join("doc.figcraft"), dir.join("copy.figcraft"));
+    u.app.session.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+    let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+    u.app.services = Box::new(SaveAsPicker { path: Some(copy.clone()), asked: asked.clone() });
+    for (shortcut, mods, x, file) in [("Cmd/Ctrl+S", cmd, 77.0, &path), ("Shift+Cmd/Ctrl+S", cmd.plus(Modifiers::SHIFT), 66.0, &copy)] {
+        let (p, _) = field(&mut u, "X");
+        click(&mut u, p);
+        assert!(crate::a11y::field_focused(&u.ctx), "{shortcut}: the field has the keyboard");
+        u.frame(vec![Event::Text(x.to_string())]);
+        key(&mut u, Key::S, mods);
+        for _ in 0..3 {
+            u.frame(vec![]);
+        }
+        assert_eq!(geom(&u, a).0, x, "{shortcut}: what was typed is committed");
+        assert!(!crate::a11y::field_focused(&u.ctx), "{shortcut}: the field let go");
+        assert!(!u.app.session.ds().unwrap().is_dirty(), "{shortcut}: saved");
+        assert_eq!(saved_x(file, a), x, "{shortcut}: the file on disk has the typed value");
+    }
+    assert_eq!(asked.get(), 1, "only Save as asked where");
+    assert_eq!(saved_x(&path, a), 77.0, "Save as left the first file alone");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn mixed_values_take_edits_relative_to_each_layer() {
     let (mut u, a, b) = setup();
@@ -415,27 +653,113 @@ fn lead(u: &Ui, id: Id) -> Pos2 {
     u.ctx.read_response(id.with("lead")).unwrap_or_else(|| panic!("no field {id:?}")).rect.center()
 }
 
+/// Asserts scrubbing the colour picker's R and alpha fields updates the colour live, each
+/// scrub adding one undo step.
 #[test]
 fn scrubbing_colour_picker_fields_is_live_and_one_undo_step() {
     let (mut u, a, _) = setup();
     let rgba = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap().to_rgba8();
     let [r0, .., a0] = rgba(&u);
-    u.ctx.data_mut(|d| d.insert_temp(Id::new("cp_model"), 1usize));
+    u.ctx.data_mut(|d| d.insert_temp(Id::unique("cp_model"), 1usize));
     u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
-    // The picker window takes a frame to size itself.
-    for _ in 0..3 {
+    // Settle sizing and the anchored position before reading field hit rectangles.
+    for _ in 0..5 {
         u.frame(vec![]);
     }
     let steps = undo_steps(&u);
-    let from = lead(&u, Id::new(("cp_f", "r")));
+    let from = lead(&u, Id::unique(("cp_f", "r")));
     drag(&mut u, from, -20.0, Modifiers::NONE);
-    assert_eq!((rgba(&u)[0], undo_steps(&u)), (r0 - 20, steps + 1), "R");
+    assert_eq!((rgba(&u)[0], undo_steps(&u)), (r0 - 10, steps + 1), "R");
+    // Committing adds a recent colour row and can lift the anchored picker. Settle its layout.
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
     // The alpha field: a scrub moves it too.
-    let from = lead(&u, Id::new("cp_a"));
+    let from = lead(&u, Id::unique("cp_a"));
     drag(&mut u, from, -30.0, Modifiers::NONE);
     let [.., alpha] = rgba(&u);
     assert!(alpha < a0, "alpha {a0} → {alpha}");
     assert_eq!(undo_steps(&u), steps + 2, "alpha");
+}
+
+/// Asserts scrubbing a prototype delay sets the value once when released and adds one undo
+/// step.
+#[test]
+fn lch_and_oklch_picker_fields_edit_lightness_keeping_hue() {
+    for (model, name, l) in [(4usize, "LCH", "lch_l"), (5, "OKLCH", "oklch_l")] {
+        let (mut u, a, _) = setup();
+        let color = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap();
+        u.app.set_props(&[a], json!({"fills": [{"type": "solid", "color": "#0D99FF"}]}));
+        let before = color(&u);
+        assert_eq!(before.to_hex(), "0D99FF");
+        u.ctx.data_mut(|d| d.insert_temp(Id::unique("cp_model"), model));
+        u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
+        for _ in 0..5 {
+            u.frame(vec![]);
+        }
+        let steps = undo_steps(&u);
+        let from = lead(&u, Id::unique(("cp_f", l)));
+        drag(&mut u, from, -20.0, Modifiers::NONE);
+        let after = color(&u);
+        let hue = |c| figcraft_color::Oklch::from_color(c).h;
+        assert!(after.luminance() < before.luminance(), "{name}: darker");
+        assert!((hue(after) - hue(before)).abs() < 3.0, "{name}: hue kept {} → {}", hue(before), hue(after));
+        assert_eq!(undo_steps(&u), steps + 1, "{name}: one undo step");
+    }
+}
+
+/// Type `text` into the picker field `id` (`("cp_f", id)`) and press Enter.
+fn type_into_picker(u: &mut Ui, id: &str, text: &str) {
+    let rect = u.ctx.read_response(Id::unique(("cp_f", id)).with("field")).unwrap_or_else(|| panic!("no picker field {id}")).rect;
+    click(u, rect.center());
+    u.frame(vec![Event::Text(text.into())]);
+    key(u, Key::Enter, Modifiers::NONE);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+}
+
+/// A picker on layer `a` in model `model` (an index into the model menu), drawn and settled.
+fn open_picker(u: &mut Ui, a: NodeId, model: usize) {
+    u.ctx.data_mut(|d| d.insert_temp(Id::unique("cp_model"), model));
+    u.app.ui.picker = Some(crate::colorpicker::PickerTarget::Paint { fills: true, index: 0, ids: vec![a] });
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+}
+
+fn kept_polar(u: &Ui) -> [f64; 3] {
+    u.ctx.data(|d| d.get_temp::<(&'static str, [f64; 3], [u8; 4])>(Id::unique("cp_polar"))).unwrap().1
+}
+
+#[test]
+fn oklch_keeps_a_hue_typed_on_a_grey() {
+    let (mut u, a, _) = setup();
+    let color = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap();
+    u.app.set_props(&[a], json!({"fills": [{"type": "solid", "color": "#808080"}]}));
+    open_picker(&mut u, a, 5);
+    type_into_picker(&mut u, "oklch_h", "250");
+    u.frame(vec![]);
+    assert_eq!(kept_polar(&u)[2].round(), 250.0, "the hue stays on a grey");
+    type_into_picker(&mut u, "oklch_c", "0.1");
+    let ok = figcraft_color::Oklch::from_color(color(&u));
+    assert!(ok.c > 0.05 && (ok.h - 250.0).abs() < 3.0, "chroma raised along the typed hue: {ok:?}");
+}
+
+#[test]
+fn lch_keeps_the_typed_chroma_while_the_colour_is_out_of_srgb() {
+    let (mut u, a, _) = setup();
+    let color = |u: &Ui| u.app.session.doc().unwrap().node(a).unwrap().fills[0].solid_color().unwrap();
+    u.app.set_props(&[a], json!({"fills": [{"type": "solid", "color": "#0D99FF"}]}));
+    open_picker(&mut u, a, 4);
+    let hue = kept_polar(&u)[2];
+    // Lightness near white: sRGB holds almost no chroma there, so the colour comes out near grey.
+    type_into_picker(&mut u, "lch_l", "98");
+    assert_eq!(kept_polar(&u)[2], hue, "hue kept near white");
+    // Back down: the chroma and hue asked for come back instead of a grey or a red.
+    type_into_picker(&mut u, "lch_l", "60");
+    let lch = figcraft_color::Lch::from_color(color(&u));
+    assert!(lch.c > 50.0 && (lch.h - hue as f32).abs() < 2.0, "blue again: {lch:?} (hue {hue})");
 }
 
 #[test]
@@ -453,23 +777,991 @@ fn scrubbing_a_prototype_delay_sets_it_once_when_let_go() {
         u.frame(vec![]);
     }
     let steps = undo_steps(&u);
-    let from = lead(&u, Id::new(("proto_delay", f1, 0usize)));
+    let from = lead(&u, Id::unique(("proto_delay", f1, 0usize)));
     drag(&mut u, from, 30.0, Modifiers::NONE);
     let ms = match u.app.session.doc().unwrap().node(f1).unwrap().interactions[0].trigger {
         figcraft_doc::proto::Trigger::AfterDelay { ms } => ms,
         _ => panic!("still after a delay"),
     };
-    assert_eq!((ms, undo_steps(&u)), (800, steps + 1));
+    assert_eq!((ms, undo_steps(&u)), (650, steps + 1));
 }
 
+/// Asserts scrubbing the scale panel's width scales the layer live in one undo step.
 #[test]
 fn scrubbing_the_scale_panel_width_scales_live_in_one_undo_step() {
     let (mut u, a, _) = setup();
     u.app.run("tool.set", json!({"tool": "scale"}));
     u.frame(vec![]);
     let steps = undo_steps(&u);
-    let from = lead(&u, Id::new("scale_w"));
+    let from = lead(&u, Id::unique("scale_w"));
     drag(&mut u, from, 20.0, Modifiers::NONE);
     let (_, _, w, h) = geom(&u, a);
-    assert_eq!((w, h, undo_steps(&u)), (60.0, 45.0, steps + 1), "40×30 scaled to a width of 60");
+    assert_eq!((w, h, undo_steps(&u)), (50.0, 37.5, steps + 1), "40×30 scaled to a width of 50");
+}
+
+/// A 100 x 100 rectangle at the origin, selected, in a Ui with the Move tool.
+fn scale_setup() -> (Ui, NodeId) {
+    let mut s = Session::new();
+    let r = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    u.frame(vec![]);
+    (u, r)
+}
+
+fn scale_field_focused(u: &Ui) -> bool {
+    u.ctx.memory(|m| m.has_focus(Id::unique("scale_k").with("te")))
+}
+
+/// Measured in Figma's web app (2026-11-09): K opens the Scale section with its input focused.
+#[test]
+fn pressing_k_focuses_the_scale_field_with_its_text_selected() {
+    let (mut u, _) = scale_setup();
+    assert!(!scale_field_focused(&u));
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+    assert!(scale_field_focused(&u), "the scale field has the keyboard");
+    let state = egui::TextEdit::load_state(&u.ctx, Id::unique("scale_k").with("te")).expect("the editor exists");
+    let range = state.cursor.char_range().expect("a selection");
+    let shown = u.ctx.data(|d| d.get_temp::<String>(Id::unique("scale_k").with("editing"))).expect("the field is being edited");
+    let (lo, hi) = (range.primary.index.min(range.secondary.index), range.primary.index.max(range.secondary.index));
+    assert_eq!((lo, hi), (egui::text::CCursor::new(0).index, egui::text::CCursor::new(shown.chars().count()).index), "all of its text is selected");
+}
+
+/// K with nothing selected, then a selection: the field doesn't take the keyboard from the canvas.
+#[test]
+fn a_selection_after_k_does_not_move_the_keyboard_to_the_scale_field() {
+    let (mut u, r) = scale_setup();
+    u.app.run("select.set", json!({"ids": []}));
+    u.frame(vec![]);
+    key(&mut u, Key::K, Modifiers::NONE);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    u.app.run("select.set", json!({"ids": [r]}));
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+    assert!(!scale_field_focused(&u), "the canvas keeps the keyboard");
+}
+
+/// Ctrl+Enter in the factor field is not the tool's exit.
+#[test]
+fn ctrl_enter_in_the_scale_field_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    key(&mut u, Key::Enter, Modifiers::CTRL);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// An Enter on the first frame the panel is back from another tab (the field not yet focused again)
+/// doesn't end the tool on a stale "had the keyboard" flag.
+#[test]
+fn enter_on_the_first_frame_back_from_another_tab_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// The Scale tool chosen again while the Design tab was away (Prototype tab, Move, then K): the
+/// field takes the keyboard again when the Design tab comes back.
+#[test]
+fn the_scale_field_takes_the_keyboard_again_after_another_tab() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.app.run("tool.set", json!({"tool": "move"}));
+    u.frame(vec![]);
+    u.app.run("tool.set", json!({"tool": "scale"}));
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u), "the field has the keyboard again");
+}
+
+/// A value typed and left unsettled when the panel went away is dropped: back again, the field
+/// shows the fresh value with all of its text selected, so typing replaces it.
+#[test]
+fn the_scale_field_comes_back_fresh_with_its_text_selected() {
+    let (mut u, r) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("7".to_string())]);
+    u.app.ui.right_tab = crate::state::RightTab::Prototype;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    u.app.ui.right_tab = crate::state::RightTab::Design;
+    u.frame(vec![]);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    let shown = u.ctx.data(|d| d.get_temp::<String>(Id::unique("scale_k").with("editing"))).expect("the field is being edited");
+    assert_ne!(shown, "7", "the leftover edit is gone");
+    let state = egui::TextEdit::load_state(&u.ctx, Id::unique("scale_k").with("te")).expect("the editor exists");
+    let range = state.cursor.char_range().expect("a selection");
+    let (lo, hi) = (range.primary.index.min(range.secondary.index), range.primary.index.max(range.secondary.index));
+    assert_eq!((lo, hi), (egui::text::CCursor::new(0).index, egui::text::CCursor::new(shown.chars().count()).index));
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+}
+
+/// Tab moves the keyboard from the factor field to the next one; an Enter there leaves the
+/// Scale tool on.
+#[test]
+fn enter_in_another_field_after_tab_keeps_the_scale_tool() {
+    let (mut u, _) = scale_setup();
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    assert!(scale_field_focused(&u));
+    // Tab, then Enter on the very next frame (as a quick Tab, Enter or a click and Enter would).
+    let ev = |key, pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    u.frame(vec![ev(Key::Tab, true), ev(Key::Tab, false)]);
+    assert!(!scale_field_focused(&u), "Tab moved the keyboard on");
+    for _ in 0..4 {
+        u.frame(vec![]);
+        assert!(!scale_field_focused(&u), "the field doesn't take the keyboard back");
+    }
+    u.frame(vec![ev(Key::Enter, true), ev(Key::Enter, false)]);
+    u.frame(vec![]);
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Scale);
+}
+
+/// K, 2, Enter: 100 x 100 becomes 200 x 200 about the panel's origin (the centre), the tool is Move, one undo step.
+#[test]
+fn k_two_enter_scales_the_selection_by_two() {
+    let (mut u, r) = scale_setup();
+    let steps = undo_steps(&u);
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("2".to_string())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![]);
+    // About the panel's origin, which starts at the centre as Figma's grid does.
+    assert_eq!(geom(&u, r), (-50.0, -50.0, 200.0, 200.0));
+    assert!(!scale_field_focused(&u), "the field let go of the keyboard");
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
+    assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
+    assert_eq!(undo_steps(&u), steps + 1);
+    u.app.run("edit.undo", json!({}));
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+}
+
+/// "2x" and "1.5" are factors too.
+#[test]
+fn the_scale_field_takes_2x_and_1_5() {
+    for (text, size) in [("2x", 200.0), ("1.5", 150.0)] {
+        let (mut u, r) = scale_setup();
+        key(&mut u, Key::K, Modifiers::NONE);
+        u.frame(vec![]);
+        u.frame(vec![Event::Text(text.to_string())]);
+        key(&mut u, Key::Enter, Modifiers::NONE);
+        u.frame(vec![]);
+        let at = 50.0 - size / 2.0;
+        assert_eq!(geom(&u, r), (at, at, size, size), "{text}");
+    }
+}
+
+/// Escape in the scale field closes it and changes nothing.
+#[test]
+fn escape_in_the_scale_field_closes_it_and_changes_nothing() {
+    let (mut u, r) = scale_setup();
+    let steps = undo_steps(&u);
+    key(&mut u, Key::K, Modifiers::NONE);
+    u.frame(vec![]);
+    u.frame(vec![Event::Text("3".to_string())]);
+    key(&mut u, Key::Escape, Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, r), (0.0, 0.0, 100.0, 100.0));
+    assert!(!scale_field_focused(&u), "the field let go of the keyboard");
+    assert_eq!(u.app.session.tool.tool, figcraft_engine::ToolId::Move);
+    assert_eq!(u.app.session.ds().unwrap().selection, vec![r]);
+    assert_eq!(undo_steps(&u), steps);
+}
+
+/// The texts painted in the last frame: what they say, whether they end in an ellipsis, and where
+/// they show (within their clip).
+fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, bool, egui::Rect)> {
+    fn walk(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<(String, bool, egui::Rect)>) {
+        match shape {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, out)),
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.galley.elided, t.visual_bounding_rect().intersect(clip))),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    shapes.iter().for_each(|c| walk(&c.shape, c.clip_rect, &mut out));
+    out
+}
+
+/// The glass effect's light intensity field is labelled (#256): drawn in the Design panel with the
+/// effect's settings open.
+#[test]
+fn the_glass_light_intensity_field_has_a_label() {
+    let mut s = Session::new();
+    let r = NodeId(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 100, "height": 80})).unwrap()["id"].as_u64().unwrap());
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    s.execute("effect.add", &json!({"type": "glass"})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.data_mut(|d| d.insert_temp(Id::unique(("fx_open", 0usize)), true));
+    u.frame(vec![]);
+    let shapes = u.frame_output(vec![]).shapes;
+    let lead = u.ctx.read_response(Id::unique(("fx", "lightIntensity", 0usize)).with("lead")).expect("the intensity field is shown").rect;
+    let labels: Vec<(String, bool)> =
+        painted_texts(&shapes).into_iter().filter(|(_, _, at)| lead.contains(at.center())).map(|(text, cut, _)| (text, cut)).collect();
+    assert_eq!(labels, [("Intensity".to_string(), false)], "labelled, and not cut short");
+    let field = u.ctx.read_response(Id::unique(("fx", "lightIntensity", 0usize)).with("field")).expect("its value").rect;
+    assert_eq!(field.max.x - lead.min.x, GLASS_FIELD_W, "the width the next test measures against");
+}
+
+/// A glass settings field's width in the Design panel at its default width.
+const GLASS_FIELD_W: f32 = 87.5;
+
+/// The light intensity label this fix adds fits whole beside its value (#256): at the default
+/// width the grid's column leaves 47.5 pt for it, and "Intensity" is 46.2. Longer translations
+/// (de "Intensit\u00e4t", es "Intensidad") end in "…" — whole on hover — rather than run into the
+/// value.
+#[test]
+fn the_intensity_label_fits_whole_beside_its_value() {
+    use crate::i18n::{self, Forms, Text};
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        let width = |s: &str| ui.painter().layout_no_wrap(s.to_string(), crate::theme::regular(11.0), egui::Color32::WHITE).size().x;
+        let mut english = 0.0;
+        for lang in i18n::languages() {
+            let label = lang.ui.iter().find(|(k, _)| *k == "Intensity").map_or("Intensity", |(_, t)| match t {
+                Text::Plain(s) | Text::Plural(Forms { other: s, .. }) => s,
+            });
+            // The test's context has only egui's own font: a label it can't draw (Vietnamese
+            // diacritics, CJK) can't be measured here, and the app draws it with a system font.
+            if !ui.ctx().fonts_mut(|f| f.has_glyphs(&crate::theme::regular(11.0), label)) {
+                continue;
+            }
+            let lead = crate::widgets::text_lead_width(ui, label, GLASS_FIELD_W);
+            if lang.code == "en" {
+                english = width(label);
+                assert!(lead >= 8.0 + english, "en: {label:?} would end in \"…\"");
+            }
+            // The value keeps its room at the field's end whatever the label's length.
+            assert!(lead <= GLASS_FIELD_W - 32.0, "{}: {label:?} leaves the value its room", lang.code);
+        }
+        assert!(english > 0.0, "the English label is in the table");
+    });
+    out.textures_delta.clear();
+}
+
+/// Asserts a label too long for its number field is elided before the value, while the value
+/// stays whole and both remain inside the field.
+#[test]
+fn a_label_too_long_for_its_field_ends_in_an_ellipsis_before_the_value() {
+    let ctx = egui::Context::default();
+    let mut field = egui::Rect::NOTHING;
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        let lead = crate::widgets::Lead::Text("A label much wider than its field");
+        let _ = crate::widgets::number_field(ui, Id::unique("long"), lead, Some(80.0), "%", 60.0, 1.0);
+        field = ui.min_rect();
+    });
+    out.textures_delta.clear();
+    let texts = painted_texts(&out.shapes);
+    let [(_, label_cut, l), (value, value_cut, v)] = texts.as_slice() else { panic!("the label and the value: {texts:?}") };
+    assert!(*label_cut, "the label ends in an ellipsis");
+    assert_eq!((value.as_str(), *value_cut), ("80%", false), "the value shows whole");
+    assert!(field.contains_rect(*l) && field.contains_rect(*v), "both inside the field {field:?}: {l:?} {v:?}");
+    assert!(l.max.x < v.min.x, "the label stops before the value: {l:?} {v:?}");
+}
+
+/// The middle of the field with response `id`.
+fn at(u: &Ui, id: Id) -> Pos2 {
+    u.ctx.read_response(id.with("field")).unwrap_or_else(|| panic!("no field {id:?}")).rect.center()
+}
+
+/// Type `text` into the field whose response is `id` and press Enter.
+fn type_at(u: &mut Ui, id: Id, text: &str) {
+    let p = at(u, id);
+    click(u, p);
+    u.frame(vec![Event::Text(text.into())]);
+    key(u, Key::Enter, Modifiers::NONE);
+    u.frame(vec![]);
+}
+
+/// A frame with one layout grid, its settings open in the Design panel.
+fn grid_ui(grid: serde_json::Value) -> (Ui, NodeId) {
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 400, "height": 300})).unwrap());
+    s.execute("node.set", &json!({"ids": [f], "props": {"grids": [grid]}})).unwrap();
+    s.execute("select.set", &json!({"ids": [f]})).unwrap();
+    let mut u = Ui::new(s);
+    u.ctx.data_mut(|d| d.insert_temp(Id::unique(("grid_open", 0usize)), true));
+    u.frame(vec![]);
+    (u, f)
+}
+
+/// Scroll the Design panel (over its own field `id`) until that field is on the test screen: the
+/// grid settings sit below the fold.
+fn scroll_to(u: &mut Ui, id: Id) {
+    let wheel = Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, -300.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    };
+    for _ in 0..10 {
+        let p = at(u, id);
+        if p.y < 860.0 {
+            break;
+        }
+        u.frame(vec![Event::PointerMoved(pos2(p.x, 500.0)), wheel.clone()]);
+        // Let the scroll settle.
+        for _ in 0..30 {
+            u.frame(vec![]);
+        }
+    }
+}
+
+/// The word for Auto types 0 only where 0 *is* the automatic value: a fixed layout grid's count
+/// does, an auto layout's gap (Auto there is "Space between") does not. Keying it on the field's
+/// placeholder said 0 everywhere, which turned the gap's mode off.
+#[test]
+fn typing_auto_is_zero_only_where_zero_is_the_automatic_value() {
+    let count_id = Id::unique(("grid_field", "count", 0usize));
+    let (mut u, f) = grid_ui(json!({"kind": "columns", "align": "min", "count": 3, "size": 8, "gutter": 10}));
+    let count = |u: &Ui| u.app.session.doc().unwrap().node(f).unwrap().grids[0].count;
+    scroll_to(&mut u, count_id);
+    type_at(&mut u, count_id, "Auto");
+    assert_eq!(count(&u), 0, "a fixed grid's count: Auto is 0");
+    type_at(&mut u, count_id, "4");
+    assert_eq!(count(&u), 4, "and a number is that count");
+    // A stretched grid works its width out from the frame: the field shows Auto and takes no edit.
+    let (mut u, f) = grid_ui(json!({"kind": "columns", "align": "stretch", "count": 3, "size": 0}));
+    let size_id = Id::unique(("grid_field", "size", 0usize));
+    scroll_to(&mut u, size_id);
+    type_at(&mut u, size_id, "40");
+    assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().grids[0].size, 0.0, "a stretched grid's width isn't set");
+    // Nor its count: a stretched grid has at least one band, so the word commits nothing.
+    type_at(&mut u, count_id, "Auto");
+    assert_eq!(u.app.session.doc().unwrap().node(f).unwrap().grids[0].count, 3, "a stretched grid keeps its count");
+
+    // The auto layout's gap: its placeholder says Auto, but Auto is a mode, not 0.
+    let mut s = Session::new();
+    let f = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 400, "height": 300})).unwrap());
+    s.execute("layout.add", &json!({"ids": [f], "direction": "vertical"})).unwrap();
+    s.execute("node.set", &json!({"ids": [f], "props": {"mainAlign": "spaceBetween"}})).unwrap();
+    s.execute("select.set", &json!({"ids": [f]})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let gap = |u: &Ui| u.app.session.doc().unwrap().node(f).unwrap().layout.as_ref().unwrap().gap;
+    let before = gap(&u);
+    type_at(&mut u, Id::unique("al_gap"), "Auto");
+    assert_eq!(gap(&u), before, "the word isn't a value where Auto is a mode");
+}
+
+/// Save starts after the field commits, even if the next raw input releases a tab click first.
+#[test]
+fn a_deferred_field_save_keeps_its_document_when_the_next_input_switches_tabs() {
+    for (save_as, same_batch, discard) in
+        [(false, false, false), (true, false, false), (false, true, false), (true, true, false), (false, true, true), (true, true, true)]
+    {
+        let (mut u, a, _) = setup();
+        let dir = std::env::temp_dir().join(format!("figcraft-deferred-field-tab-{}-{save_as}-{same_batch}-{discard}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (path, copy, other) = (dir.join("a.figcraft"), dir.join("copy.figcraft"), dir.join("b.figcraft"));
+        u.app.session.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+        let owner = u.app.session.ds().unwrap().uid;
+        u.app.session.execute("file.new", &json!({"name": "Deferred B"})).unwrap();
+        u.app.session.execute("shape.rectangle", &json!({"x": 200, "y": 0, "width": 30, "height": 30})).unwrap();
+        u.app.session.execute("file.saveAs", &json!({"path": other.to_string_lossy()})).unwrap();
+        u.app.session.execute("shape.rectangle", &json!({"x": 300, "y": 0, "width": 10, "height": 10})).unwrap();
+        let other_uid = u.app.session.ds().unwrap().uid;
+        let other_name = u.app.session.doc().unwrap().name.clone();
+        let other_bytes = std::fs::read(&other).unwrap();
+        let index = u.app.session.docs.iter().position(|d| d.uid == owner).unwrap();
+        u.app.session.execute("doc.switch", &json!({"index": index})).unwrap();
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+        u.app.services = Box::new(SaveAsPicker { path: Some(copy.clone()), asked: asked.clone() });
+        u.frame(vec![]);
+        let output = u.frame_output(vec![]);
+        let nodes = output.platform_output.accesskit_update.unwrap().nodes;
+        let tab = nodes
+            .iter()
+            .map(|(_, node)| node)
+            .find(|node| node.role() == Role::Tab && node.label() == Some(other_name.as_str()))
+            .expect("the actual B tab");
+        let bounds = tab.bounds().unwrap();
+        let at = pos2(((bounds.x0 + bounds.x1) / 2.0) as f32, ((bounds.y0 + bounds.y1) / 2.0) as f32);
+        let (field_at, _) = field(&mut u, "X");
+        click(&mut u, field_at);
+        assert!(crate::a11y::field_focused(&u.ctx));
+        assert!(u.ctx.text_edit_focused(), "the actual field editor owns raw text");
+        assert_eq!(u.ctx.memory(|m| m.focused()), Some(Id::unique("pos_x").with("te")), "X owns the keyboard");
+        if !same_batch {
+            u.frame(vec![Event::Text("77".into())]);
+            assert_eq!(u.ctx.data(|d| d.get_temp::<String>(Id::unique("pos_x").with("editing"))), Some("77".into()), "raw text reached X's draft");
+        }
+        assert_eq!(geom(&u, a).0, 10.0, "the field has not committed before the shortcut");
+        let mut modifiers = if cfg!(target_os = "macos") { Modifiers::COMMAND } else { Modifiers::COMMAND.plus(Modifiers::CTRL) };
+        if save_as {
+            modifiers = modifiers.plus(Modifiers::SHIFT);
+        }
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        // Pressing the tab relinquishes the real field; its release switches documents in the
+        // next frame, before shortcuts::handle consumes the deferred request.
+        let mut events = vec![
+            Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: true, repeat: false, modifiers },
+            Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: false, repeat: false, modifiers },
+            Event::PointerMoved(at),
+            button(true),
+        ];
+        if same_batch {
+            events.insert(0, Event::Text("77".into()));
+        }
+        if discard {
+            events.insert(0, Event::ModifiersChanged(modifiers));
+            u.frame_raw_with_discard(egui::RawInput { events, ..Default::default() });
+        } else {
+            u.frame_with(events, modifiers);
+        }
+        assert!(u.app.ui.after_field.is_some(), "the real shortcut deferred a save");
+        if !discard {
+            assert!(
+                !u.ctx.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key: Key::S, pressed: true, .. }))),
+                "the save press was consumed once"
+            );
+        }
+        // A discarded presented pass sees the original RawInput but does not dispatch it again;
+        // pending/picker/write assertions below also prove that pass did not duplicate the save.
+        assert_eq!(u.app.session.ds().unwrap().uid, owner, "press alone did not switch tabs");
+        assert_eq!(geom(&u, a).0, 77.0, "the original field committed before delivery");
+        u.frame(vec![button(false)]);
+        assert_eq!(u.app.session.ds().unwrap().uid, other_uid, "the real tab release switched to B");
+        for _ in 0..3 {
+            u.frame(vec![]);
+        }
+        assert_eq!(u.app.session.ds().unwrap().uid, other_uid, "saving A restores the front tab B");
+        assert!(u.app.session.ds().unwrap().is_dirty(), "B was not saved");
+        assert_eq!(std::fs::read(&other).unwrap(), other_bytes, "B's file was not overwritten");
+        assert_eq!(asked.get(), usize::from(save_as), "only the original Save as asks for a path");
+        assert_eq!(saved_x(if save_as { &copy } else { &path }, a), 77.0, "A's typed field is saved");
+        assert_eq!(saved_x(&path, a), if save_as { 10.0 } else { 77.0 });
+        assert!(u.app.ui.after_field.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// Asserts a deferred field save does not retarget a closed, moved or foreign owner: the other
+/// file stays untouched, Save as is not opened, and the stale request is consumed once.
+#[test]
+fn a_deferred_field_save_does_not_retarget_a_closed_moved_or_foreign_owner() {
+    for change in ["closed", "moved", "foreign"] {
+        for save_as in [false, true] {
+            let (mut u, a, _) = setup();
+            u.ctx.set_embed_viewports(false);
+            let dir = std::env::temp_dir().join(format!("figcraft-deferred-field-invalid-{}-{change}-{save_as}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let (path, other, copy) = (dir.join("a.figcraft"), dir.join("b.figcraft"), dir.join("copy.figcraft"));
+            u.app.session.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+            let owner = u.app.session.ds().unwrap().uid;
+            u.app.session.execute("file.new", &json!({"name": "Deferred B"})).unwrap();
+            u.app.session.execute("file.saveAs", &json!({"path": other.to_string_lossy()})).unwrap();
+            u.app.session.execute("shape.rectangle", &json!({"x": 200, "y": 0, "width": 10, "height": 10})).unwrap();
+            let other_uid = u.app.session.ds().unwrap().uid;
+            let other_bytes = std::fs::read(&other).unwrap();
+            let index = u.app.session.docs.iter().position(|d| d.uid == owner).unwrap();
+            u.app.session.execute("doc.switch", &json!({"index": index})).unwrap();
+            let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+            u.app.services = Box::new(SaveAsPicker { path: Some(copy.clone()), asked: asked.clone() });
+            let (at, _) = field(&mut u, "X");
+            click(&mut u, at);
+            assert!(crate::a11y::field_focused(&u.ctx));
+            assert!(u.ctx.text_edit_focused(), "the actual field editor owns raw text");
+            assert_eq!(u.ctx.memory(|m| m.focused()), Some(Id::unique("pos_x").with("te")), "X owns the keyboard");
+            u.frame(vec![Event::Text("77".into())]);
+            assert_eq!(u.ctx.data(|d| d.get_temp::<String>(Id::unique("pos_x").with("editing"))), Some("77".into()), "raw text reached X's draft");
+            assert_eq!(geom(&u, a).0, 10.0, "typed field text is not committed before Save");
+            let mut modifiers = if cfg!(target_os = "macos") { Modifiers::COMMAND } else { Modifiers::COMMAND.plus(Modifiers::CTRL) };
+            if save_as {
+                modifiers = modifiers.plus(Modifiers::SHIFT);
+            }
+            u.frame_with(
+                vec![
+                    Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: true, repeat: false, modifiers },
+                    Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: false, repeat: false, modifiers },
+                ],
+                modifiers,
+            );
+            assert!(u.app.ui.after_field.is_some());
+            assert_eq!(geom(&u, a).0, 77.0, "field commit is still before the save");
+            let owner_index = u.app.session.docs.iter().position(|d| d.uid == owner).unwrap();
+            if change == "closed" {
+                u.app.session.execute("file.close", &json!({"index": owner_index, "force": true})).unwrap();
+            } else if change == "moved" {
+                let window = crate::windows::open(&mut u.app, &u.ctx, Some(owner_index), None, None).unwrap();
+                assert_ne!(window, 0);
+                assert_eq!(u.app.windows.of(owner), window);
+            } else {
+                // An impossible/misrouted pane must fail closed too; no real window has this id.
+                u.app.windows.current = u64::MAX;
+            }
+            let other_index = u.app.session.docs.iter().position(|d| d.uid == other_uid).unwrap();
+            u.app.session.execute("doc.switch", &json!({"index": other_index})).unwrap();
+            if change == "foreign" {
+                // Exercise the actual consumer without begin() resetting this deliberate invalid
+                // scope; the valid input/field producer above was the real app path.
+                // Match this direct pass and the harness clock; egui's default predicted_dt is f32.
+                let time = u.ctx.input(|i| i.time) + 1.0 / 60.0;
+                u.advance_clock(time);
+                u.ctx
+                    .run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| {
+                        crate::shortcuts::handle(&mut u.app, ui.ctx(), false, Default::default())
+                    })
+                    .textures_delta
+                    .clear();
+                u.app.windows.current = 0;
+            } else {
+                u.frame(vec![]);
+            }
+            for _ in 0..2 {
+                u.frame(vec![]);
+            }
+            assert_eq!(u.app.session.ds().unwrap().uid, other_uid);
+            assert!(u.app.session.ds().unwrap().is_dirty(), "stale delivery must not save B");
+            assert_eq!(std::fs::read(&other).unwrap(), other_bytes);
+            assert_eq!(saved_x(&path, a), 10.0, "a cancelled owner is not saved");
+            assert_eq!(asked.get(), 0, "a stale Save as must not open for B");
+            assert!(!copy.exists());
+            assert!(u.app.ui.after_field.is_none(), "consume stale requests once");
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+}
+
+/// A save prepared for A must not force its cached X editor into B when routing changes the
+/// presented document before the fields draw, even though both panels use the same widget ID.
+#[test]
+fn a_prepared_field_save_cannot_commit_into_a_same_pass_replacement_document() {
+    for route in ["control", "tab"] {
+        for save_as in [false, true] {
+            for discard in [false, true] {
+                prepared_save_cannot_enter_a_replacement(route, save_as, discard);
+            }
+        }
+    }
+}
+
+/// The save shortcut's key events (and, routing by tab, a click on the tab at `tab_at`), with the modifiers held.
+fn save_events(route: &str, save_as: bool, tab_at: egui::Pos2) -> (Vec<Event>, Modifiers) {
+    let mut modifiers = if cfg!(target_os = "macos") { Modifiers::COMMAND } else { Modifiers::COMMAND.plus(Modifiers::CTRL) };
+    if save_as {
+        modifiers = modifiers.plus(Modifiers::SHIFT);
+    }
+    let mut events = vec![
+        Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: true, repeat: false, modifiers },
+        Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: false, repeat: false, modifiers },
+    ];
+    if route == "tab" {
+        events.push(Event::PointerMoved(tab_at));
+        for pressed in [true, false] {
+            events.push(Event::PointerButton { pos: tab_at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        }
+    }
+    (events, modifiers)
+}
+
+/// One route/save-as/discard combination of the same-pass replacement test: a save prepared for A
+/// must not commit A's cached X editor into B when routing presents B before the fields draw,
+/// even though both panels use the same widget ID.
+fn prepared_save_cannot_enter_a_replacement(route: &str, save_as: bool, discard: bool) {
+    let (mut u, a, _) = setup();
+    let dir = std::env::temp_dir().join(format!("figcraft-field-save-owner-{}-{route}-{save_as}-{discard}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (path, other, copy) = (dir.join("a.figcraft"), dir.join("b.figcraft"), dir.join("copy.figcraft"));
+    u.app.session.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+    let owner = u.app.session.ds().unwrap().uid;
+    let owner_bytes = std::fs::read(&path).unwrap();
+    u.app.session.execute("file.new", &json!({"name": "Same-pass B"})).unwrap();
+    let b = id(u.app.session.execute("shape.rectangle", &json!({"x": 200, "y": 40, "width": 30, "height": 30})).unwrap());
+    u.app.session.execute("file.saveAs", &json!({"path": other.to_string_lossy()})).unwrap();
+    u.app.session.execute("shape.rectangle", &json!({"x": 300, "y": 0, "width": 10, "height": 10})).unwrap();
+    u.app.session.execute("select.set", &json!({"ids": [b]})).unwrap();
+    let other_index = u.app.session.active;
+    let other_uid = u.app.session.ds().unwrap().uid;
+    let other_name = u.app.session.doc().unwrap().name.clone();
+    let other_model = u.app.session.ds().unwrap().doc.clone();
+    let before_switch_revision = u.app.session.ds().unwrap().revision;
+    let other_history = u.app.session.undo_depth();
+    let other_selection = u.app.session.ds().unwrap().selection.clone();
+    let other_dirty = u.app.session.ds().unwrap().is_dirty();
+    let other_bytes = std::fs::read(&other).unwrap();
+    assert!(other_dirty, "B has independent unsaved content");
+    let owner_index = u.app.session.docs.iter().position(|d| d.uid == owner).unwrap();
+    u.app.session.execute("doc.switch", &json!({"index": owner_index})).unwrap();
+    // Every command bumps the outgoing document's revision, even a nonediting switch.
+    let other_revision = u.app.session.docs.iter().find(|d| d.uid == other_uid).unwrap().revision;
+    assert_eq!(other_revision, before_switch_revision + 1, "the setup switch advances only B's command revision");
+    let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+    u.app.services = Box::new(SaveAsPicker { path: Some(copy.clone()), asked: asked.clone() });
+    let output = u.frame_output(vec![]);
+    let nodes = output.platform_output.accesskit_update.unwrap().nodes;
+    let tab = nodes
+        .iter()
+        .map(|(_, node)| node)
+        .find(|node| node.role() == Role::Tab && node.label() == Some(other_name.as_str()))
+        .expect("the actual B tab");
+    let bounds = tab.bounds().unwrap();
+    let tab_at = pos2(((bounds.x0 + bounds.x1) / 2.0) as f32, ((bounds.y0 + bounds.y1) / 2.0) as f32);
+    let (at, _) = field(&mut u, "X");
+    click(&mut u, at);
+    assert_eq!(u.ctx.memory(|m| m.focused()), Some(Id::unique("pos_x").with("te")));
+    assert!(u.ctx.text_edit_focused());
+    u.frame(vec![Event::Text("77".into())]);
+    assert_eq!(u.ctx.data(|d| d.get_temp::<String>(Id::unique("pos_x").with("editing"))), Some("77".into()));
+    assert_eq!(geom(&u, a).0, 10.0, "A's raw draft is not committed yet");
+    assert_eq!(u.app.session.ds().unwrap().uid, owner, "the save begins with A presented");
+    let reply = if route == "control" {
+        let (reply, rx) = std::sync::mpsc::channel();
+        u.app.control_queue.push(crate::ControlRequest {
+            id: json!("same-pass-switch"),
+            method: "engine.execute".into(),
+            params: json!({"command": "doc.switch", "params": {"index": other_index}, "window": 0}),
+            reply,
+            state: Default::default(),
+        });
+        Some(rx)
+    } else {
+        None
+    };
+    let (events, modifiers) = save_events(route, save_as, tab_at);
+    if discard {
+        let mut events = events;
+        events.insert(0, Event::ModifiersChanged(modifiers));
+        u.frame_raw_with_discard(egui::RawInput { events, ..Default::default() });
+    } else {
+        u.frame_with(events, modifiers);
+    }
+    if let Some(reply) = reply {
+        let reply = reply.try_recv().expect("real control::drain acknowledged doc.switch in this pass");
+        assert!(reply.result.is_ok(), "{:?}", reply.result);
+    }
+    let unchanged = |u: &Ui| {
+        assert_eq!(u.app.session.ds().unwrap().uid, other_uid, "the real same-pass route presents B");
+        assert_eq!(geom(u, b), (200.0, 40.0, 30.0, 30.0), "A's draft cannot enter B's field: route={route}, save_as={save_as}, discard={discard}");
+        assert!(std::sync::Arc::ptr_eq(&u.app.session.ds().unwrap().doc, &other_model), "B's model is untouched");
+        assert_eq!(u.app.session.ds().unwrap().revision, other_revision);
+        assert_eq!(u.app.session.undo_depth(), other_history, "B's undo/redo history is unchanged");
+        assert_eq!(u.app.session.ds().unwrap().selection, other_selection);
+        assert_eq!(u.app.session.ds().unwrap().is_dirty(), other_dirty);
+        assert_eq!(std::fs::read(&other).unwrap(), other_bytes);
+        assert_eq!(std::fs::read(&path).unwrap(), owner_bytes);
+        assert_eq!(u.app.session.docs.iter().find(|d| d.uid == owner).unwrap().doc.world_bounds(a).unwrap().x0, 10.0);
+        assert_eq!(asked.get(), 0, "the cancelled request never asks for a path");
+        assert!(!copy.exists());
+        assert!(u.app.ui.after_field.is_none(), "cancel before late fallback or queueing");
+    };
+    unchanged(&u);
+    for _ in 0..3 {
+        u.frame(vec![]);
+        unchanged(&u);
+    }
+    // A cancelled draft is not a permanent veto: B accepts a later real field edit
+    // and saves its own value through the same focused-field shortcut path.
+    let (at, _) = field(&mut u, "X");
+    click(&mut u, at);
+    assert_eq!(u.ctx.memory(|m| m.focused()), Some(Id::unique("pos_x").with("te")));
+    u.frame(vec![Event::Text("88".into())]);
+    assert_eq!(geom(&u, b).0, 200.0, "fresh B text still waits for a normal commit");
+    assert_eq!(u.ctx.data(|d| d.get_temp::<String>(Id::unique("pos_x").with("editing"))), Some("88".into()));
+    u.frame_with(
+        vec![
+            Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: true, repeat: false, modifiers },
+            Event::Key { key: Key::S, physical_key: Some(Key::S), pressed: false, repeat: false, modifiers },
+        ],
+        modifiers,
+    );
+    assert_eq!(geom(&u, b).0, 88.0, "a fresh B field commits normally");
+    assert!(u.app.ui.after_field.is_some());
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.ds().unwrap().uid, other_uid);
+    assert_eq!(saved_x(if save_as { &copy } else { &other }, b), 88.0, "a later valid save belongs to B");
+    if save_as {
+        assert_eq!(std::fs::read(&other).unwrap(), other_bytes);
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), owner_bytes, "A stays unsaved");
+    assert_eq!(asked.get(), usize::from(save_as));
+    assert!(u.app.ui.after_field.is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Replacing a painted value with its editor must preserve its baseline, including inside
+/// the horizontal rows used by the sidebar.
+#[test]
+fn sidebar_field_text_stays_in_place_on_focus() {
+    for numeric in [true, false] {
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx, crate::theme::Tokens::light());
+        let id = Id::unique("baseline_field");
+        let draw = |events| {
+            let mut out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 200.0))), events, ..Default::default() },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        if numeric {
+                            crate::widgets::number_field(ui, id, crate::widgets::Lead::None, Some(123.0), "", 100.0, 1.0);
+                        } else {
+                            crate::widgets::text_field(ui, id, "123", 100.0, "");
+                        }
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            out
+        };
+        draw(vec![]);
+        let before = draw(vec![]);
+        let bounds = |out: &egui::FullOutput| painted_texts(&out.shapes).into_iter().find(|(text, _, _)| text == "123").expect("field text").2;
+        let before = bounds(&before);
+        let p = before.center();
+        for pressed in [true, false] {
+            draw(vec![
+                Event::PointerMoved(p),
+                Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE },
+            ]);
+        }
+        assert!(ctx.memory(|m| m.has_focus(id.with("te"))), "editor is focused");
+        let after = bounds(&draw(vec![]));
+        assert!((before.center().y - after.center().y).abs() <= 0.5, "numeric={numeric}: before={before:?}, after={after:?}");
+    }
+}
+
+/// The shared paint control shows the same precision as Fill and keeps the picker toggle.
+#[test]
+fn page_background_shows_fractional_opacity_like_fill_and_keeps_it_when_opening_the_picker() {
+    let mut u = Ui::new(Session::new());
+    u.ctx.enable_accesskit();
+    u.app.run("page.setBackground", json!({"color": "#FF000080"}));
+    u.frame(vec![]);
+    assert_eq!(field(&mut u, "Opacity").1, "50.2%");
+    let page = u.app.session.page().unwrap();
+    let background = |u: &Ui| match u.app.session.doc().unwrap().node(page).unwrap().kind {
+        figcraft_doc::NodeKind::Page { background, .. } => background,
+        _ => panic!("the page"),
+    };
+    let original = background(&u);
+    let steps = undo_steps(&u);
+    let swatch = u.ctx.read_response(Id::unique("pagebg_swatch")).expect("shared page swatch").rect.center();
+    click(&mut u, swatch);
+    assert!(matches!(u.app.ui.picker, Some(crate::colorpicker::PickerTarget::PageBackground)));
+    assert_eq!(undo_steps(&u), steps, "opening the picker does not edit the colour");
+    assert_eq!(background(&u), original, "opening preserves the stored alpha");
+    assert_eq!(field(&mut u, "Opacity").1, "50.2%");
+    click(&mut u, swatch);
+    assert!(u.app.ui.picker.is_none(), "the swatch toggles the picker closed");
+    assert_eq!(background(&u), original, "closing preserves the stored alpha");
+    assert_eq!(field(&mut u, "Opacity").1, "50.2%");
+    assert_eq!(undo_steps(&u), steps, "neither toggle creates an edit");
+}
+
+/// The shared page colour row uses the sidebar's width without hiding either field.
+#[test]
+fn page_background_colour_and_opacity_fit_a_resized_sidebar() {
+    // Find the whole galley, rather than its already-clipped bounding box.
+    fn hex_text(shape: &egui::Shape) -> Option<&egui::epaint::TextShape> {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(hex_text),
+            egui::Shape::Text(text) if text.galley.text() == "123ABC" => Some(text),
+            _ => None,
+        }
+    }
+    let mut widths = Vec::new();
+    for width in [240.0, 500.0] {
+        let mut session = Session::new();
+        session.prefs.panel_widths.1 = width;
+        session.execute("page.setBackground", &json!({"color": "#123ABC80"})).unwrap();
+        let mut u = Ui::new(session);
+        let mut previous = None;
+        let mut settled = None;
+        // Stop at stable geometry, with a bound so a layout regression cannot hang the test.
+        for _ in 0..16 {
+            let out = u.frame_output(vec![]);
+            let hex = u.ctx.read_response(Id::unique("pagebg").with("click")).unwrap().rect;
+            let alpha = u.ctx.read_response(Id::unique("pagebg_a").with("field")).unwrap().rect;
+            let panel = u.app.ui.right_panel_rect.unwrap();
+            if previous == Some((hex, alpha, panel)) {
+                settled = Some((out, hex, alpha, panel));
+                break;
+            }
+            previous = Some((hex, alpha, panel));
+        }
+        let (out, hex, alpha, panel) = settled.expect("the page row settles");
+        assert!(hex.left() >= u.app.canvas.rect.right(), "the colour stays in the sidebar");
+        assert!(hex.right() < alpha.left(), "the colour and opacity never overlap");
+        // Half a point permits device-pixel rounding, not an arbitrary gap from the panel edge.
+        assert!((alpha.right() - (panel.right() - crate::widgets::PAD_RIGHT)).abs() <= 0.5, "opacity stays at the right edge");
+        assert!((hex.center().y - alpha.center().y).abs() <= 0.5, "both fields stay on the same row");
+        let (text, clip) = out.shapes.iter().find_map(|s| hex_text(&s.shape).map(|text| (text, s.clip_rect))).expect("the HEX text");
+        assert!(!text.galley.elided, "the whole HEX value fits at {width} pt");
+        assert!(hex.expand(0.5).contains_rect(text.visual_bounding_rect()), "the HEX text fits its field");
+        assert!(clip.expand(0.5).contains_rect(text.visual_bounding_rect()), "the HEX text is not clipped");
+        widths.push(hex.width());
+    }
+    assert!(widths[1] > widths[0], "a wider sidebar gives the colour field more room");
+}
+
+/// The Page section's opacity field edits the page background's alpha (#1748; it was a label),
+/// one undo step per commit, and the hex field keeps that opacity unless the typed colour
+/// carries its own.
+#[test]
+fn the_page_background_opacity_field_sets_the_page_colour_alpha() {
+    let mut u = Ui::new(Session::new());
+    u.ctx.enable_accesskit();
+    u.frame(vec![]);
+    let page_bg = |u: &Ui| {
+        let page = u.app.session.page().unwrap();
+        match &u.app.session.doc().unwrap().node(page).unwrap().kind {
+            figcraft_doc::NodeKind::Page { background, .. } => *background,
+            _ => panic!("the page"),
+        }
+    };
+    // Within an 8-bit step: the colour travels as RRGGBBAA.
+    let near = |a: f32, b: f32| (a - b).abs() < 1.0 / 255.0;
+    assert!(near(page_bg(&u).a, 1.0));
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Opacity", "50", Key::Enter);
+    assert!(near(page_bg(&u).a, 0.5), "{:?}", page_bg(&u));
+    assert_eq!(undo_steps(&u), steps + 1, "one undo step for the commit");
+    // No label is drawn, so the field's leading strip scrubs it: half a percent a point, live, and one
+    // undo step for the whole drag.
+    let edge = lead(&u, Id::unique("pagebg_a"));
+    drag(&mut u, edge, -50.0, Modifiers::NONE);
+    assert!(near(page_bg(&u).a, 0.25), "{:?}", page_bg(&u));
+    assert_eq!(undo_steps(&u), steps + 2, "one undo step for the whole scrub");
+    u.app.run("edit.undo", json!({}));
+    assert!(near(page_bg(&u).a, 0.5), "undo takes back the scrub alone");
+    // The hex field keeps the opacity when the typed colour has none, and takes one it carries.
+    let hex = |u: &mut Ui| u.ctx.read_response(Id::unique("pagebg").with("click")).expect("the hex field").rect.center();
+    let at = hex(&mut u);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("FF0000".into())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    let c = page_bg(&u);
+    assert!(near(c.r, 1.0) && near(c.g, 0.0) && near(c.a, 0.5), "{c:?}");
+    let at = hex(&mut u);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("00FF0080".into())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    let c = page_bg(&u);
+    assert!(near(c.g, 1.0) && near(c.a, 128.0 / 255.0), "{c:?}");
+    // Eight digits asking for opaque set 100 %: an alpha of 1 in the text is not "no alpha".
+    let at = hex(&mut u);
+    click(&mut u, at);
+    u.frame(vec![Event::Text("0000FFFF".into())]);
+    key(&mut u, Key::Enter, Modifiers::NONE);
+    let c = page_bg(&u);
+    assert!(near(c.b, 1.0) && near(c.a, 1.0), "{c:?}");
+    assert_eq!(undo_steps(&u), steps + 4);
+    u.app.run("edit.undo", json!({}));
+    assert!(near(page_bg(&u).g, 1.0) && near(page_bg(&u).a, 128.0 / 255.0), "undo takes back the last colour alone");
+}
+
+/// "You can also hover the input field itself and hold down the modifier key: Mac: ⌥ Option
+/// Windows: Alt" to scrub it (Adjust alignment, rotation, position, and dimensions). Alt is what
+/// makes the drag a scrub there, not the fine rate: a point moves half a step, as on the label. Without
+/// Alt a drag on the field is no click, so it neither edits nor moves anything.
+#[test]
+fn alt_held_over_a_field_scrubs_it() {
+    let (mut u, a, _) = setup();
+    let (at, _) = field(&mut u, "X");
+    let steps = undo_steps(&u);
+    // Alt is held as the pointer arrives over the field, a frame before the press (the field takes
+    // a drag only once it has seen Alt; egui assigns a press by the frame before it).
+    let alt = Modifiers { alt: true, ..Modifiers::NONE };
+    u.frame_with(vec![Event::PointerMoved(at)], alt);
+    drag(&mut u, at, 24.0, alt);
+    assert_eq!(geom(&u, a).0, 22.0, "half a step a point: X from 10");
+    assert_eq!(undo_steps(&u), steps + 1, "one undo step for the whole scrub");
+    assert_eq!(field(&mut u, "X").1, "22", "the field shows it and isn't editing");
+    let (at, _) = field(&mut u, "X");
+    drag(&mut u, at, 25.0, Modifiers::NONE);
+    assert_eq!(geom(&u, a).0, 22.0, "without Alt the field doesn't scrub");
+    assert_eq!(undo_steps(&u), steps + 1);
+    // Alt let go before the button still ends the scrub with its undo step.
+    let (at, _) = field(&mut u, "X");
+    let press = |pressed: bool, m: Modifiers, p: Pos2| Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: m };
+    u.frame_with(vec![Event::PointerMoved(at)], alt);
+    u.frame_with(vec![press(true, alt, at)], alt);
+    for k in 1..=10 {
+        u.frame_with(vec![Event::PointerMoved(pos2(at.x + 2.0 * k as f32, at.y))], alt);
+    }
+    let to = pos2(at.x + 20.0, at.y);
+    u.frame_with(vec![Event::PointerMoved(to), press(false, Modifiers::NONE, to)], Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, a).0, 32.0, "ten more");
+    assert_eq!(undo_steps(&u), steps + 2, "committed when the button went up, without Alt");
+    // Without Alt the field doesn't take the drag at all (a touch swipe over it is the panel's to
+    // scroll): the press is a click of the field's, not a drag.
+    let (at, _) = field(&mut u, "X");
+    let field_id = Id::unique("pos_x").with("field");
+    u.frame_with(vec![Event::PointerMoved(at)], Modifiers::NONE);
+    u.frame_with(vec![press(true, Modifiers::NONE, at)], Modifiers::NONE);
+    u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y))], Modifiers::NONE);
+    assert!(!u.ctx.is_being_dragged(field_id), "a plain press on the field isn't a drag of the field's");
+    u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y)), press(false, Modifiers::NONE, pos2(at.x + 10.0, at.y))], Modifiers::NONE);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, a).0, 32.0, "nothing scrubbed");
+    // With Alt held over it, the field does take the drag.
+    let (at, _) = field(&mut u, "X");
+    u.frame_with(vec![Event::PointerMoved(at)], alt);
+    u.frame_with(vec![press(true, alt, at)], alt);
+    u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y))], alt);
+    assert!(u.ctx.is_being_dragged(field_id), "with Alt the drag is the field's");
+    u.frame_with(vec![Event::PointerMoved(pos2(at.x + 10.0, at.y)), press(false, alt, pos2(at.x + 10.0, at.y))], alt);
+    u.frame(vec![]);
+    assert_eq!(geom(&u, a).0, 37.0, "five more");
+}
+
+#[test]
+fn a_boolean_group_has_one_corner_radius_field_and_a_mixed_selection_reads_mixed() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let r = id(u.app.session.execute("shape.rectangle", &json!({"x": 400, "y": 0, "width": 50, "height": 50})).unwrap());
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0");
+    let steps = undo_steps(&u);
+    type_into(&mut u, "Corner radius", "20", Key::Enter);
+    let radii = |u: &Ui, n: NodeId| u.app.session.doc().unwrap().node(n).unwrap().corners.radii;
+    assert_eq!(radii(&u, g), [20.0; 4]);
+    assert_eq!(undo_steps(&u), steps + 1, "one undo step");
+    u.app.run("select.set", json!({"ids": [g, r]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "Mixed");
+    type_into(&mut u, "Corner radius", "8", Key::Enter);
+    assert_eq!((radii(&u, g), radii(&u, r)), ([8.0; 4], [8.0; 4]));
+}
+
+/// A boolean group draws its first radius; per-corner values a script or a file left behind don't
+/// make its field read Mixed, and a relative edit starts from the radius it draws.
+#[test]
+fn a_boolean_groups_field_shows_the_radius_it_draws() {
+    let (mut u, a, b) = setup();
+    let g = id(u.app.session.execute("bool.union", &json!({"ids": [a, b]})).unwrap());
+    let corners = json!({"topRightRadius": 30, "bottomRightRadius": 30, "bottomLeftRadius": 30});
+    u.app.session.execute("node.set", &json!({"ids": [g], "props": corners})).unwrap();
+    u.app.run("select.set", json!({"ids": [g]}));
+    assert_eq!(field(&mut u, "Corner radius").1, "0", "the radius it draws");
+    type_into(&mut u, "Corner radius", "+10", Key::Enter);
+    assert_eq!(u.app.session.doc().unwrap().node(g).unwrap().corners.radii, [10.0; 4], "0 + 10, not 30 + 10");
 }

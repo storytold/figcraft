@@ -52,6 +52,115 @@ fn sorted(mut v: Vec<NodeId>) -> Vec<NodeId> {
 }
 
 #[test]
+fn selected_hierarchies_have_continuous_rounded_backgrounds() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Selected frame"})).unwrap());
+    let child = rect(&mut s, "child", 0.0, Some(frame));
+    let group = id(s.execute("object.group", &json!({"ids": [child]})).unwrap());
+    rect(&mut s, "sibling", 30.0, Some(frame));
+    let other = id(s.execute("frame.create", &json!({"name": "Other frame"})).unwrap());
+    rect(&mut s, "other child", 0.0, Some(other));
+    s.execute("select.set", &json!({"ids": [frame, group, other]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.extend([frame, group, other]);
+    let selected_rows = [frame, group, other].map(|id| u.row_at(id));
+    let out = u.frame_output(vec![Event::PointerGone]);
+    let t = crate::theme::Tokens::get(&u.ctx);
+    for pos in selected_rows {
+        let rect_at = |fill| {
+            out.shapes.iter().enumerate().find_map(|(i, s)| match &s.shape {
+                egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(pos) => Some(i),
+                _ => None,
+            })
+        };
+        let background = rect_at(t.selected_row_child).expect("the selected row belongs to the hierarchy background");
+        let highlight = rect_at(t.selected_row).expect("each selected frame or group has its own highlight");
+        assert!(highlight > background, "the selected highlight is painted above the hierarchy background");
+    }
+    let backgrounds: Vec<_> = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.fill == t.selected_row_child => Some(r),
+            _ => None,
+        })
+        .collect();
+    // Other frame + child, then selected frame + sibling + selected group + child.
+    assert_eq!(backgrounds.len(), 6);
+    for band in [&backgrounds[..2], &backgrounds[2..]] {
+        assert_eq!(band.first().unwrap().corner_radius.nw, 5);
+        assert_eq!(band.last().unwrap().corner_radius.sw, 5);
+        for pair in band.windows(2) {
+            assert_eq!(pair[0].rect.bottom(), pair[1].rect.top(), "the highlight fills the inter-row spacing");
+            assert_eq!(pair[0].corner_radius.sw, 0, "no rounded seams inside the hierarchy");
+            assert_eq!(pair[1].corner_radius.nw, 0, "a selected nested group stays in the same block");
+        }
+    }
+    assert!(backgrounds[1].rect.bottom() < backgrounds[2].rect.top(), "separate selected hierarchies stay separate");
+    // A collapsed frame and a filtered leaf each have all four corners rounded.
+    u.app.ui.expanded.clear();
+    let out = u.frame_output(vec![]);
+    let collapsed: Vec<_> = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.fill == t.selected_row_child => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(collapsed.len(), 2);
+    assert!(collapsed.iter().all(|r| r.corner_radius == egui::CornerRadius::same(5)));
+    u.app.ui.layer_filter = "child".into();
+    let out = u.frame_output(vec![]);
+    assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+        egui::Shape::Rect(r) if r.fill == t.selected_row_child && r.corner_radius.sw == 5
+    )));
+}
+
+#[test]
+fn selected_hierarchy_keeps_square_seams_when_scrolled() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Long hierarchy"})).unwrap());
+    for i in 0..70 {
+        rect(&mut s, &format!("Child {i}"), 0.0, Some(frame));
+    }
+    s.execute("select.set", &json!({"ids": [frame]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.expanded.insert(frame);
+    let fill = crate::theme::Tokens::get(&u.ctx).selected_row_child;
+    let corners = |out: &egui::FullOutput| {
+        out.shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.fill == fill && r.rect.intersects(s.clip_rect) => Some(r.corner_radius),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let wheel = |y| Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, y),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    u.frame(vec![Event::PointerMoved(egui::pos2(150.0, 500.0)), wheel(-700.0)]);
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    let middle = corners(&u.frame_output(vec![]));
+    assert!(!middle.is_empty());
+    assert!(middle.iter().all(|c| *c == egui::CornerRadius::ZERO), "viewport edges inside a subtree are square seams");
+    u.frame(vec![wheel(-10000.0)]);
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    let end = corners(&u.frame_output(vec![]));
+    assert_eq!(end.first().unwrap().nw, 0, "the hierarchy starts above the viewport");
+    assert_eq!(end.last().unwrap().sw, 5, "the hierarchy's real end stays rounded");
+}
+
+#[test]
 fn clicking_rows_selects_by_the_documented_rules() {
     let (mut u, [a, b, c, d]) = four();
     let rows = [a, b, c, d].map(|i| u.row_at(i));
@@ -144,6 +253,54 @@ fn sweeping_across_eyes_and_padlocks_sets_several_layers() {
 }
 
 #[test]
+fn the_padlock_of_a_layer_in_a_locked_frame_is_inert() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Locked frame"})).unwrap());
+    let child = rect(&mut s, "child", 0.0, Some(frame));
+    s.execute("select.none", &json!({})).unwrap();
+    s.execute("object.toggleLock", &json!({"ids": [frame], "locked": true})).unwrap();
+    let mut u = Ui::new(s);
+    // Selecting the child reveals its row; then the selection goes away.
+    u.app.run("select.set", json!({"ids": [child]}));
+    u.frame(vec![]);
+    u.app.run("select.none", json!({}));
+    u.frame(vec![]);
+    let steps = u.app.session.undo_depth();
+    let r = u.row_at(child);
+    // The padlock column (see the sweep test above).
+    click(&mut u, Pos2::new(250.0, r.y), Modifiers::NONE);
+    assert!(!u.app.session.doc().unwrap().node(child).unwrap().locked, "the child's padlock doesn't lock it");
+    assert_eq!(u.app.session.undo_depth(), steps, "and adds no undo step");
+}
+
+#[test]
+fn a_padlock_sweep_skips_the_children_of_a_locked_frame() {
+    let mut s = Session::new();
+    let frame = id(s.execute("frame.create", &json!({"name": "Locked frame"})).unwrap());
+    let c1 = rect(&mut s, "child 1", 0.0, Some(frame));
+    let c2 = rect(&mut s, "child 2", 20.0, Some(frame));
+    let sibling = rect(&mut s, "sibling", 40.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    s.execute("object.toggleLock", &json!({"ids": [frame], "locked": true})).unwrap();
+    let mut u = Ui::new(s);
+    // Selecting a child reveals the frame's rows; then the selection goes away.
+    u.app.run("select.set", json!({"ids": [c1]}));
+    u.frame(vec![]);
+    u.app.run("select.none", json!({}));
+    u.frame(vec![]);
+    let padlock = 250.0;
+    let (rs, rc) = (u.row_at(sibling), u.row_at(c1));
+    let from = Pos2::new(padlock, rs.y);
+    u.frame(vec![Event::PointerMoved(from)]);
+    u.drag_to(from, Pos2::new(padlock, rc.y));
+    u.button(Pos2::new(padlock, rc.y), false);
+    let doc = u.app.session.doc().unwrap();
+    assert!(doc.node(sibling).unwrap().locked, "the sibling is locked by the sweep");
+    assert!(!doc.node(c1).unwrap().locked, "a child of a locked frame keeps its own flag");
+    assert!(!doc.node(c2).unwrap().locked, "so does the other child");
+}
+
+#[test]
 fn renaming_several_layers_opens_the_rename_dialog() {
     let (mut u, [a, b, c, _d]) = four();
     // Cmd/Ctrl+R (F2, the context menu's Rename) with several layers selected.
@@ -200,6 +357,81 @@ fn page_row(u: &mut Ui, page: NodeId, back: NodeId) -> Pos2 {
 }
 
 #[test]
+fn pages_search_button_opens_the_filter_and_escape_clears_it() {
+    let s = Session::new();
+    let _ = s.page().unwrap();
+    let mut u = Ui::new(s);
+
+    // The search icon in the Pages header opens the page-name field, not Find and Replace.
+    click(&mut u, Pos2::new(246.0, 124.0), Modifiers::NONE);
+    assert!(u.app.ui.page_search, "the Pages search is open");
+    assert!(u.app.ui.find.is_none(), "page search does not open Find and Replace");
+    u.frame(vec![Event::Text("COMPON".into())]);
+    assert_eq!(u.app.ui.page_filter, "COMPON", "typing can start immediately");
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    assert!(!u.app.ui.page_search, "Escape closes page search");
+    assert!(u.app.ui.page_filter.is_empty(), "Escape clears the filter");
+}
+
+#[test]
+fn pages_search_leaves_escape_to_the_canvas_when_the_field_is_unfocused() {
+    let mut s = Session::new();
+    let r = rect(&mut s, "r", 0.0, None);
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.page_search = true;
+    u.app.ui.page_filter = "COMPON".into();
+    u.frame(vec![]);
+
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+
+    assert!(u.app.session.selection().is_empty(), "Escape deselects on the canvas");
+    assert!(u.app.ui.page_search, "the page search stays open");
+    assert_eq!(u.app.ui.page_filter, "COMPON", "and keeps its filter");
+}
+
+#[test]
+fn escape_in_the_pages_search_does_not_reach_the_canvas() {
+    let mut s = Session::new();
+    let r = rect(&mut s, "r", 0.0, None);
+    s.execute("select.set", &json!({"ids": [r]})).unwrap();
+    let mut u = Ui::new(s);
+    click(&mut u, Pos2::new(246.0, 124.0), Modifiers::NONE);
+    assert!(u.app.ui.page_search);
+    u.frame(vec![Event::Text("x".into())]);
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    assert!(!u.app.ui.page_search, "Escape closes the page search");
+    assert_eq!(u.app.session.selection(), vec![r], "and leaves the selection alone");
+}
+
+#[test]
+fn pages_search_filters_page_names_case_insensitively() {
+    let mut s = Session::new();
+    let _overview = s.page().unwrap();
+    let components = id(s.execute("page.add", &json!({"name": "Components"})).unwrap());
+    let library = id(s.execute("page.add", &json!({"name": "Library"})).unwrap());
+    s.execute("page.select", &json!({"id": library})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.ui.page_search = true;
+    u.app.ui.page_filter = "COMPON".into();
+    let shapes = u.frame_output(vec![]).shapes;
+    let text = crate::live_tests::texts(&crate::live_tests::flat(&shapes));
+    assert!(text.iter().any(|(label, _, _)| label == "Components"), "the matching page remains visible");
+    assert!(!text.iter().any(|(label, _, _)| label == "Library"), "nonmatching pages are filtered out");
+
+    // Search leaves only Components; the active page starts as Library.
+    for y in (150..400).step_by(4) {
+        let p = Pos2::new(150.0, y as f32);
+        u.button(p, true);
+        u.button(p, false);
+        if u.app.session.page().unwrap() == components {
+            break;
+        }
+    }
+    assert_eq!(u.app.session.page().unwrap(), components, "matching is case-insensitive and opens the named page");
+}
+
+#[test]
 fn pages_drag_to_reorder_and_dividers_open_nothing() {
     let mut s = Session::new();
     let p1 = s.page().unwrap();
@@ -237,6 +469,7 @@ fn pages_down_to(u: &mut Ui, to: f32) -> Vec<NodeId> {
     opened
 }
 
+/// Asserts a 60-page list scrolls with the wheel to its last page, past its first pages.
 #[test]
 fn a_long_pages_list_scrolls_and_leaves_room_for_the_layers() {
     let mut s = Session::new();
@@ -255,6 +488,7 @@ fn a_long_pages_list_scrolls_and_leaves_room_for_the_layers() {
     // The wheel over the pages list scrolls it to its last page.
     let wheel = Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
         delta: egui::vec2(0.0, -400.0),
         phase: egui::TouchPhase::Move,
         modifiers: Default::default(),
@@ -307,6 +541,8 @@ fn double_click_checking_focus(u: &mut Ui, p: Pos2) {
     }
 }
 
+/// Asserts double-clicking a page selects and renames it, with the keyboard in its name
+/// field for the screen-reader tree.
 #[test]
 fn double_clicking_a_page_renames_it_with_the_focus_in_the_screen_reader_tree() {
     let mut s = Session::new();
@@ -319,10 +555,10 @@ fn double_clicking_a_page_renames_it_with_the_focus_in_the_screen_reader_tree() 
     double_click_checking_focus(&mut u, r2);
     assert_eq!(u.app.session.page().unwrap(), p2);
     assert_eq!(u.app.ui.rename_page.as_ref().map(|r| r.0), Some(p2), "a double click renames the page");
-    assert!(u.ctx.memory(|m| m.has_focus(Id::new(("pagename", p2)).with("te"))), "with the keyboard in its name");
+    assert!(u.ctx.memory(|m| m.has_focus(Id::unique(("pagename", p2)).with("te"))), "with the keyboard in its name");
     // The page that's open.
     u.app.ui.rename_page = None;
-    u.ctx.memory_mut(|m| m.surrender_focus(Id::new(("pagename", p2)).with("te")));
+    u.ctx.memory_mut(|m| m.surrender_focus(Id::unique(("pagename", p2)).with("te")));
     u.app.session.execute("page.select", &json!({"id": p1})).unwrap();
     for _ in 0..30 {
         u.frame(vec![]);
@@ -330,4 +566,419 @@ fn double_clicking_a_page_renames_it_with_the_focus_in_the_screen_reader_tree() 
     double_click_checking_focus(&mut u, r1);
     assert_eq!(u.app.ui.rename_page.as_ref().map(|r| r.0), Some(p1));
     assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+/// A press of `key` in the frame that's next, then a few frames to settle.
+fn press_page_field_key(u: &mut Ui, key: egui::Key) {
+    u.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+}
+
+/// Asserts a click on the name of page `page`, away from page `other`, opens it and starts no
+/// rename: the pages list is back to plain rows however the last rename ended.
+fn assert_clicking_page_opens_it(u: &mut Ui, page: NodeId, other: NodeId, row: Pos2) {
+    assert!(u.app.ui.rename_page.is_none(), "the rename is over");
+    u.app.session.execute("page.select", &json!({"id": other})).unwrap();
+    for _ in 0..30 {
+        u.frame(vec![Event::PointerMoved(row)]);
+    }
+    u.button(row, true);
+    u.button(row, false);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.page().unwrap(), page, "the click opens the page");
+    assert!(!u.ctx.memory(|m| m.has_focus(Id::unique(("pagename", page)).with("te"))), "and doesn't edit its name");
+}
+
+/// Asserts a page's row is a plain row after a rename that was cancelled, committed unchanged or
+/// committed with a new name: a click on its name opens the page rather than editing the name.
+#[test]
+fn a_finished_page_rename_leaves_a_row_that_a_click_opens() {
+    for (key, text) in [(egui::Key::Escape, None), (egui::Key::Enter, None), (egui::Key::Enter, Some("Renamed"))] {
+        let mut s = Session::new();
+        let p1 = s.page().unwrap();
+        let p2 = id(s.execute("page.add", &json!({})).unwrap());
+        let mut u = Ui::new(s);
+        let r2 = page_row(&mut u, p2, p1);
+        u.ctx.enable_accesskit();
+        double_click_checking_focus(&mut u, r2);
+        assert_eq!(u.app.ui.rename_page.as_ref().map(|r| r.0), Some(p2), "a double click renames the page");
+        if let Some(text) = text {
+            u.frame(vec![Event::Text(text.into())]);
+        }
+        press_page_field_key(&mut u, key);
+        assert_clicking_page_opens_it(&mut u, p2, p1, r2);
+    }
+}
+
+/// Asserts the row's Rename page puts the keyboard in the name, and a name typed there is kept.
+#[test]
+fn the_page_menus_rename_starts_with_the_keyboard_in_the_name() {
+    let mut s = Session::new();
+    let p1 = s.page().unwrap();
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    let mut u = Ui::new(s);
+    let r2 = page_row(&mut u, p2, p1);
+    u.frame(vec![
+        Event::PointerMoved(r2),
+        Event::PointerButton { pos: r2, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![Event::PointerButton { pos: r2, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+    let shapes: Vec<egui::Shape> = u.frame_output(vec![]).shapes.into_iter().map(|c| c.shape).collect();
+    let item = crate::live_tests::text_center(&shapes, "Rename page");
+    u.frame(vec![Event::PointerMoved(item)]);
+    u.button(item, true);
+    u.button(item, false);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.ui.rename_page.as_ref().map(|r| r.0), Some(p2), "the menu renames the page");
+    assert!(u.ctx.memory(|m| m.has_focus(Id::unique(("pagename", p2)).with("te"))), "with the keyboard in its name");
+    u.frame(vec![Event::Text("Renamed".into())]);
+    press_page_field_key(&mut u, egui::Key::Enter);
+    assert_eq!(u.app.session.doc().unwrap().node(p2).map(|n| n.name.clone()).as_deref(), Some("Renamed"));
+    assert_clicking_page_opens_it(&mut u, p2, p1, r2);
+}
+
+/// Right-clicks `at` in the pages list and returns the menu's "Set as opening page" item, if shown.
+fn opening_item(u: &mut Ui, at: Pos2) -> Option<Pos2> {
+    u.frame(vec![
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE }]);
+    let shapes: Vec<egui::Shape> = u.frame_output(vec![]).shapes.into_iter().map(|c| c.shape).collect();
+    crate::live_tests::has_text(&shapes, "Set as opening page").then(|| crate::live_tests::text_center(&shapes, "Set as opening page"))
+}
+
+/// The pages list's menu offers "Set as opening page" on a page and not on a divider, and using it
+/// writes the document's opening page without moving the viewer's own page (#1817).
+#[test]
+fn the_page_menu_sets_the_opening_page_and_not_on_dividers() {
+    let mut s = Session::new();
+    let p1 = s.page().unwrap();
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    let div = id(s.execute("page.add", &json!({"name": "-"})).unwrap());
+    s.execute("page.move", &json!({"id": div, "index": 1})).unwrap();
+    s.execute("page.select", &json!({"id": p1})).unwrap();
+    let mut u = Ui::new(s);
+    let (r1, r2) = (page_row(&mut u, p1, p2), page_row(&mut u, p2, p1));
+    let mid = Pos2::new(r1.x, (r1.y + r2.y) / 2.0);
+    u.app.session.execute("page.select", &json!({"id": p1})).unwrap();
+    u.frame(vec![]);
+    assert_eq!(opening_item(&mut u, mid), None, "a divider has no such item");
+    u.frame(vec![Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+    for _ in 0..5 {
+        u.frame(vec![]);
+    }
+    let item = opening_item(&mut u, r2).expect("a page has the item (and its menu is open)");
+    assert_ne!(u.app.session.doc().unwrap().current_page, Some(p2), "not the opening page yet");
+    u.frame(vec![Event::PointerMoved(item)]);
+    u.button(item, true);
+    u.button(item, false);
+    for _ in 0..3 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.doc().unwrap().current_page, Some(p2), "the document's opening page is the clicked page");
+    assert_eq!(u.app.session.page().unwrap(), p1, "the viewer's own page stays");
+    assert!(u.app.ui.last_error.is_none(), "{:?}", u.app.ui.last_error);
+}
+
+/// The y of the line between the pages and the layers, above the layers' row at `layer` (found by
+/// the resize cursor it shows when hovered).
+fn pages_edge_at(u: &mut Ui, layer: f32) -> f32 {
+    let hits: Vec<f32> = ((layer - 120.0) as i32..layer as i32)
+        .map(|y| y as f32)
+        .filter(|y| u.frame_output(vec![Event::PointerMoved(Pos2::new(150.0, *y))]).platform_output.cursor_icon == egui::CursorIcon::ResizeVertical)
+        .collect();
+    assert!(!hits.is_empty(), "no edge above {layer}");
+    (hits[0] + hits[hits.len() - 1]) / 2.0
+}
+
+#[test]
+fn the_line_between_pages_and_layers_drags_to_size_the_pages_list() {
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    for _ in 0..59 {
+        s.execute("page.add", &json!({})).unwrap();
+    }
+    let first = s.doc().unwrap().pages[0];
+    s.execute("page.select", &json!({"id": first})).unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    let before = u.row_at(rect).y;
+    let edge = pages_edge_at(&mut u, before);
+    // A drag down by 150 px makes the pages list taller and moves the layers down with it.
+    let at = |dy: f32| Pos2::new(150.0, edge + dy);
+    let button = |p, pressed| Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    u.frame(vec![Event::PointerMoved(at(0.0))]);
+    u.frame(vec![button(at(0.0), true)]);
+    for k in 1..=15 {
+        u.frame(vec![Event::PointerMoved(at(10.0 * k as f32))]);
+    }
+    u.frame(vec![button(at(150.0), false)]);
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    let after = u.row_at(rect).y;
+    assert!((after - before - 150.0).abs() < 3.0, "the layers moved from {before} to {after}");
+    // The height is kept for the next start.
+    let kept = u.app.session.prefs.pages_height.expect("kept in the preferences");
+    let mut next = Session::new();
+    next.prefs = u.app.session.prefs.clone();
+    assert_eq!(crate::FigApp::new(next, Box::new(crate::NoServices)).ui.pages_height, Some(kept));
+    // A double-click puts back the default.
+    let edge = pages_edge_at(&mut u, after);
+    let p = Pos2::new(150.0, edge);
+    u.frame(vec![Event::PointerMoved(p)]);
+    for _ in 0..2 {
+        u.frame(vec![button(p, true)]);
+        u.frame(vec![button(p, false)]);
+    }
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.prefs.pages_height, None);
+    assert!((u.row_at(rect).y - before).abs() < 3.0);
+}
+
+#[test]
+fn dragging_up_the_line_under_a_short_pages_list_shrinks_it_at_once() {
+    // Five pages fit in the room the list is given: the drag starts from the rows shown, not
+    // from that room, so the line follows the pointer.
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    for _ in 0..4 {
+        s.execute("page.add", &json!({})).unwrap();
+    }
+    let first = s.doc().unwrap().pages[0];
+    s.execute("page.select", &json!({"id": first})).unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    let before = u.row_at(rect).y;
+    let edge = pages_edge_at(&mut u, before);
+    let at = |dy: f32| Pos2::new(150.0, edge + dy);
+    let button = |p, pressed| Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    u.frame(vec![Event::PointerMoved(at(0.0))]);
+    u.frame(vec![button(at(0.0), true)]);
+    for k in 1..=4 {
+        u.frame(vec![Event::PointerMoved(at(-10.0 * k as f32))]);
+    }
+    u.frame(vec![button(at(-40.0), false)]);
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    let after = u.row_at(rect).y;
+    assert!((before - after - 40.0).abs() < 3.0, "the layers moved from {before} to {after}");
+}
+
+#[test]
+fn the_pages_list_keeps_three_rows_and_leaves_the_layers_room() {
+    use crate::layers::{ROW, pages_list_height};
+    // The default: 40% of the panel.
+    assert_eq!(pages_list_height(None, 800.0), 320.0);
+    // Dragged short or tall, it stays within three rows and the room the layers need.
+    assert_eq!(pages_list_height(Some(0.0), 800.0), 3.0 * ROW);
+    assert_eq!(pages_list_height(Some(5000.0), 800.0), 800.0 - 40.0 - 3.0 * ROW);
+    assert_eq!(pages_list_height(Some(f32::NAN), 800.0), 320.0);
+    // A panel too short for both keeps the three rows.
+    assert_eq!(pages_list_height(Some(500.0), 100.0), 3.0 * ROW);
+}
+
+/// Selecting a page that is far down the list automatically scrolls it into view.
+#[test]
+fn selecting_a_distant_page_scrolls_it_into_view() {
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap());
+    for _ in 0..40 {
+        s.execute("page.add", &json!({})).unwrap();
+    }
+    let pages = s.doc().unwrap().pages.clone();
+    let first = pages[0];
+    let last = *pages.last().unwrap();
+    s.execute("page.select", &json!({"id": first})).unwrap();
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    let layer = u.row_at(rect);
+    u.frame(vec![]);
+    // Select the last page.
+    u.app.run("page.select", json!({"id": last}));
+    for _ in 0..15 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.ui.pages_seen_page, Some((u.app.session.ds().unwrap().uid, last)));
+    let opened = pages_down_to(&mut u, layer.y - 60.0);
+    let top = pages.iter().position(|p| Some(p) == opened.first()).unwrap();
+    assert!(top > 20, "the list scrolled past its first pages to reveal the selection (top row: page {top})");
+}
+
+/// If the active page is filtered out by search, it is not marked as seen
+/// until the filter is cleared and its row actually renders.
+#[test]
+fn filtered_out_active_page_is_seen_only_after_rendering() {
+    let mut s = Session::new();
+    let p1 = s.doc().unwrap().pages[0];
+    let p2 = id(s.execute("page.add", &json!({})).unwrap());
+    s.execute("page.rename", &json!({"id": p1, "name": "Alpha"})).unwrap();
+    s.execute("page.rename", &json!({"id": p2, "name": "Beta"})).unwrap();
+    s.execute("page.select", &json!({"id": p1})).unwrap();
+    let uid = s.ds().unwrap().uid;
+    let mut u = Ui::new(s);
+    assert_eq!(u.app.ui.pages_seen_page, Some((uid, p1)));
+
+    // Filter to only "Alpha", then select "Beta" (p2).
+    u.app.ui.page_search = true;
+    u.app.ui.page_filter = "Alpha".into();
+    u.app.run("page.select", json!({"id": p2}));
+    u.frame(vec![]);
+
+    // Beta was filtered out and not rendered, so pages_seen_page has not recorded it.
+    assert_ne!(u.app.ui.pages_seen_page, Some((uid, p2)));
+
+    // Clear filter: Beta renders now and is recorded.
+    u.app.ui.page_filter.clear();
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.pages_seen_page, Some((uid, p2)));
+}
+
+/// How far the text `hint` is from the middle of the field it's drawn in.
+fn off_centre(u: &mut Ui, hint: &str) -> f32 {
+    fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            s => out.push(s),
+        }
+    }
+    u.frame(vec![]);
+    let frame = u.frame_output(vec![]);
+    let mut shapes = Vec::new();
+    frame.shapes.iter().for_each(|c| walk(&c.shape, &mut shapes));
+    let text = shapes.iter().find_map(|s| match s {
+        egui::Shape::Text(t) if t.galley.text() == hint => Some(t.galley.rect.translate(t.pos.to_vec2()).center()),
+        _ => None,
+    });
+    let text = text.unwrap_or_else(|| panic!("no {hint:?}"));
+    let fill = crate::theme::Tokens::get(&u.ctx).field;
+    let field = shapes.iter().find_map(|s| match s {
+        egui::Shape::Rect(r) if r.fill == fill && r.rect.contains(text) => Some(r.rect),
+        _ => None,
+    });
+    (field.unwrap_or_else(|| panic!("no field around {hint:?}")).center().y - text.y).abs()
+}
+
+/// The search fields' text sits in the middle of the field. It hung below it, touching the bottom
+/// edge (#1703): the editor was laid out in a box of one line's height.
+#[test]
+fn search_fields_keep_their_text_in_the_middle() {
+    let mut s = Session::new();
+    s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap();
+    let mut u = Ui::new(s);
+    (u.app.ui.page_search, u.app.ui.layer_search) = (true, true);
+    for hint in ["Search pages", "Find layers"] {
+        let off = off_centre(&mut u, hint);
+        assert!(off < 1.0, "{hint} is {off} points off the middle");
+    }
+    u.app.ui.left_tab = crate::LeftTab::Assets;
+    let off = off_centre(&mut u, "Search assets");
+    assert!(off < 1.0, "Search assets is {off} points off the middle");
+}
+
+/// The centre of `id`'s icon, a top-level row: the row's left edge is the first point from the
+/// left at which the pointer is over it, and the icon's centre is 8 (margin) + 4 + 22 points
+/// further right.
+fn icon_of(u: &mut Ui, id: NodeId) -> Pos2 {
+    let y = u.row_at(id).y;
+    let mut left = None;
+    for x in 0..150 {
+        let p = Pos2::new(x as f32, y);
+        u.app.session.ds_mut().unwrap().hover = None;
+        u.frame(vec![Event::PointerMoved(p)]);
+        if u.app.session.ds().unwrap().hover == Some(id) {
+            left = Some(x as f32);
+            break;
+        }
+    }
+    Pos2::new(left.expect("the row has a left edge") + 34.0, y)
+}
+
+/// Measured in Figma's web app, 2026-11-12: a double-click on a layer's icon zooms the canvas to
+/// the layer and starts no rename (a double-click on the name renames, as before).
+#[test]
+fn a_double_click_on_a_layers_icon_zooms_to_it_instead_of_renaming() {
+    let mut s = Session::new();
+    rect(&mut s, "near", 0.0, None);
+    let far = rect(&mut s, "far", 3000.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let icon = icon_of(&mut u, far);
+    let view = |u: &Ui| {
+        let v = &u.app.session.ds().unwrap().view;
+        (v.cx, v.cy, v.zoom)
+    };
+    let before = view(&u);
+    for _ in 0..2 {
+        u.button(icon, true);
+        u.button(icon, false);
+    }
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.rename, None, "a double-click on the icon renames nothing");
+    assert_eq!(u.app.session.selection(), vec![far], "the layer is selected");
+    let after = view(&u);
+    assert_ne!(after, before, "the view moved");
+    u.app.session.execute("view.set", &json!({"cx": before.0, "cy": before.1, "zoom": before.2})).unwrap();
+    u.app.session.execute("view.zoomSelection", &json!({})).unwrap();
+    assert_eq!(after, view(&u), "the view frames the layer, as view.zoomSelection does");
+}
+
+/// A double-click's release is also a click on the row; with Ctrl held it must not toggle the layer
+/// back out of the selection the zoom just made, nor can Shift restore a range.
+#[test]
+fn an_icon_double_click_keeps_its_selection_when_a_modifier_is_held() {
+    let mut s = Session::new();
+    rect(&mut s, "near", 0.0, None);
+    let far = rect(&mut s, "far", 3000.0, None);
+    s.execute("select.none", &json!({})).unwrap();
+    let mut u = Ui::new(s);
+    u.frame(vec![]);
+    let icon = icon_of(&mut u, far);
+    let before = (u.app.session.ds().unwrap().view.cx, u.app.session.ds().unwrap().view.zoom);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: CMD };
+            u.frame_with(vec![Event::PointerMoved(icon), e], CMD);
+        }
+    }
+    u.frame(vec![]);
+    assert_eq!(u.app.session.selection(), vec![far], "the layer stays selected");
+    assert_eq!(u.app.ui.rename, None);
+    let v = &u.app.session.ds().unwrap().view;
+    assert_ne!((v.cx, v.zoom), before, "the view frames the layer");
+}
+
+/// A Shift-double-click on an icon leaves just that layer selected, and it becomes the anchor: the
+/// next Shift-click selects the range from it, not a toggle.
+#[test]
+fn an_icon_double_click_becomes_the_range_anchor() {
+    let (mut u, [a, b, c, d]) = four();
+    u.frame(vec![]);
+    let a_row = u.row_at(a);
+    click(&mut u, a_row, Modifiers::NONE);
+    let icon = icon_of(&mut u, b);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            let e = Event::PointerButton { pos: icon, button: egui::PointerButton::Primary, pressed, modifiers: SHIFT };
+            u.frame_with(vec![Event::PointerMoved(icon), e], SHIFT);
+        }
+    }
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    assert_eq!(u.app.session.selection(), vec![b], "the icon's layer is all that is selected");
+    let d_row = u.row_at(d);
+    click(&mut u, d_row, SHIFT);
+    assert_eq!(sorted(u.app.session.selection()), sorted(vec![b, c, d]), "the range from the icon's layer");
 }

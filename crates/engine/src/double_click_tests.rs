@@ -128,3 +128,77 @@ fn a_press_drags_only_past_the_threshold_in_screen_pixels() {
         assert_eq!(origin(&s, r).2 != 200.0, resizes, "resize by {by}");
     }
 }
+
+/// A double-click with Alt held throughout, as the canvas sends it.
+fn alt_double_click(s: &mut Session, x: f64, y: f64, zoom: f64) {
+    for kind in [PointerKind::Down, PointerKind::Up, PointerKind::Down, PointerKind::DoubleClick] {
+        let mut ev = PointerEvent::at(kind, x, y, zoom);
+        ev.alt = true;
+        s.pointer(&ev).unwrap();
+    }
+}
+
+/// "Tip: Double-click the vertical or horizontal edge of an auto layout object's bounding box to
+/// set it to Hug contents." and "Hold ⌥ Option or Alt and double-click the vertical or horizontal
+/// edge of an auto layout object's bounding box to set it to Fill container." (Guide to auto
+/// layout): a vertical edge sizes the width, a horizontal one the height; a layer auto layout
+/// doesn't size keeps the double-click's old meaning.
+#[test]
+fn a_double_click_on_an_auto_layout_edge_hugs_and_with_alt_fills() {
+    use figcraft_doc::Sizing;
+    let mut s = Session::new();
+    let f = id_of(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 400, "height": 100}))["id"]).unwrap();
+    ex(&mut s, "node.set", json!({"id": f, "props": {"layout": "horizontal", "padding": 0, "gap": 0}}));
+    let c =
+        id_of(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 100, "height": 40, "parent": f, "props": {"fill": "#FF0000"}}))["id"])
+            .unwrap();
+    let sizing = |s: &Session, id: NodeId| {
+        let cl = &s.doc().unwrap().node(id).unwrap().child_layout;
+        (cl.sizing_h, cl.sizing_v)
+    };
+    let size = |s: &Session, id: NodeId| {
+        let n = s.doc().unwrap().node(id).unwrap();
+        (n.width, n.height)
+    };
+    ex(&mut s, "select.set", json!({"ids": [f]}));
+    assert_eq!((sizing(&s, f), size(&s, f)), ((Sizing::Fixed, Sizing::Fixed), (400.0, 100.0)));
+    // The frame's right edge: Hug contents horizontally, and the frame shrinks onto its child.
+    double_click(&mut s, 400.0, 50.0, 0.0, 1.0);
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Fixed));
+    assert_eq!(size(&s, f), (100.0, 100.0));
+    assert_eq!(s.selection(), [f], "still selected, not entered");
+    s.undo().unwrap();
+    assert_eq!((sizing(&s, f), size(&s, f)), ((Sizing::Fixed, Sizing::Fixed), (400.0, 100.0)), "one undo step");
+    // Its bottom edge: Hug contents vertically.
+    double_click(&mut s, 200.0, 100.0, 0.0, 1.0);
+    assert_eq!(sizing(&s, f), (Sizing::Fixed, Sizing::Hug));
+    assert_eq!(size(&s, f), (400.0, 40.0));
+    // Alt on the child's right edge: Fill container horizontally, and the child takes the width.
+    ex(&mut s, "select.set", json!({"ids": [c]}));
+    alt_double_click(&mut s, 100.0, 20.0, 1.0);
+    assert_eq!(sizing(&s, c), (Sizing::Fill, Sizing::Fixed));
+    assert_eq!(size(&s, c), (400.0, 40.0));
+    // Without Alt the child, no auto layout frame itself, keeps the old meaning (a frame's
+    // double-click: nothing to enter here), and a plain rectangle's edge still edits its points.
+    double_click(&mut s, 400.0, 20.0, 0.0, 1.0);
+    assert_eq!(sizing(&s, c), (Sizing::Fill, Sizing::Fixed));
+    // A text child of the frame: Alt+double-click on its edge sets Fill like any child's, and a
+    // plain double-click on its edge still enters the text.
+    let x = id_of(&ex(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 0, "parent": f, "props": {"fontSize": 16}}))["id"]).unwrap();
+    ex(&mut s, "node.set", json!({"id": x, "props": {"textAutoResize": "none", "width": 60, "height": 20}}));
+    ex(&mut s, "select.set", json!({"ids": [x]}));
+    let b = s.doc().unwrap().world_bounds(x).unwrap();
+    alt_double_click(&mut s, b.x1, (b.y0 + b.y1) / 2.0, 1.0);
+    assert_eq!(sizing(&s, x), (Sizing::Fill, Sizing::Fixed), "a text child fills too");
+    let b = s.doc().unwrap().world_bounds(x).unwrap();
+    // On the edge handle, a pixel in (the hit test's reach): the text, not the frame edge it shares.
+    double_click(&mut s, b.x1 - 1.0, (b.y0 + b.y1) / 2.0, 0.0, 1.0);
+    assert!(s.ds().unwrap().text_edit.as_ref().is_some_and(|te| te.id == x), "a text's edge still enters it without Alt");
+    assert_eq!(sizing(&s, x), (Sizing::Fill, Sizing::Fixed));
+    crate::textedit::end(&mut s).unwrap();
+    let r = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 300, "width": 100, "height": 100}))["id"]).unwrap();
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    double_click(&mut s, 99.0, 350.0, 0.0, 1.0);
+    assert_eq!(sizing(&s, r), (Sizing::Fixed, Sizing::Fixed));
+    assert!(s.ds().unwrap().vector_edit.is_some(), "a shape's double-click still edits its points");
+}

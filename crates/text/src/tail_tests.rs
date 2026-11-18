@@ -43,7 +43,32 @@ fn starts(l: &TextLayout) -> Vec<(f64, Option<f64>)> {
 }
 
 fn pl(list: ListStyle, indent: u8) -> ParaList {
-    ParaList { list, indent }
+    ParaList { list, indent, start_offset: 0, ..ParaList::default() }
+}
+
+fn from(list: ListStyle, indent: u8, start_offset: u32) -> ParaList {
+    ParaList { list, indent, start_offset, ..ParaList::default() }
+}
+
+#[test]
+fn numbered_lists_count_from_their_start() {
+    use ListStyle::{Bulleted as B, None as P, Numbered as N};
+    let cases: Vec<(Vec<ParaList>, Vec<&str>, &str)> = vec![
+        (vec![from(N, 0, 1)], vec!["2."], "a one-item list started at 2 (#686)"),
+        (vec![from(N, 0, 3), pl(N, 0), pl(N, 0)], vec!["4.", "5.", "6."], "the items after the first count on from it"),
+        (vec![from(N, 0, 3), from(N, 0, 3), from(N, 0, 3)], vec!["4.", "5.", "6."], "items that go on counting ignore their own start"),
+        (vec![from(N, 0, 1), pl(P, 0), from(N, 0, 1)], vec!["2.", "", "2."], "a list after a plain paragraph starts from its own start"),
+        (vec![pl(N, 0), from(N, 1, 1), pl(N, 1)], vec!["1.", "b.", "c."], "a nested level starts from its first item's start"),
+        (vec![from(B, 0, 4), pl(B, 0)], vec!["\u{2022}", "\u{2022}"], "bullets have no number"),
+        (vec![from(N, 0, 4_000), pl(N, 2)], vec!["4001.", "i."], "big starts"),
+    ];
+    for (lists, want, why) in cases {
+        assert_eq!(list_markers(&lists), want, "{why}");
+    }
+    // The largest start never overflows, on 32-bit targets too.
+    let max = list_markers(&[from(N, 0, u32::MAX), pl(N, 0), pl(N, 0)]);
+    assert_eq!(max.len(), 3);
+    assert!(max.iter().all(|m| m.starts_with("429496729")), "{max:?}");
 }
 
 #[test]
@@ -65,11 +90,19 @@ fn list_numbering_by_level() {
         ),
         (
             vec![pl(B, 0), pl(B, 1), pl(B, 2), pl(B, 3)],
-            vec!["\u{2022}", "\u{25E6}", "\u{25AA}", "\u{2022}"],
-            "silent: bullets change shape per level, round again",
+            vec!["\u{2022}", "\u{2022}", "\u{2022}", "\u{2022}"],
+            "bullets keep the same styling at all levels of indentation",
         ),
-        (vec![pl(N, 0), pl(N, 0), pl(P, 0), pl(N, 0)], vec!["1.", "2.", "", "1."], "silent: a plain paragraph ends a list, the next starts at 1"),
-        (vec![pl(N, 0), pl(B, 0), pl(N, 0)], vec!["1.", "\u{2022}", "1."], "silent: the other kind of list at the same level starts the count again"),
+        (
+            vec![pl(N, 0), pl(N, 0), pl(P, 0), pl(N, 0)],
+            vec!["1.", "2.", "", "1."],
+            "as measured in Figma (2026-11-11): a plain paragraph ends a list, the next starts at 1",
+        ),
+        (
+            vec![pl(N, 0), pl(B, 0), pl(N, 0)],
+            vec!["1.", "\u{2022}", "1."],
+            "as measured in Figma (2026-11-11): a bullet item between numbered ones starts the count again",
+        ),
         (vec![pl(N, 0), pl(N, 1), pl(N, 0), pl(N, 1)], vec!["1.", "a.", "2.", "a."], "a shallower item starts the deeper count again"),
         (vec![pl(N, 2), pl(N, 2), pl(N, 2), pl(N, 2)], vec!["i.", "ii.", "iii.", "iv."], "roman numerals at the third level"),
     ];
@@ -157,8 +190,8 @@ fn hanging_punctuation_outside_the_aligned_edge() {
     // quote stays on one line.
     let mut t = text("\u{201C}ab cd").unwrap();
     t.auto_resize = TextAutoResize::Height;
-    let w = layout(&t, None, None).width;
-    let room = w - plain.glyphs[0].advance + 0.01;
+    let unwrapped = layout(&t, None, None);
+    let room = unwrapped.width - unwrapped.glyphs[0].advance + 0.01;
     assert_eq!(layout(&t, Some(room), None).lines.len(), 2, "without hanging it wraps");
     t.hanging_punctuation = true;
     assert_eq!(layout(&t, Some(room), None).lines.len(), 1, "with hanging it fits");

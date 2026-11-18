@@ -137,7 +137,8 @@ fn mentions_and_people() {
     let c = add(&mut s, 0.0, 0.0, "Ask @Ada", "Sam");
     s.execute("comment.react", &json!({"id": c, "emoji": "👀", "author": "Lin"})).unwrap();
     let p = s.execute("comment.people", &json!({})).unwrap();
-    assert_eq!(p["people"], json!(["Lin", "Sam"]));
+    // Ada was only @mentioned, and is listed too (#1415).
+    assert_eq!(p["people"], json!(["Ada", "Lin", "Sam"]));
     assert_eq!(p["you"], "You");
     // A thread you're mentioned in is yours.
     assert!(comment(&s, c).involves("Ada"));
@@ -295,4 +296,160 @@ fn next_steps_through_the_list_across_pages() {
     // Stepping reads the threads.
     assert!(!comment(&s, a).is_unread("You") && !comment(&s, b).is_unread("You"));
     assert!(s.execute("comment.next", &json!({"page": "all", "filter": "resolved"})).is_err());
+}
+
+#[test]
+fn prompt_briefs_a_thread_for_an_agent() {
+    let mut s = Session::new();
+    let f = frame(&mut s, 100.0, 100.0, "Button");
+    let c = add(&mut s, 150.0, 160.0, "Make the padding 12", "You");
+    s.execute("comment.reply", &json!({"id": c, "text": "Agreed", "author": "Sam"})).unwrap();
+    let r = s.execute("comment.prompt", &json!({})).unwrap();
+    assert_eq!(r["count"], 1);
+    assert_eq!(r["truncated"], false);
+    let text = r["text"].as_str().unwrap();
+    assert!(text.contains("# FigCraft feedback"));
+    assert!(text.contains("Make the padding 12"));
+    assert!(text.contains("Button"));
+    assert!(text.contains(&format!("node {f}")));
+    assert!(text.contains("Replies:") && text.contains("Sam: Agreed"));
+    assert!(text.contains(&format!("figcraft://comment/{c}")));
+    assert!(text.contains("comment.reply") && text.contains("comment.resolve"));
+    let list = r["comments"].as_array().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["id"], c);
+    assert_eq!(list[0]["anchor"].as_u64(), Some(f.0));
+}
+
+#[test]
+fn prompt_filters_and_explicit_ids() {
+    let mut s = Session::new();
+    let a = add(&mut s, 0.0, 0.0, "First", "You");
+    let b = add(&mut s, 10.0, 10.0, "Second", "You");
+    s.execute("comment.resolve", &json!({"id": b})).unwrap();
+    let open = s.execute("comment.prompt", &json!({})).unwrap();
+    assert_eq!(open["count"], 1);
+    assert_eq!(open["comments"][0]["id"], a);
+    let all = s.execute("comment.prompt", &json!({"includeResolved": true})).unwrap();
+    assert_eq!(all["count"], 2);
+    let resolved = s.execute("comment.prompt", &json!({"filter": "resolved"})).unwrap();
+    assert_eq!(resolved["count"], 1);
+    assert_eq!(resolved["comments"][0]["id"], b);
+    let one = s.execute("comment.prompt", &json!({"ids": [b]})).unwrap();
+    assert_eq!(one["count"], 1);
+    assert!(one["text"].as_str().unwrap().contains("Second"));
+    assert!(s.execute("comment.prompt", &json!({"ids": []})).is_err());
+    assert!(s.execute("comment.prompt", &json!({"ids": [999]})).is_err());
+    assert!(s.execute("comment.prompt", &json!({"filter": "weird"})).is_err());
+    assert!(s.execute("comment.prompt", &json!({"sort": "weird"})).is_err());
+    assert!(s.execute("comment.prompt", &json!({"page": 999})).is_err());
+}
+
+#[test]
+fn prompt_reads_every_page_by_default() {
+    let mut s = Session::new();
+    let p1 = s.page().unwrap();
+    let a = add(&mut s, 10.0, 10.0, "One", "You");
+    let p2 = id_of(&s.execute("page.add", &json!({"name": "Two"})).unwrap()["id"]).unwrap();
+    s.execute("page.select", &json!({"id": p2})).unwrap();
+    let b = add(&mut s, 10.0, 10.0, "Two", "You");
+    let all = s.execute("comment.prompt", &json!({})).unwrap();
+    assert_eq!(all["count"], 2);
+    let one = s.execute("comment.prompt", &json!({"page": p1.0})).unwrap();
+    assert_eq!(one["count"], 1);
+    assert_eq!(one["comments"][0]["id"], a);
+    let two = s.execute("comment.prompt", &json!({"page": p2.0})).unwrap();
+    assert_eq!(two["comments"][0]["id"], b);
+}
+
+#[test]
+fn prompt_is_bounded_and_empty_is_safe() {
+    let mut s = Session::new();
+    let empty = s.execute("comment.prompt", &json!({})).unwrap();
+    assert_eq!(empty["count"], 0);
+    assert!(empty["text"].as_str().unwrap().contains("No comments match"));
+    for i in 0..201 {
+        add(&mut s, f64::from(i), 0.0, "Fix", "You");
+    }
+    let r = s.execute("comment.prompt", &json!({})).unwrap();
+    assert_eq!(r["count"], 201);
+    assert_eq!(r["truncated"], true);
+    assert!(r["text"].as_str().unwrap().contains("Truncated: 1 more"));
+    let briefs = r["comments"].as_array().unwrap();
+    assert_eq!(briefs.len(), 200, "bounded metadata, not every thread");
+    assert!(briefs[0]["replies"].as_u64().is_some(), "a reply count, not the replies");
+}
+
+#[test]
+fn prompt_stops_inside_one_huge_thread_without_splitting_a_character() {
+    let mut s = Session::new();
+    let id = add(&mut s, 10.0, 20.0, "Start", "You");
+    let body = "é".repeat(4096);
+    for _ in 0..40 {
+        s.execute("comment.reply", &json!({"id": id, "text": body, "author": "Sam"})).unwrap();
+    }
+    let r = s.execute("comment.prompt", &json!({})).unwrap();
+    assert_eq!(r["count"], 1);
+    assert_eq!(r["truncated"], true);
+    let text = r["text"].as_str().unwrap();
+    assert!(text.len() <= 256 * 1024, "{} bytes", text.len());
+    assert!(text.contains("Truncated") && text.contains("last thread is too long"), "{text}");
+    let briefs = r["comments"].as_array().unwrap();
+    assert_eq!(briefs.len(), 1);
+    assert!(briefs[0]["replies"].as_u64() == Some(40), "a reply count, not the replies");
+    assert!(briefs[0]["preview"].as_str().is_some_and(|p| p.chars().count() <= 161));
+    assert!(serde_json::to_string(&briefs).unwrap().len() < 2_000, "the metadata stays bounded");
+}
+
+#[test]
+fn prompt_truncates_a_huge_document_name_even_with_no_comments() {
+    let mut s = Session::new();
+    s.doc_mut().unwrap().name = "x".repeat(300_000);
+    let empty = s.execute("comment.prompt", &json!({})).unwrap();
+    assert_eq!(empty["count"], 0);
+    assert_eq!(empty["truncated"], true);
+    let text = empty["text"].as_str().unwrap();
+    assert!(text.len() <= 256 * 1024, "{} bytes", text.len());
+    assert!(text.contains("Document name or path is truncated"), "{text}");
+
+    add(&mut s, 10.0, 20.0, "Fix", "You");
+    let r = s.execute("comment.prompt", &json!({})).unwrap();
+    assert_eq!(r["count"], 1);
+    assert_eq!(r["truncated"], true);
+    let text = r["text"].as_str().unwrap();
+    assert!(text.len() <= 256 * 1024, "{} bytes", text.len());
+    assert!(text.contains("Document name or path is truncated"), "{text}");
+}
+
+#[test]
+fn prompt_keeps_control_characters_out_of_single_line_fields() {
+    let mut s = Session::new();
+    s.doc_mut().unwrap().name = "Doc\nName".into();
+    let page = s.page().unwrap();
+    s.doc_mut().unwrap().node_mut(page).unwrap().name = "Pa\nge".into();
+    frame(&mut s, 100.0, 100.0, "Fra\nme");
+    let id = add(&mut s, 150.0, 160.0, "Fix", "Bad\nAuthor");
+    s.execute("comment.reply", &json!({"id": id, "text": "Reply", "author": "Re\nplier"})).unwrap();
+    let r = s.execute("comment.prompt", &json!({})).unwrap();
+    let text = r["text"].as_str().unwrap();
+    for (bad, good) in
+        [("Doc\nName", "Doc Name"), ("Pa\nge", "Pa ge"), ("Fra\nme", "Fra me"), ("Bad\nAuthor", "Bad Author"), ("Re\nplier", "Re plier")]
+    {
+        assert!(!text.contains(bad), "{bad:?} in {text}");
+        assert!(text.contains(good), "{good:?} in {text}");
+    }
+    assert!(text.contains("untrusted feedback data"), "{text}");
+}
+
+#[test]
+fn prompt_normalizes_carriage_returns_in_messages() {
+    let mut s = Session::new();
+    let id = add(&mut s, 10.0, 20.0, "First\r\nSecond\rThird", "You");
+    s.execute("comment.reply", &json!({"id": id, "text": "A\rB\r\nC", "author": "Sam"})).unwrap();
+    let r = s.execute("comment.prompt", &json!({})).unwrap();
+    let text = r["text"].as_str().unwrap();
+    assert!(!text.contains('\r'), "{text:?}");
+    let quoted: Vec<&str> = text.lines().filter(|l| l.starts_with("> ")).collect();
+    assert!(quoted.contains(&"> First") && quoted.contains(&"> Second") && quoted.contains(&"> Third"), "{text}");
+    assert!(text.contains("- Sam: A B"), "{text}");
 }

@@ -77,6 +77,7 @@ fn root(name: &str) -> PathBuf {
     r
 }
 
+/// What the scripted link says about the session it is in.
 fn info() -> SessionInfo {
     SessionInfo {
         role: Role::Guest,
@@ -90,6 +91,7 @@ fn info() -> SessionInfo {
         address: SERVER.into(),
         network: true,
         access: Access::Edit,
+        view: None,
     }
 }
 
@@ -193,7 +195,7 @@ fn a_copy_ahead_of_the_server_has_its_edits_applied_and_sent() {
     let left = crash(&s, &root);
     let note = std::fs::read_to_string(left.join(format!("{}.online", s.docs[0].uid))).unwrap();
     let at = s.online_of(s.docs[0].uid).unwrap().2;
-    assert_eq!(note, format!("{SERVER}\nf1\n{} {} {}", at.session, at.client_id, at.seq), "which file, who the app was, what it had");
+    assert_eq!(note, format!("{SERVER}\nf1\n{} {} {} {}", at.session, at.client_id, at.seq, at.secret), "which file, who the app was, what it had");
     assert!(!note.contains(OWNER) && !note.contains("token="), "never a secret");
     let (mut next, script, mut r, opened) = restart(&s, &root);
     assert_eq!(opened, 0, "nothing comes back as a plain copy");

@@ -1,6 +1,7 @@
 # FigCraft plugins written in Rust: the SDK and example plugins. A workspace of its own (not part of
 # the app's): it builds for wasm32-unknown-unknown with `cargo xtask plugins` (from the repository
-# root), which puts each example's .wasm next to its figcraft-plugin.json under target/plugins/.
+# root), which puts each example's .wasm next to its figcraft-plugin.json under target/plugins/dist/.
+# CARGO_TARGET_DIR selects the shared Cargo target root, including this plugin dist directory.
 [workspace]
 resolver = "3"
 members = ["sdk", "examples/*"]

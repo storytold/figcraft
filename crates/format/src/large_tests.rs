@@ -15,8 +15,17 @@ use super::*;
 fn large(screens: usize) -> Document {
     let mut d = Document::new("Large");
     let page = d.first_page().unwrap();
-    let button =
-        d.create(page, NodeKind::Component { description: "A button".into(), props: Default::default() }, "Button", 0.0, -80.0, 96.0, 32.0).unwrap();
+    let button = d
+        .create(
+            page,
+            NodeKind::Component { description: "A button".into(), props: Default::default(), prop_order: Vec::new() },
+            "Button",
+            0.0,
+            -80.0,
+            96.0,
+            32.0,
+        )
+        .unwrap();
     let label = d.create(button, NodeKind::Text(TextData::new("OK")), "Label", 8.0, 8.0, 40.0, 16.0).unwrap();
     d.get_mut(label).unwrap().plugin_data.insert("agent".into(), "note".into());
     for s in 0..screens {
@@ -201,4 +210,21 @@ fn the_header_is_read_on_its_own() {
     // The image index is read from the header too.
     let (_, _, index) = parse_json(&d.replacen("\"imageIndex\":[]", "\"imageIndex\":[{\"hash\":\"ab\"},{\"nope\":1}]", 1)).unwrap();
     assert_eq!(index, Some(["ab".to_string()].into_iter().collect()));
+}
+
+#[test]
+fn document_json_may_unpack_in_proportion_to_its_packed_size() {
+    const MB: u64 = 1024 * 1024;
+    // A small archive keeps the member cap: it can't unpack into gigabytes.
+    assert_eq!(document_limit(0, 0), MAX_MEMBER);
+    assert_eq!(document_limit(MB, 2 * MB), MAX_MEMBER);
+    // A real 900 000-layer document saved by us packs 1 477 139 810 bytes into 244 362 923, and
+    // didn't open again under the 512 MB cap.
+    if cfg!(not(target_pointer_width = "32")) {
+        assert!(document_limit(244_362_923, 260 * MB) > 1_477_139_810);
+    }
+    // The packed size an archive claims counts only up to the archive's own size.
+    assert_eq!(document_limit(u64::MAX, MB), MAX_MEMBER);
+    // Never more than the ceiling.
+    assert_eq!(document_limit(u64::MAX, u64::MAX), MAX_DOCUMENT);
 }

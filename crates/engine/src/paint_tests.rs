@@ -13,7 +13,7 @@ fn red_rect(s: &mut Session) -> figcraft_doc::NodeId {
     r
 }
 
-fn fill(s: &Session, id: figcraft_doc::NodeId) -> Color {
+pub(crate) fn fill(s: &Session, id: figcraft_doc::NodeId) -> Color {
     s.doc().unwrap().node(id).unwrap().fills[0].solid_color().unwrap()
 }
 
@@ -133,6 +133,16 @@ fn image_adjust_refuses_what_it_cannot_do() {
     assert!(s.execute("image.adjust", &json!({"ids": [r], "target": "glow", "preset": "vivid"})).is_err());
     // Mixed selections adjust the layers that have images.
     assert_eq!(s.execute("image.adjust", &json!({"ids": [plain, r], "index": 1, "preset": "vivid"})).unwrap()["changed"], 1);
+}
+
+#[test]
+fn save_preset_rejects_bad_index() {
+    let mut s = Session::new();
+    let r = image_rect(&mut s);
+    assert!(s.execute("image.savePreset", &json!({"ids": [r], "name": "B", "index": 0})).is_err());
+    assert!(s.execute("image.savePreset", &json!({"ids": [r], "name": "B", "index": -1})).is_err(), "negative index accepted");
+    assert!(s.execute("image.savePreset", &json!({"ids": [r], "name": "B", "index": 1.5})).is_err(), "fractional index accepted");
+    assert!(s.execute("image.savePreset", &json!({"ids": [r], "name": "B", "index": 1})).is_ok());
 }
 
 #[test]

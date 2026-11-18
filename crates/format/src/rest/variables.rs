@@ -20,11 +20,24 @@ const MAX_VARIABLES: usize = 100_000;
 const MAX_MODES: usize = 1_000;
 /// Longest string variable value kept (characters).
 const MAX_STRING: usize = 10_000;
+/// The copies of fallback values that fill missing modes, in bytes, for one import: variables, modes
+/// and string length are each capped, but not their product. Past it, modes stay empty.
+const MAX_FILLED_BYTES: usize = 64 << 20;
 
 /// The object holding `variableCollections` and `variables`: a local variables response's `meta`,
 /// or `v` itself.
 pub fn source(v: &Value) -> Option<&Value> {
     [v.get("meta"), Some(v)].into_iter().flatten().find(|m| m.get("variableCollections").is_some_and(Value::is_object))
+}
+
+/// The variable ids the collections of a local variables response list in `variableIds`.
+pub(super) fn listed_ids(v: &Value) -> BTreeSet<&str> {
+    source(v)
+        .into_iter()
+        .flat_map(|src| objects(src, "variableCollections", MAX_COLLECTIONS))
+        .flat_map(|(_, c)| list(c, "variableIds").iter().filter_map(Value::as_str).map(clip_str))
+        .take(MAX_VARIABLES)
+        .collect()
 }
 
 pub(super) fn kind_of(t: &str) -> Option<VariableType> {
@@ -57,7 +70,8 @@ pub(super) fn value(kind: VariableType, v: &Value) -> Option<VariableValue> {
 
 /// `collections` of `vars` (with their variables) as a local variables response, which
 /// [`Ctx::variables`] reads back. Aliases to variables outside them are written as the value they
-/// resolve to in the default modes.
+/// resolve to in the default modes. Colour calculations have no shape in this JSON, so they go out
+/// as the colour they resolve to in the mode they are written for.
 pub fn export(vars: &Variables, collections: &[&Collection]) -> Value {
     let ids: BTreeSet<&str> = collections.iter().map(|c| c.id.as_str()).collect();
     let members: Vec<&Variable> = vars.variables.iter().filter(|v| ids.contains(v.collection.as_str())).collect();
@@ -81,7 +95,10 @@ pub fn export(vars: &Variables, collections: &[&Collection]) -> Value {
                     Some(r) => r,
                     None => continue,
                 },
-                other => other.clone(),
+                other => match vars.flattened(v, mode, other) {
+                    Some(flat) => flat,
+                    None => continue,
+                },
             };
             values.insert(mode.clone(), raw(&val));
         }
@@ -102,7 +119,8 @@ pub fn export(vars: &Variables, collections: &[&Collection]) -> Value {
     json!({"status": 200, "error": false, "meta": {"variableCollections": colls, "variables": out}})
 }
 
-/// A value as the variables JSON writes it (the inverse of [`value`]).
+/// A value as the variables JSON writes it (the inverse of [`value`]). The export resolves
+/// calculations before calling this, so they have no shape of their own here.
 fn raw(v: &VariableValue) -> Value {
     match v {
         VariableValue::Color(c) => json!({"r": c.r, "g": c.g, "b": c.b, "a": c.a}),
@@ -110,6 +128,7 @@ fn raw(v: &VariableValue) -> Value {
         VariableValue::String(s) => json!(s),
         VariableValue::Boolean(b) => json!(b),
         VariableValue::Alias(a) => json!({"type": "VARIABLE_ALIAS", "id": a}),
+        VariableValue::ColorAlpha { .. } | VariableValue::ColorMix { .. } => Value::Null,
     }
 }
 
@@ -118,14 +137,18 @@ fn objects<'v>(v: &'v Value, key: &str, max: usize) -> impl Iterator<Item = (&'v
 }
 
 impl Ctx<'_> {
-    /// Add the collections and variables of a local variables response (or its `meta`).
-    pub(super) fn variables(&mut self, src: &Value) {
+    /// Add the collections and variables of a local variables response (or its `meta`); nothing
+    /// when `v` isn't one. The `variables` map is read next to `variableCollections`, or from
+    /// `meta` or the top level when it sits on the other side.
+    pub(super) fn variables(&mut self, v: &Value) {
+        let Some(src) = source(v) else { return };
         for (key, c) in objects(src, "variableCollections", MAX_COLLECTIONS) {
             self.collection(key, c);
         }
+        let holder = [Some(src), v.get("meta"), Some(v)].into_iter().flatten().find(|m| m.get("variables").is_some_and(Value::is_object));
         let mut found: Vec<Variable> = Vec::new();
         let mut seen: BTreeSet<String> = BTreeSet::new();
-        for (key, v) in objects(src, "variables", MAX_VARIABLES) {
+        for (key, v) in holder.into_iter().flat_map(|h| objects(h, "variables", MAX_VARIABLES)) {
             if let Some(var) = self.variable(key, v)
                 && seen.insert(var.id.clone())
             {
@@ -267,14 +290,10 @@ impl Ctx<'_> {
         if dropped {
             self.warn("variable aliases to variables that aren't in the variables JSON (or of another type) were skipped");
         }
+        let mut budget = MAX_FILLED_BYTES;
         for v in found.iter_mut() {
             let Some(modes) = self.var_modes.get(&v.collection) else { continue };
-            let fallback = modes.first().and_then(|m| v.values.get(m)).or_else(|| v.values.values().next()).cloned();
-            if let Some(f) = fallback {
-                for m in modes {
-                    v.values.entry(m.clone()).or_insert_with(|| f.clone());
-                }
-            }
+            fill_modes(&mut v.values, modes, &mut budget);
         }
     }
 
@@ -499,5 +518,38 @@ fn field_type(field: &str) -> VariableType {
         "characters" | "fontFamily" | "fontStyle" => VariableType::String,
         "visible" => VariableType::Boolean,
         _ => VariableType::Number,
+    }
+}
+
+/// Give each of `modes` without a value a copy of the first mode's (else any) value, while the
+/// copies' bytes fit in `budget`.
+fn fill_modes(values: &mut BTreeMap<String, VariableValue>, modes: &[String], budget: &mut usize) {
+    let Some(f) = modes.first().and_then(|m| values.get(m)).or_else(|| values.values().next()).cloned() else { return };
+    let cost =
+        64 + modes.iter().map(String::len).max().unwrap_or(0) + if let VariableValue::String(t) | VariableValue::Alias(t) = &f { t.len() } else { 0 };
+    for m in modes {
+        if values.contains_key(m) {
+            continue;
+        }
+        let Some(left) = budget.checked_sub(cost) else { return };
+        *budget = left;
+        values.insert(m.clone(), f.clone());
+    }
+}
+
+#[cfg(test)]
+mod fill_tests {
+    use super::*;
+
+    #[test]
+    fn missing_modes_are_filled_only_within_the_budget() {
+        let modes: Vec<String> = (0..10).map(|i| format!("m{i}")).collect();
+        let mut v = BTreeMap::from([("m0".to_string(), VariableValue::String("x".repeat(100)))]);
+        let mut budget = 1_000;
+        fill_modes(&mut v, &modes, &mut budget);
+        assert!(v.len() > 1 && v.len() < 10, "{}", v.len());
+        let mut v = BTreeMap::from([("m0".to_string(), VariableValue::Number(1.0))]);
+        fill_modes(&mut v, &modes, &mut { MAX_FILLED_BYTES });
+        assert_eq!(v.len(), 10);
     }
 }

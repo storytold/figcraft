@@ -70,6 +70,28 @@
     </dict>
   </array>
 
+  <!-- Other apps' formats FigCraft opens, declared by their public type identifiers so Open With
+       knows them on a Mac without that app installed. -->
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.bohemiancoding.sketch.drawing.single</string>
+      <key>UTTypeDescription</key>
+      <string>Sketch Document</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.content</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>sketch</string></array>
+      </dict>
+    </dict>
+  </array>
+
   <!-- figcraft://join?... live session invite links open FigCraft. -->
   <key>CFBundleURLTypes</key>
   <array>
@@ -107,6 +129,16 @@
       <string>Alternate</string>
       <key>LSItemContentTypes</key>
       <array><string>public.svg-image</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Sketch Document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.bohemiancoding.sketch.drawing.single</string></array>
     </dict>
     <dict>
       <key>CFBundleTypeName</key>

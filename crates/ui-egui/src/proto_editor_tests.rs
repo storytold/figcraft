@@ -1,10 +1,11 @@
 //! The interaction editor's conditionals and the presenter's hotspot hints, driven headless
 //! through egui (the harness is `present_tests`').
 
-use egui::{Pos2, Rect, pos2};
+use egui::{Event, Key, Modifiers, Pos2, Rect, pos2};
 use figcraft_doc::proto::{Action, Expr, ExprOp};
 use figcraft_doc::{NodeId, VariableValue};
 use figcraft_engine::Session;
+use figcraft_engine::keymap::Platform;
 use serde_json::{Value, json};
 
 use crate::present_tests::{Ui, id};
@@ -40,6 +41,48 @@ fn rect_of(v: &Value) -> Rect {
 fn click(u: &mut Ui, p: Pos2) {
     u.button(p, true);
     u.button(p, false);
+}
+
+fn press(u: &mut Ui, key: Key, modifiers: Modifiers) {
+    let ev = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+    u.frame(vec![ev(true), ev(false)]);
+}
+
+/// Cmd on macOS, Ctrl elsewhere, as egui reports it.
+fn cmd() -> Modifiers {
+    if crate::shortcuts::platform() == Platform::Mac { Modifiers::MAC_CMD | Modifiers::COMMAND } else { Modifiers::CTRL | Modifiers::COMMAND }
+}
+
+/// Hide UI (the Options menu, or Cmd/Ctrl+\ as in the editor) hides the bar above the prototype and
+/// the navigation bar under it, so the prototype alone shows and takes the bar's room; the key shows
+/// them again; the option carries over like the others, and the prototype still reacts meanwhile.
+#[test]
+fn hide_ui_hides_the_bars_and_the_key_shows_them_again() {
+    let (s, a, b, _) = setup();
+    let mut u = Ui::new(s);
+    u.run("proto.present", json!({"start": a}));
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(false), "shown by default");
+    let top = |u: &Ui| rect_of(&presenter(u)["hotspots"][0]["rect"]).min.y;
+    let with_bars = top(&u);
+    u.run("proto.presentOptions", json!({"hideUi": true}));
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(true));
+    assert_eq!(u.app.inspect()["presentOptions"]["hideUi"], json!(true), "kept for the next presentation");
+    let without = top(&u);
+    assert!(without < with_bars, "the prototype moves up into the bar's room: {with_bars} then {without}");
+    press(&mut u, Key::Backslash, cmd());
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(false), "the key shows the bars again");
+    assert_eq!(top(&u), with_bars);
+    press(&mut u, Key::Backslash, cmd());
+    u.frame(vec![]);
+    assert_eq!(presenter(&u)["hideUi"], json!(true), "and hides them once more");
+    assert!(u.app.ui.present_view.hide_ui, "kept for the next presentation");
+    // The prototype keeps reacting with the bars hidden.
+    let at = rect_of(&presenter(&u)["hotspots"][0]["rect"]).center();
+    click(&mut u, at);
+    assert_eq!(presenter(&u)["current"], json!(b));
 }
 
 #[test]
@@ -78,6 +121,9 @@ fn condition(u: &Ui, btn: NodeId, block: usize) -> String {
     blocks[block].condition.as_ref().map(|c| c.display(&doc.variables)).unwrap_or_default()
 }
 
+/// Asserts the interaction editor shows conditional blocks and nested actions, restarts a
+/// condition when a variable of another type is picked, ignores a right-hand-side variable pick
+/// for a complex condition, and one undo restores the previous condition.
 #[test]
 fn the_interaction_editor_shows_conditionals_and_picks_their_variables() {
     let (mut s, _, b, btn) = setup();
@@ -95,7 +141,7 @@ fn the_interaction_editor_shows_conditionals_and_picks_their_variables() {
     u.app.ui.right_tab = crate::RightTab::Prototype;
     crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
     // The conditional open, then its nested set variable, then the else-if as an expression.
-    let open = egui::Id::new(("proto_open_action", btn, 0usize));
+    let open = egui::Id::unique(("proto_open_action", btn, 0usize));
     for path in [vec![1usize], vec![1, 0, 1], vec![1, 2, 0]] {
         u.ctx.data_mut(|d| d.insert_temp(open, path));
         u.frames(3, Vec::new);
@@ -154,6 +200,8 @@ fn the_builder_takes_variable_operator_value_conditions() {
     }
 }
 
+/// Asserts invalid typed conditions keep their draft and show errors without saving, a valid
+/// one clears the error and saves, and Enter does not leak to shortcuts.
 #[test]
 fn typed_conditions_are_checked_and_errors_show_until_fixed() {
     let (mut s, _, b, btn) = setup();
@@ -169,7 +217,7 @@ fn typed_conditions_are_checked_and_errors_show_until_fixed() {
     let mut u = Ui::new(s);
     u.app.ui.right_tab = crate::RightTab::Prototype;
     crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
-    u.ctx.data_mut(|d| d.insert_temp(egui::Id::new(("proto_open_action", btn, 0usize)), vec![1usize]));
+    u.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("proto_open_action", btn, 0usize)), vec![1usize]));
     u.frames(3, Vec::new);
     // The else if is complex: it shows as an expression field.
     let field = Slot { node: btn, k: 0, path: vec![1] }.id("proto_cond_expr").with(1usize);
@@ -225,4 +273,101 @@ fn the_presenter_inspects_the_layer_under_the_pointer() {
     u.frame(vec![egui::Event::PointerMoved(pos2(5.0, 400.0))]);
     assert_eq!(presenter(&u)["inspected"], json!(a));
     assert_eq!(u.app.inspect()["presentOptions"]["inspect"], json!(true));
+}
+
+#[test]
+fn deleting_a_prototype_interaction_removes_the_interaction_not_the_component() {
+    let (s, _a, b, btn) = setup();
+    let mut u = Ui::new(s);
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    u.run("select.set", json!({"ids": [btn]}));
+    crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
+    u.frames(1, Vec::new);
+
+    assert!(u.app.session.doc().unwrap().node(btn).is_some());
+    assert_eq!(u.app.session.doc().unwrap().node(btn).unwrap().interactions.len(), 1);
+    assert_eq!(crate::proto_panel::editor(&u.ctx), Some((btn, 0)));
+
+    // Pressing Delete when an interaction is selected should delete the interaction, NOT the component.
+    u.key(pos2(100.0, 100.0), egui::Key::Delete);
+
+    assert!(u.app.session.doc().unwrap().node(btn).is_some(), "Bug #767 regression: component was deleted when deleting prototype interaction!");
+    assert_eq!(u.app.session.doc().unwrap().node(btn).unwrap().interactions.len(), 0, "the interaction should be removed");
+    assert_eq!(crate::proto_panel::editor(&u.ctx), None);
+
+    // Re-add interaction and test Backspace as well.
+    u.run("proto.interaction.add", json!({"id": btn, "dest": b}));
+    assert_eq!(u.app.session.doc().unwrap().node(btn).unwrap().interactions.len(), 1);
+    crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
+    u.frames(1, Vec::new);
+    u.key(pos2(100.0, 100.0), egui::Key::Backspace);
+    assert!(u.app.session.doc().unwrap().node(btn).is_some());
+    assert_eq!(u.app.session.doc().unwrap().node(btn).unwrap().interactions.len(), 0);
+    assert_eq!(crate::proto_panel::editor(&u.ctx), None);
+
+    // When NO interaction is active, Delete deletes the component as normal.
+    u.key(pos2(100.0, 100.0), egui::Key::Delete);
+    assert!(u.app.session.doc().unwrap().node(btn).is_none(), "when no interaction is selected, Delete removes the layer");
+}
+
+/// Edit ▸ Delete from the menu bar does the same as the Delete key (#767).
+#[test]
+fn edit_delete_from_the_menu_removes_the_open_interaction_not_the_layer() {
+    let (s, _a, _b, btn) = setup();
+    let mut u = Ui::new(s);
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    u.run("select.set", json!({"ids": [btn]}));
+    crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
+    u.frames(1, Vec::new);
+    crate::menus::invoke(&mut u.app, "edit.delete");
+    let doc = u.app.session.doc().unwrap();
+    assert!(doc.node(btn).is_some_and(|n| n.interactions.is_empty()), "the interaction goes, the layer stays");
+    assert_eq!(crate::proto_panel::editor(&u.ctx), None);
+    crate::menus::invoke(&mut u.app, "edit.delete");
+    assert!(u.app.session.doc().unwrap().node(btn).is_none(), "with no interaction open, Edit ▸ Delete deletes the layer");
+}
+
+#[test]
+fn escape_closes_prototype_editor_and_the_next_deselects() {
+    let (s, _a, _b, btn) = setup();
+    let mut u = Ui::new(s);
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    u.run("select.set", json!({"ids": [btn]}));
+    crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
+    u.frames(1, Vec::new);
+
+    assert_eq!(crate::proto_panel::editor(&u.ctx), Some((btn, 0)));
+    assert_eq!(u.app.session.selection(), vec![btn]);
+
+    // First Escape closes the interaction editor; layer remains selected.
+    u.key(pos2(100.0, 100.0), egui::Key::Escape);
+    assert_eq!(crate::proto_panel::editor(&u.ctx), None);
+    assert_eq!(u.app.session.selection(), vec![btn], "layer remains selected");
+
+    // Second Escape clears the selection, not stepping out to the parent frame.
+    u.key(pos2(100.0, 100.0), egui::Key::Escape);
+    assert!(u.app.session.selection().is_empty(), "the second Escape deselects");
+}
+
+/// After a click in the Pages list, Delete that removes an interaction ends the list's hold on the
+/// keyboard: with the layer deselected afterwards, Delete doesn't take the page (#859).
+#[test]
+fn deleting_an_interaction_ends_the_pages_list_focus() {
+    let (s, _a, _b, btn) = setup();
+    let mut u = Ui::new(s);
+    let first = u.app.session.page().unwrap();
+    u.run("page.add", json!({}));
+    u.run("page.select", json!({"id": first}));
+    // As after a click on the page's row (layers_keys_tests clicks the real row).
+    u.app.ui.pages_focus = u.app.session.ds().ok().map(|d| d.uid);
+    u.app.ui.right_tab = crate::RightTab::Prototype;
+    u.run("select.set", json!({"ids": [btn]}));
+    crate::proto_panel::open_editor(&u.ctx, Some((btn, 0)));
+    u.frames(1, Vec::new);
+    u.key(pos2(100.0, 100.0), egui::Key::Delete);
+    assert_eq!(u.app.session.doc().unwrap().node(btn).unwrap().interactions.len(), 0);
+    assert!(u.app.ui.pages_focus.is_none());
+    u.run("select.none", json!({}));
+    u.key(pos2(100.0, 100.0), egui::Key::Delete);
+    assert_eq!(u.app.session.doc().unwrap().pages.len(), 2, "the page stays");
 }

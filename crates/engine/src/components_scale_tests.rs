@@ -453,7 +453,13 @@ fn library_setup(path: &str) -> (Session, DesignSystem, Session, DesignSystem, V
     let lib = crate::library::Cache::default().load(path).unwrap();
     let mut doc = Document::new("Consumer");
     let m = &lib.manifest;
-    doc.libraries_mut().enabled.push(LibraryLink { id: m.id.clone(), name: m.name.clone(), path: path.to_string(), version: m.version });
+    doc.libraries_mut().enabled.push(LibraryLink {
+        id: m.id.clone(),
+        name: m.name.clone(),
+        path: path.to_string(),
+        version: m.version,
+        ..Default::default()
+    });
     let map = crate::library::import(&mut doc, &lib, &ds.assets(), false).unwrap();
     let mut local = ds.remap(&map);
     local.theme = doc.libraries.collections.iter().find(|r| r.key == ds.theme).map(|r| r.local.clone()).unwrap();
@@ -746,4 +752,30 @@ fn alt_dropping_a_library_component_swaps_to_it() {
     let glyph = find_path(doc, top, &["Glyph"]).unwrap();
     assert!(doc.node(glyph).unwrap().overrides.is_empty());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_fill_set_on_a_bound_instance_layer_detaches_it_as_an_override() {
+    // Without unbinding first: the explicit colour detaches the variable on the instance layer only,
+    // and stays through main edits until the override is reset.
+    let mut s = Session::new();
+    let (chip, _) = bound_chip(&mut s);
+    let i = crate::params::id_of(&ex(&mut s, "instance.create", json!({"component": chip, "x": 200, "y": 0}))["id"]).unwrap();
+    let bg = find_path(s.doc().unwrap(), i, &["Bg"]).unwrap();
+    ex(&mut s, "node.set", json!({"ids": [bg], "props": {"fill": "#ff00ff"}}));
+    let n = s.doc().unwrap().node(bg).unwrap().clone();
+    assert_eq!(n.fills[0].solid_color().unwrap().to_hex(), "FF00FF");
+    assert!(!n.bound.contains_key("fill"));
+    assert!(n.overrides.contains("fills"));
+    let main_bg = find_path(s.doc().unwrap(), chip, &["Bg"]).unwrap();
+    ex(&mut s, "node.set", json!({"ids": [main_bg], "props": {"height": 28}}));
+    ex(&mut s, "variable.set", json!({"variable": "Chip", "value": "#445566"}));
+    let doc = s.doc().unwrap();
+    healthy(doc);
+    assert_eq!(doc.node(bg).unwrap().fills[0].solid_color().unwrap().to_hex(), "FF00FF");
+    assert!(doc.node(main_bg).unwrap().bound.contains_key("fill"), "the main keeps its binding");
+    ex(&mut s, "component.resetOverride", json!({"id": bg, "group": "fills"}));
+    let n = s.doc().unwrap().node(bg).unwrap();
+    assert!(n.bound.contains_key("fill"));
+    assert_eq!(n.fills[0].solid_color().unwrap().to_hex(), "445566");
 }

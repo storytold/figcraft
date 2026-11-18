@@ -189,6 +189,7 @@ fn corner_radius_follows_the_documented_rules() {
         (NodeKind::Polygon { count: 5 }, true, false, "polygons: one radius for every corner"),
         (NodeKind::Star { count: 5, inner_ratio: 0.4 }, true, false, "stars: one radius for every corner"),
         (NodeKind::Vector { network: Default::default() }, true, false, "vectors: a radius, and one per point in edit mode"),
+        (NodeKind::BooleanOp { op: BoolOp::Union }, true, false, "boolean groups: one radius for every sharp corner of the result"),
         (NodeKind::Line, false, false, "lines and arrows take no radius"),
     ];
     for (kind, radius, independent, why) in doc_rows {
@@ -203,6 +204,92 @@ fn corner_radius_follows_the_documented_rules() {
         path.winding(Point::new(50.0, 50.0)) != 0 && path.bounding_box().width() > 50.0,
         "silent: a huge radius makes the polygon as round as it gets (pinned)"
     );
+}
+
+#[test]
+fn corner_smoothing_follows_the_documented_rules() {
+    // Smoothing applies to any shape a radius applies to, and only to the entire shape.
+    // (layer, radius, derivation)
+    let rows: Vec<(&str, f64, &str)> = vec![
+        ("shape.rectangle", 20.0, "rectangles smooth their rounded corners"),
+        ("shape.polygon", 12.0, "polygons smooth their rounded corners"),
+        ("shape.star", 4.0, "stars smooth their rounded corners"),
+    ];
+    for (cmd, radius, why) in rows {
+        let mut s = Session::new();
+        let id = create(&mut s, cmd, json!({"x": 0, "y": 0, "width": 100, "height": 100}));
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerRadius": radius}}));
+        let round = figcraft_doc::geometry::shape_path(&node(&s, id)).unwrap().area().abs();
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerSmoothing": 0.6}}));
+        let smooth = figcraft_doc::geometry::shape_path(&node(&s, id)).unwrap().area().abs();
+        assert!((smooth - round).abs() > 1.0, "{why}: {round} then {smooth}");
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerRadius": 0}}));
+        let sharp = figcraft_doc::geometry::shape_path(&node(&s, id)).unwrap();
+        ex(&mut s, "node.set", json!({"ids": [id], "props": {"cornerSmoothing": 0}}));
+        assert_eq!(sharp, figcraft_doc::geometry::shape_path(&node(&s, id)).unwrap(), "{why}: smoothing needs a radius");
+    }
+    // (kind, takes smoothing, derivation)
+    let doc_rows: Vec<(NodeKind, bool, &str)> = vec![
+        (NodeKind::Rectangle, true, "rectangles"),
+        (NodeKind::Frame, true, "frames"),
+        (NodeKind::Polygon { count: 5 }, true, "polygons"),
+        (NodeKind::Star { count: 5, inner_ratio: 0.4 }, true, "stars"),
+        (
+            NodeKind::Vector {
+                network: figcraft_doc::VectorNetwork::from_points(&[Point::ZERO, Point::new(10.0, 0.0), Point::new(10.0, 10.0)], true),
+            },
+            true,
+            "vector networks that are closed shapes",
+        ),
+        (NodeKind::Vector { network: Default::default() }, false, "an open vector has no closed shape to smooth"),
+        (NodeKind::BooleanOp { op: BoolOp::Union }, true, "boolean groups (the plugin API's corner mixin; the look is pinned)"),
+        (NodeKind::Line, false, "lines take no radius, so no smoothing"),
+    ];
+    for (kind, smoothing, why) in doc_rows {
+        assert_eq!(kind.has_corner_smoothing(), smoothing, "{why}");
+    }
+}
+
+#[test]
+fn closed_vectors_take_corner_smoothing() {
+    // "Vector networks that are closed shapes" take corner smoothing, which applies to the entire
+    // shape; a single open stroke does not.
+    let mut s = Session::new();
+    let closed = create(&mut s, "vector.create", json!({"points": [[0, 0], [100, 0], [100, 100], [0, 100]], "closed": true}));
+    let open = create(&mut s, "vector.create", json!({"points": [[200, 0], [300, 0], [300, 100]], "closed": false}));
+    ex(&mut s, "node.set", json!({"ids": [closed, open], "props": {"cornerRadius": 20}}));
+    let outline = |s: &Session, id: NodeId| figcraft_doc::geometry::shape_path(&node(s, id)).unwrap();
+    let svg = |s: &Session, id: NodeId| figcraft_svg::export_svg(s.doc().unwrap(), &[id], &figcraft_svg::SvgOptions::default()).unwrap();
+    let render = |s: &Session, id: NodeId| figcraft_render::node_outline(s.doc().unwrap(), &node(s, id)).unwrap().0;
+    let (round, open_round, svg_round, drawn_round) = (outline(&s, closed), outline(&s, open), svg(&s, closed), render(&s, closed));
+    ex(&mut s, "node.set", json!({"ids": [closed, open], "props": {"cornerSmoothing": 0.6}}));
+    let smooth = outline(&s, closed);
+    // The smoothed corner reaches 1.6 radii along each edge, as a smoothed rectangle's does.
+    let want = figcraft_geom::rounded_rect(100.0, 100.0, [20.0; 4], 0.6).area().abs();
+    assert!((smooth.area().abs() - want).abs() < 0.1, "the closed vector smooths: {} vs {want}", smooth.area().abs());
+    assert!((smooth.area().abs() - round.area().abs()).abs() > 1.0, "smoothing changes the closed vector's outline");
+    assert_ne!(svg(&s, closed), svg_round, "SVG export draws the smoothed corners");
+    assert_ne!(render(&s, closed), drawn_round, "the canvas draws the smoothed corners");
+    assert_eq!(outline(&s, open), open_round, "an open vector keeps its plain rounded points");
+    let stroke = figcraft_doc::geometry::stroke_geometry(&node(&s, closed)).unwrap();
+    assert!((stroke.area().abs() - want).abs() < 0.1, "the stroke follows the smoothed outline");
+    // Smoothing needs a radius, and undo restores the plain corners in one step.
+    s.undo().unwrap();
+    assert_eq!(outline(&s, closed), round, "one undo step");
+    ex(&mut s, "node.set", json!({"ids": [closed], "props": {"cornerRadius": 0}}));
+    let sharp = outline(&s, closed);
+    ex(&mut s, "node.set", json!({"ids": [closed], "props": {"cornerSmoothing": 0.6}}));
+    assert_eq!(outline(&s, closed), sharp, "smoothing needs a radius");
+    // A vector whose region has paints of its own draws the smoothed corners too, on the canvas
+    // and in SVG.
+    ex(&mut s, "node.set", json!({"ids": [closed], "props": {"cornerRadius": 20}}));
+    if let NodeKind::Vector { network } = &mut s.doc_mut().unwrap().get_mut(closed).unwrap().kind {
+        network.regions[0].fills = Some(vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)]);
+    }
+    let (region_svg, region_path) = (svg(&s, closed), render(&s, closed));
+    assert!((region_path.area().abs() - want).abs() < 0.5, "region paints follow the smoothed outline: {}", region_path.area().abs());
+    ex(&mut s, "node.set", json!({"ids": [closed], "props": {"cornerSmoothing": 0}}));
+    assert_ne!(svg(&s, closed), region_svg, "SVG export draws the region's smoothed corners");
 }
 
 #[test]
@@ -397,6 +484,30 @@ fn boolean_results_and_the_look_they_take() {
 }
 
 #[test]
+fn flatten_keeps_open_paths() {
+    // #377: open paths have no fill outline, so two pen paths flattened to "nothing to flatten"
+    // and next to a closed shape they disappeared.
+    let mut s = Session::new();
+    let a = create(&mut s, "vector.create", json!({"points": [[0, 0], [100, 50], [200, 0]]}));
+    let b = create(&mut s, "vector.create", json!({"points": [[0, 100], [100, 150], [200, 100]]}));
+    let tri = create(&mut s, "vector.create", json!({"points": [[300, 0], [400, 0], [400, 100]], "closed": true}));
+    let v = create(&mut s, "vector.flatten", json!({"ids": [a, b, tri]}));
+    let NodeKind::Vector { network } = node(&s, v).kind else { panic!("flatten makes one vector") };
+    assert_eq!((network.vertices.len(), network.segments.len()), (9, 7), "both open paths and the triangle");
+    assert_eq!(network.regions.len(), 1, "only the triangle is filled");
+    let bb = s.doc().unwrap().world_bounds(v).unwrap();
+    assert_eq!((bb.x0, bb.y0, bb.x1, bb.y1), (0.0, 0.0, 400.0, 150.0), "nothing moves");
+
+    // Joining two open paths goes the same way.
+    let mut s = Session::new();
+    let a = create(&mut s, "vector.create", json!({"points": [[0, 0], [100, 0]]}));
+    let b = create(&mut s, "vector.create", json!({"points": [[0, 50], [100, 50]]}));
+    let v = create(&mut s, "vector.join", json!({"ids": [a, b]}));
+    let NodeKind::Vector { network } = node(&s, v).kind else { panic!("join makes one vector") };
+    assert_eq!(network.segments.len(), 2);
+}
+
+#[test]
 fn flatten_and_outline_stroke() {
     // Flatten: one vector layer from the selection, in one step; Alt+Shift+F does it.
     let mut s = Session::new();
@@ -458,4 +569,19 @@ fn outline_stroke_outlines_every_selected_layer() {
         assert!(s.doc().unwrap().node(line).is_none(), "the line was replaced by its outline");
         assert_eq!(s.selection(), ids, "the results are selected");
     }
+}
+
+#[test]
+fn node_set_non_numeric_miter_smoothing_paragraph_is_an_error() {
+    let mut s = Session::new();
+    let r = create(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 50, "height": 50}));
+    let t = create(&mut s, "text.create", json!({"text": "Hi", "x": 0, "y": 100}));
+    ex(&mut s, "node.set", json!({"ids": [r], "props": {"miterLimit": 8, "cornerSmoothing": 0.5}}));
+    ex(&mut s, "node.set", json!({"ids": [t], "props": {"paragraphSpacing": 6, "paragraphIndent": 4}}));
+    for (id, key) in [(r, "miterLimit"), (r, "cornerSmoothing"), (t, "paragraphSpacing"), (t, "paragraphIndent")] {
+        let err = s.execute("node.set", &json!({"ids": [id], "props": {key: "abc"}})).expect_err(key);
+        assert!(err.to_string().contains("must be a number"), "{key}: {err}");
+    }
+    assert_eq!(node(&s, r).stroke.miter_limit, 8.0);
+    assert_eq!(node(&s, r).corners.smoothing, 0.5);
 }

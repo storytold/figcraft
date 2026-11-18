@@ -3,17 +3,48 @@
 use crate::args::{Args, file_url_path, is_invite, parse};
 
 fn args(a: &[&str]) -> Vec<String> {
-    a.iter().map(|s| s.to_string()).collect()
+    a.iter().map(ToString::to_string).collect()
 }
 
 #[test]
 fn files_and_the_control_port() {
     assert_eq!(parse(&args(&[])), Args::default());
-    let a = parse(&args(&["--control", "4242", "a.figcraft", "--verbose", "b.svg"]));
-    assert_eq!(a, Args { control: Some(4242), files: args(&["a.figcraft", "b.svg"]), join: None });
+    let a = parse(&args(&["--control", "4242", "a.figcraft", "b.svg"]));
+    assert_eq!(a, Args { control: Some(4242), files: args(&["a.figcraft", "b.svg"]), ..Args::default() });
     // A missing or bad port is ignored, not taken as a file.
     assert_eq!(parse(&args(&["--control"])), Args::default());
     assert_eq!(parse(&args(&["--control", "nope"])).control, None);
+}
+
+#[test]
+fn the_control_port_accepts_the_equals_form() {
+    let a = parse(&args(&["--control=7980", "a.figcraft"]));
+    assert_eq!(a, Args { control: Some(7980), files: args(&["a.figcraft"]), ..Args::default() });
+    // A bad port is ignored, not taken as a file.
+    assert_eq!(parse(&args(&["--control=nope"])), Args::default());
+}
+
+#[test]
+fn automation_roots_repeat_and_are_never_files() {
+    let a = parse(&args(&["--automation-read-root", "in", "--automation-write-root=out", "--automation-read-root=more", "a.figcraft"]));
+    assert_eq!(a.read_roots, args(&["in", "more"]));
+    assert_eq!(a.write_roots, args(&["out"]));
+    assert_eq!(a.files, args(&["a.figcraft"]));
+    // A flag without its folder is kept as an empty one, which startup refuses.
+    assert_eq!(parse(&args(&["--automation-write-root"])).write_roots, args(&[""]));
+}
+
+#[test]
+fn unknown_flags_are_refused_never_ignored() {
+    // #836: a mistyped root flag (or one an older release lacks) must stop the app, not start it
+    // unconfined. Both forms, with and without `=`.
+    let a = parse(&args(&["--automation-write-roots", "out", "--automation-write-dir=out", "--verbose", "a.figcraft"]));
+    assert_eq!(a.unknown, args(&["--automation-write-roots", "--automation-write-dir=out", "--verbose"]));
+    assert!(a.write_roots.is_empty());
+    // Single-dash arguments are left as they were (files); after `--` everything is a file.
+    let a = parse(&args(&["--control", "1", "--", "--odd.figcraft", "--automation-write-root=x"]));
+    assert_eq!(a.files, args(&["--odd.figcraft", "--automation-write-root=x"]));
+    assert!(a.unknown.is_empty() && a.write_roots.is_empty());
 }
 
 #[test]

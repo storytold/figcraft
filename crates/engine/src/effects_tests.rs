@@ -51,6 +51,32 @@ fn effect_set_edits_noise_texture_and_glass() {
     assert!(s.execute("effect.set", &json!({"ids": [r], "index": 0, "effect": {"type": "glass", "depth": "deep"}})).is_err());
 }
 
+/// A key an effect doesn't have is refused, naming what it takes: serde dropped it without a word,
+/// so a shadow given `offsetX`/`offsetY` (the names variable bindings use) kept the default offset.
+#[test]
+fn effects_refuse_keys_they_dont_have() {
+    let mut s = Session::new();
+    let r = rect(&mut s);
+    let shadow = json!({"type": "dropShadow", "color": "#00000040", "offsetX": 0, "offsetY": 1, "radius": 3});
+    let err = s.execute("node.set", &json!({"ids": [r], "props": {"effects": [shadow]}})).unwrap_err().to_string();
+    assert!(err.contains("effects[0]") && err.contains("offsetX, offsetY") && err.contains("offset"), "{err}");
+    assert!(s.doc().unwrap().node(r).unwrap().effects.is_empty(), "nothing stored");
+    let err = s.execute("effect.add", &json!({"ids": [r], "effect": {"type": "layerBlur", "radious": 8}})).unwrap_err().to_string();
+    assert!(err.contains("radious"), "{err}");
+    s.execute("effect.add", &json!({"ids": [r], "type": "dropShadow"})).unwrap();
+    let err = s.execute("effect.set", &json!({"ids": [r], "index": 0, "effect": {"type": "dropShadow", "spred": 2}})).unwrap_err().to_string();
+    assert!(err.contains("spred"), "{err}");
+    // Every kind's own keys still go in, camelCase or snake_case, and so does what inspect reports.
+    for ty in ["innerShadow", "layerBlur", "backgroundBlur", "noise", "texture", "glass"] {
+        s.execute("effect.add", &json!({"ids": [r], "type": ty})).unwrap();
+    }
+    let reported = crate::inspect::node_json(s.doc().unwrap(), r, 0)["effects"].clone();
+    s.execute("node.set", &json!({"ids": [r], "props": {"effects": reported}})).unwrap();
+    let camel = json!({"type": "dropShadow", "offset": [0, 1], "showBehind": true, "visible": true});
+    let snake = json!({"type": "innerShadow", "offset": [0, 1], "show_behind": false});
+    s.execute("node.set", &json!({"ids": [r], "props": {"effects": [camel, snake]}})).unwrap();
+}
+
 #[test]
 fn scaling_scales_grain_and_glass() {
     let mut s = Session::new();
@@ -67,6 +93,32 @@ fn scaling_scales_grain_and_glass() {
     assert_eq!((nz.size, t.size, t.radius, g.depth, g.frost), (1.0, 1.0, 8.0, d.depth * 2.0, d.frost * 2.0));
     // Unitless values stay.
     assert_eq!((g.refraction, nz.density), (d.refraction, 0.5));
+}
+
+#[test]
+fn scaling_a_frost_from_an_older_file_starts_from_what_it_draws() {
+    // A frost of 150, saved before the 0–100 range, draws at 100: halved, it draws at 50.
+    let mut s = Session::new();
+    let r = rect(&mut s);
+    s.execute("effect.add", &json!({"ids": [r], "type": "glass"})).unwrap();
+    s.execute("effect.set", &json!({"ids": [r], "index": 0, "effect": {"type": "glass", "frost": 150}})).unwrap();
+    s.execute("transform.scale", &json!({"ids": [r], "factor": 0.5})).unwrap();
+    let EffectKind::Glass(g) = &s.doc().unwrap().node(r).unwrap().effects[0].kind else { panic!() };
+    assert_eq!(g.frost, 50.0);
+}
+
+#[test]
+fn inspect_shows_a_frost_from_an_older_file_as_it_draws() {
+    // A frost of 150, saved before the 0–100 range, draws at 100: Dev Mode says 100 as CSS does.
+    let mut s = Session::new();
+    let r = rect(&mut s);
+    s.execute("effect.add", &json!({"ids": [r], "type": "glass"})).unwrap();
+    s.execute("effect.set", &json!({"ids": [r], "index": 0, "effect": {"type": "glass", "frost": 150}})).unwrap();
+    let doc = s.doc().unwrap();
+    let sections = crate::devinspect::properties(doc, r);
+    let glass = &sections.iter().find(|s| s.title == "Effects").unwrap().rows[0];
+    assert!(glass.value.contains(" frost 100 "), "{}", glass.value);
+    assert!(code_for(doc, r, CodeLang::Css).contains("backdrop-filter: blur(50px);"));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 //! Renaming layers in the layers panel, driven through egui headless: a double-click or Cmd/Ctrl+R
-//! starts it, Tab / Shift+Tab commit and go on to the next / previous row (the selection follows),
+//! starts it, Tab / Shift+Tab commit and go on to the next / previous row (the selection stays),
 //! Enter commits and Escape cancels.
 
 use egui::{Event, Key, Modifiers};
@@ -66,7 +66,7 @@ fn tab_and_shift_tab_commit_and_rename_the_next_and_previous_rows() {
     press(&mut u, Key::Tab, Modifiers::NONE);
     assert_eq!(name(&u, c), "Top");
     assert_eq!(renaming(&u), Some(frame), "Tab renames the row below");
-    assert_eq!(u.app.session.selection(), vec![frame], "the selection follows the rename");
+    assert_eq!(u.app.session.selection(), vec![c], "the selection stays on the first layer");
     u.frame(vec![]);
     // The whole name is selected: typing replaces it.
     type_text(&mut u, "Box");
@@ -88,14 +88,31 @@ fn tab_and_shift_tab_commit_and_rename_the_next_and_previous_rows() {
 }
 
 #[test]
-fn tab_on_the_last_row_commits_and_ends() {
-    let (mut u, a, _, _, _) = setup();
+fn tab_on_the_last_row_commits_and_wraps_to_the_first() {
+    // Measured in Figma's web app, 2026-11-12: Tab on the last row commits and opens the first
+    // row's rename, and the selection stays where it was.
+    let (mut u, a, _, _, c) = setup();
     double_click(&mut u, a);
     type_text(&mut u, "Bottom");
     press(&mut u, Key::Tab, Modifiers::NONE);
     assert_eq!(name(&u, a), "Bottom");
-    assert_eq!(renaming(&u), None);
+    assert_eq!(renaming(&u), Some(c), "Tab on the last row renames the first");
     assert_eq!(u.app.session.selection(), vec![a]);
+}
+
+#[test]
+fn tab_while_renaming_leaves_the_selection_on_the_first_layer() {
+    // Measured in Figma's web app, 2026-11-12 (second run): Tab and Shift+Tab open the next and
+    // previous row in edit, and the selection stays on the layer first renamed.
+    let (mut u, _, frame, _, c) = setup();
+    double_click(&mut u, c);
+    press(&mut u, Key::Tab, Modifiers::NONE);
+    assert_eq!(renaming(&u), Some(frame), "Tab opens the next row's rename");
+    assert_eq!(u.app.session.selection(), vec![c], "the selection stays on the first layer");
+    u.frame(vec![]);
+    press(&mut u, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(renaming(&u), Some(c), "Shift+Tab opens the previous row's rename");
+    assert_eq!(u.app.session.selection(), vec![c], "the selection stays on the first layer");
 }
 
 #[test]
@@ -144,6 +161,8 @@ fn rename_without_a_name_renames_one_row_or_opens_the_dialog() {
     assert!(std::sync::Arc::ptr_eq(&doc, &s.ds().unwrap().doc));
 }
 
+/// Asserts a layer rename continues after its row is scrolled out of view and commits on
+/// Enter.
 #[test]
 fn a_rename_scrolled_out_of_view_goes_on() {
     let mut s = Session::new();
@@ -158,6 +177,7 @@ fn a_rename_scrolled_out_of_view_goes_on() {
     let p = egui::pos2(150.0, 400.0);
     let wheel = Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
         delta: egui::vec2(0.0, -400.0),
         phase: egui::TouchPhase::Move,
         modifiers: Modifiers::NONE,
@@ -169,4 +189,29 @@ fn a_rename_scrolled_out_of_view_goes_on() {
     assert_eq!(renaming(&u), Some(top), "still renaming");
     press(&mut u, Key::Enter, Modifiers::NONE);
     assert_eq!(name(&u, top), "Far");
+}
+
+#[test]
+fn a_key_typed_in_the_frame_a_rename_starts_replaces_the_name() {
+    // The app draws no frame between the double-click's last release (or F2, or File ▸ Rename) and
+    // the first key, so the name field first shows in the frame that types into it.
+    let (mut u, a, _, _, c) = setup();
+    let p = u.row_at(c);
+    for _ in 0..2 {
+        u.button(p, true);
+        u.button(p, false);
+    }
+    type_text(&mut u, "Hero");
+    press(&mut u, Key::Enter, Modifiers::NONE);
+    assert_eq!(name(&u, c), "Hero", "a double-click rename");
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![]);
+    press(&mut u, Key::F2, Modifiers::NONE);
+    type_text(&mut u, "Base");
+    press(&mut u, Key::Enter, Modifiers::NONE);
+    assert_eq!(name(&u, a), "Base", "an F2 rename");
+    crate::menus::invoke(&mut u.app, "file.rename");
+    type_text(&mut u, "Brand kit");
+    press(&mut u, Key::Enter, Modifiers::NONE);
+    assert_eq!(u.app.session.doc().unwrap().name, "Brand kit", "File ▸ Rename");
 }

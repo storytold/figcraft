@@ -162,6 +162,7 @@ fn paints_gradients_and_image_placeholders() {
     let s = &named(&doc, "Solid").fills[0];
     assert!(matches!(s.kind, PaintKind::Solid { color } if color.r == 1.0 && color.a == 1.0));
     assert!(close(f64::from(s.opacity), 0.25), "paint opacity × colour alpha");
+    assert!(close(f64::from(s.color_alpha), 0.5), "the colour's part, which a bound variable replaces");
     assert!(!s.visible && s.blend == BlendMode::Screen);
     let PaintKind::Gradient(g) = &named(&doc, "Linear").fills[0].kind else { panic!() };
     assert_eq!((g.kind, g.from, g.to, g.width), (GradientKind::Linear, (0.0, 0.5), (1.0, 0.5), (0.0, 1.0)));
@@ -184,6 +185,26 @@ fn paints_gradients_and_image_placeholders() {
     assert_eq!(named(&doc, "Emoji").fills.len(), 1, "unsupported paints are skipped");
     assert!(warnings.iter().any(|w| w.contains("EMOJI")), "{warnings:?}");
     assert!(warnings.iter().any(|w| w.starts_with("1 image without image data shows")), "{warnings:?}");
+}
+
+#[test]
+fn image_filter_tint_turns_magenta_positive_into_native_green_positive() {
+    let rect = |name: &str, tint: f64| {
+        json!({
+            "id": name, "name": name, "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10},
+            "fills": [{"type": "IMAGE", "imageRef": "tint", "filters": {"tint": tint}}]
+        })
+    };
+    let (doc, warnings) = one(json!([rect("Magenta", 0.75), rect("Green", -0.5), rect("Neutral", 0.0)]));
+    let image = |name: &str| {
+        let PaintKind::Image(image) = &named(&doc, name).fills[0].kind else { panic!("{name} is not an image fill") };
+        image
+    };
+    // The same sign as a `.fig` import (`fig::tests::image_filters`).
+    assert!(close(f64::from(image("Magenta").filters.tint), -0.75));
+    assert!(close(f64::from(image("Green").filters.tint), 0.5));
+    assert!(image("Neutral").filters.tint.is_sign_positive(), "no negative zero");
+    assert!(!warnings.iter().any(|w| w.contains("approximate renderer")), "{warnings:?}");
 }
 
 #[test]
@@ -269,6 +290,8 @@ fn vectors_ellipses_stars_and_booleans() {
     counted["pointCount"] = json!(6);
     let mut boolean = base("Bool", "BOOLEAN_OPERATION");
     boolean["booleanOperation"] = json!("SUBTRACT");
+    boolean["cornerRadius"] = json!(12);
+    boolean["cornerSmoothing"] = json!(0.6);
     boolean["children"] =
         json!([base("A", "RECTANGLE"), {"id": "B", "name": "B", "type": "ELLIPSE", "relativeTransform": at(5.0, 5.0), "size": {"x": 10, "y": 10}}]);
     let (doc, warnings) = one(json!([tri, wire, empty, arc, star, plain_star, counted, boolean]));
@@ -290,6 +313,8 @@ fn vectors_ellipses_stars_and_booleans() {
     assert!(matches!(b.kind, NodeKind::BooleanOp { op: BoolOp::Subtract }));
     assert_eq!(b.children.len(), 2);
     assert!(close(b.width, 15.0), "booleans wrap their children");
+    assert_eq!(b.corners.radii, [12.0; 4], "a boolean group keeps its corner radius");
+    assert!(close(b.corners.smoothing, 0.6));
 }
 
 #[test]
@@ -345,6 +370,17 @@ fn text_styles_and_runs() {
 }
 
 #[test]
+fn max_lines_apply_only_while_truncating() {
+    let (doc, _) = one(json!([
+        {"id": "1", "name": "Auto", "type": "TEXT", "relativeTransform": at(0.0, 0.0), "size": {"x": 100, "y": 20}, "characters": "a",
+         "style": {"textAutoResize": "HEIGHT", "textTruncation": "DISABLED", "maxLines": 2}}
+    ]));
+    let NodeKind::Text(td) = &named(&doc, "Auto").kind else { panic!() };
+    assert_eq!((td.auto_resize, td.max_lines), (TextAutoResize::Height, 0));
+    assert!(!td.truncates());
+}
+
+#[test]
 fn auto_layout_constraints_and_grids() {
     let (doc, _) = one(json!([
         {"id": "1", "name": "Stack", "type": "FRAME", "relativeTransform": at(0.0, 0.0), "size": {"x": 100, "y": 300},
@@ -363,6 +399,7 @@ fn auto_layout_constraints_and_grids() {
          ]},
         {"id": "4", "name": "Grid", "type": "FRAME", "relativeTransform": at(200.0, 0.0), "size": {"x": 300, "y": 200},
          "layoutMode": "GRID", "gridColumnCount": 3, "gridRowCount": 2, "gridColumnGap": 4, "gridRowGap": 6,
+         "_figSource": {"gridTracks": {"columnTracks": [{"sizing": "fixed", "value": 120}] }},
          "children": [{"id": "5", "name": "Cell", "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10},
                        "gridColumnAnchorIndex": 1, "gridRowAnchorIndex": 0, "gridColumnSpan": 2, "gridRowSpan": 1}]}
     ]));
@@ -389,6 +426,7 @@ fn auto_layout_constraints_and_grids() {
     assert_eq!((abs.constraints.horizontal, abs.constraints.vertical), (HConstraint::LeftRight, VConstraint::Bottom));
     let grid = named(&doc, "Grid").layout.clone().unwrap();
     assert_eq!((grid.mode, grid.grid_columns, grid.grid_rows, grid.gap, grid.cross_gap), (LayoutMode::Grid, 3, 2, 4.0, 6.0));
+    assert!(grid.column_tracks.is_empty(), "private .fig track metadata is ignored by the public REST importer");
     let cell = &named(&doc, "Cell").child_layout;
     assert_eq!((cell.grid_column, cell.grid_row, cell.grid_column_span, cell.grid_row_span), (Some(1), Some(0), 2, 1));
 }
@@ -435,7 +473,7 @@ fn components_sets_instances_and_properties() {
     assert_eq!(set.stroke.dashes, vec![10.0, 5.0]);
     let def = named(&doc, "State=Default");
     let icon = named(&doc, "Icon");
-    let NodeKind::Component { description, props } = &def.kind else { panic!() };
+    let NodeKind::Component { description, props, .. } = &def.kind else { panic!() };
     assert_eq!(description, "Primary button");
     assert_eq!(props.get("Label"), Some(&PropDef::Text { default: "OK".into() }), "{props:?}");
     assert_eq!(props.get("Icon"), Some(&PropDef::InstanceSwap { default: icon.id, preferred: Vec::new() }));
@@ -443,7 +481,7 @@ fn components_sets_instances_and_properties() {
     let NodeKind::Component { props: hover_props, .. } = &named(&doc, "State=Hover").kind else { panic!() };
     assert!(hover_props.contains_key("Label"), "variants share the set's definitions");
     assert!(
-        matches!(&icon.kind, NodeKind::Component { description, props } if description == "An icon" && props.get("Show") == Some(&PropDef::Boolean { default: true }))
+        matches!(&icon.kind, NodeKind::Component { description, props, .. } if description == "An icon" && props.get("Show") == Some(&PropDef::Boolean { default: true }))
     );
     let label = doc.node(def.children[0]).unwrap();
     assert_eq!(label.prop_refs.get("characters").map(String::as_str), Some("Label"));
@@ -496,7 +534,7 @@ fn shared_styles_link_with_metadata_names() {
     let fill = doc.style("S:1").unwrap();
     assert_eq!((fill.name.as_str(), fill.description.as_str()), ("Brand/Primary", "Main"));
     assert!(matches!(&fill.kind, StyleKind::Paint { paints } if paints.len() == 1));
-    assert!(matches!(&doc.style("S:2").unwrap().kind, StyleKind::Text { style } if style.font_size == 32.0));
+    assert!(matches!(&doc.style("S:2").unwrap().kind, StyleKind::Text { style, .. } if style.font_size == 32.0));
     assert!(matches!(&doc.style("Soft").unwrap().kind, StyleKind::Effect { effects } if effects.len() == 1));
     let r = named(&doc, "R");
     assert_eq!((r.styles.fill.as_deref(), r.styles.effect.as_deref()), (Some("S:1"), Some("S:4")));
@@ -637,7 +675,11 @@ fn kitchen_sink() -> Value {
          ]},
         {"id": "k9", "name": "Sec", "type": "SECTION", "sectionContentsHidden": true, "relativeTransform": at(0.0, 0.0), "size": {"x": 50, "y": 50},
          "children": [{"id": "k10", "name": "Use", "type": "INSTANCE", "componentId": "3:1", "relativeTransform": at(0.0, 0.0), "size": {"x": 24, "y": 24},
-                       "componentProperties": {"Show#4:1": {"type": "BOOLEAN", "value": false}}}]}
+                       "componentProperties": {"Show#4:1": {"type": "BOOLEAN", "value": false}}}]},
+        {"id": "k11", "name": "Listed", "type": "TEXT", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}, "characters": "a\nb\nc\nd\ne\n",
+         "style": {"fontFamily": "Inter", "fontSize": 12},
+         "lineTypes": ["ORDERED", "ORDERED", "ORDERED", "UNORDERED", "ORDERED", "ORDERED"], "lineIndentations": [0, 0, 1, 0, 300, 0],
+         "listStartOffsets": [4, 4, 3, 2, 7, 9]}
     ]);
     if let (Some(kids), Some(more)) = (v.pointer_mut("/document/children/0/children").and_then(Value::as_array_mut), extra.as_array()) {
         kids.extend(more.iter().cloned());
@@ -654,6 +696,9 @@ fn kitchen_sink_imports_cleanly() {
     assert!(matches!(named(&doc, "Sec").kind, NodeKind::Section { contents_hidden: true }));
     assert!(matches!(&named(&doc, "Use").kind, NodeKind::Instance { props, .. } if props.get("Show") == Some(&json!(false))));
     assert!(matches!(named(&doc, "Txt").kind, NodeKind::Text(ref t) if t.list == ListStyle::Numbered && t.runs.len() == 3));
+    let NodeKind::Text(l) = &named(&doc, "Listed").kind else { panic!("not text") };
+    let got: Vec<(u8, u32)> = (0..l.paragraph_count()).map(|p| (l.para_list(p).indent, l.para_list(p).start_offset)).collect();
+    assert_eq!(got, [(0, 4), (0, 0), (1, 3), (0, 0), (8, 7), (0, 9)], "starts stay where a count starts; the level is capped");
     assert!(warnings.iter().all(|w| !w.contains("panick")), "{warnings:?}");
 }
 
@@ -706,4 +751,72 @@ fn layer_count_is_capped() {
     let (doc, warnings) = one(Value::Array(kids));
     assert_eq!(doc.node_count(), MAX_NODES + 1);
     assert!(warnings.iter().any(|w| w.contains("more than")), "{warnings:?}");
+}
+
+#[test]
+fn the_fig_import_sets_its_own_layer_cap() {
+    // The `.fig` import passes a cap from the file's size: above `MAX_NODES` every layer comes in.
+    let kids: Vec<Value> = (0..MAX_NODES + 5).map(|i| json!({"id": i.to_string(), "type": "RECTANGLE", "name": "R"})).collect();
+    let json = file(json!([page("Page", Value::Array(kids))]));
+    let (doc, warnings) = import_with_networks(&json, &no_images, Vec::new(), MAX_NODES + 10).unwrap();
+    assert_eq!(doc.node_count(), MAX_NODES + 6);
+    assert!(!warnings.iter().any(|w| w.contains("more than")), "{warnings:?}");
+    // Below it, the import stops at the cap it was given.
+    let few: Vec<Value> = (0..10).map(|i| json!({"id": i.to_string(), "type": "RECTANGLE", "name": "R"})).collect();
+    let (doc, warnings) = import_with_networks(&file(json!([page("Page", Value::Array(few))])), &no_images, Vec::new(), 4).unwrap();
+    assert_eq!(doc.node_count(), 5);
+    assert!(warnings.iter().any(|w| w.contains("more than 4 layers")), "{warnings:?}");
+}
+
+/// Angles written many turns round keep the arc they draw: the sweep is the difference as
+/// written, and the start comes within a turn of zero, the same way round.
+#[test]
+fn an_arc_written_many_turns_round_keeps_its_sweep() {
+    let tau = std::f64::consts::TAU;
+    for (start, end) in [
+        (999.0, 999.0 + tau),
+        (1500.0, 1501.0),
+        (-5000.0, -5000.0 - 2.5),
+        (1e6, 1e6 + tau),
+        (1e6, 1e6 + 5.9),
+        (1e6, 1e6 + 6.1),
+        (3e7, 3e7),
+        (-4e5, -4e5 + tau - 0.01),
+        (-182.212373908208, -182.212373908208 + tau),
+    ] {
+        let mut arc = json!({"id": "Arc", "name": "Arc", "type": "ELLIPSE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}});
+        arc["arcData"] = json!({"startingAngle": start, "endingAngle": end, "innerRadius": 0});
+        let (doc, _) = one(json!([arc]));
+        let NodeKind::Ellipse { start: s, sweep, .. } = named(&doc, "Arc").kind else { panic!("{start}: not an ellipse") };
+        let want = end - start;
+        let want = if (want.abs() - tau).abs() < 1e-6 { tau.copysign(want) } else { want };
+        assert!((sweep - want).abs() < 1e-9, "{start}..{end}: sweep {sweep}, not {want}");
+        assert!(s.abs() < tau, "{start}: start {s} left past a turn");
+        let off = (s - start).rem_euclid(tau);
+        assert!(off.min(tau - off) < 1e-6, "{start}: start {s} isn't the same way round");
+    }
+}
+
+/// An arc with a start but no end goes all the way round, however far out the start is.
+#[test]
+fn an_arc_without_an_end_is_whole_wherever_it_starts() {
+    for start in [0.0, 2.0, -5000.0, 1e8, 1e15] {
+        let mut arc = json!({"id": "Arc", "name": "Arc", "type": "ELLIPSE", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}});
+        arc["arcData"] = json!({"startingAngle": start, "innerRadius": 0});
+        let (doc, _) = one(json!([arc]));
+        let NodeKind::Ellipse { sweep, .. } = named(&doc, "Arc").kind else { panic!("{start}: not an ellipse") };
+        assert_eq!(sweep, std::f64::consts::TAU, "start {start}");
+    }
+}
+
+#[test]
+fn a_start_on_every_line_counts_only_where_the_list_starts() {
+    let (doc, _) = one(json!([
+        {"id": "t1", "name": "Every", "type": "TEXT", "relativeTransform": at(0.0, 0.0), "size": {"x": 10, "y": 10}, "characters": "a\nb\nc",
+         "style": {"fontFamily": "Inter", "fontSize": 12},
+         "lineTypes": ["ORDERED", "ORDERED", "ORDERED"], "listStartOffsets": [4, 4, 4]}
+    ]));
+    let figcraft_doc::NodeKind::Text(t) = &named(&doc, "Every").kind else { panic!("not text") };
+    let offsets: Vec<u32> = (0..t.paragraph_count()).map(|p| t.para_list(p).start_offset).collect();
+    assert_eq!(offsets, [4, 0, 0]);
 }

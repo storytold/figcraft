@@ -1,6 +1,7 @@
 //! Frame name labels as pointer targets: a press on a label (its area as the canvas drew it,
 //! turned with a rotated frame) selects the frame and drags it in one undo step, hovering it
-//! highlights the frame, and labels of locked, hidden, deleted or other pages' frames do nothing.
+//! highlights the frame, a double-click asks the UI to rename it there, and labels of locked,
+//! hidden, deleted or other pages' frames do nothing.
 
 use figcraft_doc::NodeId;
 use figcraft_geom::Point;
@@ -62,6 +63,21 @@ fn pressing_a_rotated_frames_label_selects_and_drags_the_frame() {
 }
 
 #[test]
+fn a_click_on_a_selected_frames_label_selects_only_it() {
+    let (mut s, f, q) = setup();
+    let other = id_of(&ex(&mut s, "shape.rectangle", json!({"x": 500, "y": 500, "width": 40, "height": 40}))["id"]).unwrap();
+    ex(&mut s, "select.set", json!({"ids": [f, other]}));
+    // A point on the label's left edge, clear of the selection box's resize handles, lies outside
+    // the selection's bounds (the strip starts left of the frame's left edge there).
+    let p = q[0] + (q[3] - q[0]) * 0.2 + (q[1] - q[0]) * 0.02;
+    assert!(s.doc().unwrap().bounds_of(&[f, other]).is_some_and(|b| !b.contains(p)), "the label point is outside the selection bounds");
+    assert_eq!(label_at(s.doc().unwrap(), s.page().unwrap(), &s.tool.labels, p), Some(f), "the point is on the label");
+    s.pointer(&ev(PointerKind::Down, p)).unwrap();
+    s.pointer(&ev(PointerKind::Up, p)).unwrap();
+    assert_eq!(s.selection(), vec![f], "the label outside the bounds still narrows the selection to its frame");
+}
+
+#[test]
 fn labels_of_frames_that_cant_be_picked_do_nothing() {
     let (mut s, f, q) = setup();
     let c = center(&q);
@@ -89,4 +105,25 @@ fn labels_of_frames_that_cant_be_picked_do_nothing() {
     let nan = [Point::new(f64::NAN, 0.0); 4];
     let flat = [Point::new(1.0, 1.0); 4];
     assert_eq!(label_at(s.doc().unwrap(), page, &[(f, nan), (f, flat)], Point::new(1.0, 1.0)), None);
+}
+
+#[test]
+fn double_clicking_a_label_asks_to_rename_its_frame() {
+    let (mut s, f, q) = setup();
+    let c = center(&q);
+    let before = s.doc().unwrap().world_bounds(f).unwrap();
+    let undo = s.ds().unwrap().history.undo.len();
+    for kind in [PointerKind::Down, PointerKind::Up, PointerKind::Down, PointerKind::DoubleClick] {
+        s.pointer(&ev(kind, c)).unwrap();
+    }
+    assert_eq!(s.selection(), vec![f]);
+    let asked = s.ui_requests.iter().find(|r| r.kind == "canvas.renameLabel").map(|r| id_of(&r.data["id"]));
+    assert_eq!(asked, Some(Some(f)), "the UI renames the frame at its label");
+    assert_eq!(s.doc().unwrap().world_bounds(f), Some(before), "not moved");
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo, "nothing to undo yet");
+    // Other tools ignore the label.
+    s.ui_requests.clear();
+    s.set_tool(crate::tools::ToolId::Hand);
+    s.pointer(&ev(PointerKind::DoubleClick, c)).unwrap();
+    assert!(s.ui_requests.iter().all(|r| r.kind != "canvas.renameLabel"));
 }

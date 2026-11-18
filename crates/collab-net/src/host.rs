@@ -1,7 +1,8 @@
 //! The session host the app embeds: the shared [hub](crate::hub) serving one file, the one the
-//! app shares, with the session's single token. The person hosting is in it without a socket:
-//! their presence goes in with [`Host::presence`], their edits with [`Host::send`], what others do
-//! comes out through their [`Inbox`]. When the host stops, the session ends for everyone.
+//! app shares, with the session's edit token and, for a share that has one, its view token. The
+//! person hosting is in it without a socket: their presence goes in with [`Host::presence`], their
+//! edits with [`Host::send`], what others do comes out through their [`Inbox`]. When the host
+//! stops, the session ends for everyone.
 
 use std::io;
 use std::net::{SocketAddr, TcpListener};
@@ -26,6 +27,9 @@ pub struct HostConfig {
     /// The file's session id and secret (both in the invite).
     pub file: String,
     pub token: String,
+    /// A second secret that lets its holders look and not edit (`None`: everyone who gets in
+    /// edits). It must differ from `token`.
+    pub view_token: Option<String>,
     /// The shared document (the session's authoritative copy starts from it).
     pub doc: Document,
     /// The host's own name (empty: "Host").
@@ -40,21 +44,28 @@ pub struct Host {
     me: Peer,
 }
 
-/// The app's one file and its token: everyone with the invite edits.
+/// The app's one file and its tokens: whoever has the edit token edits, whoever has the view
+/// token only looks (the server refuses their changes).
 struct OneFile {
     file: String,
     token: String,
+    view: Option<String>,
 }
 
 impl Backend for OneFile {
+    /// Let in a hello for `file` with `token`, with what its token allows.
     fn admit(&mut self, file: &str, token: &str) -> Result<Admission, String> {
         if file != self.file {
             return Err("this invite is for another file or an earlier session".into());
         }
-        if !same_secret(token, &self.token) {
-            return Err("wrong session token".into());
+        // Both tokens are compared, whichever matches, so the time taken doesn't tell them apart.
+        let edit = same_secret(token, &self.token);
+        let view = self.view.as_deref().is_some_and(|v| same_secret(token, v));
+        match (edit, view) {
+            (true, _) => Ok(Admission { access: Access::Edit, link: None }),
+            (false, true) => Ok(Admission { access: Access::View, link: None }),
+            (false, false) => Err("wrong session token".into()),
         }
-        Ok(Admission { access: Access::Edit, link: None })
     }
 
     fn open(&mut self, _: &str) -> Result<Server, String> {
@@ -69,6 +80,10 @@ impl Backend for OneFile {
 impl Host {
     /// Listen and start the hub; the host joins its own session as the first person.
     pub fn start(cfg: HostConfig, inbox: Inbox) -> io::Result<Host> {
+        // A view token equal to the edit token would let its holders edit: nobody gets in with it.
+        if cfg.view_token.as_deref().is_some_and(|v| same_secret(v, &cfg.token)) {
+            return Err(io::Error::other("the view-only secret is the same as the edit secret"));
+        }
         let listener = match TcpListener::bind(cfg.addr) {
             Ok(l) => l,
             Err(e) if e.kind() == io::ErrorKind::AddrInUse && cfg.any_port_if_taken => TcpListener::bind(SocketAddr::new(cfg.addr.ip(), 0))?,
@@ -99,7 +114,7 @@ impl Host {
             }
         }
         let me = server.peers().find(|p| p.client_id == me).cloned().ok_or_else(|| io::Error::other("the host didn't join its own session"))?;
-        let backend = OneFile { file: cfg.file.clone(), token: cfg.token };
+        let backend = OneFile { file: cfg.file.clone(), token: cfg.token, view: cfg.view_token };
         let local = Local { file: cfg.file, server, id: me.client_id, inbox };
         let hosting = Hosting::start(listener, backend, cfg.limits, Some(local))?;
         Ok(Host { hosting, me })

@@ -74,7 +74,7 @@ fn columns_follow_the_width() {
 
 fn shown(path: &str, modified: Option<u64>, created: Option<u64>) -> Shown {
     let stat = Some(Stat { exists: modified.is_some(), modified, created });
-    Shown { path: path.into(), name: Path::new(path).file_stem().unwrap().to_string_lossy().into(), stat }
+    Shown { path: path.into(), name: Path::new(path).file_stem().unwrap().to_string_lossy().into(), stat, kind: Default::default() }
 }
 
 #[test]
@@ -256,9 +256,11 @@ fn rects_of(s: &[Shape], c: egui::Color32) -> usize {
     s.iter().filter(|s| matches!(s, Shape::Rect(r) if r.fill == c)).count()
 }
 
-/// Images drawn (meshes with a texture of their own).
+/// Preview images in the main content area, excluding the branded sidebar icon.
 fn images(s: &[Shape]) -> usize {
-    s.iter().filter(|s| matches!(s, Shape::Mesh(m) if m.texture_id != egui::TextureId::default())).count()
+    s.iter()
+        .filter(|s| matches!(s, Shape::Mesh(m) if m.texture_id != egui::TextureId::default() && m.vertices.iter().any(|v| v.pos.x > 240.0)))
+        .count()
 }
 
 #[test]

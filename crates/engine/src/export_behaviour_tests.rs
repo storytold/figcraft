@@ -188,6 +188,23 @@ fn contents_only_leaves_out_overlapping_layers() {
 }
 
 #[test]
+fn penpot_v20_export_limits_shadows_in_all_directions() {
+    let mut session = Session::new();
+    for (index, offset, size) in
+        [((0.0, 0.0), (-12.0, -7.0), (112, 107)), ((200.0, 0.0), (13.0, -9.0), (113, 109)), ((400.0, 0.0), (-3.0, 14.0), (103, 114))]
+    {
+        let r = rect(&mut session, index.0, index.1, 100.0, 100.0, "#FF0000", None);
+        shadow(&mut session, r, offset, 0.0, 0.0);
+        assert_eq!(png_size(&export(&mut session, json!({"ids":[r]}))), size, "a sharp offset shadow must extend only the touched export edges");
+        assert_eq!(
+            png_size(&export(&mut session, json!({"ids":[r], "includeBoundingBox": true}))),
+            (100, 100),
+            "explicit bounding-box exports must not grow due to a shadow"
+        );
+    }
+}
+
+#[test]
 fn what_an_export_covers() {
     let mut s = Session::new();
     let size = |s: &mut Session, id: NodeId| png_size(&export(s, json!({"ids": [id]})));
@@ -254,6 +271,43 @@ fn masks_and_slices_export_what_shows() {
     assert_eq!(png_size(&png), (50, 50), "a slice exports its own area");
     assert_eq!(pixels(&png).get_pixel(25, 25).0, [0, 255, 0, 255], "a slice exports the layers under it");
     let _ = under;
+}
+
+/// Ignore overlapping layers (contents only) on a slice: inside a frame or group the slice exports
+/// only what is in that container; off, or on the page, everything in its area.
+#[test]
+fn a_slice_in_a_frame_or_group_exports_only_that_container() {
+    let mut s = Session::new();
+    let slice_in = |s: &mut Session, parent: Option<NodeId>, x: f64| {
+        let mut p = json!({"type": "slice", "x": x, "y": 25, "width": 50, "height": 50});
+        if let Some(parent) = parent {
+            p["parent"] = json!(parent);
+        }
+        id(&ex(s, "node.create", p))
+    };
+    let at = |s: &mut Session, p: Value| pixels(&export(s, p)).get_pixel(40, 40).0;
+    // A frame holding a red square and a slice, with a blue square on the page above it.
+    let f = frame(&mut s, 0.0, 0.0, 100.0, 100.0, false);
+    rect(&mut s, 0.0, 0.0, 100.0, 100.0, "#FF0000", Some(f));
+    let in_frame = slice_in(&mut s, Some(f), 25.0);
+    rect(&mut s, 50.0, 50.0, 100.0, 100.0, "#0000FF", None);
+    assert_eq!(png_size(&export(&mut s, json!({"ids": [in_frame]}))), (50, 50), "the slice still exports its own area");
+    assert_eq!(at(&mut s, json!({"ids": [in_frame]})), [255, 0, 0, 255], "on by default: only the frame's content, the blue square left out");
+    assert_eq!(at(&mut s, json!({"ids": [in_frame], "contentsOnly": false})), [0, 0, 255, 255], "off: everything in the slice's area");
+    // The same in a group.
+    let red = rect(&mut s, 300.0, 0.0, 100.0, 100.0, "#FF0000", None);
+    let grouped = slice_in(&mut s, None, 325.0);
+    let g = id(&ex(&mut s, "object.group", json!({"ids": [red, grouped]})));
+    assert_eq!(s.doc().unwrap().node(grouped).unwrap().parent, Some(g));
+    rect(&mut s, 350.0, 50.0, 100.0, 100.0, "#0000FF", None);
+    assert_eq!(at(&mut s, json!({"ids": [grouped]})), [255, 0, 0, 255], "in a group: only the group's content");
+    assert_eq!(at(&mut s, json!({"ids": [grouped], "contentsOnly": false})), [0, 0, 255, 255], "off: everything in its area");
+    // On the page the option has no effect.
+    rect(&mut s, 600.0, 0.0, 100.0, 100.0, "#FF0000", None);
+    let top = slice_in(&mut s, None, 625.0);
+    rect(&mut s, 650.0, 50.0, 100.0, 100.0, "#0000FF", None);
+    assert_eq!(at(&mut s, json!({"ids": [top]})), [0, 0, 255, 255], "on the page: everything in its area, with the option on");
+    assert_eq!(at(&mut s, json!({"ids": [top], "contentsOnly": false})), [0, 0, 255, 255], "on the page: everything in its area, with it off");
 }
 
 #[test]
@@ -329,4 +383,179 @@ fn copy_as_png_svg_and_code() {
     assert!(text(&svg).starts_with("<svg width=\"100\""), "Copy as SVG is the selection's SVG export");
     let css = crate::codegen::code_for(doc, a, crate::codegen::CodeLang::Css);
     assert!(css.contains("background: #FF0000;"), "Copy as CSS is the layer's CSS from Inspect");
+}
+
+/// A red square with a fill-less pane over its right part, holding `effect` (#2213).
+fn pane_scene(effect: EffectKind) -> (figcraft_doc::Document, NodeId, NodeId) {
+    use figcraft_doc::{Document, NodeKind};
+    let mut d = Document::new("blur-export");
+    let page = d.first_page().unwrap();
+    let under = d.create(page, NodeKind::Rectangle, "Under", 0.0, 0.0, 120.0, 120.0).unwrap();
+    d.get_mut(under).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("E03030").unwrap())];
+    let pane = d.create(page, NodeKind::Rectangle, "Glass", 60.0, 20.0, 120.0, 80.0).unwrap();
+    d.get_mut(pane).unwrap().fills = vec![];
+    d.get_mut(pane).unwrap().effects = vec![Effect { kind: effect, visible: true }];
+    (d, under, pane)
+}
+
+/// The PNG export of `ids` as the Export command makes it, and what the canvas draws there.
+fn export_vs_canvas(d: &figcraft_doc::Document, ids: &[NodeId]) -> (image::RgbaImage, image::RgbaImage) {
+    let setting = figcraft_doc::ExportSetting::default();
+    let page = d.first_page().unwrap();
+    let area = crate::cmd::file::export_area(d, ids, &setting).unwrap();
+    let canvas = figcraft_render::render_area(d, &d.get(page).unwrap().children.clone(), area, 1.0).unwrap();
+    let canvas = image::RgbaImage::from_raw(canvas.width(), canvas.height(), figcraft_render::to_rgba8(&canvas)).unwrap();
+    let (bytes, _) = crate::cmd::file::export_file(d, ids, &setting, 1.0).unwrap();
+    (pixels(&bytes), canvas)
+}
+
+/// #2213: a layer with a background blur exported on its own shows the same pixels as the canvas
+/// shows for that area: the blur reads what lies under it, so the export must draw the layers
+/// beneath it as the backdrop (clipped to the layer) rather than blurring nothing.
+#[test]
+fn exporting_a_background_blur_layer_keeps_the_blurred_backdrop() {
+    let (d, _, pane) = pane_scene(EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(12.0)));
+    let (exported, canvas) = export_vs_canvas(&d, &[pane]);
+    // The pane's left half sits over the red square, which ends at x = 120 (60 px into the pane).
+    assert_ne!(canvas.get_pixel(60, 40).0, [0, 0, 0, 0], "the canvas draws the blurred backdrop");
+    assert_eq!(exported.get_pixel(60, 40), canvas.get_pixel(60, 40), "export lost the backdrop the blur reads");
+    assert_eq!(exported.dimensions(), (120, 80), "the pane's own bounds");
+}
+
+/// #2213, as reported and as measured in Figma (2026-11-10): the pane inside a frame, exported on
+/// its own, keeps the frame's fill and the blurred layer beneath it, opaque.
+#[test]
+fn a_blurred_pane_inside_a_frame_keeps_the_frame_and_the_layer_beneath() {
+    use figcraft_doc::{Document, NodeKind};
+    let mut d = Document::new("blur-export-frame");
+    let page = d.first_page().unwrap();
+    let art = d.create(page, NodeKind::Frame, "Art", 0.0, 0.0, 300.0, 200.0).unwrap();
+    d.get_mut(art).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("FFFFFF").unwrap())];
+    let under = d.create(art, NodeKind::Rectangle, "Under", 0.0, 0.0, 120.0, 120.0).unwrap();
+    d.get_mut(under).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("E03030").unwrap())];
+    let pane = d.create(art, NodeKind::Rectangle, "Glass", 60.0, 20.0, 120.0, 80.0).unwrap();
+    d.get_mut(pane).unwrap().fills = vec![];
+    d.get_mut(pane).unwrap().effects = vec![Effect { kind: EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(12.0)), visible: true }];
+    let (exported, canvas) = export_vs_canvas(&d, &[pane]);
+    assert_eq!(exported.get_pixel(60, 40), canvas.get_pixel(60, 40), "the blurred square under the pane");
+    assert_eq!(exported.get_pixel(100, 40).0[3], 255, "the frame's white behind the pane, opaque");
+}
+
+/// #2213: the same for Glass.
+#[test]
+fn exporting_a_glass_layer_keeps_the_backdrop_it_bends() {
+    let (d, _, pane) = pane_scene(EffectKind::Glass(figcraft_doc::Glass::default()));
+    let (exported, canvas) = export_vs_canvas(&d, &[pane]);
+    assert_ne!(canvas.get_pixel(30, 40).0, [0, 0, 0, 0]);
+    assert_eq!(exported.get_pixel(30, 40), canvas.get_pixel(30, 40), "export lost the backdrop the glass reads");
+    assert_eq!(exported.get_pixel(60, 40), canvas.get_pixel(60, 40));
+}
+
+/// Measured in Figma 2026-11-10: inside the pane's bounds the export is opaque where the backdrop
+/// is (the blurred red), and the layers over the pane stay out.
+#[test]
+fn a_blur_export_is_opaque_inside_the_pane_and_leaves_layers_above_out() {
+    let (mut d, _, pane) = pane_scene(EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(12.0)));
+    let page = d.first_page().unwrap();
+    let above = d.create(page, figcraft_doc::NodeKind::Rectangle, "Above", 0.0, 0.0, 200.0, 200.0).unwrap();
+    d.get_mut(above).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("0000FF").unwrap())];
+    let (exported, _) = export_vs_canvas(&d, &[pane]);
+    let left = exported.get_pixel(10, 40).0;
+    assert_eq!(left[3], 255, "red under the pane: opaque");
+    assert!(left[0] > 150 && left[2] < 60, "red, not the blue layer above: {left:?}");
+    // The far right of the pane has no square under it: nothing to read, nothing drawn.
+    assert_eq!(exported.get_pixel(110, 40).0[3], 0);
+}
+
+/// Guard: a layer without backdrop effects over another still exports alone ("contents only").
+#[test]
+fn a_layer_without_backdrop_effects_still_leaves_the_layers_below_out() {
+    let (mut d, _, pane) = pane_scene(EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(0.0)));
+    d.get_mut(pane).unwrap().effects.clear();
+    let (exported, _) = export_vs_canvas(&d, &[pane]);
+    assert!(exported.pixels().all(|p| p.0 == [0, 0, 0, 0]), "a fill-less pane alone exports clear");
+}
+
+#[test]
+fn node_set_takes_back_the_export_settings_node_get_returns() {
+    use figcraft_doc::{ExportColorProfile, ExportFormat, ExportSetting, PrintSettings, VdCompat};
+
+    // Every multi-word field (and `quality`) away from its default.
+    let expected = ExportSetting {
+        format: ExportFormat::Jpg,
+        suffix: "@3x".into(),
+        print: PrintSettings { bleed: 9.0, crop_marks: true, bleed_marks: true, cmyk: true },
+        contents_only: false,
+        include_bounding_box: true,
+        svg_outline_text: false,
+        svg_id_attribute: true,
+        svg_simplify_stroke: false,
+        vd_compat: VdCompat::Exact,
+        color_profile: ExportColorProfile::DisplayP3,
+        quality: 55,
+        ..Default::default()
+    };
+    let default = ExportSetting::default();
+    for (field, differs) in [
+        ("print", expected.print != default.print),
+        ("contents_only", expected.contents_only != default.contents_only),
+        ("include_bounding_box", expected.include_bounding_box != default.include_bounding_box),
+        ("svg_outline_text", expected.svg_outline_text != default.svg_outline_text),
+        ("svg_id_attribute", expected.svg_id_attribute != default.svg_id_attribute),
+        ("svg_simplify_stroke", expected.svg_simplify_stroke != default.svg_simplify_stroke),
+        ("vd_compat", expected.vd_compat != default.vd_compat),
+        ("color_profile", expected.color_profile != default.color_profile),
+        ("quality", expected.quality != default.quality),
+    ] {
+        assert!(differs, "{field} must be non-default in the expected setting");
+    }
+
+    let mut s = Session::new();
+    let a = rect(&mut s, 0.0, 0.0, 40.0, 20.0, "#FF0000", None);
+    let stored = |s: &Session| s.doc().unwrap().node(a).unwrap().exports.clone();
+    ex(
+        &mut s,
+        "export.add",
+        json!({"ids": [a], "setting": {
+            "format": "jpg", "suffix": "@3x", "bleed": 9, "cropMarks": true, "bleedMarks": true, "cmyk": true,
+            "contentsOnly": false, "includeBoundingBox": true, "svgOutlineText": false, "svgIdAttribute": true,
+            "svgSimplifyStroke": false, "vdCompat": "exact", "colorProfile": "displayP3", "quality": 55,
+        }}),
+    );
+    assert_eq!(stored(&s), vec![expected.clone()], "export.add stores every field");
+
+    // What node.get returns goes back through node.set unchanged.
+    let got = ex(&mut s, "node.get", json!({"id": a}))["exports"].clone();
+    set(&mut s, &[a], json!({"exports": []}));
+    assert!(stored(&s).is_empty());
+    set(&mut s, &[a], json!({"exports": got}));
+    assert_eq!(stored(&s), vec![expected.clone()], "node.set stores what node.get returned, unchanged");
+
+    // The snake_case spelling is taken too.
+    set(&mut s, &[a], json!({"exports": []}));
+    set(
+        &mut s,
+        &[a],
+        json!({"exports": [{
+            "format": "jpg", "suffix": "@3x",
+            "print": {"bleed": 9, "crop_marks": true, "bleed_marks": true, "cmyk": true},
+            "contents_only": false, "include_bounding_box": true, "svg_outline_text": false, "svg_id_attribute": true,
+            "svg_simplify_stroke": false, "vd_compat": "exact", "color_profile": "displayP3", "quality": 55,
+        }]}),
+    );
+    assert_eq!(stored(&s), vec![expected], "node.set takes the snake_case keys");
+}
+
+#[test]
+fn export_rejects_an_invalid_layer_id_instead_of_exporting_the_page() {
+    let mut s = Session::new();
+    let r = rect(&mut s, 0.0, 0.0, 10.0, 10.0, "#ff0000", None);
+    ex(&mut s, "export.add", json!({"ids": [r]}));
+    for cmd in ["file.export", "file.exportLayers"] {
+        for p in [json!({"ids": ["abc"], "format": "svg"}), json!({"id": "abc", "format": "svg"}), json!({"ids": [], "id": "abc", "format": "svg"})] {
+            let res = s.execute(cmd, &p);
+            assert!(res.is_err(), "{cmd} {p} exported for an invalid id: {res:?}");
+        }
+    }
+    assert!(s.execute("file.export", &json!({"format": "svg"})).is_ok());
 }

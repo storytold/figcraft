@@ -3,6 +3,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
+use figcraft_collab::message::Access;
 use figcraft_collab_net::{Endpoint, NetLimits};
 use serde::Deserialize;
 
@@ -39,6 +40,9 @@ pub struct Config {
     pub compact_after: usize,
     /// …or once the log is this large (MiB).
     pub compact_mb: u64,
+    /// Most MiB of recent batches a file in use keeps in memory for apps that reconnect (one
+    /// further behind catches up with the whole file).
+    pub max_log_mb: u64,
     /// Most plugin versions the plugin directory keeps (0 turns it off).
     pub max_plugins: usize,
     /// Largest plugin bundle, in MiB.
@@ -69,6 +73,13 @@ pub struct Config {
     pub connects_per_minute: u32,
     pub publishes_per_hour: u32,
     pub messages_per_second: u32,
+    /// The team list: everyone who reaches the server sees the files shared from it now (a link of
+    /// theirs has a join code) and opens them with this access, `"edit"`, `"comment"` or `"view"`.
+    /// Empty (the default): no team list. Only for a server just your team reaches.
+    pub team_files: String,
+    /// Where the browser build is served for this server (`https://figcraft.example.com/app/`): the
+    /// team list's browser links point there. Empty: none.
+    pub web_url: String,
 }
 
 impl Default for Config {
@@ -84,6 +95,7 @@ impl Default for Config {
             max_people: 256,
             compact_after: 1000,
             compact_mb: 16,
+            max_log_mb: 64,
             max_plugins: 500,
             max_plugin_mb: 16,
             max_plugins_mb: 1024,
@@ -99,6 +111,8 @@ impl Default for Config {
             connects_per_minute: 30,
             publishes_per_hour: 10,
             messages_per_second: 200,
+            team_files: String::new(),
+            web_url: String::new(),
         }
     }
 }
@@ -135,8 +149,30 @@ impl Config {
     /// abuse contact, or one whose clients would all count as its proxy).
     pub fn warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
+        let client_max = NetLimits::default().max_server_message >> 20;
+        if usize::try_from(self.file_mb()).is_ok_and(|mb| mb >= client_max) {
+            out.push(format!(
+                "max_file_mb is {}: the app opens files of up to {} MiB, so a file that large can't be opened",
+                self.file_mb(),
+                client_max - 1
+            ));
+        }
+        if self.people() < self.max_people {
+            out.push(format!(
+                "max_people is {}: the app keeps track of at most {} people in a file, so {} are let in",
+                self.max_people,
+                self.people(),
+                self.people()
+            ));
+        }
         if !self.open_publish {
             return out;
+        }
+        if self.file_mb() > 64 {
+            out.push(format!(
+                "open_publish is on with max_file_mb = {}: anyone may send messages that large, and the memory set aside for reading and queueing them grows to eight times it; keep it at 64 or less on a public server",
+                self.file_mb()
+            ));
         }
         if self.operator_contact.trim().is_empty() {
             out.push("open_publish is on but operator_contact is empty: people can't reach you about abuse; set it (and terms_url)".into());
@@ -153,6 +189,32 @@ impl Config {
         out
     }
 
+    /// Most people in one file at once: `max_people`, lowered to what the app keeps track of
+    /// ([`figcraft_collab::message::MAX_PEERS`]).
+    pub fn people(&self) -> usize {
+        self.max_people.min(figcraft_collab::message::MAX_PEERS)
+    }
+
+    /// What the team list lets people do with its files (`None`: there is no team list).
+    pub fn team(&self) -> Result<Option<Access>, String> {
+        let t = self.team_files.trim();
+        if t.is_empty() {
+            return Ok(None);
+        }
+        Access::parse(t).map(Some).ok_or_else(|| "`team_files` is \"edit\", \"comment\" or \"view\" (empty: no team list)".to_string())
+    }
+
+    /// The browser build's address for the team list's links, when set: an `https://` (or
+    /// `http://`) address without a query or fragment.
+    pub fn web(&self) -> Result<String, String> {
+        let w = self.web_url.trim();
+        let web = w.starts_with("https://") || w.starts_with("http://");
+        if w.is_empty() || (web && w.len() <= 500 && !w.contains(['?', '#']) && !w.contains(char::is_whitespace) && !w.contains(char::is_control)) {
+            return Ok(w.to_string());
+        }
+        Err("`web_url` must be a web address without a query (https://figcraft.example.com/app/), at most 500 characters".into())
+    }
+
     /// The trusted proxy's address, when set.
     pub fn proxy(&self) -> Result<Option<IpAddr>, String> {
         let Some(p) = self.trusted_proxy.as_deref().map(str::trim).filter(|p| !p.is_empty()) else { return Ok(None) };
@@ -164,11 +226,13 @@ impl Config {
         self.addr()?;
         self.public()?;
         self.proxy()?;
+        self.team()?;
+        self.web()?;
         if !self.idle_days.is_finite() || !(0.0..=3650.0).contains(&self.idle_days) {
             return Err("`idle_days` must be from 0 to 3650".into());
         }
         let terms = self.terms_url.trim();
-        if !terms.is_empty() && !(terms.starts_with("https://") || terms.starts_with("http://")) || terms.contains(char::is_whitespace) {
+        if !(terms.is_empty() || terms.starts_with("https://") || terms.starts_with("http://")) || terms.contains(char::is_whitespace) {
             return Err("`terms_url` must be a web address (https://…)".into());
         }
         if self.operator_contact.chars().count() > 120 || self.operator_contact.chars().any(char::is_control) || terms.len() > 500 {
@@ -195,6 +259,7 @@ impl Config {
             ("max_people", self.max_people as u64),
             ("compact_after", self.compact_after as u64),
             ("compact_mb", self.compact_mb),
+            ("max_log_mb", self.max_log_mb),
             ("max_plugin_mb", self.max_plugin_mb),
             ("max_plugins_mb", self.max_plugins_mb),
         ] {
@@ -202,7 +267,7 @@ impl Config {
                 return Err(format!("`{name}` must be at least 1"));
             }
         }
-        if self.file_mb() > 4096 || self.compact_mb > 4096 {
+        if self.file_mb() > 4096 || self.compact_mb > 4096 || self.max_log_mb > 4096 {
             return Err("sizes are in MiB and at most 4096".into());
         }
         // A bundle travels in one message (at most 64 MiB) next to its entry.
@@ -229,6 +294,9 @@ impl Config {
                 max_total_bytes: mib(self.max_total_mb),
                 max_files_per_ip: self.max_files_per_ip,
                 max_bytes_per_ip: mib(self.max_mb_per_ip),
+                // `check` refused anything else before the store is made.
+                team: self.team().ok().flatten(),
+                web: self.web().unwrap_or_default(),
                 abuse: AbuseConfig {
                     open: self.open_publish,
                     connects_per_minute: self.connects_per_minute,
@@ -253,23 +321,25 @@ impl Config {
         }
     }
 
-    /// Largest message a client may send when open to the public: a whole file (or plugin bundle)
-    /// and a margin, not the core's 64 MiB.
+    /// Largest message a client may send: a whole file (or plugin bundle) and a margin. Open to the
+    /// public this is also the cap (strangers' files stay small); a private server never goes below
+    /// the core's 64 MiB, and a `max_file_mb` above it raises the cap with it.
     fn open_message(&self) -> usize {
         usize::try_from(self.file_mb().max(self.max_plugin_mb).saturating_add(1).saturating_mul(1 << 20)).unwrap_or(usize::MAX)
     }
 
-    /// The collaboration core's part: when open, messages as large as a file at most, and the
-    /// batches kept for reconnecting clients (in memory, and in the file's snapshot) at most a
-    /// quarter of a file's bytes (256 KiB at least).
+    /// The collaboration core's part: the batches kept for reconnecting clients (in memory, and
+    /// in the file's snapshot) at most `max_log_mb`; when open, messages as large as a file at
+    /// most, and those batches also at most a quarter of a file's bytes (256 KiB at least).
     fn core(&self) -> figcraft_collab::Limits {
-        let base = figcraft_collab::Limits { max_peers: self.max_people, ..figcraft_collab::Limits::default() };
+        let bytes = |mb: u64| usize::try_from(mb.saturating_mul(1 << 20)).unwrap_or(usize::MAX);
+        let base = figcraft_collab::Limits { max_peers: self.people(), max_log_bytes: bytes(self.max_log_mb), ..figcraft_collab::Limits::default() };
         if !self.open_publish {
-            return base;
+            return figcraft_collab::Limits { max_message_bytes: base.max_message_bytes.max(self.open_message()), ..base };
         }
-        let max = self.open_message().min(base.max_message_bytes);
-        let file = usize::try_from(self.file_mb().saturating_mul(1 << 20)).unwrap_or(usize::MAX);
-        figcraft_collab::Limits { max_message_bytes: max, max_log_bytes: (file / 4).max(256 << 10), ..base }
+        let max = self.open_message();
+        let log = (bytes(self.file_mb()) / 4).max(256 << 10).min(base.max_log_bytes);
+        figcraft_collab::Limits { max_message_bytes: max, max_log_bytes: log, ..base }
     }
 
     /// The transport's part. A private server keeps the defaults; open to the public, connections
@@ -279,21 +349,24 @@ impl Config {
     pub fn net(&self) -> NetLimits {
         let base = NetLimits { max_connections: self.max_connections, trusted_proxy: self.proxy().ok().flatten(), ..NetLimits::default() };
         if !self.open_publish {
-            return base;
+            let max = base.max_client_message.max(self.open_message());
+            return NetLimits { max_client_message: max, max_queued_bytes: base.max_queued_bytes.max(max.saturating_add(1 << 20)), ..base };
         }
-        let max = self.open_message().min(base.max_client_message);
+        let max = self.open_message();
         // Shared budgets: one block of addresses (an IPv4 address, an IPv6 /48) gets at most an
-        // eighth of each, and its biggest consumers are dropped first.
-        let (queued, reading) = (256usize << 20, 192usize << 20);
+        // eighth of each, and its biggest consumers are dropped first. Each still fits one whole
+        // message, or a file as large as `max_file_mb` could never arrive.
+        let one = max.saturating_add(1 << 20);
+        let (queued, reading) = ((256usize << 20).max(one.saturating_mul(8)), (192usize << 20).max(one.saturating_mul(8)));
         NetLimits {
             max_per_address: self.max_connections_per_ip,
             max_client_message: max,
-            max_queued_bytes: max.saturating_add(1 << 20),
+            max_queued_bytes: one,
             max_queued_block: queued / 8,
             max_queued_total: queued,
-            max_reading_block: max.saturating_add(1 << 20).min(reading / 8),
+            max_reading_block: one.min(reading / 8),
             max_reading_total: reading,
-            max_in_flight: 128 << 20,
+            max_in_flight: (128usize << 20).max(one),
             reserve_for_sessions: self.max_connections / 8,
             request_idle: std::time::Duration::from_secs(20),
             ..base

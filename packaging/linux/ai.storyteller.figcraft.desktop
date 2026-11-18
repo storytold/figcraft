@@ -11,4 +11,4 @@ StartupNotify=true
 StartupWMClass=ai.storyteller.figcraft
 Categories=Graphics;2DGraphics;VectorGraphics;X-Design;
 Keywords=design;interface;ui;ux;prototype;wireframe;mockup;vector;layout;components;
-MimeType=application/x-figcraft;image/svg+xml;image/png;image/jpeg;x-scheme-handler/figcraft;
+MimeType=application/x-figcraft;image/svg+xml;image/png;image/jpeg;application/x-sketch;x-scheme-handler/figcraft;

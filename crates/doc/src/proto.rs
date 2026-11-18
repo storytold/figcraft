@@ -129,6 +129,29 @@ pub const GAMEPAD_BUTTONS: [&str; 17] = [
     "Gamepad Home",
 ];
 
+/// What PlayStation and Nintendo Switch controllers call each of [`GAMEPAD_BUTTONS`], in the same
+/// order: the same button by its place on the controller, so a Switch's bottom face button is its
+/// B though it does what "Gamepad A" does. A trigger is stored by place and works on any of them.
+pub const GAMEPAD_NAMES: [(&str, &str); 17] = [
+    ("✕", "B"),
+    ("○", "A"),
+    ("□", "Y"),
+    ("△", "X"),
+    ("L1", "L"),
+    ("R1", "R"),
+    ("L2", "ZL"),
+    ("R2", "ZR"),
+    ("Share", "−"),
+    ("Options", "+"),
+    ("L3", "LS"),
+    ("R3", "RS"),
+    ("Up", "Up"),
+    ("Down", "Down"),
+    ("Left", "Left"),
+    ("Right", "Right"),
+    ("PS", "Home"),
+];
+
 /// The button at standard-layout index `index`, as a key trigger names it.
 pub fn gamepad_button(index: usize) -> Option<&'static str> {
     GAMEPAD_BUTTONS.get(index).copied()
@@ -507,6 +530,47 @@ impl OverlayPosition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum OverlayAnchor {
+    #[default]
+    Screen,
+    TriggerInside,
+    TriggerOutside,
+}
+
+impl OverlayAnchor {
+    /// The default (the screen places the overlay), which files and JSON leave out.
+    pub fn is_screen(&self) -> bool {
+        *self == OverlayAnchor::Screen
+    }
+
+    /// Gives None for Screen and for Manual.
+    pub fn offset(self, position: OverlayPosition, trigger: [f64; 2], overlay: [f64; 2]) -> Option<[f64; 2]> {
+        use OverlayPosition as P;
+        let ([tw, th], [ow, oh]) = (trigger, overlay);
+        let outside = match self {
+            OverlayAnchor::Screen => return None,
+            OverlayAnchor::TriggerInside => false,
+            OverlayAnchor::TriggerOutside => true,
+        };
+        let x = match position {
+            P::TopLeft | P::BottomLeft => 0.0,
+            P::Center | P::TopCenter | P::BottomCenter => (tw - ow) / 2.0,
+            P::TopRight | P::BottomRight => tw - ow,
+            P::Manual => return None,
+        };
+        let y = match position {
+            P::TopLeft | P::TopCenter | P::TopRight if outside => -oh,
+            P::TopLeft | P::TopCenter | P::TopRight => 0.0,
+            P::BottomLeft | P::BottomCenter | P::BottomRight if outside => th,
+            P::BottomLeft | P::BottomCenter | P::BottomRight => th - oh,
+            P::Center | P::Manual => (th - oh) / 2.0,
+        };
+        Some([x, y])
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Action {
@@ -538,6 +602,9 @@ pub enum Action {
         /// opened it (x, y). None = right below that layer.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         offset: Option<[f64; 2]>,
+        /// The incumbent has no such option. The .fig export writes it as a manual offset.
+        #[serde(default, skip_serializing_if = "OverlayAnchor::is_screen")]
+        anchor: OverlayAnchor,
     },
     SwapOverlay {
         dest: NodeId,
@@ -545,6 +612,10 @@ pub enum Action {
     CloseOverlay,
     OpenUrl {
         url: String,
+        /// In a new tab or window (the default), or in place of the prototype where the viewer
+        /// can be sent elsewhere (a browser's own tab; the desktop app always opens the browser).
+        #[serde(default = "crate::node::yes", alias = "newTab", alias = "openInNewTab", skip_serializing_if = "is_true")]
+        new_tab: bool,
     },
     /// Change an instance to another variant (interactive components).
     ChangeTo {
@@ -744,6 +815,10 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 fn is_origin(p: &[f64; 2]) -> bool {
     *p == [0.0, 0.0]
 }
@@ -860,7 +935,35 @@ pub struct Device {
 
 impl PrototypeSettings {
     /// The devices to pick from ("None" presents the frame at its own size).
-    pub const DEVICES: [Device; 6] = [
+    pub const DEVICES: [Device; 19] = [
+        Device {
+            name: "iPhone 17",
+            width: 402.0,
+            height: 874.0,
+            rotates: true,
+            colors: &[c("Black", 0x38, 0x39, 0x3D), c("White", 0xE9, 0xE9, 0xE5)],
+        },
+        Device {
+            name: "iPhone 17 Pro",
+            width: 402.0,
+            height: 874.0,
+            rotates: true,
+            colors: &[c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 17 Pro Max",
+            width: 440.0,
+            height: 956.0,
+            rotates: true,
+            colors: &[c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone Air",
+            width: 420.0,
+            height: 912.0,
+            rotates: true,
+            colors: &[c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
         Device {
             name: "iPhone 16",
             width: 393.0,
@@ -875,6 +978,13 @@ impl PrototypeSettings {
             ],
         },
         Device {
+            name: "iPhone 16 Pro",
+            width: 402.0,
+            height: 874.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("White", 0xEC, 0xEB, 0xE6)],
+        },
+        Device {
             name: "iPhone 16 Pro Max",
             width: 440.0,
             height: 956.0,
@@ -882,11 +992,67 @@ impl PrototypeSettings {
             colors: &[c("Black", 0x3B, 0x3A, 0x38), c("White", 0xEC, 0xEB, 0xE6), c("Natural", 0xBF, 0xB9, 0xAF), c("Sand", 0xC6, 0xAC, 0x8F)],
         },
         Device {
+            name: "iPhone 16 Plus",
+            width: 430.0,
+            height: 932.0,
+            rotates: true,
+            colors: &[c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
+        },
+        Device {
+            name: "iPhone 15 Pro",
+            width: 393.0,
+            height: 852.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 15 Pro Max",
+            width: 430.0,
+            height: 932.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 15 Plus",
+            width: 430.0,
+            height: 932.0,
+            rotates: true,
+            colors: &[c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
+        },
+        Device {
+            name: "iPhone 14 Pro",
+            width: 393.0,
+            height: 852.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 14 Pro Max",
+            width: 430.0,
+            height: 932.0,
+            rotates: true,
+            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+        },
+        Device {
+            name: "iPhone 14",
+            width: 390.0,
+            height: 844.0,
+            rotates: true,
+            colors: &[c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
+        },
+        Device {
             name: "Android Compact",
             width: 412.0,
             height: 917.0,
             rotates: true,
             colors: &[c("Black", 0x2E, 0x2F, 0x33), c("Silver", 0xD6, 0xD8, 0xDB), c("Green", 0xA6, 0xC0, 0xA3)],
+        },
+        Device {
+            name: "Android Medium",
+            width: 700.0,
+            height: 840.0,
+            rotates: true,
+            colors: &[c("Black", 0x2E, 0x2F, 0x33), c("Silver", 0xD6, 0xD8, 0xDB)],
         },
         Device {
             name: "iPad mini",
@@ -912,7 +1078,7 @@ impl PrototypeSettings {
     ];
 
     /// The device whose screen is [`custom_size`](Self::custom_size) (no body is drawn around it).
-    pub const CUSTOM_DEVICE: &'static str = "Custom size";
+    pub const CUSTOM_DEVICE: &str = "Custom size";
     /// A new custom size.
     pub const CUSTOM_DEFAULT: [f64; 2] = [1280.0, 720.0];
     /// The largest side a custom size may have (points).

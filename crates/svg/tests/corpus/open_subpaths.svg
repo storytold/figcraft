@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+  <!-- Fill closes every subpath (SVG painting: "fill ... as if a closepath"). Top row, one filled
+       path: closed with Z; back on its start without Z; 0.001 short of its start without Z (what
+       PDF exports rounded to three decimals write); an open triangle. Bottom row, filled and
+       stroked: 0.001 short (closed, stroke and all); an open triangle (stroked open). Third row,
+       filled and stroked: only 0.001 short (one layer); an open triangle with its stroke under
+       the fill. -->
+  <path id="filled" fill="#000000" d="M10 10h20v20h-20z M50 10h20v20h-20v-20 M90 10h20v20h-20v-19.999 M130 10h20v20"/>
+  <path id="stroked" fill="#000000" stroke="#ff0000" stroke-width="2" d="M10 50h20v20h-20v-19.999 M130 50h20v20"/>
+  <path id="near" fill="#000000" stroke="#ff0000" stroke-width="2" d="M50 90h20v20h-20v-19.999"/>
+  <path id="under" fill="#000000" stroke="#ff0000" stroke-width="2" paint-order="stroke" d="M130 90h20v20"/>
+  <!-- probe 20 20 #000000ff -->
+  <!-- probe 60 20 #000000ff -->
+  <!-- probe 100 20 #000000ff -->
+  <!-- probe 145 15 #000000ff -->
+  <!-- probe 135 25 #00000000 -->
+  <!-- probe 20 60 #000000ff -->
+  <!-- probe 10 60 #ff0000ff -->
+  <!-- probe 140 50 #ff0000ff -->
+  <!-- probe 145 55 #000000ff -->
+  <!-- probe 135 65 #00000000 -->
+  <!-- probe 60 100 #000000ff -->
+  <!-- probe 50 100 #ff0000ff -->
+  <!-- probe 140 89 #ff0000ff -->
+  <!-- probe 140 90 #000000ff -->
+  <!-- probe 145 95 #000000ff -->
+  <!-- probe 135 105 #00000000 -->
+</svg>
