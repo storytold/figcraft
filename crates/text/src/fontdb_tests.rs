@@ -604,6 +604,7 @@ fn every_embeddable_script_face_is_a_document_fallback() {
         "Noto Sans Hebrew",
         "Noto Sans Devanagari",
         "Noto Sans Georgian",
+        "Noto Sans JP",
         "Noto Sans Symbols",
         "Noto Sans Symbols 2",
     ] {

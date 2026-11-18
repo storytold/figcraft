@@ -103,7 +103,7 @@ pub fn try_export(doc: &Document, ids: &[NodeId], opts: &VdOptions) -> Result<Vd
         let first = ids.first().and_then(|i| doc.node(*i)).map(|n| n.name.clone()).unwrap_or_default();
         walker.nothing_drawn(&first);
     }
-    let xml = xml::document(w, h, &items);
+    let xml = xml::document(w, h, items);
     Ok(VdExport { xml, warnings: walker.finish() })
 }
 

@@ -176,10 +176,11 @@ impl Session {
                         let sel = self.selection().into_iter().filter(|x| *x != d).collect();
                         self.set_selection(sel);
                     } else if let Some(k) = keep {
-                        // A click (not a drag) on one layer of a multi-selection selects just it.
+                        // A click (not a drag) on one layer of a multi-selection, or on a layer
+                        // inside a selected one, selects just it.
                         let doc = self.doc()?.clone();
                         let sel = self.selection();
-                        if sel.len() > 1 && (sel.contains(&k) || sel.iter().any(|s| doc.is_ancestor(*s, k))) {
+                        if sel.as_slice() != [k] && (sel.contains(&k) || sel.iter().any(|s| doc.is_ancestor(*s, k))) {
                             self.set_selection(vec![k]);
                         }
                     }

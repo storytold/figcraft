@@ -47,6 +47,7 @@ pub use craft_figcraft_format::{
     MAX_VERSION_INDEX, MAX_VERSION_NAME, MAX_VERSIONS, ReadBudget, VERSION, VersionEntry as NativeVersionEntry, VersionIndex as NativeVersionIndex,
     clip, document_limit, is_valid_version_id,
 };
+#[cfg(test)]
 const JSON_LEVEL: i64 = 3;
 /// The export warning for colour calculations that resolve to nothing (an operand missing, or more
 /// than 32 variables to read), shared by the Penpot and `.fig` exports.
@@ -411,7 +412,8 @@ pub(crate) fn io_err(e: impl std::fmt::Display) -> FormatError {
     FormatError::Io(e.to_string())
 }
 
-/// JSON compression for Penpot and external ZIP exporters.
+/// JSON compression for legacy Penpot test fixtures.
+#[cfg(test)]
 pub(crate) fn json_options() -> zip::write::SimpleFileOptions {
     zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).compression_level(Some(JSON_LEVEL))
 }

@@ -355,3 +355,35 @@ fn rem_conversion_keeps_the_original_pixels() {
     assert_eq!(f("padding: 3px;", 16.0), "padding: 0.1875rem;");
     assert_eq!(f("gap: 0.5px;", 16.0), "gap: 0.03125rem;");
 }
+
+#[test]
+fn text_gradient_fill_clips_to_the_glyphs() {
+    let mut s = Session::new();
+    let fills = json!([{"type": "linearGradient", "stops": ["#D98200", "#FF6B4A"]}]);
+    let t = id(&ex(&mut s, "node.create", json!({"type": "text", "text": "Gradient", "props": {"fontSize": 48, "fills": fills}})));
+    let c = css(&mut s, t);
+    assert!(c.contains("background: linear-gradient("), "{c}");
+    assert!(c.contains("-webkit-background-clip: text;"), "{c}");
+    assert!(c.contains("\nbackground-clip: text;"), "{c}");
+    assert!(c.contains("color: transparent;"), "{c}");
+    let tw = code(&mut s, t, json!({"language": "tailwind"}));
+    assert!(tw.contains("bg-clip-text") && tw.contains("text-transparent"), "{tw}");
+    // A box keeps its gradient as a plain background.
+    let r = rect(&mut s, 0.0, 0.0, 50.0, 50.0, None);
+    let set = s.execute("node.set", &json!({"id": r, "props": {"fills": fills}}));
+    assert!(set.is_ok(), "{set:?}");
+    let box_css = css(&mut s, r);
+    assert!(box_css.contains("background: linear-gradient("), "{box_css}");
+    assert!(!box_css.contains("background-clip"), "{box_css}");
+}
+
+#[test]
+fn text_gradient_under_a_solid_fill_keeps_the_solid_ink() {
+    let mut s = Session::new();
+    let fills = json!([{"type": "linearGradient", "stops": ["#D98200", "#FF6B4A"]}, {"type": "solid", "color": "#112233"}]);
+    let t = id(&ex(&mut s, "node.create", json!({"type": "text", "text": "Gradient", "props": {"fontSize": 48, "fills": fills}})));
+    let c = css(&mut s, t);
+    assert!(!c.contains("color: transparent;"), "{c}");
+    assert!(!c.contains("background-clip"), "{c}");
+    assert!(c.contains("color: #112233;"), "{c}");
+}
