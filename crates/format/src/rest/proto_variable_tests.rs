@@ -193,6 +193,10 @@ fn bound_variables_and_explicit_modes() {
 /// both are read, and neither is reported as skipped.
 #[test]
 fn variables_bound_to_stroke_sides_bind_each_sides_weight() {
+    const TOP: &str = "VariableID:9:1";
+    const RIGHT: &str = "VariableID:9:2";
+    const BOTTOM: &str = "VariableID:9:3";
+    const LEFT: &str = "VariableID:9:4";
     let rect = |id: &str, name: &str, sides: Value| {
         json!({"id": id, "name": name, "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 40, "y": 20},
                "strokes": [{"type": "SOLID", "color": rgba(0.0, 0.0, 0.0)}], "strokeWeight": 1,
@@ -202,13 +206,19 @@ fn variables_bound_to_stroke_sides_bind_each_sides_weight() {
     let file = json!({"name": "Sides", "document": {"id": "0:0", "type": "DOCUMENT", "children": [
         {"id": "0:1", "name": "Page", "type": "CANVAS", "children": [
             rect("1:1", "Row", json!({"BORDER_BOTTOM_WEIGHT": alias(SPACE)})),
-            rect("1:2", "Card", json!({"BORDER_TOP_WEIGHT": alias(SPACE), "BORDER_RIGHT_WEIGHT": alias(SPACE),
-                                       "BORDER_BOTTOM_WEIGHT": alias(SPACE), "BORDER_LEFT_WEIGHT": alias(SPACE)})),
+            rect("1:2", "Card", json!({"BORDER_TOP_WEIGHT": alias(TOP), "BORDER_RIGHT_WEIGHT": alias(RIGHT),
+                                       "BORDER_BOTTOM_WEIGHT": alias(BOTTOM), "BORDER_LEFT_WEIGHT": alias(LEFT)})),
             rect("1:3", "Spec", json!({"top": alias(SPACE), "left": alias(SPACE)})),
             rect("1:4", "Colour", json!({"BORDER_LEFT_WEIGHT": alias(BRAND)}))
         ]}
     ]}});
-    let (doc, warnings) = import_with(&file, Some(&variables_json()), &no_images).unwrap();
+    // A variable of its own for each of Card's sides, so a side read into another's field fails.
+    let mut vars = variables_json();
+    for id in [TOP, RIGHT, BOTTOM, LEFT] {
+        vars["meta"]["variables"][id] = json!({"id": id, "name": id, "variableCollectionId": THEME, "resolvedType": "FLOAT",
+                                               "valuesByMode": {"1:0": 1}, "scopes": ["ALL_SCOPES"]});
+    }
+    let (doc, warnings) = import_with(&file, Some(&vars), &no_images).unwrap();
     let sides = |name: &str| -> Vec<(String, String)> {
         let n = named(&doc, name);
         ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"]
@@ -217,8 +227,12 @@ fn variables_bound_to_stroke_sides_bind_each_sides_weight() {
             .collect()
     };
     let b = |f: &str| (f.to_string(), SPACE.to_string());
+    let on = |f: &str, v: &str| (f.to_string(), v.to_string());
     assert_eq!(sides("Row"), [b("strokeBottomWeight")], "one side bound");
-    assert_eq!(sides("Card"), [b("strokeTopWeight"), b("strokeRightWeight"), b("strokeBottomWeight"), b("strokeLeftWeight")]);
+    assert_eq!(
+        sides("Card"),
+        [on("strokeTopWeight", TOP), on("strokeRightWeight", RIGHT), on("strokeBottomWeight", BOTTOM), on("strokeLeftWeight", LEFT)]
+    );
     assert_eq!(sides("Spec"), [b("strokeTopWeight"), b("strokeLeftWeight")], "the spec's names");
     assert_eq!(sides("Colour"), [], "a colour variable can't be a weight");
     assert!(!has(&warnings, "`individualStrokeWeights`"), "{warnings:?}");
