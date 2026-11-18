@@ -133,6 +133,36 @@ fn panel_zoom_rect(tabs: Rect, mirrored: bool) -> Rect {
     Rect::from_min_size(pos2(left, tabs.center().y - 12.0), vec2(56.0, 24.0))
 }
 
+/// Locate share, present and the live-people area at the visual start of the header.
+/// The play and share hitboxes stay separated by 8 pt in either direction.
+fn panel_header_regions(top: Rect, share_width: f32, mirrored: bool) -> (Rect, Rect, Rect) {
+    let share_x = if mirrored { top.min.x + 14.0 } else { top.max.x - 14.0 - share_width };
+    let share = Rect::from_min_size(pos2(share_x, top.center().y - 16.0), vec2(share_width, 32.0));
+    let play_x = if mirrored { share.max.x + 8.0 } else { share.min.x - 50.0 };
+    let play = Rect::from_min_size(pos2(play_x, top.center().y - 14.0), vec2(42.0, 28.0));
+    let people = if mirrored {
+        Rect::from_min_max(pos2(play.max.x + 6.0, top.min.y), pos2(top.max.x - 12.0, top.max.y))
+    } else {
+        Rect::from_min_max(pos2(top.min.x + 12.0, top.min.y), pos2(play.min.x - 6.0, top.max.y))
+    };
+    (share, play, people)
+}
+
+/// The preview-menu chevron follows the end of the play button in both directions.
+fn panel_present_regions(play: Rect, mirrored: bool) -> (Rect, Rect) {
+    if mirrored {
+        (
+            Rect::from_min_max(pos2(play.min.x + 16.0, play.min.y), play.max),
+            Rect::from_min_max(play.min, pos2(play.min.x + 16.0, play.max.y)),
+        )
+    } else {
+        (
+            Rect::from_min_max(play.min, pos2(play.max.x - 16.0, play.max.y)),
+            Rect::from_min_max(pos2(play.max.x - 16.0, play.min.y), play.max),
+        )
+    }
+}
+
 /// Draw the right panel: people, present and share controls, Design/Prototype tabs and zoom
 /// menu, then route the scroll area to comments, frame presets, design, prototype or inspect.
 pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
@@ -150,26 +180,25 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     // As wide as its label needs (longer in some languages).
     let label = ui.painter().layout_no_wrap(tr("Share").to_string(), semibold(11.5), t.accent_on);
     let sw = (label.size().x + 24.0).max(56.0);
-    let share = Rect::from_min_size(pos2(top.max.x - 14.0 - sw, top.center().y - 16.0), vec2(sw, 32.0));
+    let (share, play, people) = panel_header_regions(top, sw, app.ui.mirrored);
     let sresp = ui.interact(share, ui.scope_id().with("share"), Sense::click()).tip(tr("Share: live session, export"));
     ui.painter().rect_filled(share, CornerRadius::same(6), if sresp.hovered() { t.accent_hover } else { t.accent });
     ui.painter().galley(share.center() - label.size() / 2.0, label, t.accent_on);
     crate::live::share_popover(app, &sresp);
     // Play presents; its chevron opens the play menu (present, or preview in a pane).
-    let play = Rect::from_min_size(pos2(share.min.x - 50.0, top.center().y - 14.0), vec2(42.0, 28.0));
-    let (tri_r, chev_r) =
-        (Rect::from_min_max(play.min, pos2(play.max.x - 16.0, play.max.y)), Rect::from_min_max(pos2(play.max.x - 16.0, play.min.y), play.max));
+    let (tri_r, chev_r) = panel_present_regions(play, app.ui.mirrored);
     let present_keys = crate::toolbar::pretty_shortcut(crate::shortcuts::shortcut("proto.present").unwrap_or(""));
     let presp = ui.interact(tri_r, ui.scope_id().with("play"), Sense::click()).tip(format!("{}  {present_keys}", tr("Present")));
     let mresp = ui.interact(chev_r, ui.scope_id().with("play_menu"), Sense::click()).tip(tr("Present or preview"));
     if presp.hovered() || mresp.hovered() {
         ui.painter().rect_filled(play, CornerRadius::same(5), t.hover);
     }
-    let tri = Rect::from_center_size(play.center() - vec2(7.0, 0.0), vec2(16.0, 16.0));
+    let direction = if app.ui.mirrored { -1.0 } else { 1.0 };
+    let tri = Rect::from_center_size(play.center() - vec2(7.0 * direction, 0.0), vec2(16.0, 16.0));
     let c = tri.center();
     ui.painter().add(egui::Shape::closed_line(vec![c + vec2(-5.0, -7.0), c + vec2(7.0, 0.0), c + vec2(-5.0, 7.0)], Stroke::new(1.4, t.icon)));
-    icons::paint(ui.painter(), Rect::from_center_size(play.center() + vec2(12.0, 0.0), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
-    crate::live::people_bar(app, ui, Rect::from_min_max(pos2(top.min.x + 12.0, top.min.y), pos2(play.min.x - 6.0, top.max.y)));
+    icons::paint(ui.painter(), Rect::from_center_size(play.center() + vec2(12.0 * direction, 0.0), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
+    crate::live::people_bar(app, ui, people);
     if presp.clicked() {
         app.run("proto.present", json!({}));
     }
@@ -920,6 +949,35 @@ fn pretty(s: &str) -> String {
 #[cfg(test)]
 mod right_panel_mirror_tests {
     use super::*;
+
+    #[test]
+    fn header_share_play_and_people_regions_mirror_without_overlap() {
+        let top = Rect::from_min_size(pos2(100.0, 40.0), vec2(240.0, 48.0));
+        let (ltr_share, ltr_play, ltr_people) = panel_header_regions(top, 56.0, false);
+        let (rtl_share, rtl_play, rtl_people) = panel_header_regions(top, 56.0, true);
+        assert_eq!(ltr_share.max.x, top.max.x - 14.0);
+        assert_eq!(rtl_share.min.x, top.min.x + 14.0);
+        assert_eq!(ltr_play.max.x + 8.0, ltr_share.min.x);
+        assert_eq!(rtl_share.max.x + 8.0, rtl_play.min.x);
+        assert_eq!(ltr_people.max.x + 6.0, ltr_play.min.x);
+        assert_eq!(rtl_play.max.x + 6.0, rtl_people.min.x);
+        assert_eq!(ltr_share.center().y, rtl_share.center().y);
+        assert_eq!(ltr_play.center().y, rtl_play.center().y);
+        assert_eq!(ltr_people.center().y, rtl_people.center().y);
+        assert_eq!(ltr_share.min.x + rtl_share.max.x, top.min.x + top.max.x);
+        assert_eq!(ltr_play.min.x + rtl_play.max.x, top.min.x + top.max.x);
+        for mirrored in [false, true] {
+            let (share, play, people) = panel_header_regions(top, 56.0, mirrored);
+            let (present, menu) = panel_present_regions(play, mirrored);
+            assert!(!share.intersects(play));
+            assert!(!play.intersects(people));
+            assert_eq!(present.width() + menu.width(), play.width());
+            assert_eq!(present.center().y, menu.center().y);
+            assert!(play.contains(present.center()) && play.contains(menu.center()));
+            if mirrored { assert!(menu.center().x < present.center().x); }
+            else { assert!(present.center().x < menu.center().x); }
+        }
+    }
 
     #[test]
     fn hebrew_tabs_reverse_hitboxes_and_keep_zoom_separate() {
