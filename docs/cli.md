@@ -118,7 +118,8 @@ page 1 "Screens": 380 nodes, 4 top-level
   after the frame (`Home.png`, `Settings.png`…); with no frames, one file per top-level layer.
   The name is kept as it is, except for the characters file systems refuse (`/ \ : * ? " < > |`
   and control characters), which become `_`, and leading or trailing spaces and dots, which are
-  dropped. A name is cut at 100 characters. The app's export replaces the same characters (there a
+  dropped. Reserved Windows device names such as `CON` get a leading `_`.
+  A name is cut at 100 characters. The app's export replaces the same characters (there a
   `/` makes a folder). Two layers with the same name get `Name 2`, `Name 3`…
 - `<out>` has an image extension: one file with the given `--node`, or the whole page composited.
 - `--node` takes a layer id (`12` or `0:12`) or a layer name.

@@ -5,12 +5,15 @@
 
 use std::time::{Duration, Instant};
 
-use figcraft_collab::message::{Access, AssetUsage, ClientMsg, LibraryReply, LibraryReq, MAX_ASSET_USAGE, OpenLibrary, PROTOCOL, ServerMsg};
+use figcraft_collab::message::{
+    Access, AssetActions, AssetUsage, ClientMsg, LibraryReply, LibraryReq, MAX_ASSET_USAGE, OpenLibrary, PROTOCOL, ServerMsg, Usage,
+};
 use figcraft_collab_net::Invite;
 use figcraft_doc::NodeId;
 use figcraft_engine::Session;
 use serde_json::{Value, json};
 
+use crate::store::{MAX_USERS, Store};
 use crate::test_util::{Raw, TempDir, config, publish, session};
 
 fn ex(s: &mut Session, cmd: &str, p: Value) -> Value {
@@ -79,7 +82,7 @@ fn styles_and_variables_are_counted_per_layer_and_file() {
     // Bo takes the style off one layer and the variable off its only one.
     ex(&mut b, "style.detach", json!({"ids": [two], "which": "fill"}));
     ex(&mut b, "variable.bind", json!({"ids": [three], "field": "fill"}));
-    let u = usage_when(&mut a, &mut b, |u| u["styles"][0]["layers"] == 1 && u["variables"].as_array().is_some_and(Vec::is_empty));
+    let u = usage_when(&mut a, &mut b, |u| u["styles"][0]["layers"] == 1 && u["variables"][0]["layers"] == 0);
     assert_eq!(u["styles"].as_array().unwrap().len(), 1, "{u}");
     server.stop();
 }
@@ -142,4 +145,77 @@ fn answer(raw: &mut Raw) -> LibraryReply {
         ServerMsg::Library(r) => *r,
         other => panic!("not a library answer: {other:?}"),
     }
+}
+
+#[test]
+fn inserts_and_detaches_count_per_style_and_variable_in_the_period() {
+    let dir = TempDir::new("library-asset-actions");
+    let cfg = config(dir.path());
+    let mut server = crate::start(&cfg).unwrap();
+    let addr = server.addr();
+    let mut a = session("Ada");
+    let r = rect(&mut a, 0);
+    ex(&mut a, "style.create", json!({"type": "paint", "name": "Brand", "from": r.0}));
+    let collection = ex(&mut a, "variable.createCollection", json!({"name": "Tokens"}));
+    ex(&mut a, "variable.create", json!({"name": "Accent", "type": "color", "collection": collection["id"], "value": "#0D99FF"}));
+    let p = publish(&mut a, dir.path(), addr);
+    ex(&mut a, "library.publishToServer", json!({}));
+
+    let mut b = session("Bo");
+    let lid = ex(&mut b, "library.add", json!({"path": p.view}))["id"].as_str().unwrap().to_string();
+    let (one, two) = (rect(&mut b, 0), rect(&mut b, 100));
+    ex(&mut b, "library.applyStyle", json!({"library": lid, "style": "Brand", "ids": [one.0, two.0]}));
+    ex(&mut b, "style.detach", json!({"ids": [two.0], "which": "fill"}));
+    ex(&mut b, "library.bindVariable", json!({"library": lid, "variable": "Accent", "ids": [two.0], "field": "fill"}));
+
+    let u = usage_when(&mut a, &mut b, |u| {
+        u["assetActionsKnown"] == true
+            && u["styles"][0]["insertions"] == 2
+            && u["styles"][0]["detachments"] == 1
+            && u["variables"][0]["insertions"] == 1
+    });
+    assert_eq!(u["assetActionsKnown"], true, "{u}");
+    assert_eq!(u["styles"][0]["detachments"], 1, "{u}");
+    assert_eq!(u["variables"][0]["detachments"], 0, "{u}");
+    assert_eq!(u["insertions"], 0, "components count on their own: {u}");
+
+    // An undo and a redo count once, and a style no layer uses any more stays listed.
+    ex(&mut b, "edit.undo", json!({}));
+    ex(&mut b, "edit.redo", json!({}));
+    ex(&mut b, "style.detach", json!({"ids": [one.0], "which": "fill"}));
+    let u = usage_when(&mut a, &mut b, |u| u["styles"][0]["detachments"] == 2 && u["styles"][0]["layers"] == 0);
+    assert_eq!((u["styles"][0]["insertions"].clone(), u["styles"][0]["layers"].clone()), (json!(2), json!(0)), "{u}");
+    assert_eq!(u["variables"][0]["insertions"], 1, "{u}");
+    server.stop();
+}
+
+#[test]
+fn evicting_capped_usage_rows_keeps_asset_peaks_so_a_repeat_report_is_not_counted_twice() {
+    let dir = TempDir::new("library-asset-peaks-evict");
+    let cfg = config(dir.path());
+    let mut server = crate::start(&cfg).unwrap();
+    let addr = server.addr();
+    let mut a = session("Ada");
+    let r = rect(&mut a, 0);
+    ex(&mut a, "style.create", json!({"type": "paint", "name": "Brand", "from": r.0}));
+    let p = publish(&mut a, dir.path(), addr);
+    ex(&mut a, "library.publishToServer", json!({}));
+    let file = Invite::parse(&p.edit).unwrap().file;
+    server.stop();
+    drop(server);
+
+    let mut store = Store::open(dir.path(), cfg.store()).unwrap();
+    for i in 0..MAX_USERS {
+        store.report_usage(&file, Usage { file: format!("Old{i}"), components: Vec::new() }).unwrap();
+    }
+    let actions = AssetActions { file: "Kept".into(), inserted: vec![("Brand".into(), 2)], detached: Vec::new() };
+    store.report_asset_actions(&file, actions.clone()).unwrap();
+    // One more usage-only file would evict "Kept" if asset activity did not count for retention.
+    store.report_usage(&file, Usage { file: "Extra".into(), components: Vec::new() }).unwrap();
+    store.report_asset_actions(&file, actions).unwrap();
+    let weeks = store.library_asset_actions(&file).unwrap();
+    let brand: Vec<_> = weeks.iter().filter(|w| w.component == "Brand").collect();
+    assert_eq!(brand.len(), 1, "{weeks:?}");
+    assert_eq!(brand[0].insertions, 2, "lost peaks would grow the same totals again: {weeks:?}");
+    assert_eq!(brand[0].detachments, 0, "{weeks:?}");
 }

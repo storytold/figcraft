@@ -404,6 +404,8 @@ mod keymap_tests;
 #[cfg(test)]
 mod layout_suggest_tests;
 #[cfg(test)]
+mod library_asset_counts_tests;
+#[cfg(test)]
 mod library_beacon_tests;
 #[cfg(test)]
 mod library_path_tests;
@@ -634,6 +636,8 @@ mod variables_import_shapes_tests;
 #[cfg(test)]
 mod variables_io_tests;
 #[cfg(test)]
+mod variant_shared_props_tests;
+#[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]
 mod vector_behaviour_tests;
@@ -668,6 +672,8 @@ mod widget_shapes_tests;
 #[cfg(test)]
 mod widgets_tests;
 
+#[cfg(test)]
+mod page_view_tests;
 #[cfg(test)]
 mod selection_reorder_tests;
 #[cfg(test)]

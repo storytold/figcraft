@@ -38,14 +38,15 @@ fn main() -> ExitCode {
             return ExitCode::from(u8::try_from(e.exit_code()).unwrap_or(2));
         }
     };
+    // Paths and imported/plugin errors may carry terminal controls; keep diagnostics printable.
     match run(cli) {
         Ok(code) => code,
         Err(CliError::Usage(msg)) => {
-            eprintln!("error: {msg}\n\nFor more information, try '--help'.");
+            eprintln!("error: {}\n\nFor more information, try '--help'.", files::plain(&msg));
             ExitCode::from(2)
         }
         Err(CliError::Failed(msg)) => {
-            eprintln!("error: {msg}");
+            eprintln!("error: {}", files::plain(&msg));
             ExitCode::from(1)
         }
     }

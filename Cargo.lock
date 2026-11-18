@@ -1259,7 +1259,7 @@ dependencies = [
 [[package]]
 name = "craft-vectordrawable"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=453b0da782ccef39be9a6dac8d27c80b553ef1cc#453b0da782ccef39be9a6dac8d27c80b553ef1cc"
+source = "git+https://github.com/storytold/craft-libs?rev=5cd16f2b9ac2a84c4c0794e609914e2bbf848bd7#5cd16f2b9ac2a84c4c0794e609914e2bbf848bd7"
 dependencies = [
  "kurbo",
 ]
@@ -2219,6 +2219,7 @@ dependencies = [
  "craft-font-catalog",
  "figcraft-doc",
  "figcraft-geom",
+ "flate2",
  "harfrust 0.13.3",
  "icu_segmenter",
  "log",
