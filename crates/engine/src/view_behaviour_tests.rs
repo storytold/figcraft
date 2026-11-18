@@ -131,7 +131,7 @@ fn zoom_to_fit_selection_and_frames() {
     // (command, selection before, zoom, centre, selection after, derivation)
     let rows: Vec<(&str, Vec<NodeId>, f64, (f64, f64), Vec<NodeId>, &str)> = vec![
         ("view.zoomFit", vec![], fit(content), (470.0, 300.0), vec![], "Shift+1 fits everything on the page into the view"),
-        ("view.zoomSelection", vec![r], fit(Rect::new(0.0, 0.0, 40.0, 40.0)), (920.0, 20.0), vec![r], "Shift+2 zooms to the selection"),
+        ("view.zoomSelection", vec![r], (800.0 - 80.0) / 40.0, (920.0, 20.0), vec![r], "Shift+2 zooms to the selection, with a 40-point margin"),
         (
             "view.nextFrame",
             vec![],
@@ -225,7 +225,7 @@ fn view_shortcuts_follow_the_documented_keys() {
         (Platform::Other, "-", m(true, false, false, false), "view.zoomOut", "Shift and - zooms out"),
         (Platform::Mac, "0", m(true, false, false, false), "view.zoom100", "Shift+0 zooms to 100%"),
         (Platform::Other, "1", m(true, false, false, false), "view.zoomFit", "Shift+1 zooms to fit"),
-        (Platform::Mac, "2", m(true, false, false, false), "view.zoomSelection", "Shift+2 zooms to the selection"),
+        (Platform::Mac, "2", m(true, false, false, false), "view.zoomSelection", "Shift+2 zooms to the selection, with a 40-point margin"),
         (Platform::Mac, "N", m(false, false, false, false), "view.nextFrame", "N zooms to the next frame"),
         (Platform::Other, "N", m(true, false, false, false), "view.prevFrame", "Shift+N zooms to the previous frame"),
         (Platform::Mac, "R", m(true, false, false, false), "view.rulers", "Shift+R shows and hides the rulers"),
@@ -770,4 +770,152 @@ fn view_toggles_are_kept_for_the_next_launch() {
         assert_eq!(get(view), on, "{cmd}: {why}");
     }
     assert!(!view.outlines && !view.outlines_selection && !view.proof_srgb, "{view:?}");
+}
+
+/// Select a fresh rectangle at the origin, set the view and run `cmd`; the rect's screen box is
+/// returned as (left, top, right, bottom).
+fn zoom_on(cmd: &str, inset: f64, w: f64, h: f64) -> (ViewState, (f64, f64, f64, f64)) {
+    let mut s = Session::new();
+    let r = rect(&mut s, 0.0, 0.0, w, h, None);
+    ex(&mut s, "view.set", json!({"vw": 1389, "vh": 903, "bottomInset": inset}));
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    ex(&mut s, cmd, json!({}));
+    let v = view(&s);
+    let (l, t) = v.page_to_screen(0.0, 0.0);
+    let (rr, b) = v.page_to_screen(w, h);
+    (v, (l, t, rr, b))
+}
+
+#[test]
+fn zoom_to_selection_leaves_forty_points_and_clears_the_toolbar() {
+    // Measured in Figma's web app, 2026-11-09: 40 points on every side of the canvas above the toolbar.
+    let (v, (l, t, r, b)) = zoom_on("view.zoomSelection", 58.0, 100.0, 100.0);
+    assert!((v.zoom - 7.65).abs() < 0.01, "{}", v.zoom);
+    assert!((t - 40.0).abs() < 0.5 && (b - (845.0 - 40.0)).abs() < 0.5, "top {t}, bottom {b}");
+    assert!((l - (1389.0 - r)).abs() < 0.5, "left {l}, right {r}");
+}
+
+#[test]
+fn zoom_to_selection_on_a_wide_layer_is_limited_by_the_width() {
+    let (v, (l, _, r, _)) = zoom_on("view.zoomSelection", 58.0, 1000.0, 200.0);
+    assert!((v.zoom - (1389.0 - 80.0) / 1000.0).abs() < 0.001, "{}", v.zoom);
+    assert!((l - 40.0).abs() < 0.5 && ((1389.0 - r) - 40.0).abs() < 0.5, "left {l}, right {r}");
+}
+
+#[test]
+fn zoom_to_selection_without_a_toolbar_inset_uses_the_whole_height() {
+    let (v, _) = zoom_on("view.zoomSelection", 0.0, 100.0, 100.0);
+    assert!((v.zoom - (903.0 - 80.0) / 100.0).abs() < 1e-6, "{}", v.zoom);
+    let (_, top) = v.page_to_screen(0.0, 0.0);
+    let (_, bottom) = v.page_to_screen(100.0, 100.0);
+    assert!((top - 40.0).abs() < 1e-6 && (bottom - 863.0).abs() < 1e-6, "top {top}, bottom {bottom}");
+}
+
+#[test]
+fn zoom_to_selection_in_a_short_canvas_still_ends_above_the_toolbar() {
+    // A canvas 130 points high with the 60-point toolbar strip leaves 70 above it: too short for
+    // 40 points a side, so the margin shrinks and the selection stays clear of the toolbar.
+    let mut s = Session::new();
+    let r = rect(&mut s, 0.0, 0.0, 100.0, 100.0, None);
+    ex(&mut s, "view.set", json!({"vw": 1389, "vh": 130, "bottomInset": 60}));
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    ex(&mut s, "view.zoomSelection", json!({}));
+    let v = view(&s);
+    let (_, top) = v.page_to_screen(0.0, 0.0);
+    let (_, bottom) = v.page_to_screen(100.0, 100.0);
+    assert!(top >= 0.0 && bottom <= 70.0 + 1e-6, "top {top}, bottom {bottom}");
+    assert!((top - (70.0 - bottom)).abs() < 1e-6, "centred above the toolbar: top {top}, bottom {bottom}");
+    // The margin shrinks to a quarter of the 70 points (17.5) and the zoom is the exact fit, not the floor.
+    assert!((v.zoom - 0.35).abs() < 1e-9, "{}", v.zoom);
+    assert!((top - 17.5).abs() < 1e-6 && (bottom - 52.5).abs() < 1e-6, "top {top}, bottom {bottom}");
+}
+
+/// A canvas narrower than 160 points keeps a quarter of its width on each side.
+#[test]
+fn zoom_to_selection_in_a_narrow_canvas_shrinks_the_side_margins() {
+    let mut s = Session::new();
+    let r = rect(&mut s, 0.0, 0.0, 100.0, 100.0, None);
+    ex(&mut s, "view.set", json!({"vw": 100, "vh": 903, "bottomInset": 0}));
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    ex(&mut s, "view.zoomSelection", json!({}));
+    let v = view(&s);
+    let (left, _) = v.page_to_screen(0.0, 0.0);
+    let (right, _) = v.page_to_screen(100.0, 100.0);
+    assert!((v.zoom - 0.5).abs() < 1e-9, "{}", v.zoom);
+    assert!((left - 25.0).abs() < 1e-6 && (right - 75.0).abs() < 1e-6, "left {left}, right {right}");
+}
+
+/// A view 1000 by 800 with a 100-point toolbar strip, for the edge cases of the fit.
+fn strip_view() -> ViewState {
+    ViewState { vw: 1000.0, vh: 800.0, bottom_inset: 100.0, ..ViewState::default() }
+}
+
+#[test]
+fn fitting_a_selection_survives_points_lines_extremes_and_junk() {
+    // A point: the zoom stays, and it lands in the middle of the area above the toolbar (y = 350).
+    let mut v = strip_view();
+    v.zoom = 2.0;
+    v.fit_selection(Rect::new(10.0, 20.0, 10.0, 20.0), 32.0);
+    assert_eq!(v.zoom, 2.0);
+    let (x, y) = v.page_to_screen(10.0, 20.0);
+    assert!((x - 500.0).abs() < 1e-9 && (y - 350.0).abs() < 1e-9, "{x}, {y}");
+    // A zero-width line is limited by its height, a zero-height one by its width.
+    let mut v = strip_view();
+    v.fit_selection(Rect::new(0.0, 0.0, 0.0, 100.0), 32.0);
+    assert!((v.zoom - (700.0 - 80.0) / 100.0).abs() < 1e-9, "{}", v.zoom);
+    let mut v = strip_view();
+    v.fit_selection(Rect::new(0.0, 0.0, 100.0, 0.0), 32.0);
+    assert!((v.zoom - (1000.0 - 80.0) / 100.0).abs() < 1e-9, "{}", v.zoom);
+    // A tiny one stops at the maximum zoom, a huge one at the minimum.
+    let mut v = strip_view();
+    v.fit_selection(Rect::new(0.0, 0.0, 0.001, 0.001), 32.0);
+    assert_eq!(v.zoom, 32.0);
+    v.fit_selection(Rect::new(0.0, 0.0, 1e12, 1e12), 32.0);
+    assert_eq!(v.zoom, ViewState::MIN_ZOOM);
+    // A rectangle with any coordinate that is not a finite number changes nothing.
+    for bad in [
+        Rect::new(0.0, f64::NAN, 10.0, 10.0),
+        Rect::new(0.0, 0.0, f64::INFINITY, 10.0),
+        Rect::new(0.0, 0.0, 10.0, f64::NAN),
+        Rect::new(f64::NAN, 0.0, 10.0, 10.0),
+    ] {
+        let mut v = strip_view();
+        let before = (v.zoom, v.cx, v.cy);
+        v.fit_selection(bad, 32.0);
+        assert_eq!((v.zoom, v.cx, v.cy), before, "{bad:?}");
+    }
+}
+
+#[test]
+fn the_bottom_inset_is_clamped_and_never_saved() {
+    let mut s = Session::new();
+    ex(&mut s, "view.set", json!({"bottomInset": -5}));
+    assert_eq!(view(&s).bottom_inset, 0.0);
+    ex(&mut s, "view.set", json!({"bottomInset": 1e12}));
+    assert_eq!(view(&s).bottom_inset, 20000.0);
+    // Larger than the viewport: the fit still leaves a sliver of canvas and a finite centre.
+    ex(&mut s, "view.set", json!({"vw": 400, "vh": 300, "bottomInset": 5000}));
+    let r = rect(&mut s, 0.0, 0.0, 10.0, 10.0, None);
+    ex(&mut s, "select.set", json!({"ids": [r]}));
+    ex(&mut s, "view.zoomSelection", json!({}));
+    let v = view(&s);
+    assert!(v.zoom.is_finite() && v.cx.is_finite() && v.cy.is_finite(), "{v:?}");
+    // It is not part of what the view saves.
+    let saved = serde_json::to_string(&v).unwrap();
+    assert!(!saved.to_lowercase().contains("inset"), "{saved}");
+    let back: ViewState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(back.bottom_inset, 0.0);
+}
+
+#[test]
+fn zoom_to_fit_is_unchanged() {
+    // Left alone on purpose: its 64-point margin is not measured against Figma yet.
+    let mut s = Session::new();
+    rect(&mut s, 0.0, 0.0, 100.0, 100.0, None);
+    ex(&mut s, "view.set", json!({"vw": 1389, "vh": 903, "bottomInset": 58}));
+    ex(&mut s, "view.zoomFit", json!({}));
+    let v = view(&s);
+    assert!((v.zoom - (903.0 - 128.0) / 100.0).abs() < 1e-6);
+    // No toolbar offset: the rectangle's own centre stays in the middle of the whole viewport.
+    assert_eq!((v.cx, v.cy), (50.0, 50.0));
 }

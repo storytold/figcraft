@@ -388,7 +388,14 @@ fn type_settings(
         }
         // Where lines break when the text wraps (Explore text properties).
         caption(ui, tr("Wrap style"));
-        let wrap = common(doc, ids, |n| n.kind.text().map(|t| t.wrap_style as usize)).flatten();
+        // Per paragraph, as the text direction: while editing, the selected paragraphs.
+        let wrap = common(doc, ids, |n| {
+            n.kind.text().and_then(|t| {
+                let (a, b) = range.filter(|r| r.0 == n.id).map_or((0, t.char_count()), |(_, a, b)| (a, b));
+                t.common_wrap_style(a, b).map(|w| w as usize)
+            })
+        })
+        .flatten();
         let items = [
             (tr("Auto"), tr_noop("Auto: as many words as fit on each line")),
             (tr("Balance"), tr_noop("Balance: every line close to the same length")),
@@ -396,7 +403,7 @@ fn type_settings(
         ];
         if let Some(i) = text_seg(ui, "wrap", &items, wrap, w) {
             let style = ["auto", "balance", "pretty"].get(i).copied().unwrap_or("auto");
-            app.set_props(ids, json!({"wrapStyle": style}));
+            app.run("text.wrapStyle", json!({"ids": ids, "style": style}));
         }
         // The paragraphs' base direction, once a right-to-left script is in the text or a direction
         // is forced ("controls are available to override text direction per paragraph", Add

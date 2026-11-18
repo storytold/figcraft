@@ -114,10 +114,15 @@ fn key_steps(ctx: &egui::Context, suffix: &str, step: f64) -> (f64, f64) {
     }
 }
 
-/// How far a scrub of `dx` points moves a value whose field steps by `step`: 1 step a point, ten
-/// with Shift, a tenth with Alt (fine).
+/// The steps a point of scrubbing moves a field by: half, as measured in Figma (12.2 px moved X
+/// by 6, 61.2 px by 31).
+pub const SCRUB_STEPS_PER_POINT: f64 = 0.5;
+
+/// How far a scrub of `dx` points moves a value whose field steps by `step`: half a step a point
+/// ([`SCRUB_STEPS_PER_POINT`]), ten times that with Shift (5 steps a point), a tenth of that with Alt (0.05 steps a point, fine).
 pub fn scrub_amount(dx: f64, step: f64, shift: bool, alt: bool) -> f64 {
     dx * step
+        * SCRUB_STEPS_PER_POINT
         * match (shift, alt) {
             (true, false) => 10.0,
             (false, true) => 0.1,
@@ -713,9 +718,14 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
         }
         None => {
             let (s, col) = if value.is_empty() { (placeholder, t.text_tertiary) } else { (&*shown, t.text) };
-            // Long text stays inside the field.
+            // Long text ends in an ellipsis inside the field; hovering shows the whole value (not
+            // of a secret one: that is a key).
+            let fitted = elide(ui, s, rect.width() - 16.0);
             let painter = ui.painter().with_clip_rect(rect.shrink2(vec2(8.0, 0.0)));
-            painter.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, s, regular(11.0), col);
+            painter.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, &fitted, regular(11.0), col);
+            if fitted != s && !secret && !value.is_empty() {
+                resp.on_hover_text(value);
+            }
         }
     }
     out
@@ -1024,7 +1034,7 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), r.shrink(6.0), *icon, t.icon);
+        icons::paint(ui.painter(), icon_glyph_rect(r), *icon, t.icon);
         if resp.clicked() {
             out = Some(i);
         }
@@ -1056,6 +1066,16 @@ pub fn tight_end_n<R>(ui: &mut Ui, count: usize, add: impl FnOnce(&mut Ui) -> R)
     add(&mut child)
 }
 
+/// Inset of the glyph inside a 24 pt icon button: a 16 pt glyph, the icons' native size and what
+/// `icons::button` draws (a fill row's eye), so every 24 pt icon button in the panels matches it
+/// (section header buttons included).
+pub const ICON_BUTTON_INSET: f32 = 4.0;
+
+/// The rect a 24 pt icon button paints its glyph in.
+pub fn icon_glyph_rect(button: Rect) -> Rect {
+    button.shrink(ICON_BUTTON_INSET)
+}
+
 /// An icon button at `rect` (hover highlight, tooltip); true when clicked.
 pub fn icon_button_at(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) -> bool {
     let t = Tokens::get(ui.ctx());
@@ -1063,7 +1083,7 @@ pub fn icon_button_at(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, tip: &str) ->
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(5), t.hover);
     }
-    icons::paint(ui.painter(), rect.shrink(5.0), icon, t.icon);
+    icons::paint(ui.painter(), icon_glyph_rect(rect), icon, t.icon);
     resp.clicked()
 }
 
@@ -1141,7 +1161,7 @@ pub fn checker(painter: &egui::Painter, rect: Rect, cell: f32) {
     }
 }
 
-/// Shared Fill/Stroke/Selection colors control: one background, a 16 pt swatch,
+/// Shared sidebar paint control: one background, a 16 pt swatch,
 /// caller-provided colour content, and a separated, scrubbable opacity field.
 /// The caller owns picker routing and commands; this widget only draws and reports edits.
 pub fn paint_field(
@@ -1285,13 +1305,19 @@ pub fn paint_swatch(painter: &egui::Painter, rect: Rect, paint: &figcraft_color:
 
 /// A small checkbox with label.
 pub fn checkbox(ui: &mut Ui, on: bool, label: &str) -> bool {
+    checkbox_tri(ui, Some(on), label)
+}
+
+/// A checkbox that can show a mixed state (`None`: a dash, for a setting that differs across a
+/// selection); returns whether it was clicked.
+pub fn checkbox_tri(ui: &mut Ui, state: Option<bool>, label: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(200.0), FIELD_H), Sense::click());
-    a11y::checkbox(&resp, label, on);
+    a11y::checkbox_tri(&resp, label, state);
     let b = Rect::from_min_size(pos2(rect.min.x, rect.center().y - 7.0), vec2(14.0, 14.0));
-    if on {
+    if state != Some(false) {
         ui.painter().rect_filled(b, CornerRadius::same(3), t.accent);
-        icons::paint(ui.painter(), b.shrink(1.5), Icon::Check, t.accent_on);
+        icons::paint(ui.painter(), b.shrink(1.5), if state.is_some() { Icon::Check } else { Icon::Minus }, t.accent_on);
     } else {
         ui.painter().rect_stroke(b, CornerRadius::same(3), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
     }
@@ -1365,7 +1391,10 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
         Some(mut text) => {
             ui.painter().rect_filled(rect.expand(2.0), CornerRadius::same(4), t.panel);
             ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(4), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            // The editor is at least the theme's field height; centred on a shorter row it
+            // keeps its text on the row's middle line instead of hanging below it (#2318).
+            let edit = Rect::from_center_size(rect.center(), vec2(rect.width(), rect.height().max(FIELD_H)));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit));
             let r = crate::bidi::single_line(&mut child, te_id, &mut text, font, rect.width());
             a11y::own_focus(&r);
             keep_focus(&r, started);

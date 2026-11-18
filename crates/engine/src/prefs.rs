@@ -36,6 +36,9 @@ pub struct Prefs {
     /// A mouse wheel zooms the canvas about the pointer, and Cmd/Ctrl+wheel scrolls it (off: the
     /// other way round). Trackpads are unchanged.
     pub scroll_wheel_zoom: bool,
+    /// Wheel zoom goes the other way: Cmd/Ctrl+wheel (and a plain mouse wheel with Scroll wheel
+    /// zoom on) zooms out where it would zoom in. A trackpad pinch is unchanged.
+    pub invert_zoom: bool,
     /// "system" by default; an explicit "light" or "dark" choice stays saved.
     pub theme: String,
     /// The widths of the main window's left and right panels (the interface keeps them within its
@@ -136,6 +139,7 @@ impl Default for Prefs {
             number_keys_opacity: true,
             show_dimensions: true,
             scroll_wheel_zoom: false,
+            invert_zoom: false,
             theme: "system".into(),
             panel_widths: (240.0, 240.0),
             pages_height: None,

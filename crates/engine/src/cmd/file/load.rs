@@ -75,7 +75,9 @@ pub fn load_bytes(bytes: &[u8], name_hint: &str) -> Result<(Document, Vec<String
 pub fn load_path(path: &str, variables: Option<&Value>) -> Result<(figcraft_format::Loaded, bool)> {
     let bytes = read(path)?;
     let sibling = if variables.is_none() { sibling_variables(path) } else { None };
-    load_with(&bytes, path, variables.or(sibling.as_ref()), &rest_images(path))
+    let (mut loaded, rest) = load_with(&bytes, path, variables.or(sibling.as_ref()), &rest_images(path))?;
+    crate::library::resolve_links(&mut loaded.doc, path);
+    Ok((loaded, rest))
 }
 
 /// Load from bytes. Returns the document with its notes (repairs of a native file, or import

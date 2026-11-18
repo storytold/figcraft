@@ -1,9 +1,9 @@
-use super::super::map::{MAX_SCALE_FACTOR, MIN_SCALE_FACTOR};
 use super::common::{
     bool_data, changed, layout_grid, prop_type, resolved_alike, scaled, sort_position, symbol_data, text_data, text_value, var_data, variant_pairs,
 };
 use super::scale::main_equal_lengths;
 use super::{AUX, BTreeMap, Bound, Exporter, Fields, Kv, MAX_NODES, Node, NodeId, NodeKind, PropDef, StyleKind, Value, arr, b, e, fl, guid, o, s};
+use super::{MAX_SCALE_FACTOR, MIN_SCALE_FACTOR};
 
 /// A changed effect/grid style, and a payload only when it differs from that style's values.
 struct ListStyleOverride {

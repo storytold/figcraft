@@ -14,6 +14,8 @@ pub(crate) fn settle_text(doc: &mut Document, before: &Document, touched: &BTree
     if !is_board(doc) {
         return;
     }
+    crate::board_table::settle_resize(doc, before, touched);
+    super::code::settle_code(doc, touched);
     for &id in touched {
         let Some(n) = doc.node(id) else { continue };
         if let Some(BoardItem::Shape { shape }) = n.board

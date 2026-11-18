@@ -193,6 +193,10 @@ pub fn invoke(app: &mut FigApp, id: &str) {
                 app.toast(tr("Properties copied"));
             }
         }
+        // A fill, stroke or effect row highlighted in the Design panel: that paint or effect.
+        "edit.copy" if crate::property_rows::current(app).is_some() => {
+            crate::property_rows::copy_highlighted(app);
+        }
         "edit.copy" | "edit.cut" => {
             let ids = app.session.selection();
             // For other apps: text layers' text, other layers as SVG; taken before a cut removes them.

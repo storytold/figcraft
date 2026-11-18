@@ -37,7 +37,7 @@ pub(crate) use menu::menu_row_width;
 pub(crate) use menu::preview_blend;
 pub use menu::{blend_menu, context_popup, menu_check, menu_icon_item, menu_item, menu_item_beside_checks, menu_item_with, menu_popup, menu_row};
 pub(crate) use menu::{block, menu_row_lit, menu_style, row, row_rect};
-use paints::{appearance, paints, variable_modes};
+use paints::{appearance, page_variable_modes, paints, variable_modes};
 pub(crate) use stroke::{CAP_ART_W, cap_art, join_label};
 
 /// Common value of `f` across `ids` (None when mixed or empty).
@@ -75,7 +75,12 @@ impl FigApp {
             None => return,
         };
         let Ok(doc) = self.session.doc() else { return };
-        let values: Vec<(NodeId, f64)> = ids.iter().filter_map(|i| Some((*i, rel.apply(shown(doc.node(*i)?))?))).collect();
+        let mut values: Vec<(NodeId, f64)> = ids.iter().filter_map(|i| Some((*i, rel.apply(shown(doc.node(*i)?))?))).collect();
+        if key == "absoluteRotation" {
+            // A page angle depends on the parents': turn a selected parent before the layers in it
+            // (as `node.set` orders a multi-id call), whatever order the selection is in.
+            values.sort_by_key(|(i, _)| doc.ancestors(*i).len());
+        }
         if values.is_empty() || self.session.begin_interaction("Edit").is_err() {
             return;
         }
@@ -332,21 +337,22 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
     let mut new_color: Option<(figcraft_color::Color, Option<bool>)> = None;
     row(ui, 32.0, |ui| {
         let p = Paint::solid(bg);
-        let sw = widgets::swatch(ui, &p, 16.0);
+        let (sw, opacity) =
+            widgets::paint_field(ui, Id::unique("pagebg_swatch"), Id::unique("pagebg_a"), &p, ui.available_width(), |child, text_r| {
+                // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
+                // (`FF000080`; `FF0000FF` asks for opaque).
+                if let Some(h) = widgets::text_field_inline(child, Id::unique("pagebg"), &bg.to_hex(), text_r.shrink2(vec2(0.0, 4.0)), regular(11.0))
+                    && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
+                {
+                    let digits = h.trim().trim_start_matches('#');
+                    let carries_alpha = matches!(digits.len(), 4 | 8) && digits.chars().all(|ch| ch.is_ascii_hexdigit());
+                    new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
+                }
+            });
         app.picker_control(crate::colorpicker::PickerTarget::PageBackground, &sw);
-        // A typed colour keeps the page's opacity unless it carries one: 4 or 8 hex digits
-        // (`FF000080`; `FF0000FF` asks for opaque).
-        if let Some(h) = widgets::text_field(ui, Id::unique("pagebg"), &bg.to_hex(), 96.0, "")
-            && let Some(c) = figcraft_color::Color::from_hex_or_name(&h)
-        {
-            let digits = h.trim().trim_start_matches('#');
-            let carries_alpha = matches!(digits.len(), 4 | 8) && digits.chars().all(|ch| ch.is_ascii_hexdigit());
-            new_color = Some((if carries_alpha { c } else { c.with_alpha(bg.a) }, None));
-        }
         // The opacity: a field like every other opacity field, not a label (#1748).
         let alpha = |v: f64| bg.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);
-        let shown = Some(f64::from((bg.a * 100.0).round()));
-        match widgets::number_field(ui, Id::unique("pagebg_a"), Lead::Named(tr("Opacity")), shown, "%", 56.0, 1.0) {
+        match opacity {
             Some(FieldEdit::Set(v)) => new_color = Some((alpha(v), None)),
             Some(FieldEdit::Scrub(v, done)) => new_color = Some((alpha(v), Some(done))),
             None => {}
@@ -368,6 +374,9 @@ fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document) {
         }
     }
     widgets::separator(ui);
+    if page_variable_modes(app, ui, doc, page) {
+        widgets::separator(ui);
+    }
     widgets::section_header(ui, tr("Color profile"), &[], false);
     row(ui, 32.0, |ui| {
         let resp = widgets::dropdown(ui, doc.color_profile.label(), 140.0, None);
@@ -456,7 +465,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
         if sresp.hovered() {
             ui.painter().rect_filled(sr, CornerRadius::same(5), t.hover);
         }
-        icons::paint(ui.painter(), sr.shrink(5.0), Icon::Rotate, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(sr), Icon::Rotate, t.icon);
         if sresp.clicked() {
             app.run("frame.swapOrientation", json!({"ids": sel}));
         }
@@ -511,8 +520,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
             ("bool.union", Some(op)) => crate::layers::op_icon(op),
             _ => icon,
         };
-        let icon_rect = Rect::from_min_size(br.min, vec2(24.0, 24.0)).shrink(5.0);
-        icons::paint(ui.painter(), icon_rect, icon, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(br), icon, t.icon);
         if dropdown {
             icons::paint(ui.painter(), Rect::from_center_size(pos2(br.max.x - 6.0, br.center().y), vec2(8.0, 8.0)), Icon::Chevron, t.icon_secondary);
         }
@@ -606,6 +614,8 @@ fn position(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, shown: &Arc<Docu
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PositionValues {
     pub can_align: bool,
+    /// Align is off because the one selected layer is placed by its auto layout frame.
+    pub align_blocked: bool,
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub rot: Option<f64>,
@@ -627,17 +637,19 @@ fn y_of(doc: &Document, n: &Node) -> f64 {
     (doc.frame_relative(n.id).as_coeffs()[5] * 100.0).round() / 100.0
 }
 
-fn rot_of(n: &Node) -> f64 {
-    (figcraft_geom::rotation_degrees(n.transform) * 100.0).round() / 100.0
+/// The layer's rotation on the page (its own angle plus its parents'), what the field shows.
+fn rot_of(doc: &Document, n: &Node) -> f64 {
+    (figcraft_geom::rotation_degrees(doc.world_transform(n.id)) * 100.0).round() / 100.0
 }
 
 pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> PositionValues {
     let parent = |n: &Node| n.parent.and_then(|p| doc.node(p));
     crate::selection_cache::cached(ctx, "position", doc, sel, &[], || PositionValues {
         can_align: figcraft_engine::cmd::arrange::can_align(doc, sel),
+        align_blocked: figcraft_engine::cmd::arrange::align_blocked_by_auto_layout(doc, sel),
         x: common(doc, sel, |n| x_of(doc, n)),
         y: common(doc, sel, |n| y_of(doc, n)),
-        rot: common(doc, sel, rot_of),
+        rot: common(doc, sel, |n| rot_of(doc, n)),
         parent_al: sel.iter().all(|i| doc.node(*i).and_then(parent).is_some_and(|p| p.layout.is_some())),
         absolute: common(doc, sel, |n| n.child_layout.absolute),
         // Constraints: children of frames without auto layout, or ignoring it.
@@ -648,22 +660,43 @@ pub(crate) fn position_values(ctx: &egui::Context, doc: &Arc<Document>, sel: &[N
     })
 }
 
+/// Whether the Design panel offers Tidy up for `sel`: three or more layers forming a row, a column
+/// or a full grid, none in an auto layout flow (`can_tidy`).
+pub(crate) fn tidy_available(ctx: &egui::Context, doc: &Arc<Document>, sel: &[NodeId]) -> bool {
+    crate::selection_cache::cached(ctx, "tidy", doc, sel, &[], || figcraft_engine::tidy::can_tidy(doc, sel))
+}
+
 /// Draw alignment and distribution, X/Y and rotation with flip/rotate controls, the
 /// absolute-position toggle and frame constraints.
 fn position_fields(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, sel: &[NodeId]) {
     let pv = position_values(ui.ctx(), doc, sel);
     let col = widgets::col_width(ui.available_width());
-    align_row(app, ui, sel, pv.can_align, col);
+    align_row(app, ui, AlignTarget::Layers(sel), pv.can_align, pv.align_blocked, col);
     position_row(app, ui, doc, sel, &pv, col);
-    rotation_row(app, ui, sel, pv.rot, col);
+    rotation_row(app, ui, doc, sel, pv.rot, col);
     if pv.in_frame {
         constraints_row(app, ui, sel, pv.constraints, col);
     }
 }
 
-/// Alignment, and distribution and tidy up for three or more layers.
-fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col: f32) {
-    let ids = sel.to_vec();
+/// What the alignment row acts on.
+#[derive(Clone, Copy)]
+pub enum AlignTarget<'a> {
+    /// These layers (distribution and tidy up from three).
+    Layers(&'a [NodeId]),
+    /// The selected points in vector edit mode, this many of them (distribution from three, no
+    /// tidy up).
+    Points(usize),
+}
+
+/// Alignment, and distribution and tidy up for three or more layers (or the selected points).
+pub fn align_row(app: &mut FigApp, ui: &mut Ui, target: AlignTarget, can_align: bool, blocked: bool, col: f32) {
+    let (ids, count, points) = match target {
+        AlignTarget::Layers(sel) => (sel.to_vec(), sel.len(), false),
+        AlignTarget::Points(n) => (vec![], n, true),
+    };
+    // Points take the commands with no ids: they act on the selected points.
+    let params = || if points { json!({}) } else { json!({"ids": ids}) };
     widgets::sublabels(ui, tr("Alignment"), None);
     row(ui, 32.0, |ui| {
         let cmds = ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"];
@@ -682,20 +715,33 @@ fn align_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], can_align: bool, col
             let v = widgets::segmented(ui, &items[3..], None, w).map(|i| i + 3);
             h.or(v)
         });
-        picked.response.on_disabled_hover_text(tr("A layer on its own aligns to its frame: select more layers, or one in a frame"));
+        let why = if blocked {
+            tr("A layer in an auto layout frame is placed by its frame")
+        } else {
+            tr("A layer on its own aligns to its frame: select more layers, or one in a frame")
+        };
+        picked.response.on_disabled_hover_text(why);
         if let Some(i) = picked.inner {
-            app.run(cmds[i], json!({"ids": ids}));
+            app.run(cmds[i], params());
         }
-        if sel.len() > 2 {
+        if count > 2 {
             let more = icons::button(ui, Icon::DistributeH, 24.0, false, tr("Distribute and tidy"));
             menu_popup(&more).show(|ui| {
-                for (l, c) in [
-                    (tr("Distribute horizontal spacing"), "distribute.horizontal"),
-                    (tr("Distribute vertical spacing"), "distribute.vertical"),
-                    (tr("Tidy up"), "arrange.tidy"),
-                ] {
-                    if menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")) {
-                        app.run(c, json!({"ids": ids}));
+                let can_tidy = !points && app.session.ds().is_ok_and(|ds| tidy_available(ui.ctx(), &ds.doc, &ids));
+                let tidy = (tr("Tidy up"), "arrange.tidy", can_tidy);
+                let entries = [
+                    (tr("Distribute horizontal spacing"), "distribute.horizontal", true),
+                    (tr("Distribute vertical spacing"), "distribute.vertical", true),
+                ];
+                // Points have no tidy up.
+                for (l, c, on) in entries.into_iter().chain((!points).then_some(tidy)) {
+                    let item = ui.add_enabled_ui(on, |ui| menu_item(ui, l, crate::shortcuts::shortcut(c).unwrap_or("")));
+                    if !on {
+                        item.response
+                            .on_disabled_hover_text(tr("Select a row, a column or a full grid of three or more layers, outside an auto layout flow"));
+                    }
+                    if item.inner {
+                        app.run(c, params());
                         ui.close();
                     }
                 }
@@ -732,12 +778,12 @@ fn position_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], p
 }
 
 /// Rotation, with the rotate and flip buttons.
-fn rotation_row(app: &mut FigApp, ui: &mut Ui, sel: &[NodeId], rot: Option<f64>, col: f32) {
+fn rotation_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId], rot: Option<f64>, col: f32) {
     let ids = sel.to_vec();
     widgets::sublabels(ui, tr("Rotation"), None);
     row(ui, 32.0, |ui| {
         let e = widgets::number_field_mixed(ui, Id::unique("pos_rot"), Lead::Icon(Icon::Angle, tr("Rotation")), rot, "°", col, 1.0);
-        app.field_of(&ids, "rotation", e, rot_of, |v| json!(v));
+        app.field_of(&ids, "absoluteRotation", e, |n| rot_of(doc, n), |v| json!(v));
         let items = [
             (Icon::Rotate, tr("Rotate 90° right")),
             (Icon::FlipH, crate::shortcuts::tip(tr("Flip horizontal"), "object.flipH")),

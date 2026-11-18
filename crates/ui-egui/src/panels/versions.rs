@@ -441,7 +441,7 @@ fn version_row(ui: &mut Ui, row: &Row, last: bool, previewing: bool) -> Option<A
         if more.hovered() || menu_open {
             ui.painter().rect_filled(br, CornerRadius::same(5), t.pressed);
         }
-        icons::paint(ui.painter(), br.shrink(5.0), Icon::Dots, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(br), Icon::Dots, t.icon);
     }
     let more = more.tip(tr("More"));
     let mut menu = |ui: &mut Ui| {
@@ -496,7 +496,7 @@ fn branch_row(ui: &mut Ui, b: &BranchRow) -> Option<Action> {
         if more.hovered() || menu_open {
             ui.painter().rect_filled(br, CornerRadius::same(5), t.pressed);
         }
-        icons::paint(ui.painter(), br.shrink(5.0), Icon::Dots, t.icon);
+        icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(br), Icon::Dots, t.icon);
     }
     let more = more.tip(tr("More"));
     let mut menu = |ui: &mut Ui| {
@@ -606,4 +606,26 @@ fn buttons(ui: &mut Ui, primary: &str, enabled: bool) -> Option<bool> {
         if ok { Some(true) } else { cancel.then_some(false) }
     })
     .inner
+}
+
+#[cfg(test)]
+mod icon_size_tests {
+    use super::*;
+    use crate::header_icon_size_tests::{painted_rects, paints_icon_at_button_size};
+
+    /// The version and branch rows' More buttons (shown on hover) paint their dots at 16 pt (#2238).
+    #[test]
+    fn version_and_branch_menus_paint_16pt() {
+        let over = Some(pos2(20.0, 20.0));
+        let row = Row { id: "v".into(), name: "Draft".into(), description: String::new(), time: 0, auto: false };
+        let version = painted_rects(over, |ui| {
+            version_row(ui, &row, true, false);
+        });
+        assert!(paints_icon_at_button_size(&version, Icon::Dots), "version row menu is not 16 pt");
+        let branch = BranchRow { id: "b".into(), name: "Try".into(), time: 0, state: BranchState::Active };
+        let branches = painted_rects(over, |ui| {
+            branch_row(ui, &branch);
+        });
+        assert!(paints_icon_at_button_size(&branches, Icon::Dots), "branch row menu is not 16 pt");
+    }
 }

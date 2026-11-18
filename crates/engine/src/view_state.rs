@@ -12,6 +12,10 @@ pub struct ViewState {
     /// Viewport size in logical pixels (set by the UI; used by zoom-to-fit).
     pub vw: f64,
     pub vh: f64,
+    /// Height in screen points of the strip the floating bottom toolbar covers (from its top edge to
+    /// the canvas's bottom edge); set by the UI every frame, 0 when it's hidden. Never saved.
+    #[serde(skip)]
+    pub bottom_inset: f64,
     pub pixel_grid: bool,
     pub layout_grids: bool,
     pub rulers: bool,
@@ -51,6 +55,7 @@ impl Default for ViewState {
             zoom: 1.0,
             vw: 1200.0,
             vh: 800.0,
+            bottom_inset: 0.0,
             pixel_grid: true,
             layout_grids: true,
             rulers: false,
@@ -105,6 +110,32 @@ impl ViewState {
         self.cx = r.center().x;
         self.cy = r.center().y;
     }
+    /// Fit a page rectangle for Zoom to selection: a 40 point margin on all four sides of the area
+    /// above the bottom toolbar (`vw` by `vh - bottom_inset`), centred in that area.
+    pub fn fit_selection(&mut self, r: figcraft_geom::Rect, max_zoom: f64) {
+        // A rectangle that isn't all finite numbers leaves the view as it is.
+        if ![r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        let inset = if self.bottom_inset.is_finite() { self.bottom_inset.clamp(0.0, (self.vh - 1.0).max(0.0)) } else { 0.0 };
+        let area_h = (self.vh - inset).max(1.0);
+        // A point (nothing to fit) is centred in the area above the toolbar at the zoom it has.
+        if !(r.width() > 0.0 || r.height() > 0.0) {
+            self.cx = r.center().x;
+            self.cy = r.center().y + (self.vh - area_h) / 2.0 / self.zoom.max(1e-6);
+            return;
+        }
+        // 40 points as measured; a canvas too small for that keeps a quarter of its size on each
+        // side instead, so the selection still ends above the toolbar.
+        let mx = (self.vw / 4.0).clamp(0.0, 40.0);
+        let my = (area_h / 4.0).clamp(0.0, 40.0);
+        let zx = (self.vw - mx * 2.0).max(1.0) / r.width().max(1e-6);
+        let zy = (area_h - my * 2.0).max(1.0) / r.height().max(1e-6);
+        self.zoom = zx.min(zy).clamp(Self::MIN_ZOOM, max_zoom);
+        // The rect's centre lands at screen y = area_h / 2, the page centre `(vh - area_h) / 2` below it.
+        self.cx = r.center().x;
+        self.cy = r.center().y + (self.vh - area_h) / 2.0 / self.zoom;
+    }
     /// The zoom from which the pixel grid shows (400%).
     pub const PIXEL_GRID_ZOOM: f64 = 4.0;
     /// Whether the pixel grid draws: it's on and the canvas is zoomed in to 400% or more.
@@ -127,6 +158,44 @@ impl ViewState {
         let z = self.zoom.max(1e-6);
         self.cx -= dx / z;
         self.cy -= dy / z;
+    }
+    /// How near the viewport's edge a drag must hold the pointer to pan the canvas (screen px).
+    pub const AUTOPAN_ZONE_PX: f64 = 15.0;
+    /// Auto-pan speed gained for each pixel the pointer is closer to the edge (screen px/s).
+    pub const AUTOPAN_RATE: f64 = 40.0;
+    /// The fastest auto-pan, at the edge and beyond it (screen px/s).
+    pub const AUTOPAN_MAX: f64 = 600.0;
+    /// The speed (screen px/s) the canvas pans toward an edge while a drag holds the pointer
+    /// `d` px inside it (negative: outside), as measured in the incumbent: `40 x (15 - d)`
+    /// clamped to 0..600 (#2015). Constant while the pointer stays put, at every zoom.
+    pub fn autopan_speed(d: f64) -> f64 {
+        if d.is_nan() {
+            return 0.0;
+        }
+        (Self::AUTOPAN_RATE * (Self::AUTOPAN_ZONE_PX - d)).clamp(0.0, Self::AUTOPAN_MAX)
+    }
+    /// The velocity (screen px/s, positive: right and down) the canvas auto-pans at while a drag
+    /// holds the pointer at (`px`, `py`) in a viewport of `width` x `height` (both from its
+    /// top-left corner): toward each edge the pointer is near, each axis by its own distance, so a
+    /// corner pans both ways.
+    pub fn autopan_velocity(px: f64, py: f64, width: f64, height: f64) -> (f64, f64) {
+        let axis = |p: f64, len: f64| {
+            if p < len / 2.0 { -Self::autopan_speed(p) } else { Self::autopan_speed(len - p) }
+        };
+        (axis(px, width), axis(py, height))
+    }
+    /// Auto-pan for `dt` seconds with the pointer at (`px`, `py`) from the viewport's top-left
+    /// corner: moves the view by the velocity ([`Self::autopan_velocity`]) in screen px. True when
+    /// it moved.
+    pub fn autopan(&mut self, px: f64, py: f64, dt: f64) -> bool {
+        let (vx, vy) = Self::autopan_velocity(px, py, self.vw, self.vh);
+        if !(dt.is_finite() && dt > 0.0) || (vx == 0.0 && vy == 0.0) {
+            return false;
+        }
+        let z = self.zoom.max(1e-6);
+        self.cx += vx * dt / z;
+        self.cy += vy * dt / z;
+        true
     }
     pub fn page_to_screen(&self, x: f64, y: f64) -> (f64, f64) {
         let (ox, oy) = self.origin();

@@ -65,7 +65,7 @@ pub(crate) fn toggle(app: &mut FigApp, targets: Vec<PaintTarget>, response: Opti
     }
 }
 
-/// Draw the selection-colour groups (at least two): swatch opens the picker, hex and opacity
+/// Draw the selection-colour groups (two, or one when a selected layer has children): swatch opens the picker, hex and opacity
 /// edits, style/variable detach/apply/bind, a style from this file or an enabled library, Create
 /// style, and “select layers with this color”; disabled during an interaction.
 pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId]) {
@@ -73,7 +73,10 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, doc: &Arc<Document>, ids: &[NodeId
     let interacting = ds.interaction.is_some();
     let uid = ds.uid;
     let colors = colors(ui, uid, doc, ids, interacting);
-    if colors.len() < 2 {
+    // Measured in Figma: two distinct colours show the section; one colour does too when a selected
+    // layer has children (frame, group, component, instance).
+    let has_children = ids.iter().any(|id| doc.node(*id).is_some_and(|n| !n.children.is_empty()));
+    if colors.len() < 2 && !(colors.len() == 1 && has_children) {
         ui.data_mut(|d| d.remove::<CreateForm>(create_form_id()));
         return;
     }
@@ -500,7 +503,7 @@ mod tests {
         let red = texts.into_iter().find(|(text, _)| text == "FF0000").unwrap().1;
         let start = Pos2::new(167.0, red.y);
         p.modifiers.alt = true;
-        for expected in [0.989, 0.979] {
+        for expected in [0.994, 0.989] {
             p.frame(vec![
                 Event::PointerMoved(start),
                 Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: p.modifiers },
@@ -518,8 +521,8 @@ mod tests {
             let opacity = p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity;
             assert!((opacity - expected).abs() < 1e-6, "fine scrub kept fractional baseline: {opacity}");
         }
-        assert!(p.frame(vec![]).iter().any(|(text, _)| text == "97.9%"));
-        for expected in [0.989, 0.999] {
+        assert!(p.frame(vec![]).iter().any(|(text, _)| text == "98.9%"));
+        for expected in [0.994, 0.999] {
             p.app.run("edit.undo", json!({}));
             let opacity = p.app.session.doc().unwrap().node(a).unwrap().fills[0].opacity;
             assert!((opacity - expected).abs() < 1e-6, "each fine scrub is one undo step: {opacity}");
@@ -555,13 +558,13 @@ mod tests {
             Event::PointerMoved(start),
             Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
         ]);
-        for dx in [-10.0, -20.0, -30.0] {
+        for dx in [-20.0, -40.0, -60.0] {
             p.frame(vec![Event::PointerMoved(start + vec2(dx, 0.0))]);
         }
         assert!(p.app.session.ds().unwrap().interaction.is_some(), "the scrub commits only on release");
         assert!(p.frame(vec![]).iter().any(|(text, _)| text == "70%"), "the live opacity stays visible while scrubbing");
         p.frame(vec![Event::PointerButton {
-            pos: start - vec2(30.0, 0.0),
+            pos: start - vec2(60.0, 0.0),
             button: egui::PointerButton::Primary,
             pressed: false,
             modifiers: Default::default(),

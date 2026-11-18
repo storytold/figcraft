@@ -113,8 +113,12 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
     // A new rotation for the selection turns it about its moved rotation origin: each layer's
     // point under the origin stays put.
     let ds = s.ds()?;
-    let pivot =
-        ds.moved_origin().filter(|_| props.contains_key("rotation") && !props.contains_key("x") && !props.contains_key("y") && ds.selection == ids);
+    let pivot = ds.moved_origin().filter(|_| {
+        (props.contains_key("rotation") || props.contains_key("absoluteRotation"))
+            && !props.contains_key("x")
+            && !props.contains_key("y")
+            && ds.selection == ids
+    });
     let pinned: Vec<(NodeId, figcraft_geom::Point)> = match pivot {
         Some(o) => roots(&ds.doc, &ids)
             .into_iter()
@@ -159,8 +163,16 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
             names.join(", ")
         ));
     }
+    let mut hugging = crate::cmd::props::hugging_parents(&s.ds()?.doc, &ids, &props);
+    let filling = crate::cmd::props::filling_children(&s.ds()?.doc, &ids, &props);
+    let targets = ids.clone();
     let doc = s.doc_mut()?;
     let before = crate::cmd::styles::bound_before(doc, &ids);
+    let mut ids = ids;
+    if props.contains_key("absoluteRotation") {
+        // A page angle depends on the parents': turn a selected parent before the layers in it.
+        ids.sort_by_key(|i| doc.ancestors(*i).len());
+    }
     for i in ids {
         crate::cmd::props::apply("node.set", doc, i, skipped.get(&i).unwrap_or(&props))?;
     }
@@ -172,6 +184,20 @@ pub(super) fn set(s: &mut Session, p: &Value) -> Result<Value> {
                 crate::cmd::arrange::move_world(doc, i, d.x, d.y)?;
             }
         }
+    }
+    // A child that filled a hugging parent along its flow turned the parent Fixed: say so.
+    // A frame set to Hug turns the children that filled it along its flow Fixed. That is the
+    // coherence pass `normalize` runs once the command returns; run it here for those frames
+    // (idempotent) so the notice sees the demotion.
+    if !filling.is_empty() {
+        let doc = s.doc_mut()?;
+        for f in &targets {
+            figcraft_layout::coherent_sizing(doc, *f);
+        }
+        hugging.extend(filling);
+    }
+    if let Some(notice) = crate::cmd::props::fixed_notice(&s.ds()?.doc, &hugging) {
+        s.message = Some(notice);
     }
     if warnings.is_empty() { ok() } else { Ok(json!({"ok": true, "warnings": warnings})) }
 }

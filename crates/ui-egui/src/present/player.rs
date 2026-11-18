@@ -60,7 +60,18 @@ pub(super) fn player(p: &mut Presenter, ui: &mut Ui, rect: Rect, now: f64, chrom
         // The pane only takes the keyboard while the pointer is over it. While a link notice shows
         // the prototype takes neither keys nor the pointer (Escape there cancels the notice).
         let keys = chrome.keys && p.link_notice.is_none() && (!chrome.pane || over);
-        input(p, &ctx, &l, InputMode { over_area: over && p.link_notice.is_none(), keys_on: keys, pane: chrome.pane, now });
+        input(
+            p,
+            &ctx,
+            &l,
+            InputMode {
+                over_area: over && p.link_notice.is_none(),
+                clicks: !(p.view.comments && !chrome.pane),
+                keys_on: keys,
+                pane: chrome.pane,
+                now,
+            },
+        );
     } else {
         p.pads.clear();
     }
@@ -173,7 +184,7 @@ fn top_bar(p: &mut Presenter, ui: &mut Ui, bar: Rect, now: f64, chrome: Chrome) 
             resp = resp.tip(tr("Inspect the layer under the pointer: size, colours, typography"));
         }
         if chrome.pane {
-            icons::paint(ui.painter(), br.shrink(5.0), *icon, if on { t.accent_on } else { t.icon });
+            icons::paint(ui.painter(), crate::widgets::icon_glyph_rect(br), *icon, if on { t.accent_on } else { t.icon });
         } else {
             ui.painter().text(br.center(), Align2::CENTER_CENTER, shown, regular(11.5), if on { t.accent_on } else { text });
         }

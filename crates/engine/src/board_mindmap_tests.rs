@@ -383,3 +383,41 @@ fn the_caps_refuse_what_is_too_far_and_cut_what_is_too_long() {
     assert_eq!(text_data(&s, id(&out, "id")).characters.chars().count(), 500);
     assert_eq!(text_data(&s, id(&out["children"][0], "id")).characters.chars().count(), 500);
 }
+
+/// Where a node's own origin (the place `x`/`y` name) is on the page.
+fn origin(s: &Session, n: NodeId) -> Point {
+    s.doc().unwrap().world_transform(n) * Point::new(0.0, 0.0)
+}
+
+#[test]
+fn a_mind_map_in_a_section_without_a_place_is_centred_on_the_view() {
+    let mut s = board();
+    let (vx, vy) = {
+        let v = &s.ds().unwrap().view;
+        (v.cx, v.cy)
+    };
+    let sec = id(&s.execute("node.create", &json!({"type": "section", "x": 1000, "y": 500, "width": 4000, "height": 4000})).unwrap(), "id");
+    let out = s.execute("board.mindMap", &json!({"parent": sec})).unwrap();
+    let c = origin(&s, id(&out, "id"));
+    assert!(same(c.x, vx) && same(c.y, vy), "the root's place {c:?} is the view's centre ({vx}, {vy})");
+}
+
+#[test]
+fn a_mind_map_in_a_turned_frame_without_a_place_is_centred_on_the_view_and_a_given_place_is_the_frames() {
+    let mut s = board();
+    let (vx, vy) = {
+        let v = &s.ds().unwrap().view;
+        (v.cx, v.cy)
+    };
+    let fr = id(&s.execute("node.create", &json!({"type": "frame", "x": 300, "y": 200, "width": 2000, "height": 2000})).unwrap(), "id");
+    s.execute("node.set", &json!({"id": fr, "props": {"rotation": 30}})).unwrap();
+    let out = s.execute("board.mindMap", &json!({"parent": fr})).unwrap();
+    let c = origin(&s, id(&out, "id"));
+    assert!(same(c.x, vx) && same(c.y, vy), "the root's place {c:?} is the view's centre ({vx}, {vy})");
+
+    // A given place is the frame's own, as on the page: (10, 20) of the frame, carried through it.
+    let given = id(&s.execute("board.mindMap", &json!({"parent": fr, "x": 10, "y": 20})).unwrap(), "id");
+    let want = s.doc().unwrap().world_transform(fr) * Point::new(10.0, 20.0);
+    let got = origin(&s, given);
+    assert!(same(got.x, want.x) && same(got.y, want.y), "{got:?} against {want:?}");
+}

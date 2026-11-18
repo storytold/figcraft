@@ -555,7 +555,7 @@ fn names(f: &skrifa::FontRef) -> (Option<String>, Option<String>) {
 /// document: the browser has no other fonts. The symbol fonts come last: Apple Symbols (macOS),
 /// Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for signs such as ⌖ and ⤒
 /// that no text face has.
-const FALLBACK_FAMILIES: [&str; 32] = [
+const FALLBACK_FAMILIES: [&str; 33] = [
     "Inter",
     "Helvetica Neue",
     "Arial",
@@ -563,6 +563,7 @@ const FALLBACK_FAMILIES: [&str; 32] = [
     "DejaVu Sans",
     "Noto Sans",
     "BIZ UDPGothic",
+    "Noto Sans JP",
     "Hiragino Sans",
     "PingFang SC",
     "Hiragino Sans GB",
@@ -699,10 +700,11 @@ pub fn db() -> &'static RwLock<FontDb> {
     raw_db()
 }
 
+/// Initialize and return the shared database, loading valid embedded faces exactly once.
 fn raw_db() -> &'static RwLock<FontDb> {
     DB.get_or_init(|| {
         let mut db = FontDb::default();
-        for f in CRAFT_FONTS {
+        for f in CRAFT_FONTS.iter() {
             if let Some(face) = Face::from_bytes(FontBytes::Static(f.bytes), 0, Some(f.family), Some(f.style)) {
                 db.add(face);
             }

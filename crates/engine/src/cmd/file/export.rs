@@ -55,6 +55,12 @@ pub fn drawn_layers(doc: &Document, ids: &[NodeId], setting: &ExportSetting) -> 
     crate::cmd::edit::z_sorted(doc, &crate::cmd::edit::roots(doc, &own))
 }
 
+/// The top-level layers of the page of `ids`, bottom to top: what a background blur or glass in an
+/// export of `ids` reads from (empty when `ids` are on no page).
+pub fn backdrop_layers(doc: &Document, ids: &[NodeId]) -> Vec<NodeId> {
+    ids.first().and_then(|i| doc.page_of(*i)).and_then(|p| doc.node(p)).map(|p| p.children.clone()).unwrap_or_default()
+}
+
 /// The frame or group a slice sits in: None on the page or in a section.
 fn slice_container(doc: &Document, slice: NodeId) -> Option<NodeId> {
     let parent = doc.node(slice)?.parent?;
@@ -289,7 +295,7 @@ pub fn jobs_for(items: impl IntoIterator<Item = (NodeId, Vec<ExportSetting>)>, d
             if out.len() >= MAX_EXPORT_FILES {
                 return out;
             }
-            let stem = format!("{base}{}", safe_file_name(&e.file_suffix()));
+            let stem = crate::file_access::escape_device_names(&format!("{base}{}", safe_file_name(&e.file_suffix())));
             let ext = e.format.ext();
             let file =
                 (1..).map(|k| if k == 1 { format!("{stem}.{ext}") } else { format!("{stem} {k}.{ext}") }).find(|f| used.insert(f.to_lowercase()));
@@ -431,5 +437,33 @@ pub(super) fn export_frames_pdf(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(json!({"path": path, "bytes": bytes.len(), "pages": pages}))
         }
         None => Ok(json!({"format": "pdf", "pages": pages, "data": base64::engine::general_purpose::STANDARD.encode(&bytes)})),
+    }
+}
+
+#[cfg(test)]
+mod filename_tests {
+    use super::*;
+
+    #[test]
+    fn export_jobs_escape_device_names_after_suffixes_and_before_numbering() {
+        let mut doc = Document::new("Export names");
+        let page = doc.first_page().unwrap();
+        let cases = [
+            ("C", "ON", "_CON.png"),
+            ("_con", "", "_con 2.png"),
+            ("CON/icon", "", "_CON/icon.png"),
+            ("Home", "CON", "HomeCON.png"),
+            ("COM", "1", "_COM1.png"),
+            ("COM1", "@2x", "COM1@2x.png"),
+        ];
+        let items: Vec<_> = cases
+            .iter()
+            .map(|(name, suffix, _)| {
+                let id = doc.create(page, NodeKind::Frame, name, 0.0, 0.0, 10.0, 10.0).unwrap();
+                (id, vec![ExportSetting { suffix: (*suffix).into(), ..Default::default() }])
+            })
+            .collect();
+        let files: Vec<_> = jobs_for(items, &doc).into_iter().map(|job| job.file).collect();
+        assert_eq!(files, cases.map(|(_, _, expected)| expected));
     }
 }

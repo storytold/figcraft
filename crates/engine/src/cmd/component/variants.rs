@@ -68,7 +68,8 @@ pub fn can_add_variant(doc: &Document, id: NodeId) -> bool {
 }
 
 /// Wrap `ids` (z-sorted main components) in a new component set, naming them "Property 1=Default",
-/// "Property 1=VariantN" unless already in prop=value form. Returns the set.
+/// "Property 1=VariantN" unless already in prop=value form, each with the component properties
+/// any of them has. Returns the set.
 fn make_variant_set(cmd: &str, doc: &mut Document, ids: &[NodeId]) -> Result<NodeId> {
     let set = wrap_in_set(cmd, doc, ids)?;
     for (k, i) in ids.iter().enumerate() {
@@ -77,6 +78,7 @@ fn make_variant_set(cmd: &str, doc: &mut Document, ids: &[NodeId]) -> Result<Nod
             node.name = format!("Property 1={}", if k == 0 { "Default".to_string() } else { format!("Variant{}", k + 1) });
         }
     }
+    super::props::share_props(doc, ids)?;
     Ok(set)
 }
 

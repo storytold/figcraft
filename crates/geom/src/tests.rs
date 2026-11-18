@@ -307,6 +307,12 @@ fn round_to_handles_large_precision_without_changing_finite_values() {
 }
 
 #[test]
+fn round_to_keeps_huge_finite_values_finite() {
+    assert_eq!(round_to(1e307, 2), 1e307);
+    assert_eq!(round_to(-1e307, 2), -1e307);
+}
+
+#[test]
 fn reverse_subpaths_preserves_open_and_closed() {
     let mut open = BezPath::new();
     open.move_to((0.0, 0.0));

@@ -145,6 +145,25 @@ struct Corner {
     cut2: f64,
 }
 
+/// Where point `v` turns between its two segments, for rounding it: `r` its radius, `s1`/`s2` the
+/// segments (`a1`/`a2` whether `v` is their `a` end), `c1`/`c2` them as curves running away from
+/// `v`, `u1`/`u2` the directions they leave in, `angle` between those, and `l1`/`l2` their lengths.
+struct Turn {
+    v: usize,
+    r: f64,
+    s1: usize,
+    a1: bool,
+    s2: usize,
+    a2: bool,
+    c1: CubicBez,
+    c2: CubicBez,
+    u1: Vec2,
+    u2: Vec2,
+    angle: f64,
+    l1: f64,
+    l2: f64,
+}
+
 /// One curve of a rounded point: its handles at its start (`ta`) and its end (`tb`), relative to
 /// those ends, and the point it ends at.
 struct CornerCurve {
@@ -182,6 +201,13 @@ fn redirect_last_segment(net: &mut VectorNetwork, loop_segs: &[usize], from: usi
     {
         s.b = to;
     }
+}
+
+/// Which segments are in a loop, and which segments join each pair of points: the lookups
+/// [`VectorNetwork::closing_segment`] reads, built once per pass by [`VectorNetwork::loop_index`].
+pub struct LoopIndex {
+    in_loop: Vec<bool>,
+    by_ends: std::collections::BTreeMap<(usize, usize), Vec<usize>>,
 }
 
 impl VectorNetwork {
@@ -384,10 +410,11 @@ impl VectorNetwork {
     }
 
     /// The network with its rounded points drawn in: each sharp point with a corner radius becomes
-    /// an arc between its two segments (the radius shrinks so the arc fits in half of each
-    /// segment, like a polygon's corners). A curved segment is cut where the arc meets it and keeps
-    /// the rest of its curve, the arc leaving along its direction there. `None` when no point is
-    /// rounded.
+    /// an arc between its two segments. The radius shrinks so the arc fits: a segment whose other
+    /// end is rounded too is shared, half for each end, as a polygon's sides are, and one whose
+    /// other end stays sharp can be used whole (as in Figma, #2334). A curved segment is cut where
+    /// the arc meets it and keeps the rest of its curve, the arc leaving along its direction there.
+    /// `None` when no point is rounded.
     pub fn rounded(&self) -> Option<VectorNetwork> {
         self.rounded_smoothed(0.0)
     }
@@ -417,7 +444,9 @@ impl VectorNetwork {
                 *x = true;
             }
         }
-        let corners: Vec<Corner> = (0..self.vertices.len()).filter_map(|v| self.corner(v, incident.get(v)?, smoothing, &on_loop)).collect();
+        let turns: Vec<Option<Turn>> = (0..self.vertices.len()).map(|v| self.turn(v, incident.get(v)?)).collect();
+        let rounds: Vec<bool> = turns.iter().map(Option::is_some).collect();
+        let corners: Vec<Corner> = turns.iter().flatten().filter_map(|t| self.corner(t, smoothing, &on_loop, &rounds)).collect();
         let mut out = self.clone();
         for v in &mut out.vertices {
             v.radius = 0.0;
@@ -471,16 +500,16 @@ impl VectorNetwork {
         // The curves go between the two segments wherever a loop walks through the point, in the
         // order the loop meets them. Each loop is rebuilt in one pass, so a polygon with many
         // rounded corners isn't quadratic.
+        let index = self.loop_index();
         for lp in out.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
-            let Some(&first_idx) = lp.first() else { continue };
-            let start_v = match (self.segments.get(first_idx), lp.get(1).and_then(|&i| self.segments.get(i))) {
-                (Some(first), Some(second)) if first.a == second.a || first.a == second.b => first.b,
-                (Some(first), _) => first.a,
-                _ => 0,
-            };
-            let mut rebuilt = Vec::with_capacity(lp.len() + by_vertex.len().min(lp.len()));
+            if lp.is_empty() {
+                continue;
+            }
+            let start_v = self.loop_start(lp).unwrap_or(0);
+            let mut rebuilt = Vec::with_capacity(lp.len() + by_vertex.len().min(lp.len()) + 1);
             let mut cur = start_v;
-            for &x in lp.iter() {
+            let closing = self.closing_segment(lp, &index);
+            for &x in lp.iter().chain(closing.iter()) {
                 rebuilt.push(x);
                 let Some(s) = self.segments.get(x) else { continue };
                 cur = if s.a == cur { s.b } else { s.a };
@@ -497,10 +526,63 @@ impl VectorNetwork {
         Some(out)
     }
 
-    /// How point `v` (its `incident` segments) is rounded, if it is: not where the two segments
-    /// run on smoothly or fold back. With `smoothing`, a point between two straight segments that
-    /// are both `on_loop` gets a smoothed corner.
-    fn corner(&self, v: usize, incident: &[(usize, bool)], smoothing: f64, on_loop: &[bool]) -> Option<Corner> {
+    /// The point loop `lp` is walked from: the end of its first segment that its second does not
+    /// share.
+    fn loop_start(&self, lp: &[usize]) -> Option<usize> {
+        let first = self.segments.get(*lp.first()?)?;
+        match lp.get(1).and_then(|&i| self.segments.get(i)) {
+            Some(second) if first.a == second.a || first.a == second.b => Some(first.b),
+            _ => Some(first.a),
+        }
+    }
+
+    /// The lookups [`Self::closing_segment`] needs, built once for a pass over every loop.
+    pub fn loop_index(&self) -> LoopIndex {
+        let mut in_loop = vec![false; self.segments.len()];
+        for &x in self.regions.iter().flat_map(|r| r.loops.iter().flatten()) {
+            if let Some(f) = in_loop.get_mut(x) {
+                *f = true;
+            }
+        }
+        let mut by_ends: std::collections::BTreeMap<(usize, usize), Vec<usize>> = std::collections::BTreeMap::new();
+        for (i, s) in self.segments.iter().enumerate() {
+            by_ends.entry((s.a.min(s.b), s.a.max(s.b))).or_default().push(i);
+        }
+        LoopIndex { in_loop, by_ends }
+    }
+
+    /// The segment that joins the two ends of an open loop `lp` when it is in no loop of its own
+    /// (and the only such segment): a corner cut off by a segment drawn before the corner point was
+    /// deleted leaves the loop open there, and the stroke follows that segment. Only a loop that
+    /// walks in order as one continuous chain has one. Rounding walks it as the loop's last
+    /// segment, so the points at the loop's ends are cut by arcs as the stroke's are, and deleting
+    /// points or segments puts it into the loop (#1951). `index` is this network's [`Self::loop_index`],
+    /// shared by every loop of one pass.
+    pub fn closing_segment(&self, lp: &[usize], index: &LoopIndex) -> Option<usize> {
+        let start_v = self.loop_start(lp)?;
+        let mut cur = start_v;
+        for &x in lp {
+            let s = self.segments.get(x)?;
+            cur = if s.a == cur {
+                s.b
+            } else if s.b == cur {
+                s.a
+            } else {
+                return None;
+            };
+        }
+        if cur == start_v {
+            return None;
+        }
+        let mut joining =
+            index.by_ends.get(&(cur.min(start_v), cur.max(start_v)))?.iter().copied().filter(|&i| !index.in_loop.get(i).copied().unwrap_or(false));
+        let first = joining.next()?;
+        joining.next().is_none().then_some(first)
+    }
+
+    /// How point `v` (its `incident` segments) turns, if it is rounded: it has a radius and two
+    /// segments that neither run on smoothly nor fold back there.
+    fn turn(&self, v: usize, incident: &[(usize, bool)]) -> Option<Turn> {
         let r = self.vertices.get(v)?.radius;
         let [(s1, a1), (s2, a2)] = *incident else { return None };
         if !(r > 0.0 && r.is_finite()) || s1 == s2 {
@@ -516,6 +598,23 @@ impl VectorNetwork {
         if !(l1 > 1e-9 && l2 > 1e-9) {
             return None;
         }
+        Some(Turn { v, r, s1, a1, s2, a2, c1, c2, u1, u2, angle, l1, l2 })
+    }
+
+    /// How far along segment `s` (`l` long) from its `a` end (`at_a`) or its `b` end the corner
+    /// there may reach: all of it when the other end stays sharp, half when that end is rounded
+    /// too (`rounds`, by point) and takes the other half.
+    fn room(&self, s: usize, at_a: bool, l: f64, rounds: &[bool]) -> f64 {
+        let far = self.segments.get(s).map(|x| if at_a { x.b } else { x.a });
+        if far.and_then(|f| rounds.get(f)).copied().unwrap_or(false) { l / 2.0 } else { l }
+    }
+
+    /// The corner of a rounded point (`p`, see [`Self::turn`]); it reaches along each segment as
+    /// far as [`Self::room`] allows (`rounds`: which points are rounded). With `smoothing`, a point
+    /// between two straight segments that are both `on_loop` gets a smoothed corner.
+    fn corner(&self, p: &Turn, smoothing: f64, on_loop: &[bool], rounds: &[bool]) -> Option<Corner> {
+        let &Turn { v, r, s1, a1, s2, a2, c1, c2, u1, u2, angle, l1, l2 } = p;
+        let reach = self.room(s1, a1, l1, rounds).min(self.room(s2, a2, l2, rounds));
         let own = |at_a: bool, t: f64| if at_a { t } else { 1.0 - t };
         let closed = |s: usize| on_loop.get(s).copied().unwrap_or(false);
         if smoothing > 0.0
@@ -523,7 +622,7 @@ impl VectorNetwork {
             && is_line(&c2)
             && closed(s1)
             && closed(s2)
-            && let Some(curves) = figcraft_geom::smoothed_corner(c1.p0, u1, u2, l1.min(l2) / 2.0, r, smoothing)
+            && let Some(curves) = figcraft_geom::smoothed_corner(c1.p0, u1, u2, reach, r, smoothing)
             && let (Some(first), Some(last)) = (curves.first(), curves.last())
         {
             let (a, b) = (first.p0, last.p3);
@@ -534,7 +633,7 @@ impl VectorNetwork {
             let (cut1, cut2) = ((a - c1.p0).hypot() / l1, (b - c2.p0).hypot() / l2);
             return Some(Corner { v, s1, s1_at_a: a1, s2, s2_at_a: a2, a, chain, cut1: own(a1, cut1), cut2: own(a2, cut2) });
         }
-        let t = (r / (angle / 2.0).tan()).min(l1.min(l2) / 2.0);
+        let t = (r / (angle / 2.0).tan()).min(reach);
         let ((a, d1, k1), (b, d2, k2)) = (trim(&c1, t, l1), trim(&c2, t, l2));
         // A cubic arc: handles of 4/3·tan(φ/4)·ρ along each end's direction, φ the turn between
         // them and ρ the radius of the circle through both ends (the corner radius between lines).

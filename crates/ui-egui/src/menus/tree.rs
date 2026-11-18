@@ -11,8 +11,8 @@ pub(crate) fn submenu<R>(ui: &mut Ui, key: &str, label: &str, t: &Tokens, add: i
 // Which submenu is open: hover intent with a safe triangle.
 //
 // Every menu tree (the main menu, the context menu) keeps, per level, which of its submenus is
-// open. Hovering another row closes the open submenu at once; resting on a submenu row for
-// `HOVER_DELAY` opens it (sweeping across rows doesn't flash every submenu on the way). Except while the
+// open. Hovering a row closes the open submenu at once and opens the row's own submenu on the
+// same frame (as Figma's main menu does, measured; `HOVER_DELAY` is zero). Except while the
 // pointer is on its way from the open submenu's row to the submenu: while each move lands inside
 // the triangle between where it was and the submenu's near edge (it keeps getting nearer), rows
 // it crosses don't take over and the submenu's row stays highlighted. Resting (`AIM_REST`) or
@@ -20,8 +20,10 @@ pub(crate) fn submenu<R>(ui: &mut Ui, key: &str, label: &str, t: &Tokens, add: i
 // last submenu open.
 // Closing a menu tree forgets all of it, so it reopens with no submenu open.
 
-/// How long the pointer stays on a submenu row before its submenu opens.
-pub(crate) const HOVER_DELAY: f64 = 0.15;
+/// How long the pointer stays on a submenu row before its submenu opens. None: Figma's main menu
+/// opens it on the first frame (median 11 ms measured), so the delay is zero; kept as a constant so
+/// the pending-row bookkeeping the aim relies on stays as it was.
+pub(crate) const HOVER_DELAY: f64 = 0.0;
 
 /// How long the pointer may rest inside the safe triangle before the row under it takes over.
 pub(crate) const AIM_REST: f64 = 0.3;
@@ -393,16 +395,21 @@ fn need_width(ui: &Ui, w: f32) {
 }
 
 pub(crate) fn item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, checked: bool, t: &Tokens) -> bool {
-    indented_item(ui, label, shortcut, enabled, checked, 0.0, t)
+    indented_item(ui, label, shortcut, enabled, checked, false, 0.0, t)
 }
 
-/// A menu row whose label starts `indent` pixels further in (nested layers).
-pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, checked: bool, indent: f32, t: &Tokens) -> bool {
+/// A menu row whose label starts `indent` pixels further in (nested layers); `locked` paints a
+/// padlock in the leading column (a checked row shows the check instead).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, checked: bool, locked: bool, indent: f32, t: &Tokens) -> bool {
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
     a11y::menu_item(&resp, label, shortcut, checked.then_some(true));
     if !enabled {
         a11y::disabled(&resp);
+    }
+    if locked {
+        a11y::describe(&resp, i18n::tr("locked"));
     }
     // The keyboard's item is highlighted like the hovered one.
     a11y::own_focus(&resp);
@@ -413,6 +420,8 @@ pub(super) fn indented_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: b
     let col = if enabled { t.menu_text } else { t.menu_dim };
     if checked {
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(12.0, 12.0)), Icon::Check, col);
+    } else if locked {
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(12.0, 12.0)), Icon::Lock, col);
     }
     let galley = ui.painter().layout_no_wrap(label.to_string(), regular(12.0), col);
     let keys = (!shortcut.is_empty())

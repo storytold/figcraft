@@ -60,6 +60,8 @@ mod bool_menu_icon_tests;
 #[cfg(test)]
 mod branch_ui_tests;
 #[cfg(test)]
+mod canvas_autopan_tests;
+#[cfg(test)]
 mod canvas_double_click_tests;
 #[cfg(test)]
 mod canvas_drag_tests;
@@ -112,11 +114,15 @@ mod export_name_tests;
 #[cfg(test)]
 mod export_preview_tests;
 #[cfg(test)]
+mod field_ellipsis_tests;
+#[cfg(test)]
 mod field_tests;
 #[cfg(test)]
 mod font_menu_regrow_tests;
 #[cfg(test)]
 mod frame_label_tests;
+#[cfg(test)]
+mod frame_new_from_selection_tests;
 #[cfg(test)]
 mod gap_handle_tests;
 #[cfg(test)]
@@ -126,11 +132,15 @@ mod guide_release_tests;
 #[cfg(test)]
 mod guide_snap_tests;
 #[cfg(test)]
+mod header_icon_size_tests;
+#[cfg(test)]
 mod home_recents_tests;
 #[cfg(test)]
 mod home_tests;
 #[cfg(test)]
 mod host_save_tests;
+#[cfg(test)]
+mod icon_button_size_tests;
 #[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
@@ -198,6 +208,8 @@ mod open_issues_tests;
 #[cfg(test)]
 mod padding_individual_tests;
 #[cfg(test)]
+mod page_variable_modes_tests;
+#[cfg(test)]
 mod palette_tests;
 #[cfg(test)]
 mod panel_remove_tests;
@@ -232,6 +244,9 @@ mod present_tests;
 mod present_view_tests;
 #[cfg(test)]
 mod property_menu_tests;
+mod property_rows;
+#[cfg(test)]
+mod property_rows_tests;
 #[cfg(test)]
 mod proto_editor_tests;
 #[cfg(test)]
@@ -251,6 +266,8 @@ mod save_as_tests;
 #[cfg(test)]
 mod select_all_tests;
 #[cfg(test)]
+mod selection_colors_tests;
+#[cfg(test)]
 mod shortcut_keys_tests;
 #[cfg(test)]
 mod shortcuts_tests;
@@ -269,11 +286,15 @@ mod text_link_tests;
 #[cfg(test)]
 mod text_mixed_fill_tests;
 #[cfg(test)]
+mod tidy_tests;
+#[cfg(test)]
 mod titlebar_tests;
 #[cfg(test)]
 mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
+#[cfg(test)]
+mod usage_summary_tests;
 #[cfg(test)]
 mod variable_picker_tests;
 #[cfg(test)]
@@ -283,11 +304,19 @@ mod variables_rename_tests;
 #[cfg(test)]
 mod variables_select_tests;
 #[cfg(test)]
+mod variables_window_resize_tests;
+#[cfg(test)]
 mod variants_discovery_tests;
+#[cfg(test)]
+mod vector_align_tests;
 #[cfg(test)]
 mod vector_keys_tests;
 #[cfg(test)]
 mod vector_panel_tests;
+#[cfg(test)]
+mod vector_point_radius_tests;
+#[cfg(test)]
+mod vector_point_xy_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
 #[cfg(test)]
@@ -597,6 +626,10 @@ pub struct UiState {
     /// copy changes the engine clipboard without writing the OS clipboard; the generation then
     /// no longer matches, so the stale mirror is not mistaken for the user's own copy.
     pub last_copy_generation: u64,
+    /// The fill, stroke or effect row highlighted in the Design panel: Cmd/Ctrl+C copies it.
+    pub property_row: Option<property_rows::Highlight>,
+    /// A paint or effect copied from its row: Cmd/Ctrl+V pastes it while it's the last copy.
+    pub property_copy: Option<property_rows::Copied>,
     /// A save shortcut pressed while a panel field had the keyboard: the field lets go (which
     /// commits what was typed) and the command runs next frame for that document/window.
     pub after_field: Option<shortcuts::AfterFieldSave>,
@@ -740,6 +773,8 @@ impl Default for UiState {
 
             last_copy: None,
             last_copy_generation: 0,
+            property_row: None,
+            property_copy: None,
             after_field: None,
             held: egui::Modifiers::NONE,
             next_autosave: 0.0,

@@ -83,14 +83,66 @@ pub fn asset_root(doc: &Document, id: NodeId) -> Option<NodeId> {
     chain.into_iter().rfind(|c| doc.node(*c).is_some_and(is_asset))
 }
 
+/// The styles and variables layer `n` links to, each once.
+fn asset_links(n: &Node) -> BTreeSet<&str> {
+    style_links(n).map(String::as_str).chain(n.bound.values().map(String::as_str)).collect()
+}
+
+/// The library and the id there of a local copy of a library style or variable.
+fn asset_record<'a>(doc: &'a Document, local: &str) -> Option<&'a ImportedRecord> {
+    doc.libraries.styles.iter().chain(&doc.libraries.variables).find(|r| r.local == local)
+}
+
+/// How many layers link to each local copy of a library style or variable. An instance and the
+/// layers in it don't count: an instance counts as its component alone, as in [`count_inserted`].
+fn library_links(doc: &Document) -> BTreeMap<String, u32> {
+    let mut links = BTreeMap::new();
+    if doc.libraries.styles.is_empty() && doc.libraries.variables.is_empty() {
+        return links;
+    }
+    let mut stack = doc.pages.clone();
+    while let Some(id) = stack.pop() {
+        let Some(n) = doc.node(id) else { continue };
+        if matches!(n.kind, NodeKind::Instance { .. }) {
+            continue;
+        }
+        stack.extend(n.children.iter().copied());
+        for local in asset_links(n).into_iter().filter(|l| asset_record(doc, l).is_some()) {
+            *links.entry(local.to_string()).or_default() += 1;
+        }
+    }
+    links
+}
+
+/// Run `edit`, a user's applying (or, with `detach`, detaching) of styles or variables, and count
+/// the layers it links to library copies (or unlinks from them) for the libraries' analytics. A
+/// style replaced by another isn't a detach: only what the action names counts.
+pub(crate) fn counting_links<T>(s: &mut crate::Session, detach: bool, edit: impl FnOnce(&mut crate::Session) -> Result<T>) -> Result<T> {
+    let before = library_links(s.doc()?);
+    let out = edit(s)?;
+    let after = library_links(s.doc()?);
+    let (from, to) = if detach { (&after, &before) } else { (&before, &after) };
+    let grown: Vec<_> = to.iter().map(|(l, n)| (l, n.saturating_sub(from.get(l).copied().unwrap_or(0)))).filter(|g| g.1 > 0).collect();
+    for (local, n) in grown {
+        let doc = s.doc_mut()?;
+        if let Some(r) = asset_record(doc, local).cloned() {
+            doc.libraries_mut().count_asset(&r.library, &r.key, detach, n);
+        }
+    }
+    Ok(out)
+}
+
 /// Count the instances of library components among `roots` (new layers: placed, pasted or
-/// duplicated) and in what they hold as inserted, for the libraries' analytics. An instance inside
-/// another instance is part of it and isn't counted on its own.
+/// duplicated) and in what they hold as inserted, and the library styles and variables of the
+/// rest, for the libraries' analytics. An instance inside another instance is part of it and isn't
+/// counted on its own, and what an instance uses is counted as the instance alone.
 pub(crate) fn count_inserted(doc: &mut Document, roots: &[NodeId]) {
-    if doc.libraries.components.is_empty() {
+    let l = &doc.libraries;
+    if l.components.is_empty() && l.styles.is_empty() && l.variables.is_empty() {
         return;
     }
     let mut found = Vec::new();
+    let mut assets = Vec::new();
     let mut stack = roots.to_vec();
     while let Some(id) = stack.pop() {
         let Some(n) = doc.node(id) else { continue };
@@ -99,11 +151,17 @@ pub(crate) fn count_inserted(doc: &mut Document, roots: &[NodeId]) {
                 let root = asset_root(doc, component);
                 found.extend(doc.libraries.components.iter().find(|r| Some(r.root) == root).map(|r| (r.library.clone(), r.key)));
             }
-            _ => stack.extend(n.children.iter().copied()),
+            _ => {
+                stack.extend(n.children.iter().copied());
+                assets.extend(asset_links(n).into_iter().filter_map(|l| asset_record(doc, l)).cloned());
+            }
         }
     }
     for (library, key) in found {
         doc.libraries_mut().count_insert(&library, key);
+    }
+    for r in assets {
+        doc.libraries_mut().count_asset(&r.library, &r.key, false, 1);
     }
 }
 
@@ -628,6 +686,90 @@ pub fn absolute_path(path: &str) -> String {
     path.to_string()
 }
 
+/// `path` with `.` and `..` taken out without asking the file system (`..` at the root stays there).
+fn lexical(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir if matches!(out.components().next_back(), Some(Component::Normal(_))) => {
+                out.pop();
+            }
+            Component::ParentDir if out.has_root() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The folder of the document saved at `doc_path`, absolute.
+fn doc_folder(doc_path: &str) -> Option<std::path::PathBuf> {
+    lexical(std::path::Path::new(&absolute_path(doc_path))).parent().map(std::path::Path::to_path_buf)
+}
+
+/// Library file `lib` from the folder of the document at `doc_path`, '/'-separated; `None` when
+/// there is no such path (another drive, say).
+fn relative_to(doc_path: &str, lib: &str) -> Option<String> {
+    use std::path::Component;
+    let folder = doc_folder(doc_path)?;
+    let lib = lexical(std::path::Path::new(&absolute_path(lib)));
+    let (from, to): (Vec<_>, Vec<_>) = (folder.components().collect(), lib.components().collect());
+    let same = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    // Not even the root in common: no relative path leads there.
+    if same == 0 || !matches!(to.get(same..), Some([_, ..])) {
+        return None;
+    }
+    let up = from.get(same..).unwrap_or_default().iter().map(|_| Some(".."));
+    let down = to.get(same..).unwrap_or_default().iter().map(|c| match c {
+        Component::Normal(s) => s.to_str(),
+        _ => None,
+    });
+    up.chain(down).collect::<Option<Vec<_>>>().map(|parts| parts.join("/"))
+}
+
+/// Before saving the document to `doc_path`: each library file link also says where the file is
+/// from the document's folder ([`LibraryLink::relative`]).
+pub fn relate_links(doc: &mut Document, doc_path: &str) {
+    if doc.libraries.enabled.is_empty() {
+        return;
+    }
+    for l in &mut doc.libraries_mut().enabled {
+        l.relative = if crate::library_server::is_server_link(&l.path) { None } else { relative_to(doc_path, &l.path) }.unwrap_or_default();
+    }
+}
+
+/// After opening the document at `doc_path`: library file links go by its folder. A library
+/// found at its [relative](LibraryLink::relative) place is followed (the folder was moved or
+/// cloned), and a relative `path` is taken from the document's folder, not the working directory.
+/// The open document keeps only the absolute `path`.
+pub fn resolve_links(doc: &mut Document, doc_path: &str) {
+    if doc.libraries.enabled.iter().all(|l| crate::library_server::is_server_link(&l.path) && l.relative.is_empty()) {
+        return;
+    }
+    let Some(folder) = doc_folder(doc_path) else { return };
+    for l in &mut doc.libraries_mut().enabled {
+        if crate::library_server::is_server_link(&l.path) {
+            l.relative.clear();
+            continue;
+        }
+        let moved = Some(l.relative.as_str()).filter(|r| !r.is_empty()).map(|r| lexical(&folder.join(r)));
+        // Only a place on this computer is looked at (see `Session::fetch_library`).
+        if let Some(p) =
+            moved.filter(|p| p.to_str().is_some_and(craft_docpath::is_local) && crate::file_access::metadata(p).is_ok_and(|m| m.is_file()))
+        {
+            l.path = p.to_string_lossy().into_owned();
+        } else if !l.path.is_empty()
+            && std::path::Path::new(&l.path).is_relative()
+            && let Some(p) = lexical(&folder.join(&l.path)).to_str().filter(|p| craft_docpath::is_local(p))
+        {
+            l.path = p.to_string();
+        }
+        // Written again on each save, from `path`.
+        l.relative.clear();
+    }
+}
+
 /// The enabled library `key` (its id, name or path).
 pub fn find_link<'a>(doc: &'a Document, key: &str) -> Option<&'a LibraryLink> {
     let l = &doc.libraries.enabled;
@@ -1074,10 +1216,12 @@ pub fn prune(doc: &mut Document, library: &str) -> Result<()> {
         doc.styles.retain(|s| !unused.contains(&s.id));
         doc.libraries_mut().styles.retain(|r| !unused.contains(&r.local));
     }
-    // Variables layers bind or set, local variables alias or extend (with what those alias).
+    // Variables layers bind or set, styles bind, local variables alias or extend (with what those
+    // alias).
     let seeds = doc
         .nodes()
         .flat_map(|n| n.bound.values().map(String::as_str).chain(action_variables(n)))
+        .chain(doc.styles.iter().flat_map(|s| s.bound.values().map(String::as_str)))
         .chain(doc.variables.variables.iter().filter_map(|v| v.extends.as_deref()))
         .map(str::to_string)
         .chain(
@@ -1257,7 +1401,13 @@ pub fn adopt_pasted(doc: &mut Document, src: &Document, src_path: Option<&str>, 
             if doc.libraries.link(&m.id).is_none()
                 && let Some(path) = src_path
             {
-                doc.libraries_mut().enabled.push(LibraryLink { id: m.id.clone(), name: m.name.clone(), path: path.to_string(), version: m.version });
+                doc.libraries_mut().enabled.push(LibraryLink {
+                    id: m.id.clone(),
+                    name: m.name.clone(),
+                    path: path.to_string(),
+                    version: m.version,
+                    relative: String::new(),
+                });
             }
         }
     }

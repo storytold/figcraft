@@ -360,6 +360,28 @@ fn vector_region_missing_and_empty_paints_remain_distinct() {
 }
 
 #[test]
+fn vector_region_fills_survive_a_fig_export() {
+    let solid = o(vec![("type", e("SOLID")), ("color", o(vec![("r", f(0.2)), ("g", f(0.4)), ("b", f(0.8)), ("a", f(1.0))])), ("opacity", f(0.5))]);
+    let gradient = o(vec![
+        ("type", e("GRADIENT_LINEAR")),
+        (
+            "stops",
+            arr(vec![
+                o(vec![("position", f(0.0)), ("color", o(vec![("r", f(1.0)), ("g", f(0.0)), ("b", f(0.0)), ("a", f(1.0))]))]),
+                o(vec![("position", f(1.0)), ("color", o(vec![("r", f(0.0)), ("g", f(0.0)), ("b", f(1.0)), ("a", f(1.0))]))]),
+            ]),
+        ),
+    ]);
+    let (doc, _) = import(&region_canvas(Some(vec![solid, gradient]), 1), "Region fills").unwrap();
+    let first = network_of(&doc, "Wave").regions[0].fills.clone();
+    assert!(first.as_ref().is_some_and(|fills| fills.len() == 2), "{first:?}");
+    let (bytes, warnings) = crate::fig::export::export(&doc, None).unwrap();
+    assert!(!warnings.iter().any(|warning| warning.contains("region")), "{warnings:?}");
+    let (back, _) = import(&bytes, "Again").unwrap();
+    assert_eq!(network_of(&back, "Wave").regions[0].fills, first);
+}
+
+#[test]
 fn vector_region_linked_fill_uses_style_paints_without_recording_definition() {
     let linked = solid(0.9, 0.1, 0.2);
     let own = solid(0.1, 0.2, 0.9);
@@ -753,7 +775,7 @@ fn connectors_without_a_saved_path_follow_their_line_style() {
     let line: Vec<_> =
         network_of(&doc, "Line").vertices.iter().map(|v| world("Line") * figcraft_doc::geom::Point::new(v.x, v.y)).map(|p| (p.x, p.y)).collect();
     assert_eq!(line, [(100.0, 650.0), (300.0, 650.0)]);
-    assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("are routed afresh")), "{warnings:?}");
 }
 
 /// #1909: a connector end whose magnet is `AUTO` (FigJam picks the side when it draws) or `CENTER`
@@ -1033,7 +1055,7 @@ fn an_elbow_connector_saved_with_its_path_keeps_it() {
     // Each end starts `END_GAP` (4) outside its side's border.
     assert_eq!(line, [(50.0, 704.0), (50.0, 740.0), (200.0, 740.0), (200.0, 850.0), (296.0, 850.0)]);
     // The fixture's own Link, saved without a path, is routed here: the note counts it alone.
-    let routed: Vec<_> = warnings.iter().filter(|w| w.contains("FigCraft's own routing")).collect();
+    let routed: Vec<_> = warnings.iter().filter(|w| w.contains("are routed afresh")).collect();
     assert_eq!(routed.len(), 1, "{warnings:?}");
     assert!(!routed[0].contains('×'), "a connector with its path isn't counted among those routed here: {routed:?}");
 }
@@ -1081,5 +1103,5 @@ fn an_elbow_whose_saved_path_doesnt_fit_its_sides_is_routed_here() {
     for name in ["Sideways", "Askew", "Repeated", "Backwards", "Inside"] {
         assert_eq!(line(name), plain, "{name} is routed as one without a path");
     }
-    assert!(warnings.iter().any(|w| w.contains("FigCraft's own routing")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("are routed afresh")), "{warnings:?}");
 }

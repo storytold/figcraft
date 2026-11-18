@@ -9,7 +9,7 @@ use figcraft_geom::{Affine, Point, Rect, Vec2, transform_rect_bbox};
 use serde::Serialize;
 
 use crate::guides;
-use crate::tools::SNAP_PX;
+use crate::tools::UNMEASURED_SNAP_PX;
 
 /// A guide line to draw: from (x0, y0) to (x1, y1) in page coordinates, with an optional label
 /// (a distance) at its middle; `dashed` marks a measurement's extension line.
@@ -438,14 +438,14 @@ impl Targets {
 }
 
 /// Snap a guide on `owner` (a page or a top-level frame) to the nearest layer edge or centre along
-/// its own axis, within `SNAP_PX` screen pixels at `zoom`. Returns the new offset in `owner`'s
+/// its own axis, within `UNMEASURED_SNAP_PX` screen pixels at `zoom`. Returns the new offset in `owner`'s
 /// coordinates, or `None` when nothing is in reach.
 pub fn snap_guide(doc: &Document, page: NodeId, owner: NodeId, vertical: bool, offset: f64, zoom: f64) -> Option<f64> {
     // The guide moves along the owner's own axis (x for a vertical guide, y for a horizontal one),
     // which the owner's transform may scale: convert the screen-pixel reach into owner units.
     let [a, b, c, d, _, _] = doc.world_transform(owner).as_coeffs();
     let axis = if vertical { a.hypot(b) } else { c.hypot(d) };
-    let threshold = SNAP_PX / (zoom.max(1e-6) * axis.max(1e-6));
+    let threshold = UNMEASURED_SNAP_PX / (zoom.max(1e-6) * axis.max(1e-6));
     Targets::gather_for_guide(doc, page, owner).snap_axis(vertical, offset, threshold).map(|d| offset + d).filter(|v| v.is_finite())
 }
 

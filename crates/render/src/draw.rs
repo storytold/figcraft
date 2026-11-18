@@ -347,8 +347,9 @@ fn node_outline_at(doc: &Document, n: &Node, depth: usize) -> Option<(BezPath, F
                     Some((p, c.bool_op.unwrap_or(*op)))
                 })
                 .collect();
-            // Past the path operations' caps the group has no outline: it draws without its result.
-            crate::boolean::fold_cached(&operands).map(|p| (p, FillRule::EvenOdd))
+            // Past the path operations' caps the group has no outline: it draws without its result. The
+            // group's corner radius rounds what is still sharp in the fold.
+            crate::boolean::result_cached(&operands, n.corners.radii[0], n.corners.smoothing).map(|p| (p, FillRule::EvenOdd))
         }
         NodeKind::Text(_) => {
             let (l, dy) = figcraft_text::layout_node(n)?;

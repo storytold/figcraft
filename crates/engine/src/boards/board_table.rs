@@ -3,6 +3,16 @@
 //! row's width, so a cell that wraps more text makes its row taller. Each row but the last draws
 //! a line under itself and the column lines are thin rectangles over the table that stretch with
 //! it (they are rebuilt after every edit, like the first row's header tint).
+//!
+//! Resizing (measured in FigJam's web app, 2026-11-09, #2172): a table never scales its text or
+//! its rows in proportion. A height change goes into the rows ([`settle_resize`]): the bottom or
+//! top edge grows the last row, a corner drag shares the change equally over every row (every
+//! cell fills its row, so the width is already shared equally), and the table keeps hugging its
+//! rows. A cell is at least [`MIN_CELL`] (40; FigJam's floor is about 52) wide and tall, and a row
+//! is never shorter than its wrapped text. There are no per-column widths yet: a side drag of
+//! the right edge splits the change equally where FigJam grows only the last column.
+
+use std::collections::BTreeSet;
 
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{
@@ -22,6 +32,10 @@ pub const MAX_COLUMNS: usize = 20;
 /// A new column's width, and a cell's height before its text is measured.
 const CELL_W: f64 = 160.0;
 const CELL_H: f64 = 40.0;
+/// The least a cell is wide or tall (FigJam's is about 52).
+pub(crate) const MIN_CELL: f64 = CELL_H;
+/// The most a resize may ask one row to be tall.
+const MAX_ROW_H: f64 = 100_000.0;
 /// Room around a cell's text: [top, right, bottom, left].
 const CELL_PAD: [f64; 4] = [10.0, 12.0, 10.0, 12.0];
 const TEXT_SIZE: f64 = 14.0;
@@ -125,6 +139,7 @@ fn make_cell(doc: &mut Document, row: NodeId, index: Option<usize>, width: f64, 
         n.child_layout.sizing_h = Sizing::Fill;
         n.child_layout.sizing_v = Sizing::Hug;
         n.child_layout.min_h = Some(CELL_H);
+        n.child_layout.min_w = Some(MIN_CELL);
     })?;
     add_text(doc, cell, text, TEXT_SIZE, INK, TextAlignH::Left, (width - CELL_PAD[1] - CELL_PAD[3]).max(1.0))?;
     Ok(cell)
@@ -257,6 +272,57 @@ fn table_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let out = answer(doc, table);
     s.set_selection(vec![table]);
     Ok(out)
+}
+
+/// A table resized by its height or a corner (the resize leaves it at a fixed height): the change
+/// goes into its rows, as in FigJam, and the table hugs them again. A bottom or top edge (or a
+/// height set by command) grows or shrinks the last row; a drag that changed both axes shares the
+/// change equally over every row. A row never gets shorter than [`MIN_CELL`] or than its text (the
+/// table hugs it), and the table is never narrower than its columns' minimum. A table already
+/// hugging (a peer's synced edit, a second pass) is left alone, so the change is made once.
+pub(crate) fn settle_resize(doc: &mut Document, before: &Document, touched: &BTreeSet<NodeId>) {
+    let mut tables = BTreeSet::new();
+    for &id in touched {
+        if let Some(t) = table_of(doc, id) {
+            tables.insert(t);
+        }
+    }
+    for table in tables {
+        let (Some(now), Some(was)) = (doc.node(table), before.node(table)) else { continue };
+        if now.child_layout.sizing_v != Sizing::Fixed {
+            continue;
+        }
+        let (w, h, bw, bh) = (now.width, now.height, was.width, was.height);
+        let (rows, _) = parts(doc, table);
+        let columns = rows.first().map_or(0, |r| cells(doc, *r).len());
+        let dh = h - bh;
+        if dh.is_finite() && dh.abs() > 1e-6 && !rows.is_empty() {
+            let both = w.is_finite() && bw.is_finite() && (w - bw).abs() > 1e-6;
+            let targets: Vec<NodeId> = if both { rows.clone() } else { rows.last().copied().into_iter().collect() };
+            let share = dh / targets.len() as f64;
+            for row in targets {
+                let base = row_content(before, row).or_else(|| row_content(doc, row)).unwrap_or(CELL_H);
+                let min_h = (base + share).clamp(MIN_CELL, MAX_ROW_H);
+                for cell in cells(doc, row) {
+                    if let Some(c) = doc.node_mut(cell) {
+                        c.child_layout.min_h = Some(min_h);
+                    }
+                }
+            }
+        }
+        if let Some(t) = doc.node_mut(table) {
+            let least = MIN_CELL * columns as f64;
+            if t.width.is_nan() || t.width < least {
+                t.width = least;
+            }
+            t.child_layout.sizing_v = Sizing::Hug;
+        }
+    }
+}
+
+/// How tall a row's cells are: the row's height less the line under it.
+fn row_content(doc: &Document, row: NodeId) -> Option<f64> {
+    cells(doc, row).into_iter().filter_map(|c| doc.node(c).map(|n| n.height)).reduce(f64::max)
 }
 
 /// The table `id` is or is in.

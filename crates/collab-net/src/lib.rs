@@ -8,8 +8,9 @@
 //! engine's `collab.*` commands drive it and the UI reads the engine's live state. Network
 //! threads wake the UI through a [`Waker`] only when something arrives; nothing polls.
 //!
-//! The browser build's [`NetLink`] joins sessions and publishes files to servers through the
-//! browser's WebSocket API (`web-sys`); hosting a session needs the desktop app. Its connection
+//! The browser build's [`NetLink`] joins sessions, publishes files to servers and asks them about
+//! team libraries and plugin directories through the browser's WebSocket API (`web-sys`); hosting
+//! a session needs the desktop app. Its connection
 //! logic (`driver.rs`, `exchange.rs`) is target-independent and tested natively.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

@@ -11,14 +11,62 @@ use crate::{Result, Session, bad, spec};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        spec!("align.left", "Align left", "{ids?}", true, |s, p| align(s, p, Al::Left)),
-        spec!("align.hcenter", "Align horizontal centers", "{ids?}", true, |s, p| align(s, p, Al::HCenter)),
-        spec!("align.right", "Align right", "{ids?}", true, |s, p| align(s, p, Al::Right)),
-        spec!("align.top", "Align top", "{ids?}", true, |s, p| align(s, p, Al::Top)),
-        spec!("align.vcenter", "Align vertical centers", "{ids?}", true, |s, p| align(s, p, Al::VCenter)),
-        spec!("align.bottom", "Align bottom", "{ids?}", true, |s, p| align(s, p, Al::Bottom)),
-        spec!("distribute.horizontal", "Distribute horizontal spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, true)),
-        spec!("distribute.vertical", "Distribute vertical spacing", "{ids?, spacing?}", true, |s, p| distribute(s, p, false)),
+        spec!(
+            "align.left",
+            "Align left",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Left)
+        ),
+        spec!(
+            "align.hcenter",
+            "Align horizontal centers",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::HCenter)
+        ),
+        spec!(
+            "align.right",
+            "Align right",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Right)
+        ),
+        spec!(
+            "align.top",
+            "Align top",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Top)
+        ),
+        spec!(
+            "align.vcenter",
+            "Align vertical centers",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::VCenter)
+        ),
+        spec!(
+            "align.bottom",
+            "Align bottom",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Bottom)
+        ),
+        spec!(
+            "distribute.horizontal",
+            "Distribute horizontal spacing",
+            "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| distribute(s, p, true)
+        ),
+        spec!(
+            "distribute.vertical",
+            "Distribute vertical spacing",
+            "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| distribute(s, p, false)
+        ),
         spec!(
             "arrange.spacing",
             "Spacing",
@@ -164,12 +212,27 @@ pub fn can_align(doc: &Document, ids: &[NodeId]) -> bool {
     align_target(doc, &roots(doc, ids)).is_some()
 }
 
+/// Whether `ids` is one layer that its auto layout frame places: Figma greys out Align for it,
+/// since the frame decides where it goes (measured in Figma's web app, 2026-11-12).
+pub fn align_blocked_by_auto_layout(doc: &Document, ids: &[NodeId]) -> bool {
+    matches!(roots(doc, ids).as_slice(), [id] if in_auto_layout_flow(doc, *id))
+}
+
+/// Whether the layer sits in an auto layout frame and takes part in its flow (not absolutely positioned).
+fn in_auto_layout_flow(doc: &Document, id: NodeId) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some())
+}
+
 /// What `roots` align to: one layer to its parent frame, several to their combined bounds.
 fn align_target(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
     match roots {
         [] => None,
         [id] => {
             let parent = doc.node(*id)?.parent.filter(|pp| !doc.node(*pp).is_some_and(Node::is_page))?;
+            if in_auto_layout_flow(doc, *id) {
+                return None;
+            }
             Some(doc.world_bounds(parent).unwrap_or_default())
         }
         _ => Some(doc.bounds_of(roots).unwrap_or_default()),
@@ -177,6 +240,18 @@ fn align_target(doc: &Document, roots: &[NodeId]) -> Option<Rect> {
 }
 
 fn align(s: &mut Session, p: &Value, a: Al) -> Result<Value> {
+    use crate::vectoredit::transform::PointAlign;
+    let how = match a {
+        Al::Left => PointAlign::Left,
+        Al::HCenter => PointAlign::HCenter,
+        Al::Right => PointAlign::Right,
+        Al::Top => PointAlign::Top,
+        Al::VCenter => PointAlign::VCenter,
+        Al::Bottom => PointAlign::Bottom,
+    };
+    if let Some(r) = crate::vectoredit::transform::align_points_in_edit_mode(s, p, how) {
+        return r;
+    }
     let ids = req_targets("align", s, p)?;
     let doc = s.doc_mut()?;
     let ids = roots(doc, &ids);
@@ -197,6 +272,9 @@ fn align(s: &mut Session, p: &Value, a: Al) -> Result<Value> {
 }
 
 fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
+    if let Some(r) = crate::vectoredit::transform::distribute_points_in_edit_mode(s, p, horizontal) {
+        return r;
+    }
     let ids = req_targets("distribute", s, p)?;
     let doc = s.doc_mut()?;
     let ids = roots(doc, &ids);
@@ -223,53 +301,25 @@ fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
     ok()
 }
 
-/// Tidy up: snap the selection into a grid of rows/columns with even spacing.
+/// Tidy up: even the gaps of a row, a column or a grid, keeping the order and sizes (see
+/// `selection::tidy`). Nothing moves, and no undo step is added, when it is unavailable.
 fn tidy(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = req_targets("arrange.tidy", s, p)?;
+    let spacing = num(p, "spacing");
+    if spacing.is_some_and(|v| !v.is_finite() || v.abs() > 1_000_000.0) {
+        return Err(bad("arrange.tidy", "spacing out of range"));
+    }
+    let snap = s.ds()?.view.snap_pixel;
+    let moves = crate::tidy::tidy_moves(s.doc()?, &ids, spacing, snap);
+    if moves.is_empty() {
+        return ok();
+    }
+    if moves.iter().any(|(_, dx, dy)| !dx.is_finite() || !dy.is_finite()) {
+        return Err(bad("arrange.tidy", "non-finite result"));
+    }
     let doc = s.doc_mut()?;
-    let ids = roots(doc, &ids);
-    let mut items: Vec<(NodeId, Rect)> = ids.iter().filter_map(|i| doc.world_bounds(*i).map(|b| (*i, b))).collect();
-    if items.len() < 2 {
-        return ok();
-    }
-    // Group into rows by vertical centre overlap.
-    items.sort_by(|a, b| a.1.y0.total_cmp(&b.1.y0));
-    let mut rows: Vec<Vec<(NodeId, Rect)>> = Vec::new();
-    for it in items {
-        match rows.last_mut() {
-            Some(row) if row.iter().any(|(_, b)| it.1.center().y < b.y1 && it.1.center().y > b.y0) => row.push(it),
-            _ => rows.push(vec![it]),
-        }
-    }
-    let all: Vec<Rect> = rows.iter().flatten().map(|(_, b)| *b).collect();
-    let (Some(origin), maxw, maxh) = (
-        all.iter().copied().reduce(|a, b| a.union(b)),
-        all.iter().map(Rect::width).fold(0.0, f64::max),
-        all.iter().map(Rect::height).fold(0.0, f64::max),
-    ) else {
-        return ok();
-    };
-    let gap = num(p, "spacing").unwrap_or_else(|| {
-        // Keep the average existing horizontal gap (min 10).
-        10f64.max(
-            rows.iter()
-                .filter(|r| r.len() > 1)
-                .map(|r| {
-                    (r.iter().map(|(_, b)| b.x1).fold(f64::MIN, f64::max)
-                        - r.iter().map(|(_, b)| b.x0).fold(f64::MAX, f64::min)
-                        - r.iter().map(|(_, b)| b.width()).sum::<f64>())
-                        / (r.len() - 1) as f64
-                })
-                .fold(0.0, f64::max),
-        )
-    });
-    for (ri, row) in rows.iter_mut().enumerate() {
-        row.sort_by(|a, b| a.1.x0.total_cmp(&b.1.x0));
-        for (ci, (id, b)) in row.iter().enumerate() {
-            let x = origin.x0 + ci as f64 * (maxw + gap);
-            let y = origin.y0 + ri as f64 * (maxh + gap);
-            move_world(doc, *id, x - b.x0, y - b.y0)?;
-        }
+    for (id, dx, dy) in moves {
+        move_world(doc, id, dx, dy)?;
     }
     ok()
 }
