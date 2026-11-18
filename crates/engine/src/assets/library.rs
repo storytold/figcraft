@@ -93,14 +93,23 @@ fn asset_record<'a>(doc: &'a Document, local: &str) -> Option<&'a ImportedRecord
     doc.libraries.styles.iter().chain(&doc.libraries.variables).find(|r| r.local == local)
 }
 
-/// How many layers link to each local copy of a library style or variable.
+/// How many layers link to each local copy of a library style or variable. An instance and the
+/// layers in it don't count: an instance counts as its component alone, as in [`count_inserted`].
 fn library_links(doc: &Document) -> BTreeMap<String, u32> {
     let mut links = BTreeMap::new();
     if doc.libraries.styles.is_empty() && doc.libraries.variables.is_empty() {
         return links;
     }
-    for local in doc.nodes().flat_map(asset_links).filter(|l| asset_record(doc, l).is_some()) {
-        *links.entry(local.to_string()).or_default() += 1;
+    let mut stack = doc.pages.clone();
+    while let Some(id) = stack.pop() {
+        let Some(n) = doc.node(id) else { continue };
+        if matches!(n.kind, NodeKind::Instance { .. }) {
+            continue;
+        }
+        stack.extend(n.children.iter().copied());
+        for local in asset_links(n).into_iter().filter(|l| asset_record(doc, l).is_some()) {
+            *links.entry(local.to_string()).or_default() += 1;
+        }
     }
     links
 }
