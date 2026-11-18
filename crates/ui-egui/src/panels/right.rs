@@ -151,15 +151,9 @@ fn panel_header_regions(top: Rect, share_width: f32, mirrored: bool) -> (Rect, R
 /// The preview-menu chevron follows the end of the play button in both directions.
 fn panel_present_regions(play: Rect, mirrored: bool) -> (Rect, Rect) {
     if mirrored {
-        (
-            Rect::from_min_max(pos2(play.min.x + 16.0, play.min.y), play.max),
-            Rect::from_min_max(play.min, pos2(play.min.x + 16.0, play.max.y)),
-        )
+        (Rect::from_min_max(pos2(play.min.x + 16.0, play.min.y), play.max), Rect::from_min_max(play.min, pos2(play.min.x + 16.0, play.max.y)))
     } else {
-        (
-            Rect::from_min_max(play.min, pos2(play.max.x - 16.0, play.max.y)),
-            Rect::from_min_max(pos2(play.max.x - 16.0, play.min.y), play.max),
-        )
+        (Rect::from_min_max(play.min, pos2(play.max.x - 16.0, play.max.y)), Rect::from_min_max(pos2(play.max.x - 16.0, play.min.y), play.max))
     }
 }
 
@@ -197,7 +191,12 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let tri = Rect::from_center_size(play.center() - vec2(7.0 * direction, 0.0), vec2(16.0, 16.0));
     let c = tri.center();
     ui.painter().add(egui::Shape::closed_line(vec![c + vec2(-5.0, -7.0), c + vec2(7.0, 0.0), c + vec2(-5.0, 7.0)], Stroke::new(1.4, t.icon)));
-    icons::paint(ui.painter(), Rect::from_center_size(play.center() + vec2(12.0 * direction, 0.0), vec2(10.0, 10.0)), Icon::Chevron, t.icon_secondary);
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(play.center() + vec2(12.0 * direction, 0.0), vec2(10.0, 10.0)),
+        Icon::Chevron,
+        t.icon_secondary,
+    );
     crate::live::people_bar(app, ui, people);
     if presp.clicked() {
         app.run("proto.present", json!({}));
@@ -974,8 +973,11 @@ mod right_panel_mirror_tests {
             assert_eq!(present.width() + menu.width(), play.width());
             assert_eq!(present.center().y, menu.center().y);
             assert!(play.contains(present.center()) && play.contains(menu.center()));
-            if mirrored { assert!(menu.center().x < present.center().x); }
-            else { assert!(present.center().x < menu.center().x); }
+            if mirrored {
+                assert!(menu.center().x < present.center().x);
+            } else {
+                assert!(present.center().x < menu.center().x);
+            }
         }
     }
 
