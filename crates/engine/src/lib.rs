@@ -579,6 +579,8 @@ mod shapebuilder_tests;
 #[cfg(test)]
 mod shapes_behaviour_tests;
 #[cfg(test)]
+mod shift_double_click_tests;
+#[cfg(test)]
 mod shortcut_parity_tests;
 #[cfg(test)]
 mod sketch_import_tests;
