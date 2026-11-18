@@ -30,15 +30,7 @@ const THAI_FONTS: &[&str] =
     &["Noto Sans Thai", "Leelawadee UI", "Tahoma", "Sukhumvit Set", "Thonburi", "Ayuthaya", "Sarabun", "Loma", "Garuda", "Waree"];
 
 /// Hebrew faces: web-embedded Noto, then common desktop families on Windows, macOS and Linux.
-const HEBREW_FONTS: &[&str] = &[
-    "Noto Sans Hebrew",
-    "Arial Hebrew",
-    "Arial",
-    "Tahoma",
-    "David",
-    "SF Hebrew",
-    "Noto Serif Hebrew",
-];
+const HEBREW_FONTS: &[&str] = &["Noto Sans Hebrew", "Arial Hebrew", "Arial", "Tahoma", "David", "SF Hebrew", "Noto Serif Hebrew"];
 
 /// Japanese faces, the built-in one first: Windows, macOS, then Linux names.
 const JAPANESE: &[&str] = &[
