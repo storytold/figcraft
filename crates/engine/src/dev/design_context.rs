@@ -45,6 +45,8 @@ struct Used {
     left_out: usize,
     /// Reached `depth` with children left.
     cut_by_depth: bool,
+    /// The layers placed.
+    placed: BTreeSet<NodeId>,
     /// Font families of the text layers placed, with their styles.
     fonts: BTreeMap<String, BTreeSet<String>>,
 }
@@ -185,6 +187,7 @@ fn code(doc: &Document, id: NodeId) -> Vec<Value> {
 fn layer(doc: &Document, id: NodeId, depth: usize, cap: usize, used: &mut Used) -> Option<Value> {
     let n = doc.node(id)?;
     used.nodes += 1;
+    used.placed.insert(id);
     if let NodeKind::Text(t) = &n.kind {
         for (_, _, style) in t.spans() {
             used.fonts.entry(style.font_family.clone()).or_default().insert(style.font_style.clone());
@@ -297,32 +300,33 @@ fn variables_json(doc: &Document, ids: &BTreeSet<String>, missing: &mut Vec<Valu
 /// Most variables followed through aliases.
 const MAX_VARIABLES: usize = 10_000;
 
-/// The variables the tree uses: those its layers bind, those its shared styles bind, and those any
-/// of them reads as an alias or in a colour calculation, however deep.
-fn referenced(doc: &Document, used: &Used) -> BTreeSet<String> {
-    let mut out: BTreeSet<String> = used.variables.clone();
-    out.extend(doc.styles.iter().filter(|st| used.styles.contains(&st.id)).flat_map(|st| st.bound.values().cloned()));
-    let mut todo: Vec<String> = out.iter().cloned().collect();
+/// The variables a tree uses: those its layers bind (`bound`), those its shared `styles` bind, and
+/// those any of them reads as an alias or in a colour calculation, however deep, up to `max`. The
+/// flag is false when `max` stopped it with variables still to follow.
+pub(crate) fn referenced(doc: &Document, bound: &BTreeSet<String>, styles: &BTreeSet<String>, max: usize) -> (BTreeSet<String>, bool) {
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    let mut todo: Vec<String> = bound.iter().cloned().collect();
+    todo.extend(doc.styles.iter().filter(|st| styles.contains(&st.id)).flat_map(|st| st.bound.values().cloned()));
+    todo.reverse();
     while let Some(id) = todo.pop() {
-        if out.len() >= MAX_VARIABLES {
-            break;
+        if out.contains(&id) {
+            continue;
         }
+        if out.len() >= max {
+            return (out, false);
+        }
+        out.insert(id.clone());
         let Some(var) = doc.variables.variables.iter().find(|v| v.id == id) else { continue };
         for value in var.values.values() {
-            let reads: Vec<&String> = match value {
-                figcraft_doc::VariableValue::Alias(other) => vec![other],
-                figcraft_doc::VariableValue::ColorAlpha { variable, .. } => vec![variable],
-                figcraft_doc::VariableValue::ColorMix { from, to, .. } => from.variable().into_iter().chain(to.variable()).collect(),
-                _ => vec![],
-            };
-            for other in reads {
-                if out.insert(other.clone()) {
-                    todo.push(other.clone());
-                }
+            match value {
+                figcraft_doc::VariableValue::Alias(other) => todo.push(other.clone()),
+                figcraft_doc::VariableValue::ColorAlpha { variable, .. } => todo.push(variable.clone()),
+                figcraft_doc::VariableValue::ColorMix { from, to, .. } => todo.extend(from.variable().into_iter().chain(to.variable()).cloned()),
+                _ => {}
             }
         }
     }
-    out
+    (out, true)
 }
 
 /// The shared styles the tree uses, with what each sets.
@@ -358,15 +362,12 @@ fn components_json(doc: &Document, ids: &BTreeSet<NodeId>) -> Value {
     Value::Object(out)
 }
 
-/// The font families the tree's text layers use, with their styles, and whether each is installed.
-fn fonts(doc: &Document, used: &BTreeMap<String, BTreeSet<String>>) -> Value {
-    let gone = crate::fonts::missing(doc);
+/// The font families the tree's text layers use, with their styles, and whether each is installed
+/// (the family name trimmed, as the missing-fonts list reads it). The spelling stays as stored.
+fn fonts(used: &BTreeMap<String, BTreeSet<String>>) -> Value {
     Value::Array(
         used.iter()
-            .map(|(family, styles)| {
-                let installed = !gone.iter().any(|m| m.family.eq_ignore_ascii_case(family));
-                json!({"family": family, "styles": styles, "installed": installed})
-            })
+            .map(|(family, styles)| json!({"family": family, "styles": styles, "installed": figcraft_text::has_family(family.trim())}))
             .collect(),
     )
 }
@@ -429,11 +430,16 @@ fn design_context(s: &mut Session, p: &Value) -> Result<Value> {
     let mut missing = vec![
         json!({"what": "responsive behaviour", "why": "the file stores no breakpoints: sizes are as designed here, and constraints, sizing and annotations are all it says about other widths"}),
     ];
-    let variables = variables_json(doc, &referenced(doc, &used), &mut missing);
+    let (joined, complete) = referenced(doc, &used.variables, &used.styles, MAX_VARIABLES);
+    let variables = variables_json(doc, &joined, &mut missing);
     let styles = styles_json(doc, &used.styles, &mut missing);
     let components = components_json(doc, &used.components);
-    let fonts = fonts(doc, &used.fonts);
+    let fonts = fonts(&used.fonts);
     let page = doc.node(s.page()?).map(|n| n.name.clone());
+    // The assets of the layers returned: a smaller tree means a smaller list.
+    let found = crate::devinspect::assets(doc, &ids);
+    let assets: Vec<&crate::devinspect::Asset> = found.iter().filter(|a| used.placed.contains(&a.id)).collect();
+    let assets_left_out = found.len() - assets.len();
     let mut out = json!({
         "version": VERSION,
         "document": {"name": doc.name, "page": {"id": s.page()?, "name": page}, "colorProfile": doc.color_profile.id()},
@@ -443,11 +449,15 @@ fn design_context(s: &mut Session, p: &Value) -> Result<Value> {
         "styles": styles,
         "components": components,
         "fonts": fonts,
-        "assets": crate::devinspect::assets(doc, &ids),
+        "assets": assets,
         "missing": missing,
     });
     if used.left_out > 0 || used.cut_by_depth {
-        out["truncated"] = json!({"layersLeftOut": used.left_out, "depth": used.cut_by_depth, "maxNodes": cap, "hint": "call again with the ids of the parts you need"});
+        out["truncated"] = json!({"layersLeftOut": used.left_out, "assetsLeftOut": assets_left_out, "depth": used.cut_by_depth, "maxNodes": cap, "hint": "call again with the ids of the parts you need"});
+    }
+    if !complete {
+        out["truncated"]["variables"] =
+            json!({"maxVariables": MAX_VARIABLES, "why": "aliases go deeper than this: some variables they read aren't defined here"});
     }
     Ok(out)
 }

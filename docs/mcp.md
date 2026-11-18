@@ -435,9 +435,9 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `styles` | By id: the shared styles the tree uses |
 | `components` | By id: `name`, `type`, `properties` with variants, `codeLinks` |
 | `fonts` | `family`, `styles`, and whether it's `installed` |
-| `assets` | What `inspect.assets` lists for the same layers |
+| `assets` | What `inspect.assets` lists, for the layers in the tree |
 | `missing` | `{what, why}`: what the design doesn't specify. Always says that the file stores no breakpoints |
-| `truncated` | When `depth` or `maxNodes` cut the tree, or `maxBytes` made the tool ask for fewer layers |
+| `truncated` | When `depth` or `maxNodes` cut the tree, or `maxBytes` made the tool ask for fewer layers: `layersLeftOut`, `assetsLeftOut`, `depth`, `maxNodes`; and `variables` when aliases went deeper than the 10,000 variables followed |
 
 Each layer in `nodes` has `id`, `name`, `type` and:
 

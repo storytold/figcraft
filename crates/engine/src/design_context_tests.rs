@@ -350,3 +350,60 @@ fn a_malformed_target_is_refused_rather_than_read_as_the_selection() {
     }
     assert_eq!(context(&mut s, json!({"ids": []}))["target"]["layers"], 0, "an empty list reads nothing");
 }
+
+#[test]
+fn a_font_stored_with_outer_spaces_isnt_taken_for_installed() {
+    let mut s = session();
+    let t = node(&mut s, json!({"type": "text", "text": "Hi", "props": {"fontFamily": " Missing Display Test "}}));
+    let v = context(&mut s, json!({"ids": [t]}));
+    let font = &v["fonts"][0];
+    assert_eq!(font["family"], " Missing Display Test ", "the spelling stays as stored");
+    assert_eq!(font["installed"], false, "{font}");
+}
+
+#[test]
+fn assets_follow_the_layers_returned_and_say_what_was_left_out() {
+    let mut s = session();
+    let frame = node(&mut s, json!({"type": "frame", "width": 400, "height": 400}));
+    for seed in 0..20u8 {
+        let img = image::RgbImage::from_fn(4, 4, |x, y| image::Rgb([x as u8, y as u8, seed]));
+        let mut bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+        let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+        s.execute("image.place", &json!({"data": data, "parent": frame})).unwrap();
+    }
+    let all = context(&mut s, json!({"ids": [frame]}));
+    assert_eq!(all["assets"].as_array().unwrap().len(), 20);
+    let few = context(&mut s, json!({"ids": [frame], "maxNodes": 5}));
+    let shown = few["assets"].as_array().unwrap().len();
+    assert_eq!(shown, 4, "only the images among the 5 layers returned");
+    assert_eq!(few["truncated"]["assetsLeftOut"], 16);
+}
+
+#[test]
+fn a_join_stopped_at_its_budget_says_so() {
+    let mut s = session();
+    let (c, first) = variable(&mut s, "v0", "#000000", "#000000");
+    let mut prev = first.clone();
+    for k in 1..6 {
+        let next = s
+            .execute(
+                "variable.create",
+                &json!({"collection": c, "name": format!("v{k}"), "type": "color", "values": {"Light": "#111111", "Dark": "#111111"}}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        for mode in ["Light", "Dark"] {
+            s.execute("variable.set", &json!({"variable": prev, "mode": mode, "value": {"alias": next}})).unwrap();
+        }
+        prev = next;
+    }
+    let start = std::collections::BTreeSet::from([first]);
+    let none = std::collections::BTreeSet::new();
+    let (all, complete) = crate::design_context::referenced(s.doc().unwrap(), &start, &none, 100);
+    assert_eq!((all.len(), complete), (6, true));
+    let (some, complete) = crate::design_context::referenced(s.doc().unwrap(), &start, &none, 3);
+    assert_eq!((some.len(), complete), (3, false), "{some:?}");
+}
