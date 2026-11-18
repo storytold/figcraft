@@ -268,7 +268,10 @@ send their requests on a thread of their own, show that they're on their way (wi
 finish when the answer arrives, acting on the file they started in. Scripts, the CLI and the MCP
 server run the same commands and wait for the answer.
 
-The browser build can't use team libraries yet (it has no library support of its own).
+The browser build uses team libraries through the same panel: adding one by its link, its styles
+and components, publishing a file that is on the server, Show usage and the reports a file sends.
+A browser can't keep a library file, and scripts through `window.figcraft` can't reach a server
+(commands there don't wait for it), so those stay with the desktop app, the CLI and MCP.
 
 ## Plugin directory
 
