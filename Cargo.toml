@@ -14,6 +14,7 @@ repository = "https://github.com/storytold/figcraft"
 
 [workspace.dependencies]
 craft-xml = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "453b0da782ccef39be9a6dac8d27c80b553ef1cc" }
+craft-svg = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "010702ee9b030844c852939095b1da0d0656a890", default-features = false, features = ["tree"] }
 craft-vectordrawable = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "5cd16f2b9ac2a84c4c0794e609914e2bbf848bd7" }
 # internal
 figcraft-geom = { path = "crates/geom" }
