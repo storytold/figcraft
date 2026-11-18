@@ -247,7 +247,7 @@ impl LiveLink for NetLink {
 
     fn library_background(&mut self, jobs: Vec<(String, LibraryReq)>) {
         if !jobs.is_empty() && !self.fetching.swap(true, Ordering::SeqCst) {
-            self.ask(exchange::libraries(jobs.into(), Vec::new(), self.fetching.clone()));
+            self.ask(exchange::libraries(jobs.into(), self.fetching.clone()));
         }
     }
 

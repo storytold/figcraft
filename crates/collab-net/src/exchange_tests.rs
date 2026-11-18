@@ -411,7 +411,7 @@ fn a_library_check_runs_in_order_and_answers_only_its_fetches() {
     ];
     let fetching = Arc::new(AtomicBool::new(true));
     let t0 = Instant::now();
-    let (mut d, inbox) = run(exchange::libraries(jobs.into(), Vec::new(), fetching.clone()), t0);
+    let (mut d, inbox) = run(exchange::libraries(jobs.into(), fetching.clone()), t0);
     let ready = library(LibraryReply::Ready { access: Access::View });
     d.opened(t0);
     say(&mut d, &ready, t0);
@@ -428,4 +428,31 @@ fn a_library_check_runs_in_order_and_answers_only_its_fetches() {
     assert_eq!(replies.len(), 2, "{events:#?}");
     assert!(replies[0].is_err());
     assert!(matches!(replies[1], Ok(LibraryReply::Empty)));
+}
+
+/// A fetch's answer reaches the UI as it comes, not at the end of the check: a report after it
+/// whose server never answers holds the first library back no longer than its own connection.
+#[test]
+fn a_library_check_hands_each_fetch_over_as_it_comes() {
+    let fetch = LibraryReq::Fetch { have: None, usage: None };
+    let jobs = vec![(link(), fetch.clone()), (link(), LibraryReq::ReportDetached(Detached::default())), (link(), fetch)];
+    let fetching = Arc::new(AtomicBool::new(true));
+    let t0 = Instant::now();
+    let (mut d, inbox) = run(exchange::libraries(jobs.into(), fetching.clone()), t0);
+    let fetched = |events: &[Event]| events.iter().filter(|e| matches!(e, Event::Library { .. })).count();
+    let ready = library(LibraryReply::Ready { access: Access::View });
+    d.opened(t0);
+    say(&mut d, &ready, t0);
+    say(&mut d, &library(LibraryReply::Empty), t0);
+    assert_eq!(fetched(&inbox.drain()), 1, "the first library is in while the report's server is asked");
+    // The report's connection never opens: the check gives up on it and goes on, saying nothing.
+    let t1 = t0 + Duration::from_secs(5);
+    d.tick(t1);
+    assert_eq!(fetched(&inbox.drain()), 0);
+    assert!(fetching.load(Ordering::SeqCst), "the check is still running");
+    d.opened(t1);
+    say(&mut d, &ready, t1);
+    say(&mut d, &library(LibraryReply::Empty), t1);
+    assert_eq!(fetched(&inbox.drain()), 1);
+    assert!(!fetching.load(Ordering::SeqCst) && d.done());
 }

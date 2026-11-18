@@ -55,6 +55,8 @@ pub(crate) enum Next {
     Ask(Box<Exchange>, Then),
     /// Done: tell the UI these, then join the file this invite names (`None`: nothing to join).
     Done(Vec<Event>, Option<Invite>),
+    /// Tell the UI these now, then go on with what follows.
+    Tell(Vec<Event>, Box<Next>),
 }
 
 impl Exchange {
@@ -248,30 +250,23 @@ fn library_reply(answers: Result<Answers, String>) -> Result<LibraryReply, Strin
 }
 
 /// Ask about the team libraries `jobs` `(link, request)`, in order, each on a connection of its
-/// own: the events their fetches end in, with the others' answers left out (a report's says
-/// nothing, and an older server refuses it). `fetching` goes down at the end.
-pub(crate) fn libraries(mut jobs: VecDeque<(String, LibraryReq)>, mut events: Vec<Event>, fetching: Arc<AtomicBool>) -> Next {
+/// own. A fetch's answer goes to the UI as it comes, before the next connection, as the desktop's
+/// does, so a slow or silent server further on holds no library back; the others' answers are left
+/// out (a report's says nothing, and an older server refuses it). `fetching` goes down at the end.
+pub(crate) fn libraries(mut jobs: VecDeque<(String, LibraryReq)>, fetching: Arc<AtomicBool>) -> Next {
     let Some((link, req)) = jobs.pop_front() else {
         fetching.store(false, Ordering::SeqCst);
-        return Next::Done(events, None);
+        return Next::Done(Vec::new(), None);
     };
     let fetch = matches!(req, LibraryReq::Fetch { .. });
-    match Invite::parse(&link) {
-        Err(reply) => {
-            if fetch {
-                events.push(Event::Library { link, reply: Err(reply) });
-            }
-            libraries(jobs, events, fetching)
-        }
-        Ok(invite) => Next::Ask(
-            Box::new(Exchange::library(invite, req)),
-            Box::new(move |answers| {
-                if fetch {
-                    events.push(Event::Library { link, reply: library_reply(answers) });
-                }
-                libraries(jobs, events, fetching)
-            }),
-        ),
+    let invite = Invite::parse(&link);
+    let then = move |reply: Result<LibraryReply, String>| {
+        let rest = libraries(jobs, fetching);
+        if fetch { Next::Tell(vec![Event::Library { link, reply }], Box::new(rest)) } else { rest }
+    };
+    match invite {
+        Err(e) => then(Err(e)),
+        Ok(invite) => Next::Ask(Box::new(Exchange::library(invite, req)), Box::new(move |answers| then(library_reply(answers)))),
     }
 }
 
