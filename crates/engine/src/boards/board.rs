@@ -72,6 +72,7 @@ pub use items::{CONNECTED_GAP, connected_place};
 pub use items::{STICKY_TEXT_SIZE, edit_text, owner_of_text, text_of};
 use items::{add_connected, ink_cmd, next_sticky, shape_cmd, stamp_cmd, sticky_cmd};
 pub(crate) use mindmap::settle_mind_maps;
+pub use mindmap::{mind_node_target, mind_sibling};
 pub(crate) use reshape::path_handle_at;
 pub use reshape::selected_connector_handles;
 
@@ -144,7 +145,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.nextSticky",
             "Next sticky note",
-            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector?}  a sticky of the same colour beside a sticky; after a shape, the next shape joined to it by a connector, as board.addConnected",
+            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector?}  a sticky of the same colour beside a sticky; after a shape, the next shape joined to it by a connector, as board.addConnected; after a mind map node, its next sibling, as board.mindMapAdd {relation: sibling}",
             true,
             next_sticky
         ),
@@ -215,7 +216,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.setColor",
             "Board color",
-            "{ids?, color (a board colour name or hex)}  stickies and shapes take it as their fill, connectors and ink as their line",
+            "{ids?, color (a board colour name or hex)}  stickies and shapes take it as their fill, connectors and ink as their line, mind map nodes as their text colour",
             true,
             set_color
         ),
@@ -232,6 +233,13 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             board_tool(s, ToolId::Sticky)
         }),
+        spec!(
+            "tool.mindMap",
+            "Mind map tool",
+            "{} (a click places a mind map, the first node's text starting at the click, and starts typing in it)",
+            false,
+            |s, _| board_tool(s, ToolId::MindMap)
+        ),
         spec!("tool.shape", "Shapes", "{shape?} (a click places a shape with text)", false, |s, p| {
             if let Some(v) = string(p, "shape") {
                 s.tool.board.shape = shape_of("tool.shape", &v)?;
