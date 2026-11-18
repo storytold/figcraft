@@ -182,3 +182,13 @@ fn junk_is_refused_without_a_panic() {
     }
     assert!(assets(&export(&mut s, json!({}))).is_empty());
 }
+
+#[test]
+fn a_malformed_target_is_refused_rather_than_read_as_the_selection() {
+    let mut s = session();
+    let id = place(&mut s, &image_bytes(image::ImageFormat::Png, 11));
+    s.execute("select.set", &json!({"ids": [id]})).unwrap();
+    for p in [json!({"id": "not-an-id"}), json!({"id": true}), json!({"ids": [id, "nope"]}), json!({"ids": "1"}), json!({"ids": [999_999]})] {
+        assert!(s.execute("file.exportAssets", &p).is_err(), "{p}");
+    }
+}

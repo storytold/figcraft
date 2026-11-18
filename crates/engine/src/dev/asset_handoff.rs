@@ -168,7 +168,18 @@ fn export_assets(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "dir: a folder")),
     };
     let doc = s.doc()?;
+    // Explicit targets are all layers, or the call is refused: never the selection instead.
+    let malformed = || bad(cmd, "ids: a list of layer ids (or id: one)");
+    match (get(p, "ids"), get(p, "id")) {
+        (Some(Value::Array(list)), _) if list.iter().all(|i| crate::params::id_of(i).is_some()) => {}
+        (Some(_), _) => return Err(malformed()),
+        (None, Some(one)) if crate::params::id_of(one).is_none() => return Err(malformed()),
+        _ => {}
+    }
     let mut ids = targets(s, p);
+    if let Some(gone) = ids.iter().find(|i| !doc.contains(**i)) {
+        return Err(bad(cmd, format!("no layer {gone}")));
+    }
     if ids.is_empty() {
         ids = vec![s.page()?];
     }
