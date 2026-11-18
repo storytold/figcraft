@@ -465,6 +465,7 @@ fn board_commands_survive_junk() {
         json!({"end": "from", "target": {"x": 1e308, "y": -1e308}, "side": "inside", "style": "curved"}),
         json!({"id": 99_999, "end": 7, "target": [1], "style": "wavy"}),
         json!({"id": 99_999, "relation": 7, "children": "x", "text": [1], "x": "NaN", "y": 1e308}),
+        json!({"id": 99_999, "language": 7, "text": [1], "width": "wide", "x": "NaN", "y": 1e308, "side": 3}),
     ];
     let ids: Vec<&str> = crate::cmd::all_commands()
         .iter()
@@ -482,6 +483,7 @@ fn board_commands_survive_junk() {
             let a = s.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap()["id"].clone();
             let b = s.execute("board.shape", &json!({"x": 300, "y": 0})).unwrap()["id"].clone();
             let _ = s.execute("board.connector", &json!({"from": a, "to": b, "label": "x"}));
+            let _ = s.execute("board.codeBlock", &json!({"x": 0, "y": 300, "text": "a\nb"}));
             if let Err(EngineError::Internal { cmd, msg }) = s.execute(cmd, j) {
                 panic!("{cmd} panicked on {j}: {msg}");
             }
@@ -497,6 +499,7 @@ fn board_commands_survive_junk() {
             let a = s.execute("board.sticky", &json!({"x": 0, "y": 0})).unwrap()["id"].clone();
             let b = s.execute("board.stamp", &json!({"x": 300, "y": 0})).unwrap()["id"].clone();
             let _ = s.execute("board.connector", &json!({"from": a, "to": b}));
+            let _ = s.execute("board.codeBlock", &json!({"x": 0, "y": 300, "text": "a\nb"}));
             if let Err(EngineError::Internal { cmd, msg }) = s.execute(spec.id, j) {
                 panic!("{cmd} panicked on {j}: {msg}");
             }

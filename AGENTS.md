@@ -59,7 +59,7 @@ inspection. It runs natively on macOS, Windows, Linux and FreeBSD, and in the br
 Siblings: `../vectorcraft` (Illustrator-class), `../photocraft` (Photoshop-class), `../designcraft`
 (InDesign-class) and the other Crafting Apps; same conventions.
 
-Repos don't share code.
+Share reusable code through craft-libs; do not depend on sibling application crates.
 
 ## Start every session here
 1. Read [`ROADMAP.md`](ROADMAP.md) (stage, headline numbers, estimates) and
@@ -182,3 +182,7 @@ commit. Grade by behaviour against the incumbent, not by whether a menu item exi
 - Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
 - Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
 - Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
+
+## Shared Craft libraries
+
+Before adding or changing reusable file-format, codec, protocol or UI code, check [craft-libs](https://github.com/storytold/craft-libs) and existing contributor work; reuse its public APIs or extend the appropriate shared library instead of adding an app-local duplicate, keeping app-specific policy and model mapping local and preserving compatibility, security limits and regression coverage.
