@@ -35,7 +35,7 @@ fn a_server_that_doesnt_count_a_kind_has_no_totals_for_it() {
 /// 1 styles, 2 variables).
 fn drawn(v: &serde_json::Value, kind: usize) -> Vec<egui::Shape> {
     let ctx = egui::Context::default();
-    let id = egui::Id::new("usage");
+    let id = egui::Id::unique("usage_summary_tests");
     ctx.data_mut(|d| d.insert_temp(id.with("kind"), kind));
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| usage_answer(ui, 600.0, id, v));
     out.textures_delta.clear();
