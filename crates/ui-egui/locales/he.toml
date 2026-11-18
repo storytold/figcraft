@@ -8,6 +8,17 @@ name = "עברית"
 status = "draft — needs native review"
 
 [ui]
+# 18 Nov 2026 DAY-02: source-matched Variables UI strings; independent Hebrew draft.
+"CSS custom properties…" = "מאפייני CSS מותאמים אישית…"
+"Dart constants for Flutter…" = "קבועי Dart עבור Flutter…"
+"Extend collection" = "הרחבת אוסף"
+"No scope is shared by all the selected variables" = "אין תחולה משותפת לכל המשתנים שנבחרו"
+"Overridden here (the collection it extends has another value)" = "הערך מותאם כאן (באוסף הבסיס שממנו מתבצעת הרחבה מוגדר ערך אחר)"
+"Scope" = "תחולה"
+"Scoping: where pickers offer it" = "תחולה: היכן המשתנה מופיע בכלי הבחירה"
+"True" = "כן"
+"Variables JSON…" = "קובץ JSON של משתנים…"
+"What it's for" = "מטרת השימוש"
 # 17 Nov 2026 NIGHT-L03: source-exact native preview, autosave, sharing/security and font consent UI; AI-assisted Hebrew draft.
 "({n} warnings: some entries were skipped)" = { one = "({n} אזהרה: חלק מהרשומות דולגו)", other = "({n} אזהרות: חלק מהרשומות דולגו)" }
 "Pixel preview 1x" = "תצוגה מקדימה בפיקסלים ×1"
