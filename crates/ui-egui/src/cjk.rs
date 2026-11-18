@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(order(HANGUL, 0), "한");
         assert_eq!(order(THAI, 0), "ก");
         assert_eq!(order(THAI | KANA, language("th")), "กあ");
-        assert_eq!(order(HEBREW | THAI, language("he")), "אג");
+        assert_eq!(order(HEBREW | THAI, language("he")), "אก");
         assert_eq!(first_face(HEBREW, language("he")), Some("Noto Sans Hebrew"));
         // A Korean UI draws Hangul in a Korean face before the Thai or Bengali ones.
         assert_eq!(order(KANA | HAN | HANGUL | BENGALI | THAI, HANGUL), "한漢あঅก");
