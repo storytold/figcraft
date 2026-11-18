@@ -8,6 +8,8 @@ mod agent_tasks;
 mod attached;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::disallowed_methods)]
 mod automation_roots;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod code_connect;
 #[allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod common;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

@@ -101,6 +101,8 @@ pub const TOOL_NAMES: &[&str] = &[
     "inspect_document",
     "get_node",
     "design_context",
+    "component_mappings",
+    "sync_mappings",
     "select",
     "export",
     "screenshot",
@@ -124,6 +126,8 @@ const DOCUMENT_TOOLS: &[&str] = &[
     "inspect_document",
     "get_node",
     "design_context",
+    "component_mappings",
+    "sync_mappings",
     "select",
     "export",
     "screenshot",
@@ -269,6 +273,33 @@ fn tools() -> Vec<Value> {
                 &[],
             ),
             true,
+        ),
+        tool(
+            "component_mappings",
+            "Component mappings",
+            "Which code component each design component is: its import, code name, source file, a ready snippet, its properties and variants, and which design values need translating. Check this before writing a component: reuse a mapped one, never recreate it. `unmapped` lists those with no code component yet.",
+            obj(
+                json!({
+                    "ids": ids_schema("Layers: the components they are, use or hold (default every component in the file)"),
+                    "unmapped": boolean("Only components without a mapping"),
+                    "root": string("The code repository, to check each link's source file is there (default where this server runs)")
+                }),
+                &[],
+            ),
+            true,
+        ),
+        tool(
+            "sync_mappings",
+            "Sync mappings with a repository",
+            "Apply a code repository's figcraft.connect.json to the open design (`import`, one undo step), or write the design's mappings to it (`export`, keeping its other keys and the links of components this design doesn't have). Run `import` first when component_mappings shows less than the repository should have.",
+            obj(
+                json!({
+                    "direction": {"type": "string", "enum": ["import", "export"], "description": "import: file to design. export: design to file"},
+                    "path": string("The file (default figcraft.connect.json where this server runs)")
+                }),
+                &["direction"],
+            ),
+            false,
         ),
         tool(
             "select",
@@ -456,6 +487,26 @@ fn design_context(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolRes
     }
 }
 
+/// `codeConnect.list`, checking source files against `root`, else where this server runs.
+fn component_mappings(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let mut params = a.clone();
+    let root = std::path::absolute(s_arg(a, "root")?.unwrap_or(".")).map_err(|e| format!("root: {e}"))?;
+    params.insert("root".into(), json!(root.to_string_lossy()));
+    exec(b, "codeConnect.list", Value::Object(params)).map(|v| ToolResult::json(&v))
+}
+
+/// `codeConnect.import` or `.export` with a code repository's connect file, made absolute here: an
+/// attached app runs in another folder.
+fn sync_mappings(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
+    let command = match s_arg(a, "direction")? {
+        Some("import") => "codeConnect.import",
+        Some("export") => "codeConnect.export",
+        _ => return Err("`direction`: import or export".into()),
+    };
+    let path = std::path::absolute(s_arg(a, "path")?.unwrap_or("figcraft.connect.json")).map_err(|e| format!("path: {e}"))?;
+    exec(b, command, json!({"path": path.to_string_lossy()})).map(|v| ToolResult::json(&v))
+}
+
 fn wait_for_changes(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<ToolResult, String> {
     b.call("events.poll", Value::Object(a.clone())).map(|v| ToolResult::json(&v))
 }
@@ -602,6 +653,8 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         "inspect_document" => inspect_document(b, &a),
         "get_node" => get_node(b, &a),
         "design_context" => design_context(b, &a),
+        "component_mappings" => component_mappings(b, &a),
+        "sync_mappings" => sync_mappings(b, &a),
         "select" => select(b, &a),
         "export" => export(b, &a),
         "screenshot" => screenshot(b, &a),

@@ -298,3 +298,124 @@ fn many_entries_for_one_component_each_link() {
     let i = idv(&ex(&mut s, "instance.create", json!({"component": hover, "x": 0, "y": 500})));
     assert_eq!(code(&mut s, i, "react"), "<Button />\n");
 }
+
+#[test]
+fn a_link_names_its_source_and_translates_variant_values() {
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, hover) = button(&mut s);
+    ex(
+        &mut s,
+        "codeConnect.set",
+        json!({"id": set, "name": "Button", "importPath": "@/ui/button", "template": "<Button state={State} />",
+        "source": "src/ui/button.tsx", "values": {"State": {"Hover": "hovered"}}, "notes": "Primary action"}),
+    );
+    let instance = idv(&ex(&mut s, "instance.create", json!({"component": hover})));
+    assert!(code(&mut s, instance, "react").contains(r#"state="hovered""#), "{}", code(&mut s, instance, "react"));
+    // A value without a mapping keeps the design's name.
+    let plain = idv(&ex(&mut s, "instance.create", json!({"component": set})));
+    assert!(code(&mut s, plain, "react").contains(r#"state="Default""#));
+}
+
+#[test]
+fn a_source_outside_the_repository_is_refused() {
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let c = card(&mut s);
+    for source in ["../up.tsx", "/etc/passwd", "a\\b.tsx", "a/../../b.tsx"] {
+        let e = s.execute("codeConnect.set", &json!({"id": c, "source": source})).unwrap_err();
+        assert!(e.to_string().contains("source"), "{source}: {e}");
+    }
+    assert!(s.execute("codeConnect.set", &json!({"id": c, "values": 3})).is_err());
+    assert!(s.execute("codeConnect.set", &json!({"id": c, "source": "src/card.tsx"})).is_ok());
+}
+
+#[test]
+fn the_new_fields_survive_a_trip_through_the_file() {
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, _) = button(&mut s);
+    ex(
+        &mut s,
+        "codeConnect.set",
+        json!({"id": set, "name": "Button", "template": "<Button />", "source": "src/b.tsx", "values": {"State": {"Hover": "h"}}, "notes": "n"}),
+    );
+    let text = ex(&mut s, "codeConnect.export", json!({}))["text"].as_str().unwrap().to_string();
+    let mut other = Session::new();
+    ex(&mut other, "file.new", json!({}));
+    let (set2, _) = button(&mut other);
+    assert_eq!(ex(&mut other, "codeConnect.import", json!({"json": text}))["linked"], 1);
+    let link = &other.doc().unwrap().node(set2).unwrap().code_links[0];
+    assert_eq!((link.source.as_str(), link.notes.as_str()), ("src/b.tsx", "n"));
+    assert_eq!(link.values["State"]["Hover"], "h");
+}
+
+#[test]
+fn a_file_from_before_stays_as_it_was() {
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, _) = button(&mut s);
+    ex(&mut s, "codeConnect.set", json!({"id": set, "name": "Button", "template": "<Button />"}));
+    let v = ex(&mut s, "codeConnect.export", json!({}));
+    let parsed: Value = serde_json::from_str(v["text"].as_str().unwrap()).unwrap();
+    let keys: Vec<&String> = parsed["links"][0].as_object().unwrap().keys().collect();
+    assert_eq!(keys, ["component", "importPath", "language", "name", "template"], "no new keys unless they're used");
+}
+
+#[test]
+fn listing_answers_what_an_agent_asks() {
+    let dir = std::env::temp_dir().join(format!("figcraft-connect-list-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/button.tsx"), "").unwrap();
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, hover) = button(&mut s);
+    let c = card(&mut s);
+    ex(
+        &mut s,
+        "codeConnect.set",
+        json!({"id": set, "name": "Button", "importPath": "@/ui/button", "template": "<Button />", "source": "src/button.tsx"}),
+    );
+    let v = ex(&mut s, "codeConnect.list", json!({"root": dir}));
+    assert_eq!((v["mapped"].as_u64(), v["unmapped"].as_u64()), (Some(1), Some(1)));
+    let b = v["components"].as_array().unwrap().iter().find(|e| e["id"] == json!(set)).unwrap();
+    assert_eq!(b["links"][0]["import"], r#"import { Button } from "@/ui/button";"#);
+    assert_eq!(b["links"][0]["sourceFound"], true);
+    assert!(b["links"][0]["snippet"].as_str().unwrap().contains("<Button"));
+    assert!(b["properties"].as_array().unwrap().iter().any(|p| p["type"] == "variant"));
+    let only = ex(&mut s, "codeConnect.list", json!({"unmapped": true}));
+    assert_eq!(only["components"][0]["id"], json!(c));
+    // A layer leads to the component it uses, a frame to those it holds.
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": hover})));
+    assert_eq!(ex(&mut s, "codeConnect.list", json!({"ids": [i]}))["components"][0]["id"], json!(set));
+    ex(&mut s, "codeConnect.set", json!({"id": set, "source": "src/gone.tsx"}));
+    assert_eq!(ex(&mut s, "codeConnect.list", json!({"root": dir, "ids": [set]}))["components"][0]["links"][0]["sourceFound"], false);
+}
+
+#[test]
+fn exporting_keeps_what_other_designs_put_in_the_file() {
+    let dir = std::env::temp_dir().join(format!("figcraft-connect-others-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("figcraft.connect.json");
+    std::fs::write(&path, r#"{"version":1,"project":{"name":"shop"},"links":[{"component":"Other","language":"react","name":"Other","template":"<Other />"},{"component":"Button","language":"react","name":"Old","template":"<Old />"}]}"#).unwrap();
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, _) = button(&mut s);
+    ex(&mut s, "codeConnect.set", json!({"id": set, "name": "Button", "template": "<Button />"}));
+    ex(&mut s, "codeConnect.export", json!({"path": path}));
+    let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let names: Vec<&str> = v["links"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Button", "Other"], "this design's link wins, the other design's stays");
+    assert_eq!(v["project"]["name"], "shop", "keys the command doesn't own stay");
+}
+
+#[test]
+fn listing_refuses_a_malformed_target_rather_than_reading_the_selection() {
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, _) = button(&mut s);
+    ex(&mut s, "select.set", json!({"ids": [set]}));
+    for p in [json!({"id": "not-an-id"}), json!({"ids": [set, "nope"]}), json!({"ids": "1"}), json!({"ids": [999_999]})] {
+        assert!(s.execute("codeConnect.list", &p).is_err(), "{p}");
+    }
+}
