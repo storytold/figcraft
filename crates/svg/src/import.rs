@@ -16,6 +16,8 @@
 //! What can't be represented (filters other than shadows and blurs, rotated repeating patterns,
 //! nested clip paths) is left out and reported in the import notes. Linked files are never read: only data URIs.
 
+use craft_svg::tree::{self, usvg};
+
 mod budget;
 mod css_color;
 mod fx;
@@ -832,10 +834,10 @@ pub(crate) fn too_deep(data: &[u8]) -> bool {
     }
 }
 
-fn options(data: &[u8], limits: budget::Limits) -> usvg::Options<'static> {
+fn options(data: &[u8], limits: tree::Limits) -> usvg::Options<'static> {
     // Only data URIs, within budgets: an opened or pasted SVG never pulls other files off the disk
     // and never expands without limit.
-    let mut o = usvg::Options { image_href_resolver: budget::resolver(limits), ..Default::default() };
+    let mut o = usvg::Options { image_href_resolver: tree::image_resolver(limits), ..Default::default() };
     if data.windows(4).any(|w| w == b"text") {
         text::prepare(&mut o);
     }
@@ -913,7 +915,7 @@ pub fn import_svg(doc: &mut Document, data: &[u8], parent: NodeId, x: f64, y: f6
 
 /// [`import_svg`], with notes on what couldn't be represented.
 pub fn import_svg_with_notes(doc: &mut Document, data: &[u8], parent: NodeId, x: f64, y: f64, name: &str) -> Result<Imported, ImportError> {
-    import_within(doc, data, parent, x, y, name, budget::Limits::default())
+    import_within(doc, data, parent, x, y, name, tree::Limits::default())
 }
 
 fn import_within(
@@ -923,22 +925,16 @@ fn import_within(
     x: f64,
     y: f64,
     name: &str,
-    limits: budget::Limits,
+    limits: tree::Limits,
 ) -> Result<Imported, ImportError> {
     // SVGZ is unpacked here, within a budget, so every check below sees the real document.
-    let data = budget::document(data, &limits).map_err(ImportError)?;
-    if too_wide(&data) {
-        return Err(ImportError(format!("an element has more than {MAX_ATTRIBUTES} attributes")));
-    }
-    if too_deep(&data) {
-        return Err(ImportError(format!("elements nested more than {MAX_NESTING} deep")));
-    }
+    let text = craft_svg::svgz::text(data, limits.bytes).map_err(|e| ImportError(e.to_string()))?;
     // usvg reads neither `color()` nor `color-mix()`: they are resolved first.
-    let (data, color_notes) = match css_color::resolve(&data, doc.color_profile) {
-        Some(resolved) => resolved,
-        None => (data, Vec::new()),
+    let (data, color_notes) = match css_color::resolve(text.as_bytes(), doc.color_profile) {
+        Some((resolved, notes)) => (resolved, notes),
+        None => (text.into_owned().into_bytes(), Vec::new()),
     };
-    let tree = usvg::Tree::from_data(&data, &options(&data, limits)).map_err(|e| ImportError(e.to_string()))?;
+    let tree = tree::parse(&data, &limits, &options(&data, limits)).map_err(|e| ImportError(e.to_string()))?;
     let size = tree.size();
     let frame =
         doc.create(parent, NodeKind::Frame, name, x, y, f64::from(size.width()), f64::from(size.height())).map_err(|e| ImportError(e.to_string()))?;
