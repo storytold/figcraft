@@ -63,7 +63,21 @@ pub fn paste(app: &mut FigApp, event_text: Option<&str>, at: Option<(f64, f64)>)
     let ours = sys_text.is_some() && sys_text == app.ui.last_copy && app.ui.last_copy_generation == app.session.clipboard.layers_generation;
     let (cx, cy) = at.or_else(|| app.session.ds().ok().map(|d| (d.view.cx, d.view.cy))).unwrap_or((0.0, 0.0));
     if !ours {
-        if let Some((png, w, h)) = clipboard_png(app) {
+        // SVG markup is the copy's source and a picture beside it is only a rendering of it, so the
+        // vectors win over the picture, and over a table on a board. Markup that doesn't import
+        // (cut short, say), or imports as an empty frame (only linked images, which aren't
+        // fetched) while a picture came with it, leaves the picture to paste.
+        let svg = sys_text.as_deref().filter(|t| !is_clipboard_marker(t)).and_then(|t| figcraft_engine::svg_import_has_layers(t).map(|l| (t, l)));
+        let picture = clipboard_png(app);
+        if let Some((text, has_layers)) = svg
+            && (has_layers || picture.is_none())
+        {
+            if !dev_mode_refuses(app, "edit.paste") {
+                paste_svg(app, text, (cx, cy), at.is_none());
+            }
+            return;
+        }
+        if let Some((png, w, h)) = picture {
             if dev_mode_refuses(app, "edit.paste") {
                 return;
             }
@@ -127,12 +141,18 @@ fn paste_text(app: &mut FigApp, text: &str, (cx, cy): (f64, f64), center: bool) 
             ));
         }
     } else if figcraft_engine::looks_like_svg(text) {
-        use base64::Engine as _;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-        app.run_user("file.import", json!({"data": b64, "name": "Pasted SVG.svg", "x": cx, "y": cy, "center": center}));
+        // Markup that doesn't import (a paste of one that does never gets here): the import says why.
+        paste_svg(app, text, (cx, cy), center);
     } else {
         app.run("text.create", json!({"text": text, "x": cx, "y": cy}));
     }
+}
+
+/// Import pasted SVG markup at `(cx, cy)`: centred there, or (`center` false) its top-left there.
+fn paste_svg(app: &mut FigApp, text: &str, (cx, cy): (f64, f64), center: bool) {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    app.run_user("file.import", json!({"data": b64, "name": "Pasted SVG.svg", "x": cx, "y": cy, "center": center}));
 }
 
 /// The system clipboard's image as PNG bytes, with its size.

@@ -57,6 +57,16 @@ fn a_larger_paste_keeps_the_largest_table_and_says_so() {
 }
 
 #[test]
+fn tab_indented_svg_on_a_board_imports_as_vectors_not_a_table() {
+    let mut board = app(true);
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\">\n\t<rect width=\"80\" height=\"40\" fill=\"#E5484D\"/>\n\t<circle cx=\"60\" cy=\"20\" r=\"12\"/>\n</svg>\n";
+    crate::menus::paste(&mut board, Some(svg), None);
+    let doc = board.session.doc().unwrap();
+    assert!(tables(doc).is_empty(), "not a table");
+    assert!(doc.nodes().any(|n| n.name.starts_with("Pasted SVG")), "the SVG was imported");
+}
+
+#[test]
 fn other_pastes_stay_text() {
     // Cells pasted into a design file.
     let mut design = app(false);

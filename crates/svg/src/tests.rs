@@ -56,6 +56,89 @@ fn export_vector_region_paints_independently() {
 }
 
 #[test]
+fn svg_import_has_layers_needs_markup_the_importer_reads_and_says_whether_it_draws() {
+    use crate::svg_import_has_layers as layers;
+    assert_eq!(layers(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8" height="4"/></svg>"#), Some(true));
+    assert_eq!(layers(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"/>"#), Some(false), "empty");
+    let linked =
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><image href="https://example.com/a.png" width="8" height="4"/></svg>"#;
+    assert_eq!(layers(linked), Some(false), "a linked image isn't fetched");
+    let mixed = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image href="https://example.com/a.png" width="4" height="4"/></svg>"#;
+    assert_eq!(layers(mixed), Some(false), "a rectangle plus a dropped linked image isn't the whole copy");
+    let nested = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%224%22%20height%3D%224%22%3E%3Cimage%20href%3D%22https%3A%2F%2Fexample.com%2Fb.png%22%20width%3D%224%22%20height%3D%224%22%2F%3E%3C%2Fsvg%3E"/></svg>"#;
+    assert_eq!(layers(nested), Some(false), "an image dropped inside a nested SVG counts too");
+    let inline = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/></svg>"#;
+    assert_eq!(layers(inline), Some(true), "an embedded image is resolved, nothing dropped");
+    let spaced = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><svg width="4" height="4"><image width="4" height="4" href = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/></svg></svg>"#;
+    assert_eq!(layers(spaced), Some(true), "spaces around = in an image href are still a data URI");
+    let nested_spaced = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%224%22%20height%3D%224%22%3E%3Cimage%20width%3D%224%22%20height%3D%224%22%20href%20%3D%20%22data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk%2BM9QDwADhgGAWjR9awAAAABJRU5ErkJggg%3D%3D%22%2F%3E%3C%2Fsvg%3E"/></svg>"#;
+    assert_eq!(layers(nested_spaced), Some(true), "a nested SVG's data-URI image with spaces around = isn't omitted");
+    let commented =
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><!-- <image href="https://x/y.png"/> --><rect width="4" height="4"/></svg>"#;
+    assert_eq!(layers(commented), Some(true), "an image in a comment isn't content");
+    let nested_commented = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%224%22%20height%3D%224%22%3E%3C!--%20%3Cimage%20href%3D%22https%3A%2F%2Fx%2Fy.png%22%2F%3E%20--%3E%3Crect%20width%3D%224%22%20height%3D%224%22%2F%3E%3C%2Fsvg%3E"/></svg>"#;
+    assert_eq!(layers(nested_commented), Some(true), "a commented-out image in a nested SVG isn't omitted");
+    let undecodable = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/png;base64,!!!!"/></svg>"#;
+    assert_eq!(layers(undecodable), Some(false), "a data URI that doesn't decode is dropped");
+    let unsized_png = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/png;base64,AA=="/></svg>"#;
+    assert_eq!(layers(unsized_png), Some(false), "a raster whose size can't be read is dropped");
+    // A nested SVG document beside a rectangle, as a data URI percent-encoded into the attribute.
+    let beside_a_rect = |inner: &str| {
+        let mut uri = String::from("data:image/svg+xml;utf8,");
+        for ch in inner.chars() {
+            match ch {
+                '%' => uri.push_str("%25"),
+                '"' => uri.push_str("%22"),
+                '<' => uri.push_str("%3C"),
+                '>' => uri.push_str("%3E"),
+                '&' => uri.push_str("%26"),
+                '#' => uri.push_str("%23"),
+                ' ' => uri.push_str("%20"),
+                c => uri.push(c),
+            }
+        }
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="{uri}"/></svg>"#
+        )
+    };
+    let qualified = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/><s:image href="https://example.com/c.png" width="4" height="4"/></svg>"#;
+    assert_eq!(layers(&beside_a_rect(qualified)), Some(false), "a namespace-qualified linked image in a nested SVG is dropped");
+    let misleading = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/><image data-href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" href="https://example.com/d.png" width="4" height="4"/></svg>"#;
+    assert_eq!(layers(&beside_a_rect(misleading)), Some(false), "only the real href counts, not a data-href beside it");
+    assert_eq!(layers(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8""#), None, "cut short");
+    assert_eq!(layers("<svg\tName\nAda\tLead"), None, "a spreadsheet row that starts like SVG");
+    assert_eq!(layers("hello"), None);
+}
+
+#[test]
+fn the_image_scan_takes_the_unprefixed_href_first_as_usvg_does() {
+    use crate::svg_import_has_layers as layers;
+    let both = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" xlink:href="https://x/y.png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="/></svg>"#;
+    assert_eq!(layers(both), Some(true), "href wins over xlink:href, so the image is the inline one");
+}
+
+#[test]
+fn the_image_scan_reads_a_nested_svg_without_a_namespace_as_usvg_does() {
+    use crate::svg_import_has_layers as layers;
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,&lt;svg width='4' height='4'&gt;&lt;rect width='4' height='4'/&gt;&lt;image href='https://x/y.png' width='4' height='4'/&gt;&lt;/svg&gt;"/></svg>"#;
+    assert_eq!(layers(svg), Some(false), "an element with no namespace is SVG to usvg");
+}
+
+#[test]
+fn the_image_scan_skips_hidden_content_as_usvg_does() {
+    use crate::svg_import_has_layers as layers;
+    let attr = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><g display="none"><image href="https://x/y.png" width="4" height="4"/></g></svg>"#;
+    assert_eq!(layers(attr), Some(true), "a linked image under display=none is never drawn");
+    let style = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image href="https://x/y.png" style="fill:red; display : none" width="4" height="4"/></svg>"#;
+    assert_eq!(layers(style), Some(true), "display:none in a style attribute hides it too");
+    // The style wins over the presentation attribute: this image is drawn, so its linked file is
+    // missing content. In a nested SVG, where usvg drops a linked image without asking the
+    // resolver, only the scan can say so.
+    let shown = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="4" height="4"/><image width="4" height="4" href="data:image/svg+xml;utf8,&lt;svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'&gt;&lt;rect width='4' height='4'/&gt;&lt;image href='https://x/y.png' display='none' style='display:inline' width='4' height='4'/&gt;&lt;/svg&gt;"/></svg>"#;
+    assert_eq!(layers(shown), Some(false), "an inline style that shows the image beats display=\"none\"");
+}
+
+#[test]
 fn import_rejects_garbage() {
     let mut d = Document::new("t");
     let p = d.first_page().unwrap();

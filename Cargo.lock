@@ -2206,6 +2206,7 @@ version = "0.18.1"
 dependencies = [
  "base64 0.22.1",
  "craft-xml",
+ "data-url",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
@@ -2213,6 +2214,7 @@ dependencies = [
  "figcraft-render",
  "figcraft-text",
  "flate2",
+ "imagesize 0.15.0",
  "thiserror 2.0.21",
  "usvg",
 ]
