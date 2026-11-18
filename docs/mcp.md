@@ -94,8 +94,14 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   (writing through it would create its target, wherever that is). A path outside the roots gets
   the same refusal whatever exists there, so a refusal doesn't tell what is outside. Folders are
   compared by whole names: `/work2/x` is not inside `/work`. On Windows the case comes from the disk (`C:\WORK\x` is
-  inside `C:\work`), `\\?\` and UNC (`\\server\share\…`) paths are resolved like drive-letter ones,
-  and new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+  inside `C:\work`), `\\?\C:\…` paths are resolved like drive-letter ones, and
+  new names that are devices (`CON`, `NUL`, `COM1`…) or streams (`a.png:x`) are refused.
+  A path on another computer (`\\server\share\…`, `\\?\UNC\…`, WebDAV's `\\host@SSL\share\…`) or a device
+  path (`\\.\pipe\…`, `\\?\GLOBALROOT\…`) is refused by its spelling before anything looks it up, since looking
+  it up would contact that host, unless a root is on the same share; a link whose target is one of those is
+  refused too. A local volume's `\\?\Volume{…}\` path is let through. A link whose text is a native NT name
+  (`\Device\…`, `\??\…`, `\GLOBAL??\…`) is refused as a device path, and so is a name that ends in a period or a space, in a
+  path or as a link's target, since Windows trims it where it looks a name up.
 - **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
   document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
   `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
@@ -182,13 +188,29 @@ Or in a project's `.mcp.json`:
   leaves its contents where they are, and so does resizing a frame with `cmd` held (constraints
   ignored); a layer a mask hides can't be clicked there, and a mask group's box and exports are
   the mask's (plus any layers under the mask).
+- Repeated UI (buttons, inputs, cards, list rows, tab bars, icons) is a component and its copies
+  are instances: make it once with `component.create` (or `create_node` type `component`) and place
+  each other copy with `instance.create {component, parent?, x?, y?}` rather than duplicating the
+  layers, so every copy follows the main. States and sizes are variants of one set: name the mains
+  `Property=value` (`State=Default`, `State=Hover`) and run `component.combineVariants` on them;
+  `component.addVariant {id}` adds one more. What changes per copy is a component property:
+  `component.addProperty {id, name, type: text|boolean|instanceSwap, layer}` on the component, or
+  on the set once its variants are combined, then `component.bindProperty {layer, property}` for
+  each other variant's layer (a property added to one variant before combining stays that
+  variant's, so an instance switched to another variant loses it); `instance.setProperties {ids,
+  properties}` sets it on each copy. The server's `initialize` instructions say this too, since
+  agents otherwise tend to copy layers.
 - Children of an auto-layout frame are positioned by the layout: set `layout`, `gap`, `padding`,
   `mainAlign`, `crossAlign`, `sizingH`/`sizingV` instead of x/y. In one call, `layout` applies
   before the keys that tune it, so `{"layout": {"mode": "vertical"}, "gap": 8}` keeps the gap;
   auto layout keys beside a `layout` of `null` or `"none"` are refused. More auto layout props:
   - `sizingH` / `sizingV`: `fixed`, `hug` (auto layout frames and text) or `fill` (children in an
-    auto layout flow). A child can't fill an axis its parent hugs: setting `fill` turns the parent
-    `fixed` on that axis, and a parent set to `hug` turns the children that filled it `fixed`. A
+    auto layout flow). A child can't fill the axis its parent hugs along the flow: setting `fill`
+    turns the parent `fixed` on that axis (the session notice reads "Width set to Fixed for <name>"),
+    and a parent set to `hug` turns the children that filled it `fixed`. Across the flow the parent keeps
+    hugging and the child takes the line's cross size (the largest sibling that doesn't fill, its min
+    counted, padding outside); the parent turns `fixed` ("Height set to Fixed for <name>") only when no
+    such sibling is left, and `fill` across a wrapping row that hugs that axis is refused. A
     layer moved out of auto layout (or whose frame loses it) keeps its size as `fixed`. Fill
     children share the space like CSS flexbox, within their min/max.
   - `minWidth` / `maxWidth` / `minHeight` / `maxHeight` (px, `null` removes) bound Hug, Fill and
@@ -477,7 +499,7 @@ Returns `{fitted: [{id, fontSize, lines, fits, orphan}]}`. Use case: a carousel 
 
 A board is a file of its own kind for thinking together: `file.newBoard {name?}` opens one (its
 page is light; `inspect_document` says `kind: "board"`). Board objects are ordinary layers with a
-`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode, …}`; a connector may say
+`board` entry `get_node` shows (`{type: sticky|shape|connector|label|stamp|ink|mindNode|codeBlock, …}`; a connector may say
 `branch: true`), so the usual
 commands move, resize, recolour, copy, delete and undo them. On a design file the board commands
 refuse; on a board `proto.*`, `dev.*`, `view.prototype` and `view.devMode` refuse. Each of these is
@@ -491,6 +513,8 @@ one undo step and returns the ids it made:
   same colour beside the selected (or edited) one; with `edit: true` the app goes on typing in it
   (`Shift+Cmd/Ctrl+Enter` in the app does both). On a shape it does what `board.addConnected` does:
   the next shape, joined to it by a connector (`{id, text, connector}`).
+  On a code block it makes the next code block 128 units beside it (`side`, default right), as wide and
+  in the same language, not joined (`{id, text, language}`).
 - `board.addConnected {id?, side?: right|below|left|above, edit?}` → `{id, text, connector}`: the
   next sticky or shape of the same kind, size and colour on that side of the selected (or edited)
   one, 80 units away, joined to it by a connector the way the Connector tool makes one; one undo
@@ -511,6 +535,17 @@ one undo step and returns the ids it made:
   of the map that the given (or selected, or edited) one belongs to: a child below its other
   children, or a sibling right after it (the first node has none); the map lays itself out again.
   One undo step. With `edit: true` the app goes on typing in it.
+- `board.codeBlock {x?, y?, language?, text?, width?, parent?, edit?}` → `{id, text, language}`: a code
+  block (`codeBlock` with its `language`): a dark panel holding monospace text (Liberation Mono 16 on a
+  24 line where it is embedded or installed). `language` is `bash cpp css go graphql html javascript json
+  kotlin plainText python ruby rust sql swift typescript` (default `typescript`); `width` is 210 to 100000
+  (default 576); `x`/`y` are its top-left corner, by default the view's centre less half the width and less 64 (half the
+  smallest height, 128), so a block of more lines reaches further down. Its height is its lines: 32 + 24 a visual line,
+  never under four lines, so only its width can be changed (a set or dragged height is not kept). In its
+  text Tab types two spaces, Enter keeps the line's indent, and lists, links and styled ranges do not stick.
+  One undo step.
+- `board.setLanguage {id?, ids?, language}` → `{ids}`: the language of the given (or selected, or edited)
+  code blocks, by id or name (`cpp` or `C++`).
 - `board.shape {shape, x, y, width?, height?, text?, color?, parent?}` → `{id, text}`: a shape with centred,
   wrapping text: `rectangle roundedRectangle ellipse diamond triangle triangleDown parallelogramRight parallelogramLeft trapezoid pentagon hexagon octagon star plus arrowLeft arrowRight chevron speechBubble database document predefinedProcess manualInput internalStorage`.
 - `board.connector {from, to, fromSide?, toSide?, fromAt?, toAt?, style?: straight|elbow|curved, startCap?, endCap?, label?}`
@@ -1006,7 +1041,7 @@ most when it can't be reached).
   `library.acceptUpdates` takes it, overrides kept. The app's own background checks ask only about
   team libraries added (`library.add`) or checked (`library.check {library?}`) on this computer,
   so opening a file that names another one contacts nothing (#1097).
-- `library.usage {library?, days?}` → `{id, name, assetsKnown, styles [{id, name, type, layers, files}], variables [{id, name, collection, layers, files}], instances, detached, detachesKnown, days,
+- `library.usage {library?, days?}` → `{id, name, assetsKnown, assetActionsKnown, styles [{id, name, type, layers, files, insertions, detachments}], variables [{id, name, collection, layers, files, insertions, detachments}], instances, detached, detachesKnown, days,
   insertions, detachments, actionsKnown, weeks: [{week, insertions, detachments}], files: [{name,
   updated, instances, detached}], components: [{id, name, instances, files, detached, insertions,
   detachments}]}`: what the files using it reported (each fetch reports the asking document's name

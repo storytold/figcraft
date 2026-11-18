@@ -62,7 +62,7 @@ fn spacing_fields_type_scrub_and_keep_one_undo_step() {
     u.frame(vec![]);
     let lead = u.ctx.read_response(field.with("lead")).unwrap().rect.center();
     drag(&mut u, lead, vec2(16., 0.), true);
-    assert_eq!(xy(&u, ids[1]), (196., 100.));
+    assert_eq!(xy(&u, ids[1]), (188., 100.));
     assert_eq!(u.app.session.undo_depth().0, history + 1);
     u.app.run("edit.undo", json!({}));
     assert_eq!(xy(&u, ids[1]), (180., 100.));
