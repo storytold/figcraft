@@ -427,6 +427,19 @@ fn node_binding<'v>(k: &str, v: &'v Value, n: &Node, out: &mut Vec<(String, &'v 
                 push(f, v.get(key).and_then(alias));
             }
         }
+        // Each stroke side's weight (#2441). The live `/nodes` response names the sides
+        // `BORDER_TOP_WEIGHT` and so on, as `rectangleCornerRadii` names its corners; Figma's
+        // published OpenAPI spec names them `top` … `left`. Either is read.
+        "individualStrokeWeights" => {
+            for (keys, f) in [
+                (["BORDER_TOP_WEIGHT", "top"], "strokeTopWeight"),
+                (["BORDER_RIGHT_WEIGHT", "right"], "strokeRightWeight"),
+                (["BORDER_BOTTOM_WEIGHT", "bottom"], "strokeBottomWeight"),
+                (["BORDER_LEFT_WEIGHT", "left"], "strokeLeftWeight"),
+            ] {
+                push(f, keys.iter().find_map(|key| v.get(*key)).and_then(alias));
+            }
+        }
         "fills" | "strokes" => {
             let field = if k == "fills" { "fill" } else { "stroke" };
             match v.as_array().and_then(|a| a.first()).and_then(alias) {
