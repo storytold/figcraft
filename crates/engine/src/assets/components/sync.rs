@@ -365,6 +365,8 @@ fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, compon
     fresh.locked = root.locked;
     fresh.visible = root.visible;
     fresh.var_modes = root.var_modes.clone();
+    // The scale an instance was given (a nested copy's own factor comes from its main layer).
+    fresh.scale_factor = root.scale_factor;
     fresh.is_mask = root.is_mask;
     fresh.exposed = root.exposed;
     fresh.guides = root.guides.clone();
