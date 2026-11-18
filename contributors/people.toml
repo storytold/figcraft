@@ -121,3 +121,7 @@ sync_github_name = true
 
 [people.gmrmad1]
 real_name = "Madhav Agarwal"
+
+[people.Aathish-D]
+real_name = "Aathish Duraiswamy"
+sync_github_name = true
