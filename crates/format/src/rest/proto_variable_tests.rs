@@ -244,6 +244,55 @@ fn variables_bound_to_stroke_sides_bind_each_sides_weight() {
     assert!(doc.validate().is_empty(), "{:?}", doc.validate());
 }
 
+/// #2441: node-level `fills`, `effects` and `textRangeFills` lists repeat what each gradient stop,
+/// effect and paint binds itself. When those are read, nothing is lost and nothing is reported; a
+/// list naming a variable they don't bind still is.
+#[test]
+fn node_level_lists_the_paints_and_effects_bind_are_not_reported() {
+    const ACCENT: &str = "VariableID:1:4";
+    let gradient = |stop_var: Option<&str>| {
+        let first = match stop_var {
+            Some(v) => json!({"position": 0, "color": rgba(1.0, 0.0, 0.0), "boundVariables": {"color": alias(v)}}),
+            None => json!({"position": 0, "color": rgba(1.0, 0.0, 0.0)}),
+        };
+        json!([{"type": "GRADIENT_LINEAR", "gradientHandlePositions": [{"x": 0, "y": 0.5}, {"x": 1, "y": 0.5}, {"x": 0, "y": 1}],
+                "gradientStops": [first, {"position": 1, "color": rgba(0.0, 0.0, 1.0)}]}])
+    };
+    let shadow = json!([{"type": "DROP_SHADOW", "color": rgba(0.0, 0.0, 0.0), "offset": {"x": 0, "y": 2}, "radius": 4, "visible": true,
+                         "blendMode": "NORMAL", "boundVariables": {"color": alias(BRAND)}}]);
+    let page = |children: Value| {
+        json!({"name": "Lists", "document": {"id": "0:0", "type": "DOCUMENT", "children": [
+            {"id": "0:1", "name": "Page", "type": "CANVAS", "children": children}]}})
+    };
+    let rect = |id: &str, name: &str, extra: Value| {
+        let mut r = json!({"id": id, "name": name, "type": "RECTANGLE", "relativeTransform": at(0.0, 0.0), "size": {"x": 40, "y": 20}});
+        if let (Some(r), Some(e)) = (r.as_object_mut(), extra.as_object()) {
+            r.extend(e.clone());
+        }
+        r
+    };
+    let kept = page(json!([
+        rect("1:1", "Gradient", json!({"fills": gradient(Some(BRAND)), "boundVariables": {"fills": [alias(BRAND)]}})),
+        rect("1:2", "Shadow", json!({"effects": shadow, "boundVariables": {"effects": [alias(BRAND)]}})),
+        {"id": "1:3", "name": "Label", "type": "TEXT", "relativeTransform": at(0.0, 0.0), "size": {"x": 40, "y": 20}, "characters": "Hi",
+         "style": {"fontFamily": "Inter", "fontSize": 8},
+         "fills": [{"type": "SOLID", "color": rgba(1.0, 0.0, 0.0), "boundVariables": {"color": alias(BRAND)}}],
+         "boundVariables": {"textRangeFills": [alias(BRAND)]}}
+    ]));
+    let (doc, warnings) = import_with(&kept, Some(&variables_json()), &no_images).unwrap();
+    for k in ["`fills`", "`effects`", "`textRangeFills`"] {
+        assert!(!has(&warnings, k), "{k}: {warnings:?}");
+    }
+    assert_eq!(named(&doc, "Gradient").bound.get("fills/0/stops/0/color").map(String::as_str), Some(BRAND));
+    assert_eq!(named(&doc, "Shadow").bound.get("effects/0/color").map(String::as_str), Some(BRAND));
+    assert_eq!(named(&doc, "Label").bound.get("fill").map(String::as_str), Some(BRAND));
+
+    // A list naming a variable no stop binds is still reported.
+    let lost = page(json!([rect("1:1", "Gradient", json!({"fills": gradient(None), "boundVariables": {"fills": [alias(ACCENT)]}}))]));
+    let (_, warnings) = import_with(&lost, Some(&variables_json()), &no_images).unwrap();
+    assert!(has(&warnings, "`fills`"), "{warnings:?}");
+}
+
 #[test]
 fn embedded_variables_match_separate_ones() {
     let mut embedded = file_json();
