@@ -322,35 +322,29 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         app.canvas.dragging = false;
         return true;
     }
+    deliver_deferred_down(app);
     let primary_pressed = ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
     let primary_down = ctx.input(|i| i.pointer.primary_down());
     let primary_released = ctx.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
-    // The press and the release carry their own positions: both in one frame (a quick click or a
-    // slow frame) would otherwise send the press from the hover position the pointer ended at.
-    let (press_pos, release_pos) = ctx.input(|i| {
-        let (mut press, mut release) = (None, None);
-        for e in &i.events {
-            if let egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } = e {
-                if *pressed {
-                    press = Some(*pos);
-                } else {
-                    release = Some(*pos);
-                }
-            }
-        }
-        (press, release)
-    });
+    let (press_pos, release_pos) = pointer_press_release_positions(&ctx);
     let kind = if primary_pressed && resp.hovered() {
         app.canvas.dragging = true;
         app.ui.context_menu = None;
         app.ui.tool_flyout = None;
         // Clicking the canvas takes focus from panel fields.
+        let had_field_focus = ctx.memory(|m| m.focused()).is_some();
         ctx.memory_mut(|m| {
             if let Some(f) = m.focused() {
                 m.surrender_focus(f);
             }
         });
-        Some(PointerKind::Down)
+        if had_field_focus {
+            app.canvas.deferred_down = Some((press_pos.unwrap_or(pos), primary_released, release_pos.unwrap_or(pos), mods));
+            ctx.request_repaint();
+            None
+        } else {
+            Some(PointerKind::Down)
+        }
     } else if app.canvas.dragging && primary_released {
         app.canvas.dragging = false;
         Some(PointerKind::Up)
@@ -395,6 +389,34 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     } else {
         true
     }
+}
+
+/// Send a pointer down/up sequence deferred from the previous frame to let a focused field blur and commit.
+fn deliver_deferred_down(app: &mut FigApp) {
+    if let Some((press_at, deferred_released, release_at, deferred_mods)) = app.canvas.deferred_down.take() {
+        send(app, PointerKind::Down, press_at, &deferred_mods);
+        if deferred_released {
+            app.canvas.dragging = false;
+            send(app, PointerKind::Up, release_at, &deferred_mods);
+        }
+    }
+}
+
+/// The press and release positions from raw pointer events in this batch.
+fn pointer_press_release_positions(ctx: &egui::Context) -> (Option<Pos2>, Option<Pos2>) {
+    ctx.input(|i| {
+        let (mut press, mut release) = (None, None);
+        for e in &i.events {
+            if let egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } = e {
+                if *pressed {
+                    press = Some(*pos);
+                } else {
+                    release = Some(*pos);
+                }
+            }
+        }
+        (press, release)
+    })
 }
 
 /// Pointer event `kind` at screen point `pos`, to the tools.

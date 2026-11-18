@@ -240,6 +240,9 @@ impl FigApp {
         crate::control::drain(self, &ctx);
         windows::requests(self, &ctx);
         selection_spacing::sync(self, &ctx);
+        let cur_sel = self.session.selection().to_vec();
+        let sel_id = egui::Id::unique("app_current_selection");
+        ctx.data_mut(|d| d.insert_temp(sel_id, cur_sel));
         // Before any widget: the navigation keys (F6, Tab, arrows, Escape) move the keyboard.
         a11y::begin(self, &ctx, ui.scope_id());
         if self.ui.title_bar == TitleBar::Custom {
