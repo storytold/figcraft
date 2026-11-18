@@ -165,7 +165,12 @@ fn inserts_and_detaches_count_per_style_and_variable_in_the_period() {
     ex(&mut b, "style.detach", json!({"ids": [two.0], "which": "fill"}));
     ex(&mut b, "library.bindVariable", json!({"library": lid, "variable": "Accent", "ids": [two.0], "field": "fill"}));
 
-    let u = usage_when(&mut a, &mut b, |u| u["styles"][0]["insertions"] == 2 && u["variables"][0]["insertions"] == 1);
+    let u = usage_when(&mut a, &mut b, |u| {
+        u["assetActionsKnown"] == true
+            && u["styles"][0]["insertions"] == 2
+            && u["styles"][0]["detachments"] == 1
+            && u["variables"][0]["insertions"] == 1
+    });
     assert_eq!(u["assetActionsKnown"], true, "{u}");
     assert_eq!(u["styles"][0]["detachments"], 1, "{u}");
     assert_eq!(u["variables"][0]["detachments"], 0, "{u}");

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::components::tests::{ex, idv};
 use crate::library_server::asset_actions;
-use figcraft_doc::{AssetCount, NodeId, PublishedLibrary};
+use figcraft_doc::{AssetCount, NodeId, NodeKind, PublishedLibrary};
 
 /// A file with a published library holding a paint style, a colour variable and a Card, and a
 /// second file that uses it: the second session, the library's id and its keys.
@@ -79,6 +79,45 @@ fn an_instance_counts_as_its_component_alone() {
     ex(&mut s, "edit.duplicate", json!({}));
     assert_eq!(counts(&s).0, (0, 0), "duplicating it");
     assert_eq!(s.doc().unwrap().libraries.inserted[0].count, 2);
+}
+
+/// Applying and detaching a library style or variable on an instance, on a layer in it, or on a
+/// layer of an instance nested in it counts nothing either: what an instance uses counts as it.
+#[test]
+fn applying_and_detaching_inside_an_instance_counts_nothing() {
+    let (mut s, lib, _) = user();
+    let placed = idv(&ex(&mut s, "library.place", json!({"library": lib, "component": "Card", "x": 0, "y": 0})));
+    // A Button holding a rectangle and an Icon instance (the Icon holds a dot), and a Button instance.
+    let icon = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 200, "width": 24, "height": 24, "name": "Icon"})));
+    ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 8, "height": 8, "parent": icon.0}));
+    let icon = idv(&ex(&mut s, "component.create", json!({"ids": [icon.0]})));
+    let button = idv(&ex(&mut s, "frame.create", json!({"x": 100, "y": 200, "width": 80, "height": 40, "name": "Button"})));
+    ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 80, "height": 40, "parent": button.0}));
+    ex(&mut s, "instance.create", json!({"component": icon.0, "parent": button.0, "x": 4, "y": 4}));
+    let button = idv(&ex(&mut s, "component.create", json!({"ids": [button.0]})));
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": button.0, "x": 300, "y": 200})));
+    let (layer, nested, deep) = {
+        let d = s.doc().unwrap();
+        let kids = |id: NodeId| d.node(id).unwrap().children.clone();
+        let nested = kids(i).into_iter().find(|k| matches!(d.node(*k).unwrap().kind, NodeKind::Instance { .. })).unwrap();
+        let layer = kids(i).into_iter().find(|k| *k != nested).unwrap();
+        (layer, nested, kids(nested)[0])
+    };
+    let targets = [placed.0, i.0, layer.0, nested.0, deep.0];
+    ex(&mut s, "library.applyStyle", json!({"library": lib, "style": "Brand", "ids": targets}));
+    ex(&mut s, "library.bindVariable", json!({"library": lib, "variable": "Accent", "ids": targets, "field": "stroke"}));
+    let d = s.doc().unwrap();
+    assert!(d.node(deep).unwrap().styles.fill.is_some() && !d.node(deep).unwrap().bound.is_empty(), "the nested layer took both");
+    ex(&mut s, "style.detach", json!({"ids": targets, "which": "fill"}));
+    ex(&mut s, "variable.bind", json!({"ids": targets, "field": "stroke"}));
+    assert_eq!(counts(&s), ((0, 0), (0, 0)));
+    // The same on a plain layer counts.
+    let plain = rect(&mut s, 600);
+    ex(&mut s, "library.applyStyle", json!({"library": lib, "style": "Brand", "ids": [plain.0]}));
+    ex(&mut s, "library.bindVariable", json!({"library": lib, "variable": "Accent", "ids": [plain.0], "field": "stroke"}));
+    ex(&mut s, "style.detach", json!({"ids": [plain.0], "which": "fill"}));
+    ex(&mut s, "variable.bind", json!({"ids": [plain.0], "field": "stroke"}));
+    assert_eq!(counts(&s), ((1, 1), (1, 1)));
 }
 
 #[test]
