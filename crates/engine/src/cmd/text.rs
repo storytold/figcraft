@@ -642,7 +642,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "text.edit.key",
             "Text key",
-            "{key: Backspace|Delete|Left|Right|Up|Down|Home|End|Enter|Tab|Escape|SelectAll, shift?, alt?, cmd?}  in a list, Tab nests the item and Shift+Tab, Enter on an empty item or Backspace at its start move it out",
+            "{key: Backspace|Delete|Left|Right|Up|Down|Home|End|Enter|Tab|Escape|SelectAll, shift?, alt?, cmd?}  in a list, Tab nests the item and Shift+Tab, Enter on an empty item or Backspace at its start move it out; in a code block, Tab types two spaces and Enter keeps the line's indent",
             true,
             |s, p| {
                 let k = req_string("text.edit.key", p, "key")?;
