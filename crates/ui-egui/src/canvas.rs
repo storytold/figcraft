@@ -234,8 +234,9 @@ fn pointer_event(app: &FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers
         sy: f64::from(pos.y),
         shift: m.shift,
         alt: m.alt,
-        // Crop mode: resizing the layer crops it, as Cmd/Ctrl-resizing does.
-        cmd: m.command || app.ui.crop.is_some(),
+        // Crop mode: resizing the layer crops it, as Cmd/Ctrl-resizing does (not while its points
+        // are being edited, where Cmd/Ctrl bends a segment).
+        cmd: m.command || (app.ui.crop.is_some() && app.session.ds().is_ok_and(|d| d.vector_edit.is_none())),
         ctrl: m.ctrl,
         zoom,
         pressure: app.canvas.pressure,

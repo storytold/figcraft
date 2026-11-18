@@ -322,3 +322,132 @@ fn crop_in_the_colour_picker_only_sets_the_mode_where_crop_image_does_not_apply(
     assert_eq!(crop_on_canvas(&u.app, &PickerTarget::PageBackground), None);
     assert_eq!(crop_on_canvas(&u.app, &PickerTarget::Style { id: "S:1".into(), index: 0 }), None);
 }
+
+#[test]
+fn in_crop_mode_the_edges_of_an_image_in_auto_layout_crop_it_too() {
+    let (mut u, layer, _) = setup();
+    let column = id(&u.app.session.execute("frame.create", &json!({"x": 0, "y": 0, "width": 200, "height": 100})).unwrap());
+    u.app.run("node.reparent", json!({"ids": [layer], "parent": column}));
+    u.app.run("node.set", json!({"ids": [column], "props": {"layout": "vertical", "sizingV": "hug"}}));
+    u.app.run("select.set", json!({"ids": [layer]}));
+    u.app.run("image.crop", json!({}));
+    u.frame(vec![]);
+    let (_, Some(before)) = mode(&u, layer) else { panic!("a crop") };
+    let (from, to) = (u.app.to_screen(100.0, 100.0), u.app.to_screen(100.0, 60.0));
+    u.drag_to(from, to);
+    u.button(to, false);
+    let n = u.app.session.doc().unwrap().node(layer).unwrap().clone();
+    assert!((n.height - 60.0).abs() < 1e-6 && (n.width - 200.0).abs() < 1e-6, "the bottom edge moved up: {} x {}", n.width, n.height);
+    let (m, Some(after)) = mode(&u, layer) else { panic!("a crop") };
+    assert_eq!(m, ImageScaleMode::Crop);
+    assert!((after[3] - before[3] * 0.6).abs() < 1e-9 && (after[0] - before[0]).abs() < 1e-9, "cropped, not squashed: {before:?} -> {after:?}");
+    assert!((after[5] - before[5]).abs() < 1e-9, "the top stays: {before:?} -> {after:?}");
+    assert_eq!(u.app.ui.crop, Some((layer, 0)), "still cropping");
+}
+
+#[test]
+fn a_double_click_in_crop_mode_keeps_cropping_and_vector_edit_ends_crop_mode() {
+    let (mut u, layer, _) = setup();
+    u.app.run("image.crop", json!({}));
+    u.frame(vec![]);
+    let at = u.app.to_screen(100.0, 50.0);
+    for _ in 0..2 {
+        u.button(at, true);
+        u.button(at, false);
+    }
+    u.frame(vec![]);
+    assert!(u.app.session.ds().unwrap().vector_edit.is_none(), "a double-click while cropping doesn't edit the points");
+    assert_eq!(u.app.ui.crop, Some((layer, 0)), "still cropping");
+    let (from, to) = (u.app.to_screen(200.0, 50.0), u.app.to_screen(150.0, 50.0));
+    u.drag_to(from, to);
+    u.button(to, false);
+    let n = u.app.session.doc().unwrap().node(layer).unwrap().clone();
+    assert!((n.width - 150.0).abs() < 1e-6 && matches!(n.kind, figcraft_doc::NodeKind::Rectangle), "the side crops; the layer stays a rectangle");
+    u.app.run("vector.edit.begin", json!({"id": layer}));
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.crop, None, "editing the points ends crop mode");
+    u.app.run("image.crop", json!({}));
+    u.frame(vec![]);
+    assert!(u.app.session.ds().unwrap().vector_edit.is_none(), "cropping ends editing the points");
+    assert_eq!(u.app.ui.crop, Some((layer, 0)));
+}
+
+/// The second press of a double-click on a side of the layer begins a resize; its release, which
+/// is the double-click, ends it, and crop mode stays.
+#[test]
+fn a_double_click_on_a_side_in_crop_mode_leaves_no_resize_open() {
+    let (mut u, layer, _) = setup();
+    u.app.run("image.crop", json!({}));
+    u.frame(vec![]);
+    let at = u.app.to_screen(200.0, 50.0);
+    for _ in 0..2 {
+        u.button(at, true);
+        u.button(at, false);
+    }
+    u.frame(vec![]);
+    assert!(u.app.session.ds().unwrap().interaction.is_none(), "the resize the second press began is over");
+    assert_eq!(u.app.ui.crop, Some((layer, 0)), "still cropping");
+}
+
+#[test]
+fn in_crop_mode_the_images_corners_scale_freely_and_with_shift_in_proportion() {
+    let image_size = |u: &Ui, layer: NodeId| {
+        let n = u.app.session.doc().unwrap().node(layer).unwrap().clone();
+        let (_, Some(c)) = mode(u, layer) else { panic!("a crop") };
+        let (x0, y0, x1, y1) = figcraft_color::ImagePaint::crop_rect(c);
+        ((x1 - x0) * n.width, (y1 - y0) * n.height)
+    };
+    for shift in [false, true] {
+        let (mut u, layer, _) = setup();
+        u.app.run("image.crop", json!({}));
+        u.frame(vec![]);
+        let (from, to) = (u.app.to_screen(200.0, 50.0), u.app.to_screen(150.0, 50.0));
+        u.drag_to(from, to);
+        u.button(to, false);
+        let (w0, h0) = image_size(&u, layer);
+        let modifiers = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+        let (from, to) = (u.app.to_screen(200.0, 100.0), u.app.to_screen(260.0, 110.0));
+        u.frame_with(
+            vec![Event::PointerMoved(from), Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers }],
+            modifiers,
+        );
+        for k in 1..=10 {
+            u.frame_with(vec![Event::PointerMoved(from + (to - from) * (k as f32 / 10.0))], modifiers);
+        }
+        u.frame_with(vec![Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers }], modifiers);
+        let (w1, h1) = image_size(&u, layer);
+        let kept = (w1 / h1 - w0 / h0).abs() < 1e-6;
+        assert!(w1 > w0, "the corner scaled the image: {w0}x{h0} -> {w1}x{h1}");
+        assert_eq!(kept, shift, "Shift {shift}: {w0}x{h0} -> {w1}x{h1}");
+    }
+}
+
+#[test]
+fn in_auto_layout_a_side_dragged_past_the_image_leaves_no_empty_strip() {
+    let mut s = Session::new();
+    let image = image::RgbaImage::from_fn(300, 200, |x, y| image::Rgba([(x % 255) as u8, (y % 255) as u8, 120, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let content = id(&s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 1092, "height": 1400})).unwrap());
+    id(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 300, "height": 160, "parent": content})).unwrap());
+    let layer = id(&s.execute("image.place", &json!({"data": data, "x": 0, "y": 300, "width": 804, "height": 969})).unwrap());
+    s.execute("node.reparent", &json!({"ids": [layer], "parent": content})).unwrap();
+    s.execute("node.set", &json!({"ids": [content], "props": {"layout": "vertical", "sizingV": "hug", "padding": [112, 0, 100, 0]}})).unwrap();
+    s.execute("node.set", &json!({"ids": [layer], "props": {"constrainProportions": true}})).unwrap();
+    s.execute("select.set", &json!({"ids": [layer]})).unwrap();
+    let mut u = Ui::new(s);
+    u.app.run("view.set", json!({"zoom": 0.5, "cx": 546, "cy": 700}));
+    u.app.run("image.crop", json!({}));
+    u.frame(vec![]);
+    let b = u.app.session.doc().unwrap().world_bounds(layer).unwrap();
+    let (from, to) = (u.app.to_screen(400.0, b.y0), u.app.to_screen(400.0, b.y0 - 120.0));
+    u.drag_to(from, to);
+    u.button(to, false);
+    let n = u.app.session.doc().unwrap().node(layer).unwrap().clone();
+    let (_, Some(c)) = mode(&u, layer) else { panic!("a crop") };
+    let (x0, y0, x1, y1) = figcraft_color::ImagePaint::crop_rect(c);
+    assert!(x0 <= 1e-9 && y0 <= 1e-9 && x1 >= 1.0 - 1e-9 && y1 >= 1.0 - 1e-9, "the image covers the layer: {:?}", (x0, y0, x1, y1));
+    assert!(n.width >= 1.0 && n.height >= 1.0, "{} x {}", n.width, n.height);
+    assert!(u.app.session.ds().unwrap().vector_edit.is_none());
+}
