@@ -3514,8 +3514,7 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a616d2fb8c89516ac2723a581f69d6c18576046bed761bd6b305e5618e6ae130"
+source = "git+https://github.com/storytold/wgpu?rev=a2b0df8059c81f88c75323faab12f1822324a767#a2b0df8059c81f88c75323faab12f1822324a767"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -3540,8 +3539,7 @@ dependencies = [
 [[package]]
 name = "naga-types"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "590afbf58a6f4f62873cd5cff4468061844bafa1cdf399cc954537c22d768d49"
+source = "git+https://github.com/storytold/wgpu?rev=a2b0df8059c81f88c75323faab12f1822324a767#a2b0df8059c81f88c75323faab12f1822324a767"
 dependencies = [
  "hashbrown 0.17.1",
  "indexmap",
@@ -6379,8 +6377,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b7fb58561a792bc237628ba0792e332de418fefe145f13b5ed8201e6d52f58"
+source = "git+https://github.com/storytold/wgpu?rev=a2b0df8059c81f88c75323faab12f1822324a767#a2b0df8059c81f88c75323faab12f1822324a767"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -6435,8 +6432,7 @@ dependencies = [
 [[package]]
 name = "wgpu-naga-bridge"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2f62e73117bb7a62bfd9c5a5841438a823f6566c6442a808ee269d2d055c081"
+source = "git+https://github.com/storytold/wgpu?rev=a2b0df8059c81f88c75323faab12f1822324a767#a2b0df8059c81f88c75323faab12f1822324a767"
 dependencies = [
  "naga",
  "wgpu-types",
@@ -6445,8 +6441,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99dad6f1fbdbbdb4c278a6508b059d44688f5cebddf78d005a46a31340269286"
+source = "git+https://github.com/storytold/wgpu?rev=a2b0df8059c81f88c75323faab12f1822324a767#a2b0df8059c81f88c75323faab12f1822324a767"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
