@@ -162,6 +162,7 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
     }
     if matches!(n.kind, NodeKind::Text(_)) {
         // Text: a solid is the ink (`color`), one per fill, so the last (top) one wins.
+        let top = n.fills.iter().rposition(|p| p.visible);
         for (i, p) in n.fills.iter().enumerate().filter(|(_, p)| p.visible) {
             match &p.kind {
                 PaintKind::Solid { color } => {
@@ -169,7 +170,16 @@ pub(crate) fn css_decls(doc: &Document, n: &Node, t: &mut Tokens, hug: (bool, bo
                     // A variable binds the first paint's colour.
                     put("color", if i == 0 { tok(doc, n, &["fill"], c, t) } else { c });
                 }
-                PaintKind::Gradient(g) => put("background", css_gradient(g, n.width, n.height, p.opacity)),
+                PaintKind::Gradient(g) => {
+                    put("background", css_gradient(g, n.width, n.height, p.opacity));
+                    // A gradient on top fills the glyphs: clip the background to the text and clear the ink.
+                    // Under a later paint it must not hide that paint's colour, so it stays a plain background.
+                    if Some(i) == top {
+                        put("-webkit-background-clip", "text".into());
+                        put("background-clip", "text".into());
+                        put("color", "transparent".into());
+                    }
+                }
                 PaintKind::Image(_) => put("background", "url(image.png) center / cover".into()),
                 PaintKind::Pattern(_) => put("background", "url(pattern.png) repeat".into()),
             }
