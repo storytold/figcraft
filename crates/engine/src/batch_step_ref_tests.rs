@@ -652,3 +652,60 @@ fn a_continue_batch_reports_runtime_errors_and_runs_later_steps() {
     assert_eq!(results[6]["ok"], true);
     assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, "Done");
 }
+
+#[test]
+fn a_refused_step_names_its_step_and_keeps_its_kind() {
+    let mut s = Session::new();
+    let comp = id(&s.execute("node.create", &json!({"type": "component", "name": "Button", "width": 100, "height": 40})).unwrap());
+    let inst = id(&s.execute("instance.create", &json!({"component": comp})).unwrap());
+    let before = s.doc().unwrap().clone();
+    let undo = s.undo_depth();
+    let result = s.execute(
+        "command.batch",
+        &json!({"commands": [
+            {"command": "node.create", "params": {"type": "rectangle", "parent": inst, "width": 10, "height": 10}}
+        ]}),
+    );
+    match result {
+        Err(EngineError::Disabled(cmd, msg)) => {
+            assert_eq!(cmd, "node.create");
+            assert!(msg.starts_with("step 0: "), "{msg}");
+            assert!(msg.contains("can't be added"), "{msg}");
+        }
+        other => panic!("expected Disabled, got {other:?}"),
+    }
+    assert_eq!(s.doc().unwrap(), &before, "the batch rolled back");
+    assert_eq!(s.undo_depth(), undo, "no undo step for the refused batch");
+    // Outside a batch the same refusal keeps its kind and says no step.
+    match s.execute("node.create", &json!({"type": "rectangle", "parent": inst, "width": 10, "height": 10})) {
+        Err(EngineError::Disabled(_, msg)) => assert!(!msg.contains("step "), "{msg}"),
+        other => panic!("expected Disabled, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_internal_step_says_which_step_without_changing_kind() {
+    use crate::derived;
+    let mut s = Session::new();
+    let r = id(&s.execute("node.create", &json!({"type": "rectangle", "width": 10, "height": 10})).unwrap());
+    let before = s.doc().unwrap().clone();
+    derived::PANIC.with(|p| p.set(true));
+    let result = s.execute(
+        "command.batch",
+        &json!({"commands": [
+            {"command": "node.set", "params": {"ids": [r], "props": {"name": "Renamed"}}}
+        ]}),
+    );
+    derived::PANIC.with(|p| p.set(false));
+    match result {
+        Err(EngineError::Internal { cmd, msg }) => {
+            assert_eq!(cmd, "node.set");
+            assert!(msg.starts_with("step 0: "), "{msg}");
+        }
+        other => panic!("expected Internal, got {other:?}"),
+    }
+    assert_eq!(s.doc().unwrap(), &before, "the panicking step is rolled back");
+    // Kinds without a message are left as they are.
+    assert!(matches!(EngineError::NoNode(figcraft_doc::NodeId(7)).at_step(2), EngineError::NoNode(_)));
+    assert!(matches!(EngineError::Waiting.at_step(2), EngineError::Waiting));
+}

@@ -153,7 +153,7 @@ fn has(app: &FigApp) -> Option<Has> {
             }
             Some(BoardItem::Label { .. } | BoardItem::MindNode) => h.text = true,
             Some(BoardItem::Table) => h.table = true,
-            Some(BoardItem::Stamp { .. }) | None => {}
+            Some(BoardItem::Stamp { .. } | BoardItem::CodeBlock { .. }) | None => {}
         }
     }
     h.only_lines = h.connector.is_some() && !others;
