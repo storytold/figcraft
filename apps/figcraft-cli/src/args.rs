@@ -316,7 +316,10 @@ fn whole_number(s: &str) -> Result<usize, ValueError> {
 
 /// `mcp --attach`: `host:port` as given, or a bare port on 127.0.0.1.
 fn attach(s: &str) -> Result<String, ValueError> {
-    if s.contains(':') {
+    if let Some((host, port)) = s.rsplit_once(':') {
+        if host.is_empty() || port.parse::<u16>().is_err() {
+            return Err(ValueError::Attach);
+        }
         return Ok(s.to_owned());
     }
     let port: u16 = s.parse().map_err(|_| ValueError::Attach)?;
@@ -461,6 +464,12 @@ mod tests {
         assert_eq!(a.attach.as_deref(), Some("127.0.0.1:7979"));
         let Command::Mcp(a) = ok(&["mcp", "--attach=localhost:7979"]) else { panic!("mcp") };
         assert_eq!(a.attach.as_deref(), Some("localhost:7979"));
+        for address in ["127.0.0.1:7979", "[::1]:7979", "[fe80::1%3]:7979", "localhost:0"] {
+            let Command::Mcp(a) = ok(&["mcp", "--attach", address]) else { panic!("mcp") };
+            assert_eq!(a.attach.as_deref(), Some(address));
+        }
+        let Command::Mcp(a) = ok(&["mcp", "--attach", "0"]) else { panic!("mcp") };
+        assert_eq!(a.attach.as_deref(), Some("127.0.0.1:0"));
         let Command::Mcp(a) = ok(&["mcp", "--attach", "7979", "--timeout", "300"]) else { panic!("mcp") };
         assert_eq!(a.timeout, Some(300));
         let Command::Mcp(a) = ok(&["mcp", "--automation-read-root", "in", "--automation-write-root", "out"]) else { panic!("mcp") };
@@ -514,6 +523,11 @@ mod tests {
             (&["perf", "--layers", "10,x"], ValueValidation),
             (&["perf", "--layers", "10", "--layers", "20"], ArgumentConflict),
             (&["mcp", "--attach", "notaport"], ValueValidation),
+            (&["mcp", "--attach", ":7979"], ValueValidation),
+            (&["mcp", "--attach", "localhost:"], ValueValidation),
+            (&["mcp", "--attach", "localhost:notaport"], ValueValidation),
+            (&["mcp", "--attach", "localhost:65536"], ValueValidation),
+            (&["mcp", "--attach", "[::1]"], ValueValidation),
             (&["mcp", "--attach", "7979", "--timeout", "0"], ValueValidation),
             (&["mcp", "--attach", "7979", "--timeout", "601"], ValueValidation),
             (&["mcp", "--timeout", "300"], MissingRequiredArgument),
@@ -543,6 +557,7 @@ mod tests {
             &["export", "x.figcraft", "-o", "out", "--help"],
             &["export", "-o", "--help"],
             &["mcp", "--attach", "notaport", "--help"],
+            &["mcp", "--attach", "localhost:notaport", "--help"],
             &["mcp", "--bogus", "-h"],
             &["--no-system-fonts", "plugin", "publish", "--bogus", "--help"],
         ] {
