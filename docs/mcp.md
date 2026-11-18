@@ -431,7 +431,7 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `document` | `name`, `page`, `colorProfile` |
 | `target` | `source` (`selection`, `ids`, `page`, `document`), `ids`, `layers` in the tree |
 | `nodes` | The tree, below |
-| `variables` | By id: `name`, `collection`, `type`, `codeSyntax`, and `modes` with each `mode`'s stored `value` and `resolved` value |
+| `variables` | By id: `name`, `collection`, `type`, `codeSyntax`, and `modes` with each `mode`'s stored `value` and `resolved` value. The tree's layers and shared styles bind them, or another one reads them as an alias or in a colour calculation |
 | `styles` | By id: the shared styles the tree uses |
 | `components` | By id: `name`, `type`, `properties` with variants, `codeLinks` |
 | `fonts` | `family`, `styles`, and whether it's `installed` |

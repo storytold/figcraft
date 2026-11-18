@@ -286,3 +286,67 @@ fn junk_parameters_are_errors_not_panics() {
     assert!(s.execute("inspect.designContext", &json!({"ids": []})).is_ok());
     assert!(s.execute("inspect.designContext", &json!({"maxNodes": 0})).is_ok());
 }
+
+/// A colour variable in collection Theme (Light, Dark): (collection id, variable id).
+fn variable(s: &mut Session, name: &str, light: &str, dark: &str) -> (Value, String) {
+    let c = s.execute("variable.createCollection", &json!({"name": format!("{name} theme"), "modes": ["Light", "Dark"]})).unwrap()["id"].clone();
+    let v = s.execute("variable.create", &json!({"collection": c, "name": name, "type": "color", "values": {"Light": light, "Dark": dark}})).unwrap();
+    (c, v["id"].as_str().unwrap().to_string())
+}
+
+#[test]
+fn a_variable_an_alias_reads_is_joined_too() {
+    let mut s = session();
+    let (c, brand) = variable(&mut s, "brand", "#3B5BDB", "#748FFC");
+    let button = s
+        .execute("variable.create", &json!({"collection": c, "name": "button", "type": "color", "values": {"Light": "#000000", "Dark": "#000000"}}))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for mode in ["Light", "Dark"] {
+        s.execute("variable.set", &json!({"variable": button, "mode": mode, "value": {"alias": brand}})).unwrap();
+    }
+    let r = node(&mut s, json!({"type": "rectangle", "width": 10, "height": 10, "props": {"fill": {"$var": button}}}));
+    let v = context(&mut s, json!({"ids": [r]}));
+    assert!(v["variables"].get(&button).is_some());
+    assert_eq!(v["variables"][&brand]["name"], "brand", "the aliased variable is defined as well: {}", v["variables"]);
+}
+
+#[test]
+fn a_variable_a_shared_style_binds_is_joined() {
+    let mut s = session();
+    let (_, brand) = variable(&mut s, "brand", "#3B5BDB", "#748FFC");
+    let r = node(&mut s, json!({"type": "rectangle", "width": 10, "height": 10, "props": {"fill": "#FF0000"}}));
+    let st = s.execute("style.create", &json!({"type": "paint", "name": "Brand/Fill", "from": r})).unwrap()["id"].clone();
+    s.execute("style.bind", &json!({"style": st, "field": "fill", "variable": brand})).unwrap();
+    s.execute("style.apply", &json!({"style": st, "ids": [r]})).unwrap();
+    let v = context(&mut s, json!({"ids": [r]}));
+    assert_eq!(only(&v)["tokens"]["style.fill"]["name"], "Brand/Fill");
+    assert_eq!(v["variables"][&brand]["name"], "brand", "the style's variable is defined: {}", v["variables"]);
+}
+
+#[test]
+fn every_returned_text_layer_has_its_font_listed() {
+    let mut s = session();
+    let title = node(&mut s, json!({"type": "text", "text": "Title", "props": {"fontFamily": "Serif Display Test"}}));
+    let busy = node(&mut s, json!({"type": "frame", "x": 300, "width": 200, "height": 200}));
+    for _ in 0..12 {
+        node(&mut s, json!({"type": "rectangle", "parent": busy, "width": 4, "height": 4}));
+    }
+    let v = context(&mut s, json!({"ids": [title, busy], "maxNodes": 2}));
+    assert_eq!(v["target"]["layers"], 2);
+    let families: Vec<&str> = v["fonts"].as_array().unwrap().iter().map(|f| f["family"].as_str().unwrap()).collect();
+    assert_eq!(families, ["Serif Display Test"], "{}", v["fonts"]);
+}
+
+#[test]
+fn a_malformed_target_is_refused_rather_than_read_as_the_selection() {
+    let mut s = session();
+    let (f, _, _) = card(&mut s);
+    s.execute("select.set", &json!({"ids": [f]})).unwrap();
+    for p in [json!({"id": "not-an-id"}), json!({"id": true}), json!({"ids": [f, "nope"]}), json!({"ids": "1"})] {
+        assert!(s.execute("inspect.designContext", &p).is_err(), "{p}");
+    }
+    assert_eq!(context(&mut s, json!({"ids": []}))["target"]["layers"], 0, "an empty list reads nothing");
+}

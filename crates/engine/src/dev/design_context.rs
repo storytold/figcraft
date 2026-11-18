@@ -45,6 +45,8 @@ struct Used {
     left_out: usize,
     /// Reached `depth` with children left.
     cut_by_depth: bool,
+    /// Font families of the text layers placed, with their styles.
+    fonts: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// `property` of a layer has no direct CSS equivalent, because `why`.
@@ -183,6 +185,11 @@ fn code(doc: &Document, id: NodeId) -> Vec<Value> {
 fn layer(doc: &Document, id: NodeId, depth: usize, cap: usize, used: &mut Used) -> Option<Value> {
     let n = doc.node(id)?;
     used.nodes += 1;
+    if let NodeKind::Text(t) = &n.kind {
+        for (_, _, style) in t.spans() {
+            used.fonts.entry(style.font_family.clone()).or_default().insert(style.font_style.clone());
+        }
+    }
     let Value::Object(mut explicit) = node_json(doc, id, 0) else { return None };
     explicit.remove("childCount");
     let mut out = Map::new();
@@ -251,8 +258,8 @@ fn value_json(v: &figcraft_doc::VariableValue) -> Value {
     }
 }
 
-/// The variables the tree uses: every mode's stored and resolved value. A value that is an alias
-/// or a calculation stays in `value`, and aliased variables are listed too, in `aliases`.
+/// `ids`' variables: every mode's stored and resolved value. A value that is an alias or a
+/// calculation stays in `value`; the variables it reads are in `ids` too ([`referenced`]).
 fn variables_json(doc: &Document, ids: &BTreeSet<String>, missing: &mut Vec<Value>) -> Value {
     let store = &doc.variables;
     let mut out = Map::new();
@@ -285,6 +292,37 @@ fn variables_json(doc: &Document, ids: &BTreeSet<String>, missing: &mut Vec<Valu
         out.insert(id.clone(), v);
     }
     Value::Object(out)
+}
+
+/// Most variables followed through aliases.
+const MAX_VARIABLES: usize = 10_000;
+
+/// The variables the tree uses: those its layers bind, those its shared styles bind, and those any
+/// of them reads as an alias or in a colour calculation, however deep.
+fn referenced(doc: &Document, used: &Used) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = used.variables.clone();
+    out.extend(doc.styles.iter().filter(|st| used.styles.contains(&st.id)).flat_map(|st| st.bound.values().cloned()));
+    let mut todo: Vec<String> = out.iter().cloned().collect();
+    while let Some(id) = todo.pop() {
+        if out.len() >= MAX_VARIABLES {
+            break;
+        }
+        let Some(var) = doc.variables.variables.iter().find(|v| v.id == id) else { continue };
+        for value in var.values.values() {
+            let reads: Vec<&String> = match value {
+                figcraft_doc::VariableValue::Alias(other) => vec![other],
+                figcraft_doc::VariableValue::ColorAlpha { variable, .. } => vec![variable],
+                figcraft_doc::VariableValue::ColorMix { from, to, .. } => from.variable().into_iter().chain(to.variable()).collect(),
+                _ => vec![],
+            };
+            for other in reads {
+                if out.insert(other.clone()) {
+                    todo.push(other.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The shared styles the tree uses, with what each sets.
@@ -320,29 +358,13 @@ fn components_json(doc: &Document, ids: &BTreeSet<NodeId>) -> Value {
     Value::Object(out)
 }
 
-/// The font families under `ids`' tree, with their styles.
-fn fonts(doc: &Document, roots: &[NodeId], cap: usize) -> Value {
-    let mut used: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut stack: Vec<NodeId> = roots.to_vec();
-    let mut seen = 0usize;
-    while let Some(id) = stack.pop() {
-        seen += 1;
-        if seen > cap {
-            break;
-        }
-        let Some(n) = doc.node(id) else { continue };
-        if let NodeKind::Text(t) = &n.kind {
-            for (_, _, s) in t.spans() {
-                used.entry(s.font_family.clone()).or_default().insert(s.font_style.clone());
-            }
-        }
-        stack.extend(n.children.iter().copied());
-    }
+/// The font families the tree's text layers use, with their styles, and whether each is installed.
+fn fonts(doc: &Document, used: &BTreeMap<String, BTreeSet<String>>) -> Value {
     let gone = crate::fonts::missing(doc);
     Value::Array(
-        used.into_iter()
+        used.iter()
             .map(|(family, styles)| {
-                let installed = !gone.iter().any(|m| m.family.eq_ignore_ascii_case(&family));
+                let installed = !gone.iter().any(|m| m.family.eq_ignore_ascii_case(family));
                 json!({"family": family, "styles": styles, "installed": installed})
             })
             .collect(),
@@ -353,6 +375,13 @@ fn fonts(doc: &Document, roots: &[NodeId], cap: usize) -> Value {
 fn roots(s: &Session, p: &Value) -> Result<(&'static str, Vec<NodeId>)> {
     let cmd = "inspect.designContext";
     let doc = s.doc()?;
+    let malformed = || bad(cmd, "ids: a list of layer ids (or id: one)");
+    match (get(p, "ids"), get(p, "id")) {
+        (Some(Value::Array(list)), _) if list.iter().all(|i| crate::params::id_of(i).is_some()) => {}
+        (Some(_), _) => return Err(malformed()),
+        (None, Some(one)) if crate::params::id_of(one).is_none() => return Err(malformed()),
+        _ => {}
+    }
     if get(p, "ids").is_some() || get(p, "id").is_some() {
         let ids: Vec<NodeId> = targets(s, p);
         if let Some(gone) = ids.iter().find(|i| !doc.contains(**i)) {
@@ -400,10 +429,10 @@ fn design_context(s: &mut Session, p: &Value) -> Result<Value> {
     let mut missing = vec![
         json!({"what": "responsive behaviour", "why": "the file stores no breakpoints: sizes are as designed here, and constraints, sizing and annotations are all it says about other widths"}),
     ];
-    let variables = variables_json(doc, &used.variables, &mut missing);
+    let variables = variables_json(doc, &referenced(doc, &used), &mut missing);
     let styles = styles_json(doc, &used.styles, &mut missing);
     let components = components_json(doc, &used.components);
-    let fonts = fonts(doc, &ids, cap.saturating_mul(4));
+    let fonts = fonts(doc, &used.fonts);
     let page = doc.node(s.page()?).map(|n| n.name.clone());
     let mut out = json!({
         "version": VERSION,
