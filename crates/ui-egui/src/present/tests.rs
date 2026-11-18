@@ -680,3 +680,47 @@ fn pane_bar_buttons_paint_16pt() {
         assert!(paints_icon_at_button_size(&painted, icon), "{icon:?} is not 16 pt");
     }
 }
+
+#[test]
+fn without_a_device_fixed_and_sticky_layers_keep_to_the_window_to_the_end_of_the_page() {
+    // Fixed (#2430): without a device, a frame taller than the window scrolled its content, then
+    // panned whole through the window, taking a fixed header and a sticky bar off its top.
+    let mut session = figcraft_engine::Session::new();
+    let frame =
+        id(&session.execute("node.create", &json!({"type": "frame", "width": 1440, "height": 1200, "props": {"overflow": "vertical"}})).unwrap());
+    let mut layer = |y: f64, height: f64, position: &str| {
+        let r = id(&session
+            .execute("node.create", &json!({"type": "rectangle", "parent": frame, "x": 0, "y": y, "width": 1440, "height": height}))
+            .unwrap());
+        session.execute("node.set", &json!({"id": r, "props": {"scrollPosition": position}})).unwrap();
+        r
+    };
+    let page = layer(0.0, 4000.0, "scrolls");
+    let header = layer(0.0, 80.0, "fixed");
+    let sticky = layer(300.0, 40.0, "sticky");
+    let mut ui = Ui::new(session);
+    ui.run("proto.present", json!({"start": frame}));
+    ui.app.ui.present.as_mut().unwrap().view.scale = PresentScale::FitWidth;
+    ui.frames(2, Vec::new);
+    let wheel = || {
+        vec![
+            egui::Event::PointerMoved(pos2(720.0, 500.0)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                source: egui::MouseWheelSource::Unknown,
+                delta: vec2(0.0, -1000.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Default::default(),
+            },
+        ]
+    };
+    ui.frames(20, wheel);
+    ui.frames(60, Vec::new);
+    // The full-window player's area, under its bar.
+    let area = Rect::from_min_max(pos2(0.0, 40.0), pos2(1440.0, 900.0));
+    let l = layout(ui.app.ui.present.as_mut().unwrap(), area, FULL).unwrap();
+    let on_screen = |id| l.place.rect(l.disp.world_bounds(id).unwrap());
+    assert!(on_screen(page).min.y < area.min.y - 3000.0, "scrolled to the end of the page: {:?}", on_screen(page));
+    assert!((on_screen(header).min.y - area.min.y).abs() < 1.0, "the fixed header stays at the window's top: {:?}", on_screen(header));
+    assert!((on_screen(sticky).min.y - area.min.y).abs() < 1.0, "the sticky bar holds at the window's top: {:?}", on_screen(sticky));
+}
