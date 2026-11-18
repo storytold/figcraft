@@ -414,6 +414,8 @@ mod library_path_tests;
 #[cfg(test)]
 mod library_range_styles_tests;
 #[cfg(test)]
+mod library_style_hops_tests;
+#[cfg(test)]
 mod library_variables_tests;
 #[cfg(test)]
 mod line_endings_tests;
