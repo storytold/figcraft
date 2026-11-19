@@ -382,7 +382,8 @@ fn html_text(s: &str) -> String {
 
 /// `link`'s template with `values` (one per parameter of `c`), every line prefixed by `pad`.
 pub(crate) fn render(doc: &Document, c: &Component, values: &[(String, Value)], link: &CodeLink, lang: CodeLang, pad: &str) -> String {
-    let values = &in_code(values, link);
+    // A value is written as code calls it; a condition reads the design's own value.
+    let coded = &in_code(values, link);
     let mut out = String::new();
     // A quoted attribute stays open across substitutions: `title="{a} {b}"` must treat both
     // placeholders as attribute values, not text after the first one.
@@ -397,7 +398,7 @@ pub(crate) fn render(doc: &Document, c: &Component, values: &[(String, Value)], 
                     vue_attr = None;
                 }
             }
-            Piece::Value { name, inner } => match find(c, values, name) {
+            Piece::Value { name, inner } => match find(c, coded, name) {
                 Some((p, v)) => {
                     let e = expr(doc, c, p, v, lang);
                     // JSX and `view!`: a plain string reads best as an attribute value, anything
@@ -544,8 +545,9 @@ pub fn check(c: &Component, link: &CodeLink, lang: CodeLang) -> std::result::Res
             unknown.push(name.to_string());
         }
     }
+    // `in_code` reads a mapping by property name, so a key that is only a parameter name does nothing.
     for prop in link.values.keys() {
-        if find(c, &values, prop).is_none() && !unknown.iter().any(|u| u == prop) {
+        if !c.params.iter().any(|p| p.prop == *prop) && !unknown.iter().any(|u| u == prop) {
             unknown.push(prop.clone());
         }
     }
@@ -741,7 +743,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "codeConnect.export",
             "Export code connections",
-            "{path? (write it there, e.g. figcraft.connect.json in the code repository; other top-level keys of a file already there stay, and so do the links of components this file doesn't have)}  every component's links as {version: 1, links: [{component (its name), language, importPath, name, template, source?, values?, notes?}]}, sorted  → {text, links} or {path, links}",
+            "{path? (write it there, e.g. figcraft.connect.json in the code repository; other top-level keys of a file already there stay, and so do the links of components this file doesn't have; a file there it can't read is left alone and the export refused)}  every component's links as {version: 1, links: [{component (its name), language, importPath, name, template, source?, values?, notes?}]}, sorted  → {text, links} or {path, links}",
             false,
             |s, p| {
                 let cmd = "codeConnect.export";
@@ -754,7 +756,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 let count = links.len();
                 // The file also holds the project's settings and the links of other designs: only
                 // the links of this file's components are this command's.
-                let old = path.as_deref().and_then(kept_keys).unwrap_or_default();
+                let old = match path.as_deref() {
+                    Some(path) => kept_keys(cmd, path)?,
+                    None => serde_json::Map::new(),
+                };
                 let here: Vec<&str> = doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).map(|n| n.name.as_str()).collect();
                 let others = old.get("links").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
                 links.extend(others.iter().filter(|l| !l.get("component").and_then(Value::as_str).is_some_and(|c| here.contains(&c))).cloned());
@@ -785,14 +790,15 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// The top-level keys of the connect file at `path`, if there is a readable one.
-fn kept_keys(path: &str) -> Option<serde_json::Map<String, Value>> {
+/// The top-level keys of the connect file at `path`, none when there is no file. A file that
+/// can't be read as one is an error: writing over it would lose what it holds.
+fn kept_keys(cmd: &str, path: &str) -> Result<serde_json::Map<String, Value>> {
     if !crate::file_access::exists(path) {
-        return None;
+        return Ok(serde_json::Map::new());
     }
-    match serde_json::from_slice(&crate::cmd::file::read_capped(path, MAX_FILE).ok()?).ok()? {
-        Value::Object(fields) => Some(fields),
-        _ => None,
+    match serde_json::from_slice(&crate::cmd::file::read_capped(path, MAX_FILE)?) {
+        Ok(Value::Object(fields)) => Ok(fields),
+        _ => Err(bad(cmd, format!("{path} isn't a connect file it can read, so it was left as it is"))),
     }
 }
 
@@ -834,7 +840,16 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             ));
             continue;
         };
-        let values = e.get("values").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+        let values = match e.get("values") {
+            None | Some(Value::Null) => Default::default(),
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(values) => values,
+                Err(_) => {
+                    warnings.push(format!("link {}: values: {{property: {{design value: code value}}}}, all strings", i + 1));
+                    continue;
+                }
+            },
+        };
         let link = CodeLink {
             language: lang.id().into(),
             import_path: field("importPath").unwrap_or_default().to_string(),

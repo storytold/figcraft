@@ -419,3 +419,86 @@ fn listing_refuses_a_malformed_target_rather_than_reading_the_selection() {
         assert!(s.execute("codeConnect.list", &p).is_err(), "{p}");
     }
 }
+
+/// A set called `name` with a variant `prop=value` for each of `values`. Returns (set, variants).
+fn set_of(s: &mut Session, name: &str, prop: &str, values: &[&str]) -> (NodeId, Vec<NodeId>) {
+    let variants: Vec<NodeId> = values
+        .iter()
+        .enumerate()
+        .map(|(k, v)| {
+            let f = idv(&ex(s, "frame.create", json!({"x": k as f64 * 150.0, "y": 600, "width": 100, "height": 40, "name": format!("{prop}={v}")})));
+            idv(&ex(s, "component.create", json!({"ids": [f]})))
+        })
+        .collect();
+    let set = idv(&ex(s, "component.combineVariants", json!({"ids": variants.clone()})));
+    ex(s, "node.set", json!({"id": set, "props": {"name": name}}));
+    (set, variants)
+}
+
+#[test]
+fn a_condition_reads_the_designs_value_not_its_name_in_code() {
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, variants) = set_of(&mut s, "Toggle", "State", &["On", "Off"]);
+    ex(&mut s, "codeConnect.set", json!({"id": set, "name": "Toggle", "template": "{State ? \"enabled\" : \"disabled\"} {State}"}));
+    let off = idv(&ex(&mut s, "instance.create", json!({"component": variants[1]})));
+    assert!(code(&mut s, off, "react").starts_with("disabled"), "{}", code(&mut s, off, "react"));
+    // `inactive` reads as true, but the condition is about the design's Off.
+    ex(&mut s, "codeConnect.set", json!({"id": set, "values": {"State": {"Off": "inactive"}}}));
+    let out = code(&mut s, off, "react");
+    assert!(out.starts_with("disabled") && out.contains("inactive"), "{out}");
+}
+
+#[test]
+fn a_mapping_keyed_by_a_name_it_cant_use_is_reported() {
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, hover) = button(&mut s);
+    let r = ex(
+        &mut s,
+        "codeConnect.set",
+        json!({"id": set, "name": "Button", "template": "<Button state={State} />", "values": {"state": {"Hover": "hovered"}}}),
+    );
+    assert!(r.to_string().contains("\"state\""), "the lowercase key does nothing, so it's named: {r}");
+    let i = idv(&ex(&mut s, "instance.create", json!({"component": hover})));
+    assert!(code(&mut s, i, "react").contains(r#"state="Hover""#));
+    let r = ex(&mut s, "codeConnect.set", json!({"id": set, "values": {"State": {"Hover": "hovered"}}}));
+    assert!(!r.to_string().contains("\"State\""), "{r}");
+}
+
+#[test]
+fn an_import_with_malformed_values_keeps_the_link_there() {
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, _) = button(&mut s);
+    ex(&mut s, "codeConnect.set", json!({"id": set, "name": "Button", "template": "<Button />", "values": {"State": {"Hover": "h"}}}));
+    let links = json!([{"component": "Button", "language": "react", "name": "Other", "template": "<Other />", "values": {"State": {"Hover": 7}}}]);
+    let r = ex(&mut s, "codeConnect.import", json!({"json": {"version": 1, "links": links}}));
+    assert_eq!(r["linked"], 0, "{r}");
+    assert!(r["warnings"][0].as_str().unwrap().contains("values"), "{r}");
+    let link = &s.doc().unwrap().node(set).unwrap().code_links[0];
+    assert_eq!((link.name.as_str(), link.values["State"]["Hover"].as_str()), ("Button", "h"));
+}
+
+#[test]
+fn exporting_over_a_file_it_cant_read_is_refused() {
+    let dir = std::env::temp_dir().join(format!("figcraft-connect-unread-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new();
+    ex(&mut s, "file.new", json!({}));
+    let (set, _) = button(&mut s);
+    ex(&mut s, "codeConnect.set", json!({"id": set, "name": "Button", "template": "<Button />"}));
+    let big = vec![b' '; 4 * 1024 * 1024 + 1];
+    for (name, bytes) in [("broken.json", b"{\"links\": [".to_vec()), ("list.json", b"[]".to_vec()), ("big.json", big)] {
+        let path = dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(s.execute("codeConnect.export", &json!({"path": path})).is_err(), "{name}");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "{name} is left as it was");
+    }
+    // A file that isn't there yet is written.
+    let new = dir.join("figcraft.connect.json");
+    let _ = std::fs::remove_file(&new);
+    ex(&mut s, "codeConnect.export", json!({"path": new}));
+    assert!(new.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

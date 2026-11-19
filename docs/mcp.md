@@ -1864,13 +1864,14 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   {path?}` → `{text, links}` (or writes the file): `{version: 1, links: [{component, language,
   importPath, name, template, source?, values?, notes?}]}`, sorted, meant to live in the code
   repository as `figcraft.connect.json` (writing a file that's there keeps its other top-level keys
-  and the links of components this design doesn't have, so several designs can share one file); `codeConnect.import {json | path}` → `{linked, warnings}` links each
+  and the links of components this design doesn't have, so several designs can share one file; a
+  file there that isn't a connect file it can read is left alone and the export refused); `codeConnect.import {json | path}` → `{linked, warnings}` links each
   entry to every component or set with that name (one undo step; at most 5,000 links and 4 MB;
-  templates up to 4,000 characters, names 100, import paths 300; invalid entries are skipped with a
-  warning). A link can also say where the code component lives (`source`, a path inside the
+  templates up to 4,000 characters, names 100, import paths 300; invalid entries, a malformed `values`
+  among them, are skipped with a warning). A link can also say where the code component lives (`source`, a path inside the
   repository), what a property's design values are called in code (`values`:
   `{"Variant": {"Primary": "primary"}}`, so `{Variant}` renders `primary`; a value without an entry
-  keeps its design name) and `notes`, through `codeConnect.set`, the file and the Inspect tab.
+  keeps its design name; `{Variant ? "a" : "b"}` still reads the design's value) and `notes`, through `codeConnect.set`, the file and the Inspect tab.
   `codeConnect.list {ids?, unmapped?, root?}` → `{components: [{id, name, type, mapped, properties,
   links: [{language, importPath, import, name, template, snippet, source?, sourceFound?, values?,
   notes?}]}], mapped, unmapped}` answers which code component each design component is; with `root`
