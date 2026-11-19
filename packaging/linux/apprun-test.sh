@@ -155,4 +155,29 @@ rm -rf "$XDG_DATA_HOME" "$CACHE_CALLS"
 out="$(CACHE_UPDATER_FAIL=1 "$APPDIR/AppRun" ok)" || fail "failing icon-cache updater blocked launch"
 [[ "$out" = "stub: ok" ]] || fail "failing icon-cache updater altered launch output: $out"
 
+# 13. GTK 4-only fallback: when gtk-update-icon-cache is unavailable, both AppRun
+#     and postinst.sh invoke gtk4-update-icon-cache with the expected arguments.
+GTK4_BIN="$TMP/gtk4-only"
+GTK4_CALLS="$TMP/gtk4-calls"
+mkdir -p "$GTK4_BIN"
+for cmd in dirname readlink mkdir sed cmp rm mv find cp; do
+  ln -s "$(command -v "$cmd")" "$GTK4_BIN/$cmd"
+done
+cat >"$GTK4_BIN/gtk4-update-icon-cache" <<'EOF'
+#!/bin/sh
+printf 'gtk4-update-icon-cache %s\n' "$*" >>"$GTK4_CALLS"
+EOF
+chmod +x "$GTK4_BIN/gtk4-update-icon-cache"
+
+rm -rf "$XDG_DATA_HOME" "$GTK4_CALLS"
+out="$(PATH="$GTK4_BIN" GTK4_CALLS="$GTK4_CALLS" "$APPDIR/AppRun" gtk4)" || fail "GTK 4-only AppRun launch failed"
+[[ "$out" = "stub: gtk4" ]] || fail "GTK 4-only AppRun altered launch output: $out"
+[[ "$(wc -l <"$GTK4_CALLS")" -eq 1 ]] || fail "GTK 4-only AppRun did not invoke gtk4-update-icon-cache once"
+grep -Fxq -- "gtk4-update-icon-cache -f -t $XDG_DATA_HOME/icons/hicolor" "$GTK4_CALLS" || fail "wrong GTK 4 AppRun arguments"
+
+: >"$GTK4_CALLS"
+PATH="$GTK4_BIN" GTK4_CALLS="$GTK4_CALLS" "$HERE/postinst.sh" || fail "GTK 4-only postinst.sh failed"
+[[ "$(wc -l <"$GTK4_CALLS")" -eq 1 ]] || fail "GTK 4-only postinst.sh did not invoke gtk4-update-icon-cache once"
+grep -Fxq -- "gtk4-update-icon-cache -q -t -f /usr/share/icons/hicolor" "$GTK4_CALLS" || fail "wrong GTK 4 postinst.sh arguments"
+
 echo "AppRun desktop integration ok"
