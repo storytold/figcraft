@@ -1767,7 +1767,7 @@ fn a_boolean_groups_field_shows_the_radius_it_draws() {
 }
 
 #[test]
-fn deselecting_while_editing_number_field_retains_stale_value_on_reselect() {
+fn a_draft_is_dropped_when_the_selection_changes() {
     let (mut u, _a, b) = setup();
     let (h_pos, _) = field(&mut u, "Height");
     click(&mut u, h_pos);
