@@ -375,6 +375,9 @@ impl FigApp {
                 .show(ui, |ui| {
                     let label = right_tab_label(self.ui.right_tab);
                     a11y::region(&mut self.ui.nav, ui, a11y::Region::Properties, egui::accesskit::Role::Pane, label);
+                    let cur_sel = self.session.selection().to_vec();
+                    let sel_id = egui::Id::unique("app_current_selection");
+                    ui.ctx().data_mut(|d| d.insert_temp(sel_id, cur_sel));
                     right::right_panel(self, ui)
                 });
         }

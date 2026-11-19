@@ -1801,3 +1801,35 @@ fn clicking_canvas_while_editing_number_field_commits_value() {
     let doc = u.app.session.doc().unwrap();
     assert_eq!(doc.node(a).unwrap().height, 50.0, "Clicking canvas must commit the edited field value");
 }
+
+#[test]
+fn field_draft_is_retained_when_window_loses_focus() {
+    let (mut u, _a, _) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+    u.frame(vec![Event::Text("55".into())]);
+
+    // Simulate window deactivation (e.g. user switching windows/applications)
+    u.frame_raw(egui::RawInput { focused: false, ..Default::default() });
+
+    // Verify draft is still present
+    let h_editing = u.ctx.data(|d| d.get_temp::<String>(Id::unique("lay_h").with("editing")));
+    assert_eq!(h_editing.as_deref(), Some("55"), "field draft must be retained when window loses focus");
+}
+
+#[test]
+fn selecting_different_layer_in_layers_panel_drops_draft() {
+    let (mut u, _a, b) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+    u.frame(vec![Event::Text("99".into())]);
+
+    // Switch selection to B via session (as layers panel does when clicked)
+    u.app.run("select.set", json!({"ids": [b]}));
+    u.frame(vec![]);
+
+    // Verify draft was dropped and b's height is shown, not 99
+    let h_editing = u.ctx.data(|d| d.get_temp::<String>(Id::unique("lay_h").with("editing")));
+    assert_eq!(h_editing, None, "stale draft must not leak into newly selected layer");
+    assert_eq!(field(&mut u, "Height").1, "20", "Height field must show layer b's height");
+}

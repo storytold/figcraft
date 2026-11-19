@@ -552,7 +552,7 @@ fn number_field_impl(
                     out = Some(e);
                 }
                 clear_field_editor(ui, id);
-            } else if !r.has_focus() && !started {
+            } else if !r.ctx.memory(|m| m.has_focus(r.id)) && !started {
                 clear_field_editor(ui, id);
             } else {
                 ui.data_mut(|d| d.insert_temp(editing_id, text));
@@ -758,7 +758,7 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
             } else if r.lost_focus() || enter {
                 out = Some(text);
                 clear_field_editor(ui, id);
-            } else if !r.has_focus() && !started {
+            } else if !r.ctx.memory(|m| m.has_focus(r.id)) && !started {
                 clear_field_editor(ui, id);
             } else {
                 ui.data_mut(|d| d.insert_temp(editing_id, text));
@@ -1460,7 +1460,7 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
                 ui.data_mut(|d| d.remove::<String>(buf_id));
                 ui.memory_mut(|m| m.surrender_focus(te_id));
                 (text != value && !text.trim().is_empty()).then_some(text)
-            } else if !r.has_focus() && !started {
+            } else if !r.ctx.memory(|m| m.has_focus(te_id)) && !started {
                 ui.data_mut(|d| d.remove::<String>(buf_id));
                 ui.memory_mut(|m| m.surrender_focus(te_id));
                 None
