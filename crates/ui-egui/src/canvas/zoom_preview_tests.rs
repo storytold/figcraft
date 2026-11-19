@@ -771,3 +771,57 @@ fn a_render_dropped_while_drawing_leaves_its_time_as_the_measure() {
     assert!(matches!(r.refine_for(&at(1.0), 0.0), Refined::More));
     assert!(r.preview(&at(2.0)).is_some(), "the zoom gets a preview by the dropped render's measure");
 }
+
+fn until_late_preview_of(w: &mut Worker, seq: u64) -> Vec<(u64, bool)> {
+    let start = std::time::Instant::now();
+    let mut got = vec![];
+    while !got.contains(&(seq, true)) {
+        assert!(start.elapsed() < Duration::from_secs(30), "no late preview of request {seq}: {got:?}");
+        got.extend(w.poll().map(|d| (d.seq, d.coarse)));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    got
+}
+
+fn until_idle(w: &mut Worker) -> Vec<(u64, bool)> {
+    let start = std::time::Instant::now();
+    let mut got = vec![];
+    while w.in_flight() {
+        assert!(start.elapsed() < Duration::from_secs(60), "the render never finished");
+        got.extend(w.poll().map(|d| (d.seq, d.coarse)));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    got.extend(w.poll().map(|d| (d.seq, d.coarse)));
+    got
+}
+
+#[test]
+fn a_zoom_in_after_a_late_preview_left_on_screen_is_measured_from_that_preview() {
+    let zoomed_out = view_at((300.0, 200.0), 0.5, 1200, 1200);
+    let zoomed_in = view_at((300.0, 200.0), 2.0, 200, 150);
+    let held = [zoomed_out.scale.to_bits(), zoomed_in.scale.to_bits()];
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = std::sync::Mutex::new(released);
+    let gate = Arc::new(move |job: &Job, done: Option<Done>| {
+        if !held.contains(&job.view.scale.to_bits()) {
+            return done;
+        }
+        let _ = released.lock().unwrap().recv_timeout(Duration::from_secs(60));
+        done.filter(|_| job.view.scale.to_bits() != held[0])
+    });
+    let (s, _) = document();
+    let ds = s.ds().unwrap();
+    let mut w = Worker::with_renders(egui::Context::default(), Renders::with_threshold(f64::INFINITY).with_refine_gate(gate));
+    w.submit(job(&ds.doc, ds.page, ds.uid, view_at((300.0, 200.0), 1.0, 120, 90)));
+    assert!(drain(&mut w).contains(&(1, false)), "a sharp image at 1x");
+    w.submit(job(&ds.doc, ds.page, ds.uid, zoomed_out));
+    let mut got = until_late_preview_of(&mut w, 2);
+    release.send(()).unwrap();
+    got.extend(until_idle(&mut w));
+    assert_eq!(got, [(2, true)], "the watchdog's preview, and no refined image after it");
+    w.submit(job(&ds.doc, ds.page, ds.uid, zoomed_in));
+    let mut got = until_late_preview_of(&mut w, 3);
+    release.send(()).unwrap();
+    got.extend(until_idle(&mut w));
+    assert_eq!(got, [(3, true), (3, false)], "the 1x image is gone from the screen: the zoom in gets its late preview");
+}
