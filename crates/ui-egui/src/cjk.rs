@@ -87,7 +87,7 @@ pub fn scripts(s: &str) -> u8 {
             0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => KANA,
             0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xFFA0..=0xFFDC => HANGUL,
             0x3000..=0x303F | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF01..=0xFF65 | 0x20000..=0x3FFFF => HAN,
-            0x0590..=0x05FF => HEBREW,
+            0x0590..=0x05FF | 0xFB1D..=0xFB4F => HEBREW,
             0x0980..=0x09FF => BENGALI,
             0x0E00..=0x0E7F => THAI,
             _ => 0,
@@ -217,6 +217,12 @@ mod tests {
         assert_eq!(scripts("หน้าแรก"), THAI);
         assert_eq!(scripts("עברית"), HEBREW);
         assert_eq!(scripts("English עברית"), HEBREW);
+        // Hebrew presentation forms (as pasted from legacy documents) also need
+        // a Hebrew font when the surrounding UI and file text are Latin-only.
+        assert_eq!(scripts("שׁ"), HEBREW);
+        assert_eq!(scripts("אַ"), HEBREW);
+        assert_eq!(scripts("file שׁ"), HEBREW);
+        assert_eq!(scripts("ﻻ"), 0); // Arabic presentation forms are not Hebrew.
         assert_eq!(language("he"), HEBREW);
         assert_eq!(language("he-IL"), HEBREW);
         assert_eq!(language("th"), THAI);
