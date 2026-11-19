@@ -119,21 +119,12 @@ fn ask_with_timeout(what: &str, ask: impl FnOnce() -> Option<String> + Send + 's
 #[cfg(target_os = "windows")]
 fn account_name() -> windows::core::Result<String> {
     use windows::System::{KnownUserProperties, User};
-    // The account this process runs as. `GetDefault` names that one; `FindAllAsync` enumerates the
-    // session's users, so it is the fallback, and only when it answers with exactly one — a
-    // machine with two signed-in accounts (fast user switching) gets no name from us rather than a
-    // guess at which of them this is.
-    let user = match User::GetDefault() {
-        Ok(user) => user,
-        Err(e) => {
-            log::debug!("user name: no default account: {e}");
-            let users = User::FindAllAsync()?.join()?;
-            if users.Size()? != 1 {
-                return Ok(String::new());
-            }
-            users.GetAt(0)?
-        }
-    };
+    // Only `GetDefault` names an account here: it names the account this process runs as. There is
+    // deliberately no fallback to `FindAllAsync`, which enumerates the session's users: a sole
+    // session user is not established to be the process's account (the review threads on this
+    // change), so when `GetDefault` errors the account has no name from us and the logon name
+    // follows, rather than a guess at whose name this is.
+    let user = User::GetDefault().inspect_err(|e| log::debug!("user name: no default account: {e}"))?;
     let first = user_property(&user, "first name", KnownUserProperties::FirstName);
     let last = user_property(&user, "last name", KnownUserProperties::LastName);
     Ok(chosen(&first, &last, || user_property(&user, "display name", KnownUserProperties::DisplayName)).unwrap_or_default())
