@@ -15,7 +15,7 @@ use figcraft_doc::{Document, Node, NodeId, NodeKind, PropDef, VariableType};
 use figcraft_engine::cmd::component::{can_add_variant, can_combine_variants};
 use figcraft_engine::components::{
     PROP_BINDING, default_variant, inside_instance, instance_prop_list, owning_component, owning_instance, prop_list, slot_def, slot_edited,
-    slots_of, variant_conflicts, variant_options, variant_props, variant_set,
+    slots_of, variant_conflicts, variant_name, variant_options, variant_props, variant_set,
 };
 use serde_json::{Value, json};
 
@@ -37,11 +37,12 @@ pub fn instance_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[No
     match &n.kind {
         NodeKind::Instance { .. } => instance_ui(app, ui, doc, n),
         NodeKind::ComponentSet { description } => {
-            properties_ui(app, ui, doc, n.id);
+            properties_ui(app, ui, doc, n.id, None);
             description_ui(app, ui, n.id, description);
         }
         NodeKind::Component { description, .. } => {
-            properties_ui(app, ui, doc, variant_set(doc, n.id).unwrap_or(n.id));
+            let set = variant_set(doc, n.id);
+            properties_ui(app, ui, doc, set.unwrap_or(n.id), set.map(|_| n.id));
             description_ui(app, ui, n.id, description);
         }
         _ => {}
@@ -224,8 +225,8 @@ fn name_width(ui: &Ui, default_w: f32, max: f32) -> f32 {
     (ui.available_width() - default_w - BUTTON - 2.0 * widgets::GUTTER).clamp(48.0, max)
 }
 
-/// Properties of a component or component set.
-fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
+/// Properties of a component or component set (`variant`: the set's variant that is selected).
+fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId, variant: Option<NodeId>) {
     let t = Tokens::get(ui.ctx());
     let is_set = matches!(doc.node(owner).map(|n| &n.kind), Some(NodeKind::ComponentSet { .. }));
     // Shared (non-variant) properties live on every variant; read them from the first.
@@ -271,6 +272,9 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
     } else {
         Default::default()
     };
+    // A selected variant's dropdowns show and set its own values (#2349); the set's, its default.
+    let own = variant.and_then(|v| doc.node(v)).map(|n| (n.id, variant_props(&n.name)));
+    let order: Vec<String> = variants.iter().map(|(k, _)| k.clone()).collect();
     // Variant properties: name, values (the matrix), add value, delete. Dragged by their left
     // margin to reorder them (only among themselves: the shared ones keep the engine's order).
     let mut drag = ListDrag::in_order(ui, ("variant_props", owner));
@@ -286,12 +290,22 @@ fn properties_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, owner: NodeId) {
             if let Some(nn) = widgets::text_field(ui, Id::unique(("vprop_name", owner, k.as_str())), k, name_w, tr("Name")) {
                 app.run("component.editProperty", json!({"id": owner, "name": k, "newName": nn}));
             }
-            let def = defaults.get(k).or(vals.first()).cloned().unwrap_or_default();
-            let resp = widgets::dropdown(ui, &def, DEFAULT_W, None).on_hover_text(tr("Default value (the top-left variant)"));
+            let def = own.as_ref().map_or(&defaults, |(_, pairs)| pairs).get(k).or(vals.first()).cloned().unwrap_or_default();
+            let hint = if own.is_some() { tr("This variant's value") } else { tr("Default value (the top-left variant)") };
+            let resp = widgets::dropdown(ui, &def, DEFAULT_W, None).on_hover_text(hint);
             menu_popup(&resp).show(|ui| {
                 for v in vals {
                     if menu_item(ui, v, "") {
-                        app.run("component.editProperty", json!({"id": owner, "name": k, "default": v}));
+                        match &own {
+                            Some((id, pairs)) => {
+                                let mut pairs = pairs.clone();
+                                pairs.insert(k.clone(), v.clone());
+                                app.run("node.set", json!({"ids": [id], "props": {"name": variant_name(&pairs, &order)}}));
+                            }
+                            None => {
+                                app.run("component.editProperty", json!({"id": owner, "name": k, "default": v}));
+                            }
+                        }
                         ui.close();
                     }
                 }

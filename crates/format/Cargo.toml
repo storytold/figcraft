@@ -25,3 +25,4 @@ craft-sketch = { workspace = true }
 craft-fig = { workspace = true }
 craft-figcraft-format = { workspace = true }
 craft-figma-rest = { workspace = true }
+craft-jpeg = { workspace = true }

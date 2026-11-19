@@ -27,6 +27,7 @@ pub const NODE_KEYS: &[&str] = &[
     "constraints",
     "cornerRadius",
     "cornerSmoothing",
+    "dashCap",
     "dashes",
     "description",
     "devChanged",

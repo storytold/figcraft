@@ -105,7 +105,7 @@ native speakers' reviews of the nine language drafts need people.
 | Traditional Chinese (Taiwan) | zh-Hant | 2,647 / 2,647 entries (100%, counted 2026-11-03) | draft (needs native review) |
 | Spanish | es, es-419 | 100% (es-419: an overlay of 101 entries) | draft (needs native review) |
 | Hindi | hi | 0% | none |
-| Arabic | ar | 2,508 / 2,508 entries (100%, counted 2026-10-28) | draft; web builds with craft-fonts offer Arabic by default; the window mirrors (panels swap sides); native review and mirrored panel rows pending |
+| Arabic | ar | 2,508 / 2,508 entries (100%, counted 2026-10-28) | draft; the window, the Design panel's rows and the layers mirror; web builds with craft-fonts offer Arabic by default; native review and the rest of the mirroring pending |
 | French | fr | 95% | draft (needs native review) |
 | Portuguese (Brazil) | pt-BR | 95% | draft (needs native review) |
 | Indonesian | id | 99% | draft (needs native review) |
@@ -367,6 +367,7 @@ Ranked; detail and milestones in [`docs/roadmap.md`](docs/roadmap.md).
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-15 | patch | Removed the obsolete duplicate live-session bullet from the browser crate docs; the existing server publishing and remote wss guidance remains authoritative. Runtime behavior unchanged. |
+| 2026-11-18 | minor | M8: design context for AI agents. `inspect.designContext` and the MCP tool `design_context` read the selection (or `ids`, or a `scope`) in one call: a tree where each layer keeps apart `explicit` values, `derived` ones layout worked out and `unsupported` ones with no direct CSS equivalent, joined with the variables (every mode's stored and resolved value), styles, components, fonts and assets it uses, and what the design leaves `missing`. A connected instance gives its code instead of its layers, and a result that wouldn't fit the client asks for fewer layers. Numbers unchanged |
 | 2026-11-18 | minor | M3, gap 10: library analytics count insertions and detachments of styles and variables. Applying one, or copying or duplicating content that uses it, inserts it; the Detach button detaches it; an instance counts as its component alone. Show usage and `library.usage` give them per style and variable over the chosen period. Modes aren't counted. Numbers unchanged. Tests: `library_asset_counts_tests`, `library_assets_tests`. |
 | 2026-11-18 | minor | M9, gap 6: the browser build uses team libraries and plugin directories on a server, through its WebSocket requests: adding a library by its link, its styles and components, publishing to it, Show usage and the reports a file sends; browsing a directory and installing from it, for the page only. Scripts through `window.figcraft` still can't, as commands there don't wait for the server. Numbers unchanged. Tests: `exchange_tests`. |
 | 2026-11-17 | minor | M6: Android Vector Drawable XML serialization uses the shared writer; application projection and colour policy remain local. Byte-parity tests cover full documents and generated deep wrappers; no new format capability or incumbent certification. |
