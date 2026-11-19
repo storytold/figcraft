@@ -69,6 +69,8 @@ craft-fig = { git = "https://github.com/storytold/craft-libs", rev = "453b0da782
 craft-figcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "453b0da782ccef39be9a6dac8d27c80b553ef1cc" }
 craft-figma-rest = { git = "https://github.com/storytold/craft-libs", rev = "453b0da782ccef39be9a6dac8d27c80b553ef1cc" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "e7873217287876f76a045550369c90a541693c33" }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "d7c9632bfb3040cf45db394e7500cc93c81c49e0" }
+craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "d7c9632bfb3040cf45db394e7500cc93c81c49e0", features = ["frames"] }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
