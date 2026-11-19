@@ -460,6 +460,41 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn paused_provider_save_keeps_the_window_open_and_device_file_intact() {
+        let mut app = app();
+        let path = std::env::temp_dir().join(format!("figcraft-provider-window-close-{}.figcraft", std::process::id()));
+        app.session.execute("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let doc = app.session.ds_mut().unwrap();
+        let uid = doc.uid;
+        std::sync::Arc::make_mut(&mut doc.doc).name = "Unsaved provider edit".into();
+
+        let ctx = egui::Context::default();
+        crate::windows::request_close(&mut app, &ctx);
+        assert!(app.ui.confirm_close);
+        let request = request(&mut app);
+        app.file_providers.resolve_dialog(&request, "provider", "saved.figcraft").unwrap();
+        app.file_providers.take_events();
+        app.file_providers.set_enabled(false).unwrap();
+        crate::windows::answer_close(&mut app, &ctx, crate::windows::CloseAnswer::Save);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::windows::confirm_close(&mut app, ui.ctx());
+            crate::windows::begin(&mut app, ui.ctx());
+        });
+        output.textures_delta.clear();
+        let on_disk = std::fs::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(on_disk, original);
+        assert!(!app.ui.quit);
+        assert!(app.session.ds().unwrap().is_dirty());
+        assert!(app.file_providers.has_unapplied_save(uid));
+        assert!(app.file_providers.take_events().is_empty(), "must not start another save");
+    }
+
     #[test]
     fn close_save_continuation_refuses_post_capture_branch_edits() {
         let (mut app, main, branch) = captured_file_with_a_later_unsynced_branch_edit();

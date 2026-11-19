@@ -646,7 +646,8 @@ fn save_then_close(app: &mut FigApp, ctx: &Context) {
     for uid in files {
         let Some(i) = app.session.docs.iter().position(|d| d.uid == uid) else { continue };
         app.session.active = i;
-        if app.file_providers.enabled() {
+        // Pausing new choices does not release a provider document or its in-flight save.
+        if app.file_providers.enabled() || app.file_providers.owns_document(uid) {
             app.ui.close_after_save_as = Some(uid);
             app.save();
             ctx.request_repaint();
