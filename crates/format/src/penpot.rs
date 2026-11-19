@@ -2308,6 +2308,8 @@ fn import_themed_tokens(
             collection: collection.clone(),
             kind,
             values,
+            expression: None,
+            expression_opacity: BTreeMap::new(),
             description: description.chars().take(1024).collect(),
             scopes: None,
             hidden_from_publishing: false,
@@ -2425,6 +2427,8 @@ fn import_token_variables(
                     collection: collection_id.clone(),
                     kind,
                     values,
+                    expression: None,
+                    expression_opacity: BTreeMap::new(),
                     description: string(token, "description")
                         .or_else(|| string(token, "$description"))
                         .unwrap_or_default()

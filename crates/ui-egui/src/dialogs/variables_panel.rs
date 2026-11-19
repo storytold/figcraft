@@ -7,6 +7,7 @@
 //! and write the variables JSON (or CSS). Everything goes through `variable.*` / `library.*`
 //! commands, so it's undoable and the same over MCP.
 
+use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Context, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 use figcraft_doc::{Collection, Document, PublishedLibrary, Variable, VariableType, VariableValue, Variables, scopes_for};
 use figcraft_engine::library;
@@ -25,6 +26,9 @@ const SIDEBAR_W: f32 = 200.0;
 const NAME_W: f32 = 240.0;
 const MODE_W: f32 = 200.0;
 const ROW_H: f32 = 36.0;
+const DYNAMIC_BADGE_W: f32 = 22.0;
+const DYNAMIC_BADGE_GAP: f32 = 4.0;
+const DYNAMIC_BADGE_H: f32 = 16.0;
 const TYPES: [VariableType; 4] = [VariableType::Color, VariableType::Number, VariableType::String, VariableType::Boolean];
 
 /// What's being renamed inline.
@@ -51,6 +55,13 @@ pub struct Editor {
     rename_start: bool,
     /// The variable whose details (name, description, scopes) are open.
     details: Option<String>,
+    /// The variable and current text being edited in its dynamic-expression field.
+    expression_edit_for: Option<String>,
+    expression_draft: String,
+    expression_source: String,
+    expression_completion: Option<ExpressionCompletion>,
+    expression_completion_selection: usize,
+    expression_completion_dismissed: Option<String>,
     /// The group the table shows ("space" or "color/brand"); None = every variable.
     group: Option<String>,
     /// The selected variables' ids (this file's), kept to the rows the table shows.
@@ -63,6 +74,37 @@ pub struct Editor {
     bulk_edit: Vec<String>,
     /// That editor's tab: 0 Details, 1 Scope.
     bulk_tab: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ExpressionCompletion {
+    prefix: String,
+    replace: std::ops::Range<usize>,
+    context: CompletionContext,
+    candidates: Vec<ExpressionCandidate>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompletionContext {
+    Variable,
+    Syntax,
+}
+
+#[derive(Clone, Debug)]
+struct ExpressionCandidate {
+    label: String,
+    detail: String,
+    insertion: String,
+    kind: ExpressionCandidateKind,
+    cursor_offset: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExpressionCandidateKind {
+    Variable,
+    Operator,
+    Function,
+    Keyword,
 }
 
 /// A click on row `id`: plain selects only it, Shift extends from the anchor to it through the
@@ -884,6 +926,7 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
     let t = Tokens::get(ui.ctx());
     let editable = view.editable();
     let (r, resp) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::click());
+    let resp = if v.expression.is_some() { resp.on_hover_text(tr("Dynamic expression; updates when referenced variables change")) } else { resp };
     let selected = editable && st.selected.contains(&v.id);
     if selected {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.selected_row);
@@ -902,7 +945,16 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
     } else {
         // Grouped names show their last part under the group's header.
         let short = v.name.rsplit('/').next().unwrap_or(&v.name);
-        ui.painter().with_clip_rect(name_r).text(name_r.left_center(), Align2::LEFT_CENTER, short, regular(11.0), t.text);
+        let name_font = regular(11.0);
+        if v.expression.is_some() {
+            let galley = ui.painter().layout_no_wrap(short.to_string(), name_font.clone(), t.text);
+            let (text_rect, badge_rect) = dynamic_badge_layout(name_r, galley.size().x);
+            ui.painter().with_clip_rect(text_rect).text(text_rect.left_center(), Align2::LEFT_CENTER, short, name_font, t.text);
+            ui.painter().rect_filled(badge_rect, CornerRadius::same(4), t.selected_row);
+            ui.painter().text(badge_rect.center(), Align2::CENTER_CENTER, "fx", semibold(9.0), t.accent_text);
+        } else {
+            ui.painter().with_clip_rect(name_r).text(name_r.left_center(), Align2::LEFT_CENTER, short, name_font, t.text);
+        }
     }
     for (i, m) in coll.modes.iter().enumerate() {
         let x = r.min.x + NAME_W + i as f32 * MODE_W;
@@ -948,6 +1000,14 @@ fn var_row(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, v: &Va
     ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.border));
 }
 
+fn dynamic_badge_layout(name_r: Rect, text_width: f32) -> (Rect, Rect) {
+    let text_max_x = name_r.max.x - DYNAMIC_BADGE_W - DYNAMIC_BADGE_GAP;
+    let text_rect = Rect::from_min_max(name_r.min, pos2(text_max_x, name_r.max.y));
+    let badge_x = (name_r.min.x + text_width + DYNAMIC_BADGE_GAP).min(name_r.max.x - DYNAMIC_BADGE_W);
+    let badge_rect = Rect::from_min_size(pos2(badge_x, name_r.center().y - DYNAMIC_BADGE_H / 2.0), vec2(DYNAMIC_BADGE_W, DYNAMIC_BADGE_H));
+    (text_rect, badge_rect)
+}
+
 /// The type marker before a variable's name: its colour (default mode), or a type glyph.
 fn kind_glyph(ui: &Ui, vars: &Variables, v: &Variable, coll: &Collection, rect: Rect) {
     let t = Tokens::get(ui.ctx());
@@ -990,7 +1050,7 @@ fn set(app: &mut FigApp, v: &Variable, mode: &str, value: Value) {
 fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &Collection, mode: &str, rect: Rect) {
     let t = Tokens::get(ui.ctx());
     let Some(val) = v.values.get(mode) else { return };
-    let editable = view.editable();
+    let editable = view.editable() && v.expression.is_none();
     let id = Id::unique(("var_cell", &v.id, mode));
     // The value editor leaves room for the alias button (and in extended collections an
     // override's reset button, so the column stays even).
@@ -1045,7 +1105,6 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
             Some(VariableValue::Color(c)) => Some(c),
             _ => None,
         };
-        // The formula is the point of the cell: it keeps the width an alpha readout would take.
         read_only_cell(ui, body, shown, formula, false);
         if resp.clicked() {
             crate::variable_ui::open_alias(ui, &v.id, mode, v.kind, body.left_bottom());
@@ -1053,6 +1112,18 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
         if hovered {
             detach(app, ui, view, v, coll, mode, (id.with("detach"), alias_btn), tr("Detach calculation"));
         }
+        return;
+    }
+    if v.expression.is_some() && v.kind == VariableType::Color {
+        let shown = match val {
+            VariableValue::Color(color) => Some(*color),
+            _ => None,
+        };
+        let text = shown.map_or_else(|| tr("Unresolved").to_string(), |color| color.to_hex());
+        let expression = v.expression.as_ref().map_or_else(String::new, |expr| expr.display_dynamic(view.vars));
+        ui.interact(body, id.with("dynamic"), Sense::hover())
+            .on_hover_text(format!("{}\n{expression}", tr("Dynamic expression; updates when referenced variables change")));
+        expression_color_cell(app, ui, v, mode, body, id, shown, text);
         return;
     }
     if !editable {
@@ -1103,6 +1174,39 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
     }
     if hovered && widgets::icon_button_at(ui, id.with("mkalias"), alias_btn, Icon::Variable, tr("Create alias")) {
         crate::variable_ui::open_alias(ui, &v.id, mode, v.kind, body.left_bottom());
+    }
+}
+
+fn expression_color_cell(
+    app: &mut FigApp,
+    ui: &mut Ui,
+    v: &Variable,
+    mode: &str,
+    body: Rect,
+    id: Id,
+    color: Option<figcraft_color::Color>,
+    text: String,
+) {
+    let opacity_rect = Rect::from_min_max(pos2(body.max.x - 48.0, body.min.y), body.max);
+    let formula_rect = Rect::from_min_max(body.min, pos2(opacity_rect.min.x - 4.0, body.max.y));
+    read_only_cell(ui, formula_rect, color, text, false);
+    let t = Tokens::get(ui.ctx());
+    ui.painter().line_segment([pos2(opacity_rect.min.x, body.min.y + 4.0), pos2(opacity_rect.min.x, body.max.y - 4.0)], Stroke::new(1.0, t.panel));
+    let Some(color) = color else { return };
+    let opacity = v.expression_opacity.get(mode).copied().unwrap_or(color.a);
+    let mut child = ui.new_child(UiBuilder::new().max_rect(opacity_rect));
+    match widgets::number_field(&mut child, id.with("opacity"), Lead::None, Some(f64::from(opacity) * 100.0), "%", opacity_rect.width(), 1.0) {
+        Some(FieldEdit::Set(value)) => {
+            app.run("variable.setExpressionOpacity", json!({"variable": v.id, "mode": mode, "opacity": value.clamp(0.0, 100.0)}));
+        }
+        Some(FieldEdit::Scrub(value, done)) => crate::typography::live(
+            app,
+            "Edit variable opacity",
+            "variable.setExpressionOpacity",
+            json!({"variable": v.id, "mode": mode, "opacity": value.clamp(0.0, 100.0)}),
+            done,
+        ),
+        None => {}
     }
 }
 
@@ -1181,17 +1285,21 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
         st.details = None;
         return;
     };
+    let expression_source = v.expression.as_ref().map_or_else(String::new, |e| e.display_dynamic(vars));
+    sync_expression_draft(st, &v.id, &expression_source);
     let t = Tokens::get(ctx);
+    let ctx = ctx.clone();
     let mut open = true;
     egui::Window::new(tr("Edit variable"))
         .id(Id::unique("variable_details"))
         .open(&mut open)
         .collapsible(false)
-        .resizable(false)
-        .default_width(280.0)
+        .resizable(true)
+        .default_width(310.0)
         .frame(egui::Frame::window(&ctx.global_style()).fill(t.panel).inner_margin(egui::Margin::same(16)))
-        .show(ctx, |ui| {
-            ui.set_width(260.0);
+        .show(&ctx, |ui| {
+            ui.set_width(280.0);
+            let editor_id = ui.make_persistent_id(("var_dynamic_expression", &v.id));
             widgets::label(ui, tr("Name"), t.text_secondary);
             if let Some(n) = widgets::text_field(ui, Id::unique(("var_detail_name", &v.id)), &v.name, 260.0, "") {
                 app.run("variable.update", json!({"variable": v.id, "name": n}));
@@ -1205,6 +1313,189 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
             if widgets::checkbox(ui, v.hidden_from_publishing, tr("Hide from publishing")) {
                 app.run("variable.update", json!({"variable": v.id, "hiddenFromPublishing": !v.hidden_from_publishing}));
             }
+            ui.add_space(10.0);
+            widgets::label(ui, tr("Dynamic expression"), t.text_secondary);
+            if ui.memory(|memory| memory.has_focus(editor_id))
+                && let Some(completion) = st.expression_completion.clone()
+            {
+                let count = completion.candidates.len();
+                if count > 0 && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                    st.expression_completion_selection = (st.expression_completion_selection + 1) % count;
+                }
+                if count > 0 && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
+                    st.expression_completion_selection = (st.expression_completion_selection + count - 1) % count;
+                }
+                if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                    st.expression_completion_dismissed = Some(completion.prefix);
+                    st.expression_completion = None;
+                } else if count > 0
+                    && ui.input_mut(|input| {
+                        (!input.modifiers.shift && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                            || input.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
+                    })
+                    && let Some(candidate) = completion.candidates.get(st.expression_completion_selection).cloned()
+                    && let Some(cursor) = insert_expression_completion(&mut st.expression_draft, &completion, &candidate)
+                {
+                    set_expression_cursor(&ctx, editor_id, cursor);
+                    st.expression_completion_dismissed = Some(candidate.label);
+                    st.expression_completion = None;
+                }
+            }
+            let opening_delimiter = ui.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Text(text) if text.chars().count() == 1 => text.chars().next().filter(|ch| expression_closing_delimiter(*ch).is_some()),
+                    _ => None,
+                })
+            });
+            let text_before_input = st.expression_draft.clone();
+            let selection_before_input = egui::TextEdit::load_state(&ctx, editor_id).and_then(|state| state.cursor.char_range());
+            let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                let font_id = ui.style().text_styles.get(&egui::TextStyle::Monospace).cloned().unwrap_or_else(|| regular(12.0));
+                let job = expression_layout_job(text.as_str(), vars, t, font_id, wrap_width);
+                ui.fonts_mut(|fonts| fonts.layout_job(job))
+            };
+            let output = ui
+                .allocate_ui(vec2(280.0, 72.0), |ui| {
+                    ui.set_min_size(vec2(280.0, 72.0));
+                    egui::TextEdit::multiline(&mut st.expression_draft)
+                        .id(editor_id)
+                        .font(egui::TextStyle::Monospace)
+                        .interactive(v.extends.is_none())
+                        .layouter(&mut layouter)
+                        .desired_width(280.0)
+                        .desired_rows(5)
+                        .hint_text("{CornerRadius} * 2\nif {CornerRadius} == 1 then 20 else 10")
+                        .show(ui)
+                })
+                .inner;
+            let mut cursor = output.cursor_range.map(|range| range.primary.index.0);
+            if output.response.response.has_focus()
+                && let (Some(delimiter), Some(at)) = (opening_delimiter, cursor)
+            {
+                let selection = selection_before_input
+                    .map(|range| (range.primary.index.0.min(range.secondary.index.0), range.primary.index.0.max(range.secondary.index.0)))
+                    .filter(|(start, end)| start < end);
+                if let Some((start, end)) = selection
+                    && let Some((text, next)) = wrap_expression_selection(&text_before_input, start..end, delimiter)
+                {
+                    st.expression_draft = text;
+                    cursor = Some(next);
+                    set_expression_cursor(&ctx, editor_id, next);
+                } else if let Some(next) = insert_closing_pair(&mut st.expression_draft, at, delimiter) {
+                    cursor = Some(next);
+                    set_expression_cursor(&ctx, editor_id, next);
+                }
+            }
+            if output.response.response.has_focus()
+                && let Some(range) = output.cursor_range
+                && range.primary.index.0 == range.secondary.index.0
+                && let Some(at) = cursor
+                && let Some(completion) = expression_completion(&st.expression_draft, at, vars)
+            {
+                if st.expression_completion_dismissed.as_deref() == Some(completion.prefix.as_str()) {
+                    st.expression_completion = None;
+                } else {
+                    if st.expression_completion.as_ref().map(|current| &current.prefix) != Some(&completion.prefix) {
+                        st.expression_completion_selection = 0;
+                    }
+                    st.expression_completion = Some(completion);
+                    st.expression_completion_dismissed = None;
+                }
+            } else if output.response.response.has_focus() {
+                st.expression_completion = None;
+                st.expression_completion_dismissed = None;
+            }
+            let mut clicked_candidate = None;
+            let mut popup_hovered = false;
+            if let Some(completion) = st.expression_completion.clone()
+                && let Some(at) = cursor
+            {
+                let caret = output.galley.pos_from_cursor(egui::text::CCursor::new(at)).right_bottom();
+                let popup_pos = output.galley_pos + caret.to_vec2() + vec2(2.0, 2.0);
+                let area = egui::Area::new(editor_id.with("completion"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(popup_pos)
+                    .constrain(true)
+                    .show(&ctx, |ui| {
+                        egui::Frame::popup(&ctx.global_style())
+                            .fill(t.panel)
+                            .stroke(Stroke::new(1.0, t.border))
+                            .show(ui, |ui| {
+                                ui.set_min_width(220.0);
+                                ui.set_max_width(280.0);
+                                egui::ScrollArea::vertical().max_height(190.0).show(ui, |ui| {
+                                    for (index, candidate) in completion.candidates.iter().enumerate() {
+                                        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+                                        if index == st.expression_completion_selection {
+                                            ui.painter().rect_filled(rect, CornerRadius::same(4), t.selected_row);
+                                        } else if response.hovered() {
+                                            ui.painter().rect_filled(rect, CornerRadius::same(4), t.hover);
+                                        }
+                                        let label_color = match candidate.kind {
+                                            ExpressionCandidateKind::Variable => t.component,
+                                            ExpressionCandidateKind::Operator => t.text_secondary,
+                                            ExpressionCandidateKind::Function => t.accent_hover,
+                                            ExpressionCandidateKind::Keyword => t.accent_text,
+                                        };
+                                        ui.painter().text(
+                                            rect.left_center() + vec2(8.0, 0.0),
+                                            Align2::LEFT_CENTER,
+                                            &candidate.label,
+                                            regular(12.0),
+                                            label_color,
+                                        );
+                                        ui.painter().text(
+                                            rect.right_center() - vec2(8.0, 0.0),
+                                            Align2::RIGHT_CENTER,
+                                            tr(&candidate.detail),
+                                            regular(10.0),
+                                            t.text_secondary,
+                                        );
+                                        if response.clicked() {
+                                            clicked_candidate = Some(candidate.clone());
+                                        }
+                                    }
+                                });
+                            });
+                    });
+                popup_hovered = area.response.hovered();
+            }
+            if let (Some(completion), Some(candidate)) = (st.expression_completion.clone(), clicked_candidate)
+                && let Some(cursor) = insert_expression_completion(&mut st.expression_draft, &completion, &candidate)
+            {
+                set_expression_cursor(&ctx, editor_id, cursor);
+                ctx.memory_mut(|memory| memory.request_focus(editor_id));
+                st.expression_completion_dismissed = Some(candidate.label);
+                st.expression_completion = None;
+            } else if !output.response.response.has_focus() && !popup_hovered {
+                st.expression_completion = None;
+            }
+            ui.horizontal(|ui| {
+                if widgets::button(ui, tr("Apply"), true, v.extends.is_none()).clicked()
+                    && app.run("variable.setExpression", json!({"variable": v.id, "expression": st.expression_draft})).is_some()
+                    && let Ok(doc) = app.session.doc()
+                    && let Some(updated) = doc.variables.get_by_id(&v.id)
+                {
+                    let source = updated.expression.as_ref().map_or_else(String::new, |e| e.display_dynamic(&doc.variables));
+                    st.expression_draft.clone_from(&source);
+                    st.expression_source = source;
+                }
+                if v.expression.is_some()
+                    && widgets::button(ui, tr("Clear"), false, v.extends.is_none()).clicked()
+                    && app.run("variable.setExpression", json!({"variable": v.id, "expression": null})).is_some()
+                {
+                    st.expression_draft.clear();
+                    st.expression_source.clear();
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(tr(
+                    "Enter an expression without the output variable name. Wrap variable references in {braces}; use arithmetic, comparisons, `not`, `and`, `or`, or `if … then … else …`.",
+                ))
+                .small()
+                .color(t.text_secondary),
+            );
             // The names code uses for it per platform (generated CSS uses the Web one).
             ui.add_space(10.0);
             widgets::label(ui, tr("Code syntax"), t.text_secondary);
@@ -1218,6 +1509,7 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
                     }
                 });
             }
+
             let scopes = scopes_for(v.kind);
             if scopes.is_empty() {
                 return;
@@ -1248,6 +1540,309 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
     if !open {
         st.details = None;
     }
+}
+
+fn sync_expression_draft(st: &mut Editor, variable_id: &str, source: &str) {
+    if st.expression_edit_for.as_deref() != Some(variable_id) {
+        st.expression_edit_for = Some(variable_id.to_string());
+        st.expression_draft = source.to_string();
+        st.expression_source = source.to_string();
+        st.expression_completion = None;
+        st.expression_completion_selection = 0;
+        st.expression_completion_dismissed = None;
+    } else if st.expression_draft == st.expression_source && st.expression_source != source {
+        st.expression_draft = source.to_string();
+        st.expression_source = source.to_string();
+        st.expression_completion = None;
+        st.expression_completion_selection = 0;
+        st.expression_completion_dismissed = None;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExpressionHighlight {
+    Variable,
+    Keyword,
+    Operator,
+    Function,
+}
+
+fn expression_layout_job(text: &str, vars: &Variables, tokens: Tokens, font_id: egui::FontId, wrap_width: f32) -> LayoutJob {
+    let plain = TextFormat { font_id, color: tokens.text, ..Default::default() };
+    let mut job = LayoutJob::default();
+    let mut from = 0;
+    for (range, kind) in expression_highlights(text, vars) {
+        if from < range.start {
+            job.append(&text[from..range.start], 0.0, plain.clone());
+        }
+        let color = match kind {
+            ExpressionHighlight::Keyword => tokens.accent_text,
+            ExpressionHighlight::Variable => tokens.component,
+            ExpressionHighlight::Operator => tokens.text_secondary,
+            ExpressionHighlight::Function => tokens.accent_hover,
+        };
+        job.append(&text[range.clone()], 0.0, TextFormat { color, ..plain.clone() });
+        from = range.end;
+    }
+    if from < text.len() {
+        job.append(&text[from..], 0.0, plain);
+    }
+    job.wrap.max_width = wrap_width;
+    job
+}
+
+fn expression_highlights(text: &str, vars: &Variables) -> Vec<(std::ops::Range<usize>, ExpressionHighlight)> {
+    let mut highlights = Vec::new();
+    let mut cursor = 0;
+    while cursor < text.len() {
+        let Some(ch) = text[cursor..].chars().next() else { break };
+        if matches!(ch, '"' | '\'') {
+            cursor = expression_string_end(text, cursor, ch);
+            continue;
+        }
+        if ch == '{'
+            && let Some(close) = text[cursor + 1..].find('}').map(|offset| cursor + 1 + offset)
+            && vars.get(text[cursor + 1..close].trim()).is_some()
+        {
+            let end = close + 1;
+            highlights.push((cursor..end, ExpressionHighlight::Variable));
+            cursor = end;
+            continue;
+        }
+        if let Some(end) = expression_function_end(text, cursor) {
+            highlights.push((cursor..end, ExpressionHighlight::Function));
+            cursor = end;
+            continue;
+        }
+        if let Some(end) = expression_operator_word_end(text, cursor) {
+            highlights.push((cursor..end, ExpressionHighlight::Operator));
+            cursor = end;
+            continue;
+        }
+        if let Some(end) = expression_keyword_end(text, cursor) {
+            highlights.push((cursor..end, ExpressionHighlight::Keyword));
+            cursor = end;
+            continue;
+        }
+        if let Some(end) = expression_operator_end(text, cursor) {
+            highlights.push((cursor..end, ExpressionHighlight::Operator));
+            cursor = end;
+            continue;
+        }
+        cursor += ch.len_utf8();
+    }
+    highlights
+}
+
+fn expression_word_end(text: &str, start: usize, words: &[&str]) -> Option<usize> {
+    if text[..start].chars().next_back().is_some_and(expression_ident) {
+        return None;
+    }
+    words.iter().find_map(|word| {
+        let end = start + word.len();
+        (text[start..].get(..word.len()).is_some_and(|part| part.eq_ignore_ascii_case(word))
+            && !text[end..].chars().next().is_some_and(expression_ident))
+        .then_some(end)
+    })
+}
+
+fn expression_function_end(text: &str, start: usize) -> Option<usize> {
+    expression_word_end(text, start, &["hsl", "hex", "lerp"])
+}
+
+fn expression_operator_word_end(text: &str, start: usize) -> Option<usize> {
+    expression_word_end(text, start, &["and", "or", "not"])
+}
+
+fn expression_keyword_end(text: &str, start: usize) -> Option<usize> {
+    expression_word_end(text, start, &["if", "then", "else", "true", "false"])
+}
+
+fn expression_operator_end(text: &str, start: usize) -> Option<usize> {
+    ["==", "!=", "<=", ">=", "&&", "||", "=", "<", ">", "+", "-", "*", "/", "!", "(", ")", "{", "}", "[", "]"]
+        .iter()
+        .find_map(|operator| text[start..].starts_with(operator).then_some(start + operator.len()))
+}
+
+fn expression_string_end(text: &str, start: usize, quote: char) -> usize {
+    let content_start = start + quote.len_utf8();
+    let mut escaped = false;
+    for (offset, ch) in text[content_start..].char_indices() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == quote {
+            return content_start + offset + ch.len_utf8();
+        }
+    }
+    text.len()
+}
+
+fn expression_ident(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+fn set_expression_cursor(ctx: &Context, id: Id, at: usize) {
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(at))));
+    egui::TextEdit::store_state(ctx, id, state);
+}
+
+fn insert_closing_pair(text: &mut String, cursor: usize, opening: char) -> Option<usize> {
+    let closing = expression_closing_delimiter(opening)?;
+    let chars: Vec<char> = text.chars().collect();
+    if cursor == 0 || chars.get(cursor - 1) != Some(&opening) {
+        return None;
+    }
+    if chars.get(cursor) != Some(&closing) {
+        let byte = expression_byte_at(text, cursor)?;
+        text.insert(byte, closing);
+    }
+    Some(cursor)
+}
+
+fn expression_closing_delimiter(opening: char) -> Option<char> {
+    match opening {
+        '(' => Some(')'),
+        '{' => Some('}'),
+        '[' => Some(']'),
+        '"' | '\'' | '`' => Some(opening),
+        _ => None,
+    }
+}
+
+fn wrap_expression_selection(text: &str, selection: std::ops::Range<usize>, opening: char) -> Option<(String, usize)> {
+    let closing = expression_closing_delimiter(opening)?;
+    if selection.start >= selection.end {
+        return None;
+    }
+    let start = expression_byte_at(text, selection.start)?;
+    let end = expression_byte_at(text, selection.end)?;
+    let mut wrapped = text.to_string();
+    wrapped.insert(end, closing);
+    wrapped.insert(start, opening);
+    Some((wrapped, selection.end.saturating_add(2)))
+}
+
+fn expression_completion(text: &str, cursor: usize, vars: &Variables) -> Option<ExpressionCompletion> {
+    let chars: Vec<char> = text.chars().collect();
+    if cursor > chars.len() {
+        return None;
+    }
+    let mut opening = None;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in chars.iter().take(cursor).copied().enumerate() {
+        if let Some(q) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '{' => opening = Some(index),
+            '}' => opening = None,
+            _ => {}
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if let Some(opening) = opening {
+        let start = opening.saturating_add(1);
+        let prefix: String = chars.get(start..cursor)?.iter().collect();
+        if prefix.contains('\n') || prefix.contains('\r') {
+            return None;
+        }
+        let end = chars.iter().enumerate().skip(cursor).find_map(|(index, ch)| (*ch == '}').then_some(index)).unwrap_or(cursor);
+        let folded_prefix = prefix.to_lowercase();
+        let candidates: Vec<ExpressionCandidate> = vars
+            .variables
+            .iter()
+            .filter(|variable| variable.name.to_lowercase().starts_with(&folded_prefix) || variable.id.to_lowercase().starts_with(&folded_prefix))
+            .take(12)
+            .map(|variable| {
+                let exact_name = !variable.name.contains('}')
+                    && variable.name.trim() == variable.name
+                    && vars.get(&variable.name).is_some_and(|resolved| resolved.id == variable.id);
+                let insertion = if exact_name { variable.name.clone() } else { variable.id.clone() };
+                ExpressionCandidate {
+                    label: variable.name.clone(),
+                    detail: "variable".into(),
+                    cursor_offset: insertion.chars().count(),
+                    insertion,
+                    kind: ExpressionCandidateKind::Variable,
+                }
+            })
+            .collect();
+        return (!candidates.is_empty()).then_some(ExpressionCompletion {
+            prefix,
+            replace: start..end,
+            context: CompletionContext::Variable,
+            candidates,
+        });
+    }
+
+    let start = chars[..cursor].iter().rposition(|ch| !expression_ident(*ch)).map_or(0, |index| index + 1);
+    let prefix: String = chars.get(start..cursor)?.iter().collect();
+    if prefix.is_empty() {
+        return None;
+    }
+    let end = chars.iter().enumerate().skip(cursor).find_map(|(index, ch)| (!expression_ident(*ch)).then_some(index)).unwrap_or(chars.len());
+    let folded_prefix = prefix.to_lowercase();
+    let candidates = [
+        ("and", "operator", "and ", ExpressionCandidateKind::Operator, 4),
+        ("or", "operator", "or ", ExpressionCandidateKind::Operator, 3),
+        ("hsl", "(h,s,l)", "hsl()", ExpressionCandidateKind::Function, 4),
+        ("hex", "(#111111)", "hex()", ExpressionCandidateKind::Function, 4),
+        ("lerp", "(color, color, alpha)", "lerp()", ExpressionCandidateKind::Function, 5),
+        ("not", "operator", "not ", ExpressionCandidateKind::Operator, 4),
+        ("if", "keyword", "if ", ExpressionCandidateKind::Keyword, 3),
+        ("then", "keyword", "then ", ExpressionCandidateKind::Keyword, 5),
+        ("else", "keyword", "else ", ExpressionCandidateKind::Keyword, 5),
+    ]
+    .into_iter()
+    .filter(|(label, _, _, _, _)| label.starts_with(&folded_prefix))
+    .map(|(label, detail, insertion, kind, cursor_offset)| ExpressionCandidate {
+        label: label.into(),
+        detail: detail.into(),
+        insertion: insertion.into(),
+        kind,
+        cursor_offset,
+    })
+    .collect::<Vec<_>>();
+    (!candidates.is_empty()).then_some(ExpressionCompletion { prefix, replace: start..end, context: CompletionContext::Syntax, candidates })
+}
+
+fn insert_expression_completion(text: &mut String, completion: &ExpressionCompletion, candidate: &ExpressionCandidate) -> Option<usize> {
+    let start = expression_byte_at(text, completion.replace.start)?;
+    let end = expression_byte_at(text, completion.replace.end)?;
+    let has_closing_brace = completion.context == CompletionContext::Variable && text.chars().nth(completion.replace.end) == Some('}');
+    text.replace_range(start..end, &candidate.insertion);
+    let cursor = completion.replace.start.saturating_add(candidate.cursor_offset);
+    if completion.context == CompletionContext::Variable {
+        if !has_closing_brace {
+            let byte = expression_byte_at(text, cursor)?;
+            text.insert(byte, '}');
+        }
+        let after_brace = cursor.saturating_add(1);
+        if text.chars().nth(after_brace) != Some(' ') {
+            let byte = expression_byte_at(text, after_brace)?;
+            text.insert(byte, ' ');
+        }
+        return Some(after_brace.saturating_add(1));
+    }
+    Some(cursor)
+}
+
+fn expression_byte_at(text: &str, char_index: usize) -> Option<usize> {
+    if char_index == text.chars().count() { Some(text.len()) } else { text.char_indices().nth(char_index).map(|(byte, _)| byte) }
 }
 
 /// Whether `f` holds for every variable (Some(true)), for none (Some(false)) or only some (None).
@@ -1344,7 +1939,164 @@ fn bulk_details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Edit
 
 #[cfg(test)]
 mod tests {
-    use super::{group_renames, groups, tri};
+    use super::{
+        Editor, ExpressionCandidateKind, ExpressionHighlight, dynamic_badge_layout, expression_completion, expression_highlights, group_renames,
+        groups, insert_closing_pair, insert_expression_completion, sync_expression_draft, tri, wrap_expression_selection,
+    };
+    use egui::{Rect, pos2};
+
+    #[test]
+    fn dynamic_expression_highlights_references_and_syntax_outside_text_literals() {
+        let mut session = figcraft_engine::Session::new();
+        session.execute("variable.createCollection", &serde_json::json!({"name": "Theme"})).unwrap();
+        for name in ["Computed", "MenuOpen"] {
+            session.execute("variable.create", &serde_json::json!({"collection": "Theme", "name": name, "type": "boolean", "value": false})).unwrap();
+        }
+        session
+            .execute("variable.create", &serde_json::json!({"collection": "Theme", "name": "Blue-100", "type": "color", "value": "#336699"}))
+            .unwrap();
+        let variables = &session.doc().unwrap().variables;
+        let text = "if {MenuOpen} == true then not {MenuOpen} else false";
+        let actual: Vec<_> = expression_highlights(text, variables).into_iter().map(|(range, kind)| (text[range].to_string(), kind)).collect();
+        assert_eq!(
+            actual,
+            [
+                ("if".into(), ExpressionHighlight::Keyword),
+                ("{MenuOpen}".into(), ExpressionHighlight::Variable),
+                ("==".into(), ExpressionHighlight::Operator),
+                ("true".into(), ExpressionHighlight::Keyword),
+                ("then".into(), ExpressionHighlight::Keyword),
+                ("not".into(), ExpressionHighlight::Operator),
+                ("{MenuOpen}".into(), ExpressionHighlight::Variable),
+                ("else".into(), ExpressionHighlight::Keyword),
+                ("false".into(), ExpressionHighlight::Keyword),
+            ]
+        );
+
+        let text = "\"{MenuOpen} and if\" or {MenuOpen}";
+        let actual: Vec<_> = expression_highlights(text, variables).into_iter().map(|(range, kind)| (text[range].to_string(), kind)).collect();
+        assert_eq!(actual, [("or".into(), ExpressionHighlight::Operator), ("{MenuOpen}".into(), ExpressionHighlight::Variable),]);
+
+        let text = "lerp(hsl(0, 100, 50), hex(#FF0000), 0.15)";
+        let actual: Vec<_> = expression_highlights(text, variables)
+            .into_iter()
+            .filter(|(_, kind)| *kind == ExpressionHighlight::Function)
+            .map(|(range, kind)| (text[range].to_string(), kind))
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                ("lerp".into(), ExpressionHighlight::Function),
+                ("hsl".into(), ExpressionHighlight::Function),
+                ("hex".into(), ExpressionHighlight::Function),
+            ]
+        );
+    }
+
+    #[test]
+    fn variable_completion_filters_braced_references_and_keeps_the_caret_inside() {
+        let mut session = figcraft_engine::Session::new();
+        session.execute("variable.createCollection", &serde_json::json!({"name": "Theme"})).unwrap();
+        session
+            .execute("variable.create", &serde_json::json!({"collection": "Theme", "name": "Blue-100", "type": "color", "value": "#336699"}))
+            .unwrap();
+        session
+            .execute("variable.create", &serde_json::json!({"collection": "Theme", "name": "Black", "type": "color", "value": "#000000"}))
+            .unwrap();
+        let variables = &session.doc().unwrap().variables;
+
+        let completion = expression_completion("{Blue", 5, variables).expect("an unfinished braced reference offers variable names");
+        assert_eq!(completion.prefix, "Blue");
+        assert_eq!(completion.candidates.iter().map(|candidate| candidate.label.as_str()).collect::<Vec<_>>(), ["Blue-100"]);
+        assert!(expression_completion("\"{Blue", 6, variables).is_none(), "quoted text is not a variable reference");
+
+        let mut text = "{Blue".to_string();
+        let cursor = insert_expression_completion(&mut text, &completion, &completion.candidates[0]).expect("the suggestion is inserted");
+        assert_eq!(text, "{Blue-100} ");
+        assert_eq!(cursor, 11, "the caret moves beyond the closing brace and one space");
+
+        let mut text = "{Blue}+1".to_string();
+        let completion = expression_completion(&text, 5, variables).expect("a braced reference offers variable names");
+        let cursor = insert_expression_completion(&mut text, &completion, &completion.candidates[0]).expect("the suggestion is inserted");
+        assert_eq!(text, "{Blue-100} +1");
+        assert_eq!(cursor, 11, "the caret is after the inserted separator");
+    }
+
+    #[test]
+    fn syntax_completion_offers_operators_and_function_templates() {
+        let variables = figcraft_engine::Session::new().doc().unwrap().variables.clone();
+        let and = expression_completion("true a", 6, &variables).expect("a partial operator name offers suggestions");
+        assert_eq!(and.candidates.iter().map(|candidate| candidate.label.as_str()).collect::<Vec<_>>(), ["and"]);
+        assert_eq!(and.candidates[0].detail, "operator");
+        assert_eq!(and.candidates[0].kind, ExpressionCandidateKind::Operator);
+        let mut text = "true a".to_string();
+        let cursor = insert_expression_completion(&mut text, &and, &and.candidates[0]).expect("the operator is inserted");
+        assert_eq!(text, "true and ");
+        assert_eq!(cursor, 9, "the caret is after the trailing space");
+
+        let or = expression_completion("o", 1, &variables).expect("or is available as an operator");
+        assert_eq!(or.candidates.iter().map(|candidate| candidate.label.as_str()).collect::<Vec<_>>(), ["or"]);
+        let mut text = "o".to_string();
+        let cursor = insert_expression_completion(&mut text, &or, &or.candidates[0]).expect("the operator is inserted");
+        assert_eq!(text, "or ");
+        assert_eq!(cursor, 3, "the caret is after the trailing space");
+
+        let functions = expression_completion("h", 1, &variables).expect("color constructors appear as functions");
+        assert_eq!(functions.candidates.iter().map(|candidate| candidate.label.as_str()).collect::<Vec<_>>(), ["hsl", "hex"]);
+        let lerp = expression_completion("ler", 3, &variables).expect("lerp appears as a color function");
+        assert_eq!(lerp.candidates[0].detail, "(color, color, alpha)");
+        assert_eq!(lerp.candidates[0].kind, ExpressionCandidateKind::Function);
+
+        let mut text = "ler".to_string();
+        let cursor = insert_expression_completion(&mut text, &lerp, &lerp.candidates[0]).expect("the call template is inserted");
+        assert_eq!(text, "lerp()");
+        assert_eq!(cursor, 5, "the caret is inside the function parentheses");
+    }
+
+    #[test]
+    fn opening_delimiters_insert_pairs_without_moving_the_caret() {
+        for (opening, expected) in [('(', "value()"), ('{', "value{}"), ('[', "value[]"), ('"', "value\"\""), ('\'', "value''"), ('`', "value``")] {
+            let mut text = format!("value{opening}");
+            let cursor = insert_closing_pair(&mut text, 6, opening).expect("the opening delimiter is paired");
+            assert_eq!(text, expected);
+            assert_eq!(cursor, 6);
+        }
+    }
+
+    #[test]
+    fn paired_delimiters_wrap_selected_text_and_put_the_caret_after_the_pair() {
+        for (opening, expected) in [('(', "(word)"), ('{', "{word}"), ('[', "[word]"), ('"', "\"word\""), ('\'', "'word'"), ('`', "`word`")] {
+            let (wrapped, cursor) = wrap_expression_selection("word", 0..4, opening).expect("the selection is wrapped");
+            assert_eq!(wrapped, expected);
+            assert_eq!(cursor, 6);
+        }
+
+        let (wrapped, cursor) = wrap_expression_selection("hé", 0..2, '"').expect("Unicode text is wrapped on character boundaries");
+        assert_eq!(wrapped, "\"hé\"");
+        assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn clean_formula_draft_tracks_renamed_references_without_losing_unsaved_edits() {
+        let mut editor = Editor::default();
+        sync_expression_draft(&mut editor, "formula", "Count < 5");
+        sync_expression_draft(&mut editor, "formula", "Limit < 5");
+        assert_eq!(editor.expression_draft, "Limit < 5");
+
+        editor.expression_draft = "Limit <= 6".to_string();
+        sync_expression_draft(&mut editor, "formula", "Maximum < 5");
+        assert_eq!(editor.expression_draft, "Limit <= 6");
+    }
+
+    #[test]
+    fn dynamic_badge_does_not_overlap_a_long_variable_name() {
+        let name_rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(192.0, 24.0));
+        let (text_rect, badge_rect) = dynamic_badge_layout(name_rect, 400.0);
+        assert!(text_rect.max.x < badge_rect.min.x);
+        assert!(badge_rect.max.x <= name_rect.max.x);
+        let (_, short_badge_rect) = dynamic_badge_layout(name_rect, 32.0);
+        assert_eq!(short_badge_rect.min.x, 36.0);
+    }
 
     #[test]
     fn tri_is_checked_empty_or_mixed() {

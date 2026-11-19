@@ -966,6 +966,8 @@ fn colour_var(id: &str, name: &str, values: &[(&str, VariableValue)]) -> Variabl
         collection: "c1".into(),
         kind: VariableType::Color,
         values: values.iter().map(|(m, v)| (m.to_string(), v.clone())).collect(),
+        expression: None,
+        expression_opacity: BTreeMap::new(),
         description: String::new(),
         scopes: None,
         hidden_from_publishing: false,
@@ -973,6 +975,31 @@ fn colour_var(id: &str, name: &str, values: &[(&str, VariableValue)]) -> Variabl
         overrides: Default::default(),
         code_syntax: Default::default(),
     }
+}
+
+#[test]
+fn legacy_documents_without_dynamic_variable_fields_load() {
+    let mut document = Document::new("legacy");
+    document.variables.collections.push(Collection {
+        id: "c1".into(),
+        name: "C".into(),
+        modes: vec![Mode { id: "light".into(), name: "Light".into() }],
+        extends: None,
+    });
+    document.variables.variables.push(colour_var("v1", "Old colour", &[("light", VariableValue::Color(Color::BLACK))]));
+
+    let mut legacy_json = serde_json::to_value(&document).unwrap();
+    let variables = legacy_json["variables"]["variables"].as_array_mut().unwrap();
+    for variable in variables {
+        let fields = variable.as_object_mut().unwrap();
+        fields.remove("expression");
+        fields.remove("expression_opacity");
+    }
+
+    let loaded: Document = serde_json::from_value(legacy_json).unwrap();
+    let variable = loaded.variables.get("v1").unwrap();
+    assert!(variable.expression.is_none());
+    assert!(variable.expression_opacity.is_empty());
 }
 
 /// `c1` with Light/Dark (Light is the default mode) and colour variables `("id", light, dark)`.

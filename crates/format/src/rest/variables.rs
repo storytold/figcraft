@@ -252,6 +252,8 @@ impl Ctx<'_> {
             collection,
             kind,
             values,
+            expression: None,
+            expression_opacity: BTreeMap::new(),
             description: text(v, "description").map(|s| s.chars().take(MAX_STRING).collect()).unwrap_or_default(),
             scopes: scopes.flatten(),
             hidden_from_publishing: v.get("hiddenFromPublishing").and_then(Value::as_bool).unwrap_or(false),

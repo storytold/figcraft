@@ -317,6 +317,8 @@ mod duplicate_map_tests;
 #[cfg(test)]
 mod duplicate_spacing_tests;
 #[cfg(test)]
+mod dynamic_variables_tests;
+#[cfg(test)]
 mod effects_tests;
 #[cfg(test)]
 mod events_tests;

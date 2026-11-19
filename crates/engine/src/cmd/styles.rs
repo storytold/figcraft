@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use figcraft_color::{Color, Paint, PaintKind};
 use figcraft_doc::ParagraphStyle;
+use figcraft_doc::proto::{Expr, ExprOp};
 use figcraft_doc::{
     Collection, CollectionId, Document, Effect, EffectKind, Mode, ModeId, Node, NodeId, NodeKind, Style, StyleId, StyleKind, TextData, TextStyle,
     Variable, VariableId, VariableType, VariableValue, Variables, trim_num,
@@ -159,6 +160,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(val) = first.as_ref().and_then(|f| v.values.get(f)).cloned() {
                     v.values.insert(mid.clone(), val);
                 }
+                if let Some(opacity) = first.as_ref().and_then(|f| v.expression_opacity.get(f)).copied() {
+                    v.expression_opacity.insert(mid.clone(), opacity);
+                }
             }
             Ok(json!({"id": mid}))
         }),
@@ -177,9 +181,23 @@ pub fn specs() -> Vec<CommandSpec> {
             var_set
         ),
         spec!(
+            "variable.setExpression",
+            "Set dynamic variable expression",
+            "{variable (id or unambiguous name), expression (value expression only; no assignment; null or empty clears): (wrap every variable reference in braces, e.g. {Radius} * 2; numbers support +, -, *, / and comparisons; + also joins text, and unary - negates numbers or inverts booleans; booleans support not, and, or; conditionals use if condition then value else value, and non-boolean values also support condition and value or fallback when both values have the same type (empty strings and 0 are selected normally; prefer if when branches may be empty or zero); group boolean logic with parentheses, e.g. if ({A} or {B}) and {C} then ... else ...; colours are braced variable references or hsl(h,s,l) (hue wraps by 360 degrees, s/l clamp to 0..100 percent) or hex(#RRGGBB), e.g. lerp({Brand}, hex(#111111), 0.2); lerp(colour1, colour2, t) interpolates in sRGB with t clamped to 0..1. Division by zero leaves the current value unchanged. Deleting a referenced variable clears the formula and keeps its last value. Expressions ignore color alpha, so computed colors are opaque; use variable.setExpressionOpacity to set output opacity)}",
+            true,
+            set_expression
+        ),
+        spec!(
+            "variable.setExpressionOpacity",
+            "Set dynamic colour opacity",
+            "{variable (id or unambiguous name), mode? (name or id; default first), opacity (0..100 percent; null removes the override)}",
+            true,
+            set_expression_opacity
+        ),
+        spec!(
             "variable.delete",
             "Delete variable",
-            "{variable} (bound layers keep their values; variables aliasing it take its values; colour calculations reading it keep the colour they show)",
+            "{variable} (bound layers keep their values; variables aliasing it take its values; colour calculations reading it keep the colour they show; formulas referencing it are cleared and keep their last values)",
             true,
             |s, p| {
                 let v = req_string("variable.delete", p, "variable")?;
@@ -1055,6 +1073,8 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
         collection: coll.id,
         kind,
         values,
+        expression: None,
+        expression_opacity: BTreeMap::new(),
         description: string(p, "description").unwrap_or_default(),
         scopes: None,
         hidden_from_publishing: false,
@@ -1093,6 +1113,212 @@ pub fn var_set(s: &mut Session, p: &Value) -> Result<Value> {
         slot.values.insert(mode, val);
     }
     ok()
+}
+
+/// Store a bounded typed expression for a variable.
+fn set_expression(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "variable.setExpression";
+    let key = req_string(cmd, p, "variable")?;
+    let expression = p.get("expression").ok_or_else(|| bad(cmd, "pass expression text, or null to clear it"))?;
+    let doc = s.doc_mut()?;
+    let id = super::variables::resolve_strict(cmd, doc, &key)?;
+    let var = doc.variables.get_by_id(&id).cloned().ok_or_else(|| bad(cmd, "no such variable"))?;
+    if var.extends.is_some() {
+        return Err(bad(cmd, "an inherited variable's expression comes from the collection it extends"));
+    }
+    let parsed = match expression {
+        Value::Null => None,
+        Value::String(text) if text.trim().is_empty() => None,
+        Value::String(text) => {
+            let expr = Expr::parse_dynamic(text, &doc.variables).map_err(|e| bad(cmd, format!("{} at character {}", e.message, e.at + 1)))?;
+            if !dynamic_expression_supported(&expr) {
+                return Err(bad(
+                    cmd,
+                    "use variable references, numeric `+`, `-`, `*`, `/`, comparisons, boolean `not`, `and`, `or`, and `if … then … else …`",
+                ));
+            }
+            expr.check_value(&doc.variables, var.kind).map_err(|e| bad(cmd, e))?;
+            Some(expr)
+        }
+        _ => return Err(bad(cmd, "expression must be text or null")),
+    };
+    if let Some(slot) = doc.variables.variables.iter_mut().find(|x| x.id == id) {
+        slot.expression = parsed;
+        if slot.expression.is_none() {
+            slot.expression_opacity.clear();
+        }
+    }
+    if dynamic_order(&doc.variables).is_none() {
+        return Err(bad(cmd, "dynamic variable expressions can't depend on each other in a cycle"));
+    }
+    ok()
+}
+
+fn set_expression_opacity(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "variable.setExpressionOpacity";
+    let key = req_string(cmd, p, "variable")?;
+    let raw = p
+        .as_object()
+        .and_then(|params| params.get("opacity"))
+        .ok_or_else(|| bad(cmd, "pass opacity as a percentage, or null to remove the override"))?;
+    let opacity = match raw {
+        Value::Null => None,
+        Value::Number(value) => {
+            let value = value
+                .as_f64()
+                .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
+                .ok_or_else(|| bad(cmd, "opacity must be between 0 and 100"))?;
+            Some((value / 100.0) as f32)
+        }
+        _ => return Err(bad(cmd, "opacity must be a percentage or null")),
+    };
+    let doc = s.doc_mut()?;
+    let id = super::variables::resolve_strict(cmd, doc, &key)?;
+    let var = doc.variables.get_by_id(&id).cloned().ok_or_else(|| bad(cmd, "no such variable"))?;
+    if var.extends.is_some() {
+        return Err(bad(cmd, "an inherited variable's expression comes from the collection it extends"));
+    }
+    if var.kind != VariableType::Color || var.expression.is_none() {
+        return Err(bad(cmd, "opacity overrides require a dynamic colour variable"));
+    }
+    let coll = doc.variables.collection_by_id(&var.collection).cloned().ok_or_else(|| bad(cmd, "variable has no collection"))?;
+    let mode = match string(p, "mode") {
+        Some(mode) => coll.find_mode(&mode).map(|mode| mode.id.clone()).ok_or_else(|| bad(cmd, "no such mode"))?,
+        None => coll.default_mode().cloned().ok_or_else(|| bad(cmd, "collection has no modes"))?,
+    };
+    if let Some(slot) = doc.variables.variables.iter_mut().find(|variable| variable.id == id) {
+        if let Some(opacity) = opacity {
+            slot.expression_opacity.insert(mode, opacity);
+        } else {
+            slot.expression_opacity.remove(&mode);
+        }
+    }
+    ok()
+}
+
+fn dynamic_expression_supported(expr: &Expr) -> bool {
+    match expr {
+        Expr::Value(value) => matches!(
+            value,
+            VariableValue::Alias(_) | VariableValue::Color(_) | VariableValue::Number(_) | VariableValue::String(_) | VariableValue::Boolean(_)
+        ),
+        Expr::Op { op, args }
+            if matches!(
+                *op,
+                ExprOp::Not
+                    | ExprOp::And
+                    | ExprOp::Or
+                    | ExprOp::Add
+                    | ExprOp::Subtract
+                    | ExprOp::Multiply
+                    | ExprOp::Divide
+                    | ExprOp::Negate
+                    | ExprOp::Equals
+                    | ExprOp::NotEqual
+                    | ExprOp::Less
+                    | ExprOp::LessOrEqual
+                    | ExprOp::Greater
+                    | ExprOp::GreaterOrEqual
+                    | ExprOp::Hsl
+                    | ExprOp::Lerp
+            ) =>
+        {
+            args.iter().all(dynamic_expression_supported)
+        }
+        Expr::Conditional { condition, then_expr, else_expr } => {
+            dynamic_expression_supported(condition) && dynamic_expression_supported(then_expr) && dynamic_expression_supported(else_expr)
+        }
+        Expr::Op { .. } | Expr::Mode { .. } | Expr::InMode { .. } => false,
+    }
+}
+
+/// Dynamic variables in dependency order, or None when their dependency graph has a cycle.
+fn dynamic_order(vars: &Variables) -> Option<Vec<VariableId>> {
+    let dynamic: BTreeMap<_, _> = vars.variables.iter().filter(|v| v.expression.is_some()).map(|v| (v.id.as_str(), v)).collect();
+    let dynamic_ids: std::collections::BTreeSet<&str> = dynamic.keys().copied().collect();
+    let mut incoming: BTreeMap<String, usize> = dynamic.keys().map(|id| ((*id).to_string(), 0)).collect();
+    let mut readers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (id, var) in &dynamic {
+        for dependency in dynamic_dependencies(vars, var.expression.as_ref()?, &dynamic_ids)? {
+            *incoming.get_mut(*id)? += 1;
+            readers.entry(dependency).or_default().push((*id).to_string());
+        }
+    }
+    let mut ready: std::collections::BTreeSet<String> = incoming.iter().filter_map(|(id, count)| (*count == 0).then_some(id.clone())).collect();
+    let mut order = Vec::with_capacity(dynamic.len());
+    while let Some(id) = ready.pop_first() {
+        order.push(id.clone());
+        for reader in readers.get(&id).into_iter().flatten() {
+            let count = incoming.get_mut(reader)?;
+            *count -= 1;
+            if *count == 0 {
+                ready.insert(reader.clone());
+            }
+        }
+    }
+    (order.len() == dynamic.len()).then_some(order)
+}
+
+/// Follow static aliases and colour calculations to find formula dependencies too.
+fn dynamic_dependencies(
+    vars: &Variables,
+    expression: &Expr,
+    dynamic_ids: &std::collections::BTreeSet<&str>,
+) -> Option<std::collections::BTreeSet<String>> {
+    let mut dependencies = std::collections::BTreeSet::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stack: Vec<String> = expression.variables().into_iter().map(str::to_string).collect();
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        if seen.len() > 10_000 {
+            return None;
+        }
+        if dynamic_ids.contains(id.as_str()) {
+            dependencies.insert(id);
+            continue;
+        }
+        if let Some(var) = vars.get_by_id(&id) {
+            stack.extend(var.values.values().flat_map(|value| value.references().into_iter().cloned()));
+        }
+    }
+    Some(dependencies)
+}
+
+/// Re-evaluate expressions after a successful command changes document variables.
+pub(crate) fn recompute_dynamic_variables(doc: &mut Document) {
+    let Some(order) = dynamic_order(&doc.variables) else { return };
+    for id in order {
+        let Some(var) = doc.variables.get_by_id(&id).cloned() else { continue };
+        let Some(expression) = var.expression else { continue };
+        let values: Vec<_> = var
+            .values
+            .keys()
+            .filter_map(|mode| {
+                let modes = BTreeMap::from([(var.collection.clone(), mode.clone())]);
+                expression.eval_dynamic(&doc.variables, &modes).and_then(|value| {
+                    let value = match (var.kind, value) {
+                        (VariableType::String, value @ (VariableValue::Number(_) | VariableValue::Boolean(_))) => {
+                            VariableValue::String(value.display())
+                        }
+                        (kind, value) if value.type_of() == Some(kind) => value,
+                        _ => return None,
+                    };
+                    let value = match (var.kind, value, var.expression_opacity.get(mode)) {
+                        (VariableType::Color, VariableValue::Color(color), Some(opacity)) => VariableValue::Color(color.with_alpha(*opacity)),
+                        (_, value, _) => value,
+                    };
+                    Some((mode.clone(), value))
+                })
+            })
+            .collect();
+        if let Some(slot) = doc.variables.variables.iter_mut().find(|v| v.id == id) {
+            for (mode, value) in values {
+                slot.values.insert(mode, value);
+            }
+        }
+    }
 }
 
 /// Write bound variable values into nodes (called during normalisation).

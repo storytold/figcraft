@@ -165,6 +165,8 @@ fn create_everything(doc: &mut Document, who: usize, round: usize) {
         collection: cid,
         kind: VariableType::Number,
         values: Default::default(),
+        expression: None,
+        expression_opacity: Default::default(),
         description: String::new(),
         scopes: None,
         hidden_from_publishing: false,

@@ -62,6 +62,8 @@ fn colourful() -> (Document, NodeId) {
         collection: "c1".into(),
         kind: VariableType::Color,
         values: BTreeMap::from([("m1".to_string(), VariableValue::Color(RED))]),
+        expression: None,
+        expression_opacity: BTreeMap::new(),
         description: String::new(),
         scopes: None,
         hidden_from_publishing: false,

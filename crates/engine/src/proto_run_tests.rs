@@ -88,6 +88,49 @@ fn set_variable_evaluates_expressions_where_the_layer_is() {
 }
 
 #[test]
+fn prototype_set_variable_recomputes_dynamic_dependents() {
+    let (mut s, frame, _, _, rect) = setup();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "underFive", "type": "boolean", "value": true})).unwrap();
+    s.execute("variable.setExpression", &json!({"variable": "underFive", "expression": "{count} < 5"})).unwrap();
+    s.execute("variable.bind", &json!({"ids": [rect], "field": "visible", "variable": "underFive"})).unwrap();
+    let mut doc = s.doc().unwrap().clone();
+    let count = var_id(&doc, "count");
+    let under_five = var_id(&doc, "underFive");
+    assert_eq!(doc.variables.resolve(&under_five, &Default::default()), Some(VariableValue::Boolean(true)));
+
+    assert!(set_variable(&mut doc, frame, &count, &json!(5), None));
+    assert_eq!(
+        doc.variables.resolve(&under_five, &Default::default()),
+        Some(VariableValue::Boolean(false)),
+        "prototype Set variable must recompute formulas before its action returns"
+    );
+    assert!(!doc.node(rect).unwrap().visible, "prototype binding must use the newly computed value");
+}
+
+#[test]
+fn prototype_set_variable_expression_recomputes_dependents() {
+    let (mut s, frame, _, _, _) = setup();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "X", "type": "boolean", "value": false})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "Y", "type": "boolean", "value": false})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "Dependent", "type": "boolean", "value": false})).unwrap();
+    s.execute("variable.setExpression", &json!({"variable": "Dependent", "expression": "{Y}"})).unwrap();
+    let mut doc = s.doc().unwrap().clone();
+    let x = var_id(&doc, "X");
+    let y = var_id(&doc, "Y");
+    let dependent = var_id(&doc, "Dependent");
+    let invert_x = Expr::op(ExprOp::Not, vec![Expr::var(&x)]);
+
+    assert!(set_variable(&mut doc, frame, &y, &json!(null), Some(&invert_x)));
+
+    assert_eq!(doc.variables.resolve(&y, &Default::default()), Some(VariableValue::Boolean(true)));
+    assert_eq!(
+        doc.variables.resolve(&dependent, &Default::default()),
+        Some(VariableValue::Boolean(true)),
+        "prototype Set variable evaluates `not {{X}}` and immediately updates dynamic dependents"
+    );
+}
+
+#[test]
 fn set_mode_switches_the_prototype_and_keeps_nested_choices() {
     let (mut s, a, b, _, r) = setup();
     // B chose Light explicitly; a group inside A chose Light too (nested: it wins).

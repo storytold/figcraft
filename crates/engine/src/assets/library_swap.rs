@@ -70,6 +70,17 @@ fn match_components(doc: &Document, records: &[ImportedComponent], m: &LibraryMa
     pairs
 }
 
+fn remap_expression(expression: &mut Option<figcraft_doc::proto::Expr>, variables: &BTreeMap<String, String>) {
+    let Some(mut expr) = expression.take() else { return };
+    let Some(references) = expr.references_mut() else { return };
+    for reference in references {
+        if let Some(replacement) = variables.get(reference.as_str()) {
+            *reference = replacement.clone();
+        }
+    }
+    *expression = Some(expr);
+}
+
 /// Swap the copies of library `from` in `doc` to library `to` by names (see the module docs).
 pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Result<Swapped> {
     let m = &to.manifest;
@@ -152,13 +163,12 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
     let coll_name = |d: &Document, id: &str| d.variables.collection_by_id(id).map(|c| c.name.clone()).unwrap_or_default();
     // Variables the document's own layers bind or its own variables alias or calculate from.
     let remote: BTreeSet<String> = doc.libraries.variables.iter().map(|r| r.local.clone()).collect();
-    let aliases = doc
-        .variables
-        .variables
-        .iter()
-        .filter(|v| !remote.contains(&v.id))
-        .flat_map(|v| v.values.values())
-        .flat_map(|x| x.references().into_iter().cloned());
+    let aliases = doc.variables.variables.iter().filter(|v| !remote.contains(&v.id)).flat_map(|v| {
+        v.values
+            .values()
+            .flat_map(|x| x.references().into_iter().cloned())
+            .chain(v.expression.iter().flat_map(|e| e.variables().into_iter().map(str::to_string)))
+    });
     let used: BTreeSet<String> = doc.nodes().filter(|n| outside(doc, n.id)).flat_map(|n| n.bound.values().cloned()).chain(aliases).collect();
     let var_recs: Vec<ImportedRecord> = doc.libraries.variables.iter().filter(|r| r.library == from && used.contains(&r.local)).cloned().collect();
     let lib_coll = |name: &str| to.doc.variables.collections.iter().find(|c| c.name == name && m.collection(&c.id).is_some_and(|x| x.published));
@@ -241,6 +251,7 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
                 *r = b.clone();
             }
         }
+        remap_expression(&mut v.expression, &vars);
     }
 
     // A's copies nothing uses any more go; A goes too once nothing of it is left.

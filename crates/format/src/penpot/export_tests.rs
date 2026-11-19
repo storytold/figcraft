@@ -541,6 +541,8 @@ fn variable(id: &str, name: &str, collection: &str, kind: VariableType, values: 
         collection: collection.into(),
         kind,
         values: values.iter().map(|(m, v)| ((*m).to_owned(), v.clone())).collect(),
+        expression: None,
+        expression_opacity: Default::default(),
         description: String::new(),
         scopes: None,
         hidden_from_publishing: false,

@@ -24,6 +24,8 @@ fn more_vars() -> Variables {
         collection: "cs".into(),
         kind: VariableType::Number,
         values: BTreeMap::from([("hc".to_string(), VariableValue::Number(1.0)), ("odd".to_string(), VariableValue::Number(2.0))]),
+        expression: None,
+        expression_opacity: BTreeMap::new(),
         description: String::new(),
         scopes: None,
         hidden_from_publishing: false,

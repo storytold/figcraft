@@ -261,6 +261,12 @@ pub struct Variable {
     pub kind: VariableType,
     /// Value per mode id.
     pub values: BTreeMap<ModeId, VariableValue>,
+    /// Optional expression that updates this variable's stored value when its inputs change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<crate::proto::Expr>,
+    /// Optional per-mode alpha override applied to the result of a colour expression.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub expression_opacity: BTreeMap<ModeId, f32>,
     #[serde(default)]
     pub description: String,
     /// Properties pickers offer the variable for (scope ids from [`scopes_for`]); None = every

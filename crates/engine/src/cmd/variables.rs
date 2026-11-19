@@ -250,6 +250,7 @@ fn remove_mode(s: &mut Session, p: &Value) -> Result<Value> {
     let cid = coll.id.clone();
     for v in doc.variables.variables.iter_mut().filter(|v| v.collection == cid) {
         v.values.remove(&mode);
+        v.expression_opacity.remove(&mode);
     }
     // Layers set to the deleted mode go back to the default.
     let users: Vec<NodeId> = doc.nodes().filter(|n| n.var_modes.get(&cid) == Some(&mode)).map(|n| n.id).collect();
@@ -347,6 +348,11 @@ pub(crate) fn forget_variables(doc: &mut Document, gone: &BTreeSet<VariableId>) 
     for (vid, m, r) in detached {
         if let Some(slot) = doc.variables.variables.iter_mut().find(|x| x.id == vid) {
             slot.values.insert(m, r);
+        }
+    }
+    for v in doc.variables.variables.iter_mut().filter(|v| !gone.contains(&v.id)) {
+        if v.expression.as_ref().is_some_and(|e| e.variables().iter().any(|id| gone.contains(*id))) {
+            v.expression = None;
         }
     }
     doc.variables.variables.retain(|v| !gone.contains(&v.id));
@@ -534,6 +540,9 @@ fn reaches_back(vars: &Variables, seed: &VariableId, only: Option<&VariableId>) 
         }
         for v in vars.get_by_id(&cur).map(|x| x.values.values()).into_iter().flatten() {
             stack.extend(v.references().into_iter().cloned());
+        }
+        if let Some(expr) = vars.get_by_id(&cur).and_then(|v| v.expression.as_ref()) {
+            stack.extend(expr.variables().into_iter().map(str::to_string));
         }
     }
     false

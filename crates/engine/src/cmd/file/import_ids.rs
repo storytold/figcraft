@@ -142,6 +142,9 @@ impl Renames {
                 (mode, val)
             });
             v.values = values.collect();
+            if let Some(expr) = &mut v.expression {
+                self.expr(theirs, expr, 0);
+            }
             let overrides = std::mem::take(&mut v.overrides).into_iter().map(|mut mode| {
                 self.mode(theirs, &v.collection, &mut mode);
                 mode
@@ -219,6 +222,12 @@ impl Renames {
             Expr::Value(v) => v.references_mut().into_iter().for_each(|r| rename(&self.variables, r)),
             Expr::Op { args, .. } if depth < MAX_EXPR_DEPTH => args.iter_mut().for_each(|a| self.expr(theirs, a, depth + 1)),
             Expr::Op { .. } => {}
+            Expr::Conditional { condition, then_expr, else_expr } if depth < MAX_EXPR_DEPTH => {
+                self.expr(theirs, condition, depth + 1);
+                self.expr(theirs, then_expr, depth + 1);
+                self.expr(theirs, else_expr, depth + 1);
+            }
+            Expr::Conditional { .. } => {}
             Expr::Mode { collection } => rename(&self.collections, collection),
             Expr::InMode { variable, mode } => {
                 if let Some(v) = theirs.get_by_id(variable) {

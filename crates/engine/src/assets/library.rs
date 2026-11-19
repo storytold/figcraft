@@ -353,6 +353,9 @@ fn alias_closure(vars: &Variables, seeds: impl IntoIterator<Item = VariableId>) 
                 stack.push(r.clone());
             }
         }
+        if let Some(expr) = &v.expression {
+            stack.extend(expr.variables().into_iter().map(str::to_string));
+        }
     }
     out
 }
@@ -972,7 +975,22 @@ pub fn import_variables(
             }
             values.insert(mode.clone(), val);
         }
-        let copy = Variable { id: local.clone(), collection, values, extends: None, overrides: Default::default(), ..v.clone() };
+        let mut expression = v.expression.clone();
+        if let Some(expr) = &mut expression {
+            let remapped = expr.references_mut().is_some_and(|references| {
+                references.into_iter().all(|r| match src.get_by_id(r.as_str()).and_then(|t| out.variables.get(&t.id)) {
+                    Some(here) => {
+                        *r = here.clone();
+                        true
+                    }
+                    None => false,
+                })
+            });
+            if !remapped {
+                expression = None;
+            }
+        }
+        let copy = Variable { id: local.clone(), collection, values, expression, extends: None, overrides: Default::default(), ..v.clone() };
         match doc.variables.variables.iter_mut().find(|x| x.id == local).filter(|_| !new) {
             Some(slot) => *slot = copy,
             None => doc.variables.variables.push(copy),
@@ -1256,6 +1274,14 @@ pub fn prune(doc: &mut Document, library: &str) -> Result<()> {
                 .filter(|v| !is_remote_variable(doc, &v.id))
                 .flat_map(|v| v.values.values())
                 .flat_map(|x| x.references().into_iter().cloned()),
+        )
+        .chain(
+            doc.variables
+                .variables
+                .iter()
+                .filter(|v| !is_remote_variable(doc, &v.id))
+                .flat_map(|v| v.expression.iter())
+                .flat_map(|e| e.variables().into_iter().map(str::to_string)),
         )
         .collect::<Vec<_>>();
     let used = alias_closure(&doc.variables, seeds);

@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use figcraft_color::Hsl as HslColor;
 use serde::{Deserialize, Serialize};
 
 use crate::{CollectionId, ModeId, VariableValue, Variables};
@@ -29,6 +30,8 @@ pub enum Expr {
     /// Variable `variable`'s value in mode `mode` of its collection, whichever mode is chosen:
     /// `accent[Dark]`.
     InMode { variable: String, mode: ModeId },
+    /// Choose `then_expr` when `condition` is true, otherwise `else_expr`.
+    Conditional { condition: Box<Expr>, then_expr: Box<Expr>, else_expr: Box<Expr> },
 }
 
 /// Expression operators.
@@ -46,6 +49,10 @@ pub enum ExprOp {
     LessOrEqual,
     Greater,
     GreaterOrEqual,
+    /// Create an opaque colour from hue degrees and saturation/lightness percentages.
+    Hsl,
+    /// Interpolate between two colours in sRGB by a fraction clamped to 0..1.
+    Lerp,
     And,
     Or,
     /// Boolean not.
@@ -68,6 +75,8 @@ impl ExprOp {
             ExprOp::LessOrEqual => "<=",
             ExprOp::Greater => ">",
             ExprOp::GreaterOrEqual => ">=",
+            ExprOp::Hsl => "hsl",
+            ExprOp::Lerp => "lerp",
             ExprOp::And => "and",
             ExprOp::Or => "or",
             ExprOp::Not => "not",
@@ -89,7 +98,14 @@ impl Expr {
     /// The value, with variables resolved in `modes`. `None` when a variable is missing, the
     /// types don't fit the operator, a number isn't finite or the nesting is too deep.
     pub fn eval(&self, vars: &Variables, modes: &BTreeMap<CollectionId, ModeId>) -> Option<VariableValue> {
-        self.eval_at(vars, modes, 0)
+        self.eval_at(vars, modes, false, 0)
+    }
+
+    /// Evaluate a dynamic variable expression with every color result made opaque. Opacity is
+    /// edited separately on the output variable, so color inputs and interpolation cannot carry
+    /// their alpha into the result.
+    pub fn eval_dynamic(&self, vars: &Variables, modes: &BTreeMap<CollectionId, ModeId>) -> Option<VariableValue> {
+        self.eval_at(vars, modes, true, 0)
     }
 
     /// Whether a condition holds: a `true` boolean (anything else, or an error, doesn't).
@@ -97,14 +113,21 @@ impl Expr {
         matches!(self.eval(vars, modes), Some(VariableValue::Boolean(true)))
     }
 
-    fn eval_at(&self, vars: &Variables, modes: &BTreeMap<CollectionId, ModeId>, depth: usize) -> Option<VariableValue> {
+    fn eval_at(&self, vars: &Variables, modes: &BTreeMap<CollectionId, ModeId>, ignore_color_alpha: bool, depth: usize) -> Option<VariableValue> {
         if depth > MAX_EXPR_DEPTH {
             return None;
         }
         let (op, args) = match self {
-            Expr::Value(VariableValue::Alias(id)) => return vars.resolve(id, modes),
+            Expr::Conditional { condition, then_expr, else_expr } => {
+                return match condition.eval_at(vars, modes, ignore_color_alpha, depth + 1)? {
+                    VariableValue::Boolean(true) => then_expr.eval_at(vars, modes, ignore_color_alpha, depth + 1),
+                    VariableValue::Boolean(false) => else_expr.eval_at(vars, modes, ignore_color_alpha, depth + 1),
+                    _ => None,
+                };
+            }
+            Expr::Value(VariableValue::Alias(id)) => return vars.resolve(id, modes).map(|value| expression_color(value, ignore_color_alpha)),
             Expr::Value(VariableValue::Number(n)) => return n.is_finite().then_some(VariableValue::Number(*n)),
-            Expr::Value(v) => return Some(v.clone()),
+            Expr::Value(v) => return Some(expression_color(v.clone(), ignore_color_alpha)),
             Expr::Mode { collection } => {
                 return vars.collection_by_id(collection)?.current_mode(modes).map(|m| VariableValue::String(m.name.clone()));
             }
@@ -113,7 +136,7 @@ impl Expr {
                 let c = vars.collection_by_id(&v.collection)?;
                 let mut at = modes.clone();
                 at.insert(c.id.clone(), c.mode_by_id(mode)?.id.clone());
-                return vars.resolve(&v.id, &at);
+                return vars.resolve(&v.id, &at).map(|value| expression_color(value, ignore_color_alpha));
             }
             Expr::Op { op, args } => (*op, args),
         };
@@ -121,7 +144,7 @@ impl Expr {
         let mut text_bytes = 0usize;
         let mut vals = Vec::with_capacity(args.len());
         for a in args {
-            let v = a.eval_at(vars, modes, depth + 1)?;
+            let v = a.eval_at(vars, modes, ignore_color_alpha, depth + 1)?;
             if let VariableValue::String(s) = &v {
                 text_bytes = text_bytes.saturating_add(s.len());
                 if text_bytes > MAX_OPERAND_BYTES {
@@ -130,7 +153,7 @@ impl Expr {
             }
             vals.push(v);
         }
-        apply(op, &vals)
+        apply(op, &vals).map(|value| expression_color(value, ignore_color_alpha))
     }
 
     /// Every variable the expression reads.
@@ -140,10 +163,44 @@ impl Expr {
         out
     }
 
+    /// The variable ids this expression reads, mutable for import and library remapping.
+    pub fn references_mut(&mut self) -> Option<Vec<&mut String>> {
+        self.references_mut_at(0)
+    }
+
+    fn references_mut_at(&mut self, depth: usize) -> Option<Vec<&mut String>> {
+        if depth > MAX_EXPR_DEPTH {
+            return None;
+        }
+        match self {
+            Expr::Value(VariableValue::Alias(id)) => Some(vec![id]),
+            Expr::InMode { variable, .. } => Some(vec![variable]),
+            Expr::Op { args, .. } => {
+                let mut out = Vec::new();
+                for arg in args {
+                    out.extend(arg.references_mut_at(depth + 1)?);
+                }
+                Some(out)
+            }
+            Expr::Conditional { condition, then_expr, else_expr } => {
+                let mut out = condition.references_mut_at(depth + 1)?;
+                out.extend(then_expr.references_mut_at(depth + 1)?);
+                out.extend(else_expr.references_mut_at(depth + 1)?);
+                Some(out)
+            }
+            Expr::Value(_) | Expr::Mode { .. } => Some(Vec::new()),
+        }
+    }
+
     fn collect_variables<'a>(&'a self, out: &mut Vec<&'a str>, depth: usize) {
         match self {
             Expr::Value(VariableValue::Alias(id)) | Expr::InMode { variable: id, .. } => out.push(id),
             Expr::Op { args, .. } if depth < MAX_EXPR_DEPTH => args.iter().for_each(|a| a.collect_variables(out, depth + 1)),
+            Expr::Conditional { condition, then_expr, else_expr } if depth < MAX_EXPR_DEPTH => {
+                condition.collect_variables(out, depth + 1);
+                then_expr.collect_variables(out, depth + 1);
+                else_expr.collect_variables(out, depth + 1);
+            }
             _ => {}
         }
     }
@@ -151,19 +208,40 @@ impl Expr {
     /// Readable text, variables by name (`count + 1`, `open == false`); [`Expr::parse`] reads it
     /// back.
     pub fn display(&self, vars: &Variables) -> String {
-        self.display_at(vars, 0)
+        self.display_at(vars, 0, false)
     }
 
-    fn display_at(&self, vars: &Variables, depth: usize) -> String {
+    /// Readable text for a dynamic-variable expression, with every variable reference braced;
+    /// [`Expr::parse_dynamic`] reads it back.
+    pub fn display_dynamic(&self, vars: &Variables) -> String {
+        self.display_at(vars, 0, true)
+    }
+
+    fn display_at(&self, vars: &Variables, depth: usize, braced_variables: bool) -> String {
         if depth > MAX_EXPR_DEPTH {
             return "…".into();
         }
         match self {
-            Expr::Value(VariableValue::Alias(id)) => vars.get_by_id(id).map_or_else(|| "(missing variable)".into(), |v| var_ref(vars, v)),
+            Expr::Conditional { condition, then_expr, else_expr } => {
+                let part = |expr: &Expr| {
+                    let shown = expr.display_at(vars, depth + 1, braced_variables);
+                    if matches!(expr, Expr::Conditional { .. }) { format!("({shown})") } else { shown }
+                };
+                format!("if {} then {} else {}", part(condition), part(then_expr), part(else_expr))
+            }
+            Expr::Value(VariableValue::Alias(id)) => {
+                vars.get_by_id(id).map_or_else(|| "(missing variable)".into(), |v| var_ref(vars, v, braced_variables))
+            }
             Expr::Value(VariableValue::String(s)) => quote(s),
-            // Exact numbers and `#` colours, so the text reads back as the same expression.
+            // Exact numbers and wrapped hex colours, so the text reads back as the same expression.
             Expr::Value(VariableValue::Number(n)) => format!("{n}"),
-            Expr::Value(VariableValue::Color(c)) => c.to_css_hex(),
+            Expr::Value(VariableValue::Color(c)) => {
+                if braced_variables {
+                    format!("hex({})", c.to_css_hex())
+                } else {
+                    c.to_css_hex()
+                }
+            }
             Expr::Value(v) => v.display(),
             Expr::Mode { collection } => {
                 let name = vars.collection_by_id(collection).map_or("(missing collection)", |c| c.name.as_str());
@@ -175,23 +253,38 @@ impl Expr {
                     .and_then(|v| vars.collection_by_id(&v.collection))
                     .and_then(|c| c.mode_by_id(mode))
                     .map_or("(missing mode)", |m| m.name.as_str());
-                format!("{}[{}]", Expr::var(variable.clone()).display_at(vars, depth + 1), name_arg(mode))
+                format!("{}[{}]", Expr::var(variable.clone()).display_at(vars, depth + 1, braced_variables), name_arg(mode))
             }
             Expr::Op { op, args } => {
                 let parts: Vec<String> = args
                     .iter()
-                    .map(|a| match a {
-                        // `not` binds looser than what it may sit in (`(not a) == b`).
-                        Expr::Op { op, args } if args.len() > 1 || *op == ExprOp::Not => format!("({})", a.display_at(vars, depth + 1)),
-                        _ => a.display_at(vars, depth + 1),
+                    .enumerate()
+                    .map(|(index, arg)| {
+                        if braced_variables {
+                            display_dynamic_operand(*op, arg, index, vars, depth + 1)
+                        } else {
+                            match arg {
+                                // `not` binds looser than what it may sit in (`(not a) == b`).
+                                Expr::Op { op, args } if (args.len() > 1 && !matches!(op, ExprOp::Hsl | ExprOp::Lerp)) || *op == ExprOp::Not => {
+                                    format!("({})", arg.display_at(vars, depth + 1, braced_variables))
+                                }
+                                _ => arg.display_at(vars, depth + 1, braced_variables),
+                            }
+                        }
                     })
                     .collect();
                 match (op, parts.as_slice()) {
+                    (ExprOp::Hsl | ExprOp::Lerp, _) => format!("{}({})", op.symbol(), parts.join(", ")),
                     // `not done` reads as a variable named "not done" if there is one: then
                     // `not (done)`.
                     (ExprOp::Not, [x]) => {
                         let bare = format!("not {x}");
-                        if x.starts_with('(') || Expr::parse(&bare, vars).is_ok_and(|e| e == *self) { bare } else { format!("not ({x})") }
+                        let parses_back = if braced_variables {
+                            Expr::parse_dynamic(&bare, vars).is_ok_and(|e| e == *self)
+                        } else {
+                            Expr::parse(&bare, vars).is_ok_and(|e| e == *self)
+                        };
+                        if x.starts_with('(') || parses_back { bare } else { format!("not ({x})") }
                     }
                     (ExprOp::Negate, [x]) => format!("-{x}"),
                     _ => parts.join(&format!(" {} ", op.symbol())),
@@ -201,10 +294,55 @@ impl Expr {
     }
 }
 
+fn display_dynamic_operand(parent: ExprOp, child: &Expr, index: usize, vars: &Variables, depth: usize) -> String {
+    let shown = child.display_at(vars, depth, true);
+    let parent_precedence = expression_precedence(parent);
+    let child_precedence = match child {
+        Expr::Conditional { .. } => 0,
+        Expr::Op { op: ExprOp::Hsl | ExprOp::Lerp, .. } => return shown,
+        Expr::Op { op, .. } => expression_precedence(*op),
+        Expr::Value(_) | Expr::Mode { .. } | Expr::InMode { .. } => return shown,
+    };
+    let same_operator = matches!(child, Expr::Op { op, .. } if *op == parent);
+    let comparison_parent =
+        matches!(parent, ExprOp::Equals | ExprOp::NotEqual | ExprOp::Less | ExprOp::LessOrEqual | ExprOp::Greater | ExprOp::GreaterOrEqual);
+    let comparison_child = matches!(
+        child,
+        Expr::Op { op: ExprOp::Equals | ExprOp::NotEqual | ExprOp::Less | ExprOp::LessOrEqual | ExprOp::Greater | ExprOp::GreaterOrEqual, .. }
+    );
+    let needs_parentheses = child_precedence < parent_precedence
+        || (child_precedence == parent_precedence && (index > 0 || same_operator || (comparison_parent && comparison_child)));
+    if needs_parentheses { format!("({shown})") } else { shown }
+}
+
+fn expression_precedence(op: ExprOp) -> u8 {
+    match op {
+        ExprOp::Or => 1,
+        ExprOp::And => 2,
+        ExprOp::Not => 3,
+        ExprOp::Equals | ExprOp::NotEqual | ExprOp::Less | ExprOp::LessOrEqual | ExprOp::Greater | ExprOp::GreaterOrEqual => 4,
+        ExprOp::Add | ExprOp::Subtract => 5,
+        ExprOp::Multiply | ExprOp::Divide => 6,
+        ExprOp::Negate => 7,
+        ExprOp::Hsl | ExprOp::Lerp => 8,
+    }
+}
+
+fn expression_color(value: VariableValue, ignore_color_alpha: bool) -> VariableValue {
+    match (value, ignore_color_alpha) {
+        (VariableValue::Color(color), true) => VariableValue::Color(color.with_alpha(1.0)),
+        (value, _) => value,
+    }
+}
+
 /// A variable as written in an expression: its bare name when that reads back as this variable,
 /// otherwise `{name}` (or `{id}` when even the braced name wouldn't), so names like `1`, `2x` or
 /// `"q"` don't read back as literals or errors.
-fn var_ref(vars: &Variables, v: &crate::Variable) -> String {
+fn var_ref(vars: &Variables, v: &crate::Variable, braced_variables: bool) -> String {
+    if braced_variables {
+        let name_is_exact = !v.name.contains('}') && v.name.trim() == v.name && vars.get(&v.name).is_some_and(|x| x.id == v.id);
+        return if name_is_exact { format!("{{{}}}", v.name) } else { format!("{{{}}}", v.id) };
+    }
     let this = Expr::var(v.id.clone());
     if Expr::parse(&v.name, vars).is_ok_and(|e| e == this) {
         return v.name.clone();
@@ -313,6 +451,19 @@ fn apply(op: ExprOp, vals: &[VariableValue]) -> Option<VariableValue> {
                 _ => ord != O::Less,
             }))
         }
+        Hsl => match vals {
+            [VariableValue::Number(h), VariableValue::Number(s), VariableValue::Number(l)] => {
+                let (h, s, l) = ((*h % 360.0) as f32, (*s / 100.0).clamp(0.0, 1.0) as f32, (*l / 100.0).clamp(0.0, 1.0) as f32);
+                (h.is_finite() && s.is_finite() && l.is_finite()).then(|| VariableValue::Color(HslColor { h, s, l }.to_color()))
+            }
+            _ => None,
+        },
+        Lerp => match vals {
+            [VariableValue::Color(a), VariableValue::Color(b), VariableValue::Number(t)] if t.is_finite() => {
+                Some(VariableValue::Color(a.lerp(*b, t.clamp(0.0, 1.0) as f32)))
+            }
+            _ => None,
+        },
         And => bools().filter(|b| !b.is_empty()).map(|b| VariableValue::Boolean(b.iter().all(|x| *x))),
         Or => bools().filter(|b| !b.is_empty()).map(|b| VariableValue::Boolean(b.iter().any(|x| *x))),
         Not => match vals {

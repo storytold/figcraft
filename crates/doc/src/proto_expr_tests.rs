@@ -14,6 +14,8 @@ pub(crate) fn vars() -> Variables {
         collection: "c".into(),
         kind,
         values,
+        expression: None,
+        expression_opacity: BTreeMap::new(),
         description: String::new(),
         scopes: None,
         hidden_from_publishing: false,
@@ -86,6 +88,31 @@ fn arithmetic_text_and_comparisons() {
     assert_eq!(eval(&Expr::op(Not, vec![Expr::var("b")])), no);
     assert_eq!(eval(&Expr::op(And, vec![b(true), n(1.0)])), None);
     assert_eq!(eval(&Expr::op(And, vec![])), None);
+}
+
+#[test]
+fn dynamic_color_eval_ignores_alpha_without_changing_prototype_eval() {
+    let mut variables = vars();
+    let color = Color::BLACK.with_alpha(0.5);
+    variables.variables.push(Variable {
+        id: "color".into(),
+        name: "Color".into(),
+        collection: "c".into(),
+        kind: VariableType::Color,
+        values: BTreeMap::from([("light".into(), VariableValue::Color(color)), ("dark".into(), VariableValue::Color(color))]),
+        expression: None,
+        expression_opacity: BTreeMap::new(),
+        description: String::new(),
+        scopes: None,
+        hidden_from_publishing: false,
+        extends: None,
+        overrides: Default::default(),
+        code_syntax: Default::default(),
+    });
+    let expression = Expr::var("color");
+    let modes = BTreeMap::new();
+    assert_eq!(expression.eval(&variables, &modes), Some(VariableValue::Color(color)));
+    assert_eq!(expression.eval_dynamic(&variables, &modes), Some(VariableValue::Color(color.with_alpha(1.0))));
 }
 
 #[test]

@@ -7,7 +7,7 @@
 //! (`accent[Dark]`, `{Brand color}["High contrast"]`) reads its value in that mode of its
 //! collection; `mode(Theme)` is the name of the mode a collection is in where the expression runs
 //! (`mode(Theme) == "Dark"`). Literals: numbers, `"text"` or `'text'`, `true` / `false`,
-//! `#RRGGBB` colours. Operators, loosest first: `or` (`||`), `and` (`&&`), `not`
+//! `#RRGGBB` colours. Operators, loosest first: `if condition then yes else no`, `or` (`||`), `and` (`&&`), `not`
 //! (`!`), comparisons (`==` or `=`, `!=`, `<`, `<=`, `>`, `>=`), `+` / `-`, `*` / `/`, unary `-`.
 //! [`Expr::display`] writes what this reads back.
 
@@ -36,6 +36,16 @@ type Parsed = Result<Expr, ExprError>;
 impl Expr {
     /// Read an expression typed as text, variables by name (or id) from `vars`.
     pub fn parse(text: &str, vars: &Variables) -> Parsed {
+        Self::parse_with_color_literals(text, vars, true, false)
+    }
+
+    /// Read a dynamic-variable expression, requiring braced variable references and explicit
+    /// `hex(#...)` color constructors.
+    pub fn parse_dynamic(text: &str, vars: &Variables) -> Parsed {
+        Self::parse_with_color_literals(text, vars, false, true).map(|expr| lower_dynamic_value_conditional(expr, vars))
+    }
+
+    fn parse_with_color_literals(text: &str, vars: &Variables, bare_colors: bool, braced_variables: bool) -> Parsed {
         let s: Vec<char> = text.chars().collect();
         if s.len() > MAX_EXPR_TEXT {
             return Err(ExprError { message: format!("Keep expressions under {MAX_EXPR_TEXT} characters"), at: 0 });
@@ -48,12 +58,12 @@ impl Expr {
             .filter(|(n, _)| !n.is_empty())
             .collect();
         names.sort_by_key(|(n, _)| std::cmp::Reverse(n.len()));
-        let mut p = Parser { s, i: 0, names, vars };
+        let mut p = Parser { s, i: 0, names, vars, bare_colors, braced_variables };
         p.ws();
         if p.peek(0).is_none() {
             return Err(ExprError { message: "Type an expression".into(), at: 0 });
         }
-        let e = p.or(0)?;
+        let e = p.conditional(0)?;
         p.ws();
         match p.peek(0) {
             None => Ok(e),
@@ -75,6 +85,13 @@ impl Expr {
         }
     }
 
+    fn check_condition_at(&self, vars: &Variables, depth: usize) -> Result<(), String> {
+        match self.type_at(vars, depth)? {
+            VariableType::Boolean => Ok(()),
+            t => Err(format!("A condition must be true or false, not {}", noun(t))),
+        }
+    }
+
     /// A value for a variable of `kind` (text variables take numbers and booleans as text).
     pub fn check_value(&self, vars: &Variables, kind: VariableType) -> Result<(), String> {
         let t = self.type_of(vars)?;
@@ -87,7 +104,18 @@ impl Expr {
         if depth > MAX_EXPR_DEPTH {
             return Err("The expression is nested too deeply".into());
         }
+        if let Expr::Conditional { condition, then_expr, else_expr } = self {
+            condition.check_condition_at(vars, depth + 1)?;
+            let then_type = then_expr.type_at(vars, depth + 1)?;
+            let else_type = else_expr.type_at(vars, depth + 1)?;
+            return if then_type == else_type {
+                Ok(then_type)
+            } else {
+                Err(format!("`if` branches must have the same type, not {} and {}", noun(then_type), noun(else_type)))
+            };
+        }
         let (op, args) = match self {
+            Expr::Conditional { .. } => return Err("The conditional needs a boolean condition and matching branches".into()),
             Expr::Value(VariableValue::Alias(id)) => return vars.get_by_id(id).map(|v| v.kind).ok_or_else(|| format!("No variable `{id}`")),
             Expr::Value(VariableValue::Number(n)) if !n.is_finite() => return Err("Numbers must be finite".into()),
             Expr::Value(v) => return v.type_of().ok_or_else(|| "Not a value".to_string()),
@@ -132,6 +160,14 @@ impl Expr {
                 [T::Number, T::Number] | [T::String, T::String] => Ok(T::Boolean),
                 _ => Err(format!("`{sym}` compares two numbers or two texts")),
             },
+            ExprOp::Hsl => match ts.as_slice() {
+                [T::Number, T::Number, T::Number] => Ok(T::Color),
+                _ => Err("`hsl` needs hue, saturation and lightness numbers".into()),
+            },
+            ExprOp::Lerp => match ts.as_slice() {
+                [T::Color, T::Color, T::Number] => Ok(T::Color),
+                _ => Err("`lerp` needs two colours and a numeric factor".into()),
+            },
             ExprOp::And | ExprOp::Or => {
                 if all(T::Boolean) {
                     Ok(T::Boolean)
@@ -152,6 +188,37 @@ impl Expr {
     }
 }
 
+/// Support the common `condition and value or fallback` shorthand for non-boolean values in
+/// dynamic expressions. Boolean `and`/`or` expressions retain their ordinary logical meaning.
+fn lower_dynamic_value_conditional(expr: Expr, vars: &Variables) -> Expr {
+    let expr = match expr {
+        Expr::Op { op, args } => Expr::op(op, args.into_iter().map(|arg| lower_dynamic_value_conditional(arg, vars)).collect()),
+        Expr::Conditional { condition, then_expr, else_expr } => Expr::Conditional {
+            condition: Box::new(lower_dynamic_value_conditional(*condition, vars)),
+            then_expr: Box::new(lower_dynamic_value_conditional(*then_expr, vars)),
+            else_expr: Box::new(lower_dynamic_value_conditional(*else_expr, vars)),
+        },
+        other => other,
+    };
+
+    if let Expr::Op { op: ExprOp::Or, args } = &expr
+        && let [Expr::Op { op: ExprOp::And, args: and_args }, fallback] = args.as_slice()
+        && let [condition, then_expr] = and_args.as_slice()
+        && condition.type_of(vars) == Ok(VariableType::Boolean)
+        && let (Ok(then_type), Ok(fallback_type)) = (then_expr.type_of(vars), fallback.type_of(vars))
+        && then_type == fallback_type
+        && then_type != VariableType::Boolean
+    {
+        return Expr::Conditional {
+            condition: Box::new(condition.clone()),
+            then_expr: Box::new(then_expr.clone()),
+            else_expr: Box::new(fallback.clone()),
+        };
+    }
+
+    expr
+}
+
 /// A type as a noun in messages.
 pub fn noun(t: VariableType) -> &'static str {
     match t {
@@ -168,6 +235,8 @@ struct Parser<'a> {
     /// Variable names and ids (as characters) with the id they stand for, longest first.
     names: Vec<(Vec<char>, String)>,
     vars: &'a Variables,
+    bare_colors: bool,
+    braced_variables: bool,
 }
 
 fn ident(c: char) -> bool {
@@ -224,6 +293,9 @@ impl Parser<'_> {
 
     /// The variable whose name (or id) starts here: (id, length in characters).
     fn variable_here(&self) -> Option<(String, usize)> {
+        if self.braced_variables {
+            return None;
+        }
         self.names.iter().find_map(|(name, id)| {
             let n = name.len();
             let same = name.iter().enumerate().all(|(k, c)| self.peek(k) == Some(*c));
@@ -249,6 +321,25 @@ impl Parser<'_> {
 
     fn or(&mut self, depth: usize) -> Parsed {
         self.chain(depth, ExprOp::Or, &["or"], &["||"], Self::and)
+    }
+
+    fn conditional(&mut self, depth: usize) -> Parsed {
+        let d = self.deeper(depth)?;
+        self.ws();
+        if self.variable_here().is_none() && self.at_keyword("if") {
+            self.i += 2;
+            let condition = self.or(d)?;
+            if !self.eat_any(&["then"], &[]) {
+                return Err(self.err("Add `then` after the condition"));
+            }
+            let then_expr = self.or(d)?;
+            if !self.eat_any(&["else"], &[]) {
+                return Err(self.err("Add `else` and a value after the true branch"));
+            }
+            let else_expr = self.conditional(d)?;
+            return Ok(Expr::Conditional { condition: Box::new(condition), then_expr: Box::new(then_expr), else_expr: Box::new(else_expr) });
+        }
+        self.or(depth)
     }
 
     fn and(&mut self, depth: usize) -> Parsed {
@@ -419,7 +510,7 @@ impl Parser<'_> {
         match c {
             '(' => {
                 self.i += 1;
-                let e = self.or(d)?;
+                let e = self.conditional(d)?;
                 self.ws();
                 if self.peek(0) != Some(')') {
                     return Err(self.err("Add a closing )"));
@@ -441,6 +532,9 @@ impl Parser<'_> {
             '"' | '\'' => self.string(c),
             '#' => {
                 let start = self.i;
+                if !self.bare_colors {
+                    return Err(ExprError { message: "Write hex colours as `hex(#336699)`".into(), at: start });
+                }
                 self.i += 1;
                 let mut hex = String::new();
                 while let Some(h) = self.peek(0).filter(char::is_ascii_hexdigit) {
@@ -455,6 +549,15 @@ impl Parser<'_> {
             c if c.is_ascii_digit() || c == '.' => self.number(),
             ')' => Err(self.err("Unexpected )")),
             _ => {
+                if self.is_call("hsl") {
+                    return self.function_call("hsl", ExprOp::Hsl, d);
+                }
+                if self.is_call("lerp") {
+                    return self.function_call("lerp", ExprOp::Lerp, d);
+                }
+                if self.is_call("hex") {
+                    return self.hex_call();
+                }
                 // `mode(…)`, also when a variable is named "mode" (a variable can't take brackets).
                 if self.at_keyword("mode") && self.next_after(4) == Some('(') {
                     return self.mode_of();
@@ -476,6 +579,64 @@ impl Parser<'_> {
                 if word.is_empty() { Err(self.err(format!("Unexpected {c}"))) } else { Err(self.err(format!("No variable `{word}`"))) }
             }
         }
+    }
+
+    fn is_call(&self, name: &str) -> bool {
+        self.at_keyword(name) && self.next_after(name.chars().count()) == Some('(')
+    }
+
+    fn function_call(&mut self, name: &str, op: ExprOp, depth: usize) -> Parsed {
+        self.i += name.chars().count();
+        self.ws();
+        self.i += 1;
+        let mut args = Vec::new();
+        loop {
+            self.ws();
+            if self.peek(0) == Some(')') {
+                self.i += 1;
+                break;
+            }
+            args.push(self.conditional(depth)?);
+            self.ws();
+            match self.peek(0) {
+                Some(',') => {
+                    self.i += 1;
+                    self.ws();
+                    if self.peek(0) == Some(')') {
+                        return Err(self.err("A function argument is missing before )"));
+                    }
+                }
+                Some(')') => {
+                    self.i += 1;
+                    break;
+                }
+                _ => return Err(self.err("Separate function arguments with commas and close with )")),
+            }
+        }
+        Ok(Expr::op(op, args))
+    }
+
+    fn hex_call(&mut self) -> Parsed {
+        self.i += "hex".len();
+        self.ws();
+        self.i += 1;
+        self.ws();
+        if self.peek(0) != Some('#') {
+            return Err(self.err("`hex` needs a # colour such as `hex(#336699)`"));
+        }
+        let color_start = self.i;
+        self.i += 1;
+        let mut digits = String::new();
+        self.take(&mut digits, |c| c.is_ascii_hexdigit());
+        let color = figcraft_color::Color::from_hex(&digits).filter(|_| matches!(digits.len(), 3 | 4 | 6 | 8));
+        self.ws();
+        if self.peek(0) != Some(')') {
+            return Err(self.err("Close the hex colour with )"));
+        }
+        self.i += 1;
+        color
+            .map(|c| Expr::Value(VariableValue::Color(c)))
+            .ok_or_else(|| ExprError { message: "Use a 3, 4, 6 or 8 digit hex colour".into(), at: color_start })
     }
 
     /// `mode(collection)` starting here: the mode the collection is in.

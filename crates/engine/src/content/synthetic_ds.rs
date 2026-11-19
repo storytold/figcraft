@@ -209,6 +209,8 @@ fn foundations(doc: &mut Document) -> (CollectionId, ModeId, ModeId) {
         collection: coll.clone(),
         kind,
         values: [light.clone(), dark.clone()].into_iter().zip(values).collect(),
+        expression: None,
+        expression_opacity: Default::default(),
         description: String::new(),
         scopes: None,
         hidden_from_publishing: false,

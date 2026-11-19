@@ -10,7 +10,7 @@ use figcraft_doc::{Document, NodeId, NodeKind, VariableType, VariableValue};
 use figcraft_geom::Rect;
 use serde_json::Value;
 
-use crate::cmd::styles::apply_bindings;
+use crate::cmd::styles::{apply_bindings, recompute_dynamic_variables};
 use crate::params::{color_of, f64_of};
 
 /// A JSON value as a value of a `kind` variable (`None` when it doesn't fit).
@@ -57,6 +57,7 @@ pub fn set_variable(doc: &mut Document, node: NodeId, variable: &str, value: &Va
     for val in slot.values.values_mut() {
         *val = v.clone();
     }
+    recompute_dynamic_variables(doc);
     apply_bindings(doc);
     crate::style_vars::refresh(doc, None, None);
     true

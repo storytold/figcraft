@@ -21,6 +21,8 @@ fn var(id: &str, name: &str, collection: &str, kind: VariableType, values: &[(&s
         collection: collection.into(),
         kind,
         values: values.iter().map(|(m, v)| (m.to_string(), v.clone())).collect(),
+        expression: None,
+        expression_opacity: Default::default(),
         description: String::new(),
         scopes: None,
         hidden_from_publishing: false,

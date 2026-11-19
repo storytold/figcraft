@@ -235,6 +235,9 @@ impl Session {
         // Saving may adopt the chosen filename as the document title. The encoded snapshot is
         // already final; normalising it again would detach it from the saved baseline.
         if !Arc::ptr_eq(&ds.doc, bdoc) && !matches!(spec.id, "file.save" | "file.saveAs") {
+            if bdoc.variables != ds.doc.variables {
+                cmd::styles::recompute_dynamic_variables(ds.doc_mut());
+            }
             normalize(ds.doc_mut(), bdoc);
         }
     }
