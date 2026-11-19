@@ -120,6 +120,45 @@ fn inherited_expression_overrides_survive_recomputation() {
 }
 
 #[test]
+fn dependents_wait_for_dynamic_targets_kept_in_inherited_alias_overrides() {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    let input = s.execute("variable.create", &json!({"collection": "Theme", "name": "Input", "type": "number", "value": 2})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "A", "type": "number", "value": 0})).unwrap();
+    s.execute("variable.setExpression", &json!({"variable": "A", "expression": format!("{{{input}}} + 1")})).unwrap();
+    let extended = s.execute("variable.extendCollection", &json!({"collection": "Theme"})).unwrap();
+    let child_collection = extended["id"].as_str().unwrap();
+    let (child_input, child_a) = {
+        let doc = s.doc().unwrap();
+        let id = |name: &str| {
+            doc.variables.variables.iter().find(|variable| variable.collection == child_collection && variable.name == name).unwrap().id.clone()
+        };
+        (id("Input"), id("A"))
+    };
+    s.execute("variable.create", &json!({"collection": child_collection, "name": "B", "type": "number", "value": 0})).unwrap();
+    let child_b = {
+        let doc = s.doc().unwrap();
+        doc.variables.variables.iter().find(|variable| variable.collection == child_collection && variable.name == "B").unwrap().id.clone()
+    };
+    s.execute("variable.setExpression", &json!({"variable": child_b, "expression": format!("{{{child_a}}} * 2")})).unwrap();
+    s.execute("variable.create", &json!({"collection": child_collection, "name": "Z", "type": "number", "value": 0})).unwrap();
+    let child_z = {
+        let doc = s.doc().unwrap();
+        doc.variables.variables.iter().find(|variable| variable.collection == child_collection && variable.name == "Z").unwrap().id.clone()
+    };
+    s.execute("variable.setExpression", &json!({"variable": child_z, "expression": format!("{{{child_input}}} * 3")})).unwrap();
+    s.execute("variable.set", &json!({"variable": child_a, "mode": "Light", "value": {"alias": child_z}})).unwrap();
+
+    s.execute("variable.set", &json!({"variable": input, "mode": "Light", "value": 4})).unwrap();
+
+    assert_eq!(number(&s, &child_z, "Light"), 12.0);
+    assert_eq!(number(&s, &child_b, "Light"), 24.0, "the dependent reads the updated value through the retained alias");
+}
+
+#[test]
 fn numeric_arithmetic_comparisons_and_conditionals_recompute_without_assignment_prefix() {
     let mut s = Session::new();
     s.execute("variable.createCollection", &json!({"name": "Theme"})).unwrap();

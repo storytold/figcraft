@@ -1276,6 +1276,9 @@ fn dynamic_dependencies(
             return None;
         }
         if dynamic_ids.contains(id.as_str()) {
+            if let Some(var) = vars.get_by_id(&id) {
+                stack.extend(var.overrides.iter().filter_map(|mode| var.values.get(mode)).flat_map(|value| value.references().into_iter().cloned()));
+            }
             dependencies.insert(id);
             continue;
         }
