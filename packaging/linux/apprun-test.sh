@@ -29,6 +29,27 @@ export APPIMAGE
 export HOME="$TMP/home"
 export XDG_DATA_HOME="$HOME/.local/share"
 mkdir -p "$HOME"
+unset FIGCRAFT_NO_DESKTOP_INTEGRATION
+
+# Record icon-cache refreshes without requiring a desktop session or GTK install.
+export REAL_CACHE_UPDATER
+REAL_CACHE_UPDATER="$(command -v gtk-update-icon-cache || true)"
+mkdir -p "$TMP/tools"
+cat >"$TMP/tools/gtk-update-icon-cache" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$CACHE_CALLS"
+if [ "${CACHE_UPDATER_FAIL:-0}" = 1 ]; then
+  exit 1
+fi
+if [ -n "$REAL_CACHE_UPDATER" ]; then
+  "$REAL_CACHE_UPDATER" "$@"
+else
+  for dir do :; done
+  : >"$dir/icon-theme.cache"
+fi
+EOF
+chmod +x "$TMP/tools/gtk-update-icon-cache"
+export PATH="$TMP/tools:$PATH" CACHE_CALLS="$TMP/cache-calls"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -53,10 +74,16 @@ if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$DESKTOP" || fail "generated desktop entry is invalid"
 fi
 
-# 3. Icons landed under the name the .desktop entry references.
+# 3. Icons landed under the name the .desktop entry references and refreshed the cache.
 for f in "16x16/apps/$APP_ID.png" "256x256/apps/$APP_ID.png" "scalable/apps/$APP_ID.svg"; do
   [[ -f "$XDG_DATA_HOME/icons/hicolor/$f" ]] || fail "icon missing: $f"
 done
+[[ -f "$CACHE_CALLS" ]] || fail "installed icons did not refresh the icon cache"
+[[ "$(wc -l <"$CACHE_CALLS")" -eq 1 ]] || fail "icon cache refreshed more than once"
+grep -Fxq -- "-f -t $XDG_DATA_HOME/icons/hicolor" "$CACHE_CALLS" || fail "wrong icon cache arguments"
+if [[ -n "$REAL_CACHE_UPDATER" ]]; then
+  [[ -f "$XDG_DATA_HOME/icons/hicolor/icon-theme.cache" ]] || fail "GTK did not build the icon cache"
+fi
 
 # 4. Idempotent: a second launch must not rewrite anything (inode unchanged).
 before="$(stat -c %i "$DESKTOP")"
@@ -64,6 +91,7 @@ out="$("$APPDIR/AppRun")" || fail "second launch exited non-zero"
 [[ "$out" = "stub: " ]] || fail "second launch output: $out"
 after="$(stat -c %i "$DESKTOP")"
 [[ "$before" = "$after" ]] || fail "desktop entry rewritten although unchanged"
+[[ "$(wc -l <"$CACHE_CALLS")" -eq 1 ]] || fail "unchanged icons refreshed the cache"
 
 # 5. Moving the AppImage refreshes Exec.
 mv "$APPIMAGE" "$TMP/moved.AppImage"
@@ -109,5 +137,22 @@ out="$("$APPDIR/AppRun" cli)" || fail "bare cli launch exited non-zero"
 # Only the first argument selects the CLI.
 out="$("$APPDIR/AppRun" file.figcraft cli)" || fail "app launch with a later cli argument exited non-zero"
 [[ "$out" = "stub: file.figcraft cli" ]] || fail "later cli argument hijacked the launch: $out"
+
+# 11. Pre-existing stale Hicolor cache is rebuilt even when icon bytes are unchanged,
+#     and a subsequent launch does not rebuild again.
+rm -rf "$XDG_DATA_HOME" "$CACHE_CALLS"
+"$APPDIR/AppRun" >/dev/null || fail "setup launch for stale-cache test exited non-zero"
+touch -t 202001010000 "$XDG_DATA_HOME/icons/hicolor/icon-theme.cache"
+: >"$CACHE_CALLS"
+"$APPDIR/AppRun" >/dev/null || fail "stale-cache repair launch exited non-zero"
+[[ "$(wc -l <"$CACHE_CALLS")" -eq 1 ]] || fail "stale icon-theme.cache was not refreshed"
+grep -Fxq -- "-f -t $XDG_DATA_HOME/icons/hicolor" "$CACHE_CALLS" || fail "wrong stale-cache refresh arguments"
+"$APPDIR/AppRun" >/dev/null || fail "post-repair launch exited non-zero"
+[[ "$(wc -l <"$CACHE_CALLS")" -eq 1 ]] || fail "repaired icon-theme.cache refreshed again"
+
+# 12. A failing icon-cache updater never blocks the launch.
+rm -rf "$XDG_DATA_HOME" "$CACHE_CALLS"
+out="$(CACHE_UPDATER_FAIL=1 "$APPDIR/AppRun" ok)" || fail "failing icon-cache updater blocked launch"
+[[ "$out" = "stub: ok" ]] || fail "failing icon-cache updater altered launch output: $out"
 
 echo "AppRun desktop integration ok"
