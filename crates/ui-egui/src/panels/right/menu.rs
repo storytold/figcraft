@@ -130,7 +130,9 @@ fn lit_row(
             ui.painter().galley(at, k, if hovered { t.menu_text } else { t.text_secondary });
         }
     }
-    art(ui.painter(), r, col);
+    // In RTL, anchor right-aligned trailing artwork near the reading end (left) so it stays opposite the label.
+    let art_r = if rtl && art_w > 0.0 { Rect::from_min_max(r.min, pos2((r.min.x + art_w + MENU_PAD).min(r.max.x), r.max.y)) } else { r };
+    art(ui.painter(), art_r, col);
     resp
 }
 
@@ -220,4 +222,39 @@ pub fn menu_icon_item(ui: &mut Ui, icon: Option<crate::icons::Icon>, on: Option<
     let resp = lit_row(ui, label, shortcut, 0.0, CHECK_COL + 22.0, paint, false);
     a11y::menu_item(&resp, label, shortcut, on);
     resp.clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtl_lit_row_places_art_opposite_label() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = true);
+        let mut art_rect = None;
+        ctx.run_ui(Default::default(), |ui| {
+            egui::Area::new(egui::Id::unique("menu-rtl-test")).fixed_pos(pos2(0.0, 0.0)).show(ui.ctx(), |ui| {
+                ui.set_width(220.0);
+                let _ = lit_row(
+                    ui,
+                    "קצוות עגולים",
+                    "",
+                    64.0,
+                    0.0,
+                    |_pt, r, _| {
+                        art_rect = Some(r);
+                    },
+                    false,
+                );
+            });
+        })
+        .textures_delta
+        .clear();
+        let art_r = art_rect.expect("art invoked");
+        // Artwork paints relative to art_r.max.x in [art_r.max.x - 64.0, art_r.max.x],
+        // so its right edge stays on the left side while the RTL label sits at r.max.x - MENU_PAD.
+        assert!((art_r.max.x - (art_r.min.x + 64.0 + MENU_PAD)).abs() < 0.01, "art_r={art_r:?}");
+        assert!(art_r.max.x < 100.0, "expected trailing left placement, got {art_r:?}");
+    }
 }

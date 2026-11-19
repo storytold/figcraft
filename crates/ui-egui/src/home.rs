@@ -161,7 +161,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         let border_x = if rtl { side.left() } else { side.right() };
         ui.painter().line_segment([pos2(border_x, side.top()), pos2(border_x, side.bottom())], Stroke::new(1.0, t.border));
         sidebar(app, ui, &t, side);
-        let main = if rtl { Rect::from_min_max(rect.min, pos2(side.min.x, rect.max.y)) } else { Rect::from_min_max(pos2(side.max.x, rect.min.y), rect.max) };
+        let main =
+            if rtl { Rect::from_min_max(rect.min, pos2(side.min.x, rect.max.y)) } else { Rect::from_min_max(pos2(side.max.x, rect.min.y), rect.max) };
         if app.ui.home_view.file_query.trim().is_empty() && app.ui.home_view.section == Section::Online {
             // Your online files lay themselves out in the area (and scroll their own list).
             let area = main.shrink2(vec2(40.0, 24.0));
