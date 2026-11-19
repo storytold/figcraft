@@ -141,32 +141,43 @@ fn prototype_set_synchronizes_inherited_values_before_recomputing_formulas() {
 #[test]
 fn prototype_recomputation_propagates_new_parent_formula_values_to_existing_extensions() {
     let (mut s, frame, _, _, _) = setup();
-    s.execute("variable.createCollection", &json!({"name": "Output"})).unwrap();
-    s.execute("variable.create", &json!({"collection": "Output", "name": "Result", "type": "number", "value": 0})).unwrap();
-    let result = var_id(s.doc().unwrap(), "Result");
     s.execute("variable.create", &json!({"collection": "Theme", "name": "Base", "type": "number", "value": 2})).unwrap();
+    s.execute("variable.set", &json!({"variable": "Base", "mode": "Dark", "value": 7})).unwrap();
     s.execute("variable.create", &json!({"collection": "Theme", "name": "Parent", "type": "number", "value": 0})).unwrap();
     let parent_base = var_id(s.doc().unwrap(), "Base");
     let parent_value = var_id(s.doc().unwrap(), "Parent");
+    s.execute("variable.setExpression", &json!({"variable": parent_value, "expression": format!("{{{parent_base}}} * 2")})).unwrap();
     let extended = s.execute("variable.extendCollection", &json!({"collection": "Theme"})).unwrap();
     let child_collection = extended["id"].as_str().unwrap();
+    let child_computed =
+        s.execute("variable.create", &json!({"collection": child_collection, "name": "Computed", "type": "number", "value": 0})).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
     let child_parent = {
         let doc = s.doc().unwrap();
         doc.variables.variables.iter().find(|v| v.collection == child_collection && v.name == "Parent").unwrap().id.clone()
     };
-    s.execute("variable.setExpression", &json!({"variable": result, "expression": format!("{{{child_parent}}} * 2")})).unwrap();
-    s.execute("variable.setExpression", &json!({"variable": parent_value, "expression": format!("{{{parent_base}}} * 2")})).unwrap();
+    s.execute("variable.setExpression", &json!({"variable": child_computed, "expression": format!("{{{child_parent}}} * 2")})).unwrap();
 
+    s.execute("variable.set", &json!({"variable": parent_base, "mode": "Light", "value": 3})).unwrap();
     let mut doc = s.doc().unwrap().clone();
-    assert!(set_variable(&mut doc, frame, &parent_base, &json!(3), None));
+    let count = var_id(&doc, "count");
+    assert!(set_variable(&mut doc, frame, &count, &json!(1), None), "prototype playback triggers the recomputation");
 
-    assert_eq!(doc.variables.resolve(&parent_value, &Default::default()), Some(VariableValue::Number(6.0)));
-    assert_eq!(doc.variables.resolve(&child_parent, &Default::default()), Some(VariableValue::Number(6.0)));
-    assert_eq!(
-        doc.variables.resolve(&result, &Default::default()),
-        Some(VariableValue::Number(12.0)),
-        "formula readers run after the parent output propagates to the existing extension"
-    );
+    let theme = doc.variables.collection_by_id(&doc.variables.get_by_id(&parent_value).unwrap().collection).unwrap();
+    let child = doc.variables.collection_by_id(child_collection).unwrap();
+    for (mode, expected_parent) in [("Light", 6.0), ("Dark", 14.0)] {
+        let parent_mode = theme.find_mode(mode).unwrap().id.clone();
+        let child_mode = child.find_mode(mode).unwrap().id.clone();
+        assert_eq!(doc.variables.get_by_id(&parent_value).unwrap().values.get(&parent_mode), Some(&VariableValue::Number(expected_parent)));
+        assert_eq!(doc.variables.get_by_id(&child_parent).unwrap().values.get(&child_mode), Some(&VariableValue::Number(expected_parent)));
+        assert_eq!(
+            doc.variables.get_by_id(&child_computed).unwrap().values.get(&child_mode),
+            Some(&VariableValue::Number(expected_parent * 2.0)),
+            "inherited formula values and their readers stay correct in {mode}"
+        );
+    }
 }
 
 #[test]
