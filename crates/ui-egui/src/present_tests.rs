@@ -13,11 +13,13 @@ pub(crate) struct Ui {
     pub(crate) ctx: egui::Context,
     pub(crate) app: FigApp,
     pub(crate) time: f64,
+    /// A display's pixels per point and the biggest texture side its GPU takes (None: egui's defaults).
+    pub(crate) hidpi: Option<(f32, usize)>,
 }
 
 impl Ui {
     pub(crate) fn new(s: Session) -> Self {
-        let mut u = Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0 };
+        let mut u = Self { ctx: egui::Context::default(), app: FigApp::new(s, Box::new(NoServices)), time: 0.0, hidpi: None };
         u.frames(3, Vec::new);
         u
     }
@@ -29,8 +31,12 @@ impl Ui {
     /// [`Self::frame`], returning what egui output (the AccessKit tree when it's enabled).
     pub(crate) fn frame_output(&mut self, events: Vec<Event>) -> egui::FullOutput {
         self.time += 1.0 / 60.0;
-        let input =
+        let mut input =
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
+        if let Some((ppp, side)) = self.hidpi {
+            input.max_texture_side = Some(side);
+            input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
+        }
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(input, |ui| app.ui(ui));
         out.textures_delta.clear();

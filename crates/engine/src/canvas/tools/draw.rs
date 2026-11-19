@@ -1,7 +1,8 @@
 use super::handles::SNAP_PX;
 use super::pen::take_enclosed;
 use super::{
-    Affine, Cursor, Gesture, Node, NodeId, NodeKind, Point, PointerEvent, Rect, Result, Session, StrokeCap, Targets, ToolId, Vec2, frame_at, textedit,
+    Affine, Cursor, Gesture, Node, NodeId, NodeKind, Point, PointerEvent, Rect, Result, Session, StrokeCap, Targets, ToolId, Vec2, frame_at,
+    pencil_add, textedit,
 };
 
 impl Session {
@@ -176,10 +177,11 @@ impl Session {
                         let sel = self.selection().into_iter().filter(|x| *x != d).collect();
                         self.set_selection(sel);
                     } else if let Some(k) = keep {
-                        // A click (not a drag) on one layer of a multi-selection selects just it.
+                        // A click (not a drag) on one layer of a multi-selection, or on a layer
+                        // inside a selected one, selects just it.
                         let doc = self.doc()?.clone();
                         let sel = self.selection();
-                        if sel.len() > 1 && (sel.contains(&k) || sel.iter().any(|s| doc.is_ancestor(*s, k))) {
+                        if sel.as_slice() != [k] && (sel.contains(&k) || sel.iter().any(|s| doc.is_ancestor(*s, k))) {
                             self.set_selection(vec![k]);
                         }
                     }
@@ -239,10 +241,7 @@ impl Session {
                 self.tool.overlay.pen.clear();
                 self.tool.overlay.pen_color = None;
                 // The stroke ends where the button came up, even without a move to get there.
-                if points.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
-                    points.push(ev.p());
-                    pressure.push(ev.pressure);
-                }
+                pencil_add(&mut points, &mut pressure, ev);
                 self.pencil_finish(&points, &pressure)?;
             }
             Gesture::Connect { from, start } => self.connect_up(ev, from, start)?,

@@ -1,6 +1,6 @@
 //! The transparency grid behind the page; rendered pixels already contain the page colour.
 
-use egui::{Color32, CornerRadius, Id, Painter, Rect, TextureHandle, pos2};
+use egui::{Color32, CornerRadius, Id, Painter, Rect, TextureHandle, TextureId, pos2};
 
 /// Reuse the checkerboard texture, updating its pixels when the active theme changes.
 fn grid_texture(ctx: &egui::Context) -> TextureHandle {
@@ -25,18 +25,40 @@ fn grid_texture(ctx: &egui::Context) -> TextureHandle {
     texture
 }
 
-/// Draw the transparency grid and apply page colour only outside the rendered image.
-pub(super) fn paint(painter: &Painter, rect: Rect, background: Color32, rendered: Option<Rect>) {
+/// Draw the transparency grid, and where the rendered image doesn't reach the coarse image around
+/// the view (`surround`: its texture and screen rect), and the page colour past that. Returns the
+/// share of `rect` that only the page colour covers.
+pub(super) fn paint(painter: &Painter, rect: Rect, background: Color32, rendered: Option<Rect>, surround: Option<(TextureId, Rect)>) -> f32 {
     if background.a() < 255 {
         // Repeat four pixels instead of allocating one shape per square on a large canvas.
         let texture = grid_texture(painter.ctx());
         let uv = Rect::from_min_size(egui::Pos2::ZERO, rect.size() / 16.0);
         painter.image(texture.id(), rect, uv, Color32::WHITE);
     }
-    // The render contains the page colour and its alpha. Painting that colour beneath it
-    // applies alpha twice (50% becomes 75%). Only uncovered areas need the fallback colour.
-    let covered = rendered.map(|r| r.intersect(rect)).filter(|r| r.is_positive());
-    let areas = match covered {
+    // Renders contain the page colour and its alpha. Painting that colour (or the coarse image)
+    // beneath one applies alpha twice (50% becomes 75%): each area gets exactly one of them.
+    let mut bare = 0.0;
+    for area in outside(rect, rendered) {
+        let rest = match surround {
+            Some((texture, at)) => {
+                if area.intersect(at).is_positive() {
+                    painter.with_clip_rect(area).image(texture, at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                outside(area, Some(at))
+            }
+            None => outside(area, None),
+        };
+        for r in rest {
+            painter.rect_filled(r, CornerRadius::ZERO, background);
+            bare += r.area();
+        }
+    }
+    if rect.area() > 0.0 { (bare / rect.area()).clamp(0.0, 1.0) } else { 0.0 }
+}
+
+/// The parts of `rect` outside `covered`: at most four strips that don't overlap.
+fn outside(rect: Rect, covered: Option<Rect>) -> impl Iterator<Item = Rect> {
+    let areas = match covered.map(|r| r.intersect(rect)).filter(|r| r.is_positive()) {
         Some(r) => [
             Rect::from_min_max(rect.min, pos2(rect.right(), r.top())),
             Rect::from_min_max(pos2(rect.left(), r.bottom()), rect.max),
@@ -45,9 +67,7 @@ pub(super) fn paint(painter: &Painter, rect: Rect, background: Color32, rendered
         ],
         None => [rect, Rect::NOTHING, Rect::NOTHING, Rect::NOTHING],
     };
-    for area in areas.into_iter().filter(|r| r.is_positive()) {
-        painter.rect_filled(area, CornerRadius::ZERO, background);
-    }
+    areas.into_iter().filter(|r| r.is_positive())
 }
 
 #[cfg(test)]
@@ -59,7 +79,7 @@ mod tests {
     fn shapes(alpha: u8, rendered: Option<Rect>) -> egui::FullOutput {
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            paint(ui.painter(), canvas(), Color32::from_rgba_unmultiplied(255, 0, 0, alpha), rendered);
+            paint(ui.painter(), canvas(), Color32::from_rgba_unmultiplied(255, 0, 0, alpha), rendered, None);
         });
         out.textures_delta.clear();
         out
@@ -169,7 +189,9 @@ mod tests {
         let mut previous_id = None;
         for tokens in [crate::theme::Tokens::light(), crate::theme::Tokens::dark(), crate::theme::Tokens::light()] {
             crate::theme::apply(&ctx, tokens);
-            let mut out = ctx.run_ui(Default::default(), |ui| paint(ui.painter(), canvas(), Color32::TRANSPARENT, None));
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                paint(ui.painter(), canvas(), Color32::TRANSPARENT, None, None);
+            });
             let (tile, _) =
                 ctx.data(|d| d.get_temp::<(TextureHandle, [Color32; 2])>(Id::unique("canvas_transparency_grid"))).expect("drawn checkerboard");
             let grid_index = assert_grid(&out, tile.id(), canvas());
@@ -226,5 +248,48 @@ mod tests {
                 assert_eq!(fills[0].rect, canvas());
             }
         }
+    }
+
+    /// Past the rendered image the coarse image around the view shows, clipped to outside the
+    /// image, and the page colour only past both: nothing is painted twice, and what is left bare
+    /// is what the call returns.
+    #[test]
+    fn the_image_around_the_view_fills_what_the_render_leaves_and_the_page_colour_the_rest() {
+        let ctx = egui::Context::default();
+        let around = TextureId::User(7);
+        // The render covers the left half; the coarse image reaches 80 to the right.
+        let rendered = Rect::from_min_max(pos2(0.0, 0.0), pos2(50.0, 100.0));
+        let at = Rect::from_min_max(pos2(-100.0, -100.0), pos2(80.0, 200.0));
+        let mut bare = -1.0;
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            bare = paint(ui.painter(), canvas(), Color32::RED, Some(rendered), Some((around, at)));
+        });
+        out.textures_delta.clear();
+        let coarse: Vec<_> = out.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Mesh(m) if m.texture_id == around)).collect();
+        assert_eq!(coarse.len(), 1, "one strip of the canvas lies past the render");
+        assert_eq!(coarse[0].clip_rect, Rect::from_min_max(pos2(50.0, 0.0), pos2(100.0, 100.0)), "clipped to past the render");
+        let fills: Vec<Rect> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fills, [Rect::from_min_max(pos2(80.0, 0.0), pos2(100.0, 100.0))], "the page colour only past both");
+        assert!((bare - 0.2).abs() < 1e-6, "a fifth of the canvas is bare: {bare}");
+        // Without one the page colour fills all of it; with one reaching everywhere nothing.
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            bare = paint(ui.painter(), canvas(), Color32::RED, Some(rendered), None);
+        });
+        out.textures_delta.clear();
+        assert!((bare - 0.5).abs() < 1e-6, "{bare}");
+        let everywhere = Rect::from_min_max(pos2(-100.0, -100.0), pos2(200.0, 200.0));
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            bare = paint(ui.painter(), canvas(), Color32::RED, Some(rendered), Some((around, everywhere)));
+        });
+        out.textures_delta.clear();
+        assert_eq!(bare, 0.0);
+        assert!(!out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(_))), "no page colour under the coarse image");
     }
 }

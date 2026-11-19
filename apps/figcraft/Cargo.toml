@@ -17,8 +17,7 @@ figcraft-collab-net = { workspace = true }
 figcraft-format = { workspace = true }
 figcraft-text = { workspace = true }
 # Shared decision of who draws the window frame on Linux (compositor vs. app), replacing the
-# bespoke Wayland xdg-decoration probe. See `[workspace.dependencies]`: pinned to the unmerged
-# craft-libs#217 branch and must be repointed to a merged `rev` before this PR is mergeable.
+# bespoke Wayland xdg-decoration probe. The `rev` is set in `[workspace.dependencies]`.
 craft-window = { workspace = true }
 # The suite's settings folder: `FIGCRAFT_CONFIG_DIR`, a portable marker, then the platform folder.
 craft-settings = { workspace = true }

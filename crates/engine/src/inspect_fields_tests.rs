@@ -505,3 +505,98 @@ fn node_get_uses_options_but_keeps_its_existing_depth_and_selection() {
     assert_eq!(s.selection(), selection);
     assert_eq!(s.undo_depth(), history);
 }
+
+/// Text and stroke settings a layer stores are reported, under the names `node.set` takes, so a
+/// value read can be written back unchanged.
+#[test]
+fn stored_text_and_stroke_settings_are_read_back_as_set() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    let text = s.execute("node.create", &json!({"type": "text", "text": "Hi", "width": 120})).unwrap()["id"].clone();
+    let line =
+        s.execute("node.create", &json!({"type": "line", "width": 80, "props": {"strokes": ["#000000"], "strokeWeight": 2}})).unwrap()["id"].clone();
+    let set = json!({
+        "textAlignVertical": "middle", "textCase": "upper", "paragraphSpacing": 8.0, "paragraphIndent": 12.0, "features": {"liga": false},
+    });
+    s.execute("node.set", &json!({"ids": [text.clone()], "props": set})).unwrap();
+    s.execute("node.set", &json!({"ids": [line.clone()], "props": {"startCap": "round", "endCap": "triangleArrow"}})).unwrap();
+    let got = s.execute("node.get", &json!({"id": text})).unwrap();
+    for (key, value) in set.as_object().unwrap() {
+        assert_eq!(&got[key], value, "{key}: {got}");
+        // Written back as read, it changes nothing.
+        s.execute("node.set", &json!({"ids": [text.clone()], "props": {key.as_str(): got[key].clone()}})).unwrap();
+        assert_eq!(s.execute("node.get", &json!({"id": text})).unwrap()[key], *value, "{key}");
+    }
+    let got = s.execute("node.get", &json!({"id": line})).unwrap();
+    assert_eq!((got["startCap"].as_str(), got["endCap"].as_str()), (Some("round"), Some("triangleArrow")), "{got}");
+    // Defaults stay out, as they do for other keys.
+    let plain = s.execute("node.create", &json!({"type": "text", "text": "x"})).unwrap()["id"].clone();
+    let got = s.execute("node.get", &json!({"id": plain})).unwrap();
+    for key in ["textAlignVertical", "textCase", "paragraphSpacing", "paragraphIndent", "features", "startCap", "endCap", "variableModes"] {
+        assert!(got.get(key).is_none(), "{key} at its default: {got}");
+    }
+}
+
+/// A frame's variable modes, a layer's component property bindings and an exposed nested instance
+/// are reported.
+#[test]
+fn modes_property_bindings_and_exposed_instances_are_read() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    let c = s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    let frame = s.execute("node.create", &json!({"type": "frame", "width": 100, "height": 100})).unwrap()["id"].clone();
+    s.execute("variable.setMode", &json!({"ids": [frame.clone()], "collection": c["id"], "mode": "Dark"})).unwrap();
+    let modes = s.execute("node.get", &json!({"id": frame})).unwrap()["variableModes"].clone();
+    assert_eq!(modes.as_object().map(|m| m.len()), Some(1), "{modes}");
+    let card = s.execute("node.create", &json!({"type": "frame", "name": "Card", "width": 100, "height": 50})).unwrap()["id"].clone();
+    let title = s.execute("node.create", &json!({"type": "text", "parent": card.clone(), "text": "Title"})).unwrap()["id"].clone();
+    let main = s.execute("component.create", &json!({"ids": [card]})).unwrap()["id"].clone();
+    s.execute("component.addProperty", &json!({"id": main.clone(), "name": "Label", "type": "text", "layer": title.clone()})).unwrap();
+    let refs = s.execute("node.get", &json!({"id": title})).unwrap()["propertyReferences"].clone();
+    assert!(refs.as_object().is_some_and(|r| r.values().any(|v| v.as_str().is_some_and(|p| p.starts_with("Label")))), "{refs}");
+    let tag = s.execute("node.create", &json!({"type": "frame", "name": "Tag", "x": 300, "width": 40, "height": 20})).unwrap()["id"].clone();
+    let tag_main = s.execute("component.create", &json!({"ids": [tag]})).unwrap()["id"].clone();
+    let nested = s.execute("instance.create", &json!({"component": tag_main})).unwrap()["id"].clone();
+    s.execute("node.reparent", &json!({"ids": [nested.clone()], "parent": main})).unwrap();
+    s.execute("component.exposeInstance", &json!({"id": nested.clone()})).unwrap();
+    assert_eq!(s.execute("node.get", &json!({"id": nested})).unwrap()["exposedInstance"], true);
+}
+
+/// Every key a layer's JSON can have is one `fields` accepts: a key missing from `NODE_KEYS` can be
+/// read in full output but is refused when asked for by name (`dashCap` was).
+#[test]
+fn every_key_node_get_writes_can_be_asked_for() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    let frame = s
+        .execute("node.create", &json!({"type": "frame", "width": 200, "height": 100, "props": {"layout": {"mode": "horizontal"}, "gap": 4}}))
+        .unwrap()["id"]
+        .clone();
+    let line = s
+        .execute(
+            "node.create",
+            &json!({"type": "line", "parent": frame, "width": 80, "props": {
+            "strokes": ["#000000"], "strokeWeight": 2, "dashes": [4, 2], "dashCap": "round", "strokeJoin": "round",
+            "opacity": 0.5, "visible": false, "locked": true}}),
+        )
+        .unwrap()["id"]
+        .clone();
+    s.execute("node.create", &json!({"type": "text", "parent": frame, "text": "Hi", "props": {"textDecoration": "underline"}})).unwrap();
+    s.execute("annotation.add", &json!({"id": line, "label": "Note"})).unwrap();
+    let mut keys = std::collections::BTreeSet::new();
+    fn walk(v: &Value, keys: &mut std::collections::BTreeSet<String>) {
+        if let Some(o) = v.as_object() {
+            keys.extend(o.keys().cloned());
+            for c in o.get("children").and_then(Value::as_array).into_iter().flatten() {
+                walk(c, keys);
+            }
+        }
+    }
+    walk(&node_json(s.doc().unwrap(), crate::params::id_of(&frame).unwrap(), 4), &mut keys);
+    assert!(keys.contains("dashCap"), "the test sets a dash cap: {keys:?}");
+    for key in keys {
+        assert!(crate::inspect::NODE_KEYS.contains(&key.as_str()), "`{key}` is written but `fields` refuses it");
+        let one = InspectOptions::parse(&json!({"fields": [key]}));
+        assert!(one.is_ok(), "{key}: {one:?}");
+    }
+}
