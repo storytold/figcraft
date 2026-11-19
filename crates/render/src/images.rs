@@ -120,20 +120,14 @@ pub(crate) fn decode_within(bytes: &[u8], target: ColorProfile, max_side: u32, m
     if figcraft_format::jpeg::finer_than_first(bytes) {
         return None;
     }
-    let opts = craft_image_codecs::DecodeOptions {
-        limits: craft_image_codecs::Limits::new(u32::MAX, u32::MAX, u64::MAX, max_bytes),
-        ..Default::default()
-    };
+    let opts =
+        craft_image_codecs::DecodeOptions { limits: craft_image_codecs::Limits::new(u32::MAX, u32::MAX, u64::MAX, max_bytes), ..Default::default() };
     let img = craft_image_codecs::decode_with(bytes, &opts).ok()?;
     let source = crate::image_profile::Source::from_decoded(bytes, img.icc.as_deref());
     let is_gray = source.is_gray() && img.layout().is_gray();
-    let layout = if is_gray {
-        craft_image_codecs::ChannelLayout::GrayA
-    } else {
-        craft_image_codecs::ChannelLayout::Rgba
-    };
+    let layout = if is_gray { craft_image_codecs::ChannelLayout::GrayA } else { craft_image_codecs::ChannelLayout::Rgba };
     let converted = img.converted(layout, craft_image_codecs::SampleType::U8);
-    let (w, h, pixels) = thumbnail_u8(converted.width(), converted.height(), max_side, is_gray, converted.into_data())?;
+    let (w, h, pixels) = thumbnail_u8(converted.width(), converted.height(), max_side, is_gray, converted.into_owned().into_data())?;
     if is_gray {
         let rgba = source.convert_u8(w, h, true, &pixels, target)?;
         return Some((premultiplied_rgba(w, h, &rgba)?, false));

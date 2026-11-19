@@ -64,10 +64,7 @@ impl Source {
         };
         if !matches!(
             format,
-            craft_image_codecs::Format::Png
-                | craft_image_codecs::Format::Jpeg
-                | craft_image_codecs::Format::WebP
-                | craft_image_codecs::Format::Tiff
+            craft_image_codecs::Format::Png | craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::WebP | craft_image_codecs::Format::Tiff
         ) {
             return Source::default();
         }
@@ -94,10 +91,7 @@ impl Source {
         let layout = if grey { Layout::GrayAlpha } else { Layout::Rgba };
         let len = usize::try_from(w).ok()?.checked_mul(usize::try_from(h).ok()?)?.checked_mul(4)?;
         let mut out = vec![0u8; len];
-        src.create_transform_8bit(layout, &working(target), Layout::Rgba, TransformOptions::default())
-            .ok()?
-            .transform(pixels, &mut out)
-            .ok()?;
+        src.create_transform_8bit(layout, &working(target), Layout::Rgba, TransformOptions::default()).ok()?.transform(pixels, &mut out).ok()?;
         Some(out)
     }
 }

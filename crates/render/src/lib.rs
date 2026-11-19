@@ -536,12 +536,7 @@ fn jpeg_with(p: &Pixmap, background: Color, quality: u8, icc: Option<Vec<u8>>) -
     }
     let embed_icc = icc.is_some();
     let img = codec_image(p, craft_image_codecs::ChannelLayout::Rgb, rgb, icc, None)?;
-    let opts = craft_image_codecs::EncodeOptions {
-        jpeg_quality: quality.clamp(1, 100),
-        embed_icc,
-        embed_metadata: false,
-        ..Default::default()
-    };
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: quality.clamp(1, 100), embed_icc, embed_metadata: false, ..Default::default() };
     encode_with_codec(&img, craft_image_codecs::Format::Jpeg, &opts)
 }
 
@@ -549,12 +544,7 @@ fn jpeg_with(p: &Pixmap, background: Color, quality: u8, icc: Option<Vec<u8>>) -
 fn webp_with(p: &Pixmap, icc: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
     let embed_icc = icc.is_some();
     let img = codec_image(p, craft_image_codecs::ChannelLayout::Rgba, to_rgba8(p), icc, None)?;
-    let opts = craft_image_codecs::EncodeOptions {
-        webp_lossless: true,
-        embed_icc,
-        embed_metadata: false,
-        ..Default::default()
-    };
+    let opts = craft_image_codecs::EncodeOptions { webp_lossless: true, embed_icc, embed_metadata: false, ..Default::default() };
     encode_with_codec(&img, craft_image_codecs::Format::WebP, &opts)
 }
 
