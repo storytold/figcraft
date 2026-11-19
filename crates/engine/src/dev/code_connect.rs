@@ -601,7 +601,15 @@ pub fn variants(doc: &Document, owner: NodeId) -> Vec<(String, Vec<String>)> {
 
 /// A link as the connect file holds it.
 fn link_json(component: &str, l: &CodeLink) -> Value {
-    let mut v = json!({"component": component, "language": l.language, "importPath": l.import_path, "name": l.name, "template": l.template});
+    let mut v = link_fields(l);
+    v["component"] = json!(component);
+    v
+}
+
+/// A link's own fields, as the connect file and `inspect.designContext` give them: its keys are
+/// the file's, and a mapping's property names and values stay as written.
+pub(crate) fn link_fields(l: &CodeLink) -> Value {
+    let mut v = json!({"language": l.language, "importPath": l.import_path, "name": l.name, "template": l.template});
     if !l.source.is_empty() {
         v["source"] = json!(l.source);
     }
@@ -633,10 +641,7 @@ fn entry(doc: &Document, id: NodeId, root: Option<&str>) -> Option<Value> {
         .iter()
         .map(|l| {
             let lang = CodeLang::from_id(&l.language);
-            let mut v = link_json(&n.name, l);
-            if let Some(o) = v.as_object_mut() {
-                o.remove("component");
-            }
+            let mut v = link_fields(l);
             v["import"] = json!(lang.map(|k| import_line(l, k)));
             v["snippet"] = json!(lang.and_then(|k| connected_code(doc, id, k, l)));
             if let Some(root) = root.filter(|_| !l.source.is_empty()) {
@@ -746,7 +751,6 @@ pub fn specs() -> Vec<CommandSpec> {
                     doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).flat_map(|n| n.code_links.iter().map(|l| link_json(&n.name, l))).collect();
                 let key =
                     |v: &Value| (v["component"].as_str().unwrap_or_default().to_string(), v["language"].as_str().unwrap_or_default().to_string());
-                links.sort_by_key(key);
                 let count = links.len();
                 // The file also holds the project's settings and the links of other designs: only
                 // the links of this file's components are this command's.

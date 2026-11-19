@@ -450,7 +450,7 @@ Each layer in `nodes` has `id`, `name`, `type` and:
   with the `name` of each. `explicit` holds the value they resolved to.
 - `unsupported`: `{property, why}` for what has no direct CSS equivalent. The value stays in `explicit`.
 - `code`: for a component or instance connected to code, per language, `{language, importPath, name,
-  code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
+  source?, notes?, code}`, with the instance's own values in `code`. A connected instance stops there: `childCount`
   says what it holds, and `get_node` reads it.
 - `children`, or `childCount` where the tree stops.
 
