@@ -170,3 +170,83 @@ fn a_walk_stopped_at_its_cap_says_so() {
     assert!(crate::responsive::context_within(doc, &[id], 100).get("truncated").is_none());
     assert_eq!(crate::responsive::context_within(doc, &[id], 5)["truncated"], true);
 }
+
+#[test]
+fn overlapping_targets_count_each_layer_once() {
+    let mut s = session();
+    let a = frame(&mut s, "A", 1440);
+    let c = s.execute("node.create", &json!({"type": "frame", "parent": a, "width": 100, "height": 100})).unwrap()["id"].as_u64().unwrap();
+    s.execute("node.create", &json!({"type": "rectangle", "parent": c, "width": 4, "height": 4})).unwrap();
+    let b = frame(&mut s, "B", 390);
+    s.execute("responsive.rule", &json!({"id": b, "text": "B stacks"})).unwrap();
+    let doc = s.doc().unwrap();
+    let ids = [figcraft_doc::NodeId(a), figcraft_doc::NodeId(c), figcraft_doc::NodeId(b)];
+    let distinct = {
+        let mut all: Vec<_> = ids.iter().flat_map(|i| doc.ancestors(*i).into_iter().chain(doc.subtree(*i))).collect();
+        all.sort_unstable();
+        all.dedup();
+        all.len()
+    };
+    let v = crate::responsive::context_within(doc, &ids, distinct);
+    assert!(v.get("truncated").is_none(), "{v}");
+    assert_eq!(v["rules"][0]["text"], "B stacks", "{v}");
+    assert_eq!(crate::responsive::context_within(doc, &ids, distinct - 1)["truncated"], true);
+}
+
+#[test]
+fn a_page_takes_no_rule() {
+    let mut s = session();
+    let f = frame(&mut s, "Home", 1440);
+    let page = s.doc().unwrap().node(figcraft_doc::NodeId(f)).unwrap().parent.unwrap();
+    let before = s.execute("annotation.categories", &json!({})).unwrap();
+    assert!(s.execute("responsive.rule", &json!({"id": page.0, "text": "A rule"})).is_err());
+    assert!(s.doc().unwrap().node(page).unwrap().annotations.is_empty());
+    assert_eq!(s.execute("annotation.categories", &json!({})).unwrap(), before, "no category made");
+}
+
+#[test]
+fn frames_and_sections_are_marked_and_components_are_not() {
+    let mut s = session();
+    let f = frame(&mut s, "Card", 300);
+    let c = s.execute("component.create", &json!({"ids": [f]})).unwrap()["id"].as_u64().unwrap();
+    let i = s.execute("instance.create", &json!({"component": c})).unwrap()["id"].as_u64().unwrap();
+    for id in [c, i] {
+        assert!(s.execute("responsive.set", &json!({"ids": [id], "viewport": "mobile"})).is_err(), "{id}");
+    }
+    let section =
+        s.execute("node.create", &json!({"type": "section", "x": 2000, "y": 0, "width": 400, "height": 400})).unwrap()["id"].as_u64().unwrap();
+    let home = frame(&mut s, "Home", 1440);
+    s.execute("responsive.set", &json!({"ids": [section, home], "viewport": "desktop"})).unwrap();
+}
+
+#[test]
+fn stored_values_that_arent_marks_are_left_out() {
+    let mut s = session();
+    let f = frame(&mut s, "Home", 1440);
+    let odd = frame(&mut s, "Odd", 800);
+    s.execute("node.set", &json!({"ids": [odd], "props": {"pluginData": {"figcraft.viewport": "watch"}}})).unwrap();
+    let long = "g".repeat(500);
+    s.execute("node.set", &json!({"ids": [f], "props": {"pluginData": {"figcraft.viewport": "desktop", "figcraft.viewportGroup": long}}})).unwrap();
+    let v = s.execute("responsive.list", &json!({})).unwrap();
+    let versions = v["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 1, "{v}");
+    assert_eq!(versions[0]["group"], "Home", "an over-long group reads as none: {v}");
+    assert_eq!(versions[0]["frames"][0]["id"], f);
+}
+
+#[test]
+fn a_group_can_go_back_to_the_frames_name() {
+    let mut s = session();
+    let f = frame(&mut s, "Home", 1440);
+    s.execute("responsive.set", &json!({"ids": [f], "viewport": "desktop", "group": "Landing"})).unwrap();
+    assert_eq!(s.execute("responsive.list", &json!({})).unwrap()["versions"][0]["group"], "Landing");
+    s.execute("responsive.set", &json!({"ids": [f], "viewport": "desktop", "group": null})).unwrap();
+    assert_eq!(s.execute("responsive.list", &json!({})).unwrap()["versions"][0]["group"], "Home");
+}
+
+#[test]
+fn developer_mode_makes_its_own_responsive_edits() {
+    for id in ["responsive.set", "responsive.rule", "responsive.list"] {
+        assert!(crate::devinspect::dev_mode_allows(id), "{id}");
+    }
+}

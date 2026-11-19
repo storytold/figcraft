@@ -7,7 +7,7 @@
 //! document.
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use figcraft_doc::{Annotation, AnnotationCategory, CodeLink, DevStatus, Document, NodeId, NodeKind};
+use figcraft_doc::{Annotation, AnnotationCategory, CodeLink, DevStatus, Document, NodeId};
 use figcraft_engine::annotations::{self, PINNABLE, Pinnable};
 use figcraft_engine::code_connect;
 use figcraft_engine::codegen::{CodeLang, code_for};
@@ -502,10 +502,10 @@ pub fn connect_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId
 /// Screen sizes for a frame: which version of a design it is, and rules for other sizes. What's
 /// here is the designer's word: agents read it instead of guessing.
 pub fn responsive_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
-    // Screens are frames: a component isn't a version of one.
-    let Some(n) = doc.node(id).filter(|n| matches!(n.kind, NodeKind::Frame)) else { return };
+    // Screens are frames and sections: a component isn't a version of one.
+    let Some(n) = doc.node(id).filter(|n| responsive::can_mark(&n.kind)) else { return };
     let t = Tokens::get(ui.ctx());
-    let current = n.plugin_data.get(responsive::VIEWPORT_KEY).map(String::as_str);
+    let current = responsive::viewport_of(n);
     widgets::separator(ui);
     widgets::section_header(ui, tr("Screen sizes"), &[], current.is_none());
     let labels = [(tr("Mobile"), "mobile"), (tr("Tablet"), "tablet"), (tr("Desktop"), "desktop")];
@@ -520,15 +520,17 @@ pub fn responsive_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: Nod
     });
     if current.is_some() {
         widgets::sublabels(ui, tr("Design it's a version of"), None);
-        let group = n.plugin_data.get(responsive::GROUP_KEY).unwrap_or(&n.name);
+        let group = responsive::group_of(n);
         row(ui, 32.0, |ui| {
             let width = ui.available_width() - 2.0 * PAD;
             if let Some(v) = widgets::text_field(ui, Id::unique(("responsive_group", id)), group, width, tr("Design it's a version of")) {
-                app.run("responsive.set", json!({"id": id, "viewport": current, "group": v}));
+                // Emptied: back to the frame's name.
+                let group = if v.trim().is_empty() { json!(null) } else { json!(v) };
+                app.run("responsive.set", json!({"id": id, "viewport": current, "group": group}));
             }
         });
     }
-    let field = Id::unique(("responsive_rule", id));
+    let field = rule_draft(app, id);
     let draft = ui.data(|d| d.get_temp::<String>(field)).unwrap_or_default();
     widgets::sublabels(ui, tr("Add a rule"), None);
     if let Some(v) = widgets::multiline_field(ui, field, &draft, tr("Sidebar becomes a drawer below 768 px"), 3) {
@@ -536,11 +538,24 @@ pub fn responsive_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: Nod
     }
     row(ui, 32.0, |ui| {
         if widgets::button(ui, tr("Add rule"), false, !draft.trim().is_empty()).clicked() {
-            app.run("responsive.rule", json!({"id": id, "text": draft}));
-            ui.data_mut(|d| d.remove_temp::<String>(field));
+            add_rule(app, ui.ctx(), id, &draft);
         }
     });
     widgets::note(ui, tr("Rules appear under Annotations, in the Responsive category."), t.text_secondary);
+}
+
+/// Where the Screen sizes section keeps the rule being typed for layer `id`.
+pub(crate) fn rule_draft(app: &FigApp, id: NodeId) -> Id {
+    // Layer ids repeat across open documents.
+    Id::unique(("responsive_rule", app.session.ds().ok().map(|d| d.uid), id))
+}
+
+/// Add `text` as a rule on `id`. The draft stays when the rule is refused, so nothing typed is lost.
+pub(crate) fn add_rule(app: &mut FigApp, ctx: &egui::Context, id: NodeId, text: &str) {
+    let field = rule_draft(app, id);
+    if app.run("responsive.rule", json!({"id": id, "text": text})).is_some() {
+        ctx.data_mut(|d| d.remove_temp::<String>(field));
+    }
 }
 
 /// Dev Mode plugins: the installed plugins that only read the document, run from the Inspect tab.

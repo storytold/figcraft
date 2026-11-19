@@ -436,7 +436,8 @@ a later step can use `{"$step": 0, "field": "ids/0"}` to target the first match.
 | `components` | By id: `name`, `type`, `properties` with variants, `codeLinks` |
 | `fonts` | `family`, `styles`, and whether it's `installed` |
 | `assets` | What `inspect.assets` lists, for the layers in the tree |
-| `missing` | `{what, why}`: what the design doesn't specify. Always says that the file stores no breakpoints |
+| `responsive` | What the designer stated about other screen sizes, as `responsive.list` gives it for the target: `explicit`, `versions`, `rules`. Nothing is inferred from names or sizes |
+| `missing` | `{what, why}`: what the design doesn't specify. Says that the file stores no breakpoints unless `responsive` is `explicit` |
 | `truncated` | When `depth` or `maxNodes` cut the tree, or `maxBytes` made the tool ask for fewer layers: `layersLeftOut`, `assetsLeftOut`, `depth`, `maxNodes`; and `variables` when aliases went deeper than the 10,000 variables followed |
 
 Each layer in `nodes` has `id`, `name`, `type` and:
@@ -1924,15 +1925,17 @@ permissions: without it nothing is downloaded); `plugin.directory.publish {path 
   note has a category menu.
 - **Screen sizes:** a file has no breakpoints, so the designer states what happens at other sizes and
   agents read that rather than guess. Undoable `responsive.set {ids?, viewport, group?}` marks frames
-  as the `mobile`, `tablet` or `desktop` version of a design (`null` clears the mark; `group` names the
-  design, by default each frame's name). Undoable `responsive.rule {id?, text}` adds a note to the
-  **Responsive** annotation category, making the category if the file lacks it; the note keeps to
-  `annotation.add`'s limits. `responsive.list {}` → `{versions: [{group, frames: [{id, name, viewport,
+  or sections as the `mobile`, `tablet` or `desktop` version of a design (`null` clears the mark;
+  `group` names the design, and `null` goes back to each frame's name). Undoable `responsive.rule {id?,
+  text}` adds a note to the **Responsive** annotation category, making the category if the file lacks
+  it; the note keeps to `annotation.add`'s limits, and pages are refused. Developer Mode makes both
+  edits, as it does annotations. `responsive.list {}` → `{versions: [{group, frames: [{id, name, viewport,
   width, height, page}]}]}`, narrowest first; with `ids` or `id`, what is stated about those layers,
   the layers above them and those inside them: `{explicit, versions, rules: [{id, layer, text}],
   truncated?}` (`truncated`: too many layers to read every rule). Nothing is inferred from names or
-  sizes. Marks are layer data (`figcraft.viewport`, `figcraft.viewportGroup`), so they save and sync
-  with no change to the file format. In the app, a frame's Inspect tab has a **Screen sizes** section.
+  sizes, and stored values that aren't one of the three versions are ignored. `design_context` gives
+  the same for its target under `responsive`. Marks are layer data (`figcraft.viewport`, `figcraft.viewportGroup`), so they save and sync
+  with no change to the file format. In the app, a frame's or section's Inspect tab has a **Screen sizes** section.
 - **Ready for dev:** frames at the top of a page or section, and sections, carry a handoff status
   (`node.set {devStatus: none|readyForDev|completed}`; other layers are refused a status).
   `inspect.readyForDev {status?: readyForDev|changed|completed|any, page?}` lists them across pages
