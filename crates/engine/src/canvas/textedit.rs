@@ -1,8 +1,9 @@
 //! On-canvas text editing: caret, selection, typing. A whole editing session is one undo step.
 
+use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
 
-use figcraft_doc::{Document, ListStyle, NodeId, NodeKind, TextData};
+use figcraft_doc::{Document, ImageData, ListStyle, NodeId, NodeKind, TextData};
 
 use crate::{EngineError, Preedit, Result, Session, TextEdit};
 
@@ -854,6 +855,106 @@ pub fn selected_text(s: &Session) -> Option<String> {
     let doc = s.doc().ok()?;
     let t = doc.node(id)?.kind.text()?;
     Some(t.characters.chars().skip(a).take(b.saturating_sub(a)).collect())
+}
+
+/// Copied characters with their formatting, for a paste into a text edit that keeps it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RichText {
+    pub text: String,
+    /// Styled runs as `(from, to, style)` char ranges of `text`. Each style carries its fills,
+    /// the layer's own where the run had none, so the characters keep their colour elsewhere.
+    pub spans: Vec<(usize, usize, figcraft_doc::TextStyle)>,
+    /// The data of the images the runs' fills use, so they resolve in another file.
+    pub images: BTreeMap<String, ImageData>,
+}
+
+/// The selected characters while editing, with their formatting (for copy).
+pub fn selected_rich_text(s: &Session) -> Option<RichText> {
+    let (id, a, b) = selected_range(s)?;
+    rich_text_of(s.doc().ok()?, id, a, b)
+}
+
+/// The characters of the text layers `ids`, one per line, with their formatting; None when one of
+/// them isn't a text layer or there are no characters.
+pub fn layers_rich_text(doc: &Document, ids: &[NodeId]) -> Option<RichText> {
+    let mut joined = RichText { text: String::new(), spans: Vec::new(), images: BTreeMap::new() };
+    let mut offset = 0;
+    for (i, id) in ids.iter().enumerate() {
+        let layer = rich_text_of(doc, *id, 0, usize::MAX)?;
+        if i > 0 {
+            joined.text.push('\n');
+            offset += 1;
+        }
+        joined.text.push_str(&layer.text);
+        joined.spans.extend(layer.spans.into_iter().map(|(from, to, style)| (from + offset, to + offset, style)));
+        joined.images.extend(layer.images);
+        offset += layer.text.chars().count();
+    }
+    (!joined.text.is_empty()).then_some(joined)
+}
+
+/// Chars `a..b` of the text layer `id` (`b` past the end means to the end), with their formatting.
+fn rich_text_of(doc: &Document, id: NodeId, a: usize, b: usize) -> Option<RichText> {
+    let n = doc.node(id)?;
+    let t = n.kind.text()?;
+    let b = b.min(t.char_count());
+    let text: String = t.characters.chars().skip(a).take(b.saturating_sub(a)).collect();
+    let spans: Vec<(usize, usize, figcraft_doc::TextStyle)> = t
+        .spans()
+        .into_iter()
+        .filter(|(from, to, _)| *to > a && *from < b)
+        .map(|(from, to, style)| {
+            let mut style = style.clone();
+            style.fills.get_or_insert_with(|| n.fills.clone());
+            (from.max(a) - a, to.min(b) - a, style)
+        })
+        .collect();
+    let mut images = BTreeMap::new();
+    for paint in spans.iter().flat_map(|(_, _, style)| style.fills.iter().flatten()) {
+        if let figcraft_color::PaintKind::Image(img) = &paint.kind
+            && let Some(d) = doc.images.get(&img.image)
+        {
+            images.insert(img.image.clone(), d.clone());
+        }
+    }
+    Some(RichText { text, spans, images })
+}
+
+/// Replace the selection in the text edit with `rich`, keeping its formatting. A link to a style
+/// this file doesn't have is dropped, a fill equal to the layer's is left to the layer, and the
+/// copied image data is added where this file lacks the key, as a pasted layer's is.
+pub fn insert_rich(s: &mut Session, rich: &RichText) -> Result<()> {
+    if s.ds()?.text_edit.is_some() {
+        let doc = s.doc_mut()?;
+        for (k, v) in &rich.images {
+            doc.images.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    let doc = s.doc()?;
+    let layer_fills = s.ds()?.text_edit.as_ref().and_then(|te| doc.node(te.id)).map(|n| n.fills.clone());
+    let spans: Vec<(usize, usize, figcraft_doc::TextStyle)> = rich
+        .spans
+        .iter()
+        .map(|(from, to, style)| {
+            let mut style = style.clone();
+            if style.style_id.as_deref().is_some_and(|id| doc.style(id).is_none()) {
+                style.style_id = None;
+            }
+            if style.fills == layer_fills {
+                style.fills = None;
+            }
+            (*from, *to, style)
+        })
+        .collect();
+    edit(s, |t, te| {
+        let (a, b) = range(te);
+        t.replace_range(a, b, &rich.text);
+        for (from, to, style) in &spans {
+            t.restyle(a + from, a + to, |x| *x = style.clone());
+        }
+        te.caret = a + rich.text.chars().count();
+        te.anchor = te.caret;
+    })
 }
 
 /// The selected range while editing (for styling commands), or None.

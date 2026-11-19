@@ -209,6 +209,7 @@ pub fn invoke(app: &mut FigApp, id: &str) {
                 .ok()
                 .and_then(|d| d.vector_edit.as_ref())
                 .is_some_and(|ve| ve.parts().iter().any(|p| !p.vertices.is_empty() || !p.segments.is_empty()));
+            let rich = doc.filter(|_| !partial).and_then(|d| figcraft_engine::textedit::layers_rich_text(d, &ids));
             let mirror = doc.filter(|_| !partial).and_then(|d| text_layers_text(d, &ids).or_else(|| figcraft_svg_export(d, &ids)));
             let ran = app.run(id, json!({}));
             // A partial copy put temporary layers on the engine clipboard; mirror their SVG.
@@ -223,6 +224,7 @@ pub fn invoke(app: &mut FigApp, id: &str) {
                 app.clipboard_set_text(&text);
                 app.ui.last_copy = Some(text);
                 app.ui.last_copy_generation = app.session.clipboard.layers_generation;
+                app.ui.text_copy = rich;
             }
         }
         "edit.paste" => paste(app, None, None),

@@ -286,6 +286,8 @@ mod text_link_tests;
 #[cfg(test)]
 mod text_mixed_fill_tests;
 #[cfg(test)]
+mod text_paste_style_tests;
+#[cfg(test)]
 mod tidy_tests;
 #[cfg(test)]
 mod titlebar_tests;
@@ -628,6 +630,9 @@ pub struct UiState {
     /// copy changes the engine clipboard without writing the OS clipboard; the generation then
     /// no longer matches, so the stale mirror is not mistaken for the user's own copy.
     pub last_copy_generation: u64,
+    /// The formatting of the characters last copied as text: a paste into a text edit of those
+    /// same characters keeps it.
+    pub text_copy: Option<figcraft_engine::textedit::RichText>,
     /// The fill, stroke or effect row highlighted in the Design panel: Cmd/Ctrl+C copies it.
     pub property_row: Option<property_rows::Highlight>,
     /// A paint or effect copied from its row: Cmd/Ctrl+V pastes it while it's the last copy.
@@ -775,6 +780,7 @@ impl Default for UiState {
 
             last_copy: None,
             last_copy_generation: 0,
+            text_copy: None,
             property_row: None,
             property_copy: None,
             after_field: None,
