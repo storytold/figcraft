@@ -1181,7 +1181,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=010702ee9b030844c852939095b1da0d0656a890#010702ee9b030844c852939095b1da0d0656a890"
 dependencies = [
  "craft-dds",
- "craft-jpeg",
+ "craft-jpeg 0.1.0 (git+https://github.com/storytold/craft-libs?rev=010702ee9b030844c852939095b1da0d0656a890)",
  "craft-metadata",
  "craft-tiff",
  "crc32fast",
@@ -1206,6 +1206,14 @@ dependencies = [
 name = "craft-jpeg"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=010702ee9b030844c852939095b1da0d0656a890#010702ee9b030844c852939095b1da0d0656a890"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-jpeg"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=e7873217287876f76a045550369c90a541693c33#e7873217287876f76a045550369c90a541693c33"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -2203,6 +2211,7 @@ dependencies = [
  "craft-fig",
  "craft-figcraft-format",
  "craft-figma-rest",
+ "craft-jpeg 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e7873217287876f76a045550369c90a541693c33)",
  "craft-penpot",
  "craft-sketch",
  "figcraft-doc",
