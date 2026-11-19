@@ -1,6 +1,6 @@
 //! Shared styles (paint, text, effect, grid) and variables (collections, modes, bindings).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use figcraft_color::{Color, Paint, PaintKind};
 use figcraft_doc::ParagraphStyle;
@@ -1278,20 +1278,60 @@ fn dynamic_dependencies(
         if dynamic_ids.contains(id.as_str()) {
             if let Some(var) = vars.get_by_id(&id) {
                 stack.extend(var.overrides.iter().filter_map(|mode| var.values.get(mode)).flat_map(|value| value.references().into_iter().cloned()));
+                if var.extends.is_some()
+                    && var.values.keys().any(|mode| !var.overrides.contains(mode))
+                    && let Some(parent) = &var.extends
+                {
+                    stack.push(parent.clone());
+                }
             }
             dependencies.insert(id);
             continue;
         }
         if let Some(var) = vars.get_by_id(&id) {
             stack.extend(var.values.values().flat_map(|value| value.references().into_iter().cloned()));
+            if var.extends.is_some()
+                && var.values.keys().any(|mode| !var.overrides.contains(mode))
+                && let Some(parent) = &var.extends
+            {
+                stack.push(parent.clone());
+            }
         }
     }
     Some(dependencies)
 }
 
+/// Propagate a recomputed variable through its inheriting variables before their formula readers run.
+fn sync_inheriting_values(doc: &mut Document, parent_id: &VariableId, inheritors: &BTreeMap<VariableId, Vec<VariableId>>) {
+    let mut pending = vec![parent_id.clone()];
+    let mut seen = BTreeSet::new();
+    while let Some(parent_id) = pending.pop() {
+        if !seen.insert(parent_id.clone()) {
+            continue;
+        }
+        let Some(parent) = doc.variables.get_by_id(&parent_id).cloned() else { continue };
+        for child_id in inheritors.get(&parent_id).into_iter().flatten() {
+            if let Some(child) = doc.variables.variables.iter_mut().find(|child| child.id == *child_id) {
+                for (mode, value) in &parent.values {
+                    if !child.overrides.contains(mode) {
+                        child.values.insert(mode.clone(), value.clone());
+                    }
+                }
+            }
+            pending.push(child_id.clone());
+        }
+    }
+}
+
 /// Re-evaluate expressions after a successful command changes document variables.
 pub(crate) fn recompute_dynamic_variables(doc: &mut Document) {
     let Some(order) = dynamic_order(&doc.variables) else { return };
+    let mut inheritors: BTreeMap<VariableId, Vec<VariableId>> = BTreeMap::new();
+    for var in &doc.variables.variables {
+        if let Some(parent) = &var.extends {
+            inheritors.entry(parent.clone()).or_default().push(var.id.clone());
+        }
+    }
     for id in order {
         let Some(var) = doc.variables.get_by_id(&id).cloned() else { continue };
         let Some(expression) = var.expression else { continue };
@@ -1324,6 +1364,7 @@ pub(crate) fn recompute_dynamic_variables(doc: &mut Document) {
                 slot.values.insert(mode, value);
             }
         }
+        sync_inheriting_values(doc, &id, &inheritors);
     }
 }
 
