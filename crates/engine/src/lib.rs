@@ -65,6 +65,7 @@ pub use dev::annotations;
 pub use dev::code_connect;
 pub use dev::codegen;
 pub use dev::component_codegen;
+pub use dev::design_context;
 pub use dev::dev_measurements;
 pub use dev::dev_resources;
 pub use dev::devcompare;
@@ -208,6 +209,8 @@ mod batch_undo_snapshot_tests;
 #[cfg(test)]
 mod binding_lists_tests;
 #[cfg(test)]
+mod board_code_tests;
+#[cfg(test)]
 mod board_connected_tests;
 #[cfg(test)]
 mod board_connector_tests;
@@ -283,6 +286,8 @@ mod dash_cap_tests;
 mod datafill_tests;
 #[cfg(test)]
 mod default_props_tests;
+#[cfg(test)]
+mod design_context_tests;
 #[cfg(test)]
 mod design_paste_tests;
 #[cfg(test)]
@@ -412,6 +417,8 @@ mod library_path_tests;
 #[cfg(test)]
 mod library_range_styles_tests;
 #[cfg(test)]
+mod library_style_hops_tests;
+#[cfg(test)]
 mod library_variables_tests;
 #[cfg(test)]
 mod line_endings_tests;
@@ -489,6 +496,8 @@ mod pen_overlay_tests;
 mod pen_undo_tests;
 #[cfg(test)]
 mod pen_vector_edit_tests;
+#[cfg(test)]
+mod pencil_shift_tests;
 #[cfg(test)]
 mod penpot_export_tests;
 #[cfg(test)]
@@ -657,6 +666,8 @@ mod vector_path_set_tests;
 mod version_preview_tests;
 #[cfg(test)]
 mod version_tests;
+#[cfg(test)]
+mod view_autopan_tests;
 #[cfg(test)]
 mod view_behaviour_tests;
 #[cfg(test)]

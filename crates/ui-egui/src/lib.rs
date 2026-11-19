@@ -58,6 +58,8 @@ mod bool_menu_icon_tests;
 #[cfg(test)]
 mod branch_ui_tests;
 #[cfg(test)]
+mod canvas_autopan_tests;
+#[cfg(test)]
 mod canvas_double_click_tests;
 #[cfg(test)]
 mod canvas_drag_tests;
@@ -75,6 +77,8 @@ mod colorpicker_eyedropper_tests;
 mod colorpicker_selection_tests;
 #[cfg(test)]
 mod comments_tests;
+#[cfg(test)]
+mod component_header_tests;
 #[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
@@ -301,6 +305,8 @@ mod variables_rename_tests;
 mod variables_select_tests;
 #[cfg(test)]
 mod variables_window_resize_tests;
+#[cfg(test)]
+mod variant_own_value_tests;
 #[cfg(test)]
 mod variants_discovery_tests;
 #[cfg(test)]

@@ -377,6 +377,7 @@ impl Ctx<'_> {
                 }
             }
         }
+        skipped.retain(|k| !bound_by_items(k, j, &found));
         for k in skipped {
             self.warn(format!("variables bound to `{}` are not supported and were skipped", clip_str(k)));
         }
@@ -458,6 +459,28 @@ fn node_binding<'v>(k: &str, v: &'v Value, n: &Node, out: &mut Vec<(String, &'v 
         },
     }
     true
+}
+
+/// A node-level `fills`, `strokes`, `effects` or `textRangeFills` list only repeats what each
+/// paint, gradient stop and effect binds itself (#2441): nothing is lost when every variable it
+/// names was read for one of them.
+fn bound_by_items(k: &str, j: &Value, found: &[(String, &str)]) -> bool {
+    let (one, each) = match k {
+        "fills" | "textRangeFills" => ("fill", "fills/"),
+        "strokes" => ("stroke", "strokes/"),
+        "effects" => ("", "effects/"),
+        _ => return false,
+    };
+    let Some(list) = j.get("boundVariables").and_then(|b| b.get(k)) else { return false };
+    aliases(list).iter().all(|a| found.iter().any(|(f, x)| x == a && (f == one || f.starts_with(each))))
+}
+
+/// Every variable an alias, or a list of them (nested), names.
+fn aliases(v: &Value) -> Vec<&str> {
+    match v.as_array() {
+        Some(a) => a.iter().flat_map(aliases).collect(),
+        None => alias(v).into_iter().collect(),
+    }
 }
 
 /// The one variable every entry of a per-range list (or a single alias) names.
