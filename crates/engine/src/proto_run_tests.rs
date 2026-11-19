@@ -108,6 +108,37 @@ fn prototype_set_variable_recomputes_dynamic_dependents() {
 }
 
 #[test]
+fn prototype_set_synchronizes_inherited_values_before_recomputing_formulas() {
+    let (mut s, frame, _, _, _) = setup();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "Base", "type": "number", "value": 2})).unwrap();
+    let parent_base = var_id(s.doc().unwrap(), "Base");
+    let extended = s.execute("variable.extendCollection", &json!({"collection": "Theme"})).unwrap();
+    let child_collection = extended["id"].as_str().unwrap();
+    s.execute("variable.create", &json!({"collection": child_collection, "name": "Computed", "type": "number", "value": 0})).unwrap();
+    let (child_base, child_computed) = {
+        let doc = s.doc().unwrap();
+        let child_base = doc.variables.variables.iter().find(|v| v.collection == child_collection && v.name == "Base").unwrap().id.clone();
+        let child_computed = doc.variables.variables.iter().find(|v| v.collection == child_collection && v.name == "Computed").unwrap().id.clone();
+        (child_base, child_computed)
+    };
+    s.execute("variable.setExpression", &json!({"variable": child_computed, "expression": format!("{{{child_base}}} * 2")})).unwrap();
+
+    let mut doc = s.doc().unwrap().clone();
+    assert!(set_variable(&mut doc, frame, &parent_base, &json!(3), None));
+    assert_eq!(doc.variables.resolve(&child_base, &Default::default()), Some(VariableValue::Number(3.0)));
+    assert_eq!(doc.variables.resolve(&child_computed, &Default::default()), Some(VariableValue::Number(6.0)));
+
+    assert!(set_variable(&mut doc, frame, &child_base, &json!(7), None));
+    assert!(set_variable(&mut doc, frame, &parent_base, &json!(4), None));
+    assert_eq!(doc.variables.resolve(&child_base, &Default::default()), Some(VariableValue::Number(7.0)));
+    assert_eq!(
+        doc.variables.resolve(&child_computed, &Default::default()),
+        Some(VariableValue::Number(14.0)),
+        "a playback write to an inherited variable creates an override like variable.set"
+    );
+}
+
+#[test]
 fn prototype_literal_action_does_not_succeed_after_target_becomes_computed() {
     let (mut s, frame, _, _, _) = setup();
     s.execute("variable.create", &json!({"collection": "Theme", "name": "Target", "type": "boolean", "value": false})).unwrap();
