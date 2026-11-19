@@ -218,6 +218,59 @@ fn ordinary_resize_and_scale_keep_image_fill_settings() {
 }
 
 #[test]
+fn crop_mode_image_resizing_without_cmd_morphs_and_with_cmd_crops() {
+    use figcraft_doc::color::{ImageScaleMode, PaintKind};
+    let mut s = session();
+    let layer = image_layer(&mut s);
+    // Set the image fill mode to Crop without an explicit crop: fill.set initializes placement crop.
+    let mut fills = s.doc().unwrap().node(layer).unwrap().fills.clone();
+    let PaintKind::Image(img) = &mut fills[0].kind else { panic!("image fill") };
+    img.scale_mode = ImageScaleMode::Crop;
+    img.crop = None;
+    ex(&mut s, "fill.set", json!({"ids": [layer], "index": 0, "paint": fills[0]}));
+
+    // Verify fill.set initialized img.crop with placement crop.
+    let initial_node = s.doc().unwrap().node(layer).unwrap().clone();
+    let PaintKind::Image(img) = &initial_node.fills[0].kind else { panic!("image fill") };
+    let Some(initial_crop) = img.crop else { panic!("crop initialized") };
+
+    let before = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    assert_eq!((before.width(), before.height()), (200, 100));
+
+    // 1. Resize without Cmd (normal resize from bottom edge: 100 -> 50).
+    // The layer height shrinks to 50, but img.crop stays unchanged, stretching/squishing the image.
+    s.pointer(&ev(PointerKind::Down, Point::new(100.0, 100.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Move, Point::new(100.0, 50.0), NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Up, Point::new(100.0, 50.0), NONE)).unwrap();
+    assert_eq!(size(&s, layer), (200.0, 50.0));
+
+    let n = s.doc().unwrap().node(layer).unwrap().clone();
+    let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+    assert_eq!(img.crop, Some(initial_crop), "normal resize leaves crop transform unchanged");
+
+    let morphed = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    assert_eq!((morphed.width(), morphed.height()), (200, 50));
+
+    // 2. Resize with Cmd from right edge: 200 -> 100.
+    // The layer width shrinks to 100, and img.crop is updated so the pixels stay stationary on page (cropping).
+    s.pointer(&ev(PointerKind::Down, Point::new(200.0, 25.0), CMD)).unwrap();
+    s.pointer(&ev(PointerKind::Move, Point::new(100.0, 25.0), CMD)).unwrap();
+    s.pointer(&ev(PointerKind::Up, Point::new(100.0, 25.0), CMD)).unwrap();
+    assert_eq!(size(&s, layer), (100.0, 50.0));
+
+    let n = s.doc().unwrap().node(layer).unwrap().clone();
+    let PaintKind::Image(img) = &n.fills[0].kind else { panic!("image fill") };
+    assert_ne!(img.crop, Some(initial_crop), "Cmd resize updates crop transform");
+
+    let cropped = figcraft_render::render_node(s.doc().unwrap(), layer, 1.0).unwrap();
+    assert_eq!((cropped.width(), cropped.height()), (100, 50));
+    // The remaining 100x50 pixels match the top-left 100x50 of morphed (pixels stayed still in layer space).
+    for y in 0..50usize {
+        assert_eq!(&cropped.data()[y * 400..(y + 1) * 400], &morphed.data()[y * 800..y * 800 + 400], "row {y}: stationary cropped pixels");
+    }
+}
+
+#[test]
 fn command_crop_preserves_each_image_fill_and_leaves_tiles() {
     use figcraft_doc::color::{Color, ImageScaleMode, Paint, PaintKind};
     let mut s = session();

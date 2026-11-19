@@ -445,6 +445,15 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
         }
     };
     if let Some((id, regions)) = fill_regions(s, cmd, p, &ids)?.filter(|_| fills && to_regions) {
+        let (nw, nh) = s.doc().ok().and_then(|d| d.node(id)).map_or((100.0, 100.0), |n| (n.width, n.height));
+        let image_dims = s.doc().ok().and_then(|d| match &new_paint {
+            Some(figcraft_color::Paint { kind: figcraft_color::PaintKind::Image(img), .. })
+                if img.scale_mode == figcraft_color::ImageScaleMode::Crop && img.crop.is_none() =>
+            {
+                d.images.get(&img.image).map(|data| (f64::from(data.width), f64::from(data.height)))
+            }
+            _ => None,
+        });
         edit_region_fills(s.doc_mut()?, id, &regions, |list| {
             if list.is_empty() {
                 list.push(figcraft_color::Paint::solid(figcraft_color::Color::DEFAULT_SHAPE));
@@ -452,10 +461,24 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
             let at = idx.unwrap_or(list.len().saturating_sub(1));
             let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
             edit_slot(slot);
+            if let Some((iw, ih)) = image_dims
+                && let figcraft_color::PaintKind::Image(img) = &mut slot.kind
+                && img.crop.is_none()
+            {
+                img.crop = Some(img.placement_crop(iw, ih, nw, nh));
+            }
             Ok(())
         })?;
         return ok();
     }
+    let image_dims = s.doc().ok().and_then(|d| match &new_paint {
+        Some(figcraft_color::Paint { kind: figcraft_color::PaintKind::Image(img), .. })
+            if img.scale_mode == figcraft_color::ImageScaleMode::Crop && img.crop.is_none() =>
+        {
+            d.images.get(&img.image).map(|data| (f64::from(data.width), f64::from(data.height)))
+        }
+        _ => None,
+    });
     let doc = s.doc_mut()?;
     for i in ids {
         let n = doc.get_mut(i)?;
@@ -470,6 +493,12 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
         let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
         let old = slot.clone();
         edit_slot(slot);
+        if let Some((iw, ih)) = image_dims
+            && let figcraft_color::PaintKind::Image(img) = &mut slot.kind
+            && img.crop.is_none()
+        {
+            img.crop = Some(img.placement_crop(iw, ih, n.width, n.height));
+        }
         crate::cmd::lists::rebind_edited_paint(n, fills, at, &old);
         if fills {
             n.styles.fill = None;

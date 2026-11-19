@@ -760,19 +760,19 @@ fn blend_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &mut P
     });
 }
 
-/// The layer and fill index to crop on the canvas (`image.crop`) when Crop is chosen for `target`:
-/// one layer's image fill as the Fill section shows it (a text's characters' shared fills
-/// included). Strokes, several layers at once and the regions selected in vector edit mode have
-/// no crop mode, so for them Crop only sets the paint's mode.
-pub(crate) fn crop_on_canvas(app: &FigApp, target: &PickerTarget) -> Option<(NodeId, usize)> {
-    let PickerTarget::Paint { fills: true, index, ids } = target else { return None };
-    let [id] = ids[..] else { return None };
-    if figcraft_engine::vectoredit::selected_region_fills(&app.session, id).is_some() {
-        return None;
-    }
+fn target_node_size(app: &FigApp, target: &PickerTarget) -> Option<(f64, f64)> {
     let doc = app.session.doc().ok()?;
-    let shown = figcraft_engine::cmd::lists::character_fills(doc.node(id)?)?;
-    matches!(shown.get(*index)?.kind, PaintKind::Image(_)).then_some((id, *index))
+    match target {
+        PickerTarget::Paint { ids, .. } | PickerTarget::Effect { ids, .. } => {
+            let n = doc.node(*ids.first()?)?;
+            Some((n.width, n.height))
+        }
+        PickerTarget::TextRange { id, .. } => {
+            let n = doc.node(*id)?;
+            Some((n.width, n.height))
+        }
+        _ => None,
+    }
 }
 
 /// The image paint's scale mode, rotation, colour profile, presets and filter sliders.
@@ -788,19 +788,17 @@ fn image_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &
                 (tr("Tile"), ImageScaleMode::Tile),
             ] {
                 if crate::right::menu_item(ui, l, "") {
-                    match crop_on_canvas(app, target).filter(|_| m == ImageScaleMode::Crop) {
-                        // Crop for a layer's own image fill is Crop image (#2150): the picture keeps
-                        // its place and crop mode takes the canvas, closing the picker, so its
-                        // handles crop it as they do when crop mode comes from the menu.
-                        Some((id, index)) => {
-                            app.run("image.crop", json!({"ids": [id], "index": index}));
-                        }
-                        None => {
-                            img.scale_mode = m;
-                            paint.kind = PaintKind::Image(img.clone());
-                            write(app, target, paint, false);
+                    if m == ImageScaleMode::Crop && img.crop.is_none() {
+                        let size = target_node_size(app, target);
+                        let doc = app.session.doc().ok();
+                        let dims = doc.as_ref().and_then(|d| d.images.get(&img.image)).map(|d| (f64::from(d.width), f64::from(d.height)));
+                        if let (Some((w, h)), Some((iw, ih))) = (size, dims) {
+                            img.crop = Some(img.placement_crop(iw, ih, w, h));
                         }
                     }
+                    img.scale_mode = m;
+                    paint.kind = PaintKind::Image(img.clone());
+                    write(app, target, paint, false);
                     ui.close();
                 }
             }
