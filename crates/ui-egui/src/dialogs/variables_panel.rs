@@ -1123,7 +1123,7 @@ fn value_cell(app: &mut FigApp, ui: &mut Ui, view: &View, v: &Variable, coll: &C
         let expression = v.expression.as_ref().map_or_else(String::new, |expr| expr.display_dynamic(view.vars));
         ui.interact(body, id.with("dynamic"), Sense::hover())
             .on_hover_text(format!("{}\n{expression}", tr("Dynamic expression; updates when referenced variables change")));
-        expression_color_cell(app, ui, v, mode, body, id, shown, text);
+        expression_color_cell(app, ui, v, mode, body, id, shown, text, view.editable());
         return;
     }
     if !editable {
@@ -1186,6 +1186,7 @@ fn expression_color_cell(
     id: Id,
     color: Option<figcraft_color::Color>,
     text: String,
+    opacity_editable: bool,
 ) {
     let opacity_rect = Rect::from_min_max(pos2(body.max.x - 48.0, body.min.y), body.max);
     let formula_rect = Rect::from_min_max(body.min, pos2(opacity_rect.min.x - 4.0, body.max.y));
@@ -1194,6 +1195,16 @@ fn expression_color_cell(
     ui.painter().line_segment([pos2(opacity_rect.min.x, body.min.y + 4.0), pos2(opacity_rect.min.x, body.max.y - 4.0)], Stroke::new(1.0, t.panel));
     let Some(color) = color else { return };
     let opacity = v.expression_opacity.get(mode).copied().unwrap_or(color.a);
+    if !opacity_editable {
+        ui.painter().text(
+            opacity_rect.right_center() - vec2(8.0, 0.0),
+            Align2::RIGHT_CENTER,
+            format!("{}%", (opacity * 100.0).round()),
+            regular(11.0),
+            t.text_secondary,
+        );
+        return;
+    }
     let mut child = ui.new_child(UiBuilder::new().max_rect(opacity_rect));
     match widgets::number_field(&mut child, id.with("opacity"), Lead::None, Some(f64::from(opacity) * 100.0), "%", opacity_rect.width(), 1.0) {
         Some(FieldEdit::Set(value)) => {
@@ -1341,14 +1352,32 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
                     st.expression_completion = None;
                 }
             }
-            let opening_delimiter = ui.input(|input| {
-                input.events.iter().find_map(|event| match event {
-                    egui::Event::Text(text) if text.chars().count() == 1 => text.chars().next().filter(|ch| expression_closing_delimiter(*ch).is_some()),
-                    _ => None,
+            let selection = egui::TextEdit::load_state(&ctx, editor_id)
+                .and_then(|state| state.cursor.char_range())
+                .map(|range| range.primary.index.0.min(range.secondary.index.0)..range.primary.index.0.max(range.secondary.index.0))
+                .filter(|range| range.start < range.end);
+            let wrapped_cursor = if ctx.memory(|memory| memory.has_focus(editor_id))
+                && let Some(selection) = selection.clone()
+            {
+                ctx.input_mut(|input| wrap_selection_on_opening_event(&mut st.expression_draft, selection, &mut input.events))
+            } else {
+                None
+            };
+            if let Some(cursor) = wrapped_cursor {
+                set_expression_cursor(&ctx, editor_id, cursor);
+            }
+            let opening_delimiter = if selection.is_none() {
+                ui.input(|input| {
+                    input.events.iter().find_map(|event| match event {
+                        egui::Event::Text(text) if text.chars().count() == 1 => {
+                            text.chars().next().filter(|ch| expression_closing_delimiter(*ch).is_some())
+                        }
+                        _ => None,
+                    })
                 })
-            });
-            let text_before_input = st.expression_draft.clone();
-            let selection_before_input = egui::TextEdit::load_state(&ctx, editor_id).and_then(|state| state.cursor.char_range());
+            } else {
+                None
+            };
             let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                 let font_id = ui.style().text_styles.get(&egui::TextStyle::Monospace).cloned().unwrap_or_else(|| regular(12.0));
                 let job = expression_layout_job(text.as_str(), vars, t, font_id, wrap_width);
@@ -1371,20 +1400,10 @@ fn details(app: &mut FigApp, ctx: &Context, vars: &Variables, st: &mut Editor) {
             let mut cursor = output.cursor_range.map(|range| range.primary.index.0);
             if output.response.response.has_focus()
                 && let (Some(delimiter), Some(at)) = (opening_delimiter, cursor)
+                && let Some(next) = insert_closing_pair(&mut st.expression_draft, at, delimiter)
             {
-                let selection = selection_before_input
-                    .map(|range| (range.primary.index.0.min(range.secondary.index.0), range.primary.index.0.max(range.secondary.index.0)))
-                    .filter(|(start, end)| start < end);
-                if let Some((start, end)) = selection
-                    && let Some((text, next)) = wrap_expression_selection(&text_before_input, start..end, delimiter)
-                {
-                    st.expression_draft = text;
-                    cursor = Some(next);
-                    set_expression_cursor(&ctx, editor_id, next);
-                } else if let Some(next) = insert_closing_pair(&mut st.expression_draft, at, delimiter) {
-                    cursor = Some(next);
-                    set_expression_cursor(&ctx, editor_id, next);
-                }
+                cursor = Some(next);
+                set_expression_cursor(&ctx, editor_id, next);
             }
             if output.response.response.has_focus()
                 && let Some(range) = output.cursor_range
@@ -1695,10 +1714,8 @@ fn insert_closing_pair(text: &mut String, cursor: usize, opening: char) -> Optio
     if cursor == 0 || chars.get(cursor - 1) != Some(&opening) {
         return None;
     }
-    if chars.get(cursor) != Some(&closing) {
-        let byte = expression_byte_at(text, cursor)?;
-        text.insert(byte, closing);
-    }
+    let byte = expression_byte_at(text, cursor)?;
+    text.insert(byte, closing);
     Some(cursor)
 }
 
@@ -1723,6 +1740,20 @@ fn wrap_expression_selection(text: &str, selection: std::ops::Range<usize>, open
     wrapped.insert(end, closing);
     wrapped.insert(start, opening);
     Some((wrapped, selection.end.saturating_add(2)))
+}
+
+fn wrap_selection_on_opening_event(text: &mut String, selection: std::ops::Range<usize>, events: &mut Vec<egui::Event>) -> Option<usize> {
+    let event_index = events.iter().position(|event| matches!(event, egui::Event::Text(_)))?;
+    let egui::Event::Text(input) = events.get(event_index)? else { return None };
+    let mut chars = input.chars();
+    let opening = chars.next()?;
+    if chars.next().is_some() || expression_closing_delimiter(opening).is_none() {
+        return None;
+    }
+    let (wrapped, cursor) = wrap_expression_selection(text, selection, opening)?;
+    *text = wrapped;
+    events.remove(event_index);
+    Some(cursor)
 }
 
 fn expression_completion(text: &str, cursor: usize, vars: &Variables) -> Option<ExpressionCompletion> {
@@ -1760,7 +1791,12 @@ fn expression_completion(text: &str, cursor: usize, vars: &Variables) -> Option<
         if prefix.contains('\n') || prefix.contains('\r') {
             return None;
         }
-        let end = chars.iter().enumerate().skip(cursor).find_map(|(index, ch)| (*ch == '}').then_some(index)).unwrap_or(cursor);
+        let boundary = chars.iter().enumerate().skip(cursor).find_map(|(index, ch)| matches!(ch, '{' | '}').then_some((index, *ch)));
+        let end = match boundary {
+            Some((index, '}')) => index,
+            Some((_, '{')) | None => cursor,
+            Some((_, _)) => cursor,
+        };
         let folded_prefix = prefix.to_lowercase();
         let candidates: Vec<ExpressionCandidate> = vars
             .variables
@@ -1824,7 +1860,10 @@ fn insert_expression_completion(text: &mut String, completion: &ExpressionComple
     let start = expression_byte_at(text, completion.replace.start)?;
     let end = expression_byte_at(text, completion.replace.end)?;
     let has_closing_brace = completion.context == CompletionContext::Variable && text.chars().nth(completion.replace.end) == Some('}');
-    text.replace_range(start..end, &candidate.insertion);
+    let has_argument_list =
+        candidate.kind == ExpressionCandidateKind::Function && text.chars().skip(completion.replace.end).find(|ch| !ch.is_whitespace()) == Some('(');
+    let insertion = if has_argument_list { &candidate.label } else { &candidate.insertion };
+    text.replace_range(start..end, insertion);
     let cursor = completion.replace.start.saturating_add(candidate.cursor_offset);
     if completion.context == CompletionContext::Variable {
         if !has_closing_brace {
@@ -1837,6 +1876,11 @@ fn insert_expression_completion(text: &mut String, completion: &ExpressionComple
             text.insert(byte, ' ');
         }
         return Some(after_brace.saturating_add(1));
+    }
+    if has_argument_list {
+        let after_name = completion.replace.start.saturating_add(candidate.label.chars().count());
+        let whitespace = text.chars().skip(after_name).take_while(|ch| ch.is_whitespace()).count();
+        return Some(after_name.saturating_add(whitespace).saturating_add(1));
     }
     Some(cursor)
 }
@@ -1942,6 +1986,7 @@ mod tests {
     use super::{
         Editor, ExpressionCandidateKind, ExpressionHighlight, dynamic_badge_layout, expression_completion, expression_highlights, group_renames,
         groups, insert_closing_pair, insert_expression_completion, sync_expression_draft, tri, wrap_expression_selection,
+        wrap_selection_on_opening_event,
     };
     use egui::{Rect, pos2};
 
@@ -2023,6 +2068,22 @@ mod tests {
     }
 
     #[test]
+    fn variable_completion_stops_before_a_later_reference() {
+        let mut session = figcraft_engine::Session::new();
+        session.execute("variable.createCollection", &serde_json::json!({"name": "Theme"})).unwrap();
+        session.execute("variable.create", &serde_json::json!({"collection": "Theme", "name": "Blue", "type": "color", "value": "#336699"})).unwrap();
+        session
+            .execute("variable.create", &serde_json::json!({"collection": "Theme", "name": "Black", "type": "color", "value": "#000000"}))
+            .unwrap();
+        let variables = &session.doc().unwrap().variables;
+        let mut text = "{Bl{Black}".to_string();
+        let completion = expression_completion(&text, 3, variables).expect("the first unfinished reference offers suggestions");
+        let cursor = insert_expression_completion(&mut text, &completion, &completion.candidates[0]).expect("the first reference is completed");
+        assert_eq!(text, "{Blue} {Black}", "the following reference remains untouched");
+        assert_eq!(cursor, 7);
+    }
+
+    #[test]
     fn syntax_completion_offers_operators_and_function_templates() {
         let variables = figcraft_engine::Session::new().doc().unwrap().variables.clone();
         let and = expression_completion("true a", 6, &variables).expect("a partial operator name offers suggestions");
@@ -2051,6 +2112,12 @@ mod tests {
         let cursor = insert_expression_completion(&mut text, &lerp, &lerp.candidates[0]).expect("the call template is inserted");
         assert_eq!(text, "lerp()");
         assert_eq!(cursor, 5, "the caret is inside the function parentheses");
+
+        let mut text = "ler  (first, second)".to_string();
+        let completion = expression_completion(&text, 3, &variables).expect("the partial function name offers completion");
+        let cursor = insert_expression_completion(&mut text, &completion, &completion.candidates[0]).expect("the function name is completed");
+        assert_eq!(text, "lerp  (first, second)");
+        assert_eq!(cursor, 7, "the existing argument list is preserved and the caret moves inside it");
     }
 
     #[test]
@@ -2061,6 +2128,21 @@ mod tests {
             assert_eq!(text, expected);
             assert_eq!(cursor, 6);
         }
+
+        let mut text = "value(()".to_string();
+        let cursor = insert_closing_pair(&mut text, 7, '(').expect("a nested opener gets its own closer");
+        assert_eq!(text, "value(())", "do not reuse the outer group's closing parenthesis");
+        assert_eq!(cursor, 7);
+    }
+
+    #[test]
+    fn selected_text_wrapping_removes_only_the_opening_event() {
+        let mut text = "selected".to_string();
+        let mut events = vec![egui::Event::Text("(".into()), egui::Event::Text("next".into())];
+        let cursor = wrap_selection_on_opening_event(&mut text, 0..8, &mut events).expect("the opener wraps selected text");
+        assert_eq!(text, "(selected)");
+        assert_eq!(cursor, 10);
+        assert_eq!(events, [egui::Event::Text("next".into())], "later same-frame text remains available to the editor");
     }
 
     #[test]

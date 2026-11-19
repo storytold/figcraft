@@ -108,6 +108,20 @@ fn prototype_set_variable_recomputes_dynamic_dependents() {
 }
 
 #[test]
+fn prototype_literal_action_does_not_succeed_after_target_becomes_computed() {
+    let (mut s, frame, _, _, _) = setup();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "Target", "type": "boolean", "value": false})).unwrap();
+    let target = var_id(s.doc().unwrap(), "Target");
+    let stored_action = Action::SetVariable { variable: target.clone(), value: json!(false), expr: None };
+    s.execute("variable.setExpression", &json!({"variable": target, "expression": "true"})).unwrap();
+    let mut doc = s.doc().unwrap().clone();
+    let Action::SetVariable { variable, value, expr } = stored_action else { panic!("expected a literal Set variable action") };
+
+    assert!(!set_variable(&mut doc, frame, &variable, &value, expr.as_ref()));
+    assert_eq!(doc.variables.resolve(&variable, &Default::default()), Some(VariableValue::Boolean(true)));
+}
+
+#[test]
 fn prototype_set_variable_expression_recomputes_dependents() {
     let (mut s, frame, _, _, _) = setup();
     s.execute("variable.create", &json!({"collection": "Theme", "name": "X", "type": "boolean", "value": false})).unwrap();

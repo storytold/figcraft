@@ -236,6 +236,7 @@ impl Session {
         // already final; normalising it again would detach it from the saved baseline.
         if !Arc::ptr_eq(&ds.doc, bdoc) && !matches!(spec.id, "file.save" | "file.saveAs") {
             if bdoc.variables != ds.doc.variables {
+                cmd::variables::sync_extensions(ds.doc_mut());
                 cmd::styles::recompute_dynamic_variables(ds.doc_mut());
             }
             normalize(ds.doc_mut(), bdoc);

@@ -104,6 +104,17 @@ fn color_constructors_and_lerp_parse_with_optional_whitespace() {
 }
 
 #[test]
+fn prototype_variables_named_like_color_constructor_calls_remain_references() {
+    let mut variables = vars();
+    for name in ["hsl(0, 100, 50)", "hex(#000000)", "lerp(#000000, #FFFFFF, 0.5)"] {
+        variables.variables.iter_mut().find(|variable| variable.id == "n").unwrap().name = name.to_string();
+        assert_eq!(Expr::parse(name, &variables), Ok(Expr::var("n")), "{name}");
+    }
+
+    assert!(matches!(Expr::parse_dynamic("hsl(0, 100, 50)", &variables), Ok(Expr::Op { op: ExprOp::Hsl, .. })));
+}
+
+#[test]
 fn dynamic_expressions_require_braces_and_round_trip_reserved_variable_names() {
     let mut variables = vars();
     assert_eq!(Expr::parse_dynamic("{n-name} + 1", &variables), Ok(Expr::op(ExprOp::Add, vec![Expr::var("n"), n(1.0)])));
@@ -161,6 +172,31 @@ fn dynamic_expressions_support_value_selection_and_grouped_boolean_conditions() 
     let boolean_logic = Expr::parse_dynamic("{b-name} and false or true", &variables).unwrap();
     assert_eq!(boolean_logic.type_of(&variables), Ok(VariableType::Boolean), "boolean and/or retains its logical meaning");
     assert_eq!(boolean_logic.eval_dynamic(&variables, &std::collections::BTreeMap::new()), Some(VariableValue::Boolean(true)));
+
+    let compound_selection = Expr::parse_dynamic("{b-name} and {b-name} and \"Success\" or \"Fail\"", &variables).unwrap();
+    assert_eq!(
+        compound_selection,
+        Expr::Conditional {
+            condition: Box::new(Expr::op(ExprOp::And, vec![Expr::var("b"), Expr::var("b")])),
+            then_expr: Box::new(Expr::Value(VariableValue::String("Success".into()))),
+            else_expr: Box::new(Expr::Value(VariableValue::String("Fail".into()))),
+        }
+    );
+    assert_eq!(compound_selection.eval_dynamic(&variables, &std::collections::BTreeMap::new()), Some(VariableValue::String("Success".into())));
+}
+
+#[test]
+fn prototype_display_parenthesizes_conditional_operands() {
+    let vars = vars();
+    let expression = Expr::parse("(if true then 1 else 2) + 3", &vars).unwrap();
+    let original_value = expression.eval(&vars, &std::collections::BTreeMap::new());
+    let shown = expression.display(&vars);
+
+    assert_eq!(shown, "(if true then 1 else 2) + 3");
+    let reparsed = Expr::parse(&shown, &vars).unwrap();
+    assert_eq!(reparsed, expression);
+    assert_eq!(reparsed.eval(&vars, &std::collections::BTreeMap::new()), original_value);
+    assert_eq!(original_value, Some(VariableValue::Number(4.0)));
 }
 
 #[test]

@@ -51,7 +51,7 @@ is opaque.
 | Operation | Syntax | Rules |
 |---|---|---|
 | Conditional | `if condition then value else value` | Condition must be boolean; both branches must have the same type. |
-| Boolean OR | `or`, `||` | Boolean operands. |
+| Boolean OR | `or`, `\|\|` | Boolean operands. |
 | Boolean AND | `and`, `&&` | Boolean operands. |
 | Boolean NOT | `not`, `!` | Boolean operand. |
 | Equality | `==`, `=`, `!=` | Compare values of the same type, including colors. |

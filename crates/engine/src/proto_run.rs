@@ -47,6 +47,9 @@ fn fit(kind: VariableType, v: VariableValue) -> Option<VariableValue> {
 /// could be set.
 pub fn set_variable(doc: &mut Document, node: NodeId, variable: &str, value: &Value, expr: Option<&Expr>) -> bool {
     let Some(var) = doc.variables.get_by_id(variable) else { return false };
+    if var.expression.is_some() {
+        return false;
+    }
     let (id, kind) = (var.id.clone(), var.kind);
     let v = match expr {
         Some(e) => e.eval(&doc.variables, &doc.modes_for(node)).and_then(|v| fit(kind, v)),

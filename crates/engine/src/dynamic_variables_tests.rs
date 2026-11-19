@@ -9,7 +9,10 @@ fn boolean(s: &Session, variable: &str, mode: &str) -> bool {
         .variables
         .get(variable)
         .and_then(|v| doc.variables.collection_by_id(&v.collection).and_then(|c| c.find_mode(mode)).and_then(|m| v.values.get(&m.id)));
-    matches!(value, Some(VariableValue::Boolean(true)))
+    match value {
+        Some(VariableValue::Boolean(value)) => *value,
+        other => panic!("expected boolean variable value, got {other:?}"),
+    }
 }
 
 fn number(s: &Session, variable: &str, mode: &str) -> f64 {
@@ -69,6 +72,51 @@ fn expressions_update_synchronously_and_follow_each_mode() {
     assert!(!boolean(&s, "MenuHidden", "Light"), "other modes keep their own computed result");
     s.execute("variable.set", &json!({"variable": "MenuOpen", "mode": "Light", "value": false})).unwrap();
     assert!(boolean(&s, "MenuHidden", "Light"));
+}
+
+#[test]
+fn inherited_values_are_synchronized_before_formulas_and_bindings_update() {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "Base", "type": "number", "values": {"Light": 2, "Dark": 5}})).unwrap();
+    let extended = s.execute("variable.extendCollection", &json!({"collection": "Theme"})).unwrap();
+    let child_collection = extended["id"].as_str().unwrap();
+    let child_base = {
+        let doc = s.doc().unwrap();
+        doc.variables.variables.iter().find(|variable| variable.collection == child_collection && variable.name == "Base").unwrap().id.clone()
+    };
+    s.execute("variable.create", &json!({"collection": child_collection, "name": "Computed", "type": "number", "values": {"Light": 0, "Dark": 0}}))
+        .unwrap();
+    s.execute("variable.setExpression", &json!({"variable": "Computed", "expression": format!("{{{child_base}}} * 2")})).unwrap();
+    let rect = crate::params::id_of(&s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 1, "height": 1})).unwrap()["id"]).unwrap();
+    s.execute("variable.bind", &json!({"ids": [rect], "field": "width", "variable": "Computed"})).unwrap();
+
+    s.execute("variable.set", &json!({"variable": "Base", "mode": "Light", "value": 3})).unwrap();
+
+    assert_eq!(number(&s, "Computed", "Light"), 6.0);
+    assert_eq!(number(&s, "Computed", "Dark"), 10.0);
+    assert_eq!(s.doc().unwrap().node(rect).unwrap().width, 6.0, "bound layers use the updated formula before normalization");
+}
+
+#[test]
+fn inherited_expression_overrides_survive_recomputation() {
+    let mut s = Session::new();
+    s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "Base", "type": "number", "values": {"Light": 2, "Dark": 5}})).unwrap();
+    s.execute("variable.create", &json!({"collection": "Theme", "name": "Computed", "type": "number", "values": {"Light": 0, "Dark": 0}})).unwrap();
+    s.execute("variable.setExpression", &json!({"variable": "Computed", "expression": "{Base} * 2"})).unwrap();
+    let extended = s.execute("variable.extendCollection", &json!({"collection": "Theme"})).unwrap();
+    let child_collection = extended["id"].as_str().unwrap();
+    let child_computed = {
+        let doc = s.doc().unwrap();
+        doc.variables.variables.iter().find(|variable| variable.collection == child_collection && variable.name == "Computed").unwrap().id.clone()
+    };
+    s.execute("variable.set", &json!({"variable": child_computed, "mode": "Light", "value": 99})).unwrap();
+
+    s.execute("variable.set", &json!({"variable": "Base", "mode": "Light", "value": 3})).unwrap();
+
+    assert_eq!(number(&s, &child_computed, "Light"), 99.0, "an overridden value stays user-authored");
+    assert_eq!(number(&s, &child_computed, "Dark"), 10.0, "non-overridden modes continue to follow the parent formula");
 }
 
 #[test]
@@ -206,7 +254,7 @@ fn division_by_zero_and_mismatched_conditional_branches_do_not_change_values() {
 
     s.execute("variable.create", &json!({"collection": "Theme", "name": "Flag", "type": "boolean", "value": false})).unwrap();
     assert!(
-        s.execute("variable.setExpression", &json!({"variable": "Flag", "expression": "if {Flag} then true else 0"})).is_err(),
+        s.execute("variable.setExpression", &json!({"variable": "Flag", "expression": "if true then true else 0"})).is_err(),
         "conditional branches with different types are rejected"
     );
     assert!(s.doc().unwrap().variables.get("Flag").unwrap().expression.is_none());

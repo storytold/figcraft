@@ -1296,6 +1296,9 @@ pub(crate) fn recompute_dynamic_variables(doc: &mut Document) {
             .values
             .keys()
             .filter_map(|mode| {
+                if var.overrides.contains(mode) {
+                    return None;
+                }
                 let modes = BTreeMap::from([(var.collection.clone(), mode.clone())]);
                 expression.eval_dynamic(&doc.variables, &modes).and_then(|value| {
                     let value = match (var.kind, value) {

@@ -203,17 +203,26 @@ fn lower_dynamic_value_conditional(expr: Expr, vars: &Variables) -> Expr {
 
     if let Expr::Op { op: ExprOp::Or, args } = &expr
         && let [Expr::Op { op: ExprOp::And, args: and_args }, fallback] = args.as_slice()
-        && let [condition, then_expr] = and_args.as_slice()
-        && condition.type_of(vars) == Ok(VariableType::Boolean)
-        && let (Ok(then_type), Ok(fallback_type)) = (then_expr.type_of(vars), fallback.type_of(vars))
-        && then_type == fallback_type
-        && then_type != VariableType::Boolean
+        && and_args.len() >= 2
     {
-        return Expr::Conditional {
-            condition: Box::new(condition.clone()),
-            then_expr: Box::new(then_expr.clone()),
-            else_expr: Box::new(fallback.clone()),
-        };
+        let (condition_args, then_args) = and_args.split_at(and_args.len() - 1);
+        if let [then_expr] = then_args {
+            let condition = match condition_args {
+                [one] => one.clone(),
+                _ => Expr::op(ExprOp::And, condition_args.to_vec()),
+            };
+            if condition.type_of(vars) == Ok(VariableType::Boolean)
+                && let (Ok(then_type), Ok(fallback_type)) = (then_expr.type_of(vars), fallback.type_of(vars))
+                && then_type == fallback_type
+                && then_type != VariableType::Boolean
+            {
+                return Expr::Conditional {
+                    condition: Box::new(condition),
+                    then_expr: Box::new(then_expr.clone()),
+                    else_expr: Box::new(fallback.clone()),
+                };
+            }
+        }
     }
 
     expr
@@ -549,6 +558,10 @@ impl Parser<'_> {
             c if c.is_ascii_digit() || c == '.' => self.number(),
             ')' => Err(self.err("Unexpected )")),
             _ => {
+                if let Some((id, n)) = self.function_variable_here() {
+                    self.i += n;
+                    return self.in_mode(id);
+                }
                 if self.is_call("hsl") {
                     return self.function_call("hsl", ExprOp::Hsl, d);
                 }
@@ -571,6 +584,7 @@ impl Parser<'_> {
                         return Ok(Expr::Value(VariableValue::Boolean(v)));
                     }
                 }
+
                 if let Some((id, n)) = var {
                     self.i += n;
                     return self.in_mode(id);
@@ -579,6 +593,16 @@ impl Parser<'_> {
                 if word.is_empty() { Err(self.err(format!("Unexpected {c}"))) } else { Err(self.err(format!("No variable `{word}`"))) }
             }
         }
+    }
+
+    /// Preserve a prototype variable whose complete name is itself a colour-constructor call.
+    fn function_variable_here(&self) -> Option<(String, usize)> {
+        let (id, length) = self.variable_here()?;
+        let name: String = self.s.iter().skip(self.i).take(length).collect();
+        let shaped = name.split_once('(').is_some_and(|(function, _)| {
+            ["hsl", "hex", "lerp"].iter().any(|known| function.trim().eq_ignore_ascii_case(known)) && name.ends_with(')')
+        });
+        (shaped && self.peek(length).is_none_or(|ch| !ident(ch))).then_some((id, length))
     }
 
     fn is_call(&self, name: &str) -> bool {

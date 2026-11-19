@@ -264,6 +264,7 @@ impl Expr {
                             display_dynamic_operand(*op, arg, index, vars, depth + 1)
                         } else {
                             match arg {
+                                Expr::Conditional { .. } => format!("({})", arg.display_at(vars, depth + 1, braced_variables)),
                                 // `not` binds looser than what it may sit in (`(not a) == b`).
                                 Expr::Op { op, args } if (args.len() > 1 && !matches!(op, ExprOp::Hsl | ExprOp::Lerp)) || *op == ExprOp::Not => {
                                     format!("({})", arg.display_at(vars, depth + 1, braced_variables))
