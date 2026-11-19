@@ -1824,9 +1824,9 @@ fn selecting_different_layer_in_layers_panel_drops_draft() {
     click(&mut u, h_pos);
     u.frame(vec![Event::Text("99".into())]);
 
-    // Switch selection to B via session (as layers panel does when clicked)
-    u.app.run("select.set", json!({"ids": [b]}));
-    u.frame(vec![]);
+    // Click layer B in the Layers panel (sending press and release in the same frame)
+    let b_row = u.row_at(b);
+    click(&mut u, b_row);
 
     // Verify draft was dropped and b's height is shown, not 99
     let h_editing = u.ctx.data(|d| d.get_temp::<String>(Id::unique("lay_h").with("editing")));
