@@ -351,18 +351,16 @@ fn preview(app: &mut FigApp, ui: &mut Ui, doc: &Document, id: NodeId) {
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
         }
-        let rtl = crate::i18n::right_to_left();
-        let icon = if open {
-            Icon::Chevron
-        } else if rtl {
-            Icon::ChevronLeft
-        } else {
-            Icon::ChevronRight
+        let rtl = crate::widgets::rtl(ui);
+        let icon = match (open, rtl) {
+            (true, _) => Icon::Chevron,
+            (false, false) => Icon::ChevronRight,
+            (false, true) => Icon::ChevronLeft,
         };
-        let icon_x = export_edge_x(r.min.x, r.max.x, 8.0, rtl);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, r.center().y), vec2(12.0, 12.0)), icon, t.icon_secondary);
-        let text_align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
-        ui.painter().text(pos2(export_edge_x(r.min.x, r.max.x, 20.0, rtl), r.center().y), text_align, tr("Preview"), regular(11.0), t.text);
+        let x = |at: f32| crate::widgets::flip_x(rtl, r, at);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(x(r.min.x + 8.0), r.center().y), vec2(12.0, 12.0)), icon, t.icon_secondary);
+        let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+        ui.painter().text(pos2(x(r.min.x + 20.0), r.center().y), align, tr("Preview"), regular(11.0), t.text);
         if resp.clicked() {
             open = !open;
         }

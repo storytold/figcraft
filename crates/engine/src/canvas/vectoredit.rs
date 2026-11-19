@@ -7,6 +7,8 @@
 //! the transform box around several points (in one layer or several) in [`transform`], point snapping in `point_snap.rs` and
 //! hovering, hatching and selecting filled regions in [`regions`].
 
+#[cfg(test)]
+mod align_tests;
 pub mod ops;
 pub(crate) mod point_snap;
 mod pointer;

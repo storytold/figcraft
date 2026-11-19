@@ -4,8 +4,8 @@ use super::handles::{
 };
 use super::{
     Affine, ArcHandle, ArcHint, Cursor, Document, Gesture, Guide, Handle, ImageScaleMode, LayoutMode, NodeId, NodeKind, PaintKind, Point,
-    PointerEvent, Rect, ResizeStart, Result, ScaleHint, Session, Sizing, Targets, TextAutoResize, ToolId, Vec2, move_world, roots, select_target,
-    textedit, within_slop,
+    PointerEvent, Rect, ResizeStart, Result, ScaleHint, Session, Sizing, Targets, TextAutoResize, ToolId, Vec2, move_world, pencil_add, roots,
+    select_target, textedit, within_slop,
 };
 
 impl Session {
@@ -77,8 +77,8 @@ impl Session {
         }
         // A frame's name label picks the frame itself. The background of a top-level frame with
         // layers in it is like the canvas (a press starts a marquee inside it) unless the frame is
-        // selected; an empty frame (or a widget, or a board object such as a sticky) is picked and
-        // dragged.
+        // selected; stepping out from a selected descendant is handled by the marquee below.
+        // An empty frame (or a widget, or a board object such as a sticky) is picked and dragged.
         let board_background = |leaf: NodeId| {
             !sel.contains(&leaf)
                 && doc.node(leaf).is_some_and(|n| {
@@ -86,17 +86,20 @@ impl Session {
                 })
         };
         let label = label_at(&doc, page, &self.tool.labels, ev.p());
-        let target = label.or_else(|| {
-            self.hit(&doc, page, ev.p(), ev.tol() * 2.0)
-                .filter(|leaf| ev.cmd || !board_background(*leaf))
-                .map(|leaf| select_target(&doc, leaf, &sel, ev.cmd))
-        });
+        let hit = label.or_else(|| self.hit(&doc, page, ev.p(), ev.tol() * 2.0));
+        let target = label.or_else(|| hit.filter(|leaf| ev.cmd || !board_background(*leaf)).map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
         // A press inside the selection's box that reaches nothing above it (an unfilled shape's
         // inside, the frame or canvas behind it, or a layer stacked below the selected layer the
         // press is in) drags the selection. In a gap between selected layers, what's there is hit.
         let in_own_box = |s: NodeId| selection_box(&doc, &[s]).is_some_and(|q| in_quad(&q, ev.p()));
+        // A press on a layer inside a selected one (a child of a selected frame) drags the
+        // selection too, and a click selects that layer; Cmd/Ctrl keeps the deep pick.
+        let in_selected = |t: NodeId| sel.iter().any(|s| *s != t && doc.is_ancestor(*s, t));
         let behind_sel = |t: Option<NodeId>| {
-            t.is_none_or(|t| sel.iter().any(|s| *s != t && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s)))))
+            t.is_none_or(|t| {
+                (!ev.cmd && in_selected(t))
+                    || sel.iter().any(|s| *s != t && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s))))
+            })
         };
         // What the press hit (a label or a painted layer): a click that doesn't become a drag
         // selects just it. A press that reaches nothing above the selection uses the selection as
@@ -119,8 +122,12 @@ impl Session {
                 let without_target = || sel.iter().copied().filter(|x| *x != target).collect::<Vec<_>>();
                 // A release without a drag narrows the selection to the layer the press hit. A
                 // selected frame's name label sits outside the selection bounds, so it counts too.
-                let keep = clicked
-                    .filter(|c| (label.is_some() || in_sel_box) && !ev.cmd && (sel.contains(c) || sel.iter().any(|s| doc.is_ancestor(*s, *c))));
+                // A layer inside a selected one counts as well: the press drags the selection, and
+                // a click selects that layer.
+                let keep = clicked.filter(|c| {
+                    !ev.cmd
+                        && (((label.is_some() || in_sel_box) && (sel.contains(c) || sel.iter().any(|s| doc.is_ancestor(*s, *c)))) || in_selected(*c))
+                });
                 let new_sel = if keep.is_some() {
                     sel.clone()
                 } else if ev.shift && deselect.is_none() {
@@ -138,7 +145,7 @@ impl Session {
                 if !edits {
                     if deselect.is_some() {
                         self.set_selection(without_target());
-                    } else if let Some(k) = keep.filter(|_| sel.len() > 1) {
+                    } else if let Some(k) = keep.filter(|k| sel.as_slice() != [*k]) {
                         self.set_selection(vec![k]);
                     }
                     return Ok(());
@@ -172,10 +179,22 @@ impl Session {
             }
             None => {
                 let within = self.marquee_within(ev.p())?;
-                if !ev.shift {
+                // Clicking the background of the frame containing the current selection steps
+                // out to that frame. Keep the marquee gesture (without a Move interaction), so
+                // dragging here still selects its contents and cannot leave a stale snapshot.
+                let parent = hit.filter(|f| !ev.shift && !ev.cmd && within == Some(*f) && sel.iter().any(|s| doc.is_ancestor(*f, *s)));
+                if let Some(f) = parent {
+                    self.set_selection(vec![f]);
+                } else if !ev.shift {
                     self.set_selection(vec![]);
                 }
-                self.tool.gesture = Gesture::Marquee { start: ev.p(), additive: ev.shift, base: if ev.shift { sel } else { vec![] }, within };
+                self.tool.gesture = Gesture::Marquee {
+                    start: ev.p(),
+                    additive: ev.shift,
+                    base: if ev.shift { sel } else { vec![] },
+                    within,
+                    pending_click: parent.is_some(),
+                };
             }
         }
         Ok(())
@@ -196,9 +215,18 @@ impl Session {
                 it.label = if ev.alt { "Duplicate" } else { "Move" }.into();
             }
         }
+        if let Gesture::Marquee { start, pending_click, .. } = &mut g
+            && *pending_click
+        {
+            if within_slop(ev, *start) {
+                self.tool.gesture = g;
+                return Ok(());
+            }
+            *pending_click = false;
+        }
         let res = match &g {
             Gesture::None => return self.hover(ev),
-            Gesture::Marquee { start, additive, base, within } => {
+            Gesture::Marquee { start, additive, base, within, .. } => {
                 let r = Rect::from_points(*start, ev.p());
                 self.tool.overlay.marquee = Some([r.x0, r.y0, r.x1, r.y1]);
                 // Cmd/Ctrl: the nested layers it touches.
@@ -416,10 +444,7 @@ impl Session {
             }
             Gesture::Pencil { points, pressure } => {
                 let (mut pts, mut pressure) = (points.clone(), pressure.clone());
-                if pts.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
-                    pts.push(ev.p());
-                    pressure.push(ev.pressure);
-                }
+                pencil_add(&mut pts, &mut pressure, ev);
                 self.tool.overlay.pen = pts.iter().map(|p| [p.x, p.y]).collect();
                 self.tool.gesture = Gesture::Pencil { points: pts, pressure };
                 if let Ok(ds) = self.ds_mut() {

@@ -109,6 +109,42 @@ fn sorted(mut v: Vec<NodeId>) -> Vec<NodeId> {
 }
 
 #[test]
+fn clicking_a_device_background_after_its_nested_button_selects_the_device() {
+    let mut s = Session::new();
+    let device = id(&ex(&mut s, "frame.create", json!({"x": 132, "y": -148, "width": 440, "height": 956})));
+    let button = id(&ex(&mut s, "frame.create", json!({"parent": device, "x": 155, "y": 30, "width": 130, "height": 34})));
+    rect(&mut s, 10.0, 5.0, Some(button));
+    ex(&mut s, "layout.add", json!({"ids": [button], "direction": "horizontal"}));
+    ex(&mut s, "select.set", json!({"ids": [button]}));
+    let before = s.doc().unwrap().clone();
+    let history = s.undo_depth();
+    s.pointer(&ev(PointerKind::Down, 352.0, 330.0, NONE)).unwrap();
+    assert_eq!(s.selection(), vec![device], "the parent is selected on press");
+    // Small pointer jitter must not turn the click into a zero-sized marquee.
+    s.pointer(&ev(PointerKind::Move, 353.0, 330.0, NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Up, 353.0, 330.0, NONE)).unwrap();
+    s.pointer(&ev(PointerKind::Hover, 353.0, 330.0, NONE)).unwrap();
+    assert_eq!(s.selection(), vec![device], "the parent stays selected after release and hover");
+    assert_eq!(*s.doc().unwrap(), before);
+    assert_eq!(s.undo_depth(), history, "selection adds no edit history");
+}
+
+#[test]
+fn dragging_a_device_background_after_its_child_still_marquees_and_closes_cleanly() {
+    let mut s = Session::new();
+    let k = scene(&mut s);
+    ex(&mut s, "select.set", json!({"ids": [k.d]}));
+    drag(&mut s, (390.0, 290.0), (190.0, 10.0), NONE);
+    assert_eq!(s.selection(), vec![k.n], "a background drag selects the nested frame");
+    assert!(s.ds().unwrap().interaction.is_none(), "a marquee leaves no move snapshot behind");
+    ex(&mut s, "node.set", json!({"id": k.n, "props": {"opacity": 0.5}}));
+    click(&mut s, 30.0, 130.0, NONE);
+    assert_eq!(s.doc().unwrap().node(k.n).unwrap().opacity, 0.5, "the next click keeps the edit");
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc().unwrap().node(k.n).unwrap().opacity, 1.0, "the edit retains its undo step");
+}
+
+#[test]
 fn clicking_selects_by_the_documented_rules() {
     let mut s = Session::new();
     let k = scene(&mut s);
@@ -130,6 +166,9 @@ fn clicking_selects_by_the_documented_rules() {
         ((520.0, 120.0), NONE, vec![], vec![k.r2], "a locked layer can't be selected on the canvas: the click goes to what is under it"),
         ((520.0, 220.0), NONE, vec![k.r], vec![], "a hidden layer can't be selected on the canvas (empty canvas deselects)"),
         ((390.0, 290.0), NONE, vec![k.r], vec![], "the background of a top-level frame with layers is like the canvas: a click deselects"),
+        ((390.0, 290.0), NONE, vec![k.c], vec![k.f], "clicking the containing frame's background steps out from its child"),
+        ((390.0, 290.0), NONE, vec![k.d], vec![k.f], "stepping out works from a deeper descendant too"),
+        ((390.0, 290.0), NONE, vec![], vec![], "without a selected descendant the background remains canvas-like"),
         ((390.0, 290.0), NONE, vec![k.f], vec![k.f], "a selected top-level frame stays selected when its background is clicked"),
         ((390.0, 290.0), CMD, vec![], vec![k.f], "silent: Cmd/Ctrl-click on a frame's background selects the frame (the deepest layer there)"),
         ((640.0, 40.0), NONE, vec![], vec![k.empty], "an empty top-level frame is selected by a click on it"),
@@ -522,4 +561,72 @@ fn shift_click_takes_a_layer_out_where_nothing_can_move() {
     assert!(s.pointer(&ev(PointerKind::Down, 520.0, 20.0, SHIFT)).is_err(), "a version being viewed can't be edited");
     s.pointer(&ev(PointerKind::Up, 520.0, 20.0, SHIFT)).unwrap();
     assert_eq!(s.selection(), vec![k.empty], "Shift-click still takes the layer out");
+}
+
+/// A top-level 300 x 300 frame with a filled 100 x 100 rectangle at (50, 50) and a nested 100 x 100
+/// frame at (180, 180) holding a 40 x 40 rectangle at (200, 200).
+fn frame_with_child(s: &mut Session) -> (NodeId, NodeId, NodeId, NodeId) {
+    let f = id(&ex(s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 300})));
+    let c = id(&ex(s, "shape.rectangle", json!({"x": 50, "y": 50, "width": 100, "height": 100, "parent": f})));
+    let n = id(&ex(s, "frame.create", json!({"x": 180, "y": 180, "width": 100, "height": 100, "parent": f})));
+    let gc = id(&ex(s, "shape.rectangle", json!({"x": 200, "y": 200, "width": 40, "height": 40, "parent": n})));
+    (f, c, n, gc)
+}
+
+#[test]
+fn a_drag_from_a_child_of_a_selected_frame_moves_the_frame() {
+    let mut s = Session::new();
+    let (f, c, _n, gc) = frame_with_child(&mut s);
+    let sib = id(&ex(&mut s, "shape.rectangle", json!({"x": 90, "y": 90, "width": 30, "height": 30})));
+    let at = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap().origin();
+    let local = |s: &Session, i: NodeId| {
+        let d = s.doc().unwrap();
+        let n = d.node(i).unwrap();
+        let c = n.transform.as_coeffs();
+        (c[4], c[5])
+    };
+    let c_local = local(&s, c);
+    // (selection before, press point, modifiers, selection after, the layers that move by (10, 10), derivation)
+    let rows: Vec<(Vec<NodeId>, (f64, f64), Mods, Vec<NodeId>, Vec<NodeId>, &str)> = vec![
+        (vec![f], (60.0, 60.0), NONE, vec![f], vec![f, c, gc], "a drag from a child of the selected frame moves the frame"),
+        (vec![f], (220.0, 220.0), NONE, vec![f], vec![f, c, gc], "a drag from a grandchild moves the top-level frame"),
+        (vec![], (60.0, 60.0), NONE, vec![c], vec![c], "with nothing selected the child is picked and moved"),
+        (vec![f], (60.0, 60.0), CMD, vec![c], vec![c], "Cmd picks the deepest layer and moves it"),
+        (vec![f], (100.0, 100.0), NONE, vec![sib], vec![sib], "a sibling painted above the frame takes the press"),
+    ];
+    for (before, from, m, after, moved, why) in rows {
+        let all = [f, c, gc, sib];
+        let home: Vec<Point> = all.iter().map(|i| at(&s, *i)).collect();
+        ex(&mut s, "select.set", json!({"ids": before}));
+        drag(&mut s, from, (from.0 + 10.0, from.1 + 10.0), m);
+        assert_eq!(sorted(s.selection()), sorted(after), "{why}");
+        for (i, h) in all.iter().zip(&home) {
+            // The frame carries its children: they move in the world, not in their local space.
+            let d = if moved.contains(i) { 10.0 } else { 0.0 };
+            assert_eq!(at(&s, *i), Point::new(h.x + d, h.y + d), "{why}");
+        }
+        assert_eq!(local(&s, c), if moved == [c] { (c_local.0 + 10.0, c_local.1 + 10.0) } else { c_local }, "{why}: the child's local position");
+        assert!(s.undo().unwrap(), "{why}: one undo step");
+        for (i, h) in all.iter().zip(&home) {
+            assert_eq!(at(&s, *i), *h, "{why}: undo restores");
+        }
+    }
+}
+
+#[test]
+fn a_click_on_a_child_of_a_selected_frame_selects_the_child() {
+    let mut s = Session::new();
+    let (f, c, n, gc) = frame_with_child(&mut s);
+    let home = s.doc().unwrap().world_bounds(c).unwrap().origin();
+    for (p, want) in [((60.0, 60.0), c), ((190.0, 190.0), n)] {
+        ex(&mut s, "select.set", json!({"ids": [f]}));
+        click(&mut s, p.0, p.1, NONE);
+        assert_eq!(s.selection(), vec![want], "a click selects the layer inside the selected frame");
+    }
+    assert_eq!(s.doc().unwrap().world_bounds(c).unwrap().origin(), home, "nothing moved");
+    let _ = gc;
+    s.tool.dev_mode = true;
+    ex(&mut s, "select.set", json!({"ids": [f]}));
+    click(&mut s, 60.0, 60.0, NONE);
+    assert_eq!(s.selection(), vec![c], "in Dev Mode too");
 }

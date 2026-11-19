@@ -431,6 +431,9 @@ pub(crate) enum Gesture {
         additive: bool,
         base: Vec<NodeId>,
         within: Option<NodeId>,
+        /// A click stepping out of a selected descendant picks its frame. Wait for a real drag
+        /// before replacing that selection with the marquee's contents.
+        pending_click: bool,
     },
     Move {
         start: Point,
@@ -441,8 +444,8 @@ pub(crate) enum Gesture {
         /// A Shift-press on this selected layer: it leaves the selection on release, unless the
         /// press became a drag.
         deselect: Option<NodeId>,
-        /// A press on one layer of a multi-selection that keeps the selection to drag it all: a
-        /// release without a drag selects just this layer.
+        /// A press on one layer of a multi-selection, or on a layer inside a selected one, that
+        /// keeps the selection to drag it all: a release without a drag selects just this layer.
         keep: Option<NodeId>,
     },
     Resize {
@@ -541,6 +544,27 @@ fn at_45_degrees(last: Point, p: Point) -> Point {
     last + Vec2::from_angle(ang) * v.hypot()
 }
 
+/// Add where the pointer is to a Pencil (Marker, Highlighter) stroke: a sample once it has moved
+/// half a screen pixel, or with Shift one straight segment from where the stroke started, at the
+/// nearest 45° step, as the Line tool and the Pen keep theirs (#2447).
+fn pencil_add(points: &mut Vec<Point>, pressure: &mut Vec<Option<f32>>, ev: &PointerEvent) {
+    let min = 0.5 / ev.zoom.max(1e-6);
+    if ev.shift
+        && let (Some(&start), Some(&first)) = (points.first(), pressure.first())
+    {
+        let end = at_45_degrees(start, ev.p());
+        points.truncate(1);
+        pressure.truncate(1);
+        if (end - start).hypot() > min {
+            points.push(end);
+            pressure.push(ev.pressure.or(first));
+        }
+    } else if points.last().is_none_or(|l| (*l - ev.p()).hypot() > min) {
+        points.push(ev.p());
+        pressure.push(ev.pressure);
+    }
+}
+
 /// The handles a pen path shows while it is drawn ([`Overlay::pen_handles`]): the last anchor's in
 /// and out handles and the one before's out handle, those that aren't zero.
 fn pen_handles(points: &[(Point, Vec2, Vec2)]) -> Vec<[f64; 4]> {
@@ -619,5 +643,18 @@ pub struct ToolState {
 impl ToolState {
     pub fn busy(&self) -> bool {
         !matches!(self.gesture, Gesture::None)
+    }
+
+    /// Whether the gesture under way pans the canvas when the pointer holds near the viewport's
+    /// edge (#2015): moving layers once past the drag slop, the selection box once it has grown
+    /// past it, and drawing a shape once it exists. Resizing, rotating, panning, text and vector
+    /// edits don't. `zoom`: screen px per page unit.
+    pub fn autopans(&self, zoom: f64) -> bool {
+        match &self.gesture {
+            Gesture::Move { moved, .. } => *moved,
+            Gesture::Marquee { .. } => self.overlay.marquee.is_some_and(|[x0, y0, x1, y1]| ((x1 - x0).hypot(y1 - y0) * zoom) >= DRAG_SLOP_PX),
+            Gesture::Draw { id, .. } => id.is_some(),
+            _ => false,
+        }
     }
 }

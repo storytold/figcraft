@@ -58,6 +58,8 @@ mod bool_menu_icon_tests;
 #[cfg(test)]
 mod branch_ui_tests;
 #[cfg(test)]
+mod canvas_autopan_tests;
+#[cfg(test)]
 mod canvas_double_click_tests;
 #[cfg(test)]
 mod canvas_drag_tests;
@@ -75,6 +77,8 @@ mod colorpicker_eyedropper_tests;
 mod colorpicker_selection_tests;
 #[cfg(test)]
 mod comments_tests;
+#[cfg(test)]
+mod component_header_tests;
 #[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
@@ -109,6 +113,8 @@ mod duplicate_paint_tests;
 mod export_name_tests;
 #[cfg(test)]
 mod export_preview_tests;
+#[cfg(test)]
+mod field_ellipsis_tests;
 #[cfg(test)]
 mod field_tests;
 #[cfg(test)]
@@ -288,6 +294,8 @@ mod ui_params_tests;
 #[cfg(test)]
 mod ui_scale_tests;
 #[cfg(test)]
+mod usage_summary_tests;
+#[cfg(test)]
 mod variable_picker_tests;
 #[cfg(test)]
 mod variables_export_ui_tests;
@@ -296,11 +304,19 @@ mod variables_rename_tests;
 #[cfg(test)]
 mod variables_select_tests;
 #[cfg(test)]
+mod variables_window_resize_tests;
+#[cfg(test)]
+mod variant_own_value_tests;
+#[cfg(test)]
 mod variants_discovery_tests;
+#[cfg(test)]
+mod vector_align_tests;
 #[cfg(test)]
 mod vector_keys_tests;
 #[cfg(test)]
 mod vector_panel_tests;
+#[cfg(test)]
+mod vector_point_radius_tests;
 #[cfg(test)]
 mod vector_point_xy_tests;
 #[cfg(test)]

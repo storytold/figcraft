@@ -114,10 +114,15 @@ fn key_steps(ctx: &egui::Context, suffix: &str, step: f64) -> (f64, f64) {
     }
 }
 
-/// How far a scrub of `dx` points moves a value whose field steps by `step`: 1 step a point, ten
-/// with Shift, a tenth with Alt (fine).
+/// The steps a point of scrubbing moves a field by: half, as measured in Figma (12.2 px moved X
+/// by 6, 61.2 px by 31).
+pub const SCRUB_STEPS_PER_POINT: f64 = 0.5;
+
+/// How far a scrub of `dx` points moves a value whose field steps by `step`: half a step a point
+/// ([`SCRUB_STEPS_PER_POINT`]), ten times that with Shift (5 steps a point), a tenth of that with Alt (0.05 steps a point, fine).
 pub fn scrub_amount(dx: f64, step: f64, shift: bool, alt: bool) -> f64 {
     dx * step
+        * SCRUB_STEPS_PER_POINT
         * match (shift, alt) {
             (true, false) => 10.0,
             (false, true) => 0.1,
@@ -713,9 +718,14 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
         }
         None => {
             let (s, col) = if value.is_empty() { (placeholder, t.text_tertiary) } else { (&*shown, t.text) };
-            // Long text stays inside the field.
+            // Long text ends in an ellipsis inside the field; hovering shows the whole value (not
+            // of a secret one: that is a key).
+            let fitted = elide(ui, s, rect.width() - 16.0);
             let painter = ui.painter().with_clip_rect(rect.shrink2(vec2(8.0, 0.0)));
-            painter.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, s, regular(11.0), col);
+            painter.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, &fitted, regular(11.0), col);
+            if fitted != s && !secret && !value.is_empty() {
+                resp.on_hover_text(value);
+            }
         }
     }
     out
@@ -981,16 +991,44 @@ fn segments(
 /// clicked.
 pub fn disclosure(ui: &mut Ui, label: &str, open: bool) -> bool {
     let t = Tokens::get(ui.ctx());
+    let rtl = rtl(ui);
     let galley = ui.painter().layout_no_wrap(label.to_string(), regular(11.0), t.text_secondary);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 22.0, FIELD_H), Sense::click());
     a11y::disclosure(&resp, label, open);
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(4), t.hover);
     }
-    let chevron = Rect::from_center_size(pos2(rect.min.x + 8.0, rect.center().y), vec2(10.0, 10.0));
-    icons::paint(ui.painter(), chevron, if open { Icon::Chevron } else { Icon::ChevronRight }, t.icon_secondary);
-    ui.painter().galley(pos2(rect.min.x + 18.0, rect.center().y - galley.size().y / 2.0), galley, t.text_secondary);
+    let chevron = Rect::from_center_size(pos2(flip_x(rtl, rect, rect.min.x + 8.0), rect.center().y), vec2(10.0, 10.0));
+    icons::paint(ui.painter(), chevron, disclosure_icon(open, rtl), t.icon_secondary);
+    let x = if rtl { rect.max.x - 18.0 - galley.size().x } else { rect.min.x + 18.0 };
+    ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, t.text_secondary);
     resp.clicked()
+}
+
+/// A disclosure's chevron: down when open, else pointing to the end, right (left when `rtl`).
+pub fn disclosure_icon(open: bool, rtl: bool) -> Icon {
+    match (open, rtl) {
+        (true, _) => Icon::Chevron,
+        (false, true) => Icon::ChevronLeft,
+        (false, false) => Icon::ChevronRight,
+    }
+}
+
+/// Whether the panels lay out right to left: a mirrored window (a right-to-left UI language sets
+/// egui's `Style::right_to_left`), where a row starts at its right end.
+pub fn rtl(ui: &Ui) -> bool {
+    ui.style().right_to_left
+}
+
+/// `x`, measured from `within`'s left edge, mirrored to the same distance from its right edge
+/// when `rtl`.
+pub fn flip_x(rtl: bool, within: Rect, x: f32) -> f32 {
+    if rtl { within.min.x + within.max.x - x } else { x }
+}
+
+/// `r` mirrored inside `within` when `rtl` (see [`flip_x`]).
+pub fn flip_rect(rtl: bool, within: Rect, r: Rect) -> Rect {
+    if rtl { Rect::from_x_y_ranges(flip_x(true, within, r.max.x)..=flip_x(true, within, r.min.x), r.y_range()) } else { r }
 }
 
 /// A section header ("Fill", "Stroke"…) with optional right-side icon buttons; returns which
@@ -1002,6 +1040,7 @@ pub fn section_header(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], dim: b
 /// [`section_header`], with the header's own response for a right-click menu.
 pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], dim: bool) -> (Option<usize>, egui::Response) {
     let t = Tokens::get(ui.ctx());
+    let rtl = rtl(ui);
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 40.0), Sense::click());
     // Only an empty section's header acts as its `+` button; elsewhere it is a right-click target
@@ -1010,8 +1049,8 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
         ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
     }
     ui.painter().text(
-        pos2(rect.min.x + PAD, rect.center().y),
-        Align2::LEFT_CENTER,
+        pos2(flip_x(rtl, rect, rect.min.x + PAD), rect.center().y),
+        if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER },
         title,
         semibold(11.0),
         if dim { t.text_secondary } else { t.text },
@@ -1019,7 +1058,7 @@ pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], d
     let mut out = None;
     let mut x = rect.max.x - PAD_RIGHT;
     for (i, (icon, tip)) in buttons.iter().enumerate().rev() {
-        let r = Rect::from_min_size(pos2(x - 24.0, rect.center().y - 12.0), vec2(24.0, 24.0));
+        let r = flip_rect(rtl, rect, Rect::from_min_size(pos2(x - 24.0, rect.center().y - 12.0), vec2(24.0, 24.0)));
         let resp = ui.interact(r, ui.scope_id().with(("hdr", title, i)), Sense::click()).tip(*tip);
         if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
@@ -1048,8 +1087,13 @@ pub fn tight_end<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 pub fn tight_end_n<R>(ui: &mut Ui, count: usize, add: impl FnOnce(&mut Ui) -> R) -> R {
     let group = 24.0 * count as f32 + 4.0 * count.saturating_sub(1) as f32;
     let avail = ui.available_rect_before_wrap();
-    let rect = Rect::from_min_max(pos2((avail.max.x - group).max(avail.min.x), avail.min.y), avail.max);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    // Mirrored, the row ends on the left and its buttons run from right to left.
+    let (rect, layout) = if rtl(ui) {
+        (Rect::from_min_max(avail.min, pos2((avail.min.x + group).min(avail.max.x), avail.max.y)), egui::Layout::right_to_left(egui::Align::Center))
+    } else {
+        (Rect::from_min_max(pos2((avail.max.x - group).max(avail.min.x), avail.min.y), avail.max), egui::Layout::left_to_right(egui::Align::Center))
+    };
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(layout));
     child.spacing_mut().item_spacing.x = 4.0;
     // The row already gave the group its height (`block` allocated it): the cursor moves on only
     // past the group's width, so the next row keeps the row's own height.
@@ -1304,14 +1348,16 @@ pub fn checkbox_tri(ui: &mut Ui, state: Option<bool>, label: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(200.0), FIELD_H), Sense::click());
     a11y::checkbox_tri(&resp, label, state);
-    let b = Rect::from_min_size(pos2(rect.min.x, rect.center().y - 7.0), vec2(14.0, 14.0));
+    let rtl = rtl(ui);
+    let b = flip_rect(rtl, rect, Rect::from_min_size(pos2(rect.min.x, rect.center().y - 7.0), vec2(14.0, 14.0)));
     if state != Some(false) {
         ui.painter().rect_filled(b, CornerRadius::same(3), t.accent);
         icons::paint(ui.painter(), b.shrink(1.5), if state.is_some() { Icon::Check } else { Icon::Minus }, t.accent_on);
     } else {
         ui.painter().rect_stroke(b, CornerRadius::same(3), Stroke::new(1.0, t.border_strong), StrokeKind::Inside);
     }
-    ui.painter().text(pos2(b.max.x + 8.0, rect.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.text);
+    let (x, align) = if rtl { (b.min.x - 8.0, Align2::RIGHT_CENTER) } else { (b.max.x + 8.0, Align2::LEFT_CENTER) };
+    ui.painter().text(pos2(x, rect.center().y), align, label, regular(11.0), t.text);
     resp.clicked()
 }
 
@@ -1320,14 +1366,16 @@ pub fn radio(ui: &mut Ui, on: bool, label: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(240.0), FIELD_H), Sense::click());
     a11y::radio(&resp, label, on);
-    let c = pos2(rect.min.x + 7.0, rect.center().y);
+    let rtl = rtl(ui);
+    let c = pos2(flip_x(rtl, rect, rect.min.x + 7.0), rect.center().y);
     if on {
         ui.painter().circle_filled(c, 7.0, t.accent);
         ui.painter().circle_filled(c, 2.5, t.accent_on);
     } else {
         ui.painter().circle_stroke(c, 6.5, Stroke::new(1.0, if resp.hovered() { crate::theme::ACCENT } else { t.border_strong }));
     }
-    ui.painter().text(pos2(rect.min.x + 22.0, rect.center().y), Align2::LEFT_CENTER, label, regular(11.0), t.text);
+    let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    ui.painter().text(pos2(flip_x(rtl, rect, rect.min.x + 22.0), rect.center().y), align, label, regular(11.0), t.text);
     resp.clicked()
 }
 
@@ -1381,7 +1429,10 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
         Some(mut text) => {
             ui.painter().rect_filled(rect.expand(2.0), CornerRadius::same(4), t.panel);
             ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(4), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            // The editor is at least the theme's field height; centred on a shorter row it
+            // keeps its text on the row's middle line instead of hanging below it (#2318).
+            let edit = Rect::from_center_size(rect.center(), vec2(rect.width(), rect.height().max(FIELD_H)));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit));
             let r = crate::bidi::single_line(&mut child, te_id, &mut text, font, rect.width());
             a11y::own_focus(&r);
             keep_focus(&r, started);
@@ -1408,7 +1459,9 @@ pub fn text_field_inline(ui: &mut Ui, id: Id, value: &str, rect: Rect, font: egu
             if resp.hovered() {
                 ui.painter().rect_filled(rect.expand(2.0), CornerRadius::same(4), t.hover);
             }
-            crate::bidi::paint_name(ui.painter(), rect.left_center(), value, font, t.text, rect.width());
+            let rtl = rtl(ui);
+            let start = if rtl { rect.right_center() } else { rect.left_center() };
+            crate::bidi::paint_name_from(ui.painter(), start, rtl, value, font, t.text, rect.width());
             None
         }
     }
@@ -1461,7 +1514,9 @@ pub fn sublabels(ui: &mut Ui, a: &str, b: Option<&str>) {
     for (i, (text, x, max_w)) in [(a, PAD, a_w)].into_iter().chain(b.map(|b| (b, PAD + col + GUTTER, w - col - GUTTER - PAD - PAD_RIGHT))).enumerate()
     {
         let shown = elide_font(ui, text, max_w, regular(10.0));
-        let at = ui.painter().text(pos2(r.min.x + x, r.max.y), Align2::LEFT_BOTTOM, &shown, regular(10.0), t.text_secondary);
+        // Mirrored, each label starts at its column's right edge.
+        let align = if rtl(ui) { Align2::RIGHT_BOTTOM } else { Align2::LEFT_BOTTOM };
+        let at = ui.painter().text(pos2(flip_x(rtl(ui), r, r.min.x + x), r.max.y), align, &shown, regular(10.0), t.text_secondary);
         if shown != text {
             ui.interact(at, ui.scope_id().with(("sublabel", i)), Sense::hover()).on_hover_text(text);
         }

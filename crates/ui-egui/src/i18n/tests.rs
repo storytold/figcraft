@@ -217,8 +217,13 @@ fn importer_notes() -> BTreeSet<String> {
 /// The `src` directory of the craft-fig sources this build uses, as Cargo resolved them.
 fn craft_fig_src() -> std::path::PathBuf {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let out = std::process::Command::new(cargo)
-        .args(["metadata", "--format-version", "1", "--offline"])
+    // Unfiltered, `cargo metadata` needs every target's packages (accesskit_ios, ...) in Cargo's
+    // cache, and `--offline` cannot fetch them; a build fetches only the host's. Filter to the host.
+    let version = std::process::Command::new(&cargo).arg("-vV").output().unwrap();
+    let version = String::from_utf8(version.stdout).unwrap();
+    let host = version.lines().find_map(|l| l.strip_prefix("host: ")).expect("cargo -vV names its host");
+    let out = std::process::Command::new(&cargo)
+        .args(["metadata", "--format-version", "1", "--offline", "--filter-platform", host])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .unwrap();

@@ -451,3 +451,15 @@ fn a_whole_ellipse_drawn_backwards_keeps_its_simple_stroke() {
         assert_eq!(backwards, forwards, "{align:?}");
     }
 }
+
+#[test]
+fn shared_xml_escaping_keeps_markup_controls_and_attribute_whitespace() {
+    let input = "A<&\"'\t\n\r\u{1}\u{fffe}🦊";
+    assert_eq!(super::esc(input), "A&lt;&amp;&quot;'&#9;&#10;&#13;🦊");
+    let markup = format!("<svg label=\"{}\"/>", super::esc(input));
+    let root = craft_xml::parse(markup.as_bytes()).unwrap();
+    assert_eq!(root.attr("label"), Some("A<&\"'\t\n\r🦊"));
+    for c in ['\0', '\u{b}', '\u{fffe}', '\u{ffff}'] {
+        assert!(!super::xml_char(c));
+    }
+}

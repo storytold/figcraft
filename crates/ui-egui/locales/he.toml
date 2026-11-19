@@ -2107,6 +2107,10 @@ status = "draft — needs native review"
 "Enter / Shift+Enter" = "Enter / Shift+Enter"
 "Space" = "רווח"
 
+# 19 Nov 2026: official upstream text-style actions (source-locked)
+"Subscript" = "כתב תחתי"
+"Superscript" = "כתב עילי"
+
 [commands]
 "branch.create" = "יצירת ענף…"
 "collab.join" = "הצטרפות לסשן משותף…"

@@ -293,6 +293,9 @@ fn decl(key: &str, value: &str) -> Vec<(String, String)> {
         // An image shorthand (`url(…) center / cover`) is a whole `background`, not a bg colour.
         ("background", v) if v.starts_with("url(") => one(format!("[background:{}]", arb(v).trim_matches(['[', ']']))),
         ("background", v) => one(util("bg", "color", v, "color:")),
+        ("-webkit-background-clip", "text") => Vec::new(),
+        ("background-clip", "text") => kw("bg-clip-text"),
+        ("color", "transparent") => kw("text-transparent"),
         ("color", v) => one(util("text", "color", v, "color:")),
         ("border", v) => border("", v),
         ("border-top", v) => border("t", v),
