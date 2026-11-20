@@ -638,6 +638,10 @@ pub struct ToolState {
     pub place_at: Option<Point>,
     /// The document (uid) and page the crosshair was shown on.
     pub(crate) place_on: Option<(u64, NodeId)>,
+    /// The last two Move or Scale presses, oldest first: where each was and the selection just
+    /// before it. A Shift double-click works from the selection its first click found. A press
+    /// with another tool clears them, and so does the double-click that uses them.
+    pub(crate) selections_before_last_two_presses: [Option<(Point, Vec<NodeId>)>; 2],
 }
 
 impl ToolState {
