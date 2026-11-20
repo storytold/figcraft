@@ -419,3 +419,16 @@ fn profile_parser_survives_junk() {
     let _ = Source::of(b"");
     let _ = Source::of(&[0x89, b'P', b'N', b'G']);
 }
+
+#[test]
+fn f32_thumbnail_averages_before_quantizing() {
+    let samples = [0.0_f32, 0.0, 0.0, 1.0, 0.002, 0.002, 0.002, 1.0].repeat(2);
+    let raw: Vec<u8> = samples.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let img = craft_image_codecs::Image::from_raw(2, 2, craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::F32, raw).unwrap();
+    let exr = craft_image_codecs::encode(&img, craft_image_codecs::Format::OpenExr, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    let (p, _) = images::decode_within(&exr, ColorProfile::Srgb, 1, u64::MAX).unwrap();
+    assert_eq!((p.width(), p.height()), (1, 1));
+    // Average 0.001 * 255 = 0.255 rounds to 0; quantizing first rounds 0.002 * 255 = 0.51 to 1,
+    // whose 8-bit average rounds to 1.
+    assert_eq!(p.data(), &[0, 0, 0, 255]);
+}
