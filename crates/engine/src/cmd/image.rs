@@ -222,6 +222,9 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         // Like any paint edit, the layer leaves its paint style.
         n.styles.fill = None;
     }
+    if s.ds()?.vector_edit.is_some() {
+        crate::vectoredit::end(s)?;
+    }
     s.request_ui(cmd, json!({"id": id, "index": index}));
     Ok(json!({"id": id, "index": index}))
 }

@@ -297,6 +297,9 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         open_context_menu(app, pos, mods.command);
         return true;
     }
+    if crop_mode_multi_click(app, resp, pos, &mods) {
+        return true;
+    }
     // A third quick click is counted as a triple, not a double (a click elsewhere in between still
     // leaves its time in the sequence): it means the same here — edit, enter, open — unless a
     // vector or text is being edited, where a triple already has its own meaning. A triple on
@@ -412,6 +415,18 @@ fn pan_past_edge(app: &mut FigApp, ctx: &egui::Context, mods: &egui::Modifiers) 
     {
         send(app, PointerKind::Move, at, mods);
     }
+}
+
+/// A double- or triple-click in crop mode stays in crop mode (it would edit the points), and is
+/// taken here. Its last press may have begun a resize on a side of the layer: its release ends that.
+fn crop_mode_multi_click(app: &mut FigApp, resp: &egui::Response, pos: Pos2, mods: &egui::Modifiers) -> bool {
+    if app.ui.crop.is_none() || !(resp.double_clicked() || resp.triple_clicked()) {
+        return false;
+    }
+    if std::mem::take(&mut app.canvas.dragging) {
+        send(app, PointerKind::Up, pos, mods);
+    }
+    true
 }
 
 fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
