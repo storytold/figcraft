@@ -20,8 +20,6 @@
 mod import;
 pub use import::{ImportError, Imported, import_svg, import_svg_with_notes, looks_like_svg};
 
-use std::fmt::Write as _;
-
 use base64::Engine as _;
 use craft_svg::write::{SVG_NS, SvgWriter, Tag};
 #[cfg(test)]
@@ -115,26 +113,7 @@ fn num(v: f64) -> String {
 }
 
 fn path_d(p: &BezPath) -> String {
-    use figcraft_geom::kurbo::PathEl::*;
-    let mut s = String::new();
-    for el in p.elements() {
-        match *el {
-            MoveTo(a) => {
-                let _ = write!(s, "M{} {}", num(a.x), num(a.y));
-            }
-            LineTo(a) => {
-                let _ = write!(s, "L{} {}", num(a.x), num(a.y));
-            }
-            QuadTo(a, b) => {
-                let _ = write!(s, "Q{} {} {} {}", num(a.x), num(a.y), num(b.x), num(b.y));
-            }
-            CurveTo(a, b, c) => {
-                let _ = write!(s, "C{} {} {} {} {} {}", num(a.x), num(a.y), num(b.x), num(b.y), num(c.x), num(c.y));
-            }
-            ClosePath => s.push('Z'),
-        }
-    }
-    s
+    craft_svg::write::path_data_with_format(p, num)
 }
 
 struct DashPiece {
