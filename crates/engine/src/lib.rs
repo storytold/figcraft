@@ -617,6 +617,8 @@ mod text_motion_tests;
 #[cfg(test)]
 mod text_style_picker_tests;
 #[cfg(test)]
+mod text_tab_tests;
+#[cfg(test)]
 mod text_tail_tests;
 #[cfg(test)]
 mod text_weight_step_tests;
