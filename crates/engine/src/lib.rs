@@ -70,6 +70,7 @@ pub use dev::dev_measurements;
 pub use dev::dev_resources;
 pub use dev::devcompare;
 pub use dev::devinspect;
+pub use dev::responsive;
 pub use dev::tailwind;
 pub use extensions::plugin_directory;
 pub use extensions::plugins;
@@ -542,6 +543,8 @@ mod proto_responsive_tests;
 mod proto_run_tests;
 #[cfg(test)]
 mod proto_tail_tests;
+#[cfg(test)]
+mod responsive_tests;
 #[cfg(test)]
 mod rest_slot_tests;
 #[cfg(test)]
