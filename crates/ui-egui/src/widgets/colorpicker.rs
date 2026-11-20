@@ -204,19 +204,147 @@ fn remember_recent(app: &mut FigApp, c: Color) {
 }
 
 fn finish(app: &mut FigApp) {
+    finish_with(app, true);
+}
+
+/// Finish the picker's edit. `record`: the colour it ends on is a choice for the recent colours
+/// (not when the picker was only closed because its layers went away or changed).
+fn finish_with(app: &mut FigApp, record: bool) {
     if let Some(PickerTarget::PluginField { plugin, control, pending: Some(hex) }) = app.ui.picker.clone() {
         crate::plugins_ui::set_field(app, &plugin, &control, &hex);
         app.ui.picker = Some(PickerTarget::PluginField { plugin, control, pending: None });
     }
-    if app.session.ds().map(|d| d.interaction.is_some()).unwrap_or(false) {
-        if let Some(t) = app.ui.picker.clone()
+    // Any open interaction counts for the recent colours: editing text holds an "Edit text" one, and
+    // the colour a drag ends on is still a choice. Only a colour interaction is committed here.
+    let label = app.session.ds().ok().and_then(|d| d.interaction.as_ref().map(|interaction| interaction.label.clone()));
+    if let Some(label) = label {
+        if record
+            && let Some(t) = app.ui.picker.clone()
             && !matches!(t, PickerTarget::PluginField { .. })
             && let Some(c) = current_paint(app, &t).and_then(|p| p.solid_color())
         {
             remember_recent(app, c);
         }
-        let _ = app.session.commit_interaction();
+        if label == "Color" {
+            let _ = app.session.commit_interaction();
+        }
     }
+}
+
+/// Finish an image picker interaction in its owning document after the active tab changed.
+fn finish_document(app: &mut FigApp, uid: u64) {
+    if let Some(PickerTarget::PluginField { plugin, control, pending: Some(hex) }) = app.ui.picker.clone() {
+        crate::plugins_ui::set_field(app, &plugin, &control, &hex);
+    }
+    let Some(index) = app.session.docs.iter().position(|doc| doc.uid == uid) else { return };
+    if !app.session.docs[index].interaction.as_ref().is_some_and(|interaction| interaction.label == "Color") {
+        return;
+    }
+    let active = app.session.active;
+    app.session.active = index;
+    let _ = app.session.commit_interaction();
+    app.session.active = active;
+}
+
+/// The same layers, in any order.
+fn same_layers(a: &[NodeId], b: &[NodeId]) -> bool {
+    a.len() == b.len() && a.iter().all(|id| b.contains(id))
+}
+
+fn clear_picker_ui(app: &mut FigApp) {
+    app.ui.picker = None;
+    app.ui.picker_context = None;
+    app.ui.picker_popover = None;
+    app.ui.picker_button = None;
+    app.ui.picker_button_id = None;
+}
+
+/// Close the picker, committing a colour interaction it still has open, without recording a recent colour.
+fn close_picker(app: &mut FigApp) {
+    finish_with(app, false);
+    clear_picker_ui(app);
+}
+
+/// Keep an open image-adjustment picker attached to the selected image layer.
+/// Other picker targets retain their existing selection ownership.
+fn sync_picker_target(app: &mut FigApp) -> bool {
+    let Some(target) = app.ui.picker.clone() else {
+        app.ui.picker_context = None;
+        return false;
+    };
+    let Ok(ds) = app.session.ds() else {
+        close_picker(app);
+        return false;
+    };
+    let (uid, page) = (ds.uid, ds.page);
+    if let Some((_, owner_uid, _, true)) = app.ui.picker_context.clone()
+        && owner_uid != uid
+    {
+        finish_document(app, owner_uid);
+        clear_picker_ui(app);
+        return false;
+    }
+    if let Some((owner_target, owner_uid, owner_page, image_owner)) = app.ui.picker_context.clone()
+        && owner_target == target
+        && owner_uid == uid
+        && image_owner
+        && owner_page != page
+    {
+        close_picker(app);
+        return false;
+    }
+    let image_owner =
+        matches!(target, PickerTarget::Paint { .. }) && current_paint(app, &target).is_some_and(|paint| matches!(paint.kind, PaintKind::Image(_)));
+    app.ui.picker_context = Some((target.clone(), uid, page, image_owner));
+
+    let (fills, index, ids) = match &target {
+        PickerTarget::Paint { fills, index, ids } => (*fills, *index, ids.clone()),
+        _ => return true,
+    };
+    let original_is_image = ids.first().and_then(|id| app.session.doc().ok()?.node(*id)).is_some_and(|node| {
+        let paints = if fills { &node.fills } else { &node.strokes };
+        matches!(paints.get(index).map(|paint| &paint.kind), Some(PaintKind::Image(_)))
+    });
+    if !original_is_image {
+        return true;
+    }
+
+    let selected = app.session.selection();
+    // The popup was opened for these layers (several can share one image paint): keep editing them all.
+    if same_layers(&ids, &selected) {
+        return true;
+    }
+    if selected.len() != 1 {
+        close_picker(app);
+        return false;
+    }
+    let selected_id = selected[0];
+    let Some(node) = app.session.doc().ok().and_then(|doc| doc.node(selected_id)) else {
+        close_picker(app);
+        return false;
+    };
+    let target_image = |fills: bool, index: usize| {
+        let paints = if fills { &node.fills } else { &node.strokes };
+        matches!(paints.get(index).map(|paint| &paint.kind), Some(PaintKind::Image(_)))
+    };
+    let (fills, index) = if target_image(fills, index) {
+        (fills, index)
+    } else if let Some(index) = node.fills.iter().position(|paint| matches!(paint.kind, PaintKind::Image(_))) {
+        (true, index)
+    } else if let Some(index) = node.strokes.iter().position(|paint| matches!(paint.kind, PaintKind::Image(_))) {
+        (false, index)
+    } else {
+        close_picker(app);
+        return false;
+    };
+    let next = PickerTarget::Paint { fills, index, ids: selected };
+    if next == target {
+        return true;
+    }
+    finish_with(app, false);
+    app.ui.picker_context = Some((next.clone(), uid, page, true));
+    app.ui.picker = Some(next);
+    true
 }
 
 /// The selected gradient stop in the picker (shared with the on-canvas stops).
@@ -985,19 +1113,32 @@ pub fn window_id() -> Id {
 /// Draw the colour picker for the current target: close it when there is no target or the
 /// target's selection no longer matches, otherwise apply eyedropper, paint-kind, colour and
 /// gradient-stop edits live, positioned beside a plugin field when applicable.
+/// An image-adjustment picker follows a single newly selected image layer instead of closing.
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
-    let Some(target) = app.ui.picker.clone() else {
+    if app.ui.picker.is_none() {
         // A colour sampled for a picker that has closed has no paint to go to.
         app.session.tool.picked = None;
         if app.session.tool.pick_only {
             app.run("tool.move", json!({}));
         }
+        app.ui.picker_context = None;
         return;
-    };
+    }
+    if !sync_picker_target(app) {
+        if app.ui.picker.is_none() {
+            app.session.tool.picked = None;
+            if app.session.tool.pick_only {
+                app.run("tool.move", json!({}));
+            }
+        }
+        return;
+    }
+    let Some(target) = app.ui.picker.clone() else { return };
     // A layer's picker belongs to the selection it was opened for: once that changes, close it
-    // rather than keep editing layers that are no longer selected.
+    // rather than keep editing layers that are no longer selected. Image-adjustment paints are
+    // retargeted first (`sync_picker_target`), and the same layers in another order stay open.
     let stale = match &target {
-        PickerTarget::Paint { ids, .. } | PickerTarget::Effect { ids, .. } => *ids != app.session.selection(),
+        PickerTarget::Paint { ids, .. } | PickerTarget::Effect { ids, .. } => !same_layers(ids, &app.session.selection()),
         PickerTarget::TextRange { id, .. } => !app.session.selection().contains(id),
         _ => false,
     };
@@ -1005,9 +1146,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let Some(mut paint) = current else {
         if matches!(target, PickerTarget::SelectionColor { .. }) {
             finish(app);
+        } else {
+            finish_with(app, false);
         }
-        app.ui.picker = None;
-        app.ui.picker_popover = None;
+        clear_picker_ui(app);
         return;
     };
     let t = Tokens::get(ctx);
@@ -1218,10 +1360,7 @@ pub fn close_if_open(app: &mut FigApp) -> bool {
 /// pending edits commit and the picker with its popover go.
 pub fn close(app: &mut FigApp) {
     finish(app);
-    app.ui.picker = None;
-    app.ui.picker_popover = None;
-    app.ui.picker_button = None;
-    app.ui.picker_button_id = None;
+    clear_picker_ui(app);
 }
 
 /// Swatches wrapped in rows inset 16 points from both sides of the picker.
@@ -1618,3 +1757,7 @@ mod tests {
 #[cfg(test)]
 #[path = "colorpicker_image_tests.rs"]
 mod image_tests;
+
+#[cfg(test)]
+#[path = "colorpicker_retarget_tests.rs"]
+mod retarget_tests;
