@@ -643,6 +643,8 @@ mod effect_order_tests;
 #[cfg(test)]
 mod effects_behaviour_tests;
 #[cfg(test)]
+mod fill_blend_tests;
+#[cfg(test)]
 mod gif_tests;
 #[cfg(test)]
 mod glass_bench_tests;

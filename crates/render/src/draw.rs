@@ -151,13 +151,62 @@ fn pixels_when_magnified(prep: Prepared, device_scale: f64) -> Prepared {
     Prepared::Pattern { pixmap, mode, quality, opacity, transform }
 }
 
-fn fill_with(pix: &mut Pixmap, path: &tiny_skia::Path, paints: &[Paint], w: f64, h: f64, xf: Affine, rule: FillRule, ctx: &Ctx, mask: Option<&Mask>) {
+/// Paint `paints` over `path`, bottom first. Each blends by its own mode with what lies under it:
+/// within a layer that isn't pass-through (`isolate`), only with the paints below it in the list,
+/// the list then laid over the canvas as one (the reference tool's: a shape's fills on a
+/// coloured backdrop, a plus-lighter or luminosity fill over a translucent one, come out the
+/// same with or without effects on the shape); a pass-through frame's paints blend with the
+/// backdrop too.
+#[allow(clippy::too_many_arguments)]
+fn fill_with(
+    pix: &mut Pixmap,
+    path: &tiny_skia::Path,
+    paints: &[Paint],
+    w: f64,
+    h: f64,
+    xf: Affine,
+    rule: FillRule,
+    ctx: &Ctx,
+    mask: Option<&Mask>,
+    isolate: bool,
+) {
+    let blended = |p: &Paint| p.visible && !matches!(p.blend, BlendMode::Normal | BlendMode::PassThrough);
+    if isolate && paints.iter().any(blended) {
+        let area = path
+            .bounds()
+            .transform(ts_transform(xf))
+            .and_then(|b| int_rect(Rect::new(b.left().into(), b.top().into(), b.right().into(), b.bottom().into()), (pix.width(), pix.height())));
+        let Some(r) = area else { return };
+        let Some(_held) = crate::layer_budget::Held::take(r.width(), r.height(), 1) else { return };
+        let Some(mut alone) = Pixmap::new(r.width(), r.height()) else { return };
+        let at = Affine::translate((-f64::from(r.x()), -f64::from(r.y()))) * xf;
+        paint_each(&mut alone, path, paints, w, h, at, rule, ctx, None);
+        let pp = PixmapPaint::default();
+        pix.draw_pixmap(r.x(), r.y(), alone.as_ref(), &pp, Transform::identity(), mask);
+        return;
+    }
+    paint_each(pix, path, paints, w, h, xf, rule, ctx, mask);
+}
+
+/// Paint `paints` over `path` onto `pix`, each by its own blend mode.
+#[allow(clippy::too_many_arguments)]
+fn paint_each(
+    pix: &mut Pixmap,
+    path: &tiny_skia::Path,
+    paints: &[Paint],
+    w: f64,
+    h: f64,
+    xf: Affine,
+    rule: FillRule,
+    ctx: &Ctx,
+    mask: Option<&Mask>,
+) {
     let scale = xf.determinant().abs().sqrt();
     for p in paints {
         let Some(prep) = prepare_at(p, w, h, scale, ctx.doc, ctx.time, ctx.preview) else { continue };
         let prep = if ctx.magnified_image_pixels && matches!(p.kind, PaintKind::Image(_)) { pixels_when_magnified(prep, scale) } else { prep };
         let paint = tiny_skia::Paint { shader: prep.shader(), anti_alias: true, blend_mode: ts_blend(p.blend), ..Default::default() };
-        if p.blend == BlendMode::PlusDarker {
+        if crate::paint::own_blend(p.blend) {
             // No tiny-skia mode: the paint alone over its pixels, then blended in.
             let area = path
                 .bounds()
@@ -753,7 +802,8 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
                         None => shape.as_ref().and_then(|sh| shadow::inner_shadow(sh, lw, lh, lxf, ctx.scale, s)),
                     }
                 {
-                    l.draw_pixmap(0, 0, inner.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+                    // Blended by its own mode with the fills under it (a linear burn darkens them).
+                    composite(l, (0, 0), &inner, 1.0, s.blend);
                 }
             }
         };
@@ -773,7 +823,7 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
             if let EffectKind::InnerShadow(s) = &e.kind
                 && let Some(sh) = shadow::inner_shadow_of(&cover, ctx.scale, s)
             {
-                layer.draw_pixmap(0, 0, sh.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+                composite(&mut layer, (0, 0), &sh, 1.0, s.blend);
             }
         }
     }
@@ -793,12 +843,22 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
             c
         });
         let caster = shadow::Caster::new(ctx.doc, n, content.as_ref().unwrap_or(&layer), lxf, ctx.scale);
+        // The shadows blend by their own modes among themselves, then lie under the layer as one
+        // (two linear-burn shadows darken where they overlap, not the backdrop under them).
+        let blended = n.effects.iter().any(|e| e.visible && matches!(&e.kind, EffectKind::DropShadow(s) if s.blend != BlendMode::Normal));
+        let mut group = if blended { Pixmap::new(lw, lh) } else { None };
         for e in n.effects.iter().filter(|e| e.visible) {
             if let EffectKind::DropShadow(s) = &e.kind
                 && let Some(sh) = shadow::drop_shadow(&caster, s)
             {
-                composite(pix, (lx, ly), &sh, op, s.blend);
+                match group.as_mut() {
+                    Some(g) => composite(g, (0, 0), &sh, 1.0, s.blend),
+                    None => composite(pix, (lx, ly), &sh, op, s.blend),
+                }
             }
+        }
+        if let Some(g) = &group {
+            composite(pix, (lx, ly), g, op, BlendMode::Normal);
         }
     }
     if casts {
@@ -809,7 +869,44 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         }
         layer_effects(ctx, &mut layer, n, id, lxf);
     }
+    if blends_through(ctx.doc, n, casts || first_back.is_some()) {
+        // A pass-through layer whose only effects are shadows isn't a group: once its shadows lie
+        // under it, what it paints blends by its own modes with the backdrop, as without them
+        // (the layer above was what the shadows were cast from).
+        let inner = |p: &mut Pixmap| {
+            for e in n.effects.iter().filter(|e| e.visible) {
+                if let EffectKind::InnerShadow(s) = &e.kind
+                    && let Some(inner) = shape.as_ref().and_then(|sh| shadow::inner_shadow(sh, lw, lh, lxf, ctx.scale, s))
+                {
+                    composite(p, (lx, ly), &inner, 1.0, s.blend);
+                }
+            }
+        };
+        let has_inner = shape.is_some() && n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::InnerShadow(_)));
+        draw_content(ctx, pix, n, xf, depth, has_inner.then_some(&inner as &dyn Fn(&mut Pixmap)));
+        return;
+    }
     composite(pix, (lx, ly), &layer, op, n.blend);
+}
+
+/// Whether pass-through layer `n` draws straight onto the canvas after its shadows instead of as
+/// a layer: fully opaque, with no effect but drop and inner shadows (`backdrop`: it has background
+/// blur or glass) and with paints or layers inside in a blend mode of their own, which would
+/// otherwise blend only with the layer's other content.
+fn blends_through(doc: &Document, n: &Node, backdrop: bool) -> bool {
+    if n.blend != BlendMode::PassThrough || n.opacity < 0.999 || backdrop {
+        return false;
+    }
+    if !n.effects.iter().filter(|e| e.visible).all(|e| matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_))) {
+        return false;
+    }
+    if shadow::inner_from_pixels(doc, n) && n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::InnerShadow(_))) {
+        return false;
+    }
+    let own = |p: &Paint| p.visible && !matches!(p.blend, BlendMode::Normal | BlendMode::PassThrough);
+    n.fills.iter().any(own)
+        || n.strokes.iter().any(own)
+        || doc.subtree(n.id).iter().skip(1).filter_map(|c| doc.node(*c)).any(|c| !matches!(c.blend, BlendMode::Normal | BlendMode::PassThrough))
 }
 
 /// Node `n`'s backdrop effects through its backdrop outline `sh`, for its `size` layer at `at` on
@@ -859,6 +956,12 @@ fn draw_outline(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize)
     }
 }
 
+/// Whether `n`'s own paints blend only among themselves: every layer but a pass-through one (a
+/// layer in a blend mode of its own, Normal included, is a group of its own).
+fn isolates_paints(n: &Node) -> bool {
+    n.blend != BlendMode::PassThrough
+}
+
 /// What paints over a node's fills, under its children and strokes (its inner shadows).
 type OverFills<'a> = Option<&'a dyn Fn(&mut Pixmap)>;
 
@@ -882,7 +985,7 @@ fn fill_vector_regions(ctx: &Ctx, pix: &mut Pixmap, n: &Node, network: &figcraft
             path.apply_affine(frame.inverse());
             let Some(tp) = ts_path(&path) else { continue };
             let rule = if region.winding == figcraft_doc::WindingRule::EvenOdd { FillRule::EvenOdd } else { FillRule::Winding };
-            fill_with(pix, &tp, paints, pw, ph, xf * frame, rule, ctx, None);
+            fill_with(pix, &tp, paints, pw, ph, xf * frame, rule, ctx, None, isolates_paints(n));
         }
     }
 }
@@ -934,7 +1037,7 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
             for k in &keys {
                 let fills = layout.styles.get(*k).and_then(|s| s.fills.as_ref()).unwrap_or(&n.fills);
                 if let Some(tp) = by_style.get(k).and_then(ts_path) {
-                    fill_with(pix, &tp, fills, w, h, gxf, FillRule::Winding, ctx, None);
+                    fill_with(pix, &tp, fills, w, h, gxf, FillRule::Winding, ctx, None, isolates_paints(n));
                 }
                 for (_, item) in ink.iter().filter(|(style, _)| style == k) {
                     match item {
@@ -958,7 +1061,7 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
                 for path in keys.iter().filter_map(|k| by_style.get(k)) {
                     let s = stroke_area(n, path, true);
                     if let Some(ts) = ts_path(&s) {
-                        fill_with(pix, &ts, &n.strokes, w, h, gxf, stroke_rule(n, true), ctx, None);
+                        fill_with(pix, &ts, &n.strokes, w, h, gxf, stroke_rule(n, true), ctx, None, isolates_paints(n));
                     }
                 }
             }
@@ -978,7 +1081,7 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
                 } else if let Some((path, rule)) = &outline
                     && let Some(tp) = ts_path(path)
                 {
-                    fill_with(pix, &tp, &n.fills, w, h, xf, *rule, ctx, None);
+                    fill_with(pix, &tp, &n.fills, w, h, xf, *rule, ctx, None, isolates_paints(n));
                 }
             }
             if let Some(f) = over_fills {
@@ -999,7 +1102,7 @@ fn draw_content(ctx: &Ctx, pix: &mut Pixmap, n: &Node, xf: Affine, depth: usize,
                 if let Some(g) = geom {
                     let area = stroke_area(n, &g, closed);
                     if let Some(tp) = ts_path(&area) {
-                        fill_with(pix, &tp, &n.strokes, w, h, xf, stroke_rule(n, closed), ctx, None);
+                        fill_with(pix, &tp, &n.strokes, w, h, xf, stroke_rule(n, closed), ctx, None, isolates_paints(n));
                     }
                 }
             }
