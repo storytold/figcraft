@@ -649,6 +649,10 @@ mod variables_import_shapes_tests;
 #[cfg(test)]
 mod variables_io_tests;
 #[cfg(test)]
+mod variant_binding_import_tests;
+#[cfg(test)]
+mod variant_mode_switch_tests;
+#[cfg(test)]
 mod variant_shared_props_tests;
 #[cfg(test)]
 mod variants_discovery_tests;

@@ -730,6 +730,7 @@ fn link_instances(doc: &mut Document) {
     for (_, i) in insts {
         crate::components::rebase_instance_with(doc, i, &mut mains);
     }
+    crate::cmd::styles::apply_prop_bindings_on_load(doc);
 }
 
 /// Largest image file read for a REST API file JSON import.
