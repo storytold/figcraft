@@ -115,6 +115,7 @@ fn copying_a_variant_pastes_an_instance_but_copying_its_set_keeps_the_components
     let (set, _, hover) = button_set(&mut s);
     ex(&mut s, "select.set", json!({"ids": [hover]}));
     ex(&mut s, "edit.copy", json!({}));
+    ex(&mut s, "select.set", json!({"ids": []}));
     let pasted = crate::params::id_of(&ex(&mut s, "edit.paste", json!({}))["ids"][0]).unwrap();
     assert_eq!(component_of(&s, pasted), hover);
     assert_eq!(node(&s, pasted).name, node(&s, set).name);
@@ -239,6 +240,108 @@ fn alt_dragging_a_main_component_copies_an_instance() {
     assert_eq!(s.doc().unwrap().world_bounds(copy).unwrap().x0, 200.0);
     assert_eq!(s.doc().unwrap().world_bounds(main).unwrap().x0, 0.0, "the main stays");
     healthy(&s);
+}
+
+#[test]
+fn pasting_a_variant_with_its_set_selected_adds_a_variant_below_the_others() {
+    let mut s = Session::new();
+    let (set, _, hover) = button_set(&mut s);
+    let bounds = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap();
+    let named = |s: &Session, i: NodeId, name: &str| kids(s, i).into_iter().find(|c| node(s, *c).name == name).unwrap();
+    ex(&mut s, "select.set", json!({"ids": [hover]}));
+    ex(&mut s, "edit.copy", json!({}));
+    let bottom = kids(&s, set).iter().map(|k| bounds(&s, *k).y1).fold(f64::MIN, f64::max);
+    let pasted = crate::params::id_of(&ex(&mut s, "edit.paste", json!({}))["ids"][0]).unwrap();
+    assert!(matches!(node(&s, pasted).kind, NodeKind::Component { .. }));
+    assert_eq!(node(&s, pasted).parent, Some(set));
+    assert_eq!(kids(&s, set).len(), 3);
+    assert_eq!(chars(&s, named(&s, pasted, "Label")), "Hover");
+    let (b, h) = (bounds(&s, pasted), bounds(&s, hover));
+    assert_eq!((b.x0, b.y0), (h.x0, bottom + 20.0));
+    assert!(bounds(&s, set).y1 >= b.y1, "the set grows to hold it");
+
+    let label = named(&s, hover, "Label");
+    ex(&mut s, "select.set", json!({"ids": [label]}));
+    let second = crate::params::id_of(&ex(&mut s, "edit.paste", json!({}))["ids"][0]).unwrap();
+    assert_eq!(node(&s, second).parent, Some(set), "a layer inside a variant selected");
+    assert_eq!(bounds(&s, second).y0, b.y1 + 20.0);
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(kids(&s, set).len(), 3);
+    healthy(&s);
+}
+
+#[test]
+fn a_variant_pasted_into_its_set_after_the_set_moved_lands_under_the_variant() {
+    let mut s = Session::new();
+    let (set, _, hover) = button_set(&mut s);
+    let bounds = |s: &Session, i: NodeId| s.doc().unwrap().world_bounds(i).unwrap();
+    ex(&mut s, "select.set", json!({"ids": [hover]}));
+    ex(&mut s, "edit.copy", json!({}));
+    let x = bounds(&s, set).x0;
+    ex(&mut s, "node.set", json!({"id": set, "props": {"x": x + 1000.0}}));
+    let pasted = crate::params::id_of(&ex(&mut s, "edit.paste", json!({}))["ids"][0]).unwrap();
+    let (b, h, sb) = (bounds(&s, pasted), bounds(&s, hover), bounds(&s, set));
+    assert_eq!(b.x0, h.x0, "under the copied variant where it is now, not where it was copied");
+    assert!(sb.x0 <= b.x0 && sb.x1 >= b.x1 && sb.y1 >= b.y1, "inside the set");
+    healthy(&s);
+}
+
+/// Copy `main`, select `selected` and run `command` with `params`; the first pasted layer.
+fn copy_then(s: &mut Session, main: NodeId, selected: &[NodeId], command: &str, params: Value) -> NodeId {
+    ex(s, "select.set", json!({"ids": [main]}));
+    ex(s, "edit.copy", json!({}));
+    ex(s, "select.set", json!({"ids": selected}));
+    crate::params::id_of(&ex(s, command, params)["ids"][0]).unwrap()
+}
+
+// Only a plain paste with the copied variants' own set, or a layer in it, selected makes new
+// variants. Every other paste of a copied main into a set makes an instance of it there, as
+// before: the tests below.
+
+#[test]
+fn a_variant_pasted_with_another_set_selected_is_an_instance() {
+    let mut s = Session::new();
+    let (set, _, hover) = button_set(&mut s);
+    let (other, ..) = button_set(&mut s);
+    ex(&mut s, "node.set", json!({"id": other, "props": {"y": 300}}));
+    let pasted = copy_then(&mut s, hover, &[other], "edit.paste", json!({}));
+    assert_eq!(component_of(&s, pasted), hover);
+    assert_eq!(node(&s, pasted).parent, Some(other));
+    assert_eq!((kids(&s, set).len(), kids(&s, other).len()), (2, 3));
+    healthy(&s);
+}
+
+#[test]
+fn a_main_that_is_no_variant_pasted_with_a_set_selected_is_an_instance() {
+    let mut s = Session::new();
+    let (set, ..) = button_set(&mut s);
+    let k = kit(&mut s);
+    let pasted = copy_then(&mut s, k.card, &[set], "edit.paste", json!({}));
+    assert_eq!(component_of(&s, pasted), k.card);
+    assert_eq!(node(&s, pasted).parent, Some(set));
+    healthy(&s);
+}
+
+#[test]
+fn a_variant_pasted_with_its_own_set_as_an_explicit_parent_is_an_instance() {
+    let mut s = Session::new();
+    let (set, _, hover) = button_set(&mut s);
+    let pasted = copy_then(&mut s, hover, &[hover], "edit.paste", json!({"parent": set}));
+    assert_eq!(component_of(&s, pasted), hover);
+    assert_eq!(node(&s, pasted).parent, Some(set));
+    healthy(&s);
+}
+
+#[test]
+fn pasting_over_or_replacing_a_variant_makes_an_instance_of_the_copied_variant() {
+    for command in ["edit.pasteOver", "edit.pasteReplace"] {
+        let mut s = Session::new();
+        let (set, default, hover) = button_set(&mut s);
+        let pasted = copy_then(&mut s, hover, &[default], command, json!({}));
+        assert_eq!(component_of(&s, pasted), hover, "{command} on a variant of the copied variant's set");
+        assert_eq!(node(&s, pasted).parent, Some(set), "{command}");
+        healthy(&s);
+    }
 }
 
 #[test]
