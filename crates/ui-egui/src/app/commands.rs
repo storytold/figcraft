@@ -321,6 +321,7 @@ impl FigApp {
         self.autosave_tick(ctx, now);
         self.auto_save_tick(ctx, now);
         updates_ui::tick(self, ctx);
+        crate::assets_panel::refresh_libraries(self, ctx);
         self.logic_ticked = true;
     }
 }
