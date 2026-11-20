@@ -131,17 +131,31 @@ pub(crate) fn decode_within(bytes: &[u8], target: ColorProfile, max_side: u32, m
     let layout = if is_gray { ChannelLayout::GrayA } else { ChannelLayout::Rgba };
     let original = img.dimensions();
     let (w, h) = thumbnail_size(original.0, original.1, max_side)?;
-    let pixels = if original != (w, h)
-        && img.sample_type() == SampleType::U16
-        && matches!(img.layout(), ChannelLayout::Gray | ChannelLayout::GrayA | ChannelLayout::Rgb | ChannelLayout::Rgba)
-    {
-        let thumbnail = thumbnail_u16(&img, w, h)?;
-        drop(img);
-        thumbnail.convert(layout, SampleType::U8).into_data()
-    } else {
-        let converted = img.converted(layout, SampleType::U8);
-        thumbnail_u8(original, (w, h), is_gray, converted.into_owned().into_data())?
-    };
+    let pixels =
+        if original != (w, h) && matches!(img.layout(), ChannelLayout::Gray | ChannelLayout::GrayA | ChannelLayout::Rgb | ChannelLayout::Rgba) {
+            match img.sample_type() {
+                SampleType::U16 => {
+                    let thumbnail = thumbnail_u16(&img, w, h)?;
+                    drop(img);
+                    thumbnail.convert(layout, SampleType::U8).into_data()
+                }
+                SampleType::F16 | SampleType::F32 => {
+                    let f32_img = (img.sample_type() == SampleType::F16).then(|| img.converted(img.layout(), SampleType::F32).into_owned());
+                    let src = f32_img.as_ref().unwrap_or(&img);
+                    let thumbnail = thumbnail_f32(src, w, h)?;
+                    drop(f32_img);
+                    drop(img);
+                    thumbnail.convert(layout, SampleType::U8).into_data()
+                }
+                SampleType::U8 => {
+                    let converted = img.converted(layout, SampleType::U8);
+                    thumbnail_u8(original, (w, h), is_gray, converted.into_owned().into_data())?
+                }
+            }
+        } else {
+            let converted = img.converted(layout, SampleType::U8);
+            thumbnail_u8(original, (w, h), is_gray, converted.into_owned().into_data())?
+        };
     if is_gray {
         let rgba = source.convert_u8(w, h, true, &pixels, target)?;
         return Some((premultiplied_rgba(w, h, &rgba)?, false));
@@ -180,6 +194,15 @@ fn thumbnail_u8((w, h): (u32, u32), (nw, nh): (u32, u32), is_gray: bool, pixels:
     }
 }
 
+/// Keep the old thumbnail's floating-point box boundaries. Every axis scales down, so
+/// a rounding edge case still needs at least one source sample.
+fn source_span(index: u32, input: u32, ratio: f32) -> std::ops::Range<usize> {
+    let offset = index as f32 * ratio;
+    let start = (offset.ceil() as u32).min(input - 1);
+    let end = ((offset + ratio).ceil() as u32).clamp(start + 1, input);
+    start as usize..end as usize
+}
+
 /// Average native samples within each thumbnail pixel's source rectangle. Use wide sums
 /// because a large reduction can overflow the image crate's U16 thumbnail accumulator.
 fn thumbnail_u16(img: &craft_image_codecs::Image, nw: u32, nh: u32) -> Option<craft_image_codecs::Image> {
@@ -194,14 +217,6 @@ fn thumbnail_u16(img: &craft_image_codecs::Image, nw: u32, nh: u32) -> Option<cr
     let rows = img.data().chunks_exact(row_bytes);
     let x_ratio = w as f32 / nw as f32;
     let y_ratio = h as f32 / nh as f32;
-    // Keep the old thumbnail's floating-point box boundaries. Every axis scales down, so
-    // a rounding edge case still needs at least one source sample.
-    let source_span = |index: u32, input: u32, ratio: f32| {
-        let offset = index as f32 * ratio;
-        let start = (offset.ceil() as u32).min(input - 1);
-        let end = ((offset + ratio).ceil() as u32).clamp(start + 1, input);
-        start as usize..end as usize
-    };
     for y in 0..nh {
         let y_span = source_span(y, h, y_ratio);
         let band = rows.clone().skip(y_span.start).take(y_span.len());
@@ -224,6 +239,44 @@ fn thumbnail_u16(img: &craft_image_codecs::Image, nw: u32, nh: u32) -> Option<cr
         }
     }
     craft_image_codecs::Image::from_raw(nw, nh, layout, SampleType::U16, data).ok()
+}
+
+/// Average native `f32` samples within each thumbnail pixel's source rectangle before
+/// quantizing to 8-bit.
+fn thumbnail_f32(img: &craft_image_codecs::Image, nw: u32, nh: u32) -> Option<craft_image_codecs::Image> {
+    let (w, h) = img.dimensions();
+    let layout = img.layout();
+    let channels = layout.channels();
+    let pixel_bytes = channels * 4;
+    let row_bytes = (w as usize).checked_mul(pixel_bytes)?;
+    let output_bytes = (nw as usize).checked_mul(nh as usize)?.checked_mul(pixel_bytes)?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(output_bytes).ok()?;
+    let rows = img.data().chunks_exact(row_bytes);
+    let x_ratio = w as f32 / nw as f32;
+    let y_ratio = h as f32 / nh as f32;
+    for y in 0..nh {
+        let y_span = source_span(y, h, y_ratio);
+        let band = rows.clone().skip(y_span.start).take(y_span.len());
+        for x in 0..nw {
+            let x_span = source_span(x, w, x_ratio);
+            let bytes = x_span.start * pixel_bytes..x_span.end * pixel_bytes;
+            let count = (x_span.len() * y_span.len()) as f64;
+            let mut sums = [0.0_f64; 4];
+            for row in band.clone() {
+                for pixel in row.get(bytes.clone())?.chunks_exact(pixel_bytes) {
+                    for (sum, sample) in sums.iter_mut().zip(pixel.as_chunks::<4>().0) {
+                        *sum += f64::from(f32::from_ne_bytes(*sample));
+                    }
+                }
+            }
+            for sum in sums.iter().take(channels) {
+                let sample = (sum / count) as f32;
+                data.extend_from_slice(&sample.to_ne_bytes());
+            }
+        }
+    }
+    craft_image_codecs::Image::from_raw(nw, nh, layout, SampleType::F32, data).ok()
 }
 
 /// Whether image `hash`, decoded as `pm`, has no transparent pixels (filters and colour profiles

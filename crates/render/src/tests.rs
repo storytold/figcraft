@@ -585,3 +585,62 @@ fn rect_clip_frame_matches_same_rect_fill_on_fractional_edges() {
         }
     }
 }
+
+#[test]
+fn export_output_and_icc_parity() {
+    use figcraft_color::ColorProfile;
+    use figcraft_doc::ExportFormat;
+    use image::ImageDecoder;
+
+    let has_png_chunk = |bytes: &[u8], kind: &[u8; 4], payload: &[u8]| {
+        bytes.windows(4).enumerate().any(|(i, w)| w == kind && bytes.get(i + 4..i + 4 + payload.len()) == Some(payload))
+    };
+
+    let mut pix = Pixmap::new(8, 8).unwrap();
+    // Premultiplied 50% alpha: `(100*255+64)/128 = 199`, `(50*255+64)/128 = 100`, `(25*255+64)/128 = 50`.
+    let straight = [199u8, 100, 50, 128];
+    let pm = tiny_skia::PremultipliedColorU8::from_rgba(100, 50, 25, 128).unwrap();
+    pix.pixels_mut().fill(pm);
+
+    // Untagged PNG and WebP preserve alpha and carry no ICC profile.
+    let raw_png = encode_png(&pix).unwrap();
+    assert!(image::codecs::png::PngDecoder::new(std::io::Cursor::new(&raw_png)).unwrap().icc_profile().unwrap().is_none());
+    assert_eq!(image::load_from_memory(&raw_png).unwrap().to_rgba8().get_pixel(4, 4).0, straight);
+
+    let raw_webp = encode_webp(&pix).unwrap();
+    assert!(image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&raw_webp)).unwrap().icc_profile().unwrap().is_none());
+    assert_eq!(image::load_from_memory(&raw_webp).unwrap().to_rgba8().get_pixel(4, 4).0, straight);
+
+    // JPEG composites alpha over the given background and clamps quality to 1..=100.
+    let blue_bg = Color::from_hex("0000FF").unwrap();
+    let jpg_min = encode_jpeg(&pix, blue_bg, 0).unwrap();
+    assert_eq!(jpg_min, encode_jpeg(&pix, blue_bg, 1).unwrap());
+    let jpg_max = encode_jpeg(&pix, blue_bg, 200).unwrap();
+    assert_eq!(jpg_max, encode_jpeg(&pix, blue_bg, 100).unwrap());
+    let jpg_px = image::load_from_memory(&jpg_max).unwrap().to_rgb8().get_pixel(4, 4).0;
+    assert!(jpg_px[2] > 140 && jpg_px[0] > 80, "expected red+blue composite, got {jpg_px:?}");
+
+    for profile in ColorProfile::ALL {
+        let png = encode_export(&pix, ExportFormat::Png, profile).unwrap();
+        let png_icc = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&png)).unwrap().icc_profile().unwrap();
+        if profile.is_srgb() {
+            assert_eq!(png_icc, None);
+            assert!(has_png_chunk(&png, b"sRGB", &[0]));
+            assert!(!has_png_chunk(&png, b"cICP", &[]));
+        } else {
+            assert_eq!(png_icc, Some(profile.icc()));
+            assert!(has_png_chunk(&png, b"cICP", &profile.cicp()));
+            assert!(!has_png_chunk(&png, b"sRGB", &[]));
+        }
+        assert_eq!(image::load_from_memory(&png).unwrap().to_rgba8().get_pixel(4, 4).0, straight);
+
+        let webp = encode_export(&pix, ExportFormat::Webp, profile).unwrap();
+        let webp_icc = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&webp)).unwrap().icc_profile().unwrap();
+        assert_eq!(webp_icc, (!profile.is_srgb()).then(|| profile.icc()));
+        assert_eq!(image::load_from_memory(&webp).unwrap().to_rgba8().get_pixel(4, 4).0, straight);
+
+        let jpg = encode_export_with(&pix, ExportFormat::Jpg, profile, 90).unwrap();
+        let jpg_icc = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&jpg)).unwrap().icc_profile().unwrap();
+        assert_eq!(jpg_icc, Some(profile.icc()));
+    }
+}
