@@ -204,3 +204,32 @@ fn sketch_files_show_their_preview_png() {
     std::fs::write(&junk, [0xFFu8; 64]).unwrap();
     assert_eq!(file_preview(&junk, 640), Preview::default());
 }
+
+#[test]
+fn thumbnail_decode_keeps_stored_orientation_and_supports_webp_and_gif() {
+    // 24x16 JPEG with EXIF orientation 6 (rotate 90 CW) must keep stored 24x16 / 12x8 dimensions.
+    let rgb = image::RgbImage::from_pixel(24, 16, image::Rgb([200, 40, 20]));
+    let mut jpg = Vec::new();
+    rgb.write_to(&mut Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
+    let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+    exif.extend_from_slice(&6u16.to_le_bytes());
+    exif.extend_from_slice(&[0; 6]);
+    let mut oriented = jpg[..2].to_vec();
+    oriented.extend_from_slice(&[0xff, 0xe1]);
+    oriented.extend_from_slice(&u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
+    oriented.extend_from_slice(&exif);
+    oriented.extend_from_slice(&jpg[2..]);
+
+    let full = decode_thumbnail(&oriented, 64).unwrap();
+    assert_eq!((full.width, full.height), (24, 16));
+    let scaled = decode_thumbnail(&oriented, 12).unwrap();
+    assert_eq!((scaled.width, scaled.height), (12, 8));
+
+    let img = image::RgbaImage::from_pixel(10, 6, image::Rgba([10, 20, 30, 255]));
+    for fmt in [image::ImageFormat::WebP, image::ImageFormat::Gif] {
+        let mut bytes = Vec::new();
+        img.write_to(&mut Cursor::new(&mut bytes), fmt).unwrap();
+        let thumb = decode_thumbnail(&bytes, 64).unwrap();
+        assert_eq!((thumb.width, thumb.height), (10, 6), "{fmt:?}");
+    }
+}

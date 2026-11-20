@@ -165,13 +165,18 @@ pub fn image_hash(bytes: &[u8]) -> String {
     d.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Stored pixel dimensions of encoded image `bytes` (without EXIF orientation swap).
+fn stored_dimensions(bytes: &[u8]) -> Result<(u32, u32), craft_image_codecs::CodecError> {
+    match craft_image_codecs::probe_stored_size(bytes, &craft_image_codecs::Limits::default()) {
+        Ok(dims) => Ok(dims),
+        Err(craft_image_codecs::CodecError::Unsupported { .. }) => craft_image_codecs::probe_allocation_size(bytes),
+        Err(e) => Err(e),
+    }
+}
+
 /// Register encoded image bytes with the document; returns the hash and pixel size.
 pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32), FormatError> {
-    let (w, h) = image::ImageReader::new(std::io::Cursor::new(&bytes))
-        .with_guessed_format()
-        .map_err(|e| FormatError::Corrupt(e.to_string()))?
-        .into_dimensions()
-        .map_err(|e| FormatError::Corrupt(format!("unsupported image: {e}")))?;
+    let (w, h) = stored_dimensions(&bytes).map_err(|e| FormatError::Corrupt(format!("unsupported image: {e}")))?;
     let hash = image_hash(&bytes);
     doc.images.insert(hash.clone(), ImageData { bytes: Arc::new(bytes), width: w, height: h });
     Ok((hash, w, h))
@@ -179,8 +184,7 @@ pub fn add_image(doc: &mut Document, bytes: Vec<u8>) -> Result<(String, u32, u32
 
 /// Image bytes with their pixel size (0×0 when they can't be decoded).
 pub(crate) fn image_data(data: Vec<u8>) -> ImageData {
-    let (w, h) =
-        image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok()).unwrap_or((0, 0));
+    let (w, h) = stored_dimensions(&data).unwrap_or((0, 0));
     ImageData { bytes: Arc::new(data), width: w, height: h }
 }
 
