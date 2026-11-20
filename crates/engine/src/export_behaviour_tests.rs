@@ -227,11 +227,12 @@ fn what_an_export_covers() {
         set(&mut s, &[r], json!({"strokes": ["#000000"], "strokeWeight": w, "strokeAlign": align}));
         assert_eq!(size(&mut s, r), want, "{why}");
     }
-    // A shadow extends the export towards its offset: blur 4 reaches 6 (1.5 × blur, docs silent on
-    // the exact reach), moved 10 down, so 6 more on the left and right, 16 more below, none above.
+    // A shadow extends the export towards its offset: blur 4 reaches 4 (its radius, as the
+    // reference tool's exports measure), moved 10 down, so 4 more on the left and right, 14 more
+    // below, none above.
     let r = rect(&mut s, 400.0, 0.0, 100.0, 100.0, "#FF0000", None);
     shadow(&mut s, r, (0.0, 10.0), 4.0, 0.0);
-    assert_eq!(size(&mut s, r), (112, 116), "effects extend the bounds, in the direction the shadow falls");
+    assert_eq!(size(&mut s, r), (108, 114), "effects extend the bounds, in the direction the shadow falls");
     assert_eq!(pixels(&export(&mut s, json!({"ids": [r]}))).get_pixel(6, 0).0, [255, 0, 0, 255], "the layer's top edge is the image's top edge");
     // Include bounding box: the layer's box, whatever it paints outside it.
     let b = export(&mut s, json!({"ids": [r], "includeBoundingBox": true}));

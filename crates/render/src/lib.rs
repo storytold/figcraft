@@ -393,9 +393,9 @@ pub fn raster_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
 }
 
 /// The page-space rectangle a node exports: a clipping frame's box (plus its own effects), else
-/// everything it paints.
+/// everything it paints, framed as [`Document::world_export_bounds`] frames it.
 pub fn export_bounds(doc: &Document, id: NodeId) -> Option<Rect> {
-    doc.world_render_bounds(id)
+    doc.world_export_bounds(id)
 }
 
 /// Rasterise one node at `scale` (export). Transparent background.
@@ -642,6 +642,8 @@ mod dots_tests;
 mod effect_order_tests;
 #[cfg(test)]
 mod effects_behaviour_tests;
+#[cfg(test)]
+mod export_framing_tests;
 #[cfg(test)]
 mod fill_blend_tests;
 #[cfg(test)]
