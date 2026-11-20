@@ -11,6 +11,8 @@ mod automation_roots;
 #[allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod common;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod create_warnings;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod export_hidden_roots;
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod export_profile;

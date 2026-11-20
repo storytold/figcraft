@@ -15,6 +15,7 @@ use crate::{BatchStep, EngineError, Result, Session, bad, spec};
 
 mod clipboard;
 mod props;
+pub(crate) use props::font_style_warnings;
 pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;
 mod vector_clipboard;
