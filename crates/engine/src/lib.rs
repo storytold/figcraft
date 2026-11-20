@@ -345,6 +345,8 @@ mod fig_font_names_tests;
 #[cfg(test)]
 mod fig_import_tests;
 #[cfg(test)]
+mod fig_optical_size_tests;
+#[cfg(test)]
 mod fill_none_tests;
 #[cfg(test)]
 mod finite_geometry_tests;

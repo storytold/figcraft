@@ -143,6 +143,7 @@ fn load_any(
                 let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
                 link_instances(&mut doc);
                 installed_fonts_first();
+                optical_size_follows_text_size(&mut doc);
                 return Ok((figcraft_format::Loaded { issues: warnings, ..doc.into() }, true));
             }
             let mut loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
@@ -261,11 +262,40 @@ fn match_font_families(doc: &mut Document) {
 /// Sketch draws text with the tracking a font's `trak` table gives at its size (Apple's text engine
 /// adds it; FigCraft's, like Figma's, doesn't): the imported text keeps it as letter spacing, so
 /// lines measure and break as they did there. A named style's optical size follows the text size
-/// there too (FigCraft keeps the instance's), so the imported text carries it as an `opsz` value.
+/// there too ([`optical_size_follows_text_size`]).
 fn platform_tracking(doc: &mut Document) {
+    let mut face = face_cache();
+    each_text_style(doc, &mut |style| {
+        let Some(f) = face(style) else { return };
+        let t = f.tracking(style.font_size);
+        if t != 0.0 && t.is_finite() {
+            let px = style.letter_spacing.resolve(style.font_size);
+            style.letter_spacing = figcraft_doc::LetterSpacing::Pixels(px + t);
+        }
+    });
+    optical_size_follows_text_size(doc);
+}
+
+/// Figma and Sketch set a variable font's optical size to the text size (within the axis), also
+/// for a named style; FigCraft keeps the named instance's (so existing documents render as
+/// before). The imported text carries its size as an `opsz` value instead, unless it sets one.
+/// Seen in the glyph advances `.fig` files save with their text: SF Pro Regular at 12–17 px is the
+/// 17 cut, at 18, 20, 22 and 24 px that size's, at 30 px the 28 cut (the axis's top).
+fn optical_size_follows_text_size(doc: &mut Document) {
+    let mut face = face_cache();
+    each_text_style(doc, &mut |style| {
+        let Some(f) = face(style) else { return };
+        if f.axis("opsz").is_some() && f.instance(&style.font_style).is_some() && style.font_size.is_finite() {
+            style.variations.entry("opsz".into()).or_insert(style.font_size);
+        }
+    });
+}
+
+/// A lookup of the installed face for a text style, cached per family and style.
+fn face_cache() -> impl FnMut(&figcraft_doc::TextStyle) -> Option<std::sync::Arc<figcraft_text::fontdb::Face>> {
     let mut cache: std::collections::BTreeMap<(String, String), Option<std::sync::Arc<figcraft_text::fontdb::Face>>> =
         std::collections::BTreeMap::new();
-    let mut face = |style: &figcraft_doc::TextStyle| {
+    move |style: &figcraft_doc::TextStyle| {
         cache
             .entry((style.font_family.clone(), style.font_style.clone()))
             .or_insert_with(|| {
@@ -274,30 +304,24 @@ fn platform_tracking(doc: &mut Document) {
                     .flatten()
             })
             .clone()
-    };
-    let mut track = |style: &mut figcraft_doc::TextStyle| {
-        let Some(f) = face(style) else { return };
-        let t = f.tracking(style.font_size);
-        if t != 0.0 && t.is_finite() {
-            let px = style.letter_spacing.resolve(style.font_size);
-            style.letter_spacing = figcraft_doc::LetterSpacing::Pixels(px + t);
-        }
-        if f.axis("opsz").is_some() && f.instance(&style.font_style).is_some() && style.font_size.is_finite() {
-            style.variations.entry("opsz".into()).or_insert(style.font_size);
-        }
-    };
+    }
+}
+
+/// Calls `f` on every text style of the document: each text layer's, its runs' and the shared
+/// text styles'.
+fn each_text_style(doc: &mut Document, f: &mut dyn FnMut(&mut figcraft_doc::TextStyle)) {
     let ids: Vec<NodeId> = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Text(_))).map(|n| n.id).collect();
     for id in ids {
         if let Some(NodeKind::Text(td)) = doc.node_mut(id).map(|n| &mut n.kind) {
-            track(&mut td.style);
+            f(&mut td.style);
             for r in &mut td.runs {
-                track(&mut r.style);
+                f(&mut r.style);
             }
         }
     }
     for st in &mut doc.styles {
         if let StyleKind::Text { style, .. } = &mut st.kind {
-            track(style);
+            f(style);
         }
     }
 }
@@ -397,6 +421,7 @@ pub(crate) fn load_fig(bytes: &[u8], name: &str) -> Option<Result<figcraft_forma
     Some(r.map_err(|e| EngineError::Other(e.to_string())).map(|(mut doc, warnings)| {
         link_instances(&mut doc);
         installed_fonts_first();
+        optical_size_follows_text_size(&mut doc);
         figcraft_format::Loaded { issues: warnings, ..doc.into() }
     }))
 }
