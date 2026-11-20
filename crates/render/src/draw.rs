@@ -151,6 +151,27 @@ fn pixels_when_magnified(prep: Prepared, device_scale: f64) -> Prepared {
     Prepared::Pattern { pixmap, mode, quality, opacity, transform }
 }
 
+/// An image pattern shown smaller than its pixels, straight, drawn into `path` under `xf` (local
+/// → device) on a `limit`-sized pixmap: replaced by the device pixels it covers, each the average
+/// of the image under it (see [`crate::resample`]), laid on the pixel grid. Others as they are.
+fn averaged_when_shrunk(prep: Prepared, path: &tiny_skia::Path, xf: Affine, limit: (u32, u32)) -> Prepared {
+    let Prepared::Pattern { pixmap, mode: tiny_skia::SpreadMode::Pad, opacity, transform, .. } = &prep else { return prep };
+    let device = ts_transform(xf);
+    let area = path
+        .bounds()
+        .transform(device)
+        .and_then(|b| int_rect(Rect::new(b.left().into(), b.top().into(), b.right().into(), b.bottom().into()), limit));
+    let (Some(area), Some(back)) = (area, device.invert()) else { return prep };
+    let Some(avg) = crate::resample::area_averaged(pixmap, device.pre_concat(*transform), area) else { return prep };
+    Prepared::Pattern {
+        pixmap: std::sync::Arc::new(avg),
+        mode: tiny_skia::SpreadMode::Pad,
+        quality: FilterQuality::Nearest,
+        opacity: *opacity,
+        transform: back.pre_translate(area.x() as f32, area.y() as f32),
+    }
+}
+
 /// Paint `paints` over `path`, bottom first. Each blends by its own mode with what lies under it:
 /// within a layer that isn't pass-through (`isolate`), only with the paints below it in the list,
 /// the list then laid over the canvas as one (the reference tool's: a shape's fills on a
@@ -205,6 +226,7 @@ fn paint_each(
     for p in paints {
         let Some(prep) = prepare_at(p, w, h, scale, ctx.doc, ctx.time, ctx.preview) else { continue };
         let prep = if ctx.magnified_image_pixels && matches!(p.kind, PaintKind::Image(_)) { pixels_when_magnified(prep, scale) } else { prep };
+        let prep = if matches!(p.kind, PaintKind::Image(_)) { averaged_when_shrunk(prep, path, xf, (pix.width(), pix.height())) } else { prep };
         let paint = tiny_skia::Paint { shader: prep.shader(), anti_alias: true, blend_mode: ts_blend(p.blend), ..Default::default() };
         if crate::paint::own_blend(p.blend) {
             // No tiny-skia mode: the paint alone over its pixels, then blended in.

@@ -20,6 +20,7 @@ mod layer_budget;
 pub mod lod;
 pub mod paint;
 pub mod pattern;
+mod resample;
 pub mod retained;
 pub mod shadow;
 
