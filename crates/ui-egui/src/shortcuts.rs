@@ -412,6 +412,9 @@ pub fn run_binding(app: &mut FigApp, id: &str) {
         "edit.delete" if app.session.tool.pen.is_some() => {
             let _ = app.session.pen_finish();
         }
+        "edit.pickColor" if app.ui.picker.is_some() => {
+            app.run("edit.pickColor", json!({"apply": false}));
+        }
         // Enter with a shape or frame tool chosen places one in the middle of the view.
         "select.children" if !dev && app.session.tool.tool.draws_shape() => {
             app.run("tool.place", json!({}));

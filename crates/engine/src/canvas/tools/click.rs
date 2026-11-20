@@ -382,7 +382,15 @@ impl Session {
             // and what to call it; nothing is applied).
             self.request_ui("dialog.createFromColor", json!({"color": c.to_css_hex()}));
         } else if !sel.is_empty() {
-            self.execute("node.set", &json!({"ids": sel, "props": {"fill": c.to_css_hex()}}))?;
+            let (stroked, filled): (Vec<NodeId>, Vec<NodeId>) = sel.iter().partition(|id| doc.node(**id).is_some_and(takes_pick_on_stroke));
+            self.grouped("Pick color", |s| {
+                for (ids, key) in [(filled, "fill"), (stroked, "stroke")] {
+                    if !ids.is_empty() {
+                        s.execute("node.set", &json!({"ids": ids, "props": {key: c.to_css_hex()}}))?;
+                    }
+                }
+                Ok(())
+            })?;
         }
         self.recent_colors.retain(|x| *x != c);
         self.recent_colors.insert(0, c);
@@ -391,4 +399,8 @@ impl Session {
         self.set_tool(ToolId::Move);
         Ok(())
     }
+}
+
+fn takes_pick_on_stroke(n: &Node) -> bool {
+    !n.fills.iter().any(|p| p.visible) && n.strokes.iter().any(|p| p.visible)
 }
