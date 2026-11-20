@@ -95,7 +95,7 @@ pub struct ExportArgs {
     pub format: Option<String>,
     #[command(flatten)]
     pub scale: ScaleArg,
-    /// The page to export (default the first)
+    /// The page to export (default the first non-divider page)
     #[arg(long, value_name = "NAME")]
     pub page: Option<String>,
     /// The layer to export, by id (12 or 0:12) or name
@@ -161,7 +161,7 @@ pub struct RenderArgs {
     pub out: String,
     #[command(flatten)]
     pub scale: ScaleArg,
-    /// The page to render (default the first)
+    /// The page to render (default the first non-divider page)
     #[arg(long, value_name = "NAME")]
     pub page: Option<String>,
     #[command(flatten)]
