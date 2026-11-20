@@ -148,21 +148,44 @@ impl Comment {
 
     /// `user` wrote in the thread or is @mentioned in it.
     pub fn involves(&self, user: &str) -> bool {
-        self.messages().any(|m| m.author == user || !mention_ranges(&m.text, &[user]).is_empty())
+        self.involves_as(user, None)
+    }
+
+    /// [`Self::involves`], with `legacy_user` counting as `user` too. An old default author can be
+    /// claimed this way after the local person's real name replaces the placeholder, without
+    /// rewriting the messages in the file.
+    pub fn involves_as(&self, user: &str, legacy_user: Option<&str>) -> bool {
+        self.messages()
+            .any(|m| m.author == user || legacy_user.is_some_and(|legacy| m.author == legacy) || !mention_ranges(&m.text, &[user]).is_empty())
     }
 
     /// The thread has something `user` hasn't read.
     pub fn is_unread(&self, user: &str) -> bool {
-        self.read_by.as_ref().is_some_and(|r| !r.iter().any(|u| u == user))
+        self.is_unread_as(user, None)
+    }
+
+    /// [`Self::is_unread`], with `legacy_user` counting as `user` too: a thread read under the old
+    /// default name stays read when that person is renamed.
+    pub fn is_unread_as(&self, user: &str, legacy_user: Option<&str>) -> bool {
+        self.read_by.as_ref().is_some_and(|r| !r.iter().any(|u| u == user || legacy_user.is_some_and(|legacy| u == legacy)))
     }
 
     /// Mark the thread read or unread for `user`. True when it changed.
     pub fn set_read(&mut self, user: &str, read: bool) -> bool {
-        if read != self.is_unread(user) {
+        self.set_read_as(user, read, None)
+    }
+
+    /// [`Self::set_read`], with `legacy_user` counting as `user` too. Marking the renamed person
+    /// unread drops the old default name from the readers; marking them read needs no write when
+    /// the old default name already recorded that they had read it.
+    pub fn set_read_as(&mut self, user: &str, read: bool, legacy_user: Option<&str>) -> bool {
+        if read != self.is_unread_as(user, legacy_user) {
             return false;
         }
         if read {
-            if let Some(r) = self.read_by.as_mut() {
+            if let Some(r) = self.read_by.as_mut()
+                && !r.iter().any(|u| u == user)
+            {
                 r.push(user.to_string());
             }
             return true;
@@ -172,7 +195,7 @@ impl Comment {
             self.read_by = Some(self.participants().into_iter().map(String::from).collect());
         }
         if let Some(r) = self.read_by.as_mut() {
-            r.retain(|u| u != user);
+            r.retain(|u| u != user && !legacy_user.is_some_and(|legacy| u == legacy));
         }
         true
     }

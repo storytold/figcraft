@@ -3,7 +3,8 @@
 //! Messages are addressed by `reply` (an index into the replies; omitted: the thread's first
 //! message). `author` is who is acting (default: the AI agent the command runs for, else the name
 //! from Preferences, `pref.userName`): only a message's author edits or deletes it, and only the
-//! thread's author deletes the thread.
+//! thread's author deletes the thread. A message signed with the old default `You` remains the
+//! local person's after their real name arrives, without rewriting the file's author string.
 
 use std::fmt::Write as _;
 
@@ -99,13 +100,13 @@ impl Filter {
         Self::ALL.into_iter().find(|f| f.id().eq_ignore_ascii_case(s.trim()))
     }
 
-    pub fn keeps(self, c: &Comment, user: &str) -> bool {
+    pub fn keeps(self, c: &Comment, user: &str, legacy_user: Option<&str>) -> bool {
         match self {
             Filter::All => true,
             Filter::Open => !c.resolved,
             Filter::Resolved => c.resolved,
-            Filter::Mine => c.involves(user),
-            Filter::Unread => c.is_unread(user),
+            Filter::Mine => c.involves_as(user, legacy_user),
+            Filter::Unread => c.is_unread_as(user, legacy_user),
         }
     }
 }
@@ -161,15 +162,16 @@ impl Default for Query<'_> {
     }
 }
 
-/// The comments `q` asks for, as `user` sees them, in order.
-pub fn query<'a>(doc: &'a Document, q: &Query, user: &str) -> Vec<&'a Comment> {
+/// The comments `q` asks for, as `user` sees them, in order. `legacy_user` is an old placeholder
+/// name (the default author) that still counts as `user` after a real name replaces it.
+pub fn query<'a>(doc: &'a Document, q: &Query, user: &str, legacy_user: Option<&str>) -> Vec<&'a Comment> {
     let needle = q.text.trim().to_lowercase();
     let mut out: Vec<&Comment> = doc
         .comments
         .iter()
         .filter(|c| doc.pages.contains(&c.page))
         .filter(|c| q.page.is_none_or(|p| c.page == p))
-        .filter(|c| q.filter.keeps(c, user))
+        .filter(|c| q.filter.keeps(c, user, legacy_user))
         .filter(|c| q.frame.is_none_or(|f| frame_of(doc, c) == Some(f)))
         .filter(|c| needle.is_empty() || matches_text(doc, c, &needle))
         .collect();
@@ -290,6 +292,19 @@ fn author(s: &Session, p: &Value) -> String {
     string(p, "author").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).unwrap_or_else(|| acting_name(s))
 }
 
+/// The old default author, when it still identifies `who` in this session: `who` is the local
+/// person (not an AI agent acting for them) whose real name has replaced `You`. Other people and
+/// agents get no claim on placeholder-authored messages.
+pub fn legacy_default(s: &Session, who: &str) -> Option<&'static str> {
+    (s.agent.is_none() && who == user_name(s) && who != DEFAULT_AUTHOR).then_some(DEFAULT_AUTHOR)
+}
+
+/// Whether `m` is `who`'s message in this session, including a placeholder-authored message the
+/// local person wrote before their real name arrived.
+pub fn is_own(s: &Session, m: &Message, who: &str) -> bool {
+    m.author == who || legacy_default(s, who).is_some_and(|default| m.author == default)
+}
+
 /// A new message by `who`, marked as an agent's when the command runs for one.
 fn new_message(s: &Session, who: String, text: String) -> Message {
     Message { agent: s.agent.is_some(), ..Message::new(who, text, now_secs()) }
@@ -304,8 +319,8 @@ fn text(cmd: &str, p: &Value) -> crate::Result<String> {
 }
 
 /// Refuse to change someone else's message.
-fn own(cmd: &str, m: &Message, who: &str, what: &str) -> crate::Result<()> {
-    if m.author == who {
+fn own(cmd: &str, m: &Message, who: &str, legacy_user: Option<&str>, what: &str) -> crate::Result<()> {
+    if m.author == who || legacy_user.is_some_and(|legacy| m.author == legacy) {
         return Ok(());
     }
     Err(bad(cmd, format!("only {} can {what} (acting as {who}; pass `author` to act as someone else)", m.author)))
@@ -371,7 +386,10 @@ fn listed<'s>(cmd: &str, s: &'s Session, p: &Value, who: &str, people: &[&str]) 
     let (page, filter, sort, text) = list_params(cmd, s, p)?;
     let want = mentions_param(cmd, p)?;
     let q = Query { page, frame: id(p, "frame"), filter, sort, text: &text };
-    Ok(query(s.doc()?, &q, who).into_iter().filter(|c| want.as_deref().is_none_or(|w| thread_mentions(c, people, w))).collect())
+    Ok(query(s.doc()?, &q, who, legacy_default(s, who))
+        .into_iter()
+        .filter(|c| want.as_deref().is_none_or(|w| thread_mentions(c, people, w)))
+        .collect())
 }
 
 /// Add the names `text` @mentions to `named` as `{name, known, you}`, each once.
@@ -423,7 +441,7 @@ fn message_json(m: &Message, people: &[&str], user: &str) -> Value {
 
 /// JSON view of a comment as `user` sees it: its page position, frame, read state and link, the
 /// first message's fields, and the replies; mentions resolve against `people` (`mentionable`).
-pub fn comment_json(doc: &Document, c: &Comment, user: &str, people: &[&str]) -> Value {
+pub fn comment_json(doc: &Document, c: &Comment, user: &str, people: &[&str], legacy_user: Option<&str>) -> Value {
     let (x, y) = c.position(doc);
     let frame = frame_of(doc, c);
     let mut v = message_json(&c.first, people, user);
@@ -431,7 +449,7 @@ pub fn comment_json(doc: &Document, c: &Comment, user: &str, people: &[&str]) ->
         "id": c.id, "page": c.page, "pageName": doc.node(c.page).map(|n| n.name.as_str()),
         "x": x, "y": y, "anchor": c.anchor,
         "frame": frame, "frameName": frame.and_then(|f| doc.node(f)).map(|n| n.name.as_str()),
-        "resolved": c.resolved, "unread": c.is_unread(user), "link": link(c.id),
+        "resolved": c.resolved, "unread": c.is_unread_as(user, legacy_user), "link": link(c.id),
         "replies": c.replies.iter().map(|m| message_json(m, people, user)).collect::<Vec<_>>(),
     });
     if let (Some(m), Value::Object(e)) = (v.as_object_mut(), extra) {
@@ -442,7 +460,7 @@ pub fn comment_json(doc: &Document, c: &Comment, user: &str, people: &[&str]) ->
 
 /// Bounded metadata for `comment.prompt`'s `comments` list. Full messages and replies stay in
 /// `comment.list`; a prompt over thousands of threads must not repeat all of them here.
-fn comment_brief_json(doc: &Document, c: &Comment, user: &str, people: &[&str]) -> Value {
+fn comment_brief_json(doc: &Document, c: &Comment, user: &str, people: &[&str], legacy_user: Option<&str>) -> Value {
     let (x, y) = c.position(doc);
     let frame = frame_of(doc, c);
     // The names the whole thread @mentions, as `comment.list` reports them per message.
@@ -464,7 +482,7 @@ fn comment_brief_json(doc: &Document, c: &Comment, user: &str, people: &[&str]) 
         "pageName": doc.node(c.page).map(|n| clip_chars(&n.name, 80)),
         "x": x, "y": y, "anchor": c.anchor,
         "frame": frame, "frameName": frame.and_then(|f| doc.node(f)).map(|n| clip_chars(&n.name, 80)),
-        "resolved": c.resolved, "unread": c.is_unread(user), "link": link(c.id),
+        "resolved": c.resolved, "unread": c.is_unread_as(user, legacy_user), "link": link(c.id),
         "author": clip_chars(&c.first.author, 80), "agent": c.first.agent, "preview": clip_chars(&c.first.text, 160),
         "replies": c.replies.len(), "mentions": named,
     })
@@ -503,17 +521,18 @@ fn reveal(s: &mut Session, id: u64, how: &str) -> crate::Result<()> {
 
 /// Reveal a thread (`how`: fit, center or keep), mark it read for `who` and ask the UI to open it.
 fn open(s: &mut Session, id: u64, how: &str, who: &str) -> crate::Result<Value> {
+    let legacy = legacy_default(s, who);
     reveal(s, id, how)?;
-    if s.doc()?.comment(id).is_some_and(|c| c.is_unread(who))
+    if s.doc()?.comment(id).is_some_and(|c| c.is_unread_as(who, legacy))
         && let Some(c) = s.doc_mut()?.comment_mut(id)
     {
-        c.set_read(who, true);
+        c.set_read_as(who, true, legacy);
     }
     s.request_ui("comment.open", json!({"id": id}));
     let doc = s.doc()?;
     let c = doc.comment(id).ok_or_else(|| bad("comment.open", "no comment"))?;
     let people = doc.comment_people();
-    Ok(comment_json(doc, c, who, &mentionable(&people, who)))
+    Ok(comment_json(doc, c, who, &mentionable(&people, who), legacy))
 }
 
 /// A list's page (None: every page), filter, sort and search text from params.
@@ -718,11 +737,12 @@ pub fn specs() -> Vec<CommandSpec> {
             let id = req_comment("comment.edit", s, p)?;
             let t = text("comment.edit", p)?;
             let who = author(s, p);
+            let legacy = legacy_default(s, &who);
             let (i, same) = {
                 let c = s.doc()?.comment(id).ok_or_else(|| bad("comment.edit", "no comment"))?;
                 let i = message_index("comment.edit", c, p)?;
                 let m = c.message(i).ok_or_else(|| bad("comment.edit", "no message"))?;
-                own("comment.edit", m, &who, "edit this message")?;
+                own("comment.edit", m, &who, legacy, "edit this message")?;
                 (i, m.text == t)
             };
             // The same text is no edit (and no undo step).
@@ -791,16 +811,17 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let id = req_comment("comment.delete", s, p)?;
                 let who = author(s, p);
+                let legacy = legacy_default(s, &who);
                 let doc = s.doc_mut()?;
                 let c = doc.comment_mut(id).ok_or_else(|| bad("comment.delete", "no comment"))?;
                 match message_index("comment.delete", c, p)? {
                     0 => {
-                        own("comment.delete", &c.first, &who, "delete this thread")?;
+                        own("comment.delete", &c.first, &who, legacy, "delete this thread")?;
                         doc.comments.retain(|c| c.id != id);
                     }
                     i => {
                         let m = c.message(i).ok_or_else(|| bad("comment.delete", "no message"))?;
-                        own("comment.delete", m, &who, "delete this reply")?;
+                        own("comment.delete", m, &who, legacy, "delete this reply")?;
                         c.replies.remove(i - 1);
                     }
                 }
@@ -816,14 +837,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 let read = boolean(p, "read").unwrap_or(true);
                 let who = author(s, p);
                 let only = if get(p, "id").is_some() || get(p, "link").is_some() { Some(req_comment("comment.markRead", s, p)?) } else { None };
-                let wants = |c: &Comment| only.is_none_or(|i| c.id == i) && c.is_unread(&who) == read;
+                let legacy = legacy_default(s, &who);
+                let wants = |c: &Comment| only.is_none_or(|i| c.id == i) && c.is_unread_as(&who, legacy) == read;
                 // The document is left alone when nothing changes (no unsaved changes for nothing).
                 if !s.doc()?.comments.iter().any(wants) {
                     return Ok(json!({"changed": 0}));
                 }
                 let mut n = 0;
                 for c in s.doc_mut()?.comments.iter_mut().filter(|c| only.is_none_or(|i| c.id == i)) {
-                    n += usize::from(c.set_read(&who, read));
+                    n += usize::from(c.set_read_as(&who, read, legacy));
                 }
                 Ok(json!({"changed": n}))
             }
@@ -904,8 +926,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 let who = author(s, p);
                 let people = doc.comment_people();
                 let people = mentionable(&people, &who);
-                let list: Vec<Value> =
-                    listed("comment.list", s, p, &who, &people)?.into_iter().map(|c| comment_json(doc, c, &who, &people)).collect();
+                let list: Vec<Value> = listed("comment.list", s, p, &who, &people)?
+                    .into_iter()
+                    .map(|c| comment_json(doc, c, &who, &people, legacy_default(s, &who)))
+                    .collect();
                 Ok(json!({"comments": list}))
             }
         ),
@@ -962,13 +986,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     out
                 } else {
                     let search = string(p, "query").unwrap_or_default();
-                    query(doc, &Query { page, frame: None, filter, sort, text: &search }, &who)
+                    query(doc, &Query { page, frame: None, filter, sort, text: &search }, &who, legacy_default(s, &who))
                 };
                 let count = selected.len();
                 let (text, truncated) = prompt_text(doc, path.as_deref(), &selected);
                 let people = doc.comment_people();
                 let people = mentionable(&people, &who);
-                let comments: Vec<Value> = selected.iter().take(PROMPT_MAX_THREADS).map(|c| comment_brief_json(doc, c, &who, &people)).collect();
+                let comments: Vec<Value> =
+                    selected.iter().take(PROMPT_MAX_THREADS).map(|c| comment_brief_json(doc, c, &who, &people, legacy_default(s, &who))).collect();
                 Ok(json!({"count": count, "truncated": truncated, "text": text, "comments": comments}))
             }
         ),
