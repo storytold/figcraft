@@ -587,6 +587,18 @@ fn rect_clip_frame_matches_same_rect_fill_on_fractional_edges() {
 }
 
 #[test]
+fn jpeg_export_keeps_full_chroma() {
+    let mut pix = Pixmap::new(8, 8).unwrap();
+    pix.fill(tiny_skia::Color::from_rgba8(160, 64, 192, 255));
+    let jpeg = encode_export_with(&pix, ExportFormat::Jpg, ColorProfile::Srgb, 90).unwrap();
+
+    // SOF0 for the generated 8-bit, three-component baseline JPEG.
+    let header = [0xff, 0xc0, 0, 17, 8, 0, 8, 0, 8, 3];
+    let frame = jpeg.windows(19).find(|segment| segment.starts_with(&header)).expect("RGB JPEG frame");
+    assert_eq!([frame[11], frame[14], frame[17]], [0x11; 3], "JPEG component sampling factors");
+}
+
+#[test]
 fn export_output_and_icc_parity() {
     use figcraft_color::ColorProfile;
     use figcraft_doc::ExportFormat;
