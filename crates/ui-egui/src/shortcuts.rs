@@ -476,10 +476,6 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
         }
         return true;
     }
-    // Arrows move through the layers panel while it has the keyboard.
-    if app.ui.layers_focus && !m.command && !m.alt && crate::layers::key_nav(app, key, m.shift) {
-        return true;
-    }
     // Arrow nudges, Alt held too (measuring stays on while the selection moves); with nothing
     // selected the arrows pan the view.
     let (dx, dy) = match key {
