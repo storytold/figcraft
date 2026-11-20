@@ -597,8 +597,8 @@ fn export_output_and_icc_parity() {
     };
 
     let mut pix = Pixmap::new(8, 8).unwrap();
-    // Premultiplied 50% alpha over red-orange (straight [200, 100, 50, 128]).
-    let straight = [200u8, 100, 50, 128];
+    // Premultiplied 50% alpha: `(100*255+64)/128 = 199`, `(50*255+64)/128 = 100`, `(25*255+64)/128 = 50`.
+    let straight = [199u8, 100, 50, 128];
     let pm = tiny_skia::PremultipliedColorU8::from_rgba(100, 50, 25, 128).unwrap();
     pix.pixels_mut().fill(pm);
 
