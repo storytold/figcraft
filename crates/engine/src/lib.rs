@@ -483,6 +483,8 @@ mod panels_behaviour_tests;
 #[cfg(test)]
 mod paste_missing_image_tests;
 #[cfg(test)]
+mod paste_over_tests;
+#[cfg(test)]
 mod paste_sibling_tests;
 #[cfg(test)]
 mod path_read_caps_tests;
