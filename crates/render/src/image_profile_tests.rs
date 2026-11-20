@@ -432,3 +432,30 @@ fn f32_thumbnail_averages_before_quantizing() {
     // whose 8-bit average rounds to 1.
     assert_eq!(p.data(), &[0, 0, 0, 255]);
 }
+
+#[test]
+fn non_finite_f32_and_f16_thumbnails_clamp_like_full_size_decode() {
+    let samples = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0, 1.0, f32::NEG_INFINITY, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0];
+    let raw: Vec<u8> = samples.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let f32_img =
+        craft_image_codecs::Image::from_raw(2, 2, craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::F32, raw).unwrap();
+    let f16_img = f32_img.convert(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::F16);
+
+    for (label, img) in [("f32", f32_img), ("f16", f16_img)] {
+        let exr = craft_image_codecs::encode(&img, craft_image_codecs::Format::OpenExr, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let (full, _) = images::decode_within(&exr, ColorProfile::Srgb, 2, u64::MAX).unwrap();
+        assert_eq!(&full.data()[..4], &[0, 255, 0, 255], "{label} full-size pixel 0");
+        let (thumb, _) = images::decode_within(&exr, ColorProfile::Srgb, 1, u64::MAX).unwrap();
+        assert_eq!((thumb.width(), thumb.height()), (1, 1), "{label} thumb dimensions");
+        assert_eq!(thumb.data(), &[191, 64, 64, 255], "{label} thumb pixels");
+    }
+
+    let nan_alpha = [1.0_f32, 1.0, 1.0, f32::NAN, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+    let alpha_raw: Vec<u8> = nan_alpha.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let alpha_img =
+        craft_image_codecs::Image::from_raw(2, 2, craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::F32, alpha_raw).unwrap();
+    let alpha_exr =
+        craft_image_codecs::encode(&alpha_img, craft_image_codecs::Format::OpenExr, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    let (alpha_thumb, _) = images::decode_within(&alpha_exr, ColorProfile::Srgb, 1, u64::MAX).unwrap();
+    assert_eq!(alpha_thumb.data(), &[191, 191, 191, 191]);
+}
