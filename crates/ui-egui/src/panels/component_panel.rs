@@ -31,6 +31,7 @@ use crate::widgets;
 pub fn instance_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let [id] = sel else {
         combine_ui(app, ui, doc, sel);
+        instances_ui(app, ui, doc, sel);
         return;
     };
     let Some(n) = doc.node(*id) else { return };
@@ -712,7 +713,7 @@ fn instance_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node) {
             }
         });
     }
-    instance_props(app, ui, doc, n, &comps);
+    instance_props(app, ui, doc, &[n.id], &comps);
     // Exposed nested instances: their properties, under their names.
     if !nested {
         for c in figcraft_engine::components::exposed_copies(doc, id) {
@@ -722,7 +723,7 @@ fn instance_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node) {
                 icons::paint(ui.painter(), r, Icon::Instance, crate::theme::COMPONENT);
                 ui.label(egui::RichText::new(&cn.name).font(semibold(11.0)).color(t.text));
             });
-            instance_props(app, ui, doc, cn, &comps);
+            instance_props(app, ui, doc, &[cn.id], &comps);
         }
     }
 }
@@ -732,38 +733,120 @@ fn nested_in_main(doc: &Document, id: NodeId) -> bool {
     !inside_instance(doc, id) && figcraft_engine::components::owning_component(doc, id).is_some_and(|c| c != id)
 }
 
-/// Variant and component property controls for instance `n`.
-fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node, comps: &[(NodeId, String)]) {
-    let NodeKind::Instance { component, props } = &n.kind else { return };
-    let id = n.id;
-    let set = variant_set(doc, *component);
-    let slots = slots_of(doc, id);
+/// The Instance section for a selection of two or more instances: the properties they share. A
+/// selection with any other layer shows nothing.
+fn instances_ui(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
+    if sel.len() < 2 || !sel.iter().all(|id| matches!(doc.node(*id).map(|n| &n.kind), Some(NodeKind::Instance { .. }))) {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let comps = local_components(app, ui, doc);
+    widgets::separator(ui);
+    row(ui, 36.0, |ui| {
+        ui.label(egui::RichText::new(tr("Instance")).font(semibold(11.0)).color(t.text));
+    });
+    instance_props(app, ui, doc, sel, &comps);
+}
+
+/// A variant property the selected instances share: the values every one of their sets has, and
+/// the current value, None when it differs between them (Mixed).
+struct SharedVariantProp {
+    name: String,
+    values: Vec<String>,
+    current: Option<String>,
+}
+
+/// A boolean, text, instance-swap or slot property the selected instances share, by name and type:
+/// its definition (the first instance's) and the value, None when it differs between them (Mixed).
+struct SharedProp {
+    name: String,
+    def: PropDef,
+    value: Option<Value>,
+}
+
+/// The variant and other properties of instance `id` with its own values (a property it doesn't
+/// set has its default). None when `id` isn't an instance.
+fn own_props(doc: &Document, id: NodeId) -> Option<(Vec<SharedVariantProp>, Vec<SharedProp>)> {
+    let Some(NodeKind::Instance { component, props }) = doc.node(id).map(|n| &n.kind) else { return None };
+    let current = doc.node(*component).map(|c| variant_props(&c.name)).unwrap_or_default();
+    let variants = variant_set(doc, *component)
+        .map(|set| variant_options(doc, set))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, values)| SharedVariantProp { current: Some(current.get(&name).cloned().unwrap_or_default()), name, values })
+        .collect();
+    let others = instance_prop_list(doc, *component)
+        .into_iter()
+        .map(|(name, def)| {
+            let value = props.get(&name).cloned().unwrap_or_else(|| figcraft_engine::components::prop_default_value(&def));
+            SharedProp { name, def, value: Some(value) }
+        })
+        .collect();
+    Some((variants, others))
+}
+
+/// The properties every instance in `ids` has, in the first one's order, with the values they share;
+/// nothing when any of `ids` isn't an instance.
+fn shared_props(doc: &Document, ids: &[NodeId]) -> (Vec<SharedVariantProp>, Vec<SharedProp>) {
+    let Some((first, rest)) = ids.split_first() else { return Default::default() };
+    let Some((mut variants, mut others)) = own_props(doc, *first) else { return Default::default() };
+    for id in rest {
+        let Some((own_variants, own_others)) = own_props(doc, *id) else { return Default::default() };
+        variants.retain_mut(|shared| {
+            let Some(own) = own_variants.iter().find(|o| o.name == shared.name) else { return false };
+            shared.values.retain(|v| own.values.contains(v));
+            if shared.current != own.current {
+                shared.current = None;
+            }
+            true
+        });
+        others.retain_mut(|shared| {
+            let Some(own) =
+                own_others.iter().find(|o| o.name == shared.name && std::mem::discriminant(&o.def) == std::mem::discriminant(&shared.def))
+            else {
+                return false;
+            };
+            if shared.value != own.value {
+                shared.value = None;
+            }
+            true
+        });
+    }
+    (variants, others)
+}
+
+/// Variant and component property controls for instances `ids`: the properties they share, set on
+/// all of them at once. Slots show only for a single instance.
+fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId], comps: &[(NodeId, String)]) {
+    let (variants, others) = shared_props(doc, ids);
+    let slots = match ids {
+        [id] => slots_of(doc, *id),
+        _ => Vec::new(),
+    };
     // Variant properties.
-    if let Some(set) = set {
-        let current = doc.node(*component).map(|c| variant_props(&c.name)).unwrap_or_default();
-        for (k, vals) in variant_options(doc, set) {
-            let cur = current.get(&k).cloned().unwrap_or_default();
-            row(ui, 32.0, |ui| {
-                prop_label(ui, &k, Icon::ComponentSet);
-                let w = ui.available_width().max(60.0);
-                // A string variable naming one of the values can choose it.
-                crate::variable_ui::bindable(app, ui, &[id], &format!("{PROP_BINDING}{k}"), VariableType::String, w, |app, ui| {
-                    let resp = widgets::dropdown(ui, &cur, w, None);
-                    menu_popup(&resp).show(|ui| {
-                        for v in &vals {
-                            if menu_item(ui, v, "") {
-                                app.run("instance.setProperties", json!({"ids": [id], "properties": {k.clone(): v}}));
-                                ui.close();
-                            }
+    for SharedVariantProp { name: k, values: vals, current } in variants {
+        row(ui, 32.0, |ui| {
+            prop_label(ui, &k, Icon::ComponentSet);
+            let w = ui.available_width().max(60.0);
+            // A string variable naming one of the values can choose it.
+            crate::variable_ui::bindable(app, ui, ids, &format!("{PROP_BINDING}{k}"), VariableType::String, w, |app, ui| {
+                let resp = widgets::dropdown(ui, current.as_deref().unwrap_or(tr("Mixed")), w, None);
+                menu_popup(&resp).show(|ui| {
+                    for v in &vals {
+                        if menu_item(ui, v, "") {
+                            app.run("instance.setProperties", json!({"ids": ids, "properties": {k.clone(): v}}));
+                            ui.close();
                         }
-                    });
+                    }
                 });
             });
-        }
+        });
     }
     // Boolean, text and instance-swap properties.
-    for (k, d) in instance_prop_list(doc, *component) {
-        let v = props.get(&k).cloned().unwrap_or_else(|| figcraft_engine::components::prop_default_value(&d));
+    for SharedProp { name: k, def: d, value } in others {
+        if matches!(d, PropDef::Slot { .. }) && !slots.iter().any(|(_, name)| *name == k) {
+            continue;
+        }
         row(ui, 32.0, |ui| {
             prop_label(ui, &k, type_icon(&d));
             let w = ui.available_width().max(60.0);
@@ -771,26 +854,28 @@ fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node, comps
             let bind_field = format!("{PROP_BINDING}{k}");
             match d {
                 PropDef::Boolean { .. } => {
-                    crate::variable_ui::bindable(app, ui, &[id], &bind_field, VariableType::Boolean, w, |app, ui| {
-                        let on = v.as_bool().unwrap_or(false);
-                        if widgets::checkbox(ui, on, "") {
-                            app.run("instance.setProperties", json!({"ids": [id], "properties": {k.clone(): !on}}));
+                    crate::variable_ui::bindable(app, ui, ids, &bind_field, VariableType::Boolean, w, |app, ui| {
+                        let state = value.as_ref().map(|v| v.as_bool().unwrap_or(false));
+                        if widgets::checkbox_tri(ui, state, "") {
+                            app.run("instance.setProperties", json!({"ids": ids, "properties": {k.clone(): !state.unwrap_or(false)}}));
                         }
                     });
                 }
                 PropDef::Text { .. } => {
-                    crate::variable_ui::bindable(app, ui, &[id], &bind_field, VariableType::String, w, |app, ui| {
-                        let cur = v.as_str().unwrap_or_default().to_string();
-                        if let Some(ns) = widgets::text_field(ui, Id::unique(("iprop", id, k.as_str())), &cur, w, "")
+                    crate::variable_ui::bindable(app, ui, ids, &bind_field, VariableType::String, w, |app, ui| {
+                        let cur = value.as_ref().and_then(Value::as_str).unwrap_or_default().to_string();
+                        let placeholder = if value.is_some() { "" } else { tr("Mixed") };
+                        if let Some(ns) = widgets::text_field(ui, Id::unique(("iprop", ids, k.as_str())), &cur, w, placeholder)
                             && ns != cur
                         {
-                            app.run("instance.setProperties", json!({"ids": [id], "properties": {k.clone(): ns}}));
+                            app.run("instance.setProperties", json!({"ids": ids, "properties": {k.clone(): ns}}));
                         }
                     });
                 }
                 PropDef::InstanceSwap { preferred, .. } => {
-                    if let Some(c) = swap_dropdown(ui, doc, figcraft_engine::params::id_of(&v), &preferred, comps, w, &k).1 {
-                        app.run("instance.setProperties", json!({"ids": [id], "properties": {k.clone(): c.0}}));
+                    let cur = value.as_ref().and_then(figcraft_engine::params::id_of);
+                    if let Some(c) = swap_dropdown(ui, doc, cur, value.is_none(), &preferred, comps, w, &k).1 {
+                        app.run("instance.setProperties", json!({"ids": ids, "properties": {k.clone(): c.0}}));
                     }
                 }
                 PropDef::Variant { .. } => {}
@@ -806,18 +891,24 @@ fn instance_props(app: &mut FigApp, ui: &mut Ui, doc: &Document, n: &Node, comps
 
 /// The dropdown of an instance-swap property showing component `cur`: its menu lists the
 /// property's preferred components first (when it has any), then every component in the file. The
-/// dropdown, and the component picked (picking the current one picks nothing). `name` labels it for
-/// assistive technology.
+/// dropdown, and the component picked (picking the current one picks nothing). Without `cur` it reads
+/// "Mixed" when `mixed` (the selected instances swap in different components), else "None". `name`
+/// labels it for assistive technology.
 pub(crate) fn swap_dropdown(
     ui: &mut Ui,
     doc: &Document,
     cur: Option<NodeId>,
+    mixed: bool,
     preferred: &[NodeId],
     comps: &[(NodeId, String)],
     w: f32,
     name: &str,
 ) -> (egui::Response, Option<NodeId>) {
-    let label = cur.and_then(|c| doc.node(c)).map(|c| c.name.clone()).unwrap_or_else(|| tr("None").into());
+    let label = match cur.and_then(|c| doc.node(c)) {
+        Some(c) => c.name.clone(),
+        None if mixed => tr("Mixed").into(),
+        None => tr("None").into(),
+    };
     let resp = widgets::dropdown(ui, &label, w, Some(Icon::Instance));
     if !name.is_empty() {
         crate::a11y::combo(&resp, name, &label, crate::a11y::menu_open(&resp));
