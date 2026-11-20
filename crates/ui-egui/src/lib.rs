@@ -300,6 +300,8 @@ mod variable_picker_tests;
 #[cfg(test)]
 mod variables_export_ui_tests;
 #[cfg(test)]
+mod variables_group_create_tests;
+#[cfg(test)]
 mod variables_rename_tests;
 #[cfg(test)]
 mod variables_select_tests;
