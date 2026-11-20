@@ -66,7 +66,7 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are used as in RFC 2119
 FigCraft is an open-source, pure-Rust (egui) design app (Figma-class): interface design, auto layout, components and variants, styles and variables, prototyping and inspection. It runs natively on macOS, Windows, Linux and FreeBSD, and in the browser via WASM.
 
 ### Layout
-- `crates/*` by layer, enforced by `cargo xtask layers`: geom and color (L0), doc (L1), layout, text, pathops, plugin, collab (L2), render and format (L3), svg and pdf (L4), engine (L5), ui-egui and mcp (L6), then `apps/`. Nothing below L6 depends on egui, eframe, rfd or winit, so the UI crate is swappable.
+- `crates/*` by layer, enforced by `cargo xtask layers`: geom and color (L0), doc (L1), layout, text, pathops, plugin, collab (L2), render and format (L3), svg, pdf and vectordrawable (L4), engine (L5), ui-egui, mcp and collab-net (L6), then `apps/`. Nothing below L6 depends on egui, eframe, rfd or winit, so the UI crate is swappable.
 - Commands live in `crates/engine/src/cmd/*` (`spec!(id, label, params doc, undoable, run)`). Menus, shortcuts, the Actions palette, CLI, control channel and MCP dispatch the same ids. The menu catalog is `crates/engine/src/catalog.rs` (`cargo xtask parity`). A programmatic call only requests UI (`Session::request_ui`); the control channel drops dialog requests.
 - Panels read engine state and act through `app.run(id, params)` or `app.set_props(ids, props)`. Colours come from `theme::Tokens`.
 - Progress docs: `ROADMAP.md`, `docs/gaps.md` (ranked work list), `docs/target-app-parity.md`, `docs/roadmap.md`, `docs/architecture.md`, the `docs/*-parity.md` files and the generated `docs/parity-checklist.md`. A PR that lands a task updates the rows it touches.
@@ -76,7 +76,7 @@ FigCraft is an open-source, pure-Rust (egui) design app (Figma-class): interface
 For the crates you changed: `cargo fmt`, `cargo clippy -p <crate> --all-targets`, `cargo test -p <crate>`. Repository-wide steps when they apply: `cargo xtask layers`, `cargo xtask assets`, `cargo xtask wasm`, `cargo xtask parity`. `cargo xtask ci` runs them together.
 
 ### Paths and conventions
-- `unsafe`: none; `Cargo.toml` sets `unsafe_code = "forbid"`. `figcraft_engine::guard` catches a panic at every engine entry point.
+- `unsafe`: none in the workspace; `Cargo.toml` sets `unsafe_code = "forbid"`. The plug-in SDK in `plugins/sdk` is outside the workspace and uses `unsafe` for the WebAssembly host calls. `figcraft_engine::guard` catches a panic at every engine entry point.
 - Attribution file: [`ATTRIBUTION.md`](ATTRIBUTION.md); `cargo xtask assets` fails on an unlisted file under `assets/`, `docs/brand/` or `docs/images/`. Licences: `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`; `docs/brand/LICENSE-brand.txt` for the ArtCraft logos.
 - UI icons are drawn in code (`crates/ui-egui/src/icons.rs`). The app icon is `assets/app-icon/figcraft.svg` (`assets/app-icon/README.md`); `cargo xtask icon` renders the PNGs and `.ico`.
 - Fonts come from [storytold/craft-fonts](https://github.com/storytold/craft-fonts) through the optional `CRAFT_FONTS_DIR` build input (`.cargo/config.toml` points it at `../craft-fonts`; `crates/text/build.rs` embeds it). Without it, system fonts are scanned at runtime.
