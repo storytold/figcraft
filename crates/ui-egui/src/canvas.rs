@@ -98,6 +98,8 @@ pub struct CanvasState {
     pressure: Option<f32>,
     /// The latest scroll came from a mouse wheel rather than a trackpad (Scroll wheel zoom).
     wheel_is_mouse: bool,
+    /// A pointer press on the canvas deferred by one frame to let a focused panel field blur and commit.
+    deferred_down: Option<(Pos2, bool, Pos2, egui::Modifiers)>,
 }
 
 impl Default for CanvasState {
@@ -129,6 +131,7 @@ impl Default for CanvasState {
             preedit: None,
             pressure: None,
             wheel_is_mouse: false,
+            deferred_down: None,
         }
     }
 }

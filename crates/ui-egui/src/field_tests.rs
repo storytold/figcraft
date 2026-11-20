@@ -1765,3 +1765,71 @@ fn a_boolean_groups_field_shows_the_radius_it_draws() {
     type_into(&mut u, "Corner radius", "+10", Key::Enter);
     assert_eq!(u.app.session.doc().unwrap().node(g).unwrap().corners.radii, [10.0; 4], "0 + 10, not 30 + 10");
 }
+
+#[test]
+fn a_draft_is_dropped_when_the_selection_changes() {
+    let (mut u, _a, b) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+    u.frame(vec![Event::Text("23".into())]);
+
+    // Deselect (clear selection) while field is in editing state
+    u.app.run("select.clear", json!({}));
+    u.frame(vec![]);
+
+    // Now select b (which has height 20)
+    u.app.run("select.set", json!({"ids": [b]}));
+    u.frame(vec![]);
+
+    // Verify height field does NOT stay stuck in editing state
+    let h_editing = u.ctx.data(|d| d.get_temp::<String>(Id::unique("lay_h").with("editing")));
+    assert_eq!(h_editing, None, "Height field must not be stuck in editing state after deselect and reselect");
+    assert_eq!(field(&mut u, "Height").1, "20", "Height field must show layer b's height");
+}
+
+#[test]
+fn clicking_canvas_while_editing_number_field_commits_value() {
+    let (mut u, a, _) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+    u.frame(vec![Event::Text("50".into())]);
+
+    // Click on empty canvas (outside the layers and panels)
+    let canvas_click = pos2(500.0, 500.0);
+    click(&mut u, canvas_click);
+
+    let doc = u.app.session.doc().unwrap();
+    assert_eq!(doc.node(a).unwrap().height, 50.0, "Clicking canvas must commit the edited field value");
+}
+
+#[test]
+fn field_draft_is_retained_when_window_loses_focus() {
+    let (mut u, _a, _) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+    u.frame(vec![Event::Text("55".into())]);
+
+    // Simulate window deactivation (e.g. user switching windows/applications)
+    u.frame_raw(egui::RawInput { focused: false, ..Default::default() });
+
+    // Verify draft is still present
+    let h_editing = u.ctx.data(|d| d.get_temp::<String>(Id::unique("lay_h").with("editing")));
+    assert_eq!(h_editing.as_deref(), Some("55"), "field draft must be retained when window loses focus");
+}
+
+#[test]
+fn selecting_different_layer_in_layers_panel_drops_draft() {
+    let (mut u, _a, b) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+    u.frame(vec![Event::Text("99".into())]);
+
+    // Click layer B in the Layers panel (sending press and release in the same frame)
+    let b_row = u.row_at(b);
+    click(&mut u, b_row);
+
+    // Verify draft was dropped and b's height is shown, not 99
+    let h_editing = u.ctx.data(|d| d.get_temp::<String>(Id::unique("lay_h").with("editing")));
+    assert_eq!(h_editing, None, "stale draft must not leak into newly selected layer");
+    assert_eq!(field(&mut u, "Height").1, "20", "Height field must show layer b's height");
+}
