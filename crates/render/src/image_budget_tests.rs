@@ -192,3 +192,31 @@ fn filter_and_profile_variants_count_against_one_budget() {
         }
     }
 }
+
+#[test]
+fn zero_size_and_corrupt_inputs_are_refused() {
+    let corrupt: [&[u8]; 6] = [b"", b"not an image", b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff\xe0", b"RIFF\x00\x00\x00\x00WEBP", b"GIF89a"];
+    for bytes in corrupt {
+        assert!(images::dimensions(bytes).is_none());
+        assert!(images::decode(bytes).is_none());
+        assert!(images::decode_within(bytes, ColorProfile::Srgb, 256, u64::MAX).is_none());
+        assert!(crate::image_profile::Source::of(bytes).name.is_none());
+    }
+    for (w, h) in [(0, 0), (0, 4), (4, 0)] {
+        let bad_png = png_header_only(w, h);
+        assert!(images::dimensions(&bad_png).is_none(), "{w}x{h}");
+        assert!(images::decode(&bad_png).is_none(), "{w}x{h}");
+        assert!(images::decode_within(&bad_png, ColorProfile::Srgb, 256, u64::MAX).is_none(), "{w}x{h}");
+    }
+}
+
+#[test]
+fn dimensions_reads_valid_formats() {
+    let p = Pixmap::new(12, 7).unwrap();
+    let png_bytes = crate::encode_png(&p).unwrap();
+    let jpg_bytes = crate::encode_jpeg(&p, figcraft_color::Color::WHITE, 85).unwrap();
+    let webp_bytes = crate::encode_webp(&p).unwrap();
+    for bytes in [png_bytes, jpg_bytes, webp_bytes] {
+        assert_eq!(images::dimensions(&bytes), Some((12, 7)));
+    }
+}
