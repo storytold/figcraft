@@ -221,10 +221,18 @@ fn natural_ratio(face: &Face) -> f64 {
     ((face.ascent + face.descent + face.line_gap.max(0.0)) / face.upem).max(0.5)
 }
 
-/// A line's height: whole pixels (halves round up), whatever unit it was given in. Heights under a
-/// pixel stay as they are, so tiny text keeps its lines apart.
-fn whole_px(line_height: f64) -> f64 {
-    if line_height >= 1.0 { (line_height + 0.5).floor() } else { line_height }
+/// A line's height: one given in pixels as it is (22.5 px lines stay 22.5 apart, as the reference
+/// tool lays them out), one worked out from the font (Auto or a percentage) in whole pixels, halves
+/// rounding up. Heights under a pixel stay as they are, so tiny text keeps its lines apart.
+fn line_px(line_height: LineHeight, size: f64, natural: f64) -> f64 {
+    let h = line_height.resolve(size, natural);
+    if matches!(line_height, LineHeight::Pixels(_)) || h < 1.0 { h } else { (h + 0.5).floor() }
+}
+
+/// A text box's height: the lines' height rounded up to a whole pixel (lines a fraction of a pixel
+/// tall add up to that), as the reference tool sizes it. Under a pixel it stays as it is.
+fn box_px(h: f64) -> f64 {
+    if h >= 1.0 { (h - 1e-6).ceil() } else { h }
 }
 
 /// Advances sit on a grid of this many steps per em, then scale with the font size.
@@ -1105,7 +1113,7 @@ fn finish_layout(out: &mut TextLayout, finish: LayoutFinish<'_>) {
             g.y -= shift;
         }
     }
-    let bottom = |l: &Line| if trim { l.baseline } else { l.top + l.height };
+    let bottom = |l: &Line| if trim { l.baseline } else { box_px(l.top + l.height) };
     out.height = out.lines.last().map_or(flow_height, bottom).max(0.0);
 
     truncate_layout(out, &finish);
@@ -1270,9 +1278,9 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
         match faces.get(st_idx).and_then(Option::as_ref).or(default_face.as_ref()) {
             Some(f) => {
                 let k = size / f.upem;
-                [f.ascent * k, f.descent * k, whole_px(st.line_height.resolve(size, natural_ratio(f))), f.cap_height * k]
+                [f.ascent * k, f.descent * k, line_px(st.line_height, size, natural_ratio(f)), f.cap_height * k]
             }
-            None => [size * 0.8, size * 0.2, whole_px(st.line_height.resolve(size, 1.2)), size * 0.7],
+            None => [size * 0.8, size * 0.2, line_px(st.line_height, size, 1.2), size * 0.7],
         }
     };
     let mut first_cap = 0.0;

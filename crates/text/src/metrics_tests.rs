@@ -1,5 +1,5 @@
-//! Text metric rules measured against documents re-saved by other software: line heights are whole
-//! pixels, advances sit on a grid of 1024 steps per em, and letter spacing goes between glyphs
+//! Text metric rules measured against documents re-saved by other software: line heights worked
+//! out from the font are whole pixels (ones given in pixels keep their fraction), advances sit on a grid of 1024 steps per em, and letter spacing goes between glyphs
 //! only. Each case derives its numbers from the face in use (skipped on a machine without fonts);
 //! the last test pins sizes that were measured, for the one font build they were measured with.
 
@@ -32,7 +32,6 @@ fn line_heights_are_whole_pixels() {
         (22.0, LineHeight::Percent(125.0), 28.0, "27.5: halves round up"),
         (48.0, LineHeight::Percent(110.0), 53.0, "52.8 rounds up"),
         (14.0, LineHeight::Pixels(20.0), 20.0, "whole pixels stay"),
-        (14.0, LineHeight::Pixels(20.4), 20.0, "pixel values round too (not measured: pins today's behaviour)"),
         (14.0, LineHeight::Auto, (own(14.0) + 0.5).floor(), "Auto: the font's own line height, rounded"),
         (20.0, LineHeight::Auto, (own(20.0) + 0.5).floor(), "Auto at 20 px"),
         (24.0, LineHeight::Auto, (own(24.0) + 0.5).floor(), "Auto at 24 px"),
@@ -50,6 +49,26 @@ fn line_heights_are_whole_pixels() {
         for (i, line) in l.lines.iter().enumerate() {
             let baseline = i as f64 * want + (want - asc - desc) / 2.0 + asc;
             assert!((line.height - want).abs() < 1e-9 && (line.baseline - baseline).abs() < 1e-9, "{why}: line {i} baseline {}", line.baseline);
+        }
+    }
+}
+
+/// A line height given in pixels keeps its fraction: lines 22.5 px apart stay 22.5 apart, the
+/// glyphs centred in each, and the box rounds the lines' total up to a whole pixel (three lines of
+/// 22.5 are 68 tall, three of 18.4 are 56), as the reference tool lays them out.
+#[test]
+fn pixel_line_heights_keep_their_fraction() {
+    let Some(f) = face() else { return };
+    for (size, px, lines, want_box) in [(17.0, 22.5, 3, 68.0), (17.0, 22.5, 4, 90.0), (16.0, 18.4, 3, 56.0), (14.0, 20.4, 2, 41.0)] {
+        let mut t = text(&vec!["Ag"; lines].join("\n"), &f, size);
+        t.style.line_height = LineHeight::Pixels(px);
+        let l = layout(&t, None, None);
+        assert_eq!(l.lines.len(), lines);
+        assert_eq!(l.height, want_box, "{lines} lines of {px} px");
+        let (asc, desc) = (f.ascent * size / f.upem, f.descent * size / f.upem);
+        for (i, line) in l.lines.iter().enumerate() {
+            let baseline = i as f64 * px + (px - asc - desc) / 2.0 + asc;
+            assert!((line.height - px).abs() < 1e-9 && (line.baseline - baseline).abs() < 1e-9, "{px} px: line {i} baseline {}", line.baseline);
         }
     }
 }
