@@ -39,6 +39,8 @@
 #[cfg(target_arch = "wasm32")]
 mod api;
 #[cfg(target_arch = "wasm32")]
+mod file_providers;
+#[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(any(target_arch = "wasm32", test))]
 mod hostmode;
