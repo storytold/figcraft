@@ -291,7 +291,7 @@ impl Server {
                     resources::ReadError::NotFound(uri) => (RESOURCE_NOT_FOUND, format!("resource not found: {uri}")),
                     resources::ReadError::Backend(why) => (INTERNAL_ERROR, why),
                 })?;
-                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}]}))
+                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": serde_json::to_string(&v).unwrap_or_default()}]}))
             }
             "prompts/list" => Ok(prompts::list()),
             "prompts/get" => {
