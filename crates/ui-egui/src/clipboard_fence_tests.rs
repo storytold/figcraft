@@ -103,7 +103,7 @@ fn a_synthetic_copy_shortcut_leaves_the_system_clipboard_alone() {
         state: Default::default(),
     });
     w.frame(vec![]);
-    let events = crate::windows::take_input(&mut w.app, egui::ViewportId::ROOT);
+    let events = crate::windows::take_input(&mut w.app, &w.ctx, egui::ViewportId::ROOT);
     assert!(!events.is_empty(), "the injected shortcut");
     w.frame(events);
     assert_eq!(w.writes(), (0, 0), "a control-channel gesture never replaces the user's clipboard");
@@ -183,7 +183,7 @@ fn a_synthetic_cut_deletes_the_selection_but_leaves_the_users_clipboard_alone() 
     // A control-channel gesture is fenced from the OS clipboard, but its Cut still edits the
     // document: the selection is deleted exactly as a user's Cut would delete it.
     w.app.push_control_input(vec![Event::Cut]);
-    let events = crate::windows::take_input(&mut w.app, egui::ViewportId::ROOT);
+    let events = crate::windows::take_input(&mut w.app, &w.ctx, egui::ViewportId::ROOT);
     assert_eq!(events, [Event::Cut], "the production input path owns the synthetic frame");
     w.frame(events);
     assert_eq!(w.writes(), (0, 0), "a synthetic cut never writes the user's clipboard");

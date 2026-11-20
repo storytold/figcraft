@@ -99,6 +99,7 @@ impl FigApp {
             return;
         }
         self.applied_input = None;
+        self.applied_prior_input = None;
         if ctx.will_discard() {
             // Keep `applied_frame`/`applied_acks`: the rerun pass must present (and acknowledge)
             // the same frame without replaying the input.

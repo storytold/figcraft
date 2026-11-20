@@ -141,7 +141,7 @@ pub fn guard(app: &mut FigApp, ctx: &Context, f: impl FnOnce(&mut FigApp)) {
 
 /// Control-channel input events (`ui.input`) for the window `viewport` draws next. A batch queued
 /// for another document is dropped rather than replayed into the new one.
-pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event> {
+pub fn take_input(app: &mut FigApp, ctx: &Context, viewport_id: ViewportId) -> Vec<egui::Event> {
     let (events, tagged, current) = match app.windows.list.iter_mut().find(|w| viewport(w.id) == viewport_id) {
         Some(w) => {
             let events = std::mem::take(&mut w.pane.control_input);
@@ -157,7 +157,11 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
     };
     // A frame with no batch of its own says nothing about the document: never treat "nothing
     // queued" as a dropped batch (that used to error another window's acknowledgement).
-    if !events.is_empty() && tagged != current {
+    // egui derives pointer, scroll and key state from the raw input before this frame's control
+    // requests run, and that state cannot be undone afterwards. A `doc.switch` (or other command
+    // that changes the open files) still queued behind the batch would let it reach the new file,
+    // so the batch is rejected here, before egui begins processing it.
+    if !events.is_empty() && (tagged != current || queue_changes_files(app)) {
         // The file changed before the batch reached a frame: say so once instead of replaying it
         // into the new document. Only this window's own acknowledgements belong to the batch.
         fail_input_acks(app, viewport_id);
@@ -168,10 +172,117 @@ pub fn take_input(app: &mut FigApp, viewport_id: ViewportId) -> Vec<egui::Event>
         app.control_synthetic = true;
         let acks = app.take_input_acks(viewport_id);
         app.applied_acks.extend(acks);
+        // egui's scroll smoothing carries residue between frames: keep the state this batch is
+        // merged into, so a rejected batch's scroll can be taken out of the state that made it.
+        app.applied_prior_input = events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. })).then(|| ctx.input(|i| i.clone()));
         app.applied_input = Some(events.clone());
+        app.applied_doc = tagged;
         app.applied_frame = Some(viewport_id);
     }
     events
+}
+
+/// Whether a queued control request runs a command that can change which file is active. Commands
+/// that leave the active file alone (`file.versionHistory`, `file.save`) do not count.
+fn queue_changes_files(app: &FigApp) -> bool {
+    const CHANGES_ACTIVE: &[&str] = &[
+        "doc.switch",
+        "doc.nextTab",
+        "doc.previousTab",
+        "file.new",
+        "file.newBoard",
+        "file.newFromTemplate",
+        "file.open",
+        "file.openRecent",
+        "file.import",
+        "doc.close",
+        "file.close",
+        "file.duplicate",
+        "file.recover",
+        "version.duplicate",
+        "branch.open",
+        "branch.create",
+        "branch.merge",
+        "branch.archive",
+        "collab.join",
+        "collab.openFile",
+        "collab.recoverFile",
+    ];
+    app.control_queue
+        .iter()
+        .any(|r| r.method == "engine.execute" && r.params.get("command").and_then(|c| c.as_str()).is_some_and(|c| CHANGES_ACTIVE.contains(&c)))
+}
+
+/// After this frame's control requests ran: the batch it took for one file never reaches another
+/// the window switched to meanwhile (`ui.input` then `doc.switch`, unacknowledged). Its
+/// acknowledgements fail once and its events leave this pass's input; other events stay.
+pub(crate) fn revalidate_input(app: &mut FigApp, ctx: &Context) {
+    if app.applied_frame != Some(ctx.viewport_id()) {
+        return;
+    }
+    let current = app.session.docs.get(app.session.active).map(|d| d.uid);
+    if app.applied_doc == current {
+        return;
+    }
+    // Only the pass holding the batch: a discarded pass's rerun has none (it was applied).
+    let Some(batch) = app.applied_input.take() else { return };
+    let prior = app.applied_prior_input.take();
+    for ack in app.applied_acks.drain(..) {
+        let _ = ack.tx.send(crate::ControlReply { id: ack.reply.id, result: Err("the document changed before the input could be applied".into()) });
+    }
+    // The hooks append the batch after the platform's events: remove one copy of each from the
+    // end, so an identical event of the user's own stays.
+    let options = ctx.options(|o| o.input_options);
+    let pixels_per_point = ctx.pixels_per_point();
+    ctx.input_mut(|i| {
+        for e in batch.iter().rev() {
+            if let Some(at) = i.events.iter().rposition(|x| x == e) {
+                i.events.remove(at);
+            }
+            if let Some(at) = i.raw.events.iter().rposition(|x| x == e) {
+                i.raw.events.remove(at);
+            }
+        }
+        // egui already derived pointer and scroll state from the batch; events alone cannot undo it.
+        if batch.iter().any(|e| matches!(e, egui::Event::PointerButton { .. })) {
+            // Rebuild the pointer from what the batch did not set: the last position and the
+            // buttons held before it, then this pass's remaining events.
+            let pos = i.pointer.latest_pos();
+            let mut seed = Vec::new();
+            if let Some(pos) = pos {
+                seed.push(egui::Event::PointerMoved(pos));
+                for button in [
+                    egui::PointerButton::Primary,
+                    egui::PointerButton::Secondary,
+                    egui::PointerButton::Middle,
+                    egui::PointerButton::Extra1,
+                    egui::PointerButton::Extra2,
+                ] {
+                    // A button the batch touched was held before it only if the batch released it first.
+                    let first = batch.iter().find_map(|e| match e {
+                        egui::Event::PointerButton { button: b, pressed, .. } if *b == button => Some(*pressed),
+                        _ => None,
+                    });
+                    if first.map_or_else(|| i.pointer.button_down(button), |pressed| !pressed) {
+                        seed.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers: egui::Modifiers::NONE });
+                    }
+                }
+            }
+            let time = i.raw.time;
+            let held =
+                egui::InputState::default().begin_pass(egui::RawInput { time, events: seed, ..Default::default() }, false, pixels_per_point, options);
+            i.pointer = held.begin_pass(i.raw.clone(), false, pixels_per_point, options).pointer;
+        }
+        if batch.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. })) {
+            // Redo the scroll smoothing from the state before this pass without the batch: the
+            // user's own wheel input in the same frame stays, and so do earlier frames' residue.
+            let prior = prior.unwrap_or_default();
+            let mut clean = prior.begin_pass(i.raw.clone(), false, pixels_per_point, options);
+            clean.pointer = i.pointer.clone();
+            clean.events = std::mem::take(&mut i.events);
+            *i = clean;
+        }
+    });
 }
 
 /// Error, once, the `ui.input` acknowledgements waiting for `viewport`'s batch: its file changed

@@ -220,7 +220,7 @@ fn synthetic_input_for_a_child_window_reaches_the_pane_that_draws_it() {
     let pushed = crate::windows::as_window(&mut app, w, |app| app.push_control_input(events.clone()));
     assert_eq!(pushed, Some(true));
     assert!(app.control_input.is_empty(), "the main window's pane is untouched");
-    assert_eq!(crate::windows::take_input(&mut app, other), events, "the child's next frame takes its batch");
+    assert_eq!(crate::windows::take_input(&mut app, &ctx, other), events, "the child's next frame takes its batch");
 }
 
 /// Asserts a child raw-input hook with no batch does not error or drain the root window's
@@ -242,7 +242,7 @@ fn a_frame_without_a_batch_does_not_error_another_windows_acknowledgement() {
     app.input_acks.push(crate::PendingAck { viewport: ViewportId::ROOT, tx, reply: ControlReply { id: json!(5), result: Ok(json!({})) } });
     // The child's raw-input hook runs first in the same frame and has no batch of its own: that
     // is not a document change, so the root's acknowledgement must neither be errored nor drained.
-    let events = crate::windows::take_input(&mut app, crate::windows::viewport(w));
+    let events = crate::windows::take_input(&mut app, &ctx, crate::windows::viewport(w));
     assert!(events.is_empty());
     assert!(rx.try_recv().is_err(), "no bogus document-change reply");
     assert_eq!(app.input_acks.len(), 1, "the root's ack still waits for its own batch");
