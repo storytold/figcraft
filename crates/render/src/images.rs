@@ -120,8 +120,10 @@ pub(crate) fn decode_within(bytes: &[u8], target: ColorProfile, max_side: u32, m
     if figcraft_format::jpeg::finer_than_first(bytes) {
         return None;
     }
-    let opts =
-        craft_image_codecs::DecodeOptions { limits: craft_image_codecs::Limits::new(u32::MAX, u32::MAX, u64::MAX, max_bytes), ..Default::default() };
+    let opts = craft_image_codecs::DecodeOptions {
+        limits: craft_image_codecs::Limits::new(u32::MAX, u32::MAX, u64::MAX, max_bytes),
+        keep_orientation: true,
+    };
     let img = craft_image_codecs::decode_with(bytes, &opts).ok()?;
     let source = crate::image_profile::Source::from_decoded(bytes, img.icc.as_deref());
     let is_gray = source.is_gray() && img.layout().is_gray();
