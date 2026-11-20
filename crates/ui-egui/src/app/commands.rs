@@ -224,6 +224,9 @@ impl FigApp {
                 }
                 "preview" => {
                     if let Some(start) = r.data.get("start").and_then(figcraft_engine::params::id_of) {
+                        // The preview draws over the editor and must not stay behind the presenter.
+                        tabs::pause_present(self);
+                        self.ui.home = false;
                         self.ui.preview = Some(present::Pane::new(start, &self.session));
                     }
                 }
