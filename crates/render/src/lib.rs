@@ -536,7 +536,13 @@ fn jpeg_with(p: &Pixmap, background: Color, quality: u8, icc: Option<Vec<u8>>) -
     }
     let embed_icc = icc.is_some();
     let img = codec_image(p, craft_image_codecs::ChannelLayout::Rgb, rgb, icc, None)?;
-    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: quality.clamp(1, 100), embed_icc, embed_metadata: false, ..Default::default() };
+    let opts = craft_image_codecs::EncodeOptions {
+        jpeg_quality: quality.clamp(1, 100),
+        jpeg_chroma_subsampling: false, // Preserve full chroma resolution from before the shared codec cutover.
+        embed_icc,
+        embed_metadata: false,
+        ..Default::default()
+    };
     encode_with_codec(&img, craft_image_codecs::Format::Jpeg, &opts)
 }
 
