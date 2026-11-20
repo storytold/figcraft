@@ -79,15 +79,22 @@ impl Session {
         // layers in it is like the canvas (a press starts a marquee inside it) unless the frame is
         // selected; stepping out from a selected descendant is handled by the marquee below.
         // An empty frame (or a widget, or a board object such as a sticky) is picked and dragged.
+        let in_section = |n: &figcraft_doc::Node| n.parent.and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::Section { .. }));
         let board_background = |leaf: NodeId| {
-            !sel.contains(&leaf)
+            (ev.cmd || !sel.contains(&leaf))
                 && doc.node(leaf).is_some_and(|n| {
-                    n.parent == Some(page) && n.kind.is_frame_like() && !n.children.is_empty() && !crate::widgets::is_widget(n) && !n.is_board_atom()
+                    let board = match n.kind {
+                        NodeKind::Section { contents_hidden } => !contents_hidden,
+                        ref k => k.is_frame_like() && (n.parent == Some(page) || in_section(n)),
+                    };
+                    board && !n.children.is_empty() && !crate::widgets::is_widget(n) && !n.is_board_atom()
                 })
         };
         let label = label_at(&doc, page, &self.tool.labels, ev.p());
-        let hit = label.or_else(|| self.hit(&doc, page, ev.p(), ev.tol() * 2.0));
-        let target = label.or_else(|| hit.filter(|leaf| ev.cmd || !board_background(*leaf)).map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
+        let leaf = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+        let hit = label.or(leaf);
+        let background_under_cmd = leaf.filter(|l| ev.cmd && label.is_none() && board_background(*l));
+        let target = label.or_else(|| leaf.filter(|leaf| !board_background(*leaf)).map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
         // A press inside the selection's box that reaches nothing above it (an unfilled shape's
         // inside, the frame or canvas behind it, or a layer stacked below the selected layer the
         // press is in) drags the selection. In a gap between selected layers, what's there is hit.
@@ -105,8 +112,15 @@ impl Session {
         // selects just it. A press that reaches nothing above the selection uses the selection as
         // its drag target instead; that fallback is not a clicked layer.
         let clicked = target;
+        let marks_out_a_selected_board = background_under_cmd.is_some_and(|b| sel.contains(&b));
         let target = match sel.iter().copied().find(|s| !locked_in(&doc, *s)) {
-            Some(first) if label.is_none() && !ev.shift && behind_sel(target) && selection_box(&doc, &sel).is_some_and(|q| in_quad(&q, ev.p())) => {
+            Some(first)
+                if label.is_none()
+                    && !ev.shift
+                    && !marks_out_a_selected_board
+                    && behind_sel(target)
+                    && selection_box(&doc, &sel).is_some_and(|q| in_quad(&q, ev.p())) =>
+            {
                 Some(first)
             }
             _ => target,
@@ -186,7 +200,7 @@ impl Session {
                 if let Some(f) = parent {
                     self.set_selection(vec![f]);
                 } else if !ev.shift {
-                    self.set_selection(vec![]);
+                    self.set_selection(background_under_cmd.into_iter().collect());
                 }
                 self.tool.gesture = Gesture::Marquee {
                     start: ev.p(),
