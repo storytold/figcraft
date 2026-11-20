@@ -80,6 +80,6 @@ For the crates you changed: `cargo fmt`, `cargo clippy -p <crate> --all-targets`
 - Attribution file: [`ATTRIBUTION.md`](ATTRIBUTION.md); `cargo xtask assets` fails on an unlisted file under `assets/`, `docs/brand/` or `docs/images/`. Licences: `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`; `docs/brand/LICENSE-brand.txt` for the ArtCraft logos.
 - UI icons are drawn in code (`crates/ui-egui/src/icons.rs`). The app icon is `assets/app-icon/figcraft.svg` (`assets/app-icon/README.md`); `cargo xtask icon` renders the PNGs and `.ico`.
 - Fonts come from [storytold/craft-fonts](https://github.com/storytold/craft-fonts) through the optional `CRAFT_FONTS_DIR` build input (`.cargo/config.toml` points it at `../craft-fonts`; `crates/text/build.rs` embeds it). Without it, system fonts are scanned at runtime.
-- Run: `cargo run -p figcraft -- --control <port> [file]`; drive it with JSON lines (`engine.execute`, `ui.screenshot`). Headless: `figcraft-cli` (`info`, `export`, `run`, `commands`, `mcp`).
+- Run: `cargo run -p figcraft -- --control <port> [file]`; drive it with JSON lines (`engine.execute`, `ui.screenshot`). Headless: `figcraft-cli` (`info`, `export`, `run`, `commands`, `mcp`); start the agent server with `figcraft-cli mcp --automation-read-root DIR --automation-write-root DIR` (`docs/mcp.md`).
 - Contributor credits: `docs/contributors.md`.
 - `plan/` is an optional gitignored notebook.
