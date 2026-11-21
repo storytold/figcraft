@@ -2279,6 +2279,7 @@ dependencies = [
  "craft-jpeg 0.1.0 (git+https://github.com/storytold/craft-libs?rev=a49329e71e32ad93794ab595c41f33209a7d2220)",
  "craft-penpot",
  "craft-sketch",
+ "craft-zip",
  "figcraft-doc",
  "figcraft-layout",
  "figcraft-pathops",

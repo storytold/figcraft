@@ -8,6 +8,8 @@ use std::path::Path;
 
 /// Largest `thumbnail.png` read from an archive.
 pub const MAX_THUMBNAIL_BYTES: u64 = craft_figcraft_format::MAX_PREVIEW_THUMBNAIL_BYTES;
+/// Maximum ZIP index bytes read while locating a Sketch preview.
+const MAX_SKETCH_PREVIEW_METADATA_BYTES: u64 = 64 * 1024 * 1024;
 /// Largest image file read as its own picture.
 pub const MAX_IMAGE_FILE_BYTES: u64 = 32 * 1024 * 1024;
 /// Widest or tallest picture decoded (pixels); a larger one gives none.
@@ -33,8 +35,13 @@ pub fn thumbnail_png<R: Read + Seek>(archive: R) -> Option<Vec<u8>> {
 
 /// The bytes of `previews/preview.png` in a `.sketch` zip; `None` as [`thumbnail_png`] gives it.
 pub fn sketch_preview_png<R: Read + Seek>(archive: R) -> Option<Vec<u8>> {
-    let mut z = zip::ZipArchive::new(archive).ok()?;
-    crate::read_member(&mut z, "previews/preview.png", MAX_THUMBNAIL_BYTES).ok()
+    let limits = craft_zip::SeekableLimits {
+        max_entries: craft_sketch::MAX_ENTRIES,
+        max_metadata_bytes: MAX_SKETCH_PREVIEW_METADATA_BYTES,
+        max_total_bytes: MAX_THUMBNAIL_BYTES,
+    };
+    let mut archive = craft_zip::SeekableArchive::open(archive, limits).ok()?;
+    archive.read("previews/preview.png", MAX_THUMBNAIL_BYTES).ok().flatten()
 }
 
 /// Decode a picture (PNG, JPEG, WebP, GIF, BMP or TIFF) no larger than [`MAX_THUMBNAIL_SIDE`] on
