@@ -460,12 +460,19 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
             }
             let at = idx.unwrap_or(list.len().saturating_sub(1));
             let Some(slot) = list.get_mut(at) else { return Err(bad(cmd, format!("no paint at index {at}"))) };
+            let old = slot.clone();
             edit_slot(slot);
             if let Some((iw, ih)) = image_dims
                 && let figcraft_color::PaintKind::Image(img) = &mut slot.kind
                 && img.crop.is_none()
             {
-                img.crop = Some(img.placement_crop(iw, ih, nw, nh));
+                let crop = match &old.kind {
+                    figcraft_color::PaintKind::Image(old_img) if old_img.image == img.image && old_img.rotation == img.rotation => {
+                        old_img.placement_crop(iw, ih, nw, nh)
+                    }
+                    _ => img.placement_crop(iw, ih, nw, nh),
+                };
+                img.crop = Some(crop);
             }
             Ok(())
         })?;
@@ -497,7 +504,13 @@ fn paint_set_in(s: &mut Session, p: &Value, fills: bool, to_regions: bool) -> Re
             && let figcraft_color::PaintKind::Image(img) = &mut slot.kind
             && img.crop.is_none()
         {
-            img.crop = Some(img.placement_crop(iw, ih, n.width, n.height));
+            let crop = match &old.kind {
+                figcraft_color::PaintKind::Image(old_img) if old_img.image == img.image && old_img.rotation == img.rotation => {
+                    old_img.placement_crop(iw, ih, n.width, n.height)
+                }
+                _ => img.placement_crop(iw, ih, n.width, n.height),
+            };
+            img.crop = Some(crop);
         }
         crate::cmd::lists::rebind_edited_paint(n, fills, at, &old);
         if fills {

@@ -272,7 +272,7 @@ fn crop_in_the_colour_picker_only_sets_the_mode_where_crop_image_does_not_apply(
     assert_eq!(image_at(&u, layer, false, None).scale_mode, ImageScaleMode::Crop);
     assert_eq!(mode(&u, layer), (ImageScaleMode::Fill, None), "the fill is untouched");
 
-    // Two image layers at once: both take the mode.
+    // Two image layers at once: both take the mode, with each layer's crop sized to its own dimensions.
     let (mut u, layer, rect) = setup();
     let paint = picture(&u, layer);
     u.app.run("fill.set", json!({"ids": [rect], "index": 0, "paint": paint}));
@@ -280,6 +280,8 @@ fn crop_in_the_colour_picker_only_sets_the_mode_where_crop_image_does_not_apply(
     crop_only_sets_the_mode(&mut u, PickerTarget::Paint { fills: true, index: 0, ids: vec![layer, rect] }, "two layers");
     assert_eq!(mode(&u, layer).0, ImageScaleMode::Crop);
     assert_eq!(mode(&u, rect).0, ImageScaleMode::Crop);
+    let (crop1, crop2) = (mode(&u, layer).1.unwrap(), mode(&u, rect).1.unwrap());
+    assert_ne!(crop1, crop2, "differently sized layers must have distinct placement crops without stretching");
 
     // A region's own image fill in vector edit mode: the region's mode is set, the layer's image
     // fill is untouched.

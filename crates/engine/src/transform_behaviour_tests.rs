@@ -271,6 +271,37 @@ fn crop_mode_image_resizing_without_cmd_morphs_and_with_cmd_crops() {
 }
 
 #[test]
+fn multi_layer_crop_mode_selection_computes_placement_per_node() {
+    use figcraft_doc::color::{ImageScaleMode, PaintKind};
+    let mut s = session();
+    let layer1 = image_layer(&mut s); // 200 x 100
+    let layer2 = id(&ex(&mut s, "shape.rectangle", json!({"x": 300, "y": 0, "width": 100, "height": 100})));
+
+    // Choose Crop mode on both layers simultaneously via fill.set with crop: None (as the picker does).
+    let mut fill = s.doc().unwrap().node(layer1).unwrap().fills[0].clone();
+    let PaintKind::Image(img) = &mut fill.kind else { panic!("image fill") };
+    img.scale_mode = ImageScaleMode::Crop;
+    img.crop = None;
+    ex(&mut s, "fill.set", json!({"ids": [layer1, layer2], "index": 0, "paint": fill}));
+
+    // Verify both layers received crop transforms tailored to their own dimensions, not stretched.
+    let n1 = s.doc().unwrap().node(layer1).unwrap().clone();
+    let n2 = s.doc().unwrap().node(layer2).unwrap().clone();
+    let PaintKind::Image(img1) = &n1.fills[0].kind else { panic!("image fill") };
+    let PaintKind::Image(img2) = &n2.fills[0].kind else { panic!("image fill") };
+
+    let crop1 = img1.crop.expect("layer1 crop initialized");
+    let crop2 = img2.crop.expect("layer2 crop initialized");
+
+    // layer1 (200x100) and layer2 (100x100) have different aspect ratios, so their crop transforms must differ.
+    assert_ne!(crop1, crop2, "differently sized layers must have distinct crop transforms");
+
+    // Both should match expected placement crop for their respective dimensions (iw=200, ih=100 from image_layer):
+    assert_eq!(crop1, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(crop2, [0.5, 0.0, 0.0, 1.0, 0.25, 0.0]);
+}
+
+#[test]
 fn command_crop_preserves_each_image_fill_and_leaves_tiles() {
     use figcraft_doc::color::{Color, ImageScaleMode, Paint, PaintKind};
     let mut s = session();
