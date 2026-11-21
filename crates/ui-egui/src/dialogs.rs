@@ -119,13 +119,27 @@ pub const ABOUT_WIDTH: f32 = 660.0;
 
 /// The About window's tab row, drawn like the Design / Prototype tabs of the right panel.
 /// A row of tabs (the About window's, the shortcuts panel's): the current one highlighted.
+fn tab_strip_layout(rtl: bool) -> egui::Layout {
+    if rtl { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) }
+}
+
 pub(crate) fn tab_strip<T: Copy + PartialEq>(ui: &mut egui::Ui, t: &Tokens, tabs: &[T], label: fn(T) -> &'static str, current: &mut T) {
-    ui.horizontal(|ui| {
+    // A fixed-width child preserves the Shortcuts search field beside the tabs.
+    // An unrestricted with_layout would consume the rest of that toolbar.
+    let galleys: Vec<_> = tabs
+        .iter()
+        .map(|&tab| {
+            let active = *current == tab;
+            ui.painter().layout_no_wrap(label(tab).into(), semibold(11.0), if active { t.text } else { t.text_secondary })
+        })
+        .collect();
+    let width = galleys.iter().map(|g| g.size().x + 16.0).sum::<f32>() + tabs.len().saturating_sub(1) as f32 * 2.0;
+
+    ui.allocate_ui_with_layout(vec2(width, 24.0), tab_strip_layout(crate::i18n::right_to_left()), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        for &tab in tabs {
+        for (&tab, galley) in tabs.iter().zip(galleys) {
             let label = label(tab);
             let active = *current == tab;
-            let galley = ui.painter().layout_no_wrap(label.into(), semibold(11.0), if active { t.text } else { t.text_secondary });
             let (r, resp) = ui.allocate_exact_size(vec2(galley.size().x + 16.0, 24.0), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
             if active || resp.hovered() {
@@ -137,6 +151,15 @@ pub(crate) fn tab_strip<T: Copy + PartialEq>(ui: &mut egui::Ui, t: &Tokens, tabs
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tab_strip_direction_tests {
+    #[test]
+    fn shared_tab_strip_layout_tracks_hebrew_and_ltr_direction() {
+        assert_eq!(super::tab_strip_layout(true).main_dir(), egui::Direction::RightToLeft);
+        assert_eq!(super::tab_strip_layout(false).main_dir(), egui::Direction::LeftToRight);
+    }
 }
 
 /// About ▸ About: the logo, version, blurb and links.
