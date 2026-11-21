@@ -1056,7 +1056,8 @@ fn truncate_layout(out: &mut TextLayout, finish: &LayoutFinish<'_>) {
             let gend = out.lines.last().map(|l| l.glyph_end).unwrap_or(0);
             out.glyphs.truncate(gend);
             out.truncated = true;
-            out.height = out.lines.last().map_or(0.0, bottom);
+            // Rounded up as the self-sizing box is (cap-height trimmed text ends at its baseline).
+            out.height = out.lines.last().map_or(0.0, |l| if trim { l.baseline } else { box_px(l.top + l.height) });
         }
     }
     if out.truncated {

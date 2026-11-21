@@ -302,6 +302,7 @@ fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Opti
         magnified_image_pixels: opts.magnified_image_pixels,
         under: None,
         time: 0.0,
+        casting: false,
         bounds: &bounds,
     };
     let xf = view.transform();
@@ -337,6 +338,7 @@ fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, tim
         magnified_image_pixels: false,
         under,
         time,
+        casting: false,
         bounds: &bounds,
     };
     // 0, but inside an exporter's [`at_layer_depth`] its depth: one cap for both (#1082).

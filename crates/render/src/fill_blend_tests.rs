@@ -104,3 +104,21 @@ fn inner_shadows_blend_with_the_fills_under_them() {
     assert!(near(px(&pix, 100, 45), [103, 103, 103], 4), "{:?}", px(&pix, 100, 45));
     assert!(near(px(&pix, 100, 155), [168, 168, 168], 4), "{:?}", px(&pix, 100, 155));
 }
+
+/// A pass-through frame inside a pass-through frame: its Multiply fill blends with the backdrop
+/// whether or not the frame around it casts shadows (yellow over the light backdrop comes out
+/// its yellow, not pure yellow).
+#[test]
+fn a_nested_pass_through_frames_fills_blend_with_the_backdrop_under_shadows() {
+    for effects in [vec![], vec![faint()]] {
+        let (mut d, p) = backdrop();
+        let outer = d.create(p, NodeKind::Frame, "Outer", 20.0, 40.0, 160.0, 120.0).unwrap();
+        let n = d.get_mut(outer).unwrap();
+        (n.fills, n.effects, n.blend) = (vec![], effects.clone(), BlendMode::PassThrough);
+        let inner = d.create(outer, NodeKind::Frame, "Inner", 0.0, 0.0, 160.0, 120.0).unwrap();
+        let n = d.get_mut(inner).unwrap();
+        (n.fills, n.blend) = (vec![blended("FFFF00", 1.0, BlendMode::Multiply)], BlendMode::PassThrough);
+        let pix = render(&d);
+        assert!(near(px(&pix, 100, 100), [247, 248, 0], 3), "{:?} with {} effects", px(&pix, 100, 100), effects.len());
+    }
+}

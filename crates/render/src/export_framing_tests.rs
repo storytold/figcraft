@@ -45,7 +45,7 @@ fn a_layer_that_draws_nothing_stays_out_of_the_export() {
 }
 
 /// A 400 × 400 white image with one black column of pixels (x = 201), on a 100 × 100 layer at
-/// `(x, 0)`.
+/// `(x, 0)` in a white 120 × 100 frame; returns the frame.
 fn line_at(x: f64) -> (Document, figcraft_doc::NodeId) {
     let mut img = Pixmap::new(400, 400).unwrap();
     for (i, c) in img.data_mut().chunks_exact_mut(4).enumerate() {
@@ -54,22 +54,47 @@ fn line_at(x: f64) -> (Document, figcraft_doc::NodeId) {
     }
     let (mut d, p) = page();
     d.images.insert("line".into(), ImageData { bytes: Arc::new(encode_png(&img).unwrap()), width: 400, height: 400 });
-    let r = d.create(p, NodeKind::Rectangle, "Image", x, 0.0, 100.0, 100.0).unwrap();
+    let f = d.create(p, NodeKind::Frame, "Frame", 0.0, 0.0, 120.0, 100.0).unwrap();
+    d.get_mut(f).unwrap().fills = vec![Paint::solid(Color::WHITE)];
+    let r = d.create(f, NodeKind::Rectangle, "Image", x, 0.0, 100.0, 100.0).unwrap();
     d.get_mut(r).unwrap().fills = vec![Paint::image("line", ImageScaleMode::Fill)];
-    (d, r)
+    (d, f)
 }
 
 #[test]
 fn an_image_shown_smaller_exports_the_average_of_what_each_pixel_covers() {
-    // Shown at a quarter of its size, the line is a quarter of a pixel wide: wherever it falls,
-    // the pixels it crosses hold a quarter pixel's worth of black between them (sampled at pixel
-    // centres instead, it vanishes or comes out a whole pixel dark).
-    for at in [0.0, 10.5, 7.3, 3.9] {
-        let (d, r) = line_at(at);
-        let pix = render_node(&d, r, 1.0).unwrap();
+    // Shown at a quarter of its size, the line is a quarter of a pixel wide, at x + 50.25. The
+    // pixels it crosses share its quarter pixel of black by how much of it each covers (sampled at
+    // pixel centres instead, it vanishes or comes out a whole pixel dark).
+    for at in [0.0, 10.5, 7.3, 3.9, 0.6] {
+        let (d, f) = line_at(at);
+        let pix = render_node(&d, f, 1.0).unwrap();
         let w = pix.width() as usize;
-        let y = 50;
-        let ink: f64 = (0..w).map(|x| 255.0 - f64::from(pix.data()[(y * w + x) * 4])).sum();
-        assert!((ink - 255.0 / 4.0).abs() < 6.0, "layer at x {at}: {ink} of black in the row");
+        let ink = |x: usize| 255.0 - f64::from(pix.data()[(50 * w + x) * 4]);
+        let (l, r) = (at + 50.25, at + 50.5);
+        for x in 0..w {
+            let covered = (r.min(x as f64 + 1.0) - l.max(x as f64)).max(0.0);
+            assert!((ink(x) - 255.0 * covered).abs() < 3.0, "layer at x {at}: pixel {x} holds {} of black", ink(x));
+        }
     }
+}
+
+/// Where a shape's edge cuts a pixel, an image fitted to that edge fades it once (by the shape's
+/// coverage), not again for the image area past the edge.
+#[test]
+fn a_fitted_image_shown_smaller_fades_the_shapes_edge_once() {
+    let mut img = Pixmap::new(8, 8).unwrap();
+    img.fill(tiny_skia::Color::from_rgba8(0, 0, 0, 255));
+    let (mut d, p) = page();
+    d.images.insert("black".into(), ImageData { bytes: Arc::new(encode_png(&img).unwrap()), width: 8, height: 8 });
+    let f = d.create(p, NodeKind::Frame, "Frame", 0.0, 0.0, 8.0, 8.0).unwrap();
+    d.get_mut(f).unwrap().fills = vec![Paint::solid(Color::WHITE)];
+    // 4 wide, so the image shows at half its size, fitted edge to edge across.
+    let r = d.create(f, NodeKind::Rectangle, "Image", 0.25, 0.0, 4.0, 6.0).unwrap();
+    d.get_mut(r).unwrap().fills = vec![Paint::image("black", ImageScaleMode::Fit)];
+    let pix = render_node(&d, f, 1.0).unwrap();
+    let w = pix.width() as usize;
+    let ink = |x: usize| 255.0 - f64::from(pix.data()[(3 * w + x) * 4]);
+    assert!((ink(0) - 255.0 * 0.75).abs() < 4.0, "the first pixel, three quarters covered, holds {}", ink(0));
+    assert!(ink(1) > 250.0, "the next, inside, holds {}", ink(1));
 }

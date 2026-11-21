@@ -40,6 +40,10 @@ pub struct Ctx<'a, 'd> {
     pub time: f64,
     /// Paint bounds already worked out in this render.
     pub bounds: &'a Bounds<'d>,
+    /// Drawing only what a pass-through layer casts its shadows from, before it draws again onto
+    /// the canvas: layers inside don't draw twice themselves (nested, the draws would double at
+    /// each level).
+    pub casting: bool,
 }
 
 /// What one render works out about layers with children, which a walk down their subtree finds:
@@ -162,7 +166,8 @@ fn averaged_when_shrunk(prep: Prepared, path: &tiny_skia::Path, xf: Affine, limi
         .transform(device)
         .and_then(|b| int_rect(Rect::new(b.left().into(), b.top().into(), b.right().into(), b.bottom().into()), limit));
     let (Some(area), Some(back)) = (area, device.invert()) else { return prep };
-    let Some(avg) = crate::resample::area_averaged(pixmap, device.pre_concat(*transform), area) else { return prep };
+    let Some(clip) = path.bounds().transform(device) else { return prep };
+    let Some(avg) = crate::resample::area_averaged(pixmap, device.pre_concat(*transform), area, clip) else { return prep };
     Prepared::Pattern {
         pixmap: std::sync::Arc::new(avg),
         mode: tiny_skia::SpreadMode::Pad,
@@ -191,20 +196,23 @@ fn fill_with(
     mask: Option<&Mask>,
     isolate: bool,
 ) {
-    let blended = |p: &Paint| p.visible && !matches!(p.blend, BlendMode::Normal | BlendMode::PassThrough);
+    let blended = |p: &Paint| p.visible && p.opacity > 0.0 && !matches!(p.blend, BlendMode::Normal | BlendMode::PassThrough);
     if isolate && paints.iter().any(blended) {
         let area = path
             .bounds()
             .transform(ts_transform(xf))
             .and_then(|b| int_rect(Rect::new(b.left().into(), b.top().into(), b.right().into(), b.bottom().into()), (pix.width(), pix.height())));
-        let Some(r) = area else { return };
-        let Some(_held) = crate::layer_budget::Held::take(r.width(), r.height(), 1) else { return };
-        let Some(mut alone) = Pixmap::new(r.width(), r.height()) else { return };
-        let at = Affine::translate((-f64::from(r.x()), -f64::from(r.y()))) * xf;
-        paint_each(&mut alone, path, paints, w, h, at, rule, ctx, None);
-        let pp = PixmapPaint::default();
-        pix.draw_pixmap(r.x(), r.y(), alone.as_ref(), &pp, Transform::identity(), mask);
-        return;
+        // Past the layer budget, the paints blend with the canvas too rather than not draw.
+        if let Some(r) = area
+            && let Some(_held) = crate::layer_budget::Held::take(r.width(), r.height(), 1)
+            && let Some(mut alone) = Pixmap::new(r.width(), r.height())
+        {
+            let at = Affine::translate((-f64::from(r.x()), -f64::from(r.y()))) * xf;
+            paint_each(&mut alone, path, paints, w, h, at, rule, ctx, None);
+            let pp = PixmapPaint::default();
+            pix.draw_pixmap(r.x(), r.y(), alone.as_ref(), &pp, Transform::identity(), mask);
+            return;
+        }
     }
     paint_each(pix, path, paints, w, h, xf, rule, ctx, mask);
 }
@@ -812,6 +820,8 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         layer.draw_pixmap(0, 0, b.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
     }
     let op = n.opacity.clamp(0.0, 1.0);
+    // Drawn onto the canvas after its shadows, the layer below is only what they are cast from.
+    let through = !ctx.casting && blends_through(ctx.doc, n, casts || first_back.is_some());
     {
         // Inner shadows paint over the fills, under the children and strokes: cast from around the
         // outline, or around the fills' pixels where images paint their own alpha.
@@ -835,7 +845,8 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         let under = Under { opacity: op, blend: n.blend, ..Under::new(pix, (lx, ly), ctx.under) };
         let over_back = first_back.as_ref().filter(|_| casts).map(|b| Under::new(b, (0, 0), Some(&under)));
         let content_under = over_back.as_ref().unwrap_or(&under);
-        draw_content(&Ctx { under: Some(content_under), ..*ctx }, &mut layer, n, lxf, depth, has_inner.then_some(&inner as &dyn Fn(&mut Pixmap)));
+        let sub = Ctx { under: Some(content_under), casting: ctx.casting || through, ..*ctx };
+        draw_content(&sub, &mut layer, n, lxf, depth, has_inner.then_some(&inner as &dyn Fn(&mut Pixmap)));
     }
     // A group is no outline of its own: its inner shadows are cast from around what its layers
     // draw together, over them.
@@ -867,8 +878,12 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         let caster = shadow::Caster::new(ctx.doc, n, content.as_ref().unwrap_or(&layer), lxf, ctx.scale);
         // The shadows blend by their own modes among themselves, then lie under the layer as one
         // (two linear-burn shadows darken where they overlap, not the backdrop under them).
-        let blended = n.effects.iter().any(|e| e.visible && matches!(&e.kind, EffectKind::DropShadow(s) if s.blend != BlendMode::Normal));
-        let mut group = if blended { Pixmap::new(lw, lh) } else { None };
+        // A shadow that adds nothing (fully transparent) doesn't make the others a group. Past the
+        // layer budget they lie under the layer one by one.
+        let blended =
+            n.effects.iter().any(|e| e.visible && matches!(&e.kind, EffectKind::DropShadow(s) if s.blend != BlendMode::Normal && s.color.a > 0.0));
+        let held = if blended { crate::layer_budget::Held::take(lw, lh, 1) } else { None };
+        let mut group = held.as_ref().and_then(|_| Pixmap::new(lw, lh));
         for e in n.effects.iter().filter(|e| e.visible) {
             if let EffectKind::DropShadow(s) = &e.kind
                 && let Some(sh) = shadow::drop_shadow(&caster, s)
@@ -891,7 +906,7 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         }
         layer_effects(ctx, &mut layer, n, id, lxf);
     }
-    if blends_through(ctx.doc, n, casts || first_back.is_some()) {
+    if through {
         // A pass-through layer whose only effects are shadows isn't a group: once its shadows lie
         // under it, what it paints blends by its own modes with the backdrop, as without them
         // (the layer above was what the shadows were cast from).
@@ -925,10 +940,22 @@ fn blends_through(doc: &Document, n: &Node, backdrop: bool) -> bool {
     if shadow::inner_from_pixels(doc, n) && n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::InnerShadow(_))) {
         return false;
     }
+    paints_blend(n)
+        || doc.subtree(n.id).iter().skip(1).filter_map(|c| doc.node(*c)).any(|c| match c.blend {
+            BlendMode::Normal => false,
+            // Its paints blend with what lies under it too.
+            BlendMode::PassThrough => paints_blend(c),
+            _ => true,
+        })
+}
+
+/// Whether one of `n`'s own paints (fills, strokes, a vector region's fills) is in a blend mode
+/// of its own.
+fn paints_blend(n: &Node) -> bool {
     let own = |p: &Paint| p.visible && !matches!(p.blend, BlendMode::Normal | BlendMode::PassThrough);
     n.fills.iter().any(own)
         || n.strokes.iter().any(own)
-        || doc.subtree(n.id).iter().skip(1).filter_map(|c| doc.node(*c)).any(|c| !matches!(c.blend, BlendMode::Normal | BlendMode::PassThrough))
+        || region_painted(n).is_some_and(|net| net.regions.iter().any(|r| r.fills.as_deref().is_some_and(|f| f.iter().any(own))))
 }
 
 /// Node `n`'s backdrop effects through its backdrop outline `sh`, for its `size` layer at `at` on

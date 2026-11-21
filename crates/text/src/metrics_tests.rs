@@ -73,6 +73,19 @@ fn pixel_line_heights_keep_their_fraction() {
     }
 }
 
+/// Cut to its box's height, the text keeps a whole-pixel height too (one line of 22.5 is 23).
+#[test]
+fn text_cut_to_its_height_keeps_a_whole_pixel_height() {
+    let Some(f) = face() else { return };
+    let mut t = text("Ag\nAg", &f, 17.0);
+    t.style.line_height = LineHeight::Pixels(22.5);
+    t.auto_resize = figcraft_doc::TextAutoResize::Truncate;
+    let l = layout(&t, Some(200.0), Some(30.0));
+    assert_eq!(l.lines.len(), 1);
+    assert_eq!(l.height, l.height.ceil(), "one line of 22.5 px");
+    assert!(l.height > 22.5);
+}
+
 #[test]
 fn advances_sit_on_a_grid_of_1024_per_em() {
     let Some(f) = face() else { return };

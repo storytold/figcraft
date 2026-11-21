@@ -4,17 +4,19 @@
 //! aliased, and a copy scaled down first then shifted a fraction of a pixel comes out blurred).
 //! Past its edges the image extends its edge pixels, as the pattern it replaces does.
 
-use tiny_skia::{IntRect, Pixmap, Transform};
+use tiny_skia::{IntRect, Pixmap, Rect, Transform};
 
-/// The most weights the two passes may work through (device pixels times the image pixels each
-/// averages), so one huge image shown small doesn't hold up an export: past it the image is
-/// sampled as before.
+/// The most weights the two passes may work through (the image pixels each device column averages
+/// times those each device row does), so one huge image shown small doesn't hold up an export:
+/// past it the image is sampled as before.
 const MAX_WORK: u64 = 1 << 28;
 
 /// `src` (premultiplied) as it shows over device area `area` under `m` (image pixels → device),
-/// averaged per device pixel; its pixel (0, 0) lies at the area's top-left. `None` unless `m` is
-/// axis-aligned and makes the image smaller along both axes.
-pub(crate) fn area_averaged(src: &Pixmap, m: Transform, area: IntRect) -> Option<Pixmap> {
+/// averaged per device pixel; its pixel (0, 0) lies at the area's top-left. Each pixel averages
+/// only the part of it inside `clip` (the shape the image fills, in device pixels), so where the
+/// shape's edge cuts a pixel, its antialiasing alone fades it (once, not again for the image).
+/// `None` unless `m` is axis-aligned and makes the image smaller along both axes.
+pub(crate) fn area_averaged(src: &Pixmap, m: Transform, area: IntRect, clip: Rect) -> Option<Pixmap> {
     let (sx, sy) = (f64::from(m.sx), f64::from(m.sy));
     let (tx, ty) = (f64::from(m.tx), f64::from(m.ty));
     let straight = m.kx.abs() < 1e-6 && m.ky.abs() < 1e-6;
@@ -23,48 +25,39 @@ pub(crate) fn area_averaged(src: &Pixmap, m: Transform, area: IntRect) -> Option
     }
     let (sw, sh) = (src.width() as usize, src.height() as usize);
     let (dw, dh) = (area.width() as usize, area.height() as usize);
-    let cols = spans(area.x(), dw, tx, sx, sw);
-    let rows = spans(area.y(), dh, ty, sy, sh);
-    // Only the image rows some device row reads are averaged across.
-    let (r0, r1) = rows.iter().fold((usize::MAX, 0), |(a, b), s| (a.min(s.first), b.max(s.first + s.weights.len())));
-    let r1 = r1.min(sh);
-    if r0 >= r1 {
-        return None;
-    }
+    let cols = spans(area.x(), dw, (clip.left().into(), clip.right().into()), tx, sx, sw)?;
+    let rows = spans(area.y(), dh, (clip.top().into(), clip.bottom().into()), ty, sy, sh)?;
     let work = |s: &[Span]| s.iter().map(|s| s.weights.len() as u64).sum::<u64>();
-    if work(&cols).saturating_mul((r1 - r0) as u64).saturating_add(work(&rows).saturating_mul(dw as u64)) > MAX_WORK {
+    if work(&cols).saturating_mul(work(&rows)) > MAX_WORK {
         return None;
     }
+    let _held = crate::layer_budget::Held::take(area.width(), area.height(), 1)?;
+    let mut out = Pixmap::new(area.width(), area.height())?;
     let data = src.data();
-    // Across: each image row in use, averaged into the device columns.
-    let mut across = vec![[0.0_f32; 4]; (r1 - r0) * dw];
-    for (r, out) in (r0..r1).zip(across.chunks_mut(dw)) {
-        let row = data.get(r * sw * 4..(r + 1) * sw * 4)?;
-        for (c, o) in cols.iter().zip(out.iter_mut()) {
-            for (k, w) in c.weights.iter().enumerate() {
-                let px = row.get((c.first + k) * 4..(c.first + k) * 4 + 4)?;
-                for (acc, v) in o.iter_mut().zip(px) {
-                    *acc += w * f32::from(*v);
+    // Each device row: the image rows it covers, each averaged across into the device columns
+    // and weighted in (only one device row of scratch, whatever the image's size).
+    let mut acc = vec![[0.0_f32; 4]; dw];
+    for (y, s) in rows.iter().enumerate() {
+        acc.iter_mut().for_each(|a| *a = [0.0; 4]);
+        for (k, wy) in s.weights.iter().enumerate() {
+            let r = s.first + k;
+            let row = data.get(r * sw * 4..(r + 1) * sw * 4)?;
+            for (c, o) in cols.iter().zip(acc.iter_mut()) {
+                for (j, wx) in c.weights.iter().enumerate() {
+                    let px = row.get((c.first + j) * 4..(c.first + j) * 4 + 4)?;
+                    let w = wx * wy;
+                    for (a, v) in o.iter_mut().zip(px) {
+                        *a += w * f32::from(*v);
+                    }
                 }
             }
         }
-    }
-    // Down: the device rows from those.
-    let mut out = Pixmap::new(area.width(), area.height())?;
-    for (y, s) in rows.iter().enumerate() {
-        for x in 0..dw {
-            let mut acc = [0.0_f32; 4];
-            for (k, w) in s.weights.iter().enumerate() {
-                let px = across.get((s.first + k - r0) * dw + x)?;
-                for (a, v) in acc.iter_mut().zip(px) {
-                    *a += w * v;
-                }
-            }
-            let to = |v: f32| v.round().clamp(0.0, 255.0) as u8;
-            let alpha = to(acc[3]);
-            let dst = out.data_mut().get_mut((y * dw + x) * 4..(y * dw + x) * 4 + 4)?;
+        let to = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+        let line = out.data_mut().get_mut(y * dw * 4..(y + 1) * dw * 4)?;
+        for (dst, a) in line.chunks_exact_mut(4).zip(&acc) {
+            let alpha = to(a[3]);
             // Premultiplied: no channel above the alpha, whatever rounding did.
-            dst.copy_from_slice(&[to(acc[0]).min(alpha), to(acc[1]).min(alpha), to(acc[2]).min(alpha), alpha]);
+            dst.copy_from_slice(&[to(a[0]).min(alpha), to(a[1]).min(alpha), to(a[2]).min(alpha), alpha]);
         }
     }
     Some(out)
@@ -77,31 +70,39 @@ struct Span {
 }
 
 /// For `n` device pixels from `start`, the image pixels each covers along an axis where image
-/// pixel `u` lies at `t + u * s` (device): the overlap of each with the pixel, as a share of the
-/// pixel's width in image pixels. What lies past the image's `len` pixels counts as its edge
-/// pixel.
-fn spans(start: i32, n: usize, t: f64, s: f64, len: usize) -> Vec<Span> {
-    let last = len.saturating_sub(1);
-    (0..n)
+/// pixel `u` lies at `t + u * s` (device): the overlap of each with the part of the pixel inside
+/// `clip` (device; all of it when none is), as a share of that part. What lies past the image's
+/// `len` pixels counts as its edge pixel. `None` for an empty image.
+fn spans(start: i32, n: usize, clip: (f64, f64), t: f64, s: f64, len: usize) -> Option<Vec<Span>> {
+    let last = len.checked_sub(1)?;
+    let spans = (0..n)
         .map(|i| {
             let d = f64::from(start) + i as f64;
-            let (a, b) = ((d - t) / s, (d + 1.0 - t) / s);
+            let (d0, d1) = (d.max(clip.0), (d + 1.0).min(clip.1));
+            let (d0, d1) = if d1 > d0 { (d0, d1) } else { (d, d + 1.0) };
+            let (a, b) = ((d0 - t) / s, (d1 - t) / s);
             let (a, b) = (a.min(b), a.max(b));
             let total = b - a;
             let clamp = |u: f64| u.clamp(0.0, last as f64) as usize;
             let (first, end) = (clamp(a.floor()), clamp(b.ceil() - 1.0));
             let mut weights = vec![0.0_f32; end - first + 1];
-            // Each image pixel's own overlap; what lies before the image goes to the first and
-            // past it to the last.
-            let mut u = a.floor();
-            while u < b {
-                let w = (b.min(u + 1.0) - a.max(u)) / total;
-                if let Some(slot) = weights.get_mut(clamp(u) - first) {
-                    *slot += w as f32;
+            // What lies before the image goes to its first pixel and past it to its last, each
+            // in one share; each image pixel in between takes its own overlap.
+            let mut add = |at: usize, w: f64| {
+                if let Some(slot) = at.checked_sub(first).and_then(|k| weights.get_mut(k)) {
+                    *slot += (w.max(0.0) / total) as f32;
                 }
+            };
+            add(first, b.min(0.0) - a);
+            add(end, b - a.max(len as f64));
+            let (lo, hi) = (a.max(0.0), b.min(len as f64));
+            let mut u = lo.floor();
+            while u < hi {
+                add(u as usize, hi.min(u + 1.0) - lo.max(u));
                 u += 1.0;
             }
             Span { first, weights }
         })
-        .collect()
+        .collect();
+    Some(spans)
 }

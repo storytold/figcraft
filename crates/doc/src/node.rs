@@ -784,10 +784,19 @@ impl Node {
         self.board.as_ref().is_some_and(crate::BoardItem::is_atom)
     }
 
-    /// Whether this layer puts nothing on the canvas: no visible fill, stroke or effect and no
-    /// children (a placeholder box whose image was taken out, an empty frame).
+    /// Whether this layer puts nothing on the canvas: no visible fill (its own or a vector
+    /// region's), stroke or effect and no children (a placeholder box whose image was taken out,
+    /// an empty frame).
     pub fn draws_nothing(&self) -> bool {
-        self.children.is_empty() && !self.fills.iter().any(|f| f.visible) && !self.has_visible_stroke() && !self.effects.iter().any(|e| e.visible)
+        let region_fill = match &self.kind {
+            NodeKind::Vector { network } => network.regions.iter().any(|r| r.fills.as_deref().is_some_and(|f| f.iter().any(|p| p.visible))),
+            _ => false,
+        };
+        self.children.is_empty()
+            && !self.fills.iter().any(|f| f.visible)
+            && !region_fill
+            && !self.has_visible_stroke()
+            && !self.effects.iter().any(|e| e.visible)
     }
 
     /// A section whose contents are hidden: only its name and outline show; its children are
