@@ -63,7 +63,8 @@ pub struct Prefs {
     /// Files that have a path are saved by themselves a few seconds after they change (the app's
     /// timer; off: only File ▸ Save writes them).
     pub auto_save: bool,
-    /// The desktop app starts on the Home screen instead of in a new file.
+    /// The desktop app starts on the Home screen instead of reopening the files open when it last
+    /// quit.
     pub start_on_home: bool,
     /// `figcraft://` invite links open this app (`collab.registerLinks`); `None`: on for installed
     /// builds, off for development builds.
@@ -85,6 +86,13 @@ pub struct Prefs {
     /// Recently opened or saved files, newest first (File ▸ Open recent; at most
     /// [`cmd::file::MAX_RECENT`]).
     pub recent_files: Vec<String>,
+    /// The files open when the desktop app last quit, in tab order: the next start opens them again
+    /// ([`Session::reopen_files`](crate::Session::reopen_files)).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub open_files: Vec<String>,
+    /// Which of [`open_files`](Self::open_files) was in front.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub front_file: Option<String>,
     /// The files you put on a server without its key, with their owner tokens (passwords: see
     /// [`online`]), most recently opened first, at most [`online::MAX_ONLINE_FILES`].
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "online::read")]
@@ -155,6 +163,8 @@ impl Default for Prefs {
             plugin_directory: None,
             publish_server: live::DEFAULT_SERVER.into(),
             recent_files: Vec::new(),
+            open_files: Vec::new(),
+            front_file: None,
             online_files: Vec::new(),
             getting_started_dismissed: false,
             link_notice_skipped: false,

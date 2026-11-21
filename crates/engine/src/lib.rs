@@ -106,6 +106,7 @@ mod derived;
 mod doc_state;
 mod error;
 mod prefs;
+mod reopen;
 mod session;
 mod view_state;
 
@@ -542,6 +543,8 @@ mod proto_responsive_tests;
 mod proto_run_tests;
 #[cfg(test)]
 mod proto_tail_tests;
+#[cfg(test)]
+mod reopen_tests;
 #[cfg(test)]
 mod rest_slot_tests;
 #[cfg(test)]
