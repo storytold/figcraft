@@ -257,7 +257,7 @@ impl Session {
             if let Some(h) = handle_at(&doc, &sel, ev.p(), ev.zoom).filter(|_| !self.tool.dev_mode) {
                 cursor = resize_cursor(&doc, &sel, h);
             } else {
-                let leaf = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+                let leaf = self.hit_pick(&doc, page, ev.p(), ev.tol() * 2.0, ev.cmd);
                 if leaf.and_then(|l| crate::widgets::target_at(&doc, l, ev.p())).is_some() {
                     cursor = Cursor::Pointer;
                 }

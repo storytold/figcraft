@@ -86,7 +86,7 @@ impl Session {
                 })
         };
         let label = label_at(&doc, page, &self.tool.labels, ev.p());
-        let hit = label.or_else(|| self.hit(&doc, page, ev.p(), ev.tol() * 2.0));
+        let hit = label.or_else(|| self.hit_pick(&doc, page, ev.p(), ev.tol() * 2.0, ev.cmd));
         let target = label.or_else(|| hit.filter(|leaf| ev.cmd || !board_background(*leaf)).map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
         // A press inside the selection's box that reaches nothing above it (an unfilled shape's
         // inside, the frame or canvas behind it, or a layer stacked below the selected layer the
@@ -95,10 +95,15 @@ impl Session {
         // A press on a layer inside a selected one (a child of a selected frame) drags the
         // selection too, and a click selects that layer; Cmd/Ctrl keeps the deep pick.
         let in_selected = |t: NodeId| sel.iter().any(|s| *s != t && doc.is_ancestor(*s, t));
+        // With Cmd/Ctrl, a selected nested frame the deep pick went through here (no fill under the
+        // pointer, see `HitOpts::deep`) isn't pressed on: the layer under it is the pick, as when
+        // the frame isn't selected.
+        let passed_through =
+            |s: NodeId| ev.cmd && doc.node(s).is_some_and(|n| n.kind.is_frame_like()) && !hit.is_some_and(|h| h == s || doc.is_ancestor(s, h));
         let behind_sel = |t: Option<NodeId>| {
             t.is_none_or(|t| {
                 (!ev.cmd && in_selected(t))
-                    || sel.iter().any(|s| *s != t && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s))))
+                    || sel.iter().any(|s| *s != t && !passed_through(*s) && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s))))
             })
         };
         // What the press hit (a label or a painted layer): a click that doesn't become a drag
