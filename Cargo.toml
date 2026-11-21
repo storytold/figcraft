@@ -69,7 +69,7 @@ craft-fig = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e
 craft-figcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
 craft-figma-rest = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
-craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "ba25ccd233934d1b2f74e3c0f235168bf5f13ef3" }
 craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220", features = ["frames"] }
 
 # foundation
