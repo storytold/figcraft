@@ -275,6 +275,30 @@ fn cmd_click_reaches_through_an_unfilled_nested_frame() {
     }
 }
 
+/// With no board under it (a frame in a group on the page), a Cmd/Ctrl press in an unfilled
+/// frame's empty part reaches nothing, whether the frame is selected or not: it starts a marquee
+/// there and doesn't move the frame.
+#[test]
+fn a_cmd_press_through_a_selected_unfilled_frame_onto_nothing_starts_a_marquee() {
+    let gesture = |selected: bool| {
+        let mut s = Session::new();
+        let veil = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 200})));
+        ex(&mut s, "node.set", json!({"ids": [veil], "props": {"fills": []}}));
+        let dot = rect(&mut s, 300.0, 0.0, None);
+        ex(&mut s, "object.group", json!({"ids": [veil, dot]}));
+        let before: Vec<NodeId> = if selected { vec![veil] } else { vec![] };
+        ex(&mut s, "select.set", json!({"ids": before}));
+        drag(&mut s, (100.0, 100.0), (150.0, 150.0), CMD);
+        let at = s.doc().unwrap().world_bounds(veil).unwrap();
+        (s.selection(), (at.x0, at.y0))
+    };
+    let (unselected, at) = gesture(false);
+    assert_eq!(at, (0.0, 0.0), "unselected, the press starts a marquee");
+    let (selected, at) = gesture(true);
+    assert_eq!(at, (0.0, 0.0), "selected, the frame doesn't move either: the press isn't on it");
+    assert_eq!(selected, unselected, "and the marquee picks the same layers");
+}
+
 /// A click and a double-click with `m` held on the middle of the layer `pick` chooses, in a fresh
 /// device chrome scene.
 fn double_click_on(m: Mods, pick: fn(&Chrome) -> NodeId) -> (Session, Chrome) {

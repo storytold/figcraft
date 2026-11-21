@@ -100,11 +100,13 @@ impl Session {
         // the frame isn't selected.
         let passed_through =
             |s: NodeId| ev.cmd && doc.node(s).is_some_and(|n| n.kind.is_frame_like()) && !hit.is_some_and(|h| h == s || doc.is_ancestor(s, h));
-        let behind_sel = |t: Option<NodeId>| {
-            t.is_none_or(|t| {
+        let behind_sel = |t: Option<NodeId>| match t {
+            // Reaching nothing counts only for a selected layer the press wasn't passed through.
+            None => sel.iter().any(|s| !passed_through(*s)),
+            Some(t) => {
                 (!ev.cmd && in_selected(t))
                     || sel.iter().any(|s| *s != t && !passed_through(*s) && (doc.is_ancestor(t, *s) || (in_own_box(*s) && paints_below(&doc, t, *s))))
-            })
+            }
         };
         // What the press hit (a label or a painted layer): a click that doesn't become a drag
         // selects just it. A press that reaches nothing above the selection uses the selection as
