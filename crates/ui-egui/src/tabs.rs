@@ -943,3 +943,54 @@ mod layout_tests {
         assert!(motion.opening.is_empty(), "Reduce motion opens tabs at once");
     }
 }
+
+#[cfg(test)]
+mod headless_language_tab_acceptance {
+    use super::{HEIGHT, TitleBar, preferred_width};
+    use egui::{Event, Modifiers, PointerButton, pos2};
+    use figcraft_engine::Session;
+    use serde_json::json;
+
+    use crate::present_tests::Ui;
+
+    fn click(ui: &mut Ui, x: f32, y: f32) {
+        let p = pos2(x, y);
+        for pressed in [true, false] {
+            ui.frame(vec![
+                Event::PointerMoved(p),
+                Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE },
+            ]);
+        }
+        ui.frame(vec![]);
+    }
+
+    #[test]
+    fn actual_editor_tabs_switch_and_close_at_language_specific_edges() {
+        for (mirrored, locale) in [(false, "en"), (true, "he")] {
+            let mut ui = Ui::new(Session::new());
+            ui.app.session.prefs.language = locale.into();
+            ui.app.ui.mirrored = mirrored;
+            ui.app.ui.home = false;
+            let keep_uid = ui.app.session.docs[0].uid;
+            ui.run("file.new", json!({}));
+            assert_eq!(ui.app.session.docs.len(), 2, "{locale} fixture must have two files");
+            assert_eq!(ui.app.session.active, 1, "{locale} new file starts active");
+
+            // Recreate the true tab-strip layout; these positions are used by ui.interact.
+            let x = if ui.app.ui.title_bar == TitleBar::Inset { 76.0 } else { 8.0 };
+            let home_w = if ui.app.ui.title_bar == TitleBar::Inset || mirrored { 44.0 } else { crate::layers::RAIL_WIDTH - x };
+            let first_x = x + home_w;
+            let first_w = preferred_width(&ui.app, 0);
+            let mid_y = HEIGHT / 2.0;
+            ui.frames(2, || vec![]);
+            click(&mut ui, first_x + 64.0, mid_y);
+            assert_eq!(ui.app.session.active, 0, "{locale} body click must select first file");
+            assert_eq!(ui.app.session.docs.len(), 2, "{locale} body click must not close");
+
+            let close_x = if mirrored { first_x + 16.0 } else { first_x + first_w - 16.0 };
+            click(&mut ui, close_x, mid_y);
+            assert_eq!(ui.app.session.docs.len(), 1, "{locale} close must hit the reading-side close target");
+            assert_ne!(ui.app.session.docs[0].uid, keep_uid, "{locale} first file should close");
+        }
+    }
+}
