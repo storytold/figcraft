@@ -232,8 +232,15 @@ struct Pin {
 }
 
 impl Pin {
-    fn of(c: &Comment, me: &str, at: Pos2) -> Self {
-        Pin { id: c.id, author: c.first.author.clone(), resolved: c.resolved, unread: c.is_unread(me), mine: c.first.author == me, at }
+    fn of(c: &Comment, me: &str, legacy_user: Option<&str>, at: Pos2) -> Self {
+        Pin {
+            id: c.id,
+            author: c.first.author.clone(),
+            resolved: c.resolved,
+            unread: c.is_unread_as(me, legacy_user),
+            mine: c.first.author == me || legacy_user.is_some_and(|legacy| c.first.author == legacy),
+            at,
+        }
     }
 }
 
@@ -242,9 +249,10 @@ impl Pin {
 fn pins(app: &FigApp) -> Vec<Pin> {
     let Ok(ds) = app.session.ds() else { return Vec::new() };
     let me = me(app);
+    let legacy = cc::legacy_default(&app.session, &me);
     let cu = &app.ui.comments;
     let q = Query { page: Some(ds.page), filter: cu.filter, ..Query::default() };
-    let mut list = cc::query(&ds.doc, &q, &me);
+    let mut list = cc::query(&ds.doc, &q, &me, legacy);
     list.reverse();
     if let Some(c) = cu.open.and_then(|o| ds.doc.comment(o)).filter(|c| c.page == ds.page && !list.iter().any(|x| x.id == c.id)) {
         list.push(c);
@@ -260,7 +268,7 @@ fn pins(app: &FigApp) -> Vec<Pin> {
                     app.to_screen(x, y)
                 }
             };
-            Pin::of(c, &me, at)
+            Pin::of(c, &me, legacy, at)
         })
         .collect()
 }
@@ -648,6 +656,8 @@ struct ThreadCtx<'a> {
     c: &'a Comment,
     me: &'a str,
     people: &'a [String],
+    /// The old default author that still counts as `me` after a real name arrives.
+    legacy_user: Option<&'a str>,
 }
 
 /// One message: author, time, its buttons on hover (react; edit and delete when it's yours), the
@@ -676,7 +686,7 @@ fn message(
             let when = if m.edited > 0 { trf("{when} · edited", &[("when", &ago(m.created))]) } else { ago(m.created) };
             ui.label(egui::RichText::new(when).font(regular(11.0)).color(t.text_tertiary));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if m.author == cx.me {
+                if m.author == cx.me || cx.legacy_user.is_some_and(|legacy| m.author == legacy) {
                     let menu = Id::unique(("comment_msg_more_menu", id, i));
                     let more = hover_button(
                         ui,
@@ -899,14 +909,15 @@ pub fn thread(app: &mut FigApp, ctx: &egui::Context, id: u64, anchor: Pos2, boun
     };
     let people = ds.doc.comment_people();
     let me = me(app);
-    if c.is_unread(&me) && !previewing {
+    let legacy = cc::legacy_default(&app.session, &me);
+    if c.is_unread_as(&me, legacy) && !previewing {
         app.run("comment.markRead", json!({"id": id}));
     }
     let mut reply = std::mem::take(&mut app.ui.comments.reply);
     let mut editing = app.ui.comments.editing.take().filter(|e| e.0 == id && c.message(e.1).is_some());
     let mut pick = std::mem::take(&mut app.ui.comments.mention);
     let mut act: Option<Act> = None;
-    let cx = ThreadCtx { c: &c, me: &me, people: &people };
+    let cx = ThreadCtx { c: &c, me: &me, people: &people, legacy_user: legacy };
     egui::Area::new(Id::unique("comment_thread")).order(egui::Order::Foreground).fixed_pos(popover_pos(anchor, bounds)).show(ctx, |ui| {
         popover_frame(&t).show(ui, |ui| {
             ui.set_width(POPOVER_W - 24.0);
@@ -935,7 +946,9 @@ pub fn thread(app: &mut FigApp, ctx: &egui::Context, id: u64, anchor: Pos2, boun
                             act = Some(Act::Run("comment.resolve", json!({"id": id, "resolved": !c.resolved})));
                             ui.close();
                         }
-                        if c.first.author == me && crate::right::menu_item(ui, tr("Delete thread"), "") {
+                        if (c.first.author == me || legacy.is_some_and(|default| c.first.author == default))
+                            && crate::right::menu_item(ui, tr("Delete thread"), "")
+                        {
                             act = Some(Act::Run("comment.delete", json!({"id": id})));
                             ui.close();
                         }
@@ -1068,6 +1081,7 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
     let page = ds.page;
     let doc = ds.doc.clone();
     let me = me(app);
+    let legacy = cc::legacy_default(&app.session, &me);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.add_space(16.0);
@@ -1126,7 +1140,7 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
     ui.add_space(8.0);
     let search = app.ui.comments.search.clone();
     let q = Query { page: None, frame: None, filter: app.ui.comments.filter, sort: app.ui.comments.sort, text: &search };
-    let list = cc::query(&doc, &q, &me);
+    let list = cc::query(&doc, &q, &me, legacy);
     if list.is_empty() {
         let (title, sub) = if doc.comments.iter().any(|c| doc.pages.contains(&c.page)) {
             (tr("No matching comments"), tr("Try another search or filter."))
@@ -1168,7 +1182,7 @@ pub fn panel(app: &mut FigApp, ui: &mut Ui) {
         } else if resp.hovered() {
             ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
         }
-        let unread = c.is_unread(&me);
+        let unread = c.is_unread_as(&me, legacy);
         if unread {
             ui.painter().circle_filled(pos2(r.min.x + 8.0, r.min.y + 22.0), 3.5, ACCENT);
         }
@@ -1220,16 +1234,17 @@ pub fn presenter(app: &mut FigApp, ctx: &egui::Context, frame: NodeId, place: cr
     let doc = ds.doc.clone();
     let Some(fb) = doc.world_bounds(frame) else { return };
     let me = me(app);
+    let legacy = cc::legacy_default(&app.session, &me);
     let open = app.ui.comments.open;
     // The frame as designed maps onto the frame as presented.
     let to_screen = |(x, y): (f64, f64)| place.pt(place.page_min.0 + x - fb.x0, place.page_min.1 + y - fb.y0);
     let q = Query { frame: Some(frame), filter: app.ui.comments.filter, ..Query::default() };
-    let mut list = cc::query(&doc, &q, &me);
+    let mut list = cc::query(&doc, &q, &me, legacy);
     list.reverse();
     if let Some(c) = open.and_then(|o| doc.comment(o)).filter(|c| cc::frame_of(&doc, c) == Some(frame) && !list.iter().any(|x| x.id == c.id)) {
         list.push(c);
     }
-    let pins: Vec<Pin> = list.iter().map(|c| Pin::of(c, &me, to_screen(c.position(&doc)))).filter(|p| clip.contains(p.at)).collect();
+    let pins: Vec<Pin> = list.iter().map(|c| Pin::of(c, &me, legacy, to_screen(c.position(&doc)))).filter(|p| clip.contains(p.at)).collect();
     let mut clicked = None;
     for p in &pins {
         let r = pin_rect(p.at);

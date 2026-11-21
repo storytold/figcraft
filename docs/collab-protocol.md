@@ -450,7 +450,12 @@ resuming with its offline edits, and leaving the session going back to snapshot 
   coordinates on whatever page you look at and nothing is outlined.
 - Colours and names: the host hands out the first free colour of an eight-colour palette and
   "Guest N" to people without a name (Preferences ▸ Your name, `pref.userName`; also in the Share
-  popover and the Join dialog). Changing it while in a session renames you there at once (a
+  popover and the Join dialog; a desktop start arrives named unless you have set one, because it
+  takes the system account's name into that preference). Clearing it goes back to "Guest N" as
+  before, with one exception worth knowing: clearing is not a lasting choice - the next desktop
+  start fills the name from the account again, so it stays cleared only for as long as that run
+  lasts, or until a name of your own is set, which the start-up does not touch. Changing it while
+  in a session renames you there at once (a
   `name` signal, sent again after a reconnect, whose hello has the old name); clearing it keeps
   the session's name until you join again. After a newcomer's `Welcome` the host sends it its own `PeerJoined`, which is how it
   learns its name and colour.
