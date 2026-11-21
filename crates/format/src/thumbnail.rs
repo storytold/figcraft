@@ -43,20 +43,26 @@ pub fn decode_thumbnail(bytes: &[u8], fit: u32) -> Option<Thumbnail> {
     if crate::jpeg::finer_than_first(bytes) {
         return None;
     }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_THUMBNAIL_SIDE);
-    limits.max_image_height = Some(MAX_THUMBNAIL_SIDE);
-    limits.max_alloc = Some(MAX_DECODE_ALLOC);
-    reader.limits(limits);
-    let mut picture = reader.decode().ok()?;
-    let fit = fit.clamp(1, MAX_THUMBNAIL_SIDE);
-    if picture.width() > fit || picture.height() > fit {
-        picture = picture.thumbnail(fit, fit);
+    let opts = craft_image_codecs::DecodeOptions {
+        limits: craft_image_codecs::Limits::new(MAX_THUMBNAIL_SIDE, MAX_THUMBNAIL_SIDE, u64::MAX, MAX_DECODE_ALLOC),
+        keep_orientation: true,
+    };
+    let img = craft_image_codecs::decode_with(bytes, &opts).ok()?;
+    let rgba_img = img.converted(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
+    let (w, h) = rgba_img.dimensions();
+    if w == 0 || h == 0 {
+        return None;
     }
-    let rgba = picture.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    (width > 0 && height > 0).then(|| Thumbnail { width, height, rgba: rgba.into_raw() })
+    let fit = fit.clamp(1, MAX_THUMBNAIL_SIDE);
+    let (width, height, rgba) = if w > fit || h > fit {
+        let buf = image::RgbaImage::from_raw(w, h, rgba_img.into_owned().into_data())?;
+        let thumb = image::DynamicImage::ImageRgba8(buf).thumbnail(fit, fit).into_rgba8();
+        let (nw, nh) = thumb.dimensions();
+        (nw, nh, thumb.into_raw())
+    } else {
+        (w, h, rgba_img.into_owned().into_data())
+    };
+    (width > 0 && height > 0).then_some(Thumbnail { width, height, rgba })
 }
 
 /// What kind of file `path` is, for its picture and its icon.

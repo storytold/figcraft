@@ -587,6 +587,18 @@ fn rect_clip_frame_matches_same_rect_fill_on_fractional_edges() {
 }
 
 #[test]
+fn jpeg_export_keeps_full_chroma() {
+    let mut pix = Pixmap::new(8, 8).unwrap();
+    pix.fill(tiny_skia::Color::from_rgba8(160, 64, 192, 255));
+    let jpeg = encode_export_with(&pix, ExportFormat::Jpg, ColorProfile::Srgb, 90).unwrap();
+
+    // SOF0 for the generated 8-bit, three-component baseline JPEG.
+    let header = [0xff, 0xc0, 0, 17, 8, 0, 8, 0, 8, 3];
+    let frame = jpeg.windows(19).find(|segment| segment.starts_with(&header)).expect("RGB JPEG frame");
+    assert_eq!([frame[11], frame[14], frame[17]], [0x11; 3], "JPEG component sampling factors");
+}
+
+#[test]
 fn export_output_and_icc_parity() {
     use figcraft_color::ColorProfile;
     use figcraft_doc::ExportFormat;
@@ -642,5 +654,26 @@ fn export_output_and_icc_parity() {
         let jpg = encode_export_with(&pix, ExportFormat::Jpg, profile, 90).unwrap();
         let jpg_icc = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&jpg)).unwrap().icc_profile().unwrap();
         assert_eq!(jpg_icc, Some(profile.icc()));
+    }
+}
+
+#[test]
+fn export_display_p3_roundtrips_icc_through_decode() {
+    use figcraft_color::ColorProfile;
+    use figcraft_doc::ExportFormat;
+
+    // Saturated Display P3 red: `ColorProfile::Srgb` red [255, 0, 0] converted to Display P3 values.
+    let p3_red = ColorProfile::Srgb.conversion_to(ColorProfile::DisplayP3).apply(Color::new(1.0, 0.0, 0.0, 1.0)).to_rgba8();
+    let mut pix = Pixmap::new(8, 8).unwrap();
+    pix.fill(tiny_skia::Color::from_rgba8(p3_red[0], p3_red[1], p3_red[2], 255));
+
+    for format in [ExportFormat::Png, ExportFormat::Jpg, ExportFormat::Webp] {
+        let encoded = encode_export(&pix, format, ColorProfile::DisplayP3).unwrap();
+        let source = crate::image_profile::Source::of(&encoded);
+        assert!(source.name.as_deref().is_some_and(|n| n.contains("P3")), "{format:?}: {:?}", source.name);
+        let decoded = images::decode(&encoded).unwrap();
+        let px = decoded.pixel(4, 4).unwrap();
+        // Converting the Display P3 export back into sRGB restores sRGB red [255, 0, 0].
+        assert!(px.red() >= 250 && px.green() <= 5 && px.blue() <= 5, "{format:?}: {px:?}");
     }
 }

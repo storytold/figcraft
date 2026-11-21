@@ -242,7 +242,8 @@ fn thumbnail_u16(img: &craft_image_codecs::Image, nw: u32, nh: u32) -> Option<cr
 }
 
 /// Average native `f32` samples within each thumbnail pixel's source rectangle before
-/// quantizing to 8-bit.
+/// quantizing to 8-bit, clamping non-finite and out-of-range samples to `[0, 1]` like full-size
+/// decode so `NaN` or cancelling infinities cannot poison a block.
 fn thumbnail_f32(img: &craft_image_codecs::Image, nw: u32, nh: u32) -> Option<craft_image_codecs::Image> {
     let (w, h) = img.dimensions();
     let layout = img.layout();
@@ -266,7 +267,8 @@ fn thumbnail_f32(img: &craft_image_codecs::Image, nw: u32, nh: u32) -> Option<cr
             for row in band.clone() {
                 for pixel in row.get(bytes.clone())?.chunks_exact(pixel_bytes) {
                     for (sum, sample) in sums.iter_mut().zip(pixel.as_chunks::<4>().0) {
-                        *sum += f64::from(f32::from_ne_bytes(*sample));
+                        let v = f32::from_ne_bytes(*sample);
+                        *sum += if v.is_nan() { 0.0 } else { f64::from(v.clamp(0.0, 1.0)) };
                     }
                 }
             }
