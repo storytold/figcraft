@@ -62,14 +62,31 @@ pub fn decode_thumbnail(bytes: &[u8], fit: u32) -> Option<Thumbnail> {
         // Keep the original channel width until the thumbnail has been averaged.
         let samples = img.to_u16_samples()?;
         drop(img);
-        let picture = match layout {
-            ChannelLayout::Gray => DynamicImage::ImageLuma16(ImageBuffer::from_raw(w, h, samples)?),
-            ChannelLayout::GrayA => DynamicImage::ImageLumaA16(ImageBuffer::from_raw(w, h, samples)?),
-            ChannelLayout::Rgb => DynamicImage::ImageRgb16(ImageBuffer::from_raw(w, h, samples)?),
-            ChannelLayout::Rgba => DynamicImage::ImageRgba16(ImageBuffer::from_raw(w, h, samples)?),
-            _ => return None,
+        let scale = f64::from(fit) / f64::from(w.max(h));
+        let width = (f64::from(w) * scale).round().max(1.0) as u32;
+        let height = (f64::from(h) * scale).round().max(1.0) as u32;
+
+        // Allow a pixel for floating-point bin boundaries. A u32 sum of u16 samples,
+        // including the rounding term, is safe for at most 65,536 samples.
+        let footprint = (w.div_ceil(width) + 1) * (h.div_ceil(height) + 1);
+        let picture = if footprint > 65_536 {
+            // Widen on read, so image's thumbnail sampler uses u64 sums without
+            // allocating a widened full-size source.
+            let source = WideThumbnailSamples { width: w, height: h, channels: layout.channels(), samples: &samples };
+            let thumb = image::imageops::thumbnail(&source, width, height);
+            let native = thumb.into_raw().into_iter().map(|sample| sample as u16).collect::<Vec<_>>();
+            DynamicImage::ImageRgba16(ImageBuffer::from_raw(width, height, native)?)
+        } else {
+            let source = match layout {
+                ChannelLayout::Gray => DynamicImage::ImageLuma16(ImageBuffer::from_raw(w, h, samples)?),
+                ChannelLayout::GrayA => DynamicImage::ImageLumaA16(ImageBuffer::from_raw(w, h, samples)?),
+                ChannelLayout::Rgb => DynamicImage::ImageRgb16(ImageBuffer::from_raw(w, h, samples)?),
+                ChannelLayout::Rgba => DynamicImage::ImageRgba16(ImageBuffer::from_raw(w, h, samples)?),
+                _ => return None,
+            };
+            source.thumbnail_exact(width, height)
         };
-        let thumbnail = picture.thumbnail(fit, fit).into_rgba8();
+        let thumbnail = picture.into_rgba8();
         let (width, height) = thumbnail.dimensions();
         return Some(Thumbnail { width, height, rgba: thumbnail.into_raw() });
     }
@@ -83,6 +100,33 @@ pub fn decode_thumbnail(bytes: &[u8], fit: u32) -> Option<Thumbnail> {
         (w, h, rgba_img.into_owned().into_data())
     };
     (width > 0 && height > 0).then_some(Thumbnail { width, height, rgba })
+}
+
+struct WideThumbnailSamples<'a> {
+    width: u32,
+    height: u32,
+    channels: usize,
+    samples: &'a [u16],
+}
+
+impl image::GenericImageView for WideThumbnailSamples<'_> {
+    type Pixel = image::Rgba<u32>;
+
+    fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    fn get_pixel(&self, x: u32, y: u32) -> Self::Pixel {
+        let start = (y as usize * self.width as usize + x as usize) * self.channels;
+        let rgba = match self.samples.get(start..start + self.channels) {
+            Some(&[gray]) => [gray, gray, gray, u16::MAX],
+            Some(&[gray, alpha]) => [gray, gray, gray, alpha],
+            Some(&[red, green, blue]) => [red, green, blue, u16::MAX],
+            Some(&[red, green, blue, alpha]) => [red, green, blue, alpha],
+            _ => [0; 4],
+        };
+        image::Rgba(rgba.map(u32::from))
+    }
 }
 
 /// What kind of file `path` is, for its picture and its icon.
