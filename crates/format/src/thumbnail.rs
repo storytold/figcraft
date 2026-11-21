@@ -48,13 +48,33 @@ pub fn decode_thumbnail(bytes: &[u8], fit: u32) -> Option<Thumbnail> {
         keep_orientation: true,
     };
     let img = craft_image_codecs::decode_with(bytes, &opts).ok()?;
-    let rgba_img = img.converted(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
-    let (w, h) = rgba_img.dimensions();
+    let (w, h) = img.dimensions();
     if w == 0 || h == 0 {
         return None;
     }
     let fit = fit.clamp(1, MAX_THUMBNAIL_SIDE);
-    let (width, height, rgba) = if w > fit || h > fit {
+    let shrink = w > fit || h > fit;
+    let layout = img.layout();
+    if shrink && img.sample_type() == craft_image_codecs::SampleType::U16 && (layout.is_gray() || layout.is_rgb()) {
+        use craft_image_codecs::ChannelLayout;
+        use image::{DynamicImage, ImageBuffer};
+
+        // Keep the original channel width until the thumbnail has been averaged.
+        let samples = img.to_u16_samples()?;
+        drop(img);
+        let picture = match layout {
+            ChannelLayout::Gray => DynamicImage::ImageLuma16(ImageBuffer::from_raw(w, h, samples)?),
+            ChannelLayout::GrayA => DynamicImage::ImageLumaA16(ImageBuffer::from_raw(w, h, samples)?),
+            ChannelLayout::Rgb => DynamicImage::ImageRgb16(ImageBuffer::from_raw(w, h, samples)?),
+            ChannelLayout::Rgba => DynamicImage::ImageRgba16(ImageBuffer::from_raw(w, h, samples)?),
+            _ => return None,
+        };
+        let thumbnail = picture.thumbnail(fit, fit).into_rgba8();
+        let (width, height) = thumbnail.dimensions();
+        return Some(Thumbnail { width, height, rgba: thumbnail.into_raw() });
+    }
+    let rgba_img = img.converted(craft_image_codecs::ChannelLayout::Rgba, craft_image_codecs::SampleType::U8);
+    let (width, height, rgba) = if shrink {
         let buf = image::RgbaImage::from_raw(w, h, rgba_img.into_owned().into_data())?;
         let thumb = image::DynamicImage::ImageRgba8(buf).thumbnail(fit, fit).into_rgba8();
         let (nw, nh) = thumb.dimensions();

@@ -69,6 +69,27 @@ fn large_pictures_are_scaled_down_to_fit_never_up() {
 }
 
 #[test]
+fn shrunk_16_bit_pngs_keep_native_precision_until_display_conversion() {
+    use image::{DynamicImage, ImageBuffer};
+
+    // At 2-to-1, these channels average below the first 8-bit rounding threshold.
+    let cases = [
+        DynamicImage::ImageLuma16(ImageBuffer::from_raw(2, 1, vec![0, 129]).unwrap()),
+        DynamicImage::ImageLumaA16(ImageBuffer::from_raw(2, 1, vec![0, 0, 129, 129]).unwrap()),
+        DynamicImage::ImageRgb16(ImageBuffer::from_raw(2, 1, vec![0, u16::MAX, 129, 129, u16::MAX, 0]).unwrap()),
+        DynamicImage::ImageRgba16(ImageBuffer::from_raw(2, 1, vec![0, u16::MAX, 129, 0, 129, u16::MAX, 0, 129]).unwrap()),
+    ];
+    for picture in cases {
+        let mut bytes = Cursor::new(Vec::new());
+        picture.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let thumbnail = decode_thumbnail(bytes.get_ref(), 1).unwrap();
+        let expected = picture.thumbnail(1, 1).into_rgba8();
+        assert_eq!((thumbnail.width, thumbnail.height), (1, 1));
+        assert_eq!(&thumbnail.rgba, expected.as_raw(), "{:?}", picture.color());
+    }
+}
+
+#[test]
 fn missing_damaged_oversized_and_non_zip_input_give_none() {
     // No thumbnail in the archive.
     let bytes = crate::save_bytes(&Document::new("File"), None).unwrap();
