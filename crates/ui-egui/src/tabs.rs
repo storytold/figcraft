@@ -489,11 +489,18 @@ struct TabPaint<'a> {
     mirrored: bool,
 }
 
+/// File tabs enter from their reading edge: left for LTR, right for mirrored Hebrew.
+/// The offset affects painting only, not hitboxes, selection or document IDs.
+fn tab_entry_offset(progress: f32, mirrored: bool) -> f32 {
+    let distance = 28.0 * (1.0 - progress).clamp(0.0, 1.0).powi(2);
+    if mirrored { distance } else { -distance }
+}
+
 /// Draws a document tab: background, icon, name, live mark, unsaved dot and close button.
 fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
     let TabPaint { name, kind, rects: [r, close_r], width: w, state: [active, hovered, close_hovered, dirty], live, lost, progress, mirrored } = *tab;
     let mark_w = if live.is_some() || lost { LIVE_MARK_WIDTH } else { 0.0 };
-    let paint_r = r.translate(vec2(-28.0 * (1.0 - progress).powi(2), 0.0));
+    let paint_r = r.translate(vec2(tab_entry_offset(progress, mirrored), 0.0));
     let painter = ui.painter().with_clip_rect(r);
     if active {
         painter.rect_filled(paint_r, CornerRadius::ZERO, t.tab_active.linear_multiply(progress));
@@ -822,7 +829,7 @@ pub fn resize_edges(ctx: &egui::Context) {
 mod layout_tests {
     use super::{
         MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, document_tab_regions, open_progress, present_room, presentation_tab_icon_x,
-        presentation_tab_regions, tab_drop_position, tab_layout,
+        presentation_tab_regions, tab_drop_position, tab_entry_offset, tab_layout,
     };
     use egui::{Rect, pos2};
 
@@ -908,6 +915,18 @@ mod layout_tests {
         assert!(rtl_body.contains(pos2(290.0, 25.0)));
         assert_eq!(presentation_tab_icon_x(tab, false), 119.0);
         assert_eq!(presentation_tab_icon_x(tab, true), 281.0);
+    }
+
+    #[test]
+    fn hebrew_new_tab_enters_from_right_without_moving_action_regions() {
+        assert_eq!(tab_entry_offset(0.0, false), -28.0);
+        assert_eq!(tab_entry_offset(0.0, true), 28.0);
+        assert_eq!(tab_entry_offset(0.5, false), -7.0);
+        assert_eq!(tab_entry_offset(0.5, true), 7.0);
+        assert_eq!(tab_entry_offset(1.0, false), 0.0);
+        assert_eq!(tab_entry_offset(1.0, true), 0.0);
+        // A completed or reduced-motion tab never paints outside its hitbox.
+        assert_eq!(tab_entry_offset(2.0, true), 0.0);
     }
 
     #[test]
