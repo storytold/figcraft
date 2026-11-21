@@ -239,7 +239,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         let mut close_present_tab = None;
         for (tab, &w) in app.ui.presents.iter().skip(present_layout.first).zip(&present_layout.widths) {
             let active = present_on == Some(tab.id);
-            let (clicked, closed) = present_tab(ui, &t, tab, Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT)), active);
+            let (clicked, closed) = present_tab(ui, &t, tab, Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT)), active, app.ui.mirrored);
             if clicked && !active {
                 to_present = Some(tab.id);
             }
@@ -551,12 +551,21 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
     }
 }
 
+/// Presentation tabs share the same distinct body and close targets as file tabs.
+/// Mirroring changes only screen geometry, not the stable tab ID or action.
+fn presentation_tab_regions(r: Rect, mirrored: bool) -> (Rect, Rect) {
+    document_tab_regions(r, mirrored)
+}
+
+fn presentation_tab_icon_x(r: Rect, mirrored: bool) -> f32 {
+    if mirrored { r.max.x - 19.0 } else { r.min.x + 19.0 }
+}
+
 /// One presentation tab in `r`: whether it was clicked and whether it was closed (its X or a
 /// middle click).
-fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool) -> (bool, bool) {
+fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool, mirrored: bool) -> (bool, bool) {
     let label = present_tab_name(tab);
-    let body_r = Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y));
-    let close_r = Rect::from_min_max(body_r.right_top(), r.max);
+    let (body_r, close_r) = presentation_tab_regions(r, mirrored);
     let resp = ui.interact(body_r, ui.scope_id().with(("presentation_tab", tab.id)), Sense::click()).tip(tr("Present"));
     let cresp = ui.interact(close_r, ui.scope_id().with(("presentation_close", tab.id)), Sense::click()).tip(tr("Close preview"));
     crate::a11y::tab(&resp, &label, active);
@@ -566,8 +575,21 @@ fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool)
     } else if hovered {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 19.0, r.center().y), Vec2::splat(BAR_ICON)), Icon::Play, t.icon);
-    crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 34.0, r.center().y), &label, regular(12.0), t.text, r.width() - 62.0);
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(pos2(presentation_tab_icon_x(r, mirrored), r.center().y), Vec2::splat(BAR_ICON)),
+        Icon::Play,
+        t.icon,
+    );
+    if mirrored {
+        // Shape the mixed Hebrew/Latin title next to the icon on the right.
+        // The original page and filename strings remain unchanged for commands.
+        let galley = crate::bidi::name_galley(ui.painter(), &label, regular(12.0), t.text, (r.width() - 62.0).max(0.0));
+        let at = pos2(r.max.x - 34.0 - galley.size().x, r.center().y - galley.size().y / 2.0);
+        ui.painter().galley(at, galley, t.text);
+    } else {
+        crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 34.0, r.center().y), &label, regular(12.0), t.text, r.width() - 62.0);
+    }
     if hovered || active {
         let cr = Rect::from_center_size(close_r.center(), Vec2::splat(20.0));
         if cresp.hovered() {
@@ -799,7 +821,8 @@ pub fn resize_edges(ctx: &egui::Context) {
 #[cfg(test)]
 mod layout_tests {
     use super::{
-        MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, document_tab_regions, open_progress, present_room, tab_drop_position, tab_layout,
+        MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, document_tab_regions, open_progress, present_room, presentation_tab_icon_x,
+        presentation_tab_regions, tab_drop_position, tab_layout,
     };
     use egui::{Rect, pos2};
 
@@ -866,6 +889,25 @@ mod layout_tests {
         assert!(ltr_body.contains(pos2(110.0, 25.0)));
         assert!(rtl_close.contains(pos2(110.0, 25.0)));
         assert!(rtl_body.contains(pos2(290.0, 25.0)));
+    }
+
+    #[test]
+    fn hebrew_presentation_tabs_mirror_close_target_and_play_icon_without_changing_action_regions() {
+        let tab = Rect::from_min_max(pos2(100.0, 5.0), pos2(300.0, 45.0));
+        let (ltr_body, ltr_close) = presentation_tab_regions(tab, false);
+        let (rtl_body, rtl_close) = presentation_tab_regions(tab, true);
+        assert_eq!(ltr_body.width(), rtl_body.width());
+        assert_eq!(ltr_close.width(), 32.0);
+        assert_eq!(rtl_close.width(), 32.0);
+        assert_eq!(ltr_body.max.x, ltr_close.min.x);
+        assert_eq!(rtl_close.max.x, rtl_body.min.x);
+        assert_eq!(ltr_close.max.x, tab.max.x);
+        assert_eq!(rtl_close.min.x, tab.min.x);
+        assert!(ltr_body.contains(pos2(110.0, 25.0)));
+        assert!(rtl_close.contains(pos2(110.0, 25.0)));
+        assert!(rtl_body.contains(pos2(290.0, 25.0)));
+        assert_eq!(presentation_tab_icon_x(tab, false), 119.0);
+        assert_eq!(presentation_tab_icon_x(tab, true), 281.0);
     }
 
     #[test]
