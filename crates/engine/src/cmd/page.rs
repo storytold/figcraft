@@ -27,7 +27,7 @@ fn settle(s: &mut Session, cmd: &str) -> crate::Result<()> {
 /// The page a command targets: the explicit `id` (which must be a page) or the open page.
 fn page_target(s: &Session, cmd: &str, p: &Value) -> crate::Result<NodeId> {
     let target = match p.get("id") {
-        None | Some(Value::Null) => return s.page(),
+        None | Some(Value::Null) => s.page()?,
         Some(_) => req_id(cmd, p, "id")?,
     };
     if !s.doc()?.pages.contains(&target) {
