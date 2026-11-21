@@ -86,7 +86,7 @@ impl Session {
                 })
         };
         let label = label_at(&doc, page, &self.tool.labels, ev.p());
-        let hit = label.or_else(|| self.hit(&doc, page, ev.p(), ev.tol() * 2.0));
+        let hit = label.or_else(|| self.hit_pick(&doc, page, ev.p(), ev.tol() * 2.0, ev.cmd));
         let target = label.or_else(|| hit.filter(|leaf| ev.cmd || !board_background(*leaf)).map(|leaf| select_target(&doc, leaf, &sel, ev.cmd)));
         // A press inside the selection's box that reaches nothing above it (an unfilled shape's
         // inside, the frame or canvas behind it, or a layer stacked below the selected layer the

@@ -180,6 +180,73 @@ fn clicking_selects_by_the_documented_rules() {
     }
 }
 
+/// Observed in the reference app with synthetic files: with Cmd/Ctrl held, a frame, component
+/// or instance nested in another layer is hit only where it has a visible fill (its stroke and
+/// its empty box let the pick through to the layers under it), while a plain click still picks
+/// it by its box. A device chrome overlay shows it: a status bar and a home indicator in an
+/// unfilled instance the size of the screen, over the screen's content.
+#[test]
+fn cmd_click_reaches_through_an_unfilled_nested_frame() {
+    let mut s = Session::new();
+    let screen = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 390, "height": 844})));
+    let content = rect(&mut s, 40.0, 300.0, Some(screen));
+    let chrome = id(&ex(&mut s, "frame.create", json!({"x": 600, "y": 0, "width": 390, "height": 844})));
+    ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 390, "height": 47, "parent": chrome}));
+    ex(&mut s, "shape.rectangle", json!({"x": 128, "y": 830, "width": 134, "height": 5, "parent": chrome}));
+    ex(&mut s, "node.set", json!({"ids": [chrome], "props": {"fills": []}}));
+    let comp = id(&ex(&mut s, "component.create", json!({"ids": [chrome]})));
+    let inst = id(&ex(&mut s, "instance.create", json!({"component": comp, "x": 0, "y": 0, "parent": screen})));
+    let status = s.doc().unwrap().node(inst).unwrap().children[0];
+    let unfilled = json!([]);
+    let filled = json!([{"type": "solid", "color": "#FFFFFF"}]);
+    let hidden = json!([{"type": "solid", "color": "#FFFFFF", "visible": false}]);
+    let clear = json!([{"type": "solid", "color": "#FFFFFF", "opacity": 0}]);
+    // (the instance's fills, point, modifiers, selection after, derivation)
+    let rows: Vec<(&Value, (f64, f64), Mods, NodeId, &str)> = vec![
+        (&unfilled, (60.0, 320.0), CMD, content, "Cmd/Ctrl-click reaches the layer under the unfilled instance"),
+        (&unfilled, (200.0, 600.0), CMD, screen, "with nothing under it there, the top-level frame is picked"),
+        (&unfilled, (200.0, 20.0), CMD, status, "a layer inside the instance is still the deepest layer"),
+        (&unfilled, (60.0, 320.0), NONE, inst, "a plain click still picks the instance by its box"),
+        (&filled, (200.0, 600.0), CMD, inst, "a visible fill makes the instance the deepest layer there"),
+        (&filled, (60.0, 320.0), CMD, inst, "and hides the layer under it"),
+        (&hidden, (60.0, 320.0), CMD, content, "a hidden fill paints nothing"),
+        (&clear, (60.0, 320.0), CMD, content, "a fill at 0% paints nothing"),
+    ];
+    for (fills, p, m, after, why) in rows {
+        ex(&mut s, "node.set", json!({"ids": [inst], "props": {"fills": fills}}));
+        ex(&mut s, "select.none", json!({}));
+        click(&mut s, p.0, p.1, m);
+        assert_eq!(s.selection(), vec![after], "{why}");
+    }
+    ex(&mut s, "node.set", json!({"ids": [inst], "props": {"fills": []}}));
+    ex(&mut s, "stroke.add", json!({"ids": [inst]}));
+    ex(&mut s, "select.none", json!({}));
+    click(&mut s, 0.5, 600.0, CMD);
+    assert_eq!(s.selection(), vec![screen], "a frame's stroke doesn't count: the pick goes through it too");
+    s.pointer(&ev(PointerKind::Hover, 60.0, 320.0, CMD)).unwrap();
+    assert_eq!(s.ds().unwrap().hover, Some(content), "hover with Cmd/Ctrl held shows what a Cmd/Ctrl-click picks");
+    s.pointer(&ev(PointerKind::Hover, 60.0, 320.0, NONE)).unwrap();
+    assert_eq!(s.ds().unwrap().hover, Some(inst), "and without it, what a click picks");
+
+    // A plain nested frame does the same. A frame directly in a section is a board, like a
+    // top-level frame: it keeps its box.
+    let card = id(&ex(&mut s, "frame.create", json!({"x": 1000, "y": 0, "width": 300, "height": 300})));
+    let inside = rect(&mut s, 20.0, 20.0, Some(card));
+    let veil = id(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 300, "height": 300, "parent": card})));
+    ex(&mut s, "node.set", json!({"ids": [veil], "props": {"fills": []}}));
+    let sec = id(&ex(&mut s, "node.create", json!({"type": "section", "x": 2000, "y": 0, "width": 400, "height": 400})));
+    let board = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 50, "y": 50, "width": 100, "height": 100, "parent": sec})));
+    ex(&mut s, "node.set", json!({"ids": [board], "props": {"fills": []}}));
+    for (p, after, why) in [
+        ((1040.0, 40.0), inside, "an unfilled nested frame lets the pick through like an instance"),
+        ((2100.0, 100.0), board, "Cmd/Ctrl-click on the background of a frame in a section picks the frame"),
+    ] {
+        ex(&mut s, "select.none", json!({}));
+        click(&mut s, p.0, p.1, CMD);
+        assert_eq!(s.selection(), vec![after], "{why}");
+    }
+}
+
 /// The operand of boolean `u` under x (its children are the two rectangles).
 fn sel_operand(s: &Session, u: NodeId, x: f64) -> NodeId {
     let doc = s.doc().unwrap();
