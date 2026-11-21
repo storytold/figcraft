@@ -246,6 +246,15 @@ fn cmd_click_reaches_through_an_unfilled_nested_frame() {
     assert_eq!(s.ds().unwrap().hover, Some(content), "hover with Cmd/Ctrl held shows what a Cmd/Ctrl-click picks");
     s.pointer(&ev(PointerKind::Hover, 60.0, 320.0, NONE)).unwrap();
     assert_eq!(s.ds().unwrap().hover, Some(inst), "and without it, what a click picks");
+    // The instance being selected doesn't stop the pick: the press isn't on it there.
+    for (p, after, why) in [
+        ((60.0, 320.0), content, "with the instance selected, Cmd/Ctrl-click still reaches the layer under it"),
+        ((200.0, 600.0), screen, "and on an empty spot there, the top-level frame"),
+    ] {
+        ex(&mut s, "select.set", json!({"ids": [inst]}));
+        click(&mut s, p.0, p.1, CMD);
+        assert_eq!(s.selection(), vec![after], "{why}");
+    }
 
     // A plain nested frame does the same. A frame directly in a section is a board, like a
     // top-level frame: it keeps its box.
