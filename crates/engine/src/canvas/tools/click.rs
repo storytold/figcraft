@@ -92,7 +92,9 @@ impl Session {
         if edits && matches!(self.tool.tool, ToolId::Move | ToolId::Scale) && !(ev.shift || ev.cmd) && self.edge_double_click(&doc, &sel, ev)? {
             return Ok(());
         }
-        let hit_here = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+        // With Cmd/Ctrl, the pick reaches through an unfilled overlay as a Cmd/Ctrl-click does, so
+        // the layer under it is edited at once.
+        let hit_here = self.hit_pick(&doc, page, ev.p(), ev.tol() * 2.0, ev.cmd);
         // A double-click anywhere on the one selected shape edits its points, like Enter: also
         // inside a hollow (unfilled) closed shape, where the hit test finds nothing under the
         // pointer (an open path or a line has no inside: only its stroke counts).
