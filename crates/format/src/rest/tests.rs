@@ -326,7 +326,7 @@ fn text_styles_and_runs() {
          "style": {"fontFamily": "Inter", "fontPostScriptName": "Inter-Regular", "fontStyle": "Regular", "fontWeight": 400, "fontSize": 24,
                    "lineHeightPx": 29, "lineHeightUnit": "INTRINSIC_%", "letterSpacing": 0, "textAlignHorizontal": "CENTER",
                    "textAlignVertical": "CENTER", "textAutoResize": "HEIGHT", "textCase": "UPPER", "textDecoration": "UNDERLINE",
-                   "paragraphSpacing": 8, "paragraphIndent": 4, "leadingTrim": "CAP_HEIGHT", "openTypeFlags": {"LIGA": 0, "ss01": 1}},
+                   "paragraphSpacing": 8, "paragraphIndent": 4, "leadingTrim": "CAP_HEIGHT", "opentypeFlags": {"LIGA": 0, "ss01": 1}},
          // UTF-16 code units: the emoji takes two.
          "characterStyleOverrides": [0, 1, 1, 2],
          "styleOverrideTable": {"1": {"fontWeight": 700}, "2": {"fills": [solid(1.0, 0.0, 0.0)], "hyperlink": {"type": "URL", "url": "https://example.com"}}},

@@ -784,6 +784,21 @@ impl Node {
         self.board.as_ref().is_some_and(crate::BoardItem::is_atom)
     }
 
+    /// Whether this layer puts nothing on the canvas: no visible fill (its own or a vector
+    /// region's), stroke or effect and no children (a placeholder box whose image was taken out,
+    /// an empty frame).
+    pub fn draws_nothing(&self) -> bool {
+        let region_fill = match &self.kind {
+            NodeKind::Vector { network } => network.regions.iter().any(|r| r.fills.as_deref().is_some_and(|f| f.iter().any(|p| p.visible))),
+            _ => false,
+        };
+        self.children.is_empty()
+            && !self.fills.iter().any(|f| f.visible)
+            && !region_fill
+            && !self.has_visible_stroke()
+            && !self.effects.iter().any(|e| e.visible)
+    }
+
     /// A section whose contents are hidden: only its name and outline show; its children are
     /// skipped when rendering and hit testing.
     pub fn hides_contents(&self) -> bool {
@@ -890,9 +905,21 @@ impl Node {
     /// The page-space area this node paints itself under `world` (its children aside): its box
     /// grown by its strokes and glyphs, then by its effects (see [`Node::grow_by_effects`]).
     pub fn own_paint_bounds(&self, world: Affine) -> figcraft_geom::Rect {
+        self.own_bounds_with(world, SHADOW_BLUR_REACH)
+    }
+
+    /// [`Node::own_paint_bounds`] as an export frames it: drop shadows count as far as their blur
+    /// radius (what the reference tool's exports and render bounds take in; the faint tail of the
+    /// blur past it stays out).
+    pub fn own_export_bounds(&self, world: Affine) -> figcraft_geom::Rect {
+        self.own_bounds_with(world, 1.0)
+    }
+
+    /// [`Node::own_paint_bounds`] with drop shadows' blur reaching `blur` times their radius.
+    fn own_bounds_with(&self, world: Affine, blur: f64) -> figcraft_geom::Rect {
         let o = self.outline_reach();
         let base = self.local_rect().inflate(o, o);
-        let grown = self.grow_by_effects(figcraft_geom::transform_rect_bbox(world, base));
+        let grown = self.grow_by_effects_with(figcraft_geom::transform_rect_bbox(world, base), blur);
         // A filled outline's spread grows in local units (see [`Node::outline_spreads`]): a box by
         // its spread all round, sharp corners' mitres anywhere within a circle of it.
         let [a, b, c, d, _, _] = world.as_coeffs();
@@ -906,7 +933,7 @@ impl Node {
                     let m = spread * SPREAD_MITER_LIMIT;
                     figcraft_geom::transform_rect_bbox(world, base).inflate(m * a.hypot(c), m * b.hypot(d))
                 };
-                let (g, (dx, dy)) = (layer + s.radius.abs() * 1.5, s.offset);
+                let (g, (dx, dy)) = (layer + s.radius.abs() * blur, s.offset);
                 if g.is_finite() && dx.is_finite() && dy.is_finite() && outline.is_finite() {
                     r.union(outline.inflate(g, g) + figcraft_geom::kurbo::Vec2::new(dx, dy))
                 } else {
@@ -923,12 +950,22 @@ impl Node {
     /// Layer blurs and texture grow it by what they reach together, and drop shadows are cast from
     /// that (see [`Node::layer_effects_reach`]).
     pub fn grow_by_effects(&self, b: figcraft_geom::Rect) -> figcraft_geom::Rect {
+        self.grow_by_effects_with(b, SHADOW_BLUR_REACH)
+    }
+
+    /// [`Node::grow_by_effects`] as an export frames it (see [`Node::own_export_bounds`]).
+    pub fn grow_by_export_effects(&self, b: figcraft_geom::Rect) -> figcraft_geom::Rect {
+        self.grow_by_effects_with(b, 1.0)
+    }
+
+    /// [`Node::grow_by_effects`] with drop shadows' blur reaching `blur` times their radius.
+    fn grow_by_effects_with(&self, b: figcraft_geom::Rect, blur: f64) -> figcraft_geom::Rect {
         let miter = self.spread_miter_reach();
         let layer = self.layer_effects_reach();
         let moved = if layer > 0.0 { b.inflate(layer, layer) } else { b };
         self.effects.iter().filter(|e| e.visible).fold(moved, |r, e| match &e.kind {
             EffectKind::DropShadow(s) => {
-                let g = s.radius.abs() * 1.5 + s.spread.max(0.0) + miter;
+                let g = s.radius.abs() * blur + s.spread.max(0.0) + miter;
                 let (dx, dy) = s.offset;
                 if g.is_finite() && dx.is_finite() && dy.is_finite() {
                     r.union(moved.inflate(g, g) + figcraft_geom::kurbo::Vec2::new(dx, dy))
@@ -1019,6 +1056,10 @@ impl Node {
 /// The most one effect's reach counts for (document units) when reaches are added up: far past any
 /// canvas, and a sum of any number of them (or of their squares) stays finite.
 const MAX_EFFECT_REACH: f64 = 1e100;
+
+/// How many times its radius a drop shadow's blur reaches past the shape when everything it paints
+/// counts: three standard deviations of a blur whose deviation is half the radius.
+const SHADOW_BLUR_REACH: f64 = 1.5;
 
 /// An effect's reach made safe to add: finite, in 0..[`MAX_EFFECT_REACH`].
 fn effect_reach(r: f64) -> f64 {

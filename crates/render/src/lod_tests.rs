@@ -180,6 +180,7 @@ fn exports_never_use_lod() {
         magnified_image_pixels: false,
         under: None,
         time: 0.0,
+        casting: false,
         bounds: &bounds,
     };
     let parent = d.world_transform(p);

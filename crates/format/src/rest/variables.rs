@@ -386,8 +386,11 @@ impl Ctx<'_> {
                 self.warn("variable bindings to properties the layer doesn't have were skipped");
                 continue;
             }
+            // A component property takes a string variable (variant and text) or a boolean one;
+            // the engine checks which when it applies the binding.
+            let prop = field.starts_with(PROP_BINDING);
             match self.var_kinds.get(var) {
-                Some(kind) if *kind == field_type(&field) => {
+                Some(kind) if *kind == field_type(&field) || (prop && matches!(kind, VariableType::String | VariableType::Boolean)) => {
                     n.bound.insert(field, var.to_string());
                 }
                 Some(_) => self.warn("variable bindings whose variable type doesn't fit the property were skipped"),
@@ -400,6 +403,9 @@ impl Ctx<'_> {
         n.var_modes.extend(self.modes(j));
     }
 }
+
+/// The binding key prefix of an instance's component property (the engine's `PROP_BINDING`).
+pub(crate) const PROP_BINDING: &str = "componentProperties/";
 
 /// Map one `boundVariables` entry onto our field names; false when the property isn't bindable.
 fn node_binding<'v>(k: &str, v: &'v Value, n: &Node, out: &mut Vec<(String, &'v str)>) -> bool {
@@ -414,6 +420,15 @@ fn node_binding<'v>(k: &str, v: &'v Value, n: &Node, out: &mut Vec<(String, &'v 
             push("height", v.get("y").and_then(alias));
         }
         "itemSpacing" => push("gap", alias(v)),
+        // An instance's component properties, variant ones included (`Mode` bound to a string
+        // variable picks the variant it names): `componentProperties/<name>`, the engine's
+        // `PROP_BINDING` key that `variable.bind` writes.
+        "componentProperties" => {
+            let Some(props) = v.as_object() else { return false };
+            for (name, a) in props.iter().take(256) {
+                push(&format!("{PROP_BINDING}{name}"), alias(a));
+            }
+        }
         "counterAxisSpacing" => push("crossGap", alias(v)),
         "characters" | "visible" | "opacity" | "strokeWeight" | "strokeTopWeight" | "strokeRightWeight" | "strokeBottomWeight"
         | "strokeLeftWeight" | "paddingLeft" | "paddingRight" | "paddingTop" | "paddingBottom" | "topLeftRadius" | "topRightRadius"
