@@ -129,6 +129,34 @@ fn native_paths_and_an_extensionless_default_save_native_files_and_show_the_writ
 }
 
 #[test]
+fn native_save_as_preserves_hebrew_document_name_and_mixed_direction_filename_on_reopen() {
+    let temp = Temp::new();
+    let chosen = "סקיצה 02 - layout.figcraft";
+    let path = temp.path(chosen);
+    let (mut app, picks) = app(Some(path.clone()));
+    app.session.doc_mut().unwrap().name = "פרויקט אב - חלון 1".into();
+    let before = app.session.doc().unwrap().clone();
+
+    app.save_as_dialog();
+    app.poll_dialog(&egui::Context::default());
+
+    assert_eq!(
+        *picks.lock().unwrap(),
+        vec![("Save as".into(), "פרויקט אב - חלון 1.figcraft".into(), vec!["figcraft".into(), "fig".into()],)],
+        "the native picker retains the original Hebrew document name and format extensions"
+    );
+    assert!(path.is_file());
+    assert_eq!(app.session.ds().unwrap().path.as_deref(), path.to_str());
+    assert!(!app.session.ds().unwrap().is_dirty());
+    assert_eq!(toast(&app), format!("Saved {chosen}"));
+
+    let mut reopened = Session::empty();
+    reopened.execute("file.open", &json!({"path": path})).unwrap();
+    assert_eq!(reopened.doc().unwrap().name, before.name);
+    assert_eq!(reopened.doc().unwrap().nodes().count(), before.nodes().count());
+}
+
+#[test]
 fn returned_fig_paths_export_real_copies_without_changing_native_save_state() {
     let temp = Temp::new();
     for name in ["copy.fig", "upper.FIG"] {

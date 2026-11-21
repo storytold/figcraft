@@ -297,11 +297,21 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             // The body below the 44-point header: what is left of the window (the table scrolls).
             let h = (size.y - 44.0).max(0.0);
             let top_down = egui::Layout::top_down(egui::Align::Min);
+            // egui's horizontal_top always lays children out left-to-right, independently of
+            // the locale. Place the navigation sidebar on the reading edge in Hebrew.
             ui.horizontal_top(|ui| {
-                ui.allocate_ui_with_layout(vec2(SIDEBAR_W, h), top_down, |ui| sidebar(app, ui, &views, &doc.variables, &mut st));
+                if crate::i18n::right_to_left() {
+                    ui.allocate_ui_with_layout(vec2(size.x - SIDEBAR_W - 1.0, h), top_down, |ui| table(app, ui, view, &mut st));
+                } else {
+                    ui.allocate_ui_with_layout(vec2(SIDEBAR_W, h), top_down, |ui| sidebar(app, ui, &views, &doc.variables, &mut st));
+                }
                 let (line, _) = ui.allocate_exact_size(vec2(1.0, h), Sense::hover());
                 ui.painter().rect_filled(line, CornerRadius::ZERO, t.border);
-                ui.allocate_ui_with_layout(vec2(size.x - SIDEBAR_W - 1.0, h), top_down, |ui| table(app, ui, view, &mut st));
+                if crate::i18n::right_to_left() {
+                    ui.allocate_ui_with_layout(vec2(SIDEBAR_W, h), top_down, |ui| sidebar(app, ui, &views, &doc.variables, &mut st));
+                } else {
+                    ui.allocate_ui_with_layout(vec2(size.x - SIDEBAR_W - 1.0, h), top_down, |ui| table(app, ui, view, &mut st));
+                }
             });
         });
     details(app, ctx, &doc.variables, &mut st);
@@ -309,14 +319,19 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     app.ui.variables = open.then_some(st);
 }
 
-/// Draw the variables header: the title at the left, and the import/export/Close controls at the
-/// right.
+/// Draw the variables header with title, actions and Close at their locale reading edges.
 fn header(app: &mut FigApp, ui: &mut Ui, open: &mut bool) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
-    // Import and export, left of Close.
-    let bar = Rect::from_min_max(pos2(r.max.x - 280.0, r.min.y + 10.0), pos2(r.max.x - 40.0, r.max.y - 10.0));
-    let mut bar = ui.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    let rtl = crate::i18n::right_to_left();
+    // Import and export live next to Close: on the opposite physical side in RTL.
+    let bar = if rtl {
+        Rect::from_min_max(pos2(r.min.x + 40.0, r.min.y + 10.0), pos2(r.min.x + 280.0, r.max.y - 10.0))
+    } else {
+        Rect::from_min_max(pos2(r.max.x - 280.0, r.min.y + 10.0), pos2(r.max.x - 40.0, r.max.y - 10.0))
+    };
+    let layout = if rtl { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
+    let mut bar = ui.new_child(UiBuilder::new().max_rect(bar).layout(layout));
     // The window lays itself out without item spacing (set by the caller); the buttons in this bar
     // keep the same gap between them as the one between Export and the Close button (#1754).
     bar.spacing_mut().item_spacing.x = 16.0;
@@ -333,11 +348,16 @@ fn header(app: &mut FigApp, ui: &mut Ui, open: &mut bool) {
     if widgets::button(&mut bar, tr("Import…"), false, true).on_hover_text(tr("Add or update collections from a variables JSON")).clicked() {
         import_dialog(app);
     }
-    ui.painter().text(pos2(r.min.x + 16.0, r.center().y), Align2::LEFT_CENTER, tr("Local variables"), semibold(13.0), t.text);
+    let (title_pos, title_align, close_x) = if rtl {
+        (pos2(r.max.x - 16.0, r.center().y), Align2::RIGHT_CENTER, r.min.x + 22.0)
+    } else {
+        (pos2(r.min.x + 16.0, r.center().y), Align2::LEFT_CENTER, r.max.x - 22.0)
+    };
+    ui.painter().text(title_pos, title_align, tr("Local variables"), semibold(13.0), t.text);
     if widgets::icon_button_at(
         ui,
         Id::unique("vars_close"),
-        Rect::from_center_size(pos2(r.max.x - 22.0, r.center().y), vec2(24.0, 24.0)),
+        Rect::from_center_size(pos2(close_x, r.center().y), vec2(24.0, 24.0)),
         Icon::Close,
         tr("Close"),
     ) {
@@ -432,11 +452,17 @@ pub(crate) fn unique(base: &str, taken: impl Fn(&str) -> bool) -> String {
 fn sidebar(app: &mut FigApp, ui: &mut Ui, views: &[View], local: &Variables, st: &mut Editor) {
     let t = Tokens::get(ui.ctx());
     let (hr, _) = ui.allocate_exact_size(vec2(SIDEBAR_W, 40.0), Sense::hover());
-    ui.painter().text(pos2(hr.min.x + 16.0, hr.center().y), Align2::LEFT_CENTER, tr("Collections"), semibold(11.0), t.text_secondary);
+    let rtl = crate::i18n::right_to_left();
+    let (heading_x, heading_align, add_x) = if rtl {
+        (hr.max.x - 16.0, Align2::RIGHT_CENTER, hr.min.x + 20.0)
+    } else {
+        (hr.min.x + 16.0, Align2::LEFT_CENTER, hr.max.x - 20.0)
+    };
+    ui.painter().text(pos2(heading_x, hr.center().y), heading_align, tr("Collections"), semibold(11.0), t.text_secondary);
     if widgets::icon_button_at(
         ui,
         Id::unique("vars_add_coll"),
-        Rect::from_center_size(pos2(hr.max.x - 20.0, hr.center().y), vec2(24.0, 24.0)),
+        Rect::from_center_size(pos2(add_x, hr.center().y), vec2(24.0, 24.0)),
         Icon::Plus,
         tr("Create collection"),
     ) {
@@ -461,9 +487,17 @@ fn library_title(ui: &mut Ui, name: &str) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(8.0);
     let (r, resp) = ui.allocate_exact_size(vec2(SIDEBAR_W, 26.0), Sense::hover());
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 22.0, r.center().y), vec2(12.0, 12.0)), Icon::Library, t.icon_secondary);
-    let name_r = Rect::from_min_max(pos2(r.min.x + 34.0, r.min.y), pos2(r.max.x - 8.0, r.max.y));
-    ui.painter().with_clip_rect(name_r).text(name_r.left_center(), Align2::LEFT_CENTER, name, semibold(11.0), t.text_secondary);
+    let rtl = crate::i18n::right_to_left();
+    let icon_x = if rtl { r.max.x - 22.0 } else { r.min.x + 22.0 };
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, r.center().y), vec2(12.0, 12.0)), Icon::Library, t.icon_secondary);
+    let name_r = if rtl {
+        Rect::from_min_max(pos2(r.min.x + 8.0, r.min.y), pos2(r.max.x - 34.0, r.max.y))
+    } else {
+        Rect::from_min_max(pos2(r.min.x + 34.0, r.min.y), pos2(r.max.x - 8.0, r.max.y))
+    };
+    let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    let pos = if rtl { name_r.right_center() } else { name_r.left_center() };
+    ui.painter().with_clip_rect(name_r).text(pos, align, name, semibold(11.0), t.text_secondary);
     resp.on_hover_text(tr("Library: its variables are read-only here; edit them in the library file and publish it"));
 }
 
@@ -480,16 +514,25 @@ fn collection_row(app: &mut FigApp, ui: &mut Ui, view: &View, c: &Collection, st
     }
     let target = Rename::Collection(c.id.clone());
     let count = view.in_collection(&c.id).count();
-    ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, count.to_string(), regular(11.0), t.text_tertiary);
+    let rtl = crate::i18n::right_to_left();
+    let count_x = if rtl { r.min.x + 8.0 } else { r.max.x - 8.0 };
+    let count_align = if rtl { Align2::LEFT_CENTER } else { Align2::RIGHT_CENTER };
+    ui.painter().text(pos2(count_x, r.center().y), count_align, count.to_string(), regular(11.0), t.text_tertiary);
     let indent = if view.editable() { 8.0 } else { 26.0 };
-    let name_r = Rect::from_min_max(pos2(r.min.x + indent, r.min.y + 4.0), pos2(r.max.x - 32.0, r.max.y - 4.0));
+    let name_r = if rtl {
+        Rect::from_min_max(pos2(r.min.x + 32.0, r.min.y + 4.0), pos2(r.max.x - indent, r.max.y - 4.0))
+    } else {
+        Rect::from_min_max(pos2(r.min.x + indent, r.min.y + 4.0), pos2(r.max.x - 32.0, r.max.y - 4.0))
+    };
     if view.editable() && st.rename.as_ref() == Some(&target) {
         if let Some(name) = rename_field(ui, st, &target, &c.name, name_r, regular(11.0)) {
             app.run("variable.renameCollection", json!({"collection": c.id, "name": name}));
         }
     } else {
         let font = if selected { semibold(11.0) } else { regular(11.0) };
-        ui.painter().with_clip_rect(name_r).text(name_r.left_center(), Align2::LEFT_CENTER, &c.name, font, t.text);
+        let pos = if rtl { name_r.right_center() } else { name_r.left_center() };
+        let align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+        ui.painter().with_clip_rect(name_r).text(pos, align, &c.name, font, t.text);
     }
     if resp.clicked() {
         if !selected {
@@ -559,13 +602,22 @@ fn group_rows(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
             ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, t.border), StrokeKind::Inside);
         }
         let depth = g.map_or(0, |g| g.matches('/').count());
-        let x = r.min.x + 20.0 + depth as f32 * 12.0;
+        let rtl = crate::i18n::right_to_left();
+        let indent = 20.0 + depth as f32 * 12.0;
         let label = g.map_or(tr("All variables"), |g| g.rsplit('/').next().unwrap_or(g));
         let count = names.iter().filter(|n| g.is_none_or(|g| n.starts_with(&format!("{g}/")))).count();
-        ui.painter().text(pos2(r.max.x - 8.0, r.center().y), Align2::RIGHT_CENTER, count.to_string(), regular(10.0), t.text_tertiary);
-        let name_r = Rect::from_min_max(pos2(x, r.min.y + 3.0), pos2(r.max.x - 28.0, r.max.y - 3.0));
+        let count_x = if rtl { r.min.x + 8.0 } else { r.max.x - 8.0 };
+        let count_align = if rtl { Align2::LEFT_CENTER } else { Align2::RIGHT_CENTER };
+        ui.painter().text(pos2(count_x, r.center().y), count_align, count.to_string(), regular(10.0), t.text_tertiary);
+        let name_r = if rtl {
+            Rect::from_min_max(pos2(r.min.x + 28.0, r.min.y + 3.0), pos2(r.max.x - indent, r.max.y - 3.0))
+        } else {
+            Rect::from_min_max(pos2(r.min.x + indent, r.min.y + 3.0), pos2(r.max.x - 28.0, r.max.y - 3.0))
+        };
+        let name_pos = if rtl { name_r.right_center() } else { name_r.left_center() };
+        let name_align = if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
         let Some(g) = g else {
-            ui.painter().text(name_r.left_center(), Align2::LEFT_CENTER, label, regular(11.0), t.text_secondary);
+            ui.painter().text(name_pos, name_align, label, regular(11.0), t.text_secondary);
             if resp.clicked() {
                 st.group = None;
             }
@@ -577,7 +629,7 @@ fn group_rows(app: &mut FigApp, ui: &mut Ui, view: &View, coll: &Collection, st:
                 rename_group(app, &members, g, &new, st);
             }
         } else {
-            ui.painter().with_clip_rect(name_r).text(name_r.left_center(), Align2::LEFT_CENTER, label, regular(11.0), t.text);
+            ui.painter().with_clip_rect(name_r).text(name_pos, name_align, label, regular(11.0), t.text);
         }
         if resp.clicked() {
             st.group = Some(g.clone());
@@ -721,21 +773,34 @@ fn table(app: &mut FigApp, ui: &mut Ui, view: &View, st: &mut Editor) {
     };
     // Search.
     let (sr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
-    let field = Rect::from_min_size(pos2(sr.min.x + 16.0, sr.center().y - 12.0), vec2(220.0, 24.0));
+    let rtl = crate::i18n::right_to_left();
+    let field = if rtl {
+        Rect::from_min_size(pos2(sr.max.x - 236.0, sr.center().y - 12.0), vec2(220.0, 24.0))
+    } else {
+        Rect::from_min_size(pos2(sr.min.x + 16.0, sr.center().y - 12.0), vec2(220.0, 24.0))
+    };
     ui.painter().rect_filled(field, CornerRadius::same(5), t.field);
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(field.min.x + 13.0, field.center().y), vec2(12.0, 12.0)), Icon::Search, t.icon_secondary);
-    let mut child = ui.new_child(
-        UiBuilder::new().max_rect(Rect::from_min_max(pos2(field.min.x + 24.0, field.min.y + 4.0), pos2(field.max.x - 4.0, field.max.y - 4.0))),
-    );
+    let icon_x = if rtl { field.max.x - 13.0 } else { field.min.x + 13.0 };
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, field.center().y), vec2(12.0, 12.0)), Icon::Search, t.icon_secondary);
+    let text_rect = if rtl {
+        Rect::from_min_max(pos2(field.min.x + 4.0, field.min.y + 4.0), pos2(field.max.x - 24.0, field.max.y - 4.0))
+    } else {
+        Rect::from_min_max(pos2(field.min.x + 24.0, field.min.y + 4.0), pos2(field.max.x - 4.0, field.max.y - 4.0))
+    };
+    let mut child = ui.new_child(UiBuilder::new().max_rect(text_rect));
     let r = child.add(
         egui::TextEdit::singleline(&mut st.query)
             .frame(egui::Frame::NONE)
             .hint_text(tr("Search"))
             .font(regular(11.0))
-            .align(egui::Align2::LEFT_CENTER),
+            .align(if rtl { egui::Align2::RIGHT_CENTER } else { egui::Align2::LEFT_CENTER }),
     );
     crate::widgets::select_all_on_focus(ui, &r, &st.query);
-    let note = Rect::from_min_max(pos2(field.max.x + 16.0, sr.min.y + 8.0), pos2(sr.max.x - 16.0, sr.max.y - 8.0));
+    let note = if rtl {
+        Rect::from_min_max(pos2(sr.min.x + 16.0, sr.min.y + 8.0), pos2(field.min.x - 16.0, sr.max.y - 8.0))
+    } else {
+        Rect::from_min_max(pos2(field.max.x + 16.0, sr.min.y + 8.0), pos2(sr.max.x - 16.0, sr.max.y - 8.0))
+    };
     let mut bar = ui.new_child(UiBuilder::new().max_rect(note).layout(egui::Layout::right_to_left(egui::Align::Center)));
     let text = match (view.library, coll.extends.as_deref().and_then(|p| view.vars.collection_by_id(p))) {
         (Some((lib, name)), _) => {

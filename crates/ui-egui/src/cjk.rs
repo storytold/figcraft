@@ -1,4 +1,4 @@
-//! Chinese, Japanese, Korean, Bengali and Thai text in the UI. egui's own fonts and Inter have no glyphs
+//! Chinese, Japanese, Korean, Bengali, Thai and Hebrew text in the UI. egui's own fonts and Inter have no glyphs
 //! for them, so the UI adds a face per script it needs: the UI language's, the scripts in the open file's names
 //! and comments, the language picker's and typed text. Desktop finds them among the installed
 //! fonts (the system font scan), only once one is needed, so English users load none; the web
@@ -17,8 +17,10 @@ pub const HAN: u8 = 4;
 pub const BENGALI: u8 = 8;
 /// Thai script.
 pub const THAI: u8 = 16;
+/// Hebrew script, including its combining marks and punctuation.
+pub const HEBREW: u8 = 32;
 /// Every script bit: nothing more to look for once all have a face.
-pub const ALL: u8 = KANA | HANGUL | HAN | BENGALI | THAI;
+pub const ALL: u8 = KANA | HANGUL | HAN | BENGALI | THAI | HEBREW;
 
 /// Bengali faces: cross-platform, Windows, macOS, then Linux names.
 const BENGALI_FONTS: &[&str] = &["Noto Sans Bengali", "Nirmala UI", "Bangla Sangam MN", "Kalpurush", "SolaimanLipi"];
@@ -26,6 +28,9 @@ const BENGALI_FONTS: &[&str] = &["Noto Sans Bengali", "Nirmala UI", "Bangla Sang
 /// Thai faces: cross-platform, Windows, macOS, then Linux names.
 const THAI_FONTS: &[&str] =
     &["Noto Sans Thai", "Leelawadee UI", "Tahoma", "Sukhumvit Set", "Thonburi", "Ayuthaya", "Sarabun", "Loma", "Garuda", "Waree"];
+
+/// Hebrew faces: web-embedded Noto, then common desktop families on Windows, macOS and Linux.
+const HEBREW_FONTS: &[&str] = &["Noto Sans Hebrew", "Arial Hebrew", "Arial", "Tahoma", "David", "SF Hebrew", "Noto Serif Hebrew"];
 
 /// Japanese faces, the built-in one first: Windows, macOS, then Linux names.
 const JAPANESE: &[&str] = &[
@@ -75,13 +80,14 @@ const TRADITIONAL_CHINESE: &[&str] = &[
     "PMingLiU",
 ];
 
-/// The CJK, Bengali and Thai scripts in `s`.
+/// The CJK, Bengali, Thai and Hebrew scripts in `s`.
 pub fn scripts(s: &str) -> u8 {
     s.chars().fold(0, |m, c| {
         m | match u32::from(c) {
             0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F => KANA,
             0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xFFA0..=0xFFDC => HANGUL,
             0x3000..=0x303F | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF01..=0xFF65 | 0x20000..=0x3FFFF => HAN,
+            0x0590..=0x05FF | 0xFB1D..=0xFB4F => HEBREW,
             0x0980..=0x09FF => BENGALI,
             0x0E00..=0x0E7F => THAI,
             _ => 0,
@@ -97,6 +103,7 @@ pub fn language(code: &str) -> u8 {
         Some("zh") => HAN,
         Some("bn") => BENGALI,
         Some("th") => THAI,
+        Some("he") => HEBREW,
         _ => 0,
     }
 }
@@ -125,6 +132,11 @@ fn shows(code: &str, web: bool) -> bool {
     }
     if code.split('-').next() == Some("ka") {
         return figcraft_text::face_with_char('ა', &["Noto Sans Georgian"]).is_some();
+    }
+    if code.split('-').next() == Some("he") {
+        // A web build cannot borrow desktop Hebrew fonts. Hide the picker entry
+        // unless a Hebrew face was actually embedded with the app.
+        return figcraft_text::face_with_char('א', &["Noto Sans Hebrew"]).is_some();
     }
     if code.split('-').next() == Some("ar") {
         // Web cannot borrow the desktop's Arabic faces. Its current font budget excludes
@@ -158,11 +170,12 @@ fn samples(need: u8, ui: u8, hant: bool) -> Vec<(char, Vec<&'static str>)> {
         (HANGUL, ('한', KOREAN.to_vec())),
         (BENGALI, ('অ', BENGALI_FONTS.to_vec())),
         (THAI, ('ก', THAI_FONTS.to_vec())),
+        (HEBREW, ('א', HEBREW_FONTS.to_vec())),
     ];
     match ui {
         HANGUL => v.swap(0, 2),
         HAN => v.swap(0, 1),
-        BENGALI | THAI => {
+        BENGALI | THAI | HEBREW => {
             if let Some(pos) = v.iter().position(|(bit, _)| *bit == ui) {
                 let item = v.remove(pos);
                 v.insert(0, item);
@@ -202,6 +215,16 @@ mod tests {
         assert_eq!(scripts("按钮"), HAN);
         assert_eq!(scripts("বাংলা"), BENGALI);
         assert_eq!(scripts("หน้าแรก"), THAI);
+        assert_eq!(scripts("עברית"), HEBREW);
+        assert_eq!(scripts("English עברית"), HEBREW);
+        // Hebrew presentation forms (as pasted from legacy documents) also need
+        // a Hebrew font when the surrounding UI and file text are Latin-only.
+        assert_eq!(scripts("שׁ"), HEBREW);
+        assert_eq!(scripts("אַ"), HEBREW);
+        assert_eq!(scripts("file שׁ"), HEBREW);
+        assert_eq!(scripts("ﻻ"), 0); // Arabic presentation forms are not Hebrew.
+        assert_eq!(language("he"), HEBREW);
+        assert_eq!(language("he-IL"), HEBREW);
         assert_eq!(language("th"), THAI);
         assert_eq!(scripts("日本語のレイヤー（1）"), KANA | HAN);
         assert_eq!(language("ja"), KANA | HAN);
@@ -223,6 +246,14 @@ mod tests {
         assert_eq!(shows("ka", true), face);
         assert_eq!(shows("ka-GE", true), face);
         assert!(shows("en", true) && shows("tr", true));
+    }
+
+    #[test]
+    fn the_web_offers_hebrew_only_with_its_face() {
+        assert!(shows("he", false), "desktop must offer Hebrew with installed fonts");
+        let face = figcraft_text::face_with_char('א', &["Noto Sans Hebrew"]).is_some();
+        assert_eq!(shows("he", true), face);
+        assert_eq!(shows("he-IL", true), face);
     }
 
     #[test]
@@ -253,6 +284,8 @@ mod tests {
         assert_eq!(order(HANGUL, 0), "한");
         assert_eq!(order(THAI, 0), "ก");
         assert_eq!(order(THAI | KANA, language("th")), "กあ");
+        assert_eq!(order(HEBREW | THAI, language("he")), "אก");
+        assert_eq!(first_face(HEBREW, language("he")), Some("Noto Sans Hebrew"));
         // A Korean UI draws Hangul in a Korean face before the Thai or Bengali ones.
         assert_eq!(order(KANA | HAN | HANGUL | BENGALI | THAI, HANGUL), "한漢あঅก");
         // Han without kana outside a Japanese or Korean UI reads as Chinese.
@@ -272,6 +305,7 @@ mod tests {
         assert_eq!(hant[0].1[0], "Noto Sans CJK TC");
         assert!(["Microsoft JhengHei UI", "PingFang TC", "Noto Sans CJK TC"].iter().all(|f| hant[0].1.contains(f)));
         assert!(faces(0, "en", &|_| false).is_empty());
+        assert!(faces(HEBREW, "he", &|_| true).is_empty(), "existing font should not trigger a new face");
         assert!(faces(KANA | HANGUL | HAN | BENGALI, "ja", &|_| true).is_empty(), "nothing is looked up for scripts the UI draws");
     }
 }

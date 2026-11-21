@@ -119,13 +119,27 @@ pub const ABOUT_WIDTH: f32 = 660.0;
 
 /// The About window's tab row, drawn like the Design / Prototype tabs of the right panel.
 /// A row of tabs (the About window's, the shortcuts panel's): the current one highlighted.
+fn tab_strip_layout(rtl: bool) -> egui::Layout {
+    if rtl { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) }
+}
+
 pub(crate) fn tab_strip<T: Copy + PartialEq>(ui: &mut egui::Ui, t: &Tokens, tabs: &[T], label: fn(T) -> &'static str, current: &mut T) {
-    ui.horizontal(|ui| {
+    // A fixed-width child preserves the Shortcuts search field beside the tabs.
+    // An unrestricted with_layout would consume the rest of that toolbar.
+    let galleys: Vec<_> = tabs
+        .iter()
+        .map(|&tab| {
+            let active = *current == tab;
+            ui.painter().layout_no_wrap(label(tab).into(), semibold(11.0), if active { t.text } else { t.text_secondary })
+        })
+        .collect();
+    let width = galleys.iter().map(|g| g.size().x + 16.0).sum::<f32>() + tabs.len().saturating_sub(1) as f32 * 2.0;
+
+    ui.allocate_ui_with_layout(vec2(width, 24.0), tab_strip_layout(crate::i18n::right_to_left()), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        for &tab in tabs {
+        for (&tab, galley) in tabs.iter().zip(galleys) {
             let label = label(tab);
             let active = *current == tab;
-            let galley = ui.painter().layout_no_wrap(label.into(), semibold(11.0), if active { t.text } else { t.text_secondary });
             let (r, resp) = ui.allocate_exact_size(vec2(galley.size().x + 16.0, 24.0), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
             if active || resp.hovered() {
@@ -137,6 +151,15 @@ pub(crate) fn tab_strip<T: Copy + PartialEq>(ui: &mut egui::Ui, t: &Tokens, tabs
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tab_strip_direction_tests {
+    #[test]
+    fn shared_tab_strip_layout_tracks_hebrew_and_ltr_direction() {
+        assert_eq!(super::tab_strip_layout(true).main_dir(), egui::Direction::RightToLeft);
+        assert_eq!(super::tab_strip_layout(false).main_dir(), egui::Direction::LeftToRight);
+    }
 }
 
 /// About ▸ About: the logo, version, blurb and links.
@@ -256,15 +279,34 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             if app.services.reduce_motion() {
                 crate::widgets::label(ui, tr("Your system asks for reduced motion: animations stay off."), t.text_secondary);
             }
-            // The browser has no files to save to.
-            if !cfg!(target_arch = "wasm32") && crate::widgets::checkbox(ui, prefs.auto_save, tr("Save files automatically")) {
-                toggles.push("pref.autoSave");
+            // The browser has no files to save to. Mirror the actual native autosave
+            // control in Hebrew, not only its translated label, without changing EN.
+            if !cfg!(target_arch = "wasm32") {
+                let toggled = if crate::i18n::right_to_left() {
+                    let mut toggled = false;
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let mut on = prefs.auto_save;
+                            toggled = ui.checkbox(&mut on, tr("Save files automatically")).changed();
+                        });
+                    });
+                    toggled
+                } else {
+                    crate::widgets::checkbox(ui, prefs.auto_save, tr("Save files automatically"))
+                };
+                if toggled {
+                    toggles.push("pref.autoSave");
+                }
             }
             if !cfg!(target_arch = "wasm32") && crate::widgets::checkbox(ui, prefs.start_on_home, tr("Start on the Home screen")) {
                 toggles.push("pref.startOnHome");
             }
             for c in toggles {
-                app.run(c, json!({}));
+                if app.run(c, json!({})).is_some() && c == "pref.autoSave" {
+                    // The generic boolean preference command does not mark prefs_unsaved;
+                    // keep the user's actual autosave choice across a clean process restart.
+                    app.session.prefs_unsaved = true;
+                }
             }
             // Where the app registers itself as the opener of invite links (Windows).
             if let Some(on) = app.session.invite_links_on() {

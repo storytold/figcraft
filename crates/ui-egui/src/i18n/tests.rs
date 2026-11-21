@@ -577,6 +577,176 @@ fn arabic_tags_and_count_neutral_forms() {
 }
 
 #[test]
+fn hebrew_catalog_is_available_for_regional_tags_and_uses_rtl() {
+    let he = LANGS.iter().position(|l| l.code == "he").expect("Hebrew catalog must be embedded");
+    assert_eq!(LANGS[he].name, "עברית");
+    assert!(LANGS[he].draft, "first Hebrew catalog requires native review");
+    for tag in ["he", "he-IL", "he_IL.UTF-8"] {
+        assert_eq!(resolve(tag, None), he, "{tag}");
+        assert_eq!(resolve("system", Some(tag)), he, "{tag}");
+    }
+    assert!(writes_right_to_left(LANGS[he].code));
+}
+
+#[test]
+fn hebrew_file_open_save_messages_have_native_translations() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Save file",
+        "Save files automatically",
+        "Save a copy…",
+        "Don't Save",
+        "Unsaved changes",
+        "Unsaved changes in {names}. Save them before closing?",
+        "Couldn't save the file",
+        "Couldn't save automatically: {error}",
+        "Opening the file…",
+        "Opened “{name}” in a new tab",
+        "No files or templates match your search",
+        "File not found",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew UI translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        for placeholder in ["{names}", "{name}", "{error}"] {
+            assert_eq!(key.contains(placeholder), value.contains(placeholder), "placeholder in {key:?}");
+        }
+    }
+}
+
+#[test]
+fn hebrew_home_settings_and_export_labels_are_native() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Home",
+        "Browse",
+        "Language",
+        "Missing fonts",
+        "Open presentations",
+        "Open variables ({count})",
+        "Retry now",
+        "Export all",
+        "Import variables",
+        "New board",
+        "Close tab",
+        "Export…",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew UI translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        assert_eq!(key.contains("{count}"), value.contains("{count}"), "placeholder in {key:?}");
+    }
+}
+
+/// Home search, templates and online file sharing must stay Hebrew in the real tr() path.
+#[test]
+fn hebrew_home_and_online_file_flow_replaces_english_labels() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Search results",
+        "Start from a blank canvas",
+        "Getting started",
+        "No templates match your search",
+        "Join with a code",
+        "Search templates",
+        "Shared",
+        "Not shared",
+        "Start sharing",
+        "Stop sharing",
+        "Checking the server…",
+        "Remove from server",
+        "Rename on the server",
+        "Show as grid",
+        "Show as list",
+        "Last modified",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew Home/Online Files UI translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+    }
+}
+
+#[test]
+fn hebrew_inspector_and_layer_panels_have_native_labels() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Appearance",
+        "Fills",
+        "Strokes",
+        "Opacity & blend",
+        "Layout grid",
+        "Layout grids",
+        "Layout grid settings",
+        "Text direction",
+        "Letter spacing",
+        "Horizontal spacing",
+        "Vertical spacing",
+        "Fill container",
+        "Fill window",
+        "Fixed size",
+        "Auto width",
+        "Auto height",
+        "Component name",
+        "Component property",
+        "Instance properties",
+        "Layer name",
+        "Corner smoothing",
+        "Frames",
+        "Group selection",
+        "Delete page",
+        "Duplicate page",
+        "No matching layers",
+        "Find layers",
+        "Align text baselines",
+        "Variable",
+        "Color variables",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew inspector/layer translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+    }
+}
+
+#[test]
+fn hebrew_context_edit_and_selection_menus_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    // Native context-menu actions must not silently fall back to English.
+    for key in [
+        "Actions…",
+        "Convert to frame",
+        "Convert to section",
+        "Copy as CSS",
+        "Copy as PNG",
+        "Crop image",
+        "Detach instance",
+        "Flip horizontal",
+        "Flip vertical",
+        "Frame selection",
+        "Go to main component",
+        "Lock/Unlock",
+        "Paste here",
+        "Paste to replace",
+        "Select all",
+        "Send backward",
+        "Send to back",
+        "Show/Hide UI",
+        "Use as mask",
+        "Zoom to fit",
+        "Search actions, layers and tools",
+        "Select layer",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew context-menu translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} unexpectedly fell back to English");
+    }
+}
+
+#[test]
 fn right_to_left_languages_mirror_the_window() {
     for code in ["ar", "ar-SA", "AR", "he", "he-IL", "fa", "ur", "ckb", "yi"] {
         assert!(writes_right_to_left(code), "{code}");
@@ -762,5 +932,305 @@ fn the_language_preference_takes_language_codes() {
     assert_eq!(s.prefs.language, "es-419");
     for bad in ["", "../es", "es--ES", "abcdefghi"] {
         assert!(s.execute("pref.language", &serde_json::json!({"language": bad})).is_err(), "{bad:?}");
+    }
+}
+
+/// High-frequency Hebrew labels seen on the native document and inspector screen.
+#[test]
+fn hebrew_native_document_and_inspector_basics_are_translated() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Position",
+        "Dimensions",
+        "Clip content",
+        "Drafts",
+        "Variables",
+        "Selection colors",
+        "Stroke weight",
+        "Visibility",
+        "Background blur",
+        "Keyboard shortcuts",
+        "Local variables",
+        "Prototype settings",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew native document/inspector label for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+    }
+}
+
+/// File recovery, version history and import failures remain readable in Native Hebrew.
+#[test]
+fn hebrew_native_file_recovery_and_versions_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Back to the current version",
+        "Current version",
+        "Drop a .figcraft, .fig, .jam, .sketch, .json, .svg or image file.",
+        "FigCraft couldn't open its window: {error}",
+        "Fold autosaves",
+        "Show autosaves",
+        "No saved versions yet. Save a version to mark a point in your work you can come back to.",
+        "Nothing changed since this version.",
+        "Reload the page to get back the unsaved files the browser had room for.",
+        "Reload the page to get your unsaved files back.",
+        "Remove from recents",
+        "Restore this version",
+        "Save version  {key}",
+        "Search files and templates",
+        "Show open",
+        "This version can't be read.",
+        "Version",
+        "Version {version}",
+        "Version {v} · {components} · {styles} · {variables}",
+        "What changed since a saved version",
+        "Your unsaved files were too large for the browser to keep.",
+        "Your copy of the file stays open",
+        "The destination document is unavailable. Nothing was imported.",
+        "The destination document was closed. Nothing was imported.",
+        "The destination page was removed. Nothing was imported.",
+        "Imported {name}",
+        "Link copied: it opens the file in FigCraft",
+        "Link copied: it opens the file in the browser",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew file/recovery translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        for placeholder in ["{error}", "{key}", "{name}", "{version}", "{v}", "{components}", "{styles}", "{variables}"] {
+            assert_eq!(key.contains(placeholder), value.contains(placeholder), "placeholder parity: {key:?}");
+        }
+    }
+}
+
+/// The Native export dialog and PDF print controls must not silently switch
+/// back to English when using Hebrew, including numeric export notifications.
+#[test]
+fn hebrew_native_export_and_pdf_print_controls_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Replace mixed export settings",
+        "Click + to replace mixed content",
+        "Export {name}",
+        "Suffix",
+        "Remove export setting",
+        "Android Vector Drawable",
+        "Best effort",
+        "Exact only",
+        "Ignore unsupported",
+        "Ignore overlapping layers",
+        "Include bounding box",
+        "Outline text",
+        "Include id attribute",
+        "Simplify stroke",
+        "Compatibility",
+        "Color profile",
+        "Same as file ({profile})",
+        "PDF print settings",
+        "{length} bleed",
+        "crop marks",
+        "bleed marks",
+        "no bleed",
+        "Bleed",
+        "Crop marks",
+        "Bleed marks",
+        "CMYK colour",
+        "Bleed marks need a bleed",
+        "Preview",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew Native export control: {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        for placeholder in ["{name}", "{profile}", "{length}"] {
+            assert_eq!(key.contains(placeholder), value.contains(placeholder), "placeholder in {key:?}");
+        }
+    }
+    for key in [
+        "Export {n} layers",
+        "Exported {n} files",
+        "Exported {n} files; some content was changed or left out",
+        "Exported {name}; {n} kinds of content were changed or left out",
+    ] {
+        let Some(Text::Plural(Forms { one: Some(one), other, .. })) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew Native export count forms: {key:?}");
+        };
+        for value in [one, other] {
+            assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)));
+            assert!(value.contains("{n}"), "lost export count in {key:?}");
+            assert_eq!(key.contains("{name}"), value.contains("{name}"), "lost export filename in {key:?}");
+        }
+    }
+}
+
+/// Native variable pickers, style creation and library controls must render Hebrew,
+/// including empty states, rather than silently falling back to English.
+#[test]
+fn hebrew_native_variable_style_library_controls_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Apply variable to text",
+        "Apply variable to visibility",
+        "Change alias",
+        "Choose collection",
+        "Choose variable",
+        "Create a variable collection first",
+        "Create a variable first",
+        "Create alias",
+        "Create collection",
+        "Create component property",
+        "Create components, styles or variables to publish them as a library.",
+        "Create from color",
+        "Create property…",
+        "Create style",
+        "Create style from the selected text",
+        "Detach variable",
+        "Edit style",
+        "Edit variable",
+        "No boolean variables fit here.",
+        "No boolean variables yet. Create them in Local variables.",
+        "No category",
+        "No color styles",
+        "No colour variables fit here.",
+        "No colour variables yet. Create them in Local variables.",
+        "No matching styles",
+        "No matching variables",
+        "No number variables fit here.",
+        "No number variables yet. Create them in Local variables.",
+        "No string variables fit here.",
+        "No string variables yet. Create them in Local variables.",
+        "No styles yet.",
+        "No styles yet. Click + to create one from the selection.",
+        "No text styles yet. Click + to create one from the selected text.",
+        "No variables fit here.",
+        "No variables yet. Create them in Local variables.",
+        "Scope: all supported properties",
+        "Scope: hidden from pickers",
+        "Scope: only {scope}",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew variable/style translation for {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to non-Hebrew UI");
+        assert_eq!(placeholders(key), placeholders(value), "variable/style placeholder parity: {key:?}");
+    }
+}
+
+/// Hebrew collaboration, publishing, comments and plugin controls use actual
+/// translations and keep all interpolation fields from their English source.
+#[test]
+fn hebrew_native_collaboration_sharing_plugins_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Comment",
+        "Edit comment",
+        "No comments yet",
+        "No comments to copy",
+        "No matching comments",
+        "Show comments (Shift+C)",
+        "Presenting: comments",
+        "Publish changes",
+        "Publish to server",
+        "Publish to another server…",
+        "Publishing…",
+        "Published version {v}",
+        "Published version {v} to the server",
+        "Publishing with the server's key.",
+        "Hide from publishing",
+        "Hide when publishing",
+        "Shared by your team on {server}",
+        "Library updates available",
+        "Reading the library…",
+        "From the library \"{name}\": read-only",
+        "Can't read this library: {e}",
+        "Plugin",
+        "Install plugin",
+        "Update plugin",
+        "Import plugin from manifest",
+        "Import plugin from manifest…",
+        "It asks permission to:",
+        "No plugins on {server}.",
+        "No plugins yet. Import a development plugin from its figcraft-plugin.json.",
+        "Edit link",
+        "Edit link copied",
+        "An invite link that opens FigCraft and joins",
+        "View only: you see every change as it happens but can't edit. Leave to keep a copy you can edit.",
+        "Can comment: you see every change as it happens and can comment, but can't edit. Leave to keep a copy you can edit.",
+        "can edit the document",
+        "read the document",
+        "reads the document",
+        "read and edit the document",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew collaboration/share/plugin control: {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        assert_eq!(placeholders(key), placeholders(value), "collaboration/share/plugin placeholder parity: {key:?}");
+    }
+}
+
+/// Prototype editor, presentation and interaction labels stay translated in Native Hebrew.
+/// Every key comes from the maintained English UI source catalog.
+#[test]
+fn hebrew_native_prototype_flows_and_interactions_are_localized() {
+    let he = LANGS.iter().position(|lang| lang.code == "he").expect("Hebrew catalog");
+    for key in [
+        "Action",
+        "Actions for {name}",
+        "Add action",
+        "Add actions for when no condition holds",
+        "After delay",
+        "After delay {ms}ms",
+        "Conditional",
+        "Delay",
+        "Every top-level frame already starts a flow",
+        "Flow chart",
+        "Flow starting point",
+        "Flow starting points",
+        "Flows",
+        "Highlight layers on hover",
+        "If {condition}",
+        "Interaction",
+        "Interactions",
+        "Leaving the prototype",
+        "Link frames on the Prototype tab, then present the flow",
+        "Mixed interactions: click + to replace them",
+        "Navigate to",
+        "No scrolling",
+        "On click",
+        "Overlay",
+        "Overlay position",
+        "Pause",
+        "Present or preview",
+        "Present this flow",
+        "Preserve scroll position",
+        "Preview this flow",
+        "Preview this frame",
+        "Prototype preview",
+        "Remove interaction",
+        "Remove the else and its actions",
+        "Remove this condition and its actions",
+        "Replace with a new interaction",
+        "Scroll behavior",
+        "Scroll to",
+        "Scroll to layer",
+        "Scroll with parent",
+        "Select a frame and add a starting point to present it as a flow.",
+        "Select a frame to preview it",
+        "Smart animate",
+        "Swap overlay",
+        "There's no destination for that action",
+        "This condition is edited as an expression",
+        "This link opens a website outside the prototype:",
+        "Trigger",
+        "Trigger layer",
+        "Your system asks for reduced motion: animations stay off.",
+    ] {
+        let Some(Text::Plain(value)) = find(LANGS[he].ui, key) else {
+            panic!("missing Hebrew Native prototype control: {key:?}");
+        };
+        assert!(value.chars().any(|c| ('\u{0590}'..='\u{05ff}').contains(&c)), "{key:?} fell back to English");
+        assert_eq!(placeholders(key), placeholders(value), "prototype placeholder parity: {key:?}");
     }
 }

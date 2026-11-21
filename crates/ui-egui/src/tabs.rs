@@ -107,6 +107,17 @@ fn tab_drop_position(visible: &[(usize, Rect)], from: usize, pointer_x: f32) -> 
     }
 }
 
+/// Split a file tab into a draggable body and a non-overlapping close target.
+/// In RTL interfaces close is at the visual start (left), while stable egui IDs
+/// and tab indices continue to follow the document, not its screen coordinates.
+fn document_tab_regions(r: Rect, mirrored: bool) -> (Rect, Rect) {
+    if mirrored {
+        (Rect::from_min_max(pos2(r.min.x + 32.0, r.min.y), r.max), Rect::from_min_max(r.min, pos2(r.min.x + 32.0, r.max.y)))
+    } else {
+        (Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y)), Rect::from_min_max(pos2(r.max.x - 32.0, r.min.y), r.max))
+    }
+}
+
 /// Draw the top tab bar: Home, document and presenter tabs, new-tab and window controls,
 /// open/close/reorder animation and tab closing, pausing the presenter when going Home.
 pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
@@ -162,8 +173,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             let lost = live_lost(app, d.uid);
             let dirty = d.is_dirty();
             let r = tab_rects[slot];
-            let body_r = Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y));
-            let close_r = Rect::from_min_max(body_r.right_top(), r.max);
+            let (body_r, close_r) = document_tab_regions(r, app.ui.mirrored);
             let resp = ui.interact(body_r, ui.scope_id().with(("tab", d.uid)), Sense::click_and_drag());
             let cresp = ui.interact(close_r, ui.scope_id().with(("tabclose", d.uid)), Sense::click()).tip(tr("Close tab"));
             match tab_gesture(ui, &resp, rect, several) {
@@ -195,6 +205,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
                 live,
                 lost,
                 progress,
+                mirrored: app.ui.mirrored,
             };
             paint_tab(ui, &t, &tab);
             if cresp.clicked() {
@@ -228,7 +239,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
         let mut close_present_tab = None;
         for (tab, &w) in app.ui.presents.iter().skip(present_layout.first).zip(&present_layout.widths) {
             let active = present_on == Some(tab.id);
-            let (clicked, closed) = present_tab(ui, &t, tab, Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT)), active);
+            let (clicked, closed) = present_tab(ui, &t, tab, Rect::from_min_size(pos2(x, rect.min.y), vec2(w, HEIGHT)), active, app.ui.mirrored);
             if clicked && !active {
                 to_present = Some(tab.id);
             }
@@ -475,13 +486,21 @@ struct TabPaint<'a> {
     lost: bool,
     /// How far the opening animation is (0..=1).
     progress: f32,
+    mirrored: bool,
+}
+
+/// File tabs enter from their reading edge: left for LTR, right for mirrored Hebrew.
+/// The offset affects painting only, not hitboxes, selection or document IDs.
+fn tab_entry_offset(progress: f32, mirrored: bool) -> f32 {
+    let distance = 28.0 * (1.0 - progress).clamp(0.0, 1.0).powi(2);
+    if mirrored { distance } else { -distance }
 }
 
 /// Draws a document tab: background, icon, name, live mark, unsaved dot and close button.
 fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
-    let TabPaint { name, kind, rects: [r, close_r], width: w, state: [active, hovered, close_hovered, dirty], live, lost, progress } = *tab;
+    let TabPaint { name, kind, rects: [r, close_r], width: w, state: [active, hovered, close_hovered, dirty], live, lost, progress, mirrored } = *tab;
     let mark_w = if live.is_some() || lost { LIVE_MARK_WIDTH } else { 0.0 };
-    let paint_r = r.translate(vec2(-28.0 * (1.0 - progress).powi(2), 0.0));
+    let paint_r = r.translate(vec2(tab_entry_offset(progress, mirrored), 0.0));
     let painter = ui.painter().with_clip_rect(r);
     if active {
         painter.rect_filled(paint_r, CornerRadius::ZERO, t.tab_active.linear_multiply(progress));
@@ -490,27 +509,44 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
     }
     icons::paint(
         &painter,
-        Rect::from_center_size(pos2(paint_r.min.x + 17.0, paint_r.center().y), Vec2::splat(BAR_ICON)),
+        Rect::from_center_size(pos2(if mirrored { paint_r.max.x - 17.0 } else { paint_r.min.x + 17.0 }, paint_r.center().y), Vec2::splat(BAR_ICON)),
         icons::file_mark(kind),
         crate::theme::ACCENT.linear_multiply(progress),
     );
     // The unsaved-changes dot follows the name on screen, whichever way the name reads.
-    let shown = crate::bidi::paint_name(
-        &painter,
-        pos2(paint_r.min.x + 32.0, paint_r.center().y),
-        name,
-        regular(12.0),
-        t.text.linear_multiply(progress),
-        (w - mark_w - if dirty { 72.0 } else { 60.0 }).max(0.0),
-    );
-    let at = Rect::from_center_size(pos2(paint_r.max.x - 42.0, paint_r.center().y), Vec2::splat(BAR_ICON));
+    let max_name_w = (w - mark_w - if dirty { 72.0 } else { 60.0 }).max(0.0);
+    let shown = if mirrored {
+        // The visual text ends next to the file icon on the right. The bidi shaper
+        // still receives the original logical filename, including Latin fragments.
+        let galley = crate::bidi::name_galley(&painter, name, regular(12.0), t.text.linear_multiply(progress), max_name_w);
+        let at = pos2(paint_r.max.x - 32.0 - galley.size().x, paint_r.center().y - galley.size().y / 2.0);
+        let shown = Rect::from_min_size(at, galley.size());
+        painter.galley(at, galley, t.text.linear_multiply(progress));
+        shown
+    } else {
+        crate::bidi::paint_name(
+            &painter,
+            pos2(paint_r.min.x + 32.0, paint_r.center().y),
+            name,
+            regular(12.0),
+            t.text.linear_multiply(progress),
+            max_name_w,
+        )
+    };
+    let live_x = if mirrored { paint_r.min.x + 42.0 } else { paint_r.max.x - 42.0 };
+    let at = Rect::from_center_size(pos2(live_x, paint_r.center().y), Vec2::splat(BAR_ICON));
     if lost {
         icons::paint(&painter, at, Icon::LiveDisconnected, t.danger.linear_multiply(progress));
     } else if let Some(shared) = live {
         icons::paint(&painter, at, crate::online::mark(shared), if shared { t.success } else { t.icon_secondary }.linear_multiply(progress));
     }
     if dirty {
-        painter.text(pos2(shown.max.x + 4.0, paint_r.center().y), Align2::LEFT_CENTER, "•", regular(12.0), t.text.linear_multiply(progress));
+        let (at, align) = if mirrored {
+            (shown.left_center() - vec2(4.0, 0.0), Align2::RIGHT_CENTER)
+        } else {
+            (shown.right_center() + vec2(4.0, 0.0), Align2::LEFT_CENTER)
+        };
+        painter.text(at, align, "•", regular(12.0), t.text.linear_multiply(progress));
     }
     let cr = Rect::from_center_size(close_r.center() + vec2(paint_r.min.x - r.min.x, 0.0), Vec2::splat(20.0));
     // The close target never overlaps the draggable body, including on inactive tabs.
@@ -522,12 +558,21 @@ fn paint_tab(ui: &Ui, t: &Tokens, tab: &TabPaint) {
     }
 }
 
+/// Presentation tabs share the same distinct body and close targets as file tabs.
+/// Mirroring changes only screen geometry, not the stable tab ID or action.
+fn presentation_tab_regions(r: Rect, mirrored: bool) -> (Rect, Rect) {
+    document_tab_regions(r, mirrored)
+}
+
+fn presentation_tab_icon_x(r: Rect, mirrored: bool) -> f32 {
+    if mirrored { r.max.x - 19.0 } else { r.min.x + 19.0 }
+}
+
 /// One presentation tab in `r`: whether it was clicked and whether it was closed (its X or a
 /// middle click).
-fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool) -> (bool, bool) {
+fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool, mirrored: bool) -> (bool, bool) {
     let label = present_tab_name(tab);
-    let body_r = Rect::from_min_max(r.min, pos2(r.max.x - 32.0, r.max.y));
-    let close_r = Rect::from_min_max(body_r.right_top(), r.max);
+    let (body_r, close_r) = presentation_tab_regions(r, mirrored);
     let resp = ui.interact(body_r, ui.scope_id().with(("presentation_tab", tab.id)), Sense::click()).tip(tr("Present"));
     let cresp = ui.interact(close_r, ui.scope_id().with(("presentation_close", tab.id)), Sense::click()).tip(tr("Close preview"));
     crate::a11y::tab(&resp, &label, active);
@@ -537,8 +582,21 @@ fn present_tab(ui: &mut Ui, t: &Tokens, tab: &PresentTab, r: Rect, active: bool)
     } else if hovered {
         ui.painter().rect_filled(r, CornerRadius::ZERO, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 19.0, r.center().y), Vec2::splat(BAR_ICON)), Icon::Play, t.icon);
-    crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 34.0, r.center().y), &label, regular(12.0), t.text, r.width() - 62.0);
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(pos2(presentation_tab_icon_x(r, mirrored), r.center().y), Vec2::splat(BAR_ICON)),
+        Icon::Play,
+        t.icon,
+    );
+    if mirrored {
+        // Shape the mixed Hebrew/Latin title next to the icon on the right.
+        // The original page and filename strings remain unchanged for commands.
+        let galley = crate::bidi::name_galley(ui.painter(), &label, regular(12.0), t.text, (r.width() - 62.0).max(0.0));
+        let at = pos2(r.max.x - 34.0 - galley.size().x, r.center().y - galley.size().y / 2.0);
+        ui.painter().galley(at, galley, t.text);
+    } else {
+        crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 34.0, r.center().y), &label, regular(12.0), t.text, r.width() - 62.0);
+    }
     if hovered || active {
         let cr = Rect::from_center_size(close_r.center(), Vec2::splat(20.0));
         if cresp.hovered() {
@@ -769,7 +827,10 @@ pub fn resize_edges(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod layout_tests {
-    use super::{MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, open_progress, present_room, tab_drop_position, tab_layout};
+    use super::{
+        MIN_TAB_WIDTH, OPEN_TIME, OVERFLOW_WIDTH, TabMotion, document_tab_regions, open_progress, present_room, presentation_tab_icon_x,
+        presentation_tab_regions, tab_drop_position, tab_entry_offset, tab_layout,
+    };
     use egui::{Rect, pos2};
 
     #[test]
@@ -816,6 +877,59 @@ mod layout_tests {
     }
 
     #[test]
+    fn hebrew_document_tab_mirrors_close_hitbox_without_stealing_tab_clicks() {
+        let tab = Rect::from_min_max(pos2(100.0, 5.0), pos2(300.0, 45.0));
+        let (ltr_body, ltr_close) = document_tab_regions(tab, false);
+        let (rtl_body, rtl_close) = document_tab_regions(tab, true);
+        assert_eq!(ltr_body.width(), 168.0);
+        assert_eq!(rtl_body.width(), 168.0);
+        assert_eq!(ltr_close.width(), 32.0);
+        assert_eq!(rtl_close.width(), 32.0);
+        assert_eq!(ltr_close.max.x, tab.max.x);
+        assert_eq!(rtl_close.min.x, tab.min.x);
+        assert_eq!(ltr_body.min.x, tab.min.x);
+        assert_eq!(rtl_body.max.x, tab.max.x);
+        // egui Rect::intersects regards two touching edges as intersecting;
+        // their hit targets share the boundary but have no overlapping area.
+        assert_eq!(ltr_body.max.x, ltr_close.min.x);
+        assert_eq!(rtl_close.max.x, rtl_body.min.x);
+        assert!(ltr_body.contains(pos2(110.0, 25.0)));
+        assert!(rtl_close.contains(pos2(110.0, 25.0)));
+        assert!(rtl_body.contains(pos2(290.0, 25.0)));
+    }
+
+    #[test]
+    fn hebrew_presentation_tabs_mirror_close_target_and_play_icon_without_changing_action_regions() {
+        let tab = Rect::from_min_max(pos2(100.0, 5.0), pos2(300.0, 45.0));
+        let (ltr_body, ltr_close) = presentation_tab_regions(tab, false);
+        let (rtl_body, rtl_close) = presentation_tab_regions(tab, true);
+        assert_eq!(ltr_body.width(), rtl_body.width());
+        assert_eq!(ltr_close.width(), 32.0);
+        assert_eq!(rtl_close.width(), 32.0);
+        assert_eq!(ltr_body.max.x, ltr_close.min.x);
+        assert_eq!(rtl_close.max.x, rtl_body.min.x);
+        assert_eq!(ltr_close.max.x, tab.max.x);
+        assert_eq!(rtl_close.min.x, tab.min.x);
+        assert!(ltr_body.contains(pos2(110.0, 25.0)));
+        assert!(rtl_close.contains(pos2(110.0, 25.0)));
+        assert!(rtl_body.contains(pos2(290.0, 25.0)));
+        assert_eq!(presentation_tab_icon_x(tab, false), 119.0);
+        assert_eq!(presentation_tab_icon_x(tab, true), 281.0);
+    }
+
+    #[test]
+    fn hebrew_new_tab_enters_from_right_without_moving_action_regions() {
+        assert_eq!(tab_entry_offset(0.0, false), -28.0);
+        assert_eq!(tab_entry_offset(0.0, true), 28.0);
+        assert_eq!(tab_entry_offset(0.5, false), -7.0);
+        assert_eq!(tab_entry_offset(0.5, true), 7.0);
+        assert_eq!(tab_entry_offset(1.0, false), 0.0);
+        assert_eq!(tab_entry_offset(1.0, true), 0.0);
+        // A completed or reduced-motion tab never paints outside its hitbox.
+        assert_eq!(tab_entry_offset(2.0, true), 0.0);
+    }
+
+    #[test]
     fn new_tabs_animate_unless_motion_is_reduced() {
         let mut motion = TabMotion::default();
         motion.begin_frame([1].into_iter(), 0.0, false);
@@ -827,5 +941,56 @@ mod layout_tests {
         assert!(motion.opening.is_empty(), "the animation ends");
         motion.begin_frame([1, 2, 3].into_iter(), 2.0, true);
         assert!(motion.opening.is_empty(), "Reduce motion opens tabs at once");
+    }
+}
+
+#[cfg(test)]
+mod headless_language_tab_acceptance {
+    use super::{HEIGHT, TitleBar, preferred_width};
+    use egui::{Event, Modifiers, PointerButton, pos2};
+    use figcraft_engine::Session;
+    use serde_json::json;
+
+    use crate::present_tests::Ui;
+
+    fn click(ui: &mut Ui, x: f32, y: f32) {
+        let p = pos2(x, y);
+        for pressed in [true, false] {
+            ui.frame(vec![
+                Event::PointerMoved(p),
+                Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE },
+            ]);
+        }
+        ui.frame(vec![]);
+    }
+
+    #[test]
+    fn actual_editor_tabs_switch_and_close_at_language_specific_edges() {
+        for (mirrored, locale) in [(false, "en"), (true, "he")] {
+            let mut ui = Ui::new(Session::new());
+            ui.app.session.prefs.language = locale.into();
+            ui.app.ui.mirrored = mirrored;
+            ui.app.ui.home = false;
+            let keep_uid = ui.app.session.docs[0].uid;
+            ui.run("file.new", json!({}));
+            assert_eq!(ui.app.session.docs.len(), 2, "{locale} fixture must have two files");
+            assert_eq!(ui.app.session.active, 1, "{locale} new file starts active");
+
+            // Recreate the true tab-strip layout; these positions are used by ui.interact.
+            let x = if ui.app.ui.title_bar == TitleBar::Inset { 76.0 } else { 8.0 };
+            let home_w = if ui.app.ui.title_bar == TitleBar::Inset || mirrored { 44.0 } else { crate::layers::RAIL_WIDTH - x };
+            let first_x = x + home_w;
+            let first_w = preferred_width(&ui.app, 0);
+            let mid_y = HEIGHT / 2.0;
+            ui.frames(2, || vec![]);
+            click(&mut ui, first_x + 64.0, mid_y);
+            assert_eq!(ui.app.session.active, 0, "{locale} body click must select first file");
+            assert_eq!(ui.app.session.docs.len(), 2, "{locale} body click must not close");
+
+            let close_x = if mirrored { first_x + 16.0 } else { first_x + first_w - 16.0 };
+            click(&mut ui, close_x, mid_y);
+            assert_eq!(ui.app.session.docs.len(), 1, "{locale} close must hit the reading-side close target");
+            assert_ne!(ui.app.session.docs[0].uid, keep_uid, "{locale} first file should close");
+        }
     }
 }

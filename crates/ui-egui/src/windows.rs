@@ -461,9 +461,21 @@ fn unsaved_question(ctx: &Context, names: &[String]) -> Option<CloseAnswer> {
     let mut answer = None;
     crate::dialogs::window(tr("Unsaved changes"), ctx).order(egui::Order::Foreground).open(&mut open).show(ctx, |ui| {
         ui.set_width(340.0);
-        crate::widgets::label(ui, &trf("Unsaved changes in {names}. Save them before closing?", &[("names", &names.join(", "))]), t.text);
+        let rtl = crate::i18n::right_to_left();
+        let question = trf("Unsaved changes in {names}. Save them before closing?", &[("names", &names.join(", "))]);
+        if rtl {
+            // Keep the RTL text inside a content-height row. A vertical with_layout would
+            // reserve the entire available window height and make this safety dialog huge.
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    crate::widgets::label(ui, &question, t.text);
+                });
+            });
+        } else {
+            crate::widgets::label(ui, &question, t.text);
+        }
         ui.add_space(12.0);
-        ui.horizontal(|ui| {
+        let mut draw_buttons = |ui: &mut egui::Ui| {
             if crate::widgets::button(ui, tr("Don't Save"), false, true).clicked() {
                 answer = Some(CloseAnswer::DontSave);
             }
@@ -473,7 +485,15 @@ fn unsaved_question(ctx: &Context, names: &[String]) -> Option<CloseAnswer> {
             if crate::widgets::button(ui, tr("Save"), true, true).clicked() {
                 answer = Some(CloseAnswer::Save);
             }
-        });
+        };
+        if rtl {
+            // Native Hebrew dialogs read from the right; keep each action's meaning unchanged.
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| draw_buttons(ui));
+            });
+        } else {
+            ui.horizontal(|ui| draw_buttons(ui));
+        }
         // Save is the default: Enter answers it when no button has the keyboard.
         if answer.is_none() && ui.memory(|m| m.focused().is_none()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             answer = Some(CloseAnswer::Save);
