@@ -760,21 +760,6 @@ fn blend_row(ui: &mut Ui, app: &mut FigApp, target: &PickerTarget, paint: &mut P
     });
 }
 
-fn target_node_size(app: &FigApp, target: &PickerTarget) -> Option<(f64, f64)> {
-    let doc = app.session.doc().ok()?;
-    match target {
-        PickerTarget::Paint { ids, .. } | PickerTarget::Effect { ids, .. } => {
-            let n = doc.node(*ids.first()?)?;
-            Some((n.width, n.height))
-        }
-        PickerTarget::TextRange { id, .. } => {
-            let n = doc.node(*id)?;
-            Some((n.width, n.height))
-        }
-        _ => None,
-    }
-}
-
 /// The image paint's scale mode, rotation, colour profile, presets and filter sliders.
 fn image_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &mut Paint, mut img: ImagePaint, t: &Tokens) {
     ui.horizontal(|ui| {
@@ -788,14 +773,6 @@ fn image_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &
                 (tr("Tile"), ImageScaleMode::Tile),
             ] {
                 if crate::right::menu_item(ui, l, "") {
-                    if m == ImageScaleMode::Crop && img.crop.is_none() {
-                        let size = target_node_size(app, target);
-                        let doc = app.session.doc().ok();
-                        let dims = doc.as_ref().and_then(|d| d.images.get(&img.image)).map(|d| (f64::from(d.width), f64::from(d.height)));
-                        if let (Some((w, h)), Some((iw, ih))) = (size, dims) {
-                            img.crop = Some(img.placement_crop(iw, ih, w, h));
-                        }
-                    }
                     img.scale_mode = m;
                     paint.kind = PaintKind::Image(img.clone());
                     write(app, target, paint, false);
@@ -805,6 +782,9 @@ fn image_controls(app: &mut FigApp, ui: &mut Ui, target: &PickerTarget, paint: &
         });
         if icons::button(ui, Icon::Rotate, 24.0, false, tr("Rotate 90°")).clicked() {
             img.rotation = (img.rotation + 1) % 4;
+            if img.scale_mode == ImageScaleMode::Crop {
+                img.crop = None;
+            }
             paint.kind = PaintKind::Image(img.clone());
             write(app, target, paint, false);
         }
