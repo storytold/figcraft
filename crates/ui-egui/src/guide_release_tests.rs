@@ -91,6 +91,23 @@ fn a_guide_dragged_back_onto_or_past_its_ruler_is_removed() {
     }
 }
 
+/// Where the button came up decides, not where the pointer went later in the same frame.
+#[test]
+fn a_guide_released_above_the_canvas_stays_when_the_pointer_then_moves_past_its_ruler() {
+    let mut u = rulers();
+    let r = u.app.canvas.rect;
+    drag(&mut u, Pos2::new(r.min.x + 5.0, r.min.y + 60.0), r.center());
+    let placed = offsets(&u);
+    u.button(r.center(), true);
+    let above = Pos2::new(r.center().x, r.min.y - 30.0);
+    u.frame(vec![Event::PointerMoved(above)]);
+    u.frame(vec![
+        Event::PointerButton { pos: above, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() },
+        Event::PointerMoved(Pos2::new(r.min.x - 40.0, above.y)),
+    ]);
+    assert_eq!(offsets(&u), placed);
+}
+
 #[test]
 fn a_guide_released_off_the_canvas_away_from_its_ruler_stays() {
     let mut u = rulers();

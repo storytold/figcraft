@@ -317,7 +317,15 @@ pub fn end_released(app: &mut FigApp, ctx: &egui::Context) {
         taken
     });
     let Some(GuideDrag::Move { owner, index, vertical, copy: false, .. }) = drag else { return };
-    let Some(pos) = ctx.input(|i| i.pointer.latest_pos()) else { return };
+    // Where the button came up: a later move in the same frame, or a touch's end clearing the
+    // pointer, doesn't change it.
+    let released_at = ctx.input(|i| {
+        i.events.iter().rev().find_map(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } => Some(*pos),
+            _ => None,
+        })
+    });
+    let Some(pos) = released_at else { return };
     if rulers_on(app) && on_own_ruler(app, at, vertical, pos) {
         let page = app.session.ds().map(|d| d.page).ok();
         app.run("guide.remove", owned(owner, page, json!({"index": index})));
