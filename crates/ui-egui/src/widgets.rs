@@ -294,19 +294,52 @@ fn cancel_retargeted_field_save(ui: &mut Ui, id: Id) {
     ui.memory_mut(|m| m.surrender_focus(editor));
 }
 
-/// Drop a field draft when the active selection has changed since the edit began.
-fn sync_field_owner(ui: &mut Ui, id: Id) -> (Option<String>, Option<Vec<figcraft_doc::NodeId>>) {
+/// A snapshot of the active document and selection generation.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct SelectionSnapshot {
+    pub(crate) doc_uid: Option<u64>,
+    pub(crate) selection: Vec<figcraft_doc::NodeId>,
+    pub(crate) generation: u64,
+}
+
+pub(crate) fn update_selection_snapshot(ctx: &egui::Context, doc_uid: Option<u64>, selection: Vec<figcraft_doc::NodeId>) {
+    let sel_id = egui::Id::unique("app_current_selection");
+    let prev: Option<SelectionSnapshot> = ctx.data(|d| d.get_temp(sel_id));
+    let generation = match prev {
+        Some(ref p) if p.doc_uid == doc_uid && p.selection == selection => p.generation,
+        Some(ref p) => p.generation.wrapping_add(1),
+        None => 1,
+    };
+    ctx.data_mut(|d| {
+        d.insert_temp(sel_id, SelectionSnapshot { doc_uid, selection, generation });
+    });
+}
+
+/// Drop a field draft when the active selection, document, or layer value has changed since the edit began.
+fn sync_field_owner(ui: &mut Ui, id: Id, current_val: Option<f64>) -> (Option<String>, Option<SelectionSnapshot>) {
     let editing_id = id.with("editing");
     let owner_id = id.with("owner_sel");
+    let owner_val_id = id.with("owner_val");
     let sel_id = egui::Id::unique("app_current_selection");
-    let cur_sel: Option<Vec<figcraft_doc::NodeId>> = ui.data(|d| d.get_temp(sel_id));
-    let owner: Option<Vec<figcraft_doc::NodeId>> = ui.data(|d| d.get_temp(owner_id));
+    let cur_snap: Option<SelectionSnapshot> = ui.data(|d| d.get_temp(sel_id));
+    let owner_snap: Option<SelectionSnapshot> = ui.data(|d| d.get_temp(owner_id));
+    let owner_val: Option<Option<f64>> = ui.data(|d| d.get_temp(owner_val_id));
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
-    if editing.is_some() && cur_sel.is_some() && owner.is_some() && owner != cur_sel {
+
+    let selection_changed = editing.is_some()
+        && (cur_snap.is_none()
+            || owner_snap.is_none()
+            || owner_snap.as_ref().map(|s| (&s.doc_uid, &s.selection, s.generation))
+                != cur_snap.as_ref().map(|s| (&s.doc_uid, &s.selection, s.generation)));
+
+    let value_changed = editing.is_some() && owner_val.is_some() && owner_val != Some(current_val);
+
+    if selection_changed || value_changed {
         ui.data_mut(|d| {
             d.remove::<String>(editing_id);
             d.remove::<String>(id.with("kept"));
-            d.remove::<Vec<figcraft_doc::NodeId>>(owner_id);
+            d.remove::<SelectionSnapshot>(owner_id);
+            d.remove::<Option<f64>>(owner_val_id);
             d.remove::<bool>(id.with("selectall"));
             d.remove::<bool>(id.with("cmdstart"));
             d.remove::<bool>(id.with("edited"));
@@ -314,14 +347,47 @@ fn sync_field_owner(ui: &mut Ui, id: Id) -> (Option<String>, Option<Vec<figcraft
         ui.memory_mut(|m| m.surrender_focus(id.with("te")));
         editing = None;
     }
-    (editing, cur_sel)
+    (editing, cur_snap)
+}
+
+/// Drop a text field draft when the active selection, document, or string value has changed since the edit began.
+fn sync_text_field_owner(ui: &mut Ui, id: Id, current_val: &str) -> (Option<String>, Option<SelectionSnapshot>) {
+    let editing_id = id.with("editing");
+    let owner_id = id.with("owner_sel");
+    let owner_text_id = id.with("owner_text");
+    let sel_id = egui::Id::unique("app_current_selection");
+    let cur_snap: Option<SelectionSnapshot> = ui.data(|d| d.get_temp(sel_id));
+    let owner_snap: Option<SelectionSnapshot> = ui.data(|d| d.get_temp(owner_id));
+    let owner_text: Option<String> = ui.data(|d| d.get_temp(owner_text_id));
+    let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
+
+    let selection_changed = editing.is_some()
+        && (cur_snap.is_none()
+            || owner_snap.is_none()
+            || owner_snap.as_ref().map(|s| (&s.doc_uid, &s.selection, s.generation))
+                != cur_snap.as_ref().map(|s| (&s.doc_uid, &s.selection, s.generation)));
+
+    let value_changed = editing.is_some() && owner_text.as_deref().is_some_and(|t| t != current_val);
+
+    if selection_changed || value_changed {
+        ui.data_mut(|d| {
+            d.remove::<String>(editing_id);
+            d.remove::<SelectionSnapshot>(owner_id);
+            d.remove::<String>(owner_text_id);
+        });
+        ui.memory_mut(|m| m.surrender_focus(id.with("te")));
+        editing = None;
+    }
+    (editing, cur_snap)
 }
 
 /// Discard an editor's active draft and surrender focus.
 fn clear_field_editor(ui: &mut Ui, id: Id) {
     ui.data_mut(|d| {
         d.remove::<String>(id.with("editing"));
-        d.remove::<Vec<figcraft_doc::NodeId>>(id.with("owner_sel"));
+        d.remove::<SelectionSnapshot>(id.with("owner_sel"));
+        d.remove::<Option<f64>>(id.with("owner_val"));
+        d.remove::<String>(id.with("owner_text"));
     });
     ui.memory_mut(|m| m.surrender_focus(id.with("te")));
 }
@@ -374,7 +440,7 @@ fn number_field_impl(
     let edit_rect = Rect::from_min_max(pos2(rect.min.x + lead_w, rect.min.y), rect.max);
     let editing_id = id.with("editing");
     let owner_id = id.with("owner_sel");
-    let (mut editing, cur_sel) = sync_field_owner(ui, id);
+    let (mut editing, cur_snap) = sync_field_owner(ui, id, value);
     // Alt held over the field scrubs it too, as the label always does: "hover the input field
     // itself and hold down the modifier key" (Adjust alignment, rotation, position, and
     // dimensions). The field senses drags only while Alt is held, or while a scrub begun that way
@@ -472,9 +538,10 @@ fn number_field_impl(
         ui.data_mut(|d| {
             d.insert_temp(editing_id, editing.clone().unwrap_or_default());
             d.insert_temp(kept_id, value.map(fmt_num).unwrap_or_default());
-            if let Some(ref s) = cur_sel {
+            if let Some(ref s) = cur_snap {
                 d.insert_temp(owner_id, s.clone());
             }
+            d.insert_temp(id.with("owner_val"), value);
             d.insert_temp(id.with("selectall"), !typed_now);
             d.insert_temp(id.with("cmdstart"), with_command);
             d.remove::<bool>(id.with("edited"));
@@ -526,6 +593,7 @@ fn number_field_impl(
                         // The stepped value stays selected: typing replaces it.
                         ui.data_mut(|d| {
                             d.insert_temp(kept_id, text.clone());
+                            d.insert_temp(id.with("owner_val"), Some(nv));
                             d.insert_temp(id.with("selectall"), true);
                             d.insert_temp(id.with("edited"), true);
                         });
@@ -725,7 +793,7 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
     let t = Tokens::get(ui.ctx());
     let editing_id = id.with("editing");
     let owner_id = id.with("owner_sel");
-    let (mut editing, cur_sel) = sync_field_owner(ui, id);
+    let (mut editing, cur_snap) = sync_text_field_owner(ui, id, value);
     let resp = ui.interact(rect, id.with("click"), Sense::click());
     let shown = if secret { std::borrow::Cow::Owned("•".repeat(value.chars().count())) } else { std::borrow::Cow::Borrowed(value) };
     a11y::text(&resp, name, &shown);
@@ -738,8 +806,11 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
     let started = editing.is_none() && resp.clicked();
     if started {
         editing = Some(value.to_string());
-        if let Some(ref s) = cur_sel {
-            ui.data_mut(|d| d.insert_temp(owner_id, s.clone()));
+        if let Some(ref s) = cur_snap {
+            ui.data_mut(|d| {
+                d.insert_temp(owner_id, s.clone());
+                d.insert_temp(id.with("owner_text"), value.to_string());
+            });
         }
         ui.memory_mut(|m| m.request_focus(id.with("te")));
         select_all_next(ui, id.with("te"), value);

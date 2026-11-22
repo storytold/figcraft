@@ -1819,17 +1819,150 @@ fn field_draft_is_retained_when_window_loses_focus() {
 
 #[test]
 fn selecting_different_layer_in_layers_panel_drops_draft() {
-    let (mut u, _a, b) = setup();
+    let (mut u, a, b) = setup();
     let (h_pos, _) = field(&mut u, "Height");
     click(&mut u, h_pos);
     u.frame(vec![Event::Text("99".into())]);
 
-    // Click layer B in the Layers panel (sending press and release in the same frame)
+    // Click layer B in the Layers panel with press and release in the same frame
     let b_row = u.row_at(b);
-    click(&mut u, b_row);
+    u.frame(vec![
+        Event::PointerButton { pos: b_row, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos: b_row, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+    u.frame(vec![]);
 
-    // Verify draft was dropped and b's height is shown, not 99
+    // Verify draft was dropped, A was not committed with 99, and B retains its height
+    let doc = u.app.session.doc().unwrap();
+    assert_eq!(doc.node(a).unwrap().height, 30.0, "Layer A must retain its original height and not commit the draft");
+    assert_eq!(doc.node(b).unwrap().height, 20.0, "Layer B must retain its original height");
     let h_editing = u.ctx.data(|d| d.get_temp::<String>(Id::unique("lay_h").with("editing")));
     assert_eq!(h_editing, None, "stale draft must not leak into newly selected layer");
     assert_eq!(field(&mut u, "Height").1, "20", "Height field must show layer b's height");
+}
+
+#[test]
+fn draft_is_dropped_across_empty_selection_transition() {
+    let (mut u, a, _) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+    u.frame(vec![Event::Text("23".into())]);
+
+    // Clear selection for one frame (Design panel will not render Height during this frame)
+    u.app.session.execute("select.set", &json!({"ids": []})).unwrap();
+    u.frame(vec![]);
+
+    // Update A's height externally while deselected
+    u.app.session.execute("node.set", &json!({"id": a, "props": {"height": 60.0}})).unwrap();
+
+    // Reselect A
+    u.app.session.execute("select.set", &json!({"ids": [a]})).unwrap();
+    u.frame(vec![]);
+
+    // Draft must have been invalidated across the hidden selection transition
+    let h_editing = u.ctx.data(|d| d.get_temp::<String>(Id::unique("lay_h").with("editing")));
+    assert_eq!(h_editing, None, "draft must be invalidated across empty selection transition");
+    assert_eq!(field(&mut u, "Height").1, "60", "Height field must display A's updated height");
+    let doc = u.app.session.doc().unwrap();
+    assert_eq!(doc.node(a).unwrap().height, 60.0, "Layer A height must remain 60");
+}
+
+#[test]
+fn draft_is_dropped_when_layer_value_changes_externally() {
+    let (mut u, a, _) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+    u.frame(vec![Event::Text("23".into())]);
+
+    // Change A's height externally through node.set while selection remains unchanged
+    u.app.session.execute("node.set", &json!({"id": a, "props": {"height": 75.0}})).unwrap();
+    u.frame(vec![]);
+
+    // Draft must be dropped and field must show the new size 75
+    let h_editing = u.ctx.data(|d| d.get_temp::<String>(Id::unique("lay_h").with("editing")));
+    assert_eq!(h_editing, None, "draft must be dropped when layer size changes");
+    assert_eq!(field(&mut u, "Height").1, "75", "Height field must show the new layer size");
+}
+
+#[test]
+fn deferred_canvas_press_preserves_page_coordinates_across_view_change() {
+    let (mut u, _a, _) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+    u.frame(vec![Event::Text("50".into())]);
+
+    // Press on canvas while Height is focused; deferred_down captures current page coordinates
+    let canvas_click = pos2(500.0, 300.0);
+    let original_page_pos = u.app.to_page(canvas_click);
+
+    // Frame with click on canvas (queues deferred down and release)
+    u.frame(vec![
+        Event::PointerMoved(canvas_click),
+        Event::PointerButton { pos: canvas_click, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos: canvas_click, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+
+    // Simulate view change (e.g. scrolling or panning) before delivery
+    if let Ok(ds) = u.app.session.ds_mut() {
+        ds.view.scroll(100.0, 50.0, false);
+    }
+
+    // Deliver deferred down in the next frame
+    u.frame(vec![]);
+
+    // Verify pointer down delivered to engine matches original page coordinates, not shifted by scroll
+    let last = u.app.canvas.last_down.expect("pointer down event delivered");
+    assert!((last.x - original_page_pos.x).abs() < 1e-4, "deferred press must preserve original page x coordinate");
+    assert!((last.y - original_page_pos.y).abs() < 1e-4, "deferred press must preserve original page y coordinate");
+}
+
+#[test]
+fn deferred_press_released_off_canvas_delivers_cleanly_without_orphan_down() {
+    let (mut u, _a, _) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+
+    // Press inside focused field / canvas to queue deferred down
+    let canvas_pos = pos2(500.0, 300.0);
+    u.button(canvas_pos, true);
+
+    // Release off canvas (e.g. outside window/canvas rect) before the next frame
+    let off_canvas = pos2(-50.0, -50.0);
+    u.frame_with(
+        vec![
+            Event::PointerMoved(off_canvas),
+            Event::PointerButton { pos: off_canvas, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        ],
+        Modifiers::NONE,
+    );
+
+    // Re-enter canvas
+    u.frame_with(vec![Event::PointerMoved(canvas_pos)], Modifiers::NONE);
+
+    // Verify no dragging or orphan Down is stuck
+    assert!(!u.app.canvas.dragging, "canvas must not be left in dragging state");
+    assert!(u.app.canvas.deferred_down.is_none(), "deferred down must be cleared");
+}
+
+#[test]
+fn deferred_press_discarded_on_doc_or_page_switch() {
+    let (mut u, _a, _) = setup();
+    let (h_pos, _) = field(&mut u, "Height");
+    click(&mut u, h_pos);
+
+    // Press on canvas to queue deferred down
+    let canvas_pos = pos2(500.0, 300.0);
+    u.button(canvas_pos, true);
+    assert!(u.app.canvas.deferred_down.is_some(), "deferred down should be queued");
+
+    // Create and switch to a new page
+    let new_page = u.app.session.execute("page.add", &json!({"name": "Page 2"})).unwrap();
+    let page_id = id(new_page);
+    u.app.session.execute("page.select", &json!({"id": page_id})).unwrap();
+
+    // Run next frame
+    u.frame(vec![]);
+
+    // Deferred down must have been discarded because page changed
+    assert!(u.app.canvas.deferred_down.is_none(), "deferred down must be discarded on page switch");
 }

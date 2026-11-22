@@ -48,6 +48,19 @@ pub mod render_worker;
 pub(crate) mod selection_spacing;
 pub mod widget_bar;
 
+/// A pointer press on the canvas deferred by one frame to let a focused panel field blur and commit.
+#[derive(Clone, Debug)]
+pub(crate) struct DeferredDown {
+    pub(crate) doc_uid: u64,
+    pub(crate) page: NodeId,
+    pub(crate) page_pos: Point,
+    pub(crate) screen_pos: Pos2,
+    pub(crate) released: bool,
+    pub(crate) release_page_pos: Point,
+    pub(crate) release_screen_pos: Pos2,
+    pub(crate) mods: egui::Modifiers,
+}
+
 pub struct CanvasState {
     pub rect: Rect,
     texture: Option<egui::TextureHandle>,
@@ -77,13 +90,14 @@ pub struct CanvasState {
     pub refine_latency_ms: Option<f64>,
     /// The share of the canvas no render covered last frame: the page background showed there.
     pub uncovered: f32,
-    dragging: bool,
+    pub(crate) dragging: bool,
     space_pan: bool,
     middle_pan: Option<(Pos2, f64, f64)>,
     /// The zoom tool (Z held): zooming out (Alt) or in, and where its drag started.
     zoom_tool: Option<bool>,
     zoom_drag: Option<Pos2>,
     pub last_pointer: Option<Point>,
+    pub last_down: Option<Point>,
     /// The real pointer was over the canvas last frame (leaving it clears what it hovered).
     hovering: bool,
     /// The hover last sent to the tools and the state it was found in ([`input::HoverKey`]): the
@@ -99,7 +113,7 @@ pub struct CanvasState {
     /// The latest scroll came from a mouse wheel rather than a trackpad (Scroll wheel zoom).
     wheel_is_mouse: bool,
     /// A pointer press on the canvas deferred by one frame to let a focused panel field blur and commit.
-    deferred_down: Option<(Pos2, bool, Pos2, egui::Modifiers)>,
+    pub(crate) deferred_down: Option<DeferredDown>,
 }
 
 impl Default for CanvasState {
@@ -126,6 +140,7 @@ impl Default for CanvasState {
             zoom_tool: None,
             zoom_drag: None,
             last_pointer: None,
+            last_down: None,
             hovering: false,
             last_hover: None,
             preedit: None,

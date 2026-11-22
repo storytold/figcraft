@@ -1,4 +1,4 @@
-use super::{FigApp, Point, PointerKind, Pos2, Rect, Ui, json, pointer_event};
+use super::{FigApp, Point, PointerEvent, PointerKind, Pos2, Rect, Ui, json, pointer_event};
 
 /// What a hover was found in: the event (where, the modifiers, the zoom) and what decides what it
 /// hits (the file and page, their revision, the selection, the tool and modes). The same again finds
@@ -208,6 +208,7 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
     });
     let (wheel, zoom_delta) = wheel_zoom(app, &ctx, zoom_delta, mods.shift);
     let scroll = wheel + pan;
+    deliver_deferred_down(app, &ctx);
     let editing_text = app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false);
     let typing_elsewhere = crate::a11y::field_focused(&ctx);
     app.canvas.space_pan = space && !editing_text && !typing_elsewhere;
@@ -323,7 +324,6 @@ pub(super) fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> boo
         app.canvas.dragging = false;
         return true;
     }
-    deliver_deferred_down(app);
     let primary_pressed = ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
     let primary_down = ctx.input(|i| i.pointer.primary_down());
     let primary_released = ctx.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
@@ -390,7 +390,22 @@ fn primary_pointer_kind(
             }
         });
         if had_field_focus {
-            app.canvas.deferred_down = Some((press_pos.unwrap_or(pos), primary_released, release_pos.unwrap_or(pos), mods));
+            if let Ok(ds) = app.session.ds() {
+                let press_screen = press_pos.unwrap_or(pos);
+                let press_page = app.to_page(press_screen);
+                let release_screen = release_pos.unwrap_or(pos);
+                let release_page = app.to_page(release_screen);
+                app.canvas.deferred_down = Some(crate::canvas::DeferredDown {
+                    doc_uid: ds.uid,
+                    page: ds.page,
+                    page_pos: press_page,
+                    screen_pos: press_screen,
+                    released: primary_released,
+                    release_page_pos: release_page,
+                    release_screen_pos: release_screen,
+                    mods,
+                });
+            }
             ctx.request_repaint();
             None
         } else {
@@ -414,13 +429,28 @@ fn primary_pointer_kind(
 }
 
 /// Send a pointer down/up sequence deferred from the previous frame to let a focused field blur and commit.
-fn deliver_deferred_down(app: &mut FigApp) {
-    if let Some((press_at, deferred_released, release_at, deferred_mods)) = app.canvas.deferred_down.take() {
-        send(app, PointerKind::Down, press_at, &deferred_mods);
-        if deferred_released {
-            app.canvas.dragging = false;
-            send(app, PointerKind::Up, release_at, &deferred_mods);
-        }
+fn deliver_deferred_down(app: &mut FigApp, ctx: &egui::Context) {
+    let Some(deferred) = app.canvas.deferred_down.take() else {
+        return;
+    };
+    let Ok(ds) = app.session.ds() else {
+        app.canvas.dragging = false;
+        return;
+    };
+    if ds.uid != deferred.doc_uid || ds.page != deferred.page {
+        app.canvas.dragging = false;
+        return;
+    }
+    let released_now = !ctx.input(|i| i.pointer.primary_down());
+    if deferred.released || released_now {
+        send_at_page(app, PointerKind::Down, deferred.page_pos, deferred.screen_pos, &deferred.mods);
+        app.canvas.dragging = false;
+        let up_page = if deferred.released { deferred.release_page_pos } else { deferred.page_pos };
+        let up_screen = if deferred.released { deferred.release_screen_pos } else { deferred.screen_pos };
+        send_at_page(app, PointerKind::Up, up_page, up_screen, &deferred.mods);
+    } else {
+        app.canvas.dragging = true;
+        send_at_page(app, PointerKind::Down, deferred.page_pos, deferred.screen_pos, &deferred.mods);
     }
 }
 
@@ -453,7 +483,29 @@ fn pan_past_edge(app: &mut FigApp, ctx: &egui::Context, mods: &egui::Modifiers) 
 }
 
 fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
-    let ev = pointer_event(app, kind, pos, m);
+    let page_pos = app.to_page(pos);
+    send_at_page(app, kind, page_pos, pos, m);
+}
+
+fn send_at_page(app: &mut FigApp, kind: PointerKind, page_pos: Point, screen_pos: Pos2, m: &egui::Modifiers) {
+    let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
+    let ev = PointerEvent {
+        kind,
+        x: page_pos.x,
+        y: page_pos.y,
+        sx: f64::from(screen_pos.x),
+        sy: f64::from(screen_pos.y),
+        shift: m.shift,
+        alt: m.alt,
+        cmd: m.command || app.ui.crop.is_some(),
+        ctrl: m.ctrl,
+        zoom,
+        pressure: app.canvas.pressure,
+    };
+    send_pointer_event(app, ev, kind);
+}
+
+fn send_pointer_event(app: &mut FigApp, ev: PointerEvent, kind: PointerKind) {
     // A hover where nothing changed since the last one finds what that one found (the state is
     // taken after it ran: what it set, such as the hovered layer, is part of it).
     let hover = kind == PointerKind::Hover;
@@ -462,6 +514,9 @@ fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
     }
     if kind == PointerKind::Up {
         app.canvas.pressure = None;
+    }
+    if kind == PointerKind::Down {
+        app.canvas.last_down = Some(Point::new(ev.x, ev.y));
     }
     app.canvas.last_pointer = Some(Point::new(ev.x, ev.y));
     // A gesture something else committed under the held button (a colour picker closing on this
