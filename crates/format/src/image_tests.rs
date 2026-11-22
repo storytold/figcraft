@@ -160,3 +160,38 @@ fn a_hash_shaped_rest_image_ref_never_names_its_placeholder() {
         assert_eq!(doc.images.keys().collect::<Vec<_>>(), ["rest-image-missing"], "{image_ref}");
     }
 }
+
+#[test]
+fn image_dimensions_preserve_stored_orientation_and_reject_corrupt() {
+    let rgb = image::RgbImage::from_pixel(24, 16, image::Rgb([100, 150, 200]));
+    let mut jpg = Vec::new();
+    rgb.write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
+    let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+    exif.extend_from_slice(&6u16.to_le_bytes());
+    exif.extend_from_slice(&[0; 6]);
+    let mut oriented = jpg[..2].to_vec();
+    oriented.extend_from_slice(&[0xff, 0xe1]);
+    oriented.extend_from_slice(&u16::try_from(exif.len() + 2).unwrap().to_be_bytes());
+    oriented.extend_from_slice(&exif);
+    oriented.extend_from_slice(&jpg[2..]);
+
+    let mut d = Document::new("t");
+    let (_, w, h) = add_image(&mut d, oriented.clone()).unwrap();
+    assert_eq!((w, h), (24, 16));
+    let data = image_data(oriented);
+    assert_eq!((data.width, data.height), (24, 16));
+
+    let img = image::RgbaImage::from_pixel(9, 5, image::Rgba([1, 2, 3, 255]));
+    for fmt in [image::ImageFormat::Png, image::ImageFormat::WebP, image::ImageFormat::Gif] {
+        let mut bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut bytes), fmt).unwrap();
+        let (_, w, h) = add_image(&mut d, bytes.clone()).unwrap();
+        assert_eq!((w, h), (9, 5), "{fmt:?}");
+        let data = image_data(bytes);
+        assert_eq!((data.width, data.height), (9, 5), "{fmt:?}");
+    }
+
+    assert!(add_image(&mut d, b"not an image".to_vec()).is_err());
+    let bad = image_data(b"not an image".to_vec());
+    assert_eq!((bad.width, bad.height), (0, 0));
+}
