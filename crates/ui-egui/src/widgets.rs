@@ -327,10 +327,10 @@ fn sync_field_owner(ui: &mut Ui, id: Id, current_val: Option<f64>) -> (Option<St
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
 
     let selection_changed = editing.is_some()
-        && (cur_snap.is_none()
-            || owner_snap.is_none()
-            || owner_snap.as_ref().map(|s| (&s.doc_uid, &s.selection, s.generation))
-                != cur_snap.as_ref().map(|s| (&s.doc_uid, &s.selection, s.generation)));
+        && match (&cur_snap, &owner_snap) {
+            (Some(cur), Some(owner)) => cur != owner,
+            _ => false,
+        };
 
     let value_changed = editing.is_some() && owner_val.is_some() && owner_val != Some(current_val);
 
@@ -362,10 +362,10 @@ fn sync_text_field_owner(ui: &mut Ui, id: Id, current_val: &str) -> (Option<Stri
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
 
     let selection_changed = editing.is_some()
-        && (cur_snap.is_none()
-            || owner_snap.is_none()
-            || owner_snap.as_ref().map(|s| (&s.doc_uid, &s.selection, s.generation))
-                != cur_snap.as_ref().map(|s| (&s.doc_uid, &s.selection, s.generation)));
+        && match (&cur_snap, &owner_snap) {
+            (Some(cur), Some(owner)) => cur != owner,
+            _ => false,
+        };
 
     let value_changed = editing.is_some() && owner_text.as_deref().is_some_and(|t| t != current_val);
 
