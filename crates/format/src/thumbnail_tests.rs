@@ -236,6 +236,19 @@ fn previews_carry_the_first_pages_colour() {
 }
 
 #[test]
+fn sketch_preview_rejects_archives_above_the_import_entry_limit() {
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("previews/preview.png", stored).unwrap();
+    zip.write_all(&png(1, 1)).unwrap();
+    for number in 0..craft_sketch::MAX_ENTRIES {
+        zip.start_file(format!("pages/{number}.json"), stored).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    assert!(crate::thumbnail::sketch_preview_png(Cursor::new(bytes)).is_none());
+}
+
+#[test]
 fn sketch_files_show_their_preview_png() {
     use crate::thumbnail::{Preview, file_preview};
     let d = dir("sketch");
