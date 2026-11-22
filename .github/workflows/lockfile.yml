@@ -18,7 +18,7 @@ env:
 jobs:
   lockfile:
     name: Lockfile is in sync
-    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - name: Harden runner
