@@ -98,3 +98,22 @@ fn a_fitted_image_shown_smaller_fades_the_shapes_edge_once() {
     assert!((ink(0) - 255.0 * 0.75).abs() < 4.0, "the first pixel, three quarters covered, holds {}", ink(0));
     assert!(ink(1) > 250.0, "the next, inside, holds {}", ink(1));
 }
+
+/// Text painted only through its runs' fills draws something, so it counts for the export.
+#[test]
+fn text_painted_by_its_runs_counts_for_the_export() {
+    let (mut d, p) = page();
+    let mut td = figcraft_doc::TextData::new("Hi");
+    td.runs = vec![figcraft_doc::StyleRun {
+        start: 0,
+        end: 2,
+        style: figcraft_doc::TextStyle { fills: Some(vec![Paint::solid(Color::BLACK)]), ..td.style.clone() },
+    }];
+    let t = d.create(p, NodeKind::Text(td), "T", 0.0, 0.0, 40.0, 20.0).unwrap();
+    let n = d.get_mut(t).unwrap();
+    n.fills.clear();
+    assert!(!n.draws_nothing());
+    let NodeKind::Text(td) = &mut n.kind else { panic!("not text") };
+    td.runs.clear();
+    assert!(n.draws_nothing(), "without the runs' fills, nothing");
+}

@@ -25,13 +25,19 @@ pub(crate) fn area_averaged(src: &Pixmap, m: Transform, area: IntRect, clip: Rec
     }
     let (sw, sh) = (src.width() as usize, src.height() as usize);
     let (dw, dh) = (area.width() as usize, area.height() as usize);
+    // Bounded before any weight is worked out: each device pixel covers at most 1 / s + 2 image
+    // pixels along an axis, however wide the area a caller asks for.
+    let setup = |n: usize, s: f64| (n as f64) * (1.0 / s.abs() + 2.0);
+    if setup(dw, sx) + setup(dh, sy) > MAX_WORK as f64 {
+        return None;
+    }
+    let _held = crate::layer_budget::Held::take(area.width(), area.height(), 1)?;
     let cols = spans(area.x(), dw, (clip.left().into(), clip.right().into()), tx, sx, sw)?;
     let rows = spans(area.y(), dh, (clip.top().into(), clip.bottom().into()), ty, sy, sh)?;
     let work = |s: &[Span]| s.iter().map(|s| s.weights.len() as u64).sum::<u64>();
     if work(&cols).saturating_mul(work(&rows)) > MAX_WORK {
         return None;
     }
-    let _held = crate::layer_budget::Held::take(area.width(), area.height(), 1)?;
     let mut out = Pixmap::new(area.width(), area.height())?;
     let data = src.data();
     // Each device row: the image rows it covers, each averaged across into the device columns

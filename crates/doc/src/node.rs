@@ -784,12 +784,14 @@ impl Node {
         self.board.as_ref().is_some_and(crate::BoardItem::is_atom)
     }
 
-    /// Whether this layer puts nothing on the canvas: no visible fill (its own or a vector
-    /// region's), stroke or effect and no children (a placeholder box whose image was taken out,
+    /// Whether this layer puts nothing on the canvas: no visible fill (its own, a vector
+    /// region's or a text run's), stroke or effect and no children (a placeholder box whose image was taken out,
     /// an empty frame).
     pub fn draws_nothing(&self) -> bool {
+        let shows = |f: &Option<Vec<Paint>>| f.as_deref().is_some_and(|f| f.iter().any(|p| p.visible));
         let region_fill = match &self.kind {
-            NodeKind::Vector { network } => network.regions.iter().any(|r| r.fills.as_deref().is_some_and(|f| f.iter().any(|p| p.visible))),
+            NodeKind::Vector { network } => network.regions.iter().any(|r| shows(&r.fills)),
+            NodeKind::Text(t) => shows(&t.style.fills) || t.runs.iter().any(|r| shows(&r.style.fills)),
             _ => false,
         };
         self.children.is_empty()

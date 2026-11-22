@@ -242,8 +242,13 @@ fn paint_each(
                 .bounds()
                 .transform(ts_transform(xf))
                 .and_then(|b| int_rect(Rect::new(b.left().into(), b.top().into(), b.right().into(), b.bottom().into()), (pix.width(), pix.height())));
-            let Some(mut alone) = area.and_then(|r| Pixmap::new(r.width(), r.height())) else { continue };
             let Some(r) = area else { continue };
+            // Past the layer budget, the paint draws in the nearest mode tiny-skia has instead.
+            let held = crate::layer_budget::Held::take(r.width(), r.height(), 1);
+            let Some(mut alone) = held.as_ref().and_then(|_| Pixmap::new(r.width(), r.height())) else {
+                pix.fill_path(path, &paint, rule, ts_transform(xf), mask);
+                continue;
+            };
             let t = ts_transform(Affine::translate((-f64::from(r.x()), -f64::from(r.y()))) * xf);
             alone.fill_path(path, &tiny_skia::Paint { blend_mode: tiny_skia::BlendMode::SourceOver, ..paint }, rule, t, None);
             crate::paint::composite(pix, (r.x(), r.y()), &alone, 1.0, p.blend);
@@ -942,6 +947,8 @@ fn blends_through(doc: &Document, n: &Node, backdrop: bool) -> bool {
     }
     paints_blend(n)
         || doc.subtree(n.id).iter().skip(1).filter_map(|c| doc.node(*c)).any(|c| match c.blend {
+            // A hidden layer draws nothing (nor do the layers inside it).
+            _ if !c.visible => false,
             BlendMode::Normal => false,
             // Its paints blend with what lies under it too.
             BlendMode::PassThrough => paints_blend(c),
