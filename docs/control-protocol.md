@@ -67,6 +67,7 @@ state are answered without a frame (about half a second each), while `ui.screens
 
 Coordinates are page units, y down. `x`/`y` in `node.set`/`node.create` are relative to the parent
 frame (groups have no coordinate space of their own).
+`rotation` in `node.set` is the layer's angle to its parent; `absoluteRotation` sets its rotation on the page (what the Design panel's field shows); a call takes one of the two.
 
 **Windows.** The desktop app can show files in several windows (`window.new`). Every method takes
 an optional `window` (an id from `window.list`; `0` is the main window) and then runs in that
@@ -194,6 +195,9 @@ layout (including grid `columnTracks` / `rowTracks`), sizing, `minWidth` / `maxW
 children), `gridCell` (a grid auto layout child's column, row and spans), clip, text properties,
 component/instance links, overrides, `slot` (a slot layer's property name), boundVariables, interactions, exports,
 `devStatus` (handoff status), `devChanged` (changed since it was marked ready for dev),
+`textAlignVertical`, `textCase`, `paragraphSpacing`, `paragraphIndent`, `features` (OpenType
+toggles), `startCap` and `endCap` (when not none), `variableModes` (a frame's collection → mode),
+`propertyReferences` (which component property controls a field), `exposedInstance`,
 `annotations` (Developer Mode notes: `[{label, properties, category?}]`), `codeLinks` (a component's
 links to code: `[{language, importPath, name, template}]`), `devResources` (links for developers,
 its own and inherited: `[{name, url, index?, from?}]`), `measurements` (Developer Mode measurements
@@ -235,7 +239,9 @@ zoom preview or the refined image (`canvas.quality`: `preview` or `refined`) and
 asking for a render to its preview and its refined image being handed to egui as the canvas
 texture (`canvas.previewLatencyMs`, `canvas.refineLatencyMs`, on a monotonic clock, rendering
 included in the browser too; the GPU upload and presenting the frame come after; `null` until
-there was one). `importReport` holds the Import report window's content (`{name, pages, layers, images, appended, placed, warnings, warningCount}`,
+there was one), and the share of the canvas only the page colour covered last frame, no render
+reaching it (`canvas.uncovered`, 0 to 1: past the canvas image the desktop shows a coarse image of the
+area around the view). `importReport` holds the Import report window's content (`{name, pages, layers, images, appended, placed, warnings, warningCount}`,
 `null` while none is open). The window opens only for a file the user opened or imported in the app
 (File ▸ Open or Import, Open recent, a recent file on the home screen, a drop, a paste, the system's open event).
 Emulated user input counts as the user's action: `ui.input` and `ui.key` (for example a Cmd+V paste or a click

@@ -388,7 +388,14 @@ fn type_settings(
         }
         // Where lines break when the text wraps (Explore text properties).
         caption(ui, tr("Wrap style"));
-        let wrap = common(doc, ids, |n| n.kind.text().map(|t| t.wrap_style as usize)).flatten();
+        // Per paragraph, as the text direction: while editing, the selected paragraphs.
+        let wrap = common(doc, ids, |n| {
+            n.kind.text().and_then(|t| {
+                let (a, b) = range.filter(|r| r.0 == n.id).map_or((0, t.char_count()), |(_, a, b)| (a, b));
+                t.common_wrap_style(a, b).map(|w| w as usize)
+            })
+        })
+        .flatten();
         let items = [
             (tr("Auto"), tr_noop("Auto: as many words as fit on each line")),
             (tr("Balance"), tr_noop("Balance: every line close to the same length")),
@@ -396,7 +403,7 @@ fn type_settings(
         ];
         if let Some(i) = text_seg(ui, "wrap", &items, wrap, w) {
             let style = ["auto", "balance", "pretty"].get(i).copied().unwrap_or("auto");
-            app.set_props(ids, json!({"wrapStyle": style}));
+            app.run("text.wrapStyle", json!({"ids": ids, "style": style}));
         }
         // The paragraphs' base direction, once a right-to-left script is in the text or a direction
         // is forced ("controls are available to override text direction per paragraph", Add
@@ -462,6 +469,7 @@ fn type_settings(
         let face = uniform(styles, |s| (s.font_family.clone(), s.font_style.clone())).and_then(|(f, s)| figcraft_text::find_face(&f, &s));
         let face_name = face.as_ref().map(|f| format!("{} {}", f.family, f.style)).unwrap_or_else(|| tr("Mixed fonts").into());
         widgets::label(ui, &face_name, t.text_secondary);
+        position_row(app, ui, doc, ids, w);
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for (tag, label, default_on) in FEATURES {
                 let state = common(doc, ids, |n| n.kind.text().map(|t| t.features.get(tag).copied())).flatten();
@@ -476,6 +484,21 @@ fn type_settings(
             }
         });
     }
+}
+
+/// Position: the layers' text as superscript or subscript (`sups`, `subs`; drawn smaller and
+/// raised or lowered where the font has no glyphs for them), or neither. `sups` wins when a layer
+/// has both, as when it is drawn (#2338).
+fn position_row(app: &mut FigApp, ui: &mut Ui, doc: &Document, ids: &[NodeId], w: f32) {
+    caption(ui, tr("Position"));
+    let on = |t: &figcraft_doc::TextData, tag: &str| t.features.get(tag).copied().unwrap_or(false);
+    let active = common(doc, ids, |n| n.kind.text().map(|t| if on(t, "sups") { 1 } else { usize::from(on(t, "subs")) * 2 })).flatten();
+    let items = [("—", tr_noop("None")), ("X²", tr_noop("Superscript")), ("X₂", tr_noop("Subscript"))];
+    if let Some(i) = text_seg(ui, "position", &items, active, w) {
+        let want = |k: usize| if i == k { json!(true) } else { Value::Null };
+        app.run("text.setFeatures", json!({"ids": ids, "features": {"sups": want(1), "subs": want(2)}}));
+    }
+    ui.add_space(4.0);
 }
 
 /// How the decoration looks: style, thickness, (underlines) offset and skip ink, and colour.

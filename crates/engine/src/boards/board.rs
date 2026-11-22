@@ -21,6 +21,7 @@ use crate::params::{boolean, color_of, get, id, id_of, num, num_or, opt_id, req_
 use crate::tools::{Gesture, PointerEvent, ToolId};
 use crate::{EngineError, Result, Session, bad, spec, textedit};
 
+mod code;
 mod connectors;
 mod derived;
 mod edit;
@@ -29,6 +30,7 @@ mod mindmap;
 mod reshape;
 mod tools;
 
+pub use code::is_code_text;
 pub(crate) use connectors::end_handle_at;
 pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
@@ -100,12 +102,16 @@ const HIGHLIGHTER: (f64, f32) = (20.0, 0.45);
 const ERASER_PX: f64 = 8.0;
 /// The text sizes the contextual bar offers.
 pub const TEXT_SIZES: [(&str, f64); 4] = [("S", 12.0), ("M", 16.0), ("L", 24.0), ("XL", 36.0)];
+/// The text sizes a sticky's menu offers (FigJam's, measured 2026-11-12): name and size.
+pub const STICKY_SIZES: [(&str, f64); 5] = [("Small", 16.0), ("Medium", 24.0), ("Large", 40.0), ("Extra large", 64.0), ("Huge", 96.0)];
 
 /// The board tools' choices: the colour new stickies get, the shape and stamp the tools place,
 /// how new connectors run and the marker's and highlighter's colours.
 #[derive(Clone, Debug)]
 pub struct BoardTool {
     pub sticky: Color,
+    /// The text size new stickies get (the last one chosen on a sticky).
+    pub sticky_size: f64,
     pub shape: BoardShape,
     pub stamp: Stamp,
     pub routing: Routing,
@@ -118,6 +124,7 @@ impl Default for BoardTool {
         let first = BOARD_COLORS.first().map_or(Color::WHITE, |c| c.1);
         Self {
             sticky: first,
+            sticky_size: STICKY_TEXT_SIZE,
             shape: BoardShape::Rectangle,
             stamp: Stamp::ThumbsUp,
             routing: Routing::Elbow,
@@ -132,14 +139,14 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.sticky",
             "Sticky note",
-            "{x, y (its top-left, in the parent), text?, color? (yellow|orange|red|pink|violet|blue|green|gray or hex; default the sticky tool's), author? (a name, or false for none; default yours), parent?} → {id, text}",
+            "{x, y (its top-left, in the parent), text?, color? (yellow|orange|red|pink|violet|blue|green|gray or hex; default the sticky tool's), fontSize? (1 to 1000; default the sticky tool's, 16 at first), author? (a name, or false for none; default yours), parent?} → {id, text}",
             true,
             sticky_cmd
         ),
         spec!(
             "board.nextSticky",
             "Next sticky note",
-            "{id? (a sticky or shape; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector?}  a sticky of the same colour beside a sticky; after a shape, the next shape joined to it by a connector, as board.addConnected",
+            "{id? (a sticky, shape or code block; default the selected or edited one), side?: right|below|left|above (default right), edit? (start typing in it; default false)} → {id, text, connector?}  a sticky of the same colour beside a sticky; after a shape, the next shape joined to it by a connector, as board.addConnected; after a code block, the next code block beside it (128 away), as wide and in the same language, not joined",
             true,
             next_sticky
         ),
@@ -192,6 +199,20 @@ pub fn specs() -> Vec<CommandSpec> {
             true,
             mindmap::mind_map_add
         ),
+        spec!(
+            "board.codeBlock",
+            "Code block",
+            "{x?, y? (its top-left in the parent; default a four-line block centred in the view), language? (bash|cpp|css|go|graphql|html|javascript|json|kotlin|plainText|python|ruby|rust|sql|swift|typescript; default typescript), text?, width? (210 to 100000; default 576), parent?, edit? (start typing in it; default false)} → {id, text, language}  a dark panel holding monospace text: as wide as it is made, as tall as its lines (four at least)",
+            true,
+            code::code_block_cmd
+        ),
+        spec!(
+            "board.setLanguage",
+            "Code language",
+            "{id? | ids? (code blocks; default the selected ones, or the one being typed in), language} → {ids}",
+            true,
+            code::set_language
+        ),
         spec!("board.label", "Connector label", "{id (a connector; default the selection), text (empty removes it)} → {id, label}", true, label_cmd),
         spec!(
             "board.stamp",
@@ -217,7 +238,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.setStyle",
             "Board style",
-            "{ids?, shape? (shapes with text), fontSize? (their text), style?: straight|elbow|curved, startCap?, endCap? (connectors)}",
+            "{ids?, shape? (shapes with text), fontSize? (the text of stickies, shapes, labels and mind nodes; stickies remember it for new ones), style?: straight|elbow|curved, startCap?, endCap? (connectors)}",
             true,
             set_style
         ),

@@ -17,7 +17,7 @@ use crate::invite::{Endpoint, Invite, Lookup};
 use crate::join::ask;
 use crate::net::{Duplex, NetLimits, config, open};
 pub(crate) use crate::requests::REFUSED;
-use crate::requests::{code_requests, comment_request, hosting_error, link_requests, made_comment, made_links, shared};
+use crate::requests::{code_requests, comment_request, directory_error, hosting_error, link_requests, made_comment, made_links, shared};
 
 type Ws = WebSocket<Duplex>;
 
@@ -165,8 +165,7 @@ pub fn plugins(server: &Endpoint, key: &str, req: PluginReq, limits: &NetLimits,
     match reply(&mut ws, limits, pick) {
         Ok(PluginReply::Ready { .. }) => {}
         // An older server can't read the request at all.
-        Err(e) if e.contains("couldn't be read") => return Err(format!("{} has no plugin directory (update the server)", server.display())),
-        Err(e) => return Err(e),
+        Err(e) => return Err(directory_error(server, e)),
         Ok(other) => return Err(format!("the server answered {other:?} instead of opening its plugin directory")),
     }
     send(&mut ws, &ClientMsg::Plugins(req))?;

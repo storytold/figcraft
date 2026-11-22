@@ -433,6 +433,11 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
     if key == Key::Escape && !egui::Popup::is_any_open(ctx) && crate::colorpicker::close_if_open(app) {
         return true;
     }
+    // A fill, stroke or effect row highlighted in the Design panel: Escape lets it go, before the
+    // binding deselects the layers.
+    if key == Key::Escape && m.is_none() && !egui::Popup::is_any_open(ctx) && crate::property_rows::escape(app) {
+        return true;
+    }
     if key_pick(app, key, m) || key_box(app, key, m) {
         return true;
     }
@@ -516,10 +521,7 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
         }
         return true;
     }
-    if m.is_none() && !repeat && opacity_digit(app, key, now) {
-        return true;
-    }
-    false
+    m.is_none() && !repeat && opacity_digit(app, key, now)
 }
 
 /// Keys while a selection box drawn from the keyboard shows (`select.area`, Alt+Space or Ctrl+Space,

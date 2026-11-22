@@ -61,7 +61,7 @@ impl LiveLink for Link {
 /// A session with `prefs` that opened a file (from disk) whose libraries include [`LINK`].
 fn opened(prefs: Prefs, tag: &str) -> (Session, Arc<Mutex<Wire>>, std::path::PathBuf) {
     let mut d = Document::new("Someone else's file");
-    d.libraries_mut().enabled.push(LibraryLink { id: "lib".into(), name: "Kit".into(), path: LINK.into(), version: 3 });
+    d.libraries_mut().enabled.push(LibraryLink { id: "lib".into(), name: "Kit".into(), path: LINK.into(), version: 3, ..Default::default() });
     let path = std::env::temp_dir().join(format!("figcraft-beacon-{}-{tag}.figcraft", std::process::id()));
     std::fs::write(&path, figcraft_format::save_bytes(&d, None).unwrap()).unwrap();
     let mut s = Session::new();

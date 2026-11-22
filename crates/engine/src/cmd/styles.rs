@@ -275,6 +275,9 @@ fn paragraph_style_json(cmd: &str, v: &Value) -> Result<ParagraphStyle> {
             "paragraphSpacing" | "paragraph_spacing" => ps.paragraph_spacing = length(k, x)?,
             "paragraphIndent" | "paragraph_indent" => ps.paragraph_indent = length(k, x)?,
             "listStyle" | "list" => ps.list = super::props::enum_of(x).ok_or_else(|| bad(cmd, "listStyle: none|bulleted|numbered"))?,
+            "wrapStyle" | "textWrap" | "wrap_style" => {
+                ps.wrap_style = super::props::enum_of(x).ok_or_else(|| bad(cmd, "wrapStyle: auto|balance|pretty"))?;
+            }
             "features" | "openTypeFeatures" | "fontFeatures" | "textFeatures" => {
                 ps.features = super::props::features_of(cmd, x)?.into_iter().filter_map(|(tag, on)| Some((tag, on?))).collect();
             }
@@ -289,15 +292,20 @@ fn paragraph_style_json(cmd: &str, v: &Value) -> Result<ParagraphStyle> {
 fn paragraph_style_of(n: &Node, range: Option<(usize, usize)>) -> Option<ParagraphStyle> {
     let t = n.kind.text()?;
     let mut ps = t.paragraph_style();
-    if let Some((a, b)) = range
-        && let Some(pl) = t.common_para_list(a, b)
-    {
-        ps.list = pl.list;
+    if let Some((a, b)) = range {
+        if let Some(pl) = t.common_para_list(a, b) {
+            ps.list = pl.list;
+        }
+        ps.wrap_style = t.common_wrap_style(a, b).unwrap_or(t.wrap_style);
     }
     Some(ps)
 }
 
 fn detach(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::library::counting_links(s, true, |s| detach_style(s, p))
+}
+
+fn detach_style(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "style.detach";
     let which = req_string(cmd, p, "which")?;
     if which == "text" {
@@ -454,6 +462,10 @@ pub fn apply_style_ref(doc: &mut Document, id: NodeId, field: &str, sid: Option<
 }
 
 pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::library::counting_links(s, false, |s| apply_style(s, p))
+}
+
+fn apply_style(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "style.apply";
     let st = req_string(cmd, p, "style")?;
     let style = s.doc()?.style(&st).cloned().ok_or_else(|| bad(cmd, format!("no style `{st}`")))?;
@@ -842,6 +854,10 @@ pub fn sync_list_styles(doc: &mut Document, before: &Document, ids: &[NodeId]) {
 
 /// `variable.bind`: bind (or with no variable, unbind) `field` of the targets.
 pub fn bind(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::library::counting_links(s, string(p, "variable").is_none(), |s| bind_field(s, p))
+}
+
+fn bind_field(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "variable.bind";
     let field = req_string(cmd, p, "field")?;
     let var = string(p, "variable");

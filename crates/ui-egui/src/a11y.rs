@@ -883,9 +883,17 @@ pub fn tab(resp: &Response, label: &str, selected: bool) {
 }
 
 pub fn checkbox(resp: &Response, label: &str, on: bool) {
+    checkbox_tri(resp, label, Some(on));
+}
+
+/// A checkbox that can be mixed (`None`, announced as "mixed" rather than unchecked).
+pub fn checkbox_tri(resp: &Response, label: &str, state: Option<bool>) {
     node(resp, label, |n| {
         n.set_role(Role::CheckBox);
-        n.set_toggled(toggled(on));
+        n.set_toggled(match state {
+            Some(on) => toggled(on),
+            None => Toggled::Mixed,
+        });
     });
 }
 
@@ -985,6 +993,18 @@ pub fn submenu(resp: &Response, label: &str, open: bool) {
 /// `resp` can't be used now (a menu item whose command doesn't apply).
 pub fn disabled(resp: &Response) {
     node(resp, "", |n| n.set_disabled());
+}
+
+/// `resp`'s node also says `text` (a menu row's state, e.g. "locked"), after any description
+/// already set (joined with ", ").
+pub fn describe(resp: &Response, text: &str) {
+    node(resp, "", |n| {
+        let d = match n.description() {
+            Some(old) if !old.is_empty() => format!("{old}, {text}"),
+            _ => text.to_string(),
+        };
+        n.set_description(d);
+    });
 }
 
 /// What a layer row says besides its name.

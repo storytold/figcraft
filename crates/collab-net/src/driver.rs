@@ -152,6 +152,12 @@ impl<S: Socket> Driver<S> {
                     None => self.done = true,
                 }
             }
+            exchange::Next::Tell(events, then) => {
+                for e in events {
+                    self.inbox.push(e);
+                }
+                self.follow(*then, now);
+            }
         }
     }
 
