@@ -1109,7 +1109,8 @@ most when it can't be reached).
   the instance itself (its layers follow the main's constraints) or edit the main.
 - **Variants**: `instance.setProperties {ids?, properties}` switching variants keeps an override
   where the layer's name path matches and both variants had the same value for that property;
-  text layers keep all theirs. The default variant (`instance.create` with a set, the Assets
+  text layers keep all theirs, and a text layer the other variant nests elsewhere is matched by
+  its name when one layer on each side has it. The default variant (`instance.create` with a set, the Assets
   thumbnail) is the one in the set's top-left corner; `component.editProperty {name, default}`
   moves the chosen variant there, `{name, index}` reorders variant properties (the variants'
   names follow). `component.properties` on a set reports `conflicts`: variants sharing one
