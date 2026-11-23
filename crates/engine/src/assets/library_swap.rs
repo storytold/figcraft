@@ -70,6 +70,36 @@ fn match_components(doc: &Document, records: &[ImportedComponent], m: &LibraryMa
     pairs
 }
 
+/// A layer's explicit modes after a swap: a mode of A's collection becomes B's mode of the same
+/// name (`colls`: A's collection → B's, and A's mode ids → B's), and stays as well while that
+/// collection still has a variable on A (`still_a`). A mode the layer already chose of B's
+/// collection wins over one moved from A's.
+fn move_modes(
+    old: BTreeMap<String, String>,
+    colls: &BTreeMap<String, (String, BTreeMap<String, String>)>,
+    still_a: &BTreeSet<String>,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut moved = Vec::new();
+    for (c, mode) in old {
+        match colls.get(&c).and_then(|(b, modes)| modes.get(&mode).map(|bm| (b.clone(), bm.clone()))) {
+            Some(to) => {
+                moved.push(to);
+                if still_a.contains(&c) {
+                    out.insert(c, mode);
+                }
+            }
+            None => {
+                out.insert(c, mode);
+            }
+        }
+    }
+    for (c, mode) in moved {
+        out.entry(c).or_insert(mode);
+    }
+    out
+}
+
 /// Swap the copies of library `from` in `doc` to library `to` by names (see the module docs).
 pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Result<Swapped> {
     let m = &to.manifest;
@@ -238,25 +268,7 @@ pub fn swap_library(doc: &mut Document, from: &str, to: &PublishedLibrary) -> Re
                 *v = b.clone();
             }
         }
-        // A mode the layer already chose of B's collection wins over one moved from A's.
-        let old = std::mem::take(&mut n.var_modes);
-        let mut moved = Vec::new();
-        for (c, mode) in old {
-            match colls.get(&c).and_then(|(b, modes)| modes.get(&mode).map(|bm| (b.clone(), bm.clone()))) {
-                Some(to) => {
-                    moved.push(to);
-                    if still_a.contains(&c) {
-                        n.var_modes.insert(c, mode);
-                    }
-                }
-                None => {
-                    n.var_modes.insert(c, mode);
-                }
-            }
-        }
-        for (c, mode) in moved {
-            n.var_modes.entry(c).or_insert(mode);
-        }
+        n.var_modes = move_modes(std::mem::take(&mut n.var_modes), &colls, &still_a);
     }
     for v in doc.variables.variables.iter_mut().filter(|v| !remote.contains(&v.id)) {
         for r in v.values.values_mut().flat_map(VariableValue::references_mut) {
