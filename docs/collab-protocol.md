@@ -916,12 +916,14 @@ installing: [`plugins.md`](plugins.md#plugin-directories)):
   register on first run, and off for builds from source (inside a Cargo build directory, or debug
   builds), which leave any registration alone. Turning it off removes only this copy's
   registration. The registry sits behind a trait, so tests use a fake.
-- **macOS**: the bundle declares the scheme (`CFBundleURLTypes`), so links open FigCraft; the
-  link itself arrives as an Apple Event, which the windowing layer doesn't pass on yet, so the app
-  opens without joining (paste the link) until it does.
+- **macOS**: the bundle declares the scheme (`CFBundleURLTypes`), so links open FigCraft. The
+  link arrives as a GetURL ('GURL') Apple event rather than on the command line, both at launch
+  and to the app already running; `fmv-macos-events` (0.2) hands it over and the link goes where
+  a link on the command line goes (#960).
 - **Linux and FreeBSD**: the desktop entry declares `x-scheme-handler/figcraft` and passes URLs
   (`%U`); the app joins from its command line.
-- An app that is already running doesn't receive the link: a second window starts and joins.
+- On Windows and Linux an app that is already running doesn't receive the link: a second window
+  starts and joins. On macOS the running app receives it.
 
 ## Offline and reconnect
 
