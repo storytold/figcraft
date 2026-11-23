@@ -131,6 +131,10 @@ fn fields_and_outline_survive_every_depth_retry() {
 fn compact_children_keep_window_markers_and_page_in_order() {
     let mut c = Client::new();
     let root = tree(|params| c.create(params));
+    // The ID-only response must still require paging after compact serialization.
+    for _ in 0..48 {
+        c.create(json!({"type": "rectangle", "parent": root}));
+    }
     let full = c.ok("get_node", json!({"id": root, "depth": 1, "fields": []}));
     let expected = full["children"].as_array().unwrap();
     let wire = serde_json::to_string(&serde_json::to_string(&full).unwrap()).unwrap().len();
