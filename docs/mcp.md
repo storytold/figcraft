@@ -103,16 +103,16 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   refused too. A local volume's `\\?\Volume{…}\` path is let through. A link whose text is a native NT name
   (`\Device\…`, `\??\…`, `\GLOBAL??\…`) is refused as a device path, and so is a name that ends in a period or a space, in a
   path or as a link's target, since Windows trims it where it looks a name up.
-- **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
-  document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
-  `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
-  refuses, and `library.updates` / `library.list` report the refusal for each instead of the last
-  version fetched) and plugin directories are refused with `automation roots are set: commands
-  don't reach the network …`. The app started with the flags confines its own window too, so its
-  sharing is off as well. One exception: a root on a network share (a UNC path such as
-  `\\server\share\…`, or a mounted network drive) is still a root, so reading and writing inside
-  it reaches that file server, and saving there sends the document to it. Give only roots you would
-  let the agent's files go to.
+- **The network:** confined calls cannot reach a FigCraft or plugin server, except for headless
+  MCP's `collab.join` to a server explicitly allowed with `--automation-allow-server` (below).
+  Hosting, publishing and sharing a file (`collab.host`, `collab.publish`, `collab.share` …), team
+  libraries on a server (`library.check` refuses, and `library.updates` / `library.list` report the
+  refusal for each instead of the last version fetched) and plugin directories remain refused with
+  `automation roots are set: commands don't reach the network …`. The app started with the flags
+  confines its own window too, so its sharing is off as well. One exception: a root on a network
+  share (a UNC path such as `\\server\share\…`, or a mounted network drive) is still a root, so
+  reading and writing inside it reaches that file server, and saving there sends the document to
+  it. Give only roots you would let the agent's files go to.
 - **Joining one approved server (headless only):** add one or more
   `--automation-allow-server wss://figcraft.example.com/` flags. Each URL must be a `ws://` or
   `wss://` server address with no query or key. A join link is accepted only when its parsed
