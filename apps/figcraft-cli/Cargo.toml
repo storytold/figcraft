@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 figcraft-engine = { workspace = true }
+figcraft-collab-net = { workspace = true }
 figcraft-doc = { workspace = true }
 figcraft-render = { workspace = true }
 figcraft-text = { workspace = true }

@@ -282,19 +282,22 @@ the flags leave the output identical when nothing strays outside the roots.
 Every command with its label, shortcut, undoable flag (`*`) and parameter docs; `--json` for
 machines.
 
-### `mcp [--attach PORT] [--automation-read-root DIR]… [--automation-write-root DIR]…`
+### `mcp [--attach PORT] [--automation-read-root DIR]… [--automation-write-root DIR]… [--automation-allow-server URL]…`
 
 Serve MCP on stdio: headless by default, or attached to a running app started with
 `figcraft --control PORT`. See [mcp.md](mcp.md). The automation roots (each repeatable; existing
 folders) confine the files the agent's calls read (inside a read or write root) and write (inside a
 write root); everything else is refused ([mcp.md › Confining file access](mcp.md#confining-file-access)).
+Headless MCP requires both `--automation-read-root` and `--automation-write-root`; `--attach` uses
+the attached app's roots instead.
 They apply to the headless session only, and that is why `--attach` refuses them: an attached server
 is confined by the app it attaches to, from the flags that app was started with. With `--attach`,
 `--timeout SECONDS` (1–600, default 60) is how long the app may take over each request. The headless
-session can host, join and publish
-live sessions (`collab.*`: without a key on a server open to the public, with `collab.serverInfo`,
-`collab.manageFile` for the owner token and `collab.report`) and use plugin directories
-(`plugin.directory.*`); the one-shot `run` can't (no network link).
+session can join a shared file on an explicitly allowed server with `--automation-allow-server
+wss://host/`; the file must already have been published and the agent needs its edit link. That
+flag only permits `collab.join` to the named server. Other network commands remain disabled; without
+the flag, all network commands remain disabled as well. See [Confining file access](mcp.md#confining-file-access).
+The one-shot `run` has no network link.
 
 ### `plugin publish <folder> --server ws://host:port/[?key=KEY]`
 

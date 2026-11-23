@@ -70,8 +70,9 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   and correct, for example `automation path rejected: /etc/x.png is outside the folders that may be
   written: /work/project/out`. Nothing is written and the server keeps serving.
 - Read and write authority are separate. With only `--automation-read-root` nothing can be written
-  to disk (`export` and the export commands without a `path` still return the bytes). Without either
-  flag nothing changes.
+  to disk (`export` and the export commands without a `path` still return the bytes). Headless MCP
+  refuses to start unless both `--automation-read-root` and `--automation-write-root` are supplied.
+  Attached MCP takes neither flag; the attached app's roots govern its file access.
 - The roots must be existing folders: a missing one, or a file, stops the server at startup.
   `initialize`'s `instructions` name the folders, so the agent knows where it may work.
 - **What is covered:** everything a call does, because the engine reaches the file system through
@@ -102,16 +103,42 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   refused too. A local volume's `\\?\Volume{…}\` path is let through. A link whose text is a native NT name
   (`\Device\…`, `\??\…`, `\GLOBAL??\…`) is refused as a device path, and so is a name that ends in a period or a space, in a
   path or as a link's target, since Windows trims it where it looks a name up.
-- **The network:** a confined call reaches no FigCraft or plugin server, so it can't send a
-  document anywhere through one. Hosting, joining, publishing and sharing a file (`collab.host`,
-  `collab.join`, `collab.publish`, `collab.share` …), team libraries on a server (`library.check`
-  refuses, and `library.updates` / `library.list` report the refusal for each instead of the last
-  version fetched) and plugin directories are refused with `automation roots are set: commands
-  don't reach the network …`. The app started with the flags confines its own window too, so its
-  sharing is off as well. One exception: a root on a network share (a UNC path such as
-  `\\server\share\…`, or a mounted network drive) is still a root, so reading and writing inside
-  it reaches that file server, and saving there sends the document to it. Give only roots you would
-  let the agent's files go to.
+- **The network:** confined calls cannot reach a FigCraft or plugin server, except for headless
+  MCP's `collab.join` to a server explicitly allowed with `--automation-allow-server` (below).
+  Hosting, publishing and sharing a file (`collab.host`, `collab.publish`, `collab.share` …), team
+  libraries on a server (`library.check` refuses, and `library.updates` / `library.list` report the
+  refusal for each instead of the last version fetched) and plugin directories remain refused with
+  `automation roots are set: commands don't reach the network …`. The app started with the flags
+  confines its own window too, so its sharing is off as well. One exception: a root on a network
+  share (a UNC path such as `\\server\share\…`, or a mounted network drive) is still a root, so
+  reading and writing inside it reaches that file server, and saving there sends the document to
+  it. Give only roots you would let the agent's files go to.
+- **Joining one approved server (headless only):** add one or more
+  `--automation-allow-server wss://figcraft.example.com/` flags. Each URL must be a `ws://` or
+  `wss://` server address with no query or key. A join link is accepted only when its parsed
+  scheme, host and port match an allowed server and its path is within that server's path prefix.
+  The only newly permitted network operation is `collab.join` to such a server. Hosting, publishing
+  a new file, team libraries and plugin directories remain blocked; the server's administrative
+  key is not needed or accepted in the allowlist. Without this flag the network remains blocked,
+  as before.
+
+  This lets an agent join a file that was published once from the desktop app. Give headless MCP
+  the file's **edit link**, then call `collab.join` with it. The server-hosted document is the shared
+  source of truth: the agent's edits sync to the server and other clients in the live session, and
+  the server keeps confirmed edits after everyone disconnects. A later headless MCP process can
+  join again with the same link. The desktop app does not need to stay open on the publishing
+  machine. A local `.figcraft` file is not automatically kept in sync; use `file.saveAs` to save a
+  separate local snapshot inside a write root when needed.
+
+  For example:
+
+  ```sh
+  figcraft-cli mcp --automation-read-root /work/designs --automation-write-root /work/designs \
+    --automation-allow-server wss://figcraft.example.com/
+  ```
+
+  The edit link is a file-specific secret; give it only to the agent and clients you trust. Use an
+  edit link, not a view link, when the agent must change the file.
 - Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
   plugins installed from a plugin directory, the system fonts).
 - `--attach` with either flag is a usage error: the app runs the commands, so only the app can
