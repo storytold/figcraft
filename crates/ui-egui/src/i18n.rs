@@ -95,7 +95,9 @@ const LATIN_AMERICA: &[&str] =
 /// language the UI can't draw (CJK on the web without CJK faces built in) doesn't count.
 fn resolve_one(want: &str) -> Option<usize> {
     let tag = want.trim().split(['.', '@']).next().unwrap_or("").replace('_', "-");
-    let base = tag.split('-').next().unwrap_or("");
+    let raw_base = tag.split('-').next().unwrap_or("");
+    // Map the obsolete ISO 639-1 tag `iw` (still emitted by older Java/Android locales) to `he`.
+    let base = if raw_base.eq_ignore_ascii_case("iw") { "he" } else { raw_base };
     let has = |subtags: &[&str]| tag.split('-').skip(1).any(|t| subtags.iter().any(|s| s.eq_ignore_ascii_case(t)));
     let zh = |code: &str| {
         LANGS.iter().position(|l| l.code.eq_ignore_ascii_case(code)).filter(|i| LANGS.get(*i).is_some_and(|l| crate::cjk::can_show(l.code)))
