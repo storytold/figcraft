@@ -54,6 +54,9 @@ fn library_with(path: &str, color: &str, extra: &[&str], linked: bool) -> String
         ex(&mut s, "variable.bind", json!({"ids": [dot], "field": "fill", "variable": "accent"}));
         ex(&mut s, "component.create", json!({"ids": [badge]}));
         ex(&mut s, "component.create", json!({"ids": [dot]}));
+        // A Theme variable no other library has, with a value of its own in Dark.
+        ex(&mut s, "variable.create", json!({"collection": "Theme", "name": "glow", "type": "color", "value": "#111111"}));
+        ex(&mut s, "variable.set", json!({"variable": "glow", "mode": "Dark", "value": "#222222"}));
     }
     for (i, name) in extra.iter().enumerate() {
         let e = idv(&ex(&mut s, "frame.create", json!({"x": 200 + 50 * i, "y": 0, "width": 20, "height": 20, "name": name})));
@@ -247,4 +250,38 @@ fn swap_repoints_the_styles_and_variables_of_component_copies_it_keeps() {
     let bound = doc.node(dot_main).unwrap().bound.get("fill").cloned().unwrap_or_default();
     assert!(doc.libraries.variable_import(&bound).is_some_and(|i| i.library == a), "{bound}");
     assert_eq!((fill(&s, badge), fill(&s, dot)), ("0000FF".to_string(), "0000FF".to_string()));
+}
+
+/// A frame choosing A's Theme mode Dark holds a layer bound to `accent` (B has it) and one bound
+/// to `glow` (only A has it). The swap gives the frame B's Dark for `accent` and keeps A's Dark for
+/// `glow`, which stays on A, so it doesn't fall back to Light.
+#[test]
+fn swap_keeps_the_mode_of_a_collection_that_still_has_a_variable_on_the_old_library() {
+    let (_dir, mut s, a, b) = two_libraries_with("modes", &[], true);
+    let frame = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 100, "height": 100})));
+    let rect = |s: &mut Session, x: f64| idv(&ex(s, "shape.rectangle", json!({"x": x, "y": 0, "width": 10, "height": 10, "parent": frame})));
+    let (accent, glow) = (rect(&mut s, 0.0), rect(&mut s, 20.0));
+    ex(&mut s, "library.bindVariable", json!({"library": a, "variable": "accent", "field": "fill", "ids": [accent]}));
+    ex(&mut s, "library.bindVariable", json!({"library": a, "variable": "glow", "field": "fill", "ids": [glow]}));
+    ex(&mut s, "library.setVariableMode", json!({"library": a, "collection": "Theme", "mode": "Dark", "ids": [frame]}));
+    let fill = |s: &Session, id: NodeId| s.doc().unwrap().node(id).unwrap().fills[0].solid_color().unwrap().to_hex();
+    assert_eq!(fill(&s, glow), "222222", "Dark before the swap");
+
+    let r = ex(&mut s, "library.swap", json!({"from": a, "to": b}));
+    assert_eq!((r["variables"].as_u64(), &r["unmatched"]), (Some(1), &json!(["variable Theme/glow"])), "{r}");
+    let doc = s.doc().unwrap();
+    let modes = &doc.node(frame).unwrap().var_modes;
+    let lib = |c: &str| doc.libraries.collection_import(c).map(|r| r.library.clone());
+    let mut owners: Vec<Option<String>> = modes.keys().map(|c| lib(c)).collect();
+    owners.sort();
+    let mut expected = vec![Some(a.clone()), Some(b.clone())];
+    expected.sort();
+    assert_eq!(owners, expected, "B's Theme mode, and A's kept: {modes:?}");
+    assert_eq!((fill(&s, accent), fill(&s, glow)), ("00FF00".to_string(), "222222".to_string()), "glow stays on A's Dark");
+
+    // With nothing left on A's Theme, its mode goes with it.
+    ex(&mut s, "edit.delete", json!({"ids": [glow]}));
+    ex(&mut s, "library.swap", json!({"from": a, "to": b}));
+    let doc = s.doc().unwrap();
+    assert!(doc.node(frame).unwrap().var_modes.keys().all(|c| doc.libraries.collection_import(c).is_some_and(|r| r.library == b)));
 }
