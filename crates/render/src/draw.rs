@@ -183,7 +183,6 @@ fn averaged_when_shrunk(prep: Prepared, path: &tiny_skia::Path, xf: Affine, limi
 /// coloured backdrop, a plus-lighter or luminosity fill over a translucent one, come out the
 /// same with or without effects on the shape); a pass-through frame's paints blend with the
 /// backdrop too.
-#[allow(clippy::too_many_arguments)]
 fn fill_with(
     pix: &mut Pixmap,
     path: &tiny_skia::Path,
@@ -218,7 +217,6 @@ fn fill_with(
 }
 
 /// Paint `paints` over `path` onto `pix`, each by its own blend mode.
-#[allow(clippy::too_many_arguments)]
 fn paint_each(
     pix: &mut Pixmap,
     path: &tiny_skia::Path,

@@ -1041,7 +1041,11 @@ fn var_create(s: &mut Session, p: &Value) -> Result<Value> {
     for val in values.values_mut() {
         if let VariableValue::Alias(a) = val {
             let id = super::variables::resolve_strict(cmd, doc, a)?;
-            let t = doc.variables.get_by_id(&id).filter(|t| t.kind == kind).ok_or_else(|| bad(cmd, format!("no {} variable `{a}` to alias", kind.id())))?;
+            let t = doc
+                .variables
+                .get_by_id(&id)
+                .filter(|t| t.kind == kind)
+                .ok_or_else(|| bad(cmd, format!("no {} variable `{a}` to alias", kind.id())))?;
             *a = t.id.clone();
         }
     }

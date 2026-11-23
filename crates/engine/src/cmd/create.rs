@@ -398,9 +398,9 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     // of their own (which wins).
     if let Some(h) = num(p, "height")
         && get(p, "props").and_then(Value::as_object).is_none_or(|o| !o.contains_key("height") && !o.contains_key("h"))
-        && doc.node(nid).is_some_and(|n| {
-            matches!(&n.kind, NodeKind::Text(t) if matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate))
-        })
+        && doc
+            .node(nid)
+            .is_some_and(|n| matches!(&n.kind, NodeKind::Text(t) if matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate)))
     {
         let mut fixed = serde_json::Map::new();
         fixed.insert("height".into(), json!(h));
@@ -417,9 +417,7 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // A `fontStyle` the family lacks draws in its nearest face, the same as `node.set` says.
     let warnings = match get(p, "props") {
-        Some(Value::Object(props)) if doc.node(nid).is_some_and(|n| n.kind.text().is_some()) => {
-            super::edit::font_style_warnings(doc, &[nid], props)
-        }
+        Some(Value::Object(props)) if doc.node(nid).is_some_and(|n| n.kind.text().is_some()) => super::edit::font_style_warnings(doc, &[nid], props),
         _ => Vec::new(),
     };
     if boolean(p, "select").unwrap_or(true) {
