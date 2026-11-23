@@ -372,6 +372,29 @@ pub fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(Value::Object(props)) = get(p, "props") {
         super::props::apply(cmd, doc, nid, props)?;
     }
+    // A fixed-size text (auto-resize `none`/`truncate` in `props`) is measured as auto-height
+    // before `props` are applied, so the measured height overwrites the top-level `height`. Put
+    // the top-level `height` back through the normal command path, unless `props` set a height
+    // of their own (which wins).
+    if let Some(h) = num(p, "height")
+        && get(p, "props").and_then(Value::as_object).is_none_or(|o| !o.contains_key("height") && !o.contains_key("h"))
+        && doc.node(nid).is_some_and(|n| {
+            matches!(&n.kind, NodeKind::Text(t) if matches!(t.auto_resize, TextAutoResize::None | TextAutoResize::Truncate))
+        })
+    {
+        let mut fixed = serde_json::Map::new();
+        fixed.insert("height".into(), json!(h));
+        // With the proportions locked, `apply` would treat a lone height as a linked resize and
+        // rescale the width; pin the current width so the box keeps it. The width key does not
+        // change a fixed text's mode (`fix_size` leaves None/Truncate alone).
+        if let Some(n) = doc.node(nid)
+            && n.constrain_proportions
+            && n.width.is_finite()
+        {
+            fixed.insert("width".into(), json!(n.width));
+        }
+        super::props::apply(cmd, doc, nid, &fixed)?;
+    }
     if boolean(p, "select").unwrap_or(true) {
         ds.selection = vec![nid];
     }
