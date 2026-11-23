@@ -112,6 +112,32 @@ Each may be given more than once, as `--flag DIR` or `--flag=DIR`:
   `\\server\share\…`, or a mounted network drive) is still a root, so reading and writing inside
   it reaches that file server, and saving there sends the document to it. Give only roots you would
   let the agent's files go to.
+- **Joining one approved server (headless only):** add one or more
+  `--automation-allow-server wss://figcraft.example.com/` flags. Each URL must be a `ws://` or
+  `wss://` server address with no query or key. A join link is accepted only when its parsed
+  scheme, host and port match an allowed server and its path is within that server's path prefix.
+  The only newly permitted network operation is `collab.join` to such a server. Hosting, publishing
+  a new file, team libraries and plugin directories remain blocked; the server's administrative
+  key is not needed or accepted in the allowlist. Without this flag the network remains blocked,
+  as before.
+
+  This lets an agent join a file that was published once from the desktop app. Give headless MCP
+  the file's **edit link**, then call `collab.join` with it. The server-hosted document is the shared
+  source of truth: the agent's edits sync to the server and other clients in the live session, and
+  the server keeps confirmed edits after everyone disconnects. A later headless MCP process can
+  join again with the same link. The desktop app does not need to stay open on the publishing
+  machine. A local `.figcraft` file is not automatically kept in sync; use `file.saveAs` to save a
+  separate local snapshot inside a write root when needed.
+
+  For example:
+
+  ```sh
+  figcraft-cli mcp --automation-read-root /work/designs --automation-write-root /work/designs \
+    --automation-allow-server wss://figcraft.example.com/
+  ```
+
+  The edit link is a file-specific secret; give it only to the agent and clients you trust. Use an
+  edit link, not a view link, when the agent must change the file.
 - Not confined: the app's own folders, which no tool names (preferences, Data Recovery copies,
   plugins installed from a plugin directory, the system fonts).
 - `--attach` with either flag is a usage error: the app runs the commands, so only the app can

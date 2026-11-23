@@ -58,7 +58,8 @@ fn start_host(s: &mut Session, cmd: &str, p: &Value, bind: Bind, short: bool, vi
     };
     let (doc, uid) = s.ds().map(|ds| (ds.doc.clone(), ds.uid))?;
     let opts = HostOptions { port, bind, name: display_name(&s.prefs), doc, short, view };
-    let (id, info) = s.live.start(cmd, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
+    let (id, info) =
+        s.live.start(cmd, None, |l, id| l.host(id, opts).map_err(|e| EngineError::Other(format!("couldn't start the live session: {e}"))))?;
     s.live.open(Live { id, status: Status::Live, info: Some(info), doc_uid: Some(uid), tab: Some(uid), ..Live::default() });
     Ok(id)
 }
@@ -78,7 +79,7 @@ fn start_publish(s: &mut Session, cmd: &str, server: &str, p: &Value, share: boo
     let name = string(p, "name").map(|n| n.trim().chars().filter(|c| !c.is_control()).take(256).collect::<String>()).filter(|n| !n.is_empty());
     let me = display_name(&s.prefs);
     let opts = PublishOptions { server: server.trim().to_string(), key, name: name.unwrap_or_else(|| doc.name.clone()), me, doc, share };
-    let (id, ()) = s.live.start(cmd, |l, id| l.publish(id, opts).map_err(|e| bad(cmd, e)))?;
+    let (id, ()) = s.live.start(cmd, None, |l, id| l.publish(id, opts).map_err(|e| bad(cmd, e)))?;
     // This tab becomes the server file's synced document once it is there.
     s.live.open(Live { id, status: Status::Connecting, doc_uid: Some(uid), tab: Some(uid), server: server.trim().to_string(), ..Live::default() });
     Ok(id)

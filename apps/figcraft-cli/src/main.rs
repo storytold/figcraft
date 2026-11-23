@@ -92,7 +92,7 @@ fn run(cli: Cli) -> CliResult<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         // `--attach` conflicts with the roots: the app runs the commands, only its own roots can confine them.
-        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, roots_of(&a.roots)?),
+        Command::Mcp(a) => mcp(a.attach.as_deref(), a.timeout, mcp_roots(&a.roots, &a.automation_allow_servers)?),
         Command::Plugin { command: PluginCommand::Publish(a) } => publish_plugin(&a.folder, &a.server),
         Command::Connect { command: ConnectCommand::Publish(a) } => confined(&a.roots, || files::connect_publish(&a.file, &a.mappings, a.dry_run)),
         Command::Perf(a) => {
@@ -170,4 +170,50 @@ fn mcp(attach: Option<&str>, timeout: Option<u64>, roots: Option<figcraft_engine
     let stdout = std::io::stdout();
     server.serve(stdin.lock(), stdout.lock()).map_err(|e| format!("stdio: {e}"))?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn mcp_roots(roots: &RootArgs, allowed_servers: &[String]) -> CliResult<Option<figcraft_engine::file_access::Roots>> {
+    let Some(roots) = roots_of(roots)? else {
+        return if allowed_servers.is_empty() {
+            Ok(None)
+        } else {
+            Err(CliError::Usage("--automation-allow-server requires automation read or write roots".into()))
+        };
+    };
+    let mut servers = Vec::with_capacity(allowed_servers.len());
+    for server in allowed_servers {
+        if server.contains('?') {
+            return Err(CliError::Usage("--automation-allow-server must not contain a query or key".into()));
+        }
+        let (endpoint, query) = figcraft_collab_net::Endpoint::parse(server)
+            .map_err(|_| CliError::Usage("--automation-allow-server must be a ws:// or wss:// server URL".into()))?;
+        if !query.is_empty() {
+            return Err(CliError::Usage("--automation-allow-server must not contain a query or key".into()));
+        }
+        servers.push(endpoint.url());
+    }
+    Ok(Some(roots.with_allowed_servers(servers)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CliError, mcp_roots};
+    use crate::args::RootArgs;
+
+    #[test]
+    fn an_allowed_server_needs_file_roots_and_cannot_carry_a_key() {
+        let server = "wss://figcraft.example.com/".to_string();
+        let no_roots = RootArgs { automation_read_root: Vec::new(), automation_write_root: Vec::new() };
+        assert!(matches!(mcp_roots(&no_roots, std::slice::from_ref(&server)), Err(CliError::Usage(_))));
+
+        let path = std::env::temp_dir().join(format!("figcraft-cli-roots-{}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        let roots = RootArgs { automation_read_root: Vec::new(), automation_write_root: vec![path.to_string_lossy().into_owned()] };
+        let allowed = mcp_roots(&roots, &[server]).unwrap().unwrap();
+        assert_eq!(allowed.allowed_servers(), ["wss://figcraft.example.com:443/"]);
+
+        let with_key = "wss://figcraft.example.com/?key=secret".to_string();
+        assert!(matches!(mcp_roots(&roots, &[with_key]), Err(CliError::Usage(message)) if !message.contains("secret")));
+        let _ = std::fs::remove_dir_all(path);
+    }
 }
